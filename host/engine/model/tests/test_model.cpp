@@ -540,9 +540,78 @@ TEST_CASE("masters' hardware outputs: defaults, round trip and the 2.3 route for
     CHECK(warnings[0].code == "project.hw_output_route");
 }
 
+TEST_CASE("masters: arm, audio items and lane mute round trip (ADR-0057)") {
+    EditTxn t(Session::create(), 1);
+    Track alt;
+    alt.type = StripType::Master;
+    alt.record.armed = true;
+    const Id cue = t.create(alt);
+    auto project = t.project();
+    project.masters.push_back(cue);
+    t.setProject(project);
+    t.modify<Track>(kMaster, [](auto& tr) { tr.laneMute = true; });
+    MediaSource md;
+    md.path = "print.wav";
+    md.sampleRate = 48000;
+    md.channels = 2;
+    md.frames = 48000;
+    const Id media = t.create(md);
+    Take take;
+    take.source = media;
+    const Id tk = t.create(take);
+    Item print;
+    print.track = kMaster;
+    print.length = 2;
+    print.takes = {tk};
+    print.activeTake = tk;
+    const Id it = t.create(print);
+    auto s = t.commit();
+    REQUIRE_MESSAGE(s, (s ? std::string() : s.error().toString()));
+    REQUIRE(validateStripRules(*s));
+    const std::string saved = serializeProject(*s);
+    CHECK(saved.find("\"supple.project/2.5\"") != std::string::npos);
+    auto back = parseProject(saved);
+    REQUIRE(back);
+    CHECK(back->tracks.find(kMaster)->laneMute);
+    CHECK(back->tracks.find(cue)->record.armed);
+    CHECK(back->items.find(it)->track == kMaster);
+    CHECK(serializeProject(*back) == saved);
+    // A 2.4 file has none of it and loads unchanged.
+    auto old = projectToJson(Session::create());
+    old["schema"] = "supple.project/2.4";
+    std::vector<schema::Warning> warnings;
+    auto loaded = projectFromJson(old, &warnings);
+    REQUIRE(loaded);
+    CHECK(warnings.empty());
+    CHECK_FALSE(loaded->tracks.find(kMaster)->laneMute);
+    auto rejected = [&](auto mutate) {
+        EditTxn bad(*s, 2);
+        mutate(bad);
+        auto result = validateStripRules(bad.preview());
+        REQUIRE_FALSE(result);
+        CHECK(result.error().code == "track.strip_type");
+        CHECK_FALSE(result.error().hint.empty());
+    };
+    rejected([&](EditTxn& bad) {  // MIDI on a master
+        MidiSource mi;
+        const Id midi = bad.create(mi);
+        bad.modify<Take>(tk, [&](auto& x) { x.source = midi; });
+    });
+    rejected([&](EditTxn& bad) {  // a master records its output, not an input
+        bad.modify<Track>(cue, [](auto& tr) { tr.record.monitor = Monitor::On; });
+    });
+    rejected([&](EditTxn& bad) {
+        Track ch;
+        ch.parent = kMaster;
+        ch.laneMute = true;
+        const Id id = bad.create(ch);
+        bad.modify<Track>(kMaster, [&](auto& tr) { tr.children.push_back(id); });
+    });
+}
+
 TEST_CASE("project newer minor ignores unknown fields with load warnings") {
     auto doc = projectToJson(Session::create());
-    doc["schema"] = "supple.project/2.5";
+    doc["schema"] = "supple.project/2.6";
     doc["tracks"]["tr_0"]["future"] = true;
     std::vector<schema::Warning> warnings;
     auto parsed = projectFromJson(doc, &warnings);
@@ -1003,7 +1072,7 @@ TEST_CASE("render settings: a 2.2 file migrates to schema 2.3 and reopens byte-i
     CHECK(loaded->project->render ==
           render::toJson(render::settingsSchema().decode(expected).value()));
     const std::string saved = serializeProject(*loaded);
-    CHECK(saved.find("\"supple.project/2.4\"") != std::string::npos);
+    CHECK(saved.find("\"supple.project/2.5\"") != std::string::npos);
     CHECK(saved.find("tail_ms") == std::string::npos);
     auto reopened = parseProject(saved);
     REQUIRE(reopened);

@@ -72,3 +72,4 @@ current state.
 | [0054](0054-track-freeze.md) | Whole-chain channel freeze | Accepted |
 | [0055](0055-render-settings-and-dialog.md) | Render settings, presets and the render dialog | Accepted |
 | [0056](0056-master-hardware-outputs.md) | Masters play to hardware outputs; a mix renders several masters | Accepted |
+| [0057](0057-master-recording.md) | Masters record their output and play their own items | Accepted |

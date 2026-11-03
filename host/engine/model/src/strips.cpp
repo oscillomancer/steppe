@@ -106,11 +106,22 @@ Status validateStripRules(const Session& s) {
         if (t.type == StripType::Channel && !t.children.empty())
             return trackError("a channel cannot have children", path + "/children",
                               "add a buss and place the channels under it");
+        // A master may be armed: it records its output (ADR-0057). Inputs,
+        // monitoring, record modes and input FX stay on channels.
         if (t.type != StripType::Channel &&
-            (t.record.armed || t.record.input || t.record.monitor != Monitor::Off ||
-             t.record.mode != RecordMode::Input || !t.inputChain.empty()))
-            return trackError("only channels have record settings and input FX", path,
-                              "record or monitor on a child channel instead");
+            ((t.record.armed && t.type != StripType::Master) || t.record.input ||
+             t.record.monitor != Monitor::Off || t.record.mode != RecordMode::Input ||
+             !t.inputChain.empty()))
+            return trackError(t.type == StripType::Master
+                                  ? "a master records its output: no input, monitoring or input FX"
+                                  : "only channels and masters can be armed",
+                              path,
+                              t.type == StripType::Master
+                                  ? "arm the master alone; record or monitor inputs on a channel"
+                                  : "record or monitor on a child channel instead");
+        if (t.laneMute && t.type != StripType::Master)
+            return trackError("only masters have a lane mute", path + "/lane_mute",
+                              "mute the items themselves, or the strip");
         if (t.hwOutput) {  // ADR-0056
             const auto& out = *t.hwOutput;
             if (t.type != StripType::Master)
@@ -131,10 +142,18 @@ Status validateStripRules(const Session& s) {
     }
     for (const auto& e : s.items) {
         const Track* t = s.tracks.find(e.value->track);
-        if (t && t->type != StripType::Channel)
-            return trackError("only channels hold items and lanes",
+        if (t && t->type == StripType::Buss)
+            return trackError("only channels and masters hold items",
                               "/items/" + e.id.str() + "/track",
-                              "put the items on a child channel and route it into the buss/master");
+                              "put the items on a child channel and route it into the buss");
+        // A master's items are prints of a mix (ADR-0057): audio only.
+        if (t && t->type == StripType::Master)
+            for (Id take : e.value->takes)
+                if (const Take* tk = s.takes.find(take);
+                    tk && tk->source && tk->source->kind != Kind::Media)
+                    return trackError("a master's items are audio",
+                                      "/items/" + e.id.str() + "/takes",
+                                      "put MIDI on a channel with an instrument");
     }
     bool hasPlayrate = false;
     for (const auto& e : s.envelopes) {

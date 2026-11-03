@@ -104,7 +104,7 @@ holds only user inserts.
 |---|---|---|---|---|---|
 | `channel` | — (record/monitor inputs only) | yes | never | C9 Channel last | C9 Channel |
 | `buss` | encoded strips | no | yes (folder) | C9 Buss first, C9 Channel last | C9 Channel |
-| `master` | encoded strips | no | yes (folder) | C9 Buss first, plain gain/pan last | plain stage |
+| `master` | encoded strips | audio items after the plain stage; arm records its output (ADR-0057) | yes (folder) | C9 Buss first, plain gain/pan, then its items | plain stage |
 
 Fields:
 
@@ -121,7 +121,8 @@ Fields:
 | `phase_invert`, `mono` | bool | the main pair's polarity flip and mono sum, after the inserts and before the fader (ADR-0022), ramped like mute |
 | `parent_send` | `{enabled}` | the encoded main pair into the parent (no level or channel map of its own) |
 | `hw_output` | [int] or absent | masters only (ADR-0056): the device output channels the main pair plays to, 1-based and at most 64: `[l, r]`, `[mono]` ((L+R)/2) or `[]` (none). Absent: tr_0 plays to `[1, 2]`, other masters to none. Masters sharing a channel add |
-| `record` | `{armed, input: route id or null, monitor: off|on|auto, mode: input|output|midi_overdub|midi_replace}` | channels only; `output` still loads from project files, but an armed output-mode track prevents recording with `record.output_unsupported` before any file is created; use input mode instead |
+| `lane_mute` | bool | masters only (ADR-0057): silences the master's own items and nothing else; default false |
+| `record` | `{armed, input: route id or null, monitor: off|on|auto, mode: input|output|midi_overdub|midi_replace}` | channels; on masters only `armed` (it records the master's output, ADR-0057). `output` still loads from project files, but an armed output-mode channel prevents recording with `record.output_unsupported` before any file is created; use input mode instead |
 | `timebase` | enum or `project` | default for its items (channels) |
 | `chain`, `input_chain` | [fx id] | §1.7; `input_chain` on channels only |
 | `lanes` | `{mode: none|fixed|comp, lanes: [ln id], comp: …}` | channels only |
@@ -424,8 +425,10 @@ deduplicated, reference-counted across versions.
 
 The track tree is a forest rooted at the masters (`project.masters`, tr_0
 first, all of type `master`, parent null); every other track's parent is a
-buss or master; channels have no children; items, lanes, record settings and
-`input_chain` only on channels; routes obey ADR-0019 §4; every referenced ID exists; items'
+buss or master; channels have no children; items only on channels and
+masters (a master's takes are audio or empty, ADR-0057); record settings and
+`input_chain` only on channels, except `record.armed` on masters; `lane_mute`
+only on masters; routes obey ADR-0019 §4; every referenced ID exists; items'
 tracks/lanes exist; `active_take` ∈ `takes`; sources referenced by takes
 exist (or are marked missing); no route cycles (including parent sends);
 envelope targets exist; points sorted; chains reference fx that belong to
@@ -453,7 +456,7 @@ routes: sd_1 tr_2 → tr_6 ch 1/2→3/4 pre-fader −6 dB (sidechain)
 markers: mk_1 "Verse" bar 1 · regions: rg_1 "Chorus" bars 9–17
 ```
 
-## 5. Project file (`supple.project/2.4`)
+## 5. Project file (`supple.project/2.5`)
 
 ### 5.1 Shape
 
@@ -465,11 +468,12 @@ with warnings.)*
 Schema 2.1 adds master playrate and its envelope target (ADR-0045).
 Schema 2.3 reshapes the render settings (§1.10, ADR-0055).
 Schema 2.4 adds masters' `hw_output` and the render setting `masters`
-(ADR-0056). Before 2.4, a route from a master to `hw_channels` (which never
+(ADR-0056). Schema 2.5 adds masters' `lane_mute`, and allows `record.armed`
+and audio items on masters (ADR-0057). Before 2.4, a route from a master to `hw_channels` (which never
 played) becomes that master's `hw_output` (its first such route) and the
 route is dropped, with a `project.hw_output_route` warning.
 
-The loader accepts 1.x and 2.x documents and saves 2.4. Migration allocates
+The loader accepts 1.x and 2.x documents and saves 2.5. Migration allocates
 child channel IDs in track-ID order, inserts each child first, and moves the
 source items and record/input FX there while keeping user inserts on the
 buss. Hardware/MIDI record routes follow the new child. Legacy numeric send
@@ -983,3 +987,11 @@ Writers now emit `supple.project/2.4`. The 2.4 changes are the masters' `hw_outp
 its routes to `hw_channels`, which become `hw_output` as §5.1 says. An older
 application opening a 2.4 file ignores both members with warnings: every master but
 tr_0 is then silent, and its mix renders tr_0 alone.
+
+### Master recording and items (schema 2.5, ADR-0057)
+
+Writers now emit `supple.project/2.5`. The 2.5 change is the masters' `lane_mute` (§1.4);
+2.5 also lets a master be armed (`record.armed`, nothing else in `record`) and hold audio
+items, which play after its plain gain/pan stage. A 2.4 file loads unchanged. An older
+application opening a 2.5 file ignores `lane_mute` with a warning, but refuses a project
+whose masters are armed or hold items: its strip rules allow neither (`track.strip_type`).

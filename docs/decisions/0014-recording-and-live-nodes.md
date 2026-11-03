@@ -14,6 +14,11 @@ unimplemented monitoring-latency promise with a backwards read-ahead solve
 and clarifies actual recording placement. The former forward solve
 delayed live paths to match playback; read-ahead removes that padding.
 
+**Amendment, 2026-11-03:** [ADR-0057](0057-master-recording.md) adds armed
+masters: decision 1's capture also takes a master's output (from its node in
+the callback, or from a record ring the renderer fills), placed by the
+master's own timeline shift instead of the device's input latency.
+
 ## Context
 
 Everything renders ahead today (ADR-0012). Recording needs the device's
