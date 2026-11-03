@@ -84,6 +84,8 @@ using Matrix = std::map<std::string, std::vector<std::string>>;
 
 struct Settings {
     std::optional<Source> source;
+    // The mix's masters, one file each (ADR-0056); absent: the main master.
+    std::optional<std::vector<std::string>> masters;
     std::optional<Bounds> bounds;
     std::optional<double> startBeat, endBeat, tailS;
     std::optional<Pattern> pattern;
@@ -110,6 +112,7 @@ std::span<const std::string_view> fieldNames();
 template <class F>
 void forEachField(F&& visit) {
     visit("source", &Settings::source);
+    visit("masters", &Settings::masters);
     visit("bounds", &Settings::bounds);
     visit("start_beat", &Settings::startBeat);
     visit("end_beat", &Settings::endBeat);

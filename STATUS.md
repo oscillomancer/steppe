@@ -167,7 +167,10 @@ instructions are in `docs/guides/installing.md`.
   key deactivates a plug-in's key port or bus, so it can key from its own
   input); up to 128
   channels per strip with plugin pins and multi-output instruments; strip
-  polarity and mono; the routing matrix.
+  polarity and mono; the routing matrix. Several masters, each playing to
+  its own device outputs (a pair, one mono output or none; ADR-0056), in
+  step with each other, picked from the master strip's out button; the
+  engine opens every output of the device (up to 64).
 - **Recording**: armed inputs to crash-readable WAV, input monitoring (needs
   the arm), MIDI monitoring and recording with overdub, loop recording into
   takes, punch, count-in, metronome.
@@ -194,14 +197,15 @@ instructions are in `docs/guides/installing.md`.
   the keyboard.
 - **Rendering** (`specs/engine.md` §3, ADR-0055): mix, stems, regions and
   the render matrix through one implementation; one set of render settings
-  per project (`project.render`, schema 2.3, undoable), resolved over the
+  per project (`project.render`, schema 2.4, undoable), resolved over the
   user's render default and the built-ins (`render.settings` shows each
   member's layer); per-user presets (six factory ones, read-only);
   file-name patterns with `{version}`, `{branch}` and subfolders, and
   overwrite / number / skip / error for existing files; project, loop or
   custom bounds, tails, seamless loops, region handles, trim of silence;
   loudness or peak normalization (only down, or one master gain for every
-  stem) and a true-peak limiter with or without it; up to four outputs per
+  stem) and a true-peak limiter with or without it; a mix of several
+  masters, a file each (ADR-0056); up to four outputs per
   file: WAV (16/24-bit with seeded TPDF or noise-shaped dither, or float,
   RF64 beyond 4 GiB), AIFF, FLAC, MP3 (LAME, gapless header) and Ogg Vorbis;
   tags, a cover, BWF timecode and loudness and embedded markers where the
@@ -761,6 +765,13 @@ Engine and hosting:
   preset last loaded.
 - Multi-output plugins: main output ports wider than stereo are not used,
   and there are no per-output meters.
+- A master's hardware output carries its main pair only: auxiliary channels
+  (3+) of a wide master cannot reach the device, and an output has no gain
+  of its own. A key route from one output master into another master's path
+  leaves the first one early at the device (a plan warning gives the
+  samples). The metronome always plays on outputs 1/2. Native CI has not yet
+  run the multi-output engine on macOS or Windows (CoreAudio and WASAPI
+  opening every output of a device).
 - Overlapping gestures on a plugin without semantic parameters share one
   state blob.
 - The render dialog's Time selection range is never offered (the arrange

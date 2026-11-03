@@ -80,8 +80,9 @@ Status DummyBackend::start(const BackendConfig& config, Callback callback) {
                      "stop this backend before starting it again or changing its configuration");
     config_ = config;
     callback_ = std::move(callback);
-    outL_.assign(config.blockSize, 0.0f);
-    outR_.assign(config.blockSize, 0.0f);
+    outputs_.assign(config.outputs, std::vector<float>(config.blockSize, 0.0f));
+    outPtrs_.clear();
+    for (auto& c : outputs_) outPtrs_.push_back(c.data());
     inputs_.assign(config.inputs, std::vector<float>(config.blockSize, 0.0f));
     inPtrs_.clear();
     for (auto& c : inputs_) inPtrs_.push_back(c.data());
@@ -90,7 +91,7 @@ Status DummyBackend::start(const BackendConfig& config, Callback callback) {
     midi_.reserve(kMaxMidiInputEvents);
     capture_.sampleRate = config.sampleRate;
     capture_.channels.assign(
-        2, std::vector<float>(static_cast<std::size_t>(options_.captureFrames), 0.0f));
+        config.outputs, std::vector<float>(static_cast<std::size_t>(options_.captureFrames), 0.0f));
     captured_ = 0;
     cycles_ = 0;
     running_ = true;
@@ -107,8 +108,7 @@ Status DummyBackend::start(const BackendConfig& config, Callback callback) {
                     std::this_thread::sleep_until(next);
                 }
             }
-            float* out[2] = {outL_.data(), outR_.data()};
-            callback_(nullptr, out, 0);  // the final callback (Backend::stop contract)
+            callback_(nullptr, outPtrs_.data(), 0);  // the final callback (Backend::stop contract)
         });
     }
     return okStatus();
@@ -119,8 +119,7 @@ void DummyBackend::stop() {
     if (thread_.joinable()) {
         thread_.join();
     } else if (wasRunning && callback_) {
-        float* out[2] = {outL_.data(), outR_.data()};
-        callback_(nullptr, out, 0);  // Manual: the caller is the audio thread
+        callback_(nullptr, outPtrs_.data(), 0);  // Manual: the caller is the audio thread
     }
 }
 
@@ -133,7 +132,7 @@ void DummyBackend::run(std::int64_t n) {
 }
 
 void DummyBackend::cycle() {
-    float* out[2] = {outL_.data(), outR_.data()};
+    float* const* out = outPtrs_.data();
     if (options_.input && !inPtrs_.empty())
         options_.input(inPtrs_.data(), config_.inputs, config_.blockSize, inputFrame_);
     midi_.clear();
@@ -148,8 +147,8 @@ void DummyBackend::cycle() {
     callback_(inPtrs_.empty() ? nullptr : inPtrs_.data(), out, config_.blockSize);
     const auto room = std::min<std::int64_t>(config_.blockSize, options_.captureFrames - captured_);
     if (room > 0) {
-        std::copy_n(outL_.begin(), room, capture_.channels[0].begin() + captured_);
-        std::copy_n(outR_.begin(), room, capture_.channels[1].begin() + captured_);
+        for (std::size_t c = 0; c < outputs_.size(); ++c)
+            std::copy_n(outputs_[c].begin(), room, capture_.channels[c].begin() + captured_);
         captured_ += room;
     }
     cycles_.fetch_add(1);
@@ -192,7 +191,9 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
         // once. Room for the render-ahead amount at up to 192 kHz.
         const auto chunks = static_cast<std::size_t>(
             std::ceil(options_.renderAheadMs / 1000.0 * 192000.0 / options_.renderBlock));
-        ring_ = std::make_unique<detail::ChunkRing>(chunks + 2, options_.renderBlock);
+        deviceOutputs_ = std::min<std::uint32_t>(config.outputs, 64);
+        ring_ = std::make_unique<detail::ChunkRing>(chunks + 2, options_.renderBlock, false,
+                                                    deviceOutputs_);
         const TransportSnapshot t = transportSnapshot();  // the main thread writes it
         rtEpoch_ = t.epoch;
         loopC_ = t.loop;
@@ -204,6 +205,7 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
     }
     deviceInputs_ =
         std::min<std::uint32_t>(config.inputs, 64);  // the callback's copy, set before it runs
+    deviceOutputs_ = std::min<std::uint32_t>(config.outputs, 64);
     outputWakeAt_.store(INT64_MAX);
     outputWakeSerial_.fetch_add(1);
     outputWakeSeen_ = 0;
@@ -558,11 +560,19 @@ Status Engine::load(const model::Session& session, const std::filesystem::path& 
                 plan->frontierRings.push_back(
                     std::make_unique<detail::ChunkRing>(chunks + 2, quantum));
         } else if (plan->rateEnabled) {
-            plan->rateOutput = std::make_unique<detail::ChunkRing>(chunks + 2, quantum, true);
+            plan->rateOutput =
+                std::make_unique<detail::ChunkRing>(chunks + 2, quantum, true, deviceOutputs_);
         }
     }
     outputLatency_ = static_cast<std::uint32_t>(plan->outputLatency);
     warnings_ = plan->warnings;
+    for (const detail::OutputTap& o : plan->outputs)  // ADR-0056
+        if (std::max(o.left, o.right) >= static_cast<int>(deviceOutputs_))
+            warnings_.push_back(
+                plan->nodes[o.node].id.str() + " plays to output " +
+                std::to_string(std::max(o.left, o.right) + 1) + ", but the device has " +
+                std::to_string(deviceOutputs_) +
+                " outputs: set its hw_output, or start the engine with more outputs");
     warnings_.insert(warnings_.end(), startWarnings_.begin(), startWarnings_.end());
     // Metering (P5.3c): every strip of this plan gets its bank slot here, on
     // the main thread — never while an audio side reads it — and the lists the
@@ -1237,8 +1247,8 @@ void Engine::cycle(const float* const* in, float* const* out, std::uint32_t fram
             std::array<const float*, 64> inAt{};
             for (std::uint32_t c = 0; c < deviceInputs_ && c < inAt.size(); ++c)
                 inAt[c] = in && in[c] ? in[c] + k : nullptr;
-            float* outAt[2] = {out[0] + k, out[1] + k};
-            cycleBody(in ? inAt.data() : nullptr, outAt, frames - k, k);
+            const auto outAt = advanced(out, k);
+            cycleBody(in ? inAt.data() : nullptr, outAt.data(), frames - k, k);
         }
         counting_.store(countLeft_ > 0, std::memory_order_relaxed);
         return;
@@ -1298,8 +1308,9 @@ void Engine::cycleBody(const float* const* in, float* const* out, std::uint32_t 
                     std::array<const float*, 64> input{};
                     for (std::uint32_t c = 0; c < deviceInputs_ && c < input.size(); ++c)
                         input[c] = in && in[c] ? in[c] + first : nullptr;
-                    float* rest[] = {out[0] + first, out[1] + first};
-                    cycleBody(in ? input.data() : nullptr, rest, frames - first, midiBase + first);
+                    const auto rest = advanced(out, first);
+                    cycleBody(in ? input.data() : nullptr, rest.data(), frames - first,
+                              midiBase + first);
                     return;
                 }
                 break;
@@ -1391,9 +1402,7 @@ void Engine::cycleBody(const float* const* in, float* const* out, std::uint32_t 
         if (detail::processCallbackBlock(liveWorkersReady_.load(std::memory_order_acquire), *plan,
                                          pos_, frames, false, false, &processing_)) {
             publishPluginOutputs(*plan, false, rtEpoch_, pos_, rtStream_.load());
-            const detail::Node& master = plan->nodes[plan->mainMaster];
-            std::copy_n(master.post.l.begin(), frames, out[0]);
-            std::copy_n(master.post.r.begin(), frames, out[1]);
+            writeDevice(*plan, out, 0, frames);
             // Metering (P5.3c): monitored input is heard as it is produced —
             // there is no play position ahead of it to wait for.
             if (meters_)
@@ -1401,8 +1410,7 @@ void Engine::cycleBody(const float* const* in, float* const* out, std::uint32_t 
                            rtStream_.load(std::memory_order_relaxed), frames, false);
         } else {
             processErrors_.fetch_add(1);
-            std::fill_n(out[0], frames, 0.0f);
-            std::fill_n(out[1], frames, 0.0f);
+            silence(out, 0, frames);
         }
         reportedPos_.store(pos_);
         reportedPlaying_.store(false);
@@ -1429,9 +1437,7 @@ void Engine::cycleBody(const float* const* in, float* const* out, std::uint32_t 
             break;
         }
         publishPluginOutputs(*plan, false, rtEpoch_, pos_, meterStream);
-        const detail::Node& master = plan->nodes[plan->mainMaster];
-        std::copy_n(master.post.l.begin(), k, out[0] + done);
-        std::copy_n(master.post.r.begin(), k, out[1] + done);
+        writeDevice(*plan, out, done, k);
         addClicks(*plan, out, done, pos_, k);
         if (detail::Recorder* r = recorder_.load()) {
             const auto timeline = static_cast<std::int64_t>(std::llround(plan->rateSample(pos_)));
@@ -1450,8 +1456,7 @@ void Engine::cycleBody(const float* const* in, float* const* out, std::uint32_t 
     }
     if (!ok) {
         if (run) processErrors_.fetch_add(1);
-        std::fill_n(out[0], frames, 0.0f);
-        std::fill_n(out[1], frames, 0.0f);
+        silence(out, 0, frames);
     }
     if (ok && run) {
         rtPos_.store(pos_, std::memory_order_relaxed);
@@ -1523,6 +1528,21 @@ float Engine::clickSample() SUPPLE_RT {
     clickEnv_ *= clickDecay_;
     if (++clickAge_ >= clickLength_) clickAge_ = -1;
     return v;
+}
+
+void Engine::silence(float* const* out, std::uint32_t offset, std::uint32_t k) const SUPPLE_RT {
+    for (std::uint32_t c = 0; c < deviceOutputs_; ++c) std::fill_n(out[c] + offset, k, 0.0f);
+}
+
+void Engine::writeDevice(const detail::Plan& p, float* const* out, std::uint32_t offset,
+                         std::uint32_t k) const SUPPLE_RT {
+    detail::writeOutputs(p, out, deviceOutputs_, offset, k);
+}
+
+std::array<float*, 64> Engine::advanced(float* const* out, std::uint32_t by) const SUPPLE_RT {
+    std::array<float*, 64> at{};
+    for (std::uint32_t c = 0; c < deviceOutputs_; ++c) at[c] = out[c] + by;
+    return at;
 }
 
 void Engine::countClicks(float* const* out, std::uint32_t k) SUPPLE_RT {
@@ -1627,8 +1647,12 @@ Engine::Pulled Engine::pullAhead(float* const* out, std::uint32_t frames) SUPPLE
         if (done > 0 && wrapped) return {first, done, true};
         const std::uint32_t take = std::min(frames - done, c->frames - rtOffset_);
         if (first == kNothingPlayed) first = c->start + rtOffset_;
-        std::copy_n(c->l.begin() + rtOffset_, take, out[0] + done);
-        std::copy_n(c->r.begin() + rtOffset_, take, out[1] + done);
+        for (std::uint32_t ch = 0; ch < deviceOutputs_; ++ch) {
+            if (ch < c->width())
+                std::copy_n(c->channel(ch) + rtOffset_, take, out[ch] + done);
+            else
+                std::fill_n(out[ch] + done, take, 0.0f);
+        }
         done += take;
         rtOffset_ += take;
         const auto pos = c->start + rtOffset_;
@@ -1656,8 +1680,7 @@ Engine::Pulled Engine::pullAhead(float* const* out, std::uint32_t frames) SUPPLE
         rtPosEpoch_.store(e);
     }
     if (done < frames) {
-        std::fill_n(out[0] + done, frames - done, 0.0f);
-        std::fill_n(out[1] + done, frames - done, 0.0f);
+        silence(out, done, frames - done);
         if (rtPrimed_ && wantPlaying_.load(std::memory_order_relaxed))
             misses_.fetch_add(1, std::memory_order_relaxed);
     }
@@ -2095,9 +2118,17 @@ void Engine::rendererLoop(std::uint64_t seen) {
                 fill(plan_->frontierRings[j]->slot(), detail::edgeSignal(*plan_, e));
                 plan_->frontierRings[j]->publish();
             }
-        } else {
+        } else {  // the device's channels (ADR-0056)
             auto& output = plan_->rateOutput ? *plan_->rateOutput : *ring_;
-            fill(output.slot(), plan_->nodes[plan_->mainMaster].post);
+            detail::Chunk* c = output.slot();
+            fill(c, plan_->nodes[plan_->mainMaster].post);
+            std::array<float*, 64> channels{};
+            const std::uint32_t width = std::min<std::uint32_t>(c->width(), 64);
+            for (std::uint32_t ch = 0; ch < width; ++ch) channels[ch] = c->channel(ch);
+            if (ok)
+                detail::writeOutputs(*plan_, channels.data(), width, 0, n);
+            else
+                for (std::uint32_t ch = 2; ch < width; ++ch) std::fill_n(channels[ch], n, 0.0f);
             output.publish();
         }
         // Metering (P5.3c): the renderer publishes what it just rendered, at
@@ -2202,18 +2233,17 @@ void Engine::anticipativeCycle(const float* const* in, float* const* out, std::u
             break;
         }
         for (std::uint32_t c = 0; c < inputs; ++c) inAt[c] = in && in[c] ? in[c] + done : nullptr;
-        float* outAt[2] = {out[0] + done, out[1] + done};
+        const auto outAt = advanced(out, done);
         const float* const* ins = in ? inAt.data() : nullptr;
         if (livePlan_ && livePlan_->split) {
-            k = liveRender(ins, outAt, k, midiBase + done);
+            k = liveRender(ins, outAt.data(), k, midiBase + done);
         } else if (countHold_) {  // counting in: the rendered audio waits
-            std::fill_n(outAt[0], k, 0.0f);
-            std::fill_n(outAt[1], k, 0.0f);
+            silence(outAt.data(), 0, k);
         } else {
-            const Pulled played = pullAhead(outAt, k);
+            const Pulled played = pullAhead(outAt.data(), k);
             if (played.wrapped) k = played.frames;  // the rest continues at the loop start
             if (played.first != kNothingPlayed && livePlan_)
-                addClicks(*livePlan_, outAt, 0, played.first, played.frames);
+                addClicks(*livePlan_, outAt.data(), 0, played.first, played.frames);
             // Only input that went with played audio is recorded; what came
             // during a dropout had no timeline position and counts as lost.
             if (detail::Recorder* r = recorder_.load()) {
@@ -2241,8 +2271,7 @@ std::uint32_t Engine::liveRender(const float* const* in, float* const* out, std:
     const void* self = &liveProcessing_;
     if (!liveReady_) {
         if (epochDone_.load(std::memory_order_acquire) < rtEpoch_) {  // not placed yet
-            std::fill_n(out[0], k, 0.0f);
-            std::fill_n(out[1], k, 0.0f);
+            silence(out, 0, k);
             return k;
         }
         livePos_ = playedPosition(rtEpoch_, epochStart_.load());
@@ -2295,14 +2324,10 @@ std::uint32_t Engine::liveRender(const float* const* in, float* const* out, std:
     // is rendered ahead, so a monitored input is heard as it is produced.
     if (ok && meters_ && (playing || !wantNow()))
         pushMeters(*meters_, p, p.liveMeterNodes, rtEpoch_, liveStream_, k, false);
-    const detail::Node& master = p.nodes[p.mainMaster];
-    if (ok) {
-        std::copy_n(master.post.l.begin(), k, out[0]);
-        std::copy_n(master.post.r.begin(), k, out[1]);
-    } else {
-        std::fill_n(out[0], k, 0.0f);
-        std::fill_n(out[1], k, 0.0f);
-    }
+    if (ok)
+        writeDevice(p, out, 0, k);
+    else
+        silence(out, 0, k);
     if (playing) addClicks(p, out, 0, livePos_, k);
     if (playing) {
         if (detail::Recorder* r = recorder_.load()) {

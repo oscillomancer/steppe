@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 // JSON forms of the session objects (core-schema) and the project file
-// `supple.project/2.3` (session-model §5). Fields equal to their defaults are
+// `supple.project/2.4` (session-model §5). Fields equal to their defaults are
 // omitted, so files and diffs stay small; decoding fills them back in.
 #pragma once
 
@@ -32,7 +32,7 @@ json::Value toJson(const T& object) {
     return schemaOf<T>().encode(object);
 }
 
-inline constexpr std::string_view kProjectSchema = "supple.project/2.3";
+inline constexpr std::string_view kProjectSchema = "supple.project/2.4";
 
 // The whole session as the canonical project document (members in the
 // spec's order, objects keyed by ID in ID order).

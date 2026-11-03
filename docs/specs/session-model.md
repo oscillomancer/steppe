@@ -120,6 +120,7 @@ Fields:
 | `mute`, `solo` | bool / enum (`off`, `on`, `in_place`, `defeat`) | mute ramps the fader to −inf before the encode |
 | `phase_invert`, `mono` | bool | the main pair's polarity flip and mono sum, after the inserts and before the fader (ADR-0022), ramped like mute |
 | `parent_send` | `{enabled}` | the encoded main pair into the parent (no level or channel map of its own) |
+| `hw_output` | [int] or absent | masters only (ADR-0056): the device output channels the main pair plays to, 1-based and at most 64: `[l, r]`, `[mono]` ((L+R)/2) or `[]` (none). Absent: tr_0 plays to `[1, 2]`, other masters to none. Masters sharing a channel add |
 | `record` | `{armed, input: route id or null, monitor: off|on|auto, mode: input|output|midi_overdub|midi_replace}` | channels only; `output` still loads from project files, but an armed output-mode track prevents recording with `record.output_unsupported` before any file is created; use input mode instead |
 | `timebase` | enum or `project` | default for its items (channels) |
 | `chain`, `input_chain` | [fx id] | §1.7; `input_chain` on channels only |
@@ -245,7 +246,7 @@ rendered).
 | field | notes |
 |---|---|
 | `from` | `{track: id}` or `{hw_input: {channels: [..]}}` or `{midi_input: device}` |
-| `to` | `{track: id}`, `{fx: id}` (a plug-in's key, ADR-0018) or `{hw_output: {channels: [..]}}` |
+| `to` | `{track: id}` or `{fx: id}` (a plug-in's key, ADR-0018); hardware outputs are a master's `hw_output` (§1.4, ADR-0056), and a route to `hw_channels` is refused with `route.hw_output` |
 | `tap` | `post_fader` (default), `pre_fader` (post-FX), `pre_fx` |
 | `volume` dB, `pan` % or `follow` (default: the strip's pan), `mute`, `phase_invert`, `mono` | into a buss/master: realized by the send's own C9 Channel (ADR-0019 §3) |
 | `channels` | `{from: [..], to: [..]}` channel mapping, 1-based in 1..128 and up to each strip's channels (e.g. [1,2] → [3,4] for a detector on 3/4). Main pairs map the encoded send; pairs touching auxiliary channels are linear links at the route's level, mute and polarity (ADR-0020) |
@@ -256,7 +257,7 @@ are routes from `hw_input`/`midi_input` referenced by `track.record.input`.
 Cycles are rejected at edit time (`route.cycle`, naming the cycle).
 ADR-0019 §4 rules, rejected at edit time with `route.strip_type` (and a hint
 naming the allowed alternative): audio into a channel only from `hw_input`;
-audio into a buss/master only from strips; `hw_output` only from masters; key
+audio into a buss/master only from strips; key
 routes from any tap of any strip.
 
 ### 1.9 Envelopes and automation items
@@ -311,6 +312,10 @@ missing member comes from the user's default, then the built-in default
 
 - `source`: `mix` | `stems` | `regions` [`mix`]: the dialog's source
   (`render.mix` always renders the mix).
+- `masters`: [master ids], 1–256 [the main master alone]: the masters the
+  mix renders, one file each (ADR-0056). With more than one, a pattern
+  without `{track}` gets `-{track}` (the master's name). Presets and the
+  user default never hold it.
 - `bounds`: `project` (beat 0 to the last item's end) | `loop` (the
   transport loop; `render.empty` when none is set) | `custom` (the members
   `start_beat` [0] and `end_beat` [the last item's end]) [`project`]. A
@@ -447,7 +452,7 @@ routes: sd_1 tr_2 → tr_6 ch 1/2→3/4 pre-fader −6 dB (sidechain)
 markers: mk_1 "Verse" bar 1 · regions: rg_1 "Chorus" bars 9–17
 ```
 
-## 5. Project file (`supple.project/2.3`)
+## 5. Project file (`supple.project/2.4`)
 
 ### 5.1 Shape
 
@@ -458,8 +463,12 @@ with warnings.)*
 
 Schema 2.1 adds master playrate and its envelope target (ADR-0045).
 Schema 2.3 reshapes the render settings (§1.10, ADR-0055).
+Schema 2.4 adds masters' `hw_output` and the render setting `masters`
+(ADR-0056). Before 2.4, a route from a master to `hw_channels` (which never
+played) becomes that master's `hw_output` (its first such route) and the
+route is dropped, with a `project.hw_output_route` warning.
 
-The loader accepts 1.x and 2.x documents and saves 2.3. Migration allocates
+The loader accepts 1.x and 2.x documents and saves 2.4. Migration allocates
 child channel IDs in track-ID order, inserts each child first, and moves the
 source items and record/input FX there while keeping user inserts on the
 buss. Hardware/MIDI record routes follow the new child. Legacy numeric send
@@ -711,7 +720,7 @@ and naming. All `edit` unless marked (q) query or (a) action.
   `transport.record`, `transport.seek {pos}`, `transport.loop {range}`,
   `transport.punch {start, end}`, `transport.metronome {count_in_bars,
   count_in_playback, …}` (a count-in before recording), `transport.get` (q).
-- **render** (a): `render.mix {master}` (default tr_0), `render.stems`, `render.regions` (matrix),
+- **render** (a): `render.mix {master}` (one master for the call; default the `masters` setting, else tr_0), `render.stems`, `render.regions` (matrix),
   `render.items`, `render.dry-run` (q: resolved file list), `render.job.*`;
   `format` (wav|flac), `secondary` (a second file in another format/bit depth
   from the same render); `render.queue.add/list/remove/run` (renders queued
@@ -793,6 +802,9 @@ eviction; blob dedup.
   A job cancelled during project replacement keeps its cancelled status and
   receives the stale result when its queued completion is serviced.
 - `track.add` and `track.set` accept 1..128 channels; busses/masters require at least 2.
+- `track.set {hw_output}` (ADR-0056) accepts 0–2 distinct channels 1..64, on masters only
+  (`track.strip_type` otherwise, `track.hw_output` for three channels or a repeated one).
+  Retyping a master clears it. `track.list` reports every master's resolved `hw_output`.
   `fx.param.set` keeps semantic parameter units and also supports plain CLAP/VST3
   parameter names/IDs, declared ranges, writable flags and plugin text conversion.
   Plain parameter edits save processor state after applying queued values on a
@@ -961,3 +973,11 @@ Writers now emit `supple.project/2.3`. The 2.3 change is the shape of `project.r
 top level. A save and reopen gives the same bytes. An older application opening a 2.3
 file ignores the members it does not know, with warnings, and renders with its own
 defaults for them.
+
+### Master hardware outputs (schema 2.4, ADR-0056)
+
+Writers now emit `supple.project/2.4`. The 2.4 changes are the masters' `hw_output`
+(§1.4) and the render setting `masters` (§1.10); a 2.3 file loads unchanged apart from
+its routes to `hw_channels`, which become `hw_output` as §5.1 says. An older
+application opening a 2.4 file ignores both members with warnings: every master but
+tr_0 is then silent, and its mix renders tr_0 alone.

@@ -278,6 +278,12 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
     std::map<Id, std::size_t> index;
     for (std::size_t i = 0; i < order->size(); ++i) index[(*order)[i]] = i;
     p.mainMaster = index.at(model::kMaster);
+    for (Id m : s.project->masters) {  // ADR-0056
+        const auto channels = model::hardwareOutputs(*s.tracks.find(m), m);
+        if (channels.empty()) continue;
+        p.outputs.push_back(
+            {index.at(m), channels[0] - 1, channels.size() > 1 ? channels[1] - 1 : -1});
+    }
     p.nodes.resize(order->size());
     for (std::size_t i = 0; i < order->size(); ++i) {
         Node& n = p.nodes[i];
@@ -640,6 +646,8 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
     // track that feeds nothing).
     if (p.anyLive) {
         p.nodes[p.mainMaster].live = true;
+        // Every master the device plays: the callback writes their output.
+        for (const OutputTap& o : p.outputs) p.nodes[o.node].live = true;
         // A main-master key may feed later strips, which must stay with the live executor.
         for (Node& n : p.nodes)
             for (std::size_t edge : n.in) n.live = n.live || p.nodes[p.edges[edge].from].live;
@@ -957,9 +965,18 @@ Status prepare(Plan& p, const Session& s) {
         });
         n.timelineShift = INT64_MAX;
     }
-    Node& master = p.nodes[p.mainMaster];
-    p.outputLatency = master.latIn + master.latChain;
-    master.timelineShift = master.latIn;
+    // The anchors: the main master and every master the device plays
+    // (ADR-0056). They share one output latency, the largest of theirs, so
+    // their outputs reach the device in step; with only the main master this
+    // is its own latency, as before.
+    std::vector<std::size_t> anchors{p.mainMaster};
+    for (const OutputTap& o : p.outputs)
+        if (std::find(anchors.begin(), anchors.end(), o.node) == anchors.end())
+            anchors.push_back(o.node);
+    p.outputLatency = 0;
+    for (std::size_t a : anchors)
+        p.outputLatency = std::max(p.outputLatency, p.nodes[a].latIn + p.nodes[a].latChain);
+    for (std::size_t a : anchors) p.nodes[a].timelineShift = p.outputLatency - p.nodes[a].latChain;
     // ADR-0051: S = outputLatency - downstreamLatency. Schedule every source
     // as late as its downstream paths permit, leaving padding only at splits.
     // Classification/monitoring never enters this solve. The main master is
@@ -995,6 +1012,15 @@ Status prepare(Plan& p, const Session& s) {
             if (e.encode) e.encoded.init(block);
             e.auxTmp.assign(e.auxLinks.empty() ? 0 : block, 0.0f);
         }
+    }
+    // A key route from one output master into another's path can pull the
+    // first one earlier than the others (ADR-0056).
+    for (const OutputTap& o : p.outputs) {
+        const Node& m = p.nodes[o.node];
+        if (const auto early = p.outputLatency - m.timelineShift - m.latChain; early > 0)
+            p.warnings.push_back(m.id.str() + " reaches the device " + std::to_string(early) +
+                                 " samples early: a key route from it feeds another master's "
+                                 "path");
     }
     // Automation lines up with the signal where it is applied: the fader sees
     // the track's input and chain latency, a route's gain its target's input.
@@ -2824,6 +2850,38 @@ void carryLiveNotes(Plan& from, Plan& to, bool liveOnly) SUPPLE_RT {
             break;
         }
     }
+}
+
+void writeOutputs(const Plan& p, float* const* out, std::uint32_t width, std::uint32_t offset,
+                  std::uint32_t k) SUPPLE_RT {
+    std::array<bool, 64> written{};
+    auto put = [&](int c, const float* from, bool half, const float* other) {
+        if (c < 0 || static_cast<std::uint32_t>(c) >= width || c >= 64) return;
+        float* to = out[c] + offset;
+        const bool first = !written[static_cast<std::size_t>(c)];
+        written[static_cast<std::size_t>(c)] = true;
+        if (half) {
+            for (std::uint32_t i = 0; i < k; ++i) {
+                const float v = 0.5f * (from[i] + other[i]);
+                to[i] = first ? v : to[i] + v;
+            }
+        } else if (first) {
+            std::copy_n(from, k, to);
+        } else {
+            for (std::uint32_t i = 0; i < k; ++i) to[i] += from[i];
+        }
+    };
+    for (const OutputTap& o : p.outputs) {
+        const Stereo& post = p.nodes[o.node].post;
+        if (o.right < 0) {
+            put(o.left, post.l.data(), true, post.r.data());
+        } else {
+            put(o.left, post.l.data(), false, nullptr);
+            put(o.right, post.r.data(), false, nullptr);
+        }
+    }
+    for (std::uint32_t c = 0; c < width && c < 64; ++c)
+        if (!written[c]) std::fill_n(out[c] + offset, k, 0.0f);
 }
 
 void carryMix(Plan& from, Plan& to, int liveClass) SUPPLE_RT {

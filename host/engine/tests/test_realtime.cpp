@@ -396,6 +396,112 @@ TEST_CASE("real-time output equals the offline render (any block size)" *
         }
 }
 
+TEST_CASE("several masters play to their own device outputs, in step (ADR-0056)" *
+          doctest::description("rt")) {
+    // Two synths: one under the main master (outputs 1/2), one under a cue
+    // master on 3/4 whose latent gain makes it the later of the two.
+    model::Session s = synthSession(-18.0, nullptr, 2);
+    model::EditTxn t(s, 2);
+    model::Track cueTrack;
+    cueTrack.type = model::StripType::Master;
+    cueTrack.name = "Cue";
+    cueTrack.hwOutput = std::vector<int>{3, 4};
+    const Id cue = t.create(cueTrack);
+    auto project = t.project();
+    project.masters.push_back(cue);
+    project.seed = 97531;
+    t.setProject(project);
+    const Id moved = s.tracks.find(kMaster)->children.back();
+    t.modify<model::Track>(kMaster, [&](auto& m) { std::erase(m.children, moved); });
+    t.modify<model::Track>(cue, [&](auto& m) { m.children.push_back(moved); });
+    t.modify<model::Track>(moved, [&](auto& tr) {
+        tr.parent = cue;
+        tr.volumeDb = -9.0;
+    });
+    model::FxInstance gain;
+    gain.plugin.id = "com.suppleaudio.test.gain";
+    gain.patch =
+        json::parse(R"({"schema": "supple.test-gain-patch/1.0", "params": {"latency": "short"}})")
+            .value();
+    const Id g = t.create(gain);
+    t.modify<model::Track>(cue, [&](auto& m) { m.chain.push_back(g); });
+    s = t.commit().value();
+    auto pool = makePool();
+    auto main = renderOffline(s, pool, {.startSeconds = 0, .endSeconds = 2.0}).value();
+    auto cued =
+        renderOffline(s, pool, {.master = cue, .startSeconds = 0, .endSeconds = 2.0}).value();
+    for (const EngineOptions& options :
+         {kInCallback, EngineOptions{.workers = 0}, EngineOptions{.workers = 3}}) {
+        INFO("anticipative " << options.anticipative << ", workers " << options.workers);
+        auto rtPool = makePool();
+        MediaCache media;
+        DummyBackend backend(
+            {.mode = DummyBackend::Mode::Manual, .captureFrames = 48000 * 2 + 4096});
+        Engine engine(rtPool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128, .outputs = 6}));
+        REQUIRE(engine.load(s));
+        engine.play();
+        if (options.anticipative)
+            runAhead(engine, backend, (48000 * 2 + 4096) / 128, 128);
+        else
+            backend.run((48000 * 2 + 4096) / 128);
+        engine.stop();
+        CHECK(engine.processErrors() == 0);
+        const std::uint32_t L = engine.outputLatency();
+        CHECK(L == 64u);  // the cue master's gain: both masters wait for it
+        const auto& cap = backend.capture();
+        REQUIRE(cap.channels.size() == 6);
+        CHECK(maxDiff(cap.channels[0], L, main.audio.channels[0], 96000) == 0.0);
+        CHECK(maxDiff(cap.channels[1], L, main.audio.channels[1], 96000) == 0.0);
+        CHECK(maxDiff(cap.channels[2], L, cued.audio.channels[0], 96000) == 0.0);
+        CHECK(maxDiff(cap.channels[3], L, cued.audio.channels[1], 96000) == 0.0);
+        double cuePeak = 0, unused = 0;
+        for (std::size_t i = 0; i < 96000; ++i) {
+            cuePeak = std::max(cuePeak, std::fabs(double(cap.channels[2][i])));
+            unused = std::max({unused, std::fabs(double(cap.channels[4][i])),
+                               std::fabs(double(cap.channels[5][i]))});
+        }
+        CHECK(cuePeak > 0.01);
+        CHECK(unused == 0.0);
+    }
+}
+
+TEST_CASE("a master with one output plays mono; outputs past the device are skipped" *
+          doctest::description("rt")) {
+    model::Session s = synthSession(-18.0);
+    model::EditTxn t(s, 2);
+    t.modify<model::Track>(kMaster, [](auto& m) { m.hwOutput = std::vector<int>{2}; });
+    s = t.commit().value();
+    auto pool = makePool();
+    auto offline = renderOffline(s, pool, {.startSeconds = 0, .endSeconds = 1.0}).value();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000});
+    Engine engine(pool, media, kInCallback);
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+    REQUIRE(engine.load(s));
+    engine.play();
+    backend.run(48000 / 128);
+    // The same master on outputs 5/6 of a two-output device: nothing plays
+    // there, and the engine says why.
+    model::EditTxn far(s, 3);
+    far.modify<model::Track>(kMaster, [](auto& m) { m.hwOutput = std::vector<int>{5, 6}; });
+    REQUIRE(engine.load(far.commit().value()));
+    const auto warnings = engine.warnings();
+    CHECK(std::any_of(warnings.begin(), warnings.end(), [](const std::string& w) {
+        return w.find("output 6") != std::string::npos;
+    }));
+    engine.stop();
+    const auto& cap = backend.capture();
+    double left = 0, worst = 0;
+    for (std::size_t i = 0; i < 48000 - 128; ++i) {
+        left = std::max(left, std::fabs(double(cap.channels[0][i])));
+        const float mono = 0.5f * (offline.audio.channels[0][i] + offline.audio.channels[1][i]);
+        worst = std::max(worst, std::fabs(double(cap.channels[1][i]) - double(mono)));
+    }
+    CHECK(left == 0.0);
+    CHECK(worst == 0.0);
+}
+
 TEST_CASE("take FX: real-time output equals the offline render" * doctest::description("rt")) {
     // The synth session with its sine and a latent gain moved into the take's chain.
     model::Session base = synthSession(-3.0, "com.suppleaudio.test.gain");
@@ -1378,6 +1484,8 @@ TEST_CASE("anticipative monitoring: live input and rendered playback, identical 
     project.console9 = true;
     project.seed = 5723;
     mode.setProject(project);
+    // The main master on outputs 3/4 (ADR-0056): the live executor writes them.
+    mode.modify<model::Track>(kMaster, [](auto& m) { m.hwOutput = std::vector<int>{3, 4}; });
     s = mode.commit().value();
     constexpr std::int64_t kCycles = 400;  // 102400 frames at 256
     audio::AudioData reference;
@@ -1395,7 +1503,8 @@ TEST_CASE("anticipative monitoring: live input and rendered playback, identical 
         auto measuredOptions = options;
         measuredOptions.benchProbe = &probe;
         Engine engine(pool, media, measuredOptions);
-        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256, .inputs = 2}));
+        REQUIRE(engine.start(backend,
+                             {.sampleRate = 48000, .blockSize = 256, .inputs = 2, .outputs = 4}));
         REQUIRE(engine.load(s));
         engine.play();
         if (options.anticipative)
@@ -1425,14 +1534,17 @@ TEST_CASE("anticipative monitoring: live input and rendered playback, identical 
         }
         const auto& cap = backend.capture();
         double live = 0;
-        for (std::size_t i = 60000; i < 70000; ++i)
-            live = std::max(live, std::fabs(double(cap.channels[1][i])));
+        double unused = 0;
+        for (std::size_t i = 60000; i < 70000; ++i) {
+            live = std::max(live, std::fabs(double(cap.channels[3][i])));
+            unused = std::max(unused, std::fabs(double(cap.channels[1][i])));
+        }
         CHECK(live > 0.05);  // the ramp, through the vocal chain
+        CHECK(unused == 0.0);
         if (!options.anticipative) {
             reference = cap;
         } else {
-            CHECK(cap.channels[0] == reference.channels[0]);
-            CHECK(cap.channels[1] == reference.channels[1]);
+            for (std::size_t c = 0; c < 4; ++c) CHECK(cap.channels[c] == reference.channels[c]);
         }
     }
 }
@@ -2666,10 +2778,7 @@ TEST_CASE("a master key is legal and its downstream node follows the live execut
     key.from.track = kMaster;
     key.to.fx = fx;
     t.create(key);
-    model::Route hw;
-    hw.from.track = kMaster;
-    hw.to.hwChannels = std::vector<int>{1, 2};
-    t.create(hw);
+    t.modify<model::Track>(kMaster, [](auto& tr) { tr.hwOutput = std::vector<int>{1, 2}; });
     auto s = t.commit();
     REQUIRE(s);
     auto pool = makePool();
