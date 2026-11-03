@@ -27,13 +27,20 @@ plan (built incrementally from the previous one where possible, §1.6).
   [tap: pre_fader] → C9 Channel (fader, pan, mute) → [tap: post_fader]`; buss
   `input sum → C9 Buss → [pre_fx] → inserts → mono/polarity → [pre_fader] →
   C9 Channel → [post_fader]`; master `input sum → C9 Buss → [pre_fx] →
-  inserts → mono/polarity → [pre_fader] → plain gain/pan → [post_fader]` →
-  outputs/renders/monitor chain. Mono and polarity (ADR-0022) act on the
+  inserts → mono/polarity → [pre_fader] → plain gain/pan → its own items →
+  [post_fader]` → outputs/renders/monitor chain (ADR-0057). Mono and polarity (ADR-0022) act on the
   main pair, ramped like mute, never between an encode and a decode. With
   `project.console9` off the C9 stages run linear (same gains and pan law,
-  no curves, noise or dither; ADR-0019 §6). Items play *before* the
-  chain (as in REAPER); input monitoring and record inputs enter channels
-  at `inputs`.
+  no curves, noise or dither; ADR-0019 §6). A channel's items play *before*
+  the chain (as in REAPER); input monitoring and record inputs enter channels
+  at `inputs`. A master's items (audio only, its prints) play after its
+  plain stage, at timeline shift `S + chain`, into a buffer of their own that
+  joins the output there: no decode, inserts, fader or pan act on them; the
+  master's mute ramp (mute, its envelope, VCAs, solo silencing) does, and
+  `lane_mute` leaves them out of the plan. Take FX and envelopes run as on a
+  channel. The node keeps its output before them (`mix`) for a recording.
+  The plan checker requires channels' items before the chain, masters' after
+  the plain stage, and none on busses.
 - **SendEncoder** per route into a buss/master that cannot share the
   source's `post_fader` tap: the route's polarity/mono, then its own C9
   Channel (fader = send level, plus the strip's fader for post-fader
@@ -633,6 +640,9 @@ first use, and no plug-in code runs early to warm it.
   at that version, which may be in the current branch's history or, for a
   render of another branch, in that branch's; it takes the ID counters of the
   branch it starts from.
+- Stems of channels and busses (isolated or through the master) and freeze
+  captures leave every master's own items out; a master's mix, including a
+  stem whose track is a master, keeps them (ADR-0057).
 - A post-fader stem of a channel or buss is decoded outside the graph, under
   the same floating-point environment as the graph's nodes (§2.4).
 - Through-master stems use playback's solo signal-path rules: retain the

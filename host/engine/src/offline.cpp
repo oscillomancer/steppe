@@ -470,6 +470,17 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
         }
         selectedSession.groups = groups.build();
     }
+    // A stem of a channel or buss (isolated or through the master) and a
+    // freeze capture leave the masters' own items out: they belong to no
+    // channel (ADR-0057). A master's mix keeps them.
+    if (opt.track || opt.throughMaster || opt.freezeTrack) {
+        model::IdMap<model::Item>::Builder items(selectedSession.items);
+        for (const auto& entry : selectedSession.items)
+            if (const model::Track* owner = selectedSession.tracks.find(entry.value->track);
+                owner && owner->type == model::StripType::Master)
+                items.erase(entry.id);
+        selectedSession.items = items.build();
+    }
     auto compiled = detail::compile(selectedSession, pool, opt.startSeconds, opt.blockSize);
     if (!compiled) return std::move(compiled).error();
     Plan& p = *compiled;

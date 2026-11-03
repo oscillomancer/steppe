@@ -541,6 +541,75 @@ TEST_CASE("take FX: real-time output equals the offline render" * doctest::descr
     }
 }
 
+TEST_CASE("a master's own items: real-time output equals the offline render (ADR-0057)" *
+          doctest::description("rt")) {
+    // A print on the master, after its latent insert and its fader, beside the live synth.
+    const auto dir =
+        std::filesystem::temp_directory_path() / ("supple-rt-print-" + std::to_string(::getpid()));
+    std::filesystem::remove_all(dir);
+    audio::AudioData tone;
+    tone.sampleRate = 48000;
+    tone.channels.assign(2, std::vector<float>(48000));
+    for (std::size_t i = 0; i < 48000; ++i)
+        tone.channels[0][i] = tone.channels[1][i] =
+            static_cast<float>(0.25 * std::sin(double(i) * 0.01));
+    REQUIRE(audio::writeWav(dir / "media" / "print.wav", tone));
+    model::Session base = synthSession(-3.0);
+    model::EditTxn t(base, 2);
+    const Id md = t.create(model::MediaSource{"print.wav", "", "wav", 48000, 2, 48000});
+    model::Take take;
+    take.source = md;
+    const Id tk = t.create(take);
+    model::Item item;
+    item.track = kMaster;
+    item.position = 0.5;
+    item.length = 2.0;
+    item.takes = {tk};
+    item.activeTake = tk;
+    t.create(item);
+    model::FxInstance gain;
+    gain.plugin.id = "com.suppleaudio.test.gain";
+    gain.patch =
+        json::parse(R"({"schema": "supple.test-gain-patch/1.0", "params": {"latency": "short"}})")
+            .value();
+    const Id f = t.create(gain);
+    t.modify<model::Track>(kMaster, [&](model::Track& m) {
+        m.chain.push_back(f);
+        m.volumeDb = -6;
+    });
+    const model::Session s = t.commit().value();
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        auto pool = makePool();
+        MediaCache offlineMedia;
+        auto offline =
+            renderOffline(
+                s, pool,
+                {.startSeconds = 0, .endSeconds = 2.0, .projectDir = dir, .media = &offlineMedia})
+                .value();
+        CHECK(offline.warnings.empty());
+        auto rtPool = makePool();
+        MediaCache media;
+        DummyBackend backend(
+            {.mode = DummyBackend::Mode::Manual, .captureFrames = 48000 * 2 + 4096});
+        Engine engine(rtPool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+        REQUIRE(engine.load(s, dir));
+        engine.play();
+        if (options.anticipative)
+            runAhead(engine, backend, (48000 * 2 + 4096) / 128, 128);
+        else
+            backend.run((48000 * 2 + 4096) / 128);
+        engine.stop();
+        const std::uint32_t L = engine.outputLatency();
+        CHECK(L == 64u);
+        CHECK(engine.processErrors() == 0);
+        CHECK(maxDiff(backend.capture().channels[0], L, offline.audio.channels[0], 96000) == 0.0);
+        CHECK(maxDiff(backend.capture().channels[1], L, offline.audio.channels[1], 96000) == 0.0);
+    }
+    std::filesystem::remove_all(dir);
+}
+
 TEST_CASE("a stretched take: real-time output equals the offline render" *
           doctest::description("rt")) {
     const auto dir = std::filesystem::temp_directory_path() /

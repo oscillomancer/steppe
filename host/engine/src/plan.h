@@ -567,6 +567,15 @@ struct Node {
     bool releaseHeld = false;
     std::vector<Clip> clips;
     std::vector<TakeChain> takeChains;
+    // Masters (ADR-0057): their own items play after the plain gain/pan stage,
+    // into `items`, and join `post` there (ramped by the master's mute only);
+    // `mix` keeps the output before them, what a master's recording takes.
+    // `itemShift`: the timeline shift where the items play (the input's on
+    // channels, the input's plus the chain's on masters).
+    bool postItems = false;
+    std::int64_t itemShift = 0;
+    Stereo items, mix;
+    bool hasItems() const SUPPLE_RT { return !clips.empty() || !takeChains.empty(); }
     int noteTarget = -1;  // chain index receiving note events
     double volumeDb = 0.0, pan = 0.0;
     double staticGain = 1, staticPan = .5;

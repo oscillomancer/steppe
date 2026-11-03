@@ -193,6 +193,9 @@ TEST_CASE("Console 9: send sharing, tap encoders, control ramps and mode swaps")
     next.nodes[next.mainMaster].decodeInput = false;
     CHECK_FALSE(checkStrips(next));
     next.nodes[next.mainMaster].decodeInput = true;
+    next.nodes[next.mainMaster].postItems = false;  // a master's items at its input sum
+    CHECK_FALSE(checkStrips(next));
+    next.nodes[next.mainMaster].postItems = true;
     next.edges.front().tap = model::Tap::PreFader;
     CHECK_FALSE(checkStrips(next));
 }
@@ -374,6 +377,19 @@ TEST_CASE("engine.strips-fuzz: typed graphs, all taps, keys, PDC and determinist
             if (random() % 2) envelope(t, ch, "pan", -30, 30);
         }
         if (iteration % 2) fx(t, buses[2], "com.suppleaudio.test.gain", true);
+        if (random() % 2) {  // a master's own item with take FX (ADR-0057)
+            model::FxInstance f;
+            f.plugin.id = "com.suppleaudio.test.gain";
+            model::Take take;
+            take.chain = {t.create(f)};
+            const Id tk = t.create(take);
+            model::Item it;
+            it.track = random() % 2 ? kMaster : second;
+            it.length = 4;
+            it.takes = {tk};
+            it.activeTake = tk;
+            t.create(it);
+        }
         const Id key = fx(t, buses[2], "com.suppleaudio.test.keymix");
         model::Route route;
         route.from.track = iteration % 2 ? kMaster : channels[0];
