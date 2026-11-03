@@ -140,10 +140,41 @@ ui::Label& heading(ui::Node& parent, const std::string& id, const std::string& l
 }
 }  // namespace
 
+std::string fileUrl(std::string_view path) {
+    static constexpr char kHex[] = "0123456789ABCDEF";
+    std::string out = "file://";
+    std::size_t from = 0;
+    const auto drive = [&](std::string_view p) {
+        return p.size() >= 2 && p[1] == ':' &&
+               ((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z'));
+    };
+    if (path.starts_with("//")) {  // UNC: the server is the URL's host
+        from = 2;
+    } else if (drive(path)) {
+        out += '/';
+        out += path.substr(0, 2);  // "C:"
+        from = 2;
+    }
+    for (std::size_t i = from; i < path.size(); ++i) {
+        const auto c = static_cast<unsigned char>(path[i]);
+        const bool plain = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                           (c >= '0' && c <= '9') || c == '-' || c == '.' || c == '_' || c == '~' ||
+                           c == '/';
+        if (plain) {
+            out += static_cast<char>(c);
+        } else {
+            out += '%';
+            out += kHex[c >> 4];
+            out += kHex[c & 15];
+        }
+    }
+    return out;
+}
+
 RenderDialog::RenderDialog(engine::EngineApp& app, cmd::Dispatcher& dispatcher, ui::Root& root)
     : app_(app), dispatcher_(dispatcher), root_(root) {
     openFolder = [](const std::filesystem::path& dir) {
-        const std::string url = "file://" + dir.generic_string();
+        const std::string url = fileUrl(dir.generic_string());
         (void)SDL_OpenURL(url.c_str());
     };
 }

@@ -19,6 +19,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "supple/engine/app.h"
@@ -34,6 +35,12 @@ class ScrollView;
 }  // namespace supple::ui
 
 namespace supple::gui {
+
+// A file URL for a path in generic form (forward slashes): "file:///home/a"
+// on POSIX, "file:///C:/Users/a" for a drive path, "file://server/share/a"
+// for a UNC path. Every byte but unreserved characters and "/" (the drive's
+// colon too) is percent-encoded, UTF-8 included.
+std::string fileUrl(std::string_view genericPath);
 
 class RenderDialog {
   public:

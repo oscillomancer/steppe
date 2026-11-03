@@ -1819,3 +1819,10 @@ TEST_CASE("render dialog settings: written once when changed; presets; File → 
     CHECK(reported.find("Mixed") == 0);
     CHECK(reported.find("once-01.wav") != std::string::npos);
 }
+
+TEST_CASE("file URLs: POSIX, drive and UNC paths, with reserved characters encoded") {
+    CHECK(gui::fileUrl("/home/me/Mixes #2/a b?%") == "file:///home/me/Mixes%20%232/a%20b%3F%25");
+    CHECK(gui::fileUrl("C:/Users/Me/Renders") == "file:///C:/Users/Me/Renders");
+    CHECK(gui::fileUrl("//server/share/Mixes") == "file://server/share/Mixes");
+    CHECK(gui::fileUrl("/r\xC3\xA9sum\xC3\xA9") == "file:///r%C3%A9sum%C3%A9");
+}
