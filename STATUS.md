@@ -192,10 +192,21 @@ instructions are in `docs/guides/installing.md`.
   which takes items and points on any track at once) and moved, deleted,
   copied, pasted and reshaped together, across lanes, from the lane's menu or
   the keyboard.
-- **Rendering** (`specs/engine.md` §3): mix, stems, regions and the render
-  matrix; file-name patterns; loudness or peak normalization with a
-  true-peak limiter; WAV (16/24-bit with seeded dither, or float, RF64
-  beyond 4 GiB) and FLAC; render jobs and a queue; per-file analysis.
+- **Rendering** (`specs/engine.md` §3, ADR-0055): mix, stems, regions and
+  the render matrix through one implementation; one set of render settings
+  per project (`project.render`, schema 2.3, undoable), resolved over the
+  user's render default and the built-ins (`render.settings` shows each
+  member's layer); per-user presets (four factory ones, read-only);
+  file-name patterns with `{version}`, `{branch}` and subfolders, and
+  overwrite / number / skip / error for existing files; project, loop or
+  custom bounds, tails, seamless loops, region handles, trim of silence;
+  loudness or peak normalization (only down, or one master gain for every
+  stem) and a true-peak limiter with or without it; up to four outputs per
+  file: WAV (16/24-bit with seeded dither, or float, RF64 beyond 4 GiB) and
+  FLAC; loudness and true-peak checks on each file as written, with an
+  optional text report; render jobs and a queue that pins version and
+  settings; per-file analysis, branch and version; `branch.create
+  {version}` starts a branch at a render's mix.
 - **Plugin hosting** (ADR-0013, ADR-0017, ADR-0018): CLAP and VST3,
   in-process or isolated in shared or dedicated bridge processes (a crash
   fails the instances in that bridge), supervised scanning with a cache, editors

@@ -445,8 +445,8 @@
   },
   {
     "name": "branch_create",
-    "title": "Start a branch from a branch's head (default: the current one) and switch to it.",
-    "description": "Start a branch from a branch's head (default: the current one) and switch to it. Agents: work on agent/<you>/<topic> branches, then branch.diff and branch.merge into main. Merging replays your edits onto main even if main moved; conflicting edits are reported. See describe for errors and examples.",
+    "title": "Start a branch from a branch's head or an earlier version, and switch to it.",
+    "description": "Start a branch from a branch's head or an earlier version, and switch to it. Agents: work on agent/<you>/<topic> branches, then branch.diff and branch.merge into main. Merging replays your edits onto main even if main moved; conflicting edits are reported. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "branch_create_args",
@@ -458,6 +458,11 @@
         "from": {
           "type": "string",
           "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1.0,
+          "description": "Start at this version of the current branch's history (history.list; a render result's version) instead of a head"
         },
         "switch": {
           "type": "boolean",
@@ -6633,7 +6638,238 @@
         },
         "render": {
           "type": "object",
+          "title": "render settings",
+          "description": "Render settings (session-model §1.10); every member optional",
           "properties": {
+            "source": {
+              "type": "string",
+              "enum": ["mix", "stems", "regions"],
+              "description": "The dialog's source; render.mix always renders the mix"
+            },
+            "bounds": {
+              "type": "string",
+              "enum": ["project", "loop", "custom"],
+              "description": "project (default), loop or custom (start_beat, end_beat)"
+            },
+            "start_beat": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1e+09
+            },
+            "end_beat": {
+              "type": "number",
+              "exclusiveMinimum": 0.0,
+              "maximum": 1e+09
+            },
+            "tail_s": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 600.0,
+              "description": "Seconds rendered past the end"
+            },
+            "pattern": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "title": "pattern per source",
+                  "properties": {
+                    "mix": {
+                      "type": "string"
+                    },
+                    "stems": {
+                      "type": "string"
+                    },
+                    "regions": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              ],
+              "description": "File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions}"
+            },
+            "sample_rate": {
+              "type": "integer",
+              "minimum": 8000.0,
+              "maximum": 384000.0,
+              "description": "Default: the project rate"
+            },
+            "channels": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "enum": [1, 2]
+                },
+                {
+                  "type": "string",
+                  "enum": ["track"]
+                }
+              ],
+              "description": "1 (mono, (L+R)/2), 2 (stereo) or \"track\" (stems: mono files for 1-channel tracks)"
+            },
+            "outputs": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "title": "render output",
+                "description": "One encoding of the rendered audio",
+                "properties": {
+                  "format": {
+                    "type": "string",
+                    "enum": ["wav", "aiff", "flac", "mp3", "vorbis"]
+                  },
+                  "bit_depth": {
+                    "type": "integer",
+                    "enum": [16, 24, 32],
+                    "description": "WAV 16/24/32 (float) [32]; AIFF and FLAC 16/24 [24]; none for MP3 and Vorbis"
+                  },
+                  "dither": {
+                    "type": "string",
+                    "enum": ["none", "tpdf", "shaped"],
+                    "description": "16- and 24-bit output: none, tpdf (default) or shaped"
+                  },
+                  "sample_rate": {
+                    "type": "integer",
+                    "minimum": 8000.0,
+                    "maximum": 384000.0,
+                    "description": "This output's own rate"
+                  },
+                  "mp3": {
+                    "type": "object",
+                    "title": "mp3 options",
+                    "properties": {
+                      "mode": {
+                        "type": "string",
+                        "enum": ["cbr", "vbr"],
+                        "description": "cbr (default) or vbr"
+                      },
+                      "bitrate_kbps": {
+                        "type": "integer",
+                        "enum": [32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320],
+                        "description": "CBR bit rate [320]"
+                      },
+                      "vbr_quality": {
+                        "type": "integer",
+                        "minimum": 0.0,
+                        "maximum": 9.0,
+                        "description": "VBR quality, 0 (best) to 9 [2]"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "vorbis_quality": {
+                    "type": "number",
+                    "minimum": -1.0,
+                    "maximum": 10.0,
+                    "description": "Ogg Vorbis quality, -1 to 10 [6]"
+                  },
+                  "suffix": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9 _.+-]{1,32}$",
+                    "description": "Inserted before the extension of a second or later output, e.g. \"-16bit\""
+                  }
+                },
+                "required": ["format"],
+                "additionalProperties": false
+              },
+              "minItems": 1,
+              "maxItems": 4,
+              "description": "1-4 encodings of the same audio [[{format: wav, bit_depth: 32}]]"
+            },
+            "normalize": {
+              "type": "object",
+              "title": "normalize",
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "enum": ["none", "lufs_i", "lufs_s", "lufs_m", "peak", "true_peak", "rms"]
+                },
+                "target": {
+                  "type": "number",
+                  "minimum": -100.0,
+                  "maximum": 0.0,
+                  "description": "LUFS or dB [-14]"
+                },
+                "only_reduce": {
+                  "type": "boolean",
+                  "description": "Never raise the level"
+                },
+                "scope": {
+                  "type": "string",
+                  "enum": ["file", "master"],
+                  "description": "file (default), or master: stems share the master mix's gain"
+                }
+              },
+              "required": ["mode"],
+              "additionalProperties": false
+            },
+            "limit_true_peak_db": {
+              "type": "number",
+              "minimum": -60.0,
+              "maximum": 0.0,
+              "description": "A true-peak ceiling (dBTP)"
+            },
+            "trim": {
+              "type": "object",
+              "title": "trim",
+              "properties": {
+                "start": {
+                  "type": "boolean"
+                },
+                "end": {
+                  "type": "boolean"
+                },
+                "threshold_db": {
+                  "type": "number",
+                  "minimum": -144.0,
+                  "maximum": 0.0,
+                  "description": "[-60]"
+                }
+              },
+              "additionalProperties": false
+            },
+            "seamless_loop": {
+              "type": "boolean",
+              "description": "Sum the tail into the start (needs tail_s)"
+            },
+            "handles_s": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 60.0,
+              "description": "Regions: seconds added at both ends"
+            },
+            "stems": {
+              "type": "object",
+              "title": "stems",
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "enum": ["isolated", "through_master"],
+                  "description": "isolated (default; no master processing) or through_master"
+                },
+                "tap": {
+                  "type": "string",
+                  "enum": ["post_fader", "pre_fader", "pre_fx"]
+                },
+                "tracks": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^tr_[0-9]+$"
+                  },
+                  "maxItems": 4096,
+                  "description": "Track ids (default: every top-level track)"
+                },
+                "skip_silent": {
+                  "type": "boolean",
+                  "description": "Leave out stems whose peak is below -90 dBFS"
+                }
+              },
+              "additionalProperties": false
+            },
             "matrix": {
               "type": "object",
               "additionalProperties": {
@@ -6646,8 +6882,74 @@
               "propertyNames": {
                 "pattern": "^project$|^rg_[0-9]+$"
               }
+            },
+            "if_exists": {
+              "type": "string",
+              "enum": ["overwrite", "number", "skip", "error"]
+            },
+            "metadata": {
+              "type": "object",
+              "title": "render metadata",
+              "description": "Tags written into each file; text members accept the file-name tokens",
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "maxLength": 1024
+                },
+                "artist": {
+                  "type": "string",
+                  "maxLength": 1024
+                },
+                "album": {
+                  "type": "string",
+                  "maxLength": 1024
+                },
+                "track_number": {
+                  "type": "integer",
+                  "minimum": 1.0,
+                  "maximum": 9999.0
+                },
+                "date": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}(-[0-9]{2}-[0-9]{2})?$"
+                },
+                "genre": {
+                  "type": "string",
+                  "maxLength": 1024
+                },
+                "comment": {
+                  "type": "string",
+                  "maxLength": 1024
+                },
+                "isrc": {
+                  "type": "string",
+                  "pattern": "^[A-Z]{2}[A-Z0-9]{3}[0-9]{7}$"
+                },
+                "cover": {
+                  "type": "string",
+                  "maxLength": 1024,
+                  "description": "A PNG or JPEG of at most 10 MiB, relative to the project folder"
+                },
+                "bwf": {
+                  "type": "boolean",
+                  "description": "WAV: a BWF bext chunk (v2) with time reference and loudness"
+                },
+                "markers": {
+                  "type": "boolean",
+                  "description": "WAV cue points / AIFF markers for the markers and regions in the file's range"
+                }
+              },
+              "additionalProperties": false
+            },
+            "report": {
+              "type": "boolean",
+              "description": "Write <file>.loudness.txt beside each file"
+            },
+            "add_to_project": {
+              "type": "boolean"
             }
-          }
+          },
+          "additionalProperties": false
         },
         "timebase": {
           "type": "string",
@@ -7004,106 +7306,391 @@
   {
     "name": "render_dry-run",
     "title": "List the files a render would write, with lengths, without rendering.",
-    "description": "List the files a render would write, with lengths, without rendering. Files go to the renders directory, named by pattern. job: true runs the render as a job (job.get for progress, job.cancel to stop); results carry a render id and an analysis summary per file. See describe for errors and examples.",
+    "description": "List the files a render would write, with lengths, without rendering. Each file: path (where if_exists sends it), exists (its destination is already there), skip (if_exists skip leaves it out), seconds and outputs. operation: mix, stems or regions (default: tracks or regions given, else the settings' source). See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "render_args",
       "properties": {
-        "master": {
+        "source": {
           "type": "string",
-          "pattern": "^tr_[0-9]+$"
+          "enum": ["mix", "stems", "regions"],
+          "description": "The dialog's source; render.mix always renders the mix"
         },
-        "branch": {
-          "type": "string"
-        },
-        "pattern": {
+        "bounds": {
           "type": "string",
-          "description": "File name pattern (session-model §7.3), e.g. \"{project}-{track_number:02}-{track|lower}\""
-        },
-        "name": {
-          "type": "string",
-          "description": "A fixed file name instead of a pattern"
-        },
-        "mode": {
-          "type": "string",
-          "description": "Stems: isolated (default; the track alone, no master processing) or through_master (the others muted)"
-        },
-        "tap": {
-          "type": "string",
-          "description": "Stems: post_fader (default), pre_fader or pre_fx"
-        },
-        "format": {
-          "type": "string",
-          "description": "wav (default) or flac (16/24 bit)"
-        },
-        "secondary": {
-          "description": "A second file of the same render beside the first: {format: wav|flac, bit_depth}, or \"none\"; default: the project's render settings"
-        },
-        "normalize": {
-          "description": "none, lufs_i, lufs_s, lufs_m, peak, true_peak or rms; or {mode, target, limit_true_peak_db}"
-        },
-        "operation": {
-          "type": "string",
-          "description": "Dry run: mix, stems or regions (default from the other arguments)"
-        },
-        "tracks": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Stems: track ids (default: every top-level track)"
-        },
-        "regions": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Regions: region ids (default: all, with the project render matrix)"
+          "enum": ["project", "loop", "custom"],
+          "description": "project (default), loop or custom (start_beat, end_beat)"
         },
         "start_beat": {
           "type": "number",
-          "minimum": 0.0
+          "minimum": 0.0,
+          "maximum": 1e+09
         },
         "end_beat": {
           "type": "number",
-          "exclusiveMinimum": 0.0
+          "exclusiveMinimum": 0.0,
+          "maximum": 1e+09
         },
         "tail_s": {
           "type": "number",
           "minimum": 0.0,
-          "maximum": 600.0
+          "maximum": 600.0,
+          "description": "Seconds rendered past the end"
         },
-        "target": {
-          "type": "number"
-        },
-        "limit_true_peak_db": {
-          "type": "number"
-        },
-        "bit_depth": {
-          "type": "integer",
-          "minimum": 16.0,
-          "maximum": 32.0
+        "pattern": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "object",
+              "title": "pattern per source",
+              "properties": {
+                "mix": {
+                  "type": "string"
+                },
+                "stems": {
+                  "type": "string"
+                },
+                "regions": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          ],
+          "description": "File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions}"
         },
         "sample_rate": {
           "type": "integer",
           "minimum": 8000.0,
-          "maximum": 384000.0
+          "maximum": 384000.0,
+          "description": "Default: the project rate"
         },
         "channels": {
-          "type": "integer",
-          "minimum": 1.0,
-          "maximum": 2.0
+          "anyOf": [
+            {
+              "type": "integer",
+              "enum": [1, 2]
+            },
+            {
+              "type": "string",
+              "enum": ["track"]
+            }
+          ],
+          "description": "1 (mono, (L+R)/2), 2 (stereo) or \"track\" (stems: mono files for 1-channel tracks)"
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "title": "render output",
+            "description": "One encoding of the rendered audio",
+            "properties": {
+              "format": {
+                "type": "string",
+                "enum": ["wav", "aiff", "flac", "mp3", "vorbis"]
+              },
+              "bit_depth": {
+                "type": "integer",
+                "enum": [16, 24, 32],
+                "description": "WAV 16/24/32 (float) [32]; AIFF and FLAC 16/24 [24]; none for MP3 and Vorbis"
+              },
+              "dither": {
+                "type": "string",
+                "enum": ["none", "tpdf", "shaped"],
+                "description": "16- and 24-bit output: none, tpdf (default) or shaped"
+              },
+              "sample_rate": {
+                "type": "integer",
+                "minimum": 8000.0,
+                "maximum": 384000.0,
+                "description": "This output's own rate"
+              },
+              "mp3": {
+                "type": "object",
+                "title": "mp3 options",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": ["cbr", "vbr"],
+                    "description": "cbr (default) or vbr"
+                  },
+                  "bitrate_kbps": {
+                    "type": "integer",
+                    "enum": [32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320],
+                    "description": "CBR bit rate [320]"
+                  },
+                  "vbr_quality": {
+                    "type": "integer",
+                    "minimum": 0.0,
+                    "maximum": 9.0,
+                    "description": "VBR quality, 0 (best) to 9 [2]"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "vorbis_quality": {
+                "type": "number",
+                "minimum": -1.0,
+                "maximum": 10.0,
+                "description": "Ogg Vorbis quality, -1 to 10 [6]"
+              },
+              "suffix": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9 _.+-]{1,32}$",
+                "description": "Inserted before the extension of a second or later output, e.g. \"-16bit\""
+              }
+            },
+            "required": ["format"],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 4,
+          "description": "1-4 encodings of the same audio [[{format: wav, bit_depth: 32}]]"
+        },
+        "normalize": {
+          "type": "object",
+          "title": "normalize",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["none", "lufs_i", "lufs_s", "lufs_m", "peak", "true_peak", "rms"]
+            },
+            "target": {
+              "type": "number",
+              "minimum": -100.0,
+              "maximum": 0.0,
+              "description": "LUFS or dB [-14]"
+            },
+            "only_reduce": {
+              "type": "boolean",
+              "description": "Never raise the level"
+            },
+            "scope": {
+              "type": "string",
+              "enum": ["file", "master"],
+              "description": "file (default), or master: stems share the master mix's gain"
+            }
+          },
+          "required": ["mode"],
+          "additionalProperties": false
+        },
+        "limit_true_peak_db": {
+          "type": "number",
+          "minimum": -60.0,
+          "maximum": 0.0,
+          "description": "A true-peak ceiling (dBTP)"
+        },
+        "trim": {
+          "type": "object",
+          "title": "trim",
+          "properties": {
+            "start": {
+              "type": "boolean"
+            },
+            "end": {
+              "type": "boolean"
+            },
+            "threshold_db": {
+              "type": "number",
+              "minimum": -144.0,
+              "maximum": 0.0,
+              "description": "[-60]"
+            }
+          },
+          "additionalProperties": false
+        },
+        "seamless_loop": {
+          "type": "boolean",
+          "description": "Sum the tail into the start (needs tail_s)"
+        },
+        "handles_s": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 60.0,
+          "description": "Regions: seconds added at both ends"
+        },
+        "stems": {
+          "type": "object",
+          "title": "stems",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["isolated", "through_master"],
+              "description": "isolated (default; no master processing) or through_master"
+            },
+            "tap": {
+              "type": "string",
+              "enum": ["post_fader", "pre_fader", "pre_fx"]
+            },
+            "tracks": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^tr_[0-9]+$"
+              },
+              "maxItems": 4096,
+              "description": "Track ids (default: every top-level track)"
+            },
+            "skip_silent": {
+              "type": "boolean",
+              "description": "Leave out stems whose peak is below -90 dBFS"
+            }
+          },
+          "additionalProperties": false
+        },
+        "matrix": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^tr_[0-9]+$"
+            }
+          },
+          "propertyNames": {
+            "pattern": "^project$|^rg_[0-9]+$"
+          }
+        },
+        "if_exists": {
+          "type": "string",
+          "enum": ["overwrite", "number", "skip", "error"]
+        },
+        "metadata": {
+          "type": "object",
+          "title": "render metadata",
+          "description": "Tags written into each file; text members accept the file-name tokens",
+          "properties": {
+            "title": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "artist": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "album": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "track_number": {
+              "type": "integer",
+              "minimum": 1.0,
+              "maximum": 9999.0
+            },
+            "date": {
+              "type": "string",
+              "pattern": "^[0-9]{4}(-[0-9]{2}-[0-9]{2})?$"
+            },
+            "genre": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "comment": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "isrc": {
+              "type": "string",
+              "pattern": "^[A-Z]{2}[A-Z0-9]{3}[0-9]{7}$"
+            },
+            "cover": {
+              "type": "string",
+              "maxLength": 1024,
+              "description": "A PNG or JPEG of at most 10 MiB, relative to the project folder"
+            },
+            "bwf": {
+              "type": "boolean",
+              "description": "WAV: a BWF bext chunk (v2) with time reference and loudness"
+            },
+            "markers": {
+              "type": "boolean",
+              "description": "WAV cue points / AIFF markers for the markers and regions in the file's range"
+            }
+          },
+          "additionalProperties": false
+        },
+        "report": {
+          "type": "boolean",
+          "description": "Write <file>.loudness.txt beside each file"
+        },
+        "add_to_project": {
+          "type": "boolean"
+        },
+        "master": {
+          "type": "string",
+          "pattern": "^tr_[0-9]+$",
+          "description": "Mix: the master (default tr_0)"
+        },
+        "branch": {
+          "type": "string",
+          "description": "Render this branch's head (default: the current one)"
         },
         "version": {
           "type": "integer",
           "minimum": 0.0,
           "description": "Render the session as of this version (history.list); the render queue pins its renders"
         },
-        "job": {
-          "type": "boolean",
-          "default": false
+        "name": {
+          "type": "string",
+          "description": "A file name instead of the pattern, for this call"
         },
-        "add_to_project": {
+        "operation": {
+          "type": "string",
+          "enum": ["mix", "stems", "regions"],
+          "description": "Dry run and render.settings: mix, stems or regions (default: tracks or regions given, else the settings' source)"
+        },
+        "regions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^rg_[0-9]+$"
+          },
+          "description": "Regions: region ids (default: all, with the render matrix)"
+        },
+        "tracks": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^tr_[0-9]+$"
+          },
+          "description": "Stems: track ids (sets stems.tracks for this call)"
+        },
+        "format": {
+          "type": "string",
+          "enum": ["wav", "aiff", "flac", "mp3", "vorbis"],
+          "description": "Sets outputs[0].format for this call"
+        },
+        "bit_depth": {
+          "type": "integer",
+          "minimum": 16.0,
+          "maximum": 32.0,
+          "description": "Sets outputs[0].bit_depth for this call"
+        },
+        "secondary": {
+          "description": "Replaces outputs[1] ({format, bit_depth}), or \"none\" removes it, for this call"
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["isolated", "through_master"],
+          "description": "Sets stems.mode for this call"
+        },
+        "tap": {
+          "type": "string",
+          "enum": ["post_fader", "pre_fader", "pre_fx"],
+          "description": "Sets stems.tap for this call"
+        },
+        "target": {
+          "type": "number",
+          "description": "Sets normalize.target for this call"
+        },
+        "analyze": {
+          "type": "string",
+          "enum": ["summary", "full"],
+          "description": "Mix: a supple.analysis-report/1.0 inline"
+        },
+        "job": {
           "type": "boolean",
           "default": false
         }
@@ -7118,112 +7705,800 @@
   },
   {
     "name": "render_mix",
-    "title": "Render the mix offline to a float WAV (default: start to the last item's end).",
-    "description": "Render the mix offline to a float WAV (default: start to the last item's end). start_beat/end_beat select a timeline range; master playrate determines its rendered duration. tail_s adds device-time seconds after the end (reverb tails). analyze: summary or full returns a supple.analysis-report/1.0 inline. The render id can be passed to analyze.render or analyze.compare. add_to_project: the file becomes an item on a new track at start_beat, as its own undo step right after the render (with job: when the job completes). See describe for errors and examples.",
+    "title": "Render the mix offline with the project's render settings (default: whole song).",
+    "description": "Render the mix offline with the project's render settings (default: whole song). Arguments override project.render (then the user's default, then built-ins) for this call only; render.settings shows what applies. Files go to the renders folder, named by pattern (subfolders allowed). job: true runs the render as a job (job.get for progress, job.cancel to stop). Each file lists its outputs (with delivery checks when a loudness target or a ceiling is set), branch, version, start_beat, seconds, a render id (analyze.render, analyze.compare) and an analysis summary. The mix answers with its file's entry at the top level (path, secondary_path, outputs, peak_dbfs, …); analyze: summary or full adds the report inline. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
-      "title": "render_mix_args",
+      "title": "render_args",
       "properties": {
-        "master": {
+        "source": {
           "type": "string",
-          "pattern": "^tr_[0-9]+$",
-          "description": "Master output (default tr_0) id, e.g. \"tr_1\"."
+          "enum": ["mix", "stems", "regions"],
+          "description": "The dialog's source; render.mix always renders the mix"
+        },
+        "bounds": {
+          "type": "string",
+          "enum": ["project", "loop", "custom"],
+          "description": "project (default), loop or custom (start_beat, end_beat)"
         },
         "start_beat": {
           "type": "number",
-          "minimum": 0.0
+          "minimum": 0.0,
+          "maximum": 1e+09
         },
         "end_beat": {
           "type": "number",
-          "exclusiveMinimum": 0.0
+          "exclusiveMinimum": 0.0,
+          "maximum": 1e+09
         },
         "tail_s": {
           "type": "number",
           "minimum": 0.0,
-          "maximum": 60.0
-        },
-        "name": {
-          "type": "string",
-          "pattern": "^[A-Za-z0-9 _.+-]{1,64}$"
+          "maximum": 600.0,
+          "description": "Seconds rendered past the end"
         },
         "pattern": {
-          "type": "string"
-        },
-        "branch": {
-          "type": "string"
-        },
-        "format": {
-          "type": "string",
-          "description": "wav (default) or flac (16/24 bit)"
-        },
-        "secondary": {
-          "description": "A second file beside the first: {format: wav|flac, bit_depth}, or \"none\""
-        },
-        "bit_depth": {
-          "type": "integer",
-          "minimum": 16.0,
-          "maximum": 32.0
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "object",
+              "title": "pattern per source",
+              "properties": {
+                "mix": {
+                  "type": "string"
+                },
+                "stems": {
+                  "type": "string"
+                },
+                "regions": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          ],
+          "description": "File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions}"
         },
         "sample_rate": {
           "type": "integer",
           "minimum": 8000.0,
-          "maximum": 384000.0
+          "maximum": 384000.0,
+          "description": "Default: the project rate"
         },
         "channels": {
-          "type": "integer",
-          "minimum": 1.0,
-          "maximum": 2.0
+          "anyOf": [
+            {
+              "type": "integer",
+              "enum": [1, 2]
+            },
+            {
+              "type": "string",
+              "enum": ["track"]
+            }
+          ],
+          "description": "1 (mono, (L+R)/2), 2 (stereo) or \"track\" (stems: mono files for 1-channel tracks)"
         },
-        "normalize": {},
-        "job": {
+        "outputs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "title": "render output",
+            "description": "One encoding of the rendered audio",
+            "properties": {
+              "format": {
+                "type": "string",
+                "enum": ["wav", "aiff", "flac", "mp3", "vorbis"]
+              },
+              "bit_depth": {
+                "type": "integer",
+                "enum": [16, 24, 32],
+                "description": "WAV 16/24/32 (float) [32]; AIFF and FLAC 16/24 [24]; none for MP3 and Vorbis"
+              },
+              "dither": {
+                "type": "string",
+                "enum": ["none", "tpdf", "shaped"],
+                "description": "16- and 24-bit output: none, tpdf (default) or shaped"
+              },
+              "sample_rate": {
+                "type": "integer",
+                "minimum": 8000.0,
+                "maximum": 384000.0,
+                "description": "This output's own rate"
+              },
+              "mp3": {
+                "type": "object",
+                "title": "mp3 options",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": ["cbr", "vbr"],
+                    "description": "cbr (default) or vbr"
+                  },
+                  "bitrate_kbps": {
+                    "type": "integer",
+                    "enum": [32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320],
+                    "description": "CBR bit rate [320]"
+                  },
+                  "vbr_quality": {
+                    "type": "integer",
+                    "minimum": 0.0,
+                    "maximum": 9.0,
+                    "description": "VBR quality, 0 (best) to 9 [2]"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "vorbis_quality": {
+                "type": "number",
+                "minimum": -1.0,
+                "maximum": 10.0,
+                "description": "Ogg Vorbis quality, -1 to 10 [6]"
+              },
+              "suffix": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9 _.+-]{1,32}$",
+                "description": "Inserted before the extension of a second or later output, e.g. \"-16bit\""
+              }
+            },
+            "required": ["format"],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 4,
+          "description": "1-4 encodings of the same audio [[{format: wav, bit_depth: 32}]]"
+        },
+        "normalize": {
+          "type": "object",
+          "title": "normalize",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["none", "lufs_i", "lufs_s", "lufs_m", "peak", "true_peak", "rms"]
+            },
+            "target": {
+              "type": "number",
+              "minimum": -100.0,
+              "maximum": 0.0,
+              "description": "LUFS or dB [-14]"
+            },
+            "only_reduce": {
+              "type": "boolean",
+              "description": "Never raise the level"
+            },
+            "scope": {
+              "type": "string",
+              "enum": ["file", "master"],
+              "description": "file (default), or master: stems share the master mix's gain"
+            }
+          },
+          "required": ["mode"],
+          "additionalProperties": false
+        },
+        "limit_true_peak_db": {
+          "type": "number",
+          "minimum": -60.0,
+          "maximum": 0.0,
+          "description": "A true-peak ceiling (dBTP)"
+        },
+        "trim": {
+          "type": "object",
+          "title": "trim",
+          "properties": {
+            "start": {
+              "type": "boolean"
+            },
+            "end": {
+              "type": "boolean"
+            },
+            "threshold_db": {
+              "type": "number",
+              "minimum": -144.0,
+              "maximum": 0.0,
+              "description": "[-60]"
+            }
+          },
+          "additionalProperties": false
+        },
+        "seamless_loop": {
           "type": "boolean",
-          "default": false
+          "description": "Sum the tail into the start (needs tail_s)"
+        },
+        "handles_s": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 60.0,
+          "description": "Regions: seconds added at both ends"
+        },
+        "stems": {
+          "type": "object",
+          "title": "stems",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["isolated", "through_master"],
+              "description": "isolated (default; no master processing) or through_master"
+            },
+            "tap": {
+              "type": "string",
+              "enum": ["post_fader", "pre_fader", "pre_fx"]
+            },
+            "tracks": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^tr_[0-9]+$"
+              },
+              "maxItems": 4096,
+              "description": "Track ids (default: every top-level track)"
+            },
+            "skip_silent": {
+              "type": "boolean",
+              "description": "Leave out stems whose peak is below -90 dBFS"
+            }
+          },
+          "additionalProperties": false
+        },
+        "matrix": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^tr_[0-9]+$"
+            }
+          },
+          "propertyNames": {
+            "pattern": "^project$|^rg_[0-9]+$"
+          }
+        },
+        "if_exists": {
+          "type": "string",
+          "enum": ["overwrite", "number", "skip", "error"]
+        },
+        "metadata": {
+          "type": "object",
+          "title": "render metadata",
+          "description": "Tags written into each file; text members accept the file-name tokens",
+          "properties": {
+            "title": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "artist": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "album": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "track_number": {
+              "type": "integer",
+              "minimum": 1.0,
+              "maximum": 9999.0
+            },
+            "date": {
+              "type": "string",
+              "pattern": "^[0-9]{4}(-[0-9]{2}-[0-9]{2})?$"
+            },
+            "genre": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "comment": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "isrc": {
+              "type": "string",
+              "pattern": "^[A-Z]{2}[A-Z0-9]{3}[0-9]{7}$"
+            },
+            "cover": {
+              "type": "string",
+              "maxLength": 1024,
+              "description": "A PNG or JPEG of at most 10 MiB, relative to the project folder"
+            },
+            "bwf": {
+              "type": "boolean",
+              "description": "WAV: a BWF bext chunk (v2) with time reference and loudness"
+            },
+            "markers": {
+              "type": "boolean",
+              "description": "WAV cue points / AIFF markers for the markers and regions in the file's range"
+            }
+          },
+          "additionalProperties": false
+        },
+        "report": {
+          "type": "boolean",
+          "description": "Write <file>.loudness.txt beside each file"
         },
         "add_to_project": {
-          "type": "boolean",
-          "default": false
+          "type": "boolean"
+        },
+        "master": {
+          "type": "string",
+          "pattern": "^tr_[0-9]+$",
+          "description": "Mix: the master (default tr_0)"
+        },
+        "branch": {
+          "type": "string",
+          "description": "Render this branch's head (default: the current one)"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 0.0,
+          "description": "Render the session as of this version (history.list); the render queue pins its renders"
+        },
+        "name": {
+          "type": "string",
+          "description": "A file name instead of the pattern, for this call"
+        },
+        "operation": {
+          "type": "string",
+          "enum": ["mix", "stems", "regions"],
+          "description": "Dry run and render.settings: mix, stems or regions (default: tracks or regions given, else the settings' source)"
+        },
+        "regions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^rg_[0-9]+$"
+          },
+          "description": "Regions: region ids (default: all, with the render matrix)"
+        },
+        "tracks": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^tr_[0-9]+$"
+          },
+          "description": "Stems: track ids (sets stems.tracks for this call)"
+        },
+        "format": {
+          "type": "string",
+          "enum": ["wav", "aiff", "flac", "mp3", "vorbis"],
+          "description": "Sets outputs[0].format for this call"
+        },
+        "bit_depth": {
+          "type": "integer",
+          "minimum": 16.0,
+          "maximum": 32.0,
+          "description": "Sets outputs[0].bit_depth for this call"
+        },
+        "secondary": {
+          "description": "Replaces outputs[1] ({format, bit_depth}), or \"none\" removes it, for this call"
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["isolated", "through_master"],
+          "description": "Sets stems.mode for this call"
+        },
+        "tap": {
+          "type": "string",
+          "enum": ["post_fader", "pre_fader", "pre_fx"],
+          "description": "Sets stems.tap for this call"
+        },
+        "target": {
+          "type": "number",
+          "description": "Sets normalize.target for this call"
         },
         "analyze": {
           "type": "string",
-          "enum": ["summary", "full"]
+          "enum": ["summary", "full"],
+          "description": "Mix: a supple.analysis-report/1.0 inline"
+        },
+        "job": {
+          "type": "boolean",
+          "default": false
         }
       },
       "additionalProperties": false
     },
-    "outputSchema": {
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "render_preset_delete",
+    "title": "Delete one of the user's render presets, or the user's render default.",
+    "description": "Delete one of the user's render presets, or the user's render default.  See describe for errors and examples.",
+    "inputSchema": {
       "type": "object",
-      "title": "render_mix",
+      "title": "render_preset_delete_args",
       "properties": {
-        "render": {
-          "type": "string"
+        "name": {
+          "type": "string",
+          "description": "A preset name (render.preset.list)"
         },
-        "path": {
-          "type": "string"
+        "default": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "render_preset_list",
+    "title": "Render presets: the factory ones, then the user's, with their settings.",
+    "description": "Render presets: the factory ones, then the user's, with their settings. default: the user's render default, or null. Presets live in the user's data folder (render-presets/), shared by every project. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "no_args",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "render_preset_load",
+    "title": "Replace the project's render settings with a preset (one undo step).",
+    "description": "Replace the project's render settings with a preset (one undo step).  See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "render_preset_load_args",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "A preset name (render.preset.list)"
         },
-        "secondary_path": {
-          "type": "string"
+        "default": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "render_preset_save",
+    "title": "Save render settings as a named preset, or as the user's render default.",
+    "description": "Save render settings as a named preset, or as the user's render default. settings: what to save (default: the effective settings now). Never saved: stems.tracks, matrix and custom bounds, which belong to one project. A file per preset in the user's data folder; factory presets cannot be overwritten. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "render_preset_save_args",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "A preset name (render.preset.list)"
         },
-        "seconds": {
-          "type": "number"
+        "default": {
+          "type": "boolean",
+          "default": false
         },
-        "peak_dbfs": {
-          "type": "number"
-        },
-        "output_latency": {
-          "type": "integer"
-        },
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "analysis": {},
-        "job": {
-          "type": "string"
-        },
-        "status": {
-          "type": "string"
+        "settings": {
+          "type": "object",
+          "title": "render settings",
+          "description": "Render settings (session-model §1.10); every member optional",
+          "properties": {
+            "source": {
+              "type": "string",
+              "enum": ["mix", "stems", "regions"],
+              "description": "The dialog's source; render.mix always renders the mix"
+            },
+            "bounds": {
+              "type": "string",
+              "enum": ["project", "loop", "custom"],
+              "description": "project (default), loop or custom (start_beat, end_beat)"
+            },
+            "start_beat": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1e+09
+            },
+            "end_beat": {
+              "type": "number",
+              "exclusiveMinimum": 0.0,
+              "maximum": 1e+09
+            },
+            "tail_s": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 600.0,
+              "description": "Seconds rendered past the end"
+            },
+            "pattern": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "title": "pattern per source",
+                  "properties": {
+                    "mix": {
+                      "type": "string"
+                    },
+                    "stems": {
+                      "type": "string"
+                    },
+                    "regions": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              ],
+              "description": "File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions}"
+            },
+            "sample_rate": {
+              "type": "integer",
+              "minimum": 8000.0,
+              "maximum": 384000.0,
+              "description": "Default: the project rate"
+            },
+            "channels": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "enum": [1, 2]
+                },
+                {
+                  "type": "string",
+                  "enum": ["track"]
+                }
+              ],
+              "description": "1 (mono, (L+R)/2), 2 (stereo) or \"track\" (stems: mono files for 1-channel tracks)"
+            },
+            "outputs": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "title": "render output",
+                "description": "One encoding of the rendered audio",
+                "properties": {
+                  "format": {
+                    "type": "string",
+                    "enum": ["wav", "aiff", "flac", "mp3", "vorbis"]
+                  },
+                  "bit_depth": {
+                    "type": "integer",
+                    "enum": [16, 24, 32],
+                    "description": "WAV 16/24/32 (float) [32]; AIFF and FLAC 16/24 [24]; none for MP3 and Vorbis"
+                  },
+                  "dither": {
+                    "type": "string",
+                    "enum": ["none", "tpdf", "shaped"],
+                    "description": "16- and 24-bit output: none, tpdf (default) or shaped"
+                  },
+                  "sample_rate": {
+                    "type": "integer",
+                    "minimum": 8000.0,
+                    "maximum": 384000.0,
+                    "description": "This output's own rate"
+                  },
+                  "mp3": {
+                    "type": "object",
+                    "title": "mp3 options",
+                    "properties": {
+                      "mode": {
+                        "type": "string",
+                        "enum": ["cbr", "vbr"],
+                        "description": "cbr (default) or vbr"
+                      },
+                      "bitrate_kbps": {
+                        "type": "integer",
+                        "enum": [32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320],
+                        "description": "CBR bit rate [320]"
+                      },
+                      "vbr_quality": {
+                        "type": "integer",
+                        "minimum": 0.0,
+                        "maximum": 9.0,
+                        "description": "VBR quality, 0 (best) to 9 [2]"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "vorbis_quality": {
+                    "type": "number",
+                    "minimum": -1.0,
+                    "maximum": 10.0,
+                    "description": "Ogg Vorbis quality, -1 to 10 [6]"
+                  },
+                  "suffix": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9 _.+-]{1,32}$",
+                    "description": "Inserted before the extension of a second or later output, e.g. \"-16bit\""
+                  }
+                },
+                "required": ["format"],
+                "additionalProperties": false
+              },
+              "minItems": 1,
+              "maxItems": 4,
+              "description": "1-4 encodings of the same audio [[{format: wav, bit_depth: 32}]]"
+            },
+            "normalize": {
+              "type": "object",
+              "title": "normalize",
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "enum": ["none", "lufs_i", "lufs_s", "lufs_m", "peak", "true_peak", "rms"]
+                },
+                "target": {
+                  "type": "number",
+                  "minimum": -100.0,
+                  "maximum": 0.0,
+                  "description": "LUFS or dB [-14]"
+                },
+                "only_reduce": {
+                  "type": "boolean",
+                  "description": "Never raise the level"
+                },
+                "scope": {
+                  "type": "string",
+                  "enum": ["file", "master"],
+                  "description": "file (default), or master: stems share the master mix's gain"
+                }
+              },
+              "required": ["mode"],
+              "additionalProperties": false
+            },
+            "limit_true_peak_db": {
+              "type": "number",
+              "minimum": -60.0,
+              "maximum": 0.0,
+              "description": "A true-peak ceiling (dBTP)"
+            },
+            "trim": {
+              "type": "object",
+              "title": "trim",
+              "properties": {
+                "start": {
+                  "type": "boolean"
+                },
+                "end": {
+                  "type": "boolean"
+                },
+                "threshold_db": {
+                  "type": "number",
+                  "minimum": -144.0,
+                  "maximum": 0.0,
+                  "description": "[-60]"
+                }
+              },
+              "additionalProperties": false
+            },
+            "seamless_loop": {
+              "type": "boolean",
+              "description": "Sum the tail into the start (needs tail_s)"
+            },
+            "handles_s": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 60.0,
+              "description": "Regions: seconds added at both ends"
+            },
+            "stems": {
+              "type": "object",
+              "title": "stems",
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "enum": ["isolated", "through_master"],
+                  "description": "isolated (default; no master processing) or through_master"
+                },
+                "tap": {
+                  "type": "string",
+                  "enum": ["post_fader", "pre_fader", "pre_fx"]
+                },
+                "tracks": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^tr_[0-9]+$"
+                  },
+                  "maxItems": 4096,
+                  "description": "Track ids (default: every top-level track)"
+                },
+                "skip_silent": {
+                  "type": "boolean",
+                  "description": "Leave out stems whose peak is below -90 dBFS"
+                }
+              },
+              "additionalProperties": false
+            },
+            "matrix": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^tr_[0-9]+$"
+                }
+              },
+              "propertyNames": {
+                "pattern": "^project$|^rg_[0-9]+$"
+              }
+            },
+            "if_exists": {
+              "type": "string",
+              "enum": ["overwrite", "number", "skip", "error"]
+            },
+            "metadata": {
+              "type": "object",
+              "title": "render metadata",
+              "description": "Tags written into each file; text members accept the file-name tokens",
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "maxLength": 1024
+                },
+                "artist": {
+                  "type": "string",
+                  "maxLength": 1024
+                },
+                "album": {
+                  "type": "string",
+                  "maxLength": 1024
+                },
+                "track_number": {
+                  "type": "integer",
+                  "minimum": 1.0,
+                  "maximum": 9999.0
+                },
+                "date": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}(-[0-9]{2}-[0-9]{2})?$"
+                },
+                "genre": {
+                  "type": "string",
+                  "maxLength": 1024
+                },
+                "comment": {
+                  "type": "string",
+                  "maxLength": 1024
+                },
+                "isrc": {
+                  "type": "string",
+                  "pattern": "^[A-Z]{2}[A-Z0-9]{3}[0-9]{7}$"
+                },
+                "cover": {
+                  "type": "string",
+                  "maxLength": 1024,
+                  "description": "A PNG or JPEG of at most 10 MiB, relative to the project folder"
+                },
+                "bwf": {
+                  "type": "boolean",
+                  "description": "WAV: a BWF bext chunk (v2) with time reference and loudness"
+                },
+                "markers": {
+                  "type": "boolean",
+                  "description": "WAV cue points / AIFF markers for the markers and regions in the file's range"
+                }
+              },
+              "additionalProperties": false
+            },
+            "report": {
+              "type": "boolean",
+              "description": "Write <file>.loudness.txt beside each file"
+            },
+            "add_to_project": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false
@@ -7237,7 +8512,7 @@
   {
     "name": "render_queue_add",
     "title": "Queue a render (mix, stems or regions) to run later with render.queue.run.",
-    "description": "Queue a render (mix, stems or regions) to run later with render.queue.run. args: the render command's arguments (as for render.mix/stems/regions). The queued render is pinned to the session as it is now (its version; a branch's head when branch is given), so later edits do not change it; a dry run lists its files now. The queue is transport-like state: not an undo step, not saved with the project. See describe for errors and examples.",
+    "description": "Queue a render (mix, stems or regions) to run later with render.queue.run. args: the render command's arguments (as for render.mix/stems/regions). The queued render is pinned to the session and settings as they are now (its version, a branch's head when branch is given, and the effective render settings, a loop range as beats), so later edits do not change it; a dry run lists its files now. The queue is transport-like state: not an undo step, not saved with the project. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "render_queue_add_args",
@@ -7324,106 +8599,391 @@
   {
     "name": "render_regions",
     "title": "Render each region (or the render matrix's tracks per region) to files.",
-    "description": "Render each region (or the render matrix's tracks per region) to files. Files go to the renders directory, named by pattern. job: true runs the render as a job (job.get for progress, job.cancel to stop); results carry a render id and an analysis summary per file. See describe for errors and examples.",
+    "description": "Render each region (or the render matrix's tracks per region) to files. Arguments override project.render (then the user's default, then built-ins) for this call only; render.settings shows what applies. Files go to the renders folder, named by pattern (subfolders allowed). job: true runs the render as a job (job.get for progress, job.cancel to stop). Each file lists its outputs (with delivery checks when a loudness target or a ceiling is set), branch, version, start_beat, seconds, a render id (analyze.render, analyze.compare) and an analysis summary. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "render_args",
       "properties": {
-        "master": {
+        "source": {
           "type": "string",
-          "pattern": "^tr_[0-9]+$"
+          "enum": ["mix", "stems", "regions"],
+          "description": "The dialog's source; render.mix always renders the mix"
         },
-        "branch": {
-          "type": "string"
-        },
-        "pattern": {
+        "bounds": {
           "type": "string",
-          "description": "File name pattern (session-model §7.3), e.g. \"{project}-{track_number:02}-{track|lower}\""
-        },
-        "name": {
-          "type": "string",
-          "description": "A fixed file name instead of a pattern"
-        },
-        "mode": {
-          "type": "string",
-          "description": "Stems: isolated (default; the track alone, no master processing) or through_master (the others muted)"
-        },
-        "tap": {
-          "type": "string",
-          "description": "Stems: post_fader (default), pre_fader or pre_fx"
-        },
-        "format": {
-          "type": "string",
-          "description": "wav (default) or flac (16/24 bit)"
-        },
-        "secondary": {
-          "description": "A second file of the same render beside the first: {format: wav|flac, bit_depth}, or \"none\"; default: the project's render settings"
-        },
-        "normalize": {
-          "description": "none, lufs_i, lufs_s, lufs_m, peak, true_peak or rms; or {mode, target, limit_true_peak_db}"
-        },
-        "operation": {
-          "type": "string",
-          "description": "Dry run: mix, stems or regions (default from the other arguments)"
-        },
-        "tracks": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Stems: track ids (default: every top-level track)"
-        },
-        "regions": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Regions: region ids (default: all, with the project render matrix)"
+          "enum": ["project", "loop", "custom"],
+          "description": "project (default), loop or custom (start_beat, end_beat)"
         },
         "start_beat": {
           "type": "number",
-          "minimum": 0.0
+          "minimum": 0.0,
+          "maximum": 1e+09
         },
         "end_beat": {
           "type": "number",
-          "exclusiveMinimum": 0.0
+          "exclusiveMinimum": 0.0,
+          "maximum": 1e+09
         },
         "tail_s": {
           "type": "number",
           "minimum": 0.0,
-          "maximum": 600.0
+          "maximum": 600.0,
+          "description": "Seconds rendered past the end"
         },
-        "target": {
-          "type": "number"
-        },
-        "limit_true_peak_db": {
-          "type": "number"
-        },
-        "bit_depth": {
-          "type": "integer",
-          "minimum": 16.0,
-          "maximum": 32.0
+        "pattern": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "object",
+              "title": "pattern per source",
+              "properties": {
+                "mix": {
+                  "type": "string"
+                },
+                "stems": {
+                  "type": "string"
+                },
+                "regions": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          ],
+          "description": "File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions}"
         },
         "sample_rate": {
           "type": "integer",
           "minimum": 8000.0,
-          "maximum": 384000.0
+          "maximum": 384000.0,
+          "description": "Default: the project rate"
         },
         "channels": {
-          "type": "integer",
-          "minimum": 1.0,
-          "maximum": 2.0
+          "anyOf": [
+            {
+              "type": "integer",
+              "enum": [1, 2]
+            },
+            {
+              "type": "string",
+              "enum": ["track"]
+            }
+          ],
+          "description": "1 (mono, (L+R)/2), 2 (stereo) or \"track\" (stems: mono files for 1-channel tracks)"
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "title": "render output",
+            "description": "One encoding of the rendered audio",
+            "properties": {
+              "format": {
+                "type": "string",
+                "enum": ["wav", "aiff", "flac", "mp3", "vorbis"]
+              },
+              "bit_depth": {
+                "type": "integer",
+                "enum": [16, 24, 32],
+                "description": "WAV 16/24/32 (float) [32]; AIFF and FLAC 16/24 [24]; none for MP3 and Vorbis"
+              },
+              "dither": {
+                "type": "string",
+                "enum": ["none", "tpdf", "shaped"],
+                "description": "16- and 24-bit output: none, tpdf (default) or shaped"
+              },
+              "sample_rate": {
+                "type": "integer",
+                "minimum": 8000.0,
+                "maximum": 384000.0,
+                "description": "This output's own rate"
+              },
+              "mp3": {
+                "type": "object",
+                "title": "mp3 options",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": ["cbr", "vbr"],
+                    "description": "cbr (default) or vbr"
+                  },
+                  "bitrate_kbps": {
+                    "type": "integer",
+                    "enum": [32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320],
+                    "description": "CBR bit rate [320]"
+                  },
+                  "vbr_quality": {
+                    "type": "integer",
+                    "minimum": 0.0,
+                    "maximum": 9.0,
+                    "description": "VBR quality, 0 (best) to 9 [2]"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "vorbis_quality": {
+                "type": "number",
+                "minimum": -1.0,
+                "maximum": 10.0,
+                "description": "Ogg Vorbis quality, -1 to 10 [6]"
+              },
+              "suffix": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9 _.+-]{1,32}$",
+                "description": "Inserted before the extension of a second or later output, e.g. \"-16bit\""
+              }
+            },
+            "required": ["format"],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 4,
+          "description": "1-4 encodings of the same audio [[{format: wav, bit_depth: 32}]]"
+        },
+        "normalize": {
+          "type": "object",
+          "title": "normalize",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["none", "lufs_i", "lufs_s", "lufs_m", "peak", "true_peak", "rms"]
+            },
+            "target": {
+              "type": "number",
+              "minimum": -100.0,
+              "maximum": 0.0,
+              "description": "LUFS or dB [-14]"
+            },
+            "only_reduce": {
+              "type": "boolean",
+              "description": "Never raise the level"
+            },
+            "scope": {
+              "type": "string",
+              "enum": ["file", "master"],
+              "description": "file (default), or master: stems share the master mix's gain"
+            }
+          },
+          "required": ["mode"],
+          "additionalProperties": false
+        },
+        "limit_true_peak_db": {
+          "type": "number",
+          "minimum": -60.0,
+          "maximum": 0.0,
+          "description": "A true-peak ceiling (dBTP)"
+        },
+        "trim": {
+          "type": "object",
+          "title": "trim",
+          "properties": {
+            "start": {
+              "type": "boolean"
+            },
+            "end": {
+              "type": "boolean"
+            },
+            "threshold_db": {
+              "type": "number",
+              "minimum": -144.0,
+              "maximum": 0.0,
+              "description": "[-60]"
+            }
+          },
+          "additionalProperties": false
+        },
+        "seamless_loop": {
+          "type": "boolean",
+          "description": "Sum the tail into the start (needs tail_s)"
+        },
+        "handles_s": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 60.0,
+          "description": "Regions: seconds added at both ends"
+        },
+        "stems": {
+          "type": "object",
+          "title": "stems",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["isolated", "through_master"],
+              "description": "isolated (default; no master processing) or through_master"
+            },
+            "tap": {
+              "type": "string",
+              "enum": ["post_fader", "pre_fader", "pre_fx"]
+            },
+            "tracks": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^tr_[0-9]+$"
+              },
+              "maxItems": 4096,
+              "description": "Track ids (default: every top-level track)"
+            },
+            "skip_silent": {
+              "type": "boolean",
+              "description": "Leave out stems whose peak is below -90 dBFS"
+            }
+          },
+          "additionalProperties": false
+        },
+        "matrix": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^tr_[0-9]+$"
+            }
+          },
+          "propertyNames": {
+            "pattern": "^project$|^rg_[0-9]+$"
+          }
+        },
+        "if_exists": {
+          "type": "string",
+          "enum": ["overwrite", "number", "skip", "error"]
+        },
+        "metadata": {
+          "type": "object",
+          "title": "render metadata",
+          "description": "Tags written into each file; text members accept the file-name tokens",
+          "properties": {
+            "title": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "artist": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "album": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "track_number": {
+              "type": "integer",
+              "minimum": 1.0,
+              "maximum": 9999.0
+            },
+            "date": {
+              "type": "string",
+              "pattern": "^[0-9]{4}(-[0-9]{2}-[0-9]{2})?$"
+            },
+            "genre": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "comment": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "isrc": {
+              "type": "string",
+              "pattern": "^[A-Z]{2}[A-Z0-9]{3}[0-9]{7}$"
+            },
+            "cover": {
+              "type": "string",
+              "maxLength": 1024,
+              "description": "A PNG or JPEG of at most 10 MiB, relative to the project folder"
+            },
+            "bwf": {
+              "type": "boolean",
+              "description": "WAV: a BWF bext chunk (v2) with time reference and loudness"
+            },
+            "markers": {
+              "type": "boolean",
+              "description": "WAV cue points / AIFF markers for the markers and regions in the file's range"
+            }
+          },
+          "additionalProperties": false
+        },
+        "report": {
+          "type": "boolean",
+          "description": "Write <file>.loudness.txt beside each file"
+        },
+        "add_to_project": {
+          "type": "boolean"
+        },
+        "master": {
+          "type": "string",
+          "pattern": "^tr_[0-9]+$",
+          "description": "Mix: the master (default tr_0)"
+        },
+        "branch": {
+          "type": "string",
+          "description": "Render this branch's head (default: the current one)"
         },
         "version": {
           "type": "integer",
           "minimum": 0.0,
           "description": "Render the session as of this version (history.list); the render queue pins its renders"
         },
-        "job": {
-          "type": "boolean",
-          "default": false
+        "name": {
+          "type": "string",
+          "description": "A file name instead of the pattern, for this call"
         },
-        "add_to_project": {
+        "operation": {
+          "type": "string",
+          "enum": ["mix", "stems", "regions"],
+          "description": "Dry run and render.settings: mix, stems or regions (default: tracks or regions given, else the settings' source)"
+        },
+        "regions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^rg_[0-9]+$"
+          },
+          "description": "Regions: region ids (default: all, with the render matrix)"
+        },
+        "tracks": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^tr_[0-9]+$"
+          },
+          "description": "Stems: track ids (sets stems.tracks for this call)"
+        },
+        "format": {
+          "type": "string",
+          "enum": ["wav", "aiff", "flac", "mp3", "vorbis"],
+          "description": "Sets outputs[0].format for this call"
+        },
+        "bit_depth": {
+          "type": "integer",
+          "minimum": 16.0,
+          "maximum": 32.0,
+          "description": "Sets outputs[0].bit_depth for this call"
+        },
+        "secondary": {
+          "description": "Replaces outputs[1] ({format, bit_depth}), or \"none\" removes it, for this call"
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["isolated", "through_master"],
+          "description": "Sets stems.mode for this call"
+        },
+        "tap": {
+          "type": "string",
+          "enum": ["post_fader", "pre_fader", "pre_fx"],
+          "description": "Sets stems.tap for this call"
+        },
+        "target": {
+          "type": "number",
+          "description": "Sets normalize.target for this call"
+        },
+        "analyze": {
+          "type": "string",
+          "enum": ["summary", "full"],
+          "description": "Mix: a supple.analysis-report/1.0 inline"
+        },
+        "job": {
           "type": "boolean",
           "default": false
         }
@@ -7437,108 +8997,793 @@
     }
   },
   {
-    "name": "render_stems",
-    "title": "Render each selected track to its own file (stems).",
-    "description": "Render each selected track to its own file (stems). Files go to the renders directory, named by pattern. job: true runs the render as a job (job.get for progress, job.cancel to stop); results carry a render id and an analysis summary per file. See describe for errors and examples.",
+    "name": "render_settings",
+    "title": "The render settings that apply, and the layer each one comes from.",
+    "description": "The render settings that apply, and the layer each one comes from. effective: what a render with these arguments would use (every member filled in); project: project.render as stored; default: the user's render default (null if none); from: per member, args, project, default or built-in (ADR-0055). Change the project's settings with project.set {render} or render.preset.load. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "render_args",
       "properties": {
-        "master": {
+        "source": {
           "type": "string",
-          "pattern": "^tr_[0-9]+$"
+          "enum": ["mix", "stems", "regions"],
+          "description": "The dialog's source; render.mix always renders the mix"
         },
-        "branch": {
-          "type": "string"
-        },
-        "pattern": {
+        "bounds": {
           "type": "string",
-          "description": "File name pattern (session-model §7.3), e.g. \"{project}-{track_number:02}-{track|lower}\""
-        },
-        "name": {
-          "type": "string",
-          "description": "A fixed file name instead of a pattern"
-        },
-        "mode": {
-          "type": "string",
-          "description": "Stems: isolated (default; the track alone, no master processing) or through_master (the others muted)"
-        },
-        "tap": {
-          "type": "string",
-          "description": "Stems: post_fader (default), pre_fader or pre_fx"
-        },
-        "format": {
-          "type": "string",
-          "description": "wav (default) or flac (16/24 bit)"
-        },
-        "secondary": {
-          "description": "A second file of the same render beside the first: {format: wav|flac, bit_depth}, or \"none\"; default: the project's render settings"
-        },
-        "normalize": {
-          "description": "none, lufs_i, lufs_s, lufs_m, peak, true_peak or rms; or {mode, target, limit_true_peak_db}"
-        },
-        "operation": {
-          "type": "string",
-          "description": "Dry run: mix, stems or regions (default from the other arguments)"
-        },
-        "tracks": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Stems: track ids (default: every top-level track)"
-        },
-        "regions": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Regions: region ids (default: all, with the project render matrix)"
+          "enum": ["project", "loop", "custom"],
+          "description": "project (default), loop or custom (start_beat, end_beat)"
         },
         "start_beat": {
           "type": "number",
-          "minimum": 0.0
+          "minimum": 0.0,
+          "maximum": 1e+09
         },
         "end_beat": {
           "type": "number",
-          "exclusiveMinimum": 0.0
+          "exclusiveMinimum": 0.0,
+          "maximum": 1e+09
         },
         "tail_s": {
           "type": "number",
           "minimum": 0.0,
-          "maximum": 600.0
+          "maximum": 600.0,
+          "description": "Seconds rendered past the end"
         },
-        "target": {
-          "type": "number"
-        },
-        "limit_true_peak_db": {
-          "type": "number"
-        },
-        "bit_depth": {
-          "type": "integer",
-          "minimum": 16.0,
-          "maximum": 32.0
+        "pattern": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "object",
+              "title": "pattern per source",
+              "properties": {
+                "mix": {
+                  "type": "string"
+                },
+                "stems": {
+                  "type": "string"
+                },
+                "regions": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          ],
+          "description": "File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions}"
         },
         "sample_rate": {
           "type": "integer",
           "minimum": 8000.0,
-          "maximum": 384000.0
+          "maximum": 384000.0,
+          "description": "Default: the project rate"
         },
         "channels": {
-          "type": "integer",
-          "minimum": 1.0,
-          "maximum": 2.0
+          "anyOf": [
+            {
+              "type": "integer",
+              "enum": [1, 2]
+            },
+            {
+              "type": "string",
+              "enum": ["track"]
+            }
+          ],
+          "description": "1 (mono, (L+R)/2), 2 (stereo) or \"track\" (stems: mono files for 1-channel tracks)"
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "title": "render output",
+            "description": "One encoding of the rendered audio",
+            "properties": {
+              "format": {
+                "type": "string",
+                "enum": ["wav", "aiff", "flac", "mp3", "vorbis"]
+              },
+              "bit_depth": {
+                "type": "integer",
+                "enum": [16, 24, 32],
+                "description": "WAV 16/24/32 (float) [32]; AIFF and FLAC 16/24 [24]; none for MP3 and Vorbis"
+              },
+              "dither": {
+                "type": "string",
+                "enum": ["none", "tpdf", "shaped"],
+                "description": "16- and 24-bit output: none, tpdf (default) or shaped"
+              },
+              "sample_rate": {
+                "type": "integer",
+                "minimum": 8000.0,
+                "maximum": 384000.0,
+                "description": "This output's own rate"
+              },
+              "mp3": {
+                "type": "object",
+                "title": "mp3 options",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": ["cbr", "vbr"],
+                    "description": "cbr (default) or vbr"
+                  },
+                  "bitrate_kbps": {
+                    "type": "integer",
+                    "enum": [32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320],
+                    "description": "CBR bit rate [320]"
+                  },
+                  "vbr_quality": {
+                    "type": "integer",
+                    "minimum": 0.0,
+                    "maximum": 9.0,
+                    "description": "VBR quality, 0 (best) to 9 [2]"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "vorbis_quality": {
+                "type": "number",
+                "minimum": -1.0,
+                "maximum": 10.0,
+                "description": "Ogg Vorbis quality, -1 to 10 [6]"
+              },
+              "suffix": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9 _.+-]{1,32}$",
+                "description": "Inserted before the extension of a second or later output, e.g. \"-16bit\""
+              }
+            },
+            "required": ["format"],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 4,
+          "description": "1-4 encodings of the same audio [[{format: wav, bit_depth: 32}]]"
+        },
+        "normalize": {
+          "type": "object",
+          "title": "normalize",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["none", "lufs_i", "lufs_s", "lufs_m", "peak", "true_peak", "rms"]
+            },
+            "target": {
+              "type": "number",
+              "minimum": -100.0,
+              "maximum": 0.0,
+              "description": "LUFS or dB [-14]"
+            },
+            "only_reduce": {
+              "type": "boolean",
+              "description": "Never raise the level"
+            },
+            "scope": {
+              "type": "string",
+              "enum": ["file", "master"],
+              "description": "file (default), or master: stems share the master mix's gain"
+            }
+          },
+          "required": ["mode"],
+          "additionalProperties": false
+        },
+        "limit_true_peak_db": {
+          "type": "number",
+          "minimum": -60.0,
+          "maximum": 0.0,
+          "description": "A true-peak ceiling (dBTP)"
+        },
+        "trim": {
+          "type": "object",
+          "title": "trim",
+          "properties": {
+            "start": {
+              "type": "boolean"
+            },
+            "end": {
+              "type": "boolean"
+            },
+            "threshold_db": {
+              "type": "number",
+              "minimum": -144.0,
+              "maximum": 0.0,
+              "description": "[-60]"
+            }
+          },
+          "additionalProperties": false
+        },
+        "seamless_loop": {
+          "type": "boolean",
+          "description": "Sum the tail into the start (needs tail_s)"
+        },
+        "handles_s": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 60.0,
+          "description": "Regions: seconds added at both ends"
+        },
+        "stems": {
+          "type": "object",
+          "title": "stems",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["isolated", "through_master"],
+              "description": "isolated (default; no master processing) or through_master"
+            },
+            "tap": {
+              "type": "string",
+              "enum": ["post_fader", "pre_fader", "pre_fx"]
+            },
+            "tracks": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^tr_[0-9]+$"
+              },
+              "maxItems": 4096,
+              "description": "Track ids (default: every top-level track)"
+            },
+            "skip_silent": {
+              "type": "boolean",
+              "description": "Leave out stems whose peak is below -90 dBFS"
+            }
+          },
+          "additionalProperties": false
+        },
+        "matrix": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^tr_[0-9]+$"
+            }
+          },
+          "propertyNames": {
+            "pattern": "^project$|^rg_[0-9]+$"
+          }
+        },
+        "if_exists": {
+          "type": "string",
+          "enum": ["overwrite", "number", "skip", "error"]
+        },
+        "metadata": {
+          "type": "object",
+          "title": "render metadata",
+          "description": "Tags written into each file; text members accept the file-name tokens",
+          "properties": {
+            "title": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "artist": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "album": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "track_number": {
+              "type": "integer",
+              "minimum": 1.0,
+              "maximum": 9999.0
+            },
+            "date": {
+              "type": "string",
+              "pattern": "^[0-9]{4}(-[0-9]{2}-[0-9]{2})?$"
+            },
+            "genre": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "comment": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "isrc": {
+              "type": "string",
+              "pattern": "^[A-Z]{2}[A-Z0-9]{3}[0-9]{7}$"
+            },
+            "cover": {
+              "type": "string",
+              "maxLength": 1024,
+              "description": "A PNG or JPEG of at most 10 MiB, relative to the project folder"
+            },
+            "bwf": {
+              "type": "boolean",
+              "description": "WAV: a BWF bext chunk (v2) with time reference and loudness"
+            },
+            "markers": {
+              "type": "boolean",
+              "description": "WAV cue points / AIFF markers for the markers and regions in the file's range"
+            }
+          },
+          "additionalProperties": false
+        },
+        "report": {
+          "type": "boolean",
+          "description": "Write <file>.loudness.txt beside each file"
+        },
+        "add_to_project": {
+          "type": "boolean"
+        },
+        "master": {
+          "type": "string",
+          "pattern": "^tr_[0-9]+$",
+          "description": "Mix: the master (default tr_0)"
+        },
+        "branch": {
+          "type": "string",
+          "description": "Render this branch's head (default: the current one)"
         },
         "version": {
           "type": "integer",
           "minimum": 0.0,
           "description": "Render the session as of this version (history.list); the render queue pins its renders"
         },
+        "name": {
+          "type": "string",
+          "description": "A file name instead of the pattern, for this call"
+        },
+        "operation": {
+          "type": "string",
+          "enum": ["mix", "stems", "regions"],
+          "description": "Dry run and render.settings: mix, stems or regions (default: tracks or regions given, else the settings' source)"
+        },
+        "regions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^rg_[0-9]+$"
+          },
+          "description": "Regions: region ids (default: all, with the render matrix)"
+        },
+        "tracks": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^tr_[0-9]+$"
+          },
+          "description": "Stems: track ids (sets stems.tracks for this call)"
+        },
+        "format": {
+          "type": "string",
+          "enum": ["wav", "aiff", "flac", "mp3", "vorbis"],
+          "description": "Sets outputs[0].format for this call"
+        },
+        "bit_depth": {
+          "type": "integer",
+          "minimum": 16.0,
+          "maximum": 32.0,
+          "description": "Sets outputs[0].bit_depth for this call"
+        },
+        "secondary": {
+          "description": "Replaces outputs[1] ({format, bit_depth}), or \"none\" removes it, for this call"
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["isolated", "through_master"],
+          "description": "Sets stems.mode for this call"
+        },
+        "tap": {
+          "type": "string",
+          "enum": ["post_fader", "pre_fader", "pre_fx"],
+          "description": "Sets stems.tap for this call"
+        },
+        "target": {
+          "type": "number",
+          "description": "Sets normalize.target for this call"
+        },
+        "analyze": {
+          "type": "string",
+          "enum": ["summary", "full"],
+          "description": "Mix: a supple.analysis-report/1.0 inline"
+        },
         "job": {
           "type": "boolean",
           "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "render_stems",
+    "title": "Render each selected track to its own file (stems).",
+    "description": "Render each selected track to its own file (stems). Arguments override project.render (then the user's default, then built-ins) for this call only; render.settings shows what applies. Files go to the renders folder, named by pattern (subfolders allowed). job: true runs the render as a job (job.get for progress, job.cancel to stop). Each file lists its outputs (with delivery checks when a loudness target or a ceiling is set), branch, version, start_beat, seconds, a render id (analyze.render, analyze.compare) and an analysis summary. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "render_args",
+      "properties": {
+        "source": {
+          "type": "string",
+          "enum": ["mix", "stems", "regions"],
+          "description": "The dialog's source; render.mix always renders the mix"
+        },
+        "bounds": {
+          "type": "string",
+          "enum": ["project", "loop", "custom"],
+          "description": "project (default), loop or custom (start_beat, end_beat)"
+        },
+        "start_beat": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1e+09
+        },
+        "end_beat": {
+          "type": "number",
+          "exclusiveMinimum": 0.0,
+          "maximum": 1e+09
+        },
+        "tail_s": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 600.0,
+          "description": "Seconds rendered past the end"
+        },
+        "pattern": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "object",
+              "title": "pattern per source",
+              "properties": {
+                "mix": {
+                  "type": "string"
+                },
+                "stems": {
+                  "type": "string"
+                },
+                "regions": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          ],
+          "description": "File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions}"
+        },
+        "sample_rate": {
+          "type": "integer",
+          "minimum": 8000.0,
+          "maximum": 384000.0,
+          "description": "Default: the project rate"
+        },
+        "channels": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "enum": [1, 2]
+            },
+            {
+              "type": "string",
+              "enum": ["track"]
+            }
+          ],
+          "description": "1 (mono, (L+R)/2), 2 (stereo) or \"track\" (stems: mono files for 1-channel tracks)"
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "title": "render output",
+            "description": "One encoding of the rendered audio",
+            "properties": {
+              "format": {
+                "type": "string",
+                "enum": ["wav", "aiff", "flac", "mp3", "vorbis"]
+              },
+              "bit_depth": {
+                "type": "integer",
+                "enum": [16, 24, 32],
+                "description": "WAV 16/24/32 (float) [32]; AIFF and FLAC 16/24 [24]; none for MP3 and Vorbis"
+              },
+              "dither": {
+                "type": "string",
+                "enum": ["none", "tpdf", "shaped"],
+                "description": "16- and 24-bit output: none, tpdf (default) or shaped"
+              },
+              "sample_rate": {
+                "type": "integer",
+                "minimum": 8000.0,
+                "maximum": 384000.0,
+                "description": "This output's own rate"
+              },
+              "mp3": {
+                "type": "object",
+                "title": "mp3 options",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": ["cbr", "vbr"],
+                    "description": "cbr (default) or vbr"
+                  },
+                  "bitrate_kbps": {
+                    "type": "integer",
+                    "enum": [32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320],
+                    "description": "CBR bit rate [320]"
+                  },
+                  "vbr_quality": {
+                    "type": "integer",
+                    "minimum": 0.0,
+                    "maximum": 9.0,
+                    "description": "VBR quality, 0 (best) to 9 [2]"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "vorbis_quality": {
+                "type": "number",
+                "minimum": -1.0,
+                "maximum": 10.0,
+                "description": "Ogg Vorbis quality, -1 to 10 [6]"
+              },
+              "suffix": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9 _.+-]{1,32}$",
+                "description": "Inserted before the extension of a second or later output, e.g. \"-16bit\""
+              }
+            },
+            "required": ["format"],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 4,
+          "description": "1-4 encodings of the same audio [[{format: wav, bit_depth: 32}]]"
+        },
+        "normalize": {
+          "type": "object",
+          "title": "normalize",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["none", "lufs_i", "lufs_s", "lufs_m", "peak", "true_peak", "rms"]
+            },
+            "target": {
+              "type": "number",
+              "minimum": -100.0,
+              "maximum": 0.0,
+              "description": "LUFS or dB [-14]"
+            },
+            "only_reduce": {
+              "type": "boolean",
+              "description": "Never raise the level"
+            },
+            "scope": {
+              "type": "string",
+              "enum": ["file", "master"],
+              "description": "file (default), or master: stems share the master mix's gain"
+            }
+          },
+          "required": ["mode"],
+          "additionalProperties": false
+        },
+        "limit_true_peak_db": {
+          "type": "number",
+          "minimum": -60.0,
+          "maximum": 0.0,
+          "description": "A true-peak ceiling (dBTP)"
+        },
+        "trim": {
+          "type": "object",
+          "title": "trim",
+          "properties": {
+            "start": {
+              "type": "boolean"
+            },
+            "end": {
+              "type": "boolean"
+            },
+            "threshold_db": {
+              "type": "number",
+              "minimum": -144.0,
+              "maximum": 0.0,
+              "description": "[-60]"
+            }
+          },
+          "additionalProperties": false
+        },
+        "seamless_loop": {
+          "type": "boolean",
+          "description": "Sum the tail into the start (needs tail_s)"
+        },
+        "handles_s": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 60.0,
+          "description": "Regions: seconds added at both ends"
+        },
+        "stems": {
+          "type": "object",
+          "title": "stems",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["isolated", "through_master"],
+              "description": "isolated (default; no master processing) or through_master"
+            },
+            "tap": {
+              "type": "string",
+              "enum": ["post_fader", "pre_fader", "pre_fx"]
+            },
+            "tracks": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^tr_[0-9]+$"
+              },
+              "maxItems": 4096,
+              "description": "Track ids (default: every top-level track)"
+            },
+            "skip_silent": {
+              "type": "boolean",
+              "description": "Leave out stems whose peak is below -90 dBFS"
+            }
+          },
+          "additionalProperties": false
+        },
+        "matrix": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^tr_[0-9]+$"
+            }
+          },
+          "propertyNames": {
+            "pattern": "^project$|^rg_[0-9]+$"
+          }
+        },
+        "if_exists": {
+          "type": "string",
+          "enum": ["overwrite", "number", "skip", "error"]
+        },
+        "metadata": {
+          "type": "object",
+          "title": "render metadata",
+          "description": "Tags written into each file; text members accept the file-name tokens",
+          "properties": {
+            "title": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "artist": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "album": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "track_number": {
+              "type": "integer",
+              "minimum": 1.0,
+              "maximum": 9999.0
+            },
+            "date": {
+              "type": "string",
+              "pattern": "^[0-9]{4}(-[0-9]{2}-[0-9]{2})?$"
+            },
+            "genre": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "comment": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "isrc": {
+              "type": "string",
+              "pattern": "^[A-Z]{2}[A-Z0-9]{3}[0-9]{7}$"
+            },
+            "cover": {
+              "type": "string",
+              "maxLength": 1024,
+              "description": "A PNG or JPEG of at most 10 MiB, relative to the project folder"
+            },
+            "bwf": {
+              "type": "boolean",
+              "description": "WAV: a BWF bext chunk (v2) with time reference and loudness"
+            },
+            "markers": {
+              "type": "boolean",
+              "description": "WAV cue points / AIFF markers for the markers and regions in the file's range"
+            }
+          },
+          "additionalProperties": false
+        },
+        "report": {
+          "type": "boolean",
+          "description": "Write <file>.loudness.txt beside each file"
         },
         "add_to_project": {
+          "type": "boolean"
+        },
+        "master": {
+          "type": "string",
+          "pattern": "^tr_[0-9]+$",
+          "description": "Mix: the master (default tr_0)"
+        },
+        "branch": {
+          "type": "string",
+          "description": "Render this branch's head (default: the current one)"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 0.0,
+          "description": "Render the session as of this version (history.list); the render queue pins its renders"
+        },
+        "name": {
+          "type": "string",
+          "description": "A file name instead of the pattern, for this call"
+        },
+        "operation": {
+          "type": "string",
+          "enum": ["mix", "stems", "regions"],
+          "description": "Dry run and render.settings: mix, stems or regions (default: tracks or regions given, else the settings' source)"
+        },
+        "regions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^rg_[0-9]+$"
+          },
+          "description": "Regions: region ids (default: all, with the render matrix)"
+        },
+        "tracks": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^tr_[0-9]+$"
+          },
+          "description": "Stems: track ids (sets stems.tracks for this call)"
+        },
+        "format": {
+          "type": "string",
+          "enum": ["wav", "aiff", "flac", "mp3", "vorbis"],
+          "description": "Sets outputs[0].format for this call"
+        },
+        "bit_depth": {
+          "type": "integer",
+          "minimum": 16.0,
+          "maximum": 32.0,
+          "description": "Sets outputs[0].bit_depth for this call"
+        },
+        "secondary": {
+          "description": "Replaces outputs[1] ({format, bit_depth}), or \"none\" removes it, for this call"
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["isolated", "through_master"],
+          "description": "Sets stems.mode for this call"
+        },
+        "tap": {
+          "type": "string",
+          "enum": ["post_fader", "pre_fader", "pre_fx"],
+          "description": "Sets stems.tap for this call"
+        },
+        "target": {
+          "type": "number",
+          "description": "Sets normalize.target for this call"
+        },
+        "analyze": {
+          "type": "string",
+          "enum": ["summary", "full"],
+          "description": "Mix: a supple.analysis-report/1.0 inline"
+        },
+        "job": {
           "type": "boolean",
           "default": false
         }

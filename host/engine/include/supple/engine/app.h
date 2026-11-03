@@ -53,6 +53,9 @@ struct AppOptions {
     std::filesystem::path projectTemplateDir;  // empty = … / <slug> / templates
     std::filesystem::path workdir;
     std::filesystem::path rendersDir;  // empty = <workdir>/renders; setRendersDir changes it
+    // Render presets and the user's render default (ADR-0055). Empty =
+    // <workdir>/render-presets; the app passes <data>/<slug>/render-presets.
+    std::filesystem::path renderPresetDir;
     // DSP scripts (ADR-0032): <scriptDir>/<name>/<name>.cpp, each a plugin of
     // the script player. Empty = <workdir>/scripts.
     std::filesystem::path scriptDir;

@@ -312,16 +312,19 @@ missing member comes from the user's default, then the built-in default
 - `source`: `mix` | `stems` | `regions` [`mix`]: the dialog's source
   (`render.mix` always renders the mix).
 - `bounds`: `project` (beat 0 to the last item's end) | `loop` (the
-  transport loop; `render.empty` when none is set) | `custom` (`start_beat`,
-  `end_beat`) [`project`].
+  transport loop; `render.empty` when none is set) | `custom` (the members
+  `start_beat` [0] and `end_beat` [the last item's end]) [`project`]. A
+  command that gives `start_beat` or `end_beat` without `bounds` renders
+  custom bounds.
 - `tail_s` 0–600 [0]: seconds rendered past the end.
 - `pattern`: a string (used for every source), or `{mix, stems, regions}`,
   each optional [`{project}-v{version}` for the mix,
   `{project}-{track}-{region}` otherwise].
 - `sample_rate` 8000–384000 [the project rate]: the rate the chain runs at
   after the offline render.
-- `channels`: `1` | `2` | `"track"` (stems only: a 1-channel track gives a
-  mono file, others stereo) [2]. Mono is (L+R)/2.
+- `channels`: `1` | `2` | `"track"` (each file as wide as its source: a
+  1-channel track's stem is mono, everything else stereo) [2]. Mono is
+  (L+R)/2.
 - `outputs`: 1–4 objects [`[{format: "wav", bit_depth: 32}]`], each
   `{format: wav|aiff|flac|mp3|vorbis, bit_depth?, dither?, sample_rate?,
   mp3?, vorbis_quality?, suffix?}`:
@@ -330,21 +333,25 @@ missing member comes from the user's default, then the built-in default
   - `dither`: `none` | `tpdf` | `shaped` [`tpdf`]. Applies only to 16- and
     24-bit output.
   - `sample_rate`: overrides the chain's rate for this output only. MP3
-    accepts 8000–48000 and otherwise defaults to 48000, or 44100 when the
-    chain rate is a multiple of 44100 above 48000.
+    accepts the MPEG rates 8000–48000 and otherwise defaults to 48000, or
+    44100 when the chain rate is a multiple of 44100 above 48000 (below
+    48000, the next MPEG rate up). Vorbis accepts up to 192000 and
+    otherwise defaults to half the chain rate.
   - `mp3`: `{mode: cbr|vbr, bitrate_kbps (cbr: 32, 40, 48, 56, 64, 80, 96,
     112, 128, 160, 192, 224, 256, 320), vbr_quality 0–9}` [cbr 320].
   - `vorbis_quality`: −1 to 10 [6].
-  - `suffix`: a file-name-safe string inserted before the extension of a
-    second or later output.
+  - `suffix`: a file-name-safe string (letters, digits, space, `_ . + -`,
+    up to 32) inserted before the extension of a second or later output.
+    Without one, a later output whose extension repeats an earlier one's
+    gets `.<bit depth>`, `.<kbps>k`, `.V<quality>` or `.q<quality>`.
 - `normalize`: `{mode: none|lufs_i|lufs_s|lufs_m|peak|true_peak|rms,
-  target, only_reduce?, scope?}` [`none`; target −14]. `only_reduce` never
+  target, only_reduce?, scope?}` [`none`; target −14, −100 to 0]. `only_reduce` never
   raises the level. `scope`: `file` [default] normalizes each file on its
-  own; `master` (stems only) applies to every stem the gain that would
-  normalize the master mix over the same range.
-- `limit_true_peak_db` ≤ 0 or absent [absent]: a true-peak ceiling, applied
-  with or without normalization. It is refused with `normalize.scope:
-  master`.
+  own; `master` applies to every stem the gain that would normalize the
+  master mix over the same range (other sources normalize each file).
+- `limit_true_peak_db` −60 to 0, or absent [absent]: a true-peak ceiling,
+  applied with or without normalization. Stems with `normalize.scope:
+  master` refuse it.
 - `trim`: `{start, end, threshold_db}` [off; −60 dBFS]: removes silence
   below the threshold at either end of each file.
 - `seamless_loop` [false]: sums the tail into the start, so the file is

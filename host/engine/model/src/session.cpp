@@ -521,18 +521,6 @@ Status validateNumeric(const Session& s) {
         }
     if (!render.isObject())
         return Error("schema.type", "render must be an object", "/project/render");
-    for (const char* key : {"sample_rate", "tail_ms", "channels"})
-        if (const auto* v = render.find(key)) {
-            const std::string p = std::string("/project/render/") + key;
-            if (!v->isNumber()) return Error("schema.type", "expected a number", p);
-            const double n = v->asDouble();
-            if (!std::isfinite(n) ||
-                (std::string_view(key) == "sample_rate" &&
-                 (n < 8000 || n > 384000 || n != std::floor(n))) ||
-                (std::string_view(key) == "channels" && n != 1 && n != 2) ||
-                (std::string_view(key) == "tail_ms" && (n < 0 || n > 600000)))
-                return numericError(p);
-        }
     for (const auto& e : s.media) {
         const auto& md = *e.value;
         const std::string p = "/sources/media/" + e.id.str();

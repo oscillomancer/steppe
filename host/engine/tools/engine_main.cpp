@@ -100,6 +100,11 @@ fs::path defaultWorkdir() {
     return base / std::string(product::kSlug) / "engine";
 }
 
+// The user's render presets, as the app keeps them: <data>/<slug>/render-presets.
+fs::path userRenderPresetDir() {
+    return paths::data(true) / std::string(product::kSlug) / "render-presets";
+}
+
 std::atomic<bool> g_interrupted{false};
 
 engine::AppOptions cliOptions() {
@@ -166,6 +171,7 @@ int play(cmd::Registry& registry, const std::vector<std::string>& args) {
             return usage();
     }
     options.workdir = project.parent_path();
+    options.renderPresetDir = userRenderPresetDir();
     // --plugin-path first, then the stock plugins built beside this binary, then the defaults.
     if (auto stock = host::stockPluginDir()) options.pluginPath.push_back(*stock);
     for (auto& p : host::defaultSearchPath()) options.pluginPath.push_back(p);
@@ -252,8 +258,12 @@ int main(int argc, char** argv) {
             else
                 return usage();
         }
-        if (options.workdir.empty())
+        // Render presets are the user's, shared with the app (ADR-0055); under
+        // --workdir (tests) they stay in <workdir>/render-presets.
+        if (options.workdir.empty()) {
             options.workdir = project.empty() ? defaultWorkdir() : project.parent_path();
+            options.renderPresetDir = userRenderPresetDir();
+        }
         if (auto stock = host::stockPluginDir()) options.pluginPath.push_back(*stock);
         for (auto& path : host::defaultSearchPath()) options.pluginPath.push_back(path);
         auto app = engine::EngineApp::create(options);
@@ -385,8 +395,10 @@ int main(int argc, char** argv) {
         else
             return usage();
     }
-    if (options.workdir.empty())
+    if (options.workdir.empty()) {
         options.workdir = project.empty() ? defaultWorkdir() : project.parent_path();
+        options.renderPresetDir = userRenderPresetDir();
+    }
     if (auto stock = host::stockPluginDir()) options.pluginPath.push_back(*stock);
     for (auto& p : host::defaultSearchPath()) options.pluginPath.push_back(p);
     auto app = engine::EngineApp::create(options);

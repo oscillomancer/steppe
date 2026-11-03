@@ -88,6 +88,7 @@ q = nil
 ---@class Quire.branch_create_args
 ---@field name string
 ---@field from? string
+---@field version? integer Start at this version of the current branch's history (history.list; a render result's version) instead of a head
 ---@field switch? boolean (default: true)
 
 ---@class Quire.branch_create_result
@@ -868,7 +869,7 @@ q = nil
 ---@field notes? string
 ---@field console9? boolean
 ---@field history_budget_bytes? integer Estimated retained history byte budget; default 1 GiB. Leases and branch boundaries may exceed it.
----@field render? table
+---@field render? table Render settings (session-model §1.10); every member optional
 ---@field timebase? "time"|"beats"|"beats_position"
 
 ---@class Quire.project_template_delete_args
@@ -925,59 +926,91 @@ q = nil
 ---@field text? string
 
 ---@class Quire.render_dry_run_args
----@field master? string
----@field branch? string
----@field pattern? string File name pattern (session-model §7.3), e.g. "{project}-{track_number:02}-{track|lower}"
----@field name? string A fixed file name instead of a pattern
----@field mode? string Stems: isolated (default; the track alone, no master processing) or through_master (the others muted)
----@field tap? string Stems: post_fader (default), pre_fader or pre_fx
----@field format? string wav (default) or flac (16/24 bit)
----@field secondary? any A second file of the same render beside the first: {format: wav|flac, bit_depth}, or "none"; default: the project's render settings
----@field normalize? any none, lufs_i, lufs_s, lufs_m, peak, true_peak or rms; or {mode, target, limit_true_peak_db}
----@field operation? string Dry run: mix, stems or regions (default from the other arguments)
----@field tracks? string[] Stems: track ids (default: every top-level track)
----@field regions? string[] Regions: region ids (default: all, with the project render matrix)
+---@field source? "mix"|"stems"|"regions" The dialog's source; render.mix always renders the mix
+---@field bounds? "project"|"loop"|"custom" project (default), loop or custom (start_beat, end_beat)
 ---@field start_beat? number
 ---@field end_beat? number
----@field tail_s? number
----@field target? number
----@field limit_true_peak_db? number
----@field bit_depth? integer
----@field sample_rate? integer
----@field channels? integer
+---@field tail_s? number Seconds rendered past the end
+---@field pattern? number|string File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions}
+---@field sample_rate? integer Default: the project rate
+---@field channels? number|string 1 (mono, (L+R)/2), 2 (stereo) or "track" (stems: mono files for 1-channel tracks)
+---@field outputs? table[] 1-4 encodings of the same audio [[{format: wav, bit_depth: 32}]]
+---@field normalize? table
+---@field limit_true_peak_db? number A true-peak ceiling (dBTP)
+---@field trim? table
+---@field seamless_loop? boolean Sum the tail into the start (needs tail_s)
+---@field handles_s? number Regions: seconds added at both ends
+---@field stems? table
+---@field matrix? table<string, string[]>
+---@field if_exists? "overwrite"|"number"|"skip"|"error"
+---@field metadata? table Tags written into each file; text members accept the file-name tokens
+---@field report? boolean Write <file>.loudness.txt beside each file
+---@field add_to_project? boolean
+---@field master? string Mix: the master (default tr_0)
+---@field branch? string Render this branch's head (default: the current one)
 ---@field version? integer Render the session as of this version (history.list); the render queue pins its renders
+---@field name? string A file name instead of the pattern, for this call
+---@field operation? "mix"|"stems"|"regions" Dry run and render.settings: mix, stems or regions (default: tracks or regions given, else the settings' source)
+---@field regions? string[] Regions: region ids (default: all, with the render matrix)
+---@field tracks? string[] Stems: track ids (sets stems.tracks for this call)
+---@field format? "wav"|"aiff"|"flac"|"mp3"|"vorbis" Sets outputs[0].format for this call
+---@field bit_depth? integer Sets outputs[0].bit_depth for this call
+---@field secondary? any Replaces outputs[1] ({format, bit_depth}), or "none" removes it, for this call
+---@field mode? "isolated"|"through_master" Sets stems.mode for this call
+---@field tap? "post_fader"|"pre_fader"|"pre_fx" Sets stems.tap for this call
+---@field target? number Sets normalize.target for this call
+---@field analyze? "summary"|"full" Mix: a supple.analysis-report/1.0 inline
 ---@field job? boolean (default: false)
----@field add_to_project? boolean (default: false)
 
 ---@class Quire.render_mix_args
----@field master? string Master output (default tr_0) id, e.g. "tr_1".
+---@field source? "mix"|"stems"|"regions" The dialog's source; render.mix always renders the mix
+---@field bounds? "project"|"loop"|"custom" project (default), loop or custom (start_beat, end_beat)
 ---@field start_beat? number
 ---@field end_beat? number
----@field tail_s? number
----@field name? string
----@field pattern? string
----@field branch? string
----@field format? string wav (default) or flac (16/24 bit)
----@field secondary? any A second file beside the first: {format: wav|flac, bit_depth}, or "none"
----@field bit_depth? integer
----@field sample_rate? integer
----@field channels? integer
----@field normalize? any
+---@field tail_s? number Seconds rendered past the end
+---@field pattern? number|string File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions}
+---@field sample_rate? integer Default: the project rate
+---@field channels? number|string 1 (mono, (L+R)/2), 2 (stereo) or "track" (stems: mono files for 1-channel tracks)
+---@field outputs? table[] 1-4 encodings of the same audio [[{format: wav, bit_depth: 32}]]
+---@field normalize? table
+---@field limit_true_peak_db? number A true-peak ceiling (dBTP)
+---@field trim? table
+---@field seamless_loop? boolean Sum the tail into the start (needs tail_s)
+---@field handles_s? number Regions: seconds added at both ends
+---@field stems? table
+---@field matrix? table<string, string[]>
+---@field if_exists? "overwrite"|"number"|"skip"|"error"
+---@field metadata? table Tags written into each file; text members accept the file-name tokens
+---@field report? boolean Write <file>.loudness.txt beside each file
+---@field add_to_project? boolean
+---@field master? string Mix: the master (default tr_0)
+---@field branch? string Render this branch's head (default: the current one)
+---@field version? integer Render the session as of this version (history.list); the render queue pins its renders
+---@field name? string A file name instead of the pattern, for this call
+---@field operation? "mix"|"stems"|"regions" Dry run and render.settings: mix, stems or regions (default: tracks or regions given, else the settings' source)
+---@field regions? string[] Regions: region ids (default: all, with the render matrix)
+---@field tracks? string[] Stems: track ids (sets stems.tracks for this call)
+---@field format? "wav"|"aiff"|"flac"|"mp3"|"vorbis" Sets outputs[0].format for this call
+---@field bit_depth? integer Sets outputs[0].bit_depth for this call
+---@field secondary? any Replaces outputs[1] ({format, bit_depth}), or "none" removes it, for this call
+---@field mode? "isolated"|"through_master" Sets stems.mode for this call
+---@field tap? "post_fader"|"pre_fader"|"pre_fx" Sets stems.tap for this call
+---@field target? number Sets normalize.target for this call
+---@field analyze? "summary"|"full" Mix: a supple.analysis-report/1.0 inline
 ---@field job? boolean (default: false)
----@field add_to_project? boolean (default: false)
----@field analyze? "summary"|"full"
 
----@class Quire.render_mix_result
----@field render? string
----@field path? string
----@field secondary_path? string
----@field seconds? number
----@field peak_dbfs? number
----@field output_latency? integer
----@field warnings? string[]
----@field analysis? any
----@field job? string
----@field status? string
+---@class Quire.render_preset_delete_args
+---@field name? string A preset name (render.preset.list)
+---@field default? boolean (default: false)
+
+---@class Quire.render_preset_load_args
+---@field name? string A preset name (render.preset.list)
+---@field default? boolean (default: false)
+
+---@class Quire.render_preset_save_args
+---@field name? string A preset name (render.preset.list)
+---@field default? boolean (default: false)
+---@field settings? table Render settings (session-model §1.10); every member optional
 
 ---@class Quire.render_queue_add_args
 ---@field command string
@@ -992,54 +1025,115 @@ q = nil
 ---@field job? boolean (default: false)
 
 ---@class Quire.render_regions_args
----@field master? string
----@field branch? string
----@field pattern? string File name pattern (session-model §7.3), e.g. "{project}-{track_number:02}-{track|lower}"
----@field name? string A fixed file name instead of a pattern
----@field mode? string Stems: isolated (default; the track alone, no master processing) or through_master (the others muted)
----@field tap? string Stems: post_fader (default), pre_fader or pre_fx
----@field format? string wav (default) or flac (16/24 bit)
----@field secondary? any A second file of the same render beside the first: {format: wav|flac, bit_depth}, or "none"; default: the project's render settings
----@field normalize? any none, lufs_i, lufs_s, lufs_m, peak, true_peak or rms; or {mode, target, limit_true_peak_db}
----@field operation? string Dry run: mix, stems or regions (default from the other arguments)
----@field tracks? string[] Stems: track ids (default: every top-level track)
----@field regions? string[] Regions: region ids (default: all, with the project render matrix)
+---@field source? "mix"|"stems"|"regions" The dialog's source; render.mix always renders the mix
+---@field bounds? "project"|"loop"|"custom" project (default), loop or custom (start_beat, end_beat)
 ---@field start_beat? number
 ---@field end_beat? number
----@field tail_s? number
----@field target? number
----@field limit_true_peak_db? number
----@field bit_depth? integer
----@field sample_rate? integer
----@field channels? integer
+---@field tail_s? number Seconds rendered past the end
+---@field pattern? number|string File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions}
+---@field sample_rate? integer Default: the project rate
+---@field channels? number|string 1 (mono, (L+R)/2), 2 (stereo) or "track" (stems: mono files for 1-channel tracks)
+---@field outputs? table[] 1-4 encodings of the same audio [[{format: wav, bit_depth: 32}]]
+---@field normalize? table
+---@field limit_true_peak_db? number A true-peak ceiling (dBTP)
+---@field trim? table
+---@field seamless_loop? boolean Sum the tail into the start (needs tail_s)
+---@field handles_s? number Regions: seconds added at both ends
+---@field stems? table
+---@field matrix? table<string, string[]>
+---@field if_exists? "overwrite"|"number"|"skip"|"error"
+---@field metadata? table Tags written into each file; text members accept the file-name tokens
+---@field report? boolean Write <file>.loudness.txt beside each file
+---@field add_to_project? boolean
+---@field master? string Mix: the master (default tr_0)
+---@field branch? string Render this branch's head (default: the current one)
 ---@field version? integer Render the session as of this version (history.list); the render queue pins its renders
+---@field name? string A file name instead of the pattern, for this call
+---@field operation? "mix"|"stems"|"regions" Dry run and render.settings: mix, stems or regions (default: tracks or regions given, else the settings' source)
+---@field regions? string[] Regions: region ids (default: all, with the render matrix)
+---@field tracks? string[] Stems: track ids (sets stems.tracks for this call)
+---@field format? "wav"|"aiff"|"flac"|"mp3"|"vorbis" Sets outputs[0].format for this call
+---@field bit_depth? integer Sets outputs[0].bit_depth for this call
+---@field secondary? any Replaces outputs[1] ({format, bit_depth}), or "none" removes it, for this call
+---@field mode? "isolated"|"through_master" Sets stems.mode for this call
+---@field tap? "post_fader"|"pre_fader"|"pre_fx" Sets stems.tap for this call
+---@field target? number Sets normalize.target for this call
+---@field analyze? "summary"|"full" Mix: a supple.analysis-report/1.0 inline
 ---@field job? boolean (default: false)
----@field add_to_project? boolean (default: false)
+
+---@class Quire.render_settings_args
+---@field source? "mix"|"stems"|"regions" The dialog's source; render.mix always renders the mix
+---@field bounds? "project"|"loop"|"custom" project (default), loop or custom (start_beat, end_beat)
+---@field start_beat? number
+---@field end_beat? number
+---@field tail_s? number Seconds rendered past the end
+---@field pattern? number|string File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions}
+---@field sample_rate? integer Default: the project rate
+---@field channels? number|string 1 (mono, (L+R)/2), 2 (stereo) or "track" (stems: mono files for 1-channel tracks)
+---@field outputs? table[] 1-4 encodings of the same audio [[{format: wav, bit_depth: 32}]]
+---@field normalize? table
+---@field limit_true_peak_db? number A true-peak ceiling (dBTP)
+---@field trim? table
+---@field seamless_loop? boolean Sum the tail into the start (needs tail_s)
+---@field handles_s? number Regions: seconds added at both ends
+---@field stems? table
+---@field matrix? table<string, string[]>
+---@field if_exists? "overwrite"|"number"|"skip"|"error"
+---@field metadata? table Tags written into each file; text members accept the file-name tokens
+---@field report? boolean Write <file>.loudness.txt beside each file
+---@field add_to_project? boolean
+---@field master? string Mix: the master (default tr_0)
+---@field branch? string Render this branch's head (default: the current one)
+---@field version? integer Render the session as of this version (history.list); the render queue pins its renders
+---@field name? string A file name instead of the pattern, for this call
+---@field operation? "mix"|"stems"|"regions" Dry run and render.settings: mix, stems or regions (default: tracks or regions given, else the settings' source)
+---@field regions? string[] Regions: region ids (default: all, with the render matrix)
+---@field tracks? string[] Stems: track ids (sets stems.tracks for this call)
+---@field format? "wav"|"aiff"|"flac"|"mp3"|"vorbis" Sets outputs[0].format for this call
+---@field bit_depth? integer Sets outputs[0].bit_depth for this call
+---@field secondary? any Replaces outputs[1] ({format, bit_depth}), or "none" removes it, for this call
+---@field mode? "isolated"|"through_master" Sets stems.mode for this call
+---@field tap? "post_fader"|"pre_fader"|"pre_fx" Sets stems.tap for this call
+---@field target? number Sets normalize.target for this call
+---@field analyze? "summary"|"full" Mix: a supple.analysis-report/1.0 inline
+---@field job? boolean (default: false)
 
 ---@class Quire.render_stems_args
----@field master? string
----@field branch? string
----@field pattern? string File name pattern (session-model §7.3), e.g. "{project}-{track_number:02}-{track|lower}"
----@field name? string A fixed file name instead of a pattern
----@field mode? string Stems: isolated (default; the track alone, no master processing) or through_master (the others muted)
----@field tap? string Stems: post_fader (default), pre_fader or pre_fx
----@field format? string wav (default) or flac (16/24 bit)
----@field secondary? any A second file of the same render beside the first: {format: wav|flac, bit_depth}, or "none"; default: the project's render settings
----@field normalize? any none, lufs_i, lufs_s, lufs_m, peak, true_peak or rms; or {mode, target, limit_true_peak_db}
----@field operation? string Dry run: mix, stems or regions (default from the other arguments)
----@field tracks? string[] Stems: track ids (default: every top-level track)
----@field regions? string[] Regions: region ids (default: all, with the project render matrix)
+---@field source? "mix"|"stems"|"regions" The dialog's source; render.mix always renders the mix
+---@field bounds? "project"|"loop"|"custom" project (default), loop or custom (start_beat, end_beat)
 ---@field start_beat? number
 ---@field end_beat? number
----@field tail_s? number
----@field target? number
----@field limit_true_peak_db? number
----@field bit_depth? integer
----@field sample_rate? integer
----@field channels? integer
+---@field tail_s? number Seconds rendered past the end
+---@field pattern? number|string File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions}
+---@field sample_rate? integer Default: the project rate
+---@field channels? number|string 1 (mono, (L+R)/2), 2 (stereo) or "track" (stems: mono files for 1-channel tracks)
+---@field outputs? table[] 1-4 encodings of the same audio [[{format: wav, bit_depth: 32}]]
+---@field normalize? table
+---@field limit_true_peak_db? number A true-peak ceiling (dBTP)
+---@field trim? table
+---@field seamless_loop? boolean Sum the tail into the start (needs tail_s)
+---@field handles_s? number Regions: seconds added at both ends
+---@field stems? table
+---@field matrix? table<string, string[]>
+---@field if_exists? "overwrite"|"number"|"skip"|"error"
+---@field metadata? table Tags written into each file; text members accept the file-name tokens
+---@field report? boolean Write <file>.loudness.txt beside each file
+---@field add_to_project? boolean
+---@field master? string Mix: the master (default tr_0)
+---@field branch? string Render this branch's head (default: the current one)
 ---@field version? integer Render the session as of this version (history.list); the render queue pins its renders
+---@field name? string A file name instead of the pattern, for this call
+---@field operation? "mix"|"stems"|"regions" Dry run and render.settings: mix, stems or regions (default: tracks or regions given, else the settings' source)
+---@field regions? string[] Regions: region ids (default: all, with the render matrix)
+---@field tracks? string[] Stems: track ids (sets stems.tracks for this call)
+---@field format? "wav"|"aiff"|"flac"|"mp3"|"vorbis" Sets outputs[0].format for this call
+---@field bit_depth? integer Sets outputs[0].bit_depth for this call
+---@field secondary? any Replaces outputs[1] ({format, bit_depth}), or "none" removes it, for this call
+---@field mode? "isolated"|"through_master" Sets stems.mode for this call
+---@field tap? "post_fader"|"pre_fader"|"pre_fx" Sets stems.tap for this call
+---@field target? number Sets normalize.target for this call
+---@field analyze? "summary"|"full" Mix: a supple.analysis-report/1.0 inline
 ---@field job? boolean (default: false)
----@field add_to_project? boolean (default: false)
 
 ---@class Quire.route_add_args
 ---@field from string
@@ -1472,7 +1566,7 @@ q = nil
 ---@field unpool fun(args: Quire.autoitem_unpool_args): table Take an automation item out of its pool (its points stay).
 
 ---@class Quire.branch
----@field create fun(args: Quire.branch_create_args): Quire.branch_create_result Start a branch from a branch's head (default: the current one) and switch to it.
+---@field create fun(args: Quire.branch_create_args): Quire.branch_create_result Start a branch from a branch's head or an earlier version, and switch to it.
 ---@field delete fun(args: Quire.branch_delete_args): table Delete a branch (not main, not the current one).
 ---@field diff fun(args: Quire.branch_diff_args): Quire.branch_diff_result What differs between two branch heads: objects added, removed, changed (fields).
 ---@field list fun(): Quire.branch_list_result List branches and the current one.
@@ -1629,9 +1723,16 @@ q = nil
 
 ---@class Quire.render
 ---@field ["dry-run"] fun(args?: Quire.render_dry_run_args): table List the files a render would write, with lengths, without rendering.
----@field mix fun(args?: Quire.render_mix_args): Quire.render_mix_result Render the mix offline to a float WAV (default: start to the last item's end).
+---@field mix fun(args?: Quire.render_mix_args): table Render the mix offline with the project's render settings (default: whole song).
 ---@field regions fun(args?: Quire.render_regions_args): table Render each region (or the render matrix's tracks per region) to files.
+---@field settings fun(args?: Quire.render_settings_args): table The render settings that apply, and the layer each one comes from.
 ---@field stems fun(args?: Quire.render_stems_args): table Render each selected track to its own file (stems).
+
+---@class Quire.render.preset
+---@field delete fun(args?: Quire.render_preset_delete_args): table Delete one of the user's render presets, or the user's render default.
+---@field list fun(): table Render presets: the factory ones, then the user's, with their settings.
+---@field load fun(args?: Quire.render_preset_load_args): table Replace the project's render settings with a preset (one undo step).
+---@field save fun(args?: Quire.render_preset_save_args): table Save render settings as a named preset, or as the user's render default.
 
 ---@class Quire.render.queue
 ---@field add fun(args: Quire.render_queue_add_args): table Queue a render (mix, stems or regions) to run later with render.queue.run.

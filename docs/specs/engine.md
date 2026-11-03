@@ -504,10 +504,20 @@ first use, and no plug-in code runs early to warm it.
   default, then the built-in default. Object fields are replaced whole.
   Arguments are never written back to the project. Contradictory settings
   are reported as `render.args` with the offending path and a hint:
-  - `seamless_loop` without a tail, or with `trim` or `handles_s`
-  - `scope: master` outside stems, or with a ceiling
-  - `channels: "track"` outside stems
+  - `seamless_loop` without a tail, or with `trim`, or with `handles_s` on
+    regions
+  - `scope: master` on stems together with a ceiling
   - a bit depth or sample rate the output's format does not support
+    (32 bits outside WAV, a bit depth on MP3 or Vorbis, an MP3 rate other
+    than the MPEG rates 8000–48000, Vorbis above 192 kHz)
+
+  Settings that only some sources use are no contradiction elsewhere, so
+  File → Mix still works when the dialog was set up for stems: `handles_s`
+  and `matrix` apply to regions, `stems` and `scope: master` to stems (any
+  other file normalizes on its own; the mix is the master), and
+  `channels: "track"` gives each file its source's own width (a 1-channel
+  track's stem is mono; the mix and regions are stereo). The error's message
+  says when the offending member came from the project or the user default.
 - **Chain**, in this order, per file:
   1. Offline render of the range plus the tail, at the project rate.
   2. Seamless-loop fold: the tail's samples are summed onto the start,
@@ -554,8 +564,19 @@ first use, and no plug-in code runs early to warm it.
   - `analysis` and `warnings`.
 
   `skipped: [{track?, region?, reason}]` lists files left out by
-  `skip_silent` or `if_exists: skip`. `render.dry-run` reports each
-  destination with `exists` and the path `if_exists` resolves to.
+  `skip_silent` or `if_exists: skip`. `render.dry-run` lists each file with
+  `path` (where `if_exists` sends it), `exists` (its destination is already
+  there), `skip: true` when `if_exists: skip` leaves it out, `seconds` and
+  `outputs: [{path, format}]`. With no `operation` it plans the settings'
+  `source`. `render.mix` answers with its file's entry at the top level
+  (plus `peak_dbfs`, `render`, `output_latency` and `skipped`), as before.
+  A later output with no `suffix` whose extension repeats an earlier one's
+  is named with its bit depth, bit rate or quality (`mix.16.wav`,
+  `mix.128k.mp3`, `mix.q6.ogg`); two outputs that still collide are
+  refused (`render.path`).
+- **Queue.** `render.queue.add` pins the effective settings (with a loop
+  range turned into custom bounds) as well as the version, so a later
+  default, preset or loop does not change what it renders.
 - **Settings commands.**
   - `render.settings` (query): `{effective, project, default, from: {field:
     "args"|"project"|"default"|"built-in"}}`; accepts the render arguments as

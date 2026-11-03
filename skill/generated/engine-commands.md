@@ -695,7 +695,7 @@ Result:
 
 ## `branch.create@1`
 
-Start a branch from a branch's head (default: the current one) and switch to it.
+Start a branch from a branch's head or an earlier version, and switch to it.
 
 Agents: work on agent/<you>/<topic> branches, then branch.diff and branch.merge into main. Merging replays your edits onto main even if main moved; conflicting edits are reported.
 
@@ -707,6 +707,7 @@ Kind: `action`. Exposure: `mcp-tool`.
 | --- | --- | --- | --- | --- | --- |
 | `name` | string |  |  |  |  |
 | `from` | string |  |  |  |  |
+| `version` | integer |  | 1.0.. |  | Start at this version of the current branch's history (history.list; a render result's version) instead of a head |
 | `switch` | boolean |  |  | true |  |
 
 ### Result
@@ -8819,7 +8820,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | `notes` | string |  |  |  |  |
 | `console9` | boolean |  |  |  |  |
 | `history_budget_bytes` | integer |  | 1.0.. |  | Estimated retained history byte budget; default 1 GiB. Leases and branch boundaries may exceed it. |
-| `render` | object |  |  |  |  |
+| `render` | object |  |  |  | Render settings (session-model §1.10); every member optional |
 | `timebase` | string |  |  |  |  |
 
 ### Result
@@ -9468,7 +9469,7 @@ Result:
 
 List the files a render would write, with lengths, without rendering.
 
-Files go to the renders directory, named by pattern. job: true runs the render as a job (job.get for progress, job.cancel to stop); results carry a render id and an analysis summary per file.
+Each file: path (where if_exists sends it), exists (its destination is already there), skip (if_exists skip leaves it out), seconds and outputs. operation: mix, stems or regions (default: tracks or regions given, else the settings' source).
 
 Kind: `query`. Exposure: `mcp-tool`.
 
@@ -9476,29 +9477,41 @@ Kind: `query`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `master` | string |  |  |  |  |
-| `branch` | string |  |  |  |  |
-| `pattern` | string |  |  |  | File name pattern (session-model §7.3), e.g. "{project}-{track_number:02}-{track|lower}" |
-| `name` | string |  |  |  | A fixed file name instead of a pattern |
-| `mode` | string |  |  |  | Stems: isolated (default; the track alone, no master processing) or through_master (the others muted) |
-| `tap` | string |  |  |  | Stems: post_fader (default), pre_fader or pre_fx |
-| `format` | string |  |  |  | wav (default) or flac (16/24 bit) |
-| `secondary` | value |  |  |  | A second file of the same render beside the first: {format: wav|flac, bit_depth}, or "none"; default: the project's render settings |
-| `normalize` | value |  |  |  | none, lufs_i, lufs_s, lufs_m, peak, true_peak or rms; or {mode, target, limit_true_peak_db} |
-| `operation` | string |  |  |  | Dry run: mix, stems or regions (default from the other arguments) |
-| `tracks` | array |  |  |  | Stems: track ids (default: every top-level track) |
-| `regions` | array |  |  |  | Regions: region ids (default: all, with the project render matrix) |
-| `start_beat` | number |  | 0.0.. |  |  |
-| `end_beat` | number |  |  |  |  |
-| `tail_s` | number |  | 0.0..600.0 |  |  |
-| `target` | number |  |  |  |  |
-| `limit_true_peak_db` | number |  |  |  |  |
-| `bit_depth` | integer |  | 16.0..32.0 |  |  |
-| `sample_rate` | integer |  | 8000.0..384000.0 |  |  |
-| `channels` | integer |  | 1.0..2.0 |  |  |
+| `source` | string |  |  |  | The dialog's source; render.mix always renders the mix |
+| `bounds` | string |  |  |  | project (default), loop or custom (start_beat, end_beat) |
+| `start_beat` | number |  | 0.0..1e+09 |  |  |
+| `end_beat` | number |  | ..1e+09 |  |  |
+| `tail_s` | number |  | 0.0..600.0 |  | Seconds rendered past the end |
+| `pattern` | value |  |  |  | File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions} |
+| `sample_rate` | integer |  | 8000.0..384000.0 |  | Default: the project rate |
+| `channels` | value |  |  |  | 1 (mono, (L+R)/2), 2 (stereo) or "track" (stems: mono files for 1-channel tracks) |
+| `outputs` | array |  |  |  | 1-4 encodings of the same audio [[{format: wav, bit_depth: 32}]] |
+| `normalize` | object |  |  |  |  |
+| `limit_true_peak_db` | number |  | -60.0..0.0 |  | A true-peak ceiling (dBTP) |
+| `trim` | object |  |  |  |  |
+| `seamless_loop` | boolean |  |  |  | Sum the tail into the start (needs tail_s) |
+| `handles_s` | number |  | 0.0..60.0 |  | Regions: seconds added at both ends |
+| `stems` | object |  |  |  |  |
+| `matrix` | object |  |  |  |  |
+| `if_exists` | string |  |  |  |  |
+| `metadata` | object |  |  |  | Tags written into each file; text members accept the file-name tokens |
+| `report` | boolean |  |  |  | Write <file>.loudness.txt beside each file |
+| `add_to_project` | boolean |  |  |  |  |
+| `master` | string |  |  |  | Mix: the master (default tr_0) |
+| `branch` | string |  |  |  | Render this branch's head (default: the current one) |
 | `version` | integer |  | 0.0.. |  | Render the session as of this version (history.list); the render queue pins its renders |
+| `name` | string |  |  |  | A file name instead of the pattern, for this call |
+| `operation` | string |  |  |  | Dry run and render.settings: mix, stems or regions (default: tracks or regions given, else the settings' source) |
+| `regions` | array |  |  |  | Regions: region ids (default: all, with the render matrix) |
+| `tracks` | array |  |  |  | Stems: track ids (sets stems.tracks for this call) |
+| `format` | string |  |  |  | Sets outputs[0].format for this call |
+| `bit_depth` | integer |  | 16.0..32.0 |  | Sets outputs[0].bit_depth for this call |
+| `secondary` | value |  |  |  | Replaces outputs[1] ({format, bit_depth}), or "none" removes it, for this call |
+| `mode` | string |  |  |  | Sets stems.mode for this call |
+| `tap` | string |  |  |  | Sets stems.tap for this call |
+| `target` | number |  |  |  | Sets normalize.target for this call |
+| `analyze` | string |  |  |  | Mix: a supple.analysis-report/1.0 inline |
 | `job` | boolean |  |  | false |  |
-| `add_to_project` | boolean |  |  | false |  |
 
 ### Result
 
@@ -9530,9 +9543,9 @@ Result:
 
 ## `render.mix@1`
 
-Render the mix offline to a float WAV (default: start to the last item's end).
+Render the mix offline with the project's render settings (default: whole song).
 
-start_beat/end_beat select a timeline range; master playrate determines its rendered duration. tail_s adds device-time seconds after the end (reverb tails). analyze: summary or full returns a supple.analysis-report/1.0 inline. The render id can be passed to analyze.render or analyze.compare. add_to_project: the file becomes an item on a new track at start_beat, as its own undo step right after the render (with job: when the job completes).
+Arguments override project.render (then the user's default, then built-ins) for this call only; render.settings shows what applies. Files go to the renders folder, named by pattern (subfolders allowed). job: true runs the render as a job (job.get for progress, job.cancel to stop). Each file lists its outputs (with delivery checks when a loudness target or a ceiling is set), branch, version, start_beat, seconds, a render id (analyze.render, analyze.compare) and an analysis summary. The mix answers with its file's entry at the top level (path, secondary_path, outputs, peak_dbfs, …); analyze: summary or full adds the report inline.
 
 Kind: `action`. Exposure: `mcp-tool`.
 
@@ -9540,64 +9553,46 @@ Kind: `action`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `master` | string |  |  |  | Master output (default tr_0) id, e.g. "tr_1". |
-| `start_beat` | number |  | 0.0.. |  |  |
-| `end_beat` | number |  |  |  |  |
-| `tail_s` | number |  | 0.0..60.0 |  |  |
-| `name` | string |  |  |  |  |
-| `pattern` | string |  |  |  |  |
-| `branch` | string |  |  |  |  |
-| `format` | string |  |  |  | wav (default) or flac (16/24 bit) |
-| `secondary` | value |  |  |  | A second file beside the first: {format: wav|flac, bit_depth}, or "none" |
-| `bit_depth` | integer |  | 16.0..32.0 |  |  |
-| `sample_rate` | integer |  | 8000.0..384000.0 |  |  |
-| `channels` | integer |  | 1.0..2.0 |  |  |
-| `normalize` | value |  |  |  |  |
+| `source` | string |  |  |  | The dialog's source; render.mix always renders the mix |
+| `bounds` | string |  |  |  | project (default), loop or custom (start_beat, end_beat) |
+| `start_beat` | number |  | 0.0..1e+09 |  |  |
+| `end_beat` | number |  | ..1e+09 |  |  |
+| `tail_s` | number |  | 0.0..600.0 |  | Seconds rendered past the end |
+| `pattern` | value |  |  |  | File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions} |
+| `sample_rate` | integer |  | 8000.0..384000.0 |  | Default: the project rate |
+| `channels` | value |  |  |  | 1 (mono, (L+R)/2), 2 (stereo) or "track" (stems: mono files for 1-channel tracks) |
+| `outputs` | array |  |  |  | 1-4 encodings of the same audio [[{format: wav, bit_depth: 32}]] |
+| `normalize` | object |  |  |  |  |
+| `limit_true_peak_db` | number |  | -60.0..0.0 |  | A true-peak ceiling (dBTP) |
+| `trim` | object |  |  |  |  |
+| `seamless_loop` | boolean |  |  |  | Sum the tail into the start (needs tail_s) |
+| `handles_s` | number |  | 0.0..60.0 |  | Regions: seconds added at both ends |
+| `stems` | object |  |  |  |  |
+| `matrix` | object |  |  |  |  |
+| `if_exists` | string |  |  |  |  |
+| `metadata` | object |  |  |  | Tags written into each file; text members accept the file-name tokens |
+| `report` | boolean |  |  |  | Write <file>.loudness.txt beside each file |
+| `add_to_project` | boolean |  |  |  |  |
+| `master` | string |  |  |  | Mix: the master (default tr_0) |
+| `branch` | string |  |  |  | Render this branch's head (default: the current one) |
+| `version` | integer |  | 0.0.. |  | Render the session as of this version (history.list); the render queue pins its renders |
+| `name` | string |  |  |  | A file name instead of the pattern, for this call |
+| `operation` | string |  |  |  | Dry run and render.settings: mix, stems or regions (default: tracks or regions given, else the settings' source) |
+| `regions` | array |  |  |  | Regions: region ids (default: all, with the render matrix) |
+| `tracks` | array |  |  |  | Stems: track ids (sets stems.tracks for this call) |
+| `format` | string |  |  |  | Sets outputs[0].format for this call |
+| `bit_depth` | integer |  | 16.0..32.0 |  | Sets outputs[0].bit_depth for this call |
+| `secondary` | value |  |  |  | Replaces outputs[1] ({format, bit_depth}), or "none" removes it, for this call |
+| `mode` | string |  |  |  | Sets stems.mode for this call |
+| `tap` | string |  |  |  | Sets stems.tap for this call |
+| `target` | number |  |  |  | Sets normalize.target for this call |
+| `analyze` | string |  |  |  | Mix: a supple.analysis-report/1.0 inline |
 | `job` | boolean |  |  | false |  |
-| `add_to_project` | boolean |  |  | false |  |
-| `analyze` | string |  |  |  |  |
 
 ### Result
 
 ```json
-{
-  "type": "object",
-  "title": "render_mix",
-  "properties": {
-    "render": {
-      "type": "string"
-    },
-    "path": {
-      "type": "string"
-    },
-    "secondary_path": {
-      "type": "string"
-    },
-    "seconds": {
-      "type": "number"
-    },
-    "peak_dbfs": {
-      "type": "number"
-    },
-    "output_latency": {
-      "type": "integer"
-    },
-    "warnings": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "analysis": {},
-    "job": {
-      "type": "string"
-    },
-    "status": {
-      "type": "string"
-    }
-  },
-  "additionalProperties": false
-}
+{}
 
 ```
 
@@ -9618,9 +9613,198 @@ Result:
 {
   "render": "rd_1",
   "path": "<any>",
+  "outputs": "<any>",
+  "branch": "main",
+  "version": "<any>",
+  "start_beat": 0,
   "seconds": "<any>",
   "peak_dbfs": "<any>",
   "output_latency": 0
+}
+
+```
+
+## `render.preset.delete@1`
+
+Delete one of the user's render presets, or the user's render default.
+
+
+
+Kind: `action`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `name` | string |  |  |  | A preset name (render.preset.list) |
+| `default` | boolean |  |  | false |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Errors
+
+- `render.preset_factory`: factory presets cannot be deleted Hint: delete one of your own
+
+### Examples
+
+**Delete a preset** (`render_preset`)
+
+```json
+{
+  "name": "Archive"
+}
+
+```
+
+Result:
+
+```json
+{
+  "deleted": true
+}
+
+```
+
+## `render.preset.list@1`
+
+Render presets: the factory ones, then the user's, with their settings.
+
+default: the user's render default, or null. Presets live in the user's data folder (render-presets/), shared by every project.
+
+Kind: `query`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
+
+**List** (`empty`)
+
+```json
+{}
+
+```
+
+Result:
+
+```json
+{
+  "presets": "<any>",
+  "default": null
+}
+
+```
+
+## `render.preset.load@1`
+
+Replace the project's render settings with a preset (one undo step).
+
+
+
+Kind: `edit`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `name` | string |  |  |  | A preset name (render.preset.list) |
+| `default` | boolean |  |  | false |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Errors
+
+- `render.preset_unknown`: no preset with that name Hint: render.preset.list shows them
+
+### Examples
+
+**A factory preset** (`empty`)
+
+```json
+{
+  "name": "WAV 24-bit"
+}
+
+```
+
+Result:
+
+```json
+{
+  "render": "<any>"
+}
+
+```
+
+## `render.preset.save@1`
+
+Save render settings as a named preset, or as the user's render default.
+
+settings: what to save (default: the effective settings now). Never saved: stems.tracks, matrix and custom bounds, which belong to one project. A file per preset in the user's data folder; factory presets cannot be overwritten.
+
+Kind: `action`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `name` | string |  |  |  | A preset name (render.preset.list) |
+| `default` | boolean |  |  | false |  |
+| `settings` | object |  |  |  | Render settings (session-model §1.10); every member optional |
+
+### Result
+
+```json
+{}
+
+```
+
+### Errors
+
+- `render.preset_factory`: a factory preset has that name Hint: save under another name
+
+### Examples
+
+**A preset of FLAC files** (`empty`)
+
+```json
+{
+  "name": "Archive",
+  "settings": {
+    "outputs": [
+      {
+        "format": "flac"
+      }
+    ]
+  }
+}
+
+```
+
+Result:
+
+```json
+{
+  "name": "Archive"
 }
 
 ```
@@ -9629,7 +9813,7 @@ Result:
 
 Queue a render (mix, stems or regions) to run later with render.queue.run.
 
-args: the render command's arguments (as for render.mix/stems/regions). The queued render is pinned to the session as it is now (its version; a branch's head when branch is given), so later edits do not change it; a dry run lists its files now. The queue is transport-like state: not an undo step, not saved with the project.
+args: the render command's arguments (as for render.mix/stems/regions). The queued render is pinned to the session and settings as they are now (its version, a branch's head when branch is given, and the effective render settings, a loop range as beats), so later edits do not change it; a dry run lists its files now. The queue is transport-like state: not an undo step, not saved with the project.
 
 Kind: `action`. Exposure: `mcp-tool`.
 
@@ -9812,7 +9996,7 @@ Result:
 
 Render each region (or the render matrix's tracks per region) to files.
 
-Files go to the renders directory, named by pattern. job: true runs the render as a job (job.get for progress, job.cancel to stop); results carry a render id and an analysis summary per file.
+Arguments override project.render (then the user's default, then built-ins) for this call only; render.settings shows what applies. Files go to the renders folder, named by pattern (subfolders allowed). job: true runs the render as a job (job.get for progress, job.cancel to stop). Each file lists its outputs (with delivery checks when a loudness target or a ceiling is set), branch, version, start_beat, seconds, a render id (analyze.render, analyze.compare) and an analysis summary.
 
 Kind: `action`. Exposure: `mcp-tool`.
 
@@ -9820,29 +10004,41 @@ Kind: `action`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `master` | string |  |  |  |  |
-| `branch` | string |  |  |  |  |
-| `pattern` | string |  |  |  | File name pattern (session-model §7.3), e.g. "{project}-{track_number:02}-{track|lower}" |
-| `name` | string |  |  |  | A fixed file name instead of a pattern |
-| `mode` | string |  |  |  | Stems: isolated (default; the track alone, no master processing) or through_master (the others muted) |
-| `tap` | string |  |  |  | Stems: post_fader (default), pre_fader or pre_fx |
-| `format` | string |  |  |  | wav (default) or flac (16/24 bit) |
-| `secondary` | value |  |  |  | A second file of the same render beside the first: {format: wav|flac, bit_depth}, or "none"; default: the project's render settings |
-| `normalize` | value |  |  |  | none, lufs_i, lufs_s, lufs_m, peak, true_peak or rms; or {mode, target, limit_true_peak_db} |
-| `operation` | string |  |  |  | Dry run: mix, stems or regions (default from the other arguments) |
-| `tracks` | array |  |  |  | Stems: track ids (default: every top-level track) |
-| `regions` | array |  |  |  | Regions: region ids (default: all, with the project render matrix) |
-| `start_beat` | number |  | 0.0.. |  |  |
-| `end_beat` | number |  |  |  |  |
-| `tail_s` | number |  | 0.0..600.0 |  |  |
-| `target` | number |  |  |  |  |
-| `limit_true_peak_db` | number |  |  |  |  |
-| `bit_depth` | integer |  | 16.0..32.0 |  |  |
-| `sample_rate` | integer |  | 8000.0..384000.0 |  |  |
-| `channels` | integer |  | 1.0..2.0 |  |  |
+| `source` | string |  |  |  | The dialog's source; render.mix always renders the mix |
+| `bounds` | string |  |  |  | project (default), loop or custom (start_beat, end_beat) |
+| `start_beat` | number |  | 0.0..1e+09 |  |  |
+| `end_beat` | number |  | ..1e+09 |  |  |
+| `tail_s` | number |  | 0.0..600.0 |  | Seconds rendered past the end |
+| `pattern` | value |  |  |  | File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions} |
+| `sample_rate` | integer |  | 8000.0..384000.0 |  | Default: the project rate |
+| `channels` | value |  |  |  | 1 (mono, (L+R)/2), 2 (stereo) or "track" (stems: mono files for 1-channel tracks) |
+| `outputs` | array |  |  |  | 1-4 encodings of the same audio [[{format: wav, bit_depth: 32}]] |
+| `normalize` | object |  |  |  |  |
+| `limit_true_peak_db` | number |  | -60.0..0.0 |  | A true-peak ceiling (dBTP) |
+| `trim` | object |  |  |  |  |
+| `seamless_loop` | boolean |  |  |  | Sum the tail into the start (needs tail_s) |
+| `handles_s` | number |  | 0.0..60.0 |  | Regions: seconds added at both ends |
+| `stems` | object |  |  |  |  |
+| `matrix` | object |  |  |  |  |
+| `if_exists` | string |  |  |  |  |
+| `metadata` | object |  |  |  | Tags written into each file; text members accept the file-name tokens |
+| `report` | boolean |  |  |  | Write <file>.loudness.txt beside each file |
+| `add_to_project` | boolean |  |  |  |  |
+| `master` | string |  |  |  | Mix: the master (default tr_0) |
+| `branch` | string |  |  |  | Render this branch's head (default: the current one) |
 | `version` | integer |  | 0.0.. |  | Render the session as of this version (history.list); the render queue pins its renders |
+| `name` | string |  |  |  | A file name instead of the pattern, for this call |
+| `operation` | string |  |  |  | Dry run and render.settings: mix, stems or regions (default: tracks or regions given, else the settings' source) |
+| `regions` | array |  |  |  | Regions: region ids (default: all, with the render matrix) |
+| `tracks` | array |  |  |  | Stems: track ids (sets stems.tracks for this call) |
+| `format` | string |  |  |  | Sets outputs[0].format for this call |
+| `bit_depth` | integer |  | 16.0..32.0 |  | Sets outputs[0].bit_depth for this call |
+| `secondary` | value |  |  |  | Replaces outputs[1] ({format, bit_depth}), or "none" removes it, for this call |
+| `mode` | string |  |  |  | Sets stems.mode for this call |
+| `tap` | string |  |  |  | Sets stems.tap for this call |
+| `target` | number |  |  |  | Sets normalize.target for this call |
+| `analyze` | string |  |  |  | Mix: a supple.analysis-report/1.0 inline |
 | `job` | boolean |  |  | false |  |
-| `add_to_project` | boolean |  |  | false |  |
 
 ### Result
 
@@ -9872,11 +10068,87 @@ Result:
 
 ```
 
+## `render.settings@1`
+
+The render settings that apply, and the layer each one comes from.
+
+effective: what a render with these arguments would use (every member filled in); project: project.render as stored; default: the user's render default (null if none); from: per member, args, project, default or built-in (ADR-0055). Change the project's settings with project.set {render} or render.preset.load.
+
+Kind: `query`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `source` | string |  |  |  | The dialog's source; render.mix always renders the mix |
+| `bounds` | string |  |  |  | project (default), loop or custom (start_beat, end_beat) |
+| `start_beat` | number |  | 0.0..1e+09 |  |  |
+| `end_beat` | number |  | ..1e+09 |  |  |
+| `tail_s` | number |  | 0.0..600.0 |  | Seconds rendered past the end |
+| `pattern` | value |  |  |  | File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions} |
+| `sample_rate` | integer |  | 8000.0..384000.0 |  | Default: the project rate |
+| `channels` | value |  |  |  | 1 (mono, (L+R)/2), 2 (stereo) or "track" (stems: mono files for 1-channel tracks) |
+| `outputs` | array |  |  |  | 1-4 encodings of the same audio [[{format: wav, bit_depth: 32}]] |
+| `normalize` | object |  |  |  |  |
+| `limit_true_peak_db` | number |  | -60.0..0.0 |  | A true-peak ceiling (dBTP) |
+| `trim` | object |  |  |  |  |
+| `seamless_loop` | boolean |  |  |  | Sum the tail into the start (needs tail_s) |
+| `handles_s` | number |  | 0.0..60.0 |  | Regions: seconds added at both ends |
+| `stems` | object |  |  |  |  |
+| `matrix` | object |  |  |  |  |
+| `if_exists` | string |  |  |  |  |
+| `metadata` | object |  |  |  | Tags written into each file; text members accept the file-name tokens |
+| `report` | boolean |  |  |  | Write <file>.loudness.txt beside each file |
+| `add_to_project` | boolean |  |  |  |  |
+| `master` | string |  |  |  | Mix: the master (default tr_0) |
+| `branch` | string |  |  |  | Render this branch's head (default: the current one) |
+| `version` | integer |  | 0.0.. |  | Render the session as of this version (history.list); the render queue pins its renders |
+| `name` | string |  |  |  | A file name instead of the pattern, for this call |
+| `operation` | string |  |  |  | Dry run and render.settings: mix, stems or regions (default: tracks or regions given, else the settings' source) |
+| `regions` | array |  |  |  | Regions: region ids (default: all, with the render matrix) |
+| `tracks` | array |  |  |  | Stems: track ids (sets stems.tracks for this call) |
+| `format` | string |  |  |  | Sets outputs[0].format for this call |
+| `bit_depth` | integer |  | 16.0..32.0 |  | Sets outputs[0].bit_depth for this call |
+| `secondary` | value |  |  |  | Replaces outputs[1] ({format, bit_depth}), or "none" removes it, for this call |
+| `mode` | string |  |  |  | Sets stems.mode for this call |
+| `tap` | string |  |  |  | Sets stems.tap for this call |
+| `target` | number |  |  |  | Sets normalize.target for this call |
+| `analyze` | string |  |  |  | Mix: a supple.analysis-report/1.0 inline |
+| `job` | boolean |  |  | false |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
+
+**What File → Mix would do** (`song`)
+
+```json
+{}
+
+```
+
+Result:
+
+```json
+{
+  "effective": "<any>",
+  "project": "<any>",
+  "default": null,
+  "from": "<any>"
+}
+
+```
+
 ## `render.stems@1`
 
 Render each selected track to its own file (stems).
 
-Files go to the renders directory, named by pattern. job: true runs the render as a job (job.get for progress, job.cancel to stop); results carry a render id and an analysis summary per file.
+Arguments override project.render (then the user's default, then built-ins) for this call only; render.settings shows what applies. Files go to the renders folder, named by pattern (subfolders allowed). job: true runs the render as a job (job.get for progress, job.cancel to stop). Each file lists its outputs (with delivery checks when a loudness target or a ceiling is set), branch, version, start_beat, seconds, a render id (analyze.render, analyze.compare) and an analysis summary.
 
 Kind: `action`. Exposure: `mcp-tool`.
 
@@ -9884,29 +10156,41 @@ Kind: `action`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `master` | string |  |  |  |  |
-| `branch` | string |  |  |  |  |
-| `pattern` | string |  |  |  | File name pattern (session-model §7.3), e.g. "{project}-{track_number:02}-{track|lower}" |
-| `name` | string |  |  |  | A fixed file name instead of a pattern |
-| `mode` | string |  |  |  | Stems: isolated (default; the track alone, no master processing) or through_master (the others muted) |
-| `tap` | string |  |  |  | Stems: post_fader (default), pre_fader or pre_fx |
-| `format` | string |  |  |  | wav (default) or flac (16/24 bit) |
-| `secondary` | value |  |  |  | A second file of the same render beside the first: {format: wav|flac, bit_depth}, or "none"; default: the project's render settings |
-| `normalize` | value |  |  |  | none, lufs_i, lufs_s, lufs_m, peak, true_peak or rms; or {mode, target, limit_true_peak_db} |
-| `operation` | string |  |  |  | Dry run: mix, stems or regions (default from the other arguments) |
-| `tracks` | array |  |  |  | Stems: track ids (default: every top-level track) |
-| `regions` | array |  |  |  | Regions: region ids (default: all, with the project render matrix) |
-| `start_beat` | number |  | 0.0.. |  |  |
-| `end_beat` | number |  |  |  |  |
-| `tail_s` | number |  | 0.0..600.0 |  |  |
-| `target` | number |  |  |  |  |
-| `limit_true_peak_db` | number |  |  |  |  |
-| `bit_depth` | integer |  | 16.0..32.0 |  |  |
-| `sample_rate` | integer |  | 8000.0..384000.0 |  |  |
-| `channels` | integer |  | 1.0..2.0 |  |  |
+| `source` | string |  |  |  | The dialog's source; render.mix always renders the mix |
+| `bounds` | string |  |  |  | project (default), loop or custom (start_beat, end_beat) |
+| `start_beat` | number |  | 0.0..1e+09 |  |  |
+| `end_beat` | number |  | ..1e+09 |  |  |
+| `tail_s` | number |  | 0.0..600.0 |  | Seconds rendered past the end |
+| `pattern` | value |  |  |  | File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions} |
+| `sample_rate` | integer |  | 8000.0..384000.0 |  | Default: the project rate |
+| `channels` | value |  |  |  | 1 (mono, (L+R)/2), 2 (stereo) or "track" (stems: mono files for 1-channel tracks) |
+| `outputs` | array |  |  |  | 1-4 encodings of the same audio [[{format: wav, bit_depth: 32}]] |
+| `normalize` | object |  |  |  |  |
+| `limit_true_peak_db` | number |  | -60.0..0.0 |  | A true-peak ceiling (dBTP) |
+| `trim` | object |  |  |  |  |
+| `seamless_loop` | boolean |  |  |  | Sum the tail into the start (needs tail_s) |
+| `handles_s` | number |  | 0.0..60.0 |  | Regions: seconds added at both ends |
+| `stems` | object |  |  |  |  |
+| `matrix` | object |  |  |  |  |
+| `if_exists` | string |  |  |  |  |
+| `metadata` | object |  |  |  | Tags written into each file; text members accept the file-name tokens |
+| `report` | boolean |  |  |  | Write <file>.loudness.txt beside each file |
+| `add_to_project` | boolean |  |  |  |  |
+| `master` | string |  |  |  | Mix: the master (default tr_0) |
+| `branch` | string |  |  |  | Render this branch's head (default: the current one) |
 | `version` | integer |  | 0.0.. |  | Render the session as of this version (history.list); the render queue pins its renders |
+| `name` | string |  |  |  | A file name instead of the pattern, for this call |
+| `operation` | string |  |  |  | Dry run and render.settings: mix, stems or regions (default: tracks or regions given, else the settings' source) |
+| `regions` | array |  |  |  | Regions: region ids (default: all, with the render matrix) |
+| `tracks` | array |  |  |  | Stems: track ids (sets stems.tracks for this call) |
+| `format` | string |  |  |  | Sets outputs[0].format for this call |
+| `bit_depth` | integer |  | 16.0..32.0 |  | Sets outputs[0].bit_depth for this call |
+| `secondary` | value |  |  |  | Replaces outputs[1] ({format, bit_depth}), or "none" removes it, for this call |
+| `mode` | string |  |  |  | Sets stems.mode for this call |
+| `tap` | string |  |  |  | Sets stems.tap for this call |
+| `target` | number |  |  |  | Sets normalize.target for this call |
+| `analyze` | string |  |  |  | Mix: a supple.analysis-report/1.0 inline |
 | `job` | boolean |  |  | false |  |
-| `add_to_project` | boolean |  |  | false |  |
 
 ### Result
 

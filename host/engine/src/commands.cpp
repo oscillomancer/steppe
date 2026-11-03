@@ -20,6 +20,7 @@
 #include "supple/base/sha256.h"
 #include "supple/engine/app.h"
 #include "supple/model/groups.h"
+#include "supple/model/render_settings.h"
 #include "supple/model/schemas.h"
 #include "supple/notation/notation.h"
 #include "supple/params/params.h"
@@ -747,95 +748,6 @@ constexpr std::size_t kMaxListedParams = 512;
 
 // --- render / history ------------------------------------------------------------------------
 
-enum class RenderAnalyze { Summary, Full };
-struct RenderMixArgs {
-    std::optional<std::string> master;
-    std::optional<double> startBeat, endBeat, tailS;
-    std::optional<std::string> name;
-    std::optional<std::string> pattern;
-    std::optional<std::string> branch;
-    std::optional<RenderAnalyze> analyze;
-    std::optional<json::Value> normalize, secondary;
-    std::optional<std::int64_t> bitDepth, sampleRate, channels;
-    std::optional<std::string> format;
-    bool job = false;
-    bool addToProject = false;
-};
-struct RenderMixResult {
-    std::optional<std::string> render, path, secondaryPath;
-    std::optional<double> seconds, peakDbfs;
-    std::optional<std::int64_t> outputLatency;
-    std::optional<std::vector<std::string>> warnings;
-    std::optional<json::Value> analysis;
-    std::optional<std::string> job, status;
-};
-// Prepares the audio and writes the mix (and its secondary file); returns the
-// secondary file's path, if any.
-Result<std::optional<fs::path>> writeMix(audio::AudioData& data, const model::Project& project,
-                                         const RenderMixArgs& args, const fs::path& path) {
-    RenderOutputArgs output;
-    output.format = args.format;
-    output.normalize = args.normalize;
-    output.bitDepth = args.bitDepth;
-    output.sampleRate = args.sampleRate;
-    output.channels = args.channels;
-    output.secondary = args.secondary;
-    auto finished = finishRenderAudio(data, project, output);
-    if (!finished) return std::move(finished).error();
-    SUPPLE_TRY(writeRender(path, data, finished->primary));
-    if (!finished->secondary) return std::optional<fs::path>{};
-    const fs::path second = secondaryPath(path, finished->primary, *finished->secondary);
-    SUPPLE_TRY(writeRender(second, data, *finished->secondary));
-    return std::optional<fs::path>(second);
-}
-
-Result<fs::path> mixPath(const EngineApp& app, const model::Session& session,
-                         const RenderMixArgs& args) {
-    const auto& defaults = session.project->render;
-    const auto* projectPattern = defaults.isObject() ? defaults.find("pattern") : nullptr;
-    const std::string pattern = args.name.value_or(args.pattern.value_or(
-        projectPattern && projectPattern->isString() ? projectPattern->asString()
-                                                     : "mix-v" + std::to_string(session.version)));
-    RenderPatternContext context;
-    context.project = session.project->name.empty() ? "project" : session.project->name;
-    if (args.master) context.track = session.tracks.find(*model::Id::parse(*args.master))->name;
-    context.startBeats = args.startBeat.value_or(0);
-    context.startSeconds = session.timeMap->secondsAt(context.startBeats);
-    const auto* rateSetting = defaults.isObject() ? defaults.find("sample_rate") : nullptr;
-
-    context.sampleRate = static_cast<int>(
-        args.sampleRate.value_or(rateSetting && rateSetting->isNumber()
-                                     ? rateSetting->asInt()
-                                     : static_cast<std::int64_t>(session.project->sampleRate)));
-    auto encoding = renderEncoding(*session.project, args.format, args.bitDepth);
-    if (!encoding) return std::move(encoding).error();
-    SUPPLE_TRY(secondaryEncoding(*session.project, args.secondary));  // refused before rendering
-    context.bitDepth = encoding->bits();
-    context.format = encoding->container;
-    auto expanded = expandRenderPattern(pattern, context);
-    if (!expanded) return std::move(expanded).error();
-    const fs::path path = app.rendersDir() / (*expanded + encoding->extension());
-    std::error_code ec;
-    const auto root = fs::weakly_canonical(app.rendersDir(), ec);
-    if (ec)
-        return Error("render.path", "cannot resolve renders directory", "/pattern",
-                     "use a relative pattern beneath a readable and writable renders directory; "
-                     "remove traversal components or symlinks that escape it");
-    // The final path, not only its parent (see render_commands.cpp): an entry
-    // that already exists at this name resolves to its target, so a symlink
-    // out of the renders directory is refused rather than written through.
-    const auto resolved = fs::weakly_canonical(path, ec);
-    if (ec)
-        return Error("render.path", "cannot resolve the render path", "/pattern",
-                     "use a relative pattern beneath a readable and writable renders directory; "
-                     "remove traversal components or symlinks that escape it");
-    const auto relative = resolved.lexically_relative(root);
-    if (relative.empty() || relative.is_absolute() || *relative.begin() == "..")
-        return Error("render.path", "render name escapes the renders directory", "/pattern",
-                     "use a relative pattern beneath a readable and writable renders directory; "
-                     "remove traversal components or symlinks that escape it");
-    return path;
-}
 struct HistoryResult {
     std::int64_t version = 0;
     std::string label;
@@ -981,10 +893,20 @@ void registerEngineCommands(cmd::Registry& registry) {
         // state-aware checks and repair hints in run().
         auto renderSchema = model::schemaOf<model::Project>().jsonSchema()["properties"]["render"];
         renderSchema.asObject().erase("default");  // omission leaves existing settings unchanged
+        // The typed render settings (session-model §1.10); members before
+        // schema 2.3 (format, bit_depth, secondary, tail_ms) are migrated.
         const schema::Schema<json::Value> renderArgs{
             "render settings",
-            [](const json::Value& v, json::Value& out, schema::DecodeCtx&, const std::string&) {
+            [](const json::Value& v, json::Value& out, schema::DecodeCtx& c, const std::string& p) {
                 out = v;
+                if (auto migrated = model::render::migrateLegacy(out, p); !migrated) {
+                    c.error(migrated.error().code, migrated.error().message, migrated.error().path,
+                            migrated.error().hint);
+                    return false;
+                }
+                model::render::Settings settings;
+                if (!model::render::settingsSchema().decodeInto(out, settings, c, p)) return false;
+                out = model::render::toJson(settings);
                 return true;
             },
             [](const json::Value& v) { return v; }, std::move(renderSchema)};
@@ -1051,6 +973,15 @@ void registerEngineCommands(cmd::Registry& registry) {
                         }
                     }
                 }
+                if (const auto* stems = a.render->find("stems"))
+                    if (const auto* tracks = stems->find("tracks"))
+                        for (const auto& cell : tracks->asArray()) {
+                            auto id = model::Id::parse(cell.asString());
+                            if (!id || !A(ctx).view().tracks.contains(*id))
+                                return Error("track.unknown",
+                                             "unknown stem track " + cell.asString(),
+                                             "/render/stems/tracks", "use track.list");
+                        }
                 p.render = *a.render;
             }
             if (a.timebase && *a.timebase != p.timebase) {
@@ -2747,205 +2678,6 @@ void registerEngineCommands(cmd::Registry& registry) {
         };
         addChecked(registry, std::move(c));
     }();
-    // ---------------------------------------------------------------- render.mix
-    [&] {
-        Command<RenderMixArgs, RenderMixResult> c;
-        c.name = "render.mix";
-        c.kind = Kind::Action;
-        c.exposure = cmd::Exposure::McpTool;
-        c.summary =
-            "Render the mix offline to a float WAV (default: start to the last item's end).";
-        c.description =
-            "start_beat/end_beat select a timeline range; master playrate determines its "
-            "rendered duration. tail_s adds device-time seconds after the end (reverb tails). "
-            "analyze: summary or full returns a supple.analysis-report/1.0 inline. "
-            "The render id can be passed to analyze.render or analyze.compare. "
-            "add_to_project: the file becomes an item on a new track at start_beat, as its own "
-            "undo step right after the render (with job: when the job completes).";
-        c.tags = {"render"};
-        c.args = schema::object<RenderMixArgs>("render_mix_args")
-                     .field("master", &RenderMixArgs::master,
-                            idArg("tr", "Master output (default tr_0)"))
-                     .field("start_beat", &RenderMixArgs::startBeat, schema::number().min(0))
-                     .field("end_beat", &RenderMixArgs::endBeat, schema::number().exclusiveMin(0))
-                     .field("tail_s", &RenderMixArgs::tailS, schema::number().range(0, 60))
-                     .field("name", &RenderMixArgs::name,
-                            schema::string().pattern("^[A-Za-z0-9 _.+-]{1,64}$",
-                                                     "a file-name-safe name"))
-                     .field("pattern", &RenderMixArgs::pattern, schema::string())
-                     .field("branch", &RenderMixArgs::branch, schema::string())
-                     .field("format", &RenderMixArgs::format,
-                            schema::string().doc("wav (default) or flac (16/24 bit)"))
-                     .field("secondary", &RenderMixArgs::secondary,
-                            schema::any().doc("A second file beside the first: {format: "
-                                              "wav|flac, bit_depth}, or \"none\""))
-                     .field("bit_depth", &RenderMixArgs::bitDepth, schema::integer().range(16, 32))
-                     .field("sample_rate", &RenderMixArgs::sampleRate,
-                            schema::integer().range(8000, 384000))
-                     .field("channels", &RenderMixArgs::channels, schema::integer().range(1, 2))
-                     .field("normalize", &RenderMixArgs::normalize, schema::any())
-                     .field("job", &RenderMixArgs::job, schema::boolean())
-                     .defaultValue(false)
-                     .field("add_to_project", &RenderMixArgs::addToProject, schema::boolean())
-                     .defaultValue(false)
-                     .field("analyze", &RenderMixArgs::analyze,
-                            schema::enumeration<RenderAnalyze>({{RenderAnalyze::Summary, "summary"},
-                                                                {RenderAnalyze::Full, "full"}}))
-                     .build();
-        c.result =
-            schema::object<RenderMixResult>("render_mix")
-                .field("render", &RenderMixResult::render, schema::string())
-                .field("path", &RenderMixResult::path, schema::string())
-                .field("secondary_path", &RenderMixResult::secondaryPath, schema::string())
-                .field("seconds", &RenderMixResult::seconds, schema::number())
-                .field("peak_dbfs", &RenderMixResult::peakDbfs, schema::number())
-                .field("output_latency", &RenderMixResult::outputLatency, schema::integer())
-                .field("warnings", &RenderMixResult::warnings, schema::arrayOf(schema::string()))
-                .field("analysis", &RenderMixResult::analysis, schema::any())
-                .field("job", &RenderMixResult::job, schema::string())
-                .field("status", &RenderMixResult::status, schema::string())
-                .build();
-        c.examples = {
-            {"Render", obj(R"({"name": "mix-v1"})"),
-             obj(R"({"render": "rd_1", "path": "<any>", "seconds": "<any>", "peak_dbfs": "<any>", "output_latency": 0})"),
-             "song_with_fx"}};
-        c.run = [](const RenderMixArgs& a, Context& ctx) -> Result<RenderMixResult> {
-            EngineApp& app = A(ctx);
-            model::Session s = app.view();
-            if (a.branch) {
-                auto head = app.versions().head(*a.branch);
-                if (!head)
-                    return Error("branch.unknown", "unknown branch " + *a.branch, "/branch",
-                                 "use branch.list");
-                s = *head;
-            }
-            double endBeat = a.endBeat.value_or(0.0);
-            if (!a.endBeat) endBeat = std::max(endBeat, model::lastItemBeat(s));
-            if (endBeat <= a.startBeat.value_or(0.0))
-                return Error("render.empty", "nothing to render", {}, "add items or give end_beat");
-            OfflineSettings o;
-            if (a.master) {
-                auto master = existing<model::Track>(s, *a.master, "/master");
-                if (!master) return std::move(master).error();
-                if (s.tracks.find(*master)->type != model::StripType::Master)
-                    return Error("track.strip_type", "mix output must be a master", "/master",
-                                 "choose a master id from track.list");
-                o.master = *master;
-            }
-            o.startSeconds = s.timeMap->secondsAt(a.startBeat.value_or(0.0));
-            o.endSeconds = s.timeMap->secondsAt(endBeat);
-            const auto* tailDefault =
-                s.project->render.isObject() ? s.project->render.find("tail_ms") : nullptr;
-            o.tailSeconds = a.tailS.value_or(
-                tailDefault && tailDefault->isNumber() ? tailDefault->asDouble() / 1000.0 : 0.0);
-            o.projectDir = app.projectDir();
-            SUPPLE_TRY(checkRenderRange(s, o, a.sampleRate));
-            auto resolvedPath = mixPath(app, s, a);
-            if (!resolvedPath) return std::move(resolvedPath).error();
-            const fs::path path = *resolvedPath;
-            auto& dispatcher = ctx.service<cmd::Dispatcher>();
-            const cmd::Origin origin = ctx.origin();
-            const auto target = renderTarget(app);
-            auto addFile = [&app, target, &dispatcher, origin, path,
-                            start = a.startBeat.value_or(0.0)] {
-                json::Value files = json::Value::array(), f = json::Value::object();
-                f["path"] = path.string();
-                f["start_beat"] = start;
-                files.push_back(std::move(f));
-                postAddToProject(app, target, dispatcher, origin, files);
-            };
-            if (a.job) {
-                auto available = app.plugins();
-                if (!available) return std::move(available).error();
-                std::vector<host::PluginInfo> catalogue(available->begin(), available->end());
-                const auto identity = app.options().identity;
-                auto& jobs = ctx.service<cmd::JobManager>();
-                const std::string id = jobs.create();
-                const std::string renderId = app.reserveRenderId();
-                auto pin = app.versions().pin(s.version);
-                app.startJob([&app, &dispatcher, &jobs, target, id, renderId, pin = std::move(pin),
-                              s = std::move(s), o, path, a, addFile,
-                              catalogue = std::move(catalogue), identity](supple::StopToken stop) {
-                    if (stop.stop_requested() || jobs.cancelled(id)) return;
-                    OfflineSettings settings = o;
-                    settings.cancelFlag = jobs.cancellationFlag(id);
-                    settings.progressFlag = jobs.progressFlag(id);
-                    settings.progress = [&jobs, id](double fraction) {
-                        (void)jobs.progress(id, fraction, "Rendering");
-                    };
-                    settings.progressScale = 0.8;
-                    settings.stopToken = stop;
-                    auto r = renderSnapshot(s, settings, catalogue, identity);
-                    if (!r) {
-                        (void)jobs.fail(id, std::move(r).error());
-                        return;
-                    }
-                    if (stop.stop_requested() || jobs.cancelled(id)) return;
-                    auto written = writeMix(r->audio, *s.project, a, path);
-                    if (!written) {
-                        (void)jobs.fail(id, std::move(written).error());
-                        return;
-                    }
-                    json::Value result = json::Value::object();
-                    result["path"] = path.string();
-                    if (*written) result["secondary_path"] = (*written)->string();
-                    result["seconds"] = r->audio.seconds();
-                    result["render"] = renderId;
-                    float peak = 0;
-                    for (const auto& channel : r->audio.channels)
-                        for (float sample : channel) peak = std::max(peak, std::fabs(sample));
-                    result["peak_dbfs"] =
-                        peak > 0 ? 20.0 * std::log10(static_cast<double>(peak)) : -1000.0;
-                    result["output_latency"] = static_cast<std::int64_t>(r->outputLatency);
-                    if (a.analyze) {
-                        auto report = analyzeAudio(r->audio, *a.analyze == RenderAnalyze::Full
-                                                                 ? analysis::Detail::Full
-                                                                 : analysis::Detail::Summary);
-                        if (report) result["analysis"] = std::move(*report);
-                    }
-                    completeRenderJob(app, dispatcher, jobs, id, target, std::move(result),
-                                      [&app, renderId, path, a, addFile,
-                                       meters = std::move(r->meters)]() mutable {
-                                          app.publishRender(renderId, path);
-                                          app.rememberRenderMeters(std::move(meters));
-                                          if (a.addToProject) addFile();
-                                      });
-                });
-                RenderMixResult started;
-                started.job = id;
-                started.status = "running";
-                return started;
-            }
-            auto r = app.renderSession(s, o);
-            if (!r) return std::move(r).error();
-            auto written = writeMix(r->audio, *s.project, a, path);
-            if (!written) return std::move(written).error();
-            float peak = 0;
-            for (const auto& ch : r->audio.channels)
-                for (float v : ch) peak = std::max(peak, std::fabs(v));
-            RenderMixResult out;
-            out.render = app.rememberRender(path);
-            app.rememberRenderMeters(std::move(r->meters));
-            out.path = path.string();
-            if (*written) out.secondaryPath = (*written)->string();
-            out.seconds = std::round(r->audio.seconds() * 1e4) / 1e4;
-            out.peakDbfs =
-                peak > 0 ? std::round(20.0 * std::log10(static_cast<double>(peak)) * 100) / 100
-                         : -1000.0;
-            out.outputLatency = r->outputLatency;
-            if (!r->warnings.empty()) out.warnings = r->warnings;
-            if (a.addToProject) addFile();
-            if (a.analyze) {
-                auto report = analyzeAudio(r->audio, *a.analyze == RenderAnalyze::Full
-                                                         ? analysis::Detail::Full
-                                                         : analysis::Detail::Summary);
-                if (!report) return std::move(report).error();
-                out.analysis = std::move(*report);
-            }
-            return out;
-        };
-        addChecked(registry, std::move(c));
-    }();
     registerRenderCommands(registry);
     registerEngineAnalysisCommands(registry);
     // ---------------------------------------------------------------- history
@@ -3025,6 +2757,7 @@ void registerEngineCommands(cmd::Registry& registry) {
     struct BranchCreateArgs {
         std::string name;
         std::optional<std::string> from;
+        std::optional<std::int64_t> version;
         bool switchTo = true;
     };
     struct BranchName {
@@ -3062,8 +2795,7 @@ void registerEngineCommands(cmd::Registry& registry) {
         c.name = "branch.create";
         c.kind = Kind::Action;
         c.exposure = cmd::Exposure::McpTool;
-        c.summary =
-            "Start a branch from a branch's head (default: the current one) and switch to it.";
+        c.summary = "Start a branch from a branch's head or an earlier version, and switch to it.";
         c.description =
             "Agents: work on agent/<you>/<topic> branches, then branch.diff and branch.merge into "
             "main. "
@@ -3073,6 +2805,10 @@ void registerEngineCommands(cmd::Registry& registry) {
         c.args = schema::object<BranchCreateArgs>("branch_create_args")
                      .field("name", &BranchCreateArgs::name, branchName())
                      .field("from", &BranchCreateArgs::from, branchName())
+                     .field("version", &BranchCreateArgs::version,
+                            schema::integer().min(1).doc(
+                                "Start at this version of the current branch's history "
+                                "(history.list; a render result's version) instead of a head"))
                      .field("switch", &BranchCreateArgs::switchTo, schema::boolean())
                      .defaultValue(true)
                      .build();
@@ -3085,8 +2821,15 @@ void registerEngineCommands(cmd::Registry& registry) {
                        obj(R"({"name": "agent/claude/darker"})"), "song"}};
         c.run = [](const BranchCreateArgs& a, Context& ctx) -> Result<BranchName> {
             EngineApp& app = A(ctx);
-            SUPPLE_TRY(
-                app.versions().createBranch(a.name, a.from.value_or(app.versions().branch())));
+            if (a.version) {
+                if (a.from)
+                    return Error("branch.args", "give from or version, not both", "/version",
+                                 "version starts the branch at a version of the current branch");
+                SUPPLE_TRY(
+                    app.versions().createBranchAt(a.name, static_cast<std::uint64_t>(*a.version)));
+            } else
+                SUPPLE_TRY(
+                    app.versions().createBranch(a.name, a.from.value_or(app.versions().branch())));
             if (a.switchTo) SUPPLE_TRY(app.switchBranch(a.name));
             return BranchName{a.name};
         };

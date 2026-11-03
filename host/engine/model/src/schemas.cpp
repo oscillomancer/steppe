@@ -3,6 +3,7 @@
 #include "supple/model/schemas.h"
 #include "migration.h"
 #include "supple/model/audio_warp.h"
+#include "supple/model/render_settings.h"
 #include "supple/schema/document.h"
 
 #include "supple/base/files.h"
@@ -77,115 +78,24 @@ Schema<json::Value> jsonObject() {
             [](const json::Value& v) { return v; }, spec};
 }
 
+// project.render: the typed render settings (render_settings.h), stored as
+// their canonical JSON. Members before schema 2.3 migrate first.
 Schema<json::Value> renderSettings() {
     auto decode = [](const json::Value& v, json::Value& out, schema::DecodeCtx& c,
                      const std::string& p) {
         if (!jsonObject().decodeInto(v, out, c, p)) return false;
-        auto fields = [&](json::Value& object,
-                          const std::map<std::string, Schema<json::Value>>& specs,
-                          const std::string& path) {
-            bool valid = true;
-            std::vector<std::string> unknown;
-            for (const auto& field : object.asObject()) {
-                const auto at = json::pointerJoin(path, field.key);
-                if (const auto it = specs.find(field.key); it != specs.end()) {
-                    json::Value decoded;
-                    valid &= it->second.decodeInto(field.value, decoded, c, at);
-                } else {
-                    if (c.warnings)
-                        c.warnings->push_back(
-                            {"schema.unknown_member", "ignored unknown member", at});
-                    unknown.push_back(field.key);
-                }
-            }
-            for (const auto& key : unknown) object.asObject().erase(key);
-            return valid;
-        };
-        auto typed = [](std::string type) {
-            auto ex = json::Value::object();
-            ex["type"] = type;
-            return Schema<json::Value>(
-                type,
-                [type](const json::Value& x, json::Value& y, schema::DecodeCtx& ctx,
-                       const std::string& at) {
-                    const bool ok = type == "string"    ? x.isString()
-                                    : type == "boolean" ? x.isBool()
-                                    : type == "integer"
-                                        ? x.isInt()
-                                        : x.isNumber() && std::isfinite(x.asDouble());
-                    if (!ok) {
-                        ctx.error("schema.type", "expected " + type, at);
-                        return false;
-                    }
-                    y = x;
-                    return true;
-                },
-                [](const json::Value& x) { return x; }, ex);
-        };
-        const auto text = typed("string"), number = typed("number"), integer = typed("integer");
-        bool ok = true;
-        const std::set<std::string> known{"format",   "bit_depth", "sample_rate",
-                                          "channels", "normalize", "tail_ms",
-                                          "pattern",  "secondary", "matrix"};
-        std::vector<std::string> unknown;
-        for (auto& field : out.asObject()) {
-            const auto at = json::pointerJoin(p, field.key);
-            if (!known.count(field.key)) {
-                if (c.warnings)
-                    c.warnings->push_back({"schema.unknown_member", "ignored unknown member", at});
-                unknown.push_back(field.key);
-                continue;
-            }
-            if (field.key == "format" || field.key == "normalize" || field.key == "secondary") {
-                if (field.value.isString()) continue;
-                if (field.key == "secondary" && field.value.isNull()) continue;
-                if (!field.value.isObject()) {
-                    c.error("schema.type", "expected a string or object", at);
-                    ok = false;
-                    continue;
-                }
-                if (field.key == "format")
-                    ok &= fields(
-                        field.value,
-                        {{"container", text}, {"bit_depth", integer}, {"dither", typed("boolean")}},
-                        at);
-                else if (field.key == "normalize")
-                    ok &= fields(
-                        field.value,
-                        {{"mode", text}, {"target", number}, {"limit_true_peak_db", number}}, at);
-                else
-                    ok &= fields(field.value, {{"format", text}, {"bit_depth", integer}}, at);
-            } else if (field.key == "matrix") {
-                if (!field.value.isObject()) {
-                    c.error("schema.type", "expected an object", at);
-                    ok = false;
-                    continue;
-                }
-                for (const auto& row : field.value.asObject()) {
-                    std::vector<std::string> decoded;
-                    ok &= schema::arrayOf(schema::string())
-                              .decodeInto(row.value, decoded, c, json::pointerJoin(at, row.key));
-                }
-            } else {
-                json::Value decoded;
-                ok &= (field.key == "pattern"     ? text
-                       : field.key == "bit_depth" ? integer
-                                                  : number)
-                          .decodeInto(field.value, decoded, c, at);
-            }
+        if (auto migrated = render::migrateLegacy(out, p); !migrated) {
+            c.error(migrated.error().code, migrated.error().message, migrated.error().path,
+                    migrated.error().hint);
+            return false;
         }
-        for (const auto& key : unknown) out.asObject().erase(key);
-        return ok;
+        render::Settings settings;
+        if (!render::settingsSchema().decodeInto(out, settings, c, p)) return false;
+        out = render::toJson(settings);
+        return true;
     };
-    auto ex = json::Value::object();
-    ex["type"] = "object";
-    // The ID-shaped alternative must remain visible to the merge schema walker;
-    // the literal project row is not an ID and is left unchanged.
-    ex["properties"]["matrix"] =
-        schema::mapOf(schema::arrayOf(schema::string().pattern("^tr_[0-9]+$", "track id")))
-            .keyPattern("^project$|^rg_[0-9]+$", "region id or project")
-            .jsonSchema();
-    return {"render settings", decode, [](const json::Value& v) { return v; }, ex};
+    return {"render settings", decode, [](const json::Value& v) { return v; },
+            render::settingsSchema().jsonSchema()};
 }
 
 std::string hex2(unsigned v) {
@@ -1239,7 +1149,7 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
         auto migrated = migrateProject1(std::move(doc), warnings);
         if (!migrated) return std::move(migrated).error();
         doc = std::move(*migrated);
-    } else if (version->minor > 2 && warnings)
+    } else if (version->minor > 3 && warnings)
         warnings->push_back(
             {"project.newer_minor", "loading a newer project minor version", "/schema"});
     std::uint32_t legacyGroupNext = 1;

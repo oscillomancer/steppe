@@ -306,6 +306,8 @@ int main(int argc, char** argv) {
     // DSP scripts are the user's, shared by every project: <data>/<slug>/scripts;
     // under --workdir (tests) <workdir>/scripts.
     if (o.workdir.empty()) options.scriptDir = dataFolder() / "scripts";
+    // Render presets and the render default likewise (ADR-0055).
+    if (o.workdir.empty()) options.renderPresetDir = dataFolder() / "render-presets";
     auto app = engine::EngineApp::create(options);
     if (!app) {
         std::fprintf(stderr, "%s\n", app.error().toString().c_str());

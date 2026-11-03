@@ -1651,10 +1651,11 @@ TEST_CASE("renders: FLAC files, a secondary format, and a queue pinned to its ve
     CHECK(fs::path(file.find("path")->asString()).filename() == "stem-Synth.flac");
     CHECK(fs::path(file.find("secondary_path")->asString()).filename() == "stem-Synth.24.flac");
     CHECK(fs::exists(file.find("secondary_path")->asString()));
-    // FLAC is 16 or 24 bit.
+    // FLAC is 16 or 24 bit: a contradiction in the settings (engine.md §3).
     auto refused = bus.execute({"render.mix", j(R"({"format":"flac","bit_depth":32})"), kOrigin});
     REQUIRE_FALSE(refused);
-    CHECK(refused.error().code == "render.format");
+    CHECK(refused.error().code == "render.args");
+    CHECK(refused.error().path == "/args/outputs/0/bit_depth");
     // The queue: q1 now, then the track 12 dB down and q2; q1 still renders loud.
     const auto q1 = run(bus, "render.queue.add",
                         R"({"command":"render.mix","args":{"name":"before","end_beat":2}})");
@@ -2299,11 +2300,13 @@ TEST_CASE("normalization rejects nonfinite derived gain and samples before mutat
         {"render.mix",
          j(R"({"name":"overflow","end_beat":1,"normalize":{"mode":"peak","target":1e308}})"),
          kOrigin});
+    // Targets above 0 are outside the settings' range (session-model §1.10).
     CHECK_FALSE(result);
     if (!result) {
-        CHECK(result.error().code == "render.normalize");
-        CHECK(result.error().path == "/args/normalize/target");
-        CHECK_FALSE(result.error().hint.empty());
+        const auto& error =
+            result.error().details.empty() ? result.error() : result.error().details.front();
+        CHECK(error.path == "/args/normalize/target");
+        CHECK_FALSE(error.hint.empty());
     }
     CHECK_FALSE(fs::exists(app->rendersDir() / "overflow.wav"));
 }

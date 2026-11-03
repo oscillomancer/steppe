@@ -2859,6 +2859,11 @@ struct Gain : Effect {
         run("timesig.set", R"({"bar": 9, "meter": "3/4"})");
         return;
     }
+    if (fixture == "render_preset") {  // a user render preset, "Archive"
+        run("render.preset.save",
+            R"({"name": "Archive", "settings": {"outputs": [{"format": "flac"}]}})");
+        return;
+    }
     if (fixture == "saved") {
         run("project.set", R"({"name": "Saved"})");
         (void)save("example-project.json");

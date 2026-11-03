@@ -52,10 +52,12 @@ name the files; names that escape the renders directory are rejected.
 Use `branch.render-ab {a, b, end_beat}` to render and analyze two branch heads
 without switching the active branch. For a long export, pass `job: true` to
 `render.mix`, `render.stems`, or `render.regions`, then use `job.get {job}` or
-`job.wait {job}` for progress and `job.cancel {job}` to stop it. WAV export
-supports 16/24-bit PCM with seeded dither and 32-bit float. Set
-`normalize: {mode: "lufs_i", target: -14, limit_true_peak_db: -1}` on stem or
-region renders to measure the first pass and apply gain on the second.
+`job.wait {job}` for progress and `job.cancel {job}` to stop it. The project's
+render settings (`render.settings` shows them and where each comes from) apply
+to every render; arguments override them for one call. Set
+`normalize: {mode: "lufs_i", target: -14}` with `limit_true_peak_db: -1` to
+deliver a streaming master: each output is measured as written and its
+`checks` say whether it met the target and the ceiling.
 
 ## Targets that are safe defaults
 

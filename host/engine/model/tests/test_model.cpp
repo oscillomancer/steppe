@@ -3,6 +3,7 @@
 #include <doctest/doctest.h>
 #include <supple/base/environment.h>
 
+#include <supple/model/render_settings.h>
 #include <supple/model/schemas.h>
 #include <supple/model/session.h>
 #include <supple/model/versions.h>
@@ -496,7 +497,7 @@ TEST_CASE("project 1.x migration: folders and receives become busses with child 
 
 TEST_CASE("project newer minor ignores unknown fields with load warnings") {
     auto doc = projectToJson(Session::create());
-    doc["schema"] = "supple.project/2.3";
+    doc["schema"] = "supple.project/2.4";
     doc["tracks"]["tr_0"]["future"] = true;
     std::vector<schema::Warning> warnings;
     auto parsed = projectFromJson(doc, &warnings);
@@ -933,4 +934,78 @@ TEST_CASE("automation items on a time envelope convert beat positions into secon
     REQUIRE(reopened);
     CHECK(model::serializeProject(*reopened) == model::serializeProject(*session));
     CHECK(model::pointsValueAt(model::effectivePoints(*reopened, lane), .5625, 1) == 2.5);
+}
+
+TEST_CASE("render settings: a 2.2 file migrates to schema 2.3 and reopens byte-identical") {
+    auto doc = projectToJson(Session::create());
+    doc["schema"] = "supple.project/2.2";
+    doc["project"]["render"] = json::parse(R"({
+        "format": {"container": "flac", "bit_depth": 16, "dither": false},
+        "secondary": {"format": "wav", "bit_depth": 24},
+        "tail_ms": 1500, "sample_rate": 44100, "channels": 1, "pattern": "{project}-{track}",
+        "normalize": {"mode": "lufs_i", "target": -16, "limit_true_peak_db": -1},
+        "matrix": {"project": ["tr_0"]}})")
+                                   .value();
+    auto loaded = projectFromJson(doc);
+    REQUIRE(loaded);
+    const auto expected = json::parse(R"({
+        "outputs": [{"format": "flac", "bit_depth": 16, "dither": "none"},
+                    {"format": "wav", "bit_depth": 24}],
+        "tail_s": 1.5, "sample_rate": 44100, "channels": 1, "pattern": "{project}-{track}",
+        "normalize": {"mode": "lufs_i", "target": -16}, "limit_true_peak_db": -1,
+        "matrix": {"project": ["tr_0"]}})")
+                              .value();
+    CHECK(loaded->project->render ==
+          render::toJson(render::settingsSchema().decode(expected).value()));
+    const std::string saved = serializeProject(*loaded);
+    CHECK(saved.find("\"supple.project/2.3\"") != std::string::npos);
+    CHECK(saved.find("tail_ms") == std::string::npos);
+    auto reopened = parseProject(saved);
+    REQUIRE(reopened);
+    CHECK(serializeProject(*reopened) == saved);
+    // A string format and normalize, and a bare bit depth.
+    doc["project"]["render"] =
+        json::parse(R"({"format": "wav", "bit_depth": 16, "normalize": "peak"})").value();
+    loaded = projectFromJson(doc);
+    REQUIRE(loaded);
+    CHECK(json::writeCompact(loaded->project->render) ==
+          R"({"outputs":[{"format":"wav","bit_depth":16}],"normalize":{"mode":"peak"}})");
+    // Every member of the new shape round-trips.
+    doc["schema"] = std::string(kProjectSchema);
+    doc["project"]["render"] = json::parse(R"({
+        "source": "stems", "bounds": "custom", "start_beat": 4, "end_beat": 12, "tail_s": 2,
+        "pattern": {"mix": "{project}/{project}-v{version}", "stems": "{track}"},
+        "channels": "track", "seamless_loop": false, "handles_s": 0.5, "if_exists": "number",
+        "outputs": [{"format": "wav", "bit_depth": 24, "dither": "shaped"},
+                    {"format": "mp3", "mp3": {"mode": "vbr", "vbr_quality": 2}, "suffix": "-web"},
+                    {"format": "vorbis", "vorbis_quality": 5, "sample_rate": 44100}],
+        "normalize": {"mode": "lufs_i", "target": -14, "only_reduce": true, "scope": "master"},
+        "trim": {"start": true, "end": true, "threshold_db": -70},
+        "stems": {"mode": "through_master", "tap": "pre_fader", "tracks": ["tr_0"],
+                  "skip_silent": true},
+        "metadata": {"title": "{project}", "artist": "A", "track_number": 3, "date": "2026-11-03",
+                     "isrc": "USRC17607839", "bwf": true, "markers": true},
+        "report": true, "add_to_project": true})")
+                                   .value();
+    loaded = projectFromJson(doc);
+    REQUIRE(loaded);
+    auto again = parseProject(serializeProject(*loaded));
+    REQUIRE(again);
+    CHECK(again->project->render ==
+          render::toJson(render::settingsSchema().decode(doc["project"]["render"]).value()));
+    CHECK(again->project->render.size() == doc["project"]["render"].size());
+    // Values outside the contract are refused where they are.
+    for (const auto& [render, path] : std::vector<std::pair<const char*, const char*>>{
+             {R"({"outputs": []})", "/project/render/outputs"},
+             {R"({"outputs": [{"format": "ogg"}]})", "/project/render/outputs/0/format"},
+             {R"({"outputs": [{"format": "mp3", "mp3": {"bitrate_kbps": 100}}]})",
+              "/project/render/outputs/0/mp3/bitrate_kbps"},
+             {R"({"channels": 3})", "/project/render/channels"},
+             {R"({"tail_ms": 1e300})", "/project/render/tail_s"},
+             {R"({"metadata": {"date": "Nov 3"}})", "/project/render/metadata/date"}}) {
+        doc["project"]["render"] = json::parse(render).value();
+        auto refused = projectFromJson(doc);
+        REQUIRE_FALSE(refused);
+        CHECK_MESSAGE(refused.error().path == path, refused.error().toString());
+    }
 }

@@ -757,6 +757,23 @@ Status VersionStore::createBranch(const std::string& name, std::string_view from
     return okStatus();
 }
 
+Status VersionStore::createBranchAt(const std::string& name, std::uint64_t version) {
+    if (name.empty() || name.size() > 100)
+        return Error("branch.name", "branch names are 1-100 characters", "/name");
+    if (branches_.count(name))
+        return Error("branch.exists", "branch \"" + name + "\" already exists", "/name",
+                     "pick another name or switch to it");
+    auto src = find(current_);
+    if (!src) return std::move(src).error();
+    const auto at = versions_.find(version);
+    if (at == versions_.end() || !at->second.session || !descends((*src)->head, version))
+        return Error("history.version",
+                     "version " + std::to_string(version) + " is not in this branch's history",
+                     "/version", "history.list shows the versions of the current branch");
+    branches_.emplace(name, Branch{version, version, {}, (*src)->allocated});
+    return okStatus();
+}
+
 Status VersionStore::switchBranch(std::string_view name) {
     auto b = find(name);
     if (!b) return std::move(b).error();
