@@ -119,8 +119,6 @@ class RenderDialog {
     // The "Open folder when done" preference.
     std::function<bool()> openFolderWhenDone;
     std::function<void(bool)> setOpenFolderWhenDone;
-    // The arrange view's time selection in beats, if any.
-    std::function<std::optional<std::pair<double, double>>()> timeSelection;
     void showFolder();  // the renders folder, as the dialog shows it
     const std::string& folderText() const { return folderText_; }
 

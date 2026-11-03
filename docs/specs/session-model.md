@@ -317,7 +317,8 @@ missing member comes from the user's default, then the built-in default
   without `{track}` gets `-{track}` (the master's name). Presets and the
   user default never hold it.
 - `bounds`: `project` (beat 0 to the last item's end) | `loop` (the
-  transport loop; `render.empty` when none is set) | `custom` (the members
+  transport loop range, the GUI's time selection, whether or not looping is
+  on; `render.empty` when none is set) | `custom` (the members
   `start_beat` [0] and `end_beat` [the last item's end]) [`project`]. A
   command that gives `start_beat` or `end_beat` without `bounds` renders
   custom bounds.

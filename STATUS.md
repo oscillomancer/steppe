@@ -201,7 +201,7 @@ instructions are in `docs/guides/installing.md`.
   user's render default and the built-ins (`render.settings` shows each
   member's layer); per-user presets (six factory ones, read-only);
   file-name patterns with `{version}`, `{branch}` and subfolders, and
-  overwrite / number / skip / error for existing files; project, loop or
+  overwrite / number / skip / error for existing files; project, time selection or
   custom bounds, tails, seamless loops, region handles, trim of silence;
   loudness or peak normalization (only down, or one master gain for every
   stem) and a true-peak limiter with or without it; a mix of several
@@ -774,9 +774,8 @@ Engine and hosting:
   opening every output of a device).
 - Overlapping gestures on a plugin without semantic parameters share one
   state blob.
-- The render dialog's Time selection range is never offered (the arrange
-  view has no time selection), and its Start and End show beats and
-  bar.beat rather than the ruler's full format.
+- The render dialog's Start and End show beats and bar.beat rather than
+  the ruler's full format.
 - MP3 encodes run one at a time (LAME's shared tables, `libs/audio-codecs`):
   several MP3 renders in parallel jobs wait for each other's encoding step.
 - Renders: MP3 and Ogg Vorbis files are byte-identical from run to run on

@@ -26,6 +26,7 @@
 #include "supple/gui/png.h"
 #include "supple/host/clap_host.h"
 #include "supple/json/write.h"
+#include "supple/ui/forms.h"
 #include "supple/ui/list.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/root.h"
@@ -1887,4 +1888,35 @@ TEST_CASE("render dialog: with several masters the mix lists them, a file each (
     f.render->setField("render.end", "1");
     f.render->refreshPreview();
     CHECK(f.render->preview().find("Cue") != std::string::npos);  // its own file
+}
+
+TEST_CASE("render dialog: Time selection renders the ruler's loop range, looping on or off") {
+    Fixture f;
+    if (!f.ok) return;
+    gui::test::linkGeneratedMedia(f.app->mediaDir());
+    REQUIRE(gui::generateSession(*f.dispatcher, f.app->mediaDir(), 1));
+    const auto range = [&]() -> ui::Dropdown& {
+        auto* d = dynamic_cast<ui::Dropdown*>(f.root->find("render.range"));
+        REQUIRE(d);
+        return *d;
+    };
+    f.render->open();
+    f.frame();
+    CHECK(range().choices().size() == 3);       // no separate Loop choice
+    CHECK_FALSE(range().choices()[1].enabled);  // no time selection yet
+    f.render->close();
+    REQUIRE(f.run("transport.loop",
+                  f.args({{"start_seconds", 1.0}, {"end_seconds", 3.0}, {"enabled", false}})));
+    f.render->open();
+    f.frame();
+    CHECK(range().choices()[1].enabled);
+    range().choose("loop");
+    f.frame();
+    CHECK(range().label() == "Time selection");
+    CHECK(f.render->renderArguments()["bounds"].asString() == "loop");
+    json::Value args = f.render->renderArguments();
+    args["operation"] = "mix";
+    auto dry = f.run("render.dry-run", std::move(args));
+    REQUIRE(dry);
+    CHECK((*dry)["files"].asArray()[0].find("seconds")->asDouble() == doctest::Approx(2.0));
 }
