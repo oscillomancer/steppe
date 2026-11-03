@@ -150,6 +150,13 @@ function(_supple_codec_target target)
   endif()
   if(_supple_sanitize_flags)
     target_compile_options(${target} PRIVATE ${_supple_sanitize_flags})
+    # LAME and libvorbis shift signed ints left (past the sign bit, or
+    # negative values: id3tag.c's frame ids, psy.c), which C99 leaves
+    # undefined and every supported compiler does as two's complement. The
+    # vendored sources stay unmodified, so UBSan's shift check is off here.
+    if(SUPPLE_SANITIZE MATCHES "undefined")
+      target_compile_options(${target} PRIVATE -fno-sanitize=shift)
+    endif()
   endif()
 endfunction()
 
@@ -176,6 +183,13 @@ if(NOT WIN32)
   target_link_libraries(tp-vorbis PUBLIC m)
 endif()
 _supple_codec_target(tp-vorbis)
+# psy.c (_vp_psy_init) reads noiseoff[j][P_BANDS] at the top band and
+# multiplies it by zero: an upstream one-past-the-end read inside the same
+# struct (the next row, or the member after the array), harmless and left
+# unmodified here, so UBSan's bounds check is off for libvorbis.
+if(_supple_sanitize_flags AND SUPPLE_SANITIZE MATCHES "undefined")
+  target_compile_options(tp-vorbis PRIVATE -fno-sanitize=bounds)
+endif()
 add_library(supple::vorbis ALIAS tp-vorbis)
 
 set(_lame ${CMAKE_CURRENT_SOURCE_DIR}/lame-3.100)
