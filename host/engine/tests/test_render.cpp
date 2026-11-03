@@ -81,8 +81,9 @@ TEST_CASE("render settings resolve per member: arguments, project, default, buil
     auto settings = r.run("render.settings", "{}");
     CHECK(settings.find("default")->isNull());
     CHECK(settings["from"]["outputs"] == "built-in");
-    CHECK(settings["effective"]["outputs"] == j(R"([{"format":"wav","bit_depth":32,
-        "dither":"none","sample_rate":48000}])"));
+    // No member that depends on another one is filled in: an output's rate
+    // follows the chain rate, a 32-bit output has no dither.
+    CHECK(settings["effective"]["outputs"] == j(R"([{"format":"wav","bit_depth":32}])"));
     CHECK(settings["effective"]["pattern"]["mix"] == "{project}-v{version}");
     // The user's default fills what the project leaves out; objects are whole.
     r.run("render.preset.save",
@@ -408,3 +409,27 @@ TEST_CASE("factory presets cover the delivery targets") {
     CHECK(std::find(names.begin(), names.end(), "Podcast (MP3, −16 LUFS)") != names.end());
     CHECK(std::find(names.begin(), names.end(), "Game loop (Ogg Vorbis, seamless)") != names.end());
 }
+
+TEST_CASE("an output follows the chain rate unless it names its own") {
+    Rig r;
+    r.song();
+    // What the dialog writes back: the effective settings, with a new chain rate.
+    auto effective = r.run("render.settings", R"({"outputs":[{"format":"wav","bit_depth":24},
+        {"format":"mp3"},{"format":"flac","sample_rate":96000}]})")["effective"];
+    for (auto& o : effective["outputs"].asArray())
+        CHECK((o.find("sample_rate") == nullptr) == (o["format"].asString() != "flac"));
+    effective["sample_rate"] = std::int64_t{44100};
+    json::Value set = json::Value::object();
+    set["render"] = effective;
+    r.run("project.set", json::writeCompact(set));
+    auto mix = r.run("render.mix", R"({"name":"rate","end_beat":1})");
+    auto& outputs = mix["outputs"].asArray();
+    CHECK(outputs[0]["sample_rate"] == 44100);
+    CHECK(outputs[1]["sample_rate"] == 44100);
+    CHECK(outputs[2]["sample_rate"] == 96000);
+    CHECK(audio::readAudio(outputs[0]["path"].asString())->sampleRate == 44100);
+    // The dry run says what each output will be.
+    auto dry = r.run("render.dry-run", R"({"name":"rate","end_beat":1})");
+    CHECK(dry["files"].asArray()[0]["outputs"].asArray()[1]["sample_rate"] == 44100);
+}
+

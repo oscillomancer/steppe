@@ -31,10 +31,13 @@ rs::Settings builtInRenderSettings(const model::Session& session);
 rs::Settings resolveRenderSettings(const rs::Settings& args, const rs::Settings& project,
                                    const rs::Settings& user, const rs::Settings& builtIn,
                                    RenderOrigins* from = nullptr);
-// Fills every optional member of the objects with its default (targets,
-// bit depths, dither, MP3 and Vorbis options, patterns per source), so the
-// result shows what applies. `chainRate` is the effective sample rate.
-void completeRenderSettings(rs::Settings& settings, double chainRate);
+// Fills the optional members of the objects with their defaults (targets,
+// bit depths, dither for 16/24 bits, MP3 and Vorbis options, patterns per
+// source), so the result shows what applies. Only defaults that depend on
+// nothing else are filled: an output's sample_rate stays absent unless given
+// (outputSampleRate resolves it against the chain rate where it is used), so
+// settings written back keep following the chain rate.
+void completeRenderSettings(rs::Settings& settings);
 // The default bit depth for a format (0: none, for MP3 and Vorbis).
 int defaultBitDepth(rs::Format format);
 // An output's effective rate: its own, else the chain's, adjusted to what

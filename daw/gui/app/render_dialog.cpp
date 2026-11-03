@@ -1571,10 +1571,17 @@ std::string RenderDialog::mixLabel() {
     json::Value args = json::Value::object();
     args["operation"] = "mix";
     std::string file = "…";
+    json::Value first = e.find("outputs")->at(0);
     if (auto dry = dispatcher_.execute({"render.dry-run", std::move(args), kUiOrigin}))
-        if (const auto* files = dry->find("files"); files && files->size())
-            file = baseName(text(files->at(0).find("path")));
-    std::string label = "Mix → " + file + " (" + outputLabel(e.find("outputs")->at(0)) + ")";
+        if (const auto* files = dry->find("files"); files && files->size()) {
+            const json::Value& entry = files->at(0);
+            file = baseName(text(entry.find("path")));
+            // The rate the file is written at (an output follows the chain rate).
+            if (const auto* outputs = entry.find("outputs"); outputs && outputs->size())
+                if (const auto* rate = outputs->at(0).find("sample_rate"))
+                    first["sample_rate"] = *rate;
+        }
+    std::string label = "Mix → " + file + " (" + outputLabel(first) + ")";
     const std::string bounds = text(e.find("bounds"), "project");
     if (bounds == "loop")
         label += ", loop";

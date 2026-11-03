@@ -160,7 +160,7 @@ int outputSampleRate(const rs::Output& output, int chainRate) {
     return chainRate;
 }
 
-void completeRenderSettings(rs::Settings& s, double chainRate) {
+void completeRenderSettings(rs::Settings& s) {
     if (s.pattern && s.pattern->all) {
         const std::string all = *s.pattern->all;
         s.pattern = rs::Pattern{{}, all, all, all};
@@ -173,7 +173,9 @@ void completeRenderSettings(rs::Settings& s, double chainRate) {
         for (auto& o : *s.outputs) {
             const int bits = defaultBitDepth(o.format);
             if (bits && !o.bitDepth) o.bitDepth = bits;
-            if (bits && !o.dither) o.dither = rs::Dither::Tpdf;
+            // Dither applies to 16- and 24-bit output only; a 32-bit output
+            // leaves it unset, so a later change of depth gets the default.
+            if ((o.bitDepth == 16 || o.bitDepth == 24) && !o.dither) o.dither = rs::Dither::Tpdf;
             if (o.format == rs::Format::Mp3) {
                 rs::Mp3 mp3 = o.mp3.value_or(rs::Mp3{});
                 if (!mp3.mode) mp3.mode = rs::Mp3Mode::Cbr;
@@ -182,8 +184,6 @@ void completeRenderSettings(rs::Settings& s, double chainRate) {
                 o.mp3 = mp3;
             }
             if (o.format == rs::Format::Vorbis && !o.vorbisQuality) o.vorbisQuality = 6.0;
-            if (!o.sampleRate)
-                o.sampleRate = outputSampleRate(o, static_cast<int>(std::llround(chainRate)));
         }
     if (s.normalize) {
         if (!s.normalize->target) s.normalize->target = -14.0;

@@ -422,7 +422,7 @@ Status checkSettings(const rs::Settings& e, rs::Source operation, const RenderOr
             return argsError(std::string(rs::formatName(o.format)) + " is 16 or 24 bit" +
                                  layerNote(from, "outputs"),
                              at + "/bit_depth", "use 16 or 24 (32-bit float is WAV only)");
-        const auto rate = o.sampleRate.value_or(0);
+        const auto rate = outputSampleRate(o, static_cast<int>(*e.sampleRate));
         if (o.format == rs::Format::Mp3) {
             static constexpr std::array<std::int64_t, 9> kRates{8000,  11025, 12000, 16000, 22050,
                                                                 24000, 32000, 44100, 48000};
@@ -517,9 +517,7 @@ Result<Resolved> resolveFor(EngineApp& app, const model::Session& s, const Args&
         e.normalize->target = sel.target;
         r.from["normalize"] = "args";
     }
-    for (auto& output : *e.outputs)  // dither applies to 16- and 24-bit output only
-        if (output.bitDepth == 32 && !output.dither) output.dither = rs::Dither::None;
-    completeRenderSettings(e, static_cast<double>(*e.sampleRate));
+    completeRenderSettings(e);
     return r;
 }
 
@@ -618,12 +616,13 @@ std::uint64_t outputSeed(std::uint64_t seed, std::size_t index) {
     return z ^ (z >> 31);
 }
 
-RenderEncoding encodingOf(const rs::Output& o, std::uint64_t seed, std::size_t index) {
+RenderEncoding encodingOf(const rs::Output& o, int chainRate, std::uint64_t seed,
+                          std::size_t index) {
     RenderEncoding e;
     e.format = o.format;
     e.bitDepth = static_cast<int>(o.bitDepth.value_or(0));
-    e.dither = o.dither.value_or(rs::Dither::None);
-    e.sampleRate = static_cast<int>(o.sampleRate.value_or(48000));
+    e.dither = o.dither.value_or(rs::Dither::Tpdf);  // ignored for float and lossy
+    e.sampleRate = outputSampleRate(o, chainRate);
     if (o.mp3) {
         e.mp3Mode = o.mp3->mode.value_or(rs::Mp3Mode::Cbr);
         e.mp3Bitrate = static_cast<int>(o.mp3->bitrateKbps.value_or(320));
@@ -819,7 +818,7 @@ Result<RenderPlan> plan(EngineApp& app, rs::Source operation, const Args& a) {
                 }
                 break;
             }
-        data.sampleRate = static_cast<int>(firstOutput.sampleRate.value_or(*e.sampleRate));
+        data.sampleRate = encodings.front().sampleRate;
         data.bitDepth = encodings.front().bitDepth;
         data.format = std::string(rs::formatName(firstOutput.format));
         data.counter = static_cast<int>(out.tasks.size() + out.skipped.size() + 1);
@@ -1028,6 +1027,8 @@ json::Value dryRunList(const RenderPlan& p) {
             json::Value file = json::Value::object();
             file["path"] = o.path.string();
             file["format"] = std::string(rs::formatName(o.encoding.format));
+            if (o.encoding.bitDepth) file["bit_depth"] = o.encoding.bitDepth;
+            file["sample_rate"] = o.encoding.sampleRate;
             outputs.push_back(std::move(file));
         }
         entry["outputs"] = std::move(outputs);
