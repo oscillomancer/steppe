@@ -119,6 +119,8 @@ Result<FileInfo> inspectWav(std::ifstream& in, std::span<const std::uint8_t> hea
     info.container = Container::Wav;
     info.sampleRate = riff.sampleRate;
     info.channels = riff.channels;
+    info.bitsPerSample = riff.bitsPerSample;
+    info.floatSamples = riff.formatTag == 3;
     std::uint64_t bytes = riff.haveData ? riff.dataBytes : 0;
     if (riff.haveData) {
         const std::uint64_t present = fileBytes > riff.dataOffset ? fileBytes - riff.dataOffset : 0;

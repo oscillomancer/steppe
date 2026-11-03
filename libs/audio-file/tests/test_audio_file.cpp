@@ -413,6 +413,8 @@ TEST_CASE("inspect reads metadata without decoding, and agrees with readAudio") 
     CHECK(wav->channels == 2);
     CHECK(wav->frames == 12345);
     CHECK_FALSE(wav->truncated);
+    CHECK(wav->bitsPerSample == 32);
+    CHECK(wav->floatSamples);
     WavOptions pcm;
     pcm.format = SampleFormat::Pcm24;
     REQUIRE(writeWav(dir / "pcm.wav", tone, pcm));
@@ -421,6 +423,9 @@ TEST_CASE("inspect reads metadata without decoding, and agrees with readAudio") 
     CHECK(pcmInfo->frames == 12345);
     CHECK(pcmInfo->sampleRate == 48000);
     CHECK(pcmInfo->channels == 2);
+    CHECK(pcmInfo->bitsPerSample == 24);
+    CHECK_FALSE(pcmInfo->floatSamples);
+    CHECK(flac->bitsPerSample == 0);
 
     // An interrupted file: the data chunk is shorter than it declares.
     const auto bytes = encodeWav(tone, pcm).value();

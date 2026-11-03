@@ -308,7 +308,8 @@ allocate scratch; they and arbitrary-rate `resample` are offline APIs.
 formats via dr_wav, FLAC via dr_flac, MP3 via dr_mp3) → planar float +
 sample rate + channel count; `Status writeWav(path, data, format)` (16/24-bit
 PCM with TPDF dither — seeded — or 32-bit float). Round-trip tests.
-`inspect(path)` reads container metadata without decoding PCM. PCM and
+`inspect(path)` reads container metadata without decoding PCM (for WAV also
+the stored bits per sample and whether they are IEEE float). PCM and
 IEEE-float WAV headers, including those EXTENSIBLE subformats, must have
 `blockAlign` equal to channels times bytes per sample (bit depth rounded up
 to whole bytes). FLAC inspection requires a complete, exactly 34-byte
