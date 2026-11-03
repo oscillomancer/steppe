@@ -433,3 +433,27 @@ TEST_CASE("an output follows the chain rate unless it names its own") {
     CHECK(dry["files"].asArray()[0]["outputs"].asArray()[1]["sample_rate"] == 44100);
 }
 
+TEST_CASE("a dry run checks the cover without reading it; a render reads it") {
+    Rig r;
+    r.song();
+    r.run(
+        "project.save",
+        "{\"path\":" + json::writeCompact(json::Value((r.dir.path / "song.json").string())) + "}");
+    const fs::path folder = r.app->projectDir();
+    REQUIRE(
+        writeFileAtomic(folder / "cover.png",
+                        std::vector<std::uint8_t>{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}));
+    REQUIRE(writeFileAtomic(folder / "notes.txt", std::string("not an image")));
+    std::vector<std::uint8_t> big(11u << 20, 0);
+    big[0] = 0xFF, big[1] = 0xD8, big[2] = 0xFF;
+    REQUIRE(writeFileAtomic(folder / "big.jpg", big));
+    r.run("render.dry-run", R"({"end_beat":1,"metadata":{"cover":"cover.png"}})");
+    for (const char* bad : {"notes.txt", "big.jpg", "missing.png"}) {
+        const std::string args =
+            std::string(R"({"end_beat":1,"metadata":{"cover":")") + bad + "\"}}";
+        CHECK(r.fails("render.dry-run", args).path == "/args/metadata/cover");
+    }
+    auto mix = r.run("render.mix", R"({"name":"c","end_beat":1,"outputs":[{"format":"flac"}],
+        "metadata":{"cover":"cover.png"}})");
+    CHECK(holds(mix["path"].asString(), "image/png"));
+}

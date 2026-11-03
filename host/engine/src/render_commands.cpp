@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cmath>
 #include <ctime>
+#include <fstream>
 #include <iomanip>
 #include <limits>
 #include <set>
@@ -561,7 +562,9 @@ struct RenderPlan {
 };
 
 // metadata.cover: a PNG or JPEG of at most 10 MiB inside the project folder.
-Status readCover(EngineApp& app, const std::string& cover, RenderPlan& out) {
+// A dry run (the dialog's preview, the File menu's label) checks the file's
+// size and first bytes only; a render reads it whole.
+Status readCover(EngineApp& app, const std::string& cover, RenderPlan& out, bool whole) {
     const fs::path folder = app.projectPath().empty() ? fs::path() : app.projectDir();
     if (folder.empty())
         return argsError("a cover needs a saved project", "/metadata/cover",
@@ -577,11 +580,20 @@ Status readCover(EngineApp& app, const std::string& cover, RenderPlan& out) {
     if (ec || inside.empty() || *inside.begin() == "..")
         return argsError("the cover must be inside the project folder", "/metadata/cover",
                          "copy the image into the project folder and name it relative to it");
-    auto bytes = readFile(resolved, 10u << 20);
-    if (!bytes)
+    const auto size = fs::file_size(resolved, ec);
+    if (ec || size > (10u << 20))
         return argsError("cannot read the cover " + rel.generic_string(), "/metadata/cover",
                          "give a PNG or JPEG of at most 10 MiB in the project folder");
-    const auto& b = *bytes;
+    std::vector<std::uint8_t> head(8, 0);
+    {
+        std::ifstream in(resolved, std::ios::binary);
+        in.read(reinterpret_cast<char*>(head.data()), static_cast<std::streamsize>(head.size()));
+        if (!in && !in.eof())
+            return argsError("cannot read the cover " + rel.generic_string(), "/metadata/cover",
+                             "give a PNG or JPEG of at most 10 MiB in the project folder");
+        head.resize(static_cast<std::size_t>(in.gcount()));
+    }
+    const auto& b = head;
     if (b.size() >= 8 && b[0] == 0x89 && b[1] == 'P' && b[2] == 'N' && b[3] == 'G')
         out.coverMime = "image/png";
     else if (b.size() >= 3 && b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF)
@@ -589,6 +601,11 @@ Status readCover(EngineApp& app, const std::string& cover, RenderPlan& out) {
     else
         return argsError("the cover is not a PNG or JPEG", "/metadata/cover",
                          "give a PNG or JPEG image");
+    if (!whole) return okStatus();
+    auto bytes = readFile(resolved, 10u << 20);
+    if (!bytes)
+        return argsError("cannot read the cover " + rel.generic_string(), "/metadata/cover",
+                         "give a PNG or JPEG of at most 10 MiB in the project folder");
     out.cover = std::move(*bytes);
     return okStatus();
 }
@@ -663,7 +680,9 @@ Status insideRoot(const fs::path& root, const fs::path& path) {
     return okStatus();
 }
 
-Result<RenderPlan> plan(EngineApp& app, rs::Source operation, const Args& a) {
+// dryRun: nothing is written or rendered, so large inputs (the cover) are
+// only checked.
+Result<RenderPlan> plan(EngineApp& app, rs::Source operation, const Args& a, bool dryRun = false) {
     auto source = sessionFor(app, a.sel.branch, a.sel.version);
     if (!source) return std::move(source).error();
     model::Session s = *source;
@@ -677,11 +696,13 @@ Result<RenderPlan> plan(EngineApp& app, rs::Source operation, const Args& a) {
     out.version = s.version;
     out.analyze = a.sel.analyze;
     const rs::Settings& e = out.settings;
-    if (e.metadata && e.metadata->cover) SUPPLE_TRY(readCover(app, *e.metadata->cover, out));
+    if (e.metadata && e.metadata->cover)
+        SUPPLE_TRY(readCover(app, *e.metadata->cover, out, !dryRun));
     const auto& firstOutput = e.outputs->front();
     std::vector<RenderEncoding> encodings;
     for (std::size_t i = 0; i < e.outputs->size(); ++i)
-        encodings.push_back(encodingOf((*e.outputs)[i], s.project->seed, i));
+        encodings.push_back(
+            encodingOf((*e.outputs)[i], static_cast<int>(*e.sampleRate), s.project->seed, i));
     const std::string pattern =
         a.sel.name.value_or(operation == rs::Source::Mix     ? *e.pattern->mix
                             : operation == rs::Source::Stems ? *e.pattern->stems
@@ -1606,7 +1627,7 @@ void registerQueueCommands(cmd::Registry& registry) {
                 args.sel.version = static_cast<std::int64_t>(source->version);
             }
             const auto operation = operationOf(a.command, args, {});
-            auto planned = plan(app, operation, args);
+            auto planned = plan(app, operation, args, true);  // run plans again, reading all
             if (!planned) return queueArgsError(std::move(planned).error());
             // The settings as they resolve now, so a later default, preset or
             // loop does not change the queued render.
@@ -2062,7 +2083,7 @@ void registerRenderCommands(cmd::Registry& registry) {
             auto& app = ctx.service<EngineApp>();
             auto operation = operationFor(app, name, a);
             if (!operation) return std::move(operation).error();
-            auto planned = plan(app, *operation, a);
+            auto planned = plan(app, *operation, a, std::string_view(name) == "render.dry-run");
             if (!planned) return std::move(planned).error();
             const bool mix = std::string_view(name) == "render.mix";
             if (std::string_view(name) == "render.dry-run") {
