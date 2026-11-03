@@ -21,6 +21,7 @@
 #include "learn_dialog.h"
 #include "plugin_browser.h"
 #include "render_dialog.h"
+#include "supple/audio/audio_file.h"
 #include "supple/engine/app.h"
 #include "supple/gui/png.h"
 #include "supple/host/clap_host.h"
@@ -1825,4 +1826,46 @@ TEST_CASE("file URLs: POSIX, drive and UNC paths, with reserved characters encod
     CHECK(gui::fileUrl("C:/Users/Me/Renders") == "file:///C:/Users/Me/Renders");
     CHECK(gui::fileUrl("//server/share/Mixes") == "file://server/share/Mixes");
     CHECK(gui::fileUrl("/r\xC3\xA9sum\xC3\xA9") == "file:///r%C3%A9sum%C3%A9");
+}
+
+TEST_CASE("render dialog: regions checklist, the matrix grid and the chain rate reach the render") {
+    Fixture f;
+    if (!f.ok) return;
+    gui::test::linkGeneratedMedia(f.app->mediaDir());
+    REQUIRE(gui::generateSession(*f.dispatcher, f.app->mediaDir(), 1));
+    REQUIRE(f.run("region.add", f.args({{"start", 0.0}, {"end", 2.0}, {"name", "One"}})));
+    REQUIRE(f.run("region.add", f.args({{"start", 2.0}, {"end", 4.0}, {"name", "Two"}})));
+    f.render->open();
+    f.render->setSource(gui::RenderDialog::Source::Regions);
+    f.frame();
+    // The checked regions are rendered (a one-off selector).
+    CHECK_FALSE(f.render->renderArguments().find("regions"));  // all of them
+    REQUIRE(f.click("render.regions.list.none"));
+    REQUIRE(f.click("render.regions.list.item.0"));
+    json::Value args = f.render->renderArguments();
+    REQUIRE(args.find("regions"));
+    CHECK(args["regions"].size() == 1);
+    CHECK(f.app->head().project->render.find("regions") == nullptr);
+    // A cell of the matrix grid becomes a matrix member of the settings.
+    f.render->openMatrix();
+    f.frame();
+    REQUIRE(f.click("render.matrix.rg_1.tr_1"));
+    args = f.render->renderArguments();
+    REQUIRE(args.find("matrix"));
+    CHECK(args["matrix"]["rg_1"].asArray()[0] == "tr_1");
+    f.click("render.matrix.close");
+    f.render->setSource(gui::RenderDialog::Source::Master);
+    // A new sample rate gives a file at that rate (outputs follow the chain).
+    f.render->setField("render.end", "2");
+    f.render->setField("render.sample_rate", "44100");
+    f.render->setField("render.pattern", "rate-{counter:02}");
+    f.render->run();
+    for (int i = 0; i < 6000 && !f.render->job().empty(); ++i) {
+        f.render->tick();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    REQUIRE(f.render->resultFiles().size() == 1);
+    auto audio = audio::readAudio(f.render->resultFiles()[0]);
+    REQUIRE(audio);
+    CHECK(audio->sampleRate == 44100);
 }

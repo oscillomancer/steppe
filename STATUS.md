@@ -763,11 +763,9 @@ Engine and hosting:
   and there are no per-output meters.
 - Overlapping gestures on a plugin without semantic parameters share one
   state blob.
-- The render dialog (gui.md §4.8) has no region checklist or Matrix… grid
-  yet (regions render all regions, or the matrix set with `project.set`),
-  its Time selection range is never offered (the arrange view has no time
-  selection), and File → Mix reports its file in the status bar without an
-  Open folder action there (the "Open folder when done" preference covers it).
+- The render dialog's Time selection range is never offered (the arrange
+  view has no time selection), and its Start and End show beats and
+  bar.beat rather than the ruler's full format.
 - MP3 encodes run one at a time (LAME's shared tables, `libs/audio-codecs`):
   several MP3 renders in parallel jobs wait for each other's encoding step.
 - Renders: MP3 and Ogg Vorbis files are byte-identical from run to run on

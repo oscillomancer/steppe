@@ -459,6 +459,11 @@ json::Value RenderDialog::selectors() const {
         a["branch"] = versionChoice_.substr(7);
     else if (versionChoice_.starts_with("version:"))
         if (auto v = integer(versionChoice_.substr(8))) a["version"] = *v;
+    if (regions_ && source() == Source::Regions) {
+        json::Value ids = json::Value::array();
+        for (const auto& id : *regions_) ids.push_back(id);
+        a["regions"] = std::move(ids);
+    }
     return a;
 }
 
@@ -522,6 +527,7 @@ void RenderDialog::open() {
     load(json::Value::object());
     presetName_.clear();
     versionChoice_ = "current";
+    regions_.reset();
     ask_ = false;
     auto page = buildPage();
     root_.openPopup(std::move(page), {}, ui::Placement::Center, [this] {
@@ -702,10 +708,21 @@ void RenderDialog::buildSource(ui::Node& body) {
         std::vector<Choice> regions;
         for (const auto& e : s.regions)
             regions.push_back({e.id.str(), e.value->name.empty() ? e.id.str() : e.value->name});
+        auto& list = body.emplace<ui::Checklist>("render.regions.list");
+        std::vector<std::string> on;
+        for (const auto& r : regions)
+            if (!regions_ ||
+                std::find(regions_->begin(), regions_->end(), r.value) != regions_->end())
+                on.push_back(r.value);
+        list.setItems(regions, on);
+        list.onChange = [this, count = regions.size()](const std::vector<std::string>& checked) {
+            if (checked.size() == count)
+                regions_.reset();
+            else
+                regions_ = checked;
+            markDirty();
+        };
         auto& opts = row(body, "render.regions.row");
-        caption(opts, "render.regions.label",
-                std::to_string(regions.size()) + (regions.size() == 1 ? " region" : " regions"),
-                80);
         caption(opts, "render.handles.label", "Handles (s)", 76);
         auto& handles = opts.emplace<ui::EditableDropdown>(
             "render.handles",
@@ -714,10 +731,16 @@ void RenderDialog::buildSource(ui::Node& body) {
                                          : compact(num(settings_.find("handles_s"))));
         handles.layout.width = ui::SizeRule::fixed(90);
         handles.onChange = [this](const std::string& t) { setField("render.handles", t); };
-        opts.emplace<ui::Label>(
-            "render.matrix.note",
-            settings_.find("matrix") ? "Matrix: set (project.set render.matrix)" : "Matrix: none",
-            ui::Font::Ui, "caption", "ink-quiet");
+        opts.emplace<ui::Button>("render.matrix", "Matrix\u2026", [this] { openMatrix(); });
+        std::size_t cells = 0;
+        if (const auto* matrix = settings_.find("matrix"); matrix && matrix->isObject())
+            for (const auto& row : matrix->asObject()) cells += row.value.size();
+        opts.emplace<ui::Label>("render.matrix.note",
+                                cells ? std::to_string(cells) +
+                                            (cells == 1 ? " track chosen" : " tracks chosen") +
+                                            " in the matrix"
+                                      : "Matrix: each region renders the master mix",
+                                ui::Font::Ui, "caption", "ink-quiet");
     }
 }
 
@@ -1337,6 +1360,64 @@ void RenderDialog::openExisting(const json::Value& existing) {
             startJob(commandName(), std::move(a));
         });
     buttons.emplace<ui::Button>("render.exists.cancel", "Cancel", [this] { root_.closePopup(); });
+    root_.openPopup(std::move(panel), {}, ui::Placement::Center);
+}
+
+void RenderDialog::openMatrix() {
+    const model::Session& s = app_.head();
+    std::vector<std::pair<std::string, std::string>> rows{{"project", "Project"}};
+    for (const auto& e : s.regions)
+        rows.emplace_back(e.id.str(), e.value->name.empty() ? e.id.str() : e.value->name);
+    std::vector<std::pair<std::string, std::string>> columns;
+    for (const auto& e : s.tracks)
+        if (e.value->type == model::StripType::Master || e.value->parent == model::kMaster)
+            columns.emplace_back(e.id.str(), e.value->name.empty() ? e.id.str() : e.value->name);
+    auto panel = std::make_unique<ui::Node>("render.matrix.panel");
+    panel->layout.dir = ui::Layout::Dir::Column;
+    panel->layout.width = ui::SizeRule::fixed(
+        std::min(1100.0f, 140.0f + 90.0f * static_cast<float>(columns.size()) + 24));
+    panel->layout.padding = ui::Insets::all(12);
+    panel->layout.gap = 4;
+    panel->emplace<ui::Label>("render.matrix.title", "Render matrix: regions by tracks",
+                              ui::Font::UiBold, "title");
+    auto& head = row(*panel, "render.matrix.head");
+    caption(head, "render.matrix.corner", "", 140);
+    for (const auto& [id, name] : columns) caption(head, "render.matrix.col." + id, name, 84);
+    const json::Value* matrix = settings_.find("matrix");
+    for (const auto& [rowId, rowName] : rows) {
+        auto& line = row(*panel, "render.matrix.row." + rowId);
+        caption(line, "render.matrix.name." + rowId, rowName, 140);
+        const json::Value* cells = matrix && matrix->isObject() ? matrix->find(rowId) : nullptr;
+        for (const auto& [trackId, trackName] : columns) {
+            bool on = false;
+            if (cells && cells->isArray())
+                for (const auto& c : cells->asArray())
+                    on |= c.isString() && c.asString() == trackId;
+            auto& box =
+                line.emplace<ui::Checkbox>("render.matrix." + rowId + "." + trackId, "", on);
+            box.layout.width = ui::SizeRule::fixed(84);
+            box.onToggle = [this, rowId = rowId, trackId = trackId](bool checked) {
+                json::Value next = settings_.find("matrix") && settings_["matrix"].isObject()
+                                       ? settings_["matrix"]
+                                       : json::Value::object();
+                json::Value cellsNow = next.find(rowId) ? next[rowId] : json::Value::array();
+                json::Value kept = json::Value::array();
+                for (const auto& c : cellsNow.asArray())
+                    if (c.asString() != trackId) kept.push_back(c);
+                if (checked) kept.push_back(trackId);
+                if (kept.size())
+                    next[rowId] = std::move(kept);
+                else
+                    next.asObject().erase(rowId);
+                set("matrix", next.size() ? std::move(next) : json::Value());
+            };
+        }
+    }
+    auto& buttons = row(*panel, "render.matrix.buttons");
+    buttons.emplace<ui::Button>("render.matrix.close", "Done", [this] {
+        root_.closePopup();
+        rebuild();
+    });
     root_.openPopup(std::move(panel), {}, ui::Placement::Center);
 }
 

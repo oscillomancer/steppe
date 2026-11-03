@@ -86,6 +86,12 @@ class RenderDialog {
     // The settings the dialog would render with (complete) and the members it
     // would write to the project (session-model §1.10 JSON).
     const json::Value& settings() const { return settings_; }
+    // The arguments Render would pass (settings plus the one-off selectors:
+    // version and the checked regions).
+    json::Value renderArguments() const { return renderArgs(false); }
+    // Regions: the grid of regions (and a Project row) by tracks and masters
+    // that edits `matrix`.
+    void openMatrix();
     json::Value projectSettings() const;
 
     // Presets (render.preset.*): load one into the dialog (not the project),
@@ -171,6 +177,8 @@ class RenderDialog {
     std::size_t tab_ = 0;
     bool ask_ = false;                       // if_exists "Ask" (never written)
     std::string versionChoice_ = "current";  // "current", "branch:<name>", "version:<n>"
+    // The checked regions when not all are (a one-off selector, never written).
+    std::optional<std::vector<std::string>> regions_;
     std::string presetName_;
     std::string previewText_, statusText_, job_, folderText_;
     bool mixJob_ = false;  // the job is File → Mix
