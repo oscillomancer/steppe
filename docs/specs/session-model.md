@@ -718,8 +718,9 @@ and naming. All `edit` unless marked (q) query or (a) action.
   `autoitem.list` (q).
 - **rulers**: `marker.add/remove/set`, `region.add/remove/set`.
 - **transport** (a): `transport.play`, `transport.stop`, `transport.pause`,
-  `transport.record`, `transport.seek {pos}`, `transport.loop {range}`,
-  `transport.punch {start, end}`, `transport.metronome {count_in_bars,
+  `transport.record`, `transport.seek {pos}`, `transport.loop {range | clear}`,
+  `transport.punch {start, end | clear}` (`clear` removes the range and turns
+  it off), `transport.metronome {count_in_bars,
   count_in_playback, …}` (a count-in before recording), `transport.get` (q).
 - **render** (a): `render.mix {master}` (one master for the call; default the `masters` setting, else tr_0), `render.stems`, `render.regions` (matrix),
   `render.items`, `render.dry-run` (q: resolved file list), `render.job.*`;

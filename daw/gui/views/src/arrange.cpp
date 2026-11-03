@@ -386,6 +386,15 @@ class Ruler : public ui::Node {
                 "Loop range = punch range",
                 [this, ps, pe] { setRange(false, std::pair{ps, pe}, view_.loopEnabled()); },
                 pe > ps);
+            add("Delete loop", [this] { clearRange(false); }, le > ls);
+            add("Delete punch", [this] { clearRange(true); }, pe > ps);
+            add(
+                "Delete loop and punch",
+                [this] {
+                    clearRange(false);
+                    clearRange(true);
+                },
+                le > ls || pe > ps);
         }
         if (y >= tempoTop && y < tempoTop + kTempoRowH / 2.0f) {
             const time::TempoPoint* hit = nullptr;
@@ -470,6 +479,16 @@ class Ruler : public ui::Node {
             view_.setPunchRange(start, end, on);
         else
             view_.setLoopRange(start, end, on);
+    }
+    // Removes the loop or punch range, which also turns it off.
+    void clearRange(bool punch) {
+        json::Value args = json::Value::object();
+        args["clear"] = true;
+        if (!execute(punch ? "transport.punch" : "transport.loop", std::move(args))) return;
+        if (punch)
+            view_.setPunchRange(0, 0, false);
+        else
+            view_.setLoopRange(0, 0, false);
     }
     void remove(const std::string& stem, model::Id id) {
         json::Value args = json::Value::object();
@@ -736,9 +755,13 @@ bool Ruler::onPointer(const ui::PointerEvent& e) {
             if (drag_ == Drag::LoopNew) {
                 draftStart_ = std::min(originalStart_, at);
                 draftEnd_ = std::max(originalStart_, at);
-            } else if (drag_ == Drag::LoopLeft || drag_ == Drag::RegionLeft) {
+            } else if (drag_ == Drag::LoopLeft) {  // the edges may meet: no range
+                draftStart_ = std::min(at, originalEnd_);
+            } else if (drag_ == Drag::LoopRight) {
+                draftEnd_ = std::max(at, originalStart_);
+            } else if (drag_ == Drag::RegionLeft) {
                 draftStart_ = std::min(at, originalEnd_ - std::min(1e-6, originalEnd_ / 2));
-            } else if (drag_ == Drag::LoopRight || drag_ == Drag::RegionRight) {
+            } else if (drag_ == Drag::RegionRight) {
                 draftEnd_ = std::max(at, originalStart_ + 1e-6);
             } else {
                 const auto& tm = *view_.session().timeMap;
@@ -773,6 +796,8 @@ bool Ruler::onPointer(const ui::PointerEvent& e) {
                     else
                         view_.setLoopRange(start, end, on);
                 }
+            } else if (moved_ && (drag_ == Drag::LoopLeft || drag_ == Drag::LoopRight)) {
+                clearRange(punch_);  // an edge dragged onto the other: the range is gone
             } else if (moved_ && (drag_ == Drag::Marker || isRegion()) &&
                        (draftStart_ != originalStart_ || draftEnd_ != originalEnd_)) {
                 args["id"] = id_.str();

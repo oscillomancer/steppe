@@ -12946,7 +12946,7 @@ Result:
 
 Set or toggle the loop range: playback reaching its end repeats it.
 
-start and end as seconds, beat or bar (start_bar 5, end_bar 9 = bars 5-8); a range turns the loop on unless enabled says otherwise; enabled alone toggles the current range. Recording while looping makes one take per pass on one item. Transport state: not an undo step, not saved in the project.
+start and end as seconds, beat or bar (start_bar 5, end_bar 9 = bars 5-8); a range turns the loop on unless enabled says otherwise; enabled alone toggles the current range; clear removes the range and turns the loop off. Recording while looping makes one take per pass on one item. Transport state: not an undo step, not saved in the project.
 
 Kind: `action`. Exposure: `mcp-tool`.
 
@@ -12955,6 +12955,7 @@ Kind: `action`. Exposure: `mcp-tool`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `enabled` | boolean |  |  |  |  |
+| `clear` | boolean |  |  |  |  |
 | `start_seconds` | number |  | 0.0.. |  |  |
 | `start_beat` | number |  | 0.0.. |  |  |
 | `start_bar` | integer |  | 1.0..2147483647.0 |  |  |
@@ -12987,7 +12988,7 @@ Kind: `action`. Exposure: `mcp-tool`.
 
 ### Errors
 
-- `transport.range`: not one start and one end, or end not after start Hint: e.g. start_bar 5, end_bar 9
+- `transport.range`: not one start and one end, end not after start, or clear with a range Hint: e.g. start_bar 5, end_bar 9
 
 ### Examples
 
@@ -13008,6 +13009,26 @@ Result:
   "enabled": true,
   "start_seconds": 2.0,
   "end_seconds": 6.0
+}
+
+```
+
+**Remove the range** (`empty`)
+
+```json
+{
+  "clear": true
+}
+
+```
+
+Result:
+
+```json
+{
+  "enabled": false,
+  "start_seconds": 0,
+  "end_seconds": 0
 }
 
 ```
@@ -13626,7 +13647,7 @@ Result:
 
 Set or toggle the punch range: recordings keep only that range.
 
-start and end as seconds, beat or bar; a range turns punch on unless enabled says otherwise. The recording keeps running; the committed items cover only the punch range (the file keeps everything). Not an undo step.
+start and end as seconds, beat or bar; a range turns punch on unless enabled says otherwise; clear removes the range and turns punch off. The recording keeps running; the committed items cover only the punch range (the file keeps everything). Not an undo step.
 
 Kind: `action`. Exposure: `mcp-tool`.
 
@@ -13635,6 +13656,7 @@ Kind: `action`. Exposure: `mcp-tool`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `enabled` | boolean |  |  |  |  |
+| `clear` | boolean |  |  |  |  |
 | `start_seconds` | number |  | 0.0.. |  |  |
 | `start_beat` | number |  | 0.0.. |  |  |
 | `start_bar` | integer |  | 1.0..2147483647.0 |  |  |
@@ -13667,7 +13689,7 @@ Kind: `action`. Exposure: `mcp-tool`.
 
 ### Errors
 
-- `transport.range`: not one start and one end, or end not after start Hint: e.g. start_bar 5, end_bar 9
+- `transport.range`: not one start and one end, end not after start, or clear with a range Hint: e.g. start_bar 5, end_bar 9
 
 ### Examples
 
@@ -13688,6 +13710,26 @@ Result:
   "enabled": true,
   "start_seconds": 2.0,
   "end_seconds": 6.0
+}
+
+```
+
+**Remove the range** (`empty`)
+
+```json
+{
+  "clear": true
+}
+
+```
+
+Result:
+
+```json
+{
+  "enabled": false,
+  "start_seconds": 0,
+  "end_seconds": 0
 }
 
 ```
