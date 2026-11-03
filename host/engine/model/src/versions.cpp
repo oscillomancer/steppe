@@ -763,14 +763,24 @@ Status VersionStore::createBranchAt(const std::string& name, std::uint64_t versi
     if (branches_.count(name))
         return Error("branch.exists", "branch \"" + name + "\" already exists", "/name",
                      "pick another name or switch to it");
-    auto src = find(current_);
-    if (!src) return std::move(src).error();
     const auto at = versions_.find(version);
-    if (at == versions_.end() || !at->second.session || !descends((*src)->head, version))
+    if (at == versions_.end() || !at->second.session)
+        return Error("history.version", "no version " + std::to_string(version), "/version",
+                     "history.list shows the versions of the current branch");
+    // The current branch's history first, then any other branch's (a render
+    // of another branch's head names that branch's version); the new branch
+    // takes the ID counters of the lineage it starts from.
+    const Branch* from = nullptr;
+    if (const auto* current = lookup(current_); current && descends(current->head, version))
+        from = current;
+    for (const auto& [branchName, branch] : branches_)
+        if (!from && descends(branch.head, version)) from = &branch;
+    if (!from)
         return Error("history.version",
-                     "version " + std::to_string(version) + " is not in this branch's history",
+                     "version " + std::to_string(version) + " is in no branch's history",
                      "/version", "history.list shows the versions of the current branch");
-    branches_.emplace(name, Branch{version, version, {}, (*src)->allocated});
+    const Counters allocated = from->allocated;
+    branches_.emplace(name, Branch{version, version, {}, allocated});
     return okStatus();
 }
 

@@ -145,6 +145,24 @@ TEST_CASE("branches: isolated heads, fast-forward merge") {
     CHECK(vs.switchBranch("nope").error().code == "branch.unknown");
 }
 
+TEST_CASE("a branch starts at a version of the current or of another branch") {
+    VersionStore vs(Session::create());
+    const auto first = run(vs, {inv("track.add", R"({"name": "A"})")});
+    run(vs, {inv("track.add", R"({"name": "B"})")});
+    REQUIRE(vs.createBranch("other", "main"));
+    REQUIRE(vs.switchBranch("other"));
+    const auto theirs = run(vs, {inv("track.add", R"({"name": "C"})")});
+    REQUIRE(vs.switchBranch("main"));
+    REQUIRE(vs.createBranchAt("early", first));  // the current branch's history
+    CHECK(vs.headVersion("early") == first);
+    REQUIRE(vs.createBranchAt("from-other", theirs));  // only in "other"'s history
+    CHECK(vs.headVersion("from-other") == theirs);
+    REQUIRE(vs.switchBranch("from-other"));
+    run(vs, {inv("track.add", R"({"name": "D"})")});  // counters follow "other": no reused id
+    CHECK(track(vs, "from-other", "tr_4"));
+    CHECK(vs.createBranchAt("nowhere", 999).error().code == "history.version");
+}
+
 TEST_CASE("merge by replay remaps IDs created on both sides") {
     VersionStore vs(Session::create());
     REQUIRE(vs.createBranch("topic", "main"));

@@ -608,7 +608,9 @@ first use, and no plug-in code runs early to warm it.
   `default.json`), canonical `supple.render-preset/1.0`. Under `--workdir`
   they are kept in `<workdir>/render-presets`.
 - `branch.create` accepts `version` (instead of `from`): the new branch starts
-  at that version of the current branch's history.
+  at that version, which may be in the current branch's history or, for a
+  render of another branch, in that branch's; it takes the ID counters of the
+  branch it starts from.
 - A post-fader stem of a channel or buss is decoded outside the graph, under
   the same floating-point environment as the graph's nodes (§2.4).
 - Through-master stems use playback's solo signal-path rules: retain the

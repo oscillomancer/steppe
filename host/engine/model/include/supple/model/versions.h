@@ -130,7 +130,8 @@ class VersionStore {
     void forEachVersion(const std::function<void(const Version&)>& visit) const;
 
     Status createBranch(const std::string& name, std::string_view from);  // at from's head
-    // At an earlier version of the current branch (its first-parent history).
+    // At an earlier version: in the current branch's first-parent history,
+    // else in another branch's (taking that branch's ID counters).
     Status createBranchAt(const std::string& name, std::uint64_t version);
     Status switchBranch(std::string_view name);
     Status deleteBranch(std::string_view name);  // not "main", not the current branch
