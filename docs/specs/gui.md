@@ -866,10 +866,9 @@ project is drawn in the quiet ink, with "from your default" on hover.
   - Version: a dropdown with Current, each other branch's head, and "Earlier
     version…", which picks from `history.list`. The choice applies to this
     render only and is never saved.
-- **Range:** a dropdown with Entire project | Loop | Time selection | Custom.
-  - Loop is disabled without a loop, and Time selection without a
-    selection.
-  - Time selection fills in custom bounds.
+- **Range:** a dropdown with Entire project | Time selection | Custom.
+  - Time selection is the loop range drawn on the ruler (`bounds: loop`),
+    whether or not looping is on; it is disabled while there is none.
   - Start, End and Length are shown in the ruler's format, and are editable
     under Custom.
   - Tail: a checkbox and an editable dropdown in seconds (0.5, 1, 2, 5, 10),

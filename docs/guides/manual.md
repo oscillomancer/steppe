@@ -152,8 +152,9 @@ writes it to the project. Presets and your default are kept in the data folder
   version from the history, for this render only. Every result names the
   branch and version it came from, and its menu offers *Branch from this
   version* to start a branch at that mix.
-- **Range**: the entire project (to the last item's end), the loop, or a
-  custom start and end in beats. A **tail** renders seconds past the end for
+- **Range**: the entire project (to the last item's end), the time
+  selection (the range drawn on the ruler, also the loop, whether or not
+  looping is on), or a custom start and end in beats. A **tail** renders seconds past the end for
   reverb and delays; *Cut silence at the end* trims what is left quiet.
 
 ### Files and formats

@@ -758,26 +758,16 @@ void RenderDialog::buildRange(ui::Node& body) {
     heading(body, "render.h.range", "Range");
     auto& r = row(body, "render.range.row");
     const std::string bounds = text(settings_.find("bounds"), "project");
+    // The time selection is the loop range drawn on the ruler, whether or not
+    // looping is on (bounds "loop").
     const auto& loop = app_.loop();
-    const auto selection = timeSelection ? timeSelection() : std::nullopt;
     std::vector<Choice> choices{{"project", "Entire project"},
-                                {"loop", "Loop", loop.end > loop.start},
-                                {"selection", "Time selection", selection.has_value()},
+                                {"loop", "Time selection", loop.end > loop.start},
                                 {"custom", "Custom"}};
     auto& range = r.emplace<ui::Dropdown>("render.range", choices, bounds);
     range.layout.width = ui::SizeRule::fixed(150);
     range.quiet = fromDefault("bounds");
-    range.onChange = [this, selection](const std::string& v) {
-        if (v == "selection" && selection) {
-            settings_["start_beat"] = selection->first;
-            settings_["end_beat"] = selection->second;
-            owned_.insert("start_beat");
-            owned_.insert("end_beat");
-            set("bounds", "custom", true);
-            return;
-        }
-        set("bounds", v, true);
-    };
+    range.onChange = [this](const std::string& v) { set("bounds", v, true); };
     const model::Session& s = app_.head();
     double first = 0, last = model::lastItemBeat(s);
     if (bounds == "loop" && loop.end > loop.start) {
