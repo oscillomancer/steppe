@@ -914,14 +914,17 @@ project is drawn in the quiet ink, with "from your default" on hover.
   preference).
 - **Preview:** the live dry-run list (re-run on every edit, coalesced per
   frame): each file's name, duration and outputs, "exists" where it does,
-  and a count. An invalid field blocks the preview, queue insertion and
+  and a count, in a fixed-height list that scrolls (stems and regions can
+  list many files). An invalid field blocks the preview, queue insertion and
   rendering with a field diagnostic that names the field.
 - **Buttons:** Queue (n), Add to queue, **Save as default**,
   Render N files.
 - **Results** (after a job): for each file, its outputs, LUFS and dBTP, the
   checks as "ok" or "FAIL" with the measured value (the UI fonts have no check
-  marks), and the skipped files with their reason. A file's menu offers Open folder, Add to project, and "Branch from
-  this version", which runs `branch.create {version}`.
+  marks), and the skipped files with their reason, in a scrolling list like
+  the preview's. Below it, a file picker and **File actions…**, whose menu
+  offers Open folder, Add to project, and "Branch from this version", which
+  runs `branch.create {version}`.
 
 **Writing the settings.** Render and Add to queue compare the dialog's
 settings with `project.render`, canonically. If they differ, they write them

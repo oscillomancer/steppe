@@ -1249,9 +1249,12 @@ void RenderDialog::buildAfter(ui::Node& body) {
 void RenderDialog::buildFooter(ui::Node& page) {
     diagnostic_ =
         &page.emplace<ui::Label>("render.diagnostic", "", ui::Font::Ui, "caption", "clip");
-    previewBlock_ =
-        &page.emplace<ui::TextBlock>("render.preview", "", ui::Font::Mono, "caption", "ink");
-    previewBlock_->layout.height = ui::SizeRule::fixed(56);
+    // The file lists scroll inside fixed heights: stems and regions can list
+    // many files, which must not spill over the buttons below.
+    auto& previewScroll = page.emplace<ui::ScrollView>("render.preview.scroll");
+    previewScroll.layout.height = ui::SizeRule::fixed(72);
+    previewBlock_ = &previewScroll.content().emplace<ui::TextBlock>(
+        "render.preview", "", ui::Font::Mono, "caption", "ink");
     auto& actions = row(page, "render.actions", 28);
     queueButton_ = &actions.emplace<ui::Button>("render.queue", "Queue", [this] { openQueue(); });
     actions.emplace<ui::Button>("render.queue.add", "Add to queue", [this] { addToQueue(); });
@@ -1265,9 +1268,10 @@ void RenderDialog::buildFooter(ui::Node& page) {
                                           "ink-quiet");
     status_->layout.width = ui::SizeRule::fraction();
     renderButton_ = &actions.emplace<ui::Button>("render.run", "Render", [this] { run(); });
-    resultsBlock_ =
-        &page.emplace<ui::TextBlock>("render.results", "", ui::Font::Mono, "caption", "ink-quiet");
-    resultsBlock_->layout.height = ui::SizeRule::fixed(64);
+    auto& resultsScroll = page.emplace<ui::ScrollView>("render.results.scroll");
+    resultsScroll.layout.height = ui::SizeRule::fixed(72);
+    resultsBlock_ = &resultsScroll.content().emplace<ui::TextBlock>(
+        "render.results", "", ui::Font::Mono, "caption", "ink-quiet");
     resultsRow_ = &row(page, "render.results.files", 24);
 }
 
@@ -1770,13 +1774,23 @@ void RenderDialog::showResults(const json::Value& result, bool cancelled) {
     if (resultsRow_) {
         root_.releaseWithin(resultsRow_);
         resultsRow_->clear();
-        for (std::size_t i = 0; i < resultFiles_.size() && i < 6; ++i) {
-            auto& b = resultsRow_->emplace<ui::Button>(
-                "render.result." + std::to_string(i), baseName(resultFiles_[i]) + "…", [this, i] {
-                    if (auto* node = root_.find("render.result." + std::to_string(i)))
-                        openResultMenu(i, node->bounds());
-                });
-            (void)b;
+        // One file picker and its actions, however many files there are.
+        if (!resultFiles_.empty()) {
+            std::vector<ui::Choice> files;
+            for (std::size_t i = 0; i < resultFiles_.size(); ++i)
+                files.push_back({std::to_string(i), baseName(resultFiles_[i])});
+            auto& pick =
+                resultsRow_->emplace<ui::Dropdown>("render.result.file", std::move(files), "0");
+            pick.layout.width = ui::SizeRule::fixed(360);
+            resultsRow_->emplace<ui::Button>("render.result.actions", "File actions…", [this] {
+                const auto* picked = dynamic_cast<ui::Dropdown*>(root_.find("render.result.file"));
+                const auto* button = root_.find("render.result.actions");
+                if (!picked || !button) return;
+                std::size_t index = 0;
+                const std::string& v = picked->value();
+                std::from_chars(v.data(), v.data() + v.size(), index);
+                openResultMenu(index, button->bounds());
+            });
         }
         root_.relayout();
     }
