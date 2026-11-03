@@ -191,7 +191,7 @@ struct SeekArgs {
     std::optional<std::int64_t> bar;
 };
 struct RangeArgs {
-    std::optional<bool> enabled;
+    std::optional<bool> enabled, clear;
     std::optional<double> startSeconds, startBeat, endSeconds, endBeat;
     std::optional<std::int64_t> startBar, endBar;
 };
@@ -4222,14 +4222,17 @@ void registerEngineCommands(cmd::Registry& registry) {
         c.description =
             loop ? "start and end as seconds, beat or bar (start_bar 5, end_bar 9 = bars 5-8); "
                    "a range turns the loop on unless enabled says otherwise; enabled alone "
-                   "toggles the current range. Recording while looping makes one take per pass "
-                   "on one item. Transport state: not an undo step, not saved in the project."
+                   "toggles the current range; clear removes the range and turns the loop off. "
+                   "Recording while looping makes one take per pass on one item. Transport "
+                   "state: not an undo step, not saved in the project."
                  : "start and end as seconds, beat or bar; a range turns punch on unless enabled "
-                   "says otherwise. The recording keeps running; the committed items cover only "
-                   "the punch range (the file keeps everything). Not an undo step.";
+                   "says otherwise; clear removes the range and turns punch off. The recording "
+                   "keeps running; the committed items cover only the punch range (the file "
+                   "keeps everything). Not an undo step.";
         c.tags = {"transport", "recording"};
         c.args = schema::object<RangeArgs>("range_args")
                      .field("enabled", &RangeArgs::enabled, schema::boolean())
+                     .field("clear", &RangeArgs::clear, schema::boolean())
                      .field("start_seconds", &RangeArgs::startSeconds, schema::number().min(0))
                      .field("start_beat", &RangeArgs::startBeat, schema::number().min(0))
                      .field("start_bar", &RangeArgs::startBar,
@@ -4240,11 +4243,14 @@ void registerEngineCommands(cmd::Registry& registry) {
                             schema::integer().range(1, std::numeric_limits<int>::max()))
                      .build();
         c.result = rangeSchema(loop ? "loop" : "punch");
-        c.errors = {{"transport.range", "not one start and one end, or end not after start",
+        c.errors = {{"transport.range",
+                     "not one start and one end, end not after start, or clear with a range",
                      "e.g. start_bar 5, end_bar 9"}};
-        c.examples = {{"Bars 2-3 (120 BPM, 4/4)", obj(R"({"start_bar": 2, "end_bar": 4})"),
-                       obj(R"({"enabled": true, "start_seconds": 2.0, "end_seconds": 6.0})"),
-                       "empty"}};
+        c.examples = {
+            {"Bars 2-3 (120 BPM, 4/4)", obj(R"({"start_bar": 2, "end_bar": 4})"),
+             obj(R"({"enabled": true, "start_seconds": 2.0, "end_seconds": 6.0})"), "empty"},
+            {"Remove the range", obj(R"({"clear": true})"),
+             obj(R"({"enabled": false, "start_seconds": 0, "end_seconds": 0})"), "empty"}};
         c.run = [loop](const RangeArgs& a, Context& ctx) -> Result<TransportRange> {
             EngineApp& app = A(ctx);
             TransportRange r = loop ? app.loop() : app.punch();
@@ -4256,7 +4262,12 @@ void registerEngineCommands(cmd::Registry& registry) {
                 return Error("transport.range", "give one start and one end (or neither)", "",
                              "provide exactly one start_seconds/start_beat/start_bar and one "
                              "end_seconds/end_beat/end_bar, or omit all six");
-            if (starts == 1) {
+            if (a.clear.value_or(false)) {
+                if (starts == 1 || a.enabled.value_or(false))
+                    return Error("transport.range", "clear removes the range", "/clear",
+                                 "send clear alone, or a start and end without clear");
+                r = {};
+            } else if (starts == 1) {
                 const model::Session s = app.view();
                 auto at = [&](std::optional<double> sec, std::optional<double> beat,
                               std::optional<std::int64_t> bar) {

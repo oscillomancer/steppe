@@ -1414,6 +1414,7 @@ q = nil
 
 ---@class Quire.transport_loop_args
 ---@field enabled? boolean
+---@field clear? boolean
 ---@field start_seconds? number
 ---@field start_beat? number
 ---@field start_bar? integer
@@ -1478,6 +1479,7 @@ q = nil
 
 ---@class Quire.transport_punch_args
 ---@field enabled? boolean
+---@field clear? boolean
 ---@field start_seconds? number
 ---@field start_beat? number
 ---@field start_bar? integer

@@ -11787,12 +11787,15 @@
   {
     "name": "transport_loop",
     "title": "Set or toggle the loop range: playback reaching its end repeats it.",
-    "description": "Set or toggle the loop range: playback reaching its end repeats it. start and end as seconds, beat or bar (start_bar 5, end_bar 9 = bars 5-8); a range turns the loop on unless enabled says otherwise; enabled alone toggles the current range. Recording while looping makes one take per pass on one item. Transport state: not an undo step, not saved in the project. See describe for errors and examples.",
+    "description": "Set or toggle the loop range: playback reaching its end repeats it. start and end as seconds, beat or bar (start_bar 5, end_bar 9 = bars 5-8); a range turns the loop on unless enabled says otherwise; enabled alone toggles the current range; clear removes the range and turns the loop off. Recording while looping makes one take per pass on one item. Transport state: not an undo step, not saved in the project. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "range_args",
       "properties": {
         "enabled": {
+          "type": "boolean"
+        },
+        "clear": {
           "type": "boolean"
         },
         "start_seconds": {
@@ -12315,12 +12318,15 @@
   {
     "name": "transport_punch",
     "title": "Set or toggle the punch range: recordings keep only that range.",
-    "description": "Set or toggle the punch range: recordings keep only that range. start and end as seconds, beat or bar; a range turns punch on unless enabled says otherwise. The recording keeps running; the committed items cover only the punch range (the file keeps everything). Not an undo step. See describe for errors and examples.",
+    "description": "Set or toggle the punch range: recordings keep only that range. start and end as seconds, beat or bar; a range turns punch on unless enabled says otherwise; clear removes the range and turns punch off. The recording keeps running; the committed items cover only the punch range (the file keeps everything). Not an undo step. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "range_args",
       "properties": {
         "enabled": {
+          "type": "boolean"
+        },
+        "clear": {
           "type": "boolean"
         },
         "start_seconds": {
