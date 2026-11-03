@@ -70,3 +70,4 @@ current state.
 | [0052](0052-track-groups-and-vcas.md) | Track edit groups and VCA control strips | Accepted |
 | [0053](0053-audio-warp.md) | Audio warp, transient editing and prepared sources | Accepted |
 | [0054](0054-track-freeze.md) | Whole-chain channel freeze | Accepted |
+| [0055](0055-render-settings-and-dialog.md) | Render settings, presets and the render dialog | Accepted |

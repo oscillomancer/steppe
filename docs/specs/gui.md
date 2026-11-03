@@ -836,20 +836,109 @@ on the UI thread; outstanding dialogs may safely outlive shutdown.
 
 ### 4.8 Render dialog
 
-A front end to `render.*` (`engine.md` §3): sources (master, stems, selected
-items/regions, region matrix), bounds, tail, output pattern (the typed
-variables of the render schema) with a **live dry-run preview** of the
-resolved files, formats (primary + secondary), normalization/limiting,
-add-to-project, queue. Every option maps to a schema field; nothing is
-GUI-only. A nonempty invalid numeric field blocks preview, queue insertion
-and rendering with a field diagnostic. Cancelled jobs remain labelled
-cancelled and retain any partial result files returned by the engine.
-The Add-to-project checkbox reflects its stored flag whenever the dialog
-opens. A Folder row shows where the files go (`~` for the home folder) and
-**Choose folder…** opens the system's folder dialog; the choice applies at
-once and is kept as the `render_directory` preference (default: the media
-folder, §4.11). The dialog tracks one render or queue job at a time; a second launch
-is refused with a status message while it tracks that job.
+A front end to `render.*` (`engine.md` §3, ADR-0055). Every control maps to a
+render-settings field (session-model §1.10). Nothing is GUI-only except the
+"ask" choice for existing files (below) and "Open folder when done" (a
+preference). On open, the dialog reads `render.settings` and shows the
+effective values. A value that comes from the user default rather than the
+project is drawn in the quiet ink, with "from your default" on hover.
+
+**Layout**, top to bottom; scrolls when taller than the window:
+
+- **Header:** a Preset dropdown (factory presets, then the user's, each
+  loaded into the dialog only, written to the project only on Render),
+  **Save preset…** (asks for a name), **Delete preset**, Close.
+- **Source:** a segmented control: Master mix | Stems | Regions.
+  - Stems shows a checklist of top-level tracks (All / None), plus Mode
+    (Isolated / Through master) and Tap (Post-fader / Pre-fader / Pre-FX)
+    dropdowns and a "Skip silent stems" checkbox.
+  - Regions shows a checklist of regions, Handles (an editable dropdown in
+    seconds: 0, 0.5, 1, 2) and **Matrix…**, a grid of regions × tracks and
+    masters that edits `matrix`.
+  - Version: a dropdown with Current, each other branch's head, and "Earlier
+    version…", which picks from `history.list`. The choice applies to this
+    render only and is never saved.
+- **Range:** a dropdown with Entire project | Loop | Time selection | Custom.
+  - Loop is disabled without a loop, and Time selection without a
+    selection.
+  - Time selection fills in custom bounds.
+  - Start, End and Length are shown in the ruler's format, and are editable
+    under Custom.
+  - Tail: a checkbox and an editable dropdown in seconds (0.5, 1, 2, 5, 10),
+    with "Cut silence at the end" (`trim.end`).
+- **Output:**
+  - **Folder (all projects)**: the path (`~` for home), **Choose folder…**
+    (the system dialog; the `render_directory` preference) and **Open**,
+    which shows it in the file manager via SDL's URL opener.
+  - **File name**: the pattern field, with **Tokens ▾**, a menu that inserts
+    §7.3 tokens at the cursor.
+  - **If the file exists**: a dropdown with Overwrite / Add a number / Skip
+    / Ask. Ask runs a dry run first, then asks with the list of existing
+    files and continues as Overwrite or Skip.
+- **Format**: one tab per output (Primary; "+ Output" adds one, up to four;
+  each added tab has a remove ×):
+  - **Format** dropdown: WAV, AIFF, FLAC, MP3, Ogg Vorbis.
+  - **Bit depth** dropdown, listing only the format's depths: "32-bit float"
+    for WAV.
+  - **Dither** dropdown (Off / TPDF / Noise-shaped), shown only for 16 and
+    24 bits.
+  - **Sample rate**: an editable dropdown with "Project (N)", 44100, 48000,
+    88200, 96000, 176400, 192000; any typed integer from 8000 to 384000.
+    Later tabs add "Same as primary".
+  - **Channels** (primary tab, applies to all outputs): Stereo / Mono, plus
+    "Mono tracks as mono" for stems.
+  - MP3: Mode (Constant / Variable), Bitrate (the CBR list) or Quality (V0–V9).
+  - Vorbis: Quality (−1 to 10).
+  - Later tabs: Suffix.
+- **Loudness** (folded unless set; the fold line summarises, e.g. "−14 LUFS,
+  −1 dBTP"):
+  - Normalize dropdown: Off / Integrated loudness (LUFS-I) / Loudest 3 s
+    (LUFS-S) / Loudest 400 ms (LUFS-M) / Sample peak / True peak / RMS.
+  - Target: an editable dropdown whose list and unit follow the mode. LUFS:
+    −14 (Spotify, YouTube), −16 (Apple Music, podcasts), −23 (EBU R128), −24
+    (ATSC A/85). Peaks: −1, −0.1. RMS: −20, −16.
+  - "Only turn down".
+  - For stems: "Same gain for every stem (from the master mix)".
+  - "Limit true peak to" a checkbox and an editable dropdown (−1, −0.5, −0.1,
+    −2), usable with Normalize off.
+  - "Write a loudness report".
+- **Processing** (folded unless set): Trim start / Trim end and their
+  threshold (−60, −70, −50 dBFS, editable), and "Seamless loop (fold the tail
+  into the start)".
+- **Metadata** (folded unless set): Title, Artist, Album, Track number, Date,
+  Genre, ISRC, Comment (tokens allowed), Cover (a file chooser that starts in
+  the project folder), "Write BWF timecode and loudness (WAV)" and "Embed
+  markers and regions (WAV, AIFF)". Formats that cannot hold a field say so
+  beside it.
+- **After render:** "Add to project" and "Open folder when done" (a
+  preference).
+- **Preview:** the live dry-run list (re-run on every edit, coalesced per
+  frame): each file's name, duration and outputs, "exists" where it does,
+  and a count. An invalid field blocks the preview, queue insertion and
+  rendering with a field diagnostic that names the field.
+- **Buttons:** Queue (n), Add to queue, **Save as default**,
+  Render N files.
+- **Results** (after a job): for each file, its outputs, LUFS and dBTP, the
+  checks as ✓ or ✗ with the measured value, and the skipped files with their
+  reason. A file's menu offers Open folder, Add to project, and "Branch from
+  this version", which runs `branch.create {version}`.
+
+**Writing the settings.** Render and Add to queue compare the dialog's
+settings with `project.render`, canonically. If they differ, they write them
+first with one `project.set`, labelled "Render settings" in history, then
+render. The one-off Version choice and "Ask" are never written.
+
+The dialog tracks one render or queue job at a time; a second launch is
+refused with a status message while it tracks that job. Cancelled jobs remain
+labelled cancelled and retain any partial result files returned by the
+engine.
+
+**File → Mix** runs `render.mix` as a job with no other arguments, so it
+follows the project's settings, then the user default. Its menu label is
+resolved each time the menu opens: "Mix → <file name> (<first output, e.g.
+WAV 24-bit 48 kHz>)", plus the range when the bounds are not the whole
+project. Progress shows in the status bar, then the path, with an Open
+folder action.
 
 ### 4.9 Recording
 
@@ -898,8 +987,9 @@ that comes back with warnings (a plug-in whose state could not be read keeps
 its earlier state) opens a popup listing them. Open and Save as start in the
 project's own file, else in the media folder `~/Documents/<slug>-media`
 (created on demand); any other folder can be browsed to. Renders go to the
-same media folder unless the render dialog chose another (§4.8); under
-`--workdir` (tests) they go to `<workdir>/renders`.
+same media folder unless the render dialog chose another (§4.8); the render
+folder is one for all projects (ADR-0055). Under `--workdir` (tests) they go
+to `<workdir>/renders`.
 
 **Each project has a folder of its own**: Save as of `<folder>/<name>` saves
 `<folder>/<name>/<name>.json`, with the project's `media/` beside it, unless
@@ -1145,7 +1235,12 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   to `EngineApp::setRendersDir` at once and on every start. Absent (and in
   1.0–1.2 files) it means the default media folder; anything other than an
   absolute path reports `preferences.render_directory` at
-  `/render_directory`.
+  `/render_directory`. It is app-wide by design (ADR-0055): no command or
+  project field sets it.
+  **Open render folder when done** (1.6): the boolean `render_open_folder`
+  (absent, and in older files, false; other types report
+  `preferences.render_open_folder`), set from the render dialog's After
+  render section.
   **Copy imported audio into project** (1.4): On by default, saved as the
   boolean `copy_imported_media` (absent, and in older files, means true;
   other types report `preferences.copy_imported_media`) and applied to

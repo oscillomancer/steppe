@@ -489,13 +489,90 @@ first use, and no plug-in code runs early to warm it.
   invariant are documented exceptions.
 - Render jobs (`render.*`): mix, stems (per track post-fader through the
   master-less path, or through master using an exclusive solo — option), regions,
-  the render matrix, selected items; tail handling (`tail_ms` or until
-  silence); normalization (loudness via core-analysis, then gain, then
-  optional true-peak limiter — deterministic, two-pass); dither (seeded
-  TPDF); formats WAV (PCM/float, RF64 beyond 4 GiB) and FLAC (the original
-  audio-file encoder); file
-  naming per session-model §7.3; a job
-  queue; results reported as files + analysis summaries.
+  the render matrix, selected items; file naming per session-model §7.3; a job
+  queue; results reported as files + analysis summaries. `render.mix`,
+  `render.stems`, `render.regions` and `render.dry-run` share one
+  implementation and one argument set (ADR-0055).
+- **Settings** (ADR-0055, session-model §1.10). Every member of
+  `project.render` is also a command argument of the same name. The legacy
+  arguments `format`, `bit_depth` and `secondary` remain:
+  - `format` and `bit_depth` override `outputs[0]`'s members.
+  - `secondary` replaces `outputs[1]`, or with `"none"` removes it.
+  - Giving `outputs` together with any of them is `render.args`.
+
+  A field resolves from the arguments, then `project.render`, then the user
+  default, then the built-in default. Object fields are replaced whole.
+  Arguments are never written back to the project. Contradictory settings
+  are reported as `render.args` with the offending path and a hint:
+  - `seamless_loop` without a tail, or with `trim` or `handles_s`
+  - `scope: master` outside stems, or with a ceiling
+  - `channels: "track"` outside stems
+  - a bit depth or sample rate the output's format does not support
+- **Chain**, in this order, per file:
+  1. Offline render of the range plus the tail, at the project rate.
+  2. Seamless-loop fold: the tail's samples are summed onto the start,
+     wrapping again if the tail is longer than the range.
+  3. Resample to `sample_rate` (the audio-file polyphase resampler).
+  4. Mono fold, (L+R)/2.
+  5. Normalization: measure with core-analysis, then one gain, clamped to
+     ≤ 0 dB with `only_reduce`. With `scope: master`, the gain comes from a
+     master-mix render of the same range through steps 1–4.
+  6. True-peak limit (look-ahead gain envelope, 5 ms attack, 50 ms release,
+     4× or 2× oversampled detection, then a final trim), whenever
+     `limit_true_peak_db` is set.
+  7. Trim of silence at either end.
+  8. For each output:
+     - resample to the output's own rate;
+     - quantize with seeded dither (`tpdf`, or `shaped`: TPDF with fixed
+       error-feedback noise shaping) at 16 or 24 bits;
+     - encode: WAV (PCM or float, RF64 beyond 4 GiB), AIFF, FLAC (the
+       original audio-file encoder), MP3 (LAME, with a LAME/Xing header for
+       gapless playback) or Ogg Vorbis (libvorbis).
+
+  Each output gets its own dither seed derived from the project seed and its
+  index. No step reads the wall clock, and the same session and settings
+  give byte-identical files.
+- **Checks.** When `normalize` targets a LUFS mode or `limit_true_peak_db` is
+  set, each output is measured as written, with MP3 decoded through dr_mp3
+  and Vorbis through vorbisfile. Its entry carries `checks: {loudness?:
+  {mode, target, measured, ok}, true_peak?: {ceiling, measured, ok}}`.
+  - Loudness passes within ±1 LU of the target, or at or below target + 1 LU
+    with `only_reduce`.
+  - True peak passes at or below the ceiling + 0.1 dB, allowing for lossy
+    coding.
+  - `report: true` writes `<file>.loudness.txt` beside each output, with no
+    timestamps. It lists:
+    - integrated loudness, LRA and max short-term and momentary loudness;
+    - true and sample peak;
+    - duration, format and the checks.
+- **Results.** Each file entry has:
+  - `path`: the first output;
+  - `secondary_path`: the second output, if any;
+  - `outputs`: `[{path, format, bit_depth?, sample_rate, checks?}]`;
+  - `branch` and `version`;
+  - `start_beat` and `seconds`, after any trim;
+  - `analysis` and `warnings`.
+
+  `skipped: [{track?, region?, reason}]` lists files left out by
+  `skip_silent` or `if_exists: skip`. `render.dry-run` reports each
+  destination with `exists` and the path `if_exists` resolves to.
+- **Settings commands.**
+  - `render.settings` (query): `{effective, project, default, from: {field:
+    "args"|"project"|"default"|"built-in"}}`; accepts the render arguments as
+    overrides.
+  - `render.preset.list` (query): factory and user presets.
+  - `render.preset.save {name | default: true, settings?}` (action): saves
+    the given settings, or the effective settings, without `stems.tracks`,
+    `matrix` and custom bounds.
+  - `render.preset.load {name}` (edit): replaces `project.render`.
+  - `render.preset.delete {name | default: true}` (action). Factory presets
+    cannot be overwritten or deleted.
+
+  Files are `<data>/<slug>/render-presets/<name>.json` (the user default is
+  `default.json`), canonical `supple.render-preset/1.0`. Under `--workdir`
+  they are kept in `<workdir>/render-presets`.
+- `branch.create` accepts `version` (instead of `from`): the new branch starts
+  at that version of the current branch's history.
 - A post-fader stem of a channel or buss is decoded outside the graph, under
   the same floating-point environment as the graph's nodes (§2.4).
 - Through-master stems use playback's solo signal-path rules: retain the

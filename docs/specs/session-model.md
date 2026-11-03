@@ -304,17 +304,84 @@ and retain the segment shape on both sides. MIDI overdub uses the take's play ra
 Markers `mk_*` `{pos, timebase, name, color, lane}`; regions `rg_*` `{start, end,
 timebase, name, color, lane}`; ruler lanes `{id, name}`.
 
-Render settings (defaults for `render.*`): `format` (wav/flac, bit depth,
-dither), `sample_rate`, `channels`, `normalize` (`none` | `{mode: lufs_i|
-lufs_s|lufs_m|peak|true_peak|rms, target, limit_true_peak_db?}`), `tail_ms`,
-`pattern` (file-name pattern, §7.3), `secondary` format, `matrix`
-(`{rg id or "project": [track/master ids, e.g. "tr_0"]}`).
+Render settings `render` (ADR-0055): the project's one set of settings for
+`render.*`, versioned like every other field. Every member is optional. A
+missing member comes from the user's default, then the built-in default
+(shown in brackets).
+
+- `source`: `mix` | `stems` | `regions` [`mix`]: the dialog's source
+  (`render.mix` always renders the mix).
+- `bounds`: `project` (beat 0 to the last item's end) | `loop` (the
+  transport loop; `render.empty` when none is set) | `custom` (`start_beat`,
+  `end_beat`) [`project`].
+- `tail_s` 0–600 [0]: seconds rendered past the end.
+- `pattern`: a string (used for every source), or `{mix, stems, regions}`,
+  each optional [`{project}-v{version}` for the mix,
+  `{project}-{track}-{region}` otherwise].
+- `sample_rate` 8000–384000 [the project rate]: the rate the chain runs at
+  after the offline render.
+- `channels`: `1` | `2` | `"track"` (stems only: a 1-channel track gives a
+  mono file, others stereo) [2]. Mono is (L+R)/2.
+- `outputs`: 1–4 objects [`[{format: "wav", bit_depth: 32}]`], each
+  `{format: wav|aiff|flac|mp3|vorbis, bit_depth?, dither?, sample_rate?,
+  mp3?, vorbis_quality?, suffix?}`:
+  - `bit_depth`: WAV 16/24/32 (32 is float) [32]; AIFF and FLAC 16/24 [24];
+    absent for MP3 and Vorbis.
+  - `dither`: `none` | `tpdf` | `shaped` [`tpdf`]. Applies only to 16- and
+    24-bit output.
+  - `sample_rate`: overrides the chain's rate for this output only. MP3
+    accepts 8000–48000 and otherwise defaults to 48000, or 44100 when the
+    chain rate is a multiple of 44100 above 48000.
+  - `mp3`: `{mode: cbr|vbr, bitrate_kbps (cbr: 32, 40, 48, 56, 64, 80, 96,
+    112, 128, 160, 192, 224, 256, 320), vbr_quality 0–9}` [cbr 320].
+  - `vorbis_quality`: −1 to 10 [6].
+  - `suffix`: a file-name-safe string inserted before the extension of a
+    second or later output.
+- `normalize`: `{mode: none|lufs_i|lufs_s|lufs_m|peak|true_peak|rms,
+  target, only_reduce?, scope?}` [`none`; target −14]. `only_reduce` never
+  raises the level. `scope`: `file` [default] normalizes each file on its
+  own; `master` (stems only) applies to every stem the gain that would
+  normalize the master mix over the same range.
+- `limit_true_peak_db` ≤ 0 or absent [absent]: a true-peak ceiling, applied
+  with or without normalization. It is refused with `normalize.scope:
+  master`.
+- `trim`: `{start, end, threshold_db}` [off; −60 dBFS]: removes silence
+  below the threshold at either end of each file.
+- `seamless_loop` [false]: sums the tail into the start, so the file is
+  exactly the range long and loops without a gap. It needs `tail_s` > 0 and
+  cannot be combined with `trim` or `handles_s`.
+- `handles_s` 0–60 [0]: regions only; extends each region earlier and later
+  (never before 0).
+- `stems`: `{mode: isolated|through_master, tap: post_fader|pre_fader|pre_fx,
+  tracks?: [track ids], skip_silent?}` [isolated, post_fader, every
+  top-level track, false]. `skip_silent` leaves out files whose sample peak
+  is below −90 dBFS.
+- `matrix`: `{rg id or "project": [track/master ids, e.g. "tr_0"]}`.
+- `if_exists`: `overwrite` | `number` (adds `-2`, `-3`… to the base name of
+  all the file's outputs) | `skip` | `error` [`overwrite`].
+- `metadata`: `{title, artist, album, track_number, date, genre, comment,
+  isrc, cover, bwf, markers}`, all optional [none]:
+  - Text members accept the §7.3 tokens.
+  - `date` is `YYYY` or `YYYY-MM-DD`.
+  - `cover` is a PNG or JPEG of at most 10 MiB, as a path relative to the
+    project folder (refused for an unsaved project or a path that leaves the
+    folder).
+  - `bwf: true` writes a BWF `bext` chunk, version 2, to WAV files: time
+    reference and loudness fields.
+  - `markers: true` writes the markers and regions inside the file's range
+    as WAV cue points or AIFF markers.
+- `report` [false]: writes a plain-text loudness report beside each file.
+- `add_to_project` [false].
+
+Files before schema 2.3 used `format` (a string or `{container, bit_depth,
+dither}`), `bit_depth`, `secondary`, `tail_ms` and
+`normalize.limit_true_peak_db`. The loader migrates them into `outputs`,
+`tail_s` and `limit_true_peak_db`, and saving writes only the new members.
 Both the project schema and `project.set` argument schema mark matrix row keys
 as region IDs (with `project` as a literal alternative in `propertyNames`) and
-array cells as track IDs. Merge replay and conflict checks remap these references;
-the `project` key and free text such as `pattern` remain unchanged. This describes
-the existing file shape; the project schema version and runtime validation are
-unchanged.
+array cells as track IDs, and `stems.tracks` entries as track IDs. Merge replay
+and conflict checks remap these references; the `project` key and free text such
+as `pattern` remain unchanged.
 
 ### 1.11 Blobs
 
@@ -373,7 +440,7 @@ routes: sd_1 tr_2 → tr_6 ch 1/2→3/4 pre-fader −6 dB (sidechain)
 markers: mk_1 "Verse" bar 1 · regions: rg_1 "Chorus" bars 9–17
 ```
 
-## 5. Project file (`supple.project/2.2`)
+## 5. Project file (`supple.project/2.3`)
 
 ### 5.1 Shape
 
@@ -383,8 +450,9 @@ markers: mk_1 "Verse" bar 1 · regions: rg_1 "Chorus" bars 9–17
 with warnings.)*
 
 Schema 2.1 adds master playrate and its envelope target (ADR-0045).
+Schema 2.3 reshapes the render settings (§1.10, ADR-0055).
 
-The loader accepts 1.x and 2.x documents and saves 2.2. Migration allocates
+The loader accepts 1.x and 2.x documents and saves 2.3. Migration allocates
 child channel IDs in track-ID order, inserts each child first, and moves the
 source items and record/input FX there while keeping user inserts on the
 buss. Hardware/MIDI record routes follow the new child. Legacy numeric send
@@ -668,7 +736,10 @@ REAPER's `$`-mini-language: `{project}`, `{track}`, `{track_number:02}`,
 `{folder_path}`, `{region}`, `{region_number:02}`, `{marker}`,
 `{item}`, `{take}`, `{start:beats|seconds|timecode}`, `{format}`,
 `{sample_rate}`, `{bit_depth}`, `{date:YYYY-MM-DD}`, `{time:HH-mm-ss}`,
-`{counter:03}`. Filters: `|lower`, `|upper`, `|replace(" ","_")`,
+`{counter:03}`, `{version}` (the rendered session's version number) and
+`{branch}` (its branch name). A pattern may contain `/` to make subfolders
+inside the render folder; they are created as needed. With several outputs,
+`{format}`, `{sample_rate}` and `{bit_depth}` take the first output's values. Filters: `|lower`, `|upper`, `|replace(" ","_")`,
 `|max(8)`. `render.dry-run` returns the resolved list. Empty tokens drop an
 adjacent separator (`-`, `_`, `.`, space), as REAPER does. Replacement arguments
 are double-quoted literals: pipes, braces and commas inside them are not
@@ -871,3 +942,15 @@ commands only author slope zero and strictly increasing coordinates with segment
 rates 0.01..100; anchor coordinate magnitudes are at most 1e9 seconds. Source positions outside the file represent silence. Master playrate
 acts after this map. Splitting/rebasing subtracts the cut from marker item times;
 slipping translates absolute source positions; rate-stretch scales marker item times.
+
+### Render settings (schema 2.3, ADR-0055)
+
+Writers now emit `supple.project/2.3`. The 2.3 change is the shape of `project.render`
+(§1.10); every other member is as in 2.2. On load, a 2.2 or older `render` migrates:
+`format` (string or `{container, bit_depth, dither}`) and `bit_depth` become
+`outputs[0]` (a boolean `dither` maps to `tpdf` or `none`); `secondary` becomes
+`outputs[1]` (`"none"` or null leaves one output); `tail_ms` becomes `tail_s`;
+`normalize` as a string becomes `{mode}`, and its `limit_true_peak_db` moves to the
+top level. A save and reopen gives the same bytes. An older application opening a 2.3
+file ignores the members it does not know, with warnings, and renders with its own
+defaults for them.
