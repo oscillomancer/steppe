@@ -494,8 +494,8 @@ curve is editable and saved, but audio application remains pending.
 (after the selection), **Delete**, **Consolidate items**, **Heal splits**,
 and, for one multi-take MIDI item, **Merge takes** (layers its MIDI takes via
 `midi.merge`), **Split item at cursor** (S),
-**Split item at prior zero crossing**, then the timebases and the take
-entries below. A right-click on empty lane space opens a menu with Paste.
+**Split item at prior zero crossing**, **Export…**, then the timebases and the
+take entries below. A right-click on empty lane space opens a menu with Paste.
 The keys each action has are shown beside it.
 Consolidate items and Heal splits sit beside each other and use the engine's
 shared read-only selection planners for enablement. Consolidate captures active
@@ -519,6 +519,13 @@ silence keeps the cursor, and no crossing falls back to the cursor. Pending
 preparation produces a retryable status error. Linked items use the initiating
 item's resolved time. See engine.md for the command contract. The toolkit's
 `menuItems` accessor exposes borrowed, read-only menu rows for inspection.
+**Export…** acts on the clicked item (else the first selected one) and is greyed
+when its heard take is empty. It opens the system's save dialog (SDL3,
+asynchronous, guarded like Save As against a project change) filtered to WAV or
+MIDI, starting in the project's folder (unsaved: the media home) with the take's
+name (else the item ID) plus `.wav` or `.mid`, then runs `item.export`; the status
+line reports "Exported <file>" or the error. `ui.item.export` is the key-bindable
+action (the first selected item). See engine.md for what the file holds.
 
 **Takes.** An item with several takes shows each in a lane under its name
 bar when the row is tall enough (at least 14 units a lane), the heard one

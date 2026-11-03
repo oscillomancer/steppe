@@ -4,7 +4,10 @@
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
+#include "supple/audio/audio_file.h"
+#include "supple/base/files.h"
 #include "supple/engine/app.h"
+#include "supple/midi/midi.h"
 #include "supple/model/item_edits.h"
 #include "supple/model/schemas.h"
 
@@ -188,4 +191,75 @@ TEST_CASE("healing refuses moved pieces and differing stored take FX") {
     CHECK(result.error().code == (fx ? "item.heal_fx" : "item.heal_incompatible"));
     CHECK_FALSE(result.error().hint.empty());
     CHECK(f.app->head().items.size() == 2);
+}
+
+TEST_CASE("item.export writes the raw source span a trimmed, split or looping item covers") {
+    Fixture f;
+    const auto tone = audio::readAudio(f.dir / "media" / "tone.wav").value();
+    auto exported = [&](const char* item, const char* name) {
+        auto args = json::Value::object();
+        args["item"] = item;
+        args["path"] = (f.dir / name).string();
+        auto result = f.run("item.export", json::writeCompact(args));
+        const std::filesystem::path written = result["path"].asString();
+        CHECK(written.stem() == std::filesystem::path(name).stem());
+        CHECK(written.extension() == ".wav");
+        return audio::readAudio(written).value();
+    };
+    // Trimmed at both ends: half a second from 0.25 s, gain and fades not applied.
+    f.run("item.set", R"({"item":"it_1","length":1,"gain_db":-6,"fade_in":0.1})");
+    f.run("take.set", R"({"take":"tk_1","start_offset":0.25})");
+    auto trimmed = exported("it_1", "trimmed.wav");
+    REQUIRE(trimmed.channelCount() == 2);
+    REQUIRE(trimmed.frames() == 24000);
+    for (std::size_t i = 0; i < trimmed.frames(); ++i)
+        REQUIRE(trimmed.channels[0][i] == tone.channels[0][12000 + i]);
+    // Looping past the source's end: the source repeats as heard.
+    f.run("take.set", R"({"take":"tk_1","start_offset":0})");
+    f.run("item.set", R"({"item":"it_1","length":10,"loop":true})");
+    auto looped = exported("it_1", "looped.wav");
+    REQUIRE(looped.frames() == 5 * 48000);
+    for (std::size_t i = 0; i < looped.frames(); i += 997)
+        REQUIRE(looped.channels[1][i] == tone.channels[1][i % tone.frames()]);
+    // Split: each half exports its own part only, and together they are the source.
+    f.run("item.set", R"({"item":"it_1","length":4,"loop":false})");
+    f.run("item.split", R"({"item":"it_1","at":2})");
+    auto left = exported("it_1", "left.wav");
+    auto right = exported("it_2", "right");  // the extension is added
+    REQUIRE(left.frames() == 48000);
+    REQUIRE(right.frames() == 48000);
+    CHECK(std::equal(left.channels[0].begin(), left.channels[0].end(), tone.channels[0].begin()));
+    CHECK(std::equal(right.channels[0].begin(), right.channels[0].end(),
+                     tone.channels[0].begin() + 48000));
+    // An audio item does not become a MIDI file, nor overwrite the project's media.
+    CHECK(f.call("item.export", R"({"item":"it_1","path":"x.mid"})").error().code ==
+          "item.export_extension");
+    auto media = json::Value::object();
+    media["item"] = "it_1";
+    media["path"] = (f.dir / "media" / "tone.wav").string();
+    CHECK(f.call("item.export", json::writeCompact(media)).error().code == "item.export_path");
+}
+
+TEST_CASE("item.export writes a trimmed MIDI item as a Standard MIDI File from zero") {
+    Fixture f;
+    f.run("item.add", R"({"track":"tr_1","bar":3,"notation":"voice x; 1: C2:q D2:q E2:q F2:q"})");
+    // The middle two notes: the take starts a beat in and the item lasts two.
+    f.run("take.set", R"({"take":"tk_2","start_offset":1})");
+    f.run("item.set", R"({"item":"it_2","length":2})");
+    auto args = json::Value::object();
+    args["item"] = "it_2";
+    args["path"] = (f.dir / "middle.mid").string();
+    CHECK(f.run("item.export", json::writeCompact(args))["notes"].asInt() == 2);
+    midi::SmfInfo info;
+    auto seq = midi::readSmf(readFile(f.dir / "middle.mid").value(), &info);
+    REQUIRE(seq);
+    REQUIRE(seq->notes.size() == 2);
+    CHECK(seq->notes[0].pitch == 38);
+    CHECK(seq->notes[0].start == 0);
+    CHECK(seq->notes[1].pitch == 40);
+    CHECK(seq->notes[1].start == seq->ppq);
+    CHECK(seq->length == 2 * seq->ppq);
+    REQUIRE(info.tempos.size() == 1);
+    CHECK(info.tempos[0].second == doctest::Approx(120.0));
+    CHECK(info.meters == std::vector<std::pair<std::int64_t, midi::Meter>>{{0, midi::Meter{4, 4}}});
 }

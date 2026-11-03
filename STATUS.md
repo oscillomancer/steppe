@@ -183,6 +183,8 @@ instructions are in `docs/guides/installing.md`.
   transient detection, joint multitrack audio quantize and slicing,
   background `item.consolidate` for active audio with take FX baked and MIDI
   kept separate per track (one undo step, track processing stays live),
+  item Export… (`item.export`: the heard take's raw source span as WAV, trims,
+  splits and loops respected, or a MIDI item as a Standard MIDI File),
   adjacent Consolidate items / Heal splits item-menu actions with shared engine
   eligibility, and non-rendering `item.heal` for compatible split/slice chains,
   retaining outer fades and full source maps while removing generated interior fades,

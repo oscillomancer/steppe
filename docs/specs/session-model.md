@@ -674,12 +674,14 @@ and naming. All `edit` unless marked (q) query or (a) action.
   first take stays, the others on new channels below or one after another),
   `item.apply-fx {item, mode: take|replace}` (the heard take rendered through
   its take FX and the track's main chain, pre-fader, over the item's span,
-  into an audio file in the media folder: a new heard take or in its place).
+  into an audio file in the media folder: a new heard take or in its place),
+  `item.export {item, path}` (a: the heard take's raw source span as WAV, or
+  what a MIDI item plays as a Standard MIDI File; engine.md).
 - **MIDI**: `midi.write {item | {track, at}, notation, replace: bool}`,
   `midi.get {item, format: notation|events}` (q), `midi.edit {item, ops:
   [{select: {pitch, range, channel}, set|shift|transpose|quantize|velocity}]}`,
-  `midi.quantize`, `midi.humanize {seed}`, `midi.import {file, track}`,
-  `midi.export` (a). `midi.edit` note indices are a set per operation: repeated
+  `midi.quantize`, `midi.humanize {seed}`, `midi.import {file, track}`;
+  MIDI files are written by `item.export`. `midi.edit` note indices are a set per operation: repeated
   indices edit each original note once. Tick conversions and all resulting
   starts, ends, lengths and sequence lengths are checked before publication;
   out-of-range arithmetic returns structured `midi.range` with a repair hint,

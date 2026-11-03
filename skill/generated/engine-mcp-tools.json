@@ -5072,6 +5072,60 @@
     }
   },
   {
+    "name": "item_export",
+    "title": "Write an item's raw audio (WAV) or its MIDI (SMF) to a file.",
+    "description": "Write an item's raw audio (WAV) or its MIDI (SMF) to a file. Exports the active take over the part the item covers (trims and splits respected). Audio: the source's own samples, rate and channels, from the source position at the item's start to the one at its end (playrate, unpreserved pitch and stretch markers decide that span but are not applied; a looping item ignores markers and repeats its source as heard; outside the source is silence). No gain, fades, pan, channel mode, FX or track processing. 16/24-bit PCM WAV sources keep their format; others are 32-bit float. MIDI: what the item plays (loops unrolled, notes ending by its end) from 0, at the source PPQ, with the tempo and meter at the item's start. Relative paths resolve against the work directory; a missing extension is added; existing files are replaced, the project's media never. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "item_export_args",
+      "properties": {
+        "item": {
+          "type": "string",
+          "pattern": "^it_[0-9]+$"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": ["item", "path"],
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "title": "item_export_result",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "format": {
+          "type": "string"
+        },
+        "sample_format": {
+          "type": "string"
+        },
+        "sample_rate": {
+          "type": "number"
+        },
+        "channels": {
+          "type": "integer"
+        },
+        "frames": {
+          "type": "integer"
+        },
+        "notes": {
+          "type": "integer"
+        }
+      },
+      "required": ["path", "format"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false
+    }
+  },
+  {
     "name": "item_heal",
     "title": "Heal compatible consecutive audio pieces without rendering.",
     "description": "Heal compatible consecutive audio pieces without rendering. One chain per track, complete linked/warp selection, matching stored audio/take/FX properties and continuous source maps. Accepts touching split pieces and unchanged linear Slice-at-hits overlaps up to 50 ms. Keep all left takes, outer fades and full warp maps; remove interior slice fades. Nonlinear envelope seams that cannot be recovered refuse. Stored FX states must match exactly; no live plugin queries or audio rendering. One undo step. See describe for errors and examples.",

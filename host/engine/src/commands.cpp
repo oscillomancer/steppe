@@ -34,6 +34,7 @@ void registerChainCommands(cmd::Registry& registry);
 void registerTakeCommands(cmd::Registry& registry);
 void registerAudioCommands(cmd::Registry& registry);
 void registerConsolidateCommands(cmd::Registry& registry);
+void registerExportCommands(cmd::Registry& registry);
 void registerHealCommands(cmd::Registry& registry);
 void registerLearnCommands(cmd::Registry& registry);
 void registerDspCommands(cmd::Registry& registry);
@@ -852,6 +853,7 @@ void registerEngineCommands(cmd::Registry& registry) {
     registerTakeCommands(registry);
     registerAudioCommands(registry);
     registerConsolidateCommands(registry);
+    registerExportCommands(registry);
     registerHealCommands(registry);
     registerLearnCommands(registry);
     registerDspCommands(registry);

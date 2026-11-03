@@ -2201,6 +2201,44 @@ rerendering FX. Published files remain available to history, undo and project
 copies. Errors carry paths and repair hints; source/render problems must be fixed
 before retrying. No sample processing or I/O is added to audio executors.
 
+### Exporting an item
+
+`item.export {item, path}` is a read-only action: it writes a file and changes
+nothing in the session. It exports the active take over the part the item covers,
+so trims and splits are respected: a split piece exports only its own part.
+
+Audio is written raw: the source's own samples, sample rate and channel count,
+with no item or take gain, fades, pan, polarity, channel mode, take or track FX.
+The span is in source time: from the source position at the item's start to the
+one at its end. Without an active warp map that is `start_offset` to
+`start_offset + length * speed`, where `speed` is the playrate times the pitch
+ratio when pitch is not preserved (the playback variant's speed); with one it is
+`audioSourceAt` at the item's two ends. Rate, pitch and warp decide the span but
+are not applied, so the file lasts the source time the item reads, not the item's
+length, when the rate is not 1. A looping item ignores markers, as playback does,
+and wraps around the source as heard (a loop longer than its source repeats it);
+a non-looping item's span outside the source is silence. Ends round to the
+source's sample grid (`samplesAt`), so a split's pieces tile the source without a
+gap or an overlap. A 16- or 24-bit PCM WAV source keeps its format (written
+without dither, so it is bit exact); every other source is written as 32-bit
+float WAV. Exports over the renderer's 2^28-sample budget refuse with
+`item.export_too_long`.
+
+MIDI is what the item plays (`midi.merge`'s heard-take helper: the source window,
+looped passes unrolled, a note held into the start begins at 0, notes ending by
+the item's end), in item beats from 0 at the source PPQ, as a format-0 Standard
+MIDI File with the tempo and meter in effect at the item's start (one of each).
+
+Relative paths resolve against the work directory like `project.save`; a path
+without an extension gets `.wav` or `.mid`; a mismatched one is
+`item.export_extension`. Missing folders are created and an existing file is
+replaced, except the project's own media (`item.export_path`). An empty take is
+`item.export_empty`; an unreadable source is `item.export_source` with a relink
+hint. The result gives `path` and `format` (`wav` or `mid`), plus
+`sample_format`, `sample_rate`, `channels` and `frames` for audio or `notes` for
+MIDI. The source is decoded on the command thread (as analysis commands do); no
+audio executor is involved.
+
 ### Healing audio splits
 
 `item.heal {items:[it...]}` is a pure edit returning surviving `items`, one per

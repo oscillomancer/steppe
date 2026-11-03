@@ -955,9 +955,15 @@ TEST_CASE("arrange item menu splits at the edit cursor and disables zero crossin
     CHECK(rows[menuIndex(f, "Split item at prior zero crossing")].label ==
           "Split item at prior zero crossing");
     CHECK(rows[menuIndex(f, "Split item at prior zero crossing")].enabled);
+    CHECK(rows[menuIndex(f, "Export")].enabled);
     if (const char* out = std::getenv("SUPPLE_TEST_SNAPSHOTS"))
         REQUIRE(
             gui::writePng(std::filesystem::path(out) / "item-split-menu.png", f.root->readBack()));
+    std::optional<model::Id> exported;
+    f.view->gestures().onExport = [&](model::Id item) { exported = item; };
+    pick(f, "Export");
+    CHECK(exported == audio);
+    rightClick(f, onItem(f, audio, f.rectOf(audio).y + f.rectOf(audio).h / 2));
     const auto count = f.app->head().items.size(), steps = f.steps();
     pick(f, "Split item at cursor");
     CHECK(f.app->head().items.size() == count + 1);
@@ -968,6 +974,7 @@ TEST_CASE("arrange item menu splits at the edit cursor and disables zero crossin
     menu = f.root->find("item.menu");
     REQUIRE(menu);
     CHECK_FALSE(ui::menuItems(*menu)[menuIndex(f, "Split item at prior zero crossing")].enabled);
+    CHECK(ui::menuItems(*menu)[menuIndex(f, "Export")].enabled);  // a MIDI file
     const auto before = model::serializeProject(f.app->head());
     pick(f, "Split item at prior zero crossing");
     CHECK(f.root->find("item.menu"));  // a disabled entry does not activate

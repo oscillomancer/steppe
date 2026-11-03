@@ -39,6 +39,8 @@ void SDLCALL onDialog(void* userdata, const char* const* files, int) {
 const SDL_DialogFileFilter kProjectFilter[] = {{"Projects", "json"}, {"All files", "*"}};
 const SDL_DialogFileFilter kAudioFilter[] = {{"Audio", "wav;flac;mp3"}, {"All files", "*"}};
 const SDL_DialogFileFilter kImageFilter[] = {{"Images", "png;jpg;jpeg"}, {"All files", "*"}};
+const SDL_DialogFileFilter kWavFilter[] = {{"WAV audio", "wav"}, {"All files", "*"}};
+const SDL_DialogFileFilter kMidiFilter[] = {{"MIDI files", "mid;midi"}, {"All files", "*"}};
 
 // The saved project templates: a click starts a new project from one, a right
 // click offers to delete it (`remove` is true when the file is gone).
@@ -360,6 +362,33 @@ void FileActions::chooseImage(const std::filesystem::path& start,
     if (!start.empty() && std::filesystem::is_directory(start, ec)) where = start.string() + "/";
     SDL_ShowOpenFileDialog(onDialog, req, window_, kImageFilter, 2,
                            where.empty() ? nullptr : where.c_str(), false);
+}
+
+void FileActions::exportItem(model::Id item, std::function<void(const std::string&)> status) {
+    const model::Session& s = app_.head();
+    const model::Item* it = s.items.find(item);
+    const model::Take* take = it && it->activeTake ? s.takes.find(*it->activeTake) : nullptr;
+    if (!take || !take->source) return status("Export: the item has no material");
+    const bool midi = take->source->kind == model::Kind::Midi;
+    std::string name = take->name.empty() ? item.str() : take->name;
+    for (char& c : name)
+        if (std::string_view("/\\:*?\"<>|").find(c) != std::string_view::npos) c = '-';
+    std::filesystem::path folder = app_.projectPath().empty() ? mediaHome() : app_.projectDir();
+    std::error_code ec;
+    if (!folder.empty()) std::filesystem::create_directories(folder, ec);
+    const std::string start = (folder / (name + (midi ? ".mid" : ".wav"))).string();
+    auto guarded = guardDialog([this, item, status = std::move(status)](auto paths) {
+        json::Value args = json::Value::object();
+        args["item"] = item.str();
+        args["path"] = paths.front().string();
+        auto r = dispatcher_.execute({"item.export", std::move(args), kOrigin});
+        if (!r) return status("Export failed: " + r.error().message);
+        status("Exported " + std::filesystem::path((*r)["path"].asString()).filename().string());
+    });
+    if (saveDialog_) return saveDialog_(start, std::move(guarded));
+    auto* req = new DialogRequest{std::move(guarded)};
+    SDL_ShowSaveFileDialog(onDialog, req, window_, midi ? kMidiFilter : kWavFilter, 2,
+                           start.c_str());
 }
 
 void FileActions::openSaveTemplate(Template kind) {

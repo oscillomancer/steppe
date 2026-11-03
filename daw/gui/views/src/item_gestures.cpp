@@ -1116,6 +1116,15 @@ void ItemGestures::addEditItems(std::vector<ui::MenuItem>& items, ui::Point at, 
     });
     add("Split item at prior zero crossing", "ui.item.split-zero", audio,
         [this] { return splitSelection(true); });
+    // The clicked item's heard take, raw (item.export); greyed for an empty take.
+    const model::Id target =
+        state_.anchor.kind == model::Kind::Item ? state_.anchor : selection_.front();
+    const model::Item* item = itemOf(s, target);
+    const model::Take* heard = item && item->activeTake ? s.takes.find(*item->activeTake) : nullptr;
+    add("Export\u2026", "ui.item.export", heard && heard->source, [this, target] {
+        if (onExport) onExport(target);
+        return Status{};
+    });
 }
 
 void ItemGestures::openSpaceMenu(ui::Point at) {

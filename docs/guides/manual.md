@@ -435,6 +435,18 @@ selected audio and MIDI items at the edit cursor. Items outside the cursor stay
 whole; the menu's pointer position does not set the split point. Undo restores
 the entire selection edit in one step.
 
+Right-click an item and choose **Export…** to save its material to a file of
+your choosing. An audio item gives a WAV of its source audio exactly as recorded
+or imported: no gain, fades, effects or mixer processing, at the source's own
+sample rate and channels (a 16- or 24-bit WAV source stays 16 or 24-bit; others
+become 32-bit float). Only the part the item covers is exported: a trimmed item
+gives its trimmed part, and one piece of a split item gives only that piece. A
+looping item repeats its source as you hear it. Play rate and stretch markers
+choose which stretch of the source is exported but are not applied. A MIDI item
+gives a MIDI file of the notes it plays, starting at zero, with the tempo and time
+signature at the item's start. The entry is greyed for an empty take; the status
+line says where the file went. Agents use `item.export {item, path}`.
+
 **Split item at prior zero crossing** moves the split back to the last point,
 at most 100 ms before the cursor, where the item's audio crosses zero, which
 avoids a click at the cut. If there is none, it splits at the cursor. It does

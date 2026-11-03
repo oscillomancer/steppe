@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 #include "command_validation.h"
+#include "heard_midi.h"
 #include "midi_ticks.h"
 // Note-level MIDI editing (the piano roll's commands, and an agent's when
 // notation is the wrong tool): midi.notes reads an item's notes and CCs in
@@ -433,11 +434,10 @@ struct MergeResult {
     std::string item;
 };
 
-// What `take` plays in `it` (as the engine schedules it: the source window,
-// looped passes, a note held into the item's start), every note ending by the
-// item's end, written into `out` `shift` beats later.
-void heardMidi(const model::Session& s, const model::Item& it, const model::Take& take,
-               const midi::Sequence& seq, double shift, midi::Sequence& out) {
+}  // namespace
+
+void detail::heardMidi(const model::Session& s, const model::Item& it, const model::Take& take,
+                       const midi::Sequence& seq, double shift, midi::Sequence& out) {
     const model::ItemSpan span = model::itemSpan(s, it);
     const double itemBeats = s.timeMap->beatAt(span.endSec) - span.startBeat;
     const double rate = take.playrate > 0 ? take.playrate : 1.0;
@@ -483,8 +483,6 @@ void heardMidi(const model::Session& s, const model::Item& it, const model::Take
         }
     }
 }
-
-}  // namespace
 
 void registerMidiCommands(cmd::Registry& registry) {
     {
@@ -704,8 +702,8 @@ void registerMidiCommands(cmd::Registry& registry) {
             for (const auto& [id, take] : parts) {
                 const model::Item& it = *s.items.find(id);
                 const model::Take& tk = *s.takes.find(take);
-                heardMidi(s, it, tk, s.midi.find(*tk.source)->sequence,
-                          model::itemSpan(s, it).startBeat - start, merged);
+                detail::heardMidi(s, it, tk, s.midi.find(*tk.source)->sequence,
+                                  model::itemSpan(s, it).startBeat - start, merged);
             }
             merged.length = std::llround((end - start) * merged.ppq);
             merged.canonicalize();

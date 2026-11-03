@@ -18,7 +18,8 @@
 // that take (the one under the pointer, else the heard one) out into an item of its own, on any
 // channel. A right-click on an item (without dragging) opens its menu: Cut, Copy, Paste (at the
 // pointer), Duplicate, Delete, Consolidate items, Heal splits, Merge takes for
-// one multi-take MIDI item, timebase, take FX
+// one multi-take MIDI item, the splits, Export… (the item's raw audio or its MIDI
+// to a file, through onExport), timebase, take FX
 // and envelopes, and for several takes: show all takes, explode them onto tracks or along the
 // track, delete the take under the pointer; and rendering the item through its FX (MIDI to audio)
 // in place or as a new take; on empty lane space, a menu with Paste. Each gesture previews as a
@@ -68,6 +69,8 @@ class ItemGestures {
     Runner run;
     std::function<void(const std::vector<model::Id>&, const std::string&, double)> onAudioEdit;
     std::function<void(const std::vector<model::Id>&)> onConsolidate;
+    // The item menu's Export…: the app asks where, then runs item.export.
+    std::function<void(model::Id item)> onExport;
     std::function<std::uint64_t()>
         projectGeneration;  // app identity, even before the next resnapshot
     // Keep the copied version available to item.paste until the clipboard changes.
