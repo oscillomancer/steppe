@@ -960,8 +960,12 @@ TEST_CASE("mixer: the chain's empty part takes a double-click (plugin browser); 
         added.push_back(v.isString() ? v.asString() : v.find("track")->asString());
         return {};
     });
-    std::vector<model::Id> picked;
+    std::vector<model::Id> picked, outputs;
     f.mixer->pickInput = [&](const model::Id& track, const ui::Rect&) { picked.push_back(track); };
+    f.mixer->pickOutput = [&](const model::Id& track, const ui::Rect&) {
+        outputs.push_back(track);
+    };
+    f.mixer->outputText = [](const model::Id&) { return std::string("out 1/2"); };
     f.mixer->inputText = [](const model::Id&) { return std::string("AUX0"); };
     const auto a = f.addTrack("channel", "A");
     f.refresh();
@@ -979,6 +983,12 @@ TEST_CASE("mixer: the chain's empty part takes a double-click (plugin browser); 
     REQUIRE(f.root->click("mixer.input." + a));
     REQUIRE(picked.size() == 1);
     CHECK(picked[0].str() == a);
+    // A master's out button: its hardware outputs (ADR-0056), not a send.
+    REQUIRE(f.strip(model::kMaster.str()).out);
+    CHECK(f.strip(model::kMaster.str()).out->valueText() == "out 1/2");
+    REQUIRE(f.root->click("mixer.out.tr_0"));
+    REQUIRE(outputs.size() == 1);
+    CHECK(outputs[0] == model::kMaster);
 }
 
 TEST_CASE("preferences: the dialog applies each setting at once and saves it") {
@@ -1141,26 +1151,28 @@ TEST_CASE("audio device: settings become engine.start arguments") {
     // Defaults: WASAPI, its default devices, the output's own rate.
     CHECK(args(s) == canon(R"({"backend":"portaudio","block":256,"host_api":"Windows WASAPI",)"
                            R"("inputs":1,"rate":48000.0})"));
-    // Named devices; every input channel (up to 32); a chosen rate wins.
+    // Named devices; every input channel (up to 32) and output (up to 64); a
+    // chosen rate wins.
     s.outputDevice = "Interface";
     s.inputDevice = "Interface";
     s.rate = 44100;
     s.block = 64;
     CHECK(args(s) == canon(R"({"backend":"portaudio","block":64,"host_api":"Windows WASAPI",)"
                            R"("output_device":"Interface","input_device":"Interface","inputs":8,)"
-                           R"("rate":44100.0})"));
+                           R"("outputs":10,"rate":44100.0})"));
     // Playback only opens no input.
     s.record = false;
     s.rate = 0;
     CHECK(args(s) == canon(R"({"backend":"portaudio","block":64,"host_api":"Windows WASAPI",)"
-                           R"("output_device":"Interface","rate":96000.0})"));
+                           R"("output_device":"Interface","outputs":10,"rate":96000.0})"));
     // ASIO: one device both ways, whatever input was chosen before.
     s = {};
     s.backend = "portaudio";
     s.hostApi = "ASIO";
     s.inputDevice = "Microphone";
     CHECK(args(s) == canon(R"({"backend":"portaudio","block":256,"host_api":"ASIO",)"
-                           R"("input_device":"Interface ASIO","inputs":18,"rate":48000.0})"));
+                           R"("input_device":"Interface ASIO","inputs":18,"outputs":20,)"
+                           R"("rate":48000.0})"));
     // A device that is not listed now is still asked for: engine.start names it.
     s = {};
     s.backend = "portaudio";

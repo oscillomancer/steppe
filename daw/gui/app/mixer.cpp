@@ -907,7 +907,18 @@ void Mixer::rebuild() {
         }
         // The record input and the output ("out": a click opens the routing
         // matrix, a drag onto a buss or master makes a send), as in the TCP.
-        if (t.type != model::StripType::Master) {
+        // A master's "out" picks the device outputs it plays to (ADR-0056).
+        if (t.type == model::StripType::Master) {
+            auto& io = frame->emplace<ui::Node>("mixer.io." + tid);
+            io.layout.dir = ui::Layout::Dir::Row;
+            io.layout.height = ui::SizeRule::fixed(18);
+            st.out = &io.emplace<ui::Button>("mixer.out." + tid, "out");
+            st.out->onClick = [this, id, button = st.out] {
+                if (pickOutput) pickOutput(id, button->bounds());
+            };
+            st.out->layout.width = ui::SizeRule::fraction();
+            st.out->layout.height = ui::SizeRule::fixed(18);
+        } else {
             auto& io = frame->emplace<ui::Node>("mixer.io." + tid);
             io.layout.dir = ui::Layout::Dir::Row;
             io.layout.height = ui::SizeRule::fixed(18);
@@ -1433,6 +1444,8 @@ void Mixer::update() {
                 : t->record.monitor == model::Monitor::On ? ui::MonitorButton::Mode::On
                                                           : ui::MonitorButton::Mode::Auto);
         if (st.input && inputText) st.input->setText(inputText(*id));
+        if (t->type == model::StripType::Master && st.out && outputText)
+            st.out->setText(outputText(*id));
     }
 }
 

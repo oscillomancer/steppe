@@ -884,3 +884,37 @@ TEST_CASE("TCP: a click anywhere else ends a rename and keeps the edit") {
     CHECK_FALSE(field->visible);
     CHECK(f.root->focused() != field);
 }
+
+TEST_CASE("a master's outputs menu lists the device's outputs and sets hw_output (ADR-0056)") {
+    SendsFixture f;
+    const model::Id cue = f.add("master", "Cue");
+    f.sync();
+    // Stopped: the device's outputs are unknown; None is still offered.
+    f.shell->openOutputMenu(cue, {10, 10, 40, 18});
+    const auto* menu = f.root->find("output." + cue.str());
+    REQUIRE(menu);
+    CHECK(ui::menuItems(*menu).front().label == "None");
+    CHECK(ui::menuItems(*menu).front().checked);  // a new master plays nowhere
+    CHECK(f.shell->outputLabel(cue) == "out \u2014");
+    CHECK(f.shell->outputLabel(model::kMaster) == "out 1/2");
+    f.root->closePopup();
+    json::Value start = json::Value::object();
+    start["backend"] = "dummy";
+    start["outputs"] = std::int64_t{4};
+    f.exec("engine.start", std::move(start));
+    f.shell->openOutputMenu(cue, {10, 10, 40, 18});
+    menu = f.root->find("output." + cue.str());
+    REQUIRE(menu);
+    std::vector<std::string> rows;
+    for (const auto& item : ui::menuItems(*menu))
+        rows.push_back(item.separator ? "-" : item.shortcut.empty() ? item.label : item.shortcut);
+    CHECK(rows == std::vector<std::string>{"None", "-", "stereo 1-2", "stereo 3-4", "-", "mono 1",
+                                           "mono 2", "mono 3", "mono 4"});
+    const auto pick = ui::menuItems(*menu)[3].run;  // the menu goes as it runs
+    pick();
+    const auto* track = f.app->head().tracks.find(cue);
+    REQUIRE(track);
+    CHECK(model::hardwareOutputs(*track, cue) == std::vector<int>{3, 4});
+    CHECK(f.shell->outputLabel(cue) == "out 3/4");
+    f.exec("engine.stop");
+}

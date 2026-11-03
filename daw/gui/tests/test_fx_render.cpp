@@ -1864,3 +1864,27 @@ TEST_CASE("render dialog: regions checklist, the matrix grid and the chain rate 
     REQUIRE(audio);
     CHECK(audio->sampleRate == 44100);
 }
+
+TEST_CASE("render dialog: with several masters the mix lists them, a file each (ADR-0056)") {
+    Fixture f;
+    if (!f.ok) return;
+    gui::test::linkGeneratedMedia(f.app->mediaDir());
+    REQUIRE(gui::generateSession(*f.dispatcher, f.app->mediaDir(), 1));
+    f.render->open();
+    f.frame();
+    CHECK(f.root->find("render.masters") == nullptr);  // one master: nothing to choose
+    f.render->close();
+    REQUIRE(f.run("track.add", f.args({{"name", "Cue"}, {"type", "master"}})));
+    f.render->open();
+    f.render->setSource(gui::RenderDialog::Source::Master);
+    f.frame();
+    REQUIRE(f.root->find("render.masters") != nullptr);
+    CHECK_FALSE(f.render->renderArguments().find("masters"));  // the main master
+    REQUIRE(f.click("render.masters.all"));
+    const json::Value args = f.render->renderArguments();
+    REQUIRE(args.find("masters"));
+    CHECK(args.find("masters")->size() == 2);
+    f.render->setField("render.end", "1");
+    f.render->refreshPreview();
+    CHECK(f.render->preview().find("Cue") != std::string::npos);  // its own file
+}

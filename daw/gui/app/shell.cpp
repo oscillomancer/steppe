@@ -561,6 +561,88 @@ void Shell::openInputMenu(const model::Id& track, const ui::Rect& anchor) {
         anchor);
 }
 
+std::string Shell::outputLabel(const model::Id& track) const {
+    const model::Track* tr = app_.head().tracks.find(track);
+    const auto channels = tr ? model::hardwareOutputs(*tr, track) : std::vector<int>{};
+    if (channels.empty()) return "out \u2014";
+    std::string out = "out ";
+    for (std::size_t i = 0; i < channels.size(); ++i)
+        out += (i ? "/" : "") + std::to_string(channels[i]);
+    return out;
+}
+
+void Shell::openOutputMenu(const model::Id& track, const ui::Rect& anchor) {
+    if (!root_) return;
+    const json::Value& list = inputs(/*force=*/true);
+    const model::Track* tr = app_.head().tracks.find(track);
+    if (!tr || tr->type != model::StripType::Master) return;
+    const std::vector<int> current = model::hardwareOutputs(*tr, track);
+    auto pick = [this, track](std::vector<int> channels) {
+        json::Value args = json::Value::object();
+        args["track"] = track.str();
+        json::Value out = json::Value::array();
+        for (int ch : channels) out.push_back(json::Value(static_cast<std::int64_t>(ch)));
+        args["hw_output"] = std::move(out);
+        commit("track.set", std::move(args), {});
+    };
+    std::vector<ui::MenuItem> items;
+    ui::MenuItem none;
+    none.label = "None";
+    none.checked = current.empty();
+    none.run = [pick] { pick({}); };
+    items.push_back(std::move(none));
+    const json::Value* running = list.find("running");
+    const json::Value* outputs = list.find("outputs");
+    const std::size_t count = outputs && outputs->isArray() ? outputs->size() : 0;
+    // The device's port names where it reports them (JACK), else "output N".
+    auto name = [&](int ch) {
+        for (std::size_t i = 0; i < count; ++i) {
+            const json::Value& e = outputs->at(i);
+            const json::Value* c = e.find("channel");
+            const json::Value* p = e.find("port");
+            if (c && static_cast<int>(c->asInt()) == ch && p && p->isString() &&
+                !p->asString().empty())
+                return p->asString();
+        }
+        return "output " + std::to_string(ch);
+    };
+    auto add = [&](std::vector<int> channels) {
+        ui::MenuItem m;
+        m.label = channels.size() == 2 ? name(channels[0]) + " + " + name(channels[1])
+                                       : name(channels[0]);
+        m.shortcut = channels.size() == 2 ? "stereo " + std::to_string(channels[0]) + "-" +
+                                                std::to_string(channels[1])
+                                          : "mono " + std::to_string(channels[0]);
+        m.checked = channels == current;
+        m.run = [pick, channels] { pick(channels); };
+        items.push_back(std::move(m));
+    };
+    if (!running || !running->asBool()) {
+        // The device's outputs are known only while the engine holds it open.
+        items.push_back({"", "", {}, true, true});
+        items.push_back(
+            {"engine stopped \u2014 start the engine to list its outputs", "", {}, false});
+    } else {
+        const int n = static_cast<int>(count);
+        items.push_back({"", "", {}, true, true});
+        bool listed = current.empty();
+        for (int ch = 1; ch + 1 <= n; ch += 2) {
+            listed = listed || current == std::vector<int>{ch, ch + 1};
+            add({ch, ch + 1});
+        }
+        items.push_back({"", "", {}, true, true});
+        for (int ch = 1; ch <= n; ++ch) {
+            listed = listed || current == std::vector<int>{ch};
+            add({ch});
+        }
+        // Set elsewhere (an agent, another device): still shown, and checked.
+        if (!listed) add(current);
+    }
+    root_->openPopup(
+        ui::makeMenu("output." + track.str(), std::move(items), [this] { root_->closePopup(); }),
+        anchor);
+}
+
 bool Shell::isSelected(const model::Id& track) const { return trackSelected(ui_, track.str()); }
 
 void Shell::selectTrack(const model::Id& track, unsigned mods) {

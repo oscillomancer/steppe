@@ -63,6 +63,10 @@ class Mixer {
     // shared with the TCP).
     std::function<std::string(const model::Id& track)> inputText;
     std::function<void(const model::Id& track, const ui::Rect& anchor)> pickInput;
+    // The masters' output button (ADR-0056): what it says ("out 1/2") and the
+    // hardware outputs menu (the shell's, shared with the TCP).
+    std::function<std::string(const model::Id& track)> outputText;
+    std::function<void(const model::Id& track, const ui::Rect& anchor)> pickOutput;
     std::function<void(const model::Id&, const ui::Rect&)> envelopes;
 
     // Tests.

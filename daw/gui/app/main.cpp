@@ -451,6 +451,10 @@ int main(int argc, char** argv) {
     mixer.pickInput = [&shell](const model::Id& track, const ui::Rect& anchor) {
         shell.openInputMenu(track, anchor);
     };
+    mixer.outputText = [&shell](const model::Id& track) { return shell.outputLabel(track); };
+    mixer.pickOutput = [&shell](const model::Id& track, const ui::Rect& anchor) {
+        shell.openOutputMenu(track, anchor);
+    };
     mixer.envelopes = [&shell](const model::Id& id, const ui::Rect& anchor) {
         shell.openEnvelopeMenu(id, anchor);
     };
