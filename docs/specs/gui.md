@@ -938,10 +938,9 @@ engine.
 
 **File → Mix** (the action `ui.render.mix`; a menus file that still lists
 `render.mix` runs the command directly) runs `render.mix` as a job with no
-other arguments, so it follows the project's settings, then the user default. Its menu label is
-resolved each time the menu opens: "Mix → <file name> (<first output, e.g.
-WAV 24-bit 48 kHz>)", plus the range when the bounds are not the whole
-project. Progress shows in the status bar, then the path of the file written
+other arguments, so it follows the project's settings, then the user default. Its menu
+label is plain "Mix" (a label naming the file and format made the File menu far wider).
+Progress shows in the status bar, then the path of the file written
 (the status bar holds text only); "Open folder when done" (§4.11) opens the
 folder.
 

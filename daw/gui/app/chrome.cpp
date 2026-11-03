@@ -215,8 +215,7 @@ void fillChrome(ui::Node& bar, ui::Root& root, AppActions& actions, const Chrome
                     }
                     const actions::Action* a = actions.registry().find(id);
                     if (!a) continue;  // unknown ids in a user file are skipped
-                    std::string name = actions.labelFor(id);
-                    if (name.empty()) name = shortName(*a) + (a->prompts.empty() ? "" : "…");
+                    const std::string name = shortName(*a) + (a->prompts.empty() ? "" : "…");
                     entries.push_back(
                         {name, actions.keysFor(id), [&actions, id] { actions.invoke(id); }});
                 }

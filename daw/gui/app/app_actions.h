@@ -86,10 +86,6 @@ class AppActions {
              const std::vector<std::string>& sections = {"arrange", "global"});
     // Built-in UI actions the app provides (open the actions list, …).
     void addUi(std::string id, std::string name, std::function<void()> run);
-    // A menu label computed each time a menu opens (File → Mix names its file).
-    void setLabel(std::string id, std::function<std::string()> label);
-    // The label a menu shows for an action: its computed label, else "".
-    std::string labelFor(const std::string& id) const;
     // A built-in with one prompted argument (the actions list asks for it).
     void addUi(std::string id, std::string name, std::string prompt,
                std::function<Status(const json::Value& value)> run);
@@ -134,7 +130,6 @@ class AppActions {
     std::uint64_t learnSerial_ = 0, learnOwner_ = 0;
     std::function<void()> closeLearn_;
     actions::ActionRegistry registry_;
-    std::map<std::string, std::function<std::string()>> labels_;
     actions::Keymap keymap_;
     std::filesystem::path keymapFile_;
     ControlMap controls_;

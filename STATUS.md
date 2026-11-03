@@ -233,7 +233,7 @@ instructions are in `docs/guides/installing.md`.
   the plugin browser, routing matrix, MIDI editor, render dialog (the
   project's render settings with dropdowns, foldable sections, presets, a
   user default, up to four outputs, delivery checks in its results, and
-  File → Mix as a job named by the file it writes), history dock with
+  File → Mix as a job), history dock with
   branches, actions list with key bindings and macros, editable
   menus, toolbar and mouse modifiers, screensets, two palettes in dark and
   light, preferences, and tap tempo in the tempo form. Help exports the bundled

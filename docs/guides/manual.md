@@ -102,9 +102,8 @@ Uninstalling Quire leaves these folders and your projects in place.
 ## Rendering
 
 **File > Render…** opens the render dialog; **File > Mix** renders the mix
-straight away with the project's render settings. Its menu entry names the file
-it will write and the first format, for example *Mix → Song-v12.wav (WAV
-32-bit float 48 kHz)*, and its progress and result show in the status bar.
+straight away with the project's render settings; its progress and the file it
+wrote show in the status bar.
 
 ### One set of settings per project
 

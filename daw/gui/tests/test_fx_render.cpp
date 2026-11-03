@@ -1805,14 +1805,9 @@ TEST_CASE("render dialog settings: written once when changed; presets; File → 
     REQUIRE(settings);
     CHECK((*settings)["default"]["outputs"].asArray()[0]["bit_depth"].asInt() == 24);
     f.render->close();
-    // File → Mix: its label names the file and the first output; it runs as a job.
+    // File → Mix runs as a job and reports the file it wrote.
     std::string reported;
     f.render->onStatus = [&](const std::string& message) { reported = message; };
-    const std::string label = f.render->mixLabel();
-    CHECK(label.find("once-01.wav") != std::string::npos);
-    // The project leaves outputs to the user default saved above.
-    CHECK(label.find("WAV 24-bit 48 kHz") != std::string::npos);
-    CHECK(label.find("beats 0") != std::string::npos);  // custom bounds are named
     f.render->mixJob();
     REQUIRE_FALSE(f.render->job().empty());
     CHECK(f.render->nextDeadline());  // polled while closed

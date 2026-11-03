@@ -96,23 +96,6 @@ std::string formatLabel(const std::string& format) {
         if (c.value == format) return c.label;
     return format;
 }
-// "WAV 24-bit 48 kHz", "MP3 320 kbps 44.1 kHz".
-std::string outputLabel(const json::Value& o) {
-    const std::string format = text(o.find("format"), "wav");
-    std::string out = formatLabel(format);
-    if (const auto* bits = o.find("bit_depth"); bits && bits->isNumber())
-        out += bits->asInt() == 32 ? " 32-bit float" : " " + std::to_string(bits->asInt()) + "-bit";
-    if (format == "mp3") {
-        const auto* mp3 = o.find("mp3");
-        const bool vbr = mp3 && text(mp3->find("mode")) == "vbr";
-        out += vbr ? " V" + compact(num(mp3->find("vbr_quality"), 2))
-                   : " " + compact(num(mp3 ? mp3->find("bitrate_kbps") : nullptr, 320)) + " kbps";
-    }
-    if (format == "vorbis") out += " q" + compact(num(o.find("vorbis_quality"), 6));
-    const double rate = num(o.find("sample_rate"), 48000);
-    out += " " + compact(rate / 1000) + " kHz";
-    return out;
-}
 std::string sourceKey(RenderDialog::Source s) {
     return s == RenderDialog::Source::Master  ? "mix"
            : s == RenderDialog::Source::Stems ? "stems"
@@ -1678,33 +1661,6 @@ void RenderDialog::mixJob() {
         mixJob_ = true;
         if (auto status = onStatus) status("Mixing…");
     }
-}
-
-std::string RenderDialog::mixLabel() {
-    auto settings = dispatcher_.execute({"render.settings", json::Value::object(), kUiOrigin});
-    if (!settings) return "Mix";
-    const json::Value& e = *settings->find("effective");
-    json::Value args = json::Value::object();
-    args["operation"] = "mix";
-    std::string file = "…";
-    json::Value first = e.find("outputs")->at(0);
-    if (auto dry = dispatcher_.execute({"render.dry-run", std::move(args), kUiOrigin}))
-        if (const auto* files = dry->find("files"); files && files->size()) {
-            const json::Value& entry = files->at(0);
-            file = baseName(text(entry.find("path")));
-            // The rate the file is written at (an output follows the chain rate).
-            if (const auto* outputs = entry.find("outputs"); outputs && outputs->size())
-                if (const auto* rate = outputs->at(0).find("sample_rate"))
-                    first["sample_rate"] = *rate;
-        }
-    std::string label = "Mix → " + file + " (" + outputLabel(first) + ")";
-    const std::string bounds = text(e.find("bounds"), "project");
-    if (bounds == "loop")
-        label += ", loop";
-    else if (bounds == "custom")
-        label += ", beats " + compact(num(e.find("start_beat"), 0)) + "–" +
-                 (e.find("end_beat") ? compact(num(e.find("end_beat"))) : std::string("end"));
-    return label;
 }
 
 void RenderDialog::showResults(const json::Value& result, bool cancelled) {

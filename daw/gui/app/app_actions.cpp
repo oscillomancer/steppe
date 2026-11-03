@@ -399,15 +399,6 @@ void AppActions::endLearn(std::uint64_t owner) {
     app_.setLearning(false);
 }
 
-void AppActions::setLabel(std::string id, std::function<std::string()> label) {
-    labels_[std::move(id)] = std::move(label);
-}
-
-std::string AppActions::labelFor(const std::string& id) const {
-    const auto it = labels_.find(id);
-    return it != labels_.end() && it->second ? it->second() : std::string();
-}
-
 void AppActions::addUi(std::string id, std::string name, std::function<void()> run) {
     actions::Action a;
     a.id = std::move(id);

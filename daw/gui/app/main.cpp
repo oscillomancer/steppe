@@ -532,7 +532,6 @@ int main(int argc, char** argv) {
     // File → Mix: the project's render settings, as a job; the label names the
     // file it will write (gui.md §4.8).
     appActions.addUi("ui.render.mix", "File: mix", [&] { renderDialog.mixJob(); });
-    appActions.setLabel("ui.render.mix", [&] { return renderDialog.mixLabel(); });
     appActions.onPrompt = [&](const actions::Action& action) {
         gui::openActionPrompt(root, appActions, action);
     };

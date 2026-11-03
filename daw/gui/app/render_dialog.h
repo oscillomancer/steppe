@@ -102,10 +102,8 @@ class RenderDialog {
     Status deletePreset(const std::string& name);
 
     // File → Mix: render.mix with no other arguments, as a job, reported by
-    // onStatus; its menu label, resolved each time ("Mix → song-v3.wav (WAV
-    // 24-bit 48 kHz)").
+    // onStatus.
     void mixJob();
-    std::string mixLabel();
 
     // The Folder row's Choose folder…: the app opens the system's folder
     // dialog and, once the renders folder changed, calls showFolder().
