@@ -2564,9 +2564,9 @@ Result:
 
 ## `engine.inputs@1`
 
-The device inputs a track can record: audio channels and MIDI devices.
+The device's audio inputs, MIDI devices and the outputs masters play to.
 
-audio: one entry per input channel (channel, the 1-based number track.set record_input takes, and the device port it is connected to). midi: the MIDI devices (names track.set record_midi matches; JACK ports or native CoreMIDI/WinMM inputs, fixed until restart). While the engine is stopped: running false and empty lists (engine.start opens the device).
+audio: one entry per input channel (channel, the 1-based number track.set record_input takes, and the device port it is connected to). midi: the MIDI devices (names track.set record_midi matches; JACK ports or native CoreMIDI/WinMM inputs, fixed until restart). outputs: one entry per output channel (channel, the number track.set hw_output takes for a master, and the port it is connected to). While the engine is stopped: running false and empty lists (engine.start opens the device).
 
 Kind: `query`. Exposure: `mcp-tool`.
 
@@ -2597,7 +2597,8 @@ Result:
 {
   "running": false,
   "audio": [],
-  "midi": []
+  "midi": [],
+  "outputs": []
 }
 
 ```
@@ -2606,7 +2607,7 @@ Result:
 
 Start playback through JACK, native PortAudio, or a device-free dummy.
 
-backend: jack (Linux default), portaudio (macOS/Windows native device), or dummy (default elsewhere, no device). For portaudio, host_api, input_device and output_device select exact names from engine.devices. inputs defaults to 0 (playback only); outputs defaults to 2. rate defaults to the project rate; a rate given is asked of the device (CoreAudio switches the device's rate when it can, WASAPI converts) or, with JACK on PipeWire, suggested to the graph (node.rate: applied only while the devices are idle and the rate is allowed). force_graph (JACK on PipeWire, default false) instead forces block as the graph's quantum, and rate if given, while the engine runs. PortAudio opens up to 16 native MIDI inputs; engine.inputs lists their names. Dummy is paced like a device. block: the device block in frames (default 256); the device's period may differ and is reported. anticipative (default true): render ahead of the playhead on worker threads (edits are heard up to 200 ms later); false renders everything in the audio callback. The engine runs at the device's rate (media is resampled; renders stay at the project's rate). Background and live thread capacities follows the app's Audio processing threads preference (Automatic by default); live helpers join each callback with no added latency. memory_lock reports the default-off host-process memory policy: requested, active, and a structured OS error on failure. cpu_idle_latency reports the default-off 20 microsecond PM QoS request, released on engine stop. A protection failure does not prevent audio startup. MIDI inputs that refuse to open are skipped: midi_warnings reports each device, numeric os_error, message and corrective hint; audio continues.
+backend: jack (Linux default), portaudio (macOS/Windows native device), or dummy (default elsewhere, no device). For portaudio, host_api, input_device and output_device select exact names from engine.devices. inputs defaults to 0 (playback only); outputs (the device channels masters can play to, track.set hw_output) defaults to one per physical playback port with JACK (2 to 64) and 2 otherwise. rate defaults to the project rate; a rate given is asked of the device (CoreAudio switches the device's rate when it can, WASAPI converts) or, with JACK on PipeWire, suggested to the graph (node.rate: applied only while the devices are idle and the rate is allowed). force_graph (JACK on PipeWire, default false) instead forces block as the graph's quantum, and rate if given, while the engine runs. PortAudio opens up to 16 native MIDI inputs; engine.inputs lists their names. Dummy is paced like a device. block: the device block in frames (default 256); the device's period may differ and is reported. anticipative (default true): render ahead of the playhead on worker threads (edits are heard up to 200 ms later); false renders everything in the audio callback. The engine runs at the device's rate (media is resampled; renders stay at the project's rate). Background and live thread capacities follows the app's Audio processing threads preference (Automatic by default); live helpers join each callback with no added latency. memory_lock reports the default-off host-process memory policy: requested, active, and a structured OS error on failure. cpu_idle_latency reports the default-off 20 microsecond PM QoS request, released on engine stop. A protection failure does not prevent audio startup. MIDI inputs that refuse to open are skipped: midi_warnings reports each device, numeric os_error, message and corrective hint; audio continues.
 
 Kind: `action`. Exposure: `mcp-tool`.
 
@@ -9478,6 +9479,7 @@ Kind: `query`. Exposure: `mcp-tool`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `source` | string |  |  |  | The dialog's source; render.mix always renders the mix |
+| `masters` | array |  |  |  | The mix: the masters to render, a file each (default: tr_0) |
 | `bounds` | string |  |  |  | project (default), loop or custom (start_beat, end_beat) |
 | `start_beat` | number |  | 0.0..1e+09 |  |  |
 | `end_beat` | number |  | ..1e+09 |  |  |
@@ -9497,7 +9499,7 @@ Kind: `query`. Exposure: `mcp-tool`.
 | `metadata` | object |  |  |  | Tags written into each file; text members accept the file-name tokens |
 | `report` | boolean |  |  |  | Write <file>.loudness.txt beside each file |
 | `add_to_project` | boolean |  |  |  |  |
-| `master` | string |  |  |  | Mix: the master (default tr_0) |
+| `master` | string |  |  |  | Mix: one master for this call (default: the settings' masters, else tr_0) |
 | `branch` | string |  |  |  | Render this branch's head (default: the current one) |
 | `version` | integer |  | 0.0.. |  | Render the session as of this version (history.list); the render queue pins its renders |
 | `name` | string |  |  |  | A file name instead of the pattern, for this call |
@@ -9545,7 +9547,7 @@ Result:
 
 Render the mix offline with the project's render settings (default: whole song).
 
-Arguments override project.render (then the user's default, then built-ins) for this call only; render.settings shows what applies. Files go to the renders folder, named by pattern (subfolders allowed). job: true runs the render as a job (job.get for progress, job.cancel to stop). Each file lists its outputs (with delivery checks when a loudness target or a ceiling is set), branch, version, start_beat, seconds, a render id (analyze.render, analyze.compare) and an analysis summary. The mix answers with its file's entry at the top level (path, secondary_path, outputs, peak_dbfs, …); analyze: summary or full adds the report inline.
+Arguments override project.render (then the user's default, then built-ins) for this call only; render.settings shows what applies. Files go to the renders folder, named by pattern (subfolders allowed). job: true runs the render as a job (job.get for progress, job.cancel to stop). Each file lists its outputs (with delivery checks when a loudness target or a ceiling is set), branch, version, start_beat, seconds, a render id (analyze.render, analyze.compare) and an analysis summary. The mix answers with its file's entry at the top level (path, secondary_path, outputs, peak_dbfs, …); analyze: summary or full adds the report inline. masters renders several masters, a file each (the first on top, all in files); a pattern without {track} then gets -{track}, the master's name.
 
 Kind: `action`. Exposure: `mcp-tool`.
 
@@ -9554,6 +9556,7 @@ Kind: `action`. Exposure: `mcp-tool`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `source` | string |  |  |  | The dialog's source; render.mix always renders the mix |
+| `masters` | array |  |  |  | The mix: the masters to render, a file each (default: tr_0) |
 | `bounds` | string |  |  |  | project (default), loop or custom (start_beat, end_beat) |
 | `start_beat` | number |  | 0.0..1e+09 |  |  |
 | `end_beat` | number |  | ..1e+09 |  |  |
@@ -9573,7 +9576,7 @@ Kind: `action`. Exposure: `mcp-tool`.
 | `metadata` | object |  |  |  | Tags written into each file; text members accept the file-name tokens |
 | `report` | boolean |  |  |  | Write <file>.loudness.txt beside each file |
 | `add_to_project` | boolean |  |  |  |  |
-| `master` | string |  |  |  | Mix: the master (default tr_0) |
+| `master` | string |  |  |  | Mix: one master for this call (default: the settings' masters, else tr_0) |
 | `branch` | string |  |  |  | Render this branch's head (default: the current one) |
 | `version` | integer |  | 0.0.. |  | Render the session as of this version (history.list); the render queue pins its renders |
 | `name` | string |  |  |  | A file name instead of the pattern, for this call |
@@ -10005,6 +10008,7 @@ Kind: `action`. Exposure: `mcp-tool`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `source` | string |  |  |  | The dialog's source; render.mix always renders the mix |
+| `masters` | array |  |  |  | The mix: the masters to render, a file each (default: tr_0) |
 | `bounds` | string |  |  |  | project (default), loop or custom (start_beat, end_beat) |
 | `start_beat` | number |  | 0.0..1e+09 |  |  |
 | `end_beat` | number |  | ..1e+09 |  |  |
@@ -10024,7 +10028,7 @@ Kind: `action`. Exposure: `mcp-tool`.
 | `metadata` | object |  |  |  | Tags written into each file; text members accept the file-name tokens |
 | `report` | boolean |  |  |  | Write <file>.loudness.txt beside each file |
 | `add_to_project` | boolean |  |  |  |  |
-| `master` | string |  |  |  | Mix: the master (default tr_0) |
+| `master` | string |  |  |  | Mix: one master for this call (default: the settings' masters, else tr_0) |
 | `branch` | string |  |  |  | Render this branch's head (default: the current one) |
 | `version` | integer |  | 0.0.. |  | Render the session as of this version (history.list); the render queue pins its renders |
 | `name` | string |  |  |  | A file name instead of the pattern, for this call |
@@ -10081,6 +10085,7 @@ Kind: `query`. Exposure: `mcp-tool`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `source` | string |  |  |  | The dialog's source; render.mix always renders the mix |
+| `masters` | array |  |  |  | The mix: the masters to render, a file each (default: tr_0) |
 | `bounds` | string |  |  |  | project (default), loop or custom (start_beat, end_beat) |
 | `start_beat` | number |  | 0.0..1e+09 |  |  |
 | `end_beat` | number |  | ..1e+09 |  |  |
@@ -10100,7 +10105,7 @@ Kind: `query`. Exposure: `mcp-tool`.
 | `metadata` | object |  |  |  | Tags written into each file; text members accept the file-name tokens |
 | `report` | boolean |  |  |  | Write <file>.loudness.txt beside each file |
 | `add_to_project` | boolean |  |  |  |  |
-| `master` | string |  |  |  | Mix: the master (default tr_0) |
+| `master` | string |  |  |  | Mix: one master for this call (default: the settings' masters, else tr_0) |
 | `branch` | string |  |  |  | Render this branch's head (default: the current one) |
 | `version` | integer |  | 0.0.. |  | Render the session as of this version (history.list); the render queue pins its renders |
 | `name` | string |  |  |  | A file name instead of the pattern, for this call |
@@ -10157,6 +10162,7 @@ Kind: `action`. Exposure: `mcp-tool`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `source` | string |  |  |  | The dialog's source; render.mix always renders the mix |
+| `masters` | array |  |  |  | The mix: the masters to render, a file each (default: tr_0) |
 | `bounds` | string |  |  |  | project (default), loop or custom (start_beat, end_beat) |
 | `start_beat` | number |  | 0.0..1e+09 |  |  |
 | `end_beat` | number |  | ..1e+09 |  |  |
@@ -10176,7 +10182,7 @@ Kind: `action`. Exposure: `mcp-tool`.
 | `metadata` | object |  |  |  | Tags written into each file; text members accept the file-name tokens |
 | `report` | boolean |  |  |  | Write <file>.loudness.txt beside each file |
 | `add_to_project` | boolean |  |  |  |  |
-| `master` | string |  |  |  | Mix: the master (default tr_0) |
+| `master` | string |  |  |  | Mix: one master for this call (default: the settings' masters, else tr_0) |
 | `branch` | string |  |  |  | Render this branch's head (default: the current one) |
 | `version` | integer |  | 0.0.. |  | Render the session as of this version (history.list); the render queue pins its renders |
 | `name` | string |  |  |  | A file name instead of the pattern, for this call |
@@ -12131,6 +12137,13 @@ Kind: `query`. Exposure: `mcp-tool`.
               "pattern": "^[a-z]{2}_[0-9]+$"
             }
           },
+          "hw_output": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            },
+            "description": "Masters: the device outputs they play to"
+          },
           "requested_effective_volume_db": {
             "type": "number"
           },
@@ -12323,6 +12336,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | `parent_send` | boolean |  |  |  | The implicit send to the parent buss/master (off: only explicit sends leave the strip) |
 | `timebase` | string |  |  |  | What this channel's items follow when the tempo changes (those that inherit it): project, beats, time or beats_position; they keep their place now |
 | `channels` | integer |  | 1.0..128.0 |  | 1-2: the strip's main pair; up to 128 adds auxiliary channels 3-128 for routes and plug-in pins (a detector on 3/4, a multi-out instrument's outputs), outside the fader, pan and parent send |
+| `hw_output` | array |  |  |  | Masters: the device outputs the main pair plays to: [l, r], [mono] or [] for none (engine.inputs lists them). Default: tr_0 [1, 2], other masters [] |
 
 ### Result
 
@@ -12434,6 +12448,23 @@ Result:
 {
   "track": "tr_1",
   "channels": 4
+}
+
+```
+
+Result:
+
+```json
+{}
+
+```
+
+**Play the main mix to outputs 3 and 4** (`song`)
+
+```json
+{
+  "track": "tr_0",
+  "hw_output": [3, 4]
 }
 
 ```

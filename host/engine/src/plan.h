@@ -204,7 +204,16 @@ struct Chunk {
     std::int64_t stream = 0;  // frames rendered in this epoch before it (ADR-0015)
     std::uint32_t frames = 0;
     std::vector<float> l, r;
+    // The root ring only: device output channels 3 and up (ADR-0056).
+    std::vector<std::vector<float>> extra;
     std::vector<double> timeline, rates;  // root ring only, per consumed boundary
+    std::uint32_t width() const SUPPLE_RT { return 2 + static_cast<std::uint32_t>(extra.size()); }
+    float* channel(std::uint32_t c) SUPPLE_RT {
+        return c == 0 ? l.data() : c == 1 ? r.data() : extra[c - 2].data();
+    }
+    const float* channel(std::uint32_t c) const SUPPLE_RT {
+        return c == 0 ? l.data() : c == 1 ? r.data() : extra[c - 2].data();
+    }
 };
 
 // Single producer (the renderer), single consumer (the audio callback).
@@ -214,12 +223,15 @@ struct ChunkRing {
     alignas(64) std::atomic<std::size_t> write{0};
     alignas(64) std::atomic<std::size_t> read{0};
 
-    ChunkRing(std::size_t capacity, std::uint32_t frames, bool metadata = false) {
+    // `channels`: 2, or the device's outputs for the root ring.
+    ChunkRing(std::size_t capacity, std::uint32_t frames, bool metadata = false,
+              std::uint32_t channels = 2) {
         chunks.resize(std::bit_ceil(std::max<std::size_t>(capacity, 4)));
         mask = chunks.size() - 1;
         for (Chunk& c : chunks) {
             c.l.assign(frames, 0.0f);
             c.r.assign(frames, 0.0f);
+            c.extra.assign(channels > 2 ? channels - 2 : 0, std::vector<float>(frames, 0.0f));
             if (metadata) {
                 c.timeline.resize(frames + 1);
                 c.rates.resize(frames + 1, 1.);
@@ -605,11 +617,21 @@ void forEachStage(N& node, F&& f) {
         for (auto& st : tc.chain) f(st);
 }
 
+// A master's main pair at the device (ADR-0056): 0-based device channels;
+// right < 0 plays mono, (L+R)/2, on `left`.
+struct OutputTap {
+    std::size_t node = 0;
+    int left = 0, right = 1;
+};
+
 struct Plan {
     InstancePool* pool = nullptr;  // main-thread prepare/notifications only
     std::uint64_t generation = 0;  // set by the real-time engine when it publishes the plan
     std::vector<Node> nodes;       // topological order
     std::size_t mainMaster = 0;    // tr_0 need not be last (multiple roots and key routes)
+    // The masters that play to the device, in project.masters order. Each one
+    // is live whenever anything is, and all of them share outputLatency.
+    std::vector<OutputTap> outputs;
     std::vector<Edge> edges;
     bool linearConsole = false;
     model::Playrate masterPlayrate;
@@ -786,6 +808,12 @@ void carryLiveNotes(Plan& from, Plan& to, bool liveOnly) SUPPLE_RT;
 Status configureRateTransition(Plan& p, Plan* previous, PlayrateTimeline& old, std::int64_t device);
 void carryRateSources(Plan& from, Plan& to, int liveClass) SUPPLE_RT;
 void carryMix(Plan& from, Plan& to, int liveClass) SUPPLE_RT;
+// The device output for `k` frames (ADR-0056): every output master's main
+// pair at its channels (taps beyond `width` are skipped), the rest silent.
+// `out[c] + offset` receives channel c. A channel's first tap is copied, so a
+// single master reaches the device bit-exact; further taps add.
+void writeOutputs(const Plan& p, float* const* out, std::uint32_t width, std::uint32_t offset,
+                  std::uint32_t k) SUPPLE_RT;
 
 // `loop`: the executor's transport loop, for plugins that follow it.
 host::Transport transportAt(const Plan& p, std::int64_t sample, const LoopRange* loop = nullptr,

@@ -192,6 +192,11 @@ json::Value engineStartArgs(const AudioDeviceSettings& s,
                 args["inputs"] = std::int64_t{2};
             }
         }
+        // Every output the device has (up to 64), so any master can play to
+        // any of them (ADR-0056).
+        if (output && output->outputs > 2)
+            args["outputs"] =
+                static_cast<std::int64_t>(std::min<std::uint32_t>(output->outputs, 64));
     } else if (backend == "jack" && s.forceGraph) {
         args["force_graph"] = true;
     }

@@ -111,6 +111,23 @@ TEST_CASE("capture names retain channel indices when a connection fails") {
     fake.reset();
 }
 
+TEST_CASE("playback ports: one engine output each; extra outputs stay unconnected (ADR-0056)") {
+    FakeJack& fake = fakeJack();
+    fake.reset();
+    auto names = JackBackend::playbackNames(fakeOptions());
+    REQUIRE(names);
+    CHECK(*names == std::vector<std::string>{"system:playback_1", "system:playback_2"});
+    JackBackend backend(fakeOptions());
+    Recorder rec;
+    BackendConfig cfg;
+    cfg.outputs = 4;
+    REQUIRE(backend.start(cfg, rec.callback()));
+    CHECK(backend.outputNames() ==
+          std::vector<std::string>{"system:playback_1", "system:playback_2", "", ""});
+    backend.stop();
+    fake.reset();
+}
+
 TEST_CASE("the backend runs the engine in blocks, whatever the graph's period") {
     FakeJack& fake = fakeJack();
     fake.reset(1024);

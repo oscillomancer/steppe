@@ -91,6 +91,8 @@ bool validTrackColor(std::string_view color);
 // A strip's channels at most (ADR-0020, ADR-0021): the main pair and up to
 // 126 auxiliary channels (a multi-out instrument's outputs), as REAPER.
 inline constexpr int kMaxTrackChannels = 128;
+// Device output channels a master can play to (ADR-0056).
+inline constexpr int kMaxDeviceOutputs = 64;
 
 // Whole-chain pre-fader render, with original objects retained (ADR-0054).
 struct TrackFreeze {
@@ -116,6 +118,10 @@ struct Track {
     bool phaseInvert = false, mono = false;
     Solo solo = Solo::Off;
     ParentSend parentSend;
+    // Masters only (ADR-0056): the device output channels the main pair plays
+    // to, 1-based: two (left, right), one (mono, (L+R)/2) or none. Unset: the
+    // main master plays to 1/2, other masters to none (hardwareOutputs()).
+    std::optional<std::vector<int>> hwOutput;
     RecordSettings record;
     TrackTimebase timebase = TrackTimebase::Project;
     std::vector<Id> chain, inputChain;
@@ -124,6 +130,13 @@ struct Track {
     std::optional<TrackFreeze> freeze;
     int folderCompact = 0;  // 0 normal, 1 small, 2 collapsed
 };
+
+// A master's device output channels (1-based), with the default resolved.
+inline std::vector<int> hardwareOutputs(const Track& track, Id id) {
+    if (track.type != StripType::Master) return {};
+    if (track.hwOutput) return *track.hwOutput;
+    return id == kMaster ? std::vector<int>{1, 2} : std::vector<int>{};
+}
 
 // Track edit links and an optional audio-free VCA control (ADR-0052).
 inline constexpr std::size_t kMaxVcaControllers = 32;

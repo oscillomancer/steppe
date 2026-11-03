@@ -53,6 +53,19 @@ Audio device dialog then opens and says why. Choose another device, or
 what is running: the backend, rate, buffer size, device period and output
 latency.
 
+### Outputs and several masters
+
+Quire opens every output of the device (up to 64; with JACK, one per
+playback port). The main master plays to outputs 1 and 2. A project can have
+more masters (right-click the mixer's empty space, **Master**), for example
+a headphone mix or a second pair of speakers: each has its own fader, effects
+and outputs. Click a master's **out** button in the mixer to choose where it
+plays: *None*, a stereo pair (1/2, 3/4, …) or a single output in mono. A new
+master plays nowhere until you choose. Masters that share outputs add up, and
+all masters reach the device at the same moment, whatever their effects'
+latency. The metronome plays on outputs 1 and 2. The menu lists the outputs
+only while the audio engine is running.
+
 When monitoring an armed input, the latency comes from the device, input FX,
 and effects on that input's route to the master. Effects on unrelated playback
 tracks do not delay it. If the input feeds both a direct path and a bus with
@@ -127,7 +140,10 @@ writes it to the project. Presets and your default are kept in the data folder
 
 ### Sources and ranges
 
-- **Master mix** renders the master. **Stems** renders each checked top-level
+- **Master mix** renders the main master. With more than one master, a list
+  under it chooses which masters to render, each to its own file named after
+  the master (`-{track}` is added to the file name unless it already has
+  `{track}`). **Stems** renders each checked top-level
   track to its own file, isolated (no master processing) or through the
   master, after the fader, before it or before the effects; *Skip silent
   stems* leaves out tracks that stay below −90 dBFS. **Regions** renders each

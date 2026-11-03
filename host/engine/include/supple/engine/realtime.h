@@ -230,6 +230,8 @@ class Backend {
     // What each audio input channel is connected to (index 0 = channel 1;
     // "" when unconnected), fixed while running. Main thread.
     virtual std::vector<std::string> inputNames() const { return {}; }
+    // What each audio output channel is connected to, likewise (ADR-0056).
+    virtual std::vector<std::string> outputNames() const { return {}; }
 };
 
 // No device. `Manual` runs cycles on the caller's thread (deterministic
@@ -269,7 +271,8 @@ class DummyBackend : public Backend {
 
     void run(std::int64_t cycles);  // Manual mode: run cycles now, on this thread
     std::int64_t cycles() const { return cycles_.load(); }
-    const audio::AudioData& capture() const { return capture_; }  // read after stop() / run()
+    // Every output channel; read after stop() / run().
+    const audio::AudioData& capture() const { return capture_; }
 
   private:
     std::vector<MidiInputEvent> midi_;  // this cycle's (capacity reserved)
@@ -280,7 +283,8 @@ class DummyBackend : public Backend {
     std::thread thread_;
     std::atomic<bool> running_{false};
     std::atomic<std::int64_t> cycles_{0};
-    std::vector<float> outL_, outR_;
+    std::vector<std::vector<float>> outputs_;  // config.outputs channels
+    std::vector<float*> outPtrs_;
     std::vector<std::vector<float>> inputs_;
     std::vector<float*> inPtrs_;
     std::int64_t inputFrame_ = 0;
@@ -515,6 +519,13 @@ class Engine {
     std::atomic<std::uint64_t> countSeq_{0};
     std::atomic<bool> counting_{false};
     void countClicks(float* const* out, std::uint32_t k) SUPPLE_RT;
+    // The device outputs from `offset` (ADR-0056): silence, or the plan's
+    // output masters.
+    void silence(float* const* out, std::uint32_t offset, std::uint32_t k) const SUPPLE_RT;
+    void writeDevice(const detail::Plan& p, float* const* out, std::uint32_t offset,
+                     std::uint32_t k) const SUPPLE_RT;
+    // `out` advanced by `by` frames, every device channel.
+    std::array<float*, 64> advanced(float* const* out, std::uint32_t by) const SUPPLE_RT;
     // Audio thread: the count in progress, and the play request this cycle
     // acts on (read once, before the count request, so a count-in is never
     // missed by a cycle that already sees its play()).
@@ -732,8 +743,9 @@ class Engine {
 
     // The callback's share when anticipative: its plan and the live instances
     // it owns, and where it plays live nodes.
-    std::uint32_t deviceInputs_ = 0;  // written before the backend starts
-    Backend* midiSource_ = nullptr;   // the backend, for the callback: set before it starts
+    std::uint32_t deviceInputs_ = 0;   // written before the backend starts
+    std::uint32_t deviceOutputs_ = 2;  // the callback's out channels (at most 64), likewise
+    Backend* midiSource_ = nullptr;    // the backend, for the callback: set before it starts
     detail::Plan* livePlan_ = nullptr;
     std::vector<host::Instance*> liveProcessing_;
     std::int64_t livePos_ = 0;

@@ -260,8 +260,8 @@ schema::Schema<Selectors> selectorSchema() {
         .field("master", &Selectors::master,
                schema::string()
                    .pattern("^tr_[0-9]+$", "master id")
-                   .doc("Mix: the master "
-                        "(default tr_0)"))
+                   .doc("Mix: one master for this call (default: the settings' masters, "
+                        "else tr_0)"))
         .field("branch", &Selectors::branch,
                schema::string().doc("Render this branch's head (default: the current one)"))
         .field("version", &Selectors::version,
@@ -703,10 +703,39 @@ Result<RenderPlan> plan(EngineApp& app, rs::Source operation, const Args& a, boo
     for (std::size_t i = 0; i < e.outputs->size(); ++i)
         encodings.push_back(
             encodingOf((*e.outputs)[i], static_cast<int>(*e.sampleRate), s.project->seed, i));
-    const std::string pattern =
+    std::string pattern =
         a.sel.name.value_or(operation == rs::Source::Mix     ? *e.pattern->mix
                             : operation == rs::Source::Stems ? *e.pattern->stems
                                                              : *e.pattern->regions);
+    // The mix's masters (ADR-0056): `master` for this call, else the
+    // settings' masters, else the main master alone.
+    std::vector<model::Id> mixMasters;
+    if (operation == rs::Source::Mix) {
+        if (a.sel.master) {
+            auto id = trackId(s, *a.sel.master, "/master");
+            if (!id) return std::move(id).error();
+            mixMasters.push_back(*id);
+        } else if (e.masters) {
+            for (const auto& text : *e.masters) {
+                auto id = trackId(s, text, "/masters");
+                if (!id) return std::move(id).error();
+                if (s.tracks.find(*id)->type != model::StripType::Master)
+                    return Error("render.masters", "not a master: " + text, "/masters",
+                                 "list master ids from track.list (type master)");
+                if (std::find(mixMasters.begin(), mixMasters.end(), *id) == mixMasters.end())
+                    mixMasters.push_back(*id);
+            }
+        } else {
+            mixMasters.push_back(model::kMaster);
+        }
+        for (model::Id id : mixMasters)
+            if (s.tracks.find(id)->type != model::StripType::Master)
+                return Error("track.strip_type", "mix output must be a master", "/master",
+                             "choose a master id from track.list");
+        // Several masters: each file is told apart by its master's name.
+        if (mixMasters.size() > 1 && pattern.find("{track") == std::string::npos)
+            pattern += "-{track}";
+    }
     std::error_code ec;
     const auto root = fs::weakly_canonical(app.rendersDir(), ec);
     if (ec)
@@ -959,7 +988,12 @@ Result<RenderPlan> plan(EngineApp& app, rs::Source operation, const Args& a, boo
         return {};
     };
     if (operation == rs::Source::Mix) {
-        SUPPLE_TRY(add({}, {}, 0, 0));
+        if (mixMasters == std::vector<model::Id>{model::kMaster}) {
+            SUPPLE_TRY(add({}, {}, 0, 0));  // {track} stays empty, as before ADR-0056
+        } else {
+            int n = 0;
+            for (model::Id id : mixMasters) SUPPLE_TRY(add(id, {}, ++n, 0));
+        }
     } else if (operation == rs::Source::Stems) {
         std::vector<model::Id> ids;
         if (e.stems->tracks)
@@ -1367,6 +1401,8 @@ json::Value mixResult(json::Value result) {
             out["peak_dbfs"] = std::round(peak->asDouble() * 100) / 100;
     }
     if (const auto* skipped = result.find("skipped")) out["skipped"] = *skipped;
+    // Several masters (ADR-0056): the first file on top, every file listed.
+    if (files && files->size() > 1) out["files"] = *files;
     return out;
 }
 
@@ -2057,7 +2093,9 @@ void registerRenderCommands(cmd::Registry& registry) {
         if (which == "render.mix")
             c.description +=
                 " The mix answers with its file's entry at the top level (path, secondary_path, "
-                "outputs, peak_dbfs, …); analyze: summary or full adds the report inline.";
+                "outputs, peak_dbfs, …); analyze: summary or full adds the report inline. "
+                "masters renders several masters, a file each (the first on top, all in files); "
+                "a pattern without {track} then gets -{track}, the master's name.";
         if (which == "render.dry-run")
             c.description =
                 "Each file: path (where if_exists sends it), exists (its destination is already "

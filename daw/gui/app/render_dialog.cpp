@@ -639,6 +639,33 @@ void RenderDialog::buildSource(ui::Node& body) {
         markDirty();
     };
     const model::Session& s = app_.head();
+    // Several masters (ADR-0056): which of them the mix renders, a file each.
+    if (current == Source::Master && s.project->masters.size() > 1) {
+        std::vector<Choice> masters;
+        for (model::Id id : s.project->masters) {
+            const model::Track* t = s.tracks.find(id);
+            masters.push_back({id.str(), t && !t->name.empty() ? t->name : id.str()});
+        }
+        std::vector<std::string> on;
+        if (const auto* list = settings_.find("masters"); list && list->isArray())
+            for (const auto& m : list->asArray())
+                if (std::any_of(masters.begin(), masters.end(),
+                                [&](const Choice& c) { return c.value == m.asString(); }))
+                    on.push_back(m.asString());
+        if (on.empty()) on.push_back(model::kMaster.str());
+        auto& list = body.emplace<ui::Checklist>("render.masters");
+        list.setItems(masters, on);
+        list.onChange = [this](const std::vector<std::string>& checked) {
+            // None checked, or the main master alone: the default.
+            if (checked.empty() || checked == std::vector<std::string>{model::kMaster.str()}) {
+                set("masters", json::Value(), checked.empty());
+                return;
+            }
+            json::Value ids = json::Value::array();
+            for (const auto& id : checked) ids.push_back(id);
+            set("masters", std::move(ids));
+        };
+    }
     if (current == Source::Stems) {
         std::vector<Choice> tracks;
         for (const auto& e : s.tracks)

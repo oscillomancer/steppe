@@ -403,6 +403,23 @@ path; Audio processing threads Limit 1 disables it on next start.
 6. Write hardware outputs; publish meters (lossy rings) and state deltas
    (coalescing slots).
 
+**Device outputs (ADR-0056).** The plan lists the masters with a
+`hw_output` (tr_0 plays to 1/2 unless it says otherwise) as output taps.
+Every executor writes all of the device's opened channels: each tap's main
+pair into its channels (one channel: (L+R)/2), the first tap of a channel
+copied and later ones added, every other channel silent; taps beyond the
+device's channels are skipped and `engine.load` adds a warning naming them.
+The anticipative root ring carries every device channel; frontier rings stay
+stereo. Output masters are live whenever anything is live. The main master
+and every output master are latency anchors: `outputLatency` is the largest
+of their `latIn + latChain`, and each anchor's `timelineShift` is
+`outputLatency − latChain`, so all of them reach the device together (with
+only tr_0, its own latency as before). A key route from one output master
+into another's path can pull the first earlier; the plan then warns with the
+sample count. The metronome plays on outputs 1/2. Offline renders of any
+master use that master's own shift and latency, so the device output of each
+master equals its offline render at `outputLatency`.
+
 **Meters**. Per strip, the peak and the mean square of the strip's signal
 **after the fader and after the pan law, before the Console 9 encode**
 (`sum × faderGain × ` the stage's own `panGains` — what a user expects at
@@ -585,6 +602,11 @@ first use, and no plug-in code runs early to warm it.
   `outputs: [{path, format}]`. With no `operation` it plans the settings'
   `source`. `render.mix` answers with its file's entry at the top level
   (plus `peak_dbfs`, `render`, `output_latency` and `skipped`), as before.
+  The mix renders the `masters` setting, a file each in that order
+  (ADR-0056; `master` for one call; absent: tr_0 with `{track}` empty, as
+  before); with several, the first file is on top and `files` lists all, and
+  a pattern without `{track}` gets `-{track}`. A listed id that is not a
+  master is `render.masters`.
   A later output with no `suffix` whose extension repeats an earlier one's
   is named with its bit depth, bit rate or quality (`mix.16.wav`,
   `mix.128k.mp3`, `mix.q6.ogg`); two outputs that still collide are
@@ -1542,9 +1564,14 @@ but never builds or initializes the PortAudio library.
 
 `engine.start` accepts backend `jack|portaudio|dummy` and optional `host_api`,
 `input_device`, `output_device`, `rate` (1..768000), `inputs` (0..64) and `outputs`
-(2..64). Native stream audio inputs default to zero, outputs to two;
-the engine writes the first stereo pair. Both native and JACK backends clear
-any additional opened output channels to silence before invoking the engine.
+(2..64). Native stream audio inputs default to zero, outputs to two (the
+GUI asks for every output of the chosen device, up to 64); JACK registers one
+output per physical playback port, 2 to 64, unless `outputs` is given. The
+engine writes every opened output channel (Device outputs, §2.3). Both
+native and JACK backends also clear any additional opened output channels to
+silence before invoking the engine. `engine.inputs` lists `outputs`, one
+`{channel, port}` per opened output (JACK: the playback port it connects to;
+native: empty).
 engine.start enables native MIDI inputs (ADR-0042). JACK keeps its capture/MIDI behavior. Native default backend stays
 dummy (the GUI starts the saved device instead, ADR-0050); Linux's existing
 default stays JACK. An explicit `rate` sets `PortAudioOptions::changeDeviceRate`:

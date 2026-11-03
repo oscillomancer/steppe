@@ -635,6 +635,7 @@ struct TrackSetArgs {
     std::optional<bool> parentSend;
     std::optional<model::TrackTimebase> timebase;
     std::optional<std::int64_t> channels;
+    std::optional<std::vector<std::int64_t>> hwOutput;
 };
 struct TrackEntry {
     bool frozen = false;
@@ -647,6 +648,7 @@ struct TrackEntry {
     std::string solo;
     std::vector<std::string> fx, items;
     std::vector<Id> groups, vcas;
+    std::optional<std::vector<std::int64_t>> hwOutput;  // masters
     double requestedEffective = 0, effective = 0, at = 0;
     bool effectiveMute = false, soloSilenced = false;
 };
@@ -984,6 +986,16 @@ void registerEngineCommands(cmd::Registry& registry) {
                                              "unknown stem track " + cell.asString(),
                                              "/render/stems/tracks", "use track.list");
                         }
+                if (const auto* masters = a.render->find("masters"))  // ADR-0056
+                    for (const auto& cell : masters->asArray()) {
+                        auto id = model::Id::parse(cell.asString());
+                        const model::Session view = A(ctx).view();
+                        const model::Track* strip = id ? view.tracks.find(*id) : nullptr;
+                        if (!strip || strip->type != model::StripType::Master)
+                            return Error("render.masters", "not a master: " + cell.asString(),
+                                         "/render/masters",
+                                         "list master ids from track.list (type master)");
+                    }
                 p.render = *a.render;
             }
             if (a.timebase && *a.timebase != p.timebase) {
@@ -1556,6 +1568,11 @@ void registerEngineCommands(cmd::Registry& registry) {
                         .doc("1-2: the strip's main pair; up to 128 adds auxiliary channels 3-128 "
                              "for routes and plug-in pins (a detector on 3/4, a multi-out "
                              "instrument's outputs), outside the fader, pan and parent send"))
+                .field("hw_output", &TrackSetArgs::hwOutput,
+                       schema::arrayOf(schema::integer().range(1, model::kMaxDeviceOutputs))
+                           .doc("Masters: the device outputs the main pair plays to: [l, r], "
+                                "[mono] or [] for none (engine.inputs lists them). Default: "
+                                "tr_0 [1, 2], other masters []"))
                 .build();
         c.result = emptySchema();
         c.examples = {
@@ -1570,7 +1587,9 @@ void registerEngineCommands(cmd::Registry& registry) {
              obj("{}"), "song"},
             {"Check the mix in mono", obj(R"({"track": "tr_0", "mono": true})"), obj("{}"), "song"},
             {"Four channels: a key signal can arrive on 3/4",
-             obj(R"({"track": "tr_1", "channels": 4})"), obj("{}"), "song"}};
+             obj(R"({"track": "tr_1", "channels": 4})"), obj("{}"), "song"},
+            {"Play the main mix to outputs 3 and 4",
+             obj(R"({"track": "tr_0", "hw_output": [3, 4]})"), obj("{}"), "song"}};
         c.run = [](const TrackSetArgs& a, Context& ctx) -> Result<Empty> {
             EngineApp& app = A(ctx);
             const model::Session s = app.view();
@@ -1589,6 +1608,15 @@ void registerEngineCommands(cmd::Registry& registry) {
                 return Error("track.record_input", "record audio or MIDI, not both", "/record_midi",
                              "provide either record_input for audio or record_midi for MIDI, and "
                              "clear the other input");
+            if (a.hwOutput && a.type.value_or(s.tracks.find(*id)->type) != model::StripType::Master)
+                return Error("track.strip_type", "only masters play to hardware outputs",
+                             "/hw_output",
+                             "send this strip to a master and set that master's hw_output");
+            if (a.hwOutput && (a.hwOutput->size() > 2 ||
+                               (a.hwOutput->size() == 2 && (*a.hwOutput)[0] == (*a.hwOutput)[1])))
+                return Error("track.hw_output",
+                             "hw_output is two different channels, one channel or none",
+                             "/hw_output", "e.g. [3, 4] for a pair, [5] for mono, [] for none");
             if (a.parentSend && !s.tracks.find(*id)->parent)
                 return Error("track.parent_send", "a master has no parent", "/parent_send",
                              "masters feed hardware outputs and renders");
@@ -1611,7 +1639,10 @@ void registerEngineCommands(cmd::Registry& registry) {
                     txn.setProject(std::move(p));
                     txn.modify<model::Track>(model::kMaster,
                                              [&](auto& tr) { tr.children.push_back(*id); });
-                    txn.modify<model::Track>(*id, [](auto& tr) { tr.parent = model::kMaster; });
+                    txn.modify<model::Track>(*id, [](auto& tr) {
+                        tr.parent = model::kMaster;
+                        tr.hwOutput.reset();  // only masters play to hardware
+                    });
                 }
                 txn.modify<model::Track>(*id, [&](auto& tr) {
                     tr.type = *a.type;
@@ -1679,6 +1710,8 @@ void registerEngineCommands(cmd::Registry& registry) {
                 if (a.parentSend) t.parentSend.enabled = *a.parentSend;
                 if (a.timebase) t.timebase = *a.timebase;
                 if (a.channels) t.channels = static_cast<int>(*a.channels);
+                if (a.hwOutput)
+                    t.hwOutput = std::vector<int>(a.hwOutput->begin(), a.hwOutput->end());
                 if (a.solo)
                     t.solo = *a.solo == "on"         ? model::Solo::On
                              : *a.solo == "in_place" ? model::Solo::InPlace
@@ -1796,6 +1829,9 @@ void registerEngineCommands(cmd::Registry& registry) {
                          .field("items", &TrackEntry::items, schema::arrayOf(schema::string()))
                          .field("groups", &TrackEntry::groups, schema::arrayOf(model::idSchema()))
                          .field("vcas", &TrackEntry::vcas, schema::arrayOf(model::idSchema()))
+                         .field("hw_output", &TrackEntry::hwOutput,
+                                schema::arrayOf(schema::integer())
+                                    .doc("Masters: the device outputs they play to"))
                          .field("requested_effective_volume_db", &TrackEntry::requestedEffective,
                                 schema::number())
                          .field("effective_volume_db", &TrackEntry::effective, schema::number())
@@ -1825,6 +1861,10 @@ void registerEngineCommands(cmd::Registry& registry) {
                 e.at = args.at.value_or(A(ctx).engine() ? A(ctx).engine()->transport().seconds : 0);
                 e.groups = model::trackGroups(s, id);
                 e.vcas = model::vcaControllers(s, id);
+                if (t.type == model::StripType::Master) {
+                    const auto channels = model::hardwareOutputs(t, id);
+                    e.hwOutput = std::vector<std::int64_t>(channels.begin(), channels.end());
+                }
                 const auto level = model::effectiveTrackLevel(s, id, e.at);
                 e.requestedEffective = level.requestedDb;
                 e.effective = level.appliedDb;
@@ -3636,7 +3676,9 @@ void registerEngineCommands(cmd::Registry& registry) {
             "(default "
             "elsewhere, no device). For portaudio, host_api, input_device and output_device "
             "select exact names from engine.devices. inputs defaults to 0 (playback only); "
-            "outputs defaults to 2. rate defaults to the project rate; a rate given is asked of "
+            "outputs (the device channels masters can play to, track.set hw_output) defaults to "
+            "one per physical playback port with JACK (2 to 64) and 2 otherwise. rate defaults to "
+            "the project rate; a rate given is asked of "
             "the device (CoreAudio switches the device's rate when it can, WASAPI converts) or, "
             "with JACK on PipeWire, suggested to the graph (node.rate: applied only while the "
             "devices are idle and the rate is allowed). force_graph (JACK on PipeWire, default "
@@ -3717,7 +3759,7 @@ void registerEngineCommands(cmd::Registry& registry) {
             device.native.outputDevice = a.outputDevice.value_or("");
             device.rate = a.rate.value_or(0);
             device.inputs = static_cast<std::uint32_t>(a.inputs.value_or(0));
-            device.outputs = static_cast<std::uint32_t>(a.outputs.value_or(2));
+            device.outputs = static_cast<std::uint32_t>(a.outputs.value_or(0));
             device.forceGraph = a.forceGraph.value_or(false);
             SUPPLE_TRY(app.startEngine(backend == BackendArg::Dummy  ? "dummy"
                                        : backend == BackendArg::Jack ? "jack"
@@ -3749,18 +3791,21 @@ void registerEngineCommands(cmd::Registry& registry) {
         c.name = "engine.inputs";
         c.kind = Kind::Query;
         c.exposure = cmd::Exposure::McpTool;
-        c.summary = "The device inputs a track can record: audio channels and MIDI devices.";
+        c.summary = "The device's audio inputs, MIDI devices and the outputs masters play to.";
         c.description =
             "audio: one entry per input channel (channel, the 1-based number track.set "
             "record_input takes, and the device port it is connected to). midi: the MIDI devices "
             "(names track.set record_midi matches; JACK ports or native CoreMIDI/WinMM inputs, "
-            "fixed until restart). While the engine is stopped: running false and "
+            "fixed until restart). outputs: one entry per output channel (channel, the number "
+            "track.set hw_output takes for a master, and the port it is connected to). While the "
+            "engine is stopped: running false and "
             "empty lists (engine.start opens the device).";
         c.tags = {"engine", "record"};
         c.args = schema::object<NoArgs>("no_args").build();
         c.result = schema::any();
-        c.examples = {
-            {"Stopped", obj("{}"), obj(R"({"running": false, "audio": [], "midi": []})"), "empty"}};
+        c.examples = {{"Stopped", obj("{}"),
+                       obj(R"({"running": false, "audio": [], "midi": [], "outputs": []})"),
+                       "empty"}};
         c.run = [](const NoArgs&, Context& ctx) -> Result<json::Value> {
             EngineApp& app = A(ctx);
             const Backend* backend = app.backend();
@@ -3768,6 +3813,7 @@ void registerEngineCommands(cmd::Registry& registry) {
             out["running"] = backend != nullptr;
             out["audio"] = json::Value::array();
             out["midi"] = json::Value::array();
+            out["outputs"] = json::Value::array();
             if (!backend) return out;
             json::Value audio = json::Value::array();
             const auto names = backend->inputNames();
@@ -3778,10 +3824,19 @@ void registerEngineCommands(cmd::Registry& registry) {
                 e["port"] = ch < names.size() ? names[ch] : std::string();
                 audio.push_back(std::move(e));
             }
+            json::Value outputs = json::Value::array();
+            const auto outNames = backend->outputNames();
+            for (std::uint32_t ch = 0; ch < backend->config().outputs; ++ch) {
+                json::Value e = json::Value::object();
+                e["channel"] = static_cast<std::int64_t>(ch + 1);
+                e["port"] = ch < outNames.size() ? outNames[ch] : std::string();
+                outputs.push_back(std::move(e));
+            }
             json::Value midi = json::Value::array();
             for (const std::string& name : backend->midiPorts()) midi.push_back(name);
             out["backend"] = backend->name();
             out["audio"] = std::move(audio);
+            out["outputs"] = std::move(outputs);
             out["midi"] = std::move(midi);
             return out;
         };

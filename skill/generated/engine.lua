@@ -927,6 +927,7 @@ q = nil
 
 ---@class Quire.render_dry_run_args
 ---@field source? "mix"|"stems"|"regions" The dialog's source; render.mix always renders the mix
+---@field masters? string[] The mix: the masters to render, a file each (default: tr_0)
 ---@field bounds? "project"|"loop"|"custom" project (default), loop or custom (start_beat, end_beat)
 ---@field start_beat? number
 ---@field end_beat? number
@@ -946,7 +947,7 @@ q = nil
 ---@field metadata? table Tags written into each file; text members accept the file-name tokens
 ---@field report? boolean Write <file>.loudness.txt beside each file
 ---@field add_to_project? boolean
----@field master? string Mix: the master (default tr_0)
+---@field master? string Mix: one master for this call (default: the settings' masters, else tr_0)
 ---@field branch? string Render this branch's head (default: the current one)
 ---@field version? integer Render the session as of this version (history.list); the render queue pins its renders
 ---@field name? string A file name instead of the pattern, for this call
@@ -964,6 +965,7 @@ q = nil
 
 ---@class Quire.render_mix_args
 ---@field source? "mix"|"stems"|"regions" The dialog's source; render.mix always renders the mix
+---@field masters? string[] The mix: the masters to render, a file each (default: tr_0)
 ---@field bounds? "project"|"loop"|"custom" project (default), loop or custom (start_beat, end_beat)
 ---@field start_beat? number
 ---@field end_beat? number
@@ -983,7 +985,7 @@ q = nil
 ---@field metadata? table Tags written into each file; text members accept the file-name tokens
 ---@field report? boolean Write <file>.loudness.txt beside each file
 ---@field add_to_project? boolean
----@field master? string Mix: the master (default tr_0)
+---@field master? string Mix: one master for this call (default: the settings' masters, else tr_0)
 ---@field branch? string Render this branch's head (default: the current one)
 ---@field version? integer Render the session as of this version (history.list); the render queue pins its renders
 ---@field name? string A file name instead of the pattern, for this call
@@ -1026,6 +1028,7 @@ q = nil
 
 ---@class Quire.render_regions_args
 ---@field source? "mix"|"stems"|"regions" The dialog's source; render.mix always renders the mix
+---@field masters? string[] The mix: the masters to render, a file each (default: tr_0)
 ---@field bounds? "project"|"loop"|"custom" project (default), loop or custom (start_beat, end_beat)
 ---@field start_beat? number
 ---@field end_beat? number
@@ -1045,7 +1048,7 @@ q = nil
 ---@field metadata? table Tags written into each file; text members accept the file-name tokens
 ---@field report? boolean Write <file>.loudness.txt beside each file
 ---@field add_to_project? boolean
----@field master? string Mix: the master (default tr_0)
+---@field master? string Mix: one master for this call (default: the settings' masters, else tr_0)
 ---@field branch? string Render this branch's head (default: the current one)
 ---@field version? integer Render the session as of this version (history.list); the render queue pins its renders
 ---@field name? string A file name instead of the pattern, for this call
@@ -1063,6 +1066,7 @@ q = nil
 
 ---@class Quire.render_settings_args
 ---@field source? "mix"|"stems"|"regions" The dialog's source; render.mix always renders the mix
+---@field masters? string[] The mix: the masters to render, a file each (default: tr_0)
 ---@field bounds? "project"|"loop"|"custom" project (default), loop or custom (start_beat, end_beat)
 ---@field start_beat? number
 ---@field end_beat? number
@@ -1082,7 +1086,7 @@ q = nil
 ---@field metadata? table Tags written into each file; text members accept the file-name tokens
 ---@field report? boolean Write <file>.loudness.txt beside each file
 ---@field add_to_project? boolean
----@field master? string Mix: the master (default tr_0)
+---@field master? string Mix: one master for this call (default: the settings' masters, else tr_0)
 ---@field branch? string Render this branch's head (default: the current one)
 ---@field version? integer Render the session as of this version (history.list); the render queue pins its renders
 ---@field name? string A file name instead of the pattern, for this call
@@ -1100,6 +1104,7 @@ q = nil
 
 ---@class Quire.render_stems_args
 ---@field source? "mix"|"stems"|"regions" The dialog's source; render.mix always renders the mix
+---@field masters? string[] The mix: the masters to render, a file each (default: tr_0)
 ---@field bounds? "project"|"loop"|"custom" project (default), loop or custom (start_beat, end_beat)
 ---@field start_beat? number
 ---@field end_beat? number
@@ -1119,7 +1124,7 @@ q = nil
 ---@field metadata? table Tags written into each file; text members accept the file-name tokens
 ---@field report? boolean Write <file>.loudness.txt beside each file
 ---@field add_to_project? boolean
----@field master? string Mix: the master (default tr_0)
+---@field master? string Mix: one master for this call (default: the settings' masters, else tr_0)
 ---@field branch? string Render this branch's head (default: the current one)
 ---@field version? integer Render the session as of this version (history.list); the render queue pins its renders
 ---@field name? string A file name instead of the pattern, for this call
@@ -1364,6 +1369,7 @@ q = nil
 ---@field parent_send? boolean The implicit send to the parent buss/master (off: only explicit sends leave the strip)
 ---@field timebase? "project"|"time"|"beats"|"beats_position" What this channel's items follow when the tempo changes (those that inherit it): project, beats, time or beats_position; they keep their place now
 ---@field channels? integer 1-2: the strip's main pair; up to 128 adds auxiliary channels 3-128 for routes and plug-in pins (a detector on 3/4, a multi-out instrument's outputs), outside the fader, pan and parent send
+---@field hw_output? integer[] Masters: the device outputs the main pair plays to: [l, r], [mono] or [] for none (engine.inputs lists them). Default: tr_0 [1, 2], other masters []
 
 ---@class Quire.track_template_delete_args
 ---@field name string
@@ -1586,7 +1592,7 @@ q = nil
 
 ---@class Quire.engine
 ---@field devices fun(args?: Quire.engine_devices_args): Quire.engine_devices_result List native audio device names, host APIs, rates and channel capacities.
----@field inputs fun(): table The device inputs a track can record: audio channels and MIDI devices.
+---@field inputs fun(): table The device's audio inputs, MIDI devices and the outputs masters play to.
 ---@field start fun(args?: Quire.engine_start_args): Quire.engine_start_result Start playback through JACK, native PortAudio, or a device-free dummy.
 ---@field status fun(): Quire.engine_status_result Real-time engine state: backend, rate, block, device period, latency, xruns.
 ---@field stop fun(): table Stop real-time playback and release the audio device.

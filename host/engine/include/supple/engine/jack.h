@@ -79,15 +79,19 @@ class JackBackend : public Backend {
     std::span<const MidiInputEvent> midiInput() const override;
     std::vector<std::string> midiPorts() const override;
     std::vector<std::string> inputNames() const override;
+    std::vector<std::string> outputNames() const override;
     // The device's physical capture ports, in order, from a short-lived
     // client (no activation): how many inputs start() should open.
     static Result<std::vector<std::string>> captureNames(const Options& options = {});
+    // The physical playback ports (ADR-0056: one engine output each), likewise.
+    static Result<std::vector<std::string>> playbackNames(const Options& options = {});
 
     // Whether libjack can be loaded and has every symbol we use. Does not
     // contact a server.
     static Status available(const std::string& library = "libjack.so.0");
 
   private:
+    static Result<std::vector<std::string>> physicalPorts(const Options& options, bool capture);
     struct Impl;
     MainThreadWake* mainWake_ = nullptr;
     Options options_;

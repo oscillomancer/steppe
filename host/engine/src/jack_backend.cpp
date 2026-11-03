@@ -293,10 +293,21 @@ struct JackBackend::Impl {
         if (client) api->clientClose(client);
         client = nullptr;
     }
-    std::vector<std::string> inputNames;  // what each input is connected to
+    std::vector<std::string> inputNames;   // what each input is connected to
+    std::vector<std::string> outputNames;  // what each output is connected to
 };
 
 JackBackend::JackBackend(Options options) : options_(std::move(options)) {}
+
+std::vector<std::string> JackBackend::outputNames() const {
+    std::vector<std::string> out = impl_ ? impl_->outputNames : std::vector<std::string>{};
+    out.resize(config_.outputs);  // unconnected channels: ""
+    return out;
+}
+
+Result<std::vector<std::string>> JackBackend::playbackNames(const Options& options) {
+    return physicalPorts(options, false);
+}
 
 std::vector<std::string> JackBackend::inputNames() const {
     std::vector<std::string> out = impl_ ? impl_->inputNames : std::vector<std::string>{};
@@ -305,6 +316,10 @@ std::vector<std::string> JackBackend::inputNames() const {
 }
 
 Result<std::vector<std::string>> JackBackend::captureNames(const Options& options) {
+    return physicalPorts(options, true);
+}
+
+Result<std::vector<std::string>> JackBackend::physicalPorts(const Options& options, bool capture) {
     auto loadedApi = loadApi(options.library);
     if (!loadedApi) return std::move(loadedApi).error();
     const Api* api = *loadedApi;
@@ -318,7 +333,8 @@ Result<std::vector<std::string>> JackBackend::captureNames(const Options& option
                      "a client/port configuration it can accept");
     std::vector<std::string> names;
     if (const char** ports =
-            api->getPorts(client, nullptr, kAudioType, kPortIsPhysical | kPortIsOutput)) {
+            api->getPorts(client, nullptr, kAudioType,
+                          kPortIsPhysical | (capture ? kPortIsOutput : kPortIsInput))) {
         for (std::size_t c = 0; ports[c]; ++c) names.emplace_back(ports[c]);
         api->free(static_cast<void*>(ports));
     }
@@ -450,10 +466,12 @@ Status JackBackend::start(const BackendConfig& config, Callback callback) {
     if (options_.connectOutputs) {
         // Our outputs to the physical playback ports, in order; a device with
         // fewer ports leaves the rest unconnected.
+        impl->outputNames.resize(config.outputs);
         if (const char** ports =
                 api->getPorts(impl->client, nullptr, kAudioType, kPortIsPhysical | kPortIsInput)) {
             for (std::uint32_t c = 0; c < config.outputs && ports[c]; ++c)
-                api->connect(impl->client, api->portName(impl->outPorts[c]), ports[c]);
+                if (api->connect(impl->client, api->portName(impl->outPorts[c]), ports[c]) == 0)
+                    impl->outputNames[c] = ports[c];
             api->free(static_cast<void*>(ports));
         }
         // The physical capture ports into our inputs, in order.

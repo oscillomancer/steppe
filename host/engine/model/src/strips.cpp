@@ -111,6 +111,16 @@ Status validateStripRules(const Session& s) {
              t.record.mode != RecordMode::Input || !t.inputChain.empty()))
             return trackError("only channels have record settings and input FX", path,
                               "record or monitor on a child channel instead");
+        if (t.hwOutput) {  // ADR-0056
+            const auto& out = *t.hwOutput;
+            if (t.type != StripType::Master)
+                return trackError("only masters play to hardware outputs", path + "/hw_output",
+                                  "send this strip to a master and set that master's hw_output");
+            if (out.size() > 2 || (out.size() == 2 && out[0] == out[1]))
+                return Error(
+                    "track.hw_output", "hw_output is two different channels, one channel or none",
+                    path + "/hw_output", "e.g. [3, 4] for a pair, [5] for mono, [] for none");
+        }
         if (t.record.input) {
             const Route* r = s.routes.find(*t.record.input);
             if (!r || (!r->from.hwChannels && !r->from.midiDevice) || r->to.track != e.id)
@@ -153,13 +163,11 @@ Status validateStripRules(const Session& s) {
                     "route hardware into a channel, then send that channel to the key");
             continue;
         }
-        if (r.to.hwChannels) {
-            const Track* from = r.from.track ? s.tracks.find(*r.from.track) : nullptr;
-            if (!from || from->type != StripType::Master)
-                return routeError(
-                    e.id, "hardware outputs are fed only by masters", "from",
-                    "route the channel/buss into a master and send that master to hardware");
-        }
+        if (r.to.hwChannels)  // ADR-0056: a master's hw_output, not a route
+            return Error("route.hw_output", "hardware outputs are set on a master, not routed",
+                         "/routes/" + e.id.str() + "/to",
+                         "route the strip into a master and set that master's hw_output "
+                         "(track.set {track, hw_output: [1, 2]})");
         if (r.to.track && r.from.track) {
             const Track* from = s.tracks.find(*r.from.track);
             if (from && from->type == StripType::Master)

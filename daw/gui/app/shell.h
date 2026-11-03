@@ -79,6 +79,10 @@ class Shell {
     // The record input picker at `anchor` and what a strip's input button says
     // (the TCP's and the mixer's): the port names, "midi *", or "in —".
     void openInputMenu(const model::Id& track, const ui::Rect& anchor);
+    // A master's hardware outputs (ADR-0056): None, the device's pairs, then
+    // each output alone (mono); a pick sets the master's hw_output.
+    void openOutputMenu(const model::Id& track, const ui::Rect& anchor);
+    std::string outputLabel(const model::Id& track) const;  // "out 1/2", "out —"
     std::string inputLabel(const model::Id& track) const;
 
     // Track or VCA automation lanes; created on first show.

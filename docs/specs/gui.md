@@ -585,9 +585,13 @@ their entire ancestor chain is visible, and clear peak hold on reopening.
 Small "fx" and "+" buttons sit at each strip's top right (the TCP's: the
 chain window, and the plugin browser alone); a double-click on the name
 renames the strip in place, as in the TCP. Under the chain (and its sends),
-the arm, centred (channels); an input button (channels) and "out" (not on
-masters: a click opens the routing matrix, a drag onto a buss or master makes
-a send); then one row with the small polarity pill ("Ø"), monitoring
+the arm, centred (channels); an input button (channels) and "out" (a click
+opens the routing matrix, a drag onto a buss or master makes a send; on a
+master it reads "out 1/2", "out 5" or "out —" and opens the hardware outputs
+menu instead, ADR-0056: None, the device's stereo pairs 1/2, 3/4…, then each
+output alone as mono, with the port names JACK reports; the current choice is
+checked and a pick runs `track.set {hw_output}`. While the engine is stopped
+the menu offers None and says the engine lists the outputs); then one row with the small polarity pill ("Ø"), monitoring
 (channels) and the mono pill (ADR-0022), above the pan. Everything under the
 chain has a fixed height and the chain takes what a strip's missing rows
 leave, so every strip's fader sits at the same height. The strip's plug-in chain lists every plug-in,
@@ -849,6 +853,10 @@ project is drawn in the quiet ink, with "from your default" on hover.
   loaded into the dialog only, written to the project only on Render),
   **Save preset…** (asks for a name), **Delete preset**, Close.
 - **Source:** a segmented control: Master mix | Stems | Regions.
+  - Master mix, when the project has more than one master, shows a checklist
+    of the masters (All / None; the main master alone by default) that edits
+    `masters`: each checked master renders its own file (ADR-0056). Unchecking
+    every master returns to the main master.
   - Stems shows a checklist of top-level tracks (All / None), plus Mode
     (Isolated / Through master) and Tap (Post-fader / Pre-fader / Pre-FX)
     dropdowns and a "Skip silent stems" checkbox.

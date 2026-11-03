@@ -283,6 +283,7 @@ std::vector<RenderPreset> factoryRenderPresets() {
 
 rs::Settings presetSettings(rs::Settings s) {
     if (s.stems) s.stems->tracks.reset();
+    s.masters.reset();
     s.matrix.reset();
     s.startBeat.reset();
     s.endBeat.reset();

@@ -718,6 +718,20 @@ TEST_CASE("typed strip commands: rejected edits roll back and masters render ind
     const auto alt = run(bus, "render.mix", R"({"master":"tr_1","name":"alt","end_beat":1})");
     CHECK(peak(main.find("path")->asString()) == 0);
     CHECK(peak(alt.find("path")->asString()) > 0.01);
+    // Hardware outputs and several masters in one mix (ADR-0056).
+    rejected("track.set", R"({"track":"tr_2","hw_output":[3,4]})", "track.strip_type");
+    rejected("track.set", R"({"track":"tr_1","hw_output":[3,3]})", "track.hw_output");
+    run(bus, "track.set", R"({"track":"tr_1","hw_output":[3,4]})");
+    list = run(bus, "track.list", "{}");
+    CHECK(*list["tracks"].at(0).find("hw_output") == j("[1,2]"));
+    CHECK(*list["tracks"].at(1).find("hw_output") == j("[3,4]"));
+    CHECK(list["tracks"].at(2).find("hw_output") == nullptr);
+    rejected("project.set", R"({"render":{"masters":["tr_2"]}})", "render.masters");
+    auto both = run(bus, "render.mix", R"({"masters":["tr_0","tr_1"],"end_beat":1,
+        "pattern":"both"})");
+    REQUIRE(both["files"].size() == 2);
+    CHECK(both["files"].at(1).find("path")->asString().ends_with("both-Alt.wav"));
+    CHECK(peak(both["files"].at(1).find("path")->asString()) > 0.01);
     run(bus, "project.set",
         R"({"console9":false,"render":{"matrix":{"project":["tr_0","tr_1"]},"pattern":"master-{track}"}})");
     auto matrix = run(bus, "render.dry-run", R"({"operation":"regions","end_beat":1})");

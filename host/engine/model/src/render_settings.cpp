@@ -9,26 +9,11 @@ namespace supple::model::render {
 namespace {
 using schema::Schema;
 
-constexpr std::array<std::string_view, 20> kFields{"source",
-                                                   "bounds",
-                                                   "start_beat",
-                                                   "end_beat",
-                                                   "tail_s",
-                                                   "pattern",
-                                                   "sample_rate",
-                                                   "channels",
-                                                   "outputs",
-                                                   "normalize",
-                                                   "limit_true_peak_db",
-                                                   "trim",
-                                                   "seamless_loop",
-                                                   "handles_s",
-                                                   "stems",
-                                                   "matrix",
-                                                   "if_exists",
-                                                   "metadata",
-                                                   "report",
-                                                   "add_to_project"};
+constexpr std::array<std::string_view, 21> kFields{
+    "source",   "masters",       "bounds",        "start_beat", "end_beat",  "tail_s",
+    "pattern",  "sample_rate",   "channels",      "outputs",    "normalize", "limit_true_peak_db",
+    "trim",     "seamless_loop", "handles_s",     "stems",      "matrix",    "if_exists",
+    "metadata", "report",        "add_to_project"};
 constexpr std::array<std::int64_t, 14> kMp3Bitrates{32,  40,  48,  56,  64,  80,  96,
                                                     112, 128, 160, 192, 224, 256, 320};
 
@@ -288,6 +273,11 @@ Schema<Settings> settingsSchema() {
                 schema::enumeration<Source>(
                     {{Source::Mix, "mix"}, {Source::Stems, "stems"}, {Source::Regions, "regions"}})
                     .doc("The dialog's source; render.mix always renders the mix"))
+            .field("masters", &Settings::masters,
+                   schema::arrayOf(schema::string().pattern("^tr_[0-9]+$", "track id"))
+                       .minItems(1)
+                       .maxItems(256)
+                       .doc("The mix: the masters to render, a file each (default: tr_0)"))
             .field("bounds", &Settings::bounds,
                    schema::enumeration<Bounds>({{Bounds::Project, "project"},
                                                 {Bounds::Loop, "loop"},

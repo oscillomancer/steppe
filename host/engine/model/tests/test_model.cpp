@@ -421,7 +421,17 @@ TEST_CASE("typed strips: master forest, follow pan and edit validation") {
                 r.to.hwChannels = std::vector<int>{1, 2};
             });
         },
-        "route.strip_type");
+        "route.hw_output");
+    rejected(
+        [&](EditTxn& bad) {
+            bad.modify<Track>(buss, [](auto& tr) { tr.hwOutput = std::vector<int>{1, 2}; });
+        },
+        "track.strip_type");
+    rejected(
+        [&](EditTxn& bad) {
+            bad.modify<Track>(alt, [](auto& tr) { tr.hwOutput = std::vector<int>{3, 3}; });
+        },
+        "track.hw_output");
     rejected(
         [&](EditTxn& bad) {
             Envelope e;
@@ -495,9 +505,44 @@ TEST_CASE("project 1.x migration: folders and receives become busses with child 
     CHECK(serializeProject(*back) == text);
 }
 
+TEST_CASE("masters' hardware outputs: defaults, round trip and the 2.3 route form") {
+    EditTxn t(Session::create(), 1);
+    Track alt;
+    alt.type = StripType::Master;
+    const Id cue = t.create(alt);
+    auto project = t.project();
+    project.masters.push_back(cue);
+    t.setProject(project);
+    auto s = t.commit();
+    REQUIRE(s);
+    CHECK(hardwareOutputs(*s->tracks.find(kMaster), kMaster) == std::vector<int>{1, 2});
+    CHECK(hardwareOutputs(*s->tracks.find(cue), cue).empty());
+    EditTxn edit(*s, 2);
+    edit.modify<Track>(cue, [](auto& tr) { tr.hwOutput = std::vector<int>{3, 4}; });
+    edit.modify<Track>(kMaster, [](auto& tr) { tr.hwOutput = std::vector<int>{}; });
+    auto set = edit.commit();
+    REQUIRE(set);
+    auto back = parseProject(serializeProject(*set));
+    REQUIRE(back);
+    CHECK(hardwareOutputs(*back->tracks.find(cue), cue) == std::vector<int>{3, 4});
+    CHECK(hardwareOutputs(*back->tracks.find(kMaster), kMaster).empty());
+    // Before 2.4 the same was a route from the master to hw_channels.
+    auto doc = projectToJson(*s);
+    doc["schema"] = "supple.project/2.3";
+    doc["routes"]["sd_9"] = *json::parse(R"({"from": {"track": ")" + cue.str() +
+                                         R"("}, "to": {"hw_channels": [5, 6]}})");
+    std::vector<schema::Warning> warnings;
+    auto migrated = projectFromJson(doc, &warnings);
+    REQUIRE(migrated);
+    CHECK(migrated->routes.size() == 0);
+    CHECK(hardwareOutputs(*migrated->tracks.find(cue), cue) == std::vector<int>{5, 6});
+    REQUIRE(warnings.size() == 1);
+    CHECK(warnings[0].code == "project.hw_output_route");
+}
+
 TEST_CASE("project newer minor ignores unknown fields with load warnings") {
     auto doc = projectToJson(Session::create());
-    doc["schema"] = "supple.project/2.4";
+    doc["schema"] = "supple.project/2.5";
     doc["tracks"]["tr_0"]["future"] = true;
     std::vector<schema::Warning> warnings;
     auto parsed = projectFromJson(doc, &warnings);
@@ -958,7 +1003,7 @@ TEST_CASE("render settings: a 2.2 file migrates to schema 2.3 and reopens byte-i
     CHECK(loaded->project->render ==
           render::toJson(render::settingsSchema().decode(expected).value()));
     const std::string saved = serializeProject(*loaded);
-    CHECK(saved.find("\"supple.project/2.3\"") != std::string::npos);
+    CHECK(saved.find("\"supple.project/2.4\"") != std::string::npos);
     CHECK(saved.find("tail_ms") == std::string::npos);
     auto reopened = parseProject(saved);
     REQUIRE(reopened);

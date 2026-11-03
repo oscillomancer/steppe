@@ -71,3 +71,4 @@ current state.
 | [0053](0053-audio-warp.md) | Audio warp, transient editing and prepared sources | Accepted |
 | [0054](0054-track-freeze.md) | Whole-chain channel freeze | Accepted |
 | [0055](0055-render-settings-and-dialog.md) | Render settings, presets and the render dialog | Accepted |
+| [0056](0056-master-hardware-outputs.md) | Masters play to hardware outputs; a mix renders several masters | Accepted |

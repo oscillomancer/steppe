@@ -190,7 +190,8 @@ struct MeterReading {
 struct EngineDeviceOptions {
     PortAudioOptions native;
     double rate = 0;  // zero: project rate; otherwise asked of the device or graph
-    std::uint32_t inputs = 0, outputs = 2;
+    // outputs 0: JACK opens one per physical playback port (2-64), others 2.
+    std::uint32_t inputs = 0, outputs = 0;
     bool forceGraph = false;  // JACK on PipeWire: force the block and rate while running
 };
 

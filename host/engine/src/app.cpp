@@ -939,6 +939,13 @@ Status EngineApp::startEngine(std::string_view backend, std::uint32_t block, boo
         if (auto names = JackBackend::captureNames(o); names && !names->empty())
             config.inputs =
                 static_cast<std::uint32_t>(std::clamp<std::size_t>(names->size(), 2, 32));
+        // One output per physical playback port (2 to 64): any master can
+        // play to any of them (ADR-0056).
+        if (device.outputs > 0)
+            config.outputs = device.outputs;
+        else if (auto names = JackBackend::playbackNames(o); names && !names->empty())
+            config.outputs =
+                static_cast<std::uint32_t>(std::clamp<std::size_t>(names->size(), 2, 64));
         ownedBackend_ = std::make_unique<JackBackend>(o);
 #else
         return Error("backend.unsupported", "the JACK backend is unavailable on this platform",
@@ -946,11 +953,12 @@ Status EngineApp::startEngine(std::string_view backend, std::uint32_t block, boo
 #endif
     } else if (backend == "portaudio") {
         config.inputs = device.inputs;
-        config.outputs = device.outputs;
+        config.outputs = device.outputs > 0 ? device.outputs : 2;
         PortAudioOptions native = device.native;
         native.changeDeviceRate = device.rate > 0;  // an explicit rate is asked of the device
         ownedBackend_ = std::make_unique<PortAudioBackend>(native);
     } else if (backend == "dummy") {
+        config.outputs = device.outputs > 0 ? device.outputs : 2;
         ownedBackend_ = std::make_unique<DummyBackend>(
             DummyBackend::Options{.mode = DummyBackend::Mode::Thread, .paced = true});
     } else {

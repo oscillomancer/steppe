@@ -566,6 +566,7 @@ const Schema<Track>& schemaOf<Track>() {
         dflt(b, d.solo);
         b.field("parent_send", &Track::parentSend, parentSend);
         dflt(b, d.parentSend);
+        b.field("hw_output", &Track::hwOutput, schema::arrayOf(intS().range(1, kMaxDeviceOutputs)));
         b.field("record", &Track::record, record);
         dflt(b, d.record);
         b.field("timebase", &Track::timebase, trackTimebaseSchema());
@@ -1149,9 +1150,46 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
         auto migrated = migrateProject1(std::move(doc), warnings);
         if (!migrated) return std::move(migrated).error();
         doc = std::move(*migrated);
-    } else if (version->minor > 3 && warnings)
+    } else if (version->minor > 4 && warnings)
         warnings->push_back(
             {"project.newer_minor", "loading a newer project minor version", "/schema"});
+    // Before 2.4 a master's hardware output could be written as a route to
+    // hw_channels, which nothing played (ADR-0056): it becomes the master's
+    // hw_output (its first such route), and the route goes.
+    if (version->major == 1 || version->minor < 4)
+        if (auto* routes = doc.asObject().find("routes"); routes && routes->isObject()) {
+            auto* tracks = doc.asObject().find("tracks");
+            std::vector<std::string> moved;
+            for (const auto& entry : routes->asObject()) {
+                const json::Value* from = entry.value.find("from");
+                const json::Value* to = entry.value.find("to");
+                const json::Value* channels = to ? to->find("hw_channels") : nullptr;
+                const json::Value* source = from ? from->find("track") : nullptr;
+                if (!channels || !channels->isArray() || !source || !source->isString() ||
+                    !tracks || !tracks->isObject())
+                    continue;
+                json::Value* track = tracks->asObject().find(source->asString());
+                const json::Value* type = track ? track->find("type") : nullptr;
+                if (!track || !track->isObject() || !type || !type->isString() ||
+                    type->asString() != "master")
+                    continue;
+                if (!track->find("hw_output")) {
+                    json::Value out = json::Value::array();
+                    for (std::size_t i = 0; i < channels->size() && i < 2; ++i)
+                        out.push_back(channels->at(i));
+                    (*track)["hw_output"] = std::move(out);
+                }
+                moved.push_back(entry.key);
+            }
+            for (const auto& id : moved) {
+                routes->asObject().erase(id);
+                if (warnings)
+                    warnings->push_back({"project.hw_output_route",
+                                         "moved a master's hardware-output route into its "
+                                         "hw_output",
+                                         json::pointerJoin("/routes", id)});
+            }
+        }
     std::uint32_t legacyGroupNext = 1;
     // Previously opaque groups never become active merely by opening an old file.
     if ((version->major == 1 || version->minor < 2) && doc.find("groups")) {
