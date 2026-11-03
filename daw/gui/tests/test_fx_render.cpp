@@ -300,16 +300,18 @@ TEST_CASE("FX and render hidden subpanels release focus; popup close releases it
     f.fx->close();
     CHECK(f.uiRoot().focused() == nullptr);
     f.render->open();
-    f.render->setSource(gui::RenderDialog::Source::Stems);
+    f.render->setSource(gui::RenderDialog::Source::Regions);
     f.frame();
-    auto* mode = dynamic_cast<ui::TextField*>(f.uiRoot().find("render.mode"));
-    REQUIRE(mode);
-    f.uiRoot().focus(mode);
+    // A field of the regions section (handles) has focus; switching the source
+    // removes the section, and focus goes with it.
+    auto* handles = dynamic_cast<ui::TextField*>(f.uiRoot().find("render.handles.text"));
+    REQUIRE(handles);
+    f.uiRoot().focus(handles);
     f.render->setSource(gui::RenderDialog::Source::Master);
     CHECK(f.uiRoot().focused() == nullptr);
-    const auto modeBefore = mode->text();
+    CHECK_FALSE(f.uiRoot().find("render.handles.text"));
     f.uiRoot().text("hidden");
-    CHECK(mode->text() == modeBefore);
+    CHECK(f.render->settings().find("handles_s")->asDouble() == 0);
     f.uiRoot().focus(f.uiRoot().find("render.pattern"));
     f.render->close();
     CHECK(f.uiRoot().focused() == nullptr);
@@ -1053,19 +1055,25 @@ TEST_CASE("the render dialog: the preview matches render.dry-run and a job lists
     REQUIRE(gui::generateSession(*f.dispatcher, f.app->mediaDir(), 1));
 
     f.render->open();
-    f.render->setField("render.end", "8");  // a short render: fast and load-insensitive
-    // An empty field explains the default the engine would use.
-    const auto placeholder = [&](const char* id) {
-        auto* field = dynamic_cast<ui::TextField*>(f.uiRoot().find(id));
-        REQUIRE(field);
-        return field->placeholder();
+    f.frame();
+    // The controls show what the engine would use (render.settings).
+    const auto shown = [&](const char* id) {
+        auto* node = f.uiRoot().find(id);
+        REQUIRE(node);
+        return node->valueText();
     };
-    CHECK(placeholder("render.end").find("last item end") == 0);
-    CHECK(placeholder("render.sample_rate") == "48000");
-    CHECK(placeholder("render.bit_depth") == "32");
-    CHECK(placeholder("render.channels") == "2");
-    CHECK(placeholder("render.tail") == "0");
-    CHECK(placeholder("render.normalize") == "none");
+    CHECK(shown("render.range") == "Entire project");
+    CHECK(shown("render.format") == "WAV");
+    CHECK(shown("render.bit_depth") == "32-bit float");
+    CHECK(shown("render.channels") == "Stereo");
+    CHECK(shown("render.tail.text") == "0");
+    CHECK(shown("render.normalize") == "Off");
+    auto* rate = dynamic_cast<ui::TextField*>(f.uiRoot().find("render.sample_rate.text"));
+    REQUIRE(rate);
+    CHECK(rate->placeholder() == "Project (48000)");
+    f.render->setField("render.end", "8");  // a short render: fast and load-insensitive
+    f.frame();
+    CHECK(shown("render.range") == "Custom");
     f.render->setField("render.pattern", "preview-{counter:02}");
     f.render->refreshPreview();
 
@@ -1112,13 +1120,16 @@ TEST_CASE("the render dialog: the preview matches render.dry-run and a job lists
     // The result list carries the analysis summary when the render has one.
     CHECK(f.uiRoot().find("render.results")->valueText().find("LUFS") != std::string::npos);
 
+    // The render wrote the dialog's settings to the project first.
+    CHECK(f.app->head().project->render.find("pattern"));
     // add_to_project: the file lands as an item on a new track (one undo step).
     const std::size_t tracksBefore = f.trackCount();
     const std::size_t historyBefore = f.historyCount();
     CHECK_FALSE(f.render->addToProject());
-    f.click("render.add");
+    f.render->setAddToProject(true);  // the checkbox (below the fold of the scroll view)
+    f.frame();
     CHECK(f.render->addToProject());
-    CHECK(f.uiRoot().find("render.add")->valueText() == "[x] Add to project");
+    CHECK(f.uiRoot().find("render.add")->valueText() == "on");
     f.render->setField("render.pattern", "added-{counter:02}");
     f.render->refreshPreview();
     f.render->run();
@@ -1131,8 +1142,10 @@ TEST_CASE("the render dialog: the preview matches render.dry-run and a job lists
     REQUIRE(f.render->resultFiles().size() == 1);
     CHECK(f.trackCount() == tracksBefore + 1);
     CHECK(f.sourcePathOf("added-01") == f.render->resultFiles()[0]);
-    // The import is its own undo step; starting a job changes no model state.
-    CHECK(f.historyCount() == historyBefore + 1);
+    // Two steps: "Render settings" (the changed pattern and add_to_project)
+    // before the job, and the import after it.
+    CHECK(f.historyCount() == historyBefore + 2);
+    CHECK(f.app->head().project->render.find("add_to_project")->asBool());
 }
 
 TEST_CASE("the render dialog: FLAC, a second file, and the render queue") {
@@ -1410,15 +1423,21 @@ TEST_CASE("render cancellation retains partial files and labels them cancelled")
     CHECK(f.render->resultFiles() == std::vector<std::string>{"partial.wav"});
 }
 
-TEST_CASE("audit3: reopened render add button matches its stored value") {
+TEST_CASE("audit3: a reopened render dialog shows the stored settings, not unsaved edits") {
     Fixture f;
     REQUIRE(f.ok);
     f.render->open();
     f.render->setAddToProject(true);
+    f.render->close();  // nothing rendered: nothing written
+    CHECK(f.app->head().project->render.find("add_to_project") == nullptr);
+    f.render->open();
+    CHECK_FALSE(f.render->addToProject());
     f.render->close();
+    REQUIRE(f.run("project.set",
+                  f.args({{"render", json::parse(R"({"add_to_project":true})").value()}})));
     f.render->open();
     CHECK(f.render->addToProject());
-    CHECK(f.uiRoot().find("render.add")->valueText() == "[x] Add to project");
+    CHECK(f.uiRoot().find("render.add")->valueText() == "on");
 }
 TEST_CASE("audit3: active render refuses additional launches") {
     Fixture f;
@@ -1750,4 +1769,53 @@ TEST_CASE("simultaneous plugin browsers preserve each other's favourite toggles"
     CHECK(saved->has(b));
     first.close();
     second.close();
+}
+
+TEST_CASE("render dialog settings: written once when changed; presets; File → Mix as a job") {
+    Fixture f;
+    if (!f.ok) return;
+    gui::test::linkGeneratedMedia(f.app->mediaDir());
+    REQUIRE(gui::generateSession(*f.dispatcher, f.app->mediaDir(), 1));
+    auto wait = [&] {
+        for (int i = 0; i < 6000 && !f.render->job().empty(); ++i) {
+            f.render->tick();
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        f.dispatcher->flushJobEvents();
+    };
+    f.render->open();
+    f.render->setField("render.end", "2");
+    f.render->setField("render.pattern", "once-{counter:02}");
+    const std::size_t before = f.historyCount();
+    f.render->run();
+    wait();
+    CHECK(f.historyCount() == before + 1);  // "Render settings"
+    f.render->run();                        // nothing changed: nothing written
+    wait();
+    CHECK(f.historyCount() == before + 1);
+    // A preset loads into the dialog only; Render writes it.
+    REQUIRE(f.render->loadPreset("WAV 24-bit"));
+    json::Value shown = f.render->settings();
+    CHECK(shown["outputs"].asArray()[0]["bit_depth"].asInt() == 24);
+    CHECK(f.app->head().project->render.find("outputs") == nullptr);
+    // Save as default: render.settings then shows it for what the project leaves out.
+    REQUIRE(f.render->saveAsDefault());
+    auto settings = f.run("render.settings", json::Value::object());
+    REQUIRE(settings);
+    CHECK((*settings)["default"]["outputs"].asArray()[0]["bit_depth"].asInt() == 24);
+    f.render->close();
+    // File → Mix: its label names the file and the first output; it runs as a job.
+    std::string reported;
+    f.render->onStatus = [&](const std::string& message) { reported = message; };
+    const std::string label = f.render->mixLabel();
+    CHECK(label.find("once-01.wav") != std::string::npos);
+    // The project leaves outputs to the user default saved above.
+    CHECK(label.find("WAV 24-bit 48 kHz") != std::string::npos);
+    CHECK(label.find("beats 0") != std::string::npos);  // custom bounds are named
+    f.render->mixJob();
+    REQUIRE_FALSE(f.render->job().empty());
+    CHECK(f.render->nextDeadline());  // polled while closed
+    wait();
+    CHECK(reported.find("Mixed") == 0);
+    CHECK(reported.find("once-01.wav") != std::string::npos);
 }

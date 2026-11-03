@@ -86,17 +86,100 @@ if the project was replaced; open the dialog again. If edits arrive
 while Open is waiting, Quire asks about unsaved changes again before opening.
 
 Renders go to `~/Documents/quire-media` unless you choose another folder in
-the render dialog. The folder you choose is remembered.
+the render dialog. The folder you choose is remembered and is shared by all
+projects (see *Rendering*).
 
 ### Where Quire keeps its files
 
-| | Settings (preferences, menus, controls, appearance) | Data (unsaved projects, DSP scripts) |
+| | Settings (preferences, menus, controls, appearance) | Data (unsaved projects, DSP scripts, render presets) |
 | --- | --- | --- |
 | Linux | `~/.config/quire` (`$XDG_CONFIG_HOME`) | `~/.local/share/quire` (`$XDG_DATA_HOME`) |
 | macOS | `~/Library/Application Support/quire` | `~/Library/Application Support/quire` |
 | Windows | `%APPDATA%\quire` | `%APPDATA%\quire` |
 
 Uninstalling Quire leaves these folders and your projects in place.
+
+## Rendering
+
+**File > Render…** opens the render dialog; **File > Mix** renders the mix
+straight away with the project's render settings. Its menu entry names the file
+it will write and the first format, for example *Mix → Song-v12.wav (WAV
+32-bit float 48 kHz)*, and its progress and result show in the status bar.
+
+### One set of settings per project
+
+Each project keeps one set of render settings. They are saved in the project,
+belong to its branch and can be undone like any other edit. The dialog opens on
+them and writes them back only when you press **Render** or **Add to queue** and
+something changed; that change is one step in the history, *Render settings*.
+Closing the dialog without rendering keeps the project as it was. File > Mix and
+agents' renders use the same settings, so what you set up in the dialog is what
+they render.
+
+What a project leaves unset comes from **your default**: **Save as default**
+stores the dialog's settings for every project, and values that come from it
+are drawn in the quieter ink. **Presets** are named settings of your own, plus
+read-only factory presets: WAV 24-bit, a streaming master (−14 LUFS, −1 dBTP),
+a CD master (16-bit 44.1 kHz with noise-shaped dither, −1 dBTP), a podcast MP3
+(−16 LUFS), stems for mixing (24-bit, mono tracks as mono) and a game loop
+(Ogg Vorbis, seamless). Choosing a preset loads it into the dialog; Render
+writes it to the project. Presets and your default are kept in the data folder
+(`render-presets`, see *Where Quire keeps its files*).
+
+### Sources and ranges
+
+- **Master mix** renders the master. **Stems** renders each checked top-level
+  track to its own file, isolated (no master processing) or through the
+  master, after the fader, before it or before the effects; *Skip silent
+  stems* leaves out tracks that stay below −90 dBFS. **Regions** renders each
+  region, with *Handles* adding seconds before and after it.
+- **Version** renders the current mix, another branch's head or an earlier
+  version from the history, for this render only. Every result names the
+  branch and version it came from, and its menu offers *Branch from this
+  version* to start a branch at that mix.
+- **Range**: the entire project (to the last item's end), the loop, or a
+  custom start and end in beats. A **tail** renders seconds past the end for
+  reverb and delays; *Cut silence at the end* trims what is left quiet.
+
+### Files and formats
+
+All renders go to **one folder for every project**, shown in the dialog with
+**Choose folder…** and **Open**. The **file name** is a pattern: **Tokens…**
+inserts `{project}`, `{version}`, `{branch}`, `{track}`, `{region}`,
+`{date:YYYY-MM-DD}` and the others, and a `/` makes subfolders, so
+`{project}/{project}-v{version}` keeps each project's renders in a folder of
+its own. **If the file exists** chooses Overwrite, Add a number (`-2`, `-3`…),
+Skip, or Ask, which lists the existing files before rendering.
+
+Each render can write up to four files of the same audio (**+ Output**): WAV
+(16 or 24-bit, or 32-bit float), AIFF, FLAC, MP3 (constant or variable bit
+rate, with a gapless header) or Ogg Vorbis, each with its own bit depth,
+dither (TPDF or noise-shaped) and sample rate. Later outputs whose extension
+repeats get a suffix (`mix.16.wav`) unless you give one.
+
+### Loudness and delivery checks
+
+**Loudness** normalizes to an integrated (LUFS-I), short-term or momentary
+loudness, a sample or true peak, or RMS, with targets for the usual platforms
+(−14 LUFS for Spotify and YouTube, −16 for Apple Music and podcasts, −23 for
+EBU R128, −24 for ATSC A/85). *Only turn down* never raises the level; for
+stems, *Same gain for every stem* applies the master mix's gain to all of
+them, so they still add up to the mix. **Limit true peak** works with or
+without normalizing. When a target or a ceiling is set, every file is measured
+as written (MP3 and Vorbis decoded first) and the results show a pass or a
+FAIL with the measured value; *Write a loudness report* puts a text report
+beside each file.
+
+**Processing** trims silence at the start or end, and *Seamless loop* folds
+the tail back into the start so a game loop repeats without a gap.
+**Metadata** writes title, artist, album, track, date, genre, ISRC, comment
+and a cover image from the project folder where the format holds them (the
+dialog says where it cannot), BWF timecode and loudness in WAV files, and the
+project's markers and regions as WAV cue points or AIFF markers.
+
+**After render**, *Add to project* puts the files on new tracks, and *Open
+folder when done* (a preference) shows them in the file manager. **Add to
+queue** pins a render to the project as it is now; **Queue** runs them all.
 
 ## Automation
 

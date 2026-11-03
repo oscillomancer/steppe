@@ -38,6 +38,7 @@ void SDLCALL onDialog(void* userdata, const char* const* files, int) {
 
 const SDL_DialogFileFilter kProjectFilter[] = {{"Projects", "json"}, {"All files", "*"}};
 const SDL_DialogFileFilter kAudioFilter[] = {{"Audio", "wav;flac;mp3"}, {"All files", "*"}};
+const SDL_DialogFileFilter kImageFilter[] = {{"Images", "png;jpg;jpeg"}, {"All files", "*"}};
 
 // The saved project templates: a click starts a new project from one, a right
 // click offers to delete it (`remove` is true when the file is gone).
@@ -348,6 +349,17 @@ void FileActions::chooseFolder(const std::filesystem::path& start,
     if (!start.empty() && std::filesystem::is_directory(start, ec)) where = start.string() + "/";
     SDL_ShowOpenFolderDialog(onDialog, req, window_, where.empty() ? nullptr : where.c_str(),
                              false);
+}
+
+void FileActions::chooseImage(const std::filesystem::path& start,
+                              std::function<void(std::filesystem::path)> done) {
+    auto* req = new DialogRequest{
+        guardDialog([done = std::move(done)](auto paths) { done(paths.front()); })};
+    std::error_code ec;
+    std::string where;
+    if (!start.empty() && std::filesystem::is_directory(start, ec)) where = start.string() + "/";
+    SDL_ShowOpenFileDialog(onDialog, req, window_, kImageFilter, 2,
+                           where.empty() ? nullptr : where.c_str(), false);
 }
 
 void FileActions::openSaveTemplate(Template kind) {

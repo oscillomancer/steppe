@@ -88,7 +88,7 @@ ChromeLayout ChromeLayout::defaults() {
         {"File",
          {"ui.file.new", "ui.file.open", "ui.file.save", "ui.file.save_as", "-",
           "ui.file.template.load", "ui.file.template.save", "-", "ui.file.import", "-",
-          "render.mix", "ui.render", "-", "ui.quit"}},
+          "ui.render.mix", "ui.render", "-", "ui.quit"}},
         {"Edit",
          {"history.undo", "history.redo", "-", "ui.actions", "ui.mouse", "-", "ui.preferences",
           "ui.audio.device"}},
@@ -215,7 +215,8 @@ void fillChrome(ui::Node& bar, ui::Root& root, AppActions& actions, const Chrome
                     }
                     const actions::Action* a = actions.registry().find(id);
                     if (!a) continue;  // unknown ids in a user file are skipped
-                    const std::string name = shortName(*a) + (a->prompts.empty() ? "" : "…");
+                    std::string name = actions.labelFor(id);
+                    if (name.empty()) name = shortName(*a) + (a->prompts.empty() ? "" : "…");
                     entries.push_back(
                         {name, actions.keysFor(id), [&actions, id] { actions.invoke(id); }});
                 }

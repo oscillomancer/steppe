@@ -230,8 +230,11 @@ instructions are in `docs/guides/installing.md`.
   callback in the same readiness snapshot, as VST3 dispatch already does;
   the Linux regression passes and macOS validation is pending.
 - **GUI** (`specs/gui.md`): arrange view, track panel, mixer, FX chains and
-  the plugin browser, routing matrix, MIDI editor, render dialog, history
-  dock with branches, actions list with key bindings and macros, editable
+  the plugin browser, routing matrix, MIDI editor, render dialog (the
+  project's render settings with dropdowns, foldable sections, presets, a
+  user default, up to four outputs, delivery checks in its results, and
+  File → Mix as a job named by the file it writes), history dock with
+  branches, actions list with key bindings and macros, editable
   menus, toolbar and mouse modifiers, screensets, two palettes in dark and
   light, preferences, and tap tempo in the tempo form. Help exports the bundled
   skill as a copy or link, shows this copy's MCP commands and JSON, and registers
@@ -760,6 +763,11 @@ Engine and hosting:
   and there are no per-output meters.
 - Overlapping gestures on a plugin without semantic parameters share one
   state blob.
+- The render dialog (gui.md §4.8) has no region checklist or Matrix… grid
+  yet (regions render all regions, or the matrix set with `project.set`),
+  its Time selection range is never offered (the arrange view has no time
+  selection), and File → Mix reports its file in the status bar without an
+  Open folder action there (the "Open folder when done" preference covers it).
 - Renders: MP3 and Ogg Vorbis files are byte-identical from run to run on
   one build; different platforms or compilers may round LAME's and
   libvorbis's floating point differently, so they are not compared across

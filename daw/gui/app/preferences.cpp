@@ -14,7 +14,7 @@
 namespace supple::gui {
 namespace {
 
-constexpr const char* kSchema = "supple.preferences/1.5";
+constexpr const char* kSchema = "supple.preferences/1.6";
 
 Error threadLimitError() {
     return Error("preferences.audio_threads", "audio processing thread limit is out of range",
@@ -75,7 +75,8 @@ Result<Preferences> Preferences::load(const std::filesystem::path& file) {
          schema->asString() != "supple.preferences/1.1" &&
          schema->asString() != "supple.preferences/1.2" &&
          schema->asString() != "supple.preferences/1.3" &&
-         schema->asString() != "supple.preferences/1.4"))
+         schema->asString() != "supple.preferences/1.4" &&
+         schema->asString() != "supple.preferences/1.5"))
         return Error("preferences.schema", file.string() + " is not a " + kSchema + " document",
                      "/schema");
     if (const json::Value* m = doc->find("default_monitor")) {
@@ -112,6 +113,12 @@ Result<Preferences> Preferences::load(const std::filesystem::path& file) {
                          "/copy_imported_media", "use true or false");
         out.copyImports = v->asBool();
     }
+    if (const auto* v = doc->find("render_open_folder")) {
+        if (!v->isBool())
+            return Error("preferences.render_open_folder", "render_open_folder must be a boolean",
+                         "/render_open_folder", "use true or false");
+        out.renderOpenFolder = v->asBool();
+    }
     if (const auto* v = doc->find("render_directory")) {
         if (!v->isString() || !std::filesystem::path(v->asString()).is_absolute())
             return Error("preferences.render_directory",
@@ -137,6 +144,7 @@ Status Preferences::save(const std::filesystem::path& file) const {
     doc["audio_threads"] = static_cast<std::int64_t>(audioThreads);
     if (!renderDirectory.empty()) doc["render_directory"] = renderDirectory.string();
     doc["copy_imported_media"] = copyImports;
+    doc["render_open_folder"] = renderOpenFolder;
     doc["audio"] = audioDeviceJson(audio);
     std::error_code ec;
     std::filesystem::create_directories(file.parent_path(), ec);
@@ -399,6 +407,14 @@ Status PreferencesDialog::setAudioDevice(const AudioDeviceSettings& audio) {
     if (!file_.empty()) SUPPLE_TRY(next.save(file_));
     prefs_ = next;
     refresh();
+    return {};
+}
+
+Status PreferencesDialog::setRenderOpenFolder(bool on) {
+    auto next = prefs_;
+    next.renderOpenFolder = on;
+    if (!file_.empty()) SUPPLE_TRY(next.save(file_));
+    prefs_ = next;
     return {};
 }
 

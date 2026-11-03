@@ -529,6 +529,10 @@ int main(int argc, char** argv) {
         [&](const json::Value& v) -> Status { return fxWindow.openToAdd(uiState, v); });
     gui::RenderDialog renderDialog(**app, dispatcher, root);
     appActions.addUi("ui.render", "File: render…", [&] { renderDialog.open(); });
+    // File → Mix: the project's render settings, as a job; the label names the
+    // file it will write (gui.md §4.8).
+    appActions.addUi("ui.render.mix", "File: mix", [&] { renderDialog.mixJob(); });
+    appActions.setLabel("ui.render.mix", [&] { return renderDialog.mixLabel(); });
     appActions.onPrompt = [&](const actions::Action& action) {
         gui::openActionPrompt(root, appActions, action);
     };
@@ -594,6 +598,27 @@ int main(int argc, char** argv) {
     preferences.onAudioDevice = [&] { audioDevice.open(); };
     preferences.audioSummary = [&] { return audioDevice.summary(); };
     appActions.addUi("ui.audio.device", "Edit: audio device…", [&] { audioDevice.open(); });
+    renderDialog.onStatus = [&](const std::string& message) { shell.setStatus(message); };
+    renderDialog.openFolderWhenDone = [&] { return preferences.preferences().renderOpenFolder; };
+    renderDialog.setOpenFolderWhenDone = [&](bool on) {
+        if (auto set = preferences.setRenderOpenFolder(on); !set)
+            std::fprintf(stderr, "preferences: %s\n", set.error().toString().c_str());
+    };
+    renderDialog.onChooseCover = [&] {
+        const fs::path folder = (*app)->projectPath().empty() ? fs::path() : (*app)->projectDir();
+        if (folder.empty()) {
+            shell.setStatus("Cover: save the project first; the cover lives in its folder");
+            return;
+        }
+        fileActions.chooseImage(folder, [&, folder](const fs::path& image) {
+            const fs::path relative = image.lexically_relative(folder);
+            if (relative.empty() || *relative.begin() == "..") {
+                shell.setStatus("Cover: choose an image inside the project folder");
+                return;
+            }
+            renderDialog.setCover(relative.generic_string());
+        });
+    };
     renderDialog.onChooseFolder = [&] {
         fileActions.chooseFolder((*app)->rendersDir(), [&](const fs::path& dir) {
             if (auto set = preferences.setRenderDirectory(dir); !set)

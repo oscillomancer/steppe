@@ -919,8 +919,8 @@ project is drawn in the quiet ink, with "from your default" on hover.
 - **Buttons:** Queue (n), Add to queue, **Save as default**,
   Render N files.
 - **Results** (after a job): for each file, its outputs, LUFS and dBTP, the
-  checks as ✓ or ✗ with the measured value, and the skipped files with their
-  reason. A file's menu offers Open folder, Add to project, and "Branch from
+  checks as "ok" or "FAIL" with the measured value (the UI fonts have no check
+  marks), and the skipped files with their reason. A file's menu offers Open folder, Add to project, and "Branch from
   this version", which runs `branch.create {version}`.
 
 **Writing the settings.** Render and Add to queue compare the dialog's
@@ -933,8 +933,9 @@ refused with a status message while it tracks that job. Cancelled jobs remain
 labelled cancelled and retain any partial result files returned by the
 engine.
 
-**File → Mix** runs `render.mix` as a job with no other arguments, so it
-follows the project's settings, then the user default. Its menu label is
+**File → Mix** (the action `ui.render.mix`; a menus file that still lists
+`render.mix` runs the command directly) runs `render.mix` as a job with no
+other arguments, so it follows the project's settings, then the user default. Its menu label is
 resolved each time the menu opens: "Mix → <file name> (<first output, e.g.
 WAV 24-bit 48 kHz>)", plus the range when the bounds are not the whole
 project. Progress shows in the status bar, then the path, with an Open
@@ -1180,7 +1181,7 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   and unrelated customizations without changing the mouse file schema.
 - **Preferences** (Edit > Preferences…): app-wide settings, never project
   state. The default monitoring of new channels (off, on — the default — or
-  auto; `preferences.json`, supple.preferences/1.4, sets
+  auto; `preferences.json`, supple.preferences/1.6, sets
   `EngineApp::defaultMonitor`, so the agents' track.add follows it too), and
   a way into the mouse modifiers (where the wheel zoom anchor is set).
   **Audio processing threads** is an advanced live/background

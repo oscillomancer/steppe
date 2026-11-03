@@ -3,13 +3,22 @@
 #include "render_dialog.h"
 #include <supple/base/paths.h>
 
+#include <SDL3/SDL_misc.h>
+
 #include <algorithm>
 #include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <optional>
+#include <tuple>
+
+#include "supple/json/write.h"
+#include "supple/ui/controls.h"
+#include "supple/ui/forms.h"
+#include "supple/ui/popup.h"
 #include "supple/ui/root.h"
 #include "supple/ui/scroll_view.h"
 #include "supple/ui/text_field.h"
@@ -19,6 +28,7 @@ namespace supple::gui {
 namespace {
 
 const cmd::Origin kUiOrigin{cmd::Origin::Type::Ui, "gui", {}};
+using ui::Choice;
 
 std::uint64_t nowMs() {
     return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -38,7 +48,8 @@ std::optional<double> number(std::string_view text) {
 std::optional<std::int64_t> integer(std::string_view text) {
     std::int64_t value = 0;
     const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
-    if (error != std::errc{} || end != text.data() + text.size()) return std::nullopt;
+    if (text.empty() || error != std::errc{} || end != text.data() + text.size())
+        return std::nullopt;
     return value;
 }
 
@@ -46,232 +57,455 @@ std::string baseName(const std::string& path) {
     return std::filesystem::path(path).filename().string();
 }
 
+std::string text(const json::Value* v, std::string fallback = {}) {
+    return v && v->isString() ? v->asString() : fallback;
+}
+double num(const json::Value* v, double fallback = 0) {
+    return v && v->isNumber() ? v->asDouble() : fallback;
+}
+bool flag(const json::Value* v, bool fallback = false) {
+    return v && v->isBool() ? v->asBool() : fallback;
+}
+std::string compact(double v) {
+    char buf[32];
+    std::snprintf(buf, sizeof buf, "%g", v);
+    return buf;
+}
+// "−14" with a real minus sign, as the dialog shows numbers.
+std::string signedText(double v) {
+    std::string s = compact(v);
+    if (!s.empty() && s[0] == '-') s = "−" + s.substr(1);
+    return s;
+}
+
+const std::vector<Choice>& formatChoices() {
+    static const std::vector<Choice> c{{"wav", "WAV"},
+                                       {"aiff", "AIFF"},
+                                       {"flac", "FLAC"},
+                                       {"mp3", "MP3"},
+                                       {"vorbis", "Ogg Vorbis"}};
+    return c;
+}
+std::vector<Choice> depthChoices(const std::string& format) {
+    if (format == "wav") return {{"16", "16-bit"}, {"24", "24-bit"}, {"32", "32-bit float"}};
+    if (format == "aiff" || format == "flac") return {{"16", "16-bit"}, {"24", "24-bit"}};
+    return {};
+}
+std::string formatLabel(const std::string& format) {
+    for (const auto& c : formatChoices())
+        if (c.value == format) return c.label;
+    return format;
+}
+// "WAV 24-bit 48 kHz", "MP3 320 kbps 44.1 kHz".
+std::string outputLabel(const json::Value& o) {
+    const std::string format = text(o.find("format"), "wav");
+    std::string out = formatLabel(format);
+    if (const auto* bits = o.find("bit_depth"); bits && bits->isNumber())
+        out += bits->asInt() == 32 ? " 32-bit float" : " " + std::to_string(bits->asInt()) + "-bit";
+    if (format == "mp3") {
+        const auto* mp3 = o.find("mp3");
+        const bool vbr = mp3 && text(mp3->find("mode")) == "vbr";
+        out += vbr ? " V" + compact(num(mp3->find("vbr_quality"), 2))
+                   : " " + compact(num(mp3 ? mp3->find("bitrate_kbps") : nullptr, 320)) + " kbps";
+    }
+    if (format == "vorbis") out += " q" + compact(num(o.find("vorbis_quality"), 6));
+    const double rate = num(o.find("sample_rate"), 48000);
+    out += " " + compact(rate / 1000) + " kHz";
+    return out;
+}
+std::string sourceKey(RenderDialog::Source s) {
+    return s == RenderDialog::Source::Master  ? "mix"
+           : s == RenderDialog::Source::Stems ? "stems"
+                                              : "regions";
+}
+
+ui::Node& row(ui::Node& parent, const std::string& id, float height = 26) {
+    auto& r = parent.emplace<ui::Node>(id);
+    r.layout.dir = ui::Layout::Dir::Row;
+    r.layout.height = ui::SizeRule::fixed(height);
+    r.layout.gap = 6;
+    r.layout.align = ui::Layout::Align::Center;
+    return r;
+}
+ui::Label& caption(ui::Node& parent, const std::string& id, const std::string& label,
+                   float width = 110) {
+    auto& l = parent.emplace<ui::Label>(id, label, ui::Font::Ui, "caption", "ink-quiet");
+    l.layout.width = ui::SizeRule::fixed(width);
+    return l;
+}
+ui::Label& heading(ui::Node& parent, const std::string& id, const std::string& label) {
+    auto& l = parent.emplace<ui::Label>(id, label, ui::Font::UiBold, "small", "ink");
+    l.layout.height = ui::SizeRule::fixed(22);
+    return l;
+}
 }  // namespace
 
 RenderDialog::RenderDialog(engine::EngineApp& app, cmd::Dispatcher& dispatcher, ui::Root& root)
-    : app_(app), dispatcher_(dispatcher), root_(root) {}
-
-std::string RenderDialog::defaultFor(std::string_view key) const {
-    const model::Session& s = app_.head();
-    const json::Value& defaults = s.project->render;
-    const auto setting = [&](std::string_view k) -> const json::Value* {
-        return defaults.isObject() ? defaults.find(k) : nullptr;
+    : app_(app), dispatcher_(dispatcher), root_(root) {
+    openFolder = [](const std::filesystem::path& dir) {
+        const std::string url = "file://" + dir.generic_string();
+        (void)SDL_OpenURL(url.c_str());
     };
-    const auto number = [](const json::Value* v, double fallback) {
-        return v && v->isNumber() ? v->asDouble() : fallback;
-    };
-    char buf[64];
-    if (key == "format") {  // wav unless the project's render settings say otherwise
-        const json::Value* f = setting("format");
-        if (f && f->isString()) return f->asString();
-        if (f && f->isObject())
-            if (const json::Value* c = f->find("container"); c && c->isString())
-                return c->asString();
-        return "wav";
-    }
-    if (key == "end_beat") {
-        const double last = model::lastItemBeat(s);
-        std::snprintf(buf, sizeof buf, "last item end (%.2f)", last);
-        return buf;
-    }
-    if (key == "tail_s") {
-        std::snprintf(buf, sizeof buf, "%g", number(setting("tail_ms"), 0.0) / 1000.0);
-        return buf;
-    }
-    if (key == "sample_rate") {
-        std::snprintf(buf, sizeof buf, "%d",
-                      static_cast<int>(number(setting("sample_rate"), s.project->sampleRate)));
-        return buf;
-    }
-    if (key == "bit_depth") {
-        const json::Value* format = setting("format");
-        const json::Value* depth =
-            format && format->isObject() ? format->find("bit_depth") : setting("bit_depth");
-        std::snprintf(buf, sizeof buf, "%d", static_cast<int>(number(depth, 32)));
-        return buf;
-    }
-    if (key == "channels") {
-        std::snprintf(buf, sizeof buf, "%d", static_cast<int>(number(setting("channels"), 2)));
-        return buf;
-    }
-    if (key == "normalize") {
-        const json::Value* n = setting("normalize");
-        if (n && n->isString()) return n->asString();
-        if (n && n->isObject())
-            if (const json::Value* mode = n->find("mode"); mode && mode->isString())
-                return mode->asString();
-        return "none";
-    }
-    if (key == "target") {
-        std::snprintf(buf, sizeof buf, "%g", number(setting("target"), -14.0));
-        return buf;
-    }
-    return {};
 }
 
 RenderDialog::~RenderDialog() = default;
 
-std::unique_ptr<ui::Node> RenderDialog::buildPage() {
-    auto page = std::make_unique<ui::Node>("render");
-    page_ = page.get();
-    page->layout.dir = ui::Layout::Dir::Column;
-    page->layout.width = ui::SizeRule::fixed(780);
-    page->layout.height = ui::SizeRule::fixed(706);
-    page->layout.padding = ui::Insets::all(12);
-    page->layout.gap = 8;
-    auto& header = page->emplace<ui::Node>("render.header");
-    header.layout.dir = ui::Layout::Dir::Row;
-    header.layout.height = ui::SizeRule::fixed(30);
-    header.layout.gap = 8;
-    header.layout.align = ui::Layout::Align::Center;
-    auto& title = header.emplace<ui::Label>("render.title", "Render", ui::Font::UiBold, "title");
-    title.layout.width = ui::SizeRule::fraction();
-    header.emplace<ui::Button>("render.close", "Close", [this] { close(); });
+// ------------------------------------------------------------------ state
 
-    // Source: master mix, stems, regions (the command the dialog will call).
-    auto& sources = page->emplace<ui::Node>("render.sources");
-    sources.layout.dir = ui::Layout::Dir::Row;
-    sources.layout.height = ui::SizeRule::fixed(28);
-    sources.layout.gap = 6;
-    sources.layout.align = ui::Layout::Align::Center;
-    sources.emplace<ui::Button>("render.src.master", "Master mix",
-                                [this] { setSource(Source::Master); });
-    sources.emplace<ui::Button>("render.src.stems", "Stems", [this] { setSource(Source::Stems); });
-    sources.emplace<ui::Button>("render.src.regions", "Regions",
-                                [this] { setSource(Source::Regions); });
-    sourceLabel_ = &sources.emplace<ui::Label>("render.source", "Source: master mix",
-                                               ui::Font::Mono, "caption", "ink-quiet");
-    sourceLabel_->layout.width = ui::SizeRule::fraction();
-
-    // Where the files go: any folder, chosen in the system's dialog.
-    auto& folder = page->emplace<ui::Node>("render.folder.row");
-    folder.layout.dir = ui::Layout::Dir::Row;
-    folder.layout.height = ui::SizeRule::fixed(28);
-    folder.layout.gap = 6;
-    folder.layout.align = ui::Layout::Align::Center;
-    folder.emplace<ui::Label>("render.folder.label", "Folder", ui::Font::Ui, "caption", "ink-quiet")
-        .layout.width = ui::SizeRule::fixed(90);
-    folder_ = &folder.emplace<ui::Label>("render.folder", "", ui::Font::Mono, "caption", "ink");
-    folder_->layout.width = ui::SizeRule::fraction();
-    folder.emplace<ui::Button>("render.folder.choose", "Choose folder…", [this] {
-        if (auto choose = onChooseFolder) choose();
-    });
-    showFolder();
-
-    auto field = [&](const char* label, const char* id, const std::string& value, float width,
-                     const std::string& placeholder,
-                     std::function<void(const std::string&)> onChange) -> ui::TextField& {
-        auto& cell = page->emplace<ui::Node>(std::string(id) + ".cell");
-        cell.layout.dir = ui::Layout::Dir::Row;
-        cell.layout.height = ui::SizeRule::fixed(26);
-        cell.layout.gap = 6;
-        cell.layout.align = ui::Layout::Align::Center;
-        auto& l = cell.emplace<ui::Label>(std::string(id) + ".label", label, ui::Font::Ui,
-                                          "caption", "ink-quiet");
-        l.layout.width = ui::SizeRule::fixed(90);
-        auto& f = cell.emplace<ui::TextField>(id, value, placeholder);
-        f.layout.width = ui::SizeRule::fixed(width);
-        f.onChange = [this, onChange = std::move(onChange)](const std::string& text) {
-            onChange(text);
-            markDirty();
-        };
-        f.onSubmit = [this](const std::string&) { refreshPreview(); };
-        return f;
-    };
-    field("Pattern", "render.pattern", pattern_, 300, "",
-          [this](const std::string& t) { pattern_ = t; });
-    field("Start beat", "render.start", start_, 70, "0",
-          [this](const std::string& t) { start_ = t; });
-    field("End beat", "render.end", end_, 70, defaultFor("end_beat"),
-          [this](const std::string& t) { end_ = t; });
-    field("Tail (s)", "render.tail", tail_, 70, defaultFor("tail_s"),
-          [this](const std::string& t) { tail_ = t; });
-    field("Sample rate", "render.sample_rate", sampleRate_, 90, defaultFor("sample_rate"),
-          [this](const std::string& t) { sampleRate_ = t; });
-    field("Bit depth", "render.bit_depth", bitDepth_, 70, defaultFor("bit_depth"),
-          [this](const std::string& t) { bitDepth_ = t; });
-    field("Format", "render.format", format_, 70, defaultFor("format"),
-          [this](const std::string& t) { format_ = t; });
-    field("Second file", "render.secondary", secondary_, 110, "none",
-          [this](const std::string& t) { secondary_ = t; });
-    field("Channels", "render.channels", channels_, 70, defaultFor("channels"),
-          [this](const std::string& t) { channels_ = t; });
-    field("Normalize", "render.normalize", normalize_, 110, defaultFor("normalize"),
-          [this](const std::string& t) { normalize_ = t; });
-    field("Target", "render.target", target_, 80, defaultFor("target"),
-          [this](const std::string& t) { target_ = t; });
-    field("Limit dBTP", "render.limit", limit_, 80, "-1",
-          [this](const std::string& t) { limit_ = t; });
-
-    // Stems-only: how each track is rendered.
-    auto& stems = page->emplace<ui::Node>("render.stems.row");
-    stemsRow_ = &stems;
-    stems.layout.dir = ui::Layout::Dir::Row;
-    stems.layout.height = ui::SizeRule::fixed(26);
-    stems.layout.gap = 6;
-    stems.layout.align = ui::Layout::Align::Center;
-    modeLabel_ = &stems.emplace<ui::Label>("render.mode.label", "Mode", ui::Font::Ui, "caption",
-                                           "ink-quiet");
-    modeLabel_->layout.width = ui::SizeRule::fixed(90);
-    modeField_ = &stems.emplace<ui::TextField>("render.mode", mode_);
-    modeField_->layout.width = ui::SizeRule::fixed(140);
-    modeField_->onChange = [this](const std::string& t) {
-        mode_ = t;
-        markDirty();
-    };
-    tapLabel_ =
-        &stems.emplace<ui::Label>("render.tap.label", "Tap", ui::Font::Ui, "caption", "ink-quiet");
-    tapLabel_->layout.width = ui::SizeRule::fixed(40);
-    tapField_ = &stems.emplace<ui::TextField>("render.tap", tap_);
-    tapField_->layout.width = ui::SizeRule::fixed(120);
-    tapField_->onChange = [this](const std::string& t) {
-        tap_ = t;
-        markDirty();
-    };
-
-    auto& actions = page->emplace<ui::Node>("render.actions");
-    actions.layout.dir = ui::Layout::Dir::Row;
-    actions.layout.height = ui::SizeRule::fixed(28);
-    actions.layout.gap = 6;
-    actions.layout.align = ui::Layout::Align::Center;
-    actions.emplace<ui::Button>("render.run", "Render", [this] { run(); });
-    addButton_ = &actions.emplace<ui::Button>(
-        "render.add", addToProject_ ? "[x] Add to project" : "[ ] Add to project",
-        [this] { setAddToProject(!addToProject_); });
-    actions.emplace<ui::Button>("render.queue.add", "Add to queue", [this] { addToQueue(); });
-    queueButton_ = &actions.emplace<ui::Button>("render.queue", "Queue", [this] { openQueue(); });
-    status_ =
-        &actions.emplace<ui::Label>("render.status", "", ui::Font::Ui, "caption", "ink-quiet");
-    status_->layout.width = ui::SizeRule::fraction();
-
-    previewBlock_ =
-        &page->emplace<ui::TextBlock>("render.preview", "", ui::Font::Mono, "caption", "ink");
-    previewBlock_->layout.height = ui::SizeRule::fixed(60);
-    resultsBlock_ =
-        &page->emplace<ui::TextBlock>("render.results", "", ui::Font::Mono, "caption", "ink-quiet");
-    resultsBlock_->layout.height = ui::SizeRule::fixed(70);
-    setSource(Source::Master);
-    refreshQueueButton();
-    return page;
+void RenderDialog::load(const json::Value& args) {
+    auto result = dispatcher_.execute({"render.settings", args, kUiOrigin});
+    if (!result) {
+        setStatus("render settings: " + result.error().message);
+        return;
+    }
+    settings_ = *result->find("effective");
+    from_ = *result->find("from");
+    owned_.clear();
+    const bool preset = args.isObject() && args.size() > 0;
+    for (const auto& m : from_.asObject())
+        if (m.value.isString() && m.value.asString() == (preset ? "args" : "project"))
+            owned_.insert(m.key);
+    if (!preset) {
+        initial_ = settings_;
+        initialOwned_ = owned_;
+    }
+    raw_.clear();
+    errors_.clear();
+    tab_ = 0;
 }
+
+json::Value& RenderDialog::member(const std::string& name) { return settings_[name]; }
+
+json::Value& RenderDialog::output(std::size_t index) {
+    return settings_["outputs"].asArray().at(index);
+}
+
+bool RenderDialog::fromDefault(const std::string& name) const {
+    if (owned_.count(name)) return false;
+    const auto* layer = from_.find(name);
+    return layer && layer->isString() && layer->asString() == "default";
+}
+
+void RenderDialog::set(const std::string& name, json::Value value, bool structural) {
+    if (value.isNull())
+        settings_.asObject().erase(name);
+    else
+        settings_[name] = std::move(value);
+    owned_.insert(name);
+    markDirty();
+    if (structural) rebuild();
+}
+
+json::Value RenderDialog::projectSettings() const {
+    json::Value out = json::Value::object();
+    for (const auto& name : owned_)
+        if (const auto* v = settings_.find(name)) out[name] = *v;
+    return out;
+}
+
+RenderDialog::Source RenderDialog::source() const {
+    const std::string s = text(settings_.find("source"), "mix");
+    return s == "stems" ? Source::Stems : s == "regions" ? Source::Regions : Source::Master;
+}
+
+void RenderDialog::setSource(Source s) { set("source", sourceKey(s), true); }
+
+bool RenderDialog::addToProject() const { return flag(settings_.find("add_to_project")); }
+void RenderDialog::setAddToProject(bool on) { set("add_to_project", on, true); }
+
+std::string RenderDialog::pattern() const {
+    const auto* p = settings_.find("pattern");
+    if (!p) return {};
+    if (p->isString()) return p->asString();
+    return text(p->find(sourceKey(source())));
+}
+
+void RenderDialog::numberField(const std::string& id, const std::string& typed,
+                               std::function<Status(double)> apply) {
+    raw_[id] = typed;
+    errors_.erase(id);
+    markDirty();
+    if (typed.empty()) {
+        (void)apply(std::numeric_limits<double>::quiet_NaN());  // NaN: back to the default
+        return;
+    }
+    const auto value = number(typed);
+    if (!value) {
+        errors_[id] = "enter a finite number";
+        return;
+    }
+    if (auto applied = apply(*value); !applied) errors_[id] = applied.error().message;
+}
+
+void RenderDialog::setField(const std::string& id, const std::string& typed) {
+    const auto range = [](double v, double lo, double hi) -> Status {
+        if (v < lo || v > hi)
+            return Error("gui.render.field", "use " + compact(lo) + " to " + compact(hi));
+        return {};
+    };
+    const bool unset = typed.empty();
+    if (id == "render.pattern") {
+        json::Value p = settings_.find("pattern") ? *settings_.find("pattern") : json::Value();
+        if (!p.isObject()) {
+            const std::string all = text(&p);
+            p = json::Value::object();
+            for (const char* k : {"mix", "stems", "regions"}) p[k] = all;
+        }
+        p[sourceKey(source())] = typed;
+        set("pattern", std::move(p));
+        if (patternField_ && patternField_->text() != typed) patternField_->setText(typed);
+        return;
+    }
+    if (id == "render.start" || id == "render.end") {
+        numberField(id, typed, [&, id](double v) -> Status {
+            const char* key = id == "render.start" ? "start_beat" : "end_beat";
+            if (std::isnan(v)) {
+                settings_.asObject().erase(key);
+            } else {
+                if (v < 0 || (id == "render.end" && v <= 0))
+                    return Error("gui.render.field", "enter a positive number of beats");
+                settings_[key] = v;
+            }
+            owned_.insert(key);
+            const bool was = text(settings_.find("bounds")) == "custom";
+            set("bounds", "custom", !was);  // the Range dropdown follows
+            return {};
+        });
+    } else if (id == "render.tail") {
+        numberField(id, typed, [&](double v) -> Status {
+            if (!std::isnan(v)) SUPPLE_TRY(range(v, 0, 600));
+            set("tail_s", std::isnan(v) ? 0.0 : v);
+            return {};
+        });
+    } else if (id == "render.sample_rate") {
+        raw_[id] = typed;
+        errors_.erase(id);
+        markDirty();
+        if (unset) {
+            set("sample_rate", static_cast<std::int64_t>(app_.head().project->sampleRate));
+            owned_.erase("sample_rate");
+        } else if (auto v = integer(typed); v && *v >= 8000 && *v <= 384000)
+            set("sample_rate", *v);
+        else
+            errors_[id] = "use 8000..384000 Hz";
+    } else if (id == "render.bit_depth") {
+        raw_[id] = typed;
+        errors_.erase(id);
+        markDirty();
+        if (auto v = integer(typed); v && (*v == 16 || *v == 24 || *v == 32)) {
+            output(tab_)["bit_depth"] = *v;
+            owned_.insert("outputs");
+        } else if (!unset)
+            errors_[id] = "use 16, 24 or 32 bits";
+    } else if (id == "render.format") {
+        if (unset) return;
+        json::Value o = json::Value::object();
+        o["format"] = typed;
+        settings_["outputs"].asArray().at(tab_) = std::move(o);
+        set("outputs", settings_["outputs"], true);
+    } else if (id == "render.secondary") {
+        auto& outputs = settings_["outputs"].asArray();
+        outputs.resize(1);
+        std::string spec = typed;
+        while (!spec.empty() && spec.back() == ' ') spec.pop_back();
+        if (!spec.empty() && spec != "none") {
+            json::Value o = json::Value::object();
+            const auto space = spec.find(' ');
+            o["format"] = spec.substr(0, space);
+            if (space != std::string::npos)
+                if (auto v = integer(spec.substr(space + 1))) o["bit_depth"] = *v;
+            outputs.push_back(std::move(o));
+        }
+        set("outputs", settings_["outputs"], true);
+    } else if (id == "render.channels") {
+        raw_[id] = typed;
+        errors_.erase(id);
+        markDirty();
+        if (typed == "track")
+            set("channels", "track");
+        else if (auto v = integer(typed); v && (*v == 1 || *v == 2))
+            set("channels", *v);
+        else if (!unset)
+            errors_[id] = "use one or two channels";
+    } else if (id == "render.normalize") {
+        json::Value n = settings_["normalize"];
+        n["mode"] = unset ? "none" : typed;
+        set("normalize", std::move(n), true);
+    } else if (id == "render.target") {
+        numberField(id, typed, [&](double v) -> Status {
+            if (!std::isnan(v)) SUPPLE_TRY(range(v, -100, 0));
+            json::Value n = settings_["normalize"];
+            n["target"] = std::isnan(v) ? -14.0 : v;
+            set("normalize", std::move(n));
+            return {};
+        });
+    } else if (id == "render.limit") {
+        numberField(id, typed, [&](double v) -> Status {
+            if (!std::isnan(v)) SUPPLE_TRY(range(v, -60, 0));
+            set("limit_true_peak_db", std::isnan(v) ? json::Value() : json::Value(v));
+            return {};
+        });
+    } else if (id == "render.handles") {
+        numberField(id, typed, [&](double v) -> Status {
+            if (!std::isnan(v)) SUPPLE_TRY(range(v, 0, 60));
+            set("handles_s", std::isnan(v) ? 0.0 : v);
+            return {};
+        });
+    } else if (id == "render.threshold") {
+        numberField(id, typed, [&](double v) -> Status {
+            if (!std::isnan(v)) SUPPLE_TRY(range(v, -144, 0));
+            json::Value t = settings_["trim"];
+            t["threshold_db"] = std::isnan(v) ? -60.0 : v;
+            set("trim", std::move(t));
+            return {};
+        });
+    } else if (id == "render.vorbis_quality") {
+        numberField(id, typed, [&](double v) -> Status {
+            if (!std::isnan(v)) SUPPLE_TRY(range(v, -1, 10));
+            output(tab_)["vorbis_quality"] = std::isnan(v) ? 6.0 : v;
+            set("outputs", settings_["outputs"]);
+            return {};
+        });
+    } else if (id == "render.output_rate") {
+        raw_[id] = typed;
+        errors_.erase(id);
+        markDirty();
+        if (unset)
+            output(tab_).asObject().erase("sample_rate");
+        else if (auto v = integer(typed); v && *v >= 8000 && *v <= 384000)
+            output(tab_)["sample_rate"] = *v;
+        else
+            errors_[id] = "use 8000..384000 Hz";
+        owned_.insert("outputs");
+    } else if (id == "render.suffix") {
+        if (unset)
+            output(tab_).asObject().erase("suffix");
+        else
+            output(tab_)["suffix"] = typed;
+        set("outputs", settings_["outputs"]);
+    } else if (id == "render.mode" || id == "render.tap") {
+        json::Value st = settings_["stems"];
+        st[id == "render.mode" ? "mode" : "tap"] = typed;
+        set("stems", std::move(st));
+    } else if (id.starts_with("render.meta.")) {
+        const std::string key = id.substr(std::string_view("render.meta.").size());
+        json::Value m = settings_.find("metadata") ? settings_["metadata"] : json::Value::object();
+        raw_[id] = typed;
+        errors_.erase(id);
+        if (unset)
+            m.asObject().erase(key);
+        else if (key == "track_number") {
+            if (auto v = integer(typed); v && *v >= 1 && *v <= 9999)
+                m[key] = *v;
+            else
+                errors_[id] = "use a track number from 1 to 9999";
+        } else
+            m[key] = typed;
+        set("metadata", m.size() ? std::move(m) : json::Value());
+    }
+}
+
+void RenderDialog::setCover(const std::string& relative) {
+    json::Value m = settings_.find("metadata") ? settings_["metadata"] : json::Value::object();
+    if (relative.empty())
+        m.asObject().erase("cover");
+    else
+        m["cover"] = relative;
+    set("metadata", m.size() ? std::move(m) : json::Value(), true);
+}
+
+Status RenderDialog::validate() const {
+    if (errors_.empty()) return {};
+    const auto& [field, message] = *errors_.begin();
+    const std::string name = field.substr(field.find('.') + 1);
+    return Error("gui.render.field", field + ": " + message, "/" + name,
+                 "correct this field or clear it for the default");
+}
+
+json::Value RenderDialog::selectors() const {
+    json::Value a = json::Value::object();
+    if (versionChoice_.starts_with("branch:"))
+        a["branch"] = versionChoice_.substr(7);
+    else if (versionChoice_.starts_with("version:"))
+        if (auto v = integer(versionChoice_.substr(8))) a["version"] = *v;
+    return a;
+}
+
+std::string RenderDialog::commandName() const {
+    switch (source()) {
+        case Source::Master:
+            return "render.mix";
+        case Source::Stems:
+            return "render.stems";
+        case Source::Regions:
+            return "render.regions";
+    }
+    return "render.mix";
+}
+
+json::Value RenderDialog::renderArgs(bool forJob) const {
+    json::Value a = settings_;
+    const json::Value chosen = selectors();
+    for (const auto& m : chosen.asObject()) a[m.key] = m.value;
+    // A mix carries no per-file analysis unless it is asked for; the dialog
+    // lists its loudness.
+    if (source() == Source::Master) a["analyze"] = "summary";
+    if (forJob) a["job"] = true;
+    return a;
+}
+
+void RenderDialog::markDirty() {
+    dirty_ = true;
+    lastEditMs_ = nowMs();
+}
+
+void RenderDialog::setStatus(std::string message) {
+    statusText_ = std::move(message);
+    if (status_) status_->setText(statusText_);
+}
+
+Status RenderDialog::writeSettings() {
+    bool changed = owned_ != initialOwned_;
+    for (const auto& name : owned_) {
+        if (changed) break;
+        const auto* now = settings_.find(name);
+        const auto* before = initial_.find(name);
+        changed = !now || !before || json::writeCompact(*now) != json::writeCompact(*before);
+    }
+    if (!changed) return {};
+    json::Value args = json::Value::object();
+    args["render"] = projectSettings();
+    auto done = dispatcher_.transact("Render settings", kUiOrigin, [&]() -> Result<json::Value> {
+        return dispatcher_.execute({"project.set", std::move(args), kUiOrigin});
+    });
+    if (!done) return std::move(done).error();
+    initial_ = settings_;
+    initialOwned_ = owned_;
+    return {};
+}
+
+// ------------------------------------------------------------------ page
 
 void RenderDialog::open() {
     if (page_) return;
+    load(json::Value::object());
+    presetName_.clear();
+    versionChoice_ = "current";
+    ask_ = false;
     auto page = buildPage();
     root_.openPopup(std::move(page), {}, ui::Placement::Center, [this] {
         page_ = nullptr;
-        sourceLabel_ = nullptr;
-        folder_ = nullptr;
+        body_ = nullptr;
+        scroll_ = nullptr;
         status_ = nullptr;
+        diagnostic_ = nullptr;
         previewBlock_ = nullptr;
         resultsBlock_ = nullptr;
-        stemsRow_ = nullptr;
-        modeLabel_ = nullptr;
-        tapLabel_ = nullptr;
-        modeField_ = nullptr;
-        tapField_ = nullptr;
-        addButton_ = nullptr;
+        resultsRow_ = nullptr;
         queueButton_ = nullptr;
+        renderButton_ = nullptr;
+        folder_ = nullptr;
+        patternField_ = nullptr;
     });
     dirty_ = true;
     lastEditMs_ = nowMs();
@@ -282,248 +516,910 @@ void RenderDialog::close() {
     if (page_) root_.closePopup();
 }
 
-void RenderDialog::setAddToProject(bool on) {
-    addToProject_ = on;
-    if (addButton_) addButton_->setText(on ? "[x] Add to project" : "[ ] Add to project");
+std::unique_ptr<ui::Node> RenderDialog::buildPage() {
+    auto page = std::make_unique<ui::Node>("render");
+    page_ = page.get();
+    page->layout.dir = ui::Layout::Dir::Column;
+    page->layout.width = ui::SizeRule::fixed(800);
+    page->layout.height = ui::SizeRule::fixed(820);
+    page->layout.maxHeight = 820;
+    page->layout.padding = ui::Insets::all(12);
+    page->layout.gap = 6;
+    buildHeader(*page);
+    scroll_ = &page->emplace<ui::ScrollView>("render.scroll");
+    scroll_->layout.height = ui::SizeRule::fraction();
+    body_ = &scroll_->content();
+    body_->layout.dir = ui::Layout::Dir::Column;
+    body_->layout.gap = 4;
+    body_->layout.padding = ui::Insets{0, 0, 14, 0};
+    buildFooter(*page);
+    rebuild();
+    return page;
+}
+
+void RenderDialog::rebuild() {
+    if (!body_) return;
+    scrollY_ = scroll_ ? scroll_->scroll() : 0;
+    root_.releaseWithin(body_);
+    body_->clear();
+    patternField_ = nullptr;
+    folder_ = nullptr;
+    buildSource(*body_);
+    buildRange(*body_);
+    buildOutput(*body_);
+    buildFormat(*body_);
+    buildLoudness(*body_);
+    buildProcessing(*body_);
+    buildMetadata(*body_);
+    buildAfter(*body_);
+    showFolder();
+    refreshQueueButton();
+    root_.relayout();
+    if (scroll_) scroll_->scrollTo(scrollY_);
     root_.damageAll();
 }
 
-void RenderDialog::setSource(Source source) {
-    source_ = source;
-    const char* name = source == Source::Master  ? "master mix"
-                       : source == Source::Stems ? "stems"
-                                                 : "regions";
-    if (sourceLabel_) sourceLabel_->setText(std::string("Source: ") + name);
-    if (stemsRow_) {
-        stemsRow_->visible = source == Source::Stems;
-        if (!stemsRow_->visible) root_.releaseWithin(stemsRow_);
+void RenderDialog::buildHeader(ui::Node& page) {
+    auto& header = row(page, "render.header", 30);
+    header.emplace<ui::Label>("render.title", "Render", ui::Font::UiBold, "title");
+    auto& gap = header.emplace<ui::Node>("render.header.gap");
+    gap.layout.width = ui::SizeRule::fraction();
+    caption(header, "render.preset.label", "Preset", 44);
+    std::vector<Choice> presets{{"", "—"}};
+    if (auto list = dispatcher_.execute({"render.preset.list", json::Value::object(), kUiOrigin}))
+        for (const auto& p : (*list)["presets"].asArray()) {
+            const std::string name = text(p.find("name"));
+            presets.push_back({name, name + (flag(p.find("factory")) ? "" : " (yours)")});
+        }
+    auto& preset = header.emplace<ui::Dropdown>("render.preset", presets, presetName_);
+    preset.layout.width = ui::SizeRule::fixed(250);
+    preset.onChange = [this](const std::string& name) {
+        if (name.empty()) return;
+        if (auto loaded = loadPreset(name); !loaded) setStatus(loaded.error().message);
+    };
+    header.emplace<ui::Button>("render.preset.save", "Save preset…", [this] { openPresetName(); });
+    header.emplace<ui::Button>("render.preset.delete", "Delete preset", [this] {
+        if (presetName_.empty()) return;
+        if (auto deleted = deletePreset(presetName_); !deleted) setStatus(deleted.error().message);
+    });
+    header.emplace<ui::Button>("render.close", "Close", [this] { close(); });
+}
+
+void RenderDialog::buildSource(ui::Node& body) {
+    heading(body, "render.h.source", "Source");
+    auto& sources = row(body, "render.sources");
+    const Source current = source();
+    for (const auto& [s, id, label] :
+         {std::tuple{Source::Master, "render.src.master", "Master mix"},
+          std::tuple{Source::Stems, "render.src.stems", "Stems"},
+          std::tuple{Source::Regions, "render.src.regions", "Regions"}}) {
+        auto& t =
+            sources.emplace<ui::Toggle>(id, label, "accent", [this, s = s](bool) { setSource(s); });
+        t.layout.width = ui::SizeRule::fixed(96);
+        t.setOn(current == s);
     }
-    // Stems-only fields only exist for stems; keep them out of other args.
-    if (mode_.empty()) mode_ = "isolated";
-    if (tap_.empty()) tap_ = "post_fader";
-    if (modeField_) modeField_->setText(mode_);
-    if (tapField_) tapField_->setText(tap_);
-    markDirty();
-    root_.relayout();
-    root_.damageAll();
+    auto& gap = sources.emplace<ui::Node>("render.sources.gap");
+    gap.layout.width = ui::SizeRule::fixed(20);
+    caption(sources, "render.version.label", "Version", 50);
+    std::vector<Choice> versions{{"current", "Current"}};
+    for (const auto& name : app_.versions().branches())
+        if (name != app_.versions().branch())
+            versions.push_back({"branch:" + name, "Branch " + name});
+    if (versionChoice_.starts_with("version:"))
+        versions.push_back({versionChoice_, "Version " + versionChoice_.substr(8)});
+    versions.push_back({"earlier", "Earlier version…"});
+    auto& version = sources.emplace<ui::Dropdown>("render.version", versions, versionChoice_);
+    version.layout.width = ui::SizeRule::fixed(170);
+    version.onChange = [this](const std::string& v) {
+        if (v == "earlier") {
+            chooseVersion();
+            return;
+        }
+        versionChoice_ = v;
+        markDirty();
+    };
+    const model::Session& s = app_.head();
+    if (current == Source::Stems) {
+        std::vector<Choice> tracks;
+        for (const auto& e : s.tracks)
+            if (e.value->parent == model::kMaster)
+                tracks.push_back({e.id.str(), e.value->name.empty() ? e.id.str() : e.value->name});
+        const json::Value& stems = member("stems");
+        std::vector<std::string> on;
+        if (const auto* list = stems.find("tracks"); list && list->isArray())
+            for (const auto& t : list->asArray()) on.push_back(t.asString());
+        else
+            for (const auto& t : tracks) on.push_back(t.value);
+        auto& list = body.emplace<ui::Checklist>("render.stems.tracks");
+        list.setItems(tracks, on);
+        list.onChange = [this, count = tracks.size()](const std::vector<std::string>& checked) {
+            json::Value st = settings_["stems"];
+            if (checked.size() == count)
+                st.asObject().erase("tracks");
+            else {
+                json::Value ids = json::Value::array();
+                for (const auto& id : checked) ids.push_back(id);
+                st["tracks"] = std::move(ids);
+            }
+            set("stems", std::move(st));
+        };
+        auto& opts = row(body, "render.stems.row");
+        caption(opts, "render.mode.label", "Mode", 50);
+        auto& mode = opts.emplace<ui::Dropdown>(
+            "render.mode",
+            std::vector<Choice>{{"isolated", "Isolated"}, {"through_master", "Through master"}},
+            text(stems.find("mode"), "isolated"));
+        mode.quiet = fromDefault("stems");
+        mode.onChange = [this](const std::string& v) { setField("render.mode", v); };
+        caption(opts, "render.tap.label", "Tap", 30);
+        auto& tap = opts.emplace<ui::Dropdown>(
+            "render.tap",
+            std::vector<Choice>{
+                {"post_fader", "Post-fader"}, {"pre_fader", "Pre-fader"}, {"pre_fx", "Pre-FX"}},
+            text(stems.find("tap"), "post_fader"));
+        tap.quiet = mode.quiet;
+        tap.onChange = [this](const std::string& v) { setField("render.tap", v); };
+        auto& silent = opts.emplace<ui::Checkbox>("render.skip_silent", "Skip silent stems",
+                                                  flag(stems.find("skip_silent")));
+        silent.onToggle = [this](bool on) {
+            json::Value st = settings_["stems"];
+            st["skip_silent"] = on;
+            set("stems", std::move(st));
+        };
+    }
+    if (current == Source::Regions) {
+        std::vector<Choice> regions;
+        for (const auto& e : s.regions)
+            regions.push_back({e.id.str(), e.value->name.empty() ? e.id.str() : e.value->name});
+        auto& opts = row(body, "render.regions.row");
+        caption(opts, "render.regions.label",
+                std::to_string(regions.size()) + (regions.size() == 1 ? " region" : " regions"),
+                80);
+        caption(opts, "render.handles.label", "Handles (s)", 76);
+        auto& handles = opts.emplace<ui::EditableDropdown>(
+            "render.handles",
+            std::vector<Choice>{{"0", "0"}, {"0.5", "0.5"}, {"1", "1"}, {"2", "2"}},
+            raw_.count("render.handles") ? raw_["render.handles"]
+                                         : compact(num(settings_.find("handles_s"))));
+        handles.layout.width = ui::SizeRule::fixed(90);
+        handles.onChange = [this](const std::string& t) { setField("render.handles", t); };
+        opts.emplace<ui::Label>(
+            "render.matrix.note",
+            settings_.find("matrix") ? "Matrix: set (project.set render.matrix)" : "Matrix: none",
+            ui::Font::Ui, "caption", "ink-quiet");
+    }
+}
+
+void RenderDialog::buildRange(ui::Node& body) {
+    heading(body, "render.h.range", "Range");
+    auto& r = row(body, "render.range.row");
+    const std::string bounds = text(settings_.find("bounds"), "project");
+    const auto& loop = app_.loop();
+    const auto selection = timeSelection ? timeSelection() : std::nullopt;
+    std::vector<Choice> choices{{"project", "Entire project"},
+                                {"loop", "Loop", loop.end > loop.start},
+                                {"selection", "Time selection", selection.has_value()},
+                                {"custom", "Custom"}};
+    auto& range = r.emplace<ui::Dropdown>("render.range", choices, bounds);
+    range.layout.width = ui::SizeRule::fixed(150);
+    range.quiet = fromDefault("bounds");
+    range.onChange = [this, selection](const std::string& v) {
+        if (v == "selection" && selection) {
+            settings_["start_beat"] = selection->first;
+            settings_["end_beat"] = selection->second;
+            owned_.insert("start_beat");
+            owned_.insert("end_beat");
+            set("bounds", "custom", true);
+            return;
+        }
+        set("bounds", v, true);
+    };
+    const model::Session& s = app_.head();
+    double first = 0, last = model::lastItemBeat(s);
+    if (bounds == "loop" && loop.end > loop.start) {
+        first = s.timeMap->beatAt(loop.start);
+        last = s.timeMap->beatAt(loop.end);
+    } else if (bounds == "custom") {
+        first = num(settings_.find("start_beat"), 0);
+        last = num(settings_.find("end_beat"), last);
+    }
+    auto position = [&](double beat) {
+        const auto bb = s.timeMap->barBeat(beat);
+        char buf[48];
+        std::snprintf(buf, sizeof buf, "%d.%d", bb.bar, bb.beat);
+        return std::string(buf);
+    };
+    const bool custom = bounds == "custom";
+    for (const auto& [id, label, value] :
+         {std::tuple{"render.start", "Start", first}, std::tuple{"render.end", "End", last}}) {
+        caption(r, std::string(id) + ".label", label, 34);
+        auto& field =
+            r.emplace<ui::TextField>(id, raw_.count(id) ? raw_[id] : (custom ? compact(value) : ""),
+                                     custom ? "beats" : compact(value));
+        field.layout.width = ui::SizeRule::fixed(64);
+        field.enabled = custom;
+        field.onChange = [this, id = std::string(id)](const std::string& t) { setField(id, t); };
+        caption(r, std::string(id) + ".bar", position(value), 44);
+    }
+    char length[64];
+    std::snprintf(length, sizeof length, "Length %.2f beats (%.2f s)", std::max(0.0, last - first),
+                  std::max(0.0, s.timeMap->secondsAt(last) - s.timeMap->secondsAt(first)));
+    r.emplace<ui::Label>("render.length", length, ui::Font::Ui, "caption", "ink-quiet");
+    auto& tail = row(body, "render.tail.row");
+    const double tailS = num(settings_.find("tail_s"));
+    auto& on = tail.emplace<ui::Checkbox>("render.tail.on", "Tail (s)", tailS > 0);
+    on.onToggle = [this](bool v) {
+        raw_.erase("render.tail");
+        set("tail_s", v ? 2.0 : 0.0, true);
+    };
+    auto& seconds = tail.emplace<ui::EditableDropdown>(
+        "render.tail",
+        std::vector<Choice>{{"0.5", "0.5"}, {"1", "1"}, {"2", "2"}, {"5", "5"}, {"10", "10"}},
+        raw_.count("render.tail") ? raw_["render.tail"] : compact(tailS));
+    seconds.layout.width = ui::SizeRule::fixed(90);
+    seconds.enabled = tailS > 0 || raw_.count("render.tail");
+    seconds.onChange = [this](const std::string& t) { setField("render.tail", t); };
+    const json::Value& trim = member("trim");
+    auto& cut = tail.emplace<ui::Checkbox>("render.trim.end", "Cut silence at the end",
+                                           flag(trim.find("end")));
+    cut.onToggle = [this](bool v) {
+        json::Value t = settings_["trim"];
+        t["end"] = v;
+        set("trim", std::move(t));
+    };
+}
+
+void RenderDialog::buildOutput(ui::Node& body) {
+    heading(body, "render.h.output", "Output");
+    auto& folderRow = row(body, "render.folder.row");
+    caption(folderRow, "render.folder.label", "Folder (all projects)", 130);
+    folder_ = &folderRow.emplace<ui::Label>("render.folder", "", ui::Font::Mono, "caption", "ink");
+    folder_->layout.width = ui::SizeRule::fraction();
+    folderRow.emplace<ui::Button>("render.folder.choose", "Choose folder…", [this] {
+        if (auto choose = onChooseFolder) choose();
+    });
+    folderRow.emplace<ui::Button>("render.folder.open", "Open", [this] {
+        if (auto opener = openFolder) opener(app_.rendersDir());
+    });
+    auto& name = row(body, "render.name.row");
+    caption(name, "render.pattern.label", "File name", 130);
+    patternField_ = &name.emplace<ui::TextField>("render.pattern", pattern());
+    patternField_->layout.width = ui::SizeRule::fraction();
+    patternField_->onChange = [this](const std::string& t) { setField("render.pattern", t); };
+    patternField_->onSubmit = [this](const std::string&) { refreshPreview(); };
+    name.emplace<ui::Button>("render.tokens", "Tokens…", [this] {
+        std::vector<ui::MenuItem> items;
+        for (const char* token :
+             {"{project}", "{version}", "{branch}", "{track}", "{track_number:02}", "{region}",
+              "{region_number:02}", "{marker}", "{folder_path}", "{format}", "{sample_rate}",
+              "{bit_depth}", "{counter:03}", "{date:YYYY-MM-DD}", "{time:HH-mm-ss}", "/"}) {
+            items.push_back({token, "", [this, token = std::string(token)] {
+                                 if (!patternField_) return;
+                                 const std::string t = patternField_->text();
+                                 const std::size_t at = std::min(patternField_->caret(), t.size());
+                                 setField("render.pattern", t.substr(0, at) + token + t.substr(at));
+                             }});
+        }
+        if (auto* tokens = root_.find("render.tokens"))
+            root_.openPopup(ui::makeMenu("render.tokens.menu", std::move(items),
+                                         [this] { root_.closePopup(); }),
+                            tokens->bounds());
+    });
+    auto& exists = row(body, "render.exists.row");
+    caption(exists, "render.if_exists.label", "If the file exists", 130);
+    auto& ifExists =
+        exists.emplace<ui::Dropdown>("render.if_exists",
+                                     std::vector<Choice>{{"overwrite", "Overwrite"},
+                                                         {"number", "Add a number"},
+                                                         {"skip", "Skip"},
+                                                         {"ask", "Ask"}},
+                                     ask_ ? "ask" : text(settings_.find("if_exists"), "overwrite"));
+    ifExists.quiet = fromDefault("if_exists");
+    ifExists.onChange = [this](const std::string& v) {
+        ask_ = v == "ask";
+        if (!ask_) set("if_exists", v);
+        markDirty();
+    };
+}
+
+void RenderDialog::buildFormat(ui::Node& body) {
+    heading(body, "render.h.format", "Format");
+    auto& outputs = settings_["outputs"].asArray();
+    tab_ = std::min(tab_, outputs.size() - 1);
+    auto& tabs = row(body, "render.tabs");
+    for (std::size_t i = 0; i < outputs.size(); ++i) {
+        const std::string label =
+            (i == 0 ? std::string("Primary") : "Output " + std::to_string(i + 1)) + ": " +
+            formatLabel(text(outputs[i].find("format"), "wav"));
+        auto& t = tabs.emplace<ui::Toggle>("render.tab." + std::to_string(i), label, "accent",
+                                           [this, i](bool) {
+                                               tab_ = i;
+                                               rebuild();
+                                           });
+        t.layout.width = ui::SizeRule::fixed(170);
+        t.setOn(i == tab_);
+        if (i > 0)
+            tabs.emplace<ui::Button>("render.tab.remove." + std::to_string(i), "Remove", [this, i] {
+                settings_["outputs"].asArray().erase(settings_["outputs"].asArray().begin() +
+                                                     static_cast<std::ptrdiff_t>(i));
+                tab_ = 0;
+                set("outputs", settings_["outputs"], true);
+            });
+    }
+    if (outputs.size() < 4)
+        tabs.emplace<ui::Button>("render.tab.add", "+ Output", [this] {
+            json::Value o = json::Value::object();
+            o["format"] = "mp3";
+            settings_["outputs"].push_back(std::move(o));
+            tab_ = settings_["outputs"].size() - 1;
+            set("outputs", settings_["outputs"], true);
+        });
+    const json::Value& o = outputs[tab_];
+    const std::string format = text(o.find("format"), "wav");
+    const bool quiet = fromDefault("outputs");
+    auto& line = row(body, "render.format.row");
+    caption(line, "render.format.label", "Format", 50);
+    auto& f = line.emplace<ui::Dropdown>("render.format", formatChoices(), format);
+    f.quiet = quiet;
+    f.onChange = [this](const std::string& v) { setField("render.format", v); };
+    const auto depths = depthChoices(format);
+    const std::int64_t bits = o.find("bit_depth") ? o.find("bit_depth")->asInt() : 0;
+    if (!depths.empty()) {
+        caption(line, "render.bit_depth.label", "Bit depth", 60);
+        auto& d = line.emplace<ui::Dropdown>("render.bit_depth", depths, std::to_string(bits));
+        d.quiet = quiet;
+        d.onChange = [this](const std::string& v) {
+            setField("render.bit_depth", v);
+            rebuild();
+        };
+        if (bits == 16 || bits == 24) {
+            caption(line, "render.dither.label", "Dither", 44);
+            auto& dither = line.emplace<ui::Dropdown>(
+                "render.dither",
+                std::vector<Choice>{{"none", "Off"}, {"tpdf", "TPDF"}, {"shaped", "Noise-shaped"}},
+                text(o.find("dither"), "tpdf"));
+            dither.quiet = quiet;
+            dither.onChange = [this](const std::string& v) {
+                output(tab_)["dither"] = v;
+                set("outputs", settings_["outputs"]);
+            };
+        }
+    }
+    auto& rateRow = row(body, "render.rate.row");
+    caption(rateRow, "render.sample_rate.label", "Sample rate", 70);
+    const std::int64_t projectRate = static_cast<std::int64_t>(app_.head().project->sampleRate);
+    std::vector<Choice> rates;
+    for (int r : {44100, 48000, 88200, 96000, 176400, 192000})
+        rates.push_back({std::to_string(r), std::to_string(r)});
+    if (tab_ == 0) {
+        const std::int64_t chain =
+            settings_.find("sample_rate") ? settings_.find("sample_rate")->asInt() : projectRate;
+        const bool own = owned_.count("sample_rate") && chain != projectRate;
+        auto& rate = rateRow.emplace<ui::EditableDropdown>(
+            "render.sample_rate", rates,
+            raw_.count("render.sample_rate") ? raw_["render.sample_rate"]
+                                             : (own ? std::to_string(chain) : ""),
+            "Project (" + std::to_string(projectRate) + ")");
+        rate.layout.width = ui::SizeRule::fixed(170);
+        rate.onChange = [this](const std::string& t) { setField("render.sample_rate", t); };
+        caption(rateRow, "render.channels.label", "Channels", 56);
+        const json::Value* ch = settings_.find("channels");
+        const std::string channels = ch && ch->isString()                       ? "track"
+                                     : ch && ch->isNumber() && ch->asInt() == 1 ? "1"
+                                                                                : "2";
+        std::vector<Choice> widths{{"2", "Stereo"}, {"1", "Mono"}};
+        if (source() == Source::Stems) widths.push_back({"track", "Mono tracks as mono"});
+        auto& c = rateRow.emplace<ui::Dropdown>("render.channels", widths, channels);
+        c.quiet = fromDefault("channels");
+        c.onChange = [this](const std::string& v) { setField("render.channels", v); };
+    } else {
+        auto& rate = rateRow.emplace<ui::EditableDropdown>(
+            "render.output_rate", rates,
+            raw_.count("render.output_rate")
+                ? raw_["render.output_rate"]
+                : (o.find("sample_rate") ? std::to_string(o.find("sample_rate")->asInt()) : ""),
+            "Same as primary");
+        rate.layout.width = ui::SizeRule::fixed(140);
+        rate.onChange = [this](const std::string& t) { setField("render.output_rate", t); };
+        caption(rateRow, "render.suffix.label", "Suffix", 40);
+        auto& suffix =
+            rateRow.emplace<ui::TextField>("render.suffix", text(o.find("suffix")), "e.g. -16bit");
+        suffix.layout.width = ui::SizeRule::fixed(110);
+        suffix.onChange = [this](const std::string& t) { setField("render.suffix", t); };
+    }
+    if (format == "mp3") {
+        auto& m = row(body, "render.mp3.row");
+        const json::Value* mp3 = o.find("mp3");
+        const bool vbr = mp3 && text(mp3->find("mode")) == "vbr";
+        caption(m, "render.mp3.mode.label", "Mode", 40);
+        auto& mode = m.emplace<ui::Dropdown>(
+            "render.mp3.mode", std::vector<Choice>{{"cbr", "Constant"}, {"vbr", "Variable"}},
+            vbr ? "vbr" : "cbr");
+        mode.onChange = [this](const std::string& v) {
+            json::Value opts = json::Value::object();
+            opts["mode"] = v;
+            if (v == "cbr")
+                opts["bitrate_kbps"] = std::int64_t{320};
+            else
+                opts["vbr_quality"] = std::int64_t{2};
+            output(tab_)["mp3"] = std::move(opts);
+            set("outputs", settings_["outputs"], true);
+        };
+        std::vector<Choice> values;
+        if (vbr)
+            for (int q = 0; q <= 9; ++q)
+                values.push_back({std::to_string(q), "V" + std::to_string(q)});
+        else
+            for (int b : {32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320})
+                values.push_back({std::to_string(b), std::to_string(b) + " kbps"});
+        caption(m, "render.mp3.value.label", vbr ? "Quality" : "Bitrate", 50);
+        auto& value = m.emplace<ui::Dropdown>(
+            "render.mp3.value", values,
+            compact(num(mp3 ? mp3->find(vbr ? "vbr_quality" : "bitrate_kbps") : nullptr,
+                        vbr ? 2 : 320)));
+        value.onChange = [this, vbr](const std::string& v) {
+            json::Value opts = output(tab_)["mp3"];
+            opts[vbr ? "vbr_quality" : "bitrate_kbps"] = integer(v).value_or(vbr ? 2 : 320);
+            output(tab_)["mp3"] = std::move(opts);
+            set("outputs", settings_["outputs"]);
+        };
+    }
+    if (format == "vorbis") {
+        auto& v = row(body, "render.vorbis.row");
+        caption(v, "render.vorbis.label", "Quality (−1 to 10)", 110);
+        std::vector<Choice> qualities;
+        for (int q = -1; q <= 10; ++q) qualities.push_back({std::to_string(q), std::to_string(q)});
+        auto& q = v.emplace<ui::EditableDropdown>("render.vorbis_quality", qualities,
+                                                  raw_.count("render.vorbis_quality")
+                                                      ? raw_["render.vorbis_quality"]
+                                                      : compact(num(o.find("vorbis_quality"), 6)));
+        q.layout.width = ui::SizeRule::fixed(90);
+        q.onChange = [this](const std::string& t) { setField("render.vorbis_quality", t); };
+    }
+}
+
+void RenderDialog::buildLoudness(ui::Node& body) {
+    const json::Value& n = member("normalize");
+    const std::string mode = text(n.find("mode"), "none");
+    const double target = num(n.find("target"), -14);
+    const json::Value* limit = settings_.find("limit_true_peak_db");
+    const bool set_ =
+        mode != "none" || (limit && limit->isNumber()) || flag(settings_.find("report"));
+    auto& fold = body.emplace<ui::FoldSection>("render.loudness", "Loudness", set_);
+    std::string summary;
+    if (mode != "none") summary = signedText(target) + (mode.starts_with("lufs") ? " LUFS" : " dB");
+    if (limit && limit->isNumber())
+        summary += (summary.empty() ? "" : ", ") + signedText(limit->asDouble()) + " dBTP";
+    fold.setSummary(summary.empty() ? "off" : summary);
+    fold.onToggle = [this](bool) { root_.relayout(); };
+    ui::Node& b = fold.body();
+    auto& r1 = row(b, "render.normalize.row");
+    caption(r1, "render.normalize.label", "Normalize", 70);
+    auto& m =
+        r1.emplace<ui::Dropdown>("render.normalize",
+                                 std::vector<Choice>{{"none", "Off"},
+                                                     {"lufs_i", "Integrated loudness (LUFS-I)"},
+                                                     {"lufs_s", "Loudest 3 s (LUFS-S)"},
+                                                     {"lufs_m", "Loudest 400 ms (LUFS-M)"},
+                                                     {"peak", "Sample peak"},
+                                                     {"true_peak", "True peak"},
+                                                     {"rms", "RMS"}},
+                                 mode);
+    m.quiet = fromDefault("normalize");
+    m.onChange = [this](const std::string& v) {
+        json::Value next = settings_["normalize"];
+        next["mode"] = v;
+        const double t = num(next.find("target"), -14);
+        if (v.starts_with("lufs") && t > -5) next["target"] = -14.0;
+        if ((v == "peak" || v == "true_peak") && t < -12) next["target"] = -1.0;
+        if (v == "rms" && (t < -40 || t > -6)) next["target"] = -20.0;
+        raw_.erase("render.target");
+        set("normalize", std::move(next), true);
+    };
+    if (mode != "none") {
+        caption(r1, "render.target.label", "Target", 44);
+        std::vector<Choice> targets;
+        if (mode.starts_with("lufs"))
+            targets = {{"-14", "−14 (Spotify, YouTube)"},
+                       {"-16", "−16 (Apple Music, podcasts)"},
+                       {"-23", "−23 (EBU R128)"},
+                       {"-24", "−24 (ATSC A/85)"}};
+        else if (mode == "rms")
+            targets = {{"-20", "−20"}, {"-16", "−16"}};
+        else
+            targets = {{"-1", "−1"}, {"-0.1", "−0.1"}};
+        auto& t = r1.emplace<ui::EditableDropdown>(
+            "render.target", targets,
+            raw_.count("render.target") ? raw_["render.target"] : compact(target));
+        t.layout.width = ui::SizeRule::fixed(90);
+        t.onChange = [this](const std::string& v) { setField("render.target", v); };
+        r1.emplace<ui::Label>("render.target.unit", mode.starts_with("lufs") ? "LUFS" : "dB",
+                              ui::Font::Ui, "caption", "ink-quiet");
+    }
+    auto& r2 = row(b, "render.normalize.opts");
+    auto& reduce = r2.emplace<ui::Checkbox>("render.only_reduce", "Only turn down",
+                                            flag(n.find("only_reduce")));
+    reduce.enabled = mode != "none";
+    reduce.onToggle = [this](bool v) {
+        json::Value next = settings_["normalize"];
+        next["only_reduce"] = v;
+        set("normalize", std::move(next));
+    };
+    if (source() == Source::Stems) {
+        auto& shared = r2.emplace<ui::Checkbox>("render.scope",
+                                                "Same gain for every stem (from the master mix)",
+                                                text(n.find("scope")) == "master");
+        shared.enabled = mode != "none";
+        shared.onToggle = [this](bool v) {
+            json::Value next = settings_["normalize"];
+            next["scope"] = v ? "master" : "file";
+            set("normalize", std::move(next));
+        };
+    }
+    auto& r3 = row(b, "render.limit.row");
+    const bool limited = limit && limit->isNumber();
+    auto& lim = r3.emplace<ui::Checkbox>("render.limit.on", "Limit true peak to", limited);
+    lim.onToggle = [this](bool v) {
+        raw_.erase("render.limit");
+        set("limit_true_peak_db", v ? json::Value(-1.0) : json::Value(), true);
+    };
+    auto& ceiling = r3.emplace<ui::EditableDropdown>(
+        "render.limit",
+        std::vector<Choice>{{"-1", "−1"}, {"-0.5", "−0.5"}, {"-0.1", "−0.1"}, {"-2", "−2"}},
+        raw_.count("render.limit") ? raw_["render.limit"]
+                                   : (limited ? compact(limit->asDouble()) : ""));
+    ceiling.layout.width = ui::SizeRule::fixed(90);
+    ceiling.onChange = [this](const std::string& v) { setField("render.limit", v); };
+    r3.emplace<ui::Label>("render.limit.unit", "dBTP", ui::Font::Ui, "caption", "ink-quiet");
+    auto& report = r3.emplace<ui::Checkbox>("render.report", "Write a loudness report",
+                                            flag(settings_.find("report")));
+    report.onToggle = [this](bool v) { set("report", v); };
+}
+
+void RenderDialog::buildProcessing(ui::Node& body) {
+    const json::Value& trim = member("trim");
+    const bool seamless = flag(settings_.find("seamless_loop"));
+    const bool set_ = flag(trim.find("start")) || flag(trim.find("end")) || seamless;
+    auto& fold = body.emplace<ui::FoldSection>("render.processing", "Processing", set_);
+    std::string summary;
+    if (flag(trim.find("start")) || flag(trim.find("end"))) summary = "trim";
+    if (seamless) summary += (summary.empty() ? "" : ", ") + std::string("seamless loop");
+    fold.setSummary(summary.empty() ? "off" : summary);
+    fold.onToggle = [this](bool) { root_.relayout(); };
+    auto& r = row(fold.body(), "render.trim.row");
+    for (const auto& [id, key, label] : {std::tuple{"render.trim.start", "start", "Trim start"},
+                                         std::tuple{"render.trim.end2", "end", "Trim end"}}) {
+        auto& box = r.emplace<ui::Checkbox>(id, label, flag(trim.find(key)));
+        box.onToggle = [this, key = std::string(key)](bool v) {
+            json::Value t = settings_["trim"];
+            t[key] = v;
+            set("trim", std::move(t), true);
+        };
+    }
+    caption(r, "render.threshold.label", "below (dBFS)", 70);
+    auto& threshold = r.emplace<ui::EditableDropdown>(
+        "render.threshold", std::vector<Choice>{{"-60", "−60"}, {"-70", "−70"}, {"-50", "−50"}},
+        raw_.count("render.threshold") ? raw_["render.threshold"]
+                                       : compact(num(trim.find("threshold_db"), -60)));
+    threshold.layout.width = ui::SizeRule::fixed(90);
+    threshold.onChange = [this](const std::string& v) { setField("render.threshold", v); };
+    auto& loop = fold.body().emplace<ui::Checkbox>(
+        "render.seamless", "Seamless loop (fold the tail into the start)", seamless);
+    loop.onToggle = [this](bool v) { set("seamless_loop", v, true); };
+}
+
+void RenderDialog::buildMetadata(ui::Node& body) {
+    const json::Value* m = settings_.find("metadata");
+    const bool set_ = m && m->isObject() && m->size() > 0;
+    auto& fold = body.emplace<ui::FoldSection>("render.metadata", "Metadata", set_);
+    fold.setSummary(set_ ? text(m->find("title"), "set") : "none");
+    fold.onToggle = [this](bool) { root_.relayout(); };
+    std::set<std::string> formats;
+    for (const auto& o : settings_["outputs"].asArray()) formats.insert(text(o.find("format")));
+    // Which of the chosen formats cannot hold a member (engine.md §3).
+    auto missing = [&](const std::string& key) {
+        std::string out;
+        auto lacks = [&](const std::string& format) {
+            if (format == "aiff") return key != "title" && key != "artist" && key != "comment";
+            if (format == "wav") return key == "isrc" || key == "cover";
+            return false;
+        };
+        for (const auto& f : formats)
+            if (lacks(f)) out += (out.empty() ? "not in " : ", ") + formatLabel(f);
+        return out;
+    };
+    for (const auto& [key, label] : {std::pair{"title", "Title"},
+                                     {"artist", "Artist"},
+                                     {"album", "Album"},
+                                     {"track_number", "Track number"},
+                                     {"date", "Date"},
+                                     {"genre", "Genre"},
+                                     {"isrc", "ISRC"},
+                                     {"comment", "Comment"}}) {
+        const std::string id = "render.meta." + std::string(key);
+        auto& r = row(fold.body(), id + ".row");
+        caption(r, id + ".label", label, 90);
+        std::string value = raw_.count(id) ? raw_[id] : "";
+        if (!raw_.count(id) && m)
+            if (const auto* v = m->find(key))
+                value = v->isString() ? v->asString() : compact(v->asDouble());
+        auto& field = r.emplace<ui::TextField>(id, value,
+                                               std::string(key) == "date" ? "YYYY or YYYY-MM-DD"
+                                               : std::string(key) == "isrc"
+                                                   ? "e.g. USRC17607839"
+                                                   : "tokens allowed, e.g. {project}");
+        field.layout.width = ui::SizeRule::fixed(320);
+        field.onChange = [this, id](const std::string& t) { setField(id, t); };
+        r.emplace<ui::Label>(id + ".note", missing(key), ui::Font::Ui, "caption", "ink-faint");
+    }
+    auto& cover = row(fold.body(), "render.cover.row");
+    caption(cover, "render.cover.label", "Cover", 90);
+    cover.emplace<ui::Label>("render.cover", m ? text(m->find("cover"), "none") : "none",
+                             ui::Font::Mono, "caption", "ink");
+    cover.emplace<ui::Button>("render.cover.choose", "Choose…", [this] {
+        if (auto choose = onChooseCover) choose();
+    });
+    cover.emplace<ui::Button>("render.cover.clear", "Clear", [this] { setCover(""); });
+    cover.emplace<ui::Label>("render.cover.note", missing("cover"), ui::Font::Ui, "caption",
+                             "ink-faint");
+    auto& flags = row(fold.body(), "render.meta.flags");
+    for (const auto& [key, label] :
+         {std::pair{"bwf", "Write BWF timecode and loudness (WAV)"},
+          std::pair{"markers", "Embed markers and regions (WAV, AIFF)"}}) {
+        auto& box = flags.emplace<ui::Checkbox>("render.meta." + std::string(key), label,
+                                                m && flag(m->find(key)));
+        box.onToggle = [this, key = std::string(key)](bool v) {
+            json::Value next =
+                settings_.find("metadata") ? settings_["metadata"] : json::Value::object();
+            if (v)
+                next[key] = true;
+            else
+                next.asObject().erase(key);
+            set("metadata", next.size() ? std::move(next) : json::Value());
+        };
+    }
+}
+
+void RenderDialog::buildAfter(ui::Node& body) {
+    heading(body, "render.h.after", "After render");
+    auto& r = row(body, "render.after.row");
+    auto& add = r.emplace<ui::Checkbox>("render.add", "Add to project", addToProject());
+    add.onToggle = [this](bool v) { set("add_to_project", v); };
+    auto& open = r.emplace<ui::Checkbox>("render.open_folder", "Open folder when done",
+                                         openFolderWhenDone && openFolderWhenDone());
+    open.onToggle = [this](bool v) {
+        if (auto setPreference = setOpenFolderWhenDone) setPreference(v);
+    };
+}
+
+void RenderDialog::buildFooter(ui::Node& page) {
+    diagnostic_ =
+        &page.emplace<ui::Label>("render.diagnostic", "", ui::Font::Ui, "caption", "clip");
+    previewBlock_ =
+        &page.emplace<ui::TextBlock>("render.preview", "", ui::Font::Mono, "caption", "ink");
+    previewBlock_->layout.height = ui::SizeRule::fixed(56);
+    auto& actions = row(page, "render.actions", 28);
+    queueButton_ = &actions.emplace<ui::Button>("render.queue", "Queue", [this] { openQueue(); });
+    actions.emplace<ui::Button>("render.queue.add", "Add to queue", [this] { addToQueue(); });
+    actions.emplace<ui::Button>("render.default", "Save as default", [this] {
+        if (auto saved = saveAsDefault(); !saved)
+            setStatus(saved.error().message);
+        else
+            setStatus("saved as your default");
+    });
+    status_ = &actions.emplace<ui::Label>("render.status", statusText_, ui::Font::Ui, "caption",
+                                          "ink-quiet");
+    status_->layout.width = ui::SizeRule::fraction();
+    renderButton_ = &actions.emplace<ui::Button>("render.run", "Render", [this] { run(); });
+    resultsBlock_ =
+        &page.emplace<ui::TextBlock>("render.results", "", ui::Font::Mono, "caption", "ink-quiet");
+    resultsBlock_->layout.height = ui::SizeRule::fixed(64);
+    resultsRow_ = &row(page, "render.results.files", 24);
 }
 
 void RenderDialog::showFolder() {
-    if (!folder_) return;
-    std::string text = app_.rendersDir().generic_string();
+    std::string path = app_.rendersDir().generic_string();
     if (const auto home = paths::home(); !home.empty()) {
         const std::string prefix = home.generic_string() + "/";
-        if (text.starts_with(prefix)) text = "~/" + text.substr(prefix.size());
+        if (path.starts_with(prefix)) path = "~/" + path.substr(prefix.size());
     }
-    folder_->setText(text);
+    folderText_ = path;
+    if (folder_) folder_->setText(path);
     root_.damageAll();
     markDirty();  // the preview's paths change with it
 }
 
-const std::string& RenderDialog::folderText() const {
-    static const std::string none;
-    return folder_ ? folder_->text() : none;
-}
+// ------------------------------------------------------------------ popups
 
-const std::string& RenderDialog::pattern() const { return pattern_; }
-const std::string& RenderDialog::statusText() const { return statusText_; }
-
-void RenderDialog::setField(const std::string& id, const std::string& text) {
-    auto set = [&](std::string& target) {
-        target = text;
-        if (auto* node = dynamic_cast<ui::TextField*>(root_.find(id))) node->setText(text);
-        markDirty();
+void RenderDialog::openPresetName() {
+    auto panel = std::make_unique<ui::Node>("render.preset.panel");
+    panel->layout.dir = ui::Layout::Dir::Column;
+    panel->layout.width = ui::SizeRule::fixed(360);
+    panel->layout.padding = ui::Insets::all(12);
+    panel->layout.gap = 8;
+    panel->emplace<ui::Label>("render.preset.title", "Save preset", ui::Font::UiBold, "title");
+    auto& name = panel->emplace<ui::TextField>("render.preset.name", presetName_, "Preset name");
+    auto& buttons = row(*panel, "render.preset.buttons");
+    auto save = [this, &name] {
+        const std::string chosen = name.text();
+        root_.closePopup();
+        if (auto saved = savePreset(chosen); !saved)
+            setStatus(saved.error().message);
+        else
+            setStatus("saved preset " + chosen);
     };
-    if (id == "render.pattern")
-        set(pattern_);
-    else if (id == "render.start")
-        set(start_);
-    else if (id == "render.end")
-        set(end_);
-    else if (id == "render.tail")
-        set(tail_);
-    else if (id == "render.sample_rate")
-        set(sampleRate_);
-    else if (id == "render.bit_depth")
-        set(bitDepth_);
-    else if (id == "render.channels")
-        set(channels_);
-    else if (id == "render.format")
-        set(format_);
-    else if (id == "render.secondary")
-        set(secondary_);
-    else if (id == "render.normalize")
-        set(normalize_);
-    else if (id == "render.target")
-        set(target_);
-    else if (id == "render.limit")
-        set(limit_);
-    else if (id == "render.mode")
-        set(mode_);
-    else if (id == "render.tap")
-        set(tap_);
+    name.onSubmit = [save](const std::string&) { save(); };
+    buttons.emplace<ui::Button>("render.preset.ok", "Save", save);
+    buttons.emplace<ui::Button>("render.preset.cancel", "Cancel", [this] { root_.closePopup(); });
+    root_.openPopup(std::move(panel), {}, ui::Placement::Center);
+    root_.focus(root_.find("render.preset.name"));
 }
 
-json::Value RenderDialog::previewArgs() const {
+void RenderDialog::chooseVersion() {
+    auto history = dispatcher_.execute({"history.list", json::Value::object(), kUiOrigin});
+    std::vector<ui::MenuItem> items;
+    if (history)
+        if (const auto* versions = history->find("versions"); versions && versions->isArray())
+            for (const auto& v : versions->asArray()) {
+                const auto n = v.find("version") ? v.find("version")->asInt() : 0;
+                items.push_back(
+                    {"v" + std::to_string(n) + "  " + text(v.find("label")), "", [this, n] {
+                         versionChoice_ = "version:" + std::to_string(n);
+                         markDirty();
+                         rebuild();
+                     }});
+            }
+    if (items.empty()) items.push_back({"No earlier versions", "", {}, false});
+    if (auto* anchor = root_.find("render.version"))
+        root_.openPopup(
+            ui::makeMenu("render.version.menu", std::move(items), [this] { root_.closePopup(); }),
+            anchor->bounds());
+    rebuild();  // the dropdown shows the choice again until one is made
+}
+
+void RenderDialog::openExisting(const json::Value& existing) {
+    auto panel = std::make_unique<ui::Node>("render.exists.panel");
+    panel->layout.dir = ui::Layout::Dir::Column;
+    panel->layout.width = ui::SizeRule::fixed(460);
+    panel->layout.padding = ui::Insets::all(12);
+    panel->layout.gap = 8;
+    panel->emplace<ui::Label>("render.exists.title", "These files exist", ui::Font::UiBold,
+                              "title");
+    std::string names;
+    for (const auto& f : existing.asArray())
+        names += (names.empty() ? "" : "\n") + baseName(text(f.find("path")));
+    auto& list = panel->emplace<ui::TextBlock>("render.exists.list", names, ui::Font::Mono,
+                                               "caption", "ink");
+    list.layout.height = ui::SizeRule::fixed(120);
+    auto& buttons = row(*panel, "render.exists.buttons");
+    for (const auto& [id, label, mode] :
+         {std::tuple{"render.exists.overwrite", "Overwrite", "overwrite"},
+          std::tuple{"render.exists.skip", "Skip them", "skip"}})
+        buttons.emplace<ui::Button>(id, label, [this, mode = std::string(mode)] {
+            root_.closePopup();
+            if (auto written = writeSettings(); !written) {
+                setStatus("render settings: " + written.error().message);
+                return;
+            }
+            json::Value a = renderArgs(true);
+            a["if_exists"] = mode;
+            startJob(commandName(), std::move(a));
+        });
+    buttons.emplace<ui::Button>("render.exists.cancel", "Cancel", [this] { root_.closePopup(); });
+    root_.openPopup(std::move(panel), {}, ui::Placement::Center);
+}
+
+// ------------------------------------------------------------------ presets
+
+Status RenderDialog::loadPreset(const std::string& name) {
+    auto list = dispatcher_.execute({"render.preset.list", json::Value::object(), kUiOrigin});
+    if (!list) return std::move(list).error();
+    for (const auto& p : (*list)["presets"].asArray())
+        if (text(p.find("name")) == name) {
+            json::Value args = *p.find("settings");
+            if (!args.size()) args["source"] = text(settings_.find("source"), "mix");
+            load(args);
+            presetName_ = name;
+            markDirty();
+            rebuild();
+            setStatus("loaded preset " + name + "; Render writes it to the project");
+            return {};
+        }
+    return Error("render.preset_unknown", "no preset " + name, "/name",
+                 "choose one from the Preset list");
+}
+
+Status RenderDialog::savePreset(const std::string& name) {
     json::Value a = json::Value::object();
-    a["operation"] = source_ == Source::Master  ? "mix"
-                     : source_ == Source::Stems ? "stems"
-                                                : "regions";
-    if (!pattern_.empty()) a["pattern"] = pattern_;
-    if (auto v = number(start_)) a["start_beat"] = *v;
-    if (auto v = number(end_)) a["end_beat"] = *v;
-    if (auto v = number(tail_)) a["tail_s"] = *v;
-    if (source_ == Source::Stems) {
-        if (!mode_.empty()) a["mode"] = mode_;
-        if (!tap_.empty()) a["tap"] = tap_;
-    }
-    outputArgs(a);  // the extension follows the format
-    return a;
-}
-
-void RenderDialog::outputArgs(json::Value& a) const {
-    if (!format_.empty()) a["format"] = format_;
-    if (auto v = integer(bitDepth_)) a["bit_depth"] = *v;
-    // "flac 16", "wav 24", "flac" (its default depth) or none.
-    std::string spec = secondary_;
-    while (!spec.empty() && spec.back() == ' ') spec.pop_back();
-    if (spec.empty() || spec == "none") return;
-    json::Value second = json::Value::object();
-    const auto space = spec.find(' ');
-    second["format"] = spec.substr(0, space);
-    if (space != std::string::npos)
-        if (auto v = integer(spec.substr(space + 1))) second["bit_depth"] = *v;
-    a["secondary"] = std::move(second);
-}
-
-Status RenderDialog::validateFields() const {
-    auto invalid = [](const char* field, const char* expected) -> Status {
-        return Error("gui.render.field", std::string("render.") + field + ": " + expected,
-                     std::string("/") + field,
-                     "correct this field or leave it empty for the project default");
-    };
-    for (const auto& [field, text] : {std::pair{"start", &start_},
-                                      {"end", &end_},
-                                      {"tail", &tail_},
-                                      {"target", &target_},
-                                      {"limit", &limit_}}) {
-        if (text->empty()) continue;
-        const auto value = number(*text);
-        if (!value) return invalid(field, "enter a finite number");
-        if ((text == &start_ || text == &end_ || text == &tail_) && *value < 0)
-            return invalid(field, "enter a non-negative number");
-    }
-    for (const auto& [field, text] : {std::pair{"sample_rate", &sampleRate_},
-                                      {"channels", &channels_},
-                                      {"bit_depth", &bitDepth_}}) {
-        if (text->empty()) continue;
-        const auto value = integer(*text);
-        if (!value) return invalid(field, "enter an integer");
-        if (text == &sampleRate_ && (*value < 8000 || *value > 384000))
-            return invalid(field, "use 8000..384000 Hz");
-        if (text == &channels_ && *value != 1 && *value != 2)
-            return invalid(field, "use one or two channels");
-        if (text == &bitDepth_ && *value != 16 && *value != 24 && *value != 32)
-            return invalid(field, "use 16, 24 or 32 bits");
-    }
-    if (const auto space = secondary_.find(' '); space != std::string::npos) {
-        const auto depth = integer(secondary_.substr(space + 1));
-        if (!depth || (*depth != 16 && *depth != 24 && *depth != 32))
-            return invalid("secondary", "use a format followed by 16, 24 or 32 bits");
-    }
+    a["name"] = name;
+    a["settings"] = settings_;
+    auto saved = dispatcher_.execute({"render.preset.save", std::move(a), kUiOrigin});
+    if (!saved) return std::move(saved).error();
+    presetName_ = name;
+    if (page_) rebuild();
     return {};
 }
 
-json::Value RenderDialog::args(bool forJob) const {
+Status RenderDialog::saveAsDefault() {
     json::Value a = json::Value::object();
-    if (!pattern_.empty()) a["pattern"] = pattern_;
-    if (auto v = number(start_)) a["start_beat"] = *v;
-    if (auto v = number(end_)) a["end_beat"] = *v;
-    if (auto v = number(tail_)) a["tail_s"] = *v;
-    if (auto v = integer(sampleRate_)) a["sample_rate"] = *v;
-    outputArgs(a);
-    if (auto v = integer(channels_)) a["channels"] = *v;
-    if (!normalize_.empty() && normalize_ != "none") {
-        json::Value norm = json::Value::object();
-        norm["mode"] = normalize_;
-        if (auto v = number(target_)) norm["target"] = *v;
-        if (auto v = number(limit_)) norm["limit_true_peak_db"] = *v;
-        a["normalize"] = std::move(norm);
-    }
-    if (source_ == Source::Stems) {
-        if (!mode_.empty()) a["mode"] = mode_;
-        if (!tap_.empty()) a["tap"] = tap_;
-    }
-    // A mix carries no per-file analysis unless it is asked for; the other
-    // commands always attach one, and the dialog lists its loudness.
-    if (source_ == Source::Master) a["analyze"] = "summary";
-    if (addToProject_) a["add_to_project"] = true;
-    if (forJob) a["job"] = true;
-    return a;
+    a["default"] = true;
+    a["settings"] = settings_;
+    auto saved = dispatcher_.execute({"render.preset.save", std::move(a), kUiOrigin});
+    if (!saved) return std::move(saved).error();
+    return {};
 }
 
-void RenderDialog::markDirty() {
-    dirty_ = true;
-    lastEditMs_ = nowMs();
+Status RenderDialog::deletePreset(const std::string& name) {
+    json::Value a = json::Value::object();
+    a["name"] = name;
+    auto deleted = dispatcher_.execute({"render.preset.delete", std::move(a), kUiOrigin});
+    if (!deleted) return std::move(deleted).error();
+    presetName_.clear();
+    if (page_) rebuild();
+    setStatus("deleted preset " + name);
+    return {};
 }
 
-void RenderDialog::setStatus(std::string text) {
-    statusText_ = std::move(text);
-    if (status_) status_->setText(statusText_);
-}
+// ------------------------------------------------------------------ preview and jobs
 
 void RenderDialog::refreshPreview() {
     dirty_ = false;
-    if (auto valid = validateFields(); !valid) {
+    if (auto valid = validate(); !valid) {
         previewText_ = valid.error().message;
         setStatus(previewText_);
+        if (diagnostic_) diagnostic_->setText(previewText_);
         if (previewBlock_) previewBlock_->setText(previewText_);
         return;
     }
-    auto result = dispatcher_.execute({"render.dry-run", previewArgs(), kUiOrigin});
+    if (diagnostic_) diagnostic_->setText("");
+    json::Value args = renderArgs(false);
+    args.asObject().erase("analyze");
+    args["operation"] = sourceKey(source());
+    auto result = dispatcher_.execute({"render.dry-run", std::move(args), kUiOrigin});
     if (!result) {
-        previewText_ = "pattern: " + result.error().message;
-        setStatus(result.error().message);
+        std::string where = result.error().path;
+        if (where.starts_with("/args")) where = where.substr(5);
+        previewText_ =
+            (where.empty() ? std::string() : where.substr(1) + ": ") + result.error().message;
+        setStatus(previewText_);
+        if (diagnostic_) diagnostic_->setText(previewText_);
         if (previewBlock_) previewBlock_->setText(previewText_);
+        if (renderButton_) renderButton_->setText("Render");
         return;
     }
     const json::Value* files = result->find("files");
-    std::string text;
+    std::string lines;
     std::size_t count = 0;
     if (files && files->isArray())
         for (const json::Value& f : files->asArray()) {
-            const std::string path =
-                f.find("path") && f.find("path")->isString() ? f.find("path")->asString() : "";
-            const double seconds = f.find("seconds") && f.find("seconds")->isNumber()
-                                       ? f.find("seconds")->asDouble()
-                                       : 0.0;
-            char line[256];
-            std::snprintf(line, sizeof line, "%s  (%.2f s)", baseName(path).c_str(), seconds);
-            text += (text.empty() ? "" : "\n") + std::string(line);
-            ++count;
+            std::string kinds;
+            if (const auto* outputs = f.find("outputs"); outputs && outputs->isArray())
+                for (const auto& o : outputs->asArray())
+                    kinds += (kinds.empty() ? "" : " + ") + formatLabel(text(o.find("format")));
+            char line[512];
+            std::snprintf(line, sizeof line, "%s  (%.2f s)  %s%s",
+                          baseName(text(f.find("path"))).c_str(), num(f.find("seconds")),
+                          kinds.c_str(),
+                          flag(f.find("skip"))     ? "  exists: skipped"
+                          : flag(f.find("exists")) ? "  exists"
+                                                   : "");
+            lines += (lines.empty() ? "" : "\n") + std::string(line);
+            if (!flag(f.find("skip"))) ++count;
         }
-    if (count == 0) text = "no files";
-    previewText_ = text;
+    if (lines.empty()) lines = "no files";
+    previewText_ = lines;
     setStatus(std::to_string(count) + (count == 1 ? " file" : " files"));
     if (previewBlock_) previewBlock_->setText(previewText_);
+    if (renderButton_)
+        renderButton_->setText("Render " + std::to_string(count) +
+                               (count == 1 ? " file" : " files"));
     root_.damageAll();
 }
 
-void RenderDialog::run() {
-    if (!job_.empty()) {
-        setStatus("a render job is already active; wait for it to finish");
-        return;
-    }
-    if (auto valid = validateFields(); !valid) {
-        setStatus(valid.error().message);
-        return;
-    }
-    const char* command = source_ == Source::Master  ? "render.mix"
-                          : source_ == Source::Stems ? "render.stems"
-                                                     : "render.regions";
-    auto result = dispatcher_.execute({command, args(true), kUiOrigin});
+void RenderDialog::startJob(std::string command, json::Value args) {
+    auto result = dispatcher_.execute({command, std::move(args), kUiOrigin});
     if (!result) {
-        setStatus(std::string(command) + ": " + result.error().message);
+        setStatus(command + ": " + result.error().message);
         return;
     }
     if (const json::Value* id = result->find("job"); id && id->isString()) {
@@ -532,33 +1428,66 @@ void RenderDialog::run() {
         setStatus("rendering…");
         if (resultsBlock_) resultsBlock_->setText("");
     } else {
-        // A non-job result (should not happen with job:true) is shown directly.
         job_.clear();
-        setStatus("done");
-        if (resultsBlock_) resultsBlock_->setText(json::writeCompact(*result));
+        showResults(*result, false);
     }
 }
 
-void RenderDialog::addToQueue() {
-    if (auto valid = validateFields(); !valid) {
+void RenderDialog::run() {
+    if (!job_.empty()) {
+        setStatus("a render job is already active; wait for it to finish");
+        return;
+    }
+    if (auto valid = validate(); !valid) {
         setStatus(valid.error().message);
         return;
     }
-    const char* command = source_ == Source::Master  ? "render.mix"
-                          : source_ == Source::Stems ? "render.stems"
-                                                     : "render.regions";
-    json::Value a = args(false);
-    if (json::Object* o = a.isObject() ? &a.asObject() : nullptr) o->erase("analyze");
+    if (ask_) {
+        json::Value args = renderArgs(false);
+        args.asObject().erase("analyze");
+        args["operation"] = sourceKey(source());
+        args["if_exists"] = "overwrite";
+        auto dry = dispatcher_.execute({"render.dry-run", std::move(args), kUiOrigin});
+        if (!dry) {
+            setStatus(dry.error().message);
+            return;
+        }
+        json::Value existing = json::Value::array();
+        for (const auto& f : (*dry)["files"].asArray())
+            if (flag(f.find("exists"))) existing.push_back(f);
+        if (existing.size()) {
+            openExisting(existing);
+            return;
+        }
+    }
+    if (auto written = writeSettings(); !written) {
+        setStatus("render settings: " + written.error().message);
+        return;
+    }
+    mixJob_ = false;
+    startJob(commandName(), renderArgs(true));
+}
+
+void RenderDialog::addToQueue() {
+    if (auto valid = validate(); !valid) {
+        setStatus(valid.error().message);
+        return;
+    }
+    if (auto written = writeSettings(); !written) {
+        setStatus("render settings: " + written.error().message);
+        return;
+    }
+    json::Value a = renderArgs(false);
+    a.asObject().erase("analyze");
     json::Value q = json::Value::object();
-    q["command"] = command;
+    q["command"] = commandName();
     q["args"] = std::move(a);
     auto result = dispatcher_.execute({"render.queue.add", std::move(q), kUiOrigin});
     if (!result) {
         setStatus("queue: " + result.error().message);
         return;
     }
-    const json::Value* label = result->find("label");
-    setStatus("queued " + (label && label->isString() ? label->asString() : std::string()));
+    setStatus("queued " + text(result->find("label")));
     refreshQueueButton();
 }
 
@@ -575,27 +1504,24 @@ void RenderDialog::openQueue() {
     panel->layout.padding = ui::Insets::all(12);
     panel->layout.gap = 8;
     panel->emplace<ui::Label>("render.queue.title", "Render queue", ui::Font::UiBold, "title");
-    std::string text;
+    std::string lines;
     for (const auto& q : app_.renderQueue()) {
-        text += (text.empty() ? "" : "\n") + q.id + "  " + q.label;
+        lines += (lines.empty() ? "" : "\n") + q.id + "  " + q.label;
         if (q.files.isArray())
             for (const json::Value& f : q.files.asArray())
-                if (f.isString()) text += "\n    " + baseName(f.asString());
+                if (f.isString()) lines += "\n    " + baseName(f.asString());
     }
     auto& list = panel->emplace<ui::TextBlock>(
-        "render.queue.list", text.empty() ? "Nothing queued: Add to queue sets one up." : text,
+        "render.queue.list", lines.empty() ? "Nothing queued: Add to queue sets one up." : lines,
         ui::Font::Mono, "caption", "ink");
     list.layout.height = ui::SizeRule::fixed(180);
-    auto& row = panel->emplace<ui::Node>("render.queue.buttons");
-    row.layout.dir = ui::Layout::Dir::Row;
-    row.layout.height = ui::SizeRule::fixed(26);
-    row.layout.gap = 6;
-    auto& go = row.emplace<ui::Button>("render.queue.run", "Render all", [this] {
+    auto& buttons = row(*panel, "render.queue.buttons");
+    auto& go = buttons.emplace<ui::Button>("render.queue.run", "Render all", [this] {
         root_.closePopup();
         runQueue();
     });
     go.enabled = !app_.renderQueue().empty();
-    row.emplace<ui::Button>("render.queue.clear", "Clear", [this] {
+    buttons.emplace<ui::Button>("render.queue.clear", "Clear", [this] {
         json::Value a = json::Value::object();
         a["all"] = true;
         (void)dispatcher_.execute({"render.queue.remove", std::move(a), kUiOrigin});
@@ -603,7 +1529,7 @@ void RenderDialog::openQueue() {
         refreshQueueButton();
         setStatus("queue cleared");
     });
-    row.emplace<ui::Button>("render.queue.close", "Close", [this] { root_.closePopup(); });
+    buttons.emplace<ui::Button>("render.queue.close", "Close", [this] { root_.closePopup(); });
     root_.openPopup(std::move(panel), {}, ui::Placement::Center);
 }
 
@@ -614,17 +1540,178 @@ void RenderDialog::runQueue() {
     }
     json::Value a = json::Value::object();
     a["job"] = true;
-    auto result = dispatcher_.execute({"render.queue.run", std::move(a), kUiOrigin});
+    mixJob_ = false;
+    startJob("render.queue.run", std::move(a));
+    if (!job_.empty()) setStatus("rendering the queue…");
+}
+
+void RenderDialog::mixJob() {
+    if (!job_.empty()) {
+        if (auto status = onStatus) status("a render is already running");
+        return;
+    }
+    json::Value a = json::Value::object();
+    a["job"] = true;
+    auto result = dispatcher_.execute({"render.mix", std::move(a), kUiOrigin});
     if (!result) {
-        setStatus("queue: " + result.error().message);
+        if (auto status = onStatus) status("Mix: " + result.error().message);
         return;
     }
     if (const json::Value* id = result->find("job"); id && id->isString()) {
         job_ = id->asString();
-        resultFiles_.clear();
-        setStatus("rendering the queue…");
-        if (resultsBlock_) resultsBlock_->setText("");
+        mixJob_ = true;
+        if (auto status = onStatus) status("Mixing…");
     }
+}
+
+std::string RenderDialog::mixLabel() {
+    auto settings = dispatcher_.execute({"render.settings", json::Value::object(), kUiOrigin});
+    if (!settings) return "Mix";
+    const json::Value& e = *settings->find("effective");
+    json::Value args = json::Value::object();
+    args["operation"] = "mix";
+    std::string file = "…";
+    if (auto dry = dispatcher_.execute({"render.dry-run", std::move(args), kUiOrigin}))
+        if (const auto* files = dry->find("files"); files && files->size())
+            file = baseName(text(files->at(0).find("path")));
+    std::string label = "Mix → " + file + " (" + outputLabel(e.find("outputs")->at(0)) + ")";
+    const std::string bounds = text(e.find("bounds"), "project");
+    if (bounds == "loop")
+        label += ", loop";
+    else if (bounds == "custom")
+        label += ", beats " + compact(num(e.find("start_beat"), 0)) + "–" +
+                 (e.find("end_beat") ? compact(num(e.find("end_beat"))) : std::string("end"));
+    return label;
+}
+
+void RenderDialog::showResults(const json::Value& result, bool cancelled) {
+    resultFiles_.clear();
+    results_ = json::Value::array();
+    std::string lines;
+    json::Value skipped = json::Value::array();
+    auto addFile = [&](const json::Value& entry) {
+        const std::string path = text(entry.find("path"));
+        if (path.empty()) return;
+        resultFiles_.push_back(path);
+        results_.push_back(entry);
+        char head[320];
+        std::snprintf(head, sizeof head, "%s  (%.2f s)", baseName(path).c_str(),
+                      num(entry.find("seconds")));
+        std::string line = head;
+        if (const json::Value* analysis = entry.find("analysis"); analysis && analysis->isObject())
+            if (const json::Value* loudness = analysis->find("loudness");
+                loudness && loudness->isObject()) {
+                for (const auto& [key, unit] :
+                     {std::pair{"integrated_lufs", "LUFS"}, std::pair{"true_peak_dbtp", "dBTP"}}) {
+                    const json::Value* v = loudness->find(key);
+                    if (!v || !v->isNumber()) continue;
+                    char part[48];
+                    std::snprintf(part, sizeof part, "  %.1f %s", v->asDouble(), unit);
+                    line += part;
+                }
+            }
+        if (const auto* outputs = entry.find("outputs"); outputs && outputs->isArray())
+            for (const auto& o : outputs->asArray()) {
+                line += "\n    " + baseName(text(o.find("path")));
+                if (const auto* checks = o.find("checks"); checks && checks->isObject())
+                    for (const auto& [key, unit] :
+                         {std::pair{"loudness", "LUFS"}, std::pair{"true_peak", "dBTP"}})
+                        if (const auto* c = checks->find(key)) {
+                            char part[64];
+                            std::snprintf(part, sizeof part, "  %s %.1f %s",
+                                          flag(c->find("ok")) ? "ok" : "FAIL",
+                                          num(c->find("measured"), -1000), unit);
+                            line += part;
+                        }
+            }
+        lines += (lines.empty() ? "" : "\n") + line;
+    };
+    auto addSkipped = [&](const json::Value* list) {
+        if (list && list->isArray())
+            for (const auto& s : list->asArray()) skipped.push_back(s);
+    };
+    if (const json::Value* renders = result.find("renders"); renders && renders->isArray()) {
+        for (const json::Value& r : renders->asArray()) {
+            if (const json::Value* files = r.find("files"); files && files->isArray())
+                for (const json::Value& f : files->asArray()) addFile(f);
+            addSkipped(r.find("skipped"));
+        }
+    } else if (const json::Value* files = result.find("files"); files && files->isArray())
+        for (const json::Value& f : files->asArray()) addFile(f);
+    else if (result.find("path"))
+        addFile(result);
+    addSkipped(result.find("skipped"));
+    for (const auto& s : skipped.asArray())
+        lines += (lines.empty() ? "" : "\n") + baseName(text(s.find("path"))) + "  skipped (" +
+                 text(s.find("reason")) + ")";
+    setStatus((cancelled ? "cancelled; " : "") + std::to_string(resultFiles_.size()) +
+              (resultFiles_.size() == 1 ? " file rendered" : " files rendered"));
+    refreshQueueButton();
+    if (resultsBlock_) resultsBlock_->setText(lines.empty() ? "no files" : lines);
+    if (resultsRow_) {
+        root_.releaseWithin(resultsRow_);
+        resultsRow_->clear();
+        for (std::size_t i = 0; i < resultFiles_.size() && i < 6; ++i) {
+            auto& b = resultsRow_->emplace<ui::Button>(
+                "render.result." + std::to_string(i), baseName(resultFiles_[i]) + "…", [this, i] {
+                    if (auto* node = root_.find("render.result." + std::to_string(i)))
+                        openResultMenu(i, node->bounds());
+                });
+            (void)b;
+        }
+        root_.relayout();
+    }
+    root_.damageAll();
+}
+
+void RenderDialog::openResultMenu(std::size_t index, const ui::Rect& anchor) {
+    if (index >= results_.size()) return;
+    const json::Value entry = results_.at(index);
+    const std::filesystem::path path = text(entry.find("path"));
+    std::vector<ui::MenuItem> items;
+    items.push_back({"Open folder", "", [this, path] {
+                         if (auto opener = openFolder) opener(path.parent_path());
+                     }});
+    items.push_back(
+        {"Add to project", "", [this, entry] {
+             auto done = dispatcher_.transact(
+                 "Add render to project", kUiOrigin, [&]() -> Result<json::Value> {
+                     json::Value track = json::Value::object();
+                     track["name"] =
+                         std::filesystem::path(text(entry.find("path"))).stem().string();
+                     auto t = dispatcher_.execute({"track.add", track, kUiOrigin});
+                     if (!t) return t;
+                     json::Value item = json::Value::object();
+                     item["track"] = (*t)["track"];
+                     item["position"] = num(entry.find("start_beat"));
+                     item["audio_file"] = text(entry.find("path"));
+                     return dispatcher_.execute({"item.add", item, kUiOrigin});
+                 });
+             setStatus(done ? "added to the project" : done.error().message);
+         }});
+    const auto version = entry.find("version") ? entry.find("version")->asInt() : 0;
+    items.push_back({"Branch from this version", "",
+                     [this, version] {
+                         for (int n = 1; n < 100; ++n) {
+                             json::Value a = json::Value::object();
+                             a["name"] = "from-v" + std::to_string(version) +
+                                         (n > 1 ? "-" + std::to_string(n) : "");
+                             a["version"] = version;
+                             auto made = dispatcher_.execute({"branch.create", a, kUiOrigin});
+                             if (made) {
+                                 setStatus("switched to branch " + a["name"].asString());
+                                 return;
+                             }
+                             if (made.error().code != "branch.exists") {
+                                 setStatus(made.error().message);
+                                 return;
+                             }
+                         }
+                     },
+                     version > 0});
+    root_.openPopup(
+        ui::makeMenu("render.result.menu", std::move(items), [this] { root_.closePopup(); }),
+        anchor);
 }
 
 void RenderDialog::pollJob() {
@@ -637,84 +1724,55 @@ void RenderDialog::pollJob() {
         job_.clear();
         return;
     }
-    const json::Value* state = status->find("status");
-    const std::string s = state && state->isString() ? state->asString() : "";
+    const std::string s = text(status->find("status"));
     if (s == "running") {
         const json::Value* progress = status->find("progress");
         const json::Value* fraction = progress ? progress->find("fraction") : nullptr;
         if (fraction && fraction->isNumber()) {
-            char text[48];
-            std::snprintf(text, sizeof text, "rendering… %3.0f%%", 100 * fraction->asDouble());
-            setStatus(text);
+            char line[48];
+            std::snprintf(line, sizeof line, "rendering… %3.0f%%", 100 * fraction->asDouble());
+            if (mixJob_) {
+                if (auto report = onStatus) report(std::string("Mixing… ") + (line + 13));
+            } else
+                setStatus(line);
         }
         return;
     }
     job_.clear();
     if (s == "failed") {
         const json::Value* error = status->find("error");
-        const json::Value* message = error ? error->find("message") : nullptr;
-        setStatus(message && message->isString() ? message->asString() : "render failed");
+        const std::string message = text(error ? error->find("message") : nullptr, "render failed");
+        if (mixJob_) {
+            if (auto report = onStatus) report("Mix failed: " + message);
+        } else
+            setStatus(message);
+        mixJob_ = false;
         return;
     }
-    // done: list the files (render.mix returns one file, stems/regions a list).
-    resultFiles_.clear();
-    std::string text;
-    auto addFile = [&](const json::Value& entry) {
-        const std::string path = entry.find("path") && entry.find("path")->isString()
-                                     ? entry.find("path")->asString()
-                                     : "";
-        const double seconds = entry.find("seconds") && entry.find("seconds")->isNumber()
-                                   ? entry.find("seconds")->asDouble()
-                                   : 0.0;
-        resultFiles_.push_back(path);
-        char line[320];
-        std::snprintf(line, sizeof line, "%s  (%.2f s)", baseName(path).c_str(), seconds);
-        std::string row = line;
-        // The analysis summary, when the render carries one: loudness and peak.
-        if (const json::Value* analysis = entry.find("analysis");
-            analysis && analysis->isObject()) {
-            const json::Value* loudness = analysis->find("loudness");
-            if (loudness && loudness->isObject()) {
-                const auto append = [&](const char* key, const char* unit) {
-                    const json::Value* v = loudness->find(key);
-                    if (!v || !v->isNumber()) return;
-                    char part[48];
-                    std::snprintf(part, sizeof part, "  %.1f %s", v->asDouble(), unit);
-                    row += part;
-                };
-                append("integrated_lufs", "LUFS");
-                append("true_peak_dbtp", "dBTP");
-            }
-        }
-        text += (text.empty() ? "" : "\n") + row;
-    };
-    const json::Value* result = status->find("result");
-    if (result && result->isObject()) {
-        if (const json::Value* renders = result->find("renders"); renders && renders->isArray()) {
-            for (const json::Value& r : renders->asArray())  // the queue: each render's files
-                if (const json::Value* files = r.find("files"); files && files->isArray())
-                    for (const json::Value& f : files->asArray()) addFile(f);
-        } else if (const json::Value* files = result->find("files"); files && files->isArray())
-            for (const json::Value& f : files->asArray()) addFile(f);
-        else if (result->find("path"))
-            addFile(*result);
-    }
     const bool cancelled = s == "cancelled" || s == "canceled";
-    setStatus((cancelled ? "cancelled; " : "") + std::to_string(resultFiles_.size()) +
-              (resultFiles_.size() == 1 ? " file rendered" : " files rendered"));
-    refreshQueueButton();
-    if (resultsBlock_) resultsBlock_->setText(text.empty() ? "no files" : text);
-    root_.damageAll();
+    const json::Value* result = status->find("result");
+    showResults(result && result->isObject() ? *result : json::Value::object(), cancelled);
+    if (mixJob_) {
+        if (auto report = onStatus)
+            report(resultFiles_.empty() ? std::string("Mix: no file written")
+                                        : "Mixed → " + resultFiles_.front());
+    }
+    mixJob_ = false;
+    if (!cancelled && !resultFiles_.empty() && openFolderWhenDone && openFolderWhenDone())
+        if (auto opener = openFolder)
+            opener(std::filesystem::path(resultFiles_.front()).parent_path());
 }
 
 void RenderDialog::tick() {
-    if (!page_) return;
     if (!job_.empty()) pollJob();
+    if (!page_) return;
     if (dirty_ && nowMs() - lastEditMs_ >= static_cast<std::uint64_t>(debounceMs_))
         refreshPreview();
 }
 
 std::optional<std::chrono::steady_clock::time_point> RenderDialog::nextDeadline() const {
+    // A running job (File → Mix, with the dialog closed too) is polled.
+    if (!job_.empty()) return std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
     if (!page_ || !dirty_) return {};
     return std::chrono::steady_clock::time_point(
         std::chrono::milliseconds(lastEditMs_ + std::max(0, debounceMs_)));

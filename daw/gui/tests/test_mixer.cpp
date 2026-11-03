@@ -1043,6 +1043,7 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
     values.preventDeepIdle = true;
     values.renderDirectory = f.dir / "renders";
     values.copyImports = false;
+    values.renderOpenFolder = true;
     values.audio.backend = "portaudio";
     values.audio.hostApi = "Core Audio";
     values.audio.outputDevice = "Studio Out";
@@ -1060,14 +1061,15 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
     CHECK(loaded->preventDeepIdle);
     CHECK(loaded->renderDirectory == f.dir / "renders");
     CHECK_FALSE(loaded->copyImports);
+    CHECK(loaded->renderOpenFolder);
     CHECK(loaded->audio == values.audio);
     const auto bytes = readFile(file).value();
-    CHECK(std::string(bytes.begin(), bytes.end()).find("supple.preferences/1.5") !=
+    CHECK(std::string(bytes.begin(), bytes.end()).find("supple.preferences/1.6") !=
           std::string::npos);
     REQUIRE(loaded->save(file));
     CHECK(readFile(file).value() == bytes);
     // Older schemas load, with defaults for what they lack.
-    for (const char* version : {"1.0", "1.1", "1.2", "1.3", "1.4", "1.5"}) {
+    for (const char* version : {"1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6"}) {
         REQUIRE(writeFileAtomic(
             file, std::string("{\"schema\":\"supple.preferences/") + version + "\"}"));
         auto old = gui::Preferences::load(file);
@@ -1077,6 +1079,7 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
         CHECK_FALSE(old->preventDeepIdle);
         CHECK(old->renderDirectory.empty());
         CHECK(old->copyImports);
+        CHECK_FALSE(old->renderOpenFolder);
         CHECK(old->audio == gui::AudioDeviceSettings{});
     }
     // A wrong value names its field.
@@ -1085,8 +1088,9 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
                               {"lock_memory", "1"},
                               {"prevent_deep_idle", "\"true\""},
                               {"render_directory", "\"relative\""},
-                              {"copy_imported_media", "1"}}) {
-        REQUIRE(writeFileAtomic(file, std::string(R"({"schema":"supple.preferences/1.5",")") +
+                              {"copy_imported_media", "1"},
+                              {"render_open_folder", "\"no\""}}) {
+        REQUIRE(writeFileAtomic(file, std::string(R"({"schema":"supple.preferences/1.6",")") +
                                           field + "\":" + bad + "}"));
         auto rejected = gui::Preferences::load(file);
         REQUIRE_FALSE(rejected);

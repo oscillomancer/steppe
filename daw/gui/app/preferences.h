@@ -3,7 +3,7 @@
 // Preferences (Edit > Preferences…): app-wide settings, never project state.
 // The monitoring mode, audio thread limit, opt-in process controls, render
 // folder, import copying and the audio device are saved to
-// <config>/<slug>/preferences.json (supple.preferences/1.5). Buttons open the
+// <config>/<slug>/preferences.json (supple.preferences/1.6). Buttons open the
 // audio device and mouse modifiers dialogs.
 #pragma once
 
@@ -26,8 +26,9 @@ struct Preferences {
     bool lockMemory = false;
     bool preventDeepIdle = false;
     std::filesystem::path renderDirectory{};  // empty: the app's default (mediaHome())
-    bool copyImports = true;    // imported audio is copied into the project's media folder
-    AudioDeviceSettings audio;  // the device the engine starts with (1.5)
+    bool copyImports = true;        // imported audio is copied into the project's media folder
+    AudioDeviceSettings audio;      // the device the engine starts with (1.5)
+    bool renderOpenFolder = false;  // open the render folder when a render finishes (1.6)
     static std::filesystem::path defaultFile(std::string_view slug);
     static Result<Preferences> load(const std::filesystem::path& file);  // absent: defaults
     Status save(const std::filesystem::path& file) const;
@@ -49,6 +50,8 @@ class PreferencesDialog {
     Status setAudioThreads(unsigned limit);  // saved; next engine start
     // The render dialog's folder choice: saved, and renders go there at once.
     Status setRenderDirectory(const std::filesystem::path& dir);
+    // The render dialog's "Open folder when done": saved.
+    Status setRenderOpenFolder(bool on);
     // The audio device dialog's settings: saved (the dialog applies them).
     Status setAudioDevice(const AudioDeviceSettings& audio);
     // Opens the audio device dialog (the Audio device row's button).

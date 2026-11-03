@@ -89,6 +89,9 @@ class FileActions {
     // thread with the chosen folder.
     void chooseFolder(const std::filesystem::path& start,
                       std::function<void(std::filesystem::path)> done);
+    // The system's open dialog for a PNG or JPEG (a render cover).
+    void chooseImage(const std::filesystem::path& start,
+                     std::function<void(std::filesystem::path)> done);
     // A save's (or template's) warnings, if it has any, in a popup: a plug-in
     // whose state could not be read keeps its earlier state.
     void showSaveWarnings(const std::string& command, const json::Value& result);
