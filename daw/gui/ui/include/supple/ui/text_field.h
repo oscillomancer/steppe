@@ -27,6 +27,11 @@ class TextField : public Node {
 
     const std::string& text() const { return text_; }
     const std::string& placeholder() const { return placeholder_; }
+    void setPlaceholder(std::string placeholder) {
+        if (placeholder == placeholder_) return;
+        placeholder_ = std::move(placeholder);
+        invalidate();
+    }
     void setText(std::string text);  // does not call onChange
     void selectAll();
     std::pair<std::size_t, std::size_t> selection() const {

@@ -50,7 +50,7 @@ target_include_directories(gui-peaks PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/peaks/in
 # The retained toolkit (gui.md §2): nodes, stack layout, input, damage, theme.
 supple_add_library(gui-ui
   SOURCES ui/src/theme.cpp ui/src/canvas.cpp ui/src/node.cpp ui/src/root.cpp ui/src/widgets.cpp ui/src/gl.cpp
-          ui/src/text_field.cpp ui/src/text_area.cpp ui/src/controls.cpp ui/src/list.cpp ui/src/popup.cpp ui/src/scroll_view.cpp
+          ui/src/text_field.cpp ui/src/text_area.cpp ui/src/controls.cpp ui/src/list.cpp ui/src/popup.cpp ui/src/scroll_view.cpp ui/src/forms.cpp
   DEPS supple::gui-platform supple::core-json
   PRIVATE_DEPS SDL3::SDL3 gui-nanovg)
 target_include_directories(gui-ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/ui/include)

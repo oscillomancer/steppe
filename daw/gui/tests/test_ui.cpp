@@ -12,6 +12,7 @@
 #include "supple/gui/png.h"
 #include "supple/json/parse.h"
 #include "supple/ui/controls.h"
+#include "supple/ui/forms.h"
 #include "supple/ui/list.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/root.h"
@@ -1138,4 +1139,80 @@ TEST_CASE("instructional shortcuts show the platform primary modifier") {
 #else
     CHECK(shortcutLabel("Ctrl+Shift+S / Ctrl+click") == "Ctrl+Shift+S / Ctrl+click");
 #endif
+}
+
+TEST_CASE("form controls: dropdown, editable dropdown, checkbox, fold section, checklist") {
+    REQUIRE_GL();
+    Root root(*fixture().window, fixture().fonts, Theme::dark());
+    auto content = std::make_unique<Node>("root");
+    content->layout.dir = Layout::Dir::Column;
+    auto& format = content->emplace<Dropdown>(
+        "format", std::vector<Choice>{{"wav", "WAV"}, {"flac", "FLAC"}, {"mp3", "MP3", false}},
+        "wav");
+    auto& rate = content->emplace<EditableDropdown>(
+        "rate", std::vector<Choice>{{"44100", "44100"}, {"48000", "48000"}}, "", "Project");
+    auto& box = content->emplace<Checkbox>("box", "Only turn down");
+    auto& fold = content->emplace<FoldSection>("fold", "Loudness");
+    fold.body().emplace<Label>("fold.inner", "inside");
+    auto& list = content->emplace<Checklist>("list");
+    root.setContent(std::move(content));
+    std::vector<std::string> changes;
+    format.onChange = [&](const std::string& v) { changes.push_back(v); };
+    rate.onChange = [&](const std::string& v) { changes.push_back("rate " + v); };
+    bool toggled = false;
+    box.onToggle = [&](bool on) { toggled = on; };
+    std::vector<std::string> checked;
+    list.onChange = [&](const std::vector<std::string>& c) { checked = c; };
+    list.setItems({{"tr_1", "Drums"}, {"tr_2", "Bass"}}, {"tr_2"});
+    root.frame(false);
+    // The dropdown opens a menu with the current choice checked; a pick calls back.
+    CHECK(format.valueText() == "WAV");
+    root.click("format");
+    root.frame(false);
+    Node* menu = root.find("format.menu");
+    REQUIRE(menu);
+    auto items = menuItems(*menu);
+    REQUIRE(items.size() == 3);
+    CHECK(items[0].checked);
+    CHECK_FALSE(items[2].enabled);
+    items[1].run();
+    CHECK(changes == std::vector<std::string>{"flac"});
+    CHECK(format.value() == "flac");
+    root.closePopups();
+    format.setValue("wav");  // from the owner: no callback
+    CHECK(changes.size() == 1);
+    // The editable dropdown: typed text is free; a suggestion fills it.
+    CHECK(rate.field().placeholder() == "Project");
+    rate.setPlaceholder("Project (48000)");
+    CHECK(rate.field().placeholder() == "Project (48000)");
+    root.click("rate.pick");
+    root.frame(false);
+    REQUIRE(root.find("rate.menu"));
+    menuItems(*root.find("rate.menu"))[0].run();
+    CHECK(rate.text() == "44100");
+    CHECK(changes.back() == "rate 44100");
+    root.closePopups();
+    // The checkbox toggles on a click, not from the owner.
+    root.click("box");
+    CHECK(toggled);
+    CHECK(box.checked());
+    box.setChecked(false);
+    CHECK(toggled);
+    // The fold section hides its body and shows its summary.
+    CHECK_FALSE(fold.isOpen());
+    CHECK_FALSE(fold.body().visible);
+    fold.setSummary("-14 LUFS");
+    root.click("fold.toggle");
+    CHECK(fold.isOpen());
+    CHECK(fold.body().visible);
+    // The checklist: All / None and single boxes report the checked values.
+    CHECK(list.valueText() == "tr_2");
+    root.frame(false);
+    root.click("list.all");
+    CHECK(checked == std::vector<std::string>{"tr_1", "tr_2"});
+    root.click("list.none");
+    CHECK(checked.empty());
+    root.frame(false);
+    root.click("list.item.0");
+    CHECK(checked == std::vector<std::string>{"tr_1"});
 }
