@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <memory>
+#include <mutex>
 
 #include "lame.h"
 
@@ -84,6 +85,13 @@ Result<std::vector<std::uint8_t>> encodeMp3(const audio::AudioData& data,
     if (static_cast<double>(rate) != data.sampleRate ||
         std::find(kRates.begin(), kRates.end(), rate) == kRates.end())
         return encodeError("unsupported sample rate " + std::to_string(rate));
+    // LAME keeps shared static tables: lame_init fills the log table
+    // (util.c, init_log_table) behind an unsynchronised flag, and every
+    // lame_init_params rewrites the quantizer's power tables (quantize_pvt.c,
+    // iteration_init, pow43/adj43/ipow20) that encoding reads (takehiro.c).
+    // So one MP3 encode runs at a time; the lock outlives the encoder.
+    static std::mutex lameLock;
+    std::lock_guard lock(lameLock);
     std::unique_ptr<lame_global_flags, LameDeleter> gf(lame_init());
     if (!gf) return encodeError("could not start");
     lame_set_num_channels(gf.get(), static_cast<int>(channels));

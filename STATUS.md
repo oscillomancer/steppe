@@ -768,6 +768,8 @@ Engine and hosting:
   its Time selection range is never offered (the arrange view has no time
   selection), and File → Mix reports its file in the status bar without an
   Open folder action there (the "Open folder when done" preference covers it).
+- MP3 encodes run one at a time (LAME's shared tables, `libs/audio-codecs`):
+  several MP3 renders in parallel jobs wait for each other's encoding step.
 - Renders: MP3 and Ogg Vorbis files are byte-identical from run to run on
   one build; different platforms or compilers may round LAME's and
   libvorbis's floating point differently, so they are not compared across

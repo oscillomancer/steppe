@@ -4,7 +4,8 @@
 // Ogg Vorbis (libvorbis 1.3.7), and an Ogg Vorbis decoder (vorbisfile) for
 // the delivery checks. Main/worker threads only. Deterministic: the same
 // audio and options give the same bytes (no clock, no randomness; the Ogg
-// stream serial number is an option).
+// stream serial number is an option). Thread-safe: MP3 encodes run one at a
+// time (LAME keeps shared static tables); Vorbis encodes run in parallel.
 #pragma once
 
 #include <cstdint>

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <string_view>
+#include <thread>
 
 #include <supple/codecs/codecs.h>
 
@@ -89,4 +90,18 @@ TEST_CASE("Ogg Vorbis: a round trip keeps length and level; comments; determinis
     CHECK_FALSE(codecs::decodeVorbis(std::vector<std::uint8_t>{1, 2, 3}));
     options.quality = 11;
     CHECK_FALSE(codecs::encodeVorbis(d, options));
+}
+
+TEST_CASE("encoders on several threads at once give the same bytes (run under tsan)") {
+    const auto d = tone(44100, 2, 0.2);
+    const auto mp3 = codecs::encodeMp3(d).value();
+    const auto ogg = codecs::encodeVorbis(d).value();
+    std::vector<std::vector<std::uint8_t>> results(8);
+    std::vector<std::thread> threads;
+    for (std::size_t i = 0; i < results.size(); ++i)
+        threads.emplace_back([&d, &results, i] {
+            results[i] = i % 2 ? codecs::encodeVorbis(d).value() : codecs::encodeMp3(d).value();
+        });
+    for (auto& t : threads) t.join();
+    for (std::size_t i = 0; i < results.size(); ++i) CHECK(results[i] == (i % 2 ? ogg : mp3));
 }
