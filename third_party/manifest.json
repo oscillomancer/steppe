@@ -240,6 +240,42 @@
       ]
     },
     {
+      "name": "libogg",
+      "dir": "libogg-1.3.6",
+      "license": "BSD-3-Clause",
+      "license_file": "libogg-1.3.6/COPYING",
+      "version": "1.3.6",
+      "source": "https://downloads.xiph.org/releases/ogg/libogg-1.3.6.tar.xz",
+      "sha256": "5c8253428e181840cd20d41f3ca16557a9cc04bad4a3d04cce84808677fa1061",
+      "purpose": "Ogg container for Ogg Vorbis render outputs (ADR-0055); sources and headers only, with Quire's config_types.h",
+      "linkage": "static",
+      "scope": "daw-only"
+    },
+    {
+      "name": "libvorbis",
+      "dir": "libvorbis-1.3.7",
+      "license": "BSD-3-Clause",
+      "license_file": "libvorbis-1.3.7/COPYING",
+      "version": "1.3.7",
+      "source": "https://downloads.xiph.org/releases/vorbis/libvorbis-1.3.7.tar.xz",
+      "sha256": "b33cc4934322bcbf6efcbacf49e3ca01aadbea4114ec9589d1b1e9d20f72954b",
+      "purpose": "Ogg Vorbis render outputs and their delivery checks (vorbisenc, vorbisfile; ADR-0055); library sources only",
+      "linkage": "static",
+      "scope": "daw-only"
+    },
+    {
+      "name": "lame",
+      "dir": "lame-3.100",
+      "license": "LGPL-2.0-or-later",
+      "license_file": "lame-3.100/COPYING",
+      "version": "3.100",
+      "source": "https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz",
+      "sha256": "ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e",
+      "purpose": "MP3 render outputs (ADR-0055 §8, the maintainer-approved LGPL exception); libmp3lame encoder sources only, with Quire's config.h; no decoder or frontends",
+      "linkage": "static",
+      "scope": "daw-only"
+    },
+    {
       "name": "AudioUnitSDK",
       "dir": "AudioUnitSDK-1.1.0",
       "license": "Apache-2.0",

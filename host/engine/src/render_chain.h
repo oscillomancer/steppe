@@ -32,23 +32,6 @@ struct RenderEncoding {
     std::string extension() const;
 };
 
-// What a file carries besides audio (session-model §1.10 metadata).
-struct RenderTags {
-    std::string title, artist, album, date, genre, comment, isrc;
-    int trackNumber = 0;
-    std::vector<std::uint8_t> cover;  // PNG or JPEG bytes
-    std::string coverMime;
-    bool bwf = false;
-    std::uint64_t timeReference = 0;  // samples since midnight, at the output rate
-    std::string originator, description;
-    std::optional<double> loudness, lra, truePeak, maxMomentary, maxShortTerm;
-    struct Marker {
-        std::uint64_t frame = 0, length = 0;  // at the output rate; length 0: a marker
-        std::string name;
-    };
-    std::vector<Marker> markers;
-};
-
 // Step 2: sums the samples past `rangeFrames` onto the start, wrapping, and
 // cuts the audio to exactly `rangeFrames`.
 void foldSeamlessLoop(audio::AudioData& data, std::size_t rangeFrames);
@@ -71,9 +54,11 @@ Status normalizeRenderAudio(audio::AudioData& data, std::string_view mode, doubl
                             std::optional<double> limitTruePeakDb = {});
 
 // Step 8 for one output: `data` already at the output's rate.
+// Each format keeps what it can hold of `metadata` (audio_file.h FileMetadata,
+// codecs.h): bext and cue points only in WAV, markers in WAV and AIFF.
 Result<std::vector<std::uint8_t>> encodeRender(const audio::AudioData& data,
                                                const RenderEncoding& encoding,
-                                               const RenderTags& tags);
+                                               const audio::FileMetadata& metadata);
 // Decodes an encoded output (for the checks).
 Result<audio::AudioData> decodeRender(std::span<const std::uint8_t> bytes, rs::Format format);
 

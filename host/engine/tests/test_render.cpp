@@ -318,3 +318,93 @@ TEST_CASE("branch.create starts a branch at a render's version") {
     CHECK(r.app->head().version == static_cast<std::uint64_t>(mix["version"].asInt()));
     CHECK(r.fails("branch.create", R"({"name":"later","version":99})").code == "history.version");
 }
+
+namespace {
+bool holds(const fs::path& path, std::string_view text) {
+    auto bytes = readFile(path);
+    REQUIRE(bytes);
+    return std::search(bytes->begin(), bytes->end(), text.begin(), text.end()) != bytes->end();
+}
+}  // namespace
+
+TEST_CASE("outputs: AIFF, FLAC, MP3 and Ogg Vorbis of one render, each checked as written") {
+    Rig r;
+    r.song();
+    const char* args = R"({"name":"all","end_beat":2,"limit_true_peak_db":-1,
+        "normalize":{"mode":"lufs_i","target":-18},
+        "outputs":[{"format":"aiff","bit_depth":16,"dither":"shaped"},{"format":"flac"},
+                   {"format":"mp3","mp3":{"mode":"vbr","vbr_quality":4}},
+                   {"format":"vorbis","vorbis_quality":4}]})";
+    auto mix = r.run("render.mix", args);
+    auto& outputs = mix["outputs"].asArray();
+    REQUIRE(outputs.size() == 4);
+    std::vector<std::string> names;
+    for (auto& o : outputs) names.push_back(fs::path(o["path"].asString()).filename().string());
+    CHECK(names == std::vector<std::string>{"all.aif", "all.flac", "all.mp3", "all.ogg"});
+    for (auto& o : outputs) {
+        INFO(o["path"].asString());
+        CHECK(o["checks"]["true_peak"]["ok"] == true);
+        CHECK(o["checks"]["loudness"]["ok"] == true);
+        CHECK(o["checks"]["loudness"]["measured"].asDouble() == doctest::Approx(-18).epsilon(0.06));
+    }
+    CHECK(outputs[2].find("bit_depth") == nullptr);
+    CHECK(outputs[0]["sample_rate"] == 48000);
+    // Lossy encoders give the same bytes for the same render.
+    auto again = r.run("render.mix", args);
+    for (std::size_t i = 0; i < 4; ++i)
+        CHECK(readFile(again["outputs"].asArray()[i]["path"].asString()).value() ==
+              readFile(outputs[i]["path"].asString()).value());
+    // Formats hold only what they can.
+    CHECK(r.fails("render.mix", R"({"outputs":[{"format":"mp3","bit_depth":16}]})").path ==
+          "/args/outputs/0/bit_depth");
+    CHECK(r.fails("render.mix", R"({"outputs":[{"format":"aiff","bit_depth":32}]})").path ==
+          "/args/outputs/0/bit_depth");
+    // An MP3 of a 96 kHz chain is written at 48 kHz.
+    auto high = r.run("render.mix", R"({"name":"high","end_beat":1,"sample_rate":96000,
+        "outputs":[{"format":"wav"},{"format":"mp3"}]})");
+    CHECK(high["outputs"].asArray()[1]["sample_rate"] == 48000);
+    CHECK(audio::readAudio(high["path"].asString())->sampleRate == 96000);
+}
+
+TEST_CASE("metadata: tokens in tags, BWF timecode and loudness, markers, a cover") {
+    Rig r;
+    r.song();
+    r.run("marker.add", R"({"pos":1,"name":"Drop"})");
+    r.run("region.add", R"({"start":0,"end":1,"name":"Intro"})");
+    auto error = r.fails("render.mix", R"({"metadata":{"cover":"cover.png"}})");
+    CHECK(error.path == "/args/metadata/cover");  // an unsaved project has no folder
+    r.run(
+        "project.save",
+        "{\"path\":" + json::writeCompact(json::Value((r.dir.path / "song.json").string())) + "}");
+    const fs::path folder = r.app->projectDir();
+    const std::vector<std::uint8_t> png{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0};
+    REQUIRE(writeFileAtomic(folder / "cover.png", png));
+    auto mix = r.run("render.mix", R"({"name":"tagged","end_beat":2,
+        "outputs":[{"format":"wav","bit_depth":24},{"format":"flac"},{"format":"mp3"}],
+        "metadata":{"title":"{project} v{version}","artist":"Me","isrc":"USRC17607839",
+                    "date":"2026-11-03","cover":"cover.png","bwf":true,"markers":true}})");
+    auto& o = mix["outputs"].asArray();
+    const fs::path wav = o[0]["path"].asString(), flac = o[1]["path"].asString(),
+                   mp3 = o[2]["path"].asString();
+    for (const char* id : {"bext", "INAM", "Song v", "ISFT", "cue ", "Drop", "Intro", "ltxt"})
+        CHECK_MESSAGE(holds(wav, id), id);
+    CHECK(holds(flac, "TITLE=Song v"));
+    CHECK(holds(flac, "ISRC=USRC17607839"));
+    CHECK(holds(mp3, "TSRC"));
+    CHECK(holds(mp3, "APIC"));
+    CHECK_FALSE(holds(flac, "Drop"));  // markers are WAV and AIFF only
+    CHECK(r.fails("render.mix", R"({"metadata":{"cover":"../x.png"}})").path ==
+          "/args/metadata/cover");
+    CHECK(r.fails("render.mix", R"({"metadata":{"title":"{nope}"}})").path ==
+          "/args/metadata/title");
+}
+
+TEST_CASE("factory presets cover the delivery targets") {
+    Rig r;
+    auto list = r.run("render.preset.list", "{}");
+    std::vector<std::string> names;
+    for (auto& preset : list["presets"].asArray()) names.push_back(preset["name"].asString());
+    CHECK(names.size() == 6);
+    CHECK(std::find(names.begin(), names.end(), "Podcast (MP3, −16 LUFS)") != names.end());
+    CHECK(std::find(names.begin(), names.end(), "Game loop (Ogg Vorbis, seamless)") != names.end());
+}

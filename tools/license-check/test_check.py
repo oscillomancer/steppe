@@ -132,6 +132,13 @@ class DependencyScopes(unittest.TestCase):
     def test_or_alternative_cannot_hide_plugin_gpl(self):
         self.assertFalse(gate.dependency_license_ok({"license": "MIT OR GPL-3.0-only", "scope": "plugins"}, {"MIT"}))
 
+    def test_lame_is_the_named_lgpl_exception(self):
+        lame = {"name": "lame", "license": "LGPL-2.0-or-later", "scope": "daw-only"}
+        self.assertTrue(gate.dependency_license_ok(lame, {"MIT"}))
+        self.assertFalse(gate.dependency_license_ok(dict(lame, scope="plugins"), {"MIT"}))
+        self.assertFalse(gate.dependency_license_ok(dict(lame, name="other"), {"MIT"}))
+        self.assertFalse(gate.dependency_license_ok(dict(lame, license="LGPL-3.0-only"), {"MIT"}))
+
     def test_other_copyleft_is_not_approved_by_daw_scope(self):
         for license_id in ("AGPL-3.0-only", "LGPL-3.0-only", "GPL-2.0-only"):
             self.assertFalse(gate.dependency_license_ok({"license": license_id, "scope": "daw-only"}, {"MIT"}))

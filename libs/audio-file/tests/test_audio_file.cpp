@@ -699,3 +699,117 @@ TEST_CASE("publish retries while another program holds the target without delete
     fs::remove_all(dir, ec);
 }
 #endif
+
+namespace {
+bool contains(const std::vector<std::uint8_t>& bytes, std::string_view text) {
+    return std::search(bytes.begin(), bytes.end(), text.begin(), text.end()) != bytes.end();
+}
+}  // namespace
+
+TEST_CASE("AIFF: 16 and 24 bits decode as the same WAV does, with markers and names") {
+    const AudioData d = tone(4410, 44100, 2);
+    for (int bits : {16, 24}) {
+        AiffOptions aiff;
+        aiff.bitsPerSample = bits;
+        aiff.ditherSeed = 9;
+        aiff.metadata.tags.title = "Song";
+        aiff.metadata.cues = {{100, 0, "Verse"}, {2000, 500, "Chorus"}};
+        auto bytes = encodeAiff(d, aiff);
+        REQUIRE(bytes);
+        CHECK(contains(*bytes, "FORM"));
+        CHECK(contains(*bytes, "MARK"));
+        CHECK(contains(*bytes, "Verse"));
+        CHECK(contains(*bytes, "NAME"));
+        auto decoded = decodeAiff(*bytes);
+        REQUIRE(decoded);
+        CHECK(decoded->sampleRate == 44100);
+        WavOptions wav{bits == 16 ? SampleFormat::Pcm16 : SampleFormat::Pcm24, true, 9};
+        auto reference = readAudio(*encodeWav(d, wav));
+        REQUIRE(reference);
+        CHECK(decoded->channels == reference->channels);
+        CHECK(encodeAiff(d, aiff).value() == *bytes);  // deterministic
+    }
+    AiffOptions bad;
+    bad.bitsPerSample = 32;
+    CHECK_FALSE(encodeAiff(d, bad));
+    CHECK_FALSE(decodeAiff(*encodeWav(d)));
+}
+
+TEST_CASE("noise-shaped dither is deterministic and moves the error up the band") {
+    AudioData d;
+    d.sampleRate = 48000;
+    d.channels.assign(1, std::vector<float>(48000));
+    for (std::size_t i = 0; i < d.frames(); ++i)
+        d.channels[0][i] =
+            static_cast<float>(0.3 * std::sin(2 * M_PI * 997.0 * static_cast<double>(i) / 48000));
+    const WavOptions pcm{SampleFormat::Pcm16, true, 3};
+    EncodeExtras shaped;
+    shaped.shaped = true;
+    auto a = encodeWav(d, pcm, shaped);
+    REQUIRE(a);
+    CHECK(encodeWav(d, pcm, shaped).value() == *a);
+    CHECK(*encodeWav(d, pcm) != *a);
+    // Error spectrum: the ratio of first-difference energy (high frequencies)
+    // to plain energy is larger when the error is shaped.
+    auto tilt = [&](const std::vector<std::uint8_t>& bytes) {
+        auto back = readAudio(bytes);
+        REQUIRE(back);
+        double low = 0, high = 0, previous = 0;
+        for (std::size_t i = 0; i < d.frames(); ++i) {
+            const double e = double(back->channels[0][i]) - double(d.channels[0][i]);
+            low += e * e;
+            high += (e - previous) * (e - previous);
+            previous = e;
+        }
+        return high / low;
+    };
+    CHECK(tilt(*a) > 1.5 * tilt(*encodeWav(d, pcm)));
+    // FLAC and AIFF quantize alike.
+    FlacOptions flac{16, true, 3, 4096};
+    CHECK(readAudio(*encodeFlac(d, flac, shaped))->channels == readAudio(*a)->channels);
+}
+
+TEST_CASE("WAV and FLAC metadata: INFO, bext v2, cue points and Vorbis comments") {
+    const AudioData d = tone(4800, 48000, 2);
+    EncodeExtras extras;
+    extras.metadata.tags.title = "Song";
+    extras.metadata.tags.artist = "Band";
+    extras.metadata.tags.isrc = "USRC17607839";
+    extras.metadata.tags.software = "Test";
+    Bext bext;
+    bext.originator = "Test";
+    bext.timeReference = 48000ull * 3600;
+    bext.loudness = -14.0;
+    bext.maxTruePeak = -1.0;
+    bext.codingHistory = "A=PCM,F=48000,W=24,M=stereo\r\n";
+    extras.metadata.bext = bext;
+    extras.metadata.cues = {{0, 0, "Start"}, {2400, 1200, "Hook"}};
+    const WavOptions wav{SampleFormat::Pcm24, true, 1};
+    auto bytes = encodeWav(d, wav, extras);
+    REQUIRE(bytes);
+    for (const char* id :
+         {"bext", "LIST", "INFO", "INAM", "IART", "ISFT", "cue ", "adtl", "labl", "ltxt", "Hook"})
+        CHECK_MESSAGE(contains(*bytes, id), id);
+    CHECK((*bytes)[4] + ((*bytes)[5] << 8) + ((*bytes)[6] << 16) + ((*bytes)[7] << 24) ==
+          static_cast<int>(bytes->size() - 8));
+    // bext: version 2 and the loudness in hundredths right after the time reference.
+    const std::string_view id = "bext";
+    const auto at = static_cast<std::size_t>(
+        std::search(bytes->begin(), bytes->end(), id.begin(), id.end()) - bytes->begin() + 8);
+    const std::size_t time = at + 256 + 32 + 32 + 10 + 8;
+    std::uint64_t reference = 0;
+    for (int i = 0; i < 8; ++i)
+        reference |= std::uint64_t((*bytes)[time + static_cast<std::size_t>(i)]) << (8 * i);
+    CHECK(reference == 48000ull * 3600);
+    CHECK((*bytes)[time + 8] == 2);
+    const auto loudness =
+        static_cast<std::int16_t>((*bytes)[time + 74] | ((*bytes)[time + 75] << 8));
+    CHECK(loudness == -1400);
+    // The audio reads back exactly as without metadata.
+    CHECK(readAudio(*bytes)->channels == readAudio(*encodeWav(d, wav))->channels);
+    auto flac = encodeFlac(d, FlacOptions{}, extras);
+    REQUIRE(flac);
+    CHECK(contains(*flac, "TITLE=Song"));
+    CHECK(contains(*flac, "ISRC=USRC17607839"));
+    CHECK(readAudio(*flac)->channels == readAudio(*encodeFlac(d))->channels);
+}

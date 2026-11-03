@@ -14,8 +14,10 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "supple/base/result.h"
@@ -66,11 +68,59 @@ Result<AudioData> readAudio(std::span<const std::uint8_t> bytes);
 std::uint64_t decodeCountForTests();
 void resetDecodeCountForTests();
 
+// What a written file says about itself besides audio (render metadata,
+// session-model §1.10). Empty members are not written. WAV: a LIST INFO
+// chunk (title, artist, album, date, genre, comment, track, software), an
+// optional BWF bext chunk (version 2) and cue points with labels (regions
+// as labelled text with a length); AIFF: NAME, AUTH, ANNO and MARK chunks;
+// FLAC: a Vorbis comment block and a PICTURE block. Nothing reads the clock.
+struct FileTags {
+    std::string title, artist, album, date, genre, comment, isrc, trackNumber, software;
+    std::vector<std::uint8_t> picture;  // PNG or JPEG
+    std::string pictureMime;            // "image/png" or "image/jpeg"
+    bool empty() const {
+        return title.empty() && artist.empty() && album.empty() && date.empty() && genre.empty() &&
+               comment.empty() && isrc.empty() && trackNumber.empty() && software.empty() &&
+               picture.empty();
+    }
+};
+// The tags as Vorbis comment fields (TITLE, ARTIST, …, ENCODER), for FLAC
+// and Ogg Vorbis, and the picture as a FLAC PICTURE block body (front
+// cover), which Ogg Vorbis carries base64-encoded as METADATA_BLOCK_PICTURE.
+std::vector<std::pair<std::string, std::string>> vorbisComments(const FileTags& tags);
+std::vector<std::uint8_t> pictureBlock(const FileTags& tags);
+struct CuePoint {
+    std::uint64_t frame = 0;   // from the start of the file
+    std::uint64_t length = 0;  // frames; 0 for a marker, else a region
+    std::string name;
+};
+// EBU Tech 3285 v2. Loudness members are in the spec's units (LUFS, LU, dB)
+// and written as hundredths; absent ones are written as 0x7FFF ("not set").
+struct Bext {
+    std::string description, originator, originatorReference, date;  // date YYYY-MM-DD
+    std::uint64_t timeReference = 0;                                 // samples since midnight
+    std::optional<double> loudness, loudnessRange, maxTruePeak, maxMomentary, maxShortTerm;
+    std::string codingHistory;
+};
+struct FileMetadata {
+    FileTags tags;
+    std::optional<Bext> bext;    // WAV only
+    std::vector<CuePoint> cues;  // WAV and AIFF
+    bool empty() const { return tags.empty() && !bext && cues.empty(); }
+};
+
 enum class SampleFormat { Pcm16, Pcm24, Float32 };
 struct WavOptions {
     SampleFormat format = SampleFormat::Float32;
     bool dither = true;            // TPDF dither for PCM formats
     std::uint64_t ditherSeed = 0;  // deterministic
+};
+// What the render writers add to WavOptions/FlacOptions: noise-shaped TPDF
+// dither (implies dither) and metadata. RF64 files (beyond 4 GiB) carry no
+// metadata.
+struct EncodeExtras {
+    bool shaped = false;
+    FileMetadata metadata;
 };
 
 // Builds a canonical RIFF or RF64 header for the given payload size. RF64
@@ -78,9 +128,10 @@ struct WavOptions {
 Result<std::vector<std::uint8_t>> wavHeader(std::uint64_t frames, std::uint32_t channels,
                                             std::uint32_t sampleRate, SampleFormat format);
 
-Result<std::vector<std::uint8_t>> encodeWav(const AudioData& data, const WavOptions& options = {});
+Result<std::vector<std::uint8_t>> encodeWav(const AudioData& data, const WavOptions& options = {},
+                                            const EncodeExtras& extras = {});
 Status writeWav(const std::filesystem::path& path, const AudioData& data,
-                const WavOptions& options = {});
+                const WavOptions& options = {}, const EncodeExtras& extras = {});
 
 // FLAC (an original encoder: fixed predictors, Rice coding, stereo
 // decorrelation, MD5 in STREAMINFO). 16- or 24-bit, quantized and dithered
@@ -91,9 +142,27 @@ struct FlacOptions {
     std::uint64_t ditherSeed = 0;
     int blockSize = 4096;
 };
-Result<std::vector<std::uint8_t>> encodeFlac(const AudioData& data,
-                                             const FlacOptions& options = {});
+// extras.metadata.tags become a Vorbis comment block and a PICTURE block.
+Result<std::vector<std::uint8_t>> encodeFlac(const AudioData& data, const FlacOptions& options = {},
+                                             const EncodeExtras& extras = {});
 Status writeFlac(const std::filesystem::path& path, const AudioData& data,
                  const FlacOptions& options = {});
+
+// AIFF (an original writer): big-endian 16- or 24-bit PCM, quantized and
+// dithered exactly as encodeWav does for the same options; markers from
+// metadata.cues (a region marks its start), title/artist/comment as NAME,
+// AUTH and ANNO chunks.
+struct AiffOptions {
+    int bitsPerSample = 24;  // 16 or 24
+    bool dither = true;
+    bool shaped = false;
+    std::uint64_t ditherSeed = 0;
+    FileMetadata metadata;
+};
+Result<std::vector<std::uint8_t>> encodeAiff(const AudioData& data,
+                                             const AiffOptions& options = {});
+// Decodes AIFF bytes (dr_wav). Not a media import format: detect() and
+// readAudio() do not take AIFF.
+Result<AudioData> decodeAiff(std::span<const std::uint8_t> bytes);
 
 }  // namespace supple::audio

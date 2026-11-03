@@ -16,6 +16,8 @@
 #include <span>
 #include <sstream>
 
+#include <supple/product.h>
+#include <tuple>
 #include "../../analysis-commands/analysis_shared.h"
 #include "analysis_commands.h"
 #include "render_settings.h"
@@ -138,7 +140,8 @@ std::size_t unquotedDelimiter(std::string_view text, char delimiter, std::size_t
     return std::string_view::npos;
 }
 
-Result<std::string> expand(std::string_view pattern, const PatternData& d) {
+// Tokens and filters only (metadata text); expand() adds the file-name checks.
+Result<std::string> expandText(std::string_view pattern, const PatternData& d) {
     std::string out;
     for (std::size_t i = 0; i < pattern.size();) {
         if (pattern[i] != '{') {
@@ -209,6 +212,13 @@ Result<std::string> expand(std::string_view pattern, const PatternData& d) {
             std::string("-_. ").find(pattern[i]) != std::string::npos)
             ++i;
     }
+    return out;
+}
+
+Result<std::string> expand(std::string_view pattern, const PatternData& d) {
+    auto expanded = expandText(pattern, d);
+    if (!expanded) return std::move(expanded).error();
+    const std::string& out = *expanded;
     if (out.find('\0') != std::string::npos)
         return Error("render.path", "render name contains a NUL byte", "/pattern",
                      "remove NUL bytes from the pattern and its token values");
@@ -534,7 +544,8 @@ struct RenderTask {
     std::string label;
     std::optional<model::Id> track, region;
     int channels = 2;
-    bool exists = false;  // a destination was there when planned
+    bool exists = false;   // a destination was there when planned
+    audio::FileTags tags;  // metadata text with the file's tokens expanded
 };
 struct RenderPlan {
     rs::Source operation = rs::Source::Mix;
@@ -547,7 +558,42 @@ struct RenderPlan {
     // master mix over the stems' range.
     std::optional<RenderTask> masterGain;
     std::optional<RenderAnalyze> analyze;
+    std::vector<std::uint8_t> cover;
+    std::string coverMime;
 };
+
+// metadata.cover: a PNG or JPEG of at most 10 MiB inside the project folder.
+Status readCover(EngineApp& app, const std::string& cover, RenderPlan& out) {
+    const fs::path folder = app.projectPath().empty() ? fs::path() : app.projectDir();
+    if (folder.empty())
+        return argsError("a cover needs a saved project", "/metadata/cover",
+                         "save the project, then give the cover relative to its folder");
+    const fs::path rel = fs::path(cover).lexically_normal();
+    if (rel.empty() || rel.is_absolute() || *rel.begin() == "..")
+        return argsError("the cover must be inside the project folder", "/metadata/cover",
+                         "copy the image into the project folder and name it relative to it");
+    std::error_code ec;
+    const auto root = fs::weakly_canonical(folder, ec);
+    const auto resolved = fs::weakly_canonical(folder / rel, ec);
+    const auto inside = resolved.lexically_relative(root);
+    if (ec || inside.empty() || *inside.begin() == "..")
+        return argsError("the cover must be inside the project folder", "/metadata/cover",
+                         "copy the image into the project folder and name it relative to it");
+    auto bytes = readFile(resolved, 10u << 20);
+    if (!bytes)
+        return argsError("cannot read the cover " + rel.generic_string(), "/metadata/cover",
+                         "give a PNG or JPEG of at most 10 MiB in the project folder");
+    const auto& b = *bytes;
+    if (b.size() >= 8 && b[0] == 0x89 && b[1] == 'P' && b[2] == 'N' && b[3] == 'G')
+        out.coverMime = "image/png";
+    else if (b.size() >= 3 && b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF)
+        out.coverMime = "image/jpeg";
+    else
+        return argsError("the cover is not a PNG or JPEG", "/metadata/cover",
+                         "give a PNG or JPEG image");
+    out.cover = std::move(*bytes);
+    return okStatus();
+}
 
 Result<model::Id> trackId(const model::Session& s, const std::string& text, std::string path) {
     auto id = model::Id::parse(text);
@@ -632,6 +678,7 @@ Result<RenderPlan> plan(EngineApp& app, rs::Source operation, const Args& a) {
     out.version = s.version;
     out.analyze = a.sel.analyze;
     const rs::Settings& e = out.settings;
+    if (e.metadata && e.metadata->cover) SUPPLE_TRY(readCover(app, *e.metadata->cover, out));
     const auto& firstOutput = e.outputs->front();
     std::vector<RenderEncoding> encodings;
     for (std::size_t i = 0; i < e.outputs->size(); ++i)
@@ -779,6 +826,27 @@ Result<RenderPlan> plan(EngineApp& app, rs::Source operation, const Args& a) {
         auto name = expand(pattern, data);
         if (!name) return std::move(name).error();
         task.label = *name;
+        if (e.metadata) {
+            const auto& m = *e.metadata;
+            for (const auto& [field, from, to] :
+                 {std::tuple{"title", &m.title, &task.tags.title},
+                  std::tuple{"artist", &m.artist, &task.tags.artist},
+                  std::tuple{"album", &m.album, &task.tags.album},
+                  std::tuple{"genre", &m.genre, &task.tags.genre},
+                  std::tuple{"comment", &m.comment, &task.tags.comment}}) {
+                if (!*from) continue;
+                auto text = expandText(**from, data);
+                if (!text) {
+                    auto error = std::move(text).error();
+                    error.path = std::string("/metadata/") + field;
+                    return error;
+                }
+                *to = std::move(*text);
+            }
+            task.tags.date = m.date.value_or("");
+            task.tags.isrc = m.isrc.value_or("");
+            if (m.trackNumber) task.tags.trackNumber = std::to_string(*m.trackNumber);
+        }
         // Each output's path: the base name, a suffix and the extension.
         auto pathsFor = [&](const std::string& base) -> Result<std::vector<OutputFile>> {
             std::vector<OutputFile> files;
@@ -1059,6 +1127,71 @@ Status writeOutput(const fs::path& path, std::span<const std::uint8_t> bytes) {
     return writeFileAtomic(path, bytes);
 }
 
+// What one output carries besides audio (session-model §1.10 metadata).
+// `startSeconds` is the file's first sample on the timeline.
+Result<audio::FileMetadata> fileMetadata(const RenderPlan& p, const RenderTask& task,
+                                         const RenderEncoding& encoding,
+                                         const audio::AudioData& data, double startSeconds) {
+    audio::FileMetadata m;
+    m.tags = task.tags;
+    m.tags.software = std::string(product::kName);
+    m.tags.picture = p.cover;
+    m.tags.pictureMime = p.coverMime;
+    if (!p.settings.metadata) return m;
+    const auto& settings = *p.settings.metadata;
+    const model::Session& s = task.session;
+    const double rate = static_cast<double>(encoding.sampleRate);
+    const double playrate = s.project->playrate.rate;
+    const double endSeconds = startSeconds + data.seconds() * playrate;
+    auto frameAt = [&](double seconds) {
+        return static_cast<std::uint64_t>(
+            std::llround(std::max(0.0, seconds - startSeconds) / playrate * rate));
+    };
+    if (settings.markers.value_or(false) &&
+        (encoding.format == rs::Format::Wav || encoding.format == rs::Format::Aiff)) {
+        auto seconds = [&](double pos, model::Timebase timebase) {
+            return timebase == model::Timebase::Time ? pos : s.timeMap->secondsAt(pos);
+        };
+        for (const auto& marker : s.markers) {
+            const double at = seconds(marker.value->pos, marker.value->timebase);
+            if (at >= startSeconds && at < endSeconds)
+                m.cues.push_back({frameAt(at), 0, marker.value->name});
+        }
+        for (const auto& region : s.regions) {
+            const double from = seconds(region.value->start, region.value->timebase);
+            const double to = seconds(region.value->end, region.value->timebase);
+            if (to <= startSeconds || from >= endSeconds) continue;
+            const auto first = frameAt(std::max(from, startSeconds));
+            const auto last = frameAt(std::min(to, endSeconds));
+            m.cues.push_back({first, last > first ? last - first : 1, region.value->name});
+        }
+        std::stable_sort(m.cues.begin(), m.cues.end(),
+                         [](const auto& a, const auto& b) { return a.frame < b.frame; });
+    }
+    if (settings.bwf.value_or(false) && encoding.format == rs::Format::Wav) {
+        audio::Bext bext;
+        bext.description = task.tags.title;
+        bext.originator = std::string(product::kName);
+        bext.originatorReference = task.label.substr(0, 32);
+        if (settings.date && settings.date->size() == 10) bext.date = *settings.date;
+        bext.timeReference =
+            static_cast<std::uint64_t>(std::llround(std::max(0.0, startSeconds) * rate));
+        auto measured = measureRender(data);
+        if (!measured) return std::move(measured).error();
+        bext.loudness = measured->integrated;
+        bext.loudnessRange = measured->lra;
+        bext.maxTruePeak = measured->truePeak;
+        bext.maxMomentary = measured->maxMomentary;
+        bext.maxShortTerm = measured->maxShortTerm;
+        bext.codingHistory = "A=PCM,F=" + std::to_string(encoding.sampleRate) +
+                             ",W=" + std::to_string(encoding.bitDepth) +
+                             ",M=" + (data.channelCount() == 1 ? "mono" : "stereo") +
+                             ",T=" + std::string(product::kName) + "\r\n";
+        m.bext = std::move(bext);
+    }
+    return m;
+}
+
 // The whole chain for every task (engine.md §3). The result: {files, skipped}.
 Result<json::Value> runTasks(RunContext& run, const RenderPlan& p,
                              std::map<std::string, json::Value>* mixMeters = nullptr) {
@@ -1139,8 +1272,9 @@ Result<json::Value> runTasks(RunContext& run, const RenderPlan& p,
                 converted = std::move(*resampled);
                 source = &converted;
             }
-            RenderTags tags;
-            auto bytes = encodeRender(*source, file.encoding, tags);
+            const auto metadata = fileMetadata(p, task, file.encoding, *source, startSeconds);
+            if (!metadata) return std::move(metadata).error();
+            auto bytes = encodeRender(*source, file.encoding, *metadata);
             if (!bytes) return std::move(bytes).error();
             SUPPLE_TRY(writeOutput(file.path, *bytes));
             json::Value o = json::Value::object();

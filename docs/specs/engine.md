@@ -536,8 +536,23 @@ first use, and no plug-in code runs early to warm it.
      - quantize with seeded dither (`tpdf`, or `shaped`: TPDF with fixed
        error-feedback noise shaping) at 16 or 24 bits;
      - encode: WAV (PCM or float, RF64 beyond 4 GiB), AIFF, FLAC (the
-       original audio-file encoder), MP3 (LAME, with a LAME/Xing header for
-       gapless playback) or Ogg Vorbis (libvorbis).
+       original audio-file encoders, which quantize alike), MP3 (LAME 3.100
+       in `libs/audio-codecs`, joint stereo, algorithm quality 2, with a
+       LAME/Xing header for gapless playback) or Ogg Vorbis (libvorbis
+       1.3.7, its stream serial number taken from the output's seed).
+
+  Metadata goes where each format holds it: WAV a LIST INFO chunk, `bext`
+  and cue points with labels (a region as labelled text with its length);
+  AIFF NAME, AUTH, ANNO and MARK chunks; FLAC and Vorbis comments and a
+  front-cover PICTURE (Vorbis: METADATA_BLOCK_PICTURE); MP3 an ID3v2.3 tag
+  (TIT2, TPE1, TALB, TRCK, TYER, TCON, COMM, TSRC, TSSE and APIC). The
+  software field (ISFT, ENCODER, TSSE) and the bext originator are the
+  product name. RF64 files carry no metadata chunks. The bext time reference
+  is the file's start on the timeline in samples at the output's rate; its
+  loudness fields are measured on the file's audio; its origination date is
+  `metadata.date` when it is a full date, otherwise empty; nothing reads the
+  clock. Shaped dither feeds the quantization error back through the fixed
+  three-tap filter (1.623, −0.982, 0.109) before the TPDF dither.
 
   Each output gets its own dither seed derived from the project seed and its
   index. No step reads the wall clock, and the same session and settings

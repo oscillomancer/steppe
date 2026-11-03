@@ -11,13 +11,17 @@ installer scripts, their templates, and GitHub workflows.
 
 Allowed for bundled code: MIT, MIT-0, BSD-2/3-Clause, ISC, Zlib, Apache-2.0,
 BSL-1.0, CC0, Unlicense (OFL-1.1 for fonts). The ASIO SDK is the sanctioned GPL-3.0-only exception, Windows DAW only,
-never plugins (ADR-0033). Other GPL dependencies need a DAW-only manifest
+never plugins (ADR-0033). LAME is the sanctioned LGPL-2.0-or-later exception,
+DAW only, never plugins or the MIT libraries (ADR-0055 §8). Other GPL dependencies need a DAW-only manifest
 declaration and maintainer approval; AGPL is forbidden. LGPL/MPL need the maintainer's explicit approval. Dynamically linked OS libraries
 (libc, ALSA, JACK/PipeWire client libs, X11/Wayland/GL) are acceptable.
 
 | Name | License | Version / commit | Purpose | Linkage |
 |---|---|---|---|---|
 | asiosdk | GPL-3.0-only AND BSD-3-Clause (selected GPL option) | 2.3.4 / 2025-10-15; archive SHA-256 `d5ebf0c20dd2c5f43771fd0c1418f4b361bf52434ee670097cfa6b3a335e2eca` | ASIO backend; common and Windows host sources only | static, Windows DAW only, never plugins |
+| libogg | BSD-3-Clause | 1.3.6; tarball SHA-256 `5c8253…1061` (Xiph's SHA256SUMS) | Ogg container for Ogg Vorbis render outputs; `src/` and headers, with our `config_types.h` | static, DAW only (libs/audio-codecs) |
+| libvorbis | BSD-3-Clause | 1.3.7; tarball SHA-256 `b33cc4…954b` (Xiph's SHA256SUMS) | Ogg Vorbis render outputs (vorbisenc) and their delivery checks (vorbisfile); `lib/` sources and headers | static, DAW only (libs/audio-codecs) |
+| lame | LGPL-2.0-or-later | 3.100; tarball SHA-256 `ddfe36…da1e` (SourceForge's) | MP3 render outputs; the libmp3lame encoder sources and `lame.h`, with our `config.h`; no mpglib decoder, frontends or assembly | static, DAW only (libs/audio-codecs), never plugins or MIT libraries |
 | clap | MIT | 1.2.10 / `195b42a` | CLAP plugin ABI headers for hosting and for the stock plugins | headers |
 | doctest | MIT | 2.5.3 / `2d0a935` | Unit-test framework; tests only, never shipped | tests |
 | airwindows-console9 | MIT, © 2018 Chris Johnson | `d22a25b7f7c0c8c05e9f3ae480e7f1da9769f49d` | Airwindows Console 9 Channel/Buss reference for the DSP null test; mono AU kernels retained as reference text | test-only, never linked into a shipped binary |
@@ -84,6 +88,18 @@ Development tool (not linked, bundled, or used at runtime):
 license, Cargo packages and binary live in the user's tool cache outside this
 repository; `tools/validator/build.sh` pins and builds it for optional CLAP
 conformance checks.
+
+## LAME notices
+
+LAME 3.100 is under the GNU Library General Public License version 2 or
+later (`third_party/lame-3.100/COPYING`; the upstream LICENSE and README are
+kept beside it). The maintainer approved it on 2026-11-03 (ADR-0055 §8). It is
+linked statically into the GPL-3.0-or-later DAW only, where the DAW's own
+source offer covers it; the vendored files are unmodified and the only
+addition is `config/config.h`, the build configuration. It never enters
+`plugins/` or the MIT libraries, and `tools/license-check` allows it by name.
+MP3 encodes carry LAME's own encoder tag ("LAME3.100") in the LAME/Xing
+header, as upstream writes it.
 
 ## ASIO SDK notices
 

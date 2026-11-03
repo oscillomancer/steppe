@@ -26,6 +26,9 @@ SOURCE_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".hh", ".m", ".mm"
                    ".sh", ".ps1", ".nsi", ".yml", ".yaml"}
 # Keep GPL approvals separate from the permissive dependency allow-list.
 GPL_LICENSES = {"GPL-3.0-only", "GPL-3.0-or-later"}
+# LGPL approved by name, DAW-only (ADR-0055 §8): LAME, statically linked into
+# the GPL DAW. Any other LGPL dependency still needs the maintainer's approval.
+APPROVED_LGPL = {"lame": "LGPL-2.0-or-later"}
 MIT_LIBRARIES = {"core-base", "core-json", "core-schema", "core-params",
                  "core-patch", "core-dsp", "core-analysis"}
 SPDX_RE = re.compile("SPDX-License-" + r"Identifier:[ \t]*([^\n]+)")
@@ -51,6 +54,9 @@ def dependency_license_ok(dependency, allowed):
     permitted = set(allowed) - GPL_LICENSES
     if scope == "daw-only":
         permitted |= GPL_LICENSES
+        approved = APPROVED_LGPL.get(dependency.get("name"))
+        if approved:
+            permitted.add(approved)
     return license_ok(expression, permitted)
 
 

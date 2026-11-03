@@ -16,6 +16,8 @@
 #include <limits>
 #include <vector>
 
+#include "metadata.h"
+#include "quantize.h"
 #include "supple/audio/audio_file.h"
 #include "supple/base/files.h"
 #include "supple/base/md5.h"
@@ -287,7 +289,8 @@ int sampleSizeCode(int bps) {
 
 }  // namespace
 
-Result<std::vector<std::uint8_t>> encodeFlac(const AudioData& data, const FlacOptions& options) {
+Result<std::vector<std::uint8_t>> encodeFlac(const AudioData& data, const FlacOptions& options,
+                                             const EncodeExtras& extras) {
     const std::size_t channels = data.channelCount();
     const std::size_t frames = data.frames();
     const int bps = options.bitsPerSample;
@@ -303,20 +306,15 @@ Result<std::vector<std::uint8_t>> encodeFlac(const AudioData& data, const FlacOp
     const auto blockSize = static_cast<std::size_t>(std::clamp(options.blockSize, 16, 65535));
 
     // Quantize exactly as encodeWav does (one dither stream, frame by frame).
-    const double scale = bps == 16 ? 32768.0 : 8388608.0;
-    const double maxV = bps == 16 ? 32767.0 : 8388607.0, minV = -scale;
     std::vector<std::vector<std::int64_t>> pcm(channels, std::vector<std::int64_t>(frames));
-    Rng rng(options.ditherSeed);
+    detail::Quantizer quantize(bps, options.dither, extras.shaped, options.ditherSeed, channels);
     Md5 md5;
     const std::size_t bytesPer = static_cast<std::size_t>(bps / 8);
     std::vector<std::uint8_t> md5Frame(channels * bytesPer);
     for (std::size_t i = 0; i < frames; ++i) {
         std::size_t w = 0;
         for (std::size_t c = 0; c < channels; ++c) {
-            double x = static_cast<double>(data.channels[c][i]) * scale;
-            if (options.dither) x += rng.uniform() - rng.uniform();  // TPDF, +-1 LSB
-            if (!std::isfinite(x)) x = std::isnan(x) ? 0.0 : x;
-            const auto q = static_cast<std::int64_t>(std::clamp(std::floor(x + 0.5), minV, maxV));
+            const auto q = static_cast<std::int64_t>(quantize(data.channels[c][i], c));
             pcm[c][i] = q;
             for (std::size_t b = 0; b < bytesPer; ++b)
                 md5Frame[w++] = static_cast<std::uint8_t>(static_cast<std::uint64_t>(q) >> (8 * b));
@@ -430,7 +428,7 @@ Result<std::vector<std::uint8_t>> encodeFlac(const AudioData& data, const FlacOp
         out.bytes[info + 7 + static_cast<std::size_t>(b)] =
             static_cast<std::uint8_t>(maxFrame >> (8 * (2 - b)));
     }
-    return std::move(out.bytes);
+    return detail::flacWithTags(std::move(out.bytes), extras.metadata.tags);
 }
 
 Status writeFlac(const std::filesystem::path& path, const AudioData& data,

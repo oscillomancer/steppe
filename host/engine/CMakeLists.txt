@@ -14,7 +14,7 @@ supple_add_library(engine
   DEPS supple::model supple::clap-host supple::audio-file supple::timeline supple::semantic-params-abi
        supple::command-bus supple::lua-bus supple::notation supple::core-params supple::core-analysis
        supple::core-dsp supple::signalsmith-stretch supple::console9
-  PRIVATE_DEPS supple::product-info supple::script-compiler supple::sandbox-render ZLIB::ZLIB ${CMAKE_DL_LIBS})
+  PRIVATE_DEPS supple::product-info supple::script-compiler supple::sandbox-render supple::audio-codecs ZLIB::ZLIB ${CMAKE_DL_LIBS})
 
 target_include_directories(engine SYSTEM PRIVATE ${PROJECT_SOURCE_DIR}/third_party/portaudio-19.7.0/include)
 if(APPLE)

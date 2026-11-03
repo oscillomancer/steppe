@@ -11,6 +11,8 @@
 #include <fstream>
 #include <system_error>
 #include "file_platform.h"
+#include "metadata.h"
+#include "quantize.h"
 
 #include "supple/base/rng.h"
 
@@ -200,7 +202,8 @@ Result<std::vector<std::uint8_t>> wavHeader(std::uint64_t frames, std::uint32_t 
     return h;
 }
 
-Result<std::vector<std::uint8_t>> encodeWav(const AudioData& data, const WavOptions& options) {
+Result<std::vector<std::uint8_t>> encodeWav(const AudioData& data, const WavOptions& options,
+                                            const EncodeExtras& extras) {
     const std::size_t channels = data.channelCount();
     const std::size_t frames = data.frames();
     if (channels == 0 || channels > 64)
@@ -232,20 +235,14 @@ Result<std::vector<std::uint8_t>> encodeWav(const AudioData& data, const WavOpti
             const bool is16 = options.format == SampleFormat::Pcm16;
             format.format = DR_WAVE_FORMAT_PCM;
             format.bitsPerSample = is16 ? 16 : 24;
-            const double scale = is16 ? 32768.0 : 8388608.0;
-            const std::int32_t maxV = is16 ? 32767 : 8388607, minV = is16 ? -32768 : -8388608;
             const std::size_t bytesPer = is16 ? 2 : 3;
             payload.resize(frames * channels * bytesPer);
-            Rng rng(options.ditherSeed);
+            detail::Quantizer quantize(is16 ? 16 : 24, options.dither, extras.shaped,
+                                       options.ditherSeed, channels);
             std::size_t w = 0;
             for (std::size_t i = 0; i < frames; ++i)
                 for (std::size_t c = 0; c < channels; ++c) {
-                    double x = static_cast<double>(data.channels[c][i]) * scale;
-                    if (options.dither) x += rng.uniform() - rng.uniform();  // TPDF, +-1 LSB
-                    if (!std::isfinite(x))
-                        x = std::isnan(x) ? 0.0 : x;  // NaN -> 0; inf clamps below
-                    auto q = static_cast<std::int32_t>(std::clamp(
-                        std::floor(x + 0.5), static_cast<double>(minV), static_cast<double>(maxV)));
+                    const auto q = quantize(data.channels[c][i], c);
                     for (std::size_t b = 0; b < bytesPer; ++b)
                         payload[w++] = static_cast<std::uint8_t>(q >> (8 * b));
                 }
@@ -266,10 +263,11 @@ Result<std::vector<std::uint8_t>> encodeWav(const AudioData& data, const WavOpti
     std::vector<std::uint8_t> out(static_cast<std::uint8_t*>(mem),
                                   static_cast<std::uint8_t*>(mem) + size);
     drwav_free(mem, nullptr);
-    return out;
+    return detail::wavWithMetadata(std::move(out), extras.metadata);
 }
 
-Status writeWav(const fs::path& path, const AudioData& data, const WavOptions& options) {
+Status writeWav(const fs::path& path, const AudioData& data, const WavOptions& options,
+                const EncodeExtras& extras) {
     const std::size_t channels = data.channelCount();
     const std::uint64_t bytesPer = options.format == SampleFormat::Pcm16   ? 2
                                    : options.format == SampleFormat::Pcm24 ? 3
@@ -293,7 +291,8 @@ Status writeWav(const fs::path& path, const AudioData& data, const WavOptions& o
             return Error("audio.write", "cannot create temporary WAV file", {},
                          "check that the directory is writable and has free space");
         bool good = std::fwrite(header->data(), 1, header->size(), file) == header->size();
-        Rng rng(options.ditherSeed);
+        detail::Quantizer quantize(options.format == SampleFormat::Pcm16 ? 16 : 24, options.dither,
+                                   extras.shaped, options.ditherSeed, channels);
         std::vector<std::uint8_t> block(4096 * channels * bytesPer);
         for (std::size_t start = 0; good && start < data.frames(); start += 4096) {
             const std::size_t count = std::min<std::size_t>(4096, data.frames() - start);
@@ -305,14 +304,7 @@ Status writeWav(const fs::path& path, const AudioData& data, const WavOptions& o
                         std::memcpy(block.data() + w, &sample, 4);
                         w += 4;
                     } else {
-                        const bool pcm16 = options.format == SampleFormat::Pcm16;
-                        const double scale = pcm16 ? 32768.0 : 8388608.0;
-                        double x = static_cast<double>(sample) * scale;
-                        if (options.dither) x += rng.uniform() - rng.uniform();
-                        if (std::isnan(x)) x = 0;
-                        const auto q = static_cast<std::int32_t>(
-                            std::clamp(std::floor(x + 0.5), pcm16 ? -32768.0 : -8388608.0,
-                                       pcm16 ? 32767.0 : 8388607.0));
+                        const auto q = quantize(sample, c);
                         for (std::size_t b = 0; b < bytesPer; ++b)
                             block[w++] = static_cast<std::uint8_t>(q >> (8 * b));
                     }
@@ -338,7 +330,7 @@ Status writeWav(const fs::path& path, const AudioData& data, const WavOptions& o
         }
         return okStatus();
     }
-    auto bytes = encodeWav(data, options);
+    auto bytes = encodeWav(data, options, extras);
     if (!bytes) return std::move(bytes).error();
     auto st = writeFileAtomic(path, *bytes);
     if (!st) {

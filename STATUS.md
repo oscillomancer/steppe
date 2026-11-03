@@ -196,15 +196,17 @@ instructions are in `docs/guides/installing.md`.
   the render matrix through one implementation; one set of render settings
   per project (`project.render`, schema 2.3, undoable), resolved over the
   user's render default and the built-ins (`render.settings` shows each
-  member's layer); per-user presets (four factory ones, read-only);
+  member's layer); per-user presets (six factory ones, read-only);
   file-name patterns with `{version}`, `{branch}` and subfolders, and
   overwrite / number / skip / error for existing files; project, loop or
   custom bounds, tails, seamless loops, region handles, trim of silence;
   loudness or peak normalization (only down, or one master gain for every
   stem) and a true-peak limiter with or without it; up to four outputs per
-  file: WAV (16/24-bit with seeded dither, or float, RF64 beyond 4 GiB) and
-  FLAC; loudness and true-peak checks on each file as written, with an
-  optional text report; render jobs and a queue that pins version and
+  file: WAV (16/24-bit with seeded TPDF or noise-shaped dither, or float,
+  RF64 beyond 4 GiB), AIFF, FLAC, MP3 (LAME, gapless header) and Ogg Vorbis;
+  tags, a cover, BWF timecode and loudness and embedded markers where the
+  format holds them; loudness and true-peak checks on each file as written
+  (lossy files decoded first), with an optional text report; render jobs and a queue that pins version and
   settings; per-file analysis, branch and version; `branch.create
   {version}` starts a branch at a render's mix.
 - **Plugin hosting** (ADR-0013, ADR-0017, ADR-0018): CLAP and VST3,
@@ -758,6 +760,13 @@ Engine and hosting:
   and there are no per-output meters.
 - Overlapping gestures on a plugin without semantic parameters share one
   state blob.
+- Renders: MP3 and Ogg Vorbis files are byte-identical from run to run on
+  one build; different platforms or compilers may round LAME's and
+  libvorbis's floating point differently, so they are not compared across
+  platforms. AIFF and Ogg Vorbis are render outputs only: neither imports
+  as media. RF64 WAVs (beyond 4 GiB) carry no metadata chunks. The LAME,
+  libvorbis and libogg builds (our own config headers, no autotools) have
+  run on Linux only; macOS and Windows native CI is still to run them.
 - `fx.meters` reads a plugin's readouts live or as the last `render.mix`
   ended; other renders (stems, regions, A/B) keep none.
 - FX containers are not implemented; parallel FX run in series on pinned

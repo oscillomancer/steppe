@@ -240,9 +240,22 @@ std::vector<RenderPreset> factoryRenderPresets() {
     {
         rs::Settings s;
         s.sampleRate = 44100;
-        s.outputs = std::vector<rs::Output>{output(rs::Format::Wav, 16, rs::Dither::Tpdf)};
+        s.outputs = std::vector<rs::Output>{output(rs::Format::Wav, 16, rs::Dither::Shaped)};
         s.limitTruePeakDb = -1.0;
         add("CD master (16-bit 44.1 kHz, −1 dBTP)", s);
+    }
+    {
+        rs::Settings s;
+        rs::Output mp3 = output(rs::Format::Mp3);
+        mp3.mp3 = rs::Mp3{rs::Mp3Mode::Cbr, 128, {}};
+        s.outputs = std::vector<rs::Output>{mp3};
+        s.channels = 1;
+        rs::Normalize n;
+        n.mode = rs::NormalizeMode::LufsI;
+        n.target = -16.0;
+        s.normalize = n;
+        s.limitTruePeakDb = -1.0;
+        add("Podcast (MP3, −16 LUFS)", s);
     }
     {
         rs::Settings s;
@@ -254,6 +267,16 @@ std::vector<RenderPreset> factoryRenderPresets() {
         stems.tap = rs::StemTap::PostFader;
         s.stems = stems;
         add("Stems for mixing (24-bit)", s);
+    }
+    {
+        rs::Settings s;
+        rs::Output ogg = output(rs::Format::Vorbis);
+        ogg.vorbisQuality = 6.0;
+        s.outputs = std::vector<rs::Output>{ogg};
+        s.bounds = rs::Bounds::Loop;
+        s.tailS = 2.0;
+        s.seamlessLoop = true;
+        add("Game loop (Ogg Vorbis, seamless)", s);
     }
     return list;
 }

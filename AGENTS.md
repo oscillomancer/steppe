@@ -37,7 +37,9 @@ same change, and say what you found.
    (fonts: OFL-1.1), vendored under `third_party/` with their license file,
    declared in `third_party/manifest.json` and listed in `THIRD_PARTY.md`.
    The ASIO SDK is the sanctioned GPL-3.0-only exception, Windows DAW
-   only, never plugins; its source may be read for that integration.
+   only, never plugins; its source may be read for that integration. LAME
+   is the sanctioned LGPL-2.0-or-later exception (ADR-0055), DAW only,
+   never plugins or the MIT libraries.
    `tools/license-check` fails the build otherwise. LGPL and MPL code needs
    the maintainer's explicit approval first.
 2. **Real-time safety is absolute.** Audio-path code never allocates,

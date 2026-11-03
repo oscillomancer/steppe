@@ -131,3 +131,67 @@ if(_supple_sanitize_flags)
   endif()
 endif()
 add_library(supple::mir ALIAS tp-mir)
+
+# Render encoders for the DAW (ADR-0055): libogg 1.3.6 and libvorbis 1.3.7
+# (BSD-3-Clause) for Ogg Vorbis, LAME 3.100 (LGPL-2.0-or-later, the approved
+# exception of ADR-0055 §8) for MP3. Linked only by libs/audio-codecs, which
+# only the engine links: never plugins/ or the MIT libraries. Config headers
+# are ours (lame-3.100/config, libogg's config_types.h); no autotools, no
+# assembly or SSE, so every platform builds the same C code. Floating-point
+# contraction is off like the rest of the build, which keeps encodes stable.
+function(_supple_codec_target target)
+  set_target_properties(${target} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+  if(MSVC)
+    target_compile_options(${target} PRIVATE /w /clang:-ffp-contract=off)
+    target_compile_definitions(${target} PRIVATE _CRT_SECURE_NO_WARNINGS _USE_MATH_DEFINES)
+  else()
+    set_target_properties(${target} PROPERTIES C_STANDARD 99 C_EXTENSIONS ON)
+    target_compile_options(${target} PRIVATE -w -ffp-contract=off)
+  endif()
+  if(_supple_sanitize_flags)
+    target_compile_options(${target} PRIVATE ${_supple_sanitize_flags})
+  endif()
+endfunction()
+
+set(_ogg ${CMAKE_CURRENT_SOURCE_DIR}/libogg-1.3.6)
+add_library(tp-ogg STATIC ${_ogg}/src/bitwise.c ${_ogg}/src/framing.c)
+target_include_directories(tp-ogg SYSTEM PUBLIC ${_ogg}/include)
+_supple_codec_target(tp-ogg)
+add_library(supple::ogg ALIAS tp-ogg)
+
+set(_vorbis ${CMAKE_CURRENT_SOURCE_DIR}/libvorbis-1.3.7)
+add_library(tp-vorbis STATIC
+  ${_vorbis}/lib/analysis.c ${_vorbis}/lib/bitrate.c ${_vorbis}/lib/block.c
+  ${_vorbis}/lib/codebook.c ${_vorbis}/lib/envelope.c ${_vorbis}/lib/floor0.c
+  ${_vorbis}/lib/floor1.c ${_vorbis}/lib/info.c ${_vorbis}/lib/lookup.c ${_vorbis}/lib/lpc.c
+  ${_vorbis}/lib/lsp.c ${_vorbis}/lib/mapping0.c ${_vorbis}/lib/mdct.c ${_vorbis}/lib/psy.c
+  ${_vorbis}/lib/registry.c ${_vorbis}/lib/res0.c ${_vorbis}/lib/sharedbook.c
+  ${_vorbis}/lib/smallft.c ${_vorbis}/lib/synthesis.c ${_vorbis}/lib/window.c
+  ${_vorbis}/lib/vorbisenc.c ${_vorbis}/lib/vorbisfile.c)
+target_include_directories(tp-vorbis SYSTEM PUBLIC ${_vorbis}/include)
+target_include_directories(tp-vorbis PRIVATE ${_vorbis}/lib)
+target_link_libraries(tp-vorbis PUBLIC tp-ogg)
+if(NOT WIN32)
+  target_compile_definitions(tp-vorbis PRIVATE HAVE_ALLOCA_H=1)
+  target_link_libraries(tp-vorbis PUBLIC m)
+endif()
+_supple_codec_target(tp-vorbis)
+add_library(supple::vorbis ALIAS tp-vorbis)
+
+set(_lame ${CMAKE_CURRENT_SOURCE_DIR}/lame-3.100)
+add_library(tp-lame STATIC
+  ${_lame}/libmp3lame/bitstream.c ${_lame}/libmp3lame/encoder.c ${_lame}/libmp3lame/fft.c
+  ${_lame}/libmp3lame/gain_analysis.c ${_lame}/libmp3lame/id3tag.c ${_lame}/libmp3lame/lame.c
+  ${_lame}/libmp3lame/newmdct.c ${_lame}/libmp3lame/presets.c ${_lame}/libmp3lame/psymodel.c
+  ${_lame}/libmp3lame/quantize.c ${_lame}/libmp3lame/quantize_pvt.c
+  ${_lame}/libmp3lame/reservoir.c ${_lame}/libmp3lame/set_get.c ${_lame}/libmp3lame/tables.c
+  ${_lame}/libmp3lame/takehiro.c ${_lame}/libmp3lame/util.c ${_lame}/libmp3lame/vbrquantize.c
+  ${_lame}/libmp3lame/VbrTag.c ${_lame}/libmp3lame/version.c)
+target_include_directories(tp-lame SYSTEM PUBLIC ${_lame}/include)
+target_include_directories(tp-lame PRIVATE ${_lame}/config ${_lame}/libmp3lame)
+target_compile_definitions(tp-lame PRIVATE HAVE_CONFIG_H=1)
+if(NOT WIN32)
+  target_link_libraries(tp-lame PUBLIC m)
+endif()
+_supple_codec_target(tp-lame)
+add_library(supple::lame ALIAS tp-lame)

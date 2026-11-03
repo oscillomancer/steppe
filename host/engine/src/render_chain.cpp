@@ -11,6 +11,7 @@
 #include <sstream>
 
 #include "supple/analysis/analysis.h"
+#include "supple/codecs/codecs.h"
 #include "supple/dsp/dsp.h"
 
 namespace supple::engine {
@@ -232,36 +233,70 @@ Status normalizeRenderAudio(audio::AudioData& data, std::string_view mode, doubl
 }
 
 Result<std::vector<std::uint8_t>> encodeRender(const audio::AudioData& data,
-                                               const RenderEncoding& e, const RenderTags&) {
-    if (e.dither == rs::Dither::Shaped)
-        return Error("render.format", "noise-shaped dither is not available yet", "/outputs",
-                     "use dither tpdf or none");
+                                               const RenderEncoding& e,
+                                               const audio::FileMetadata& metadata) {
+    const bool dither = e.dither != rs::Dither::None;
+    const bool shaped = e.dither == rs::Dither::Shaped;
     switch (e.format) {
         case rs::Format::Wav: {
             audio::WavOptions wav;
             wav.format = e.bitDepth == 16   ? audio::SampleFormat::Pcm16
                          : e.bitDepth == 24 ? audio::SampleFormat::Pcm24
                                             : audio::SampleFormat::Float32;
-            wav.dither = e.dither != rs::Dither::None;
+            wav.dither = dither;
             wav.ditherSeed = e.ditherSeed;
-            return audio::encodeWav(data, wav);
+            return audio::encodeWav(data, wav, {shaped, metadata});
+        }
+        case rs::Format::Aiff: {
+            audio::AiffOptions aiff;
+            aiff.bitsPerSample = e.bitDepth;
+            aiff.dither = dither;
+            aiff.shaped = shaped;
+            aiff.ditherSeed = e.ditherSeed;
+            aiff.metadata.tags = metadata.tags;
+            aiff.metadata.cues = metadata.cues;
+            return audio::encodeAiff(data, aiff);
         }
         case rs::Format::Flac: {
             audio::FlacOptions flac;
             flac.bitsPerSample = e.bitDepth;
-            flac.dither = e.dither != rs::Dither::None;
+            flac.dither = dither;
             flac.ditherSeed = e.ditherSeed;
-            return audio::encodeFlac(data, flac);
+            audio::EncodeExtras extras;
+            extras.shaped = shaped;
+            extras.metadata.tags = metadata.tags;
+            return audio::encodeFlac(data, flac, extras);
         }
-        default:
-            return Error("render.format",
-                         std::string(rs::formatName(e.format)) + " output is not available yet",
-                         "/outputs", "use wav or flac");
+        case rs::Format::Mp3: {
+            codecs::Mp3Options mp3;
+            mp3.vbr = e.mp3Mode == rs::Mp3Mode::Vbr;
+            mp3.bitrateKbps = e.mp3Bitrate;
+            mp3.vbrQuality = e.mp3VbrQuality;
+            mp3.tags = metadata.tags;
+            return codecs::encodeMp3(data, mp3);
+        }
+        case rs::Format::Vorbis: {
+            codecs::VorbisOptions vorbis;
+            vorbis.quality = e.vorbisQuality;
+            // The stream serial comes from the seed, so encodes repeat exactly.
+            vorbis.serial = static_cast<std::uint32_t>(e.ditherSeed ^ (e.ditherSeed >> 32));
+            vorbis.tags = metadata.tags;
+            return codecs::encodeVorbis(data, vorbis);
+        }
     }
+    return Error("render.format", "unknown output format", "/outputs",
+                 "use wav, aiff, flac, mp3 or vorbis");
 }
 
-Result<audio::AudioData> decodeRender(std::span<const std::uint8_t> bytes, rs::Format) {
-    return audio::readAudio(bytes);
+Result<audio::AudioData> decodeRender(std::span<const std::uint8_t> bytes, rs::Format format) {
+    switch (format) {
+        case rs::Format::Aiff:
+            return audio::decodeAiff(bytes);
+        case rs::Format::Vorbis:
+            return codecs::decodeVorbis(bytes);
+        default:
+            return audio::readAudio(bytes);  // WAV, FLAC and MP3 (dr_mp3)
+    }
 }
 
 Result<RenderMeasurement> measureRender(const audio::AudioData& data) {
