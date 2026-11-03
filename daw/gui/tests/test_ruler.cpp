@@ -516,3 +516,50 @@ TEST_CASE("ruler: a drag in the time row sets the punch range; the menu copies r
     CHECK(f.history() == n);  // transport state, never an undo step
     CHECK(f.errors.empty());
 }
+
+TEST_CASE("ruler: an edge dragged onto the other removes a range; the menu deletes ranges") {
+    RulerFixture f;
+    // A punch range at 2 s .. 6 s turns punch on; its left edge dragged past
+    // its right one removes it and turns punch off.
+    f.drag(f.at(4.0, 30), f.at(12.0, 30));
+    REQUIRE(f.app->punch().enabled);
+    f.drag(f.at(4.0, 30), f.at(16.0, 30));
+    CHECK_FALSE(f.app->punch().enabled);
+    CHECK_FALSE(f.app->punch().end > f.app->punch().start);
+    CHECK_FALSE(f.view->punchEnd() > f.view->punchStart());
+    // Right-click in the ruler: Delete loop (row 4), Delete punch (row 5),
+    // Delete loop and punch (row 6).
+    const auto choose = [&](int index) {
+        ui::PointerEvent e;
+        e.type = Pointer::Down;
+        e.pos = f.at(1.0, 30);
+        e.button = 3;
+        f.root->pointer(e);
+        e.type = Pointer::Up;
+        f.root->pointer(e);
+        f.root->frame(false);
+        ui::Node* menu = f.root->find("ruler.menu");
+        REQUIRE(menu);
+        const ui::Point row{menu->bounds().x + 30, menu->bounds().y + index * 26.0f + 13};
+        f.pointer(Pointer::Move, row);
+        f.pointer(Pointer::Down, row);
+        f.pointer(Pointer::Up, row);
+        f.sync();
+    };
+    f.loop(2, 4, true);
+    f.drag(f.at(4.0, 30), f.at(12.0, 30));
+    choose(5);
+    CHECK_FALSE(f.app->punch().enabled);
+    CHECK_FALSE(f.app->punch().end > f.app->punch().start);
+    CHECK(f.app->loop().enabled);  // the loop is untouched
+    choose(4);
+    CHECK_FALSE(f.app->loop().enabled);
+    CHECK_FALSE(f.app->loop().end > f.app->loop().start);
+    f.loop(2, 4, true);
+    f.drag(f.at(4.0, 30), f.at(12.0, 30));
+    choose(6);
+    CHECK_FALSE(f.app->loop().end > f.app->loop().start);
+    CHECK_FALSE(f.app->punch().enabled);
+    CHECK_FALSE(f.app->punch().end > f.app->punch().start);
+    CHECK(f.errors.empty());
+}

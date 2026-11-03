@@ -411,7 +411,12 @@ Ruler (bars/beats and time; tempo and meter lanes; markers and regions),
 virtualized track rows (only visible rows exist), items with waveforms or
 MIDI, take lanes, fades and crossfades, automation lanes (volume/pan/mute
 on strips; plugin parameters), time selection, snapping grid, playhead with
-follow modes. On every version change, deleted track and item IDs are
+follow modes. The ruler's bars row draws the loop range (the time selection)
+and its time row the punch range; a new punch range turns punch on, and an
+edge dragged onto the other edge removes the range (punch or loop off). A
+right-click in those rows offers Loop on/off, Punch on/off, Punch range =
+loop range, Loop range = punch range, Delete loop, Delete punch and Delete
+loop and punch. On every version change, deleted track and item IDs are
 pruned from transient selection; undo restores objects, not old selection.
 MIDI editor selection clears on external version changes, and a gesture
 cannot commit against a different project generation or version from the
