@@ -897,15 +897,17 @@ void registerEngineCommands(cmd::Registry& registry) {
         // schema 2.3 (format, bit_depth, secondary, tail_ms) are migrated.
         const schema::Schema<json::Value> renderArgs{
             "render settings",
-            [](const json::Value& v, json::Value& out, schema::DecodeCtx& c, const std::string& p) {
+            [](const json::Value& v, json::Value& out, schema::DecodeCtx& ctx,
+               const std::string& p) {
                 out = v;
                 if (auto migrated = model::render::migrateLegacy(out, p); !migrated) {
-                    c.error(migrated.error().code, migrated.error().message, migrated.error().path,
-                            migrated.error().hint);
+                    ctx.error(migrated.error().code, migrated.error().message,
+                              migrated.error().path, migrated.error().hint);
                     return false;
                 }
                 model::render::Settings settings;
-                if (!model::render::settingsSchema().decodeInto(out, settings, c, p)) return false;
+                if (!model::render::settingsSchema().decodeInto(out, settings, ctx, p))
+                    return false;
                 out = model::render::toJson(settings);
                 return true;
             },

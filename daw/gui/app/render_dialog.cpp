@@ -661,9 +661,9 @@ void RenderDialog::buildSource(ui::Node& body) {
         tap.onChange = [this](const std::string& v) { setField("render.tap", v); };
         auto& silent = opts.emplace<ui::Checkbox>("render.skip_silent", "Skip silent stems",
                                                   flag(stems.find("skip_silent")));
-        silent.onToggle = [this](bool on) {
+        silent.onToggle = [this](bool skip) {
             json::Value st = settings_["stems"];
-            st["skip_silent"] = on;
+            st["skip_silent"] = skip;
             set("stems", std::move(st));
         };
     }
