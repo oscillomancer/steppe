@@ -8,12 +8,13 @@
 #include <cmath>
 #include <cstdio>
 
+#include "supple/base/fader.h"
 #include "supple/ui/root.h"
 
 namespace supple::ui {
 namespace {
 
-constexpr double kTopDb = 12.0, kFloorDb = -60.0, kSilence = 0.02;
+constexpr double kTopDb = fader::kTopDb, kFloorDb = fader::kFloorDb;
 constexpr float kMeterTop = 6.0f, kMeterFloor = -60.0f;
 
 std::string dbText(double db) {
@@ -31,18 +32,9 @@ float meterPos(float db) {
 
 }  // namespace
 
-double faderPosition(double db) {
-    if (db <= kFloorDb) return db <= kFaderSilenceDb + 1e-9 ? 0.0 : kSilence;
-    const double x = (std::min(db, kTopDb) - kFloorDb) / (kTopDb - kFloorDb);  // 0..1
-    return kSilence + (1.0 - kSilence) * x * x;
-}
+double faderPosition(double db) { return fader::position(db); }
 
-double faderDb(double position) {
-    if (position <= kSilence * 0.5) return kFaderSilenceDb;
-    if (position <= kSilence) return kFloorDb;
-    const double x = std::sqrt((std::min(position, 1.0) - kSilence) / (1.0 - kSilence));
-    return kFloorDb + x * (kTopDb - kFloorDb);
-}
+double faderDb(double position) { return fader::db(position); }
 
 // ----------------------------------------------------------------- Fader
 
