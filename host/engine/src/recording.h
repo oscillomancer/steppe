@@ -55,7 +55,9 @@ struct RecordingInfo {
     std::string hash = {};  // optional; finalized by the background recording job
 };
 // A track's device input after its input FX (ADR-0014): what it records
-// instead of the raw device channels, and the latency of those FX.
+// instead of the raw device channels, and the latency of those FX. For a
+// recorded master (ADR-0057), its output before its own items; the recorder
+// places it from the target's outputShift and ignores `latency`.
 struct ProcessedInput {
     model::Id track;
     const float* channels[2] = {nullptr, nullptr};
@@ -99,8 +101,10 @@ class Recorder {
         Status writeError = okStatus();  // writer thread, then finish after join
         Status sidecarError = okStatus();
         Status firstError = okStatus();
-        // Input FX latency (set at the first frame): `skip` frames still to
-        // drop, `shift` how far the file runs behind the captured frames.
+        // Input FX latency (set at the first frame), or a master's offset
+        // (set at construction, ADR-0057): `skip` frames still to drop,
+        // `shift` how far the file runs behind the captured frames (ahead of
+        // them when negative: the start is padded with silence).
         std::int64_t skip = 0, shift = 0;
     };
     // MIDI: events stamped with the captured-frame position they arrived at

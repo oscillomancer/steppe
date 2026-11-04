@@ -59,6 +59,20 @@ struct RecordTarget {
         int fromChannel = 0, toChannel = 0;
     };
     std::optional<Midi> midi;
+    // A master's output instead of device input (ADR-0057): two channels,
+    // the master's mix before its own items. startRecording sets
+    // `outputShift`, the master's timeline shift where that mix is produced.
+    bool output = false;
+    std::int64_t outputShift = 0;
+};
+
+// A master recording its output (ADR-0057): its own items do not play
+// within [startSeconds, endSeconds) (the punch range), or anywhere when
+// `everywhere`, so what is heard there is what is recorded.
+struct RecordingMaster {
+    model::Id master;
+    bool everywhere = true;
+    double startSeconds = 0, endSeconds = 0;
 };
 
 // A recorded MIDI message, where it was heard, and in which run (loop pass).
@@ -420,6 +434,11 @@ class Engine {
     std::uint64_t anticipationMisses() const { return misses_.load(); }
     // Recording (main thread): capture starts with the first played cycle,
     // placed where the performer heard it (device and plan latency).
+    // Main thread: masters recording their output (ADR-0057), for the plans
+    // the next load() builds. Their record taps stay while they are listed.
+    void setRecordingMasters(std::vector<RecordingMaster> masters) {
+        recordingMasters_ = std::move(masters);
+    }
     Status startRecording(std::vector<RecordTarget> targets);
     // Also retrieves takes finalized by stop(), once, after the device stopped.
     Result<std::vector<RecordedTake>> stopRecording();
@@ -545,7 +564,8 @@ class Engine {
     struct Pulled {
         std::int64_t first;
         std::uint32_t frames;
-        bool wrapped;  // stopped at a loop wrap (the rest is for the next pull)
+        std::int64_t stream;  // the stream position of the first frame played
+        bool wrapped;         // stopped at a loop wrap (the rest is for the next pull)
     };
     Pulled pullAhead(float* const* out, std::uint32_t frames) SUPPLE_RT;
     static constexpr std::int64_t kNothingPlayed = INT64_MIN;
@@ -764,7 +784,8 @@ class Engine {
     // odd while a callback runs (seq_cst with recorder_, so stopRecording
     // knows when no callback can still hold the recorder).
     std::unique_ptr<detail::Recorder> recorderOwned_;
-    std::vector<RecordedTake> stoppedTakes_;  // main thread; retained until stopRecording()
+    std::vector<RecordedTake> stoppedTakes_;         // main thread; retained until stopRecording()
+    std::vector<RecordingMaster> recordingMasters_;  // main thread (ADR-0057)
     std::atomic<detail::Recorder*> recorder_{nullptr};
     std::atomic<std::uint64_t> cycleSeq_{0};
 };

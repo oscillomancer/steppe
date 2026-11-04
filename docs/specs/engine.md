@@ -402,7 +402,8 @@ path; Audio processing threads Limit 1 disables it on next start.
 
 1. Pick up a new plan if published (acknowledge epoch).
 2. Drain the model→RT command queue (transport, param events, meters on/off).
-3. Read hardware inputs into HwInput buffers; feed record rings.
+3. Read hardware inputs into HwInput buffers; feed record rings (and, for
+   recorded masters the renderer runs, pull their record rings, ADR-0057).
 4. Pull anticipative outputs from rings; fork/join the live DAG.
 5. Sum into the master, run the master chain (live if anything is live, else
    the master is anticipative too and the RT thread only copies its ring
@@ -721,6 +722,26 @@ first use, and no plug-in code runs early to warm it.
   survive pending hash jobs (including finalized loop runs at stop); the
   background finalization adds an optional `hash` without changing their
   recovery contract.
+- **Recording a master** (ADR-0057): an armed master records its output
+  before its own items (`RecordTarget::output`; two channels). Every armed
+  master, and every master still recording, has a record tap in the plan.
+  Where the callback runs the node (the in-callback engine, or a live master
+  in a split graph) the recorder takes the node's buffer; where the renderer
+  runs it, the renderer copies it each block into the plan's record ring
+  (epoch- and stream-tagged, published before that block's root or frontier
+  chunk) and the callback pulls the frames it plays, recording or not, so the
+  ring drains. Record rings count for the renderer's room, wake targets and
+  the split graph's priming like frontier rings. A frame produced at
+  processing position P belongs to timeline P − (S + chain) of that master;
+  `startRecording` reads that shift from the loaded plan, and the recorder
+  writes the master's frames (round trip − S − chain) frames later in its
+  file (earlier when negative), so all files of a recording start at the
+  same position and loop runs and punch apply unchanged. With no master items
+  in the span the take is bit-identical to `render.mix` of that master.
+  `Engine::setRecordingMasters` (before `load`) lists the masters recording
+  and their punch range: their items are silent there (a per-sample range
+  check on the items buffer) or, with punch off, left out of the plan.
+  `transport.record` sets it and reloads before starting; stop clears it.
 - **Backends** (ADR-0004): JACK (dlopen), dummy, offline in P4; buffer-size,
   sample-rate and device changes stop the engine cleanly, rebuild the plan,
   and restart; xruns are counted (backend callbacks + our own deadline

@@ -263,7 +263,8 @@ Result<ResolvedLane> paramLane(host::Instance& in, const std::string& param,
 }
 
 Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, std::uint32_t block,
-                     double rate, const std::vector<model::Id>* keepLive) {
+                     double rate, const std::vector<model::Id>* keepLive,
+                     std::span<const RecordingMaster> recording) {
     SUPPLE_TRY(model::validateFrozenState(s));
     Plan p;
     p.pool = &pool;
@@ -295,6 +296,20 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         n.master = t.type == model::StripType::Master;
         n.decodeInput = t.type != model::StripType::Channel;
         n.postItems = n.master;  // a master's items join after its plain stage (ADR-0057)
+        // A recorded master (armed, or still recording) and its items while it
+        // records: silent in the punch range, else everywhere (ADR-0057).
+        const auto recorded =
+            std::find_if(recording.begin(), recording.end(),
+                         [&](const RecordingMaster& r) { return r.master == n.id; });
+        if (n.master && (t.record.armed || recorded != recording.end()))
+            p.recordTaps.push_back({i, -1, {}});
+        n.dropItems =
+            n.master && (t.laneMute || (recorded != recording.end() && recorded->everywhere));
+        if (n.master && recorded != recording.end() && !recorded->everywhere) {
+            const auto origin = time::samplesAt(startSeconds, p.rate);
+            n.silentFrom = time::samplesAt(recorded->startSeconds, p.rate) - origin;
+            n.silentTo = time::samplesAt(recorded->endSeconds, p.rate) - origin;
+        }
         n.staticGain = n.master                          ? dbToGain(t.volumeDb)
                        : t.volumeDb <= model::kSilenceDb ? 0.0
                                                          : console9::faderGain(t.volumeDb);
@@ -399,7 +414,7 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         // Takes with FX or envelopes play through a chain of their own (gap log #22).
         for (const auto& e : s.items) {
             const model::Item& it = *e.value;
-            if (it.track != n.id || it.mute || !it.activeTake || t.laneMute) continue;
+            if (it.track != n.id || it.mute || !it.activeTake || n.dropItems) continue;
             const model::Take* take = s.takes.find(*it.activeTake);
             if (!take) continue;
             const bool enveloped =
@@ -898,6 +913,7 @@ Status prepare(Plan& p, const Session& s) {
         if (!n.vcas.empty()) n.auxPostGain.resize(block);
         if (n.postKeyed) n.postKey.init(block);
     }
+    for (RecordTap& tap : p.recordTaps) tap.pulled.init(block);
     // Parameter topology may have changed during main-thread servicing or
     // activation. Resolve from model points now, without touching a live plan.
     std::map<host::Instance*, json::Value> schemas;
@@ -1105,10 +1121,9 @@ Status prepare(Plan& p, const Session& s) {
             n.frozenAudio = *data;
             continue;
         }
-        const bool laneMuted = s.tracks.find(n.id)->laneMute;  // a master's prints (ADR-0057)
         for (const auto& e : s.items) {
             const model::Item& it = *e.value;
-            if (it.track != n.id || it.mute || !it.activeTake || laneMuted) continue;
+            if (it.track != n.id || it.mute || !it.activeTake || n.dropItems) continue;
             const model::Take* take = s.takes.find(*it.activeTake);
             if (!take || !take->source || take->source->kind != Kind::Media) continue;
             const model::MediaSource* src = s.media.find(*take->source);
@@ -2345,6 +2360,14 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
     // Takes with chains or envelopes: through their chains, into the sum.
     for (TakeChain& tc : node.takeChains)
         if (!processTake(p, node, tc, pos, n, transport, self)) return false;
+    // A recording master's items are silent in the punch range (ADR-0057).
+    if (postItems && node.silentTo > node.silentFrom)
+        for (std::uint32_t i = 0; i < n; ++i) {
+            const double at =
+                mappedAt(p, node.live, pos + i, node.itemShift) - double(node.itemShift);
+            if (at >= double(node.silentFrom) && at < double(node.silentTo))
+                node.items.l[i] = node.items.r[i] = 0.0f;
+        }
     // 2. Route this block's events to the note target. Notes still held at
     // a loop wrap end first, at the start of the block after it.
     for (Stage& st : node.chain) st.blockEvents.clear();

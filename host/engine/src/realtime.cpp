@@ -52,6 +52,17 @@ void pushMeters(MeterBank& bank, const detail::Plan& plan, const std::vector<std
     }
 }
 
+// Recorded masters the renderer runs (ADR-0057): the frames [stream, stream +
+// frames) of epoch `e` the callback is playing, from their record rings.
+// Called whenever the callback plays, recording or not, so the rings drain.
+void pullRecordTaps(detail::Plan& p, std::uint64_t e, std::int64_t stream,
+                    std::uint32_t frames) SUPPLE_RT {
+    for (detail::RecordTap& tap : p.recordTaps)
+        if (tap.ring >= 0)
+            p.recordRings[static_cast<std::size_t>(tap.ring)]->pullAt(
+                e, stream, tap.pulled.l.data(), tap.pulled.r.data(), frames);
+}
+
 }  // namespace
 
 std::uint64_t midiPortMask(const std::vector<std::string>& ports, std::string_view device) {
@@ -482,7 +493,7 @@ Status Engine::load(const model::Session& session, const std::filesystem::path& 
             options_.anticipative ? std::max(options_.renderBlock, config_.blockSize)
                                   : config_.blockSize,
             config_.sampleRate,  // the device's rate, whatever the project's
-            &keepLive);
+            &keepLive, recordingMasters_);
         if (!compiled) return std::move(compiled).error();
         auto built = std::make_unique<detail::Plan>(std::move(*compiled));
         built->projectDir = projectDir;
@@ -563,6 +574,22 @@ Status Engine::load(const model::Session& session, const std::filesystem::path& 
             plan->rateOutput =
                 std::make_unique<detail::ChunkRing>(chunks + 2, quantum, true, deviceOutputs_);
         }
+        // A recorded master the renderer runs reaches the callback through a
+        // record ring (ADR-0057).
+        for (detail::RecordTap& tap : plan->recordTaps)
+            if (!plan->split || !plan->nodes[tap.node].live) {
+                tap.ring = static_cast<int>(plan->recordRings.size());
+                plan->recordRings.push_back(
+                    std::make_unique<detail::ChunkRing>(chunks + 2, quantum));
+            }
+    }
+    // What the recorder takes for each recorded master: the node the callback
+    // runs, or what it pulled from the master's record ring.
+    for (detail::RecordTap& tap : plan->recordTaps) {
+        const detail::Stereo& from =
+            tap.ring >= 0 ? tap.pulled : detail::recordSignal(plan->nodes[tap.node]);
+        plan->processedInputs.push_back(
+            {plan->nodes[tap.node].id, {from.l.data(), from.r.data()}, 0});
     }
     outputLatency_ = static_cast<std::uint32_t>(plan->outputLatency);
     warnings_ = plan->warnings;
@@ -1622,7 +1649,7 @@ void Engine::addClicks(const detail::Plan& p, float* const* out, std::uint32_t o
 }
 
 Engine::Pulled Engine::pullAhead(float* const* out, std::uint32_t frames) SUPPLE_RT {
-    std::int64_t first = kNothingPlayed;
+    std::int64_t first = kNothingPlayed, firstStream = 0;
     const std::uint64_t e = rtEpoch_;  // anticipativeCycle took it with its loop
     if (options_.benchProbe && rtPrimed_ && wantNow() &&
         epochDone_.load(std::memory_order_acquire) == e)
@@ -1634,6 +1661,8 @@ Engine::Pulled Engine::pullAhead(float* const* out, std::uint32_t frames) SUPPLE
         ring.pop();
         rtOffset_ = 0;
     }
+    if (livePlan_)  // a recorded master's ring flushes with it (ADR-0057)
+        for (const auto& record : livePlan_->recordRings) record->dropBefore(e);
     std::uint32_t done = 0;
     while (done < frames) {
         const detail::Chunk* c = ring.front();
@@ -1644,9 +1673,12 @@ Engine::Pulled Engine::pullAhead(float* const* out, std::uint32_t frames) SUPPLE
             wrapped |=
                 clock.cycle(clock.phase(c->start + rtOffset_)) != clock.cycle(clock.phase(first));
         }
-        if (done > 0 && wrapped) return {first, done, true};
+        if (done > 0 && wrapped) return {first, done, firstStream, true};
         const std::uint32_t take = std::min(frames - done, c->frames - rtOffset_);
-        if (first == kNothingPlayed) first = c->start + rtOffset_;
+        if (first == kNothingPlayed) {
+            first = c->start + rtOffset_;
+            firstStream = c->stream + rtOffset_;
+        }
         for (std::uint32_t ch = 0; ch < deviceOutputs_; ++ch) {
             if (ch < c->width())
                 std::copy_n(c->channel(ch) + rtOffset_, take, out[ch] + done);
@@ -1685,7 +1717,7 @@ Engine::Pulled Engine::pullAhead(float* const* out, std::uint32_t frames) SUPPLE
             misses_.fetch_add(1, std::memory_order_relaxed);
     }
     if (done > 0) rtPrimed_ = true;
-    return {first, done, false};
+    return {first, done, firstStream, false};
 }
 
 // --- recording (ADR-0014) --------------------------------------------------------------------
@@ -1733,7 +1765,20 @@ Status Engine::startRecording(std::vector<RecordTarget> targets) {
     if (targets.empty())
         return Error("record.nothing_armed", "no track is armed with an input", {},
                      "use track.list for a channel id, then track.set {track, armed: true, "
-                     "record_input: [1, 2]}");
+                     "record_input: [1, 2]}, or arm a master to record its output");
+    // A master's output is placed by its own timeline shift (ADR-0057).
+    const detail::Plan* plan = latestPlan_.load(std::memory_order_acquire);
+    for (RecordTarget& t : targets) {
+        if (!t.output) continue;
+        const auto node = plan
+                              ? std::find_if(plan->nodes.begin(), plan->nodes.end(),
+                                             [&](const detail::Node& n) { return n.id == t.track; })
+                              : std::vector<detail::Node>::const_iterator{};
+        if (!plan || node == plan->nodes.end() || !node->master)
+            return Error("record.output", t.track.str() + " is not a master of the loaded plan",
+                         "/track", "arm a master (track.list, type master) and record again");
+        t.outputShift = node->itemShift;
+    }
     const BackendStatus b = backend_->status();
     const std::int64_t latency =
         static_cast<std::int64_t>(outputLatency_) + b.outputLatency + b.inputLatency;
@@ -1854,7 +1899,7 @@ std::chrono::steady_clock::time_point Engine::stoppedRenderDeadline(
 
 std::chrono::steady_clock::duration Engine::rendererSafetyTimeout() const {
     if (playing_ && plan_ && !hold_.load(std::memory_order_acquire) &&
-        (!plan_->split || !plan_->frontier.empty()))
+        (!plan_->split || plan_->feedsCallback()))
         return std::chrono::duration_cast<std::chrono::steady_clock::duration>(
             std::chrono::duration<double>(0.5 * static_cast<double>(aheadFrames_) /
                                           config_.sampleRate));
@@ -1863,7 +1908,7 @@ std::chrono::steady_clock::duration Engine::rendererSafetyTimeout() const {
 
 std::int64_t Engine::rendererSpaceTarget(std::uint64_t epoch) const {
     if (!playing_ || !plan_ || hold_.load(std::memory_order_acquire) ||
-        (plan_->split && plan_->frontier.empty()))
+        (plan_->split && !plan_->feedsCallback()))
         return INT64_MAX;
     // The horizon allows another whole render block once ahead < aheadFrames_.
     auto target = streamLocal_ - aheadFrames_ + 1;
@@ -1880,6 +1925,7 @@ std::int64_t Engine::rendererSpaceTarget(std::uint64_t epoch) const {
     } else {
         requireSlot(plan_->rateOutput ? *plan_->rateOutput : *ring_);
     }
+    for (const auto& ring : plan_->recordRings) requireSlot(*ring);  // ADR-0057
     return target;
 }
 
@@ -1889,8 +1935,10 @@ bool Engine::rendererHasRoom(std::uint64_t epoch) const {
     if (!playing_ || !plan_ || hold_.load(std::memory_order_acquire) ||
         streamLocal_ - played >= aheadFrames_)
         return false;
+    for (const auto& ring : plan_->recordRings)  // recorded masters (ADR-0057)
+        if (!ring->slot()) return false;
     if (plan_->split) {
-        if (plan_->frontier.empty()) return false;
+        if (!plan_->feedsCallback()) return false;
         for (const auto& ring : plan_->frontierRings)
             if (!ring->slot()) return false;
         return true;
@@ -1940,7 +1988,7 @@ void Engine::rendererLoop(std::uint64_t seen) {
         const auto event = rendererEvent_.load(std::memory_order_acquire);
         if (rendererQuit_.load(std::memory_order_acquire)) break;
         rendererWakeAt_.store(INT64_MAX);
-        if (playing_ && plan_ && plan_->split && plan_->frontier.empty()) {
+        if (playing_ && plan_ && plan_->split && !plan_->feedsCallback()) {
             // Everything is live: nothing to render. Stay one render-ahead
             // span past what the callback played, so that a plan giving the
             // renderer work takes over where it can still render ahead (the
@@ -2112,6 +2160,14 @@ void Engine::rendererLoop(std::uint64_t seen) {
                 }
             }
         };
+        // Recorded masters first (ADR-0057): the callback that sees this
+        // block's frontier or root chunk then finds their chunk too.
+        for (const detail::RecordTap& tap : plan_->recordTaps)
+            if (tap.ring >= 0) {
+                detail::ChunkRing& ring = *plan_->recordRings[static_cast<std::size_t>(tap.ring)];
+                fill(ring.slot(), detail::recordSignal(plan_->nodes[tap.node]));
+                ring.publish();
+            }
         if (plan_->split) {  // the frontier taps, for the callback's live nodes
             for (std::size_t j = 0; j < plan_->frontier.size(); ++j) {
                 const detail::Edge& e = plan_->edges[plan_->frontier[j]];
@@ -2244,6 +2300,8 @@ void Engine::anticipativeCycle(const float* const* in, float* const* out, std::u
             if (played.wrapped) k = played.frames;  // the rest continues at the loop start
             if (played.first != kNothingPlayed && livePlan_)
                 addClicks(*livePlan_, outAt.data(), 0, played.first, played.frames);
+            if (livePlan_ && played.first != kNothingPlayed)
+                pullRecordTaps(*livePlan_, e, played.stream, played.frames);
             // Only input that went with played audio is recorded; what came
             // during a dropout had no timeline position and counts as lost.
             if (detail::Recorder* r = recorder_.load()) {
@@ -2252,7 +2310,10 @@ void Engine::anticipativeCycle(const float* const* in, float* const* out, std::u
                         livePlan_ ? static_cast<std::int64_t>(
                                         std::llround(livePlan_->rateSample(played.first, true)))
                                   : played.first;
-                    r->capture(ins, inputs, played.frames, timeline);
+                    r->capture(ins, inputs, played.frames, timeline,
+                               livePlan_ ? std::span<const detail::ProcessedInput>(
+                                               livePlan_->processedInputs)
+                                         : std::span<const detail::ProcessedInput>());
                     r->captureMidi(midiSource_->midiInput(), midiBase + done, played.frames,
                                    timeline);
                     r->lose(k - played.frames);
@@ -2284,7 +2345,7 @@ std::uint32_t Engine::liveRender(const float* const* in, float* const* out, std:
     // The frontier: what the renderer made for this position. Before its
     // first chunk (pre-roll) time holds still; the monitored input is heard.
     bool playing = wantNow();
-    if (options_.benchProbe && playing && rtPrimed_ && !p.frontier.empty() &&
+    if (options_.benchProbe && playing && rtPrimed_ && p.feedsCallback() &&
         epochDone_.load(std::memory_order_acquire) == rtEpoch_)
         options_.benchProbe->observeAhead(renderedStream_.load(std::memory_order_acquire) -
                                           liveStream_);
@@ -2299,7 +2360,16 @@ std::uint32_t Engine::liveRender(const float* const* in, float* const* out, std:
         if (!playing) e.frontierBuf.clear(k);
         found = std::min(found, got);
     }
-    if (playing && !p.frontier.empty()) {
+    for (detail::RecordTap& tap : p.recordTaps) {  // recorded masters (ADR-0057)
+        if (tap.ring < 0) continue;
+        const std::uint32_t got =
+            playing ? p.recordRings[static_cast<std::size_t>(tap.ring)]->pullAt(
+                          rtEpoch_, liveStream_, tap.pulled.l.data(), tap.pulled.r.data(), k)
+                    : 0;
+        if (!playing) tap.pulled.clear(k);
+        found = std::min(found, got);
+    }
+    if (playing && p.feedsCallback()) {
         if (found > 0) {
             rtPrimed_ = true;
         } else if (!rtPrimed_) {
