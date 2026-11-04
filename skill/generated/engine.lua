@@ -1,5 +1,5 @@
 ---@meta
--- Steppe 0.5.0 scripting reference, generated from the command registry.
+-- Steppe 0.6.0 scripting reference, generated from the command registry.
 -- Do not edit: `<slug>-engine registry --lua` writes it, tools/gen/update-generated.sh regenerates it.
 -- The `q` table of a script (libs/lua-bus, ADR-0006): every command is a
 -- function, `q.run(name, args)` reaches any of them by name, `q.batch(label, body)`

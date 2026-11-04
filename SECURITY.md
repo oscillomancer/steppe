@@ -4,7 +4,7 @@
 
 Please report security problems privately, not in a public issue. On the
 repository's **Security** tab, choose **Report a vulnerability**
-(<https://github.com/oscillomancer/quire/security/advisories/new>). Only the
+(<https://github.com/oscillomancer/steppe/security/advisories/new>). Only the
 repository's maintainers see the report.
 
 Include what you can of:

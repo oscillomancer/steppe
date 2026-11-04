@@ -40,7 +40,7 @@ that exactly duplicates structuredContent is shown once.
     },
     "serverInfo": {
       "name": "steppe",
-      "version": "0.5.0"
+      "version": "0.6.0"
     }
   }
 }
@@ -1449,7 +1449,7 @@ that exactly duplicates structuredContent is shown once.
     },
     "serverInfo": {
       "name": "steppe",
-      "version": "0.5.0"
+      "version": "0.6.0"
     }
   }
 }

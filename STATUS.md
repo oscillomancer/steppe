@@ -4,7 +4,7 @@ Updated 2026-10-30. This file describes the present: what works, what is
 known not to, and what is planned. Keep it current with each change; the
 history is in git.
 
-Steppe 0.5.0 runs on Linux (X11 or XWayland, JACK through PipeWire or a JACK
+Steppe 0.6.0 runs on Linux (X11 or XWayland, JACK through PipeWire or a JACK
 server) and is used for real sessions. Full local CI (`tools/ci/run-all.sh`:
 license, format, dev, release, gcc, asan, tsan, rtsan) passes on
 `main`.

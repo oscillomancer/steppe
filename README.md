@@ -18,7 +18,7 @@ at once, and the agent measures and adjusts it while you listen. When it's
 done, it exports as a CLAP plugin for any other host. The stock plugins are
 written the same way.
 
-Steppe is pre-release (0.5.0). It is used for real work on its author's
+Steppe is pre-release (0.6.0). It is used for real work on its author's
 machine, but file formats and commands can still change.
 
 ## What it does
@@ -75,13 +75,15 @@ machine, but file formats and commands can still change.
 
 ## Installing
 
-Downloads for [0.5.0](https://github.com/oscillomancer/quire/releases/tag/v0.5.0), released under the old name, Quire:
+Downloads for [0.6.0](https://github.com/oscillomancer/steppe/releases/tag/v0.6.0):
 
 | Platform | Installer | Portable |
 | --- | --- | --- |
-| Linux (x86_64) | [quire-0.5.0-linux-x86_64.tar.xz](https://github.com/oscillomancer/quire/releases/download/v0.5.0/quire-0.5.0-linux-x86_64.tar.xz) (runs in place, or `./install.sh` for your user) | the same tarball |
-| macOS (Apple Silicon) | [quire-0.5.0-macos-arm64.dmg](https://github.com/oscillomancer/quire/releases/download/v0.5.0/quire-0.5.0-macos-arm64.dmg) | [zip](https://github.com/oscillomancer/quire/releases/download/v0.5.0/quire-0.5.0-macos-arm64.zip) |
-| Windows (x86_64) | [quire-0.5.0-windows-x86_64.exe](https://github.com/oscillomancer/quire/releases/download/v0.5.0/quire-0.5.0-windows-x86_64.exe) (per user, no admin) | [zip](https://github.com/oscillomancer/quire/releases/download/v0.5.0/quire-0.5.0-windows-x86_64.zip) |
+| Linux (x86_64) | [steppe-0.6.0-linux-x86_64.tar.xz](https://github.com/oscillomancer/steppe/releases/download/v0.6.0/steppe-0.6.0-linux-x86_64.tar.xz) (runs in place, or `./install.sh` for your user) | the same tarball |
+| macOS (Apple Silicon) | [steppe-0.6.0-macos-arm64.dmg](https://github.com/oscillomancer/steppe/releases/download/v0.6.0/steppe-0.6.0-macos-arm64.dmg) | [zip](https://github.com/oscillomancer/steppe/releases/download/v0.6.0/steppe-0.6.0-macos-arm64.zip) |
+| Windows (x86_64) | [steppe-0.6.0-windows-x86_64.exe](https://github.com/oscillomancer/steppe/releases/download/v0.6.0/steppe-0.6.0-windows-x86_64.exe) (per user, no admin) | [zip](https://github.com/oscillomancer/steppe/releases/download/v0.6.0/steppe-0.6.0-windows-x86_64.zip) |
+
+Releases up to 0.5.0 were published under the old name, Quire.
 
 The packages are unsigned. [Installing Steppe](docs/guides/installing.md)
 covers user-space installation, unsigned first-launch steps and optional stock
