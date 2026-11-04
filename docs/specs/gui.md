@@ -831,8 +831,25 @@ close this panel without quitting the app.
 
 One grid (`reaper-ux.md` addendum 2): sources (strips in hierarchy, hardware
 inputs, MIDI inputs) × destinations (parent, strips, plugin keys, hardware
-outputs); a cell creates/edits a route (tap, channels, level, pan/follow,
-mute, invert, mono); cells that `route.strip_type` would reject are drawn
+outputs). A click selects a cell, Ctrl+click toggles one, Shift+click takes
+the rectangle from the anchor (the last cell clicked); a click on a row's or
+column's name selects all of it (Ctrl adds it, or removes it when it is all
+selected; Shift takes the rows or columns from the last one clicked), and the
+corner or Ctrl+A every cell. The selection is kept by source, pair and
+destination across reloads. A double click on a cell without a send adds one
+(`route.add`; the parent's cell turns the parent send on or off). **Add**
+does that for every selected cell that can take one and **Remove** (also
+Delete) removes every selected cell's sends (the parent's: the parent send
+off), each one undo step. The controls act on every send in the selection,
+one undo step per edit: tap, a horizontal fader for the level and a pan
+control (the strip's own widgets; a drag moves each send by the same amount
+from where it began, silence staying silent, and a one-shot set gives all the
+same value; `route.set` with a gesture, so it records automation like the
+fader), channels (the choices of the anchor's send; each goes to the selected
+sends from the same source pair whose destinations have those channels),
+polarity and mute (on for all unless all are on). They show the anchor's
+send, else the first selected; with no send they are disabled and
+neutral. Cells that `route.strip_type` would reject are drawn
 disabled with the rule as their tooltip; record-input assignments appear in
 the same grid. A graph view (nodes and edges, PDC per node) is P1. Strips are listed in the
 views' order (`route.matrix`): each master's tree with a parent's channels

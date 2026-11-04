@@ -754,7 +754,7 @@ TEST_CASE("MIDI editor: the notation panel compiles live, writes back, and follo
     CHECK_FALSE(f.editor->isOpen());
 }
 
-TEST_CASE("routing matrix: rules shown, a click sends, the send edits and goes") {
+TEST_CASE("routing matrix: rules shown, a double click sends, the send edits and goes") {
     Fixture f;
     if (!f.ok) return;
     const std::string drums =
@@ -797,21 +797,26 @@ TEST_CASE("routing matrix: rules shown, a click sends, the send edits and goes")
     auto* grid = matrix.grid();
     REQUIRE(grid);
     f.snapshot("routing-open.png", &panel.root());
-    // A click on an allowed cell sends (one version) and selects the new send.
+    // A click on an allowed cell selects it; a double click there sends (one
+    // version) and the new send is the one the controls show.
     const auto v = f.app->head().version;
     REQUIRE(matrix.clickCell(row(keys), col(drums)));
+    CHECK(f.app->head().version == v);
+    CHECK(matrix.isSelected(row(keys), col(drums)));
+    REQUIRE(matrix.doubleClickCell(row(keys), col(drums)));
     CHECK(f.app->head().version == v + 1);
     REQUIRE(matrix.selectedSend());
     CHECK(m.sendsAt(row(keys), col(drums)).size() == 1);
-    // A blocked click changes nothing.
-    CHECK_FALSE(matrix.clickCell(row(drums), col(verb)));
+    // A blocked double click changes nothing.
+    CHECK_FALSE(matrix.doubleClickCell(row(drums), col(verb)));
     CHECK(f.app->head().version == v + 1);
-    // Edit the send: level with units, pre-fader, mute; then remove it.
-    panel.root().click("routing.volume");
-    panel.root().key(SDLK_A, ui::kCtrl);
-    panel.root().text("-6 dB");
-    panel.root().key(SDLK_RETURN, 0);
+    REQUIRE(matrix.clickCell(row(keys), col(drums)));
+    // Edit the send: the level (the fader's one-shot: a double click or the
+    // wheel), pre-fader, mute; then remove it.
+    REQUIRE(matrix.volumeControl());
+    matrix.volumeControl()->onChange(-6.0, ui::Gesture::Set);
     CHECK(m.sendsAt(row(keys), col(drums)).front()->volumeDb == doctest::Approx(-6.0));
+    CHECK(panel.root().find("routing.volume.value")->valueText() == "-6.0 dB");
     REQUIRE(panel.root().click("routing.tap.pre"));
     CHECK(m.sendsAt(row(keys), col(drums)).front()->tap == "pre_fader");
     REQUIRE(panel.root().click("routing.mute"));
@@ -852,14 +857,110 @@ TEST_CASE("routing matrix: rules shown, a click sends, the send edits and goes")
     f.exec("route.add", R"({"from":")" + keys + R"(","to":")" + verb + R"("})");
     matrix.sync();
     CHECK(m.sendsAt(row(keys), col(verb)).size() == 1);
-    // The parent's cell toggles the parent send.
-    REQUIRE(matrix.clickCell(row(keys), col("tr_0")));
+    // A double click on the parent's cell toggles the parent send.
+    REQUIRE(matrix.doubleClickCell(row(keys), col("tr_0")));
     CHECK_FALSE(f.app->head().tracks.find(*model::Id::parse(keys))->parentSend.enabled);
-    REQUIRE(matrix.clickCell(row(keys), col("tr_0")));
+    REQUIRE(matrix.doubleClickCell(row(keys), col("tr_0")));
     CHECK(f.app->head().tracks.find(*model::Id::parse(keys))->parentSend.enabled);
     REQUIRE(panel.root().click("routing.close"));
     CHECK_FALSE(matrix.isOpen());
     CHECK(panel.root().focused() == nullptr);
+}
+
+TEST_CASE(
+    "routing matrix: cells select by click, Ctrl, Shift, row and column; controls act on all") {
+    Fixture f;
+    if (!f.ok) return;
+    const std::string drums =
+        f.exec("track.add", R"({"type":"buss","name":"Drums"})")["track"].asString();
+    const std::string verb =
+        f.exec("track.add", R"({"type":"buss","name":"Verb"})")["track"].asString();
+    gui::FloatingPanel panel(*f.platform, *f.window, *f.root, SUPPLE_GUI_FONTS_DIR, "Panel", 860,
+                             560, 800, 360);
+    gui::RoutingMatrix matrix(panel, *f.actions, *f.dispatcher, *f.app);
+    matrix.open();
+    panel.root().frame(false);
+    const auto& m = matrix.model();
+    auto row = [&](const std::string& id) {
+        for (std::size_t i = 0; i < m.sources.size(); ++i)
+            if (m.sources[i].id == id) return i;
+        FAIL("no source " << id);
+        return std::size_t{0};
+    };
+    auto col = [&](const std::string& id) {
+        for (std::size_t i = 0; i < m.destinations.size(); ++i)
+            if (m.destinations[i].id == id) return i;
+        FAIL("no destination " << id);
+        return std::size_t{0};
+    };
+    std::string keys;
+    for (const auto& s : m.sources)
+        if (s.name == "Keys") keys = s.id;
+    REQUIRE_FALSE(keys.empty());
+    auto steps = [&] { return f.exec("history.list", "{}")["versions"].size(); };
+    // Through the grid: a click selects, a double click sends.
+    auto* grid = matrix.grid();
+    REQUIRE(grid);
+    const ui::Point at{grid->bounds().x + 190 + (static_cast<float>(col(drums)) + 0.5f) * 22,
+                       grid->bounds().y + 112 + (static_cast<float>(row(keys)) + 0.5f) * 22};
+    auto before = steps();
+    panel.root().pointer({ui::PointerEvent::Type::Down, at, 1});
+    panel.root().pointer({ui::PointerEvent::Type::Up, at, 1});
+    CHECK(steps() == before);
+    CHECK(matrix.selectedCells() == 1);
+    panel.root().pointer({ui::PointerEvent::Type::Down, at, 1, 2});
+    panel.root().pointer({ui::PointerEvent::Type::Up, at, 1, 2});
+    CHECK(steps() == before + 1);
+    CHECK(m.sendsAt(row(keys), col(drums)).size() == 1);
+    // Add, over a cell and Ctrl+click another: the one without a send gets one.
+    REQUIRE(matrix.clickCell(row(keys), col(verb), ui::kCtrl));
+    CHECK(matrix.selectedCells() == 2);
+    before = steps();
+    REQUIRE(panel.root().click("routing.add"));
+    CHECK(steps() == before + 1);
+    REQUIRE(m.sendsAt(row(keys), col(verb)).size() == 1);
+    CHECK(matrix.selectedSends().size() == 2);
+    // A level drag moves both by the same dB (one undo step); the shown send
+    // is the last one clicked.
+    f.exec("route.set",
+           R"({"route":")" + m.sendsAt(row(keys), col(verb)).front()->id + R"(","volume_db":-3})");
+    matrix.sync();
+    auto* fader = matrix.volumeControl();
+    before = steps();
+    fader->onChange(-3, ui::Gesture::Begin);
+    fader->onChange(-6, ui::Gesture::Move);
+    fader->onChange(-9, ui::Gesture::Move);
+    fader->onChange(-9, ui::Gesture::End);
+    CHECK(steps() == before + 1);
+    CHECK(m.sendsAt(row(keys), col(verb)).front()->volumeDb == doctest::Approx(-9.0));
+    CHECK(m.sendsAt(row(keys), col(drums)).front()->volumeDb == doctest::Approx(-6.0));
+    // Pan and mute go to both.
+    matrix.panControl()->onChange(-40, ui::Gesture::Set);
+    REQUIRE(panel.root().click("routing.mute"));
+    for (const std::string& to : {drums, verb}) {
+        CHECK(m.sendsAt(row(keys), col(to)).front()->pan == doctest::Approx(-40.0));
+        CHECK(m.sendsAt(row(keys), col(to)).front()->mute);
+    }
+    // Shift+click: the rectangle from the anchor. A row's name: all of it.
+    REQUIRE(matrix.clickCell(row(drums), col(drums)));
+    REQUIRE(matrix.clickCell(row(verb), col(verb), ui::kShift));
+    CHECK(matrix.selectedCells() == 4);
+    matrix.clickRow(row(keys));
+    CHECK(matrix.selectedCells() == m.destinations.size());
+    CHECK(matrix.selectedSends().size() == 2);
+    matrix.clickColumn(col(drums), ui::kCtrl);
+    CHECK(matrix.isSelected(row(verb), col(drums)));
+    matrix.selectAll();
+    CHECK(matrix.selectedCells() == m.sources.size() * m.destinations.size());
+    // Remove over the keys row: both sends, and its parent send, in one step.
+    matrix.clickRow(row(keys));
+    before = steps();
+    REQUIRE(panel.root().click("routing.remove"));
+    CHECK(steps() == before + 1);
+    CHECK(m.sendsAt(row(keys), col(drums)).empty());
+    CHECK(m.sendsAt(row(keys), col(verb)).empty());
+    CHECK_FALSE(f.app->head().tracks.find(*model::Id::parse(keys))->parentSend.enabled);
+    f.snapshot("routing-selection.png", &panel.root());
 }
 
 TEST_CASE("routing matrix: a multi-out instrument's outputs get rows that send them (ADR-0021)") {
@@ -888,9 +989,9 @@ TEST_CASE("routing matrix: a multi-out instrument's outputs get rows that send t
     for (std::size_t i = 0; i < m.destinations.size(); ++i)
         if (m.destinations[i].id == kick) col = i;
     REQUIRE(col < m.destinations.size());
-    // A click on the Kick row sends 3/4 to the buss's main pair; its cell
-    // alone shows it.
-    REQUIRE(matrix.clickCell(main + 1, col));
+    // A double click on the Kick row sends 3/4 to the buss's main pair; its
+    // cell alone shows it.
+    REQUIRE(matrix.doubleClickCell(main + 1, col));
     CHECK(m.sendsAt(main + 1, col).size() == 1);
     CHECK(m.sendsAt(main, col).empty());
     CHECK(m.sendsAt(main + 2, col).empty());
@@ -902,7 +1003,7 @@ TEST_CASE("routing matrix: a multi-out instrument's outputs get rows that send t
     // An auxiliary pair's send leaves room for the main pair's (and a send drag's).
     const auto drumsId = *model::Id::parse(drums), kickId = *model::Id::parse(kick);
     CHECK_FALSE(model::sendsTo(f.app->head(), drumsId, kickId));
-    REQUIRE(matrix.clickCell(main, col));
+    REQUIRE(matrix.doubleClickCell(main, col));
     CHECK(m.sendsAt(main, col).size() == 1);
     CHECK(model::sendsTo(f.app->head(), drumsId, kickId));
     CHECK(f.app->head().routes.size() == 2);

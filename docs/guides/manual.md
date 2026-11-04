@@ -246,6 +246,30 @@ If another edit changes an automation item's amplitude, baseline or geometry
 while you drag its points, header or edge, the drag is cancelled with a message.
 Start the drag again using the updated item.
 
+## Routing
+
+**View > Routing matrix**, or a strip's **out** button, opens a grid of what
+feeds what: a row per strip (and per output pair of a multi-out instrument),
+a column per destination. A square with a dot is a send; a crossed-out square
+is not allowed, and hovering it says why.
+
+Click a square to select it. Ctrl+click adds or removes squares, Shift+click
+selects the rectangle from the last square you clicked, and clicking a row's
+or column's name selects all of it (Ctrl and Shift work there too). Click the
+empty corner above the row names, or press Ctrl+A, to select every square.
+
+Double-click a square to put a send there. **Add** puts a send on every
+selected square that can have one, and **Remove** (or Delete) removes the
+sends on every selected square. On a strip's parent square these turn the
+parent send on and off.
+
+Every control under the grid acts on all the sends you have selected: the
+tap (Post, Pre, Pre-FX), the level fader, the pan control, the channels menu,
+polarity and mute. Dragging the fader or pan moves every selected send by the
+same amount, in one undo step; a double click resets them. The controls show
+the send on the square you clicked last. Send moves are recorded into the
+send's envelopes like the track fader's (see Automation).
+
 ## Plugins
 
 Quire hosts CLAP and VST3 plugins. It looks for them in this order:

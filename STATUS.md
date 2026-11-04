@@ -167,7 +167,10 @@ instructions are in `docs/guides/installing.md`.
   key deactivates a plug-in's key port or bus, so it can key from its own
   input); up to 128
   channels per strip with plugin pins and multi-output instruments; strip
-  polarity and mono; the routing matrix. Several masters, each playing to
+  polarity and mono; the routing matrix (cells selected by click, Ctrl,
+  Shift, row, column or all; a double click or Add sends; every control,
+  the level fader and pan included, acts on the selection; sends' envelopes
+  under their strip). Several masters, each playing to
   its own device outputs (a pair, one mono output or none; ADR-0056), in
   step with each other, picked from the master strip's out button; the
   engine opens every output of the device (up to 64).
