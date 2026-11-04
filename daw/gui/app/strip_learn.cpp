@@ -16,11 +16,24 @@ namespace {
 const cmd::Origin kOrigin{cmd::Origin::Type::Ui, "gui", {}};
 
 bool isRoute(const model::Id& id) { return id.kind == model::Kind::Route; }
+bool isVca(const model::Id& id) { return id.kind == model::Kind::Group; }
+
+// The commands' prefix (track.learn.set) and the argument naming the object.
+std::string prefixOf(const model::Id& id) {
+    return isRoute(id) ? "route" : isVca(id) ? "vca" : "track";
+}
+std::string keyOf(const model::Id& id) {
+    return isRoute(id) ? "route" : isVca(id) ? "group" : "track";
+}
 
 const std::vector<model::ControlLearn>* learnOf(const model::Session& s, const model::Id& id) {
     if (isRoute(id)) {
         const model::Route* r = s.routes.find(id);
         return r ? &r->learn : nullptr;
+    }
+    if (isVca(id)) {
+        const model::TrackGroup* g = s.groups.find(id);
+        return g && g->vca ? &g->vca->learn : nullptr;
     }
     const model::Track* t = s.tracks.find(id);
     return t ? &t->learn : nullptr;
@@ -40,11 +53,15 @@ std::string trackName(const model::Session& s, const std::optional<model::Id>& i
     return t->name.empty() ? std::string(model::stripTypeName(t->type)) : t->name;
 }
 
-// "Bass", "Bass → Verb", or "3 sends".
+// "Bass", "Bass → Verb", "Drums VCA", or "3 sends".
 std::string ownerName(const model::Session& s, const std::vector<model::Id>& objects) {
     if (objects.size() > 1)
         return std::to_string(objects.size()) + (isRoute(objects.front()) ? " sends" : " tracks");
     const model::Id& id = objects.front();
+    if (isVca(id)) {
+        const model::TrackGroup* g = s.groups.find(id);
+        return (g && !g->name.empty() ? g->name + " " : std::string()) + "VCA";
+    }
     if (!isRoute(id)) return trackName(s, id);
     const model::Route* r = s.routes.find(id);
     if (!r) return id.str();
@@ -95,15 +112,14 @@ void openStripLearn(ui::Root& root, AppActions& actions, StripControl control) {
         const auto r =
             a->dispatcher().transact("MIDI learn", kOrigin, [&]() -> Result<json::Value> {
                 for (const model::Id& id : control.objects) {
-                    const std::string key = isRoute(id) ? "route" : "track";
                     json::Value args = json::Value::object();
-                    args[key] = id.str();
+                    args[keyOf(id)] = id.str();
                     args["param"] = control.param;
                     args["midi"] = model::midiControlSchema().encode(choice.control);
                     args["mode"] = std::string(engine::modeName(choice.mode));
                     if (continuous(control.param)) args["soft_takeover"] = choice.softTakeover;
-                    SUPPLE_TRY(
-                        a->dispatcher().execute({key + ".learn.set", std::move(args), kOrigin}));
+                    SUPPLE_TRY(a->dispatcher().execute(
+                        {prefixOf(id) + ".learn.set", std::move(args), kOrigin}));
                 }
                 return json::Value::object();
             });
@@ -115,12 +131,11 @@ void openStripLearn(ui::Root& root, AppActions& actions, StripControl control) {
             a->dispatcher().transact("Remove MIDI learn", kOrigin, [&]() -> Result<json::Value> {
                 for (const model::Id& id : control.objects) {
                     if (!bindingOf(now, id, control.param)) continue;
-                    const std::string key = isRoute(id) ? "route" : "track";
                     json::Value args = json::Value::object();
-                    args[key] = id.str();
+                    args[keyOf(id)] = id.str();
                     args["param"] = control.param;
-                    SUPPLE_TRY(
-                        a->dispatcher().execute({key + ".learn.remove", std::move(args), kOrigin}));
+                    SUPPLE_TRY(a->dispatcher().execute(
+                        {prefixOf(id) + ".learn.remove", std::move(args), kOrigin}));
                 }
                 return json::Value::object();
             });

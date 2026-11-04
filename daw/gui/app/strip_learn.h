@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
-// MIDI learn on a strip's or a send's own controls (gui.md §4.5, ADR-0058):
-// a right-click on a track's fader, pan or button (the TCP, the mixer) or on
-// a control of the routing matrix offers "MIDI learn…", which opens the learn
-// dialog. The binding is the project's (track/route `learn`), undoable.
+// MIDI learn on a strip's, a send's or a VCA's own controls (gui.md §4.5,
+// ADR-0058): a right-click on a track's fader, pan or button (the TCP, the
+// mixer), on a VCA's fader, mute or solo (the mixer) or on a control of the
+// routing matrix offers "MIDI learn…", which opens the learn dialog. The
+// binding is the project's (track/route/vca `learn`), undoable.
 #pragma once
 
 #include <string>
@@ -16,8 +17,9 @@
 
 namespace supple::gui {
 
-// The control to bind: tracks or sends (bound alike: the matrix binds every
-// selected send), and the control as track/route `learn` names it.
+// The control to bind: tracks, sends or VCAs (their groups' ids; bound alike:
+// the matrix binds every selected send), and the control as their `learn`
+// names it.
 struct StripControl {
     std::vector<model::Id> objects;
     std::string param;  // volume, pan, mute, solo, … ; tap:pre_fader on a send

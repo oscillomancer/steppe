@@ -792,10 +792,11 @@ control moved last (kind, number, channel, input), offers the CC mode
 when the effect's track (or a take FX's item) is selected, when its FX window
 or editor has the focus, or when one of them shows, and soft takeover; OK
 binds through `fx.learn.set`, Remove (when bound) through `fx.learn.remove`.
-The same dialog learns a strip's or a send's own control (ADR-0058, from the
-control's right-click menu, §4.2, §4.4, §4.6): it offers soft takeover for a
-level or pan, and a button's CC mode starts at toggle; OK binds every target
-in one undo step (`track.learn.set` / `route.learn.set`), Remove frees them.
+The same dialog learns a strip's, a send's or a VCA's own control (ADR-0058,
+from the control's right-click menu, §4.2, §4.4, §4.6): it offers soft
+takeover for a level or pan, and a button's CC mode starts at toggle; OK binds
+every target in one undo step (`track.learn.set` / `route.learn.set` /
+`vca.learn.set`), Remove frees them.
 MIDI learn is one app-wide session across roots: opening another dialog closes
 the first and its nested menus. Owner tokens prevent deferred destruction of
 an old dialog from disabling the new listener. While the dialog is open
@@ -1541,6 +1542,8 @@ including selection and matched-span item edits, but leaves VCA sound active.
 A group's optional VCA appears after audio strips and before pinned masters in
 the existing mixer. It has a name/color, member count/menu, envelope button,
 fader, mute and solo; it has no audio meter, pan, inserts, inputs or routing.
+A right-click on its fader, mute or solo offers that control's MIDI learn
+(§4.5, `vca.learn.set`, ADR-0058); elsewhere on the strip, the group's menu.
 Members' fader handles continue to show their own levels. VCA volume/mute
 lanes use the normal arrange automation editor and appear before the audio
 track lanes. Nested VCA membership is available through typed commands.

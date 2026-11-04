@@ -323,8 +323,9 @@ instructions are in `docs/guides/installing.md`.
   bindings in `controls.json`. Every track's fader, pan and buttons (mute,
   solo, polarity, mono, arm, monitoring, a master's lane mute) and every
   send's level, pan, mute, polarity and taps learn their own controller from
-  a right-click (TCP, mixer, routing matrix; ADR-0058), saved with the
-  project (`track.learn.*`, `route.learn.*` for agents). "(MIDI CC)" actions
+  a right-click (TCP, mixer, routing matrix; ADR-0058), and so do VCA
+  faders, mutes and solos in the mixer, saved with the project
+  (`track.learn.*`, `route.learn.*`, `vca.learn.*` for agents). "(MIDI CC)" actions
   drive the selected tracks' volume and pan, the master's volume, the master
   playrate, a beat jog, the last touched send and the last touched plug-in
   parameter; the learn dialog warns when a knob is learned for an action that
@@ -768,8 +769,8 @@ Engine and hosting:
   this will be addressed with Windows MIDI Services once its App SDK is released
   for production (ADR-0042).
   No direct PipeWire/ALSA backend or MIDI outputs.
-- MIDI learn has no OSC, no "arm envelope" option, and no learn on VCA faders
-  or the routing matrix's channels menu. The last
+- MIDI learn has no OSC, no "arm envelope" option, and no learn on the
+  routing matrix's channels menu. The last
   touched parameter misses edits in plug-in editors that report no gestures
   or outputs. Every MIDI input is heard as a control;
   there is no per-device "control only" setting.

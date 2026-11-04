@@ -1689,3 +1689,42 @@ TEST_CASE("mixer: a right-click on a fader or button offers MIDI learn, elsewher
     CHECK_FALSE(f.root->find("strip.learn.menu"));
     CHECK(f.root->popupOpen());  // the track's menu
 }
+
+TEST_CASE("mixer: a right-click on a VCA's fader learns MIDI for it, elsewhere the group menu") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto a = f.addTrack("channel", "A");
+    f.exec("group.add", R"({"name":"Drums","members":[")" + a + R"("]})");
+    f.exec("vca.add", R"({"group":"gr_1"})");
+    f.refresh();
+    const auto open = [&](ui::Point p) {
+        f.pointer(ui::PointerEvent::Type::Down, p, 1, 0, 3);
+        f.pointer(ui::PointerEvent::Type::Up, p, 1, 0, 3);
+    };
+    open(f.centre(f.node("mixer.vca.fader.gr_1")));
+    ui::Node* menu = f.root->find("strip.learn.menu");
+    REQUIRE(menu);
+    CHECK(ui::menuItems(*menu)[0].label == "MIDI learn: Volume…");
+    // The entry opens the learn dialog; a moved control and OK bind it.
+    const ui::Point p{menu->bounds().x + 40, menu->bounds().y + 13};
+    f.pointer(ui::PointerEvent::Type::Move, p);
+    f.pointer(ui::PointerEvent::Type::Down, p);
+    f.pointer(ui::PointerEvent::Type::Up, p);
+    REQUIRE(f.root->find("learn"));
+    engine::EngineApp::ControlEvent e;
+    e.midi.bytes[0] = 0xb0;
+    e.midi.bytes[1] = 9;
+    e.midi.bytes[2] = 127;
+    f.actions->control({e});
+    REQUIRE(f.root->click("learn.ok"));
+    const model::Session s = f.app->head();
+    const auto& learn = s.groups.find(*model::Id::parse("gr_1"))->vca->learn;
+    REQUIRE(learn.size() == 1);
+    CHECK(learn[0].param == "volume");
+    CHECK(learn[0].control.number == 9);
+    CHECK(f.errors.empty());
+
+    open(f.centre(f.node("mixer.vca.name.gr_1")));
+    CHECK_FALSE(f.root->find("strip.learn.menu"));
+    CHECK(f.root->popupOpen());  // the group's menu
+}

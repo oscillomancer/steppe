@@ -1141,9 +1141,15 @@ void Mixer::rebuild() {
         Strip st;
         st.track = tid;
         st.type = "vca";
-        auto frame = std::make_unique<StripFrame>(
-            "mixer.vca." + tid, "buss",
-            [this, gid](ui::Point p) { trackMenu_.openGroup(gid, {}, {p.x, p.y, 1, 1}); });
+        auto frame =
+            std::make_unique<StripFrame>("mixer.vca." + tid, "buss", [this, gid](ui::Point p) {
+                // On the fader, mute or solo: its MIDI learn (ADR-0058).
+                if (const char* param = learnableAt(gid.str(), p)) {
+                    openStripLearnMenu(root_, actions_, {{gid}, param}, {p.x, p.y, 1, 1});
+                    return;
+                }
+                trackMenu_.openGroup(gid, {}, {p.x, p.y, 1, 1});
+            });
         st.node = frame.get();
         frame->emplace<ui::Label>("mixer.vca.name." + tid, e.value->name, ui::Font::UiBold, "small",
                                   "ink");
@@ -1203,6 +1209,13 @@ const char* Mixer::learnableAt(const std::string& track, ui::Point p) const {
             {st.fader, "volume"}, {st.pan, "pan"},        {st.mute, "mute"},
             {st.solo, "solo"},    {st.arm, "armed"},      {st.polarity, "phase_invert"},
             {st.mono, "mono"},    {st.monitor, "monitor"}};
+        for (const auto& [node, param] : controls)
+            if (node && node->visible && node->bounds().contains(p)) return param;
+    }
+    for (const Strip& st : vcaStrips_) {
+        if (st.track != track) continue;
+        const std::pair<const ui::Node*, const char*> controls[] = {
+            {st.fader, "volume"}, {st.mute, "mute"}, {st.solo, "solo"}};
         for (const auto& [node, param] : controls)
             if (node && node->visible && node->bounds().contains(p)) return param;
     }

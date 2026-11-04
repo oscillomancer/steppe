@@ -281,8 +281,9 @@ Right-click a track's fader, pan, mute, solo, polarity, mono, arm or
 monitoring button, in the track list or the mixer, and choose **MIDI learn**.
 Move the knob, fader or button on your controller, then click OK. Each track
 can have its own knobs, so a controller with eight faders can drive eight
-tracks. The same works in the routing matrix: right-click the level, pan,
-mute, polarity or a tap button to bind it on every selected send.
+tracks. A VCA's fader, mute and solo in the mixer learn the same way. The
+same works in the routing matrix: right-click the level, pan, mute, polarity
+or a tap button to bind it on every selected send.
 
 These bindings are saved with the project and undo like any other edit. The
 menu shows what a control is bound to ("CC 7 · ch 1"); open the dialog again
