@@ -1393,6 +1393,7 @@ q = nil
 ---@field timebase? "project"|"time"|"beats"|"beats_position" What this channel's items follow when the tempo changes (those that inherit it): project, beats, time or beats_position; they keep their place now
 ---@field channels? integer 1-2: the strip's main pair; up to 128 adds auxiliary channels 3-128 for routes and plug-in pins (a detector on 3/4, a multi-out instrument's outputs), outside the fader, pan and parent send
 ---@field hw_output? integer[] Masters: the device outputs the main pair plays to: [l, r], [mono] or [] for none (engine.inputs lists them). Default: tr_0 [1, 2], other masters []
+---@field lane_mute? boolean Masters: silence the master's own items (its prints) and nothing else
 
 ---@class Quire.track_template_delete_args
 ---@field name string
@@ -1843,7 +1844,7 @@ q = nil
 ---@field pause fun(): Quire.transport_pause_result Pause playback where it is (ends a recording).
 ---@field play fun(): Quire.transport_play_result Start playback from the current position.
 ---@field punch fun(args?: Quire.transport_punch_args): Quire.transport_punch_result Set or toggle the punch range: recordings keep only that range.
----@field record fun(): Quire.transport_record_result Play and record every armed track's input.
+---@field record fun(): Quire.transport_record_result Play and record every armed track's input or master's output.
 ---@field seek fun(args?: Quire.transport_seek_args): Quire.transport_seek_result Move the play position (one of seconds, beat or bar).
 ---@field stop fun(): Quire.transport_stop_result Stop playback and return to where it started (ends a recording).
 

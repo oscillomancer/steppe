@@ -1026,11 +1026,12 @@ void ArrangeView::show(const model::Session& session, const std::vector<model::C
     const bool timing = !before.tempo.sameStorage(session.tempo) ||
                         !before.meters.sameStorage(session.meters) ||
                         before.project->timebase != session.project->timebase;
-    std::set<model::Id> timebaseTracks, dirtyEnvelopes = envelopes;
+    std::set<model::Id> timebaseTracks, laneTracks, dirtyEnvelopes = envelopes;
     for (auto id : tracks) {
         const auto* old = before.tracks.find(id);
         const auto* now = session.tracks.find(id);
         if (old && now && old->timebase != now->timebase) timebaseTracks.insert(id);
+        if (old && now && old->laneMute != now->laneMute) laneTracks.insert(id);  // ADR-0057
     }
     // FX patch/parameter edits do not affect the TCP's chain badge.
     for (auto id : changedObjects(before.fx, session.fx, changes)) {
@@ -1079,9 +1080,10 @@ void ArrangeView::show(const model::Session& session, const std::vector<model::C
         ruler_->invalidate();
     } else {
         lanes_->updateIndex(before, items, timebaseTracks);
-        for (auto track : timebaseTracks)
-            if (auto row = layout_.indexOf(track))
-                lanes_->invalidate(lanes_->rowRect(*row).intersect(lanes_->bounds()));
+        for (const auto* set : {&timebaseTracks, &laneTracks})
+            for (auto track : *set)
+                if (auto row = layout_.indexOf(track))
+                    lanes_->invalidate(lanes_->rowRect(*row).intersect(lanes_->bounds()));
         // Clear both the old and the new footprint (moves, deletion, undo).
         for (auto id : items)
             for (const auto* snapshot : {&before, &session}) {

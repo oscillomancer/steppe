@@ -127,6 +127,15 @@ master; other master ids select independent mixes. Channels cannot receive
 other strips or have children. Audio sends target busses or masters; keys may
 target a plug-in on any strip.
 
+A master can print its mix in real time: `track.set {track: "tr_0", armed:
+true}`, then `transport.record`. The take is the master's output after its
+fader, before its own items, and lands as an item on the master. A master's
+items (audio only) play after its fader and FX, beside the live mix, so a
+fresh print doubles it: `track.set {track, lane_mute: true}` silences the
+master's items alone. While a master records, its items are silent in the
+punch range (everywhere without punch), so an old print never reaches the new
+one. `render.mix` includes them; stems of channels and busses do not.
+
 The implicit summing stages use **Airwindows Console 9, by Chris Johnson**.
 Channels encode after inserts; busses decode their input sum before inserts
 and re-encode after their fader; masters decode before their insert chain and

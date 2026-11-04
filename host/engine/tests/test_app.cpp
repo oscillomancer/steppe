@@ -608,6 +608,76 @@ TEST_CASE("an LLM records a take over the bus, hears it back and undoes it") {
     CHECK(app->head().items.size() == 0);
 }
 
+TEST_CASE("an LLM prints the mix onto the master over the bus (ADR-0057)") {
+    Root root;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    auto app = makeApp(root.path);
+    cmd::Dispatcher d(registry, *app);
+    auto call = [&](std::string command, std::string_view args) {
+        return d.execute({std::move(command), j(args), kTest});
+    };
+    auto ok = [&](std::string command, std::string_view args) {
+        auto r = call(std::move(command), args);
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        return *r;
+    };
+    ok("batch", R"({"steps": [
+        {"command": "track.add", "args": {"name": "Pad"}, "as": "t"},
+        {"command": "fx.add", "args": {"track": "${t.track}", "plugin": "Test Sine"}},
+        {"command": "item.add", "args": {"track": "${t.track}", "bar": 1, "notation": "voice pad; 1: C4:w"}},
+        {"command": "track.set", "args": {"track": "tr_0", "armed": true}}]})");
+    // A master records its output; inputs, monitoring and MIDI stay on channels.
+    for (auto [args, path] : {std::pair{R"({"track": "tr_0", "monitor": "on"})", "/track"},
+                              std::pair{R"({"track": "tr_0", "record_input": [1]})", "/track"},
+                              std::pair{R"({"track": "tr_1", "lane_mute": true})", "/lane_mute"}}) {
+        auto refused = call("track.set", args);
+        REQUIRE_FALSE(refused);
+        CHECK(refused.error().code == "track.strip_type");
+        CHECK(refused.error().path == std::string("/args") + path);
+        CHECK_FALSE(refused.error().hint.empty());
+    }
+    auto midi = call("item.add", R"({"track": "tr_0", "bar": 1, "notation": "voice x; 1: C4:w"})");
+    REQUIRE_FALSE(midi);
+    CHECK(midi.error().code == "track.strip_type");
+    CHECK(midi.error().path == "/args/notation");
+    json::Value listed = ok("track.list", "{}");
+    CHECK(listed["tracks"].at(0).find("armed")->asBool());
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    REQUIRE(
+        app->startEngine(backend, {.sampleRate = 48000, .blockSize = 256}, {.anticipative = false})
+            .ok());
+    CHECK(ok("transport.record", "{}")["recording"].asBool());
+    backend.run(75);
+    json::Value stopped = ok("transport.stop", "{}");
+    REQUIRE(stopped["recorded"].size() == 1);
+    const json::Value& take = stopped["recorded"].at(0);
+    CHECK(take.find("track")->asString() == "tr_0");
+    CHECK(take.find("lost_frames")->asInt() == 0);
+    const model::Item* print = nullptr;
+    for (const auto& e : app->head().items)
+        if (e.value->track == model::kMaster) print = e.value.get();
+    REQUIRE(print);
+    app->stopEngine();
+    // The print plays beside the live mix; the lane mute silences it alone.
+    auto peakOf = [&](std::string_view args) {
+        auto audio = audio::readAudio(ok("render.mix", args)["path"].asString());
+        REQUIRE(audio);
+        double peak = 0;
+        for (std::size_t i = 4800; i < 14400; ++i)
+            peak = std::max(peak, std::fabs(double(audio->channels[0][i])));
+        return peak;
+    };
+    const double both = peakOf(R"({"name": "both", "end_beat": 1})");
+    ok("track.set", R"({"track": "tr_0", "lane_mute": true})");
+    const double live = peakOf(R"({"name": "live", "end_beat": 1})");
+    CHECK(live > 0.05);
+    CHECK(both == doctest::Approx(2 * live).epsilon(0.01));  // the print doubles the mix
+    ok("history.undo", "{}");                                // the lane mute
+    ok("history.undo", "{}");                                // the take
+    for (const auto& e : app->head().items) CHECK(e.value->track != model::kMaster);
+}
+
 TEST_CASE("recording commits before hashing and completes without an undo step") {
     Root root;
     std::atomic<bool> entered{false}, release{false};

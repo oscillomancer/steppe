@@ -66,6 +66,32 @@ all masters reach the device at the same moment, whatever their effects'
 latency. The metronome plays on outputs 1 and 2. The menu lists the outputs
 only while the audio engine is running.
 
+### Printing a mix onto its master
+
+A master has an arm button in the mixer, like a channel. Arm it and press
+record: Quire records what the master plays, after its effects, fader and
+pan, as the music goes. The take lands on the master itself, in a lane that
+appears at the top of its tracks (a master armed or holding a take has one;
+the lane goes away when it has neither). Several masters can record at once,
+each its own take. Punch and loop recording work as on a channel.
+
+A master's takes are already mixed, so they play after its effects and fader,
+which do not change them; only the master's own mute silences them with the
+rest. They play beside the live mix, so right after a print you hear the mix
+twice. The **M** in the lane's header is the lane mute: it silences the
+master's takes and nothing else, to compare the print with the live mix or to
+keep it silent. While a master records, its earlier takes are silent in the
+punch range (everywhere when punch is off), so an old print never ends up in
+the new one; outside the punch range they play as usual. Recording while the
+song already plays can let an old print be heard for a fraction of a second
+before it goes quiet; it is never recorded.
+
+Takes on a master are audio items: move, trim, split, fade and copy them as
+on any channel, or drop an audio file onto the lane. A MIDI item cannot go on
+a master. A render of the master includes its takes; stems of channels and
+busses leave them out. Projects that use master takes or an armed master do
+not open in versions of Quire from before this feature.
+
 When monitoring an armed input, the latency comes from the device, input FX,
 and effects on that input's route to the master. Effects on unrelated playback
 tracks do not delay it. If the input feeds both a direct path and a bus with

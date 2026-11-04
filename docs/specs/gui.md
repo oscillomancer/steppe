@@ -357,6 +357,12 @@ matrix shows one send per pair), meters. The mixer's strips carry the same contr
 looks (§4.4). The button row starts at the TCP's left edge with mute and
 solo (over polarity and mono) and ends at its right edge with "env" and
 "out", at any depth; a channel's input button takes the room between.
+A master that is armed or holds items has a row too, its **lane** (ADR-0057):
+the header shows only the master badge, its name, the lane mute ("M", a pill
+in the mute colour, `track.set {lane_mute}`: it silences the master's own
+items, never the master) and the arm; the master's fader, pan and FX stay in
+the mixer. A lane-muted master's items are drawn dimmed. A master with
+neither has no row.
 Rows shrink to 24 design units: the name, strip badge, "fx" and "+" fit
 above a four-unit bottom resize grip. The lower buttons hide below 40 units;
 the fader/pan row hides below 58. Track heights clamp to 24–400 units,
@@ -370,8 +376,8 @@ older session shows that kind of label too.
 
 A strip control used on a selected track acts on the whole selection, in the
 TCP and the mixer alike (`gui::SelectionEdit`): mute, solo, polarity, mono,
-arm, monitoring and the input set the same value on each (arm, monitoring and
-input only on its channels); a fader or pan drag moves each selected track by
+arm, monitoring and the input set the same value on each (monitoring and input
+only on its channels, arm on its channels and masters); a fader or pan drag moves each selected track by
 the same amount from where it started (clamped). A click is one undo step, a drag is
 one. A control on a track outside the selection acts on that track alone.
 Folder/buss parentage shows as indentation and a parent bar. Under each
@@ -480,7 +486,12 @@ other strips, including secondary masters, do not. Creating it starts flat
 at the saved project rate. The rate menu's `Master envelopes...` entry and
 the key-bindable `Master: envelopes` action open this menu even when the
 master strip has no arrange row. Visible master automation lanes appear
-above the master's child tracks; master strip rows remain hidden. Playrate
+above the master's child tracks, after the master's own lane when it has one
+(armed or holding items, ADR-0057); the children keep their depth either way.
+Items on a master's lane are edited as on a channel's (move, trim, split,
+fades, gain, copy and paste); only audio items land there: a drag, paste or
+take-out of a MIDI item does not offer a master's lane, and a paste counts such
+items as dropped. Audio files dropped on it become items of the master. Playrate
 uses the existing lane, visibility, point
 editing, shapes and automation-item controls. Its scale is logarithmic over
 0.25..4.0 with a 1.0 reference at mid-height, ratio text such as `1.000x`, and
@@ -597,7 +608,8 @@ their entire ancestor chain is visible, and clear peak hold on reopening.
 Small "fx" and "+" buttons sit at each strip's top right (the TCP's: the
 chain window, and the plugin browser alone); a double-click on the name
 renames the strip in place, as in the TCP. Under the chain (and its sends),
-the arm, centred (channels); an input button (channels) and "out" (a click
+the arm, centred (channels and masters: a master records its output,
+ADR-0057); an input button (channels) and "out" (a click
 opens the routing matrix, a drag onto a buss or master makes a send; on a
 master it reads "out 1/2", "out 5" or "out —" and opens the hardware outputs
 menu instead, ADR-0056: None, the device's stereo pairs 1/2, 3/4…, then each
@@ -609,7 +621,7 @@ chain has a fixed height and the chain takes what a strip's missing rows
 leave, so every strip's fader sits at the same height. The strip's plug-in chain lists every plug-in,
 scrolling when it is longer than its section, and takes the room a strip's
 unused rows would leave (sends show only when there are some, up to two;
-busses and masters have no arm row or monitoring). The wheel over a fader or
+busses have no arm row, masters no monitoring). The wheel over a fader or
 pan moves it (Shift finer) and elsewhere scrolls the strips. Alt+click on a
 plug-in removes it
 (`fx.remove`, one undo step); a double-click on the chain's empty part opens

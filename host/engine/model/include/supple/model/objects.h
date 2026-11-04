@@ -122,6 +122,9 @@ struct Track {
     // to, 1-based: two (left, right), one (mono, (L+R)/2) or none. Unset: the
     // main master plays to 1/2, other masters to none (hardwareOutputs()).
     std::optional<std::vector<int>> hwOutput;
+    // Masters only (ADR-0057): silences the master's own items (its prints),
+    // nothing else.
+    bool laneMute = false;
     RecordSettings record;
     TrackTimebase timebase = TrackTimebase::Project;
     std::vector<Id> chain, inputChain;

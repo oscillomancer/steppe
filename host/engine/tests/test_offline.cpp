@@ -483,6 +483,81 @@ TEST_CASE("solo: soloed tracks and their signal path stay audible") {
     CHECK(peak(r2.audio.channels[0]) > 0.25 * kStrip * kStrip * 1.2);  // B is back
 }
 
+TEST_CASE("a master's own items play after its plain stage (ADR-0057)") {
+    const auto dir = std::filesystem::temp_directory_path() /
+                     ("supple-engine-print-" + std::to_string(::getpid()));
+    std::filesystem::remove_all(dir);
+    audio::AudioData ramp;
+    ramp.sampleRate = 48000;
+    ramp.channels.assign(2, std::vector<float>(48000));
+    for (int i = 0; i < 48000; ++i) {
+        ramp.channels[0][static_cast<std::size_t>(i)] = static_cast<float>(i) / 48000.0f;
+        ramp.channels[1][static_cast<std::size_t>(i)] = -static_cast<float>(i) / 48000.0f;
+    }
+    REQUIRE(audio::writeWav(dir / "media" / "ramp.wav", ramp));
+    auto item = [](model::EditTxn& t, Id track, Id md, double beat) {
+        model::Take take;
+        take.source = md;
+        const Id tk = t.create(take);
+        model::Item it;
+        it.track = track;
+        it.position = beat;
+        it.length = 1.0;  // 0.5 s at 120 BPM
+        it.takes = {tk};
+        it.activeTake = tk;
+        t.create(it);
+    };
+    model::EditTxn t(model::Session::create({.console9 = false}), 1);
+    const Id md = t.create(model::MediaSource{"ramp.wav", "", "wav", 48000, 2, 48000});
+    const Id ch = addTrack(t, "Live");
+    item(t, ch, md, 2.0);       // the live mix, at 1.0 s
+    item(t, kMaster, md, 0.0);  // a print on the master, at 0 s
+    // A fader, a balance and a latent insert on the master leave its items alone.
+    t.modify<model::Track>(kMaster, [](model::Track& tr) {
+        tr.volumeDb = -12;
+        tr.pan = 40;
+    });
+    addFx(t, kMaster, kGain,
+          json::parse(R"({"schema": "supple.test-gain-patch/1.0", "params": {"latency": "short"}})")
+              .value());
+    const auto s = commit(t);
+    auto pool = makePool();
+    MediaCache media;
+    auto renderOf = [&](const model::Session& session, std::optional<Id> through = {}) {
+        auto r = renderOffline(session, pool,
+                               {.startSeconds = 0,
+                                .endSeconds = 1.5,
+                                .projectDir = dir,
+                                .media = &media,
+                                .throughMaster = through});
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        return std::move(*r);
+    };
+    const auto mix = renderOf(s);
+    CHECK(mix.warnings.empty());
+    for (std::size_t i = 0; i < 24000; ++i) {  // exactly the print, on time
+        REQUIRE(mix.audio.channels[0][i] == ramp.channels[0][i]);
+        REQUIRE(mix.audio.channels[1][i] == ramp.channels[1][i]);
+    }
+    CHECK(peak(mix.audio.channels[0], 48000, 72000) > 0);
+    CHECK(peak(mix.audio.channels[0], 48000, 72000) < 0.25);  // the live mix is faded
+    // A stem leaves the master's items out; the master's mute and lane mute silence them.
+    const auto stem = renderOf(s, ch);
+    CHECK(peak(stem.audio.channels[0], 0, 24000) == 0.0);
+    CHECK(peak(stem.audio.channels[0], 48000, 72000) > 0);
+    for (auto change : {+[](model::Track& tr) { tr.mute = true; },
+                        +[](model::Track& tr) { tr.laneMute = true; }}) {
+        model::EditTxn edit(s, 2);
+        edit.modify<model::Track>(kMaster, change);
+        const auto silent = renderOf(commit(edit));
+        CHECK(peak(silent.audio.channels[0], 480, 24000) == 0.0);
+    }
+    model::EditTxn lane(s, 3);
+    lane.modify<model::Track>(kMaster, [](model::Track& tr) { tr.laneMute = true; });
+    CHECK(peak(renderOf(commit(lane)).audio.channels[0], 48000, 72000) > 0);  // live mix plays
+    std::filesystem::remove_all(dir);
+}
+
 TEST_CASE("audio items: position, take offset, fade, channel mode, offline media") {
     const auto dir = std::filesystem::temp_directory_path() /
                      ("supple-engine-media-" + std::to_string(::getpid()));

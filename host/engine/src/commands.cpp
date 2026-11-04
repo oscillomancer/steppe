@@ -638,6 +638,7 @@ struct TrackSetArgs {
     std::optional<model::TrackTimebase> timebase;
     std::optional<std::int64_t> channels;
     std::optional<std::vector<std::int64_t>> hwOutput;
+    std::optional<bool> laneMute;
 };
 struct TrackEntry {
     bool frozen = false;
@@ -651,6 +652,7 @@ struct TrackEntry {
     std::vector<std::string> fx, items;
     std::vector<Id> groups, vcas;
     std::optional<std::vector<std::int64_t>> hwOutput;  // masters
+    std::optional<bool> armed, laneMute;                // masters (ADR-0057)
     double requestedEffective = 0, effective = 0, at = 0;
     bool effectiveMute = false, soloSilenced = false;
 };
@@ -1517,7 +1519,9 @@ void registerEngineCommands(cmd::Registry& registry) {
             "instrument plays the keyboard), also while stopped. record_mode: input (new "
             "items), midi_overdub (merge into the MIDI item under the start, as a new take), "
             "midi_replace. color: red | orange | yellow | green | teal | blue | violet | grey | "
-            "\"#rrggbb\" (\"\" clears it), shown as a stripe on the track.";
+            "\"#rrggbb\" (\"\" clears it), shown as a stripe on the track. A master takes "
+            "armed alone: transport.record then records its output (after its fader, before "
+            "its own items) as an item on the master; lane_mute silences a master's items.";
         c.tags = {"track", "mixer"};
         c.args =
             schema::object<TrackSetArgs>("track_set_args")
@@ -1577,6 +1581,9 @@ void registerEngineCommands(cmd::Registry& registry) {
                            .doc("Masters: the device outputs the main pair plays to: [l, r], "
                                 "[mono] or [] for none (engine.inputs lists them). Default: "
                                 "tr_0 [1, 2], other masters []"))
+                .field("lane_mute", &TrackSetArgs::laneMute,
+                       schema::boolean().doc("Masters: silence the master's own items (its "
+                                             "prints) and nothing else"))
                 .build();
         c.result = emptySchema();
         c.examples = {
@@ -1593,7 +1600,11 @@ void registerEngineCommands(cmd::Registry& registry) {
             {"Four channels: a key signal can arrive on 3/4",
              obj(R"({"track": "tr_1", "channels": 4})"), obj("{}"), "song"},
             {"Play the main mix to outputs 3 and 4",
-             obj(R"({"track": "tr_0", "hw_output": [3, 4]})"), obj("{}"), "song"}};
+             obj(R"({"track": "tr_0", "hw_output": [3, 4]})"), obj("{}"), "song"},
+            {"Arm the main master to print the mix", obj(R"({"track": "tr_0", "armed": true})"),
+             obj("{}"), "song"},
+            {"Hear the live mix without the print", obj(R"({"track": "tr_0", "lane_mute": true})"),
+             obj("{}"), "song"}};
         c.run = [](const TrackSetArgs& a, Context& ctx) -> Result<Empty> {
             EngineApp& app = A(ctx);
             const model::Session s = app.view();
@@ -1603,11 +1614,20 @@ void registerEngineCommands(cmd::Registry& registry) {
                 return Error("track.color", "unknown colour \"" + *a.color + "\"", "/color",
                              "red, orange, yellow, green, teal, blue, violet, grey or \"#rrggbb\"; "
                              "\"\" clears it");
-            if ((a.armed || a.recordInput || a.recordMidi || a.midiChannel || a.recordMode ||
-                 a.monitor) &&
-                a.type.value_or(s.tracks.find(*id)->type) != model::StripType::Channel)
-                return Error("track.strip_type", "only channels record or monitor", "/track",
-                             "record or monitor on a child channel instead");
+            const model::StripType newType = a.type.value_or(s.tracks.find(*id)->type);
+            if ((a.recordInput || a.recordMidi || a.midiChannel || a.recordMode || a.monitor) &&
+                newType != model::StripType::Channel)
+                return Error("track.strip_type", "only channels have record inputs or monitor",
+                             "/track",
+                             newType == model::StripType::Master
+                                 ? "arm the master alone (armed: true): it records its output"
+                                 : "record or monitor on a child channel instead");
+            if (a.armed && *a.armed && newType == model::StripType::Buss)
+                return Error("track.strip_type", "only channels and masters can be armed", "/armed",
+                             "arm a child channel, or the master to print the mix");
+            if (a.laneMute && newType != model::StripType::Master)
+                return Error("track.strip_type", "only masters have a lane mute", "/lane_mute",
+                             "mute the items themselves (item.set {mute}) or the strip");
             if (a.recordInput && a.recordMidi)
                 return Error("track.record_input", "record audio or MIDI, not both", "/record_midi",
                              "provide either record_input for audio or record_midi for MIDI, and "
@@ -1653,6 +1673,9 @@ void registerEngineCommands(cmd::Registry& registry) {
                     // A new channel's default monitoring goes with the channel.
                     if (*a.type != model::StripType::Channel)
                         tr.record.monitor = model::Monitor::Off;
+                    // Only masters have a lane mute; busses are never armed (ADR-0057).
+                    if (*a.type != model::StripType::Master) tr.laneMute = false;
+                    if (*a.type == model::StripType::Buss) tr.record.armed = false;
                 });
             }
             // The record input is a route from the device inputs (hw_input).
@@ -1716,6 +1739,7 @@ void registerEngineCommands(cmd::Registry& registry) {
                 if (a.channels) t.channels = static_cast<int>(*a.channels);
                 if (a.hwOutput)
                     t.hwOutput = std::vector<int>(a.hwOutput->begin(), a.hwOutput->end());
+                if (a.laneMute) t.laneMute = *a.laneMute;
                 if (a.solo)
                     t.solo = *a.solo == "on"         ? model::Solo::On
                              : *a.solo == "in_place" ? model::Solo::InPlace
@@ -1746,8 +1770,10 @@ void registerEngineCommands(cmd::Registry& registry) {
                     for (Id member : model::linkedTracks(s, *id, attribute)) {
                         if (member == *id) continue;
                         const auto& old = *s.tracks.find(member);
-                        if ((attribute == "armed" || attribute == "monitor") &&
-                            old.type != model::StripType::Channel)
+                        // Arm spreads to channels and masters (ADR-0057), monitoring
+                        // to channels.
+                        if ((attribute == "armed" && old.type == model::StripType::Buss) ||
+                            (attribute == "monitor" && old.type != model::StripType::Channel))
                             continue;
                         app.txn().modify<model::Track>(member, [&](auto& tr) { change(tr, old); });
                         const auto tr = *app.view().tracks.find(member);
@@ -1836,6 +1862,10 @@ void registerEngineCommands(cmd::Registry& registry) {
                          .field("hw_output", &TrackEntry::hwOutput,
                                 schema::arrayOf(schema::integer())
                                     .doc("Masters: the device outputs they play to"))
+                         .field("armed", &TrackEntry::armed,
+                                schema::boolean().doc("Masters: recording takes the output"))
+                         .field("lane_mute", &TrackEntry::laneMute,
+                                schema::boolean().doc("Masters: their own items are silent"))
                          .field("requested_effective_volume_db", &TrackEntry::requestedEffective,
                                 schema::number())
                          .field("effective_volume_db", &TrackEntry::effective, schema::number())
@@ -1868,6 +1898,8 @@ void registerEngineCommands(cmd::Registry& registry) {
                 if (t.type == model::StripType::Master) {
                     const auto channels = model::hardwareOutputs(t, id);
                     e.hwOutput = std::vector<std::int64_t>(channels.begin(), channels.end());
+                    e.armed = t.record.armed;
+                    e.laneMute = t.laneMute;
                 }
                 const auto level = model::effectiveTrackLevel(s, id, e.at);
                 e.requestedEffective = level.requestedDb;
@@ -1899,7 +1931,8 @@ void registerEngineCommands(cmd::Registry& registry) {
             "\"voice bass; 1: C2:q r:q C2:q r:q | F2:h G2:h\" — every bar must add up; the item "
             "is as long as the written bars unless length (beats) is given. audio_file: a path at "
             "the project's sample rate; with the app's copy-imports setting on, the project "
-            "keeps its own copy in its media folder.";
+            "keeps its own copy in its media folder. A master holds audio items only (prints, "
+            "played after its fader); busses hold none.";
         c.tags = {"item", "midi"};
         c.args =
             schema::object<ItemAddArgs>("item_add_args")
@@ -1937,9 +1970,11 @@ void registerEngineCommands(cmd::Registry& registry) {
             const model::Session s = app.view();
             auto track = existing<model::Track>(s, a.track, "/track");
             if (!track) return std::move(track).error();
-            if (s.tracks.find(*track)->type != model::StripType::Channel)
-                return Error("track.strip_type", "only channels hold items", "/track",
-                             "put items on a child channel instead");
+            SUPPLE_TRY(checkItemTrack(s, *track, {}, "/track"));
+            if (a.notation && s.tracks.find(*track)->type == model::StripType::Master)
+                return Error("track.strip_type", "a master holds audio items only", "/notation",
+                             "give audio_file for a master, or put the notation on a channel "
+                             "with an instrument");
             if ((a.notation ? 1 : 0) + (a.audioFile ? 1 : 0) > 1)
                 return Error("item.source", "give notation or audio_file, not both", {},
                              "provide exactly one of notation or audio_file for the item");
@@ -2083,9 +2118,7 @@ void registerEngineCommands(cmd::Registry& registry) {
             if (a.track) {
                 auto tr = existing<model::Track>(s, *a.track, "/track");
                 if (!tr) return std::move(tr).error();
-                if (s.tracks.find(*tr)->type != model::StripType::Channel)
-                    return Error("track.strip_type", "only channels hold items", "/track",
-                                 "put items on a child channel instead");
+                SUPPLE_TRY(checkItemTrack(s, *tr, s.items.find(*id)->takes, "/track"));
                 track = *tr;
             }
             app.txn().modify<model::Item>(*id, [&](model::Item& it) {
@@ -4051,7 +4084,8 @@ void registerEngineCommands(cmd::Registry& registry) {
           std::tuple{"pause", "Pause playback where it is (ends a recording).", false},
           std::tuple{"stop", "Stop playback and return to where it started (ends a recording).",
                      false},
-          std::tuple{"record", "Play and record every armed track's input.", true}}) {
+          std::tuple{"record", "Play and record every armed track's input or master's output.",
+                     true}}) {
         Command<NoArgs, TransportInfo> c;
         c.name = std::string("transport.") + action;
         c.kind = Kind::Action;
@@ -4062,7 +4096,7 @@ void registerEngineCommands(cmd::Registry& registry) {
         c.result = transportSchema();
         c.errors = {{"engine.stopped", "the engine is not running", "engine.start first"},
                     {"record.nothing_armed", "no armed track has an input",
-                     "track.set {armed: true, record_input: [1, 2]}"},
+                     "track.set {armed: true, record_input: [1, 2]}, or arm a master"},
                     {"record.busy", "the audio callback did not return for 2 s (still recording)",
                      "stop again, or engine.stop (the files stay recoverable)"}};
         const bool rec = std::string(action) == "record";
@@ -4071,7 +4105,9 @@ void registerEngineCommands(cmd::Registry& registry) {
                 "Recording requires saved master rate 1 and no active master rate "
                 "envelope that leaves 1 anywhere, including automation items. "
                 "Non-unity recording and an armed track with unsupported output record mode "
-                "are refused before opening files.";
+                "are refused before opening files. An armed master records its output (after "
+                "its fader, before its own items) as an item on the master; while it records, "
+                "its items are silent in the punch range, or everywhere without punch.";
             c.errors.push_back({"record.playrate", "master playrate can leave unity",
                                 "set rate to 1 and disable non-unity master playrate automation"});
             c.errors.push_back({"record.output_unsupported",

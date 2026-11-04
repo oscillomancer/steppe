@@ -116,7 +116,7 @@ instructions are in `docs/guides/installing.md`.
   two branches, a command log with origins, a history budget that squashes
   the oldest steps. Undo to an FX's initial unsaved settings restores its factory
   state while retaining the previous processing instance until plan retirement.
-  Project format `supple.project/2.2` with migration from
+  Project format `supple.project/2.5` with migration from
   1.x, autosave, crash recovery of recordings, a per-project UI sidecar.
 - **Track freeze** (ADR-0054): whole-channel pre-fader float32 capture, including
   take FX and auxiliary channels, with virtual latency and plugin retirement.
@@ -173,7 +173,11 @@ instructions are in `docs/guides/installing.md`.
   engine opens every output of the device (up to 64).
 - **Recording**: armed inputs to crash-readable WAV, input monitoring (needs
   the arm), MIDI monitoring and recording with overdub, loop recording into
-  takes, punch, count-in, metronome.
+  takes, punch, count-in, metronome. Armed masters print their output in real
+  time onto a lane of their own (ADR-0057): the take is bit-identical to
+  `render.mix` of that master in every executor; a master's items play after
+  its fader, beside the live mix, with a lane mute, and are silent in the
+  punch range while it records.
 - **Editing**: items, takes, comping lanes, fades and crossfades with shapes,
   cursor splitting from the item menu (shared with S) and an audio-only prior
   zero-crossing split (100 ms search, louder stereo channel, cursor fallback;
@@ -865,6 +869,13 @@ Session and editing:
   background preparation is pending on macOS/Windows.
 - Loop recording passes that span a change of the loop range are not
   handled; MIDI recordings have no crash recovery.
+- Master recording (ADR-0057): a plan change that moves a master's latency
+  while it records shifts the rest of the take, as output-latency changes do
+  for channel takes. Starting a recording while already playing lets an
+  earlier print be heard (never recorded) for up to the render-ahead span.
+  Masters wider than two channels record their main pair. Projects with an
+  armed master or items on a master do not open in builds before schema 2.5.
+  Linux is tested locally; native macOS/Windows CI has not run on it yet.
 - `fx.copy` does not copy envelopes or key routes; take FX cannot be keyed.
 - The history budget's size estimate walks shared payloads per version, and
   squashed steps keep large invocation arguments.

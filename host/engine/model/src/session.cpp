@@ -310,8 +310,6 @@ struct Checker {
             const Item& it = *e.value;
             if (!s.tracks.contains(it.track))
                 fail(at("items", e.id, "track"), "track " + it.track.str() + " does not exist");
-            if (it.track == kMaster)
-                fail(at("items", e.id, "track"), "items cannot live on the master track");
             for (Id t : it.takes) {
                 if (!s.takes.contains(t))
                     fail(at("items", e.id, "takes"), "take " + t.str() + " does not exist");

@@ -6258,7 +6258,7 @@ Result:
 
 Add an item on a track: MIDI written in notation, or an audio file.
 
-position in beats (quarter notes from the start) or bar (1-based). notation: e.g. "voice bass; 1: C2:q r:q C2:q r:q | F2:h G2:h" — every bar must add up; the item is as long as the written bars unless length (beats) is given. audio_file: a path at the project's sample rate; with the app's copy-imports setting on, the project keeps its own copy in its media folder.
+position in beats (quarter notes from the start) or bar (1-based). notation: e.g. "voice bass; 1: C2:q r:q C2:q r:q | F2:h G2:h" — every bar must add up; the item is as long as the written bars unless length (beats) is given. audio_file: a path at the project's sample rate; with the app's copy-imports setting on, the project keeps its own copy in its media folder. A master holds audio items only (prints, played after its fader); busses hold none.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -12325,6 +12325,14 @@ Kind: `query`. Exposure: `mcp-tool`.
             },
             "description": "Masters: the device outputs they play to"
           },
+          "armed": {
+            "type": "boolean",
+            "description": "Masters: recording takes the output"
+          },
+          "lane_mute": {
+            "type": "boolean",
+            "description": "Masters: their own items are silent"
+          },
           "requested_effective_volume_db": {
             "type": "number"
           },
@@ -12488,7 +12496,7 @@ Result:
 
 Set track fields: name, type, volume, pan, mute, solo, polarity, mono, arming.
 
-Only the given fields change. solo: off | on | in_place | defeat. armed + record_input (device input channels, 1-based) prepare a track for transport.record; record_midi records MIDI instead: a device name (substring of the MIDI port, "*" = every device) with midi_channel 1-16 (0 = all). monitor: off | on | auto (auto: while armed) — a monitored track hears its input live (an instrument plays the keyboard), also while stopped. record_mode: input (new items), midi_overdub (merge into the MIDI item under the start, as a new take), midi_replace. color: red | orange | yellow | green | teal | blue | violet | grey | "#rrggbb" ("" clears it), shown as a stripe on the track.
+Only the given fields change. solo: off | on | in_place | defeat. armed + record_input (device input channels, 1-based) prepare a track for transport.record; record_midi records MIDI instead: a device name (substring of the MIDI port, "*" = every device) with midi_channel 1-16 (0 = all). monitor: off | on | auto (auto: while armed) — a monitored track hears its input live (an instrument plays the keyboard), also while stopped. record_mode: input (new items), midi_overdub (merge into the MIDI item under the start, as a new take), midi_replace. color: red | orange | yellow | green | teal | blue | violet | grey | "#rrggbb" ("" clears it), shown as a stripe on the track. A master takes armed alone: transport.record then records its output (after its fader, before its own items) as an item on the master; lane_mute silences a master's items.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -12518,6 +12526,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | `timebase` | string |  |  |  | What this channel's items follow when the tempo changes (those that inherit it): project, beats, time or beats_position; they keep their place now |
 | `channels` | integer |  | 1.0..128.0 |  | 1-2: the strip's main pair; up to 128 adds auxiliary channels 3-128 for routes and plug-in pins (a detector on 3/4, a multi-out instrument's outputs), outside the fader, pan and parent send |
 | `hw_output` | array |  |  |  | Masters: the device outputs the main pair plays to: [l, r], [mono] or [] for none (engine.inputs lists them). Default: tr_0 [1, 2], other masters [] |
+| `lane_mute` | boolean |  |  |  | Masters: silence the master's own items (its prints) and nothing else |
 
 ### Result
 
@@ -12646,6 +12655,40 @@ Result:
 {
   "track": "tr_0",
   "hw_output": [3, 4]
+}
+
+```
+
+Result:
+
+```json
+{}
+
+```
+
+**Arm the main master to print the mix** (`song`)
+
+```json
+{
+  "track": "tr_0",
+  "armed": true
+}
+
+```
+
+Result:
+
+```json
+{}
+
+```
+
+**Hear the live mix without the print** (`song`)
+
+```json
+{
+  "track": "tr_0",
+  "lane_mute": true
 }
 
 ```
@@ -13447,7 +13490,7 @@ Kind: `action`. Exposure: `mcp-tool`.
 ### Errors
 
 - `engine.stopped`: the engine is not running Hint: engine.start first
-- `record.nothing_armed`: no armed track has an input Hint: track.set {armed: true, record_input: [1, 2]}
+- `record.nothing_armed`: no armed track has an input Hint: track.set {armed: true, record_input: [1, 2]}, or arm a master
 - `record.busy`: the audio callback did not return for 2 s (still recording) Hint: stop again, or engine.stop (the files stay recoverable)
 
 ### Examples
@@ -13621,7 +13664,7 @@ Kind: `action`. Exposure: `mcp-tool`.
 ### Errors
 
 - `engine.stopped`: the engine is not running Hint: engine.start first
-- `record.nothing_armed`: no armed track has an input Hint: track.set {armed: true, record_input: [1, 2]}
+- `record.nothing_armed`: no armed track has an input Hint: track.set {armed: true, record_input: [1, 2]}, or arm a master
 - `record.busy`: the audio callback did not return for 2 s (still recording) Hint: stop again, or engine.stop (the files stay recoverable)
 
 ### Examples
@@ -13917,9 +13960,9 @@ Result:
 
 ## `transport.record@1`
 
-Play and record every armed track's input.
+Play and record every armed track's input or master's output.
 
-Recording requires saved master rate 1 and no active master rate envelope that leaves 1 anywhere, including automation items. Non-unity recording and an armed track with unsupported output record mode are refused before opening files.
+Recording requires saved master rate 1 and no active master rate envelope that leaves 1 anywhere, including automation items. Non-unity recording and an armed track with unsupported output record mode are refused before opening files. An armed master records its output (after its fader, before its own items) as an item on the master; while it records, its items are silent in the punch range, or everywhere without punch.
 
 Kind: `action`. Exposure: `mcp-tool`.
 
@@ -14061,7 +14104,7 @@ Kind: `action`. Exposure: `mcp-tool`.
 ### Errors
 
 - `engine.stopped`: the engine is not running Hint: engine.start first
-- `record.nothing_armed`: no armed track has an input Hint: track.set {armed: true, record_input: [1, 2]}
+- `record.nothing_armed`: no armed track has an input Hint: track.set {armed: true, record_input: [1, 2]}, or arm a master
 - `record.busy`: the audio callback did not return for 2 s (still recording) Hint: stop again, or engine.stop (the files stay recoverable)
 - `record.playrate`: master playrate can leave unity Hint: set rate to 1 and disable non-unity master playrate automation
 - `record.output_unsupported`: output recording is not supported yet Hint: use track.set {record_mode: input} on the reported track
@@ -14415,7 +14458,7 @@ Kind: `action`. Exposure: `mcp-tool`.
 ### Errors
 
 - `engine.stopped`: the engine is not running Hint: engine.start first
-- `record.nothing_armed`: no armed track has an input Hint: track.set {armed: true, record_input: [1, 2]}
+- `record.nothing_armed`: no armed track has an input Hint: track.set {armed: true, record_input: [1, 2]}, or arm a master
 - `record.busy`: the audio callback did not return for 2 s (still recording) Hint: stop again, or engine.stop (the files stay recoverable)
 
 ### Examples

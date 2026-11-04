@@ -1591,10 +1591,8 @@ void registerExtraCommands(cmd::Registry& registry) {
                 if (!item) return std::move(item).error();
                 auto track = require<model::Track>(now, p.track, at + "/track");
                 if (!track) return std::move(track).error();
-                if (now.tracks.find(*track)->type != model::StripType::Channel)
-                    return Error("track.strip_type", "only channels hold items", at + "/track",
-                                 "paste onto a channel");
                 const model::Item& original = *s.items.find(*item);
+                SUPPLE_TRY(checkItemTrack(now, *track, original.takes, at + "/track", &s));
                 model::Item copy = original;
                 // Its length as its timebase kept it in the copied version (beats
                 // for beats, seconds otherwise), placed on today's tempo map.

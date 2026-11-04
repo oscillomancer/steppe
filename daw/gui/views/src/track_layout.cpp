@@ -49,6 +49,17 @@ std::vector<model::Id> stripOrder(const model::Session& session) {
     return grouped;
 }
 
+std::set<model::Id> masterLanes(const model::Session& session) {
+    std::set<model::Id> out;
+    for (model::Id m : session.project->masters)
+        if (const model::Track* t = session.tracks.find(m); t && t->record.armed) out.insert(m);
+    for (const auto& e : session.items)
+        if (const model::Track* t = session.tracks.find(e.value->track);
+            t && t->type == model::StripType::Master)
+            out.insert(e.value->track);
+    return out;
+}
+
 std::optional<std::size_t> reorderIndex(const model::Session& session, model::Id track,
                                         std::optional<model::Id> before) {
     const model::Track* t = session.tracks.find(track);
@@ -164,7 +175,22 @@ bool TrackLayout::show(const model::Session& session, const std::vector<model::C
                     before->parent != after->parent || before->children != after->children ||
                     before->hiddenTcp != after->hiddenTcp ||
                     before->folderCompact != after->folderCompact ||
-                    before->chain != after->chain || before->inputChain != after->inputChain;
+                    before->chain != after->chain || before->inputChain != after->inputChain ||
+                    (after->type == model::StripType::Master &&
+                     before->record.armed != after->record.armed);
+    }
+    // A master's lane comes and goes with its items (ADR-0057).
+    if (!geometry) {
+        auto onMaster = [](const model::Session& in, const model::Item* it) {
+            const model::Track* t = it ? in.tracks.find(it->track) : nullptr;
+            return t && t->type == model::StripType::Master;
+        };
+        for (auto id : changedObjects(session_.items, session.items, changes))
+            if (onMaster(session_, session_.items.find(id)) ||
+                onMaster(session, session.items.find(id))) {
+                geometry |= masterLanes(session) != masterLanes_;
+                break;
+            }
     }
     for (auto id : changedObjects(session_.envelopes, session.envelopes, changes)) {
         const auto* before = session_.envelopes.find(id);
@@ -229,24 +255,29 @@ bool TrackLayout::show(const model::Session& session, const std::vector<model::C
             lanes[owner].emplace_back(envOrder(*envelope.value), envelope.id);
     }
     for (auto& [track, entries] : lanes) std::sort(entries.begin(), entries.end());
+    masterLanes_ = masterLanes(session_);
     std::function<void(model::Id, int)> visit = [&](model::Id id, int depth) {
         const model::Track* t = session_.tracks.find(id);
         if (!t) return;
-        const bool row = t->type != model::StripType::Master && !t->hiddenTcp;
+        const bool master = t->type == model::StripType::Master;
+        // A master has a row only as its lane: armed or holding items (ADR-0057).
+        const bool row = (!master || masterLanes_.contains(id)) && !t->hiddenTcp;
         if (row) {
             trackRows_[id] = rows_.size();
             rows_.push_back({id, t->type, depth, std::nullopt});
         }
-        // Master strip rows stay hidden, but their visible automation lanes
-        // precede the master's children, including the global playrate lane.
-        if (row || t->type == model::StripType::Master)
+        // Master strip rows are otherwise hidden, but their visible automation
+        // lanes precede the master's children, including the global playrate lane.
+        if (row || master)
             if (const auto found = lanes.find(id); found != lanes.end())
                 for (const auto& lane : found->second) {
                     envRows_[lane.second] = rows_.size();
                     rows_.push_back({id, t->type, depth, lane.second});
                 }
         if (t->folderCompact == 2) return;  // a collapsed folder hides its children
-        for (model::Id c : displayChildren(session_, *t)) visit(c, row ? depth + 1 : depth);
+        // A master's children stay at its depth, lane or not.
+        for (model::Id c : displayChildren(session_, *t))
+            visit(c, row && !master ? depth + 1 : depth);
     };
     for (const auto& g : session_.groups)
         if (g.value->vca)
@@ -317,7 +348,7 @@ void TrackLayout::adjustAllTrackHeights(float delta) {
     auto heights = heights_;
     for (const auto& entry : session_.tracks) {
         const auto& track = *entry.value;
-        if (track.type == model::StripType::Master) continue;
+        if (track.type == model::StripType::Master && !indexOf(entry.id)) continue;
         float share = delta;
         if (const auto found = expanded.find(entry.id); found != expanded.end())
             share /= static_cast<float>(found->second);

@@ -263,7 +263,8 @@ Result<ResolvedLane> paramLane(host::Instance& in, const std::string& param,
 }
 
 Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, std::uint32_t block,
-                     double rate, const std::vector<model::Id>* keepLive) {
+                     double rate, const std::vector<model::Id>* keepLive,
+                     std::span<const RecordingMaster> recording) {
     SUPPLE_TRY(model::validateFrozenState(s));
     Plan p;
     p.pool = &pool;
@@ -294,6 +295,21 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         n.type = t.type;
         n.master = t.type == model::StripType::Master;
         n.decodeInput = t.type != model::StripType::Channel;
+        n.postItems = n.master;  // a master's items join after its plain stage (ADR-0057)
+        // A recorded master (armed, or still recording) and its items while it
+        // records: silent in the punch range, else everywhere (ADR-0057).
+        const auto recorded =
+            std::find_if(recording.begin(), recording.end(),
+                         [&](const RecordingMaster& r) { return r.master == n.id; });
+        if (n.master && (t.record.armed || recorded != recording.end()))
+            p.recordTaps.push_back({i, -1, {}});
+        n.dropItems =
+            n.master && (t.laneMute || (recorded != recording.end() && recorded->everywhere));
+        if (n.master && recorded != recording.end() && !recorded->everywhere) {
+            const auto origin = time::samplesAt(startSeconds, p.rate);
+            n.silentFrom = time::samplesAt(recorded->startSeconds, p.rate) - origin;
+            n.silentTo = time::samplesAt(recorded->endSeconds, p.rate) - origin;
+        }
         n.staticGain = n.master                          ? dbToGain(t.volumeDb)
                        : t.volumeDb <= model::kSilenceDb ? 0.0
                                                          : console9::faderGain(t.volumeDb);
@@ -398,7 +414,7 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         // Takes with FX or envelopes play through a chain of their own (gap log #22).
         for (const auto& e : s.items) {
             const model::Item& it = *e.value;
-            if (it.track != n.id || it.mute || !it.activeTake) continue;
+            if (it.track != n.id || it.mute || !it.activeTake || n.dropItems) continue;
             const model::Take* take = s.takes.find(*it.activeTake);
             if (!take) continue;
             const bool enveloped =
@@ -892,9 +908,12 @@ Status prepare(Plan& p, const Session& s) {
         n.preFx.init(block);
         n.preFader.init(block);
         n.post.init(block);
+        n.items.init(n.postItems ? block : 0);
+        n.mix.init(n.postItems ? block : 0);
         if (!n.vcas.empty()) n.auxPostGain.resize(block);
         if (n.postKeyed) n.postKey.init(block);
     }
+    for (RecordTap& tap : p.recordTaps) tap.pulled.init(block);
     // Parameter topology may have changed during main-thread servicing or
     // activation. Resolve from model points now, without touching a live plan.
     std::map<host::Instance*, json::Value> schemas;
@@ -1026,6 +1045,8 @@ Status prepare(Plan& p, const Session& s) {
     // the track's input and chain latency, a route's gain its target's input.
     for (Node& n : p.nodes) {
         const std::int64_t at = n.timelineShift + n.latChain;
+        // Items play at the input on channels, after the chain on masters.
+        n.itemShift = n.postItems ? at : n.timelineShift;
         for (Automation* a : {&n.autoVolume, &n.autoPan, &n.autoMute}) a->shift(at);
         n.vcas.shift(at);
         for (std::size_t ei : n.in) {
@@ -1048,8 +1069,8 @@ Status prepare(Plan& p, const Session& s) {
         // A take chain's output lines up with the track's input; its stages
         // run its latency ahead of it.
         for (TakeChain& tc : n.takeChains) {
-            for (Automation* a : {&tc.volume, &tc.pan, &tc.mute}) a->shift(n.timelineShift);
-            const std::int64_t ahead = n.timelineShift - tc.latency;
+            for (Automation* a : {&tc.volume, &tc.pan, &tc.mute}) a->shift(n.itemShift);
+            const std::int64_t ahead = n.itemShift - tc.latency;
             for (Stage& st : tc.chain) {
                 st.inputLatency = ahead + st.before;
                 for (ParamLane& ln : st.lanes) ln.curve.shift(st.inputLatency);
@@ -1063,8 +1084,8 @@ Status prepare(Plan& p, const Session& s) {
             const model::Take& take = *s.takes.find(tc.take);
             const model::ItemSpan span = model::itemSpan(s, it);
             const std::int64_t origin = time::samplesAt(p.startSeconds, p.rate);
-            tc.start = time::samplesAt(span.startSec, p.rate) - origin + n.timelineShift;
-            tc.end = time::samplesAt(span.endSec, p.rate) - origin + n.timelineShift;
+            tc.start = time::samplesAt(span.startSec, p.rate) - origin + n.itemShift;
+            tc.end = time::samplesAt(span.endSec, p.rate) - origin + n.itemShift;
             const double g =
                 dbToGain(it.gainDb) * dbToGain(take.gainDb) * (take.phaseInvert ? -1.0 : 1.0);
             const auto [pl, pr] =
@@ -1102,7 +1123,7 @@ Status prepare(Plan& p, const Session& s) {
         }
         for (const auto& e : s.items) {
             const model::Item& it = *e.value;
-            if (it.track != n.id || it.mute || !it.activeTake) continue;
+            if (it.track != n.id || it.mute || !it.activeTake || n.dropItems) continue;
             const model::Take* take = s.takes.find(*it.activeTake);
             if (!take || !take->source || take->source->kind != Kind::Media) continue;
             const model::MediaSource* src = s.media.find(*take->source);
@@ -1146,9 +1167,9 @@ Status prepare(Plan& p, const Session& s) {
             Clip c;
             c.item = e.id;
             c.take = *it.activeTake;
-            c.deviceShift = n.timelineShift;
+            c.deviceShift = n.itemShift;
             c.data = data.data;
-            c.start = time::samplesAt(span.startSec, p.rate) - origin + n.timelineShift;
+            c.start = time::samplesAt(span.startSec, p.rate) - origin + n.itemShift;
             c.length =
                 time::samplesAt(span.endSec, p.rate) - time::samplesAt(span.startSec, p.rate);
             // The item's source offset is in source seconds; the variant is
@@ -1192,9 +1213,9 @@ Status prepare(Plan& p, const Session& s) {
                 tc.events = trackEvents(s, n.id, p.startSeconds, p.rate,
                                         [&](Id item) { return item == tc.item; });
                 for (auto& ev : tc.events)  // its input runs the chain's latency ahead
-                    ev.sample = p.rateEnabled ? ev.sample + n.timelineShift - tc.latency
+                    ev.sample = p.rateEnabled ? ev.sample + n.itemShift - tc.latency
                                               : std::max<std::int64_t>(
-                                                    0, ev.sample + n.timelineShift - tc.latency);
+                                                    0, ev.sample + n.itemShift - tc.latency);
             }
             // Reserve every block's events (processing never allocates): notes
             // and their releases for its instrument, parameter automation.
@@ -1343,13 +1364,12 @@ Status prepare(Plan& p, const Session& s) {
         p.rateDeviceMargin = p.outputLatency + p.rateBackendLatency;
         for (const auto& node : p.nodes) {
             p.rateDeviceMargin = std::max(p.rateDeviceMargin, node.timelineShift + node.latChain);
-            p.rateSourceBehind = std::max(p.rateSourceBehind, node.timelineShift);
+            p.rateSourceBehind =
+                std::max(p.rateSourceBehind, node.hasItems() ? node.itemShift : node.timelineShift);
             for (const auto& take : node.takeChains) {
-                p.rateDeviceMargin =
-                    std::max(p.rateDeviceMargin, take.latency + node.timelineShift);
-                p.rateSourceAhead = std::max(p.rateSourceAhead, take.latency - node.timelineShift);
-                p.rateSourceBehind =
-                    std::max(p.rateSourceBehind, node.timelineShift - take.latency);
+                p.rateDeviceMargin = std::max(p.rateDeviceMargin, take.latency + node.itemShift);
+                p.rateSourceAhead = std::max(p.rateSourceAhead, take.latency - node.itemShift);
+                p.rateSourceBehind = std::max(p.rateSourceBehind, node.itemShift - take.latency);
             }
             forEachStage(node, [&](const Stage& stage) {
                 p.rateDeviceMargin = std::max(p.rateDeviceMargin, std::abs(stage.inputLatency));
@@ -1436,6 +1456,13 @@ Status checkStrips(const Plan& p) {
         if (n.decodeInput != (n.type != model::StripType::Channel) ||
             n.master != (n.type == model::StripType::Master))
             return Error("engine.strip_order", "implicit strip stages disagree with its type", {},
+                         "report this strip-type compiler inconsistency with the project and "
+                         "session.describe; a valid strip should not fail this check");
+        // Items play on channels before the chain and on masters after the
+        // plain stage (ADR-0057): never into a summing input, never on a buss.
+        if (n.postItems != n.master ||
+            (n.type == model::StripType::Buss && (n.hasItems() || !n.events.empty())))
+            return Error("engine.strip_order", "items are placed where the strip type forbids", {},
                          "report this strip-type compiler inconsistency with the project and "
                          "session.describe; a valid strip should not fail this check");
         for (std::size_t ei : n.in) {
@@ -2132,15 +2159,15 @@ bool processTake(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std::uint
     if (p.rateEnabled && transport.playing && tc.clip >= 0)
         playClip(p, node.clips[static_cast<std::size_t>(tc.clip)], tc.buf, pos, n, tc.latency,
                  node.live);
-    const double inputEnd = mappedAt(p, node.live, pos + n + tc.latency, node.timelineShift);
-    const double outputStart = mappedAt(p, node.live, pos, node.timelineShift);
+    const double inputEnd = mappedAt(p, node.live, pos + n + tc.latency, node.itemShift);
+    const double outputStart = mappedAt(p, node.live, pos, node.itemShift);
     bool intersects = inputEnd > double(tc.start) && outputStart < double(tc.end);
     if (p.rateEnabled) {
         const auto& clock = *p.timelines[node.live ? 1 : 0];
-        const double from = clock.phase(pos - node.timelineShift);
-        const double to = clock.phase(pos + n + tc.latency - node.timelineShift);
-        const double start = double(tc.start - node.timelineShift),
-                     end = double(tc.end - node.timelineShift);
+        const double from = clock.phase(pos - node.itemShift);
+        const double to = clock.phase(pos + n + tc.latency - node.itemShift);
+        const double start = double(tc.start - node.itemShift),
+                     end = double(tc.end - node.itemShift);
         const double firstEnd = clock.looping() ? std::min(end, clock.loopEnd()) : end;
         intersects = start < firstEnd && to > start && from < firstEnd;
         if (!intersects && clock.looping() && end > clock.loopStart() && start < clock.loopEnd()) {
@@ -2178,16 +2205,16 @@ bool processTake(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std::uint
         } else
             releaseVoices(tc.chain[static_cast<std::size_t>(tc.noteTarget)], true, true,
                           static_cast<std::int64_t>(
-                              mappedAt(p, node.live, pos, node.timelineShift - tc.latency)));
+                              mappedAt(p, node.live, pos, node.itemShift - tc.latency)));
         if (p.rateEnabled)
             rateEvents(p, node.live, tc.events, tc.chain[static_cast<std::size_t>(tc.noteTarget)],
-                       pos, n, node.timelineShift - tc.latency, tc.rateEventFresh);
+                       pos, n, node.itemShift - tc.latency, tc.rateEventFresh);
         while (!p.rateEnabled && tc.nextEvent < tc.events.size() &&
                double(tc.events[tc.nextEvent].sample) <
-                   mappedAt(p, node.live, pos + n, node.timelineShift - tc.latency)) {
+                   mappedAt(p, node.live, pos + n, node.itemShift - tc.latency)) {
             const TimedEvent& te = tc.events[tc.nextEvent++];
             host::Event e = te.event;
-            e.time = eventOffset(p, node.live, pos, n, node.timelineShift - tc.latency, te.sample);
+            e.time = eventOffset(p, node.live, pos, n, node.itemShift - tc.latency, te.sample);
             if (target.size() < target.capacity()) target.push_back(e);  // never allocate here
         }
     }
@@ -2204,7 +2231,7 @@ bool processTake(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std::uint
         const auto* clock = p.rateEnabled ? p.timelines[node.live ? 1 : 0].get() : nullptr;
         const double origin = clock ? clock->origin() : 0;
         const double mapped =
-            clock ? clock->absolutePosition(t - node.timelineShift) + double(node.timelineShift)
+            clock ? clock->absolutePosition(t - node.itemShift) + double(node.itemShift)
                   : double(t);
         const double start = double(tc.start) + origin, end = double(tc.end) + origin;
         if (mapped < start || mapped >= end) continue;
@@ -2224,8 +2251,9 @@ bool processTake(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std::uint
             l *= pl;
             r *= pr;
         }
-        node.sum.l[i] += static_cast<float>(static_cast<double>(tc.buf.l[i]) * l);
-        node.sum.r[i] += static_cast<float>(static_cast<double>(tc.buf.r[i]) * r);
+        Stereo& into = node.postItems ? node.items : node.sum;  // ADR-0057
+        into.l[i] += static_cast<float>(static_cast<double>(tc.buf.l[i]) * l);
+        into.r[i] += static_cast<float>(static_cast<double>(tc.buf.r[i]) * r);
     }
     return true;
 }
@@ -2321,12 +2349,25 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
         }
     }
     node.preFx.copyFrom(node.sum, n);
-    // Audio items play after the pre-FX tap, before the chain (not when stopped).
+    // Audio items play after the pre-FX tap, before the chain (not when
+    // stopped); a master's into its own buffer, joined after its plain stage
+    // (ADR-0057).
+    const bool postItems = node.postItems && node.hasItems();
+    if (postItems) node.items.clear(n);
+    Stereo& itemsInto = postItems ? node.items : node.sum;
     for (Clip& c : node.clips)
-        if (transport.playing && c.takeChain < 0) playClip(p, c, node.sum, pos, n, 0, node.live);
+        if (transport.playing && c.takeChain < 0) playClip(p, c, itemsInto, pos, n, 0, node.live);
     // Takes with chains or envelopes: through their chains, into the sum.
     for (TakeChain& tc : node.takeChains)
         if (!processTake(p, node, tc, pos, n, transport, self)) return false;
+    // A recording master's items are silent in the punch range (ADR-0057).
+    if (postItems && node.silentTo > node.silentFrom)
+        for (std::uint32_t i = 0; i < n; ++i) {
+            const double at =
+                mappedAt(p, node.live, pos + i, node.itemShift) - double(node.itemShift);
+            if (at >= double(node.silentFrom) && at < double(node.silentTo))
+                node.items.l[i] = node.items.r[i] = 0.0f;
+        }
     // 2. Route this block's events to the note target. Notes still held at
     // a loop wrap end first, at the start of the block after it.
     for (Stage& st : node.chain) st.blockEvents.clear();
@@ -2469,16 +2510,18 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
         node.fader.set(g, node.autoPan.active() ? console9::nativePan(pan) : node.staticPan, muted,
                        node.autoVolume.active() || node.vcas.automated() || node.autoPan.active(),
                        p.smoothFrames);
-        const double gain = node.fader.gain.next() * node.fader.gate.next();
+        const double gate = node.fader.gate.next();
+        const double gain = node.fader.gain.next() * gate;
         const double nativePan = node.fader.pan.next();
         if (!node.vcas.empty()) node.auxPostGain[i] = static_cast<float>(gain);
-        double keyGain = 0, keyPan = nativePan;
+        double keyGain = 0, keyGate = 0, keyPan = nativePan;
         if (node.postKeyed) {
             node.keyFader.set(
                 g, node.autoPan.active() ? console9::nativePan(pan) : node.staticPan, ownMuted,
                 node.autoVolume.active() || node.vcas.automated() || node.autoPan.active(),
                 p.smoothFrames);
-            keyGain = node.keyFader.gain.next() * node.keyFader.gate.next();
+            keyGate = node.keyFader.gate.next();
+            keyGain = node.keyFader.gain.next() * keyGate;
             keyPan = node.keyFader.pan.next();
         }
         if (node.master) {
@@ -2490,6 +2533,17 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
             if (node.postKeyed) {
                 node.postKey.l[i] = node.sum.l[i] * static_cast<float>(keyGain * l);
                 node.postKey.r[i] = node.sum.r[i] * static_cast<float>(keyGain * r);
+            }
+            // Its own items (ADR-0057): already mixed, so only the mute ramps them.
+            if (postItems) {
+                node.mix.l[i] = node.post.l[i];
+                node.mix.r[i] = node.post.r[i];
+                node.post.l[i] += node.items.l[i] * static_cast<float>(gate);
+                node.post.r[i] += node.items.r[i] * static_cast<float>(gate);
+                if (node.postKeyed) {
+                    node.postKey.l[i] += node.items.l[i] * static_cast<float>(keyGate);
+                    node.postKey.r[i] += node.items.r[i] * static_cast<float>(keyGate);
+                }
             }
             if (metered) {
                 meterPeakL = std::max(meterPeakL, std::fabs(double(node.post.l[i])));

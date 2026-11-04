@@ -254,6 +254,13 @@ struct ChunkRing {
     void pop() SUPPLE_RT {
         read.store(read.load(std::memory_order_relaxed) + 1, std::memory_order_release);
     }
+    // Consumer: drops the chunks of epochs before `e` (flushed by a seek).
+    void dropBefore(std::uint64_t e) SUPPLE_RT {
+        while (const Chunk* c = front()) {
+            if (c->epoch >= e) break;
+            pop();
+        }
+    }
     // Consumer: frames [stream, stream + n) of epoch `e` into l/r, dropping
     // older chunks; frames not rendered yet are zero. Returns the frames
     // found. Stream positions only grow, so a loop wrap needs nothing here.
@@ -567,6 +574,20 @@ struct Node {
     bool releaseHeld = false;
     std::vector<Clip> clips;
     std::vector<TakeChain> takeChains;
+    // Masters (ADR-0057): their own items play after the plain gain/pan stage,
+    // into `items`, and join `post` there (ramped by the master's mute only);
+    // `mix` keeps the output before them, what a master's recording takes.
+    // `itemShift`: the timeline shift where the items play (the input's on
+    // channels, the input's plus the chain's on masters).
+    bool postItems = false;
+    std::int64_t itemShift = 0;
+    Stereo items, mix;
+    // While it records (ADR-0057), a master's items are silent from
+    // `silentFrom` to `silentTo` (plan samples of the timeline: the punch
+    // range); silent everywhere, they are left out of the plan instead.
+    std::int64_t silentFrom = 0, silentTo = 0;
+    bool dropItems = false;  // lane_mute, or recording with its items silent everywhere
+    bool hasItems() const SUPPLE_RT { return !clips.empty() || !takeChains.empty(); }
     int noteTarget = -1;  // chain index receiving note events
     double volumeDb = 0.0, pan = 0.0;
     double staticGain = 1, staticPan = .5;
@@ -616,6 +637,16 @@ void forEachStage(N& node, F&& f) {
     for (auto& tc : node.takeChains)
         for (auto& st : tc.chain) f(st);
 }
+
+// A master whose output is recorded (ADR-0057): armed, or still recording.
+// Where the callback runs the node it records the node's buffer; where the
+// renderer does, the renderer copies it into the plan's record ring `ring`
+// each block and the callback pulls it into `pulled` as it plays.
+struct RecordTap {
+    std::size_t node = 0;
+    int ring = -1;  // index into Plan::recordRings; -1: the callback runs the node
+    Stereo pulled;
+};
 
 // A master's main pair at the device (ADR-0056): 0-based device channels;
 // right < 0 plays mono, (L+R)/2, on `left`.
@@ -703,6 +734,12 @@ struct Plan {
     std::vector<std::size_t> frontier;
     std::unique_ptr<ChunkRing> rateOutput;  // canonical rate blocks, nonsplit renderer only
     std::vector<std::unique_ptr<ChunkRing>> frontierRings;  // allocated by the engine
+    // Recorded masters (ADR-0057), in node order; their rings are allocated
+    // by the engine for the taps the renderer runs, like frontier rings.
+    std::vector<RecordTap> recordTaps;
+    std::vector<std::unique_ptr<ChunkRing>> recordRings;
+    // Split: the renderer hands the callback something (frontier or record rings).
+    bool feedsCallback() const SUPPLE_RT { return !frontier.empty() || !recordRings.empty(); }
     // Rate plans: prepared by the control thread before publication. Unity
     // plans: filled by the renderer before its callback handoff (ADR-0014/15).
     // Stream position is in frames into the transport epoch.
@@ -744,6 +781,11 @@ enum class RateAdoption { Wait, Ready, Reseek };
 RateAdoption rateAdoption(const Plan& p, const Plan* previous, std::int64_t stream,
                           std::uint64_t epoch, bool playing) SUPPLE_RT;
 
+// What a recorded master records (ADR-0057): its output before its own items.
+inline const Stereo& recordSignal(const Node& n) SUPPLE_RT {
+    return n.postItems && n.hasItems() ? n.mix : n.post;
+}
+
 // Structural invariant checker, also exposed to the randomized plan tests.
 Status checkStrips(const Plan& p);
 const Stereo& edgeSignal(const Plan& p, const Edge& e) SUPPLE_RT;
@@ -754,8 +796,11 @@ const Stereo& edgeSignal(const Plan& p, const Edge& e) SUPPLE_RT;
 // runs at (0: the project's; the real-time engine runs at the device's —
 // positions are in seconds and media is resampled, so any rate works).
 // `keepLive`: tracks that stay in the live region even unmonitored (sorted).
+// `recording`: masters recording their output (ADR-0057): each gets a record
+// tap (as every armed master does) and its items are silent where it records.
 Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, std::uint32_t block,
-                     double rate = 0, const std::vector<model::Id>* keepLive = nullptr);
+                     double rate = 0, const std::vector<model::Id>* keepLive = nullptr,
+                     std::span<const RecordingMaster> recording = {});
 // Main thread: activates new instances, measures latencies, sizes buffers
 // and delays, compiles events and clips.
 Status prepare(Plan& p, const Session& s);

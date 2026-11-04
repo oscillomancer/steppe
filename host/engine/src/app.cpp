@@ -498,6 +498,7 @@ Status EngineApp::replaceProject(model::Session session, fs::path path,
     scratch_.clear();
     reportedFailures_.clear();
     recordingFiles_.clear();
+    endMasterRecording();
     autoWrite_.clear();
     renderQueue_.clear();
     {
@@ -990,6 +991,7 @@ void EngineApp::haltEngine() {
         engine_->service();
         engine_.reset();
         recordingFiles_.clear();
+        recordingMasters_ = false;  // the engine that held them is gone
         if (takes) {
             if (auto committed = commitTakes(*takes); !committed) {
                 const auto& error = committed.error();
@@ -1482,8 +1484,10 @@ Result<TransportInfo> EngineApp::transport(std::string_view action, std::optiona
                              "/tracks/" + e.id.str() + "/record/mode",
                              "output recording is not supported yet; use track.set {track: \"" +
                                  e.id.str() + "\", record_mode: \"input\"}");
-            if (!tr.record.armed || !tr.record.input) continue;
-            const model::Route* in = s.routes.find(*tr.record.input);
+            if (!tr.record.armed) continue;
+            const bool output = tr.type == model::StripType::Master;  // ADR-0057
+            if (!output && !tr.record.input) continue;
+            const model::Route* in = output ? nullptr : s.routes.find(*tr.record.input);
             if (in && in->from.midiDevice) {  // MIDI (ADR-0016): events, no file
                 RecordTarget t;
                 t.track = e.id;
@@ -1493,10 +1497,12 @@ Result<TransportInfo> EngineApp::transport(std::string_view action, std::optiona
                 targets.push_back(std::move(t));
                 continue;
             }
-            if (!in || !in->from.hwChannels) continue;
+            if (!output && (!in || !in->from.hwChannels)) continue;
             RecordTarget t;
             t.track = e.id;
-            for (int ch : *in->from.hwChannels) t.inputs.push_back(ch - 1);
+            t.output = output;
+            if (in)
+                for (int ch : *in->from.hwChannels) t.inputs.push_back(ch - 1);
             std::string base;
             for (char c : tr.name.empty() ? e.id.str() : tr.name)
                 base += std::isalnum(static_cast<unsigned char>(c)) ? c : '-';
@@ -1515,7 +1521,20 @@ Result<TransportInfo> EngineApp::transport(std::string_view action, std::optiona
         std::vector<fs::path> files;
         for (const RecordTarget& t : targets)
             if (!t.midi) files.push_back(t.file);
-        SUPPLE_TRY(engine_->startRecording(std::move(targets)));
+        // A recording master's own items are silent where it records: in the
+        // punch range, else everywhere (ADR-0057). The plan changes first.
+        std::vector<RecordingMaster> masters;
+        for (const RecordTarget& t : targets)
+            if (t.output) masters.push_back({t.track, !punch_.enabled, punch_.start, punch_.end});
+        if (!masters.empty()) {
+            engine_->setRecordingMasters(std::move(masters));
+            recordingMasters_ = true;
+            headChanged();
+        }
+        if (auto started = engine_->startRecording(std::move(targets)); !started) {
+            endMasterRecording();
+            return std::move(started).error();
+        }
         recordingFiles_ = std::move(files);
         playStart_ = engine_->transport().seconds;
         startPlaying(metronome_.countInBars);
@@ -1532,7 +1551,15 @@ Result<TransportInfo> EngineApp::transport(std::string_view action, std::optiona
             auto takes = engine_->stopRecording();
             if (!takes) return std::move(takes).error();  // record.busy: still recording
             recordingFiles_.clear();
+            const auto before = head().version;
+            const bool masters = recordingMasters_;
+            if (masters) {
+                engine_->setRecordingMasters({});
+                recordingMasters_ = false;
+            }
             auto committed = commitTakes(*takes);
+            // The masters' items play everywhere again (a commit reloads anyway).
+            if (masters && head().version == before) headChanged();
             if (!committed) return std::move(committed).error();
             recorded = std::move(*committed);
         }
@@ -2533,9 +2560,10 @@ Result<std::vector<RecordedInfo>> EngineApp::recover(const std::vector<std::stri
             return Error("recover.no_track",
                          r->file + " was recorded on " + t.track.str() + ", which is gone",
                          "/track", "give a track to put it on");
-        if (s.tracks.find(t.track)->type != model::StripType::Channel)
-            return Error("track.strip_type", "recover recordings onto a channel", "/track",
-                         "choose a child channel instead of a buss/master");
+        // A master's own recordings recover onto it (ADR-0057: audio items).
+        if (s.tracks.find(t.track)->type == model::StripType::Buss)
+            return Error("track.strip_type", "recover recordings onto a channel or master",
+                         "/track", "choose a child channel of the buss instead");
         t.startSample = side->startSample;
         t.sampleRate = side->sampleRate;
         t.segments = side->segments;  // loop passes, when the recording ended normally
@@ -2572,6 +2600,14 @@ PlayrateState EngineApp::playrateState() const {
         state.envelopeValue = model::pointsValueAt(playratePoints_, pos, state.requestedRate);
     }
     return state;
+}
+
+void EngineApp::endMasterRecording() {
+    if (!recordingMasters_) return;
+    recordingMasters_ = false;
+    if (!engine_) return;
+    engine_->setRecordingMasters({});
+    headChanged();
 }
 
 void EngineApp::headChanged() {

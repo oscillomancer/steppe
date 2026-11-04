@@ -186,6 +186,36 @@ TEST_CASE("a stalled recording writer preserves overflow gaps and loop file posi
     std::filesystem::remove_all(dir);
 }
 
+TEST_CASE("a master's take starts with the device input's takes, padded by the round trip") {
+    // ADR-0057: device input captured at P was heard at P - 100 (round trip);
+    // the master's output at P belongs to P - 40 (its own shift). Its frames
+    // go 60 frames later in its file, so both files start at P - 100.
+    const auto dir = std::filesystem::temp_directory_path() /
+                     ("supple-rec-master-" + std::to_string(::getpid()));
+    std::filesystem::remove_all(dir);
+    RecordTarget input{Id{model::Kind::Track, 1}, {0}, dir / "input.wav", {}};
+    RecordTarget master{model::kMaster, {}, dir / "master.wav", {}, true, 40};
+    detail::Recorder recorder({input, master}, 16, 100);
+    REQUIRE(recorder.open());
+    std::array<float, 50> ramp;
+    for (std::size_t i = 0; i < ramp.size(); ++i) ramp[i] = float(i + 1);
+    const float* in[] = {ramp.data()};
+    const detail::ProcessedInput out{model::kMaster, {ramp.data(), ramp.data()}, 0};
+    recorder.capture(in, 1, 50, 1000, std::span(&out, 1));
+    const auto takes = recorder.finish();
+    REQUIRE(takes.size() == 2);
+    for (const RecordedTake& take : takes) CHECK(take.startSample == 900);
+    const auto& rec = takes[0].track == model::kMaster ? takes[0] : takes[1];
+    CHECK(rec.frames == 110);
+    const auto decoded = audio::readAudio(rec.file);
+    REQUIRE(decoded);
+    REQUIRE(decoded->channels.size() == 2);
+    CHECK(decoded->channels[0][59] == 0.f);  // padding: before this recording
+    CHECK(decoded->channels[0][60] == 1.f);  // timeline 960 = 1000 - 40
+    CHECK(decoded->channels[1][109] == 50.f);
+    std::filesystem::remove_all(dir);
+}
+
 TEST_CASE("a failed recording target leaves other targets writing") {
     using Access = detail::RecorderTestAccess;
     const auto dir =
@@ -539,6 +569,75 @@ TEST_CASE("take FX: real-time output equals the offline render" * doctest::descr
         CHECK(engine.processErrors() == 0);
         CHECK(maxDiff(backend.capture().channels[0], 0, offline.audio.channels[0], 96000) == 0.0);
     }
+}
+
+TEST_CASE("a master's own items: real-time output equals the offline render (ADR-0057)" *
+          doctest::description("rt")) {
+    // A print on the master, after its latent insert and its fader, beside the live synth.
+    const auto dir =
+        std::filesystem::temp_directory_path() / ("supple-rt-print-" + std::to_string(::getpid()));
+    std::filesystem::remove_all(dir);
+    audio::AudioData tone;
+    tone.sampleRate = 48000;
+    tone.channels.assign(2, std::vector<float>(48000));
+    for (std::size_t i = 0; i < 48000; ++i)
+        tone.channels[0][i] = tone.channels[1][i] =
+            static_cast<float>(0.25 * std::sin(double(i) * 0.01));
+    REQUIRE(audio::writeWav(dir / "media" / "print.wav", tone));
+    model::Session base = synthSession(-3.0);
+    model::EditTxn t(base, 2);
+    const Id md = t.create(model::MediaSource{"print.wav", "", "wav", 48000, 2, 48000});
+    model::Take take;
+    take.source = md;
+    const Id tk = t.create(take);
+    model::Item item;
+    item.track = kMaster;
+    item.position = 0.5;
+    item.length = 2.0;
+    item.takes = {tk};
+    item.activeTake = tk;
+    t.create(item);
+    model::FxInstance gain;
+    gain.plugin.id = "com.suppleaudio.test.gain";
+    gain.patch =
+        json::parse(R"({"schema": "supple.test-gain-patch/1.0", "params": {"latency": "short"}})")
+            .value();
+    const Id f = t.create(gain);
+    t.modify<model::Track>(kMaster, [&](model::Track& m) {
+        m.chain.push_back(f);
+        m.volumeDb = -6;
+    });
+    const model::Session s = t.commit().value();
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        auto pool = makePool();
+        MediaCache offlineMedia;
+        auto offline =
+            renderOffline(
+                s, pool,
+                {.startSeconds = 0, .endSeconds = 2.0, .projectDir = dir, .media = &offlineMedia})
+                .value();
+        CHECK(offline.warnings.empty());
+        auto rtPool = makePool();
+        MediaCache media;
+        DummyBackend backend(
+            {.mode = DummyBackend::Mode::Manual, .captureFrames = 48000 * 2 + 4096});
+        Engine engine(rtPool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+        REQUIRE(engine.load(s, dir));
+        engine.play();
+        if (options.anticipative)
+            runAhead(engine, backend, (48000 * 2 + 4096) / 128, 128);
+        else
+            backend.run((48000 * 2 + 4096) / 128);
+        engine.stop();
+        const std::uint32_t L = engine.outputLatency();
+        CHECK(L == 64u);
+        CHECK(engine.processErrors() == 0);
+        CHECK(maxDiff(backend.capture().channels[0], L, offline.audio.channels[0], 96000) == 0.0);
+        CHECK(maxDiff(backend.capture().channels[1], L, offline.audio.channels[1], 96000) == 0.0);
+    }
+    std::filesystem::remove_all(dir);
 }
 
 TEST_CASE("a stretched take: real-time output equals the offline render" *
@@ -1382,6 +1481,209 @@ DummyBackend::Options constantInput(std::int64_t captureFrames) {
             }};
 }
 }  // namespace
+
+namespace {
+// Two synths into the main master; the first also feeds a cue master with no
+// device outputs (ADR-0056/0057). Both masters armed.
+struct MasterMix {
+    model::Session session;
+    Id cue, first, second;
+};
+MasterMix masterMix() {
+    model::Session base = synthSession(-3.0, "com.suppleaudio.test.gain", 2);
+    MasterMix m;
+    for (const auto& e : base.tracks)
+        if (e.value->type == model::StripType::Channel) (m.first.n ? m.second : m.first) = e.id;
+    model::EditTxn t(base, 2);
+    model::Track cue;
+    cue.type = model::StripType::Master;
+    cue.name = "Cue";
+    cue.record.armed = true;
+    m.cue = t.create(cue);
+    auto project = t.project();
+    project.masters.push_back(m.cue);
+    t.setProject(project);
+    t.modify<model::Track>(kMaster, [](model::Track& x) {
+        x.record.armed = true;
+        x.volumeDb = -2;
+        x.pan = 30;
+    });
+    model::Route send;
+    send.from.track = m.first;
+    send.to.track = m.cue;
+    t.create(send);
+    m.session = t.commit().value();
+    return m;
+}
+}  // namespace
+
+TEST_CASE("recording a master: its take is render.mix of that master, in every executor" *
+          doctest::description("rt")) {
+    const MasterMix mix = masterMix();
+    auto pool = makePool();
+    std::map<Id, audio::AudioData> offline;
+    for (Id master : {kMaster, mix.cue})
+        offline[master] =
+            renderOffline(mix.session, pool, {.master = master, .startSeconds = 0, .endSeconds = 2})
+                .value()
+                .audio;
+    CHECK(maxDiff(offline[kMaster].channels[0], 0, offline[mix.cue].channels[0], 96000) > 0);
+    struct Run {
+        EngineOptions options;
+        bool live;  // a monitored (silent) input: the callback runs tr_0, the renderer the cue
+    };
+    for (const Run& run :
+         {Run{kInCallback, false}, Run{EngineOptions{}, false}, Run{EngineOptions{}, true}}) {
+        INFO("anticipative " << run.options.anticipative << ", live " << run.live);
+        const model::Session s = run.live ? monitoring(mix.session) : mix.session;
+        auto rtPool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+        Engine engine(rtPool, media, run.options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128, .inputs = 2}));
+        REQUIRE(engine.load(s));
+        const auto dir = std::filesystem::temp_directory_path() /
+                         ("supple-master-rec-" + std::to_string(::getpid()));
+        std::filesystem::remove_all(dir);
+        RecordTarget main{kMaster, {}, dir / "main.wav", {}, true};
+        RecordTarget cue{mix.cue, {}, dir / "cue.wav", {}, true};
+        REQUIRE(engine.startRecording({main, cue}));
+        engine.play();
+        const std::int64_t cycles = (48000 * 2 + 4096) / 128;
+        if (run.options.anticipative)
+            runAhead(engine, backend, cycles, 128);
+        else
+            backend.run(cycles);
+        auto takes = engine.stopRecording();
+        REQUIRE(takes);
+        REQUIRE(takes->size() == 2);
+        CHECK(engine.anticipationMisses() == 0);
+        CHECK(engine.processErrors() == 0);
+        const std::int64_t L = engine.outputLatency();
+        CHECK(L == 64);
+        for (const RecordedTake& take : *takes) {
+            INFO(take.track.str());
+            CHECK(take.overflowFrames == 0);
+            CHECK(take.startSample == -L);  // the play position minus the plan's latency
+            auto audio = audio::readAudio(take.file);
+            REQUIRE(audio);
+            REQUIRE(audio->channels.size() == 2);
+            REQUIRE(audio->frames() >= static_cast<std::size_t>(L + 96000));
+            const auto& want = offline[take.track];
+            for (int c = 0; c < 2; ++c)
+                CHECK(maxDiff(audio->channels[static_cast<std::size_t>(c)],
+                              static_cast<std::size_t>(L),
+                              want.channels[static_cast<std::size_t>(c)], 96000) == 0.0);
+        }
+        engine.stop();
+        std::filesystem::remove_all(dir);
+    }
+}
+
+TEST_CASE("an armed master that is not recording keeps its record ring drained" *
+          doctest::description("rt")) {
+    const MasterMix mix = masterMix();
+    auto pool = makePool();
+    const auto offline =
+        renderOffline(mix.session, pool, {.startSeconds = 0, .endSeconds = 2}).value();
+    auto rtPool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000 * 2 + 4096});
+    Engine engine(rtPool, media, EngineOptions{});
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+    REQUIRE(engine.load(mix.session));
+    engine.play();
+    runAhead(engine, backend, (48000 * 2 + 4096) / 128, 128);
+    engine.stop();
+    CHECK(engine.anticipationMisses() == 0);
+    CHECK(maxDiff(backend.capture().channels[0], 64, offline.audio.channels[0], 96000) == 0.0);
+}
+
+TEST_CASE("a recording master: its prints are silent in the punch range and never recorded" *
+          doctest::description("rt")) {
+    const auto dir = std::filesystem::temp_directory_path() /
+                     ("supple-master-punch-" + std::to_string(::getpid()));
+    std::filesystem::remove_all(dir);
+    audio::AudioData tone;
+    tone.sampleRate = 48000;
+    tone.channels.assign(2, std::vector<float>(96000));
+    for (std::size_t i = 0; i < 96000; ++i)
+        tone.channels[0][i] = tone.channels[1][i] =
+            static_cast<float>(0.25 * std::sin(double(i) * 0.003));
+    REQUIRE(audio::writeWav(dir / "media" / "print.wav", tone));
+    const MasterMix mix = masterMix();
+    model::EditTxn t(mix.session, 3);
+    const Id md = t.create(model::MediaSource{"print.wav", "", "wav", 48000, 2, 96000});
+    model::Take take;
+    take.source = md;
+    const Id tk = t.create(take);
+    model::Item print;  // an earlier print over the whole span: 0 .. 2 s
+    print.track = kMaster;
+    print.length = 4.0;
+    print.takes = {tk};
+    print.activeTake = tk;
+    t.create(print);
+    const model::Session s = t.commit().value();
+    model::EditTxn without(s, 4);
+    for (const auto& e : s.items)
+        if (e.value->track == kMaster) {
+            without.remove<model::Item>(e.id);
+            for (Id x : e.value->takes) without.remove<model::Take>(x);
+        }
+    const model::Session dry = without.commit().value();
+    auto pool = makePool();
+    MediaCache offlineMedia;
+    auto renderOf = [&](const model::Session& session) {
+        return renderOffline(
+                   session, pool,
+                   {.startSeconds = 0, .endSeconds = 2, .projectDir = dir, .media = &offlineMedia})
+            .value()
+            .audio;
+    };
+    const auto withPrint = renderOf(s), live = renderOf(dry);
+    for (const EngineOptions& options : {kInCallback, EngineOptions{}}) {
+        INFO("anticipative " << options.anticipative);
+        auto rtPool = makePool();
+        MediaCache media;
+        DummyBackend backend(
+            {.mode = DummyBackend::Mode::Manual, .captureFrames = 48000 * 2 + 4096});
+        Engine engine(rtPool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+        // As transport.record does: punch 0.5 .. 1.5 s, the plan first.
+        engine.setRecordingMasters({{kMaster, false, 0.5, 1.5}});
+        REQUIRE(engine.load(s, dir));
+        const auto file = dir / "rec" / (options.anticipative ? "ahead.wav" : "callback.wav");
+        REQUIRE(engine.startRecording({{kMaster, {}, file, {}, true}}));
+        engine.play();
+        const std::int64_t cycles = (48000 * 2 + 4096) / 128;
+        if (options.anticipative)
+            runAhead(engine, backend, cycles, 128);
+        else
+            backend.run(cycles);
+        auto takes = engine.stopRecording();
+        engine.stop();
+        REQUIRE(takes);
+        REQUIRE(takes->size() == 1);
+        const auto L = static_cast<std::size_t>(engine.outputLatency());
+        auto audio = audio::readAudio((*takes)[0].file);
+        REQUIRE(audio);
+        // The take never holds the master's own items; what plays does, outside the punch.
+        CHECK(maxDiff(audio->channels[0], L, live.channels[0], 96000) == 0.0);
+        const auto& heard = backend.capture().channels[0];
+        CHECK(maxDiff(heard, L, withPrint.channels[0], 24000) == 0.0);
+        double inside = 0;
+        for (std::size_t i = 24000; i < 72000; ++i)
+            inside =
+                std::max(inside, std::fabs(double(heard[L + i]) - double(live.channels[0][i])));
+        CHECK(inside == 0.0);
+        double after = 0;
+        for (std::size_t i = 72000; i < 96000; ++i)
+            after =
+                std::max(after, std::fabs(double(heard[L + i]) - double(withPrint.channels[0][i])));
+        CHECK(after == 0.0);
+    }
+    std::filesystem::remove_all(dir);
+}
 
 TEST_CASE("monitoring in the callback: the input is heard through the track, stopped or playing" *
           doctest::description("rt")) {

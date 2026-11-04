@@ -430,9 +430,10 @@ ItemGestures::Clip ItemGestures::clip() const {
     const model::Session& s = view_.session();
     c.version = s.version;
     if (pinVersion) c.pin = pinVersion(c.version);
+    // The rows that hold items, in order: channels and masters' lanes (ADR-0057).
     std::vector<model::Id> channels;
     for (const auto& row : view_.trackLayout().rows())
-        if (!row.env && row.type == model::StripType::Channel) channels.push_back(row.track);
+        if (holdsItem(s, row, nullptr)) channels.push_back(row.track);
     std::ptrdiff_t first = static_cast<std::ptrdiff_t>(channels.size());
     for (auto id : selection_) {
         const auto* item = itemOf(s, id);
@@ -442,7 +443,7 @@ ItemGestures::Clip ItemGestures::clip() const {
         const auto index = found - channels.begin();
         first = std::min(first, index);
         c.items.push_back({id, startBeat(s, *item), startBeat(s, *item) + lengthBeats(s, *item),
-                           item->track, index});
+                           item->track, index, audioItem(s, *item)});
     }
     if (!c.items.empty()) {
         c.anchorTrack = channels[static_cast<std::size_t>(first)];
@@ -492,8 +493,12 @@ Status ItemGestures::pasteClip(const Clip& c, double atBeat, std::optional<model
                                const std::string& label) {
     if (c.items.empty() || !run) return {};
     std::vector<model::Id> channels;
+    std::vector<bool> masters;  // a master's lane takes audio items only (ADR-0057)
     for (const auto& row : view_.trackLayout().rows())
-        if (!row.env && row.type == model::StripType::Channel) channels.push_back(row.track);
+        if (holdsItem(view_.session(), row, nullptr)) {
+            channels.push_back(row.track);
+            masters.push_back(row.type == model::StripType::Master);
+        }
     const auto anchor = std::find(channels.begin(), channels.end(),
                                   track.value_or(c.anchorTrack.value_or(model::Id{})));
     double start = 1e300;
@@ -503,7 +508,8 @@ Status ItemGestures::pasteClip(const Clip& c, double atBeat, std::optional<model
     for (const auto& e : c.items) {
         const auto target = (anchor - channels.begin()) + e.channelOffset;
         if (anchor == channels.end() || target < 0 ||
-            static_cast<std::size_t>(target) >= channels.size()) {
+            static_cast<std::size_t>(target) >= channels.size() ||
+            (!e.audio && masters[static_cast<std::size_t>(target)])) {
             ++dropped;
             continue;
         }
@@ -843,9 +849,8 @@ bool ItemGestures::pointer(const ui::PointerEvent& e) {
                     const auto target = row ? static_cast<std::ptrdiff_t>(*row) + dr : -1;
                     ok = ok && target >= 0 &&
                          static_cast<std::size_t>(target) < view_.trackLayout().rowCount() &&
-                         view_.trackLayout().rows()[static_cast<std::size_t>(target)].type ==
-                             model::StripType::Channel &&
-                         !view_.trackLayout().rows()[static_cast<std::size_t>(target)].env;
+                         holdsItem(s, view_.trackLayout().rows()[static_cast<std::size_t>(target)],
+                                   it);
                 }
                 state_.deltaRows = ok ? dr : 0;
                 break;
@@ -857,8 +862,7 @@ bool ItemGestures::pointer(const ui::PointerEvent& e) {
                 const auto row = view_.trackLayout().indexOf(anchor->track);
                 const auto target = rowAt(e.pos.y);
                 const auto& rows = view_.trackLayout().rows();
-                if (row && target && !rows[*target].env &&
-                    rows[*target].type == model::StripType::Channel)
+                if (row && target && holdsItem(s, rows[*target], anchor))
                     state_.deltaRows = static_cast<int>(*target) - static_cast<int>(*row);
                 break;
             }
@@ -1083,7 +1087,7 @@ void ItemGestures::addEditItems(std::vector<ui::MenuItem>& items, ui::Point at, 
     // Paste lands where the menu was opened: that beat (on the grid), that channel.
     std::optional<model::Id> track;
     if (const auto row = rowAt(at.y);
-        row && view_.trackLayout().rows()[*row].type == model::StripType::Channel)
+        row && holdsItem(view_.session(), view_.trackLayout().rows()[*row], nullptr))
         track = view_.trackLayout().rows()[*row].track;
     const double beat = std::max(0.0, snap(beatAtX(at.x), false));
     const std::size_t n = selection_.size();
@@ -1578,8 +1582,7 @@ void ItemGestures::commit(const ui::PointerEvent& e) {
                     const auto target = static_cast<std::ptrdiff_t>(*row) + state_.deltaRows;
                     const auto& rows = view_.trackLayout().rows();
                     if (target < 0 || static_cast<std::size_t>(target) >= rows.size() ||
-                        rows[static_cast<std::size_t>(target)].env ||
-                        rows[static_cast<std::size_t>(target)].type != model::StripType::Channel)
+                        !holdsItem(s, rows[static_cast<std::size_t>(target)], it))
                         return;
                     track = rows[static_cast<std::size_t>(target)].track;
                 }
@@ -2371,7 +2374,8 @@ Status ItemGestures::drop(const std::vector<std::filesystem::path>& files, ui::P
     std::vector<EditStep> steps;
     for (std::size_t i = 0; i < files.size(); ++i) {
         std::string track;
-        if (i == 0 && row && view_.trackLayout().rows()[*row].type == model::StripType::Channel) {
+        if (i == 0 && row &&
+            holdsItem(view_.session(), view_.trackLayout().rows()[*row], nullptr)) {
             track = view_.trackLayout().rows()[*row].track.str();
         } else {
             json::Value add = json::Value::object();

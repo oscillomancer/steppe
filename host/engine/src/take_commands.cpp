@@ -53,12 +53,12 @@ Result<Id> itemOfTake(const model::Session& s, Id take, const std::string& path)
                  "use a take from take.list");
 }
 
-Result<Id> channel(const model::Session& s, const std::string& text, const std::string& path) {
+// A track that may hold an item with `takes` (ADR-0057: channels, or masters for audio).
+Result<Id> itemTrack(const model::Session& s, const std::string& text, const std::string& path,
+                     const std::vector<Id>& takes) {
     auto track = require<model::Track>(s, text, path);
     if (!track) return track;
-    if (s.tracks.find(*track)->type != model::StripType::Channel)
-        return Error("track.strip_type", "only channels hold items", path,
-                     "choose a channel, not a buss or master");
+    SUPPLE_TRY(checkItemTrack(s, *track, takes, path));
     return track;
 }
 
@@ -239,7 +239,7 @@ void registerTakeCommands(cmd::Registry& registry) {
             auto item = itemOfTake(s, *take, "/take");
             if (!item) return std::move(item).error();
             SUPPLE_TRY(checkUnlocked(s, *item, "/take"));
-            auto track = channel(s, a.track, "/track");
+            auto track = itemTrack(s, a.track, "/track", {*take});
             if (!track) return std::move(track).error();
             const model::Item& from = *s.items.find(*item);
             const double at = a.position.value_or(model::itemSpan(s, from).startBeat);

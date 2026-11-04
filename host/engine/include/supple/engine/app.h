@@ -544,8 +544,9 @@ class EngineApp : public cmd::Host {
     explicit EngineApp(AppOptions options);
     Result<host::Instance*> scratch(const model::FxInstance& fx);
     bool inRecordDir(const std::filesystem::path& file) const;
-    void headChanged();  // reload the real-time engine
-    void haltEngine();   // tears the engine down (stopEngine also cancels a restart)
+    void headChanged();         // reload the real-time engine
+    void endMasterRecording();  // masters' items play everywhere again (ADR-0057)
+    void haltEngine();          // tears the engine down (stopEngine also cancels a restart)
     // The device changed under the running engine: stop it and remember to
     // start it again (same backend kind, block and options).
     void beginRestart(std::string reason, double seconds);
@@ -672,6 +673,7 @@ class EngineApp : public cmd::Host {
     TransportRange loop_, punch_;  // kept across engine restarts (not in the session)
     MetronomeSettings metronome_;
     std::vector<std::filesystem::path> recordingFiles_;  // while recording
+    bool recordingMasters_ = false;  // armed masters record their output (ADR-0057)
     std::set<model::Id> reportedFailures_;
     std::filesystem::path projectPath_;
     std::unique_ptr<lua::Runtime> scripts_;

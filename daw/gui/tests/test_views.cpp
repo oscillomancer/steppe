@@ -1113,9 +1113,30 @@ TEST_CASE("the TCP toggles mute, solo, arm and monitor on the strip") {
     press(root, panel->controlNode(tr2, "polarity"));
     CHECK_FALSE(s.app->head().tracks.find(tr2)->phaseInvert);
     CHECK(tcp.error.empty());
-    // A master has neither arm nor monitor.
+    // A master has no row until it is armed or holds an item (ADR-0057); then
+    // its lane's header has its arm and the lane mute, nothing else.
     const model::Id master = model::kMaster;
     CHECK(panel->controlNode(master, "arm") == nullptr);  // the master is not a row
+    REQUIRE(s.dispatcher->execute(
+        {"track.set", json::parse(R"({"track": "tr_0", "armed": true})").value(), {}}));
+    sync();
+    REQUIRE(panel->controlNode(master, "arm"));
+    CHECK(panel->controlNode(master, "arm")->visible);
+    CHECK(panel->controlNode(master, "lanemute")->visible);
+    CHECK_FALSE(panel->controlNode(master, "fader")->visible);
+    CHECK_FALSE(panel->controlNode(master, "mute")->visible);
+    CHECK_FALSE(panel->controlNode(tr2, "lanemute")->visible);
+    press(root, panel->controlNode(master, "lanemute"));
+    CHECK(s.app->head().tracks.find(master)->laneMute);
+    CHECK_FALSE(s.app->head().tracks.find(master)->mute);
+    sync();
+    press(root, panel->controlNode(master, "lanemute"));
+    sync();
+    press(root, panel->controlNode(master, "arm"));
+    CHECK_FALSE(s.app->head().tracks.find(master)->record.armed);
+    sync();
+    CHECK(panel->controlNode(master, "arm") == nullptr);  // no lane again
+    CHECK(tcp.error.empty());
 }
 
 TEST_CASE("a fader drag is one undo step and lands on the moved value") {
@@ -2088,6 +2109,56 @@ TEST_CASE("playrate envelope scale: logarithmic ratios, unity and bounded editin
     CHECK_FALSE(views::envScale(env));
     env.target.object = {model::Kind::Route, 0};
     CHECK_FALSE(views::envScale(env));
+}
+
+TEST_CASE("a master's lane: armed or holding items, above its automation lanes (ADR-0057)") {
+    model::EditTxn txn(model::Session::create(), 1);
+    model::Track track;
+    track.parent = model::kMaster;
+    const auto child = txn.create(track);
+    txn.modify<model::Track>(model::kMaster,
+                             [&](auto& master) { master.children.push_back(child); });
+    model::Envelope env;
+    env.target = {model::kMaster, "volume"};
+    env.points = {{0, 0}};
+    const auto masterEnv = txn.create(env);
+    auto s = txn.commit().value();
+    views::TrackLayout layout;
+    REQUIRE(layout.show(s));
+    CHECK_FALSE(layout.indexOf(model::kMaster));
+    CHECK(layout.indexOfEnv(masterEnv) == 0);
+    // Armed: the master's row first, its lanes, then its children at depth 0.
+    model::EditTxn arm(s, 2);
+    arm.modify<model::Track>(model::kMaster, [](auto& m) { m.record.armed = true; });
+    auto armed = arm.commit().value();
+    const auto armChanges = arm.changes();
+    REQUIRE(layout.show(armed, &armChanges));
+    CHECK(layout.indexOf(model::kMaster) == 0);
+    CHECK(layout.indexOfEnv(masterEnv) == 1);
+    CHECK(layout.indexOf(child) == 2);
+    CHECK(layout.rows()[2].depth == 0);
+    // Disarmed with a print: the lane stays; without either it goes.
+    model::EditTxn print(armed, 3);
+    print.modify<model::Track>(model::kMaster, [](auto& m) { m.record.armed = false; });
+    model::Take take;
+    const auto tk = print.create(take);
+    model::Item item;
+    item.track = model::kMaster;
+    item.length = 1;
+    item.takes = {tk};
+    item.activeTake = tk;
+    const auto it = print.create(item);
+    auto printed = print.commit().value();
+    const auto printChanges = print.changes();
+    layout.show(printed, &printChanges);
+    CHECK(layout.indexOf(model::kMaster) == 0);
+    model::EditTxn gone(printed, 4);
+    gone.remove<model::Item>(it);
+    gone.remove<model::Take>(tk);
+    auto plain = gone.commit().value();
+    const auto goneChanges = gone.changes();
+    REQUIRE(layout.show(plain, &goneChanges));
+    CHECK_FALSE(layout.indexOf(model::kMaster));
 }
 
 TEST_CASE("master automation lanes are visible while hidden track lanes remain hidden") {

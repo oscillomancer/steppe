@@ -567,6 +567,8 @@ const Schema<Track>& schemaOf<Track>() {
         b.field("parent_send", &Track::parentSend, parentSend);
         dflt(b, d.parentSend);
         b.field("hw_output", &Track::hwOutput, schema::arrayOf(intS().range(1, kMaxDeviceOutputs)));
+        b.field("lane_mute", &Track::laneMute, boolean());
+        dflt(b, d.laneMute);
         b.field("record", &Track::record, record);
         dflt(b, d.record);
         b.field("timebase", &Track::timebase, trackTimebaseSchema());
@@ -1150,7 +1152,7 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
         auto migrated = migrateProject1(std::move(doc), warnings);
         if (!migrated) return std::move(migrated).error();
         doc = std::move(*migrated);
-    } else if (version->minor > 4 && warnings)
+    } else if (version->minor > 5 && warnings)
         warnings->push_back(
             {"project.newer_minor", "loading a newer project minor version", "/schema"});
     // Before 2.4 a master's hardware output could be written as a route to

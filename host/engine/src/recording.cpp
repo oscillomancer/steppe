@@ -147,9 +147,18 @@ Recorder::Recorder(std::vector<RecordTarget> targets, double rate, std::int64_t 
         }
         auto track = std::make_unique<Track>();
         track->target = std::move(t);
-        track->ring.init(
-            static_cast<std::uint32_t>(std::max<std::size_t>(1, track->target.inputs.size())),
-            static_cast<std::size_t>(rate * 10.0));  // ten seconds
+        track->ring.init(track->target.output ? 2u
+                                              : static_cast<std::uint32_t>(std::max<std::size_t>(
+                                                    1, track->target.inputs.size())),
+                         static_cast<std::size_t>(rate * 10.0));  // ten seconds
+        // A master's output (ADR-0057) at processing position P belongs to
+        // the timeline at P - outputShift, device input at P - latency: its
+        // frames go that much later in its file (earlier when negative, the
+        // first ones dropped), so every file starts at the same position.
+        if (track->target.output) {
+            track->shift = track->target.outputShift - latency_;
+            track->skip = std::max<std::int64_t>(0, track->shift);
+        }
         tracks_.push_back(std::move(track));
     }
 }
@@ -195,6 +204,17 @@ void Recorder::capture(const float* const* in, std::uint32_t inChannels, std::ui
                 own = &p;
                 break;
             }
+        if (t->target.output) {  // a master's output; none this part: the drain pads silence
+            const auto from = static_cast<std::uint32_t>(std::min<std::int64_t>(frames, t->skip));
+            t->skip -= from;
+            if (!own || from == frames) continue;
+            const float* channels[2] = {own->channels[0] + from, own->channels[1] + from};
+            const std::uint32_t count = frames - from;
+            const std::size_t n =
+                t->ring.write(channels, 2, kPair, count, captured_ + from - t->shift);
+            if (n < count) t->overflow.fetch_add(count - n, std::memory_order_relaxed);
+            continue;
+        }
         if (!own) {
             const std::size_t n =
                 t->ring.write(in, inChannels, t->target.inputs, frames, captured_);

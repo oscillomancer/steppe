@@ -27,6 +27,26 @@ inline Status checkUnlockedTake(const model::Session& s, model::Id take, std::st
     return {};
 }
 
+// Whether `track` may hold an item with these takes (ADR-0057): a channel any
+// item, a master audio items only (its prints), a buss none. The takes are
+// looked up in `from` (a copied version) when given.
+inline Status checkItemTrack(const model::Session& s, model::Id track,
+                             const std::vector<model::Id>& takes, std::string path,
+                             const model::Session* from = nullptr) {
+    const model::Track* t = s.tracks.find(track);
+    if (!t || t->type == model::StripType::Channel) return {};
+    if (t->type == model::StripType::Buss)
+        return Error("track.strip_type", "only channels and masters hold items", std::move(path),
+                     "put items on a child channel of the buss instead");
+    for (model::Id id : takes)
+        if (const model::Take* take = (from ? *from : s).takes.find(id);
+            take && take->source && take->source->kind != model::Kind::Media)
+            return Error("track.strip_type", "a master holds audio items only", std::move(path),
+                         "put MIDI on a channel with an instrument; a master's items are "
+                         "prints of its mix");
+    return {};
+}
+
 // Removes a take with its FX, the envelopes on it and its FX, and its MIDI
 // source when nothing else uses it (take.remove, item.remove; take_commands.cpp).
 // The item's take list is the caller's to update.

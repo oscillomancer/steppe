@@ -7,6 +7,10 @@ and §1.8 and the TrackNode stage order of `engine.md` §1.1. Research:
 `docs/research/console9.md`. Builds on ADR-0018 (the engine is stereo end to
 end; routes may end at a plug-in key).
 
+**Amendment, 2026-11-03:** [ADR-0057](0057-master-recording.md) lets masters
+be armed (they record their output) and hold audio items, which play after the
+plain gain/pan stage; it amends §1, §2 and §10.
+
 ## Context
 
 Every mixer strip must have Airwindows' Console 9 built in: **Console 9
