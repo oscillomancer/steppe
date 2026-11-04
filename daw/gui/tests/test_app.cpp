@@ -351,10 +351,14 @@ TEST_CASE("the Item menu is built by its source; an older file's item entries ar
     if (!a.ok) return;
     const auto file = a.dir / "old-menus.json";
     REQUIRE(writeFileAtomic(file, R"({"schema":"supple.menus/1.0","menus":[{"title":"Item",
-        "items":["ui.midi.new","-","ui.item.cut","ui.item.merge","-","track.add:buss"]}]})"));
+        "items":["ui.midi.new","-","ui.item.cut","ui.item.merge","-","track.add:buss"]},
+        {"title":"Track","items":["track.add:channel","-","ui.track.color","ui.fx.add",
+        "track.duplicate:selected","-","track.remove:selected"]}]})"));
     auto layout = gui::ChromeLayout::load(file);
     REQUIRE(layout);
     CHECK(layout->menus.front().items == std::vector<std::string>{"track.add:buss"});
+    // The Track menu no longer holds a track's own edits (its right-click menu does).
+    CHECK(layout->menus[1].items == std::vector<std::string>{"track.add:channel"});
     gui::Chrome chrome(*a.root, *a.actions, *layout, {});
     chrome.setMenuSource("Item", [] { return std::vector<ui::MenuItem>{{"Built", "", [] {}}}; });
     a.root->setContent(chrome.build());

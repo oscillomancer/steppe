@@ -404,11 +404,13 @@ order, as one undo step (`views::reorderMoves`, track.move steps); released
 without a drag, it selects that track alone. The track menu's Delete (and the Delete key, when
 tracks were selected after items) removes every selected track as one undo
 step (`track.remove:selected`; the main master stays; children before folders).
-Its Duplicate (and Track > duplicate selected) copies every selected channel
+Its Duplicate copies every selected channel
 and buss right after its original as one undo step (`track.duplicate`, see
-session-model.md) and selects the copies. Track > Channels… opens the same
-Channels menu as the track menu's, for the first selected track only; Track >
-Delete selected is the track menu's Delete. A right-click on a row's fader,
+session-model.md) and selects the copies. The menu bar's Track menu shares
+none of these entries: it adds a channel, buss or master, adds from a
+template and saves one (loading an older `menus.json` drops the track edits
+it used to list: Color…, Channels…, add plugin, Duplicate and Delete
+selected). A right-click on a row's fader,
 pan, mute, lane mute, solo, polarity, mono, arm or monitoring button opens
 that control's menu instead, "MIDI learn: Volume…" (naming the bound control,
 "(CC 7 · ch 1)"): the learn dialog of §4.5 for that track alone, binding
@@ -698,8 +700,8 @@ divided by type, the shown track checked. A switch keeps the Chain or
 Parameters tab; from a take's chain it goes to a track's.
 Its Add plugin browser, chain/preset/pins menus and parameter MIDI learn
 dialog belong to its own root. A strip's standalone "+" / `ui.fx.add` browser
-belongs to the main root; the strip's "+" adds to its own track, Track > add
-plugin… to every selected track (one undo step). Neither asks for a track. Both browsers reload shared favourites on open and
+belongs to the main root; the strip's "+" adds to its own track, the `ui.fx.add` action (the actions
+list, a key) to every selected track (one undo step). Neither asks for a track. Both browsers reload shared favourites on open and
 immediately before applying a toggle, preserving edits from another still-open
 browser. A failed reload reports an error and does not overwrite the file.
 For MIDI learn's "when focused" gate, the FX OS window must have keyboard
@@ -1206,7 +1208,8 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   (`itemBarMenu`, § Menus under arrange items); action ids a user adds to it
   follow them after a separator. Loading a `menus.json` drops the item ids
   older defaults listed there (and `ui.midi.new`) from its Item list, as the
-  two item menus now hold them.
+  two item menus now hold them, and the track edits from its Track list
+  (§4.2).
   **Mix to new track** (`ui.item.mix-to-track`, `item.mix-to-track` on the
   selected items, engine.md) is greyed without selected items; progress and the result show in the status line as for
   Consolidate items, and only one such background item job runs at a time.
@@ -1415,9 +1418,9 @@ Steppe's own character, not a REAPER clone or a generic dark theme
   teal, blue, violet, grey; `track.set {color}` also takes "#rrggbb") drawn as
   a stripe down the TCP row's left edge and under the mixer strip's name.
   Picked from the track's right-click menu (Rename, Color…, Duplicate,
-  Delete; the same in the TCP and the mixer) or Track > color…. A pick colours every selected
-  track when the track is one of them (Track > color… always works on the
-  selection), as one undo step.
+  Delete; the same in the TCP and the mixer) or the `ui.track.color` action.
+  A pick colours every selected track when the track is one of them (the
+  action always works on the selection), as one undo step.
 - **Calm by default:** colour reserved for state (armed, clipping, selected,
   agent-changed), meters and waveforms in ink tones; motion only for
   feedback. The TCP keeps its boxed toggles.

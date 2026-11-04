@@ -271,7 +271,9 @@ instructions are in `docs/guides/installing.md`.
   templates (with a copy of their audio) are saved, loaded and deleted in
   the app. Tracks duplicate from either right-click menu with their chains,
   items, sends and automation (`track.duplicate`), the whole selection at
-  once. In the mixer, Ctrl dragging a plug-in onto another strip copies its
+  once. The menu bar's Track menu only adds strips and saves or adds track
+  templates; a track's own edits are in its right-click menu (no shared
+  entries). In the mixer, Ctrl dragging a plug-in onto another strip copies its
   whole chain, and a plug-in's right-click menu renames that instance.
   Dragging one of several selected tracks (TCP or mixer) moves them all.
   Keys act on the panel under the pointer (Delete or Alt+C removes items

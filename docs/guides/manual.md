@@ -325,7 +325,7 @@ for other hosts is listed as shadowed and never loaded. `--plugin-path P`
 (repeatable) replaces the whole list.
 
 To add an effect or instrument, use the **+** beside **fx** on a track or
-mixer strip, or **Track > FX: add plugin…**. The **fx** button opens the
+mixer strip. The **fx** button opens the
 track's FX chain, including when it is empty. In the mixer, right-click a
 plugin to rename, duplicate or delete it; a duplicate keeps the plugin's
 current settings and goes right after it. Alt-click (Option-click on macOS)

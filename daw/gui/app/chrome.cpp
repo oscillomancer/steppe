@@ -97,10 +97,11 @@ ChromeLayout ChromeLayout::defaults() {
          {"ui.actions", "ui.mixer", "ui.routing", "ui.history", "-", "ui.theme.mode",
           "ui.theme.palette", "-", "ui.screenset.save", "ui.screenset.load",
           "ui.screenset.delete"}},
+        // Adding strips and templates only: a track's own edits are in its
+        // right-click menu (track_menu.cpp), and no entry is in both.
         {"Track",
          {"track.add:channel", "track.add:buss", "track.add:master", "ui.track.template.load", "-",
-          "ui.track.color", "ui.track.channels", "ui.fx.add", "track.duplicate:selected",
-          "ui.track.template.save", "-", "track.remove:selected"}},
+          "ui.track.template.save"}},
         // Its entries come from setMenuSource (ItemGestures::itemBarMenu);
         // ids added here follow them.
         {"Item", {}},
@@ -171,17 +172,22 @@ Result<ChromeLayout> ChromeLayout::load(const std::filesystem::path& file) {
                      [](const Menu& m) { return m.title == "Help"; }))
         l.menus.push_back(defaults().menus.back());
     // The Item menu's entries are built now (gui.md §6): an older file's
-    // item ids (and New MIDI item, gone) would repeat or reappear there.
+    // item ids (and New MIDI item, gone) would repeat or reappear there. The
+    // Track menu left a track's own edits to its right-click menu.
     static const std::set<std::string, std::less<>> builtIn = {
         "ui.midi.new",         "ui.item.cut",          "ui.item.copy",         "ui.item.paste",
         "ui.item.duplicate",   "ui.item.merge",        "ui.item.consolidate",  "ui.item.heal",
         "item.split:playhead", "ui.item.split-zero",   "item.remove:selected", "edit.delete",
         "ui.item.export",      "ui.item.mix-to-track", "ui.midi.edit",         "ui.midi.toggle"};
+    static const std::set<std::string, std::less<>> trackEdits = {
+        "ui.track.color", "ui.track.channels", "ui.fx.add", "track.duplicate:selected",
+        "track.remove:selected"};
     for (Menu& m : l.menus) {
-        if (m.title != "Item") continue;
+        if (m.title != "Item" && m.title != "Track") continue;
+        const auto& dropped = m.title == "Item" ? builtIn : trackEdits;
         std::vector<std::string> kept;
         for (std::string& id : m.items)
-            if (!builtIn.contains(id) && !(id == "-" && (kept.empty() || kept.back() == "-")))
+            if (!dropped.contains(id) && !(id == "-" && (kept.empty() || kept.back() == "-")))
                 kept.push_back(std::move(id));
         if (!kept.empty() && kept.back() == "-") kept.pop_back();
         m.items = std::move(kept);
