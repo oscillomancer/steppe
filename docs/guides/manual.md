@@ -475,6 +475,16 @@ every take but the one you hear (click a take's lane to choose it) on each
 selected item, in one undo step. **Item > Delete take** removes just the take
 you hear.
 
+Right-click selected items to render them through their FX, audio and MIDI
+alike (MIDI plays through its track's instrument), in one undo step. **Render
+with FX, replacing the audio** puts the result in place of the take you hear;
+**Render with FX as a new take** keeps that take and adds the result beside it.
+**Render with FX, deleting FX** replaces the take as well and then deletes the
+effects the render went through: the take's and those on the items' tracks, so
+they do not process the result again. Other items on those tracks lose the
+track effects too. On the item you right-click, the take under the pointer is
+the one rendered.
+
 Right-click an item and choose **Split item at cursor**, or press S, to split
 selected audio and MIDI items at the edit cursor. Items outside the cursor stay
 whole; the menu's pointer position does not set the split point. Undo restores

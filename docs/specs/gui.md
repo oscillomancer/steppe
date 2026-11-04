@@ -560,11 +560,14 @@ sequence on this track** (item.explode-takes, recording order; this ends
 the takes, Show all takes keeps them); **Delete take "name"** for the
 heard take (take.remove); and **Keep only the
 selected take**: every selected item with several takes keeps only its heard
-take (take.remove of the others, one undo step). For any item with
-material: **Convert to audio** / **Render to audio as a new take** on a
-MIDI take, **Render with FX, replacing the audio** / **Render with FX as a
-new take** on an audio take (item.apply-fx through the take and track FX;
-the take under the pointer is heard first). **Ctrl-drag** below the name
+take (take.remove of the others, one undo step). The right-click menu's
+renders act on every selected item with material that is not locked, audio
+and MIDI alike, one item.apply-fx each in one undo step (through the take and
+track FX; on the clicked item the take under the pointer is heard first):
+**Render with FX, replacing the audio** (mode replace), **Render with FX,
+deleting FX** (mode replace, then fx.remove of every effect in the rendered
+items' tracks' main chains, after all the renders; the replaced takes' FX go
+with them) and **Render with FX as a new take** (mode take). **Ctrl-drag** below the name
 bar of an item with several takes takes that take (the lane under the
 pointer, else the heard one) out into an item of its own, anywhere on any
 channel (take.extract, one undo step; elsewhere Ctrl-drag still copies).
@@ -1116,8 +1119,9 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   the action that had them. **Reset keys…** (also the action
   `ui.keys.reset`) asks first, then restores every default binding and saves
   a keymap file without changes. Selected-item actions cover the take
-  features: explode onto tracks or in sequence, render with FX as a new take
-  or in place, delete the heard take, show all takes (`ui.item.takes`).
+  features: explode onto tracks or in sequence, render with FX as a new take,
+  in place or in place deleting the FX (`item.apply-fx:delete-fx`), delete the
+  heard take, show all takes (`ui.item.takes`).
 - **Keymaps:** per context section (global, arrange, MIDI editor, mixer,
   FX window, text field), chords allowed, conflicts shown in the editor. A
   key looks in `text` while a text field has focus, in `midi`, `mixer` or

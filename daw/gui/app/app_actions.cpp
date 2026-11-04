@@ -216,8 +216,40 @@ AppActions::AppActions(const cmd::Registry& registry, cmd::Dispatcher& dispatche
                         "item.explode-takes", obj({{"item", "$each.item"}, {"mode", "serial"}})));
     registry_.add(bound("item.apply-fx:take", "Item: render with FX as a new take", "item.apply-fx",
                         obj({{"item", "$each.item"}, {"mode", "take"}})));
-    registry_.add(bound("item.apply-fx:replace", "Item: render with FX in place (MIDI to audio)",
+    registry_.add(bound("item.apply-fx:replace", "Item: render with FX, replacing the audio",
                         "item.apply-fx", obj({{"item", "$each.item"}, {"mode", "replace"}})));
+    actions::Action dropFx;
+    dropFx.id = "item.apply-fx:delete-fx";
+    dropFx.name = "Item: render with FX, deleting FX";
+    dropFx.description =
+        "Render each selected item through its FX in place, then delete the FX the renders went "
+        "through (the takes' and the tracks' chains), one undo step.";
+    dropFx.builtin = [this](const actions::Context&) -> Result<json::Value> {
+        if (ui_.selectedItems.empty()) return Error("action.selection", "select items first");
+        return dispatcher_.transact("Render items", kOrigin, [&]() -> Result<json::Value> {
+            const model::Session s = app_.head();
+            std::vector<model::Id> tracks;
+            for (const std::string& text : ui_.selectedItems) {
+                const auto id = model::Id::parse(text);
+                const model::Item* it = id ? s.items.find(*id) : nullptr;
+                if (!it) continue;
+                auto r = dispatcher_.execute(
+                    {"item.apply-fx", obj({{"item", text}, {"mode", "replace"}}), kOrigin});
+                if (!r) return r;
+                if (std::find(tracks.begin(), tracks.end(), it->track) == tracks.end())
+                    tracks.push_back(it->track);
+            }
+            for (model::Id tr : tracks)  // after every render: they go through them
+                if (const model::Track* t = s.tracks.find(tr))
+                    for (model::Id fx : t->chain) {
+                        auto r =
+                            dispatcher_.execute({"fx.remove", obj({{"fx", fx.str()}}), kOrigin});
+                        if (!r) return r;
+                    }
+            return json::Value::object();
+        });
+    };
+    registry_.add(dropFx);
     actions::Action dropTake;
     dropTake.id = "take.remove:active";
     dropTake.name = "Item: delete the heard take";

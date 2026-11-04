@@ -282,7 +282,8 @@ instructions are in `docs/guides/installing.md`.
   user's own, saved and deleted there (`fx.preset.*`, the sandbox's preset
   format, kept per plugin in the configuration folder). Takes: show all takes in lanes,
   explode onto tracks or along the track, delete one, Ctrl-drag one out, and
-  render an item through its FX (MIDI to audio) in place or as a new take.
+  render the selected items through their FX (MIDI to audio) in place, in
+  place deleting the FX, or as a new take.
   The FX chain selects several effects (Ctrl/Shift+click) to bypass, offline
   or remove together; a double click opens an effect's editor. FX chains and
   the routing matrix use separate resizable utility windows owned by the main

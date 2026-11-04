@@ -1165,32 +1165,60 @@ std::vector<ui::MenuItem> ItemGestures::buildItemMenu(const MenuPlace& place, bo
         addEditItems(items, place, true);
         if (!pointed) return items;
         const model::Id take = *pointed;
-        const model::Take* tk = s.takes.find(take);
         items.push_back(rule);
-        // Render through the FX (MIDI through the track's instrument): that
-        // take is heard first when it is not.
-        const bool midi = isMidi(tk);
-        for (auto [label, mode] :
-             {std::pair{midi ? "Convert to audio" : "Render with FX, replacing the audio",
-                        "replace"},
-              {midi ? "Render to audio as a new take" : "Render with FX as a new take", "take"}}) {
+        // Render every selected item through its FX (MIDI through the track's
+        // instrument), the clicked one's take under the pointer (heard first
+        // when it is not); items without material or locked are left alone.
+        // Deleting FX removes the FX the renders went through after them: the
+        // replaced takes' go with them, then the tracks' chains.
+        std::vector<model::Id> render;
+        for (model::Id id : selection_) {
+            const model::Item* it = itemOf(s, id);
+            if (!it || it->locked) continue;
+            const model::Take* tk =
+                id == itemId ? s.takes.find(take)
+                             : (it->activeTake ? s.takes.find(*it->activeTake) : nullptr);
+            if (tk && tk->source) render.push_back(id);
+        }
+        for (auto [label, mode, dropFx] :
+             {std::tuple{"Render with FX, replacing the audio", "replace", false},
+              {"Render with FX, deleting FX", "replace", true},
+              {"Render with FX as a new take", "take", false}}) {
             ui::MenuItem m;
             m.label = label;
-            m.enabled = tk && tk->source.has_value();
-            m.run = [this, itemId, take, heard = *item->activeTake, modeName = std::string(mode)] {
+            m.enabled = !render.empty();
+            m.run = [this, render, itemId, take, heard = *item->activeTake,
+                     modeName = std::string(mode), drop = dropFx] {
                 if (!run) return;
+                const model::Session& now = view_.session();
                 std::vector<EditStep> steps;
-                if (take != heard) {
+                if (take != heard && std::count(render.begin(), render.end(), itemId)) {
                     json::Value pick = json::Value::object();
                     pick["item"] = itemId.str();
                     pick["take"] = take.str();
                     steps.push_back({"take.activate", std::move(pick)});
                 }
-                json::Value args = json::Value::object();
-                args["item"] = itemId.str();
-                args["mode"] = modeName;
-                steps.push_back({"item.apply-fx", std::move(args)});
-                if (auto r = run("Render item", steps); !r && onError) onError(r.error());
+                std::vector<model::Id> tracks;
+                for (model::Id id : render) {
+                    json::Value args = json::Value::object();
+                    args["item"] = id.str();
+                    args["mode"] = modeName;
+                    steps.push_back({"item.apply-fx", std::move(args)});
+                    if (const model::Item* it = itemOf(now, id);
+                        it && std::find(tracks.begin(), tracks.end(), it->track) == tracks.end())
+                        tracks.push_back(it->track);
+                }
+                if (drop)
+                    for (model::Id tr : tracks)
+                        if (const model::Track* t = now.tracks.find(tr))
+                            for (model::Id fx : t->chain) {
+                                json::Value args = json::Value::object();
+                                args["fx"] = fx.str();
+                                steps.push_back({"fx.remove", std::move(args)});
+                            }
+                if (auto r = run(render.size() == 1 ? "Render item" : "Render items", steps);
+                    !r && onError)
+                    onError(r.error());
             };
             items.push_back(std::move(m));
         }

@@ -1245,6 +1245,37 @@ TEST_CASE("takes: explode onto new tracks; render an item with FX as a new take"
     CHECK(made.name.ends_with("(FX)"));
 }
 
+TEST_CASE("the renders act on every selected item; deleting FX empties their tracks' chains") {
+    Fixture f;
+    if (!f.ok) return;
+    const model::Id audio = f.itemOnRow(0), midi = f.itemOnRow(1, true);
+    const model::Id track = f.item(audio).track;
+    auto listed = f.dispatcher->execute({"plugin.list", json::Value::object(), kUi});
+    REQUIRE(listed);
+    for (const json::Value& p : (*listed)["plugins"].asArray())  // an effect, where there is one
+        if (!(p.find("instrument") && p.find("instrument")->asBool()) &&
+            f.dispatcher->execute({"fx.add",
+                                   json::parse(R"({"track":")" + track.str() + R"(","plugin":")" +
+                                               p.find("id")->asString() + R"("})")
+                                       .value(),
+                                   kUi}))
+            break;
+    f.sync();
+    f.view->gestures().setSelection({audio, midi});
+    const auto steps = f.steps();
+    const ui::Rect r = f.rectOf(audio);
+    rightClick(f, onItem(f, audio, r.y + r.h / 2));
+    pick(f, "Render with FX, deleting FX");
+    CHECK(f.steps() == steps + 1);
+    for (model::Id id : {audio, midi}) {
+        const model::Take& tk = *f.app->head().takes.find(*f.item(id).activeTake);
+        CHECK(tk.name.ends_with("(FX)"));
+        CHECK(tk.source->kind != model::Kind::Midi);
+    }
+    CHECK(f.app->head().tracks.find(track)->chain.empty());
+    CHECK(f.app->head().tracks.find(f.item(midi).track)->chain.empty());
+}
+
 TEST_CASE("arrange gestures: Ctrl+click on a fade handle cycles the fade's shape") {
     Fixture f;
     if (!f.ok) return;
