@@ -1276,9 +1276,9 @@ std::vector<ui::MenuItem> ItemGestures::buildItemMenu(const MenuPlace& place, bo
         m.run = [this, timebase = std::string(name)] {
             if (!run) return;
             std::vector<EditStep> steps;
-            for (model::Id item : selection_) {
+            for (model::Id id : selection_) {
                 json::Value args = json::Value::object();
-                args["item"] = item.str();
+                args["item"] = id.str();
                 args["timebase"] = timebase;
                 steps.push_back({"item.set", std::move(args)});
             }

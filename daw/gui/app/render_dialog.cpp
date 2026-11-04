@@ -613,8 +613,8 @@ void RenderDialog::buildSource(ui::Node& body) {
          {std::tuple{Source::Master, "render.src.master", "Master mix"},
           std::tuple{Source::Stems, "render.src.stems", "Stems"},
           std::tuple{Source::Regions, "render.src.regions", "Regions"}}) {
-        auto& t =
-            sources.emplace<ui::Toggle>(id, label, "accent", [this, s = s](bool) { setSource(s); });
+        auto& t = sources.emplace<ui::Toggle>(id, label, "accent",
+                                              [this, src = s](bool) { setSource(src); });
         t.layout.width = ui::SizeRule::fixed(96);
         t.setOn(current == s);
     }
@@ -792,7 +792,9 @@ void RenderDialog::buildRange(ui::Node& body) {
                                      custom ? "beats" : compact(value));
         field.layout.width = ui::SizeRule::fixed(64);
         field.enabled = custom;
-        field.onChange = [this, id = std::string(id)](const std::string& t) { setField(id, t); };
+        field.onChange = [this, field = std::string(id)](const std::string& t) {
+            setField(field, t);
+        };
         caption(r, std::string(id) + ".bar", position(value), 44);
     }
     char length[64];
@@ -1144,9 +1146,9 @@ void RenderDialog::buildProcessing(ui::Node& body) {
     for (const auto& [id, key, label] : {std::tuple{"render.trim.start", "start", "Trim start"},
                                          std::tuple{"render.trim.end2", "end", "Trim end"}}) {
         auto& box = r.emplace<ui::Checkbox>(id, label, flag(trim.find(key)));
-        box.onToggle = [this, key = std::string(key)](bool v) {
+        box.onToggle = [this, edge = std::string(key)](bool v) {
             json::Value t = settings_["trim"];
-            t[key] = v;
+            t[edge] = v;
             set("trim", std::move(t), true);
         };
     }
@@ -1222,13 +1224,13 @@ void RenderDialog::buildMetadata(ui::Node& body) {
           std::pair{"markers", "Embed markers and regions (WAV, AIFF)"}}) {
         auto& box = flags.emplace<ui::Checkbox>("render.meta." + std::string(key), label,
                                                 m && flag(m->find(key)));
-        box.onToggle = [this, key = std::string(key)](bool v) {
+        box.onToggle = [this, name = std::string(key)](bool v) {
             json::Value next =
                 settings_.find("metadata") ? settings_["metadata"] : json::Value::object();
             if (v)
-                next[key] = true;
+                next[name] = true;
             else
-                next.asObject().erase(key);
+                next.asObject().erase(name);
             set("metadata", next.size() ? std::move(next) : json::Value());
         };
     }
@@ -1353,14 +1355,14 @@ void RenderDialog::openExisting(const json::Value& existing) {
     for (const auto& [id, label, mode] :
          {std::tuple{"render.exists.overwrite", "Overwrite", "overwrite"},
           std::tuple{"render.exists.skip", "Skip them", "skip"}})
-        buttons.emplace<ui::Button>(id, label, [this, mode = std::string(mode)] {
+        buttons.emplace<ui::Button>(id, label, [this, ifExists = std::string(mode)] {
             root_.closePopup();
             if (auto written = writeSettings(); !written) {
                 setStatus("render settings: " + written.error().message);
                 return;
             }
             json::Value a = renderArgs(true);
-            a["if_exists"] = mode;
+            a["if_exists"] = ifExists;
             startJob(commandName(), std::move(a));
         });
     buttons.emplace<ui::Button>("render.exists.cancel", "Cancel", [this] { root_.closePopup(); });
@@ -1400,19 +1402,19 @@ void RenderDialog::openMatrix() {
             auto& box =
                 line.emplace<ui::Checkbox>("render.matrix." + rowId + "." + trackId, "", on);
             box.layout.width = ui::SizeRule::fixed(84);
-            box.onToggle = [this, rowId = rowId, trackId = trackId](bool checked) {
+            box.onToggle = [this, rid = rowId, tid = trackId](bool checked) {
                 json::Value next = settings_.find("matrix") && settings_["matrix"].isObject()
                                        ? settings_["matrix"]
                                        : json::Value::object();
-                json::Value cellsNow = next.find(rowId) ? next[rowId] : json::Value::array();
+                json::Value cellsNow = next.find(rid) ? next[rid] : json::Value::array();
                 json::Value kept = json::Value::array();
                 for (const auto& c : cellsNow.asArray())
-                    if (c.asString() != trackId) kept.push_back(c);
-                if (checked) kept.push_back(trackId);
+                    if (c.asString() != tid) kept.push_back(c);
+                if (checked) kept.push_back(tid);
                 if (kept.size())
-                    next[rowId] = std::move(kept);
+                    next[rid] = std::move(kept);
                 else
-                    next.asObject().erase(rowId);
+                    next.asObject().erase(rid);
                 set("matrix", next.size() ? std::move(next) : json::Value());
             };
         }

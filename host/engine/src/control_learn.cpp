@@ -347,13 +347,12 @@ void registerFor(cmd::Registry& registry, model::Kind kind) {
         c.errors = {
             {prefix + ".learn_param", "no such control", "use one of: " + controlNames(kind)},
             {"learn.mode", "toggle on a level or pan", "use absolute or a relative mode"}};
-        c.run = [kind](const LearnArgs& a, Context& ctx) -> Result<LearnResult> {
+        c.run = [kind, prefix](const LearnArgs& a, Context& ctx) -> Result<LearnResult> {
             EngineApp& engine = app(ctx);
             const model::Session s = engine.view();
             auto id = target(s, kind, a.target);
             if (!id) return std::move(id).error();
             const ControlSpec* spec = findSpec(kind, a.param);
-            const std::string prefix(ownerOf(kind).prefix);
             if (!spec)
                 return Error(prefix + ".learn_param", "no control " + a.param, "/param",
                              "use one of: " + controlNames(kind));
@@ -395,13 +394,12 @@ void registerFor(cmd::Registry& registry, model::Kind kind) {
         c.examples = {{"Free the level",
                        j("{\"" + key + "\":\"" + example + "\",\"param\":\"volume\"}"), j("{}"),
                        "song_with_mix_learn"}};
-        c.run = [kind](const LearnRef& a, Context& ctx) -> Result<Empty> {
+        c.run = [kind, prefix](const LearnRef& a, Context& ctx) -> Result<Empty> {
             EngineApp& engine = app(ctx);
             const model::Session s = engine.view();
             auto id = target(s, kind, a.target);
             if (!id) return std::move(id).error();
             const auto& list = *learnOf(s, *id);
-            const std::string prefix(ownerOf(kind).prefix);
             if (std::none_of(list.begin(), list.end(),
                              [&](const auto& l) { return l.param == a.param; }))
                 return Error(prefix + ".learn_unknown", a.param + " has no MIDI binding", "/param",
@@ -436,9 +434,8 @@ void registerFor(cmd::Registry& registry, model::Kind kind) {
                    ? R"({"learn":[{"group":"gr_1","param":"volume","midi":{"kind":"cc","channel":1,"number":9},"control":"CC 9 · ch 1"}]})"
                    : R"({"learn":[{"track":"tr_1","param":"volume","midi":{"kind":"cc","channel":1,"number":7},"control":"CC 7 · ch 1"}]})"),
              "song_with_mix_learn"}};
-        c.run = [kind](const LearnListArgs& a, Context& ctx) -> Result<LearnList> {
+        c.run = [kind, key](const LearnListArgs& a, Context& ctx) -> Result<LearnList> {
             const model::Session s = app(ctx).view();
-            const std::string key(ownerOf(kind).key);
             LearnList out;
             if (a.target) {
                 auto id = target(s, kind, *a.target);
