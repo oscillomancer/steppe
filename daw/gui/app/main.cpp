@@ -637,6 +637,9 @@ int main(int argc, char** argv) {
             audioEdit.run(items, operation, grid);
         };
         g.onConsolidate = [&](const auto& items) { audioEdit.consolidate(items); };
+        g.onExport = [&](model::Id item) {
+            fileActions.exportItem(item, [&](const std::string& text) { shell.setStatus(text); });
+        };
         g.pinVersion = [&app](std::uint64_t version) { return (*app)->versions().pin(version); };
         const cmd::Origin ui{cmd::Origin::Type::Ui, "gui", {}};
         if (auto mouse = views::MouseMap::load(mouseFile))
@@ -808,6 +811,18 @@ int main(int argc, char** argv) {
                      [&] { reportEdit("merge", shell.arrange()->gestures().mergeSelection()); });
     appActions.addUi("ui.item.consolidate", "Item: consolidate selected items",
                      [&] { shell.arrange()->gestures().consolidateSelection(); });
+    appActions.addUi("ui.item.export", "Item: export the selected item\u2019s audio or MIDI\u2026",
+                     [&] {
+                         const auto& g = shell.arrange()->gestures();
+                         if (g.selection().empty())
+                             return shell.setStatus("Export: select an item");
+                         fileActions.exportItem(g.selection().front(),
+                                                [&](const std::string& t) { shell.setStatus(t); });
+                     });
+    appActions.addUi("ui.item.mix-to-track", "Item: mix to new track",
+                     [&] { audioEdit.mixToTrack(shell.arrange()->gestures().selection()); });
+    appActions.setEnabled("ui.item.mix-to-track",
+                          [](const actions::Context& c) { return !c.selectedItems.empty(); });
     appActions.addUi("ui.item.heal", "Item: heal selected audio splits",
                      [&] { reportEdit("heal", shell.arrange()->gestures().healSelection()); });
     appActions.addUi("item.split:playhead", "Item: split selected at cursor",

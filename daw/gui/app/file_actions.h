@@ -92,6 +92,10 @@ class FileActions {
     // The system's open dialog for a PNG or JPEG (a render cover).
     void chooseImage(const std::filesystem::path& start,
                      std::function<void(std::filesystem::path)> done);
+    // The item menu's Export…: the system's save dialog (WAV or MIDI), named
+    // after the heard take, in the project's folder (else mediaHome()), then
+    // item.export; `status` gets the outcome (the status bar).
+    void exportItem(model::Id item, std::function<void(const std::string&)> status);
     // A save's (or template's) warnings, if it has any, in a popup: a plug-in
     // whose state could not be read keeps its earlier state.
     void showSaveWarnings(const std::string& command, const json::Value& result);

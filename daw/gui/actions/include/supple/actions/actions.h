@@ -54,6 +54,8 @@ struct Action {
     // Set: the action follows a controller's value ("(MIDI CC)" actions:
     // a volume, a pan, a scroll) instead of running once per press.
     std::function<Result<json::Value>(const ControlValue&, const Context&)> control;
+    // Set: whether the action applies now (menus grey it when false). Unset: always.
+    std::function<bool(const Context&)> enabled;
     bool fromRegistry = false;
 };
 

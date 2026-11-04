@@ -54,6 +54,10 @@ struct FileInfo {
     int channels = 0;
     std::int64_t frames = 0;
     bool truncated = false;
+    // WAV only (0/false otherwise): the stored sample size and whether the
+    // samples are IEEE float rather than integer PCM.
+    int bitsPerSample = 0;
+    bool floatSamples = false;
 };
 Result<FileInfo> inspect(const std::filesystem::path& path);
 

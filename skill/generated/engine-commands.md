@@ -6614,6 +6614,112 @@ Result:
 
 ```
 
+## `item.export@1`
+
+Write an item's raw audio (WAV) or its MIDI (SMF) to a file.
+
+Exports the active take over the part the item covers (trims and splits respected). Audio: the source's own samples, rate and channels, from the source position at the item's start to the one at its end (playrate, unpreserved pitch and stretch markers decide that span but are not applied; a looping item ignores markers and repeats its source as heard; outside the source is silence). No gain, fades, pan, channel mode, FX or track processing. 16/24-bit PCM WAV sources keep their format; others are 32-bit float. MIDI: what the item plays (loops unrolled, notes ending by its end) from 0, at the source PPQ, with the tempo and meter at the item's start. Relative paths resolve against the work directory; a missing extension is added; existing files are replaced, the project's media never.
+
+Kind: `action`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `item` | string |  |  |  |  |
+| `path` | string |  |  |  |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "item_export_result",
+  "properties": {
+    "path": {
+      "type": "string"
+    },
+    "format": {
+      "type": "string"
+    },
+    "sample_format": {
+      "type": "string"
+    },
+    "sample_rate": {
+      "type": "number"
+    },
+    "channels": {
+      "type": "integer"
+    },
+    "frames": {
+      "type": "integer"
+    },
+    "notes": {
+      "type": "integer"
+    }
+  },
+  "required": ["path", "format"],
+  "additionalProperties": false
+}
+
+```
+
+### Errors
+
+- `item.unknown`: no such item Hint: use an id from session.query {kind: "item"}
+- `item.export_empty`: an empty take, or no source audio under the item Hint: pick a take with material (take.activate) or move the item onto its audio
+- `item.export_source`: the source file cannot be read Hint: restore or relink the source
+- `item.export_path`: no path, or it names the project's media Hint: choose another file
+- `item.export_extension`: the extension does not match the item's kind Hint: use .wav for audio items and .mid for MIDI items
+- `item.export_too_long`: the export exceeds the in-memory sample budget Hint: shorten the item
+
+### Examples
+
+**The right half of a split item: one second of its source** (`song_split_audio`)
+
+```json
+{
+  "item": "it_2",
+  "path": "right-half.wav"
+}
+
+```
+
+Result:
+
+```json
+{
+  "path": "<any>",
+  "format": "wav",
+  "sample_format": "float32",
+  "sample_rate": 48000.0,
+  "channels": 2,
+  "frames": 48000
+}
+
+```
+
+**A MIDI item as a Standard MIDI File** (`song_with_item`)
+
+```json
+{
+  "item": "it_1",
+  "path": "bass"
+}
+
+```
+
+Result:
+
+```json
+{
+  "path": "<any>",
+  "format": "mid",
+  "notes": 2
+}
+
+```
+
 ## `item.heal@1`
 
 Heal compatible consecutive audio pieces without rendering.
@@ -6659,6 +6765,81 @@ Result:
 }
 
 ```
+
+## `item.mix-to-track@1`
+
+Mix the selected items through their strips onto a new muted channel.
+
+Background job. Only the given items sound; each plays through its channel's full strip (take FX, item gain/fades, track FX, automation, fader, pan, Console 9 encode), and the sum is decoded by a neutral Console 9 Buss, as a fresh buss fed by those channels hears it. Sends, parent busses, mute switches and solo are ignored. Span: earliest item start to latest end, no tail. Result: a project-rate stereo float WAV in the media folder on a new muted channel after the last source (under their common parent, else the main master), one item at the span's start. Source items stay. One undo step; job.get returns track, item and file.
+
+Kind: `action`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `items` | array |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Errors
+
+- `item.mix_not_channel`: an item is not on a channel Hint: select items on channels only
+- `item.mix_empty`: nothing selected plays material Hint: select items with audio or MIDI
+- `track.frozen`: an item is on a frozen channel Hint: unfreeze the channel first
+- `item.mix_*`: stale selection, failed render or media Hint: repair and retry the mix
+
+### Examples
+
+**Mix an audio item to a new channel** (`song_with_audio`)
+
+```json
+{
+  "items": ["it_1"]
+}
+
+```
+
+Result:
+
+```json
+{
+  "job": "<any>"
+}
+
+```
+
+## `item.mix-to-track.commit@1`
+
+Put a finished item mix on a new muted channel as one replayable edit.
+
+
+
+Kind: `edit`. Exposure: `internal`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `items` | array |  |  |  |  |
+| `expected` | string |  |  |  |  |
+| `start` | number |  |  |  |  |
+| `end` | number |  |  |  |  |
+| `media` | object |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
 
 ## `item.move@1`
 

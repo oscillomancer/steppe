@@ -128,9 +128,10 @@ Status copyFolder(const fs::path& from, const fs::path& to) {
                 continue;
             }
         }
-        // A freeze job has not published these files into history yet.
+        // A freeze, consolidate or mix job has not published these files into history yet.
         if (it->is_directory(ec) && (it->path().filename() == ".freeze-pending" ||
-                                     it->path().filename() == ".consolidate-pending")) {
+                                     it->path().filename() == ".consolidate-pending" ||
+                                     it->path().filename() == ".mix-pending")) {
             it.disable_recursion_pending();
             continue;
         }

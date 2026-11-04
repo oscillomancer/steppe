@@ -102,8 +102,8 @@ ChromeLayout ChromeLayout::defaults() {
           "ui.track.template.save", "-", "track.remove:selected"}},
         {"Item",
          {"ui.midi.new", "-", "ui.item.cut", "ui.item.copy", "ui.item.paste", "ui.item.duplicate",
-          "ui.item.merge", "item.split:playhead", "item.remove:selected", "-", "ui.midi.edit",
-          "ui.midi.toggle"}},
+          "ui.item.merge", "item.split:playhead", "item.remove:selected", "ui.item.mix-to-track",
+          "-", "ui.midi.edit", "ui.midi.toggle"}},
         {"Transport",
          {"transport.toggle", "transport.record", "transport.loop.toggle", "-",
           "transport.seek:start", "transport.seek:end"}},
@@ -218,6 +218,7 @@ void fillChrome(ui::Node& bar, ui::Root& root, AppActions& actions, const Chrome
                     const std::string name = shortName(*a) + (a->prompts.empty() ? "" : "…");
                     entries.push_back(
                         {name, actions.keysFor(id), [&actions, id] { actions.invoke(id); }});
+                    if (a->enabled) entries.back().enabled = a->enabled(actions.context());
                 }
                 root.openPopup(ui::makeMenu("menu." + title + ".items", std::move(entries),
                                             [&root] { root.closePopup(); }),

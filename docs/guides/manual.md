@@ -435,6 +435,30 @@ selected audio and MIDI items at the edit cursor. Items outside the cursor stay
 whole; the menu's pointer position does not set the split point. Undo restores
 the entire selection edit in one step.
 
+**Item > Mix to new track** mixes the selected items into one new audio file,
+as a buss would: each item plays through its track's effects, automation, fader
+and pan, and the result goes onto a new track, created muted so it does not
+double what is already playing. Unmute it (and mute or remove the originals)
+when you want to hear it instead; this saves CPU and joins many files into one.
+Only the selected items are heard, whatever the tracks' mute and solo say;
+sends and the tracks' parent busses are left out. The new file runs from the
+first selected item's start to the last one's end (effect tails beyond that are
+cut) and is always a stereo WAV at the project's rate; the render dialog's
+settings do not apply. Progress shows in the status line, and one undo removes
+the new track. Agents use `item.mix-to-track {items:[...]}` and follow the job.
+
+Right-click an item and choose **Export…** to save its material to a file of
+your choosing. An audio item gives a WAV of its source audio exactly as recorded
+or imported: no gain, fades, effects or mixer processing, at the source's own
+sample rate and channels (a 16- or 24-bit WAV source stays 16 or 24-bit; others
+become 32-bit float). Only the part the item covers is exported: a trimmed item
+gives its trimmed part, and one piece of a split item gives only that piece. A
+looping item repeats its source as you hear it. Play rate and stretch markers
+choose which stretch of the source is exported but are not applied. A MIDI item
+gives a MIDI file of the notes it plays, starting at zero, with the tempo and time
+signature at the item's start. The entry is greyed for an empty take; the status
+line says where the file went. Agents use `item.export {item, path}`.
+
 **Split item at prior zero crossing** moves the split back to the last point,
 at most 100 ms before the cursor, where the item's audio crosses zero, which
 avoids a click at the cut. If there is none, it splits at the cursor. It does

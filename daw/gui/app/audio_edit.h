@@ -6,13 +6,14 @@
 #include "supple/model/schemas.h"
 
 namespace supple::gui {
-// UI continuations/status for detection/quantize and background consolidation.
+// UI continuations/status for detection/quantize and background item jobs
+// (consolidation, mix to new track).
 class AudioEdit {
   public:
     AudioEdit(engine::EngineApp& app, cmd::Dispatcher& dispatcher)
         : app_(app), dispatcher_(dispatcher) {}
     void run(const std::vector<model::Id>& selected, const std::string& operation, double grid) {
-        if (pending_ || consolidation_) {
+        if (pending_ || background_) {
             report("An audio edit is already running");
             return;
         }
@@ -58,35 +59,30 @@ class AudioEdit {
             execute("audio.quantize", args);
     }
     void consolidate(const std::vector<model::Id>& selected) {
-        if (pending_ || consolidation_) {
-            report("An audio edit is already running");
-            return;
-        }
-        auto args = json::Value::object();
-        args["items"] = json::Value::array();
-        for (auto id : selected) args["items"].push_back(id.str());
-        auto job = dispatcher_.execute({"item.consolidate", args, origin_});
-        if (!job) {
-            report(job.error().toString());
-            return;
-        }
-        consolidation_ = job->find("job")->asString();
-        report("Consolidating items…");
+        start("item.consolidate", selected,
+              {"", "Consolidating items…", "Items consolidated", "Consolidation cancelled"});
+    }
+    // Item: Mix to new track (item.mix-to-track): the result lands muted.
+    void mixToTrack(const std::vector<model::Id>& selected) {
+        if (selected.empty()) return report("Mix to new track: select items first");
+        start("item.mix-to-track", selected,
+              {"", "Mixing items to a new track…", "Items mixed to a new muted track",
+               "Mix cancelled"});
     }
     void poll() {
-        if (consolidation_) {
-            auto job = dispatcher_.jobs().status(*consolidation_);
+        if (background_) {
+            auto job = dispatcher_.jobs().status(background_->job);
             if (!job) {
                 report(job.error().toString());
-                consolidation_.reset();
+                background_.reset();
             } else if (job->find("status")->asString() != "running") {
                 if (job->find("status")->asString() == "done")
-                    report("Items consolidated");
+                    report(background_->done);
                 else if (const auto* error = job->find("error"))
                     report(json::writeCanonical(*error));
                 else
-                    report("Consolidation cancelled");
-                consolidation_.reset();
+                    report(background_->cancelled);
+                background_.reset();
             }
         }
         if (!pending_) return;
@@ -141,6 +137,27 @@ class AudioEdit {
     std::function<void(const std::string&)> onStatus;
 
   private:
+    // A background item job (consolidate, mix to new track) and its messages.
+    struct Background {
+        std::string job, running, done, cancelled;
+    };
+    void start(const char* command, const std::vector<model::Id>& selected, Background messages) {
+        if (pending_ || background_) {
+            report("An audio edit is already running");
+            return;
+        }
+        auto args = json::Value::object();
+        args["items"] = json::Value::array();
+        for (auto id : selected) args["items"].push_back(id.str());
+        auto job = dispatcher_.execute({command, args, origin_});
+        if (!job) {
+            report(job.error().toString());
+            return;
+        }
+        messages.job = job->find("job")->asString();
+        report(messages.running);
+        background_ = std::move(messages);
+    }
     void report(const std::string& message) {
         if (onStatus) onStatus(message);
     }
@@ -159,6 +176,6 @@ class AudioEdit {
     cmd::Dispatcher& dispatcher_;
     const cmd::Origin origin_{cmd::Origin::Type::Ui, "gui", {}};
     std::optional<Pending> pending_;
-    std::optional<std::string> consolidation_;
+    std::optional<Background> background_;
 };
 }  // namespace supple::gui

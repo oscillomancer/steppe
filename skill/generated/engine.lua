@@ -669,8 +669,31 @@ q = nil
 ---@field items string[]
 ---@field tracks string[]
 
+---@class Quire.item_export_args
+---@field item string
+---@field path string
+
+---@class Quire.item_export_result
+---@field path string
+---@field format string
+---@field sample_format? string
+---@field sample_rate? number
+---@field channels? integer
+---@field frames? integer
+---@field notes? integer
+
 ---@class Quire.item_heal_args
 ---@field items string[]
+
+---@class Quire.item_mix_to_track_args
+---@field items string[]
+
+---@class Quire.item_mix_to_track_commit_args
+---@field items string[]
+---@field expected string
+---@field start number
+---@field end number
+---@field media table
 
 ---@class Quire.item_move_args
 ---@field bypass_groups? boolean (default: false)
@@ -1667,7 +1690,9 @@ q = nil
 ---@field consolidate fun(args: Quire.item_consolidate_args): table Consolidate selected audio and MIDI per track in a background job.
 ---@field duplicate fun(args: Quire.item_duplicate_args): Quire.item_duplicate_result Copy an item and its takes to a new beat position (default: immediately after).
 ---@field ["explode-takes"] fun(args: Quire.item_explode_takes_args): Quire.item_explode_takes_result Spread an item's takes onto new tracks, or one after another on its track.
+---@field export fun(args: Quire.item_export_args): Quire.item_export_result Write an item's raw audio (WAV) or its MIDI (SMF) to a file.
 ---@field heal fun(args: Quire.item_heal_args): table Heal compatible consecutive audio pieces without rendering.
+---@field ["mix-to-track"] fun(args: Quire.item_mix_to_track_args): table Mix the selected items through their strips onto a new muted channel.
 ---@field move fun(args: Quire.item_move_args): table Move an item in time (position in beats or bar) and/or to another track.
 ---@field paste fun(args: Quire.item_paste_args): Quire.item_paste_result Copy items as they were in a version (a clipboard) to tracks and beats.
 ---@field remove fun(args: Quire.item_remove_args): table Remove an item with its takes (unpooled sources go too).
@@ -1676,6 +1701,9 @@ q = nil
 
 ---@class Quire.item.consolidate
 ---@field commit fun(args: Quire.item_consolidate_commit_args): table Attach consolidated audio and merge MIDI as one replayable edit.
+
+---@class Quire.item.mix-to-track
+---@field commit fun(args: Quire.item_mix_to_track_commit_args): table Put a finished item mix on a new muted channel as one replayable edit.
 
 ---@class Quire.job
 ---@field cancel fun(args: Quire.job_cancel_args): table Cancel a job.
