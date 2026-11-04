@@ -263,3 +263,66 @@ TEST_CASE("item.export writes a trimmed MIDI item as a Standard MIDI File from z
     CHECK(info.tempos[0].second == doctest::Approx(120.0));
     CHECK(info.meters == std::vector<std::pair<std::int64_t, midi::Meter>>{{0, midi::Meter{4, 4}}});
 }
+
+TEST_CASE("item.mix-to-track sums the selected items' strips onto a new muted channel") {
+    Fixture f;
+    // tr_2 plays the tone from 1 s, quieter and panned; tr_1 plays it from 0.
+    f.run("track.add", R"({"name":"Other"})");
+    auto add = json::Value::object();
+    add["track"] = "tr_2";
+    add["position"] = 2;
+    add["audio_file"] = (f.dir / "media" / "tone.wav").string();
+    f.run("item.add", json::writeCompact(add));
+    f.run("track.set", R"({"track":"tr_2","volume_db":-6,"pan":30})");
+    // With Console 9 off (this fixture) the stages are linear: the mix is the
+    // sum of the two strips' stems, each decoded as a buss would.
+    auto stem = [&](const char* track) {
+        OfflineSettings settings;
+        settings.applyMasterPlayrate = false;
+        settings.track = *model::Id::parse(track);
+        settings.startSeconds = 0;
+        settings.endSeconds = 3;
+        return f.app->renderMix(settings).value().audio;
+    };
+    const auto one = stem("tr_1"), two = stem("tr_2");
+    // Neither the mute switch nor an unselected item on a source channel is heard.
+    f.run("track.set", R"({"track":"tr_1","mute":true})");
+    add["position"] = 0;
+    f.run("item.add", json::writeCompact(add));  // it_3, not selected
+    const auto tracks = f.app->head().tracks.size();
+    {
+        std::lock_guard lock(f.mutex);
+        f.finished = false;
+    }
+    const auto result = f.finish(f.run("item.mix-to-track", R"({"items":["it_1","it_2"]})"));
+    const auto s = f.app->head();
+    REQUIRE(s.tracks.size() == tracks + 1);
+    const auto track = *model::Id::parse(result.find("track")->asString());
+    const auto& made = *s.tracks.find(track);
+    CHECK(made.type == model::StripType::Channel);
+    CHECK(made.mute);
+    CHECK(made.name == "Mix");
+    CHECK(made.parent == model::kMaster);
+    const auto& children = s.tracks.find(model::kMaster)->children;
+    CHECK(children.back() == track);  // after tr_2, the last source
+    const auto& item = *s.items.find(*model::Id::parse(result.find("item")->asString()));
+    const auto span = model::itemSpan(s, item);
+    CHECK(span.startSec == doctest::Approx(0));
+    CHECK(span.endSec == doctest::Approx(3));
+    CHECK(s.items.size() == 4);  // the sources stay
+    const auto mix = audio::readAudio(result.find("file")->asString()).value();
+    REQUIRE(mix.channelCount() == 2);
+    REQUIRE(mix.frames() == 3 * 48000);
+    REQUIRE(one.frames() == mix.frames());
+    float peak = 0;
+    for (std::size_t c = 0; c < 2; ++c)
+        for (std::size_t i = 0; i < mix.frames(); ++i) {
+            const double expected = double(one.channels[c][i]) + double(two.channels[c][i]);
+            REQUIRE(double(mix.channels[c][i]) == doctest::Approx(expected).epsilon(1e-5));
+            peak = std::max(peak, std::abs(mix.channels[c][i]));
+        }
+    CHECK(peak > 0.1f);
+    // One undo step removes the channel and its item.
+    REQUIRE(f.app->undo());
+    CHECK(f.app->head().tracks.size() == tracks);
+}

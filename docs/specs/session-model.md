@@ -676,7 +676,10 @@ and naming. All `edit` unless marked (q) query or (a) action.
   its take FX and the track's main chain, pre-fader, over the item's span,
   into an audio file in the media folder: a new heard take or in its place),
   `item.export {item, path}` (a: the heard take's raw source span as WAV, or
-  what a MIDI item plays as a Standard MIDI File; engine.md).
+  what a MIDI item plays as a Standard MIDI File; engine.md),
+  `item.mix-to-track {items}` (background action, one undo step: the items
+  through their channels' strips, decoded as a fresh buss hears them, onto a
+  new muted channel; engine.md).
 - **MIDI**: `midi.write {item | {track, at}, notation, replace: bool}`,
   `midi.get {item, format: notation|events}` (q), `midi.edit {item, ops:
   [{select: {pitch, range, channel}, set|shift|transpose|quantize|velocity}]}`,

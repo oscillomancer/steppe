@@ -6766,6 +6766,81 @@ Result:
 
 ```
 
+## `item.mix-to-track@1`
+
+Mix the selected items through their strips onto a new muted channel.
+
+Background job. Only the given items sound; each plays through its channel's full strip (take FX, item gain/fades, track FX, automation, fader, pan, Console 9 encode), and the sum is decoded by a neutral Console 9 Buss, as a fresh buss fed by those channels hears it. Sends, parent busses, mute switches and solo are ignored. Span: earliest item start to latest end, no tail. Result: a project-rate stereo float WAV in the media folder on a new muted channel after the last source (under their common parent, else the main master), one item at the span's start. Source items stay. One undo step; job.get returns track, item and file.
+
+Kind: `action`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `items` | array |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Errors
+
+- `item.mix_not_channel`: an item is not on a channel Hint: select items on channels only
+- `item.mix_empty`: nothing selected plays material Hint: select items with audio or MIDI
+- `track.frozen`: an item is on a frozen channel Hint: unfreeze the channel first
+- `item.mix_*`: stale selection, failed render or media Hint: repair and retry the mix
+
+### Examples
+
+**Mix an audio item to a new channel** (`song_with_audio`)
+
+```json
+{
+  "items": ["it_1"]
+}
+
+```
+
+Result:
+
+```json
+{
+  "job": "<any>"
+}
+
+```
+
+## `item.mix-to-track.commit@1`
+
+Put a finished item mix on a new muted channel as one replayable edit.
+
+
+
+Kind: `edit`. Exposure: `internal`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `items` | array |  |  |  |  |
+| `expected` | string |  |  |  |  |
+| `start` | number |  |  |  |  |
+| `end` | number |  |  |  |  |
+| `media` | object |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
+
 ## `item.move@1`
 
 Move an item in time (position in beats or bar) and/or to another track.

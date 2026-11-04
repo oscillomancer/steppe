@@ -185,6 +185,10 @@ instructions are in `docs/guides/installing.md`.
   kept separate per track (one undo step, track processing stays live),
   item Export… (`item.export`: the heard take's raw source span as WAV, trims,
   splits and loops respected, or a MIDI item as a Standard MIDI File),
+  Item > Mix to new track (background `item.mix-to-track`: selected items through
+  their full strips, Console 9 decoded as a fresh buss hears them, onto a new
+  muted channel, one undo step; a customized `menus.json` lists it only once
+  added with Ctrl+M),
   adjacent Consolidate items / Heal splits item-menu actions with shared engine
   eligibility, and non-rendering `item.heal` for compatible split/slice chains,
   retaining outer fades and full source maps while removing generated interior fades,

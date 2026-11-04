@@ -819,6 +819,10 @@ int main(int argc, char** argv) {
                          fileActions.exportItem(g.selection().front(),
                                                 [&](const std::string& t) { shell.setStatus(t); });
                      });
+    appActions.addUi("ui.item.mix-to-track", "Item: mix to new track",
+                     [&] { audioEdit.mixToTrack(shell.arrange()->gestures().selection()); });
+    appActions.setEnabled("ui.item.mix-to-track",
+                          [](const actions::Context& c) { return !c.selectedItems.empty(); });
     appActions.addUi("ui.item.heal", "Item: heal selected audio splits",
                      [&] { reportEdit("heal", shell.arrange()->gestures().healSelection()); });
     appActions.addUi("item.split:playhead", "Item: split selected at cursor",

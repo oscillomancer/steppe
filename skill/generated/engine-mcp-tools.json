@@ -5152,6 +5152,32 @@
     }
   },
   {
+    "name": "item_mix-to-track",
+    "title": "Mix the selected items through their strips onto a new muted channel.",
+    "description": "Mix the selected items through their strips onto a new muted channel. Background job. Only the given items sound; each plays through its channel's full strip (take FX, item gain/fades, track FX, automation, fader, pan, Console 9 encode), and the sum is decoded by a neutral Console 9 Buss, as a fresh buss fed by those channels hears it. Sends, parent busses, mute switches and solo are ignored. Span: earliest item start to latest end, no tail. Result: a project-rate stereo float WAV in the media folder on a new muted channel after the last source (under their common parent, else the main master), one item at the span's start. Source items stay. One undo step; job.get returns track, item and file. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "item_mix_to_track_args",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z]{2}_[0-9]+$"
+          },
+          "minItems": 1
+        }
+      },
+      "required": ["items"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false
+    }
+  },
+  {
     "name": "item_move",
     "title": "Move an item in time (position in beats or bar) and/or to another track.",
     "description": "Move an item in time (position in beats or bar) and/or to another track.  See describe for errors and examples.",

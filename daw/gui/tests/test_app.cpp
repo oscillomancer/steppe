@@ -320,6 +320,34 @@ TEST_CASE("app actions: keys, the actions list, prompts, key binding and menus")
     CHECK((*sel)["tracks"].asArray().size() == 1);
 }
 
+TEST_CASE("menu entries grey while their action does not apply") {
+    App a;
+    if (!a.ok) return;
+    CHECK(gui::Chrome(*a.root, *a.actions, gui::ChromeLayout::defaults(), {})
+              .inMenu("Item", "ui.item.mix-to-track"));
+    a.actions->addUi("ui.test.gated", "Item: mix to new track", [] {});
+    a.actions->setEnabled("ui.test.gated",
+                          [](const actions::Context& c) { return !c.selectedItems.empty(); });
+    gui::ChromeLayout layout;
+    layout.menus = {{"Item", {"item.split:playhead", "ui.test.gated"}}};
+    gui::Chrome chrome(*a.root, *a.actions, layout, {});
+    a.root->setContent(chrome.build());
+    a.root->frame(false);
+    auto gated = [&] {
+        a.root->closePopups();
+        REQUIRE(a.root->click("menu.Item"));
+        a.root->frame(false);
+        const auto* menu = a.root->find("menu.Item.items");
+        REQUIRE(menu);
+        return ui::menuItems(*menu).back().enabled;
+    };
+    a.ui.selectedItems.clear();
+    CHECK_FALSE(gated());
+    a.snapshot("menu-greyed.png");
+    a.ui.selectedItems = {"it_1"};
+    CHECK(gated());
+}
+
 TEST_CASE("the toolbar and menus are edited in the app and saved (gap log #37)") {
     App a;
     if (!a.ok) return;

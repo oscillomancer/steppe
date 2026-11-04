@@ -435,6 +435,18 @@ selected audio and MIDI items at the edit cursor. Items outside the cursor stay
 whole; the menu's pointer position does not set the split point. Undo restores
 the entire selection edit in one step.
 
+**Item > Mix to new track** mixes the selected items into one new audio file,
+as a buss would: each item plays through its track's effects, automation, fader
+and pan, and the result goes onto a new track, created muted so it does not
+double what is already playing. Unmute it (and mute or remove the originals)
+when you want to hear it instead; this saves CPU and joins many files into one.
+Only the selected items are heard, whatever the tracks' mute and solo say;
+sends and the tracks' parent busses are left out. The new file runs from the
+first selected item's start to the last one's end (effect tails beyond that are
+cut) and is always a stereo WAV at the project's rate; the render dialog's
+settings do not apply. Progress shows in the status line, and one undo removes
+the new track. Agents use `item.mix-to-track {items:[...]}` and follow the job.
+
 Right-click an item and choose **Export…** to save its material to a file of
 your choosing. An audio item gives a WAV of its source audio exactly as recorded
 or imported: no gain, fades, effects or mixer processing, at the source's own

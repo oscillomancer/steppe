@@ -2156,6 +2156,46 @@ right take. Clipboard copies remap a complete warp bundle to fresh take IDs;
 partial copies are independent. Edits that break a remaining bundle's alignment
 fail at transaction commit, allowing a batch to move all members together.
 
+### Mixing items to a new track
+
+`item.mix-to-track {items:[it...]}` is a background action returning `{job}`;
+`job.get` becomes done after one internal `item.mix-to-track.commit` edit (one
+undo step) and its result holds `track`, `item` and `file`. It sums material
+mid-session like a buss, rendering FX and joining files into one.
+
+Only the selected items sound. Each plays through its channel's full strip:
+take FX, item and take gain, fades and pan, the track's FX chain, its
+automation (mute automation included), polarity/mono, fader and pan and the
+Console 9 Channel encode. The encoded outputs are summed and decoded by a
+neutral Console 9 Buss: the render reads the pre-FX tap of a fresh buss under
+the main master in a private snapshot whose only children are the source
+channels (parent sends enabled), so the file is exactly what a new buss fed by
+those channels hears at its input. With `project.console9` off the stages run
+linear as everywhere else. Sends and the channels' own parent busses are not in
+the path; every track's mute switch and solo, and VCA mute and solo, are
+cleared in the snapshot, so the selection alone decides what is heard. MIDI
+items play through the track's (or take's) instrument. Unselected items are
+left out of the snapshot view, so plug-in key inputs fed by other tracks hear
+silence. The master rate is not applied (the result plays under it).
+
+The span runs from the earliest selected item's start to the latest one's end,
+with no tail, as `item.consolidate` and `item.apply-fx` do; effects ringing past
+the last item's end are cut. The result is a project-rate stereo 32-bit float
+WAV in the project's media folder (pending under `.mix-pending`, excluded from
+Save As copies, removed on failure or cancellation). The commit adds a new
+channel, muted, named "<source> mix" for one source channel and "Mix" for
+several; it goes after the last source track in arrange order, under their
+common parent, else under the main master after the top-level strip holding
+the last source (at the end of the main master's strips when that is under
+another master). One item covers the span from its start; the source items
+stay untouched. Selected items not on a channel refuse with
+`item.mix_not_channel`, items on a frozen channel with `track.frozen`, a
+selection with no unmuted material with `item.mix_empty`. Changed selected
+material (`itemEditFingerprint`) or another project or branch at completion
+refuse with `item.mix_stale` / the render target error; mixer changes made while
+the job runs do not. Render warnings (missing media or plug-ins) and nonfinite
+output fail the job with `item.mix_render`.
+
 ### Consolidating items
 
 `item.consolidate {items:[it...]}` is a background action returning `{job}`.

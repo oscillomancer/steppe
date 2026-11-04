@@ -1120,6 +1120,12 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   moves or removes it, or resets menus and toolbar. The default top-level
   menus end with Project, then Help. Loading an older `menus.json` appends
   Help if absent; existing custom menus, toolbar and explicit Help edits remain.
+  An action may carry an `enabled` predicate over the selection context; its
+  menu entry is greyed while that is false (the predicate is checked when the
+  menu opens). The Item menu's **Mix to new track** (`ui.item.mix-to-track`,
+  `item.mix-to-track` on the selected items, engine.md) is greyed without
+  selected items; progress and the result show in the status line as for
+  Consolidate items, and only one such background item job runs at a time.
 - **Help** provides four app-local actions (not engine command-registry entries):
   `ui.help.skill`, `ui.help.skill_link`, `ui.help.mcp`, `ui.help.agent`.
   **Download skill…** and **Download skill link…** open the native folder

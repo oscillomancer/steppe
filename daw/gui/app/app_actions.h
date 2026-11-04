@@ -86,6 +86,8 @@ class AppActions {
              const std::vector<std::string>& sections = {"arrange", "global"});
     // Built-in UI actions the app provides (open the actions list, …).
     void addUi(std::string id, std::string name, std::function<void()> run);
+    // Menus grey the action while `when` is false (Action::enabled).
+    void setEnabled(std::string_view id, std::function<bool(const actions::Context&)> when);
     // A built-in with one prompted argument (the actions list asks for it).
     void addUi(std::string id, std::string name, std::string prompt,
                std::function<Status(const json::Value& value)> run);
