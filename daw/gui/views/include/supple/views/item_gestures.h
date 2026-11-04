@@ -4,9 +4,9 @@
 // reaper-ux.md 8-13): select (click, Shift add, Ctrl toggle, marquee on empty
 // space or a right-drag anywhere: it takes the items and the automation points
 // inside it, on any track), move in time and across channels (snapped
-// to the grid at the current zoom; Shift moves freely; Ctrl-drag copies), trim either edge (the
-// left edge moves the take's source offset so the audio stays put; Alt on the
-// right edge stretches: the play rate follows the length), slip
+// to the grid at the current zoom; Shift moves freely; Ctrl-drag copies), trim either edge of
+// every selected item by the same amount (the left edge moves the takes' source offsets so the
+// audio stays put; Alt on the right edge stretches audio: the play rate follows the length), slip
 // (Alt-drag: the source moves under the item), fade handles at the top
 // corners (Ctrl+click cycles a fade's shape), the take badge cycles takes, double-click opens a
 // MIDI item, and files dropped on the lanes. An item showing its take lanes: click a lane to hear
@@ -101,6 +101,9 @@ class ItemGestures {
     const std::vector<model::Id>& selection() const { return selection_; }
     void setSelection(std::vector<model::Id> items);  // no onSelection call
     bool isSelected(model::Id item) const;
+    // What a move or trim drag acts on: the selection, and the pressed item
+    // when it is not selected.
+    std::vector<model::Id> dragItems() const;
 
     // From ArrangeView::onPointer (everything but the wheel); true when used.
     bool pointer(const ui::PointerEvent& e);
@@ -284,6 +287,8 @@ class ItemGestures {
     std::vector<ui::MenuItem> buildItemMenu(const MenuPlace& place, bool bar);
     // The item the menu acts on: the clicked one if selected, else the first.
     std::optional<model::Id> menuTarget() const;
+    // dragItems that a trim changes: the ones there and not locked.
+    std::vector<model::Id> trimmedItems() const;
     // The clipboard, consolidate/heal, split, mix and MIDI editor entries
     // (empty space: Paste alone).
     void addEditItems(std::vector<ui::MenuItem>& items, const MenuPlace& place, bool onItem);

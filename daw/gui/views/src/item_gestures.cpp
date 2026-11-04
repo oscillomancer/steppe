@@ -226,20 +226,24 @@ class Ghost : public ui::Node {
                     }
                 break;
             case ItemGestures::Drag::TrimLeft:
-                if (anchor)
-                    if (auto r = rectFor(*anchor, 0, 0, 0, st.deltaBeats)) {
-                        c.fillRect(*r, t.color("focus").withAlpha(0.2f));
-                        c.fillRect({r->x, r->y, 2, r->h}, t.color("focus"));
-                    }
+                for (model::Id id : g.dragItems())
+                    if (const model::Item* it = itemOf(s, id); it && !it->locked)
+                        if (auto r = rectFor(*it, 0, 0, 0, st.deltaBeats)) {
+                            c.fillRect(*r, t.color("focus").withAlpha(0.2f));
+                            c.fillRect({r->x, r->y, 2, r->h}, t.color("focus"));
+                        }
                 break;
             case ItemGestures::Drag::TrimRight:
+                for (model::Id id : g.dragItems())
+                    if (const model::Item* it = itemOf(s, id); it && !it->locked)
+                        if (auto r = rectFor(*it, 0, 0, st.deltaBeats, 0)) {
+                            c.fillRect(*r, t.color("focus").withAlpha(0.2f));
+                            c.fillRect({r->right() - 2, r->y, 2, r->h}, t.color("focus"));
+                        }
                 if (anchor)
                     if (auto r = rectFor(*anchor, 0, 0, st.deltaBeats, 0)) {
-                        c.fillRect(*r, t.color("focus").withAlpha(0.2f));
-                        c.fillRect({r->right() - 2, r->y, 2, r->h}, t.color("focus"));
-                        const model::Take* tk =
-                            anchor->activeTake ? s.takes.find(*anchor->activeTake) : nullptr;
-                        if (st.stretch && tk) {  // the rate the take will play at
+                        const model::Take* tk = activeTake(s, *anchor);
+                        if (st.stretch && tk && !isMidi(tk)) {  // the rate the take will play at
                             char buf[32];
                             std::snprintf(buf, sizeof buf, "%.3gx",
                                           g.stretchRate(*anchor, *tk, st.deltaBeats));
@@ -388,6 +392,22 @@ void ItemGestures::setSelection(std::vector<model::Id> items) {
 
 bool ItemGestures::isSelected(model::Id item) const {
     return std::find(selection_.begin(), selection_.end(), item) != selection_.end();
+}
+
+std::vector<model::Id> ItemGestures::dragItems() const {
+    std::vector<model::Id> items = selection_;
+    if (state_.anchor.kind == model::Kind::Item && !isSelected(state_.anchor))
+        items.push_back(state_.anchor);
+    return items;
+}
+
+std::vector<model::Id> ItemGestures::trimmedItems() const {
+    std::vector<model::Id> items = dragItems();
+    std::erase_if(items, [&](model::Id id) {
+        const model::Item* it = itemOf(view_.session(), id);
+        return !it || it->locked;
+    });
+    return items;
 }
 
 void ItemGestures::changed() {
@@ -768,8 +788,7 @@ bool ItemGestures::pointer(const ui::PointerEvent& e) {
                 if (b.starts_with("slip")) state_.drag = Drag::Slip;
             } else if (state_.drag == Drag::TrimLeft || state_.drag == Drag::TrimRight) {
                 b = mouse.behaviour("item.edge", e.mods);
-                state_.stretch = state_.drag == Drag::TrimRight && b.starts_with("stretch") &&
-                                 !isMidi(activeTake(s, *itemOf(s, h->item)));
+                state_.stretch = state_.drag == Drag::TrimRight && b.starts_with("stretch");
             } else if (state_.drag == Drag::FadeIn || state_.drag == Drag::FadeOut) {
                 b = mouse.behaviour("fade", e.mods);
                 cycleFade_ = b == "cycle_shape";
@@ -868,16 +887,23 @@ bool ItemGestures::pointer(const ui::PointerEvent& e) {
                 break;
             }
             case Drag::TrimLeft:
-                if (anchor)  // out to the timeline's start, in to the minimum length
-                    state_.deltaBeats =
-                        std::clamp(snap(startBeat(s, *anchor) + raw, free_) - startBeat(s, *anchor),
-                                   -startBeat(s, *anchor), lengthBeats(s, *anchor) - kMinLength);
+                if (anchor) {  // snapped at the anchor; every item out to the
+                               // timeline's start, in to the minimum length
+                    double d = snap(startBeat(s, *anchor) + raw, free_) - startBeat(s, *anchor);
+                    for (model::Id id : trimmedItems())
+                        d = std::min(d, lengthBeats(s, *itemOf(s, id)) - kMinLength);
+                    for (model::Id id : trimmedItems())
+                        d = std::max(d, -startBeat(s, *itemOf(s, id)));
+                    state_.deltaBeats = d;
+                }
                 break;
             case Drag::TrimRight:
                 if (anchor) {
                     const double end = startBeat(s, *anchor) + lengthBeats(s, *anchor);
-                    state_.deltaBeats = std::max(snap(end + raw, free_) - end,
-                                                 kMinLength - lengthBeats(s, *anchor));
+                    double d = snap(end + raw, free_) - end;
+                    for (model::Id id : trimmedItems())
+                        d = std::max(d, kMinLength - lengthBeats(s, *itemOf(s, id)));
+                    state_.deltaBeats = d;
                 }
                 break;
             case Drag::Slip:
@@ -1691,73 +1717,69 @@ void ItemGestures::commit(const ui::PointerEvent& e) {
             return;
         }
         case Drag::TrimLeft: {
-            if (!anchor || anchor->locked || state_.deltaBeats == 0) return;
+            const std::vector<model::Id> items = trimmedItems();
+            if (items.empty() || state_.deltaBeats == 0) return;
             const double d = state_.deltaBeats;
-            auto offsetFor = [&](const model::Take& take, double delta) {
-                const double rate = take.playrate > 0 ? take.playrate : 1.0;
-                return take.startOffset +
-                       (isMidi(&take) ? delta
-                                      : s.timeMap->secondsAt(startBeat(s, *anchor) + delta) -
-                                            s.timeMap->secondsAt(startBeat(s, *anchor))) *
-                           rate;
-            };
-            // Extending before a take's material starts gives it silence
-            // first (a negative offset), as slipping does.
             std::vector<EditStep> steps;
-            for (auto id : anchor->takes)
-                if (const auto* take = s.takes.find(id)) {
-                    json::Value targs = json::Value::object();
-                    targs["take"] = id.str();
-                    if (isMidi(take))
-                        targs["start_offset"] = offsetFor(*take, d);
-                    else
-                        targs["rebase_seconds"] = s.timeMap->secondsAt(startBeat(s, *anchor) + d) -
-                                                  s.timeMap->secondsAt(startBeat(s, *anchor));
-                    steps.push_back({"take.set", std::move(targs)});
-                }
-            json::Value args = json::Value::object();
-            args["item"] = state_.anchor.str();
-            args["position"] = startBeat(s, *anchor) + d;
-            args["length"] = lengthBeats(s, *anchor) - d;
-            steps.insert(steps.begin(), {"item.set", std::move(args)});
-            if (autoCrossfade)
-                addCrossfades(
-                    s,
-                    {{state_.anchor.str(), state_.anchor, anchor->track, startBeat(s, *anchor) + d,
-                      startBeat(s, *anchor) + lengthBeats(s, *anchor)}},
-                    steps);
-            runSteps("Trim item start", steps);
+            std::vector<Placed> placed;
+            for (model::Id id : items) {
+                const model::Item& it = *itemOf(s, id);
+                const double start = startBeat(s, it);
+                const double shift = s.timeMap->secondsAt(start + d) - s.timeMap->secondsAt(start);
+                json::Value args = json::Value::object();
+                args["item"] = id.str();
+                args["position"] = start + d;
+                args["length"] = lengthBeats(s, it) - d;
+                steps.push_back({"item.set", std::move(args)});
+                // Extending before a take's material starts gives it silence
+                // first (a negative offset), as slipping does.
+                for (auto tid : it.takes)
+                    if (const auto* take = s.takes.find(tid)) {
+                        json::Value targs = json::Value::object();
+                        targs["take"] = tid.str();
+                        if (isMidi(take))
+                            targs["start_offset"] =
+                                take->startOffset + d * (take->playrate > 0 ? take->playrate : 1.0);
+                        else
+                            targs["rebase_seconds"] = shift;
+                        steps.push_back({"take.set", std::move(targs)});
+                    }
+                placed.push_back({id.str(), id, it.track, start + d, start + lengthBeats(s, it)});
+            }
+            if (autoCrossfade) addCrossfades(s, placed, steps);
+            runSteps(items.size() == 1 ? "Trim item start" : "Trim item starts", steps);
             return;
         }
         case Drag::TrimRight: {
-            if (!anchor || anchor->locked || state_.deltaBeats == 0) return;
-            json::Value args = json::Value::object();
-            args["item"] = state_.anchor.str();
-            args["length"] = lengthBeats(s, *anchor) + state_.deltaBeats;
-            const model::Take* take = activeTake(s, *anchor);
-            if (state_.stretch && take) {
-                json::Value rate = json::Value::object();
-                rate["take"] = anchor->activeTake->str();
-                rate["playrate"] = stretchRate(*anchor, *take, state_.deltaBeats);
-                std::vector<EditStep> steps = {{"item.set", std::move(args)},
-                                               {"take.set", std::move(rate)}};
-                if (autoCrossfade)
-                    addCrossfades(
-                        s,
-                        {{state_.anchor.str(), state_.anchor, anchor->track, startBeat(s, *anchor),
-                          startBeat(s, *anchor) + lengthBeats(s, *anchor) + state_.deltaBeats}},
-                        steps);
-                runSteps("Stretch item", steps);
-                return;
+            const std::vector<model::Id> items = trimmedItems();
+            if (items.empty() || state_.deltaBeats == 0) return;
+            const double d = state_.deltaBeats;
+            std::vector<EditStep> steps;
+            std::vector<Placed> placed;
+            bool stretched = false;
+            for (model::Id id : items) {
+                const model::Item& it = *itemOf(s, id);
+                json::Value args = json::Value::object();
+                args["item"] = id.str();
+                args["length"] = lengthBeats(s, it) + d;
+                steps.push_back({"item.set", std::move(args)});
+                // Alt stretches audio: the play rate follows the length.
+                if (const model::Take* take = activeTake(s, it);
+                    state_.stretch && take && !isMidi(take)) {
+                    json::Value rate = json::Value::object();
+                    rate["take"] = it.activeTake->str();
+                    rate["playrate"] = stretchRate(it, *take, d);
+                    steps.push_back({"take.set", std::move(rate)});
+                    stretched = true;
+                }
+                placed.push_back({id.str(), id, it.track, startBeat(s, it),
+                                  startBeat(s, it) + lengthBeats(s, it) + d});
             }
-            std::vector<EditStep> steps = {{"item.set", std::move(args)}};
-            if (autoCrossfade)
-                addCrossfades(
-                    s,
-                    {{state_.anchor.str(), state_.anchor, anchor->track, startBeat(s, *anchor),
-                      startBeat(s, *anchor) + lengthBeats(s, *anchor) + state_.deltaBeats}},
-                    steps);
-            runSteps("Trim item end", steps);
+            if (autoCrossfade) addCrossfades(s, placed, steps);
+            const bool one = items.size() == 1;
+            runSteps(stretched ? (one ? "Stretch item" : "Stretch items")
+                               : (one ? "Trim item end" : "Trim item ends"),
+                     steps);
             return;
         }
         case Drag::Slip: {

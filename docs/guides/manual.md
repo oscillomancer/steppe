@@ -485,6 +485,10 @@ they do not process the result again. Other items on those tracks lose the
 track effects too. On the item you right-click, the take under the pointer is
 the one rendered.
 
+Dragging an item's edge trims that edge of every selected item by the same
+amount, on any track and audio or MIDI alike; Alt on the right edge stretches
+the audio items and trims the MIDI ones. Locked items stay as they are.
+
 Right-click an item and choose **Split item at cursor**, or press S, to split
 selected audio and MIDI items at the edit cursor. Items outside the cursor stay
 whole; the menu's pointer position does not set the split point. Undo restores

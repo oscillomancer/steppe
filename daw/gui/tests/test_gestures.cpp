@@ -1506,6 +1506,31 @@ TEST_CASE("left trim moves every take offset at its own play rate in one undo st
         CHECK(f.app->head().takes.find(take)->startOffset == before.takes.find(take)->startOffset);
 }
 
+TEST_CASE("a trim moves the same edge of every selected item, audio and MIDI, in one step") {
+    Fixture f;
+    REQUIRE(f.ok);
+    const model::Id audio = f.itemOnRow(0), midi = f.itemOnRow(1, true);
+    f.view->gestures().setSelection({audio, midi});
+    const double len0 = f.item(audio).length, len1 = f.item(midi).length;
+    const double pos0 = f.item(audio).position, pos1 = f.item(midi).position;
+    const float step = f.beatPx();
+    auto steps = f.steps();
+    ui::Rect r = f.rectOf(audio);
+    f.drag({r.right() - 2, r.y + r.h / 2}, {r.right() - 2 - 2 * step, r.y + r.h / 2});
+    CHECK(f.steps() == steps + 1);
+    const double cut = len0 - f.item(audio).length;
+    CHECK(cut > 0);
+    CHECK(f.item(midi).length == doctest::Approx(len1 - cut));
+    // The start, from the MIDI item's edge: both start later by the same beats.
+    steps = f.steps();
+    r = f.rectOf(midi);
+    f.drag({r.x + 2, r.y + r.h / 2}, {r.x + 2 + step, r.y + r.h / 2});
+    CHECK(f.steps() == steps + 1);
+    const double d = f.item(midi).position - pos1;
+    CHECK(d > 0);
+    CHECK(f.item(audio).position == doctest::Approx(pos0 + d));
+}
+
 TEST_CASE("the left edge extends an item before its material; slip goes both ways") {
     Fixture f;
     REQUIRE(f.ok);

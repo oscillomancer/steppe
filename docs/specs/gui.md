@@ -470,6 +470,10 @@ resizes them; other combinations do what the plain wheel does). Either can
 bind any combination to scroll the tracks, scroll in time, zoom in time or
 resize every track. Where the binding zooms, a sideways wheel scrolls in time;
 a zoom over the TCP holds the lanes' left edge when it anchors at the pointer.
+A trim moves the same edge of every selected item (and the pressed one) by
+the same beats, snapped at the pressed item and clamped so none passes the
+timeline's start or the minimum length; locked items stay. Alt on the right
+edge stretches the audio items and trims the MIDI ones.
 Left trim shifts every take's source offset by the trimmed duration times
 its play rate, in the same transaction; dragging the left edge out past a
 take's material (down to the timeline's start) and slipping its material
