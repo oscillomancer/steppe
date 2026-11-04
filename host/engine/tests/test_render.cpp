@@ -3,7 +3,6 @@
 // Render settings, presets and the processing chain (ADR-0055, engine.md §3).
 #include <doctest/doctest.h>
 
-#include <unistd.h>
 #include <cmath>
 #include <filesystem>
 
@@ -12,6 +11,7 @@
 #include <supple/engine/app.h>
 #include <supple/model/schemas.h>
 
+#include "../../../tests/file_platform.h"
 #include "render_commands.h"
 
 using namespace supple;
@@ -21,7 +21,7 @@ namespace fs = std::filesystem;
 namespace {
 struct Workdir {
     fs::path path =
-        fs::temp_directory_path() / ("supple-engine-render-" + std::to_string(::getpid()));
+        fs::temp_directory_path() / ("supple-engine-render-" + std::to_string(test::processId()));
     Workdir() {
         fs::remove_all(path);
         fs::create_directories(path);
