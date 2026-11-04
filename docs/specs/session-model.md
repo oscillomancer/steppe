@@ -811,6 +811,14 @@ eviction; blob dedup.
 - `track.set {hw_output}` (ADR-0056) accepts 0–2 distinct channels 1..64, on masters only
   (`track.strip_type` otherwise, `track.hw_output` for three channels or a repeated one).
   Retyping a master clears it. `track.list` reports every master's resolved `hw_output`.
+- `track.set {armed}` accepts masters (ADR-0057; `record_input`, `record_midi`,
+  `midi_channel`, `record_mode` and `monitor` stay channel-only, `track.strip_type`), and
+  `track.set {lane_mute}` is masters only. Retyping a master clears `lane_mute`; a buss is
+  never armed. Group-linked arm spreads to channels and masters, monitoring to channels.
+  `track.list` reports masters' `armed` and `lane_mute`. `item.add {audio_file}`,
+  `item.move`, `item.paste`, `take.extract` and `project.recover` accept masters for audio;
+  MIDI there, and any item on a buss, is `track.strip_type`. `transport.record` records
+  armed masters' outputs with the armed channels' inputs.
   `fx.param.set` keeps semantic parameter units and also supports plain CLAP/VST3
   parameter names/IDs, declared ranges, writable flags and plugin text conversion.
   Plain parameter edits save processor state after applying queued values on a

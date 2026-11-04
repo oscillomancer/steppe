@@ -703,7 +703,10 @@ TEST_CASE("typed strip commands: rejected edits roll back and masters render ind
     run(bus, "track.set", R"({"track":"tr_3","color":""})");
     CHECK(app->head().tracks.find(*model::Id::parse("tr_3"))->color.empty());
     rejected("item.move", R"({"item":"it_1","track":"tr_2"})", "track.strip_type");
-    rejected("item.add", R"({"track":"tr_1"})", "track.strip_type");
+    rejected("item.add", R"({"track":"tr_2"})", "track.strip_type");  // a buss
+    // A master holds audio items only (ADR-0057).
+    rejected("item.add", R"({"track":"tr_1","notation":"voice a; 1: C4:w"})", "track.strip_type");
+    rejected("item.move", R"({"item":"it_1","track":"tr_1"})", "track.strip_type");
     rejected("route.add", R"({"from":"tr_0","to":"tr_2"})", "route.strip_type");
     rejected("route.add", R"({"from":"tr_0","to":"tr_1"})", "route.strip_type");
     rejected("route.add", R"({"from":"tr_2","to":"tr_3"})", "route.cycle");

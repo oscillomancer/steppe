@@ -2560,9 +2560,10 @@ Result<std::vector<RecordedInfo>> EngineApp::recover(const std::vector<std::stri
             return Error("recover.no_track",
                          r->file + " was recorded on " + t.track.str() + ", which is gone",
                          "/track", "give a track to put it on");
-        if (s.tracks.find(t.track)->type != model::StripType::Channel)
-            return Error("track.strip_type", "recover recordings onto a channel", "/track",
-                         "choose a child channel instead of a buss/master");
+        // A master's own recordings recover onto it (ADR-0057: audio items).
+        if (s.tracks.find(t.track)->type == model::StripType::Buss)
+            return Error("track.strip_type", "recover recordings onto a channel or master",
+                         "/track", "choose a child channel of the buss instead");
         t.startSample = side->startSample;
         t.sampleRate = side->sampleRate;
         t.segments = side->segments;  // loop passes, when the recording ended normally
