@@ -977,9 +977,12 @@ void Mixer::rebuild() {
                     "mixer.group.color." + tid + "." + gid.str(), group.color);
                 color.layout.width = ui::SizeRule::fixed(3);
                 color.layout.height = ui::SizeRule::fixed(14);
-                auto& tab = tabs.emplace<ui::Button>(
-                    "mixer.group." + tid + "." + gid.str(), (group.active ? "" : "· ") + group.name,
-                    [this, gid, tid] { trackMenu_.openGroup(gid, {tid}, {}); });
+                auto& tab = tabs.emplace<ui::Button>("mixer.group." + tid + "." + gid.str(),
+                                                     (group.active ? "" : "· ") + group.name);
+                // The group's menu opens at its tab.
+                tab.onClick = [this, gid, tid, b = &tab] {
+                    trackMenu_.openGroup(gid, {tid}, b->bounds());
+                };
                 tab.layout.width = ui::SizeRule::fraction();
                 tab.layout.height = ui::SizeRule::fixed(14);
             }
@@ -1158,12 +1161,16 @@ void Mixer::rebuild() {
                                   "ink-quiet");
         auto& filler = frame->emplace<ui::Node>("mixer.vca.space." + tid);
         filler.layout.height = ui::SizeRule::fraction();
-        frame->emplace<ui::Button>(
-            "mixer.vca.members." + tid, std::to_string(e.value->members.size()) + " members",
-            [this, gid] { trackMenu_.openGroup(gid, actions_.ui().selectedTracks, {}); });
-        frame->emplace<ui::Button>("mixer.vca.env." + tid, "env", [this, gid] {
-            if (envelopes) envelopes(gid, {});
-        });
+        // Their menus open at the button.
+        auto& members = frame->emplace<ui::Button>(
+            "mixer.vca.members." + tid, std::to_string(e.value->members.size()) + " members");
+        members.onClick = [this, gid, b = &members] {
+            trackMenu_.openGroup(gid, actions_.ui().selectedTracks, b->bounds());
+        };
+        auto& env = frame->emplace<ui::Button>("mixer.vca.env." + tid, "env");
+        env.onClick = [this, gid, b = &env] {
+            if (envelopes) envelopes(gid, b->bounds());
+        };
         st.fader = &frame->emplace<ui::Fader>("mixer.vca.fader." + tid);
         st.fader->layout.height = ui::SizeRule::fixed(kFaderH);
         st.fader->setValue(e.value->vca->volumeDb);

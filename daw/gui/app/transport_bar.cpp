@@ -424,7 +424,11 @@ void TransportBar::openRateMenu() {
     }
     root_.openPopup(
         ui::makeMenu("transport.rate.menu", std::move(items), [this] { root_.closePopup(); }),
-        rateReadout_ ? rateReadout_->bounds() : ui::Rect{}, ui::Placement::Below);
+        rateAnchor(), ui::Placement::Below);
+}
+
+ui::Rect TransportBar::rateAnchor() const {
+    return rateReadout_ ? rateReadout_->bounds() : ui::Rect{};
 }
 
 void TransportBar::openTempoForm() {

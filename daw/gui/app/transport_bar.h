@@ -39,6 +39,9 @@ class TransportBar {
     std::optional<std::chrono::steady_clock::time_point> nextDeadline() const;
     json::Value saveLayout() const;
     void loadLayout(const json::Value& value);
+    // Where the playrate's menu opens (under its readout); the master's
+    // envelope menu, which that menu leads to, opens there too.
+    ui::Rect rateAnchor() const;
 
   private:
     void openTempoForm();

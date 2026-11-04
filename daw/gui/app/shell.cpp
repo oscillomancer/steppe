@@ -98,8 +98,9 @@ std::unique_ptr<ui::Node> Shell::build(ui::Root& root, AppActions& actions) {
     shell->layout.dir = ui::Layout::Dir::Column;
     transport_ = std::make_unique<TransportBar>(app_, actions, dispatcher_, root);
     shell->add(transport_->build());
+    // The playrate's menu leads here: open in its place.
     actions.addUi("ui.master.envelopes", "Master: envelopes",
-                  [this] { openEnvelopeMenu(model::kMaster, {}); });
+                  [this] { openEnvelopeMenu(model::kMaster, transport_->rateAnchor()); });
     auto& body = shell->emplace<ui::Node>("body");
     body.layout.dir = ui::Layout::Dir::Row;
     engine::EngineApp& app = app_;

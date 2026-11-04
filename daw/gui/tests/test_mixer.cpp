@@ -1728,3 +1728,35 @@ TEST_CASE("mixer: a right-click on a VCA's fader learns MIDI for it, elsewhere t
     CHECK_FALSE(f.root->find("strip.learn.menu"));
     CHECK(f.root->popupOpen());  // the group's menu
 }
+
+TEST_CASE("mixer: a group's tab and a VCA's members and env buttons open their menus beside them") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto a = f.addTrack("channel", "Kick");
+    f.exec("group.add", R"({"name":"Drums","members":[")" + a + R"("]})");
+    f.exec("vca.add", R"({"group":"gr_1"})");
+    std::optional<ui::Rect> envAnchor;
+    f.mixer->envelopes = [&](const model::Id&, const ui::Rect& anchor) { envAnchor = anchor; };
+    f.refresh();
+    // The menu touches the button: below it, or above when there is no room.
+    const auto beside = [&](const char* button) {
+        const ui::Rect b = f.node(button)->bounds();
+        f.pointer(ui::PointerEvent::Type::Down, f.centre(f.node(button)));
+        f.pointer(ui::PointerEvent::Type::Up, f.centre(f.node(button)));
+        const ui::Rect m = f.node("group.menu.gr_1")->bounds();
+        CHECK(m.x < b.right());
+        CHECK(m.right() > b.x);
+        CHECK((std::abs(m.y - b.bottom()) < 4 || std::abs(m.bottom() - b.y) < 4));
+        f.root->closePopup();
+        f.root->frame(false);
+    };
+    beside("mixer.group.tr_1.gr_1");
+    beside("mixer.vca.members.gr_1");
+    f.pointer(ui::PointerEvent::Type::Down, f.centre(f.node("mixer.vca.env.gr_1")));
+    f.pointer(ui::PointerEvent::Type::Up, f.centre(f.node("mixer.vca.env.gr_1")));
+    REQUIRE(envAnchor);
+    const ui::Rect env = f.node("mixer.vca.env.gr_1")->bounds();
+    CHECK(envAnchor->x == env.x);
+    CHECK(envAnchor->y == env.y);
+    CHECK(envAnchor->w == env.w);
+}

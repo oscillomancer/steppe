@@ -1814,6 +1814,12 @@ TEST_CASE("playrate envelope: main-master menu creates, edits and hides its rati
     a.root->closePopup();
     auto* list = menu(model::kMaster);
     REQUIRE(list->count() == 4);
+    // The master's menu opens under the playrate (its menu leads here), not
+    // in the window's corner.
+    const ui::Rect rate = a.root->find("transport.rate.readout")->bounds();
+    CHECK(list->bounds().y >= rate.bottom() - 1);
+    CHECK(list->bounds().x < rate.right());
+    CHECK(list->bounds().right() > rate.x);
     list->onActivate(3);
     sync();
     REQUIRE(a.app->head().envelopes.size() == 1);
