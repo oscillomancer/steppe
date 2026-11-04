@@ -11,6 +11,8 @@
 #pragma once
 
 #include <filesystem>
+#include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -35,8 +37,14 @@ struct ChromeLayout {
     json::Value toJson() const;
 };
 
+// A menu whose entries are built when it opens (the Item menu: the item
+// right-click menu's entries); the layout's action ids for that title follow.
+using MenuSource = std::function<std::vector<ui::MenuItem>()>;
+using MenuSources = std::map<std::string, MenuSource, std::less<>>;
+
 // The menu bar and toolbar as one row node.
-std::unique_ptr<ui::Node> makeChrome(ui::Root& root, AppActions& actions, ChromeLayout layout);
+std::unique_ptr<ui::Node> makeChrome(ui::Root& root, AppActions& actions, ChromeLayout layout,
+                                     MenuSources sources = {});
 
 // The chrome, editable from the GUI: edits rebuild the bar in place and are
 // saved to `file` (empty: kept in memory only).
@@ -55,6 +63,8 @@ class Chrome {
     // Adds the action to the menu's end, or removes it if the menu has it.
     void toggleMenu(const std::string& title, const std::string& id);
     void reset();  // the default menus and toolbar
+    // Builds the titled menu's leading entries when it opens (then refills the bar).
+    void setMenuSource(std::string title, MenuSource source);
     // A toolbar button's right-click menu (also the tests' way in).
     void openToolMenu(const std::string& id, const ui::Rect& anchor);
     std::function<void(const std::string&)> onError;
@@ -65,6 +75,7 @@ class Chrome {
     ui::Root& root_;
     AppActions& actions_;
     ChromeLayout layout_;
+    MenuSources sources_;
     std::filesystem::path file_;
     ui::Node* bar_ = nullptr;
 };

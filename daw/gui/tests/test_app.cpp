@@ -323,8 +323,6 @@ TEST_CASE("app actions: keys, the actions list, prompts, key binding and menus")
 TEST_CASE("menu entries grey while their action does not apply") {
     App a;
     if (!a.ok) return;
-    CHECK(gui::Chrome(*a.root, *a.actions, gui::ChromeLayout::defaults(), {})
-              .inMenu("Item", "ui.item.mix-to-track"));
     a.actions->addUi("ui.test.gated", "Item: mix to new track", [] {});
     a.actions->setEnabled("ui.test.gated",
                           [](const actions::Context& c) { return !c.selectedItems.empty(); });
@@ -346,6 +344,30 @@ TEST_CASE("menu entries grey while their action does not apply") {
     a.snapshot("menu-greyed.png");
     a.ui.selectedItems = {"it_1"};
     CHECK(gated());
+}
+
+TEST_CASE("the Item menu is built by its source; an older file's item entries are dropped") {
+    App a;
+    if (!a.ok) return;
+    const auto file = a.dir / "old-menus.json";
+    REQUIRE(writeFileAtomic(file, R"({"schema":"supple.menus/1.0","menus":[{"title":"Item",
+        "items":["ui.midi.new","-","ui.item.cut","ui.item.merge","-","track.add:buss"]}]})"));
+    auto layout = gui::ChromeLayout::load(file);
+    REQUIRE(layout);
+    CHECK(layout->menus.front().items == std::vector<std::string>{"track.add:buss"});
+    gui::Chrome chrome(*a.root, *a.actions, *layout, {});
+    chrome.setMenuSource("Item", [] { return std::vector<ui::MenuItem>{{"Built", "", [] {}}}; });
+    a.root->setContent(chrome.build());
+    a.root->frame(false);
+    REQUIRE(a.root->click("menu.Item"));
+    a.root->frame(false);
+    const auto* menu = a.root->find("menu.Item.items");
+    REQUIRE(menu);
+    const auto rows = ui::menuItems(*menu);
+    REQUIRE(rows.size() == 3);
+    CHECK(rows[0].label == "Built");
+    CHECK(rows[1].separator);
+    CHECK_FALSE(rows[2].separator);
 }
 
 TEST_CASE("the toolbar and menus are edited in the app and saved (gap log #37)") {

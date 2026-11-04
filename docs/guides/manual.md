@@ -442,8 +442,13 @@ while any saved project or history still needs them.
 
 ## Timing audio with hits and stretch markers
 
+Right-clicking an item opens the item menu; the menu bar's **Item** menu is the
+same menu, acting on the selected items (its Paste goes to the playhead on the
+selected track). Everything below that says "right-click an item" works from
+either.
+
 Right-click selected items and choose **Consolidate items** to combine material
-per track.
+per track, including MIDI items on several tracks at once.
 Audio and MIDI remain separate. Audio uses active takes and bakes their item
 controls, timing, take FX and envelopes into a new WAV; track processing stays
 live. Gaps stay silent. MIDI keeps the existing merge behavior. Progress appears
@@ -461,7 +466,7 @@ settings and stored take FX must match; moved pieces, changed fades and nonlinea
 envelope seams that cannot be restored need consolidation instead. Each track
 becomes one item and the operation is one undo step.
 Both menu entries are greyed when the selection cannot use them. For a single
-multi-take MIDI item, **Merge takes** remains available to layer its alternatives.
+multi-take MIDI item, **Merge takes** layers its alternatives into one take.
 
 Right-click an item and choose **Split item at cursor**, or press S, to split
 selected audio and MIDI items at the edit cursor. Items outside the cursor stay

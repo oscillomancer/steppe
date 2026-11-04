@@ -190,10 +190,10 @@ instructions are in `docs/guides/installing.md`.
   item Export… (`item.export`: the heard take's raw source span as WAV, trims,
   splits and loops respected, or a MIDI item as a Standard MIDI File),
   MIDI file import (`item.add {midi_file}`, File > Import… and file drops),
-  Item > Mix to new track (background `item.mix-to-track`: selected items through
+  Mix to new track (background `item.mix-to-track`: selected items through
   their full strips, Console 9 decoded as a fresh buss hears them, onto a new
-  muted channel, one undo step; a customized `menus.json` lists it only once
-  added with Ctrl+M),
+  muted channel, one undo step), one item menu shared by an item's right-click
+  and the menu bar's Item menu,
   adjacent Consolidate items / Heal splits item-menu actions with shared engine
   eligibility, and non-rendering `item.heal` for compatible split/slice chains,
   retaining outer fades and full source maps while removing generated interior fades,

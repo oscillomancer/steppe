@@ -500,14 +500,22 @@ and redraw when that scalar changes. The lane display range is independent
 of the transport knob's per-project display range. In the staged engine the
 curve is editable and saved, but audio application remains pending.
 
-**Menus.** A right-click on an item opens its menu: **Cut**, **Copy**,
+**Menus.** A right-click on an item opens the item menu: **Cut**, **Copy**,
 **Paste** (at the pointer's beat on the grid and its channel), **Duplicate**
 (after the selection), **Delete**, **Consolidate items**, **Heal splits**,
-and, for one multi-take MIDI item, **Merge takes** (layers its MIDI takes via
+**Merge takes** (one multi-take MIDI item: layers its MIDI takes via
 `midi.merge`), **Split item at cursor** (S),
-**Split item at prior zero crossing**, **Export…**, then the timebases and the
-take entries below. A right-click on empty lane space opens a menu with Paste.
-The keys each action has are shown beside it.
+**Split item at prior zero crossing**, **Export…**, **Mix to new track**, then
+**Edit MIDI** (the item in the MIDI editor) and **Show or hide the MIDI
+editor**, then the timebases and the take entries below. Rows that do not apply
+are greyed, not hidden, apart from the take entries. The menu bar's **Item**
+menu is the same menu (`ItemGestures::itemMenu`, the chrome's menu source for
+Item) over the selection: everything greyed but Paste and the MIDI editor
+toggle when nothing is selected, Paste at the playhead on the first selected
+track, and the take entries for the heard take of the clicked item (else the
+first selected one). Several MIDI items are combined with Consolidate items
+only; the GUI has no separate item merge. A right-click on empty lane space
+opens a menu with Paste. The keys each action has are shown beside it.
 Consolidate items and Heal splits sit beside each other and use the engine's
 shared read-only selection planners for enablement. Consolidate captures active
 audio with item/take processing and take FX into new media, while track processing
@@ -1140,9 +1148,12 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   Help if absent; existing custom menus, toolbar and explicit Help edits remain.
   An action may carry an `enabled` predicate over the selection context; its
   menu entry is greyed while that is false (the predicate is checked when the
-  menu opens). The Item menu's **Mix to new track** (`ui.item.mix-to-track`,
-  `item.mix-to-track` on the selected items, engine.md) is greyed without
-  selected items; progress and the result show in the status line as for
+  menu opens). The Item menu's entries are the item menu's (§ Menus, under
+  arrange items), built when it opens; action ids a user adds to it follow
+  them after a separator. Loading a `menus.json` drops the ids the item menu
+  now covers (and `ui.midi.new`) from its Item list, so they do not repeat.
+  **Mix to new track** (`ui.item.mix-to-track`, `item.mix-to-track` on the
+  selected items, engine.md) is greyed without selected items; progress and the result show in the status line as for
   Consolidate items, and only one such background item job runs at a time.
 - **Help** provides four app-local actions (not engine command-registry entries):
   `ui.help.skill`, `ui.help.skill_link`, `ui.help.mcp`, `ui.help.agent`.

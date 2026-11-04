@@ -19,10 +19,11 @@
 // channel. A right-click on an item (without dragging) opens its menu: Cut, Copy, Paste (at the
 // pointer), Duplicate, Delete, Consolidate items, Heal splits, Merge takes for
 // one multi-take MIDI item, the splits, Export… (the item's raw audio or its MIDI
-// to a file, through onExport), timebase, take FX
+// to a file, through onExport), Mix to new track, the MIDI editor, timebase, take FX
 // and envelopes, and for several takes: show all takes, explode them onto tracks or along the
 // track, delete the take under the pointer; and rendering the item through its FX (MIDI to audio)
-// in place or as a new take; on empty lane space, a menu with Paste. Each gesture previews as a
+// in place or as a new take (itemMenu, also the menu bar's Item menu); on empty lane space, a
+// menu with Paste. Each gesture previews as a
 // ghost on the root's overlay and commits ONE transaction on release.
 #pragma once
 
@@ -75,6 +76,10 @@ class ItemGestures {
     std::function<void(const std::vector<model::Id>&)> onConsolidate;
     // The item menu's Export…: the app asks where, then runs item.export.
     std::function<void(model::Id item)> onExport;
+    // The item menu's Mix to new track (item.mix-to-track on the selection)
+    // and Show or hide the MIDI editor; Edit MIDI uses onOpenMidi.
+    std::function<void(const std::vector<model::Id>&)> onMixToTrack;
+    std::function<void()> onToggleMidiEditor;
     std::function<std::uint64_t()>
         projectGeneration;  // app identity, even before the next resnapshot
     // Keep the copied version available to item.paste until the clipboard changes.
@@ -124,8 +129,8 @@ class ItemGestures {
     Status duplicateSelection();  // right after the selection, on the same tracks
     // Removes the selected items (one undo step): the item menu's Delete.
     Status deleteSelection();
-    // MIDI items on one track (or one item's MIDI takes) into one item
-    // (midi.merge, one undo step), which becomes the selection.
+    // One selected item's MIDI takes into one take (midi.merge, one undo
+    // step). Several items combine with Consolidate items.
     bool canMerge() const;
     Status mergeSelection();
     bool canConsolidate() const;
@@ -136,6 +141,16 @@ class ItemGestures {
     // Zero-crossing mode skips items without an active audio take.
     Status splitSelection(bool zeroCrossing = false);
     Status addStretchMarkerAtCursor();  // selected audio, one undo step; peers once
+    // The item menu, for a right-click on an item and the menu bar's Item
+    // menu alike: edits of the selection, timebases, audio warping, the
+    // target item's take FX, envelopes and takes, and its renders. Paste goes
+    // to `beat` on `track`; `at` (a right-click) picks the take lane under it.
+    struct MenuPlace {
+        double beat = 0;
+        std::optional<model::Id> track;
+        std::optional<ui::Point> at;
+    };
+    std::vector<ui::MenuItem> itemMenu(const MenuPlace& place);
     bool canPaste() const {
         return !clipboard_.items.empty() &&
                (!projectGeneration || projectGeneration() == clipboard_.generation);
@@ -261,11 +276,15 @@ class ItemGestures {
 
   private:
     double beatAtX(float x) const;
-    // A right-click on an item (no drag): selection deletion/timebase and active take FX/envelopes.
+    // A right-click on an item (no drag): itemMenu at that point.
     void openItemMenu(ui::Point at);
     void openSpaceMenu(ui::Point at);
-    // The clipboard and merge entries both menus start with.
-    void addEditItems(std::vector<ui::MenuItem>& items, ui::Point at, bool onItem);
+    MenuPlace placeAt(ui::Point at) const;
+    // The item the menu acts on: the clicked one if selected, else the first.
+    std::optional<model::Id> menuTarget() const;
+    // The clipboard, consolidate/merge, split, export and MIDI editor entries
+    // (empty space: Paste alone).
+    void addEditItems(std::vector<ui::MenuItem>& items, const MenuPlace& place, bool onItem);
     // A right-click on an automation lane: its points (insert, select, copy,
     // paste, delete, shape), automation items (insert, or edit the one under
     // the pointer) and the envelope (bypass, hide, remove).

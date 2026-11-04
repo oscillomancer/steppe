@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <set>
 
 #include "supple/base/files.h"
 #include "supple/json/parse.h"
@@ -100,10 +101,9 @@ ChromeLayout ChromeLayout::defaults() {
          {"track.add:channel", "track.add:buss", "track.add:master", "ui.track.template.load", "-",
           "ui.track.color", "ui.track.channels", "ui.fx.add", "track.duplicate:selected",
           "ui.track.template.save", "-", "track.remove:selected"}},
-        {"Item",
-         {"ui.midi.new", "-", "ui.item.cut", "ui.item.copy", "ui.item.paste", "ui.item.duplicate",
-          "ui.item.merge", "item.split:playhead", "item.remove:selected", "ui.item.mix-to-track",
-          "-", "ui.midi.edit", "ui.midi.toggle"}},
+        // Its entries are the item right-click menu's (setMenuSource); ids
+        // added here follow them.
+        {"Item", {}},
         {"Transport",
          {"transport.toggle", "transport.record", "transport.loop.toggle", "-",
           "transport.seek:start", "transport.seek:end"}},
@@ -170,6 +170,22 @@ Result<ChromeLayout> ChromeLayout::load(const std::filesystem::path& file) {
     if (std::none_of(l.menus.begin(), l.menus.end(),
                      [](const Menu& m) { return m.title == "Help"; }))
         l.menus.push_back(defaults().menus.back());
+    // The Item menu's entries are the item menu's own now (gui.md §6): an
+    // older file's ids for them (and New MIDI item, gone from it) would repeat.
+    static const std::set<std::string, std::less<>> builtIn = {
+        "ui.midi.new",         "ui.item.cut",          "ui.item.copy",         "ui.item.paste",
+        "ui.item.duplicate",   "ui.item.merge",        "ui.item.consolidate",  "ui.item.heal",
+        "item.split:playhead", "ui.item.split-zero",   "item.remove:selected", "edit.delete",
+        "ui.item.export",      "ui.item.mix-to-track", "ui.midi.edit",         "ui.midi.toggle"};
+    for (Menu& m : l.menus) {
+        if (m.title != "Item") continue;
+        std::vector<std::string> kept;
+        for (std::string& id : m.items)
+            if (!builtIn.contains(id) && !(id == "-" && (kept.empty() || kept.back() == "-")))
+                kept.push_back(std::move(id));
+        if (!kept.empty() && kept.back() == "-") kept.pop_back();
+        m.items = std::move(kept);
+    }
     return l;
 }
 
@@ -202,28 +218,34 @@ Status ChromeLayout::save(const std::filesystem::path& file) const {
 namespace {
 
 void fillChrome(ui::Node& bar, ui::Root& root, AppActions& actions, const ChromeLayout& layout,
+                const MenuSources& sources,
                 std::function<void(const std::string&, const ui::Rect&)> toolMenu) {
     for (const ChromeLayout::Menu& menu : layout.menus) {
         auto items = menu.items;
-        bar.emplace<MenuTitle>(
-            menu.title, [&root, &actions, items, title = menu.title](const ui::Rect& anchor) {
-                std::vector<ui::MenuItem> entries;
-                for (const std::string& id : items) {
-                    if (id == "-") {
-                        entries.push_back({"", "", {}, true, true});
-                        continue;
-                    }
-                    const actions::Action* a = actions.registry().find(id);
-                    if (!a) continue;  // unknown ids in a user file are skipped
-                    const std::string name = shortName(*a) + (a->prompts.empty() ? "" : "…");
-                    entries.push_back(
-                        {name, actions.keysFor(id), [&actions, id] { actions.invoke(id); }});
-                    if (a->enabled) entries.back().enabled = a->enabled(actions.context());
+        const auto found = sources.find(menu.title);
+        MenuSource source = found == sources.end() ? MenuSource{} : found->second;
+        bar.emplace<MenuTitle>(menu.title, [&root, &actions, items, source,
+                                            title = menu.title](const ui::Rect& anchor) {
+            std::vector<ui::MenuItem> entries;
+            if (source) entries = source();
+            if (!entries.empty() && !items.empty() && items.front() != "-")
+                entries.push_back({"", "", {}, true, true});
+            for (const std::string& id : items) {
+                if (id == "-") {
+                    entries.push_back({"", "", {}, true, true});
+                    continue;
                 }
-                root.openPopup(ui::makeMenu("menu." + title + ".items", std::move(entries),
-                                            [&root] { root.closePopup(); }),
-                               anchor);
-            });
+                const actions::Action* a = actions.registry().find(id);
+                if (!a) continue;  // unknown ids in a user file are skipped
+                const std::string name = shortName(*a) + (a->prompts.empty() ? "" : "…");
+                entries.push_back(
+                    {name, actions.keysFor(id), [&actions, id] { actions.invoke(id); }});
+                if (a->enabled) entries.back().enabled = a->enabled(actions.context());
+            }
+            root.openPopup(ui::makeMenu("menu." + title + ".items", std::move(entries),
+                                        [&root] { root.closePopup(); }),
+                           anchor);
+        });
     }
     auto& gap = bar.emplace<ui::Node>("chrome.gap");
     gap.layout.width = ui::SizeRule::fixed(16);
@@ -250,9 +272,10 @@ std::unique_ptr<ui::Node> makeBar() {
 
 }  // namespace
 
-std::unique_ptr<ui::Node> makeChrome(ui::Root& root, AppActions& actions, ChromeLayout layout) {
+std::unique_ptr<ui::Node> makeChrome(ui::Root& root, AppActions& actions, ChromeLayout layout,
+                                     MenuSources sources) {
     auto bar = makeBar();
-    fillChrome(*bar, root, actions, layout, {});
+    fillChrome(*bar, root, actions, layout, sources, {});
     return bar;
 }
 
@@ -269,7 +292,7 @@ std::unique_ptr<ui::Node> Chrome::build() {
 void Chrome::fill() {
     if (!bar_) return;
     bar_->clear();
-    fillChrome(*bar_, root_, actions_, layout_,
+    fillChrome(*bar_, root_, actions_, layout_, sources_,
                [this](const std::string& id, const ui::Rect& r) { openToolMenu(id, r); });
     bar_->relayout();
 }
@@ -321,6 +344,11 @@ void Chrome::toggleMenu(const std::string& title, const std::string& id) {
         changed();
         return;
     }
+}
+
+void Chrome::setMenuSource(std::string title, MenuSource source) {
+    sources_[std::move(title)] = std::move(source);
+    fill();
 }
 
 void Chrome::reset() {

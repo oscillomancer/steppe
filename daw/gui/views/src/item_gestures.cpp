@@ -963,31 +963,22 @@ Status ItemGestures::deleteSelection() {
 }
 
 bool ItemGestures::canMerge() const {
+    if (selection_.size() != 1) return false;
     const model::Session& s = view_.session();
-    std::optional<model::Id> track;
-    for (model::Id id : selection_) {
-        const model::Item* it = itemOf(s, id);
-        if (!it || (track && it->track != *track)) return false;
-        track = it->track;
-        if (selection_.size() == 1) {
-            if (it->takes.size() < 2) return false;
-            for (model::Id take : it->takes)
-                if (!isMidi(s.takes.find(take))) return false;
-        } else if (!isMidi(activeTake(s, *it))) {
-            return false;
-        }
-    }
-    return track.has_value();
+    const model::Item* it = itemOf(s, selection_.front());
+    if (!it || it->takes.size() < 2) return false;
+    for (model::Id take : it->takes)
+        if (!isMidi(s.takes.find(take))) return false;
+    return true;
 }
 
 Status ItemGestures::mergeSelection() {
     if (!canMerge() || !run) return {};
     json::Value ids = json::Value::array();
-    for (model::Id id : selection_) ids.push_back(id.str());
+    ids.push_back(selection_.front().str());
     json::Value args = json::Value::object();
     args["items"] = std::move(ids);
-    auto r = run(selection_.size() == 1 ? "Merge takes" : "Merge MIDI items",
-                 {{"midi.merge", std::move(args)}});
+    auto r = run("Merge takes", {{"midi.merge", std::move(args)}});
     if (!r) return std::move(r).error();
     if (const auto kept = model::Id::parse((*r)["item"].asString())) selection_ = {*kept};
     changed();
@@ -1073,7 +1064,25 @@ Status ItemGestures::addStretchMarkerAtCursor() {
     return {};
 }
 
-void ItemGestures::addEditItems(std::vector<ui::MenuItem>& items, ui::Point at, bool onItem) {
+ItemGestures::MenuPlace ItemGestures::placeAt(ui::Point at) const {
+    MenuPlace place;
+    place.at = at;
+    // Paste lands where the menu was opened: that beat (on the grid), that channel.
+    if (const auto row = rowAt(at.y);
+        row && holdsItem(view_.session(), view_.trackLayout().rows()[*row], nullptr))
+        place.track = view_.trackLayout().rows()[*row].track;
+    place.beat = std::max(0.0, snap(beatAtX(at.x), false));
+    return place;
+}
+
+std::optional<model::Id> ItemGestures::menuTarget() const {
+    if (selection_.empty()) return {};
+    if (state_.anchor.kind == model::Kind::Item && isSelected(state_.anchor)) return state_.anchor;
+    return selection_.front();
+}
+
+void ItemGestures::addEditItems(std::vector<ui::MenuItem>& items, const MenuPlace& place,
+                                bool onItem) {
     auto add = [&](std::string label, const char* action, bool enabled,
                    std::function<Status()> act) {
         ui::MenuItem m;
@@ -1085,34 +1094,30 @@ void ItemGestures::addEditItems(std::vector<ui::MenuItem>& items, ui::Point at, 
         };
         items.push_back(std::move(m));
     };
-    // Paste lands where the menu was opened: that beat (on the grid), that channel.
-    std::optional<model::Id> track;
-    if (const auto row = rowAt(at.y);
-        row && holdsItem(view_.session(), view_.trackLayout().rows()[*row], nullptr))
-        track = view_.trackLayout().rows()[*row].track;
-    const double beat = std::max(0.0, snap(beatAtX(at.x), false));
+    const double beat = place.beat;
+    const std::optional<model::Id> track = place.track;
     const std::size_t n = selection_.size();
-    const std::string count = n == 1 ? "" : " " + std::to_string(n) + " items";
+    const bool any = n > 0;
+    const std::string count = n <= 1 ? "" : " " + std::to_string(n) + " items";
     if (onItem) {
-        add("Cut" + count, "ui.item.cut", true, [this] { return cutSelection(); });
-        add("Copy" + count, "ui.item.copy", true, [this] {
+        add("Cut" + count, "ui.item.cut", any, [this] { return cutSelection(); });
+        add("Copy" + count, "ui.item.copy", any, [this] {
             copySelection();
             return Status{};
         });
     }
     add("Paste", "ui.item.paste", canPaste(), [this, beat, track] { return paste(beat, track); });
     if (!onItem) return;
-    add("Duplicate" + count, "ui.item.duplicate", true, [this] { return duplicateSelection(); });
-    add("Delete" + count, "edit.delete", true, [this] { return deleteSelection(); });
+    add("Duplicate" + count, "ui.item.duplicate", any, [this] { return duplicateSelection(); });
+    add("Delete" + count, "edit.delete", any, [this] { return deleteSelection(); });
     // Always listed (greyed when it does not apply), so the rows keep their places.
     add("Consolidate items", "ui.item.consolidate", canConsolidate(), [this] {
         consolidateSelection();
         return Status{};
     });
     add("Heal splits", "ui.item.heal", canHeal(), [this] { return healSelection(); });
-    if (n == 1 && canMerge())
-        add("Merge takes", "ui.item.merge", true, [this] { return mergeSelection(); });
-    add("Split item at cursor", "item.split:playhead", true, [this] { return splitSelection(); });
+    add("Merge takes", "ui.item.merge", canMerge(), [this] { return mergeSelection(); });
+    add("Split item at cursor", "item.split:playhead", any, [this] { return splitSelection(); });
     const auto& s = view_.session();
     const bool audio = std::any_of(selection_.begin(), selection_.end(), [&](auto id) {
         const auto* item = s.items.find(id);
@@ -1122,20 +1127,35 @@ void ItemGestures::addEditItems(std::vector<ui::MenuItem>& items, ui::Point at, 
     add("Split item at prior zero crossing", "ui.item.split-zero", audio,
         [this] { return splitSelection(true); });
     // The clicked item's heard take, raw (item.export); greyed for an empty take.
-    const model::Id target =
-        state_.anchor.kind == model::Kind::Item ? state_.anchor : selection_.front();
-    const model::Item* item = itemOf(s, target);
+    const std::optional<model::Id> target = menuTarget();
+    const model::Item* item = target ? itemOf(s, *target) : nullptr;
     const model::Take* heard = item && item->activeTake ? s.takes.find(*item->activeTake) : nullptr;
     add("Export\u2026", "ui.item.export", heard && heard->source, [this, target] {
-        if (onExport) onExport(target);
+        if (onExport && target) onExport(*target);
         return Status{};
     });
+    add("Mix to new track", "ui.item.mix-to-track", any && onMixToTrack, [this] {
+        onMixToTrack(selection_);
+        return Status{};
+    });
+    ui::MenuItem rule;
+    rule.separator = true;
+    items.push_back(rule);
+    add("Edit MIDI", "ui.midi.edit", isMidi(heard) && onOpenMidi, [this, target] {
+        onOpenMidi(*target);
+        return Status{};
+    });
+    add("Show or hide the MIDI editor", "ui.midi.toggle", static_cast<bool>(onToggleMidiEditor),
+        [this] {
+            onToggleMidiEditor();
+            return Status{};
+        });
 }
 
 void ItemGestures::openSpaceMenu(ui::Point at) {
     if (!root_) return;
     std::vector<ui::MenuItem> items;
-    addEditItems(items, at, false);
+    addEditItems(items, placeAt(at), false);
     root_->openPopup(
         ui::makeMenu("arrange.space.menu", std::move(items), [this] { root_->closePopup(); }),
         {at.x, at.y, 0, 0}, ui::Placement::Below);
@@ -1143,16 +1163,21 @@ void ItemGestures::openSpaceMenu(ui::Point at) {
 
 void ItemGestures::openItemMenu(ui::Point at) {
     if (!root_ || selection_.empty()) return;
+    root_->openPopup(
+        ui::makeMenu("item.menu", itemMenu(placeAt(at)), [this] { root_->closePopup(); }),
+        {at.x, at.y, 1, 1});
+}
+
+std::vector<ui::MenuItem> ItemGestures::itemMenu(const MenuPlace& place) {
     std::vector<ui::MenuItem> items;
-    addEditItems(items, at, true);
+    addEditItems(items, place, true);
     // Timebase: what the selection follows when the tempo changes (item.set
     // timebase, one step; the items keep their place now).
     ui::MenuItem rule;
     rule.separator = true;
     items.push_back(rule);
     const model::Session& s = view_.session();
-    const model::Item* first = itemOf(s, selection_.front());
-    const model::ItemTimebase now = first ? first->timebase : model::ItemTimebase::Track;
+    const model::Item* first = selection_.empty() ? nullptr : itemOf(s, selection_.front());
     for (auto [label, value, name] :
          {std::tuple{"Follow the beat", model::ItemTimebase::Beats, "beats"},
           {"Follow time", model::ItemTimebase::Time, "time"},
@@ -1160,7 +1185,8 @@ void ItemGestures::openItemMenu(ui::Point at) {
           {"Follow the track", model::ItemTimebase::Track, "track"}}) {
         ui::MenuItem m;
         m.label = label;
-        m.checked = now == value;
+        m.checked = first && first->timebase == value;
+        m.enabled = first != nullptr;
         m.run = [this, timebase = std::string(name)] {
             if (!run) return;
             std::vector<EditStep> steps;
@@ -1209,9 +1235,9 @@ void ItemGestures::openItemMenu(ui::Point at) {
         items.push_back(std::move(menu));
     }
     // The active take's own chain and envelopes (gap log #22).
-    const model::Id itemId =
-        state_.anchor.kind == model::Kind::Item ? state_.anchor : selection_.front();
-    const model::Item* item = itemOf(s, itemId);
+    const std::optional<model::Id> target = menuTarget();
+    const model::Item* item = target ? itemOf(s, *target) : nullptr;
+    const model::Id itemId = target.value_or(model::Id{});
     if (item && item->activeTake) {
         const model::Id take = *item->activeTake;
         items.push_back(rule);
@@ -1263,7 +1289,8 @@ void ItemGestures::openItemMenu(ui::Point at) {
     if (item && item->activeTake) {
         // The take under the pointer (a take lane), else the heard one.
         model::Id take = *item->activeTake;
-        if (const auto h = hit(at); h && h->item == itemId && h->takeLane)
+        if (const auto h = place.at ? hit(*place.at) : std::nullopt;
+            h && h->item == itemId && h->takeLane)
             take = item->takes[*h->takeLane];
         const model::Take* tk = s.takes.find(take);
         const std::string name = tk && !tk->name.empty() ? tk->name : take.str();
@@ -1330,8 +1357,7 @@ void ItemGestures::openItemMenu(ui::Point at) {
             items.push_back(std::move(m));
         }
     }
-    root_->openPopup(ui::makeMenu("item.menu", std::move(items), [this] { root_->closePopup(); }),
-                     {at.x, at.y, 1, 1});
+    return items;
 }
 
 void ItemGestures::commit(const ui::PointerEvent& e) {

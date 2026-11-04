@@ -717,6 +717,18 @@ int main(int argc, char** argv) {
             if (auto r = fxWindow.openTake(take); !r)
                 std::fprintf(stderr, "take fx: %s\n", r.error().toString().c_str());
         };
+        g.onMixToTrack = [&](const std::vector<model::Id>& items) { audioEdit.mixToTrack(items); };
+        g.onToggleMidiEditor = [&] { appActions.invoke("ui.midi.toggle"); };
+        // The menu bar's Item menu is the item menu; Paste goes to the playhead
+        // on the selected track, as its key does.
+        chrome.setMenuSource("Item", [&] {
+            views::ArrangeView& a = *shell.arrange();
+            views::ItemGestures::MenuPlace place;
+            place.beat = (*app)->head().timeMap->beatAt(a.playhead());
+            if (!uiState.selectedTracks.empty())
+                place.track = model::Id::parse(uiState.selectedTracks.front());
+            return a.gestures().itemMenu(place);
+        });
         g.onError = [](const Error& e) {
             std::fprintf(stderr, "edit refused: %s\n", e.toString().c_str());
         };
@@ -807,7 +819,7 @@ int main(int argc, char** argv) {
     appActions.addUi("ui.item.duplicate", "Item: duplicate selected after itself", [&] {
         reportEdit("duplicate", shell.arrange()->gestures().duplicateSelection());
     });
-    appActions.addUi("ui.item.merge", "Item: merge selected MIDI items (or one item's takes)",
+    appActions.addUi("ui.item.merge", "Item: merge the selected item\u2019s MIDI takes",
                      [&] { reportEdit("merge", shell.arrange()->gestures().mergeSelection()); });
     appActions.addUi("ui.item.consolidate", "Item: consolidate selected items",
                      [&] { shell.arrange()->gestures().consolidateSelection(); });

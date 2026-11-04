@@ -1281,7 +1281,7 @@ TEST_CASE(
     CHECK_FALSE(f.root->find("item.menu"));
 }
 
-TEST_CASE("arrange gestures: the menus paste where they open; Merge joins MIDI items") {
+TEST_CASE("arrange gestures: the menus paste where they open; the menu bar's is the same") {
     Fixture f;
     if (!f.ok) return;
     auto& g = f.view->gestures();
@@ -1319,19 +1319,21 @@ TEST_CASE("arrange gestures: the menus paste where they open; Merge joins MIDI i
     CHECK(pasted != one);
     CHECK(f.item(pasted).track.str() == track);
     CHECK(f.item(pasted).position > f.item(one).position);
-    // Merge: the three, one item from the first start to the last end.
-    exec("item.remove", (R"({"item":")" + pasted.str() + R"("})").c_str());
+    // Several MIDI items combine with Consolidate items; Merge takes is for
+    // one item's takes. The menu bar's Item menu has the same rows.
     g.setSelection({one, two});
     f.sync();
-    const auto steps = f.steps();
+    CHECK_FALSE(g.canMerge());
     rightClick({r1.x + 4, r1.y + r1.h / 2});
+    const auto* menu = f.root->find("item.menu");
+    REQUIRE(menu);
+    std::vector<std::string> clicked, bar;
+    for (const auto& row : ui::menuItems(*menu)) clicked.push_back(row.label);
+    CHECK_FALSE(ui::menuItems(*menu)[menuIndex(f, "Merge takes")].enabled);
+    CHECK(ui::menuItems(*menu)[menuIndex(f, "Consolidate items")].enabled);
     f.root->closePopups();
-    REQUIRE(g.mergeSelection());
-    f.sync();
-    CHECK(f.steps() == steps + 1);
-    CHECK_FALSE(f.app->head().items.find(two));
-    CHECK(g.selection() == std::vector<model::Id>{one});
-    CHECK(model::itemLengthBeats(f.app->head(), f.item(one)) == doctest::Approx(20));
+    for (const auto& row : g.itemMenu({})) bar.push_back(row.label);
+    CHECK(bar == clicked);
 }
 
 TEST_CASE("arrange gestures: the item menu sets what items follow; a time item moves by beats") {
