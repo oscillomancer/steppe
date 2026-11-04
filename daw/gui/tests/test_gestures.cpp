@@ -1114,9 +1114,8 @@ TEST_CASE("arrange menu consolidates audio and heals compatible splits with shar
     menu = f.root->find("item.menu");
     REQUIRE(menu);
     rows = ui::menuItems(*menu);
-    CHECK_FALSE(rows[menuIndex(f, "Consolidate items")].enabled);
+    CHECK(rows[menuIndex(f, "Consolidate items")].enabled);  // layers its takes
     CHECK_FALSE(rows[menuIndex(f, "Heal splits")].enabled);
-    CHECK(rows[menuIndex(f, "Merge takes")].enabled);
 }
 
 TEST_CASE("takes: show all takes spreads them out; a lane is heard, deleted from its menu") {
@@ -1319,17 +1318,15 @@ TEST_CASE("arrange gestures: the menus paste where they open; the menu bar's is 
     CHECK(pasted != one);
     CHECK(f.item(pasted).track.str() == track);
     CHECK(f.item(pasted).position > f.item(one).position);
-    // Several MIDI items combine with Consolidate items; Merge takes is for
-    // one item's takes. The menu bar's Item menu has the same rows.
+    // Several MIDI items combine with Consolidate items. The menu bar's Item
+    // menu has the same rows.
     g.setSelection({one, two});
     f.sync();
-    CHECK_FALSE(g.canMerge());
     rightClick({r1.x + 4, r1.y + r1.h / 2});
     const auto* menu = f.root->find("item.menu");
     REQUIRE(menu);
     std::vector<std::string> clicked, bar;
     for (const auto& row : ui::menuItems(*menu)) clicked.push_back(row.label);
-    CHECK_FALSE(ui::menuItems(*menu)[menuIndex(f, "Merge takes")].enabled);
     CHECK(ui::menuItems(*menu)[menuIndex(f, "Consolidate items")].enabled);
     f.root->closePopups();
     for (const auto& row : g.itemMenu({})) bar.push_back(row.label);

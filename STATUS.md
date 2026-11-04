@@ -276,7 +276,7 @@ instructions are in `docs/guides/installing.md`.
   part of a gesture or a focused control is a rebindable action, and the
   actions list shows all of an action's keys. The arrange view's
   right-click menus cut, copy, paste at the pointer, duplicate, delete and
-  merge MIDI items (`midi.merge`, also an item's MIDI takes); the MIDI
+  consolidate items; the MIDI
   editor's grid menu deletes, copies, cuts, pastes and duplicates notes. Each effect's row in the FX chain
   has a presets menu: the plugin's factory presets, read-only, and the
   user's own, saved and deleted there (`fx.preset.*`, the sandbox's preset

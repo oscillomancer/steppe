@@ -10,6 +10,8 @@ struct ItemEditGroup {
     bool audio = false;
     std::vector<Id> items;
     double start = 0, end = 0;
+    // MIDI: one item whose takes (all MIDI, two or more) layer into one take.
+    bool layerTakes = false;
 };
 // Read-only command/menu planning. Explicit selection must include affected peers.
 Status completeItemSelection(const Session&, std::span<const Id>);

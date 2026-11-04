@@ -146,6 +146,31 @@ TEST_CASE("consolidation partitions mixed items by track and active kind") {
                                  *f.app->head().items.find({model::Kind::Item, 2})) == 8);
 }
 
+TEST_CASE("consolidation joins MIDI items across a gap, and layers a lone item's takes") {
+    Fixture f;
+    f.run("track.add", R"({"name":"Keys"})");
+    f.run("item.add", R"({"track":"tr_2","bar":1,"notation":"voice keys; 1: C2:q r:*"})");
+    f.run("item.add", R"({"track":"tr_2","bar":5,"notation":"voice keys; 1: E2:q r:*"})");
+    f.finish(f.run("item.consolidate", R"({"items":["it_2","it_3"]})"));
+    CHECK_FALSE(f.app->head().items.find({model::Kind::Item, 3}));
+    auto notes = f.run("midi.notes", R"({"item":"it_2"})");
+    CHECK(notes.find("length")->asDouble() == doctest::Approx(20));
+    const auto& list = notes.find("notes")->asArray();
+    REQUIRE(list.size() == 2);
+    CHECK(list[0].find("pitch")->asInt() == 36);
+    CHECK(list[1].find("pitch")->asInt() == 40);
+    CHECK(list[1].find("start")->asDouble() == doctest::Approx(16));
+    // A lone MIDI item's two takes become one take with both.
+    const auto& item = *f.app->head().items.find({model::Kind::Item, 2});
+    f.run("take.add", R"({"item":"it_2","from":")" + item.activeTake->str() + R"("})");
+    f.run("midi.write", R"({"item":"it_2","notation":"voice keys; 1: G2:q r:*"})");
+    REQUIRE(f.app->head().items.find({model::Kind::Item, 2})->takes.size() == 2);
+    f.finished = false;
+    f.finish(f.run("item.consolidate", R"({"items":["it_2"]})"));
+    CHECK(f.app->head().items.find({model::Kind::Item, 2})->takes.size() == 1);
+    CHECK(f.run("midi.notes", R"({"item":"it_2"})").find("notes")->asArray().size() == 3);
+}
+
 TEST_CASE("healing restores pre-split and pre-slice audio bit for bit without take FX") {
     Fixture f;
     bool slice = false, warp = false;

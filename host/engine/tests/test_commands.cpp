@@ -2494,46 +2494,6 @@ TEST_CASE("track.duplicate copies a strip after itself with its FX, items, sends
     CHECK(master.error().code == "track.strip_type");
 }
 
-TEST_CASE("midi.merge joins MIDI items across a gap, and layers an item's takes") {
-    Workdir dir;
-    AppOptions options;
-    options.workdir = dir.path;
-    auto created = EngineApp::create(options, {.console9 = false});
-    REQUIRE(created);
-    auto app = std::move(*created);
-    cmd::Registry registry;
-    registerEngineCommands(registry);
-    cmd::Dispatcher bus(registry, *app);
-    run(bus, "track.add", R"({"name":"Keys"})");
-    run(bus, "item.add", R"({"track":"tr_1","bar":1,"notation":"voice keys; 1: C2:q r:*"})");
-    run(bus, "item.add", R"({"track":"tr_1","bar":5,"notation":"voice keys; 1: E2:q r:*"})");
-    const auto merged = run(bus, "midi.merge", R"({"items":["it_1","it_2"]})");
-    CHECK(merged.find("item")->asString() == "it_1");
-    CHECK_FALSE(app->head().items.find(*model::Id::parse("it_2")));
-    auto notes = run(bus, "midi.notes", R"({"item":"it_1"})");
-    CHECK(notes.find("length")->asDouble() == doctest::Approx(20));
-    const auto& list = notes.find("notes")->asArray();
-    REQUIRE(list.size() == 2);
-    CHECK(list[0].find("pitch")->asInt() == 36);
-    CHECK(list[0].find("start")->asDouble() == doctest::Approx(0));
-    CHECK(list[1].find("pitch")->asInt() == 40);
-    CHECK(list[1].find("start")->asDouble() == doctest::Approx(16));
-    // Two takes of one item become one take with both.
-    run(bus, "take.add", R"({"item":"it_1","from":"tk_3"})");
-    run(bus, "midi.write", R"({"item":"it_1","notation":"voice keys; 1: G2:q r:*"})");
-    REQUIRE(app->head().items.find(*model::Id::parse("it_1"))->takes.size() == 2);
-    run(bus, "midi.merge", R"({"items":["it_1"]})");
-    CHECK(app->head().items.find(*model::Id::parse("it_1"))->takes.size() == 1);
-    notes = run(bus, "midi.notes", R"({"item":"it_1"})");
-    CHECK(notes.find("notes")->asArray().size() == 3);
-    // Items on different tracks are refused.
-    run(bus, "track.add", R"({"name":"Bass"})");
-    run(bus, "item.add", R"({"track":"tr_2","bar":1,"notation":"voice bass; 1: C2:q r:*"})");
-    const auto apart = bus.execute({"midi.merge", j(R"({"items":["it_1","it_3"]})"), kOrigin});
-    REQUIRE_FALSE(apart);
-    CHECK(apart.error().code == "midi.merge");
-}
-
 TEST_CASE("render filters respect pipes and braces inside quoted replacements") {
     RenderPatternContext context;
     context.track = "A|{B},C";

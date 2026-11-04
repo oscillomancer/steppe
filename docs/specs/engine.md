@@ -2234,9 +2234,14 @@ output fail the job with `item.mix_render`.
 result contains `items` and audio `files`. Partition the explicit selection by
 track and active source kind: one audio and one MIDI result at most per track.
 Each spans its group's first start to last end. Audio uses only active takes;
-inactive alternatives remain available through undo. MIDI groups reuse
-`midi.merge`; a singleton MIDI partition stays unchanged. A selection with
-only singleton MIDI groups has nothing to consolidate.
+inactive alternatives remain available through undo. A MIDI group of several
+items becomes one item from the first start to the last end with what each
+item's heard take plays (looped passes unrolled, notes ending by their item's
+end; gaps empty, overlaps layered), keeping the earliest item, its id,
+settings, take name and take FX. A lone MIDI item whose takes are all MIDI
+(two or more) has them layered into one take; any other lone MIDI item stays
+unchanged. A selection with only such unchanged groups has nothing to
+consolidate (`item.consolidate_empty`).
 
 Audio capture bakes item mute/gain/fades, take gain/pan/polarity/channel mode,
 take envelopes, source looping/rate/pitch/warp and take FX with their automation.
@@ -2295,7 +2300,7 @@ without dither, so it is bit exact); every other source is written as 32-bit
 float WAV. Exports over the renderer's 2^28-sample budget refuse with
 `item.export_too_long`.
 
-MIDI is what the item plays (`midi.merge`'s heard-take helper: the source window,
+MIDI is what the item plays (consolidation's heard-take helper: the source window,
 looped passes unrolled, a note held into the start begins at 0, notes ending by
 the item's end), in item beats from 0 at the source PPQ, as a format-0 Standard
 MIDI File with the tempo and meter in effect at the item's start (one of each).

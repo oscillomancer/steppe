@@ -962,29 +962,6 @@ Status ItemGestures::deleteSelection() {
     return {};
 }
 
-bool ItemGestures::canMerge() const {
-    if (selection_.size() != 1) return false;
-    const model::Session& s = view_.session();
-    const model::Item* it = itemOf(s, selection_.front());
-    if (!it || it->takes.size() < 2) return false;
-    for (model::Id take : it->takes)
-        if (!isMidi(s.takes.find(take))) return false;
-    return true;
-}
-
-Status ItemGestures::mergeSelection() {
-    if (!canMerge() || !run) return {};
-    json::Value ids = json::Value::array();
-    ids.push_back(selection_.front().str());
-    json::Value args = json::Value::object();
-    args["items"] = std::move(ids);
-    auto r = run("Merge takes", {{"midi.merge", std::move(args)}});
-    if (!r) return std::move(r).error();
-    if (const auto kept = model::Id::parse((*r)["item"].asString())) selection_ = {*kept};
-    changed();
-    return {};
-}
-
 bool ItemGestures::canConsolidate() const {
     return static_cast<bool>(model::consolidationGroups(view_.session(), selection_));
 }
@@ -1116,7 +1093,6 @@ void ItemGestures::addEditItems(std::vector<ui::MenuItem>& items, const MenuPlac
         return Status{};
     });
     add("Heal splits", "ui.item.heal", canHeal(), [this] { return healSelection(); });
-    add("Merge takes", "ui.item.merge", canMerge(), [this] { return mergeSelection(); });
     add("Split item at cursor", "item.split:playhead", any, [this] { return splitSelection(); });
     const auto& s = view_.session();
     const bool audio = std::any_of(selection_.begin(), selection_.end(), [&](auto id) {

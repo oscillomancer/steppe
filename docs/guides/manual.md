@@ -451,8 +451,10 @@ Right-click selected items and choose **Consolidate items** to combine material
 per track, including MIDI items on several tracks at once.
 Audio and MIDI remain separate. Audio uses active takes and bakes their item
 controls, timing, take FX and envelopes into a new WAV; track processing stays
-live. Gaps stay silent. MIDI keeps the existing merge behavior. Progress appears
-in the status line; all results publish together in one undo step.
+live. Gaps stay silent. MIDI items on a track become one MIDI item, with gaps
+left empty and overlapping notes layered; a single MIDI item with several takes
+has its takes layered into one. Progress appears in the status line; all
+results publish together in one undo step.
 Select complete linked/warp bundles on matching lanes and groups. Undo retains
 the original takes; the new media stays available to history and project saves.
 Agents use `item.consolidate {items:[...]}` and follow the returned job with `job.get`.
@@ -465,8 +467,7 @@ the full source/warp mapping, removing generated internal slice fades. Source
 settings and stored take FX must match; moved pieces, changed fades and nonlinear
 envelope seams that cannot be restored need consolidation instead. Each track
 becomes one item and the operation is one undo step.
-Both menu entries are greyed when the selection cannot use them. For a single
-multi-take MIDI item, **Merge takes** layers its alternatives into one take.
+Both menu entries are greyed when the selection cannot use them.
 
 Right-click an item and choose **Split item at cursor**, or press S, to split
 selected audio and MIDI items at the edit cursor. Items outside the cursor stay

@@ -819,8 +819,6 @@ int main(int argc, char** argv) {
     appActions.addUi("ui.item.duplicate", "Item: duplicate selected after itself", [&] {
         reportEdit("duplicate", shell.arrange()->gestures().duplicateSelection());
     });
-    appActions.addUi("ui.item.merge", "Item: merge the selected item\u2019s MIDI takes",
-                     [&] { reportEdit("merge", shell.arrange()->gestures().mergeSelection()); });
     appActions.addUi("ui.item.consolidate", "Item: consolidate selected items",
                      [&] { shell.arrange()->gestures().consolidateSelection(); });
     appActions.addUi("ui.item.export", "Item: export the selected item\u2019s audio or MIDI\u2026",

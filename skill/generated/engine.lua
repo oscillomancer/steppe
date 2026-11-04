@@ -793,12 +793,6 @@ q = nil
 ---@class Quire.midi_get_result
 ---@field text string
 
----@class Quire.midi_merge_args
----@field items string[]
-
----@class Quire.midi_merge_result
----@field item string
-
 ---@class Quire.midi_notes_args
 ---@field item string
 
@@ -1726,7 +1720,6 @@ q = nil
 ---@class Quire.midi
 ---@field edit fun(args: Quire.midi_edit_args): table Edit a MIDI item's notes and CCs: add, remove, move, resize, velocity, quantize.
 ---@field get fun(args: Quire.midi_get_args): Quire.midi_get_result Read an item's MIDI as notation.
----@field merge fun(args: Quire.midi_merge_args): Quire.midi_merge_result Merge MIDI items on one track, or one item's MIDI takes, into one item.
 ---@field notes fun(args: Quire.midi_notes_args): table List a MIDI item's notes and CC points (beats from the item's start).
 ---@field write fun(args: Quire.midi_write_args): table Replace an item's MIDI with notation (the item keeps its position and length).
 

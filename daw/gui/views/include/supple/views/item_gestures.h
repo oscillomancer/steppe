@@ -17,14 +17,14 @@
 // automation items, the envelope). Ctrl-drag below the name bar of an item with several takes takes
 // that take (the one under the pointer, else the heard one) out into an item of its own, on any
 // channel. A right-click on an item (without dragging) opens its menu: Cut, Copy, Paste (at the
-// pointer), Duplicate, Delete, Consolidate items, Heal splits, Merge takes for
-// one multi-take MIDI item, the splits, Export… (the item's raw audio or its MIDI
+// pointer), Duplicate, Delete, Consolidate items (also one MIDI item's takes), Heal splits,
+// the splits, Export… (the item's raw audio or its MIDI
 // to a file, through onExport), Mix to new track, the MIDI editor, timebase, take FX
 // and envelopes, and for several takes: show all takes, explode them onto tracks or along the
-// track, delete the take under the pointer; and rendering the item through its FX (MIDI to audio)
-// in place or as a new take (itemMenu, also the menu bar's Item menu); on empty lane space, a
-// menu with Paste. Each gesture previews as a
-// ghost on the root's overlay and commits ONE transaction on release.
+// track, delete the take under the pointer; and rendering the item
+// through its FX (MIDI to audio) in place or as a new take (itemMenu, also the menu bar's Item
+// menu); on empty lane space, a menu with Paste. Each gesture previews as a ghost on the root's
+// overlay and commits ONE transaction on release.
 #pragma once
 
 #include <filesystem>
@@ -129,10 +129,6 @@ class ItemGestures {
     Status duplicateSelection();  // right after the selection, on the same tracks
     // Removes the selected items (one undo step): the item menu's Delete.
     Status deleteSelection();
-    // One selected item's MIDI takes into one take (midi.merge, one undo
-    // step). Several items combine with Consolidate items.
-    bool canMerge() const;
-    Status mergeSelection();
     bool canConsolidate() const;
     bool canHeal() const;
     void consolidateSelection();  // background action; completion is one engine edit

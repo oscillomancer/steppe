@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 #include <chrono>
 #include "command_validation.h"
+#include "heard_midi.h"
 #include "render_commands.h"
 #include "supple/base/sha256.h"
 #include "supple/model/item_edits.h"
@@ -263,14 +264,8 @@ void registerConsolidateCommands(cmd::Registry& registry) {
         for (const auto& group : *groups) {
             const Id base = group.items.front();
             if (!group.audio) {
-                if (group.items.size() > 1) {
-                    auto args = json::Value::object();
-                    args["items"] = json::Value::array();
-                    for (Id id : group.items) args["items"].push_back(id.str());
-                    auto merged =
-                        ctx.service<const cmd::Registry>().find("midi.merge")->invoke(args, ctx);
-                    if (!merged) return merged.error();
-                }
+                if (group.items.size() > 1 || group.layerTakes)
+                    SUPPLE_TRY(detail::mergeMidi(app.view(), app.txn(), group.items));
                 out["items"].push_back(base.str());
                 continue;
             }
@@ -327,8 +322,10 @@ void registerConsolidateCommands(cmd::Registry& registry) {
     command.summary = "Consolidate selected audio and MIDI per track in a background job.";
     command.description =
         "Partitions by track and active source kind. Audio bakes active takes, item controls, "
-        "warp and take FX/automation to float WAV; track processing remains live. MIDI uses "
-        "midi.merge; singleton MIDI stays unchanged. Select complete linked/warp bundles on "
+        "warp and take FX/automation to float WAV; track processing remains live. MIDI items "
+        "on a track become one item (each item's heard take, gaps empty, overlaps layered); a "
+        "lone MIDI item with several MIDI takes layers them into one take; other lone MIDI "
+        "stays unchanged. Select complete linked/warp bundles on "
         "matching lanes/groups. One undo step after successful job publication. No item-count "
         "cap; existing render/source sample budgets apply. job.get returns resulting items/files.";
     command.args = argsSchema();

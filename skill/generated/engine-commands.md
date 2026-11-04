@@ -6405,7 +6405,7 @@ Result:
 
 Consolidate selected audio and MIDI per track in a background job.
 
-Partitions by track and active source kind. Audio bakes active takes, item controls, warp and take FX/automation to float WAV; track processing remains live. MIDI uses midi.merge; singleton MIDI stays unchanged. Select complete linked/warp bundles on matching lanes/groups. One undo step after successful job publication. No item-count cap; existing render/source sample budgets apply. job.get returns resulting items/files.
+Partitions by track and active source kind. Audio bakes active takes, item controls, warp and take FX/automation to float WAV; track processing remains live. MIDI items on a track become one item (each item's heard take, gaps empty, overlaps layered); a lone MIDI item with several MIDI takes layers them into one take; other lone MIDI stays unchanged. Select complete linked/warp bundles on matching lanes/groups. One undo step after successful job publication. No item-count cap; existing render/source sample budgets apply. job.get returns resulting items/files.
 
 Kind: `action`. Exposure: `mcp-tool`.
 
@@ -7780,61 +7780,6 @@ Result:
 ```json
 {
   "text": "<any>"
-}
-
-```
-
-## `midi.merge@1`
-
-Merge MIDI items on one track, or one item's MIDI takes, into one item.
-
-Several items (on one track): one item from the first start to the last end, with what each item's heard take plays, gaps left empty and overlaps layered; the others are removed. One item: its takes' notes layered into one take. The MIDI is what plays (looped passes unrolled, notes ending by their item's end); the result keeps the earliest item's settings, take name and take FX, and its id. One undo step.
-
-Kind: `edit`. Exposure: `mcp-tool`.
-
-### Arguments
-
-| Field | Type | Unit | Range | Default | Description |
-| --- | --- | --- | --- | --- | --- |
-| `items` | array |  |  |  |  |
-
-### Result
-
-```json
-{
-  "type": "object",
-  "title": "midi_merge_result",
-  "properties": {
-    "item": {
-      "type": "string"
-    }
-  },
-  "required": ["item"],
-  "additionalProperties": false
-}
-
-```
-
-### Errors
-
-- `midi.merge`: nothing to merge, items on different tracks or not MIDI Hint: give MIDI items on one track, or one item with several MIDI takes
-
-### Examples
-
-**Layer an item's takes** (`song_with_takes`)
-
-```json
-{
-  "items": ["it_1"]
-}
-
-```
-
-Result:
-
-```json
-{
-  "item": "it_1"
 }
 
 ```

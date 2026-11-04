@@ -427,14 +427,86 @@ Status applyOp(const MidiOp& op, std::size_t at, std::vector<Working>& notes, st
     return {};
 }
 
-struct MergeArgs {
-    std::vector<std::string> items;
-};
-struct MergeResult {
-    std::string item;
-};
-
 }  // namespace
+
+Status detail::mergeMidi(const model::Session& s, model::EditTxn& txn, const std::vector<Id>& ids) {
+    auto refuse = [](std::string message) {
+        return Error("item.consolidate_midi", std::move(message), "/items",
+                     "give MIDI items on one track, or one item with several MIDI takes");
+    };
+    if (ids.empty()) return refuse("no items");
+    // What is merged: each item's heard take, or one item's every take.
+    std::vector<std::pair<Id, Id>> parts;  // item, take
+    for (const Id id : ids) {
+        const model::Item* it = s.items.find(id);
+        if (!it) return refuse("no item " + id.str());
+        SUPPLE_TRY(checkUnlocked(s, id, "/items"));
+        if (it->track != s.items.find(ids.front())->track)
+            return refuse("the items are on different tracks");
+        const std::vector<Id> takes =
+            ids.size() == 1
+                ? it->takes
+                : (it->activeTake ? std::vector<Id>{*it->activeTake} : std::vector<Id>{});
+        if (takes.empty()) return refuse(id.str() + " has no take");
+        for (const Id take : takes) {
+            const model::Take* tk = s.takes.find(take);
+            if (!tk || !tk->source || tk->source->kind != model::Kind::Midi ||
+                !s.midi.find(*tk->source))
+                return refuse(id.str() + " is not MIDI");
+            parts.emplace_back(id, take);
+        }
+    }
+    if (parts.size() < 2) return refuse("one item with one take: nothing to merge");
+    // The earliest item is kept; the merged MIDI starts there.
+    Id base = ids.front(), last = ids.front();
+    double start = 1e300, end = -1e300;
+    for (const Id id : ids) {
+        const model::Item& it = *s.items.find(id);
+        const double from = model::itemSpan(s, it).startBeat;
+        const double to = model::itemEndBeat(s, it);
+        if (from < start) {
+            start = from;
+            base = id;
+        }
+        if (to > end) {
+            end = to;
+            last = id;
+        }
+    }
+    midi::Sequence merged;
+    merged.ppq = 960;
+    for (const auto& [id, take] : parts) {
+        const model::Item& it = *s.items.find(id);
+        const model::Take& tk = *s.takes.find(take);
+        detail::heardMidi(s, it, tk, s.midi.find(*tk.source)->sequence,
+                          model::itemSpan(s, it).startBeat - start, merged);
+    }
+    merged.length = std::llround((end - start) * merged.ppq);
+    merged.canonicalize();
+    const model::Item& kept = *s.items.find(base);
+    const Id heard = kept.activeTake ? *kept.activeTake : kept.takes.front();
+    model::Take take = *s.takes.find(heard);
+    take.source = txn.create(model::MidiSource{std::move(merged), false});
+    take.startOffset = 0;
+    take.playrate = 1;
+    take.stretchMarkers.clear();
+    take.transients.reset();
+    take.warpPeers.clear();
+    auto copied = copyTake(s, txn, heard, std::move(take));
+    if (!copied) return std::move(copied).error();
+    model::Item item = kept;
+    item.takes = {*copied};
+    item.activeTake = *copied;
+    item.loop = false;
+    item.fadeOut = s.items.find(last)->fadeOut;
+    model::placeItem(s, item, start, end - start);
+    for (const Id id : ids) {
+        for (const Id t : s.items.find(id)->takes) SUPPLE_TRY(removeTakeObjects(txn, s, t));
+        if (id != base) txn.remove<model::Item>(id);
+    }
+    txn.put<model::Item>(base, std::move(item));
+    return {};
+}
 
 void detail::heardMidi(const model::Session& s, const model::Item& it, const model::Take& take,
                        const midi::Sequence& seq, double shift, midi::Sequence& out) {
@@ -614,123 +686,6 @@ void registerMidiCommands(cmd::Registry& registry) {
             json::Value out = json::Value::object();
             out["notes"] = std::move(selected);
             return out;
-        };
-        addChecked(registry, std::move(c));
-    }
-    {
-        Command<MergeArgs, MergeResult> c;
-        c.name = "midi.merge";
-        c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
-        c.summary = "Merge MIDI items on one track, or one item's MIDI takes, into one item.";
-        c.description =
-            "Several items (on one track): one item from the first start to the last end, with "
-            "what each item's heard take plays, gaps left empty and overlaps layered; the others "
-            "are removed. One item: its takes' notes layered into one take. The MIDI is what "
-            "plays (looped passes unrolled, notes ending by their item's end); the result keeps "
-            "the earliest item's settings, take name and take FX, and its id. One undo step.";
-        c.tags = {"midi", "item"};
-        c.args =
-            schema::object<MergeArgs>("midi_merge_args")
-                .field(
-                    "items", &MergeArgs::items,
-                    schema::arrayOf(schema::string().pattern("^it_[0-9]+$", "item id")).minItems(1))
-                .build();
-        c.result = schema::object<MergeResult>("midi_merge_result")
-                       .field("item", &MergeResult::item, schema::string())
-                       .build();
-        c.errors = {{"midi.merge", "nothing to merge, items on different tracks or not MIDI",
-                     "give MIDI items on one track, or one item with several MIDI takes"}};
-        c.examples = {{"Layer an item's takes", j(R"({"items":["it_1"]})"), j(R"({"item":"it_1"})"),
-                       "song_with_takes"}};
-        c.run = [](const MergeArgs& a, Context& ctx) -> Result<MergeResult> {
-            const model::Session s = ctx.service<EngineApp>().view();
-            std::vector<Id> ids;
-            for (std::size_t i = 0; i < a.items.size(); ++i) {
-                const std::string at = "/items/" + std::to_string(i);
-                auto id = Id::parse(a.items[i]);
-                if (!id || id->kind != model::Kind::Item || !s.items.find(*id))
-                    return Error("it.unknown", "no item " + a.items[i], at,
-                                 "use an item id from track.list");
-                SUPPLE_TRY(checkUnlocked(s, *id, at));
-                if (std::find(ids.begin(), ids.end(), *id) == ids.end()) ids.push_back(*id);
-            }
-            // What is merged: each item's heard take, or one item's every take.
-            std::vector<std::pair<Id, Id>> parts;  // item, take
-            for (const Id id : ids) {
-                const model::Item& it = *s.items.find(id);
-                if (it.track != s.items.find(ids.front())->track)
-                    return Error("midi.merge", "the items are on different tracks", "/items",
-                                 "merge items on one track");
-                const std::vector<Id> takes =
-                    ids.size() == 1
-                        ? it.takes
-                        : (it.activeTake ? std::vector<Id>{*it.activeTake} : std::vector<Id>{});
-                if (takes.empty())
-                    return Error("midi.merge", id.str() + " has no take", "/items",
-                                 "give MIDI items");
-                for (const Id take : takes) {
-                    const model::Take* tk = s.takes.find(take);
-                    if (!tk || !tk->source || tk->source->kind != model::Kind::Midi ||
-                        !s.midi.find(*tk->source))
-                        return Error("midi.merge", id.str() + " is not MIDI", "/items",
-                                     "give MIDI items (audio is not merged)");
-                    parts.emplace_back(id, take);
-                }
-            }
-            if (parts.size() < 2)
-                return Error("midi.merge", "one item with one take: nothing to merge", "/items",
-                             "give several items, or one item with several takes");
-            // The earliest item is kept; the merged MIDI starts there.
-            Id base = ids.front(), last = ids.front();
-            double start = 1e300, end = -1e300;
-            for (const Id id : ids) {
-                const model::Item& it = *s.items.find(id);
-                const double from = model::itemSpan(s, it).startBeat;
-                const double to = model::itemEndBeat(s, it);
-                if (from < start) {
-                    start = from;
-                    base = id;
-                }
-                if (to > end) {
-                    end = to;
-                    last = id;
-                }
-            }
-            midi::Sequence merged;
-            merged.ppq = 960;
-            for (const auto& [id, take] : parts) {
-                const model::Item& it = *s.items.find(id);
-                const model::Take& tk = *s.takes.find(take);
-                detail::heardMidi(s, it, tk, s.midi.find(*tk.source)->sequence,
-                                  model::itemSpan(s, it).startBeat - start, merged);
-            }
-            merged.length = std::llround((end - start) * merged.ppq);
-            merged.canonicalize();
-            auto& txn = ctx.service<EngineApp>().txn();
-            const model::Item& kept = *s.items.find(base);
-            const Id heard = kept.activeTake ? *kept.activeTake : kept.takes.front();
-            model::Take take = *s.takes.find(heard);
-            take.source = txn.create(model::MidiSource{std::move(merged), false});
-            take.startOffset = 0;
-            take.playrate = 1;
-            take.stretchMarkers.clear();
-            take.transients.reset();
-            take.warpPeers.clear();
-            auto copied = copyTake(s, txn, heard, std::move(take));
-            if (!copied) return std::move(copied).error();
-            model::Item item = kept;
-            item.takes = {*copied};
-            item.activeTake = *copied;
-            item.loop = false;
-            item.fadeOut = s.items.find(last)->fadeOut;
-            model::placeItem(s, item, start, end - start);
-            for (const Id id : ids) {
-                for (const Id t : s.items.find(id)->takes) SUPPLE_TRY(removeTakeObjects(txn, s, t));
-                if (id != base) txn.remove<model::Item>(id);
-            }
-            txn.put<model::Item>(base, std::move(item));
-            return MergeResult{base.str()};
         };
         addChecked(registry, std::move(c));
     }

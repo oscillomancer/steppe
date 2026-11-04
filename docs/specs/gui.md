@@ -503,8 +503,7 @@ curve is editable and saved, but audio application remains pending.
 **Menus.** A right-click on an item opens the item menu: **Cut**, **Copy**,
 **Paste** (at the pointer's beat on the grid and its channel), **Duplicate**
 (after the selection), **Delete**, **Consolidate items**, **Heal splits**,
-**Merge takes** (one multi-take MIDI item: layers its MIDI takes via
-`midi.merge`), **Split item at cursor** (S),
+**Split item at cursor** (S),
 **Split item at prior zero crossing**, **Export…**, **Mix to new track**, then
 **Edit MIDI** (the item in the MIDI editor) and **Show or hide the MIDI
 editor**, then the timebases and the take entries below. Rows that do not apply
@@ -514,7 +513,7 @@ Item) over the selection: everything greyed but Paste and the MIDI editor
 toggle when nothing is selected, Paste at the playhead on the first selected
 track, and the take entries for the heard take of the clicked item (else the
 first selected one). Several MIDI items are combined with Consolidate items
-only; the GUI has no separate item merge. A right-click on empty lane space
+(engine.md). A right-click on empty lane space
 opens a menu with Paste. The keys each action has are shown beside it.
 Consolidate items and Heal splits sit beside each other and use the engine's
 shared read-only selection planners for enablement. Consolidate captures active
@@ -523,8 +522,9 @@ stays live; MIDI and audio partition separately per track. Its background job
 reports through the existing status line and publishes all results as one undo
 step. Heal is a pure edit for compatible consecutive audio pieces, including the
 narrow unchanged Slice-at-hits overlap case; it keeps the surviving items selected.
-Both entries are disabled for invalid/incomplete/locked/frozen selections. A sole
-MIDI partition has nothing to consolidate; use Merge takes for its alternatives.
+Both entries are disabled for invalid/incomplete/locked/frozen selections. A lone
+MIDI item consolidates only when it has several takes, all MIDI: they layer into
+one take. There is no separate merge entry.
 `ui.item.consolidate` and `ui.item.heal` are key-bindable actions. Engine details
 and exact heal/FX/envelope eligibility are in engine.md; no new dialog or setting.
 Both split entries use the project/edit cursor, independent of the menu position,

@@ -72,13 +72,21 @@ Result<std::vector<ItemEditGroup>> consolidationGroups(const Session& s, std::sp
                              "/items", "select one lane and one item-group token per track/kind");
             group.end = std::max(group.end, itemSpan(s, item).endSec);
         }
-        changes = changes || group.audio || items.size() > 1;
+        if (!group.audio && items.size() == 1) {
+            const auto& only = *s.items.find(items.front());
+            group.layerTakes = only.takes.size() > 1 &&
+                               std::all_of(only.takes.begin(), only.takes.end(), [&](Id t) {
+                                   const auto* take = s.takes.find(t);
+                                   return take && take->source && s.midi.contains(*take->source);
+                               });
+        }
+        changes = changes || group.audio || items.size() > 1 || group.layerTakes;
         out.push_back(std::move(group));
     }
     if (!changes)
         return Error(
             "item.consolidate_empty", "there are no items to combine", "/items",
-            "select audio or several MIDI items on the same track; use midi.merge for takes");
+            "select audio, several MIDI items on a track, or a MIDI item with several takes");
     return out;
 }
 

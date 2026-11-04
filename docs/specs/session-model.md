@@ -693,11 +693,12 @@ and naming. All `edit` unless marked (q) query or (a) action.
   indices edit each original note once. Tick conversions and all resulting
   starts, ends, lengths and sequence lengths are checked before publication;
   out-of-range arithmetic returns structured `midi.range` with a repair hint,
-  leaving the session unchanged. `midi.merge {items}`: MIDI
-  items on one track into one item from the first start to the last end
-  (what each heard take plays: looped passes unrolled, notes ending by their
-  item's end; gaps empty, overlaps layered), or one item's MIDI takes layered
-  into one take; the earliest item, its settings and take FX are kept.
+  leaving the session unchanged. MIDI items are merged by
+  `item.consolidate` (engine.md): those on one track into one item from the
+  first start to the last end (what each heard take plays: looped passes
+  unrolled, notes ending by their item's end; gaps empty, overlaps layered),
+  or a lone item's MIDI takes layered into one take; the earliest item, its
+  settings and take FX are kept.
 - **FX**: `fx.add {track?|take?, plugin, index?, patch?, chain?}`
   (exactly one of track or take), `fx.remove`,
   `fx.move`, `fx.copy {fx, track, index?, chain?}` (live settings),
