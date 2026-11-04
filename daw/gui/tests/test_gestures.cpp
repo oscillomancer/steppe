@@ -19,6 +19,7 @@
 #include "supple/engine/app.h"
 #include "supple/gui/png.h"
 #include "supple/gui/window.h"
+#include "supple/midi/midi.h"
 #include "supple/peaks/peaks.h"
 #include "supple/ui/list.h"
 #include "supple/ui/popup.h"
@@ -422,6 +423,15 @@ TEST_CASE("arrange gestures: marquee, click to seek, take badge, double-click MI
     CHECK(f.app->head().items.size() == items + 2);
     CHECK(f.app->head().tracks.size() == tracks + 1);
     CHECK(f.steps() == s0 + 1);  // one undo step
+    // A MIDI file (any case of .mid) becomes a MIDI item on a new track.
+    midi::Sequence notes;
+    notes.notes.push_back({0, 960, 0, 60, 100, 0});
+    notes.length = 960;
+    REQUIRE(writeFileAtomic(f.dir / "z.MID", *midi::writeSmf(notes, {}, {})));
+    const std::size_t sequences = f.app->head().midi.size();
+    REQUIRE(g.drop({f.dir / "z.MID"}, {lanes.x + 300, 4000}));
+    CHECK(f.app->head().items.size() == items + 3);
+    CHECK(f.app->head().midi.size() == sequences + 1);
 }
 
 TEST_CASE("automation lanes: shown under their strip, points added, moved and deleted, modes") {

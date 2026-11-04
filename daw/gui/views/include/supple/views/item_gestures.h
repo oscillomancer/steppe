@@ -57,6 +57,10 @@ struct EditStep {
     json::Value args;
 };
 
+// The item.add argument an imported or dropped file goes to: midi_file for a
+// .mid/.midi file (any case), else audio_file.
+const char* importArg(const std::filesystem::path& file);
+
 class ItemGestures {
   public:
     // Runs the steps as one transaction (one undo step) labelled `label`; the

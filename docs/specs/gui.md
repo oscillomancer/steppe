@@ -992,12 +992,18 @@ leave the head version unchanged.
 
 ### 4.11 Project files, folders and templates
 
-File > New, Open…, Save, Save as… and Import audio… use the system's file
+File > New, Open…, Save, Save as… and Import… use the system's file
 dialogs (asynchronous; results run on the UI thread), and ask Save / Don't
 save / Cancel before unsaved changes are lost. Before New, Open or Quit checks
 for unsaved changes, active recording is stopped through `transport.stop`:
 recorded takes become an undoable version, then the normal prompt runs. If
 Stop fails, the error is shown and the requested action does not continue.
+Import… (`ui.file.import`, Ctrl+I) takes audio files (WAV, FLAC, MP3) and
+Standard MIDI Files (`.mid`, `.midi`) through `item.add` (`audio_file` or
+`midi_file`), at the playhead in one undo step: one file onto the selected
+track, else each onto a new track named after it. Files dropped on the
+arrange view are told apart the same way. An imported MIDI item plays through
+its channel's instrument, so a new track needs one before it is heard.
 File > Quit, its shortcut (Cmd+Q on macOS), SDL quit and main-window close
 all dispatch the same `ui.quit` action. An open popup only gates interactive
 Quit when recording or unsaved changes require a decision; a clean, idle

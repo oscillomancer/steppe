@@ -687,8 +687,9 @@ and naming. All `edit` unless marked (q) query or (a) action.
 - **MIDI**: `midi.write {item | {track, at}, notation, replace: bool}`,
   `midi.get {item, format: notation|events}` (q), `midi.edit {item, ops:
   [{select: {pitch, range, channel}, set|shift|transpose|quantize|velocity}]}`,
-  `midi.quantize`, `midi.humanize {seed}`, `midi.import {file, track}`;
-  MIDI files are written by `item.export`. `midi.edit` note indices are a set per operation: repeated
+  `midi.quantize`, `midi.humanize {seed}`; Standard MIDI Files are read by
+  `item.add {midi_file}` (notes keep their beats and follow the project's
+  tempo) and written by `item.export`. `midi.edit` note indices are a set per operation: repeated
   indices edit each original note once. Tick conversions and all resulting
   starts, ends, lengths and sequence lengths are checked before publication;
   out-of-range arithmetic returns structured `midi.range` with a repair hint,

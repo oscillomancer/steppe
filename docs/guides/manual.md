@@ -124,6 +124,13 @@ project untouched. File and folder dialog results are also ignored with a notice
 if the project was replaced; open the dialog again. If edits arrive
 while Open is waiting, Quire asks about unsaved changes again before opening.
 
+**File > Import…** (Ctrl+I) brings in audio files (WAV, FLAC, MP3) and MIDI
+files (`.mid`) at the playhead: one file onto the selected track, several onto
+new tracks named after them. Dropping files on the arrange view does the same.
+A MIDI file's notes keep their beats and play at the project's tempo (the file's
+own tempo is not applied). Imported MIDI
+plays through its channel's instrument, so add one to a new track to hear it.
+
 Renders go to `~/Documents/quire-media` unless you choose another folder in
 the render dialog. The folder you choose is remembered and is shared by all
 projects (see *Rendering*).

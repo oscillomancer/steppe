@@ -625,6 +625,7 @@ q = nil
 ---@field length? number Beats.
 ---@field notation? string
 ---@field audio_file? string
+---@field midi_file? string
 ---@field name? string
 
 ---@class Quire.item_add_result
@@ -1686,7 +1687,7 @@ q = nil
 ---@field undo fun(): Quire.history_undo_result Undo the last change on the current branch.
 
 ---@class Quire.item
----@field add fun(args: Quire.item_add_args): Quire.item_add_result Add an item on a track: MIDI written in notation, or an audio file.
+---@field add fun(args: Quire.item_add_args): Quire.item_add_result Add an item on a track: MIDI in notation, a MIDI file or an audio file.
 ---@field ["apply-fx"] fun(args: Quire.item_apply_fx_args): Quire.item_apply_fx_result Render an item through its take and track FX into a new audio take.
 ---@field consolidate fun(args: Quire.item_consolidate_args): table Consolidate selected audio and MIDI per track in a background job.
 ---@field duplicate fun(args: Quire.item_duplicate_args): Quire.item_duplicate_result Copy an item and its takes to a new beat position (default: immediately after).

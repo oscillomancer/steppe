@@ -6256,9 +6256,9 @@ Result:
 
 ## `item.add@1`
 
-Add an item on a track: MIDI written in notation, or an audio file.
+Add an item on a track: MIDI in notation, a MIDI file or an audio file.
 
-position in beats (quarter notes from the start) or bar (1-based). notation: e.g. "voice bass; 1: C2:q r:q C2:q r:q | F2:h G2:h" — every bar must add up; the item is as long as the written bars unless length (beats) is given. audio_file: a path at the project's sample rate; with the app's copy-imports setting on, the project keeps its own copy in its media folder. A master holds audio items only (prints, played after its fader); busses hold none.
+position in beats (quarter notes from the start) or bar (1-based). notation: e.g. "voice bass; 1: C2:q r:q C2:q r:q | F2:h G2:h" — every bar must add up; the item is as long as the written bars unless length (beats) is given. audio_file: a path at the project's sample rate; with the app's copy-imports setting on, the project keeps its own copy in its media folder. midi_file: a Standard MIDI File (type 0 or 1, every track merged, channels kept); its notes keep their beats and follow the project's tempo (the file's tempo and meter are not applied; a warning says when they differ), and the item is as long as the file unless length is given. A master holds audio items only (prints, played after its fader); busses hold none.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -6272,6 +6272,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | `length` | number |  |  |  | Beats. |
 | `notation` | string |  |  |  |  |
 | `audio_file` | string |  |  |  |  |
+| `midi_file` | string |  |  |  |  |
 | `name` | string |  |  |  |  |
 
 ### Result

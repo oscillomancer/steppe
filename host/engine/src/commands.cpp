@@ -17,8 +17,10 @@
 #include "media_files.h"
 #include "render_commands.h"
 #include "supple/audio/audio_file.h"
+#include "supple/base/files.h"
 #include "supple/base/sha256.h"
 #include "supple/engine/app.h"
+#include "supple/midi/midi.h"
 #include "supple/model/groups.h"
 #include "supple/model/render_settings.h"
 #include "supple/model/schemas.h"
@@ -670,7 +672,7 @@ struct ItemAddArgs {
     std::optional<double> position;  // beats
     std::optional<std::int64_t> bar;
     std::optional<double> length;  // beats
-    std::optional<std::string> notation, audioFile;
+    std::optional<std::string> notation, audioFile, midiFile;
     std::optional<std::string> name;
 };
 struct ItemAddResult {
@@ -1925,14 +1927,17 @@ void registerEngineCommands(cmd::Registry& registry) {
         c.name = "item.add";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpTool;
-        c.summary = "Add an item on a track: MIDI written in notation, or an audio file.";
+        c.summary = "Add an item on a track: MIDI in notation, a MIDI file or an audio file.";
         c.description =
             "position in beats (quarter notes from the start) or bar (1-based). notation: e.g. "
             "\"voice bass; 1: C2:q r:q C2:q r:q | F2:h G2:h\" — every bar must add up; the item "
             "is as long as the written bars unless length (beats) is given. audio_file: a path at "
             "the project's sample rate; with the app's copy-imports setting on, the project "
-            "keeps its own copy in its media folder. A master holds audio items only (prints, "
-            "played after its fader); busses hold none.";
+            "keeps its own copy in its media folder. midi_file: a Standard MIDI File (type 0 or 1, "
+            "every track merged, channels kept); its notes keep their beats and follow the "
+            "project's tempo (the file's tempo and meter are not applied; a warning says when they "
+            "differ), and the item is as long as the file unless length is given. A master holds "
+            "audio items only (prints, played after its fader); busses hold none.";
         c.tags = {"item", "midi"};
         c.args =
             schema::object<ItemAddArgs>("item_add_args")
@@ -1946,6 +1951,7 @@ void registerEngineCommands(cmd::Registry& registry) {
                        schema::number().exclusiveMin(0).doc("Beats."))
                 .field("notation", &ItemAddArgs::notation, schema::string())
                 .field("audio_file", &ItemAddArgs::audioFile, schema::string())
+                .field("midi_file", &ItemAddArgs::midiFile, schema::string())
                 .field("name", &ItemAddArgs::name, schema::string())
                 .build();
         c.result =
@@ -1971,13 +1977,15 @@ void registerEngineCommands(cmd::Registry& registry) {
             auto track = existing<model::Track>(s, a.track, "/track");
             if (!track) return std::move(track).error();
             SUPPLE_TRY(checkItemTrack(s, *track, {}, "/track"));
-            if (a.notation && s.tracks.find(*track)->type == model::StripType::Master)
-                return Error("track.strip_type", "a master holds audio items only", "/notation",
-                             "give audio_file for a master, or put the notation on a channel "
+            if ((a.notation || a.midiFile) &&
+                s.tracks.find(*track)->type == model::StripType::Master)
+                return Error("track.strip_type", "a master holds audio items only",
+                             a.notation ? "/notation" : "/midi_file",
+                             "give audio_file for a master, or put the MIDI on a channel "
                              "with an instrument");
-            if ((a.notation ? 1 : 0) + (a.audioFile ? 1 : 0) > 1)
-                return Error("item.source", "give notation or audio_file, not both", {},
-                             "provide exactly one of notation or audio_file for the item");
+            if ((a.notation ? 1 : 0) + (a.audioFile ? 1 : 0) + (a.midiFile ? 1 : 0) > 1)
+                return Error("item.source", "give one of notation, audio_file or midi_file", {},
+                             "provide exactly one source for the item");
             const double pos = beatsOf(
                 s, a.position, a.bar ? std::optional<int>(static_cast<int>(*a.bar)) : std::nullopt);
             SUPPLE_TRY(model::checkedBeat(s, pos, a.bar ? "/bar" : "/position"));
@@ -1992,6 +2000,39 @@ void registerEngineCommands(cmd::Registry& registry) {
                 if (!compiled) return std::move(compiled).error();
                 if (!a.length) length = compiled->second;
                 const Id mi = t.create(std::move(compiled->first));
+                take.source = mi;
+                r.source = mi.str();
+            } else if (a.midiFile) {
+                auto bytes = readFile(app.resolve(*a.midiFile), midi::kMaxSmfBytes);
+                if (!bytes) return std::move(bytes).error().at("/midi_file");
+                midi::SmfInfo info;
+                auto seq = midi::readSmf(*bytes, &info);
+                if (!seq) return std::move(seq).error().at("/midi_file");
+                auto warn = [&r](std::string w) {
+                    if (!r.warnings) r.warnings.emplace();
+                    r.warnings->push_back(std::move(w));
+                };
+                // The file's own end, else where its last event ends.
+                std::int64_t end = seq->length;
+                for (const auto& n : seq->notes) end = std::max(end, n.start + n.length);
+                for (const auto& cc : seq->controls) end = std::max(end, cc.tick);
+                seq->length = end;
+                seq->canonicalize();
+                if (!a.length && end > 0) length = static_cast<double>(end) / seq->ppq;
+                const double bpm = s.timeMap->bpmAt(pos);
+                for (const auto& [tick, tempo] : info.tempos)
+                    if (std::abs(tempo - bpm) > 1e-6) {
+                        warn("the file's tempo (" + json::formatDouble(tempo) +
+                             " BPM) is not applied: its notes follow the "
+                             "project's tempo");
+                        break;
+                    }
+                if (info.skippedEvents > 0)
+                    warn(std::to_string(info.skippedEvents) +
+                         " unsupported events in the file were skipped");
+                model::MidiSource src;
+                src.sequence = std::move(*seq);
+                const Id mi = t.create(std::move(src));
                 take.source = mi;
                 r.source = mi.str();
             } else if (a.audioFile) {

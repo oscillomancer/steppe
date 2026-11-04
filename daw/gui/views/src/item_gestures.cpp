@@ -5,6 +5,7 @@
 #include "supple/views/item_gestures.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <map>
@@ -2365,6 +2366,12 @@ void ItemGestures::commitEnv(const std::string& label) {
     if (auto r = run(label, steps); !r && onError) onError(r.error());
 }
 
+const char* importArg(const std::filesystem::path& file) {
+    std::string ext = file.extension().string();
+    for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return ext == ".mid" || ext == ".midi" ? "midi_file" : "audio_file";
+}
+
 Status ItemGestures::drop(const std::vector<std::filesystem::path>& files, ui::Point at) {
     if (files.empty() || !run) return {};
     const model::Session& s = view_.session();
@@ -2387,7 +2394,7 @@ Status ItemGestures::drop(const std::vector<std::filesystem::path>& files, ui::P
         json::Value item = json::Value::object();
         item["track"] = track;
         item["position"] = position;
-        item["audio_file"] = files[i].string();
+        item[importArg(files[i])] = files[i].string();
         steps.push_back({"item.add", std::move(item)});
     }
     (void)s;

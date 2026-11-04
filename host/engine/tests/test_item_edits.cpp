@@ -262,6 +262,24 @@ TEST_CASE("item.export writes a trimmed MIDI item as a Standard MIDI File from z
     REQUIRE(info.tempos.size() == 1);
     CHECK(info.tempos[0].second == doctest::Approx(120.0));
     CHECK(info.meters == std::vector<std::pair<std::int64_t, midi::Meter>>{{0, midi::Meter{4, 4}}});
+    // item.add imports it back: the same two notes, as long as the file.
+    auto add = json::Value::object();
+    add["track"] = "tr_1";
+    add["bar"] = 5;
+    add["midi_file"] = (f.dir / "middle.mid").string();
+    auto added = f.run("item.add", json::writeCompact(add));
+    CHECK(added["length"].asDouble() == doctest::Approx(2.0));
+    CHECK_FALSE(added.find("warnings"));  // 120 BPM, as the project
+    const auto& s = f.app->view();
+    const auto* take = s.takes.find(*model::Id::parse(added["take"].asString()));
+    REQUIRE(take);
+    const auto& imported = s.midi.find(*take->source)->sequence;
+    REQUIRE(imported.notes.size() == 2);
+    CHECK(imported.notes[0].pitch == 38);
+    CHECK(imported.notes[1].start == imported.ppq);
+    // MIDI never goes onto a master.
+    add["track"] = "tr_0";
+    CHECK(f.call("item.add", json::writeCompact(add)).error().code == "track.strip_type");
 }
 
 TEST_CASE("item.mix-to-track sums the selected items' strips onto a new muted channel") {

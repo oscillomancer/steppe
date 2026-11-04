@@ -16,6 +16,7 @@
 #include "supple/ui/scroll_view.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
+#include "supple/views/item_gestures.h"
 
 namespace supple::gui {
 namespace {
@@ -37,7 +38,10 @@ void SDLCALL onDialog(void* userdata, const char* const* files, int) {
 }
 
 const SDL_DialogFileFilter kProjectFilter[] = {{"Projects", "json"}, {"All files", "*"}};
-const SDL_DialogFileFilter kAudioFilter[] = {{"Audio", "wav;flac;mp3"}, {"All files", "*"}};
+const SDL_DialogFileFilter kImportFilter[] = {{"Audio and MIDI", "wav;flac;mp3;mid;midi"},
+                                              {"Audio", "wav;flac;mp3"},
+                                              {"MIDI files", "mid;midi"},
+                                              {"All files", "*"}};
 const SDL_DialogFileFilter kImageFilter[] = {{"Images", "png;jpg;jpeg"}, {"All files", "*"}};
 const SDL_DialogFileFilter kWavFilter[] = {{"WAV audio", "wav"}, {"All files", "*"}};
 const SDL_DialogFileFilter kMidiFilter[] = {{"MIDI files", "mid;midi"}, {"All files", "*"}};
@@ -193,9 +197,9 @@ FileActions::FileActions(ui::Root& root, AppActions& actions, cmd::Dispatcher& d
                    [this] { openSaveTemplate(Template::Track); });
     actions_.addUi("ui.track.template.load", "Track: add from template…",
                    [this] { openTemplateList(Template::Track); });
-    actions_.addUi("ui.file.import", "File: import audio…", [this] {
+    actions_.addUi("ui.file.import", "File: import…", [this] {
         auto* req = new DialogRequest{guardDialog([this](auto paths) { import(paths); })};
-        SDL_ShowOpenFileDialog(onDialog, req, window_, kAudioFilter, 2, nullptr, true);
+        SDL_ShowOpenFileDialog(onDialog, req, window_, kImportFilter, 4, nullptr, true);
     });
 }
 
@@ -518,7 +522,7 @@ void FileActions::import(const std::vector<std::filesystem::path>& files) {
     // One file: onto the selected track (or a new one) at the playhead. Several:
     // a new track each, all at the playhead — one undo step.
     const actions::Context ctx = actions_.context();
-    auto imported = dispatcher_.transact("Import audio", kOrigin, [&]() -> Result<json::Value> {
+    auto imported = dispatcher_.transact("Import", kOrigin, [&]() -> Result<json::Value> {
         for (std::size_t i = 0; i < files.size(); ++i) {
             std::string track;
             if (files.size() == 1 && !ui_.selectedTracks.empty()) {
@@ -533,7 +537,7 @@ void FileActions::import(const std::vector<std::filesystem::path>& files) {
             json::Value item = json::Value::object();
             item["track"] = track;
             item["position"] = ctx.playheadBeats;
-            item["audio_file"] = files[i].string();
+            item[views::importArg(files[i])] = files[i].string();
             if (auto r = dispatcher_.execute({"item.add", std::move(item), kOrigin}); !r) return r;
         }
         return json::Value::object();
