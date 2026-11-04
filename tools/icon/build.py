@@ -3,14 +3,14 @@
 # Copyright (c) 2026 Supple Audio
 """Builds the application icon (assets/icon/) from the geometry below.
 
-The mark is a quire stood on its spine with its leaves fanned open, which is
-also an analog level meter: the leaves are the scale, the outer right leaf is
-its red zone, and a clay needle swings from the sewn fold, its pivot.
+The mark is steppe grass bent by the wind on a flat horizon, under a pale
+moon. The blades grow taller from left to right, so the grass is also a level
+meter, and the last, tallest blade is clay: its red zone.
 
 Writes app.svg (the master, on Apple's icon grid, for app.icns), app-square.svg
 (nearly full-bleed, for the Windows and Linux PNGs and app.ico) and
-app-small.svg (fewer, broader leaves for 32 px and below everywhere), then the
-PNGs, app.ico and app.icns. Python
+app-small.svg (fewer, broader blades and no moon for 32 px and below
+everywhere), then the PNGs, app.ico and app.icns. Python
 standard library only; rasterizes with resvg (or rsvg-convert). The output is
 deterministic: rerun it after changing the geometry and commit the results.
 
@@ -27,14 +27,13 @@ from pathlib import Path
 
 SIZE = 1024
 # Colours from the stock plugin theme (plugins/suite/glue/include/supple/suite/
-# script_theme.h) and the GUI theme (daw/gui/ui/src/theme.cpp).
+# script_theme.h): walnut, the raised surface, parchment, clay and sage.
 WALNUT = "#251D17"  # plugin ground
 RAISED = "#3E3229"  # plugin raised surface
-LINE_LIT = "#6A584A"  # between the plugin lineLit and textFaint: the rim
-PIVOT_GAP = "#2A211A"
-CLAY = "#D97757"  # plugin accent
-MASTER = "#C0634F"  # GUI master-strip red: the meter's red zone
-LEAF_TONES = ["#BBAA96", "#D3C6B3", "#E6DCCB", "#F4ECDF"]  # textMuted .. parchment
+LINE_LIT = "#6A584A"  # between the plugin lineLit and textFaint: the rim and the horizon
+CLAY = "#D97757"  # plugin accent: the meter's red zone
+MOON = "#E6DCCB"  # a parchment tone
+SAGE_TONES = ["#6F7B52", "#8A9866", "#A3B27C", "#BFCB9A"]  # darker .. lighter than sage (accent2)
 
 
 def squircle(cx=512.0, cy=512.0, half=412.0, n=5.0, steps=240):
@@ -48,44 +47,27 @@ def squircle(cx=512.0, cy=512.0, half=412.0, n=5.0, steps=240):
     return "M" + " L".join(f"{x:.1f},{y:.1f}" for x, y in pts) + " Z"
 
 
-def leaf(spine, angle, length, tip_width, fill):
-    """One leaf seen end-on: tapering into the fold, bowing as paper does."""
-    r = math.radians(angle)
-    px, py = math.cos(r), math.sin(r)  # across the leaf
-    ex, ey = spine[0] + length * math.sin(r), spine[1] - length * math.cos(r)
-    c = math.radians(angle * 0.5)  # the bow: halfway between the leaf and upright
-    cx, cy = spine[0] + length * 0.6 * math.sin(c), spine[1] - length * 0.6 * math.cos(c)
-    k = tip_width * 0.35
-    a = (ex + px * tip_width / 2, ey + py * tip_width / 2)
-    b = (ex - px * tip_width / 2, ey - py * tip_width / 2)
-    return (f'<path d="M{spine[0]:.1f},{spine[1]:.1f} Q{cx + px * k:.1f},{cy + py * k:.1f} '
-            f'{a[0]:.1f},{a[1]:.1f} L{b[0]:.1f},{b[1]:.1f} Q{cx - px * k:.1f},{cy - py * k:.1f} '
-            f'{spine[0]:.1f},{spine[1]:.1f} Z" fill="{fill}"/>')
+def blade(x, base, height, width, bend, fill):
+    """One blade of grass: wide at the root, pointed, bowed by the wind."""
+    tip = (x + bend, base - height)
+    c1 = (x - width * 0.5 + bend * 0.15, base - height * 0.55)
+    c2 = (x + width * 0.5 + bend * 0.55, base - height * 0.5)
+    return (f'<path d="M{x - width / 2:.1f},{base:.1f} Q{c1[0]:.1f},{c1[1]:.1f} {tip[0]:.1f},{tip[1]:.1f} '
+            f'Q{c2[0]:.1f},{c2[1]:.1f} {x + width / 2:.1f},{base:.1f} Z" fill="{fill}"/>')
 
 
-def needle(spine, angle, length, width, fill):
-    r = math.radians(angle)
-    px, py = math.cos(r), math.sin(r)
-    ex, ey = spine[0] + length * math.sin(r), spine[1] - length * math.cos(r)
-    tip = width * 0.14
-    pts = [(spine[0] + px * width / 2, spine[1] + py * width / 2), (ex + px * tip, ey + py * tip),
-           (ex - px * tip, ey - py * tip), (spine[0] - px * width / 2, spine[1] - py * width / 2)]
-    d = "M" + " L".join(f"{x:.1f},{y:.1f}" for x, y in pts) + " Z"
-    return f'<path d="{d}" fill="{fill}" stroke="{fill}" stroke-width="{tip * 1.2:.1f}" stroke-linejoin="round"/>'
-
-
-def icon(leaves, tip_width, needle_width, pivot, needle_angle, rim, half=412.0, scale=1.0):
-    """`half` sizes the tile; `scale` grows the mark about the tile's centre."""
-    spine, reach, span = (512.0, 716.0), 416.0, 74.0
-    angles = [-span + 2 * span * i / (leaves - 1) for i in range(leaves)]
-    body = []
-    for a in sorted(angles, key=lambda a: -abs(a)):  # outer leaves first, inner on top
-        tone = LEAF_TONES[round((1 - abs(a) / span) * (len(LEAF_TONES) - 1))]
-        body.append(leaf(spine, a, reach - abs(a) * 0.4, tip_width,
-                         MASTER if a == angles[-1] else tone))
-    body.append(f'<circle cx="{spine[0]:.0f}" cy="{spine[1]:.0f}" r="{pivot + 14:.0f}" fill="{PIVOT_GAP}"/>')
-    body.append(needle(spine, needle_angle, reach + 18, needle_width, CLAY))
-    body.append(f'<circle cx="{spine[0]:.0f}" cy="{spine[1]:.0f}" r="{pivot:.0f}" fill="{CLAY}"/>')
+def icon(blades, width, low, high, left, right, base, horizon, moon, rim, half=412.0, scale=1.0):
+    """`half` sizes the tile; `scale` grows the mark about the tile's centre;
+    `moon` is (x, y, r) or None."""
+    body = [f'<rect x="40" y="{base:.0f}" width="944" height="{horizon:.0f}" fill="{LINE_LIT}"/>']
+    if moon:
+        body.insert(0, f'<circle cx="{moon[0]:.0f}" cy="{moon[1]:.0f}" r="{moon[2]:.0f}" fill="{MOON}"/>')
+    for i in range(blades):
+        t = i / (blades - 1)
+        height = low + (high - low) * t ** 1.3
+        tone = SAGE_TONES[round(t * (len(SAGE_TONES) - 1))]
+        body.append(blade(left + (right - left) * t, base + 1, height, width, height * 0.3,
+                          CLAY if i == blades - 1 else tone))
     tile = squircle(half=half)
     return "\n".join([
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{SIZE}" height="{SIZE}" viewBox="0 0 {SIZE} {SIZE}">',
@@ -96,10 +78,9 @@ def icon(leaves, tip_width, needle_width, pivot, needle_angle, rim, half=412.0, 
         "</defs>",
         f'<path d="{tile}" fill="url(#tile)"/>',
         *([f'<path d="{tile}" fill="none" stroke="{LINE_LIT}" stroke-width="{rim}"/>'] if rim else []),
-        f'<g clip-path="url(#clip)" transform="translate(512 {512 + 40 * (scale - 1):.0f}) '
-        f'scale({scale:g}) translate(-512 -512)">',
+        f'<g clip-path="url(#clip)"><g transform="translate(512 512) scale({scale:g}) translate(-512 -512)">',
         *body,
-        "</g>",
+        "</g></g>",
         "</svg>",
         "",
     ])
@@ -161,15 +142,16 @@ def main():
     out = parser.parse_args().out
     (out / "png").mkdir(parents=True, exist_ok=True)
     master, square, small = out / "app.svg", out / "app-square.svg", out / "app-small.svg"
+    grass = dict(blades=9, width=50, low=130, high=470, left=210, right=690, base=724, horizon=10,
+                 moon=(318, 318, 62))
     # macOS: the tile on Apple's 824-of-1024 grid, so it sits right among other Dock icons.
-    master.write_text(icon(leaves=7, tip_width=84, needle_width=36, pivot=34, needle_angle=12, rim=5))
+    master.write_text(icon(**grass, rim=5))
     # Windows and Linux draw icons nearly to the edge; Apple's margin would make
     # Steppe's look a size smaller than its neighbours.
-    square.write_text(icon(leaves=7, tip_width=84, needle_width=36, pivot=34, needle_angle=12, rim=6,
-                           half=484, scale=1.14))
-    # 32 px and below, every platform: fewer, broader leaves, full canvas.
-    small.write_text(icon(leaves=5, tip_width=140, needle_width=80, pivot=60, needle_angle=14, rim=0,
-                          half=496, scale=1.16))
+    square.write_text(icon(**grass, rim=6, half=484, scale=1.12))
+    # 32 px and below, every platform: fewer, broader blades, no moon, full canvas.
+    small.write_text(icon(blades=6, width=96, low=170, high=560, left=230, right=690, base=772,
+                          horizon=26, moon=None, rim=0, half=496, scale=1.14))
     def render(svg, sizes):
         with tempfile.TemporaryDirectory() as tmp:
             out_pngs = {}

@@ -3,6 +3,9 @@
 **Status:** Accepted, 2026-11-04. Amends ADR-0001 (the name; where it is
 defined is unchanged).
 
+**2026-11-04 note:** The app icon was redrawn for the new name: steppe grass
+as a level meter (`assets/icon/README.md`).
+
 ## Context
 
 ADR-0001 named the DAW Quire. The maintainer judged that name a trademark
