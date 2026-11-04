@@ -1113,17 +1113,17 @@ TEST_CASE("mixer: grouped strips, a fader drag is one undo step, toggles, pan, C
         f.exec("route.add", R"({"from":")" + strips[0].track + R"(","to":")" + buss + R"("})")["id"]
             .asString();
     mixer.sync();
-    auto* send = dynamic_cast<ui::Label*>(f.root->find("mixer.send." + route));
+    auto* send = dynamic_cast<ui::Button*>(f.root->find("mixer.send." + route));
     REQUIRE(send);
-    const auto originalSend = send->text();
+    const auto originalSend = send->valueText();
     auto* originalFader = strips[0].fader;
     f.exec("route.set", R"({"route":")" + route + R"(","volume_db":-12})");
     mixer.sync();
-    CHECK(send->text().find("-12.0") != std::string::npos);
+    CHECK(send->valueText().find("-12.0") != std::string::npos);
     CHECK(strips[0].fader == originalFader);
     f.exec("history.undo", "{}");
     mixer.sync();
-    CHECK(send->text() == originalSend);
+    CHECK(send->valueText() == originalSend);
     f.root->frame(false);
     // The masters stay pinned to the right edge; the others start at the left.
     const ui::Rect row = f.root->find("mixer.strips")->bounds();

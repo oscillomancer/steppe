@@ -5,8 +5,9 @@
 // type colour, its name (a double-click renames it), "fx" (the chain) and "+"
 // (the plugin browser) at its top right, the plug-in chain (click: the
 // plug-in's editor; drag: reorder it, or copy it onto another strip; a
-// double-click on its empty part: the browser), sends, the input and "out"
-// (click: the routing matrix; drag: a send), monitoring and arm on channels,
+// double-click on its empty part: the browser), sends (two in view, more
+// scroll; click: the routing matrix; Alt+click or right-click: delete), the
+// input and "out" (click: the routing matrix; drag: a send), monitoring and arm on channels,
 // pan, fader and meter, mute and solo; Console 9 as a project toggle in the
 // header. The panel's top edge resizes it (only the chain section grows).
 // Dragging a strip's empty part reorders it among its own kind. Every change
@@ -124,6 +125,8 @@ class Mixer {
     void openFxRename(model::Id fx, const ui::Rect& slot);
     void duplicateFx(model::Id fx);
     void removeFx(model::Id fx);
+    void openSendMenu(model::Id route, ui::Point at);
+    void removeSend(model::Id route);
     void dragSend(const std::string& track, DragPhase phase, ui::Point p);
     void endDrag(bool commit);
     void resolveStripDrop();

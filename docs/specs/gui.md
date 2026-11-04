@@ -649,10 +649,13 @@ the menu offers None and says the engine lists the outputs); then one row with t
 chain has a fixed height and the chain takes what a strip's missing rows
 leave, so every strip's fader sits at the same height. The strip's plug-in chain lists every plug-in,
 scrolling when it is longer than its section, and takes the room a strip's
-unused rows would leave (sends show only when there are some, up to two;
-busses have no arm row, masters no monitoring). The wheel over a fader or
-pan moves it (Shift finer) and elsewhere scrolls the strips. Alt+click on a
-plug-in removes it
+unused rows would leave (sends show only when there are some, two rows of
+them, scrolled by the wheel or a bar when there are more; busses have no arm
+row, masters no monitoring). A send's text brightens under the pointer; a
+click on it opens the routing matrix, as "out" does, and Alt+click or Delete
+in its right-click menu removes it (`route.remove`, one undo step). The wheel
+over a fader or pan moves it (Shift finer) and elsewhere scrolls the strips.
+Alt+click on a plug-in removes it
 (`fx.remove`, one undo step); a double-click on the chain's empty part opens
 the plugin browser for that strip. A double-click on the strips' empty space
 (not on a strip) adds a channel; a right-click there offers Channel, Buss or

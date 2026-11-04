@@ -270,6 +270,11 @@ same amount, in one undo step; a double click resets them. The controls show
 the send on the square you clicked last. Send moves are recorded into the
 send's envelopes like the track fader's (see Automation).
 
+A mixer strip lists its sends under its plugins, two at a time; scroll the
+list (or drag its bar) to see more. Clicking a send opens the routing matrix,
+like **out**. Right-click a send and choose **Delete**, or Alt-click
+(Option-click on macOS) it, to remove it.
+
 ## MIDI controllers
 
 Right-click a track's fader, pan, mute, solo, polarity, mono, arm or

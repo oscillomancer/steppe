@@ -953,6 +953,64 @@ TEST_CASE("mixer: \"out\" opens the routing matrix; a drag onto a buss makes one
     CHECK(f.errors.empty());
 }
 
+TEST_CASE("mixer: sends scroll past two; a click opens the matrix, Delete or Alt+click removes") {
+    Fixture f;
+    if (!f.ok) return;
+    int routing = 0;
+    f.actions->addUi("ui.routing", "View: routing matrix", [&] { ++routing; });
+    const auto a = f.addTrack("channel", "A");
+    std::vector<std::string> sends;
+    for (const char* name : {"B1", "B2", "B3"}) {
+        const auto bus = f.addTrack("buss", name);
+        sends.push_back(
+            f.exec("route.add", R"({"from":")" + a + R"(","to":")" + bus + R"("})")["id"]
+                .asString());
+    }
+    f.refresh();
+    // Two rows in view and a bar; the wheel brings the third in.
+    ui::Node* list = f.node("mixer.sends." + a);
+    CHECK(near(list->bounds().h, 28));
+    CHECK(f.node("mixer.sends." + a + ".bar")->visible);
+    CHECK(f.node("mixer.send." + sends[2])->bounds().y >= list->bounds().bottom() - 0.5f);
+    f.pointer(ui::PointerEvent::Type::Move, f.centre(f.node("mixer.send." + sends[1])));
+    f.snapshot("mixer-sends.png");  // the second brightened under the pointer
+    ui::PointerEvent wheel;
+    wheel.type = ui::PointerEvent::Type::Wheel;
+    wheel.pos = f.centre(list);
+    wheel.wheelY = -1;
+    f.root->pointer(wheel);
+    f.root->frame(false);
+    CHECK(near(f.node("mixer.send." + sends[2])->bounds().bottom(), list->bounds().bottom()));
+    // A click opens the routing matrix.
+    REQUIRE(f.root->click("mixer.send." + sends[2]));
+    CHECK(routing == 1);
+    // Its right-click menu has one item, Delete.
+    const auto before = f.steps();
+    const ui::Point at = f.centre(f.node("mixer.send." + sends[2]));
+    f.pointer(ui::PointerEvent::Type::Down, at, 1, 0, 3);
+    f.pointer(ui::PointerEvent::Type::Up, at, 1, 0, 3);
+    ui::Node* menu = f.node("mixer.sendmenu." + sends[2]);
+    const ui::Point item{menu->bounds().x + 40, menu->bounds().y + 13};
+    f.pointer(ui::PointerEvent::Type::Move, item);
+    f.pointer(ui::PointerEvent::Type::Down, item);
+    f.pointer(ui::PointerEvent::Type::Up, item);
+    f.refresh();
+    CHECK_FALSE(f.app->head().routes.find(*model::Id::parse(sends[2])));
+    CHECK(f.steps() == before + 1);
+    // Two left: no bar. Alt+click removes one.
+    CHECK_FALSE(f.node("mixer.sends." + a + ".bar")->visible);
+    const ui::Point first = f.centre(f.node("mixer.send." + sends[0]));
+    f.pointer(ui::PointerEvent::Type::Down, first, 1, ui::kAlt);
+    f.pointer(ui::PointerEvent::Type::Up, first, 1, ui::kAlt);
+    f.refresh();
+    CHECK_FALSE(f.app->head().routes.find(*model::Id::parse(sends[0])));
+    CHECK(f.steps() == before + 2);
+    CHECK(routing == 1);  // neither opened the matrix
+    f.exec("history.undo", "{}");
+    CHECK(f.app->head().routes.find(*model::Id::parse(sends[0])));
+    CHECK(f.errors.empty());
+}
+
 TEST_CASE("mixer: the chain's empty part takes a double-click (plugin browser); input picks") {
     Fixture f;
     if (!f.ok) return;

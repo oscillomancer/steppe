@@ -293,6 +293,105 @@ class FxList : public ui::Node {
     float scroll_ = 0;
 };
 
+// A send under a strip's plug-ins: a click opens the routing matrix, Alt+click
+// deletes it, a right-click opens its menu (Delete). Its text brightens under
+// the pointer, to show it can be clicked.
+class SendRow : public ui::Button {
+  public:
+    SendRow(std::string id, std::string text, bool muted, std::function<void()> click)
+        : Button(std::move(id), std::move(text), std::move(click)), muted_(muted) {}
+    std::function<void()> remove;         // Alt+click
+    std::function<void(ui::Point)> menu;  // a right-click (not the track's menu)
+    bool onPointer(const ui::PointerEvent& e) override {
+        if (e.type == ui::PointerEvent::Type::Down && e.button == 1 && (e.mods & ui::kAlt) &&
+            remove) {
+            remove();
+            return true;
+        }
+        if (e.type == ui::PointerEvent::Type::Down && e.button == 3 && menu) {
+            menu(e.pos);
+            return true;
+        }
+        return Button::onPointer(e);
+    }
+    // The text's colour: quiet (faint when muted), a third of the way to the
+    // full ink while hovered or pressed.
+    ui::Color ink(const ui::Theme& t) const {
+        const ui::Color base = t.color(muted_ ? "ink-faint" : "ink-quiet");
+        if (!hovered() && !pressed()) return base;
+        const ui::Color full = t.color(muted_ ? "ink-quiet" : "ink");
+        const auto mix = [](float a, float b) { return a + (b - a) * 0.4f; };
+        return {mix(base.r, full.r), mix(base.g, full.g), mix(base.b, full.b), base.a};
+    }
+    void paint(ui::Canvas& c) override {
+        const ui::Theme& t = c.theme();
+        c.text(bounds(), valueText(), ui::Font::Ui, t.type("caption"), ink(t),
+               ui::kLeft | ui::kMiddle);
+    }
+
+  private:
+    bool muted_ = false;
+};
+
+// A strip's sends, one per row, up to two in view; more scroll by the wheel or
+// a bar.
+class SendList : public ui::Node {
+  public:
+    static constexpr int kShown = 2;
+    explicit SendList(std::string id) : Node(std::move(id)) {
+        clipsChildren = true;
+        interactive = true;  // the wheel scrolls it
+        auto bar =
+            std::make_unique<ui::ScrollBar>(this->id() + ".bar", ui::ScrollBar::Axis::Vertical);
+        bar_ = bar.get();
+        bar_->onScroll = [this](float v) {
+            scroll_ = v;
+            relayout();
+            invalidate();
+        };
+        add(std::move(bar));
+    }
+    SendRow& addRow(std::unique_ptr<SendRow> row) {
+        SendRow& ref = *row;
+        rows_.push_back(&ref);
+        add(std::move(row));
+        const auto n = static_cast<float>(std::min<std::size_t>(rows_.size(), kShown));
+        layout.height = ui::SizeRule::fixed(n * kSendH);
+        return ref;
+    }
+    const std::vector<SendRow*>& rows() const { return rows_; }
+    float content() const { return static_cast<float>(rows_.size()) * kSendH; }
+    float scroll() const { return scroll_; }
+    void arrange(const ui::Canvas& canvas, const ui::Rect& b) override {
+        setBounds(b);
+        const bool bar = content() > b.h + 0.5f;
+        scroll_ = std::clamp(scroll_, 0.0f, std::max(0.0f, content() - b.h));
+        bar_->visible = bar;
+        const float w = b.w - (bar ? ui::ScrollBar::kThickness + 2 : 0);
+        bar_->setRange(content(), b.h);
+        bar_->setValue(scroll_);
+        bar_->arrange(canvas,
+                      {b.right() - ui::ScrollBar::kThickness, b.y, ui::ScrollBar::kThickness, b.h});
+        float y = b.y - scroll_;
+        for (SendRow* row : rows_) {
+            row->arrange(canvas, {b.x, y, w, kSendH});
+            y += kSendH;
+        }
+    }
+    bool onPointer(const ui::PointerEvent& e) override {
+        if (e.type != ui::PointerEvent::Type::Wheel || content() <= bounds().h + 0.5f) return false;
+        scroll_ = std::clamp(scroll_ - e.wheelY * kSendH, 0.0f, content() - bounds().h);
+        relayout();
+        invalidate();
+        return true;
+    }
+
+  private:
+    std::vector<SendRow*> rows_;
+    ui::ScrollBar* bar_ = nullptr;
+    float scroll_ = 0;
+};
+
 // A run of strips side by side from `scroll` on (the scrolled ones clip).
 class StripGroup : public ui::Node {
   public:
@@ -885,20 +984,24 @@ void Mixer::rebuild() {
                 tab.layout.height = ui::SizeRule::fixed(14);
             }
         }
-        // Sends: name and level, up to two; none leaves the room to the chain.
-        auto& sends = frame->emplace<ui::Node>("mixer.sends." + tid);
-        sends.layout.dir = ui::Layout::Dir::Column;
-        int shown = 0;
+        // Sends: name and level, two in view (more scroll); none leaves the
+        // room to the chain. A click opens the routing matrix as "out" does,
+        // Alt+click or Delete in a send's menu removes it.
+        auto& sends = frame->emplace<SendList>("mixer.sends." + tid);
         for (const auto& e : s.routes) {
-            if (e.value->from.track != id || shown == 2) continue;
-            ++shown;
-            sends
-                .emplace<ui::Label>("mixer.send." + e.id.str(), sendText(s, *e.value), ui::Font::Ui,
-                                    "caption", e.value->mute ? "ink-faint" : "ink-quiet")
-                .layout.height = ui::SizeRule::fixed(14);
+            if (e.value->from.track != id) continue;
+            const model::Id route = e.id;
+            auto row = std::make_unique<SendRow>("mixer.send." + route.str(), sendText(s, *e.value),
+                                                 e.value->mute, [this, tid] {
+                                                     json::Value args = json::Value::object();
+                                                     args["track"] = tid;
+                                                     run("ui.routing", std::move(args));
+                                                 });
+            row->remove = [this, route] { removeSend(route); };
+            row->menu = [this, route](ui::Point p) { openSendMenu(route, p); };
+            sends.addRow(std::move(row));
         }
-        sends.layout.height = ui::SizeRule::fixed(static_cast<float>(shown) * kSendH);
-        sends.visible = shown > 0;
+        sends.visible = !sends.rows().empty();
         // Channels and masters (ADR-0057: a master records its output): the arm,
         // centred, under the plug-ins (busses give the room to the chain, so
         // every strip's fader lines up).
@@ -1334,6 +1437,26 @@ void Mixer::removeFx(model::Id fx) {
         actions_.onError("mixer: " + r.error().message);
 }
 
+// A send's own menu (a right-click on it under the chain).
+void Mixer::openSendMenu(model::Id route, ui::Point at) {
+    if (!app_.head().routes.find(route)) return;
+    std::vector<ui::MenuItem> items(1);
+    items[0].label = "Delete";
+    items[0].run = [this, route] { removeSend(route); };
+    root_.openPopup(ui::makeMenu("mixer.sendmenu." + route.str(), std::move(items),
+                                 [this] { root_.closePopup(); }),
+                    ui::Rect{at.x, at.y, 0, 0}, ui::Placement::Below);
+}
+
+// Alt+click on a send, or Delete in its menu (one undo step).
+void Mixer::removeSend(model::Id route) {
+    json::Value args = json::Value::object();
+    args["route"] = route.str();
+    if (auto r = dispatcher_.execute({"route.remove", std::move(args), kOrigin});
+        !r && actions_.onError)
+        actions_.onError("mixer: " + r.error().message);
+}
+
 // A name for this instance over its slot; an empty one goes back to the
 // plug-in's own name (fx.set label).
 void Mixer::openFxRename(model::Id fx, const ui::Rect& slot) {
@@ -1444,9 +1567,9 @@ void Mixer::update() {
         }
         for (const auto& route : s.routes) {
             if (route.value->from.track != *id) continue;
-            auto* label = dynamic_cast<ui::Label*>(st.node->find("mixer.send." + route.id.str()));
-            if (!label) continue;
-            label->setText(sendText(s, *route.value));
+            auto* row = dynamic_cast<SendRow*>(st.node->find("mixer.send." + route.id.str()));
+            if (!row) continue;
+            row->setText(sendText(s, *route.value));
         }
         st.pan->setValue(t->pan);
         st.mute->setOn(t->mute);
