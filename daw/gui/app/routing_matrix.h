@@ -126,6 +126,9 @@ class RoutingMatrix {
                     const std::function<std::optional<json::Value>(const MatrixModel::Send&)>& each,
                     const std::string& gesture = {});
     void level(double db, ui::Gesture g);
+    // A right-click at `p` on a send control: its MIDI learn menu for the
+    // selected sends (false: no control there, or no send selected).
+    bool learnAt(ui::Point p);
     void panTo(double pan, ui::Gesture g);
     ui::Root& root() const { return panel_.root(); }
     FloatingPanel& panel_;

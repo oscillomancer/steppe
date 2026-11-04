@@ -408,7 +408,11 @@ Its Duplicate (and Track > duplicate selected) copies every selected channel
 and buss right after its original as one undo step (`track.duplicate`, see
 session-model.md) and selects the copies. Track > Channels… opens the same
 Channels menu as the track menu's, for the first selected track only; Track >
-Delete selected is the track menu's Delete.
+Delete selected is the track menu's Delete. A right-click on a row's fader,
+pan, mute, lane mute, solo, polarity, mono, arm or monitoring button opens
+that control's menu instead, "MIDI learn: Volume…" (naming the bound control,
+"(CC 7 · ch 1)"): the learn dialog of §4.5 for that track alone, binding
+through `track.learn.set` (ADR-0058); the mixer's strips do the same.
 Commands: `track.*`, `route.*`, `fx.*` (bypass/offline), transport.
 
 ### 4.3 Arrange view
@@ -652,7 +656,9 @@ plug-in removes it
 (`fx.remove`, one undo step); a double-click on the chain's empty part opens
 the plugin browser for that strip. A double-click on the strips' empty space
 (not on a strip) adds a channel; a right-click there offers Channel, Buss or
-Master, as the TCP's "+ strip". A send dragged from "out" draws a wire from the
+Master, as the TCP's "+ strip". A right-click on a strip's fader, pan, mute,
+solo, arm, polarity, mono or monitoring button offers its MIDI learn, as in
+the TCP (§4.2); elsewhere on the strip, the track menu. A send dragged from "out" draws a wire from the
 button and outlines the strip it would feed, as in the TCP. The
 panel's top edge (shared with the MIDI editor: it lights up under the pointer)
 resizes the mixer by drag and only the chain
@@ -783,6 +789,10 @@ control moved last (kind, number, channel, input), offers the CC mode
 when the effect's track (or a take FX's item) is selected, when its FX window
 or editor has the focus, or when one of them shows, and soft takeover; OK
 binds through `fx.learn.set`, Remove (when bound) through `fx.learn.remove`.
+The same dialog learns a strip's or a send's own control (ADR-0058, from the
+control's right-click menu, §4.2, §4.4, §4.6): it offers soft takeover for a
+level or pan, and a button's CC mode starts at toggle; OK binds every target
+in one undo step (`track.learn.set` / `route.learn.set`), Remove frees them.
 MIDI learn is one app-wide session across roots: opening another dialog closes
 the first and its nested menus. Owner tokens prevent deferred destruction of
 an old dialog from disabling the new listener. While the dialog is open
@@ -849,7 +859,10 @@ fader), channels (the choices of the anchor's send; each goes to the selected
 sends from the same source pair whose destinations have those channels),
 polarity and mute (on for all unless all are on). They show the anchor's
 send, else the first selected; with no send they are disabled and
-neutral. Cells that `route.strip_type` would reject are drawn
+neutral. A right-click on the tap buttons, the level, the pan, polarity or
+mute opens that control's MIDI learn menu (§4.5) for every selected send
+(`route.learn.set`, ADR-0058); moving the level or pan makes the anchor's
+send the one "Routing: last touched send (MIDI CC)" follows (§6). Cells that `route.strip_type` would reject are drawn
 disabled with the rule as their tooltip; record-input assignments appear in
 the same grid. A graph view (nodes and edges, PDC per node) is P1. Strips are listed in the
 views' order (`route.matrix`): each master's tree with a parent's channels
@@ -1128,7 +1141,9 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   change, an encoder step) runs the action once; the "(MIDI CC)" actions
   follow the value instead — the selected tracks' volume (the fader's
   travel) and pan (an encoder step is 1 %), the master's volume, a beat
-  jog of the play cursor, the master playrate (§4.1), and the **last touched
+  jog of the play cursor, the master playrate (§4.1), the **last touched
+  send** (the level or pan the routing matrix moved last, §4.6; soft
+  takeover per send), and the **last touched
   parameter** (the plug-in parameter edited last in the FX window or a
   plug-in's own editor; a knob takes over softly, an encoder at once; the FX
   window's tab row names it) — one undo step per movement. Other actions,

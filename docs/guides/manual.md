@@ -270,6 +270,37 @@ same amount, in one undo step; a double click resets them. The controls show
 the send on the square you clicked last. Send moves are recorded into the
 send's envelopes like the track fader's (see Automation).
 
+## MIDI controllers
+
+Right-click a track's fader, pan, mute, solo, polarity, mono, arm or
+monitoring button, in the track list or the mixer, and choose **MIDI learn**.
+Move the knob, fader or button on your controller, then click OK. Each track
+can have its own knobs, so a controller with eight faders can drive eight
+tracks. The same works in the routing matrix: right-click the level, pan,
+mute, polarity or a tap button to bind it on every selected send.
+
+These bindings are saved with the project and undo like any other edit. The
+menu shows what a control is bound to ("CC 7 · ch 1"); open the dialog again
+and click **Remove** to free it.
+
+- A fader or pan follows a knob (CC mode Absolute), or an endless encoder in
+  one of the three Relative modes. With **Soft takeover** on, the knob only
+  takes over once it reaches the current value, so it never jumps.
+- A button flips on each press: a pad (a note) always does, and a CC button
+  does in Toggle mode, the dialog's default for buttons. In Absolute mode a CC
+  button holds it on while pressed (127) and off when released (0).
+- Monitoring steps through off, on and auto; a send's tap button selects
+  that tap.
+- Moving a bound control records automation like moving the control itself.
+
+Plug-in parameters learn from the **MIDI** button in the FX window, and any
+action from the actions list (`?`, then Ctrl+L). Some actions follow a knob
+instead of running once per press: the selected tracks' volume and pan, the
+master volume, the playrate, the last touched plug-in parameter, and
+**Routing: last touched send (MIDI CC)**, which moves the level or pan of the
+send you moved last in the routing matrix. Action bindings are your own
+settings, shared by every project.
+
 ## Plugins
 
 Quire hosts CLAP and VST3 plugins. It looks for them in this order:

@@ -941,6 +941,9 @@ ArrangeView::ArrangeView(peaks::PeakService& peaks, Resolve resolve, TransportSo
                           std::function<void()> rename) {
         if (tcpCallbacks_.menu) tcpCallbacks_.menu(id, anchor, std::move(rename));
     };
+    forward.learn = [this](const model::Id& id, const std::string& param, const ui::Rect& anchor) {
+        if (tcpCallbacks_.learn) tcpCallbacks_.learn(id, param, anchor);
+    };
     forward.addSend = [this](const model::Id& from, const model::Id& to) -> Result<json::Value> {
         if (tcpCallbacks_.addSend) return tcpCallbacks_.addSend(from, to);
         return Error("gui.send", "send editing is unavailable", {}, "wire the TCP send callback");

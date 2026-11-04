@@ -9,6 +9,7 @@
 
 #include "routing_matrix.h"
 #include "shell.h"
+#include "supple/ui/popup.h"
 #include "supple/ui/root.h"
 #include "supple/ui/text_field.h"
 
@@ -942,4 +943,71 @@ TEST_CASE("a strip's envelope menu automates its sends; their lanes sit under th
     REQUIRE(lane);
     REQUIRE(strip);
     CHECK(*lane == *strip + 1);
+}
+
+TEST_CASE("TCP: a right-click on a strip's fader or button learns a MIDI control for it") {
+    SendsFixture f;
+    auto rightClick = [&](const char* what) {
+        ui::Node* node = f.view().tcpPanel().controlNode(f.a, what);
+        REQUIRE(node);
+        REQUIRE(node->visible);
+        ui::PointerEvent e;
+        e.type = Pointer::Down;
+        e.button = 3;
+        e.pos = SendsFixture::centre(node->bounds());
+        f.root->pointer(e);
+        e.type = Pointer::Up;
+        f.root->pointer(e);
+        f.root->frame(false);
+    };
+    // The menu's one row opens the learn dialog; a moved control and OK bind it.
+    auto learn = [&](const char* what, const std::string& entry, std::uint8_t cc) {
+        rightClick(what);
+        ui::Node* menu = f.root->find("strip.learn.menu");
+        REQUIRE(menu);
+        CHECK(ui::menuItems(*menu)[0].label == entry);
+        const ui::Point p{menu->bounds().x + 40, menu->bounds().y + 13};
+        f.pointer(Pointer::Move, p);
+        f.pointer(Pointer::Down, p);
+        f.pointer(Pointer::Up, p);
+        f.root->frame(false);
+        REQUIRE(f.root->find("learn"));
+        engine::EngineApp::ControlEvent e;
+        e.midi.bytes[0] = 0xb0;
+        e.midi.bytes[1] = cc;
+        e.midi.bytes[2] = 127;
+        f.actions->control({e});
+        const std::string mode = f.root->find("learn.mode.set")->valueText();
+        const auto before = f.history();
+        REQUIRE(f.root->click("learn.ok"));
+        CHECK(f.history() == before + 1);
+        return mode;
+    };
+    // A fader follows a knob; a button toggles on each press.
+    CHECK(learn("fader", "MIDI learn: Volume…", 7) == "Absolute");
+    CHECK(learn("mute", "MIDI learn: Mute…", 20).starts_with("Toggle"));
+    const model::Track& a = *f.app->head().tracks.find(f.a);
+    REQUIRE(a.learn.size() == 2);
+    CHECK(a.learn[0].param == "mute");
+    CHECK(a.learn[0].mode == model::ControlMode::Toggle);
+    CHECK(a.learn[1].param == "volume");
+    CHECK(a.learn[1].control.number == 7);
+    // The menu names what is bound.
+    rightClick("fader");
+    REQUIRE(f.root->find("strip.learn.menu"));
+    CHECK(ui::menuItems(*f.root->find("strip.learn.menu"))[0].label ==
+          "MIDI learn: Volume… (CC 7 · ch 1)");
+    f.root->closePopup();
+    // Elsewhere on the row, the track's menu as before.
+    const auto row = f.view().trackLayout().indexOf(f.a);
+    REQUIRE(row);
+    const ui::Rect r = f.view().tcpRowRect(*row);
+    ui::PointerEvent e;
+    e.type = Pointer::Down;
+    e.button = 3;
+    e.pos = {r.x + 60, r.y + 10};
+    f.root->pointer(e);
+    f.root->frame(false);
+    CHECK(f.root->find("track.menu." + f.a.str()));
+    CHECK_FALSE(f.root->find("strip.learn.menu"));
 }

@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdio>
 
+#include "strip_learn.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
@@ -17,6 +18,18 @@ namespace supple::gui {
 namespace {
 
 const cmd::Origin kOrigin{cmd::Origin::Type::Ui, "gui", {}};
+
+// The send controls' row: a right-click there is the row's (`onContext`
+// says whether it used it); the controls take only the left button.
+class ControlRow : public ui::Node {
+  public:
+    explicit ControlRow(std::string id) : Node(std::move(id)) {}
+    std::function<bool(ui::Point)> onContext;
+    bool onPointer(const ui::PointerEvent& e) override {
+        return e.type == ui::PointerEvent::Type::Down && e.button == 3 && onContext &&
+               onContext(e.pos);
+    }
+};
 constexpr float kLabelW = 190, kHeaderH = 112, kCell = 22;
 
 std::string fmt(double v, int decimals) {
@@ -488,8 +501,10 @@ void RoutingMatrix::open(std::optional<ui::Rect> anchor) {
     add_ = &top.emplace<ui::Button>("routing.add", "Add", [this] { (void)addSelected(); });
     remove_ =
         &top.emplace<ui::Button>("routing.remove", "Remove", [this] { (void)removeSelected(); });
-    // Second row: the selected sends' controls.
-    auto& row = details_->emplace<ui::Node>("routing.details.controls");
+    // Second row: the selected sends' controls. A right-click on one learns a
+    // MIDI control for it on every selected send (ADR-0058).
+    auto& row = details_->emplace<ControlRow>("routing.details.controls");
+    row.onContext = [this](ui::Point p) { return learnAt(p); };
     row.layout.dir = ui::Layout::Dir::Row;
     row.layout.height = ui::SizeRule::fixed(28);
     row.layout.gap = 6;
@@ -930,6 +945,24 @@ Status RoutingMatrix::setSends(
     return reload();
 }
 
+bool RoutingMatrix::learnAt(ui::Point p) {
+    std::vector<std::pair<const ui::Node*, std::string>> controls = {
+        {volume_, "volume"}, {pan_, "pan"}, {mute_, "mute"}, {phase_, "phase_invert"}};
+    const char* taps[] = {"tap:post_fader", "tap:pre_fader", "tap:pre_fx"};
+    for (std::size_t i = 0; i < taps_.size() && i < 3; ++i) controls.push_back({taps_[i], taps[i]});
+    StripControl control;
+    for (const auto& id : selectedSends())
+        if (auto parsed = model::Id::parse(id)) control.objects.push_back(*parsed);
+    if (control.objects.empty()) return false;
+    for (const auto& [node, param] : controls)
+        if (node && node->bounds().contains(p)) {
+            control.param = param;
+            openStripLearnMenu(root(), actions_, std::move(control), {p.x, p.y, 1, 1});
+            return true;
+        }
+    return false;
+}
+
 void RoutingMatrix::level(double db, ui::Gesture g) {
     if (volumeText_) volumeText_->setText(dbText(db));
     const auto shown = selectedSend();
@@ -941,6 +974,7 @@ void RoutingMatrix::level(double db, ui::Gesture g) {
         return;
     }
     if (g == ui::Gesture::End || !shown) return;
+    if (auto id = model::Id::parse(*shown)) actions_.touchSend(*id, "volume");
     // A drag moves each send by the same dB from where it began (silence
     // stays put unless the shown send goes there); a one-shot sets them all.
     const bool drag = g == ui::Gesture::Move && dragStart_.contains(*shown);
@@ -973,6 +1007,7 @@ void RoutingMatrix::panTo(double pan, ui::Gesture g) {
         return;
     }
     if (g == ui::Gesture::End || !shown) return;
+    if (auto id = model::Id::parse(*shown)) actions_.touchSend(*id, "pan");
     const bool drag = g == ui::Gesture::Move && dragStart_.contains(*shown);
     const double ref = drag ? dragStart_.at(*shown).second : 0;
     (void)setSends(

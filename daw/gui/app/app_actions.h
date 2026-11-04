@@ -68,6 +68,7 @@ class AppActions {
     Status resetKeymap();
     UiState& ui() { return ui_; }
     engine::EngineApp& app() { return app_; }
+    cmd::Dispatcher& dispatcher() { return dispatcher_; }
     const std::filesystem::path& keymapFile() const { return keymapFile_; }
     actions::Context context(std::vector<std::string> sections = {"arrange", "global"}) const;
     Result<json::Value> run(const actions::Action& action,
@@ -124,6 +125,14 @@ class AppActions {
     // The playrate knob's range (kRateRanges in playrate_range.h), chosen in
     // the transport bar's menu; "Transport: playrate (MIDI CC)" follows it.
     std::size_t playrateRange = 0;
+    // The send whose level or pan the routing matrix moved last (ADR-0058),
+    // for "Routing: last touched send (MIDI CC)"; none once it is removed.
+    struct TouchedSend {
+        model::Id route;
+        std::string param;  // volume or pan
+    };
+    void touchSend(model::Id route, std::string param);
+    std::optional<TouchedSend> lastTouchedSend() const;
     // A built-in that follows a controller (listed as "… (MIDI CC)").
     void addControl(std::string id, std::string name, std::string description,
                     std::function<Status(const actions::ControlValue&)> run);
@@ -140,7 +149,8 @@ class AppActions {
         std::uint64_t lastMs = 0, serial = 0;
     };
     std::map<std::string, ControlState, std::less<>> controlState_;
-    std::map<std::string, engine::Takeover> touchedTakeover_;  // per fx:param
+    std::map<std::string, engine::Takeover> touchedTakeover_;  // per fx:param, sd:param
+    std::optional<TouchedSend> touchedSend_;
     // Track volume / pan of the selection (or the master) by a controller.
     Result<json::Value> controlTracks(const actions::ControlValue& v, bool pan, bool master);
     cmd::Dispatcher& dispatcher_;

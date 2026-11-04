@@ -394,6 +394,30 @@ AppActions::AppActions(const cmd::Registry& registry, cmd::Dispatcher& dispatche
             return {};
         });
 
+    addControl(
+        "control.route.last", "Routing: last touched send (MIDI CC)",
+        "Moves the level or pan of the send moved last in the routing matrix. A knob "
+        "takes over once it reaches the value; an encoder moves it at once.",
+        [this](const actions::ControlValue& v) -> Status {
+            const auto t = lastTouchedSend();
+            if (!t)
+                return Error("route.untouched", "no send's level or pan was moved yet", {},
+                             "move a send's level or pan in the routing matrix");
+            engine::Takeover& takeover = touchedTakeover_[t->route.str() + ":" + t->param];
+            const auto set = app_.moveControl(t->route, t->param, [&](double current, double step) {
+                if (v.relative)
+                    return v.steps == 0 ? std::optional<double>()
+                                        : std::optional<double>(current + v.steps * step);
+                engine::ControlReading r;
+                r.value = v.value;
+                r.press = v.value > 0;
+                return engine::nextValue(current, r, model::ControlMode::Absolute, true, step,
+                                         takeover);
+            });
+            if (set && !v.relative) takeover.set = *set;
+            return {};
+        });
+
     if (auto loadedControls = ControlMap::load(controlsFile_); loadedControls)
         controls_ = std::move(*loadedControls);
     else
@@ -557,6 +581,15 @@ void AppActions::addControl(std::string id, std::string name, std::string descri
         return json::Value::object();
     };
     registry_.add(std::move(a));
+}
+
+void AppActions::touchSend(model::Id route, std::string param) {
+    touchedSend_ = TouchedSend{route, std::move(param)};
+}
+
+std::optional<AppActions::TouchedSend> AppActions::lastTouchedSend() const {
+    if (touchedSend_ && app_.head().routes.contains(touchedSend_->route)) return touchedSend_;
+    return std::nullopt;
 }
 
 Result<json::Value> AppActions::controlTracks(const actions::ControlValue& v, bool pan,

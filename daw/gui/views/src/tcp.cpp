@@ -153,6 +153,8 @@ class TcpPanel::Row : public ui::Node {
     void cancelGestures();
     const model::Id& track() const { return *track_; }
     ui::Node* control(std::string_view what) const;
+    // The control under `p` that MIDI learn can bind, as track `learn` names it.
+    const char* learnableAt(ui::Point p) const;
 
     void arrange(const ui::Canvas& canvas, const ui::Rect& r) override;
     void paint(ui::Canvas& canvas) override;
@@ -411,6 +413,16 @@ void TcpPanel::Row::cancelGestures() {
     }
 }
 
+const char* TcpPanel::Row::learnableAt(ui::Point p) const {
+    const std::pair<const ui::Node*, const char*> controls[] = {
+        {fader_, "volume"},       {pan_, "pan"},   {mute_, "mute"},
+        {laneMute_, "lane_mute"}, {solo_, "solo"}, {polarity_, "phase_invert"},
+        {mono_, "mono"},          {arm_, "armed"}, {monitor_, "monitor"}};
+    for (const auto& [node, param] : controls)
+        if (node->visible && node->bounds().contains(p)) return param;
+    return nullptr;
+}
+
 void TcpPanel::Row::unbind() {
     cancelGestures();
     track_.reset();
@@ -617,6 +629,12 @@ bool TcpPanel::Row::onPointer(const ui::PointerEvent& e) {
         if (ui::Root* r = root()) r->capture(this);
         return true;
     }
+    // A right-click on a fader, pan or button: MIDI learn for it.
+    if (e.button == 3 && panel_.cb_.learn)
+        if (const char* param = learnableAt(e.pos)) {
+            panel_.cb_.learn(*track_, param, {e.pos.x, e.pos.y, 1, 1});
+            return true;
+        }
     if (e.clicks >= 2 && nameRect_.contains(e.pos)) {  // rename in place
         startRename();
         return true;

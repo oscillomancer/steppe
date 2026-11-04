@@ -29,6 +29,7 @@
 #include "supple/json/write.h"
 #include "supple/ui/controls.h"
 #include "supple/ui/list.h"
+#include "supple/ui/popup.h"
 #include "supple/ui/root.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
@@ -1605,4 +1606,28 @@ TEST_CASE("mixer: freeze and unfreeze use the track menu and keep the name visib
     CHECK(f.strip(id).addFx->enabled);
     CHECK(f.steps() == before + 2);
     CHECK(f.errors.empty());
+}
+
+TEST_CASE("mixer: a right-click on a fader or button offers MIDI learn, elsewhere the track menu") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto a = f.addTrack("channel", "A");
+    f.refresh();
+    const auto open = [&](ui::Point p) {
+        f.pointer(ui::PointerEvent::Type::Down, p, 1, 0, 3);
+        f.pointer(ui::PointerEvent::Type::Up, p, 1, 0, 3);
+    };
+    for (auto [node, entry] : {std::pair{static_cast<ui::Node*>(f.strip(a).fader), "Volume"},
+                               {f.strip(a).solo, "Solo"},
+                               {f.strip(a).arm, "Record arm"}}) {
+        REQUIRE(node);
+        open(f.centre(node));
+        ui::Node* menu = f.root->find("strip.learn.menu");
+        REQUIRE(menu);
+        CHECK(ui::menuItems(*menu)[0].label == std::string("MIDI learn: ") + entry + "…");
+        f.root->closePopup();
+    }
+    open(f.empty(a));
+    CHECK_FALSE(f.root->find("strip.learn.menu"));
+    CHECK(f.root->popupOpen());  // the track's menu
 }

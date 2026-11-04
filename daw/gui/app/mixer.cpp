@@ -12,6 +12,7 @@
 
 #include "panel_grip.h"
 #include "panel_height.h"
+#include "strip_learn.h"
 #include "supple/model/groups.h"
 #include "supple/ui/controls.h"
 #include "supple/ui/list.h"
@@ -766,6 +767,11 @@ void Mixer::rebuild() {
         auto frame =
             std::make_unique<StripFrame>("mixer.strip." + tid, type, [this, id](ui::Point p) {
                 // Strip coordinates are the window's (the row lays them out in place).
+                // On a fader, pan or button: its MIDI learn (ADR-0058).
+                if (const char* param = learnableAt(id.str(), p)) {
+                    openStripLearnMenu(root_, actions_, {{id}, param}, {p.x, p.y, 1, 1});
+                    return;
+                }
                 trackMenu_.open(id, {p.x, p.y, 1, 1}, {});
             });
         st.node = frame.get();
@@ -1085,6 +1091,19 @@ void Mixer::rebuild() {
     }
     root_.relayout();
     root_.damageAll();
+}
+
+const char* Mixer::learnableAt(const std::string& track, ui::Point p) const {
+    for (const Strip& st : strips_) {
+        if (st.track != track) continue;
+        const std::pair<const ui::Node*, const char*> controls[] = {
+            {st.fader, "volume"}, {st.pan, "pan"},        {st.mute, "mute"},
+            {st.solo, "solo"},    {st.arm, "armed"},      {st.polarity, "phase_invert"},
+            {st.mono, "mono"},    {st.monitor, "monitor"}};
+        for (const auto& [node, param] : controls)
+            if (node && node->visible && node->bounds().contains(p)) return param;
+    }
+    return nullptr;
 }
 
 // The visible part of the strip under `p` (a strip scrolled under the pinned

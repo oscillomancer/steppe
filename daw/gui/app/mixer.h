@@ -129,6 +129,9 @@ class Mixer {
     void resolveStripDrop();
     void resolveFxDrop();
     const Strip* stripAt(ui::Point p) const;
+    // The control of `track`'s strip under `p` that MIDI learn binds, as track
+    // `learn` names it, or null.
+    const char* learnableAt(const std::string& track, ui::Point p) const;
     std::string structure() const;
     Result<json::Value> set(const std::string& track, const char* field, json::Value value,
                             const std::string& gesture = {}, bool bypassGroups = false);

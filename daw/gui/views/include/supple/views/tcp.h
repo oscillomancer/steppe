@@ -65,6 +65,11 @@ struct TcpCallbacks {
     std::function<void(const model::Id& track, const ui::Rect& anchor,
                        std::function<void()> rename)>
         menu;
+    // A right-click on a fader, pan or button: its MIDI learn menu (ADR-0058).
+    // `param` is the control as track `learn` names it (volume, pan, mute,
+    // solo, phase_invert, mono, armed, monitor, lane_mute).
+    std::function<void(const model::Id& track, const std::string& param, const ui::Rect& anchor)>
+        learn;
     // Output drags commit one send on release; a click opens the matrix.
     std::function<Result<json::Value>(const model::Id& from, const model::Id& to)> addSend;
     std::function<void(const Error&)> onError;

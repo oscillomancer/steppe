@@ -14,14 +14,17 @@
 #include <thread>
 
 #include "app_actions.h"
+#include "control_map.h"
 #include "history_panel.h"
 #include "midi_editor.h"
 #include "midi_event_list.h"
 #include "mixer.h"
 #include "routing_matrix.h"
+#include "supple/base/fader.h"
 #include "supple/gui/png.h"
 #include "supple/gui/window.h"
 #include "supple/ui/controls.h"
+#include "supple/ui/popup.h"
 #include "supple/ui/text_area.h"
 #include "supple/ui/widgets.h"
 #include "supple/views/mouse_map.h"
@@ -961,6 +964,85 @@ TEST_CASE(
     CHECK(m.sendsAt(row(keys), col(verb)).empty());
     CHECK_FALSE(f.app->head().tracks.find(*model::Id::parse(keys))->parentSend.enabled);
     f.snapshot("routing-selection.png", &panel.root());
+}
+
+TEST_CASE(
+    "routing matrix: a right-click learns MIDI for the selected sends; a knob follows the last") {
+    Fixture f;
+    if (!f.ok) return;
+    f.app->attachCommands(*f.dispatcher);  // learned controls move through the bus
+    const std::string drums =
+        f.exec("track.add", R"({"type":"buss","name":"Drums"})")["track"].asString();
+    const std::string verb =
+        f.exec("track.add", R"({"type":"buss","name":"Verb"})")["track"].asString();
+    gui::FloatingPanel panel(*f.platform, *f.window, *f.root, SUPPLE_GUI_FONTS_DIR, "Panel", 860,
+                             560, 800, 360);
+    gui::RoutingMatrix matrix(panel, *f.actions, *f.dispatcher, *f.app);
+    matrix.open();
+    panel.root().frame(false);
+    const auto& m = matrix.model();
+    std::size_t keys = m.sources.size(), toDrums = 0, toVerb = 0;
+    for (std::size_t i = 0; i < m.sources.size(); ++i)
+        if (m.sources[i].name == "Keys") keys = i;
+    for (std::size_t i = 0; i < m.destinations.size(); ++i) {
+        if (m.destinations[i].id == drums) toDrums = i;
+        if (m.destinations[i].id == verb) toVerb = i;
+    }
+    REQUIRE(keys < m.sources.size());
+    REQUIRE(matrix.doubleClickCell(keys, toDrums));
+    REQUIRE(matrix.doubleClickCell(keys, toVerb));
+    REQUIRE(matrix.clickCell(keys, toDrums));
+    REQUIRE(matrix.clickCell(keys, toVerb, ui::kCtrl));  // shown: the Verb send
+    REQUIRE(matrix.selectedSends().size() == 2);
+    const std::string drumsSend = m.sendsAt(keys, toDrums).front()->id;
+    const std::string verbSend = m.sendsAt(keys, toVerb).front()->id;
+    auto route = [&](const std::string& id) {
+        return *f.app->head().routes.find(*model::Id::parse(id));
+    };
+    auto steps = [&] { return f.exec("history.list", "{}")["versions"].size(); };
+
+    // A right-click on the level: its menu, then the dialog; OK binds both.
+    const ui::Rect level = matrix.volumeControl()->bounds();
+    const ui::Point at{level.x + level.w / 2, level.y + level.h / 2};
+    panel.root().pointer({ui::PointerEvent::Type::Down, at, 3});
+    panel.root().pointer({ui::PointerEvent::Type::Up, at, 3});
+    panel.root().frame(false);
+    ui::Node* menu = panel.root().find("strip.learn.menu");
+    REQUIRE(menu);
+    CHECK(ui::menuItems(*menu)[0].label == "MIDI learn: Volume…");
+    const ui::Point row{menu->bounds().x + 40, menu->bounds().y + 13};
+    panel.root().pointer({ui::PointerEvent::Type::Move, row, 0});
+    panel.root().pointer({ui::PointerEvent::Type::Down, row, 1});
+    panel.root().pointer({ui::PointerEvent::Type::Up, row, 1});
+    panel.root().frame(false);
+    REQUIRE(panel.root().find("learn"));
+    engine::EngineApp::ControlEvent cc;
+    cc.midi.bytes[0] = 0xb0;
+    cc.midi.bytes[1] = 30;
+    cc.midi.bytes[2] = 100;
+    f.actions->control({cc});
+    auto before = steps();
+    REQUIRE(panel.root().click("learn.ok"));
+    CHECK(steps() == before + 1);
+    for (const std::string& id : {drumsSend, verbSend}) {
+        REQUIRE(route(id).learn.size() == 1);
+        CHECK(route(id).learn[0].param == "volume");
+        CHECK(route(id).learn[0].control.number == 30);
+    }
+
+    // "Routing: last touched send (MIDI CC)" on an encoder moves the send
+    // whose level the matrix moved last: the shown one.
+    matrix.volumeControl()->onChange(-6, ui::Gesture::Set);
+    gui::ActionControl binding;
+    binding.action = "control.route.last";
+    binding.control = {model::ControlKind::Cc, 1, 31, ""};
+    binding.mode = model::ControlMode::Relative1;
+    f.actions->controls().bind(binding);
+    cc.midi.bytes[1] = 31;
+    cc.midi.bytes[2] = 2;  // two steps up
+    f.actions->control({cc});
+    CHECK(route(verbSend).volumeDb == doctest::Approx(fader::db(fader::position(-6) + 2.0 / 128)));
+    CHECK(route(drumsSend).volumeDb == doctest::Approx(-6.0));
 }
 
 TEST_CASE("routing matrix: a multi-out instrument's outputs get rows that send them (ADR-0021)") {
