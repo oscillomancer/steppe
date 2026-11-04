@@ -15,7 +15,7 @@ template's `Instance::watch()` and `Instance::drawEditor()`, framework
 
 ## 1. Purpose
 
-An agent working through Quire's MCP server cannot look at a plugin window.
+An agent working through Steppe's MCP server cannot look at a plugin window.
 This extension lets a host ask a plugin for a picture of its editor, drawn
 offscreen with no window and no display, as it would look if opened now:
 its controls at their values, its meters and the plugin's own displays

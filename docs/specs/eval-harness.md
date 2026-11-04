@@ -4,7 +4,7 @@
 the agent than the scores did: treat the numbers as a coarse check and the
 renders and transcripts as the result.
 **Code:** `tools/eval-harness/`, Python 3 standard library tooling (ADR-0003).
-**Runner:** Hermes with a dedicated evaluation profile (`quire-eval`). Other
+**Runner:** Hermes with a dedicated evaluation profile (`steppe-eval`). Other
 model adapters and mixing/session suites are not written yet.
 
 The harness measures whether an agent can program plugins and write notation.
@@ -122,13 +122,13 @@ Hermes executable/venv overrides are documented in the tooling README.
 
 Hermes: one isolated `HERMES_HOME` per attempt under ignored `build/eval/`;
 minimal JSON-as-YAML config, only the `sandbox` MCP toolset/server. Read only
-nonsecret model identity from `~/.hermes/profiles/quire-eval/config.yaml`
+nonsecret model identity from `~/.hermes/profiles/steppe-eval/config.yaml`
 (or an explicitly supplied identity file). Default credentials are
-`~/.hermes/profiles/quire-eval/.env`, referenced through a symlink (or a same-volume hard link on Windows when
+`~/.hermes/profiles/steppe-eval/.env`, referenced through a symlink (or a same-volume hard link on Windows when
 symlink privilege is unavailable); do not copy tokens,
 the user's own config, sessions, memory, skills, plugins or OAuth state
 into a run.
-The profile name `quire-eval` is recorded in suite and attempt metadata; the
+The profile name `steppe-eval` is recorded in suite and attempt metadata; the
 profile chooses the model, and the report records it. Missing
 profile files fail; there is **no fallback** to `~/.hermes/config.yaml`. Paths
 are formed from the product slug plus `-eval`. Clear inherited `HERMES_*` overrides. Disable memory/compression, ignore private

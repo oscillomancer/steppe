@@ -1,6 +1,6 @@
 # Marram: synthesizer
 
-Marram (`com.suppleaudio.marram`) is Quire's synthesizer: up to four
+Marram (`com.suppleaudio.marram`) is Steppe's synthesizer: up to four
 oscillators, two filters, drive and an amp per voice, with three envelopes,
 three LFOs, four macros and the player's own controllers to move them. Its
 patch is `supple.marram-patch/1.0`: physical values under `params`, flat

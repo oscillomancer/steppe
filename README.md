@@ -1,24 +1,24 @@
-# Quire
+# Steppe
 
-Quire is a digital audio workstation in which a language model can work as a
+Steppe is a digital audio workstation in which a language model can work as a
 full operator, beside the person at the keyboard. Every edit, human or agent,
 is a typed command on one bus, recorded in a version history that can branch
 and merge. It comes with a suite of stock plugins whose parameters and patches
 are described in physical units, so an agent can program them as reliably as a
 person can.
 
-![Quire with a twelve-track session: the arrange view, the MIDI editor, the
+![Steppe with a twelve-track session: the arrange view, the MIDI editor, the
 mixer with plugins and sends, and the history sidebar showing an agent's
 edits on a branch](docs/images/gui.png)
 
-Quire also has its own plugin framework, so you can ask an agent for a plugin
+Steppe also has its own plugin framework, so you can ask an agent for a plugin
 it doesn't have. Describe the effect or instrument you want, and the agent
 writes it as a DSP script inside the running DAW. It loads on a track and plays
 at once, and the agent measures and adjusts it while you listen. When it's
 done, it exports as a CLAP plugin for any other host. The stock plugins are
 written the same way.
 
-Quire is pre-release (0.5.0). It is used for real work on its author's
+Steppe is pre-release (0.5.0). It is used for real work on its author's
 machine, but file formats and commands can still change.
 
 ## What it does
@@ -75,7 +75,7 @@ machine, but file formats and commands can still change.
 
 ## Installing
 
-Downloads for [Quire 0.5.0](https://github.com/oscillomancer/quire/releases/tag/v0.5.0):
+Downloads for [0.5.0](https://github.com/oscillomancer/quire/releases/tag/v0.5.0), released under the old name, Quire:
 
 | Platform | Installer | Portable |
 | --- | --- | --- |
@@ -83,14 +83,14 @@ Downloads for [Quire 0.5.0](https://github.com/oscillomancer/quire/releases/tag/
 | macOS (Apple Silicon) | [quire-0.5.0-macos-arm64.dmg](https://github.com/oscillomancer/quire/releases/download/v0.5.0/quire-0.5.0-macos-arm64.dmg) | [zip](https://github.com/oscillomancer/quire/releases/download/v0.5.0/quire-0.5.0-macos-arm64.zip) |
 | Windows (x86_64) | [quire-0.5.0-windows-x86_64.exe](https://github.com/oscillomancer/quire/releases/download/v0.5.0/quire-0.5.0-windows-x86_64.exe) (per user, no admin) | [zip](https://github.com/oscillomancer/quire/releases/download/v0.5.0/quire-0.5.0-windows-x86_64.zip) |
 
-The packages are unsigned. [Installing Quire](docs/guides/installing.md)
+The packages are unsigned. [Installing Steppe](docs/guides/installing.md)
 covers user-space installation, unsigned first-launch steps and optional stock
 plugins for other hosts. The [manual](docs/guides/manual.md) covers audio
 devices, projects, plugins and connecting an agent over MCP.
 
 ## Building
 
-Quire builds with CMake, Ninja and Clang on Linux, macOS and Windows; every
+Steppe builds with CMake, Ninja and Clang on Linux, macOS and Windows; every
 dependency but SDL3, OpenGL and zlib is vendored under `third_party/`. On
 Linux:
 
@@ -98,11 +98,11 @@ Linux:
 cmake --preset release
 cmake --build --preset release
 ctest --preset release
-build/release/daw/gui/quire              # a new project
-build/release/daw/gui/quire song.json    # open a project
+build/release/daw/gui/steppe              # a new project
+build/release/daw/gui/steppe song.json    # open a project
 ```
 
-[Building Quire](docs/guides/building.md) lists the requirements and steps for
+[Building Steppe](docs/guides/building.md) lists the requirements and steps for
 each platform.
 
 ## Repository
@@ -133,7 +133,7 @@ privately, as [SECURITY.md](SECURITY.md) describes.
 
 ## License
 
-Quire's DAW code is GPL-3.0-or-later; see [LICENSE](LICENSE). Stock plugins
+Steppe's DAW code is GPL-3.0-or-later; see [LICENSE](LICENSE). Stock plugins
 (`plugins/`) and their shared libraries remain MIT. The complete map and
 rationale are in [ADR-0033](docs/decisions/0033-daw-and-plugin-licensing.md).
 Third-party components keep their own licenses; see [THIRD_PARTY.md](THIRD_PARTY.md).

@@ -1,4 +1,4 @@
-# Spec: MIDI model and the Quire notation
+# Spec: MIDI model and the Steppe notation
 
 **Status:** Implemented. The syntax may still be revised where agents that
 have read only this document fail to write it correctly the first time.

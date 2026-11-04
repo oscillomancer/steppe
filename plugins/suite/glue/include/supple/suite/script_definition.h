@@ -10,7 +10,7 @@
 //     the ID is.
 //   - A parameter per Param member, with the script's CLAP ID, ranges, unit,
 //     curve, group and flags. A continuous parameter's CLAP value is its
-//     0..1 position (normalizedHostValue()), as Quire's semantic hosts keep
+//     0..1 position (normalizedHostValue()), as Steppe's semantic hosts keep
 //     it; the plain value is what the script reads (a percent as a
 //     fraction), so the framework hands it over as it is.
 //   - The meaning: each parameter's key (the member's name in snake case,

@@ -106,12 +106,12 @@ header, as upstream writes it.
 The identical root and common LICENSE.txt files offer the proprietary
 Steinberg ASIO license or GPL version 3, without an "or later" grant.
 They apply only to files referencing them; embedded licenses govern other
-files. Quire selects GPL-3.0-only. Host helpers carry BSD-3-Clause notices:
+files. Steppe selects GPL-3.0-only. Host helpers carry BSD-3-Clause notices:
 source distributions retain copyright, conditions and disclaimer; binary
 distributions reproduce them in documentation or accompanying materials,
 and endorsement requires permission. Preserve those notices when shipping.
 The proprietary option requires a signed agreement before publication and
-written permission to redistribute the SDK; Quire does not select it.
+written permission to redistribute the SDK; Steppe does not select it.
 
 The unmodified SDK README says branding is optional under GPLv3. If used,
 ASIO trademarks and logos must follow the included usage guidelines: logos

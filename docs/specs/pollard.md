@@ -61,7 +61,7 @@ sound across the keys.
   peaks near −12.6 dBFS. Marram's safety limit then leaves each output
   untouched below −1 dBFS and bends it toward full scale above.
 - **Outputs.** The main stereo output and eight more (`Out 1` to `Out 8`,
-  each stereo, `Info.outputs`), so Quire's `fx.add` makes the track 18
+  each stereo, `Info.outputs`), so Steppe's `fx.add` makes the track 18
   channels wide (ADR-0021). A pad on an extra output leaves the main mix.
   The main output's meter is the main mix only.
 - **Tail** (CLAP's `tail`): the longest gated release, or what is left of

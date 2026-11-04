@@ -6,7 +6,7 @@
 // 7396 merge patches and JSON Pointer escaping. Self-contained, because the
 // suite ships in exported products. Never on the audio thread.
 //
-// Canonical text follows Quire's format rules (ADR-0009): two-space indent,
+// Canonical text follows Steppe's format rules (ADR-0009): two-space indent,
 // members one per line in insertion order, arrays of scalars on one line
 // when they fit in 100 columns, integers as integers, doubles as the
 // shortest text that reads back exactly (always with a '.' or an exponent),

@@ -1,11 +1,11 @@
 ---
-name: quire
-description: Operate the Quire DAW and its stock plugins (synth, EQ, dynamics, effects) through their MCP tools — write MIDI in Quire notation, program synth patches, render and analyze audio, mix, route, render stems. Use whenever a task involves making or changing music, sounds or mixes in Quire or its plugin sandbox.
+name: steppe
+description: Operate the Steppe DAW and its stock plugins (synth, EQ, dynamics, effects) through their MCP tools — write MIDI in Steppe notation, program synth patches, render and analyze audio, mix, route, render stems. Use whenever a task involves making or changing music, sounds or mixes in Steppe or its plugin sandbox.
 ---
 
-# Quire
+# Steppe
 
-Quire is a DAW driven through typed commands. You drive it through
+Steppe is a DAW driven through typed commands. You drive it through
 MCP tools (in the sandbox: `plugin_*`, `patch_*`, `render`, `analyze`, …; in
 the DAW: dedicated command tools plus `describe` / `exec` / `query` for the rest).
 Humans use the same commands through the GUI. Session edits enter the undo

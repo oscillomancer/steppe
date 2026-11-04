@@ -1,6 +1,6 @@
 # Drumlin: the drum machine
 
-Drumlin (`com.suppleaudio.drumlin`) is Quire's drum machine: sixteen pads,
+Drumlin (`com.suppleaudio.drumlin`) is Steppe's drum machine: sixteen pads,
 each a synthesized sound of a classic machine (the LM-1's first, fitted to
 recordings of a real one; no samples), each on a MIDI note of its own. The
 exact keys, units and ranges are in `plugin_describe` / `fx_describe`; this

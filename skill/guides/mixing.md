@@ -1,6 +1,6 @@
 # Corrective mixing
 
-Mixing in Quire is measurement-driven: render the mix, analyze it, change one
+Mixing in Steppe is measurement-driven: render the mix, analyze it, change one
 thing, render again, `analyze.compare`. Use the stock EQ and dynamics plugins for
 corrective processing; their guides describe the controls. This guide covers
 levels, panning, muting/soloing, routing, rendering, and measuring loudness and

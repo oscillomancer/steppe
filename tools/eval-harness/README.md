@@ -39,11 +39,11 @@ runner.
 
 Hermes gets an isolated `HERMES_HOME` for every attempt. The harness reads only
 the pinned model/provider identity from
-`~/.hermes/profiles/quire-eval/config.yaml` and references
-`~/.hermes/profiles/quire-eval/.env` with a symlink; it never copies credentials. Override these
+`~/.hermes/profiles/steppe-eval/config.yaml` and references
+`~/.hermes/profiles/steppe-eval/.env` with a symlink; it never copies credentials. Override these
 sources with `--model-config` and `--credentials`. The model mapping may be
 simple YAML or JSON; no other source-profile settings or MCP servers are
-inherited. The profile name `quire-eval` is recorded; missing profile files fail
+inherited. The profile name `steppe-eval` is recorded; missing profile files fail
 without falling back to `~/.hermes/config.yaml`. The profile chooses the
 model, and the report records it. OAuth credential stores are not copied or refreshed by the harness;
 use environment/API-key credentials for this runner. Process-environment

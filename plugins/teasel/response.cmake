@@ -7,7 +7,7 @@
 # alone; driving only the side leaves a centred sine clean, as does a band
 # above it; output trims what leaves. The thd readout (a probe of its own)
 # agrees with dsp.test's measurement of a 100 Hz sine at -18 dBFS RMS.
-# Required: SANDBOX (quire-sandbox), PLUGIN (Teasel.clap), WORK.
+# Required: SANDBOX (steppe-sandbox), PLUGIN (Teasel.clap), WORK.
 foreach(var SANDBOX PLUGIN WORK)
     if(NOT DEFINED ${var} OR "${${var}}" STREQUAL "")
         message(FATAL_ERROR "response: -D${var}=... is required")

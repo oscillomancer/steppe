@@ -4,7 +4,7 @@ Updated 2026-10-30. This file describes the present: what works, what is
 known not to, and what is planned. Keep it current with each change; the
 history is in git.
 
-Quire 0.5.0 runs on Linux (X11 or XWayland, JACK through PipeWire or a JACK
+Steppe 0.5.0 runs on Linux (X11 or XWayland, JACK through PipeWire or a JACK
 server) and is used for real sessions. Full local CI (`tools/ci/run-all.sh`:
 license, format, dev, release, gcc, asan, tsan, rtsan) passes on
 `main`.
@@ -603,7 +603,7 @@ instructions are in `docs/guides/installing.md`.
   by `plugin.pollard.engine-copy`): a region, forward or reversed,
   one-shot or gated, an envelope, a state-variable filter, level, pan;
   eight choke groups; variation per hit (pitch, level, start), the same in
-  every render; the main output and eight more, which make Quire's track
+  every render; the main output and eight more, which make Steppe's track
   18 channels. Its editor plays a pad where it is pressed (an instrument's
   `pointer()` may call `playNote`). Seven factory kits. 0.48 % of a core at the defaults. Not yet:
   velocity layers and round robin across several files, and sends or
@@ -719,7 +719,7 @@ Engine and hosting:
   intended for piped/file input; cancelling an interactive console read can
   await a keypress during shutdown.
 - REAPER's default anticipative FX sustains about 10 % more tracks than
-  Quire with anticipation on B1's session (82 to 83 against 75, B2). The
+  Steppe with anticipation on B1's session (82 to 83 against 75, B2). The
   anticipative renderer is the limit: it ran at 78 % of real time at 64
   tracks while the callback stayed under 5 %.
 - Live multiprocessing requires at least two usable CPUs and successful

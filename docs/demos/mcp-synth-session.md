@@ -39,7 +39,7 @@ that exactly duplicates structuredContent is shown once.
       "tools": {}
     },
     "serverInfo": {
-      "name": "quire",
+      "name": "steppe",
       "version": "0.5.0"
     }
   }
@@ -1448,7 +1448,7 @@ that exactly duplicates structuredContent is shown once.
       "tools": {}
     },
     "serverInfo": {
-      "name": "quire",
+      "name": "steppe",
       "version": "0.5.0"
     }
   }

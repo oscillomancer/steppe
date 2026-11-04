@@ -53,7 +53,7 @@ copies.
   template's repository, on the platforms the change can affect) before it
   is copied here. The template's CI builds its starter and every example,
   which exercise parts of the framework no stock plugin uses (tables,
-  presets, AU, VST3), and Quire's CI only proves the parts the stock
+  presets, AU, VST3), and Steppe's CI only proves the parts the stock
   plugins use.
 - **Permanent identifiers.** The CLAP id (`com.suppleaudio.<id>`), the AU
   subtype, the state tag and every parameter's key identify saved sessions

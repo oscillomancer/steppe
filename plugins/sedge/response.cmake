@@ -4,7 +4,7 @@
 # unchanged and reads as its note, octave, cents and frequency, in equal
 # temperament and in Werckmeister III. (host-smoke checks that every sample
 # passes exactly, as a transparent product.)
-# Required: SANDBOX (quire-sandbox), PLUGIN (Sedge.clap), WORK.
+# Required: SANDBOX (steppe-sandbox), PLUGIN (Sedge.clap), WORK.
 foreach(var SANDBOX PLUGIN WORK)
     if(NOT DEFINED ${var} OR "${${var}}" STREQUAL "")
         message(FATAL_ERROR "response: -D${var}=... is required")

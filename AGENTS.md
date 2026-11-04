@@ -1,7 +1,7 @@
-# Working on Quire
+# Working on Steppe
 
-This file is for anyone changing or reviewing Quire, coding agents and
-people alike. Quire is an LLM-native DAW for Linux, macOS and Windows plus a
+This file is for anyone changing or reviewing Steppe, coding agents and
+people alike. Steppe is an LLM-native DAW for Linux, macOS and Windows plus a
 suite of stock plugins (see `README.md`). The code is past the build-out stage: most work
 now is maintenance, polish, new features on existing foundations, and
 review. Treat existing behaviour, tests and documents as deliberate unless
@@ -49,21 +49,21 @@ same change, and say what you found.
    tests run under RealtimeSanitizer (the `rtsan` preset).
 3. **The product name lives in one place.** `cmake/Product.cmake` defines
    it, and C++ reads it from the generated `supple/product.h`
-   (`supple::product::kName`, `kSlug`, …). Never hard-code "Quire" or
-   "quire" in code, binary names, paths, socket names or UI strings. C++
-   lives in namespace `supple::` (the vendor). Docs may say "Quire".
-4. **Quire leaves the user's system alone.** The app and its installers
+   (`supple::product::kName`, `kSlug`, …). Never hard-code "Steppe" or
+   "steppe" in code, binary names, paths, socket names or UI strings. C++
+   lives in namespace `supple::` (the vendor). Docs may say "Steppe".
+4. **Steppe leaves the user's system alone.** The app and its installers
    change no system-wide configuration: no audio server settings, drivers,
    services or file associations. A rate or buffer size the user chooses
-   is applied to the device, which may keep it after Quire quits (ADR-0050).
-   Anything written outside Quire's own folders, such as the agent
+   is applied to the device, which may keep it after Steppe quits (ADR-0050).
+   Anything written outside Steppe's own folders, such as the agent
    registration and skill link from Help, happens only when the user asks.
 5. **Stock plugins keep the template's shared stack.** The stock plugins
    are instances of Supple Audio's plugin template. Their shared
    infrastructure (GUI stack, wrapper patches, `host_contract.h`,
    `Telemetry.h`, probes) stays byte-identical to the template apart from
    naming; see `plugins/AGENTS.md`.
-6. **Every change works on Linux, macOS and Windows.** Quire ships on all
+6. **Every change works on Linux, macOS and Windows.** Steppe ships on all
    three, and you are probably working on only one of them. A fix or
    feature covers every platform: when the code you touch has
    platform-specific paths (`_WIN32`, `__APPLE__`, `__linux__`,
@@ -101,7 +101,7 @@ same change, and say what you found.
   shows how), and run new audio-path tests under the `rtsan` preset.
   Nothing may sit between a Console 9 encode and its decode (ADR-0019).
 - **GUI.** Check visual changes in a real render:
-  `build/dev/daw/gui/quire --offscreen --no-socket --audio dummy --generate 6
+  `build/dev/daw/gui/steppe --offscreen --no-socket --audio dummy --generate 6
   --size 1400x900 --frames 5 --snapshot out.png` (add `--action ui.mixer`
   and similar to open panels). Golden images regenerate with a full run of
   the suite (`SUPPLE_UPDATE_GOLDEN=1`, no `-tc` filter); look at every

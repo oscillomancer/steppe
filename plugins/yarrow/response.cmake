@@ -3,7 +3,7 @@
 # Yarrow's filters, measured through the built plugin (dsp.test's impulse
 # response at octave centres): a bell lands on its gain, a bell near the top
 # octave is not cramped, and a cut is -3 dB at its corner and falls at its
-# slope. Required: SANDBOX (quire-sandbox), PLUGIN (Yarrow.clap), WORK.
+# slope. Required: SANDBOX (steppe-sandbox), PLUGIN (Yarrow.clap), WORK.
 foreach(var SANDBOX PLUGIN WORK)
     if(NOT DEFINED ${var} OR "${${var}}" STREQUAL "")
         message(FATAL_ERROR "response: -D${var}=... is required")

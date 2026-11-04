@@ -27,9 +27,9 @@ an open item rather than a pass.
 ## How it is measured
 
 ```
-quire --offscreen --no-socket --workdir DIR --generate 64 --script \
+steppe --offscreen --no-socket --workdir DIR --generate 64 --script \
       --frames 600 --idle 10 --bench
-quire --offscreen --no-socket --frames 1 --bench          # cold start
+steppe --offscreen --no-socket --frames 1 --bench          # cold start
 ```
 
 - `--generate 64` builds the session through the command bus in **one

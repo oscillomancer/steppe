@@ -164,7 +164,7 @@ def main():
     # macOS: the tile on Apple's 824-of-1024 grid, so it sits right among other Dock icons.
     master.write_text(icon(leaves=7, tip_width=84, needle_width=36, pivot=34, needle_angle=12, rim=5))
     # Windows and Linux draw icons nearly to the edge; Apple's margin would make
-    # Quire's look a size smaller than its neighbours.
+    # Steppe's look a size smaller than its neighbours.
     square.write_text(icon(leaves=7, tip_width=84, needle_width=36, pivot=34, needle_angle=12, rim=6,
                            half=484, scale=1.14))
     # 32 px and below, every platform: fewer, broader leaves, full canvas.

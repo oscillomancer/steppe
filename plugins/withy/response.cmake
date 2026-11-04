@@ -5,7 +5,7 @@
 # what leaves; one voice held still (vibrato at no depth) is the sine at its
 # own level; low keep returns the lows whole, however the voices sway. The
 # readouts agree with the depth, the shape and the rate as set.
-# Required: SANDBOX (quire-sandbox), PLUGIN (Withy.clap), WORK.
+# Required: SANDBOX (steppe-sandbox), PLUGIN (Withy.clap), WORK.
 foreach(var SANDBOX PLUGIN WORK)
     if(NOT DEFINED ${var} OR "${${var}}" STREQUAL "")
         message(FATAL_ERROR "response: -D${var}=... is required")

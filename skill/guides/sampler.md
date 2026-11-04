@@ -1,6 +1,6 @@
 # Coppice: sampler
 
-Coppice (`com.suppleaudio.coppice`) is Quire's sampler: one sound, a file
+Coppice (`com.suppleaudio.coppice`) is Steppe's sampler: one sound, a file
 or one of its factory samples, played pitched across the keys with a
 loop (classic), whole at each key (one-shot), or cut into slices, one a key
 (slice). Each voice then has one filter, an amp envelope and Env 2, with

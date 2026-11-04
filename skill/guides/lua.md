@@ -1,6 +1,6 @@
-# Scripting Quire with Lua
+# Scripting Steppe with Lua
 
-Quire runs Lua 5.4 scripts on the model thread, against the same command bus
+Steppe runs Lua 5.4 scripts on the model thread, against the same command bus
 the GUI and agents use (ADR-0006). A script is one command:
 
 ```json

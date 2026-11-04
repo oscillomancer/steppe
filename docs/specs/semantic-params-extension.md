@@ -11,7 +11,7 @@ core-params/core-patch); host side in `host/clap-host`.
 ## 1. Purpose
 
 Standard CLAP gives hosts anonymous parameters (a name, a range, value
-text). This extension lets a host that understands it — the Quire sandbox
+text). This extension lets a host that understands it — the Steppe sandbox
 and engine — see a stock plugin the way its designers do: parameters with
 keys, physical units, curves and roles; a structured, versioned JSON patch
 that can be read, replaced, merged and validated with actionable errors; and
@@ -180,7 +180,7 @@ Plugins call `changed(PATCH)` when their own GUI changes structure or loads
 a preset (in addition to the standard `clap_host_state.mark_dirty`), so the
 host can capture an undo step (ADR-0008).
 
-Quire validates semantic schemas on the main thread before accepting them.
+Steppe validates semantic schemas on the main thread before accepting them.
 Invalid required entry fields or an ID set that differs from `clap.params`
 disable the semantic view for that instance, log a warning, and fall back to
 plain CLAP parameters. The sandbox returns `sandbox.plugin_contract` with a value path

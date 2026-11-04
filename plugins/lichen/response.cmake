@@ -4,7 +4,7 @@
 # at -12 dBFS on both channels for 2 s passes unchanged, and the readings
 # are what the standards and the definitions give for it. (host-smoke checks
 # that every sample passes exactly, as a transparent product.)
-# Required: SANDBOX (quire-sandbox), PLUGIN (Lichen.clap), WORK.
+# Required: SANDBOX (steppe-sandbox), PLUGIN (Lichen.clap), WORK.
 foreach(var SANDBOX PLUGIN WORK)
     if(NOT DEFINED ${var} OR "${${var}}" STREQUAL "")
         message(FATAL_ERROR "response: -D${var}=... is required")

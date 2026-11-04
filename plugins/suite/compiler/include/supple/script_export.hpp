@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Supple Audio
 //
-// A player export (Quire's ADR-0032 §5): a copy of the script player with one
+// A player export (Steppe's ADR-0032 §5): a copy of the script player with one
 // script embedded. Linux and Windows append it to the module file. macOS
 // stores the same JSON in Contents/Resources/supple-script.json and signs
 // the bundle ad hoc; its Mach-O never receives a trailer. An export offers

@@ -1,7 +1,7 @@
 # Making a plugin with a DSP script
 
 A DSP script is a plugin you write: one C++ file, saved to the script
-library, compiled at once, and from then on an ordinary plugin to Quire.
+library, compiled at once, and from then on an ordinary plugin to Steppe.
 You load it with `fx_add`, set it in physical units with `fx_patch_merge`
 and `fx_param_set`, and save it with the project, exactly like a stock
 plugin. The language: `guides/dsp-language.md` (read it first; it is short).

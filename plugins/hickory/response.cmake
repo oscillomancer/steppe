@@ -4,7 +4,7 @@
 # are the same on both channels. At rest a sine passes unchanged; Gain sets
 # its level exactly, and its minimum is silence; the side of identical
 # channels is silence; the DC block takes 0.02 dB at 20 Hz.
-# Required: SANDBOX (quire-sandbox), PLUGIN (Hickory.clap), WORK.
+# Required: SANDBOX (steppe-sandbox), PLUGIN (Hickory.clap), WORK.
 foreach(var SANDBOX PLUGIN WORK)
     if(NOT DEFINED ${var} OR "${${var}}" STREQUAL "")
         message(FATAL_ERROR "response: -D${var}=... is required")

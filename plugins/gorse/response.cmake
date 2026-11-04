@@ -5,7 +5,7 @@
 # onset peaks 6 dB higher, from its first sample, at any level and at 44.1,
 # 48 and 96 kHz, while the steady tone after it passes unchanged and as pure
 # as it came. With Clip on, driven 24 dB over, nothing passes 0 dBFS.
-# Required: SANDBOX (quire-sandbox), PLUGIN (Gorse.clap), WORK.
+# Required: SANDBOX (steppe-sandbox), PLUGIN (Gorse.clap), WORK.
 foreach(var SANDBOX PLUGIN WORK)
     if(NOT DEFINED ${var} OR "${${var}}" STREQUAL "")
         message(FATAL_ERROR "response: -D${var}=... is required")

@@ -5,7 +5,7 @@
 # editor draws: a closed 4x12 of vintage speakers, a dynamic mic 2.5 cm off
 # the cone at 30%); the mix's dry side is the input exactly; the gain pot
 # drives the preamp from clean to distorted.
-# Required: SANDBOX (quire-sandbox), PLUGIN (Hornbeam.clap), WORK.
+# Required: SANDBOX (steppe-sandbox), PLUGIN (Hornbeam.clap), WORK.
 foreach(var SANDBOX PLUGIN WORK)
     if(NOT DEFINED ${var} OR "${${var}}" STREQUAL "")
         message(FATAL_ERROR "response: -D${var}=... is required")

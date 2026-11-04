@@ -6,7 +6,7 @@
 # feedback leave what the loop's analytic response says; keep below at the
 # notch passes half; the wet alone is an all-pass, swept or turning (the
 # 90-degree pair keeps the level as the phase turns).
-# Required: SANDBOX (quire-sandbox), PLUGIN (Pollia.clap), WORK.
+# Required: SANDBOX (steppe-sandbox), PLUGIN (Pollia.clap), WORK.
 foreach(var SANDBOX PLUGIN WORK)
     if(NOT DEFINED ${var} OR "${${var}}" STREQUAL "")
         message(FATAL_ERROR "response: -D${var}=... is required")

@@ -1,7 +1,7 @@
-# Quire manual
+# Steppe manual
 
-This manual covers using Quire once it is installed ([Installing
-Quire](installing.md)) or built ([Building Quire](building.md)): starting
+This manual covers using Steppe once it is installed ([Installing
+Steppe](installing.md)) or built ([Building Steppe](building.md)): starting
 the app, audio devices, projects, plugins, and connecting an AI agent.
 
 The workflow follows REAPER's, so most of the arrange view, mixer, FX chains,
@@ -9,45 +9,45 @@ routing and actions list will feel familiar from it. The actions list includes
 the public commands and GUI actions (`Shift+/` or `Ctrl+Shift+P`,
 `Cmd+Shift+P` on macOS).
 
-## Starting Quire
+## Starting Steppe
 
-Start Quire from the application menu, the Start menu or Finder, or from a
+Start Steppe from the application menu, the Start menu or Finder, or from a
 terminal:
 
 ```sh
-quire                 # a new project
-quire song.json       # open one
-quire --help          # every command-line option
+steppe                 # a new project
+steppe song.json       # open one
+steppe --help          # every command-line option
 ```
 
 Command names follow the product name. In a build tree, the app is
-`build/<preset>/daw/gui/quire`.
+`build/<preset>/daw/gui/steppe`.
 
 ## Audio
 
-Quire plays through JACK on Linux (PipeWire's JACK support works) and
+Steppe plays through JACK on Linux (PipeWire's JACK support works) and
 through the system's audio device on macOS (Core Audio) and Windows (WASAPI
 by default, or ASIO).
 
 **Edit > Audio device…** (also a row in **Edit > Preferences…**) chooses the
 audio system, the output and input devices, the sample rate and the buffer
-size. Quire remembers the choice and starts with it next time. Each change
+size. Steppe remembers the choice and starts with it next time. Each change
 restarts the running engine at once.
 
 - **Linux:** the rate and buffer size are requests to PipeWire, which shares
   the graph with other apps. It changes the rate only while no other client
   is playing, and only to a rate it allows. Choose **Force** to hold both on
-  the whole graph while Quire's engine runs. Other apps then run at Quire's
-  rate and buffer size too, and the device can keep them after Quire quits.
+  the whole graph while Steppe's engine runs. Other apps then run at Steppe's
+  rate and buffer size too, and the device can keep them after Steppe quits.
 - **macOS:** a chosen rate switches the device's own rate, which it keeps
-  after Quire quits. The buffer size is
+  after Steppe quits. The buffer size is
   the device's I/O size. Allow microphone access when macOS asks, so that
   recording can use your input.
 - **Windows:** WASAPI shares the device with other apps and converts other
   rates. ASIO uses one device for input and output, and its driver may round
   the buffer size.
 
-If the device is missing or busy when Quire starts, the app still opens. The
+If the device is missing or busy when Steppe starts, the app still opens. The
 Audio device dialog then opens and says why. Choose another device, or
 **Restart audio** once the device is ready. The dialog's status lines show
 what is running: the backend, rate, buffer size, device period and output
@@ -55,7 +55,7 @@ latency.
 
 ### Outputs and several masters
 
-Quire opens every output of the device (up to 64; with JACK, one per
+Steppe opens every output of the device (up to 64; with JACK, one per
 playback port). The main master plays to outputs 1 and 2. A project can have
 more masters (right-click the mixer's empty space, **Master**), for example
 a headphone mix or a second pair of speakers: each has its own fader, effects
@@ -69,7 +69,7 @@ only while the audio engine is running.
 ### Printing a mix onto its master
 
 A master has an arm button in the mixer, like a channel. Arm it and press
-record: Quire records what the master plays, after its effects, fader and
+record: Steppe records what the master plays, after its effects, fader and
 pan, as the music goes. The take lands on the master itself, in a lane that
 appears at the top of its tracks (a master armed or holding a take has one;
 the lane goes away when it has neither). Several masters can record at once,
@@ -90,7 +90,7 @@ Takes on a master are audio items: move, trim, split, fade and copy them as
 on any channel, or drop an audio file onto the lane. A MIDI item cannot go on
 a master. A render of the master includes its takes; stems of channels and
 busses leave them out. Projects that use master takes or an armed master do
-not open in versions of Quire from before this feature.
+not open in versions of Steppe from before this feature.
 
 When monitoring an armed input, the latency comes from the device, input FX,
 and effects on that input's route to the master. Effects on unrelated playback
@@ -122,7 +122,7 @@ If another project replaces the current one while the save-changes question is
 open, any button cancels the old request with a notice, leaving the replacement
 project untouched. File and folder dialog results are also ignored with a notice
 if the project was replaced; open the dialog again. If edits arrive
-while Open is waiting, Quire asks about unsaved changes again before opening.
+while Open is waiting, Steppe asks about unsaved changes again before opening.
 
 **File > Import…** (Ctrl+I) brings in audio files (WAV, FLAC, MP3) and MIDI
 files (`.mid`) at the playhead: one file onto the selected track, several onto
@@ -131,19 +131,19 @@ A MIDI file's notes keep their beats and play at the project's tempo (the file's
 own tempo is not applied). Imported MIDI
 plays through its channel's instrument, so add one to a new track to hear it.
 
-Renders go to `~/Documents/quire-media` unless you choose another folder in
+Renders go to `~/Documents/steppe-media` unless you choose another folder in
 the render dialog. The folder you choose is remembered and is shared by all
 projects (see *Rendering*).
 
-### Where Quire keeps its files
+### Where Steppe keeps its files
 
 | | Settings (preferences, menus, controls, appearance) | Data (unsaved projects, DSP scripts, render presets) |
 | --- | --- | --- |
-| Linux | `~/.config/quire` (`$XDG_CONFIG_HOME`) | `~/.local/share/quire` (`$XDG_DATA_HOME`) |
-| macOS | `~/Library/Application Support/quire` | `~/Library/Application Support/quire` |
-| Windows | `%APPDATA%\quire` | `%APPDATA%\quire` |
+| Linux | `~/.config/steppe` (`$XDG_CONFIG_HOME`) | `~/.local/share/steppe` (`$XDG_DATA_HOME`) |
+| macOS | `~/Library/Application Support/steppe` | `~/Library/Application Support/steppe` |
+| Windows | `%APPDATA%\steppe` | `%APPDATA%\steppe` |
 
-Uninstalling Quire leaves these folders and your projects in place.
+Uninstalling Steppe leaves these folders and your projects in place.
 
 ## Rendering
 
@@ -169,7 +169,7 @@ a CD master (16-bit 44.1 kHz with noise-shaped dither, −1 dBTP), a podcast MP3
 (−16 LUFS), stems for mixing (24-bit, mono tracks as mono) and a game loop
 (Ogg Vorbis, seamless). Choosing a preset loads it into the dialog; Render
 writes it to the project. Presets and your default are kept in the data folder
-(`render-presets`, see *Where Quire keeps its files*).
+(`render-presets`, see *Where Steppe keeps its files*).
 
 ### Sources and ranges
 
@@ -308,7 +308,7 @@ settings, shared by every project.
 
 ## Plugins
 
-Quire hosts CLAP and VST3 plugins. It looks for them in this order:
+Steppe hosts CLAP and VST3 plugins. It looks for them in this order:
 
 1. its own stock plugins, installed privately with the app (in a build tree,
    `build/<preset>/plugins/clap`);
@@ -338,10 +338,10 @@ that window’s selection.
 
 ## Agents (MCP)
 
-Quire is built to be driven by an AI agent as well as by hand. `quire-mcp`
+Steppe is built to be driven by an AI agent as well as by hand. `steppe-mcp`
 serves the running app's commands as MCP tools over stdio. What an agent
 does lands in the same undo history as your own edits. The bundled skill
-teaches the agent Quire's commands, units and notation.
+teaches the agent Steppe's commands, units and notation.
 
 Saved `dsp.test` audio and `dsp.preview` pictures use readable, shortened
 filenames with a hash when a plugin ID needs escaping or truncation, or ends
@@ -357,13 +357,13 @@ Code, Codex or Hermes:
 1. Choose the agent and review the command shown.
 2. Click **Connect**, or **Copy command** to run it yourself. Copied commands
    are for PowerShell on Windows.
-3. Restart or reconnect the agent. Start Quire before you use the agent.
+3. Restart or reconnect the agent. Start Steppe before you use the agent.
 
 The result shows the command's exit status and output. If a server of that
 name is already registered, check its path in the agent before replacing it.
 
 Connect also links the bundled skill into the agent's user skills folder, as
-`quire/`:
+`steppe/`:
 
 | Agent | Skills folder |
 | --- | --- |
@@ -377,55 +377,55 @@ Connect leaves it as it is and says so.
 
 **Help > MCP server…** shows this copy's absolute paths, a headless command
 and stdio/JSON instructions for any MCP client. **Help > Download skill…**
-copies the bundled skill into a folder you choose, under `quire/`.
+copies the bundled skill into a folder you choose, under `steppe/`.
 **Download skill link…** creates a symlink (a directory junction on Windows)
 instead, which follows updates to the installation; keep the installation in
 place when you use one. Use these for other agents, or to replace a skill
 that Connect left in place. Replacing an existing skill or link asks first,
 and unrelated files and folders are never touched.
 
-On macOS, move Quire.app into Applications before connecting an agent. If
+On macOS, move Steppe.app into Applications before connecting an agent. If
 macOS runs it from a temporary App Translocation location, Help shows how
 to restart it from a stable location instead of these controls. See
-[Installing Quire](installing.md#macos-apple-silicon-macos-144) for
+[Installing Steppe](installing.md#macos-apple-silicon-macos-144) for
 clearing quarantine.
 
 ### Connecting by hand
 
 The installed MCP adapter and skill are here:
 
-| Platform | `quire-mcp` | Skill |
+| Platform | `steppe-mcp` | Skill |
 | --- | --- | --- |
-| Linux | `~/.local/bin/quire-mcp` (installed) or `bin/quire-mcp` in the extracted tree | `share/quire/skill` in the tree |
-| macOS | `/Applications/Quire.app/Contents/MacOS/quire-mcp` | `Quire.app/Contents/Resources/skill` |
-| Windows | `%LOCALAPPDATA%\Programs\Quire\quire-mcp.exe` | `skill` in the installation folder |
-| Build tree | `build/<preset>/mcp/quire-mcp` | `skill/` in the repository |
+| Linux | `~/.local/bin/steppe-mcp` (installed) or `bin/steppe-mcp` in the extracted tree | `share/steppe/skill` in the tree |
+| macOS | `/Applications/Steppe.app/Contents/MacOS/steppe-mcp` | `Steppe.app/Contents/Resources/skill` |
+| Windows | `%LOCALAPPDATA%\Programs\Steppe\steppe-mcp.exe` | `skill` in the installation folder |
+| Build tree | `build/<preset>/mcp/steppe-mcp` | `skill/` in the repository |
 
 Register the adapter by its absolute path, and link the skill into the
 agent's skills folder. For a build tree, from the repository root in a
 POSIX shell (Linux or macOS):
 
 ```sh
-claude mcp add -s user quire -- "$PWD/build/release/mcp/quire-mcp"
+claude mcp add -s user steppe -- "$PWD/build/release/mcp/steppe-mcp"
 mkdir -p ~/.claude/skills
-ln -s "$PWD/skill" ~/.claude/skills/quire
+ln -s "$PWD/skill" ~/.claude/skills/steppe
 
-codex mcp add quire -- "$PWD/build/release/mcp/quire-mcp"
-hermes mcp add quire --command "$PWD/build/release/mcp/quire-mcp"
+codex mcp add steppe -- "$PWD/build/release/mcp/steppe-mcp"
+hermes mcp add steppe --command "$PWD/build/release/mcp/steppe-mcp"
 ```
 
-Start Quire first, then the agent (in Claude Code, `/mcp` reconnects). If
-Quire restarts while the agent runs, the next tool call reconnects by itself.
-To drive a second running copy, start it with `quire --instance NAME` and
-pass `--instance NAME` to `quire-mcp`.
+Start Steppe first, then the agent (in Claude Code, `/mcp` reconnects). If
+Steppe restarts while the agent runs, the next tool call reconnects by itself.
+To drive a second running copy, start it with `steppe --instance NAME` and
+pass `--instance NAME` to `steppe-mcp`.
 
 Replace `release` with your build preset (`macos` on macOS). On Windows,
 use the app's **Copy command** button for a PowerShell command with this
 installation's paths.
 
-Without the GUI, `quire-engine --mcp` serves the engine's project and audio
+Without the GUI, `steppe-engine --mcp` serves the engine's project and audio
 commands and can render offline. GUI-only state and actions require the app.
-`quire-engine play FILE --seconds 10` plays a saved project for ten seconds;
+`steppe-engine play FILE --seconds 10` plays a saved project for ten seconds;
 add `--backend dummy` to run without an audio device. Numeric options must be
 complete numbers, and `--seconds` must be finite and nonnegative. Invalid values
 report the option and how to correct it before playback starts.

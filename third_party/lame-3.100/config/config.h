@@ -1,4 +1,4 @@
-/* LAME 3.100 build configuration, written for Quire's CMake build in place
+/* LAME 3.100 build configuration, written for Steppe's CMake build in place
    of the one autotools generates (config.h.in). The same on Linux, macOS
    and Windows: C99 headers, IEEE 754 floats, no assembly, no SSE (so every
    platform runs the same C code), no decoder (mpglib) and no frontends. */

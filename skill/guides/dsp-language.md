@@ -58,7 +58,7 @@ struct Tilt : Effect {
 | `id` | Reverse DNS, `com.example.tilt-eq`: words of letters, digits and `-` joined by `.` (no `_`). Saved sessions find the plugin by it: never change it once the plugin is used |
 | `version` | Major, minor, patch: `"1.0.0"` (the default) |
 | `vendor`, `description`, `url` | As they say |
-| `features` | What the plugin is, as CLAP features after the main category (which the kind gives): `{"reverb"}`, `{"equalizer", "stereo"}`; lower case, digits and `-`, at most four. Hosts sort plugins by them, and Quire's plugin browser shows a stock plugin's first one after its name |
+| `features` | What the plugin is, as CLAP features after the main category (which the kind gives): `{"reverb"}`, `{"equalizer", "stereo"}`; lower case, digits and `-`, at most four. Hosts sort plugins by them, and Steppe's plugin browser shows a stock plugin's first one after its name |
 | `channels` | Main bus widths offered, the first the default: `{2, 1}` (the default) is stereo, then mono |
 | `sidechain` | `true`: a key input as wide as the main bus (`io.sidechain(c)`) |
 | `outputs` | Names of extra outputs (`io.output(bus, c)`) |
@@ -70,7 +70,7 @@ struct Tilt : Effect {
 
 A parameter is a member made from a description:
 `Param gain = decibels("Gain", -24, 24, 0);`. The description sets its name,
-range, default and unit; Quire, hosts and agents see it in that unit (a
+range, default and unit; Steppe, hosts and agents see it in that unit (a
 patch says `"gain": -3`), exactly as with the stock plugins.
 
 | Factory | Unit, travel |
@@ -197,7 +197,7 @@ values it is given, as `.smoothed()` parameters do by themselves.
 (`playing`, `tempo`, `beats`, `barStart`, time signature),
 `io.sidechain(c)[i]` (the key input with Info's `.sidechain`; silent until
 `io.sidechainConnected`, which is false while nothing is routed to the key
-in Quire and in hosts that deactivate an unused port; a host that always
+in Steppe and in hosts that deactivate an unused port; a host that always
 feeds the port reports it connected, so a plugin there may want a choice
 parameter for its key), `io.output(bus, c)[i]`.
 From any member function: `sampleRate()`, `maxBlockSize()`, `channels()`,

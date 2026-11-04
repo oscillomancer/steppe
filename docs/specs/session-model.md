@@ -12,7 +12,7 @@ This is the data the whole DAW is made of. Every object here is reachable by a
 stable ID, editable only through commands, versioned, diffable and savable as
 canonical JSON. The REAPER research (`docs/research/reaper-ux.md`) is the
 workflow reference; where REAPER encodes structure implicitly (folder depth
-by track order, receives by track index), Quire makes it explicit.
+by track order, receives by track index), Steppe makes it explicit.
 
 ---
 
@@ -235,7 +235,7 @@ Project loading rejects other integer factors with `fx.oversampling` at
 files use the same check and retain `chain.invalid` at the effect's
 `oversampling` field. The project schema version is unchanged: supported
 factors still round-trip identically; unsupported factors were never written
-by Quire.
+by Steppe.
 
 Chains are arrays of fx ids on tracks (`chain`, `input_chain`), takes
 (`chain`) and the master's monitoring chain (`project.monitor_chain`, not
@@ -520,12 +520,12 @@ through (the session survives; `project.load` reports them).
 
 ### 5.3 Files on disk
 
-The extension derives from the product slug: `<name>.<slug>` (e.g.
-`demo.quire`), plus an optional sidecar directory
-`<name>.<slug>-data/` for blobs over 1 MiB (`<hash>.bin`) and autosaves.
+The file is named by the caller; the GUI saves `<name>.json` (gui.md §4.11).
+Beside it is an optional sidecar directory, the file name plus `-data`
+(`demo.json-data/`), for blobs over 1 MiB (`<hash>.bin`) and autosaves.
 UI state lives separately in `<name>.ui.json` (gui.md §1.2), never in the
 project document. Saves are atomic (write temp, fsync, rename). Autosave every 60 s to
-`<name>.<slug>-data/autosave-<n>.json` (keep 5). History is persisted only
+`<file>-data/autosave-<n>.json` (keep 5). History is persisted only
 on request (ADR-0008 clarification).
 
 Media live in the project's `media_dir` (default `media/`) beside the file

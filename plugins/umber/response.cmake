@@ -7,7 +7,7 @@
 # was fitted to: about 0.1% at reference level (a sine at -18 dBFS RMS, which
 # the VU meter reads as 0) and 3% at 12.5 dB above it. The highs saturate on
 # their own: a 10 kHz sine 12 dB over reference loses about 3 dB.
-# Required: SANDBOX (quire-sandbox), PLUGIN (Umber.clap), WORK.
+# Required: SANDBOX (steppe-sandbox), PLUGIN (Umber.clap), WORK.
 foreach(var SANDBOX PLUGIN WORK)
     if(NOT DEFINED ${var} OR "${${var}}" STREQUAL "")
         message(FATAL_ERROR "response: -D${var}=... is required")

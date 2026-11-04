@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<!-- Every Quire executable on Windows (ADR-0044): the process code page is
+<!-- Every Steppe executable on Windows (ADR-0044): the process code page is
      UTF-8, so narrow paths, environment variables and std::filesystem text
      are UTF-8 whatever the system locale. Windows 10 1903 or later. -->
 <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">

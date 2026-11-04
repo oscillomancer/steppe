@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Supple Audio
-# The suite (Quire's plugins/suite: suite.cmake), and the script compiled as
+# The suite (Steppe's plugins/suite: suite.cmake), and the script compiled as
 # the script player's compiler runs it: integers wrap, and no fused
 # multiply-adds. An Array may start from single braces (= {1.0, 0.5}), as
 # the language allows, without a warning.

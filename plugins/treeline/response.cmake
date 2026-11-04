@@ -3,7 +3,7 @@
 # Treeline's ceiling, measured through the built plugin (dsp.test): driven
 # 12 dB into a -3 dB ceiling at 44.1, 48 and 96 kHz, a sine, a sweep, noise
 # and an impulse each peak at the ceiling and not above it; below the
-# ceiling it changes nothing. Required: SANDBOX (quire-sandbox), PLUGIN (Treeline.clap), WORK.
+# ceiling it changes nothing. Required: SANDBOX (steppe-sandbox), PLUGIN (Treeline.clap), WORK.
 foreach(var SANDBOX PLUGIN WORK)
     if(NOT DEFINED ${var} OR "${${var}}" STREQUAL "")
         message(FATAL_ERROR "response: -D${var}=... is required")

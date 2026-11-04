@@ -6,7 +6,7 @@
 // platform for the integer and uniform functions. All functions are
 // allocation-free and usable on the audio thread.
 //
-// Every source of randomness in Quire (plugin noise, drift, dither, humanize,
+// Every source of randomness in Steppe (plugin noise, drift, dither, humanize,
 // the optimizer) derives from an explicit seed stored in state.
 #pragma once
 

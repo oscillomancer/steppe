@@ -1,6 +1,6 @@
 # Pollard: drum sampler
 
-Pollard (`com.suppleaudio.pollard`) is Quire's drum sampler: sixteen pads
+Pollard (`com.suppleaudio.pollard`) is Steppe's drum sampler: sixteen pads
 on sixteen keys from C2 (36) up, each one sound, a file or one of its
 factory hits, played one-shot or gated through its own envelope and
 filter, at its level and pan, to the main output or one of eight more.
@@ -85,7 +85,7 @@ of the script) every pad is missing until it gets a real path.
   hats are in group 1, so the closed and pedal hats stop the open one. Put
   a crash in a group of its own to stop it by hitting it again.
 - `padN.output` `out1` … `out8` sends the pad to an extra stereo output
-  and out of the main mix. In Quire the track has 18 channels once
+  and out of the main mix. In Steppe the track has 18 channels once
   Pollard is on it (`fx_add`); route the outputs from there to treat a
   kick or the toms on their own. The Multi-Out Kit spreads the kit over
   Out 1 to Out 6.

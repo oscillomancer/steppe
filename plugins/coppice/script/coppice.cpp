@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 #include <supple/script.h>
 
-// Coppice: Quire's sampler.
+// Coppice: Steppe's sampler.
 //
 // A coppiced wood is cut back to its stools and grows again from them, every
 // shoot a new stem from the same root. Coppice plays one sound -- a file of

@@ -2,6 +2,9 @@
 
 **Status:** Accepted, 2026-09-26.
 
+**2026-11-04 note:** The DAW is now called Steppe (ADR-0059). How the name is
+defined is unchanged.
+
 ## Context
 
 The product needed a name, and renaming had to stay cheap. Supple Audio's

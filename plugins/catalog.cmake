@@ -4,7 +4,7 @@
 # patch key of each Param member, which a source export works out from the
 # script (C++ cannot see member names). This checks it against a fresh
 # export, or with -DUPDATE=ON writes the fresh one in its place.
-# Required: SANDBOX (quire-sandbox), NAME (the script), DIR (its folder), WORK.
+# Required: SANDBOX (steppe-sandbox), NAME (the script), DIR (its folder), WORK.
 foreach(var SANDBOX NAME DIR WORK)
     if(NOT DEFINED ${var} OR "${${var}}" STREQUAL "")
         message(FATAL_ERROR "catalog: -D${var}=... is required")
@@ -68,6 +68,6 @@ elseif(UPDATE)
     message(STATUS "${NAME}: Catalog.cpp updated")
 else()
     message(FATAL_ERROR "${DIR}/Catalog.cpp no longer matches script/${NAME}.cpp (a Param was added, "
-                        "removed or renamed). Regenerate it: cmake -DUPDATE=ON -DSANDBOX=<quire-sandbox> "
+                        "removed or renamed). Regenerate it: cmake -DUPDATE=ON -DSANDBOX=<steppe-sandbox> "
                         "-DNAME=${NAME} -DDIR=${DIR} -DWORK=<scratch folder> -P ${CMAKE_CURRENT_LIST_FILE}")
 endif()

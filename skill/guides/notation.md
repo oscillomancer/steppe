@@ -1,6 +1,6 @@
-# Writing music in Quire notation
+# Writing music in Steppe notation
 
-Quire notation is plain text that compiles to MIDI. You write numbered bars;
+Steppe notation is plain text that compiles to MIDI. You write numbered bars;
 each bar must add up exactly to the meter, and the compiler tells you when it
 doesn't. Full specification: `generated/notation-reference.md`.
 

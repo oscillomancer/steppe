@@ -4,7 +4,7 @@
 # sounds on General MIDI's drum keys and nowhere else, a pad's Key moves it,
 # Tune plays its recording faster (shorter as well as higher), the closed hat
 # chokes the open one, and a pad on an extra output leaves the main one.
-# Required: SANDBOX (quire-sandbox), PLUGIN (Drumlin.clap), WORK.
+# Required: SANDBOX (steppe-sandbox), PLUGIN (Drumlin.clap), WORK.
 foreach(var SANDBOX PLUGIN WORK)
     if(NOT DEFINED ${var} OR "${${var}}" STREQUAL "")
         message(FATAL_ERROR "response: -D${var}=... is required")

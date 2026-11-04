@@ -4,7 +4,7 @@
 # by exactly the gain, across the whole range, and a jump of the whole range
 # glides instead of stepping. (Block-size invariance under automation is
 # plugin.gain.blocks'.)
-# Required: SANDBOX (quire-sandbox), PLUGIN (Gain.clap), WORK.
+# Required: SANDBOX (steppe-sandbox), PLUGIN (Gain.clap), WORK.
 foreach(var SANDBOX PLUGIN WORK)
     if(NOT DEFINED ${var} OR "${${var}}" STREQUAL "")
         message(FATAL_ERROR "response: -D${var}=... is required")

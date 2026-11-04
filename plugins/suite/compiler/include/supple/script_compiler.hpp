@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Supple Audio
 //
-// The DSP script compiler, for C++ callers (the player, Quire's commands and
+// The DSP script compiler, for C++ callers (the player, Steppe's commands and
 // tests).
 //
 //   auto result = supple::scriptc::compile(source);

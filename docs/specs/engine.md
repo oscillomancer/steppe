@@ -1497,7 +1497,7 @@ There is no runtime sysfs/topology read to choose the value, frequency lock
 or guarantee of a particular C-state residency on arbitrary hardware.
 
 The request affects system idle while held and may increase power, heat and
-fan activity. Quire offers this owned, close-scoped QoS request instead of
+fan activity. Steppe offers this owned, close-scoped QoS request instead of
 locking CPU frequency: governor/EPP changes are privileged and system-wide.
 The request leaves frequency policy alone and never escalates privileges.
 

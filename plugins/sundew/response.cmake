@@ -5,7 +5,7 @@
 # 24 dB over a 4:1 threshold at 44.1, 48 and 96 kHz, and 12 dB at 2:1; Range
 # stops the cut; Opto, a feedback cell, gives the ratio set; Bloom lifts a
 # quiet sine; below the threshold nothing changes. Lookahead reports its
-# latency. Required: SANDBOX (quire-sandbox), PLUGIN (Sundew.clap), WORK.
+# latency. Required: SANDBOX (steppe-sandbox), PLUGIN (Sundew.clap), WORK.
 foreach(var SANDBOX PLUGIN WORK)
     if(NOT DEFINED ${var} OR "${${var}}" STREQUAL "")
         message(FATAL_ERROR "response: -D${var}=... is required")

@@ -71,13 +71,13 @@ Like Orrery (`plugins/orrery`):
   - `describe()` — the compact prose (§1.6);
   - `tests/` — the monorepo tests of §1.7.
 - `plugins/<id>/` — a copy of the template made as `plugins/orrery` is
-  (read its `QUIRE.md`: identity renames, vendored dependency paths,
+  (read its `STEPPE.md`: identity renames, vendored dependency paths,
   `supple_plugin_add_monorepo_libraries()`, format-gate and license-check
   handling, `supple_add_plugin(<id> <PREFIX>)` in `plugins/CMakeLists.txt`).
   The template is an effect already: keep its audio-port and process
   structure. Its `*_clap.cpp` product sections forward
   to `supple::clapx::ParamStore` / `ClapParams` / `FlatSemantic`
-  (`plugins/common`) and to the engine; `QUIRE.md` lists every deviation.
+  (`plugins/common`) and to the engine; `STEPPE.md` lists every deviation.
   The shared template infrastructure stays byte-identical apart from names.
 - The template's DSP header (`dsp/include/<id>/Processor.h`) is replaced by
   the engine library, as in Orrery.
@@ -177,7 +177,7 @@ In the plugin copy (as Orrery): `host_smoke`, `editor_input`, the template's hos
   and range, three short recipes (e.g. the EQ: remove rumble, carve a
   masking region reported by `analyze.masking`, de-harsh), and honest limits.
   Linked from `skill/SKILL.md` and `skill/guides/mixing.md`.
-- `plugins/<id>/QUIRE.md` (deviations from the template) and a STATUS row.
+- `plugins/<id>/STEPPE.md` (deviations from the template) and a STATUS row.
 
 ## 2. EQ — Yarrow [`yarrow`] (`stock-effects.md` §1)
 

@@ -5,7 +5,7 @@
 # the same note without it has ended, a one-shot plays on after its key,
 # the keys past the last slice are silent, and a factory sample plays as
 # the same file does from disk.
-# Required: SANDBOX (quire-sandbox), PLUGIN (Coppice.clap), WORK.
+# Required: SANDBOX (steppe-sandbox), PLUGIN (Coppice.clap), WORK.
 foreach(var SANDBOX PLUGIN WORK)
     if(NOT DEFINED ${var} OR "${${var}}" STREQUAL "")
         message(FATAL_ERROR "response: -D${var}=... is required")

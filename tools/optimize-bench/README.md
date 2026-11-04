@@ -55,7 +55,7 @@ measurement, as are the documented not-applicable and no-parameter skips.
 Comparison tables label each mode and use the median for any number of seeds.
 
 A variant is a code change in the product: rebuild only the sandbox
-(`cmake --build --preset dev --target quire-sandbox -j6`) and run with a new
+(`cmake --build --preset dev --target steppe-sandbox -j6`) and run with a new
 `--label`, so every table row names the build that produced it. The chosen
 defaults belong in `docs/specs/optimizer.md` (Amendments); `summary.py` writes the comparison table.
 

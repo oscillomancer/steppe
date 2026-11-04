@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 #include <supple/script.h>
 
-// Marram: Quire's synthesizer.
+// Marram: Steppe's synthesizer.
 //
 // Marram grass holds a dune together by its roots; under the wind its blades
 // sing. Each note is one voice, and a voice takes this road:

@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 #include <supple/script.h>
 
-// Pollard: Quire's drum sampler.
+// Pollard: Steppe's drum sampler.
 //
 // A pollard is a tree cut back at head height, which grows a crown of new
 // stems from the cut, as a coppice grows them from its stool. Pollard plays

@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for looking at Quire. The engineering rules in `AGENTS.md` apply to
+Thanks for looking at Steppe. The engineering rules in `AGENTS.md` apply to
 every contribution, whether you write it yourself or with a coding agent.
 This page covers the process around them.
 
@@ -9,9 +9,9 @@ This page covers the process around them.
 Open an issue with:
 
 - what you did, what you expected and what happened;
-- the Quire version or commit, your operating system, and your audio setup
+- the Steppe version or commit, your operating system, and your audio setup
   (JACK or PipeWire, Core Audio, WASAPI or ASIO; buffer size, sample rate);
-- the smallest project file that shows it, when one does (Quire projects
+- the smallest project file that shows it, when one does (Steppe projects
   are JSON, with their media in the `media/` folder beside them);
 - for crashes, the terminal output and a backtrace if you can get one.
 
@@ -157,7 +157,7 @@ platform build glue. Product-owned semantic stress tests use a native loader;
 template host/probe/shared-stack sources are unchanged.
 
 Monorepo macOS stock GUI builds keep the template's default Metal renderer:
-Quire-owned CMake glue points its `nanovg_metal` FetchContent at the vendored
+Steppe-owned CMake glue points its `nanovg_metal` FetchContent at the vendored
 pin in `third_party/nanovg_metal`, so offline builds need no download.
 
 Apple libc++'s missing jthread/stop-token facilities are supplied through the

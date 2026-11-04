@@ -5,7 +5,7 @@
 # a millisecond late, alone, is the sine at its own level; ducking takes 12
 # dB off the echoes while the sine plays; output trims what leaves. The
 # echo time and decay readouts agree with the time and feedback as set.
-# Required: SANDBOX (quire-sandbox), PLUGIN (Bracken.clap), WORK.
+# Required: SANDBOX (steppe-sandbox), PLUGIN (Bracken.clap), WORK.
 foreach(var SANDBOX PLUGIN WORK)
     if(NOT DEFINED ${var} OR "${${var}}" STREQUAL "")
         message(FATAL_ERROR "response: -D${var}=... is required")

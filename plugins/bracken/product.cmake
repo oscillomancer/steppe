@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Supple Audio
-# Bracken, Quire's stock delay: the DSP script in script/ as a plugin of its
+# Bracken, Steppe's stock delay: the DSP script in script/ as a plugin of its
 # own, compiled as C++ and run by the suite's glue (plugins/suite) as the
 # script player runs it. The plugin is what the script declares (Catalog.cpp,
 # from a source export of the script): its parameters, buses and identity

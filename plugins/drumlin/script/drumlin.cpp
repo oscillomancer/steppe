@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 #include <supple/script.h>
 
-// Drumlin: Quire's drum machine.
+// Drumlin: Steppe's drum machine.
 //
 // A drumlin is a long, low hill shaped by a glacier, smooth and streamlined,
 // that lies in swarms across the land it left. Drumlin plays the sounds of

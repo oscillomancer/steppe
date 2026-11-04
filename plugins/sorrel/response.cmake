@@ -6,7 +6,7 @@
 # holds it down, and -80 dB is silence; Expand at 2:1 turns a sine 6 dB
 # under the threshold down 6 dB more; a key high-pass keeps a low sine from
 # opening it.
-# Required: SANDBOX (quire-sandbox), PLUGIN (Sorrel.clap), WORK.
+# Required: SANDBOX (steppe-sandbox), PLUGIN (Sorrel.clap), WORK.
 foreach(var SANDBOX PLUGIN WORK)
     if(NOT DEFINED ${var} OR "${${var}}" STREQUAL "")
         message(FATAL_ERROR "response: -D${var}=... is required")

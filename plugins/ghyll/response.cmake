@@ -4,7 +4,7 @@
 # -12 dBFS on both channels. Dry (mix 0) it passes unchanged and output trims
 # what leaves. The readouts follow the room as set: the distance between two
 # places, and a concrete cube's reverberation time by Eyring's formula.
-# Required: SANDBOX (quire-sandbox), PLUGIN (Ghyll.clap), WORK.
+# Required: SANDBOX (steppe-sandbox), PLUGIN (Ghyll.clap), WORK.
 foreach(var SANDBOX PLUGIN WORK)
     if(NOT DEFINED ${var} OR "${${var}}" STREQUAL "")
         message(FATAL_ERROR "response: -D${var}=... is required")

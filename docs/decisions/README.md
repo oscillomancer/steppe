@@ -74,3 +74,4 @@ current state.
 | [0056](0056-master-hardware-outputs.md) | Masters play to hardware outputs; a mix renders several masters | Accepted |
 | [0057](0057-master-recording.md) | Masters record their output and play their own items | Accepted |
 | [0058](0058-strip-and-send-learn.md) | MIDI learn on strips' and sends' own controls | Accepted |
+| [0059](0059-renamed-to-steppe.md) | The DAW is renamed Steppe | Accepted |

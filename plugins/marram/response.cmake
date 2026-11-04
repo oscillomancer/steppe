@@ -6,7 +6,7 @@
 # and a voice's own (velocity) move it as far as their amounts say, and
 # nothing is wrong with the sound or with the silence after it (no clipping,
 # DC, sound that never ends).
-# Required: SANDBOX (quire-sandbox), PLUGIN (Marram.clap), WORK.
+# Required: SANDBOX (steppe-sandbox), PLUGIN (Marram.clap), WORK.
 foreach(var SANDBOX PLUGIN WORK)
     if(NOT DEFINED ${var} OR "${${var}}" STREQUAL "")
         message(FATAL_ERROR "response: -D${var}=... is required")

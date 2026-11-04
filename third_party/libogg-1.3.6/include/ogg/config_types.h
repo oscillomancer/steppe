@@ -1,4 +1,4 @@
-/* libogg 1.3.6 integer types, written for Quire's CMake build in place of
+/* libogg 1.3.6 integer types, written for Steppe's CMake build in place of
    the header configure or libogg's CMake generates (config_types.h.in). */
 #ifndef __CONFIG_TYPES_H__
 #define __CONFIG_TYPES_H__

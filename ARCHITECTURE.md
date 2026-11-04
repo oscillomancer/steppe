@@ -1,6 +1,6 @@
-# Quire architecture
+# Steppe architecture
 
-Quire is a Linux-first DAW in which an LLM is a first-class operator, plus a
+Steppe is a Linux-first DAW in which an LLM is a first-class operator, plus a
 suite of stock plugins designed to be programmed by LLMs, without making the
 product worse for the human who uses it directly. Its workflow reference is
 REAPER (`docs/research/reaper-ux.md`). This document is the map; the
@@ -336,7 +336,7 @@ children. A custom retained-mode toolkit drawn with NanoVG on OpenGL,
 sharing rendering technology with the plugins' editors; REAPER's workflow
 model (arrange, TCP, mixer, FX chains, routing matrix, MIDI editor, render
 dialog, actions list with bindable keys and macros, customizable toolbars
-and menus, themes) with Quire's own visual identity. UI work never stalls
+and menus, themes) with Steppe's own visual identity. UI work never stalls
 audio: the UI reads model versions and engine telemetry rings; it cannot
 block the RT path. Agents work through the MCP server from an external
 harness; the app has no built-in agent (ADR-0043).

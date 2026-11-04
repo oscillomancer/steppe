@@ -5,7 +5,7 @@
 # sound by exactly that much, the closed hat chokes the open one, a gated
 # pad ends its release after its key, and a pad on an extra output leaves
 # the main one.
-# Required: SANDBOX (quire-sandbox), PLUGIN (Pollard.clap), WORK.
+# Required: SANDBOX (steppe-sandbox), PLUGIN (Pollard.clap), WORK.
 foreach(var SANDBOX PLUGIN WORK)
     if(NOT DEFINED ${var} OR "${${var}}" STREQUAL "")
         message(FATAL_ERROR "response: -D${var}=... is required")

@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 //
 // What a plugin means, beyond the framework's tables: the documents of the
-// com.suppleaudio.semantic-params/1 extension (Quire's
+// com.suppleaudio.semantic-params/1 extension (Steppe's
 // docs/specs/semantic-params-extension.md, core-params and core-patch).
 //
 //   - Meaning: each parameter's key ("filter.cutoff"), role tags and choice

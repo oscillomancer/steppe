@@ -6,7 +6,7 @@
 library. Neither may be used on the audio thread.
 
 These two libraries carry every structured document and every command in
-Quire. Their quality bar is the error messages: an LLM that sends a bad patch
+Steppe. Their quality bar is the error messages: an LLM that sends a bad patch
 or command must be able to fix it from the error alone. See ADR-0009 for the
 format rules they implement.
 
@@ -414,7 +414,7 @@ for reuse (command names, plugin keys, notation).
 namespace `supple::units`, so plugins can use them without core-schema;
 `closestMatch` likewise lives in core-base as `supple/base/closest.h`.)*
 
-`supple/base/units.h` defines the closed unit set used across Quire. Each
+`supple/base/units.h` defines the closed unit set used across Steppe. Each
 unit belongs to a dimension; each dimension has one canonical unit; strings
 may use any alias of a compatible unit.
 

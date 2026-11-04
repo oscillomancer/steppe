@@ -8,7 +8,7 @@ ADR-0019 (typed strips), ADR-0030 (main-thread notifications/deadlines),
 `ARCHITECTURE.md` §3 (threads, event delivery) and §10, and the workflow research in `docs/research/reaper-ux.md` (the top-40
 list in §16 is the priority order for workflow coverage).
 
-Goal: a complete track can be produced in Quire without falling back to
+Goal: a complete track can be produced in Steppe without falling back to
 another DAW for core tasks. Performance gates (ADR-0005 §5): p95 frame
 ≤ 8 ms CPU at 1080p with a 64-track session in the arrange view at any zoom;
 idle CPU ≈ 0; cold start to an interactive window < 300 ms; no UI work can
@@ -1391,7 +1391,7 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
 
 ## 7. Visual identity
 
-Quire's own character, not a REAPER clone or a generic dark theme
+Steppe's own character, not a REAPER clone or a generic dark theme
 (`tools/gui/mockups.py` renders mockups of it):
 
 - **Material:** paper and ink — warm neutral grounds (light: off-white

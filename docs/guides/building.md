@@ -1,16 +1,16 @@
-# Building Quire
+# Building Steppe
 
-Quire builds with CMake and Ninja on Linux, macOS and Windows. The GUI needs
+Steppe builds with CMake and Ninja on Linux, macOS and Windows. The GUI needs
 SDL3, OpenGL and zlib; Linux also needs the X11 and EGL development libraries.
 The other library dependencies are vendored under `third_party/`. Once the
 platform's build tools and system dependencies are installed (including the
 first vcpkg install on Windows), the normal build works offline.
 
-Binary names follow `PRODUCT_SLUG` in `cmake/Product.cmake` (`quire` today).
+Binary names follow `PRODUCT_SLUG` in `cmake/Product.cmake` (`steppe` today).
 Each preset builds into `build/<preset>/`. The examples use `release` on
 Linux and the platform presets on macOS and Windows.
 
-For prebuilt downloads, see [Installing Quire](installing.md) instead. Using
+For prebuilt downloads, see [Installing Steppe](installing.md) instead. Using
 the app, plugins and agents is covered in the [manual](manual.md).
 
 ## Linux (x86_64)
@@ -44,7 +44,7 @@ tar -xzf SDL3-3.2.30.tar.gz
 cmake -S SDL3-3.2.30 -B sdl3-build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX="$HOME/.local/sdl3" -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF
 cmake --build sdl3-build && cmake --install sdl3-build
-export CMAKE_PREFIX_PATH="$HOME/.local/sdl3"   # before configuring Quire
+export CMAKE_PREFIX_PATH="$HOME/.local/sdl3"   # before configuring Steppe
 ```
 
 Build, test and start the app:
@@ -53,11 +53,11 @@ Build, test and start the app:
 cmake --preset release
 cmake --build --preset release
 ctest --preset release
-build/release/daw/gui/quire              # a new project
-build/release/daw/gui/quire song.json    # open one
+build/release/daw/gui/steppe              # a new project
+build/release/daw/gui/steppe song.json    # open one
 ```
 
-At run time Quire needs X11 or XWayland and a JACK server. PipeWire's JACK
+At run time Steppe needs X11 or XWayland and a JACK server. PipeWire's JACK
 support (`pipewire-jack`) counts. The JACK library is loaded when the engine
 starts, so building needs no JACK development package.
 
@@ -80,12 +80,12 @@ optimized app:
 cmake --preset macos -DCMAKE_BUILD_TYPE=Release
 cmake --build --preset macos -j 8
 ctest --preset macos
-build/macos/daw/gui/quire                # a new project
+build/macos/daw/gui/steppe                # a new project
 ```
 
 The `macos` build preset uses two jobs by default, the limit for GitHub's
 hosted runners. Pass `-j` to use more cores. The app bundle is
-`build/macos/daw/gui/quire.app`; `build/macos/daw/gui/quire` is a symlink to
+`build/macos/daw/gui/steppe.app`; `build/macos/daw/gui/steppe` is a symlink to
 the executable inside it. Only arm64 is supported.
 
 If `build/macos` was configured with an older Homebrew LLVM toolchain,
@@ -110,7 +110,7 @@ compiler, linker and SDK are on `PATH`:
 cmake --preset windows -DCMAKE_BUILD_TYPE=Release
 cmake --build --preset windows
 ctest --preset windows
-build\windows\daw\gui\quire.exe
+build\windows\daw\gui\steppe.exe
 ```
 
 Like `macos`, the `windows` preset builds Debug unless you pass a build type.
@@ -153,9 +153,9 @@ Tests that open real hardware are skipped unless you opt in:
 
 | Path under `build/<preset>/` | What it is |
 | --- | --- |
-| `daw/gui/quire` | The app |
-| `host/engine/quire-engine` | The headless engine: renders, scripts, a headless MCP server |
-| `mcp/quire-mcp` | The MCP adapter that agents connect to the running app through |
+| `daw/gui/steppe` | The app |
+| `host/engine/steppe-engine` | The headless engine: renders, scripts, a headless MCP server |
+| `mcp/steppe-mcp` | The MCP adapter that agents connect to the running app through |
 | `plugins/clap/` | The stock plugins, which the app loads from here in a build tree |
 
 On Windows each executable has the `.exe` suffix. [The manual](manual.md#agents-mcp)
