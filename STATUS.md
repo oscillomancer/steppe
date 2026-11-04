@@ -179,11 +179,11 @@ instructions are in `docs/guides/installing.md`.
   its fader, beside the live mix, with a lane mute, and are silent in the
   punch range while it records.
 - **Editing**: items, takes, comping lanes, fades and crossfades with shapes,
-  cursor splitting from the item menu (shared with S) and an audio-only prior
+  cursor splitting from the item right-click menu (shared with S) and an audio-only prior
   zero-crossing split (100 ms search, louder stereo channel, cursor fallback;
   agents use `item.split` with `snap: zero_crossing`),
   time stretch and pitch (Signalsmith Stretch), draggable audio warp
-  anchors (including identity insertion at the edit cursor from the item menu),
+  anchors (including identity insertion at the edit cursor from the Item menu),
   transient detection, joint multitrack audio quantize and slicing,
   background `item.consolidate` for active audio with take FX baked and MIDI
   kept separate per track (one undo step, track processing stays live),
@@ -192,8 +192,8 @@ instructions are in `docs/guides/installing.md`.
   MIDI file import (`item.add {midi_file}`, File > Import… and file drops),
   Mix to new track (background `item.mix-to-track`: selected items through
   their full strips, Console 9 decoded as a fresh buss hears them, onto a new
-  muted channel, one undo step), one item menu shared by an item's right-click
-  and the menu bar's Item menu,
+  muted channel, one undo step), an item right-click menu for everyday edits
+  and the menu bar's Item menu for the rest (no shared entries),
   adjacent Consolidate items / Heal splits item-menu actions with shared engine
   eligibility, and non-rendering `item.heal` for compatible split/slice chains,
   retaining outer fades and full source maps while removing generated interior fades,

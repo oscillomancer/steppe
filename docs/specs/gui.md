@@ -500,21 +500,22 @@ and redraw when that scalar changes. The lane display range is independent
 of the transport knob's per-project display range. In the staged engine the
 curve is editable and saved, but audio application remains pending.
 
-**Menus.** A right-click on an item opens the item menu: **Cut**, **Copy**,
+**Menus.** Items have two menus that share no entries. A right-click on an
+item opens the item menu (`ItemGestures::itemMenu`): **Cut**, **Copy**,
 **Paste** (at the pointer's beat on the grid and its channel), **Duplicate**
 (after the selection), **Delete**, **Consolidate items**, **Heal splits**,
-**Split item at cursor** (S),
-**Split item at prior zero crossing**, **Export…**, **Mix to new track**, then
-**Edit MIDI** (the item in the MIDI editor) and **Show or hide the MIDI
-editor**, then the timebases and the take entries below. Rows that do not apply
-are greyed, not hidden, apart from the take entries. The menu bar's **Item**
-menu is the same menu (`ItemGestures::itemMenu`, the chrome's menu source for
-Item) over the selection: everything greyed but Paste and the MIDI editor
-toggle when nothing is selected, Paste at the playhead on the first selected
-track, and the take entries for the heard take of the clicked item (else the
-first selected one). Several MIDI items are combined with Consolidate items
-(engine.md). A right-click on empty lane space
-opens a menu with Paste. The keys each action has are shown beside it.
+**Split item at cursor** (S), **Split item at prior zero crossing**, **Mix to
+new track**, then **Edit MIDI** (the item in the MIDI editor) and **Show or
+hide the MIDI editor**, then the renders below (for the take under the
+pointer). The menu bar's **Item** menu (`ItemGestures::itemBarMenu`, the
+chrome's menu source for Item) has the rest, over the selection: **Export…**,
+the timebases, the audio warp entries, the take FX and envelope entries and
+the take entries below, for the heard take of the last clicked item if it is
+selected (else the first selected one); with nothing selected its rows are
+greyed and the take entries absent. Rows that do not apply are greyed, not
+hidden, apart from the take entries. Several MIDI items are combined with
+Consolidate items (engine.md). A right-click on empty lane space opens a menu
+with Paste. The keys each action has are shown beside it.
 Consolidate items and Heal splits sit beside each other and use the engine's
 shared read-only selection planners for enablement. Consolidate captures active
 audio with item/take processing and take FX into new media, while track processing
@@ -538,7 +539,8 @@ silence keeps the cursor, and no crossing falls back to the cursor. Pending
 preparation produces a retryable status error. Linked items use the initiating
 item's resolved time. See engine.md for the command contract. The toolkit's
 `menuItems` accessor exposes borrowed, read-only menu rows for inspection.
-**Export…** acts on the clicked item (else the first selected one) and is greyed
+**Export…** (Item menu) acts on the last clicked item if selected (else the first
+selected one) and is greyed
 when its heard take is empty. It opens the system's save dialog (SDL3,
 asynchronous, guarded like Save As against a project change) filtered to WAV or
 MIDI, starting in the project's folder (unsaved: the media home) with the take's
@@ -549,14 +551,14 @@ action (the first selected item). See engine.md for what the file holds.
 **Takes.** An item with several takes shows each in a lane under its name
 bar when the row is tall enough (at least 14 units a lane), the heard one
 lit and each lane named; a click on a lane hears that take, a swipe comps it
-in, and the badge cycles takes. The item menu (right-click) adds, for
+in, and the badge cycles takes. The menu bar's Item menu adds, for
 several takes: **Show all takes** (a check; UI state, saved in the project's
 UI file as `expanded_takes`): the item's row grows to the name bar plus one
 lane per take, each as tall as the row's own height, so every take can be
 seen, heard (click) and edited; **Explode takes onto new tracks** and **…in
 sequence on this track** (item.explode-takes, recording order; this ends
 the takes, Show all takes keeps them); **Delete take "name"** for the
-take under the pointer (else the heard one; take.remove); and **Keep only the
+heard take (take.remove); and **Keep only the
 selected take**: every selected item with several takes keeps only its heard
 take (take.remove of the others, one undo step). For any item with
 material: **Convert to audio** / **Render to audio as a new take** on a
@@ -1150,10 +1152,11 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   Help if absent; existing custom menus, toolbar and explicit Help edits remain.
   An action may carry an `enabled` predicate over the selection context; its
   menu entry is greyed while that is false (the predicate is checked when the
-  menu opens). The Item menu's entries are the item menu's (§ Menus, under
-  arrange items), built when it opens; action ids a user adds to it follow
-  them after a separator. Loading a `menus.json` drops the ids the item menu
-  now covers (and `ui.midi.new`) from its Item list, so they do not repeat.
+  menu opens). The Item menu's entries are built when it opens
+  (`itemBarMenu`, § Menus under arrange items); action ids a user adds to it
+  follow them after a separator. Loading a `menus.json` drops the item ids
+  older defaults listed there (and `ui.midi.new`) from its Item list, as the
+  two item menus now hold them.
   **Mix to new track** (`ui.item.mix-to-track`, `item.mix-to-track` on the
   selected items, engine.md) is greyed without selected items; progress and the result show in the status line as for
   Consolidate items, and only one such background item job runs at a time.
@@ -1522,8 +1525,8 @@ item time; the source coordinate stays fixed. The overlay previews the destinati
 current grid snapping applies (Shift frees it), and release commits one command.
 A changed project/version cancels the marker gesture. Bundle anchors move together.
 
-The item menu offers Detect hits, Add stretch marker at cursor, Quantize audio,
-Slice at hits and Remove warping. Add stretch marker at cursor inserts an identity
+The menu bar's Item menu offers Detect hits, Add stretch marker at cursor,
+Quantize audio, Slice at hits and Remove warping. Add stretch marker at cursor inserts an identity
 anchor into each selected audio item whose interior contains the edit cursor,
 using `take.stretch.add` without `source_pos`; existing anchors are not duplicated.
 MIDI items are skipped. The entry is disabled unless some selected audio item

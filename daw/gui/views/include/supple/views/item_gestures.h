@@ -18,12 +18,12 @@
 // that take (the one under the pointer, else the heard one) out into an item of its own, on any
 // channel. A right-click on an item (without dragging) opens its menu: Cut, Copy, Paste (at the
 // pointer), Duplicate, Delete, Consolidate items (also one MIDI item's takes), Heal splits,
-// the splits, Export… (the item's raw audio or its MIDI
-// to a file, through onExport), Mix to new track, the MIDI editor, timebase, take FX
-// and envelopes, and for several takes: show all takes, explode them onto tracks or along the
-// track, delete the take under the pointer, keep only the heard takes; and rendering the item
-// through its FX (MIDI to audio) in place or as a new take (itemMenu, also the menu bar's Item
-// menu); on empty lane space, a menu with Paste. Each gesture previews as a ghost on the root's
+// the splits, Mix to new track, the MIDI editor, and rendering the item through its FX (MIDI
+// to audio) in place or as a new take (itemMenu). The menu bar's Item menu (itemBarMenu) has the
+// rest: Export… (the item's raw audio or its MIDI to a file, through onExport), timebase, audio
+// warping, take FX and envelopes, and for several takes: show all takes, explode them onto
+// tracks or along the track, delete a take, keep only the heard takes. On empty lane space, a
+// menu with Paste. Each gesture previews as a ghost on the root's
 // overlay and commits ONE transaction on release.
 #pragma once
 
@@ -137,16 +137,20 @@ class ItemGestures {
     // Zero-crossing mode skips items without an active audio take.
     Status splitSelection(bool zeroCrossing = false);
     Status addStretchMarkerAtCursor();  // selected audio, one undo step; peers once
-    // The item menu, for a right-click on an item and the menu bar's Item
-    // menu alike: edits of the selection, timebases, audio warping, the
-    // target item's take FX, envelopes and takes, and its renders. Paste goes
-    // to `beat` on `track`; `at` (a right-click) picks the take lane under it.
+    // The two item menus, over the selection. itemMenu (a right-click on an
+    // item): the clipboard, delete, consolidate/heal, the splits, Mix to new
+    // track, the MIDI editor and the renders through FX; Paste goes to `beat`
+    // on `track`, `at` picks the take lane under it. itemBarMenu (the menu
+    // bar's Item menu): Export…, timebases, audio warping, the target item's
+    // take FX and envelopes, and its takes (the heard one stands for the take
+    // under the pointer).
     struct MenuPlace {
         double beat = 0;
         std::optional<model::Id> track;
         std::optional<ui::Point> at;
     };
     std::vector<ui::MenuItem> itemMenu(const MenuPlace& place);
+    std::vector<ui::MenuItem> itemBarMenu();
     bool canPaste() const {
         return !clipboard_.items.empty() &&
                (!projectGeneration || projectGeneration() == clipboard_.generation);
@@ -276,9 +280,10 @@ class ItemGestures {
     void openItemMenu(ui::Point at);
     void openSpaceMenu(ui::Point at);
     MenuPlace placeAt(ui::Point at) const;
+    std::vector<ui::MenuItem> buildItemMenu(const MenuPlace& place, bool bar);
     // The item the menu acts on: the clicked one if selected, else the first.
     std::optional<model::Id> menuTarget() const;
-    // The clipboard, consolidate/merge, split, export and MIDI editor entries
+    // The clipboard, consolidate/heal, split, mix and MIDI editor entries
     // (empty space: Paste alone).
     void addEditItems(std::vector<ui::MenuItem>& items, const MenuPlace& place, bool onItem);
     // A right-click on an automation lane: its points (insert, select, copy,

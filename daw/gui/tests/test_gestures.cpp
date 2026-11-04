@@ -914,6 +914,16 @@ void rightClick(Fixture& f, ui::Point p) {
     f.pointer(ui::PointerEvent::Type::Up, p, 3);
     f.sync();
 }
+// The menu bar's Item menu over `item` (selected first unless it is), opened
+// in place of the item menu so pick and menuIndex read it.
+void barMenu(Fixture& f, model::Id item) {
+    auto& g = f.view->gestures();
+    if (!g.isSelected(item)) g.setSelection({item});
+    f.root->closePopups();
+    f.root->openPopup(ui::makeMenu("item.menu", g.itemBarMenu(), [&f] { f.root->closePopup(); }),
+                      {0, 0, 1, 1});
+    f.sync();
+}
 // Runs the open item menu's row `index` (by activation: a tall menu can be
 // clamped to the window and scroll).
 void pick(Fixture& f, int index) {
@@ -965,10 +975,12 @@ TEST_CASE("arrange item menu splits at the edit cursor and disables zero crossin
     CHECK(rows[menuIndex(f, "Split item at prior zero crossing")].label ==
           "Split item at prior zero crossing");
     CHECK(rows[menuIndex(f, "Split item at prior zero crossing")].enabled);
-    CHECK(rows[menuIndex(f, "Export")].enabled);
     if (const char* out = std::getenv("SUPPLE_TEST_SNAPSHOTS"))
         REQUIRE(
             gui::writePng(std::filesystem::path(out) / "item-split-menu.png", f.root->readBack()));
+    // Export… is in the menu bar's Item menu.
+    barMenu(f, audio);
+    CHECK(ui::menuItems(*f.root->find("item.menu"))[menuIndex(f, "Export")].enabled);
     std::optional<model::Id> exported;
     f.view->gestures().onExport = [&](model::Id item) { exported = item; };
     pick(f, "Export");
@@ -984,14 +996,16 @@ TEST_CASE("arrange item menu splits at the edit cursor and disables zero crossin
     menu = f.root->find("item.menu");
     REQUIRE(menu);
     CHECK_FALSE(ui::menuItems(*menu)[menuIndex(f, "Split item at prior zero crossing")].enabled);
-    CHECK(ui::menuItems(*menu)[menuIndex(f, "Export")].enabled);  // a MIDI file
     const auto before = model::serializeProject(f.app->head());
     pick(f, "Split item at prior zero crossing");
     CHECK(f.root->find("item.menu"));  // a disabled entry does not activate
     CHECK(model::serializeProject(f.app->head()) == before);
+    barMenu(f, midi);
+    CHECK(
+        ui::menuItems(*f.root->find("item.menu"))[menuIndex(f, "Export")].enabled);  // a MIDI file
 }
 
-TEST_CASE("arrange item menu inserts a stretch marker at the cursor and skips MIDI") {
+TEST_CASE("the Item menu inserts a stretch marker at the cursor and skips MIDI") {
     Fixture f;
     if (!f.ok) return;
     const auto audio = f.itemOnRow(0), midi = f.itemOnRow(1, true);
@@ -1000,7 +1014,7 @@ TEST_CASE("arrange item menu inserts a stretch marker at the cursor and skips MI
     f.view->setPlayhead(span.startSec + .25);
     auto& gestures = f.view->gestures();
     gestures.setSelection({audio, midi});
-    rightClick(f, onItem(f, audio, f.rectOf(audio).y + f.rectOf(audio).h / 2));
+    barMenu(f, audio);
     const auto* menu = f.root->find("item.menu");
     REQUIRE(menu);
     const auto rows = ui::menuItems(*menu);
@@ -1019,7 +1033,7 @@ TEST_CASE("arrange item menu inserts a stretch marker at the cursor and skips MI
     CHECK(f.steps() == steps + 1);
     CHECK(f.app->head().takes.find(*f.item(midi).activeTake)->stretchMarkers.empty());
     gestures.setSelection({midi});
-    rightClick(f, onItem(f, midi, f.rectOf(midi).y + f.rectOf(midi).h / 2));
+    barMenu(f, midi);
     menu = f.root->find("item.menu");
     REQUIRE(menu);
     CHECK_FALSE(ui::menuItems(*menu)[menuIndex(f, "Add stretch marker at cursor")].enabled);
@@ -1034,7 +1048,7 @@ TEST_CASE("arrange item menu inserts a stretch marker at the cursor and skips MI
         args[field] = value;
         REQUIRE(f.dispatcher->execute({command, args, kUi}));
         f.sync();
-        rightClick(f, onItem(f, audio, f.rectOf(audio).y + f.rectOf(audio).h / 2));
+        barMenu(f, audio);
         CHECK_FALSE(
             ui::menuItems(*f.root->find("item.menu"))[menuIndex(f, "Add stretch marker at cursor")]
                 .enabled);
@@ -1043,7 +1057,7 @@ TEST_CASE("arrange item menu inserts a stretch marker at the cursor and skips MI
         f.sync();
     }
     f.view->setPlayhead(span.endSec + 1);
-    rightClick(f, onItem(f, audio, f.rectOf(audio).y + f.rectOf(audio).h / 2));
+    barMenu(f, audio);
     CHECK_FALSE(
         ui::menuItems(*f.root->find("item.menu"))[menuIndex(f, "Add stretch marker at cursor")]
             .enabled);
@@ -1118,7 +1132,7 @@ TEST_CASE("arrange menu consolidates audio and heals compatible splits with shar
     CHECK_FALSE(rows[menuIndex(f, "Heal splits")].enabled);
 }
 
-TEST_CASE("takes: show all takes spreads them out; a lane is heard, deleted from its menu") {
+TEST_CASE("takes: show all takes spreads them out; a lane is heard, deleted from the Item menu") {
     Fixture f;
     if (!f.ok) return;
     const model::Id it = fourTakeItem(f);
@@ -1126,7 +1140,7 @@ TEST_CASE("takes: show all takes spreads them out; a lane is heard, deleted from
                  base = static_cast<double>(views::TrackLayout::kDefaultHeight);
     const ui::Rect compact = f.rectOf(it);
     CHECK_FALSE(views::Lanes::showsTakeLanes(compact, 4));  // too many for the row
-    rightClick(f, onItem(f, it, compact.y + compact.h / 2));
+    barMenu(f, it);
     const auto steps = f.steps();
     pick(f, "Show all takes");
     CHECK(f.view->trackLayout().takesExpanded(it));
@@ -1145,23 +1159,24 @@ TEST_CASE("takes: show all takes spreads them out; a lane is heard, deleted from
     // A click on the third lane hears the third take.
     f.click(laneAt(f, it, 2));
     CHECK(*f.item(it).activeTake == f.item(it).takes[2]);
-    // A right-click on the second lane deletes that take.
+    // Heard, the second take is deleted from the Item menu.
     const model::Id second = f.item(it).takes[1];
-    rightClick(f, laneAt(f, it, 1));
+    f.click(laneAt(f, it, 1));
+    barMenu(f, it);
     pick(f, "Delete take ");
     REQUIRE(f.item(it).takes.size() == 3);
     CHECK(std::find(f.item(it).takes.begin(), f.item(it).takes.end(), second) ==
           f.item(it).takes.end());
     CHECK(f.view->trackLayout().heightOf(row) == doctest::Approx(bar + 3 * base));
     // Shown again: the menu entry is checked and hides them.
-    rightClick(f, onItem(f, it, f.rectOf(it).y + 6));
+    barMenu(f, it);
     pick(f, "Show all takes");
     CHECK_FALSE(f.view->trackLayout().takesExpanded(it));
     CHECK(f.view->trackLayout().heightOf(row) == doctest::Approx(base));
     // Keep only the selected take: the heard one stays, in one undo step.
     const model::Id heard = *f.item(it).activeTake;
     const auto before = f.steps();
-    rightClick(f, onItem(f, it, f.rectOf(it).y + f.rectOf(it).h / 2));
+    barMenu(f, it);
     pick(f, "Keep only the selected take");
     CHECK(f.item(it).takes == std::vector<model::Id>{heard});
     CHECK(f.steps() == before + 1);
@@ -1196,7 +1211,7 @@ TEST_CASE("takes: Ctrl-drag takes one out to another track; explode spreads the 
     CHECK(f.item(sel[0]).track == f.view->trackLayout().rows()[*other].track);
     // Explode the remaining three along the track, in recording order.
     const auto takes = f.item(it).takes;
-    rightClick(f, onItem(f, it, f.rectOf(it).y + 6));
+    barMenu(f, it);
     pick(f, "Explode takes in sequence");
     CHECK(f.item(it).takes == std::vector<model::Id>{takes[0]});
     std::vector<const model::Item*> along;
@@ -1215,7 +1230,7 @@ TEST_CASE("takes: explode onto new tracks; render an item with FX as a new take"
     if (!f.ok) return;
     const model::Id it = fourTakeItem(f);
     const std::size_t tracks = f.app->head().tracks.size();
-    rightClick(f, onItem(f, it, f.rectOf(it).y + 6));
+    barMenu(f, it);
     pick(f, "Explode takes onto new tracks");
     CHECK(f.app->head().tracks.size() == tracks + 3);
     CHECK(f.item(it).takes.size() == 1);
@@ -1287,7 +1302,7 @@ TEST_CASE(
     CHECK_FALSE(f.root->find("item.menu"));
 }
 
-TEST_CASE("arrange gestures: the menus paste where they open; the menu bar's is the same") {
+TEST_CASE("arrange gestures: the menus paste where they open; the menu bar's has the rest") {
     Fixture f;
     if (!f.ok) return;
     auto& g = f.view->gestures();
@@ -1326,30 +1341,30 @@ TEST_CASE("arrange gestures: the menus paste where they open; the menu bar's is 
     CHECK(f.item(pasted).track.str() == track);
     CHECK(f.item(pasted).position > f.item(one).position);
     // Several MIDI items combine with Consolidate items. The menu bar's Item
-    // menu has the same rows.
+    // menu has the other entries, none of these.
     g.setSelection({one, two});
     f.sync();
     rightClick({r1.x + 4, r1.y + r1.h / 2});
     const auto* menu = f.root->find("item.menu");
     REQUIRE(menu);
-    std::vector<std::string> clicked, bar;
+    std::vector<std::string> clicked;
     for (const auto& row : ui::menuItems(*menu)) clicked.push_back(row.label);
     CHECK(ui::menuItems(*menu)[menuIndex(f, "Consolidate items")].enabled);
     f.root->closePopups();
-    for (const auto& row : g.itemMenu({})) bar.push_back(row.label);
-    CHECK(bar == clicked);
+    const auto bar = g.itemBarMenu();
+    CHECK(bar.front().label == "Export\u2026");
+    for (const auto& row : bar)
+        if (!row.separator)
+            CHECK_MESSAGE(std::find(clicked.begin(), clicked.end(), row.label) == clicked.end(),
+                          row.label);
 }
 
-TEST_CASE("arrange gestures: the item menu sets what items follow; a time item moves by beats") {
+TEST_CASE("arrange gestures: the Item menu sets what items follow; a time item moves by beats") {
     Fixture f;
     if (!f.ok) return;
     auto& g = f.view->gestures();
     const model::Id audio = f.itemOnRow(0);
-    const ui::Rect r = f.rectOf(audio);
-    const ui::Point on{r.x + r.w / 2, r.y + r.h / 2};
-    f.pointer(ui::PointerEvent::Type::Down, on, 3);
-    f.pointer(ui::PointerEvent::Type::Up, on, 3);
-    f.sync();
+    barMenu(f, audio);
     REQUIRE(f.root->find("item.menu"));
     const double startSec = model::itemSpan(f.app->head(), f.item(audio)).startSec;
     pick(f, "Follow time");
@@ -1381,14 +1396,10 @@ TEST_CASE("arrange gestures: take FX and a take envelope drawn and edited on its
     g.onTakeFx = [&](model::Id take) { takeFx.push_back(take); };
     const model::Id audio = f.itemOnRow(0);
     const model::Id take = *f.item(audio).activeTake;
-    auto rightClick = [&] {
-        const ui::Rect r = f.rectOf(audio);
-        f.pointer(ui::PointerEvent::Type::Down, {r.x + r.w / 2, r.y + r.h / 2}, 3);
-        f.pointer(ui::PointerEvent::Type::Up, {r.x + r.w / 2, r.y + r.h / 2}, 3);
-        f.sync();
+    auto rightClick = [&] {  // the take entries are in the menu bar's Item menu
+        barMenu(f, audio);
         REQUIRE(f.root->find("item.menu"));
     };
-    // Rows: Delete, rule, four timebases, rule, Take FX…, volume, pan, mute.
     rightClick();
     pick(f, "Take FX");
     CHECK(takeFx == std::vector<model::Id>{take});

@@ -719,16 +719,9 @@ int main(int argc, char** argv) {
         };
         g.onMixToTrack = [&](const std::vector<model::Id>& items) { audioEdit.mixToTrack(items); };
         g.onToggleMidiEditor = [&] { appActions.invoke("ui.midi.toggle"); };
-        // The menu bar's Item menu is the item menu; Paste goes to the playhead
-        // on the selected track, as its key does.
-        chrome.setMenuSource("Item", [&] {
-            views::ArrangeView& a = *shell.arrange();
-            views::ItemGestures::MenuPlace place;
-            place.beat = (*app)->head().timeMap->beatAt(a.playhead());
-            if (!uiState.selectedTracks.empty())
-                place.track = model::Id::parse(uiState.selectedTracks.front());
-            return a.gestures().itemMenu(place);
-        });
+        // The menu bar's Item menu: the item entries the right-click menu
+        // leaves out (gui.md).
+        chrome.setMenuSource("Item", [&] { return shell.arrange()->gestures().itemBarMenu(); });
         g.onError = [](const Error& e) {
             std::fprintf(stderr, "edit refused: %s\n", e.toString().c_str());
         };

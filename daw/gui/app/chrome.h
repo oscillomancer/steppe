@@ -37,8 +37,8 @@ struct ChromeLayout {
     json::Value toJson() const;
 };
 
-// A menu whose entries are built when it opens (the Item menu: the item
-// right-click menu's entries); the layout's action ids for that title follow.
+// A menu whose entries are built when it opens (the Item menu:
+// ItemGestures::itemBarMenu); the layout's action ids for that title follow.
 using MenuSource = std::function<std::vector<ui::MenuItem>()>;
 using MenuSources = std::map<std::string, MenuSource, std::less<>>;
 

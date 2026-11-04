@@ -101,8 +101,8 @@ ChromeLayout ChromeLayout::defaults() {
          {"track.add:channel", "track.add:buss", "track.add:master", "ui.track.template.load", "-",
           "ui.track.color", "ui.track.channels", "ui.fx.add", "track.duplicate:selected",
           "ui.track.template.save", "-", "track.remove:selected"}},
-        // Its entries are the item right-click menu's (setMenuSource); ids
-        // added here follow them.
+        // Its entries come from setMenuSource (ItemGestures::itemBarMenu);
+        // ids added here follow them.
         {"Item", {}},
         {"Transport",
          {"transport.toggle", "transport.record", "transport.loop.toggle", "-",
@@ -170,8 +170,8 @@ Result<ChromeLayout> ChromeLayout::load(const std::filesystem::path& file) {
     if (std::none_of(l.menus.begin(), l.menus.end(),
                      [](const Menu& m) { return m.title == "Help"; }))
         l.menus.push_back(defaults().menus.back());
-    // The Item menu's entries are the item menu's own now (gui.md §6): an
-    // older file's ids for them (and New MIDI item, gone from it) would repeat.
+    // The Item menu's entries are built now (gui.md §6): an older file's
+    // item ids (and New MIDI item, gone) would repeat or reappear there.
     static const std::set<std::string, std::less<>> builtIn = {
         "ui.midi.new",         "ui.item.cut",          "ui.item.copy",         "ui.item.paste",
         "ui.item.duplicate",   "ui.item.merge",        "ui.item.consolidate",  "ui.item.heal",

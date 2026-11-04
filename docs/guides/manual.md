@@ -442,10 +442,11 @@ while any saved project or history still needs them.
 
 ## Timing audio with hits and stretch markers
 
-Right-clicking an item opens the item menu; the menu bar's **Item** menu is the
-same menu, acting on the selected items (its Paste goes to the playhead on the
-selected track). Everything below that says "right-click an item" works from
-either.
+Items have two menus. Right-click an item for the everyday edits: cut, copy,
+paste, duplicate, delete, consolidate, heal, split, mix to new track, the MIDI
+editor and rendering through FX. The menu bar's **Item** menu has the rest for
+the selected items: export, what the items follow when the tempo changes, audio
+timing (hits and stretch markers), take FX and envelopes, and the takes.
 
 Right-click selected items and choose **Consolidate items** to combine material
 per track, including MIDI items on several tracks at once.
@@ -469,9 +470,10 @@ envelope seams that cannot be restored need consolidation instead. Each track
 becomes one item and the operation is one undo step.
 Both menu entries are greyed when the selection cannot use them.
 
-For items with several takes, **Keep only the selected take** deletes every
-take but the one you hear (click a take's lane to choose it) on each selected
-item, in one undo step. **Delete take** removes just the take you right-clicked.
+For items with several takes, **Item > Keep only the selected take** deletes
+every take but the one you hear (click a take's lane to choose it) on each
+selected item, in one undo step. **Item > Delete take** removes just the take
+you hear.
 
 Right-click an item and choose **Split item at cursor**, or press S, to split
 selected audio and MIDI items at the edit cursor. Items outside the cursor stay
@@ -490,7 +492,7 @@ cut) and is always a stereo WAV at the project's rate; the render dialog's
 settings do not apply. Progress shows in the status line, and one undo removes
 the new track. Agents use `item.mix-to-track {items:[...]}` and follow the job.
 
-Right-click an item and choose **Export…** to save its material to a file of
+Select an item and choose **Item > Export…** to save its material to a file of
 your choosing. An audio item gives a WAV of its source audio exactly as recorded
 or imported: no gain, fades, effects or mixer processing, at the source's own
 sample rate and channels (a 16- or 24-bit WAV source stays 16 or 24-bit; others
@@ -507,14 +509,14 @@ at most 100 ms before the cursor, where the item's audio crosses zero, which
 avoids a click at the cut. If there is none, it splits at the cursor. It does
 nothing to MIDI items. Linked items split together at the same point.
 
-Right-click selected audio items and choose **Detect hits** to show candidate
+Select audio items and choose **Item > Detect hits** to show candidate
 attacks. Drag a dim hit to create a stretch marker, or drag a solid marker handle
 to change timing while retaining pitch. Hold Shift for a move off the grid. Item
 edges stay pinned when the first marker is added. **Remove warping** returns to the
 take's original scalar rate/pitch and leaves detected hits visible.
 
-To put an anchor at a specific time, set the edit cursor there, right-click an
-item and choose **Add stretch marker at cursor**. It inserts a marker in each
+To put an anchor at a specific time, set the edit cursor there, select the
+items and choose **Item > Add stretch marker at cursor**. It inserts a marker in each
 selected audio item containing the cursor, without moving its timing. Drag the
 marker to change timing later. Existing markers are not duplicated; MIDI items
 are skipped. The command is one undo step and keeps warp peers together. As with

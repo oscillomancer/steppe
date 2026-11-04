@@ -1102,14 +1102,9 @@ void ItemGestures::addEditItems(std::vector<ui::MenuItem>& items, const MenuPlac
     });
     add("Split item at prior zero crossing", "ui.item.split-zero", audio,
         [this] { return splitSelection(true); });
-    // The clicked item's heard take, raw (item.export); greyed for an empty take.
     const std::optional<model::Id> target = menuTarget();
     const model::Item* item = target ? itemOf(s, *target) : nullptr;
     const model::Take* heard = item && item->activeTake ? s.takes.find(*item->activeTake) : nullptr;
-    add("Export\u2026", "ui.item.export", heard && heard->source, [this, target] {
-        if (onExport && target) onExport(*target);
-        return Status{};
-    });
     add("Mix to new track", "ui.item.mix-to-track", any && onMixToTrack, [this] {
         onMixToTrack(selection_);
         return Status{};
@@ -1145,14 +1140,75 @@ void ItemGestures::openItemMenu(ui::Point at) {
 }
 
 std::vector<ui::MenuItem> ItemGestures::itemMenu(const MenuPlace& place) {
+    return buildItemMenu(place, false);
+}
+
+std::vector<ui::MenuItem> ItemGestures::itemBarMenu() { return buildItemMenu({}, true); }
+
+std::vector<ui::MenuItem> ItemGestures::buildItemMenu(const MenuPlace& place, bool bar) {
     std::vector<ui::MenuItem> items;
-    addEditItems(items, place, true);
-    // Timebase: what the selection follows when the tempo changes (item.set
-    // timebase, one step; the items keep their place now).
     ui::MenuItem rule;
     rule.separator = true;
-    items.push_back(rule);
     const model::Session& s = view_.session();
+    const std::optional<model::Id> target = menuTarget();
+    const model::Item* item = target ? itemOf(s, *target) : nullptr;
+    const model::Id itemId = target.value_or(model::Id{});
+    // The take under the pointer (a take lane), else the heard one.
+    std::optional<model::Id> pointed;
+    if (item && item->activeTake) {
+        pointed = *item->activeTake;
+        if (const auto h = place.at ? hit(*place.at) : std::nullopt;
+            h && h->item == itemId && h->takeLane)
+            pointed = item->takes[*h->takeLane];
+    }
+    if (!bar) {
+        addEditItems(items, place, true);
+        if (!pointed) return items;
+        const model::Id take = *pointed;
+        const model::Take* tk = s.takes.find(take);
+        items.push_back(rule);
+        // Render through the FX (MIDI through the track's instrument): that
+        // take is heard first when it is not.
+        const bool midi = isMidi(tk);
+        for (auto [label, mode] :
+             {std::pair{midi ? "Convert to audio" : "Render with FX, replacing the audio",
+                        "replace"},
+              {midi ? "Render to audio as a new take" : "Render with FX as a new take", "take"}}) {
+            ui::MenuItem m;
+            m.label = label;
+            m.enabled = tk && tk->source.has_value();
+            m.run = [this, itemId, take, heard = *item->activeTake, modeName = std::string(mode)] {
+                if (!run) return;
+                std::vector<EditStep> steps;
+                if (take != heard) {
+                    json::Value pick = json::Value::object();
+                    pick["item"] = itemId.str();
+                    pick["take"] = take.str();
+                    steps.push_back({"take.activate", std::move(pick)});
+                }
+                json::Value args = json::Value::object();
+                args["item"] = itemId.str();
+                args["mode"] = modeName;
+                steps.push_back({"item.apply-fx", std::move(args)});
+                if (auto r = run("Render item", steps); !r && onError) onError(r.error());
+            };
+            items.push_back(std::move(m));
+        }
+        return items;
+    }
+    // The clicked item's heard take, raw (item.export); greyed for an empty take.
+    const model::Take* heard = item && item->activeTake ? s.takes.find(*item->activeTake) : nullptr;
+    ui::MenuItem save;
+    save.label = "Export\u2026";
+    if (keysFor) save.shortcut = keysFor("ui.item.export");
+    save.enabled = heard && heard->source;
+    save.run = [this, target] {
+        if (onExport && target) onExport(*target);
+    };
+    items.push_back(std::move(save));
+    // Timebase: what the selection follows when the tempo changes (item.set
+    // timebase, one step; the items keep their place now).
+    items.push_back(rule);
     const model::Item* first = selection_.empty() ? nullptr : itemOf(s, selection_.front());
     for (auto [label, value, name] :
          {std::tuple{"Follow the beat", model::ItemTimebase::Beats, "beats"},
@@ -1211,9 +1267,6 @@ std::vector<ui::MenuItem> ItemGestures::itemMenu(const MenuPlace& place) {
         items.push_back(std::move(menu));
     }
     // The active take's own chain and envelopes (gap log #22).
-    const std::optional<model::Id> target = menuTarget();
-    const model::Item* item = target ? itemOf(s, *target) : nullptr;
-    const model::Id itemId = target.value_or(model::Id{});
     if (item && item->activeTake) {
         const model::Id take = *item->activeTake;
         items.push_back(rule);
@@ -1262,98 +1315,64 @@ std::vector<ui::MenuItem> ItemGestures::itemMenu(const MenuPlace& place) {
             items.push_back(std::move(m));
         }
     }
-    if (item && item->activeTake) {
-        // The take under the pointer (a take lane), else the heard one.
-        model::Id take = *item->activeTake;
-        if (const auto h = place.at ? hit(*place.at) : std::nullopt;
-            h && h->item == itemId && h->takeLane)
-            take = item->takes[*h->takeLane];
-        const model::Take* tk = s.takes.find(take);
-        const std::string name = tk && !tk->name.empty() ? tk->name : take.str();
-        items.push_back(rule);
-        if (item->takes.size() > 1) {
-            ui::MenuItem all;
-            all.label = "Show all takes";
-            all.checked = view_.trackLayout().takesExpanded(itemId);
-            all.run = [this, itemId, on = !all.checked] {
-                view_.trackLayout().setTakesExpanded(itemId, on);
-            };
-            items.push_back(std::move(all));
-            for (auto [label, mode] : {std::pair{"Explode takes onto new tracks", "tracks"},
-                                       {"Explode takes in sequence on this track", "serial"}}) {
-                ui::MenuItem m;
-                m.label = label;
-                m.run = [this, itemId, modeName = std::string(mode)] {
-                    if (!run) return;
+    if (!pointed) return items;
+    const model::Id take = *pointed;
+    const model::Take* tk = s.takes.find(take);
+    const std::string name = tk && !tk->name.empty() ? tk->name : take.str();
+    // Every selected item with several takes keeps only its heard one.
+    std::vector<EditStep> crop;
+    for (model::Id id : selection_)
+        if (const model::Item* it = itemOf(s, id); it && it->activeTake)
+            for (model::Id other : it->takes)
+                if (other != *it->activeTake) {
                     json::Value args = json::Value::object();
-                    args["item"] = itemId.str();
-                    args["mode"] = modeName;
-                    if (auto r = run("Explode takes", {{"item.explode-takes", std::move(args)}});
-                        !r && onError)
-                        onError(r.error());
-                };
-                items.push_back(std::move(m));
-            }
-            ui::MenuItem drop;
-            drop.label = "Delete take \u201c" + name + "\u201d";
-            drop.run = [this, take] {
-                if (!run) return;
-                json::Value args = json::Value::object();
-                args["take"] = take.str();
-                if (auto r = run("Delete take", {{"take.remove", std::move(args)}}); !r && onError)
-                    onError(r.error());
-            };
-            items.push_back(std::move(drop));
-        }
-        // Every selected item with several takes keeps only its heard one.
-        std::vector<EditStep> crop;
-        for (model::Id id : selection_)
-            if (const model::Item* it = itemOf(s, id); it && it->activeTake)
-                for (model::Id other : it->takes)
-                    if (other != *it->activeTake) {
-                        json::Value args = json::Value::object();
-                        args["take"] = other.str();
-                        crop.push_back({"take.remove", std::move(args)});
-                    }
-        if (item->takes.size() > 1 || !crop.empty()) {
-            ui::MenuItem keep;
-            keep.label = "Keep only the selected take";
-            keep.enabled = !crop.empty();
-            keep.run = [this, crop] {
-                if (!run) return;
-                if (auto r = run("Keep only the selected take", crop); !r && onError)
-                    onError(r.error());
-            };
-            items.push_back(std::move(keep));
-        }
-        // Render through the FX (MIDI through the track's instrument): that
-        // take is heard first when it is not.
-        const bool midi = isMidi(tk);
-        for (auto [label, mode] :
-             {std::pair{midi ? "Convert to audio" : "Render with FX, replacing the audio",
-                        "replace"},
-              {midi ? "Render to audio as a new take" : "Render with FX as a new take", "take"}}) {
+                    args["take"] = other.str();
+                    crop.push_back({"take.remove", std::move(args)});
+                }
+    if (item->takes.size() < 2 && crop.empty()) return items;
+    items.push_back(rule);
+    if (item->takes.size() > 1) {
+        ui::MenuItem all;
+        all.label = "Show all takes";
+        all.checked = view_.trackLayout().takesExpanded(itemId);
+        all.run = [this, itemId, on = !all.checked] {
+            view_.trackLayout().setTakesExpanded(itemId, on);
+        };
+        items.push_back(std::move(all));
+        for (auto [label, mode] : {std::pair{"Explode takes onto new tracks", "tracks"},
+                                   {"Explode takes in sequence on this track", "serial"}}) {
             ui::MenuItem m;
             m.label = label;
-            m.enabled = tk && tk->source.has_value();
-            m.run = [this, itemId, take, heard = *item->activeTake, modeName = std::string(mode)] {
+            m.run = [this, itemId, modeName = std::string(mode)] {
                 if (!run) return;
-                std::vector<EditStep> steps;
-                if (take != heard) {
-                    json::Value pick = json::Value::object();
-                    pick["item"] = itemId.str();
-                    pick["take"] = take.str();
-                    steps.push_back({"take.activate", std::move(pick)});
-                }
                 json::Value args = json::Value::object();
                 args["item"] = itemId.str();
                 args["mode"] = modeName;
-                steps.push_back({"item.apply-fx", std::move(args)});
-                if (auto r = run("Render item", steps); !r && onError) onError(r.error());
+                if (auto r = run("Explode takes", {{"item.explode-takes", std::move(args)}});
+                    !r && onError)
+                    onError(r.error());
             };
             items.push_back(std::move(m));
         }
+        ui::MenuItem drop;
+        drop.label = "Delete take \u201c" + name + "\u201d";
+        drop.run = [this, take] {
+            if (!run) return;
+            json::Value args = json::Value::object();
+            args["take"] = take.str();
+            if (auto r = run("Delete take", {{"take.remove", std::move(args)}}); !r && onError)
+                onError(r.error());
+        };
+        items.push_back(std::move(drop));
     }
+    ui::MenuItem keep;
+    keep.label = "Keep only the selected take";
+    keep.enabled = !crop.empty();
+    keep.run = [this, crop] {
+        if (!run) return;
+        if (auto r = run("Keep only the selected take", crop); !r && onError) onError(r.error());
+    };
+    items.push_back(std::move(keep));
     return items;
 }
 
