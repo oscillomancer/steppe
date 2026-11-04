@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
-// MIDI learn on tracks' and sends' own controls (ADR-0058): a strip's fader,
-// pan and buttons, a send's level, pan and buttons. The bindings live on the
-// track or the send (`learn`); track.learn.* and route.learn.* edit and read
-// them; EngineApp::pollControl moves the controls through moveControl, as
-// track.set and route.set edits.
+// MIDI learn on tracks', sends' and VCAs' own controls (ADR-0058): a strip's
+// fader, pan and buttons, a send's level, pan and buttons, a VCA's fader, mute
+// and solo. The bindings live on the track, the send or the VCA (`learn`);
+// track.learn.*, route.learn.* and vca.learn.* edit and read them;
+// EngineApp::pollControl moves the controls through moveControl, as
+// track.set, route.set and vca.set edits.
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -54,6 +55,20 @@ constexpr ControlSpec kRouteControls[] = {{"volume", Shape::Level, "volume_db"},
                                           {"tap:post_fader", Shape::Choice, "tap", "post_fader"},
                                           {"tap:pre_fader", Shape::Choice, "tap", "pre_fader"},
                                           {"tap:pre_fx", Shape::Choice, "tap", "pre_fx"}};
+constexpr ControlSpec kVcaControls[] = {{"volume", Shape::Level, "volume_db"},
+                                        {"mute", Shape::Switch, "mute"},
+                                        {"solo", Shape::Switch, "solo"}};
+
+// How the commands name an object of each kind: the command prefix
+// (track.learn.set), the argument naming it and its id pattern.
+struct Owner {
+    std::string_view prefix, key, noun, pattern, what;
+};
+Owner ownerOf(model::Kind kind) {
+    if (kind == model::Kind::Route) return {"route", "route", "send", "^sd_[0-9]+$", "route id"};
+    if (kind == model::Kind::Group) return {"vca", "group", "VCA", "^gr_[0-9]+$", "group id"};
+    return {"track", "track", "track", "^tr_[0-9]+$", "track id"};
+}
 
 const ControlSpec* findSpec(model::Kind kind, std::string_view param) {
     const auto look = [&](const auto& list) -> const ControlSpec* {
@@ -63,6 +78,7 @@ const ControlSpec* findSpec(model::Kind kind, std::string_view param) {
     };
     if (kind == model::Kind::Track) return look(kTrackControls);
     if (kind == model::Kind::Route) return look(kRouteControls);
+    if (kind == model::Kind::Group) return look(kVcaControls);
     return nullptr;
 }
 
@@ -73,6 +89,8 @@ std::string controlNames(model::Kind kind) {
     };
     if (kind == model::Kind::Route)
         add(kRouteControls);
+    else if (kind == model::Kind::Group)
+        add(kVcaControls);
     else
         add(kTrackControls);
     return out;
@@ -119,6 +137,14 @@ std::optional<double> standing(const model::Session& s, Id id, const ControlSpec
                                                              : 1.0;
         return std::nullopt;
     }
+    if (id.kind == model::Kind::Group) {
+        const model::TrackGroup* g = s.groups.find(id);
+        if (!g || !g->vca) return std::nullopt;
+        if (c.param == "volume") return fader::position(g->vca->volumeDb);
+        if (c.param == "mute") return on(g->vca->mute);
+        if (c.param == "solo") return on(g->vca->solo);
+        return std::nullopt;
+    }
     const model::Route* r = s.routes.find(id);
     if (!r) return std::nullopt;
     if (c.param == "volume") return fader::position(r->volumeDb);
@@ -138,15 +164,16 @@ double stepOf(const ControlSpec& c) {
     return c.shape == Shape::Level ? 1.0 / 128 : c.shape == Shape::Pan ? 1.0 / 200 : 1.0;
 }
 
-// The control's track.set / route.set value at `to` (0..1).
-json::Value argValue(const ControlSpec& c, double to) {
+// The control's track.set / route.set / vca.set value at `to` (0..1).
+json::Value argValue(model::Kind kind, const ControlSpec& c, double to) {
     switch (c.shape) {
         case Shape::Level:
             return std::clamp(fader::db(to), model::kSilenceDb, 12.0);
         case Shape::Pan:
             return panAt(to);
         case Shape::Switch:
-            if (c.param == "solo") return std::string(to >= 0.5 ? "on" : "off");
+            if (c.param == "solo" && kind == model::Kind::Track)  // a VCA's solo is a bool
+                return std::string(to >= 0.5 ? "on" : "off");
             return to >= 0.5;
         case Shape::Cycle:
             return std::string(to < 0.25 ? "off" : to < 0.75 ? "on" : "auto");
@@ -202,6 +229,10 @@ const std::vector<model::ControlLearn>* learnOf(const model::Session& s, Id id) 
         const model::Track* t = s.tracks.find(id);
         return t ? &t->learn : nullptr;
     }
+    if (id.kind == model::Kind::Group) {
+        const model::TrackGroup* g = s.groups.find(id);
+        return g && g->vca ? &g->vca->learn : nullptr;
+    }
     const model::Route* r = s.routes.find(id);
     return r ? &r->learn : nullptr;
 }
@@ -210,6 +241,9 @@ void editLearn(EngineApp& engine, Id id,
                const std::function<void(std::vector<model::ControlLearn>&)>& edit) {
     if (id.kind == model::Kind::Track)
         engine.txn().modify<model::Track>(id, [&](model::Track& t) { edit(t.learn); });
+    else if (id.kind == model::Kind::Group)
+        engine.txn().modify<model::TrackGroup>(id,
+                                               [&](model::TrackGroup& g) { edit(g.vca->learn); });
     else
         engine.txn().modify<model::Route>(id, [&](model::Route& r) { edit(r.learn); });
 }
@@ -221,6 +255,12 @@ Result<Id> target(const model::Session& s, model::Kind kind, const std::string& 
     if (found) return *id;
     if (kind == model::Kind::Track)
         return Error("track.unknown", "no track " + text, "/track", "use an id from track.list");
+    if (kind == model::Kind::Group) {
+        if (id && id->kind == kind && s.groups.contains(*id))
+            return Error("vca.missing", "group " + text + " has no VCA", "/group",
+                         "add one with vca.add");
+        return Error("group.unknown", "no group " + text, "/group", "use an id from group.list");
+    }
     return Error("route.unknown", "no send " + text, "/route", "use an id from route.list");
 }
 
@@ -251,17 +291,19 @@ json::Value learnJson(std::string_view key, Id id, const model::ControlLearn& l)
 
 void registerFor(cmd::Registry& registry, model::Kind kind) {
     const bool route = kind == model::Kind::Route;
-    const std::string key = route ? "route" : "track";
-    const std::string noun = route ? "send" : "track";
-    auto idS = route ? schema::string().pattern("^sd_[0-9]+$", "route id")
-                     : schema::string().pattern("^tr_[0-9]+$", "track id");
-    const std::string fixture = route ? "song_with_route" : "song";
+    const bool vca = kind == model::Kind::Group;
+    const Owner owner = ownerOf(kind);
+    const std::string prefix(owner.prefix), key(owner.key), noun(owner.noun);
+    auto idS = schema::string().pattern(std::string(owner.pattern), std::string(owner.what));
+    const std::string fixture = route ? "song_with_route" : vca ? "song_with_vca" : "song";
+    const std::string example = route ? "sd_1" : vca ? "gr_1" : "tr_1";
     {
         Command<LearnArgs, LearnResult> c;
-        c.name = key + ".learn.set";
+        c.name = prefix + ".learn.set";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpTool;
         c.summary = route ? "Let a MIDI controller move a send's level, pan, mute or tap."
+                    : vca ? "Let a MIDI controller move a VCA's fader, mute or solo."
                           : "Let a MIDI controller move a track's fader, pan, mute, solo or arm.";
         c.description =
             "One binding per control (a new one replaces it); saved with the project. param: " +
@@ -270,11 +312,12 @@ void registerFor(cmd::Registry& registry, model::Kind kind) {
             "follows a knob (mode absolute, soft_takeover: once it reaches the value) or an "
             "encoder (relative1 127 = -1, relative2 63 = -1, relative3 65 = -1). A button: a "
             "note or program change flips it per press, as a CC in toggle mode does; an absolute "
-            "CC is on above 63. " +
-            (route ? "A tap:… control sets that tap on each press."
-                   : "monitor goes off, on, auto in turn on each press.");
-        c.tags = {key, "midi"};
-        c.args = schema::object<LearnArgs>(key + "_learn_set_args")
+            "CC is on above 63." +
+            (route ? " A tap:… control sets that tap on each press."
+             : vca ? " The bindings go with the VCA."
+                   : " monitor goes off, on, auto in turn on each press.");
+        c.tags = {prefix, "midi"};
+        c.args = schema::object<LearnArgs>(prefix + "_learn_set_args")
                      .field(key, &LearnArgs::target, idS)
                      .field("param", &LearnArgs::param,
                             schema::string().minLength(1).doc("The control: " + controlNames(kind)))
@@ -282,7 +325,7 @@ void registerFor(cmd::Registry& registry, model::Kind kind) {
                      .field("mode", &LearnArgs::mode, model::controlModeSchema())
                      .field("soft_takeover", &LearnArgs::softTakeover, schema::boolean())
                      .build();
-        c.result = schema::object<LearnResult>(key + "_learn_set_result")
+        c.result = schema::object<LearnResult>(prefix + "_learn_set_result")
                        .field("param", &LearnResult::param, schema::string())
                        .field("control", &LearnResult::control, schema::string())
                        .build();
@@ -291,22 +334,28 @@ void registerFor(cmd::Registry& registry, model::Kind kind) {
                 {"Mute the send from a pad",
                  j(R"({"route":"sd_1","param":"mute","midi":{"kind":"note","channel":10,"number":36}})"),
                  j(R"({"param":"mute","control":"Note C2 · ch 10"})"), fixture}};
+        else if (vca)
+            c.examples = {
+                {"The VCA's fader on CC 9",
+                 j(R"({"group":"gr_1","param":"volume","midi":{"kind":"cc","channel":1,"number":9}})"),
+                 j(R"({"param":"volume","control":"CC 9 · ch 1"})"), fixture}};
         else
             c.examples = {
                 {"The fader on CC 7",
                  j(R"({"track":"tr_1","param":"volume","midi":{"kind":"cc","channel":1,"number":7}})"),
                  j(R"({"param":"volume","control":"CC 7 · ch 1"})"), fixture}};
-        c.errors = {{key + ".learn_param", "no such control", "use one of: " + controlNames(kind)},
-                    {"learn.mode", "toggle on a level or pan", "use absolute or a relative mode"}};
+        c.errors = {
+            {prefix + ".learn_param", "no such control", "use one of: " + controlNames(kind)},
+            {"learn.mode", "toggle on a level or pan", "use absolute or a relative mode"}};
         c.run = [kind](const LearnArgs& a, Context& ctx) -> Result<LearnResult> {
             EngineApp& engine = app(ctx);
             const model::Session s = engine.view();
             auto id = target(s, kind, a.target);
             if (!id) return std::move(id).error();
             const ControlSpec* spec = findSpec(kind, a.param);
-            const std::string key = kind == model::Kind::Route ? "route" : "track";
+            const std::string prefix(ownerOf(kind).prefix);
             if (!spec)
-                return Error(key + ".learn_param", "no control " + a.param, "/param",
+                return Error(prefix + ".learn_param", "no control " + a.param, "/param",
                              "use one of: " + controlNames(kind));
             SUPPLE_TRY(checkStrip(s, *id, a.param));
             const model::ControlMode mode = a.mode.value_or(model::ControlMode::Absolute);
@@ -333,31 +382,30 @@ void registerFor(cmd::Registry& registry, model::Kind kind) {
     }
     {
         Command<LearnRef, Empty> c;
-        c.name = key + ".learn.remove";
+        c.name = prefix + ".learn.remove";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpTool;
         c.summary = "Remove a " + noun + " control's MIDI controller binding.";
-        c.tags = {key, "midi"};
-        c.args = schema::object<LearnRef>(key + "_learn_remove_args")
+        c.tags = {prefix, "midi"};
+        c.args = schema::object<LearnRef>(prefix + "_learn_remove_args")
                      .field(key, &LearnRef::target, idS)
                      .field("param", &LearnRef::param, schema::string().minLength(1))
                      .build();
         c.result = schema::object<Empty>("empty").build();
-        c.examples = {
-            {"Free the level",
-             j("{\"" + key + "\":\"" + (route ? "sd_1" : "tr_1") + "\",\"param\":\"volume\"}"),
-             j("{}"), "song_with_mix_learn"}};
+        c.examples = {{"Free the level",
+                       j("{\"" + key + "\":\"" + example + "\",\"param\":\"volume\"}"), j("{}"),
+                       "song_with_mix_learn"}};
         c.run = [kind](const LearnRef& a, Context& ctx) -> Result<Empty> {
             EngineApp& engine = app(ctx);
             const model::Session s = engine.view();
             auto id = target(s, kind, a.target);
             if (!id) return std::move(id).error();
             const auto& list = *learnOf(s, *id);
-            const std::string key = kind == model::Kind::Route ? "route" : "track";
+            const std::string prefix(ownerOf(kind).prefix);
             if (std::none_of(list.begin(), list.end(),
                              [&](const auto& l) { return l.param == a.param; }))
-                return Error(key + ".learn_unknown", a.param + " has no MIDI binding", "/param",
-                             "use " + key + ".learn.list for the bound controls");
+                return Error(prefix + ".learn_unknown", a.param + " has no MIDI binding", "/param",
+                             "use " + prefix + ".learn.list for the bound controls");
             editLearn(engine, *id, [&](std::vector<model::ControlLearn>& l) {
                 std::erase_if(l, [&](const auto& x) { return x.param == a.param; });
             });
@@ -367,28 +415,30 @@ void registerFor(cmd::Registry& registry, model::Kind kind) {
     }
     {
         Command<LearnListArgs, LearnList> c;
-        c.name = key + ".learn.list";
+        c.name = prefix + ".learn.list";
         c.kind = Kind::Query;
         c.exposure = cmd::Exposure::McpTool;
         c.summary = "List the MIDI controller bindings of " + noun + " controls.";
         c.description =
             "Every " + noun + "'s, or one's (" + key + "). control names the message in words.";
-        c.tags = {key, "midi"};
-        c.args = schema::object<LearnListArgs>(key + "_learn_list_args")
+        c.tags = {prefix, "midi"};
+        c.args = schema::object<LearnListArgs>(prefix + "_learn_list_args")
                      .field(key, &LearnListArgs::target, idS)
                      .build();
-        c.result = schema::object<LearnList>(key + "_learn_list")
+        c.result = schema::object<LearnList>(prefix + "_learn_list")
                        .field("learn", &LearnList::learn, schema::any())
                        .build();
         c.examples = {
             {"Every binding", json::Value::object(),
              j(route
                    ? R"({"learn":[{"route":"sd_1","param":"volume","midi":{"kind":"cc","channel":1,"number":12},"control":"CC 12 · ch 1"}]})"
+               : vca
+                   ? R"({"learn":[{"group":"gr_1","param":"volume","midi":{"kind":"cc","channel":1,"number":9},"control":"CC 9 · ch 1"}]})"
                    : R"({"learn":[{"track":"tr_1","param":"volume","midi":{"kind":"cc","channel":1,"number":7},"control":"CC 7 · ch 1"}]})"),
              "song_with_mix_learn"}};
         c.run = [kind](const LearnListArgs& a, Context& ctx) -> Result<LearnList> {
             const model::Session s = app(ctx).view();
-            const std::string key = kind == model::Kind::Route ? "route" : "track";
+            const std::string key(ownerOf(kind).key);
             LearnList out;
             if (a.target) {
                 auto id = target(s, kind, *a.target);
@@ -400,6 +450,11 @@ void registerFor(cmd::Registry& registry, model::Kind kind) {
                 for (const auto& e : s.tracks)
                     for (const auto& l : e.value->learn)
                         out.learn.push_back(learnJson(key, e.id, l));
+            } else if (kind == model::Kind::Group) {
+                for (const auto& e : s.groups)
+                    if (e.value->vca)
+                        for (const auto& l : e.value->vca->learn)
+                            out.learn.push_back(learnJson(key, e.id, l));
             } else {
                 for (const auto& e : s.routes)
                     for (const auto& l : e.value->learn)
@@ -458,6 +513,9 @@ void EngineApp::applyControlLearn(const std::vector<ControlEvent>& events) {
         for (const model::ControlLearn& learn : e.value->learn) apply(e.id, learn);
     for (const auto& e : s.routes)
         for (const model::ControlLearn& learn : e.value->learn) apply(e.id, learn);
+    for (const auto& e : s.groups)
+        if (e.value->vca)
+            for (const model::ControlLearn& learn : e.value->vca->learn) apply(e.id, learn);
 }
 
 std::optional<double> EngineApp::moveControl(
@@ -480,14 +538,15 @@ std::optional<double> EngineApp::moveControl(
     LearnState& state = learnState_[{id, param}];
     if (now > state.lastMs + kGestureMs) ++state.serial;
     state.lastMs = now;
-    const bool route = id.kind == model::Kind::Route;
+    const Owner owner = ownerOf(id.kind);
     json::Value args = json::Value::object();
-    args[route ? "route" : "track"] = id.str();
-    args[std::string(spec->field)] = argValue(*spec, to);
+    args[std::string(owner.key)] = id.str();
+    args[std::string(spec->field)] = argValue(id.kind, *spec, to);
     const cmd::Origin origin{cmd::Origin::Type::Internal, "midi", "",
                              "midi:" + id.str() + ":" + param + ":" + std::to_string(state.serial)};
     if (!commands_) return std::nullopt;
-    if (auto set = commands_->execute({route ? "route.set" : "track.set", std::move(args), origin});
+    if (auto set =
+            commands_->execute({std::string(owner.prefix) + ".set", std::move(args), origin});
         !set) {
         emit("engine.error", pluginErrorJson(set.error()));
         return std::nullopt;
@@ -498,6 +557,7 @@ std::optional<double> EngineApp::moveControl(
 void registerControlLearnCommands(cmd::Registry& registry) {
     registerFor(registry, model::Kind::Track);
     registerFor(registry, model::Kind::Route);
+    registerFor(registry, model::Kind::Group);
 }
 
 }  // namespace supple::engine

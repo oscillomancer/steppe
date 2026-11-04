@@ -724,7 +724,8 @@ and naming. All `edit` unless marked (q) query or (a) action.
   controls (ADR-0058): `track.learn.set {track, param, midi, mode?,
   soft_takeover?}` / `route.learn.set {route, …}` (a), `track.learn.remove
   {track, param}` / `route.learn.remove {route, param}` (a),
-  `track.learn.list {track?}` / `route.learn.list {route?}` (q).
+  `track.learn.list {track?}` / `route.learn.list {route?}` (q); a VCA's
+  are `vca.learn.*` (Track groups and VCA controls, below).
 - **automation**: `env.add {target}`, `env.remove`, `env.set {mode, active,
   …}`, `env.points.set {env, points, range?}`, `env.points.add`,
   `env.points.remove {range}`, `env.add {take, param}` (take envelopes);
@@ -891,8 +892,10 @@ copy preserve whole takes, including fields not interpreted by grouping.
 Split results add `linked_left`/`linked_right`; duplicate adds `linked` when
 there are linked copies. Empty added result arrays are omitted.
 
-An optional `vca` is `{volume_db, mute, solo, followers}`: defaults 0 dB,
-false, false, empty. `followers` are group IDs with their own VCA, not tracks.
+An optional `vca` is `{volume_db, mute, solo, followers, learn}`: defaults 0 dB,
+false, false, empty, empty. `learn` is MIDI learn on the VCA's own controls
+(ADR-0058), as a track's (§1.4): `param` `volume`, `mute` or `solo`; it goes
+with the VCA. `followers` are group IDs with their own VCA, not tracks.
 The graph must be acyclic and a track may have at most 32 distinct controlling
 VCAs. Unique ancestors contribute once in numeric ID order. Direct membership
 plus ancestry determines control; audio routing is unchanged. Assigning a
@@ -917,6 +920,10 @@ group.targets `{track?|item?,attribute}` resolves linked targets. vca.add and
 vca.set accept `{group,volume_db?,mute?,solo?,followers?}`;
 vca.members.set `{group,tracks?,vcas?}` replaces supplied sets (tracks writes
 the same group membership, vcas writes followers); vca.remove `{group}`.
+`vca.learn.set {group, param, midi, mode?, soft_takeover?}`, `vca.learn.remove
+{group, param}` and `vca.learn.list {group?}` (q) edit and read the VCA's MIDI
+learn as track.learn.* do a track's (§7); a group without a VCA is
+`vca.missing`.
 track.describe `{track,at?}` and track.list `{at?}` expose groups, VCAs,
 `requested_effective_volume_db`, `effective_volume_db`, effective mute and
 solo suppression at project seconds `at` (default transport time, or zero).
@@ -1019,6 +1026,7 @@ whose masters are armed or hold items: its strip rules allow neither (`track.str
 
 ### Strip and send MIDI learn (schema 2.6, ADR-0058)
 
-Writers now emit `supple.project/2.6`. The 2.6 change is `learn` on tracks (§1.4) and
-routes (§1.8). A 2.5 file loads unchanged; an older application opening a 2.6 file
-ignores `learn` with a warning, and its controllers move nothing on strips or sends.
+Writers now emit `supple.project/2.6`. The 2.6 change is `learn` on tracks (§1.4),
+routes (§1.8) and VCAs. A 2.5 file loads unchanged; an older application opening a 2.6
+file ignores `learn` with a warning, and its controllers move nothing on strips, sends or
+VCAs.

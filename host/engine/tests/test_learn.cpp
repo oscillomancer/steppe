@@ -567,3 +567,47 @@ TEST_CASE("MIDI learn: controllers move many strips' faders, buttons and sends a
     CHECK(send().tap == model::Tap::PostFader);
     CHECK(send().volumeDb < level);
 }
+
+TEST_CASE("MIDI learn: a VCA's fader, mute and solo follow their own controllers") {
+    Rig rig;
+    rig.call("track.add", R"({"name":"Kick"})");
+    rig.call("group.add", R"({"name":"Drums","members":["tr_1"]})");
+    const auto fails = [&](std::string_view args) {
+        auto r = rig.bus->execute({"vca.learn.set", j(args), kTest});
+        REQUIRE_FALSE(r);
+        return r.error().code;
+    };
+    CHECK(fails(R"({"group":"gr_1","param":"volume","midi":{"kind":"cc","channel":1}})") ==
+          "vca.missing");
+    rig.call("vca.add", R"({"group":"gr_1"})");
+    CHECK(fails(R"({"group":"gr_1","param":"pan","midi":{"kind":"cc","channel":1}})") ==
+          "vca.learn_param");
+    rig.call("vca.learn.set",
+             R"({"group":"gr_1","param":"volume","midi":{"kind":"cc","channel":1,"number":9}})");
+    rig.call("vca.learn.set",
+             R"({"group":"gr_1","param":"solo","midi":{"kind":"note","channel":1,"number":60}})");
+    CHECK(rig.call("vca.learn.list", "{}")["learn"].size() == 2);
+
+    // Saved with the project and back as they were.
+    const auto file = rig.root.path / "vca-learn.json";
+    REQUIRE(rig.app->save(file));
+    REQUIRE(rig.app->open(file));
+    const auto vca = [&] { return *rig.app->head().groups.find(*model::Id::parse("gr_1"))->vca; };
+    REQUIRE(vca().learn.size() == 2);
+    CHECK(vca().learn[1].param == "volume");
+
+    CHECK(rig.app->hasLearn());
+    rig.start();
+    rig.send(0xb0, 9, 100);
+    CHECK(vca().volumeDb == doctest::Approx(fader::db(100 / 127.0)));
+    CHECK(rig.app->head().tracks.find(*model::Id::parse("tr_1"))->volumeDb == 0);
+    rig.send(0x90, 60, 100);
+    CHECK(vca().solo);
+    rig.send(0x90, 60, 100);
+    CHECK_FALSE(vca().solo);
+
+    // The bindings go with the VCA.
+    rig.call("vca.remove", R"({"group":"gr_1"})");
+    rig.call("vca.add", R"({"group":"gr_1"})");
+    CHECK(rig.call("vca.learn.list", "{}")["learn"].size() == 0);
+}

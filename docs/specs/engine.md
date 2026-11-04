@@ -988,10 +988,10 @@ dialog) and moves the plug-in parameters learned for them (fx `learn`): a
 semantic parameter through `fx.param.set` with one gesture per movement, a
 plain one on the running instance at once and into the project when the
 control has rested for 300 ms (as an edit in the plug-in's own editor).
-Then the tracks' and sends' own bindings (track/route `learn`, ADR-0058) move
-through `moveControl`: a `track.set` or `route.set` with one gesture per
-movement, so group links, the strip rules and touch/latch/write recording
-apply as for the fader. A level follows the fader's travel (`supple::fader`),
+Then the tracks', sends' and VCAs' own bindings (track/route/vca `learn`,
+ADR-0058) move through `moveControl`: a `track.set`, `route.set` or
+`vca.set` with one gesture per movement, so group links, the strip rules
+and touch/latch/write recording apply as for the fader. A level follows the fader's travel (`supple::fader`),
 a button flips per press (a note, a program change, a CC in toggle mode) or
 follows an absolute CC (on above 63); a frozen strip's bindings move only its
 volume, pan, mute and solo.

@@ -140,6 +140,8 @@ bool EngineApp::hasLearn() const {
         if (!e.value->learn.empty()) return true;
     for (const auto& e : s.routes)
         if (!e.value->learn.empty()) return true;
+    for (const auto& e : s.groups)
+        if (e.value->vca && !e.value->vca->learn.empty()) return true;
     return false;
 }
 
@@ -191,7 +193,7 @@ void EngineApp::applyLearn(const std::vector<ControlEvent>& events) {
             if (set) takeover.set = *set;
         }
     }
-    applyControlLearn(events);  // tracks' and sends' own controls (ADR-0058)
+    applyControlLearn(events);  // tracks', sends' and VCAs' own controls (ADR-0058)
 }
 
 std::optional<double> EngineApp::moveParam(

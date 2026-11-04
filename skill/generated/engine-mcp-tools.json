@@ -4407,6 +4407,57 @@
                     "pattern": "^[a-z]{2}_[0-9]+$"
                   },
                   "default": []
+                },
+                "learn": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "title": "control_learn",
+                    "properties": {
+                      "param": {
+                        "type": "string"
+                      },
+                      "midi": {
+                        "type": "object",
+                        "title": "midi_control",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": ["cc", "note", "pitch_bend", "program"]
+                          },
+                          "channel": {
+                            "type": "integer",
+                            "minimum": 1.0,
+                            "maximum": 16.0
+                          },
+                          "number": {
+                            "type": "integer",
+                            "minimum": 0.0,
+                            "maximum": 127.0,
+                            "default": 0
+                          },
+                          "device": {
+                            "type": "string",
+                            "default": ""
+                          }
+                        },
+                        "required": ["kind", "channel"],
+                        "additionalProperties": false
+                      },
+                      "mode": {
+                        "type": "string",
+                        "enum": ["absolute", "relative1", "relative2", "relative3", "toggle"],
+                        "default": "absolute"
+                      },
+                      "soft_takeover": {
+                        "type": "boolean",
+                        "default": false
+                      }
+                    },
+                    "required": ["param", "midi"],
+                    "additionalProperties": false
+                  },
+                  "default": []
                 }
               },
               "additionalProperties": false
@@ -4510,6 +4561,57 @@
                         "items": {
                           "type": "string",
                           "pattern": "^[a-z]{2}_[0-9]+$"
+                        },
+                        "default": []
+                      },
+                      "learn": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "title": "control_learn",
+                          "properties": {
+                            "param": {
+                              "type": "string"
+                            },
+                            "midi": {
+                              "type": "object",
+                              "title": "midi_control",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": ["cc", "note", "pitch_bend", "program"]
+                                },
+                                "channel": {
+                                  "type": "integer",
+                                  "minimum": 1.0,
+                                  "maximum": 16.0
+                                },
+                                "number": {
+                                  "type": "integer",
+                                  "minimum": 0.0,
+                                  "maximum": 127.0,
+                                  "default": 0
+                                },
+                                "device": {
+                                  "type": "string",
+                                  "default": ""
+                                }
+                              },
+                              "required": ["kind", "channel"],
+                              "additionalProperties": false
+                            },
+                            "mode": {
+                              "type": "string",
+                              "enum": ["absolute", "relative1", "relative2", "relative3", "toggle"],
+                              "default": "absolute"
+                            },
+                            "soft_takeover": {
+                              "type": "boolean",
+                              "default": false
+                            }
+                          },
+                          "required": ["param", "midi"],
+                          "additionalProperties": false
                         },
                         "default": []
                       }
@@ -13229,6 +13331,143 @@
       "readOnlyHint": false,
       "destructiveHint": false,
       "idempotentHint": false
+    }
+  },
+  {
+    "name": "vca_learn_list",
+    "title": "List the MIDI controller bindings of VCA controls.",
+    "description": "List the MIDI controller bindings of VCA controls. Every VCA's, or one's (group). control names the message in words. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "vca_learn_list_args",
+      "properties": {
+        "group": {
+          "type": "string",
+          "pattern": "^gr_[0-9]+$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "title": "vca_learn_list",
+      "properties": {
+        "learn": {}
+      },
+      "required": ["learn"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "vca_learn_remove",
+    "title": "Remove a VCA control's MIDI controller binding.",
+    "description": "Remove a VCA control's MIDI controller binding.  See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "vca_learn_remove_args",
+      "properties": {
+        "group": {
+          "type": "string",
+          "pattern": "^gr_[0-9]+$"
+        },
+        "param": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["group", "param"],
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "title": "empty",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "vca_learn_set",
+    "title": "Let a MIDI controller move a VCA's fader, mute or solo.",
+    "description": "Let a MIDI controller move a VCA's fader, mute or solo. One binding per control (a new one replaces it); saved with the project. param: volume, mute, solo. midi.device: a substring of the MIDI input's name (empty: any). A level or pan follows a knob (mode absolute, soft_takeover: once it reaches the value) or an encoder (relative1 127 = -1, relative2 63 = -1, relative3 65 = -1). A button: a note or program change flips it per press, as a CC in toggle mode does; an absolute CC is on above 63. The bindings go with the VCA. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "vca_learn_set_args",
+      "properties": {
+        "group": {
+          "type": "string",
+          "pattern": "^gr_[0-9]+$"
+        },
+        "param": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The control: volume, mute, solo"
+        },
+        "midi": {
+          "type": "object",
+          "title": "midi_control",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": ["cc", "note", "pitch_bend", "program"]
+            },
+            "channel": {
+              "type": "integer",
+              "minimum": 1.0,
+              "maximum": 16.0
+            },
+            "number": {
+              "type": "integer",
+              "minimum": 0.0,
+              "maximum": 127.0,
+              "default": 0
+            },
+            "device": {
+              "type": "string",
+              "default": ""
+            }
+          },
+          "required": ["kind", "channel"],
+          "additionalProperties": false
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["absolute", "relative1", "relative2", "relative3", "toggle"]
+        },
+        "soft_takeover": {
+          "type": "boolean"
+        }
+      },
+      "required": ["group", "param", "midi"],
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "title": "vca_learn_set_result",
+      "properties": {
+        "param": {
+          "type": "string"
+        },
+        "control": {
+          "type": "string"
+        }
+      },
+      "required": ["param", "control"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true
     }
   },
   {

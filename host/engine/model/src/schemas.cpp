@@ -486,6 +486,8 @@ const Schema<Vca>& schemaOf<Vca>() {
         dflt(b, false);
         b.field("followers", &Vca::followers, ids());
         dflt(b, std::vector<Id>{});
+        b.field("learn", &Vca::learn, schema::arrayOf(controlLearnSchema()));
+        dflt(b, std::vector<ControlLearn>{});
         return b.build();
     }();
     return s;

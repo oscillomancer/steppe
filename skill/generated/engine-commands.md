@@ -5641,6 +5641,57 @@ Kind: `query`. Exposure: `mcp-tool`.
                 "pattern": "^[a-z]{2}_[0-9]+$"
               },
               "default": []
+            },
+            "learn": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "title": "control_learn",
+                "properties": {
+                  "param": {
+                    "type": "string"
+                  },
+                  "midi": {
+                    "type": "object",
+                    "title": "midi_control",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": ["cc", "note", "pitch_bend", "program"]
+                      },
+                      "channel": {
+                        "type": "integer",
+                        "minimum": 1.0,
+                        "maximum": 16.0
+                      },
+                      "number": {
+                        "type": "integer",
+                        "minimum": 0.0,
+                        "maximum": 127.0,
+                        "default": 0
+                      },
+                      "device": {
+                        "type": "string",
+                        "default": ""
+                      }
+                    },
+                    "required": ["kind", "channel"],
+                    "additionalProperties": false
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": ["absolute", "relative1", "relative2", "relative3", "toggle"],
+                    "default": "absolute"
+                  },
+                  "soft_takeover": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                },
+                "required": ["param", "midi"],
+                "additionalProperties": false
+              },
+              "default": []
             }
           },
           "additionalProperties": false
@@ -5776,6 +5827,57 @@ Kind: `query`. Exposure: `mcp-tool`.
                     "items": {
                       "type": "string",
                       "pattern": "^[a-z]{2}_[0-9]+$"
+                    },
+                    "default": []
+                  },
+                  "learn": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "title": "control_learn",
+                      "properties": {
+                        "param": {
+                          "type": "string"
+                        },
+                        "midi": {
+                          "type": "object",
+                          "title": "midi_control",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": ["cc", "note", "pitch_bend", "program"]
+                            },
+                            "channel": {
+                              "type": "integer",
+                              "minimum": 1.0,
+                              "maximum": 16.0
+                            },
+                            "number": {
+                              "type": "integer",
+                              "minimum": 0.0,
+                              "maximum": 127.0,
+                              "default": 0
+                            },
+                            "device": {
+                              "type": "string",
+                              "default": ""
+                            }
+                          },
+                          "required": ["kind", "channel"],
+                          "additionalProperties": false
+                        },
+                        "mode": {
+                          "type": "string",
+                          "enum": ["absolute", "relative1", "relative2", "relative3", "toggle"],
+                          "default": "absolute"
+                        },
+                        "soft_takeover": {
+                          "type": "boolean",
+                          "default": false
+                        }
+                      },
+                      "required": ["param", "midi"],
+                      "additionalProperties": false
                     },
                     "default": []
                   }
@@ -14833,6 +14935,180 @@ Result:
 
 ```json
 {}
+
+```
+
+## `vca.learn.list@1`
+
+List the MIDI controller bindings of VCA controls.
+
+Every VCA's, or one's (group). control names the message in words.
+
+Kind: `query`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `group` | string |  |  |  |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "vca_learn_list",
+  "properties": {
+    "learn": {}
+  },
+  "required": ["learn"],
+  "additionalProperties": false
+}
+
+```
+
+### Examples
+
+**Every binding** (`song_with_mix_learn`)
+
+```json
+{}
+
+```
+
+Result:
+
+```json
+{
+  "learn": [
+    {
+      "group": "gr_1",
+      "param": "volume",
+      "midi": {
+        "kind": "cc",
+        "channel": 1,
+        "number": 9
+      },
+      "control": "CC 9 · ch 1"
+    }
+  ]
+}
+
+```
+
+## `vca.learn.remove@1`
+
+Remove a VCA control's MIDI controller binding.
+
+
+
+Kind: `edit`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `group` | string |  |  |  |  |
+| `param` | string |  |  |  |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "empty",
+  "properties": {},
+  "additionalProperties": false
+}
+
+```
+
+### Examples
+
+**Free the level** (`song_with_mix_learn`)
+
+```json
+{
+  "group": "gr_1",
+  "param": "volume"
+}
+
+```
+
+Result:
+
+```json
+{}
+
+```
+
+## `vca.learn.set@1`
+
+Let a MIDI controller move a VCA's fader, mute or solo.
+
+One binding per control (a new one replaces it); saved with the project. param: volume, mute, solo. midi.device: a substring of the MIDI input's name (empty: any). A level or pan follows a knob (mode absolute, soft_takeover: once it reaches the value) or an encoder (relative1 127 = -1, relative2 63 = -1, relative3 65 = -1). A button: a note or program change flips it per press, as a CC in toggle mode does; an absolute CC is on above 63. The bindings go with the VCA.
+
+Kind: `edit`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `group` | string |  |  |  |  |
+| `param` | string |  |  |  | The control: volume, mute, solo |
+| `midi` | object |  |  |  |  |
+| `mode` | string |  |  |  |  |
+| `soft_takeover` | boolean |  |  |  |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "vca_learn_set_result",
+  "properties": {
+    "param": {
+      "type": "string"
+    },
+    "control": {
+      "type": "string"
+    }
+  },
+  "required": ["param", "control"],
+  "additionalProperties": false
+}
+
+```
+
+### Errors
+
+- `vca.learn_param`: no such control Hint: use one of: volume, mute, solo
+- `learn.mode`: toggle on a level or pan Hint: use absolute or a relative mode
+
+### Examples
+
+**The VCA's fader on CC 9** (`song_with_vca`)
+
+```json
+{
+  "group": "gr_1",
+  "param": "volume",
+  "midi": {
+    "kind": "cc",
+    "channel": 1,
+    "number": 9
+  }
+}
+
+```
+
+Result:
+
+```json
+{
+  "param": "volume",
+  "control": "CC 9 · ch 1"
+}
 
 ```
 

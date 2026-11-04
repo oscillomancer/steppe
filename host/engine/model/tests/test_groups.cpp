@@ -17,15 +17,15 @@ TEST_CASE("track groups round trip, overlap and nested VCA ancestry") {
     TrackGroup first;
     first.name = "Drums";
     first.members = {a, b};
-    first.vca = Vca{6, false, false, {}};
+    first.vca = Vca{6, false, false, {}, {}};
     const auto g1 = t.create(first);
     TrackGroup second;
     second.members = {b, c};
-    second.vca = Vca{6, false, false, {g1}};
+    second.vca = Vca{6, false, false, {g1}, {}};
     const auto g2 = t.create(second);
     TrackGroup third;
     third.members = {a};
-    third.vca = Vca{6, false, false, {g1, g2}};
+    third.vca = Vca{6, false, false, {g1, g2}, {}};
     const auto g3 = t.create(third);
     auto s = t.commit();
     REQUIRE(s);

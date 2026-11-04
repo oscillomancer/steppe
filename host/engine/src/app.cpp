@@ -2946,11 +2946,16 @@ struct Gain : Effect {
     }
     if (fixture == "song_with_route" || fixture == "song_with_mix_learn") {
         run("route.add", R"({"from":"tr_1","to":"tr_0"})");
-        if (fixture == "song_with_mix_learn") {  // + tr_1 volume on CC 7, sd_1 volume on CC 12
+        // + tr_1 volume on CC 7, sd_1 volume on CC 12, gr_1's VCA volume on CC 9
+        if (fixture == "song_with_mix_learn") {
             run("track.learn.set",
                 R"({"track": "tr_1", "param": "volume", "midi": {"kind": "cc", "channel": 1, "number": 7}})");
             run("route.learn.set",
                 R"({"route": "sd_1", "param": "volume", "midi": {"kind": "cc", "channel": 1, "number": 12}})");
+            run("group.add", R"({"name": "Drums", "members": ["tr_1"]})");
+            run("vca.add", R"({"group": "gr_1"})");
+            run("vca.learn.set",
+                R"({"group": "gr_1", "param": "volume", "midi": {"kind": "cc", "channel": 1, "number": 9}})");
         }
         return;
     }

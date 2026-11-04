@@ -4,6 +4,11 @@
 §7, engine.md (control messages), gui.md §4.2, §4.5, §4.6 and §6. Builds on
 ADR-0027 (MIDI learn), which left "learn on track faders directly" undone.
 
+**2026-11-04 note:** VCA faders now take bindings too, as tracks do:
+`Vca::learn` (`volume`, `mute`, `solo`), `vca.learn.set / remove / list`,
+moved through `vca.set`, learned from a right-click on the mixer's VCA strip.
+The "Not done" below no longer holds for them.
+
 ## Context
 
 ADR-0027 binds controllers to plug-in parameters (project state) and to

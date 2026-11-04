@@ -197,10 +197,10 @@ model::Session audioSession(const std::filesystem::path& path, bool console, boo
     edit.create(item);
     model::TrackGroup child;
     child.members = {id};
-    child.vca = model::Vca{-3, false, false, {}};
+    child.vca = model::Vca{-3, false, false, {}, {}};
     const auto first = edit.create(child);
     model::TrackGroup parent;
-    parent.vca = model::Vca{-6, false, false, {first}};
+    parent.vca = model::Vca{-6, false, false, {first}, {}};
     const auto second = edit.create(parent);
     if (automated) {
         model::Envelope volume;
@@ -402,7 +402,7 @@ TEST_CASE("VCA audio: independent sends and exclusive stems retain the right con
     edit.create(item);
     model::TrackGroup solo;
     solo.members = {otherId};
-    solo.vca = model::Vca{0, false, true, {}};
+    solo.vca = model::Vca{0, false, true, {}, {}};
     const auto gid = edit.create(solo);
     auto soloed = edit.commit();
     REQUIRE(soloed);

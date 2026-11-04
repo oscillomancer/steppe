@@ -1598,6 +1598,27 @@ q = nil
 ---@field solo? boolean
 ---@field followers? string[]
 
+---@class Steppe.vca_learn_list_args
+---@field group? string
+
+---@class Steppe.vca_learn_list_result
+---@field learn any
+
+---@class Steppe.vca_learn_remove_args
+---@field group string
+---@field param string
+
+---@class Steppe.vca_learn_set_args
+---@field group string
+---@field param string The control: volume, mute, solo
+---@field midi table
+---@field mode? "absolute"|"relative1"|"relative2"|"relative3"|"toggle"
+---@field soft_takeover? boolean
+
+---@class Steppe.vca_learn_set_result
+---@field param string
+---@field control string
+
 ---@class Steppe.vca_members_set_args
 ---@field group string
 ---@field tracks? string[]
@@ -1903,6 +1924,11 @@ q = nil
 ---@field add fun(args: Steppe.vca_add_args): table Add an audio-free VCA fader to a track group.
 ---@field remove fun(args: Steppe.vca_remove_args): table Remove a VCA and its automation, keeping the track group.
 ---@field set fun(args: Steppe.vca_set_args): table Set a VCA's level, mute or solo without moving member faders.
+
+---@class Steppe.vca.learn
+---@field list fun(args?: Steppe.vca_learn_list_args): Steppe.vca_learn_list_result List the MIDI controller bindings of VCA controls.
+---@field remove fun(args: Steppe.vca_learn_remove_args): table Remove a VCA control's MIDI controller binding.
+---@field set fun(args: Steppe.vca_learn_set_args): Steppe.vca_learn_set_result Let a MIDI controller move a VCA's fader, mute or solo.
 
 ---@class Steppe.vca.members
 ---@field set fun(args: Steppe.vca_members_set_args): table Replace the tracks or nested VCAs controlled by a VCA.

@@ -119,10 +119,11 @@ struct MidiControl {
     bool operator==(const MidiControl&) const = default;
 };
 
-// MIDI learn on a track's or a send's own controls (ADR-0058): the fader,
-// pan and buttons. `param` names the control: volume, pan, mute, solo,
+// MIDI learn on a track's, a send's or a VCA's own controls (ADR-0058): the
+// fader, pan and buttons. `param` names the control: volume, pan, mute, solo,
 // phase_invert, mono, armed, monitor or lane_mute on a track; volume, pan,
-// mute, phase_invert, mono or tap:post_fader|pre_fader|pre_fx on a send.
+// mute, phase_invert, mono or tap:post_fader|pre_fader|pre_fx on a send;
+// volume, mute or solo on a VCA.
 struct ControlLearn {
     std::string param;
     MidiControl control;
@@ -178,6 +179,7 @@ struct Vca {
     double volumeDb = 0.0;
     bool mute = false, solo = false;
     std::vector<Id> followers;
+    std::vector<ControlLearn> learn;  // MIDI learn, one per control (ADR-0058)
 };
 struct TrackGroup {
     std::string name, color;
