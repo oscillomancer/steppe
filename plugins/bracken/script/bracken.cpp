@@ -1352,7 +1352,8 @@ struct Bracken : Effect {
         tempoShown.set(io.transport.tempo > 0.0 ? io.transport.tempo : 120.0);
         rateShown.set(rate);
         decayShown.set(d);
-        modPhaseShown.set(modPhase);
+        // The place in the two cycles the editor draws, so its dot crosses both.
+        modPhaseShown.set(((modCycle & 1) + modPhase) * 0.5);
         // Held, the loop repeats at the times it was frozen at.
         const bool held = frozenW > 0.5;
         timeA0.set((held ? half[0].frozen : half[0].time) / rate);
@@ -2372,7 +2373,8 @@ struct Bracken : Effect {
         g.stroke();
         g.globalAlpha(1.0);
         if (depth > 0.0) {
-            const double ph1 = modPhaseShown.get();
+            const double at = modPhaseShown.get();  // 0..1 across both cycles
+            const double ph1 = 2.0 * at - floor(2.0 * at);
             double v = 0.0;
             if (m == 2)
                 v = ph1 < 0.25 ? 4.0 * ph1 : (ph1 < 0.75 ? 2.0 - 4.0 * ph1 : 4.0 * ph1 - 4.0);
@@ -2380,7 +2382,7 @@ struct Bracken : Effect {
                 v = sin(twoPi * ph1);
             g.fillStyle(Theme::text);
             g.beginPath();
-            g.circle(wvx + 4 + (wvw - 8) * ph1 * 0.5, mid - v * (wvh * 0.5 - 6) * depth, 3);
+            g.circle(wvx + 4 + (wvw - 8) * at, mid - v * (wvh * 0.5 - 6) * depth, 3);
             g.fill();
         }
     }
