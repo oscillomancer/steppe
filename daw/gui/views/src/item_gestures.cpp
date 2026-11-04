@@ -1305,6 +1305,27 @@ std::vector<ui::MenuItem> ItemGestures::itemMenu(const MenuPlace& place) {
             };
             items.push_back(std::move(drop));
         }
+        // Every selected item with several takes keeps only its heard one.
+        std::vector<EditStep> crop;
+        for (model::Id id : selection_)
+            if (const model::Item* it = itemOf(s, id); it && it->activeTake)
+                for (model::Id other : it->takes)
+                    if (other != *it->activeTake) {
+                        json::Value args = json::Value::object();
+                        args["take"] = other.str();
+                        crop.push_back({"take.remove", std::move(args)});
+                    }
+        if (item->takes.size() > 1 || !crop.empty()) {
+            ui::MenuItem keep;
+            keep.label = "Keep only the selected take";
+            keep.enabled = !crop.empty();
+            keep.run = [this, crop] {
+                if (!run) return;
+                if (auto r = run("Keep only the selected take", crop); !r && onError)
+                    onError(r.error());
+            };
+            items.push_back(std::move(keep));
+        }
         // Render through the FX (MIDI through the track's instrument): that
         // take is heard first when it is not.
         const bool midi = isMidi(tk);

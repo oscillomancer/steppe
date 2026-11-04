@@ -1158,6 +1158,13 @@ TEST_CASE("takes: show all takes spreads them out; a lane is heard, deleted from
     pick(f, "Show all takes");
     CHECK_FALSE(f.view->trackLayout().takesExpanded(it));
     CHECK(f.view->trackLayout().heightOf(row) == doctest::Approx(base));
+    // Keep only the selected take: the heard one stays, in one undo step.
+    const model::Id heard = *f.item(it).activeTake;
+    const auto before = f.steps();
+    rightClick(f, onItem(f, it, f.rectOf(it).y + f.rectOf(it).h / 2));
+    pick(f, "Keep only the selected take");
+    CHECK(f.item(it).takes == std::vector<model::Id>{heard});
+    CHECK(f.steps() == before + 1);
 }
 
 TEST_CASE("takes: Ctrl-drag takes one out to another track; explode spreads the rest") {

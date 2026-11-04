@@ -21,7 +21,7 @@
 // the splits, Export… (the item's raw audio or its MIDI
 // to a file, through onExport), Mix to new track, the MIDI editor, timebase, take FX
 // and envelopes, and for several takes: show all takes, explode them onto tracks or along the
-// track, delete the take under the pointer; and rendering the item
+// track, delete the take under the pointer, keep only the heard takes; and rendering the item
 // through its FX (MIDI to audio) in place or as a new take (itemMenu, also the menu bar's Item
 // menu); on empty lane space, a menu with Paste. Each gesture previews as a ghost on the root's
 // overlay and commits ONE transaction on release.

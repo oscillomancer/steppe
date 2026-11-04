@@ -469,6 +469,10 @@ envelope seams that cannot be restored need consolidation instead. Each track
 becomes one item and the operation is one undo step.
 Both menu entries are greyed when the selection cannot use them.
 
+For items with several takes, **Keep only the selected take** deletes every
+take but the one you hear (click a take's lane to choose it) on each selected
+item, in one undo step. **Delete take** removes just the take you right-clicked.
+
 Right-click an item and choose **Split item at cursor**, or press S, to split
 selected audio and MIDI items at the edit cursor. Items outside the cursor stay
 whole; the menu's pointer position does not set the split point. Undo restores

@@ -555,8 +555,10 @@ UI file as `expanded_takes`): the item's row grows to the name bar plus one
 lane per take, each as tall as the row's own height, so every take can be
 seen, heard (click) and edited; **Explode takes onto new tracks** and **…in
 sequence on this track** (item.explode-takes, recording order; this ends
-the takes, Show all takes keeps them); and **Delete take "name"** for the
-take under the pointer (else the heard one; take.remove). For any item with
+the takes, Show all takes keeps them); **Delete take "name"** for the
+take under the pointer (else the heard one; take.remove); and **Keep only the
+selected take**: every selected item with several takes keeps only its heard
+take (take.remove of the others, one undo step). For any item with
 material: **Convert to audio** / **Render to audio as a new take** on a
 MIDI take, **Render with FX, replacing the audio** / **Render with FX as a
 new take** on an audio take (item.apply-fx through the take and track FX;
