@@ -10033,6 +10033,143 @@
     }
   },
   {
+    "name": "route_learn_list",
+    "title": "List the MIDI controller bindings of send controls.",
+    "description": "List the MIDI controller bindings of send controls. Every send's, or one's (route). control names the message in words. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "route_learn_list_args",
+      "properties": {
+        "route": {
+          "type": "string",
+          "pattern": "^sd_[0-9]+$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "title": "route_learn_list",
+      "properties": {
+        "learn": {}
+      },
+      "required": ["learn"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "route_learn_remove",
+    "title": "Remove a send control's MIDI controller binding.",
+    "description": "Remove a send control's MIDI controller binding.  See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "route_learn_remove_args",
+      "properties": {
+        "route": {
+          "type": "string",
+          "pattern": "^sd_[0-9]+$"
+        },
+        "param": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["route", "param"],
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "title": "empty",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "route_learn_set",
+    "title": "Let a MIDI controller move a send's level, pan, mute or tap.",
+    "description": "Let a MIDI controller move a send's level, pan, mute or tap. One binding per control (a new one replaces it); saved with the project. param: volume, pan, mute, phase_invert, mono, tap:post_fader, tap:pre_fader, tap:pre_fx. midi.device: a substring of the MIDI input's name (empty: any). A level or pan follows a knob (mode absolute, soft_takeover: once it reaches the value) or an encoder (relative1 127 = -1, relative2 63 = -1, relative3 65 = -1). A button: a note or program change flips it per press, as a CC in toggle mode does; an absolute CC is on above 63. A tap:… control sets that tap on each press. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "route_learn_set_args",
+      "properties": {
+        "route": {
+          "type": "string",
+          "pattern": "^sd_[0-9]+$"
+        },
+        "param": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The control: volume, pan, mute, phase_invert, mono, tap:post_fader, tap:pre_fader, tap:pre_fx"
+        },
+        "midi": {
+          "type": "object",
+          "title": "midi_control",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": ["cc", "note", "pitch_bend", "program"]
+            },
+            "channel": {
+              "type": "integer",
+              "minimum": 1.0,
+              "maximum": 16.0
+            },
+            "number": {
+              "type": "integer",
+              "minimum": 0.0,
+              "maximum": 127.0,
+              "default": 0
+            },
+            "device": {
+              "type": "string",
+              "default": ""
+            }
+          },
+          "required": ["kind", "channel"],
+          "additionalProperties": false
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["absolute", "relative1", "relative2", "relative3", "toggle"]
+        },
+        "soft_takeover": {
+          "type": "boolean"
+        }
+      },
+      "required": ["route", "param", "midi"],
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "title": "route_learn_set_result",
+      "properties": {
+        "param": {
+          "type": "string"
+        },
+        "control": {
+          "type": "string"
+        }
+      },
+      "required": ["param", "control"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true
+    }
+  },
+  {
     "name": "route_list",
     "title": "List sends with endpoints and mixer settings.",
     "description": "List sends with endpoints and mixer settings.  See describe for errors and examples.",
@@ -11107,6 +11244,143 @@
       "readOnlyHint": false,
       "destructiveHint": true,
       "idempotentHint": false
+    }
+  },
+  {
+    "name": "track_learn_list",
+    "title": "List the MIDI controller bindings of track controls.",
+    "description": "List the MIDI controller bindings of track controls. Every track's, or one's (track). control names the message in words. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "track_learn_list_args",
+      "properties": {
+        "track": {
+          "type": "string",
+          "pattern": "^tr_[0-9]+$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "title": "track_learn_list",
+      "properties": {
+        "learn": {}
+      },
+      "required": ["learn"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "track_learn_remove",
+    "title": "Remove a track control's MIDI controller binding.",
+    "description": "Remove a track control's MIDI controller binding.  See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "track_learn_remove_args",
+      "properties": {
+        "track": {
+          "type": "string",
+          "pattern": "^tr_[0-9]+$"
+        },
+        "param": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["track", "param"],
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "title": "empty",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "track_learn_set",
+    "title": "Let a MIDI controller move a track's fader, pan, mute, solo or arm.",
+    "description": "Let a MIDI controller move a track's fader, pan, mute, solo or arm. One binding per control (a new one replaces it); saved with the project. param: volume, pan, mute, solo, phase_invert, mono, armed, monitor, lane_mute. midi.device: a substring of the MIDI input's name (empty: any). A level or pan follows a knob (mode absolute, soft_takeover: once it reaches the value) or an encoder (relative1 127 = -1, relative2 63 = -1, relative3 65 = -1). A button: a note or program change flips it per press, as a CC in toggle mode does; an absolute CC is on above 63. monitor goes off, on, auto in turn on each press. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "track_learn_set_args",
+      "properties": {
+        "track": {
+          "type": "string",
+          "pattern": "^tr_[0-9]+$"
+        },
+        "param": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The control: volume, pan, mute, solo, phase_invert, mono, armed, monitor, lane_mute"
+        },
+        "midi": {
+          "type": "object",
+          "title": "midi_control",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": ["cc", "note", "pitch_bend", "program"]
+            },
+            "channel": {
+              "type": "integer",
+              "minimum": 1.0,
+              "maximum": 16.0
+            },
+            "number": {
+              "type": "integer",
+              "minimum": 0.0,
+              "maximum": 127.0,
+              "default": 0
+            },
+            "device": {
+              "type": "string",
+              "default": ""
+            }
+          },
+          "required": ["kind", "channel"],
+          "additionalProperties": false
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["absolute", "relative1", "relative2", "relative3", "toggle"]
+        },
+        "soft_takeover": {
+          "type": "boolean"
+        }
+      },
+      "required": ["track", "param", "midi"],
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "title": "track_learn_set_result",
+      "properties": {
+        "param": {
+          "type": "string"
+        },
+        "control": {
+          "type": "string"
+        }
+      },
+      "required": ["param", "control"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true
     }
   },
   {

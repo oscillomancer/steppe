@@ -133,7 +133,12 @@ json::Value learnJson(Id fx, const model::ParamLearn& l) {
 }  // namespace
 
 bool EngineApp::hasLearn() const {
-    for (const auto& e : head().fx)
+    const model::Session s = head();
+    for (const auto& e : s.fx)
+        if (!e.value->learn.empty()) return true;
+    for (const auto& e : s.tracks)
+        if (!e.value->learn.empty()) return true;
+    for (const auto& e : s.routes)
         if (!e.value->learn.empty()) return true;
     return false;
 }
@@ -186,6 +191,7 @@ void EngineApp::applyLearn(const std::vector<ControlEvent>& events) {
             if (set) takeover.set = *set;
         }
     }
+    applyControlLearn(events);  // tracks' and sends' own controls (ADR-0058)
 }
 
 std::optional<double> EngineApp::moveParam(

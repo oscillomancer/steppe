@@ -40,6 +40,7 @@ void registerExportCommands(cmd::Registry& registry);
 void registerMixCommands(cmd::Registry& registry);
 void registerHealCommands(cmd::Registry& registry);
 void registerLearnCommands(cmd::Registry& registry);
+void registerControlLearnCommands(cmd::Registry& registry);
 void registerDspCommands(cmd::Registry& registry);
 
 using cmd::Command;
@@ -862,6 +863,7 @@ void registerEngineCommands(cmd::Registry& registry) {
     registerMixCommands(registry);
     registerHealCommands(registry);
     registerLearnCommands(registry);
+    registerControlLearnCommands(registry);
     registerDspCommands(registry);
     lua::registerScriptCommands(registry);
     // ---------------------------------------------------------------- project.get

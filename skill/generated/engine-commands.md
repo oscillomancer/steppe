@@ -10440,6 +10440,180 @@ Result:
 
 ```
 
+## `route.learn.list@1`
+
+List the MIDI controller bindings of send controls.
+
+Every send's, or one's (route). control names the message in words.
+
+Kind: `query`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `route` | string |  |  |  |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "route_learn_list",
+  "properties": {
+    "learn": {}
+  },
+  "required": ["learn"],
+  "additionalProperties": false
+}
+
+```
+
+### Examples
+
+**Every binding** (`song_with_mix_learn`)
+
+```json
+{}
+
+```
+
+Result:
+
+```json
+{
+  "learn": [
+    {
+      "route": "sd_1",
+      "param": "volume",
+      "midi": {
+        "kind": "cc",
+        "channel": 1,
+        "number": 12
+      },
+      "control": "CC 12 · ch 1"
+    }
+  ]
+}
+
+```
+
+## `route.learn.remove@1`
+
+Remove a send control's MIDI controller binding.
+
+
+
+Kind: `edit`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `route` | string |  |  |  |  |
+| `param` | string |  |  |  |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "empty",
+  "properties": {},
+  "additionalProperties": false
+}
+
+```
+
+### Examples
+
+**Free the level** (`song_with_mix_learn`)
+
+```json
+{
+  "route": "sd_1",
+  "param": "volume"
+}
+
+```
+
+Result:
+
+```json
+{}
+
+```
+
+## `route.learn.set@1`
+
+Let a MIDI controller move a send's level, pan, mute or tap.
+
+One binding per control (a new one replaces it); saved with the project. param: volume, pan, mute, phase_invert, mono, tap:post_fader, tap:pre_fader, tap:pre_fx. midi.device: a substring of the MIDI input's name (empty: any). A level or pan follows a knob (mode absolute, soft_takeover: once it reaches the value) or an encoder (relative1 127 = -1, relative2 63 = -1, relative3 65 = -1). A button: a note or program change flips it per press, as a CC in toggle mode does; an absolute CC is on above 63. A tap:… control sets that tap on each press.
+
+Kind: `edit`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `route` | string |  |  |  |  |
+| `param` | string |  |  |  | The control: volume, pan, mute, phase_invert, mono, tap:post_fader, tap:pre_fader, tap:pre_fx |
+| `midi` | object |  |  |  |  |
+| `mode` | string |  |  |  |  |
+| `soft_takeover` | boolean |  |  |  |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "route_learn_set_result",
+  "properties": {
+    "param": {
+      "type": "string"
+    },
+    "control": {
+      "type": "string"
+    }
+  },
+  "required": ["param", "control"],
+  "additionalProperties": false
+}
+
+```
+
+### Errors
+
+- `route.learn_param`: no such control Hint: use one of: volume, pan, mute, phase_invert, mono, tap:post_fader, tap:pre_fader, tap:pre_fx
+- `learn.mode`: toggle on a level or pan Hint: use absolute or a relative mode
+
+### Examples
+
+**Mute the send from a pad** (`song_with_route`)
+
+```json
+{
+  "route": "sd_1",
+  "param": "mute",
+  "midi": {
+    "kind": "note",
+    "channel": 10,
+    "number": 36
+  }
+}
+
+```
+
+Result:
+
+```json
+{
+  "param": "mute",
+  "control": "Note C2 · ch 10"
+}
+
+```
+
 ## `route.list@1`
 
 List sends with endpoints and mixer settings.
@@ -12145,6 +12319,180 @@ Kind: `edit`. Exposure: `internal`.
 ```
 
 ### Examples
+
+## `track.learn.list@1`
+
+List the MIDI controller bindings of track controls.
+
+Every track's, or one's (track). control names the message in words.
+
+Kind: `query`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `track` | string |  |  |  |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "track_learn_list",
+  "properties": {
+    "learn": {}
+  },
+  "required": ["learn"],
+  "additionalProperties": false
+}
+
+```
+
+### Examples
+
+**Every binding** (`song_with_mix_learn`)
+
+```json
+{}
+
+```
+
+Result:
+
+```json
+{
+  "learn": [
+    {
+      "track": "tr_1",
+      "param": "volume",
+      "midi": {
+        "kind": "cc",
+        "channel": 1,
+        "number": 7
+      },
+      "control": "CC 7 · ch 1"
+    }
+  ]
+}
+
+```
+
+## `track.learn.remove@1`
+
+Remove a track control's MIDI controller binding.
+
+
+
+Kind: `edit`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `track` | string |  |  |  |  |
+| `param` | string |  |  |  |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "empty",
+  "properties": {},
+  "additionalProperties": false
+}
+
+```
+
+### Examples
+
+**Free the level** (`song_with_mix_learn`)
+
+```json
+{
+  "track": "tr_1",
+  "param": "volume"
+}
+
+```
+
+Result:
+
+```json
+{}
+
+```
+
+## `track.learn.set@1`
+
+Let a MIDI controller move a track's fader, pan, mute, solo or arm.
+
+One binding per control (a new one replaces it); saved with the project. param: volume, pan, mute, solo, phase_invert, mono, armed, monitor, lane_mute. midi.device: a substring of the MIDI input's name (empty: any). A level or pan follows a knob (mode absolute, soft_takeover: once it reaches the value) or an encoder (relative1 127 = -1, relative2 63 = -1, relative3 65 = -1). A button: a note or program change flips it per press, as a CC in toggle mode does; an absolute CC is on above 63. monitor goes off, on, auto in turn on each press.
+
+Kind: `edit`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `track` | string |  |  |  |  |
+| `param` | string |  |  |  | The control: volume, pan, mute, solo, phase_invert, mono, armed, monitor, lane_mute |
+| `midi` | object |  |  |  |  |
+| `mode` | string |  |  |  |  |
+| `soft_takeover` | boolean |  |  |  |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "track_learn_set_result",
+  "properties": {
+    "param": {
+      "type": "string"
+    },
+    "control": {
+      "type": "string"
+    }
+  },
+  "required": ["param", "control"],
+  "additionalProperties": false
+}
+
+```
+
+### Errors
+
+- `track.learn_param`: no such control Hint: use one of: volume, pan, mute, solo, phase_invert, mono, armed, monitor, lane_mute
+- `learn.mode`: toggle on a level or pan Hint: use absolute or a relative mode
+
+### Examples
+
+**The fader on CC 7** (`song`)
+
+```json
+{
+  "track": "tr_1",
+  "param": "volume",
+  "midi": {
+    "kind": "cc",
+    "channel": 1,
+    "number": 7
+  }
+}
+
+```
+
+Result:
+
+```json
+{
+  "param": "volume",
+  "control": "CC 7 · ch 1"
+}
+
+```
 
 ## `track.list@1`
 

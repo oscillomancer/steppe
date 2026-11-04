@@ -127,6 +127,7 @@ Fields:
 | `chain`, `input_chain` | [fx id] | §1.7; `input_chain` on channels only |
 | `lanes` | `{mode: none|fixed|comp, lanes: [ln id], comp: …}` | channels only |
 | `locked`, `hidden_tcp`, `hidden_mixer`, `folder_compact` | bool / enum | UI state kept in the model because it is user intent, but tagged `ui: true` so diffs/merges can ignore it |
+| `learn` | [binding] | MIDI learn on the strip's own controls (ADR-0058), one per control, sorted by `param`, omitted when empty: `{param, midi, mode, soft_takeover}` with `midi` and `mode` as an effect's (§1.7). `param`: `volume`, `pan`, `mute`, `solo`, `phase_invert`, `mono`, `armed` (channels, masters), `monitor` (channels) or `lane_mute` (masters). Copied with `track.duplicate`, not kept by track templates; ignored by the freeze hash |
 
 `volume`, `pan` and `mute` are automatable (§1.9). Width and trim are not
 strip fields: insert a utility (Hickory) for them.
@@ -252,6 +253,7 @@ rendered).
 | `volume` dB, `pan` % or `follow` (default: the strip's pan), `mute`, `phase_invert`, `mono` | into a buss/master: realized by the send's own C9 Channel (ADR-0019 §3) |
 | `channels` | `{from: [..], to: [..]}` channel mapping, 1-based in 1..128 and up to each strip's channels (e.g. [1,2] → [3,4] for a detector on 3/4). Main pairs map the encoded send; pairs touching auxiliary channels are linear links at the route's level, mute and polarity (ADR-0020) |
 | `midi` | `{from_channel: all|1..16, to_channel: original|1..16}` or null (audio only) |
+| `learn` | MIDI learn on the send's controls (ADR-0058), as a track's (§1.4): `param` `volume`, `pan`, `mute`, `phase_invert`, `mono` or `tap:post_fader`, `tap:pre_fader`, `tap:pre_fx` (a press selects that tap); omitted when empty |
 
 Folder/master sends are the tracks' `parent_send`, not routes. Record inputs
 are routes from `hw_input`/`midi_input` referenced by `track.record.input`.
@@ -456,7 +458,7 @@ routes: sd_1 tr_2 → tr_6 ch 1/2→3/4 pre-fader −6 dB (sidechain)
 markers: mk_1 "Verse" bar 1 · regions: rg_1 "Chorus" bars 9–17
 ```
 
-## 5. Project file (`supple.project/2.5`)
+## 5. Project file (`supple.project/2.6`)
 
 ### 5.1 Shape
 
@@ -718,7 +720,11 @@ and naming. All `edit` unless marked (q) query or (a) action.
   `fx.state.capture` (internal, from plugin notifications), `plugin.list`
   (q), `plugin.scan` (a).
 - **routes**: `route.add {from, to, tap, channels, …}`, `route.remove`,
-  `route.set`, `route.list` (q).
+  `route.set`, `route.list` (q). MIDI learn on a strip's or a send's own
+  controls (ADR-0058): `track.learn.set {track, param, midi, mode?,
+  soft_takeover?}` / `route.learn.set {route, …}` (a), `track.learn.remove
+  {track, param}` / `route.learn.remove {route, param}` (a),
+  `track.learn.list {track?}` / `route.learn.list {route?}` (q).
 - **automation**: `env.add {target}`, `env.remove`, `env.set {mode, active,
   …}`, `env.points.set {env, points, range?}`, `env.points.add`,
   `env.points.remove {range}`, `env.add {take, param}` (take envelopes);
@@ -1010,3 +1016,9 @@ Writers now emit `supple.project/2.5`. The 2.5 change is the masters' `lane_mute
 items, which play after its plain gain/pan stage. A 2.4 file loads unchanged. An older
 application opening a 2.5 file ignores `lane_mute` with a warning, but refuses a project
 whose masters are armed or hold items: its strip rules allow neither (`track.strip_type`).
+
+### Strip and send MIDI learn (schema 2.6, ADR-0058)
+
+Writers now emit `supple.project/2.6`. The 2.6 change is `learn` on tracks (§1.4) and
+routes (§1.8). A 2.5 file loads unchanged; an older application opening a 2.6 file
+ignores `learn` with a warning, and its controllers move nothing on strips or sends.

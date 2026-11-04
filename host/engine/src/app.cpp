@@ -2944,8 +2944,14 @@ struct Gain : Effect {
             run("track.set", R"({"track": "tr_2", "channels": 4})");
         return;
     }
-    if (fixture == "song_with_route") {
+    if (fixture == "song_with_route" || fixture == "song_with_mix_learn") {
         run("route.add", R"({"from":"tr_1","to":"tr_0"})");
+        if (fixture == "song_with_mix_learn") {  // + tr_1 volume on CC 7, sd_1 volume on CC 12
+            run("track.learn.set",
+                R"({"track": "tr_1", "param": "volume", "midi": {"kind": "cc", "channel": 1, "number": 7}})");
+            run("route.learn.set",
+                R"({"route": "sd_1", "param": "volume", "midi": {"kind": "cc", "channel": 1, "number": 12}})");
+        }
         return;
     }
     if (fixture == "song_with_marker") {

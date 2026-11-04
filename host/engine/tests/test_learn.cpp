@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <mutex>
 
+#include "supple/base/fader.h"
 #include "supple/cmd/bus.h"
 #include "supple/engine/app.h"
 #include "supple/engine/midi_control.h"
@@ -425,4 +426,144 @@ TEST_CASE("a control action may stop the engine during event-driven service") {
     CHECK(received == 1);
     CHECK(rig.app->engine() == nullptr);
     CHECK_FALSE(rig.app->nextServiceDelayMs());
+}
+
+TEST_CASE("MIDI learn: track.learn and route.learn bind a strip's and a send's controls") {
+    Rig rig;
+    rig.call("track.add", R"({"name":"Bass"})");
+    rig.call("track.add", R"({"name":"Verb","type":"buss"})");
+    rig.call("route.add", R"({"from":"tr_1","to":"tr_2"})");
+    auto set = rig.call(
+        "track.learn.set",
+        R"({"track":"tr_1","param":"volume","midi":{"kind":"cc","channel":1,"number":7},"soft_takeover":true})");
+    CHECK(set["control"].asString() == "CC 7 · ch 1");
+    rig.call("track.learn.set",
+             R"({"track":"tr_1","param":"mute","midi":{"kind":"note","channel":10,"number":36}})");
+    rig.call(
+        "route.learn.set",
+        R"({"route":"sd_1","param":"tap:pre_fx","midi":{"kind":"cc","channel":1,"number":40},"mode":"toggle"})");
+    // What a strip lacks, a misspelt control and a toggled knob say what to do.
+    const auto fails = [&](std::string command, std::string_view args) {
+        auto r = rig.bus->execute({std::move(command), j(args), kTest});
+        REQUIRE_FALSE(r);
+        return r.error();
+    };
+    CHECK(fails("track.learn.set",
+                R"({"track":"tr_2","param":"monitor","midi":{"kind":"cc","channel":1}})")
+              .code == "track.strip_type");
+    const Error misspelt = fails(
+        "track.learn.set", R"({"track":"tr_1","param":"vol","midi":{"kind":"cc","channel":1}})");
+    CHECK(misspelt.code == "track.learn_param");
+    CHECK(misspelt.hint.find("volume") != std::string::npos);
+    CHECK(
+        fails("route.learn.set",
+              R"({"route":"sd_1","param":"pan","midi":{"kind":"cc","channel":1},"mode":"toggle"})")
+            .code == "learn.mode");
+    CHECK(fails("route.learn.set",
+                R"({"route":"tr_1","param":"pan","midi":{"kind":"cc","channel":1}})")
+              .code == "command.invalid_args");
+
+    // Saved with the project and back as they were.
+    const auto file = rig.root.path / "mix-learn.json";
+    REQUIRE(rig.app->save(file));
+    const std::string text = model::serializeProject(rig.app->head());
+    REQUIRE(rig.app->open(file));
+    const model::Track& bass = *rig.app->head().tracks.find(*model::Id::parse("tr_1"));
+    REQUIRE(bass.learn.size() == 2);
+    CHECK(bass.learn[0].param == "mute");
+    CHECK(bass.learn[1].softTakeover);
+    const model::Route& send = *rig.app->head().routes.find(*model::Id::parse("sd_1"));
+    REQUIRE(send.learn.size() == 1);
+    CHECK(send.learn[0].mode == model::ControlMode::Toggle);
+    CHECK(model::serializeProject(rig.app->head()) == text);
+
+    CHECK(rig.call("track.learn.list", "{}")["learn"].size() == 2);
+    CHECK(rig.call("route.learn.list", R"({"route":"sd_1"})")["learn"]
+              .at(0)
+              .find("control")
+              ->asString() == "CC 40 · ch 1");
+    rig.call("track.learn.remove", R"({"track":"tr_1","param":"mute"})");
+    CHECK(fails("track.learn.remove", R"({"track":"tr_1","param":"mute"})").code ==
+          "track.learn_unknown");
+    // A send goes with its bindings.
+    rig.call("route.remove", R"({"route":"sd_1"})");
+    CHECK(rig.call("route.learn.list", "{}")["learn"].size() == 0);
+}
+
+TEST_CASE("MIDI learn: controllers move many strips' faders, buttons and sends at once") {
+    Rig rig;
+    rig.call("track.add", R"({"name":"Bass"})");
+    rig.call("track.add", R"({"name":"Verb","type":"buss"})");
+    rig.call("route.add", R"({"from":"tr_1","to":"tr_2"})");
+    rig.call("track.learn.set",
+             R"({"track":"tr_1","param":"volume","midi":{"kind":"cc","channel":1,"number":0}})");
+    rig.call("track.learn.set",
+             R"({"track":"tr_2","param":"volume","midi":{"kind":"cc","channel":1,"number":1}})");
+    rig.call("track.learn.set",
+             R"({"track":"tr_2","param":"pan","midi":{"kind":"cc","channel":1,"number":16}})");
+    rig.call("track.learn.set",
+             R"({"track":"tr_1","param":"mute","midi":{"kind":"note","channel":1,"number":60}})");
+    rig.call("track.learn.set",
+             R"({"track":"tr_1","param":"solo","midi":{"kind":"cc","channel":1,"number":32}})");
+    rig.call(
+        "track.learn.set",
+        R"({"track":"tr_1","param":"monitor","midi":{"kind":"cc","channel":1,"number":48},"mode":"toggle"})");
+    rig.call(
+        "route.learn.set",
+        R"({"route":"sd_1","param":"volume","midi":{"kind":"cc","channel":1,"number":2},"mode":"relative2"})");
+    rig.call(
+        "route.learn.set",
+        R"({"route":"sd_1","param":"tap:pre_fader","midi":{"kind":"note","channel":1,"number":61}})");
+    CHECK(rig.app->hasLearn());
+    rig.start();
+    const auto track = [&](const char* id) {
+        return *rig.app->head().tracks.find(*model::Id::parse(id));
+    };
+    const auto send = [&] { return *rig.app->head().routes.find(*model::Id::parse("sd_1")); };
+    const std::size_t before = rig.app->versions().history(1000).size();
+
+    // Two faders on two knobs, each along the fader's travel.
+    rig.send(0xb0, 0, 127);
+    rig.send(0xb0, 0, 100);  // the same movement: the same undo step
+    rig.send(0xb0, 1, 0);
+    CHECK(track("tr_1").volumeDb == doctest::Approx(fader::db(100 / 127.0)));
+    CHECK(track("tr_2").volumeDb == model::kSilenceDb);
+    CHECK(rig.app->versions().history(1000).size() == before + 2);  // one step per fader
+    // A pan knob's centre is the centre.
+    rig.send(0xb0, 16, 64);
+    CHECK(track("tr_2").pan == 0);
+    rig.send(0xb0, 16, 0);
+    CHECK(track("tr_2").pan == -100);
+
+    // A pad flips the mute on each press; its release leaves it.
+    rig.send(0x90, 60, 100);
+    CHECK(track("tr_1").mute);
+    rig.send(0x80, 60, 0);
+    CHECK(track("tr_1").mute);
+    rig.send(0x90, 60, 100);
+    CHECK_FALSE(track("tr_1").mute);
+    // An absolute CC button holds the solo while it is down.
+    rig.send(0xb0, 32, 127);
+    CHECK(track("tr_1").solo == model::Solo::On);
+    rig.send(0xb0, 32, 0);
+    CHECK(track("tr_1").solo == model::Solo::Off);
+    // The monitor goes off, on, auto in turn.
+    rig.call("track.set", R"({"track":"tr_1","monitor":"off"})");
+    rig.send(0xb0, 48, 127);
+    CHECK(track("tr_1").record.monitor == model::Monitor::On);
+    rig.send(0xb0, 48, 127);
+    CHECK(track("tr_1").record.monitor == model::Monitor::Auto);
+
+    // A send's level on an encoder: 1/128 of the travel per step.
+    const double level = send().volumeDb;
+    rig.send(0xb0, 2, 63);  // -1
+    CHECK(send().volumeDb == doctest::Approx(fader::db(fader::position(level) - 1.0 / 128)));
+    // Its tap on a pad.
+    rig.send(0x90, 61, 90);
+    CHECK(send().tap == model::Tap::PreFader);
+
+    // Undo takes back the last movement only.
+    rig.call("history.undo", "{}");
+    CHECK(send().tap == model::Tap::PostFader);
+    CHECK(send().volumeDb < level);
 }

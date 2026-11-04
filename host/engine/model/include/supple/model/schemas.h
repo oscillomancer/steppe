@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 // JSON forms of the session objects (core-schema) and the project file
-// `supple.project/2.5` (session-model §5). Fields equal to their defaults are
+// `supple.project/2.6` (session-model §5). Fields equal to their defaults are
 // omitted, so files and diffs stay small; decoding fills them back in.
 #pragma once
 
@@ -21,6 +21,7 @@ schema::Schema<PinMap> pinMapSchema();                // {in, out, key}: 1-based
 schema::Schema<MidiControl> midiControlSchema();      // {kind, channel, number, device}
 schema::Schema<ControlMode> controlModeSchema();      // absolute | relative1..3 | toggle
 schema::Schema<ParamLearn> paramLearnSchema();        // {param, midi, mode, …} (ADR-0027)
+schema::Schema<ControlLearn> controlLearnSchema();    // {param, midi, mode, …} (ADR-0058)
 schema::Schema<TrackTimebase> trackTimebaseSchema();  // project | time | beats | beats_position
 schema::Schema<ItemTimebase> itemTimebaseSchema();    // track | time | beats | beats_position
 schema::Schema<Id> idSchema();                        // "tr_3"
@@ -32,7 +33,7 @@ json::Value toJson(const T& object) {
     return schemaOf<T>().encode(object);
 }
 
-inline constexpr std::string_view kProjectSchema = "supple.project/2.5";
+inline constexpr std::string_view kProjectSchema = "supple.project/2.6";
 
 // The whole session as the canonical project document (members in the
 // spec's order, objects keyed by ID in ID order).

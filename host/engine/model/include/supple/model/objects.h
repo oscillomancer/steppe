@@ -101,6 +101,36 @@ struct TrackFreeze {
     std::string dependencyHash;
 };
 
+// MIDI learn (ADR-0027): a controller message that drives a parameter. The
+// device is an input port's name, matched like a MIDI route's (a
+// case-insensitive substring; empty: any device).
+enum class ControlKind : std::uint8_t { Cc, Note, PitchBend, Program };
+// How a CC's value moves the parameter: to the knob's position (absolute),
+// by signed steps in one of three encoder conventions (relative 1: 127 = -1,
+// 1 = +1; relative 2: 63 = -1, 65 = +1; relative 3: 65 = -1, 1 = +1), or
+// flipping it on each press (toggle: a value above 0).
+enum class ControlMode : std::uint8_t { Absolute, Relative1, Relative2, Relative3, Toggle };
+
+struct MidiControl {
+    ControlKind kind = ControlKind::Cc;
+    int channel = 1;  // 1..16
+    int number = 0;   // the CC, note or program number (0..127); 0 for pitch bend
+    std::string device;
+    bool operator==(const MidiControl&) const = default;
+};
+
+// MIDI learn on a track's or a send's own controls (ADR-0058): the fader,
+// pan and buttons. `param` names the control: volume, pan, mute, solo,
+// phase_invert, mono, armed, monitor or lane_mute on a track; volume, pan,
+// mute, phase_invert, mono or tap:post_fader|pre_fader|pre_fx on a send.
+struct ControlLearn {
+    std::string param;
+    MidiControl control;
+    ControlMode mode = ControlMode::Absolute;
+    bool softTakeover = false;  // absolute (a level or pan): follow once the knob reaches it
+    bool operator==(const ControlLearn&) const = default;
+};
+
 struct Track {
     StripType type = StripType::Channel;
     std::string name, color, notes;
@@ -131,7 +161,8 @@ struct Track {
     // UI intent (kept in the model, ignored by merges' conflict checks).
     bool locked = false, hiddenTcp = false, hiddenMixer = false;
     std::optional<TrackFreeze> freeze;
-    int folderCompact = 0;  // 0 normal, 1 small, 2 collapsed
+    int folderCompact = 0;            // 0 normal, 1 small, 2 collapsed
+    std::vector<ControlLearn> learn;  // MIDI learn, one per control (ADR-0058)
 };
 
 // A master's device output channels (1-based), with the default resolved.
@@ -248,24 +279,6 @@ struct PinMap {
     bool empty() const { return in.empty() && out.empty() && key.empty(); }
 };
 
-// MIDI learn (ADR-0027): a controller message that drives a parameter. The
-// device is an input port's name, matched like a MIDI route's (a
-// case-insensitive substring; empty: any device).
-enum class ControlKind : std::uint8_t { Cc, Note, PitchBend, Program };
-// How a CC's value moves the parameter: to the knob's position (absolute),
-// by signed steps in one of three encoder conventions (relative 1: 127 = -1,
-// 1 = +1; relative 2: 63 = -1, 65 = +1; relative 3: 65 = -1, 1 = +1), or
-// flipping it on each press (toggle: a value above 0).
-enum class ControlMode : std::uint8_t { Absolute, Relative1, Relative2, Relative3, Toggle };
-
-struct MidiControl {
-    ControlKind kind = ControlKind::Cc;
-    int channel = 1;  // 1..16
-    int number = 0;   // the CC, note or program number (0..127); 0 for pitch bend
-    std::string device;
-    bool operator==(const MidiControl&) const = default;
-};
-
 struct ParamLearn {
     std::string param;  // a semantic key, or a plain parameter's id
     MidiControl control;
@@ -331,6 +344,7 @@ struct Route {
     bool mute = false, phaseInvert = false, mono = false;
     ChannelMap channels;
     std::optional<MidiRouting> midi;  // empty = audio only
+    std::vector<ControlLearn> learn;  // MIDI learn, one per control (ADR-0058)
 };
 
 enum class EnvMode : std::uint8_t { Trim, Read, Touch, Latch, LatchPreview, Write };

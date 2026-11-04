@@ -116,7 +116,7 @@ instructions are in `docs/guides/installing.md`.
   two branches, a command log with origins, a history budget that squashes
   the oldest steps. Undo to an FX's initial unsaved settings restores its factory
   state while retaining the previous processing instance until plan retirement.
-  Project format `supple.project/2.5` with migration from
+  Project format `supple.project/2.6` with migration from
   1.x, autosave, crash recovery of recordings, a per-project UI sidecar.
 - **Track freeze** (ADR-0054): whole-channel pre-fader float32 capture, including
   take FX and auxiliary channels, with virtual latency and plugin retirement.

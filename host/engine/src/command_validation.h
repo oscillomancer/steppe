@@ -78,7 +78,7 @@ void addChecked(cmd::Registry& registry, cmd::Command<Args, Output> command) {
                     auto owner = model::frozenOwner(before, *id);
                     if (!owner) continue;
                     if (field.key == "track") {
-                        if (name == "track.move") continue;
+                        if (name == "track.move" || name.starts_with("track.learn.")) continue;
                         if (name == "track.set") {
                             bool sound = false;
                             for (const auto& f : fields.asObject())

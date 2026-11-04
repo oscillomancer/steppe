@@ -80,6 +80,7 @@ std::string freezeDependencyHash(const Session& s, Id track) {
         sound.solo = Solo::Off;
         sound.locked = sound.hiddenTcp = sound.hiddenMixer = false;
         sound.folderCompact = 0;
+        sound.learn.clear();  // controllers move the fader, never the print
         sound.freeze.reset();
         // Inactive record configuration never reaches the offline signal.
         sound.record = {};

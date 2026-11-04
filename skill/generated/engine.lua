@@ -1173,6 +1173,27 @@ q = nil
 ---@class Quire.route_add_result
 ---@field id string
 
+---@class Quire.route_learn_list_args
+---@field route? string
+
+---@class Quire.route_learn_list_result
+---@field learn any
+
+---@class Quire.route_learn_remove_args
+---@field route string
+---@field param string
+
+---@class Quire.route_learn_set_args
+---@field route string
+---@field param string The control: volume, pan, mute, phase_invert, mono, tap:post_fader, tap:pre_fader, tap:pre_fx
+---@field midi table
+---@field mode? "absolute"|"relative1"|"relative2"|"relative3"|"toggle"
+---@field soft_takeover? boolean
+
+---@class Quire.route_learn_set_result
+---@field param string
+---@field control string
+
 ---@class Quire.route_list_result
 ---@field routes table[]
 
@@ -1350,6 +1371,27 @@ q = nil
 ---@field media table
 ---@field freeze table
 ---@field states table[]
+
+---@class Quire.track_learn_list_args
+---@field track? string
+
+---@class Quire.track_learn_list_result
+---@field learn any
+
+---@class Quire.track_learn_remove_args
+---@field track string
+---@field param string
+
+---@class Quire.track_learn_set_args
+---@field track string
+---@field param string The control: volume, pan, mute, solo, phase_invert, mono, armed, monitor, lane_mute
+---@field midi table
+---@field mode? "absolute"|"relative1"|"relative2"|"relative3"|"toggle"
+---@field soft_takeover? boolean
+
+---@class Quire.track_learn_set_result
+---@field param string
+---@field control string
 
 ---@class Quire.track_list_args
 ---@field at? number
@@ -1778,6 +1820,11 @@ q = nil
 ---@field remove fun(args: Quire.route_remove_args): table Remove a send.
 ---@field set fun(args: Quire.route_set_args): table Change a route's endpoints, tap, level, pan, mute, or channel map.
 
+---@class Quire.route.learn
+---@field list fun(args?: Quire.route_learn_list_args): Quire.route_learn_list_result List the MIDI controller bindings of send controls.
+---@field remove fun(args: Quire.route_learn_remove_args): table Remove a send control's MIDI controller binding.
+---@field set fun(args: Quire.route_learn_set_args): Quire.route_learn_set_result Let a MIDI controller move a send's level, pan, mute or tap.
+
 ---@class Quire.script
 ---@field run fun(args: Quire.script_run_args): Quire.script_run_result Run a Lua script on the command bus.
 
@@ -1824,6 +1871,11 @@ q = nil
 
 ---@class Quire.track.freeze
 ---@field commit fun(args: Quire.track_freeze_commit_args): table Attach a verified freeze artifact as one replayable edit.
+
+---@class Quire.track.learn
+---@field list fun(args?: Quire.track_learn_list_args): Quire.track_learn_list_result List the MIDI controller bindings of track controls.
+---@field remove fun(args: Quire.track_learn_remove_args): table Remove a track control's MIDI controller binding.
+---@field set fun(args: Quire.track_learn_set_args): Quire.track_learn_set_result Let a MIDI controller move a track's fader, pan, mute, solo or arm.
 
 ---@class Quire.track.template
 ---@field delete fun(args: Quire.track_template_delete_args): Quire.track_template_delete_result Delete a saved track template by name.

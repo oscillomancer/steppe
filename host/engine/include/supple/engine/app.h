@@ -464,13 +464,20 @@ class EngineApp : public cmd::Host {
     std::function<bool(model::Id fx, const model::ParamLearn& learn)> learnGate;
     void setLearning(bool on) { learning_ = on; }
     bool learning() const { return learning_; }
-    bool hasLearn() const;  // any effect of the head has a learned parameter
+    bool hasLearn() const;  // any effect, track or send of the head has a learned control
     // Moves a parameter as a learned control does: `next` gets its current
     // normalized value and one encoder step, and returns the new value (none:
     // leave it). Returns the value set (rounded for a stepped parameter), or
     // none when it stayed, or when there is no such parameter.
     std::optional<double> moveParam(
         model::Id fx, const std::string& param,
+        const std::function<std::optional<double>(double current, double step)>& next);
+    // The same for a track's or a send's own control (ADR-0058; `param` as
+    // track/route `learn` names it): `current` is the level along the
+    // fader's travel, the pan from hard left (0..1), a switch 0 or 1; the
+    // move goes through track.set / route.set, one undo step per movement.
+    std::optional<double> moveControl(
+        model::Id object, const std::string& param,
         const std::function<std::optional<double>(double current, double step)>& next);
 
     // The parameter edited last in the window (the FX window's panel, a
@@ -517,7 +524,8 @@ class EngineApp : public cmd::Host {
                  cmd::Kind kind) override;
     // Example fixtures: empty, saved, song (tr_1 "Bass"), song_with_item
     // (+ it_1: a MIDI bar), song_with_fx (+ fx_1 sine, fx_2 gain), song_with_env (+ en_1
-    // on fx_2 gain), song_with_learn (song_with_fx + fx_2 gain on CC 21), song_undone,
+    // on fx_2 gain), song_with_learn (song_with_fx + fx_2 gain on CC 21), song_with_mix_learn
+    // (song_with_route + tr_1 volume on CC 7, sd_1 volume on CC 12), song_undone,
     // engine_running (the dummy backend), engine_armed (+ tr_1 armed),
     // recording_interrupted (tr_1 + rec/Vocal-1.wav left by a crash), meter_change
     // (3/4 from bar 9), song_with_audio (tr_1 + it_1/tk_1 audio), song_with_autoitem (song_with_env
@@ -664,6 +672,7 @@ class EngineApp : public cmd::Host {
     std::optional<TouchedParam> touched_;
     std::uint64_t touchSerial_ = 0;
     void applyLearn(const std::vector<ControlEvent>& events);
+    void applyControlLearn(const std::vector<ControlEvent>& events);  // control_learn.cpp
     // Commits the plain parameters that rested (all of them: `all`).
     void commitLearned(bool all);
     void recordAutomationAt(model::Id object, const std::string& param, double value,

@@ -9,6 +9,10 @@ a command).
 the polling schedule described below with notifications and monotonic service
 deadlines. The GUI loop conversion follows separately.
 
+**Amendment, 2026-11-04:** [ADR-0058](0058-strip-and-send-learn.md) adds
+bindings on tracks' and sends' own controls (fader, pan, buttons), the
+"learn on track faders directly" left undone below.
+
 ## Context
 
 A MIDI controller's knobs, faders and buttons should be able to move any

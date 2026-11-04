@@ -73,3 +73,4 @@ current state.
 | [0055](0055-render-settings-and-dialog.md) | Render settings, presets and the render dialog | Accepted |
 | [0056](0056-master-hardware-outputs.md) | Masters play to hardware outputs; a mix renders several masters | Accepted |
 | [0057](0057-master-recording.md) | Masters record their output and play their own items | Accepted |
+| [0058](0058-strip-and-send-learn.md) | MIDI learn on strips' and sends' own controls | Accepted |

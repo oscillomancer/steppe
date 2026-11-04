@@ -586,6 +586,8 @@ const Schema<Track>& schemaOf<Track>() {
         b.field("freeze", &Track::freeze, trackFreezeSchema());
         b.field("folder_compact", &Track::folderCompact, intS().range(0, 2));
         dflt(b, d.folderCompact);
+        b.field("learn", &Track::learn, schema::arrayOf(controlLearnSchema()));
+        dflt(b, d.learn);
         return b.build();
     }();
     return s;
@@ -804,6 +806,18 @@ Schema<ParamLearn> paramLearnSchema() {
     return b.build();
 }
 
+Schema<ControlLearn> controlLearnSchema() {
+    const ControlLearn d;
+    auto b = schema::object<ControlLearn>("control_learn");
+    b.field("param", &ControlLearn::param, str());
+    b.field("midi", &ControlLearn::control, midiControlSchema());
+    b.field("mode", &ControlLearn::mode, controlModeSchema());
+    dflt(b, d.mode);
+    b.field("soft_takeover", &ControlLearn::softTakeover, boolean());
+    dflt(b, d.softTakeover);
+    return b.build();
+}
+
 template <>
 const Schema<FxInstance>& schemaOf<FxInstance>() {
     static const Schema<FxInstance> s = [] {
@@ -901,6 +915,8 @@ const Schema<Route>& schemaOf<Route>() {
         b.field("channels", &Route::channels, channels);
         dflt(b, d.channels);
         b.field("midi", &Route::midi, midiR);
+        b.field("learn", &Route::learn, schema::arrayOf(controlLearnSchema()));
+        dflt(b, d.learn);
         return b.build();
     }();
     return s;
@@ -1152,7 +1168,7 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
         auto migrated = migrateProject1(std::move(doc), warnings);
         if (!migrated) return std::move(migrated).error();
         doc = std::move(*migrated);
-    } else if (version->minor > 5 && warnings)
+    } else if (version->minor > 6 && warnings)
         warnings->push_back(
             {"project.newer_minor", "loading a newer project minor version", "/schema"});
     // Before 2.4 a master's hardware output could be written as a route to
