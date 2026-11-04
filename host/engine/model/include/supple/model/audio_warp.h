@@ -6,7 +6,10 @@
 
 namespace supple::model {
 // Marker coordinates are original source seconds and item-local seconds.
-// Outside the authored map, extrapolate at the take's scalar playrate.
+// Outside the authored map, extrapolate at the take's scalar speed.
+// Source seconds an unwarped take plays per item second: its playrate, times
+// the pitch ratio when pitch is not preserved (what playback does).
+double audioSpeed(const Take& take);
 Status validateWarpMap(const Take& take, std::string path = {});
 bool activeWarp(const Take& take);
 // Borrowed immutable take; validate once, then O(log markers) lookups.

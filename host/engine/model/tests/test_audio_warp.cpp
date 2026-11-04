@@ -29,6 +29,22 @@ TEST_CASE("audio warp maps original source seconds and survives slip split and r
     CHECK_FALSE(activeWarp(t));
 }
 
+TEST_CASE("an unwarped take without preserved pitch maps source time at playback speed") {
+    // Playback reads the source at playrate x pitch ratio; a split rebases there.
+    Take t;
+    t.startOffset = 1;
+    t.playrate = 1.5;
+    t.preservePitch = false;
+    t.pitch = 12;  // twice as fast again
+    CHECK(audioSpeed(t) == doctest::Approx(3));
+    CHECK(audioSourceAt(t, 2) == doctest::Approx(7));
+    CHECK(audioItemAt(t, 7) == doctest::Approx(2));
+    rebaseAudioTake(t, 2);
+    CHECK(t.startOffset == doctest::Approx(7));
+    t.preservePitch = true;
+    CHECK(audioSpeed(t) == doctest::Approx(1.5));
+}
+
 TEST_CASE("audio warp schema 2.2 round trip keeps object markers hits and typed peer references") {
     EditTxn tx(Session::create(), 1);
     Track tr;

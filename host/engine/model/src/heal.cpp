@@ -115,8 +115,7 @@ Status sameTake(const Session& s, const Take& first, const Take& previous, const
         return incompatible("right pieces belong to a different warp bundle");
     auto expected = previous;
     rebaseAudioTake(expected, delta);
-    const double speed =
-        current.playrate * (current.preservePitch ? 1. : std::pow(2., current.pitch / 12.));
+    const double speed = audioSpeed(current);
     const double rate = s.project->sampleRate;
     if (time::samplesAt(expected.startOffset, rate / speed) !=
             time::samplesAt(current.startOffset, rate / speed) ||

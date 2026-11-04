@@ -146,7 +146,7 @@ class LaneLabels : public ui::Node {
                     const model::AudioWarpMap hitMap(*take);
                     if (take->transients)
                         for (double pos : take->transients->positions)
-                            tick(item->loop ? (pos - take->startOffset) / take->playrate
+                            tick(item->loop ? (pos - take->startOffset) / model::audioSpeed(*take)
                                             : hitMap.itemAt(pos),
                                  false);
                     for (const auto& marker : take->stretchMarkers) tick(marker.itemPos, true);
@@ -547,7 +547,8 @@ void Lanes::drawAudio(const ui::GlFrame& frame, const ui::Rect& r, const model::
     const double rate = pyramid->sampleRate();
     const double sourceSeconds = static_cast<double>(pyramid->frames()) / rate;
     const model::AudioWarpMap timeMap(take);
-    const double framesPerUnit = rate * take.playrate / view_.pixelsPerSecond;
+    const double speed = model::audioSpeed(take);  // pitch unpreserved: faster or slower
+    const double framesPerUnit = rate * speed / view_.pixelsPerSecond;
     const peaks::Level& level = pyramid->pick(framesPerUnit * static_cast<double>(px));
     const float gain = static_cast<float>(dbToGain(item.gainDb + take.gainDb));
     const float laneH = r.h / static_cast<float>(channels);
@@ -557,9 +558,9 @@ void Lanes::drawAudio(const ui::GlFrame& frame, const ui::Rect& r, const model::
         strips_->beginRun();
         for (float x = std::floor(vis.x * frame.ratio) / frame.ratio; x < vis.right(); x += px) {
             // The waveform and playback share original-source coordinates.
-            double s0 = item.loop ? take.startOffset + (timeAt(x) - itemStart) * take.playrate
+            double s0 = item.loop ? take.startOffset + (timeAt(x) - itemStart) * speed
                                   : timeMap.sourceAt(timeAt(x) - itemStart);
-            double s1 = item.loop ? take.startOffset + (timeAt(x + px) - itemStart) * take.playrate
+            double s1 = item.loop ? take.startOffset + (timeAt(x + px) - itemStart) * speed
                                   : timeMap.sourceAt(timeAt(x + px) - itemStart);
             if (item.loop && sourceSeconds > 0) {
                 const double wrap = std::floor(s0 / sourceSeconds) * sourceSeconds;

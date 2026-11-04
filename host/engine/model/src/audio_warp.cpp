@@ -6,6 +6,9 @@
 #include <cmath>
 
 namespace supple::model {
+double audioSpeed(const Take& t) {
+    return t.playrate * (t.preservePitch ? 1.0 : std::pow(2.0, t.pitch / 12.0));
+}
 Status validateWarpMap(const Take& t, std::string path) {
     auto fail = [&](std::size_t i) -> Status {
         return Error("warp.map", "stretch anchors must increase in source and item time",
@@ -33,7 +36,7 @@ bool activeWarp(const Take& t) {
 }
 namespace {
 double map(const Take& t, double x, bool inverse, bool active) {
-    const double rate = inverse ? 1 / t.playrate : t.playrate;
+    const double rate = inverse ? 1 / audioSpeed(t) : audioSpeed(t);
     if (!active) return inverse ? (x - t.startOffset) * rate : t.startOffset + x * rate;
     const auto input = [inverse](const StretchMarker& m) {
         return inverse ? m.sourcePos : m.itemPos;
