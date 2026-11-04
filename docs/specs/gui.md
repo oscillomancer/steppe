@@ -485,6 +485,12 @@ as playback does. Fade shapes and curve bends share playback's evaluator.
 Automation drawing samples only visible time and bounds loop glyph work;
 plugin automation interpolates in the playback parameter domain (ADR-0010).
 
+A strip's envelope menu lists, after its own and its effects' envelopes, its
+sends' volume, pan and mute (`env.add {route}`, flat at the send's value;
+titled "Send → destination · Volume"). A send's visible lanes sit under the
+strip it leaves, after the strip's own and its effects' lanes; `route.set`
+records into them in touch, latch and write like `track.set`.
+
 The main master's (`tr_0`) envelope menu also offers Playrate (ADR-0045);
 other strips, including secondary masters, do not. Creating it starts flat
 at the saved project rate. The rate menu's `Master envelopes...` entry and

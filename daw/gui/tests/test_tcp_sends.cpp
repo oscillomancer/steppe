@@ -918,3 +918,28 @@ TEST_CASE("a master's outputs menu lists the device's outputs and sets hw_output
     CHECK(f.shell->outputLabel(cue) == "out 3/4");
     f.exec("engine.stop");
 }
+
+TEST_CASE("a strip's envelope menu automates its sends; their lanes sit under the strip") {
+    SendsFixture f;
+    f.send(f.a, f.b);
+    const auto route = model::Id::parse(f.routes().asArray()[0].find("id")->asString());
+    REQUIRE(route);
+    f.shell->openEnvelopeMenu(f.a, {10, 10, 40, 18});
+    const auto* menu = f.root->find("tcp.env." + f.a.str());
+    REQUIRE(menu);
+    std::function<void()> pick;
+    for (const auto& item : ui::menuItems(*menu))
+        if (item.label == "Send → B · Volume envelope") pick = item.run;
+    REQUIRE(pick);
+    pick();
+    f.sync();
+    REQUIRE(f.app->head().envelopes.size() == 1);
+    const auto& env = *f.app->head().envelopes.begin();
+    CHECK(env.value->target.object == *route);
+    CHECK(env.value->target.param == "volume");
+    const auto lane = f.view().trackLayout().indexOfEnv(env.id);
+    const auto strip = f.view().trackLayout().indexOf(f.a);
+    REQUIRE(lane);
+    REQUIRE(strip);
+    CHECK(*lane == *strip + 1);
+}

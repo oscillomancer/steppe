@@ -401,7 +401,7 @@ void Lanes::drawEnvelope(ui::Canvas& c, std::size_t row, const ui::Rect& r) {
             continue;  // under an item: not what plays
         c.fillRect({x - 3, yOf(pt.value) - 3, 6, 6}, ink);
     }
-    c.text({r.x + 6, r.y, 200, 14}, envTitle(*env) + (env->active ? "" : " (off)"), ui::Font::Ui,
+    c.text({r.x + 6, r.y, 200, 14}, envTitle(*env, s) + (env->active ? "" : " (off)"), ui::Font::Ui,
            t.type("caption"), t.color("ink-quiet"));
 }
 

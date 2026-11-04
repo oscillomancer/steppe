@@ -232,6 +232,12 @@ queue** pins a render to the project as it is now; **Queue** runs them all.
 
 ## Automation
 
+A track's **env** button lists its volume, pan and mute envelopes, then the
+same three for each of its sends ("Send → Reverb · Volume"). A send's lanes
+appear under the track it leaves, after the track's own. Record a send's
+moves as you would the fader's: set the lane's mode to touch, latch or write
+and move the send's level or pan in the routing matrix while playing.
+
 To edit an automation item's points, its amplitude magnitude must be greater than
 0.000000001. If it is zero or too small to invert, the app asks you to restore
 the amplitude first; the source curve is preserved.

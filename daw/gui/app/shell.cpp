@@ -23,6 +23,7 @@
 #include "supple/ui/popup.h"
 #include "supple/ui/root.h"
 #include "supple/ui/widgets.h"
+#include "supple/views/envelope_lane.h"
 #include "transport_bar.h"
 
 namespace supple::gui {
@@ -411,6 +412,62 @@ void Shell::openEnvelopeMenu(const model::Id& track, const ui::Rect& anchor) {
             commit("env.remove", std::move(args), {});
         };
         removals.push_back(std::move(remove));
+    }
+    // The strip's sends: their level, pan and mute, automated like the fader's.
+    bool firstSend = true;
+    for (const auto& r : s.routes) {
+        if (!tr || r.value->from.track != track) continue;
+        if (firstSend) items.push_back({"", "", {}, true, true});  // separator
+        firstSend = false;
+        for (const char* param : {"volume", "pan", "mute"}) {
+            model::Envelope probe;
+            probe.target = {r.id, param};
+            std::optional<model::Id> env;
+            bool shown = false;
+            for (const auto& e : s.envelopes)
+                if (e.value->target.object == r.id && e.value->target.param == param) {
+                    env = e.id;
+                    shown = e.value->visible;
+                }
+            const std::string name = views::envTitle(probe, s) + " envelope";
+            ui::MenuItem m;
+            m.label = name;
+            m.checked = env && shown;
+            if (env) {
+                m.run = [this, id = *env, shown] {
+                    json::Value args = json::Value::object();
+                    args["env"] = id.str();
+                    args["visible"] = !shown;
+                    commit("env.set", std::move(args), {});
+                };
+                ui::MenuItem remove;
+                remove.label = "Remove " + name;
+                remove.run = [this, id = *env] {
+                    json::Value args = json::Value::object();
+                    args["env"] = id.str();
+                    commit("env.remove", std::move(args), {});
+                };
+                removals.push_back(std::move(remove));
+            } else {
+                // Flat at the send's current value.
+                const double value = param == std::string_view("volume") ? r.value->volumeDb
+                                     : param == std::string_view("pan")
+                                         ? r.value->pan.resolve(tr->pan)
+                                         : (r.value->mute ? 1.0 : 0.0);
+                m.run = [this, route = r.id, param = std::string(param), value] {
+                    json::Value args = json::Value::object(), points = json::Value::array(),
+                                first = json::Value::object();
+                    args["route"] = route.str();
+                    args["param"] = param;
+                    first["beat"] = 0.0;
+                    first["value"] = value;
+                    points.push_back(std::move(first));
+                    args["points"] = std::move(points);
+                    commit("env.add", std::move(args), {});
+                };
+            }
+            items.push_back(std::move(m));
+        }
     }
     if (!removals.empty()) {
         items.push_back({"", "", {}, true, true});  // separator

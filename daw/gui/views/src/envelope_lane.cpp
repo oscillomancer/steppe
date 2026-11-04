@@ -218,7 +218,27 @@ double EnvelopeCurve::valueAt(double beat, double fallback) const {
 
 int envOrder(const model::Envelope& env) {
     const std::string& p = env.target.param;
-    return p == "volume" ? 0 : p == "pan" ? 1 : p == "mute" ? 2 : 3;
+    const int order = p == "volume" ? 0 : p == "pan" ? 1 : p == "mute" ? 2 : 3;
+    return env.target.object.kind == model::Kind::Route ? 4 + order : order;
+}
+
+std::string envTitle(const model::Envelope& env, const model::Session& session) {
+    const model::Route* r = env.target.object.kind == model::Kind::Route
+                                ? session.routes.find(env.target.object)
+                                : nullptr;
+    if (!r) return envTitle(env);
+    std::string to;
+    if (r->to.fx) {
+        if (const model::FxInstance* fx = session.fx.find(*r->to.fx))
+            to = "key " + (fx->label.empty() ? fx->plugin.name : fx->label);
+    } else if (r->to.track) {
+        if (const model::Track* t = session.tracks.find(*r->to.track)) to = t->name;
+    } else if (r->to.hwChannels) {
+        to = "out";
+        for (std::size_t i = 0; i < r->to.hwChannels->size(); ++i)
+            to += (i ? "/" : " ") + std::to_string((*r->to.hwChannels)[i]);
+    }
+    return "Send \u2192 " + to + " \u00b7 " + envTitle(env);
 }
 
 }  // namespace supple::views

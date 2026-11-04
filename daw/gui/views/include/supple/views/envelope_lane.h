@@ -32,10 +32,13 @@ struct EnvScale {
 std::optional<EnvScale> envScale(const model::Envelope& env);
 // "Volume", "Pan", "Mute", "Playrate" (or the parameter key).
 std::string envTitle(const model::Envelope& env);
+// With a send's destination: "Send → Reverb · Volume" (others as above).
+std::string envTitle(const model::Envelope& env, const model::Session& session);
 // The envelope's value at a beat (points are in beats), with the segment
 // shapes the engine plays; `fallback` when it has no points.
 double envValueAt(const model::Envelope& env, double beat, double fallback);
-// The order lanes appear under their track: volume, pan, mute, then others.
+// The order lanes appear under their track: volume, pan, mute, then others,
+// then its sends' (volume, pan, mute).
 int envOrder(const model::Envelope& env);
 
 // Samples visible automation directly, without expanding repeated source points.

@@ -199,7 +199,8 @@ bool TrackLayout::show(const model::Session& session, const std::vector<model::C
             return env && env->visible &&
                    (env->target.object.kind == model::Kind::Track ||
                     env->target.object.kind == model::Kind::Group ||
-                    env->target.object.kind == model::Kind::Fx);
+                    env->target.object.kind == model::Kind::Fx ||
+                    env->target.object.kind == model::Kind::Route);
         };
         geometry |= (lane(after) && scaleOf(*after).has_value()) != scaledEnvs_.contains(id);
         geometry |=
@@ -214,6 +215,12 @@ bool TrackLayout::show(const model::Session& session, const std::vector<model::C
         geometry |= !before || !after || before->plugin.id != after->plugin.id ||
                     before->plugin.format != after->plugin.format ||
                     before->plugin.version != after->plugin.version;
+    }
+    // A send that leaves another strip now takes its lanes there.
+    for (auto id : changedObjects(session_.routes, session.routes, changes)) {
+        const auto* before = session_.routes.find(id);
+        const auto* after = session.routes.find(id);
+        geometry |= !before || !after || before->from.track != after->from.track;
     }
     // An expanded item that changed may hold another number of takes now.
     bool heights = false;
@@ -233,22 +240,26 @@ bool TrackLayout::show(const model::Session& session, const std::vector<model::C
     trackRows_.clear();
     envRows_.clear();
     scaledEnvs_.clear();
-    std::map<model::Id, model::Id> fxOwners;
+    std::map<model::Id, model::Id> owners;
     for (const auto& track : session_.tracks) {
-        for (auto fx : track.value->chain) fxOwners[fx] = track.id;
-        for (auto fx : track.value->inputChain) fxOwners[fx] = track.id;
+        for (auto fx : track.value->chain) owners[fx] = track.id;
+        for (auto fx : track.value->inputChain) owners[fx] = track.id;
     }
+    // A send's lanes are under the strip it leaves (hardware inputs have none).
+    for (const auto& route : session_.routes)
+        if (route.value->from.track) owners[route.id] = *route.value->from.track;
     std::map<model::Id, std::vector<std::pair<int, model::Id>>> lanes;
     for (const auto& envelope : session_.envelopes) {
         if (!envelope.value->visible || !scaleOf(*envelope.value)) continue;
         if (envelope.value->target.object.kind == model::Kind::Track ||
             envelope.value->target.object.kind == model::Kind::Group ||
-            envelope.value->target.object.kind == model::Kind::Fx)
+            envelope.value->target.object.kind == model::Kind::Fx ||
+            envelope.value->target.object.kind == model::Kind::Route)
             scaledEnvs_.insert(envelope.id);
         auto owner = envelope.value->target.object;
-        if (owner.kind == model::Kind::Fx) {
-            const auto found = fxOwners.find(owner);
-            if (found == fxOwners.end()) continue;
+        if (owner.kind == model::Kind::Fx || owner.kind == model::Kind::Route) {
+            const auto found = owners.find(owner);
+            if (found == owners.end()) continue;
             owner = found->second;
         }
         if (owner.kind == model::Kind::Track || owner.kind == model::Kind::Group)
