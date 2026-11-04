@@ -186,6 +186,36 @@ TEST_CASE("a stalled recording writer preserves overflow gaps and loop file posi
     std::filesystem::remove_all(dir);
 }
 
+TEST_CASE("a master's take starts with the device input's takes, padded by the round trip") {
+    // ADR-0057: device input captured at P was heard at P - 100 (round trip);
+    // the master's output at P belongs to P - 40 (its own shift). Its frames
+    // go 60 frames later in its file, so both files start at P - 100.
+    const auto dir = std::filesystem::temp_directory_path() /
+                     ("supple-rec-master-" + std::to_string(::getpid()));
+    std::filesystem::remove_all(dir);
+    RecordTarget input{Id{model::Kind::Track, 1}, {0}, dir / "input.wav", {}};
+    RecordTarget master{model::kMaster, {}, dir / "master.wav", {}, true, 40};
+    detail::Recorder recorder({input, master}, 16, 100);
+    REQUIRE(recorder.open());
+    std::array<float, 50> ramp;
+    for (std::size_t i = 0; i < ramp.size(); ++i) ramp[i] = float(i + 1);
+    const float* in[] = {ramp.data()};
+    const detail::ProcessedInput out{model::kMaster, {ramp.data(), ramp.data()}, 0};
+    recorder.capture(in, 1, 50, 1000, std::span(&out, 1));
+    const auto takes = recorder.finish();
+    REQUIRE(takes.size() == 2);
+    for (const RecordedTake& take : takes) CHECK(take.startSample == 900);
+    const auto& rec = takes[0].track == model::kMaster ? takes[0] : takes[1];
+    CHECK(rec.frames == 110);
+    const auto decoded = audio::readAudio(rec.file);
+    REQUIRE(decoded);
+    REQUIRE(decoded->channels.size() == 2);
+    CHECK(decoded->channels[0][59] == 0.f);  // padding: before this recording
+    CHECK(decoded->channels[0][60] == 1.f);  // timeline 960 = 1000 - 40
+    CHECK(decoded->channels[1][109] == 50.f);
+    std::filesystem::remove_all(dir);
+}
+
 TEST_CASE("a failed recording target leaves other targets writing") {
     using Access = detail::RecorderTestAccess;
     const auto dir =
