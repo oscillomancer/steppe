@@ -310,6 +310,7 @@ class ItemGestures {
             double position = 0, end = 0;
             model::Id track;
             std::ptrdiff_t channelOffset = 0;
+            bool audio = true;  // a master's lane takes only audio items (ADR-0057)
         };
         std::vector<Entry> items;
     } clipboard_;

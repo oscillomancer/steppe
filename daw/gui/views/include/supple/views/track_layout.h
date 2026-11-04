@@ -36,6 +36,26 @@ struct TrackRow {
 // two channels (gui.md §4.2). The model's child order is untouched.
 std::vector<model::Id> displayChildren(const model::Session& session, const model::Track& parent);
 
+// The masters that have an arrange row (ADR-0057): their lane, for a master
+// that is armed or holds items.
+std::set<model::Id> masterLanes(const model::Session& session);
+
+// Whether every take of `item` is audio (or empty).
+inline bool audioItem(const model::Session& session, const model::Item& item) {
+    for (model::Id id : item.takes)
+        if (const model::Take* take = session.takes.find(id);
+            take && take->source && take->source->kind != model::Kind::Media)
+            return false;
+    return true;
+}
+
+// Whether a row can hold `item` (any item when null; ADR-0057): a channel any
+// item, a master's lane audio items only, busses and automation lanes none.
+inline bool holdsItem(const model::Session& session, const TrackRow& row, const model::Item* item) {
+    if (row.env || row.type == model::StripType::Buss) return false;
+    return row.type == model::StripType::Channel || !item || audioItem(session, *item);
+}
+
 // Every track in the mixer's strip order: channels, then busses, then masters,
 // each type in display order (displayChildren walked from the masters). The FX
 // window's track arrows and menu follow it too.
@@ -148,7 +168,8 @@ class TrackLayout {
     std::set<model::Id> scaledEnvs_;
     std::map<model::Id, float> heights_;
     std::set<model::Id> expanded_;
-    bool pruneExpanded();  // true when one went
+    std::set<model::Id> masterLanes_;  // the masters with a row (ADR-0057)
+    bool pruneExpanded();              // true when one went
     float globalHeight_ = kDefaultHeight;
     std::vector<float> rowHeights_;
     std::vector<float> yOffsets_;

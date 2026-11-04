@@ -78,7 +78,8 @@ class LaneLabels : public ui::Node {
                         c.fillRect({x, r.bottom() - 3, std::min(6.f, r.right() - x), 2},
                                    t.color("ink-quiet").withAlpha(.5f));
                 }
-                const float alpha = item->mute || frozen ? 0.45f : 0.85f;
+                const bool laneMuted = owner && owner->laneMute;  // a master's prints (ADR-0057)
+                const float alpha = item->mute || frozen || laneMuted ? 0.45f : 0.85f;
                 // An item that does not follow the beat says what it follows: a
                 // tempo change leaves "time" items at their seconds, and "pos"
                 // items keep their length in seconds (their start follows).
@@ -462,7 +463,8 @@ void Lanes::paintGl(const ui::GlFrame& frame) {
             if (span.startSec >= t1) break;  // sorted by start
             if (span.endSec <= t0) continue;
             ++stats_.items;
-            const bool dim = item->mute;
+            const model::Track* owner = s.tracks.find(item->track);
+            const bool dim = item->mute || (owner && owner->laneMute);
             const std::uint32_t body = ui::packRgba(type.withAlpha(dim ? 0.10f : 0.28f));
             const std::uint32_t edge = ui::packRgba(type.withAlpha(dim ? 0.35f : 0.85f));
             const std::uint32_t wave = ui::packRgba(t.color("ink").withAlpha(dim ? 0.3f : 0.8f));

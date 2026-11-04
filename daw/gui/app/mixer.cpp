@@ -32,7 +32,7 @@ constexpr float kSlotH = 18, kSlotGap = 2;
 constexpr float kGripH = 5, kHeaderH = 30;
 constexpr float kFaderH = 133;  // the fader and meter row
 // The fixed rows of a channel with no sends, their gaps and the padding (each
-// send adds kSendH; busses and masters have no arm row).
+// send adds kSendH; busses have no arm row).
 constexpr float kStripChrome = 173;
 constexpr float kSendH = 14;
 constexpr float kDragThreshold = 4;
@@ -893,9 +893,10 @@ void Mixer::rebuild() {
         }
         sends.layout.height = ui::SizeRule::fixed(static_cast<float>(shown) * kSendH);
         sends.visible = shown > 0;
-        // Channels: the arm, centred, under the plug-ins (busses and masters give
-        // the room to the chain, so every strip's fader lines up).
-        if (t.type == model::StripType::Channel) {
+        // Channels and masters (ADR-0057: a master records its output): the arm,
+        // centred, under the plug-ins (busses give the room to the chain, so
+        // every strip's fader lines up).
+        if (t.type != model::StripType::Buss) {
             auto& rec = frame->emplace<ui::Node>("mixer.rec." + tid);
             rec.layout.dir = ui::Layout::Dir::Row;
             rec.layout.height = ui::SizeRule::fixed(20);

@@ -83,9 +83,12 @@ Result<json::Value> SelectionEdit::set(json::Value args, const std::string& gest
             if (!t) continue;
             each["track"] = id;
             each["bypass_groups"] = true;
-            if (t->type != model::StripType::Channel && id != track)
-                for (const char* field : {"armed", "monitor", "record_input", "record_midi"})
+            if (t->type != model::StripType::Channel && id != track) {
+                for (const char* field : {"monitor", "record_input", "record_midi"})
                     each.asObject().erase(field);
+                // Masters are armed to record their output (ADR-0057); busses never.
+                if (t->type == model::StripType::Buss) each.asObject().erase("armed");
+            }
             const auto start =
                 drag && start_.contains(id) ? start_.at(id) : std::pair{t->volumeDb, t->pan};
             if (each.find("volume_db") && (drag || relativeLevel.contains(id))) {

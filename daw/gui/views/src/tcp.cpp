@@ -165,12 +165,14 @@ class TcpPanel::Row : public ui::Node {
     std::optional<model::Id> faderTrack_, panTrack_, renameTrack_, resizeTrack_;
     int depth_ = 0;
     bool channel_ = true;
+    bool master_ = false;  // a master's lane (ADR-0057): name, arm and lane mute only
     bool renaming_ = false;
     ui::Rect nameRect_{};
     bool frozen_ = false;  // a snowflake precedes the name
     ui::Label* name_ = nullptr;
     ui::TextField* rename_ = nullptr;
     ui::Toggle* mute_ = nullptr;
+    ui::Toggle* laneMute_ = nullptr;  // a master's lane: silences its own items
     ui::Toggle* solo_ = nullptr;
     ui::Toggle* polarity_ = nullptr;  // polarity and mono (ADR-0022), on the fader row
     ui::Toggle* mono_ = nullptr;
@@ -238,6 +240,12 @@ TcpPanel::Row::Row(TcpPanel& panel, std::size_t slot)
         args["mute"] = on;
         setTrack(std::move(args), {});
     });
+    laneMute_ = &emplace<ui::Toggle>(id + ".lanemute", "M", "mute", [this, setTrack](bool on) {
+        json::Value args = trackArg(*track_);
+        args["lane_mute"] = on;
+        setTrack(std::move(args), {});
+    });
+    laneMute_->pill = true;
     solo_ = &emplace<ui::Toggle>(id + ".solo", "S", "solo", [this, setTrack](bool on) {
         json::Value args = trackArg(*track_);
         args["solo"] = on ? "on" : "off";
@@ -336,6 +344,7 @@ void TcpPanel::Row::bind(const model::Id& track, int depth, const model::Track& 
     track_ = track;
     depth_ = depth;
     channel_ = tr.type == model::StripType::Channel;
+    master_ = tr.type == model::StripType::Master;
     renaming_ = false;
     rename_->visible = false;
     name_->visible = true;
@@ -347,6 +356,7 @@ void TcpPanel::Row::refresh(const model::Session& session) {
     const model::Track* tr = track_.has_value() ? session.tracks.find(*track_) : nullptr;
     if (!tr) return;
     channel_ = tr->type == model::StripType::Channel;
+    master_ = tr->type == model::StripType::Master;
     if (const auto row = panel_.layout_.indexOf(*track_))
         depth_ = panel_.layout_.rows()[*row].depth;
     const std::string name =
@@ -358,6 +368,7 @@ void TcpPanel::Row::refresh(const model::Session& session) {
     }
     if (!renaming_) rename_->setText(name);
     mute_->setOn(tr->mute);
+    laneMute_->setOn(tr->laneMute);
     solo_->setOn(tr->solo != model::Solo::Off);
     polarity_->enabled = mono_->enabled = arm_->enabled = monitor_->enabled = !tr->freeze;
     polarity_->setOn(tr->phaseInvert);
@@ -412,6 +423,7 @@ ui::Node* TcpPanel::Row::control(std::string_view what) const {
     if (what == "out") return out_;
     if (what == "rename") return rename_;
     if (what == "mute") return mute_;
+    if (what == "lanemute") return laneMute_;
     if (what == "solo") return solo_;
     if (what == "polarity") return polarity_;
     if (what == "mono") return mono_;
@@ -430,6 +442,25 @@ void TcpPanel::Row::arrange(const ui::Canvas& canvas, const ui::Rect& r) {
     setBounds(r);
     const float x = r.x, right = r.right();
     const float indent = 14.0f * static_cast<float>(depth_);
+    laneMute_->visible = false;
+    if (master_) {  // a master's lane (ADR-0057): its name, arm and the lane's mute
+        for (ui::Node* n :
+             std::initializer_list<ui::Node*>{mute_, solo_, monitor_, input_, env_, out_, fader_,
+                                              pan_, polarity_, mono_, meter_, fx_, addFx_})
+            n->visible = false;
+        nameRect_ = {x + 26 + indent, r.y + TcpRowGeometry::kNameTop,
+                     std::max(20.0f, right - x - 36 - indent), TcpRowGeometry::kNameHeight};
+        name_->arrange(canvas, nameRect_);
+        rename_->arrange(canvas, {nameRect_.x, nameRect_.y + 1, nameRect_.w, 17});
+        const bool controls = r.h >= 40;
+        laneMute_->visible = arm_->visible = controls;
+        if (controls) {
+            laneMute_->arrange(canvas, {x + 6, r.y + 22, 19, 14});
+            arm_->arrange(canvas, {x + 27, r.y + 21, 16, 16});
+        }
+        return;
+    }
+    meter_->visible = fx_->visible = addFx_->visible = true;
     // "fx" and "+" end the name line, so every row has them at any height.
     const float fxWidth = 22.0f, addWidth = 16.0f;
     addFx_->arrange(canvas, {right - 10 - addWidth, r.y + TcpRowGeometry::kFxTop, addWidth,
