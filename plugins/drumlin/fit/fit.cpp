@@ -10,7 +10,8 @@
 // machine played it at; CMA-ES searches the free parameters on every core,
 // scoring each candidate by how far its sound lies from the recordings in
 // level over time and frequency (and, for tonal sounds, in waveform at the
-// hit). See plugins/drumlin/fit/README.md.
+// hit), and by the narrow tones it rings with that they do not. See
+// plugins/drumlin/fit/README.md.
 //
 //   drumlin-fit fit <spec> [--evals N] [--seed S] [--sigma X] [--threads T]
 //   drumlin-fit score <spec>           the spec's recipe as it stands, scored
@@ -146,6 +147,7 @@ int* intField(E::Recipe& r, const std::string& name) {
     if (name == "bands") return &r.bands;
     if (name == "bursts") return &r.bursts;
     if (name == "loop") return &r.loop;
+    if (name == "bits") return &r.bits;
     if (name.rfind("band", 0) == 0 && name.size() > 6 &&
         name.substr(name.find('.') + 1) == "shape") {
         const int b = std::atoi(name.c_str() + 4);
@@ -204,8 +206,10 @@ struct Spec {
     bool peakLoaded = false;
     std::set<std::string> loaded;  // fields a `load` set
     // The score's parts: the hit's map, the body's map, the level, the
-    // waveform, the body's fine spectrum, the hit's crest factor.
+    // waveform, the body's fine spectrum, the hit's crest factor, and the
+    // narrow peaks the render rings with that the recording does not.
     double wHit = 0.5, wBody = 1.0, wLevel = 0.5, wWave = 0.0, wFine = 0.0, wCrest = 0.0;
+    double wRing = 0.0;
     double waveMs = 20.0;   // how much of the hit the waveform term compares
     double before = 0.060;  // seconds compared before the hit
     double longest = 1.5;   // ... and after it, at most
@@ -220,7 +224,7 @@ std::string trim(const std::string& s) {
 // Lines: `set <field> <value>`, `free <field> <init> <lo> <hi> [log]`,
 // `load <file>` (a fit's .best: its values), `target <wav> clock=<Hz>
 // [weight=<w>] [decay=<ms>] [hit=<n>] [accent=1] [upto=<ms>]`, `weights hit body level wave
-// [fine [crest]]`, `drive auto|fixed`, `wave <ms>` (the waveform term's length),
+// [fine [crest [ring]]]`, `drive auto|fixed`, `wave <ms>` (the waveform term's length),
 // `window <before s> <longest s>`.
 // `#` starts a comment. Paths are relative to the spec's folder unless absolute.
 Spec readSpec(const std::string& path) {
@@ -314,6 +318,7 @@ Spec readSpec(const std::string& path) {
             words >> spec.wHit >> spec.wBody >> spec.wLevel >> spec.wWave;
             if (!(words >> spec.wFine)) spec.wFine = 0.0;
             if (!(words >> spec.wCrest)) spec.wCrest = 0.0;
+            if (!(words >> spec.wRing)) spec.wRing = 0.0;
         } else if (verb == "drive") {
             std::string how;
             words >> how;
@@ -489,20 +494,19 @@ std::vector<double> levels(const std::vector<double>& x, int from, int frames) {
 
 // The body's fine spectrum (dB per 21.5 Hz bin, 150 Hz to 20 kHz) over
 // [from, to): what the band maps blur, a tone standing out of noise or the
-// narrow peaks of a cymbal's.
+// narrow peaks of a cymbal's. The ring's takes n points (finer bins).
 constexpr int kFine = 2048;
-std::vector<double> fineSpectrum(const std::vector<double>& x, int from, int to) {
-    const int lo = static_cast<int>(150.0 * kFine / kRate),
-              hi = static_cast<int>(20000.0 * kFine / kRate);
-    std::vector<double> power(hi - lo, 0.0), buf(kFine);
-    std::vector<std::complex<double>> spec(kFine / 2 + 1);
-    const pocketfft::shape_t shape{static_cast<size_t>(kFine)};
+std::vector<double> fineSpectrum(const std::vector<double>& x, int from, int to, int n = kFine) {
+    const int lo = static_cast<int>(150.0 * n / kRate), hi = static_cast<int>(20000.0 * n / kRate);
+    std::vector<double> power(hi - lo, 0.0), buf(n);
+    std::vector<std::complex<double>> spec(n / 2 + 1);
+    const pocketfft::shape_t shape{static_cast<size_t>(n)};
     const pocketfft::stride_t sIn{sizeof(double)}, sOut{sizeof(std::complex<double>)};
     int frames = 0;
-    for (int start = from; start + kFine <= to || frames == 0; start += kFine / 4) {
-        for (int i = 0; i < kFine; ++i) {
+    for (int start = from; start + n <= to || frames == 0; start += n / 4) {
+        for (int i = 0; i < n; ++i) {
             const int j = start + i;
-            const double w = 0.5 - 0.5 * std::cos(2.0 * M_PI * (i + 0.5) / kFine);
+            const double w = 0.5 - 0.5 * std::cos(2.0 * M_PI * (i + 0.5) / n);
             buf[i] = (j >= 0 && j < static_cast<int>(x.size()) ? x[j] : 0.0) * w;
         }
         pocketfft::r2c(shape, sIn, sOut, 0, true, buf.data(), spec.data(), 1.0);
@@ -511,6 +515,47 @@ std::vector<double> fineSpectrum(const std::vector<double>& x, int from, int to)
     }
     for (double& p : power) p = 10.0 * std::log10(p / frames + 1e-20);
     return power;
+}
+
+// How far each bin of a fine spectrum (dB) stands above the mean of its
+// third of an octave (dB): a pure tone stands 15 to 30 dB out, broad noise
+// and a real drum's partials, which noise and damping widen, far less.
+std::vector<double> prominence(const std::vector<double>& fine, int points) {
+    const int lo = static_cast<int>(150.0 * points / kRate), n = static_cast<int>(fine.size());
+    std::vector<double> sum(n + 1, 0.0), out(n);
+    for (int i = 0; i < n; ++i) sum[i + 1] = sum[i] + fine[i];
+    for (int i = 0; i < n; ++i) {
+        const int k = lo + i;  // the bin
+        const int a = std::max(0, static_cast<int>(k / 1.12) - lo);
+        const int b = std::min(n, static_cast<int>(k * 1.12) - lo + 1);
+        out[i] = fine[i] - (sum[b] - sum[a]) / std::max(1, b - a);
+    }
+    return out;
+}
+
+// The ring: the render's narrow peaks (within 50 dB of the recording's
+// loudest bin) standing out further than the recording does at the same
+// bin, by more than kRingSlack dB (what a fixed noise seed's own random
+// peaks reach), as the RMS over the worst handful: one pure tone 25 dB out
+// where the recording has noise scores about 5 dB, which the fine
+// spectrum's mean over all its bins (a fraction of a dB) cannot see. It is
+// taken in each of kRingSpans after the hit, the worst counting: a quiet
+// tone that outlasts the noise around it shows only once the noise is gone.
+// Each span's spectrum is as fine as the span allows (up to 8192 points,
+// 5.4 Hz bins): a tone stands further out of noise the finer the bins, as
+// the ear hears it, where the noise's own random peaks do not.
+constexpr double kRingSlack = 10.0;
+constexpr double kRingSpans[] = {0.005, 0.06, 0.25, 1.5};  // seconds after the hit
+double ringOf(const std::vector<double>& refProm, double refTop, const std::vector<double>& fine,
+              int points) {
+    const auto prom = prominence(fine, points);
+    double sum = 0.0;
+    for (size_t i = 0; i < fine.size(); ++i) {
+        if (fine[i] < refTop - 50.0) continue;
+        const double over = prom[i] - std::max(refProm[i], 0.0) - kRingSlack;
+        if (over > 0.0) sum += over * over;
+    }
+    return std::sqrt(sum / 8.0);
 }
 
 // Crest factors (peak over RMS, dB) and levels (dB) of x in 5 ms windows
@@ -536,6 +581,7 @@ void crests(const std::vector<double>& x, int from, int count, std::vector<doubl
 
 struct Score {
     double total = 0.0, hit = 0.0, body = 0.0, level = 0.0, wave = 0.0, fine = 0.0, crest = 0.0;
+    double ring = 0.0;
 };
 
 // What a recording looks like to the score, measured once.
@@ -546,6 +592,12 @@ struct Reference {
     int hitFrom = 0, hitFrames = 0, bodyFrom = 0, bodyFrames = 0, levelFrom = 0, levelFrames = 0;
     int fineFrom = 0, fineTo = 0, crestCount = 0;
     std::vector<double> hitMap, bodyMap, level, fine, crest, crestLevel;
+    struct Span {
+        int from = 0, to = 0, points = kFine;
+        double top = 0.0;
+        std::vector<double> prom;
+    };
+    std::vector<Span> spans;  // the ring's
     double top = 0.0, hitTop = 0.0, levelTop = 0.0, fineTop = 0.0;
     std::vector<double> bodyWeight, levelWeight;
 };
@@ -575,6 +627,19 @@ Reference measure(const Spec& spec, const Target& t) {
         r.fine = fineSpectrum(t.x, r.fineFrom, r.fineTo);
         r.fineTop = *std::max_element(r.fine.begin(), r.fine.end());
     }
+    if (spec.wRing > 0.0)
+        for (int k = 0; k + 1 < 4; ++k) {
+            Reference::Span span;
+            span.from = r.at + static_cast<int>(kRingSpans[k] * kRate);
+            span.to = std::min(r.at + after, r.at + static_cast<int>(kRingSpans[k + 1] * kRate));
+            if (span.to - span.from < kFine / 4) continue;  // a short sound: one frame
+            span.points = 1024;
+            while (span.points < 8192 && span.points * 2 <= span.to - span.from) span.points *= 2;
+            const auto fine = fineSpectrum(t.x, span.from, span.to, span.points);
+            span.top = *std::max_element(fine.begin(), fine.end());
+            span.prom = prominence(fine, span.points);
+            r.spans.push_back(span);
+        }
     // The crest factor through the hit's first 60 ms.
     r.crestCount = std::min(after, static_cast<int>(0.06 * kRate)) / kCrestWindow;
     crests(t.x, r.at, r.crestCount, r.crest, r.crestLevel);
@@ -648,6 +713,10 @@ Score score(const Spec& spec, const Target& t, const Reference& ref, const std::
         s.fine = std::sqrt(
             mapDistance(ref.fine, fine, static_cast<int>(fine.size()), ref.fineTop, 60.0, nullptr));
     }
+    for (const auto& span : ref.spans) {
+        const auto fine = fineSpectrum(y, span.from + shift, span.to + shift, span.points);
+        s.ring = std::max(s.ring, ringOf(span.prom, span.top, fine, span.points));
+    }
     if (spec.wCrest > 0.0) {
         // Windows within 30 dB of the hit's loudest, where a clipped top shows.
         std::vector<double> crest, level;
@@ -667,7 +736,7 @@ Score score(const Spec& spec, const Target& t, const Reference& ref, const std::
     s.total = (spec.wHit * s.hit + spec.wBody * s.body + spec.wLevel * s.level +
                spec.wFine * s.fine + spec.wCrest * s.crest) /
                   wsum +
-              spec.wWave * s.wave;
+              spec.wWave * s.wave + spec.wRing * s.ring;
     return s;
 }
 
@@ -711,6 +780,7 @@ Score evaluate(const Problem& p, const E::Recipe& r, Context& c,
         total.wave += t.weight * s.wave;
         total.fine += t.weight * s.fine;
         total.crest += t.weight * s.crest;
+        total.ring += t.weight * s.ring;
         wsum += t.weight;
     }
     total.total /= wsum;
@@ -720,6 +790,7 @@ Score evaluate(const Problem& p, const E::Recipe& r, Context& c,
     total.wave /= wsum;
     total.fine /= wsum;
     total.crest /= wsum;
+    total.ring /= wsum;
     return total;
 }
 
@@ -910,7 +981,7 @@ void writeBest(const std::string& path, const Spec& spec, const E::Recipe& r, do
                           "hold",  "decay",   "accent",  "gate",      "gateMs"};
     for (const char* name : tops) out << name << " " << *numberField(copy, name) << "\n";
     out << "modes " << r.modes << "\nbands " << r.bands << "\nbursts " << r.bursts << "\nloop "
-        << r.loop << "\n";
+        << r.loop << "\nbits " << r.bits << "\n";
     const char* modeFields[] = {"hz", "gain", "fast", "slow", "split", "phase"};
     for (int j = 0; j < r.modes; ++j)
         for (const char* f : modeFields) {
@@ -951,6 +1022,7 @@ void emit(const E::Recipe& r, int m) {
     if (r.gate > 0.0)
         std::printf("    cut(book[%d], %s, %s);\n", m, num(r.gate).c_str(), num(r.gateMs).c_str());
     if (r.loop >= 0) std::printf("    book[%d].loop = %d;\n", m, r.loop);
+    if (r.bits > 0) std::printf("    book[%d].bits = %d;\n", m, r.bits);
     for (int j = 0; j < r.modes; ++j) {
         const E::Mode& o = r.mode[j];
         std::printf("    addMode(book[%d], %s, %s, %s, %s, %s, %s);\n", m, num(o.hz).c_str(),
@@ -971,16 +1043,16 @@ void report(const Problem& p, const E::Recipe& r, Context& c) {
     const Score s = evaluate(p, r, c, &each);
     std::printf(
         "score %.4f  (hit %.2f dB, body %.2f dB, level %.2f dB, wave %.3f, fine %.2f dB, "
-        "crest %.2f dB)\n",
-        s.total, s.hit, s.body, s.level, s.wave, s.fine, s.crest);
+        "crest %.2f dB, ring %.2f dB)\n",
+        s.total, s.hit, s.body, s.level, s.wave, s.fine, s.crest, s.ring);
     for (size_t i = 0; i < each.size(); ++i) {
         const auto& t = p.spec->targets[i];
         const auto slash = t.path.rfind('/');
         std::printf(
             "  %-40s %.4f  (hit %.2f, body %.2f, level %.2f, wave %.3f, fine %.2f, "
-            "crest %.2f)\n",
+            "crest %.2f, ring %.2f)\n",
             t.path.substr(slash + 1).c_str(), each[i].total, each[i].hit, each[i].body,
-            each[i].level, each[i].wave, each[i].fine, each[i].crest);
+            each[i].level, each[i].wave, each[i].fine, each[i].crest, each[i].ring);
     }
 }
 
