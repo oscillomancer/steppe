@@ -52,7 +52,7 @@ if(SUPPLE_BUILD_TESTS AND SUPPLE_PLATFORM_LINUX)
   target_compile_options(engine-fake-jack PRIVATE $<$<CXX_COMPILER_ID:Clang>:-fno-sanitize=function>)
 
   supple_add_tests(engine SOURCES tests/test_item_edits.cpp tests/test_audio_warp.cpp tests/test_offline.cpp tests/test_freeze.cpp tests/test_instance_pool.cpp tests/test_autosave.cpp tests/test_take_copy.cpp tests/test_groups.cpp tests/test_media_files.cpp tests/test_recording_shutdown.cpp tests/test_realtime.cpp tests/test_app.cpp
-                   tests/test_commands.cpp tests/test_scripts.cpp tests/test_strips.cpp tests/test_playrate.cpp tests/test_pdc.cpp
+                   tests/test_commands.cpp tests/test_scripts.cpp tests/test_strips.cpp tests/test_playrate.cpp tests/test_mix_edits.cpp tests/test_pdc.cpp
                    tests/test_runtime_protection.cpp tests/test_jack.cpp tests/test_workers.cpp tests/test_live_workers.cpp tests/test_meters.cpp
                    tests/test_learn.cpp tests/test_dsp.cpp tests/test_bridge_engine.cpp tests/test_render.cpp LABELS rt SPLIT)
   target_include_directories(engine.tests PRIVATE src)
@@ -68,7 +68,7 @@ if(SUPPLE_BUILD_TESTS AND SUPPLE_PLATFORM_LINUX)
 endif()
 
 if(SUPPLE_BUILD_TESTS AND NOT SUPPLE_PLATFORM_LINUX)
-  supple_add_tests(engine SOURCES tests/test_item_edits.cpp tests/test_audio_warp.cpp tests/test_native_engine.cpp tests/test_freeze.cpp tests/test_instance_pool.cpp tests/test_autosave.cpp tests/test_take_copy.cpp tests/test_groups.cpp tests/test_media_files.cpp tests/test_recording_shutdown.cpp tests/test_bridge_engine.cpp tests/test_playrate.cpp tests/test_pdc.cpp tests/test_render.cpp LABELS rt)
+  supple_add_tests(engine SOURCES tests/test_item_edits.cpp tests/test_audio_warp.cpp tests/test_native_engine.cpp tests/test_freeze.cpp tests/test_instance_pool.cpp tests/test_autosave.cpp tests/test_take_copy.cpp tests/test_groups.cpp tests/test_media_files.cpp tests/test_recording_shutdown.cpp tests/test_bridge_engine.cpp tests/test_playrate.cpp tests/test_mix_edits.cpp tests/test_pdc.cpp tests/test_render.cpp LABELS rt)
   target_include_directories(engine.tests PRIVATE src)
   add_dependencies(engine.tests clap-host-fixtures ${PRODUCT_SLUG}-scanner ${PRODUCT_SLUG}-bridge)
   target_compile_definitions(engine.tests PRIVATE FIXTURE_CLAP_PATH="$<TARGET_FILE:clap-host-fixtures>" BRIDGE_PATH="$<TARGET_FILE:${PRODUCT_SLUG}-bridge>")
