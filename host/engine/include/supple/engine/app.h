@@ -630,7 +630,14 @@ class EngineApp : public cmd::Host {
     struct AutoWrite {
         double startSeconds = 0, lastSeconds = 0, lastValue = 0;
         bool touched = false;
+        std::uint64_t lastMs = 0;  // service clock of the last write (touch release)
     };
+    // The volume/pan targets this pass holds in the engine (ADR-0061): touched
+    // envelopes in a writing mode; a touch envelope only until kTouchReleaseMs
+    // after its last write. updateWriteHolds hands them over, reloading when
+    // a released curve needs compiling.
+    std::vector<model::EnvTarget> writeHolds() const;
+    void updateWriteHolds();
     std::map<model::Id, AutoWrite> autoWrite_;
     std::optional<std::map<model::Id, AutoWrite>> autoWriteRollback_;
     struct OutputGesture {

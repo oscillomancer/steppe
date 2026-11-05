@@ -5,10 +5,12 @@
 #include <doctest/doctest.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <vector>
 
+#include "supple/engine/app.h"
 #include "supple/engine/offline.h"
 #include "supple/engine/realtime.h"
 #include "supple/model/session.h"
@@ -399,4 +401,100 @@ TEST_CASE("a write hold plays the static level over the curve until it is releas
     CHECK(peakOf(L, 2560, 5120) > 0.01);          // the curve
     CHECK(peakOf(L, 5120 + 512, 15360) == 0.0);   // held at silence
     CHECK(peakOf(L, 15360 + 512, 20480) > 0.01);  // the curve again
+}
+
+namespace {
+// An app with one track whose volume has an envelope in `mode`, playing.
+struct WriteHost {
+    std::filesystem::path root =
+        std::filesystem::temp_directory_path() /
+        ("supple-mix-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    DummyBackend backend{DummyBackend::Options{.mode = DummyBackend::Mode::Manual}};
+    std::unique_ptr<EngineApp> app;
+    cmd::Registry registry;
+    std::unique_ptr<cmd::Dispatcher> bus;
+    explicit WriteHost(const char* mode) {
+        std::filesystem::create_directories(root / "plugins");
+        AppOptions options;
+        options.workdir = root;
+        options.pluginPath = {root / "plugins"};
+        auto created = EngineApp::create(options);
+        REQUIRE_MESSAGE(created, (created ? "" : created.error().toString()));
+        app = std::move(*created);
+        app->setFixedClock(10'000);
+        registerEngineCommands(registry);
+        bus = std::make_unique<cmd::Dispatcher>(registry, *app);
+        run("track.add");
+        run("env.add", R"({"track":"tr_1","param":"volume","points":[{"beat":0,"value":0}]})");
+        run("env.set", std::string(R"({"env":"en_1","mode":")") + mode + "\"}");
+        REQUIRE(app->startEngine(backend, {.sampleRate = 48000, .blockSize = 128},
+                                 {.anticipative = false, .workers = 0}));
+        run("transport.play");
+        backend.run(4);
+        app->tick();
+    }
+    ~WriteHost() {
+        bus.reset();
+        app.reset();
+        std::filesystem::remove_all(root);
+    }
+    json::Value run(const char* command, std::string_view args = "{}", std::string gesture = {}) {
+        auto parsed = json::parse(args);
+        REQUIRE(parsed);
+        auto r = bus->execute({command, *parsed, {cmd::Origin::Type::Test, "mix", {}, gesture}});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    }
+    void fader(double db) {
+        run("track.set", R"({"track":"tr_1","volume_db":)" + std::to_string(db) + "}", "fader:1");
+        backend.run(2);
+    }
+    Engine& engine() { return *app->engine(); }
+};
+const model::EnvTarget kHeld{{model::Kind::Track, 1}, "volume"};
+}  // namespace
+
+TEST_CASE("a latch pass holds what it writes without compiling, until the pass ends") {
+    WriteHost h("latch");
+    const auto generation = h.engine().planGeneration();
+    for (double db : {-3.0, -6.0, -9.0}) h.fader(db);
+    CHECK(h.engine().writeHolds() == std::vector<model::EnvTarget>{kHeld});
+    CHECK(h.engine().planGeneration() == generation);
+    CHECK(h.engine().mixEdits() == 3);
+    CHECK(h.app->head().envelopes.begin()->value->points.size() > 1);  // still written
+    h.app->setFixedClock(20'000);  // latch never lets go by itself
+    h.app->tick();
+    CHECK(h.engine().writeHolds().size() == 1);
+    h.run("transport.pause");
+    CHECK(h.engine().writeHolds().empty());
+    CHECK(h.engine().planGeneration() > generation);  // the written curve plays now
+    // A mute is not held: its write compiles.
+    h.run("env.add", R"({"track":"tr_1","param":"mute","points":[{"beat":0,"value":0}]})");
+    h.run("env.set", R"({"env":"en_2","mode":"latch"})");
+    h.run("transport.play");
+    h.backend.run(4);
+    const auto before = h.engine().planGeneration();
+    h.run("track.set", R"({"track":"tr_1","mute":true})");
+    CHECK(h.engine().planGeneration() > before);
+}
+
+TEST_CASE("a touch pass lets go of a level half a second after its last write") {
+    WriteHost h("touch");
+    const auto generation = h.engine().planGeneration();
+    h.fader(-3);
+    h.app->setFixedClock(10'300);
+    h.fader(-6);
+    CHECK(h.engine().planGeneration() == generation);
+    REQUIRE(h.app->nextServiceDeadline());  // the release is scheduled
+    h.app->setFixedClock(10'799);
+    h.app->tick();
+    CHECK(h.engine().writeHolds().size() == 1);
+    h.app->setFixedClock(10'800);
+    h.app->tick();
+    CHECK(h.engine().writeHolds().empty());
+    CHECK(h.engine().planGeneration() == generation + 1);  // its curve compiles
+    h.app->tick();
+    CHECK(h.engine().planGeneration() == generation + 1);
+    CHECK_FALSE(h.app->nextServiceDeadline());
 }

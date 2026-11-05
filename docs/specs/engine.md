@@ -179,6 +179,16 @@ at compile time). Per block, each automated target evaluates its segments:
   stored domain (seconds for `time`, tempo-map beats otherwise). Plugin-output
   recording follows the same conversion, and replay carries time-envelope
   points as explicit seconds through `env.points.set`.
+- write holds (ADR-0061): once a pass has written a strip's or send's
+  volume or pan, or a VCA's volume, the engine plays that target's static
+  value (the hand) instead of its compiled curve until the hold ends, and
+  the points the pass keeps writing reach the model without compiling
+  (§1.6). Latch, latch_preview and write hold until the pass ends at pause
+  or stop; touch until 500 ms after its last write (`EngineApp`'s service
+  clock: nothing reports a strip control's release). Ending a hold compiles
+  the session, so the written curve plays from there; a held value ramps over
+  the smoothing time like a static one. Mute, plug-in parameters and the
+  master playrate are not held: their writes compile as before.
 
 ### 1.5 Transport and time
 

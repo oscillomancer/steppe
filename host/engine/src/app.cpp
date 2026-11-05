@@ -1027,6 +1027,9 @@ namespace {
 constexpr std::uint64_t kAutosaveIntervalMs = 60'000;
 constexpr int kAutosaveKeep = 5;
 constexpr std::uint64_t kRestartGiveUpMs = 30'000;
+// A touch envelope's hold ends this long after its last write (ADR-0061):
+// nothing reports a strip control's release.
+constexpr std::uint64_t kTouchReleaseMs = 500;
 }  // namespace
 
 void EngineApp::tick() {
@@ -1051,6 +1054,7 @@ void EngineApp::tick() {
     }
     if (engine_) {
         engine_->service();
+        if (!txn_) updateWriteHolds();  // a touch hold's release time passed
         consumePluginOutputs();
         pollControl();
         // Controller actions may stop or replace the engine on this thread.
@@ -1160,6 +1164,12 @@ std::optional<std::uint64_t> EngineApp::nextServiceDelayMs() const {
     if (restarting_) at(std::min(restartRetryAt_, restartUntil_));
     if (!txn_)
         for (const auto& [key, commit] : learnCommits_) at(commit.lastMs + 300);
+    if (engine_ && !engine_->writeHolds().empty())
+        for (const auto& [id, w] : autoWrite_)  // touch holds end (ADR-0061)
+            if (const auto* env = head().envelopes.find(id); w.touched && env &&
+                                                             env->mode == model::EnvMode::Touch &&
+                                                             w.lastMs + kTouchReleaseMs > now)
+                at(w.lastMs + kTouchReleaseMs);
     for (auto* instance : serviceInstances()) {
         if (instance->isolated()) continue;
         const int timer = instance->nextTimerMs();
@@ -1564,6 +1574,7 @@ Result<TransportInfo> EngineApp::transport(std::string_view action, std::optiona
             recorded = std::move(*committed);
         }
         if (wasPlaying) SUPPLE_TRY(finishAutomationPass(stopSeconds));
+        updateWriteHolds();  // the pass is over: its curves play again
     } else if (action == "seek") {
         SUPPLE_TRY(engine_->prepareSeek(seconds.value_or(0.0)));
         if (!engine_->transport().playing) playStart_ = seconds.value_or(0.0);
@@ -1703,7 +1714,29 @@ void EngineApp::recordAutomationAt(model::Id object, const std::string& param, d
     w.lastSeconds = seconds;
     w.lastValue = value;
     w.touched = true;
+    w.lastMs = serviceClockMs();
     autoWrite_[*envId] = w;
+}
+
+std::vector<model::EnvTarget> EngineApp::writeHolds() const {
+    std::vector<model::EnvTarget> holds;
+    const std::uint64_t now = serviceClockMs();
+    for (const auto& [id, w] : autoWrite_) {
+        const model::Envelope* env = head().envelopes.find(id);
+        if (!w.touched || !env || !env->active || !writingMode(env->mode)) continue;
+        if (env->mode == model::EnvMode::Touch && now >= w.lastMs + kTouchReleaseMs) continue;
+        const auto kind = env->target.object.kind;
+        const std::string& param = env->target.param;
+        if ((kind == model::Kind::Track || kind == model::Kind::Route)
+                ? param == "volume" || param == "pan"
+                : kind == model::Kind::Group && param == "volume")
+            holds.push_back(env->target);
+    }
+    return holds;
+}
+
+void EngineApp::updateWriteHolds() {
+    if (engine_ && engine_->setWriteHolds(writeHolds())) headChanged();
 }
 
 Status EngineApp::finishAutomationPass(double stopSeconds) {
@@ -2656,6 +2689,7 @@ void EngineApp::headChanged() {
                 if (const auto* before = loadedHead_->fx.find(e.id);
                     before && (before->patch || before->state))
                     pool_->restart(e.id);
+    (void)engine_->setWriteHolds(writeHolds(), false);  // the load takes them
     auto st = engine_->load(head(), projectDir());
     if (st) loadedHead_ = versions_->head();
     if (!st) emit("engine.error", json::Value(st.error().toString()));

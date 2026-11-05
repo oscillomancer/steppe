@@ -206,7 +206,9 @@ instructions are in `docs/guides/installing.md`.
   tempo and meter maps, the item clipboard, a piano roll with velocity and
   CC lanes, an event list and a notation panel.
 - **Automation**: envelopes on strip, route and plugin parameters,
-  automation items with pools, take envelopes, touch/latch/write recording;
+  automation items with pools, take envelopes, touch/latch/write recording
+  (a written level or pan is heard as the hand moves it, held over its curve
+  until the pass ends, or for touch 500 ms after the last move: ADR-0061);
   automation points selected (click, Ctrl+click, or the arrange marquee,
   which takes items and points on any track at once) and moved, deleted,
   copied, pasted and reshaped together, across lanes, from the lane's menu or
@@ -727,6 +729,9 @@ Engine and hosting:
   plug-in changes compile the session, and with playrate scheduling started
   each also prepares a rate plan, which costs several milliseconds per edit in
   a session of a few dozen tracks.
+- A touch-mode write hold ends 500 ms after the last move, not when the
+  control is let go (ADR-0061): nothing reports a strip control's release to
+  the engine, so a fader held still longer than that hears its old curve.
 - REAPER's default anticipative FX sustains about 10 % more tracks than
   Steppe with anticipation on B1's session (82 to 83 against 75, B2). The
   anticipative renderer is the limit: it ran at 78 % of real time at 64
@@ -846,8 +851,8 @@ Session and editing:
   knob ranges are UI state and never clamp saved values. Seeded stretch phase
   variation uses a portable integer RNG, so it matches across standard
   libraries. Non-unity audio/MIDI
-  recording is refused, including queued transitions. Writing retains coarse
-  strip semantics. Compatible scalar-only live edits publish bounded clock
+  recording is refused, including queued transitions. Writing the playrate
+  holds nothing over its curve (strip levels and pans do, ADR-0061). Compatible scalar-only live edits publish bounded clock
   controls, retain source/converter state and glide over the time between
   moves through a 150 ms low-pass (one smooth pitch glide for a mouse drag or
   MIDI knob, at the cost of some extra lag) without graph
