@@ -634,3 +634,85 @@ TEST_CASE("a scalar playrate edit carries hold changes and compiles a released s
     CHECK(peakOf(L, 344 * 256, 400 * 256) == 0.0);  // held again
     CHECK(peakOf(L, 440 * 256, 520 * 256) > 0.01);  // the compiled curve
 }
+
+TEST_CASE("mix edits reach live and rendered nodes alike, across the frontier" *
+          doctest::description("rt")) {
+    // A monitored track makes the buss it sends to, and the master, live; the
+    // instruments stay with the renderer and reach them across the frontier
+    // (their sends encoded at the source). The VCA spans both classes.
+    Mix m = mixSession();
+    Id vocal;
+    {
+        model::EditTxn t(m.session, 2);
+        model::Track tr;
+        tr.parent = kMaster;
+        tr.pan = 30;
+        vocal = t.create(tr);
+        t.modify<model::Track>(kMaster, [&](auto& x) { x.children.push_back(vocal); });
+        model::Route in;
+        in.from.hwChannels = std::vector<int>{1, 2};
+        in.to.track = vocal;
+        const Id input = t.create(in);
+        t.modify<model::Track>(vocal, [&](auto& x) {
+            x.record.input = input;
+            x.record.monitor = model::Monitor::On;
+            x.record.armed = true;
+        });
+        model::Route send;
+        send.from.track = vocal;
+        send.to.track = m.bus;
+        send.volumeDb = -4;
+        t.create(send);
+        t.modify<model::TrackGroup>(m.vca, [&](auto& g) { g.members.push_back(vocal); });
+        m.session = t.commit().value();
+    }
+    model::Session next = moved(m, 3);
+    {
+        model::EditTxn t(next, 4);
+        t.modify<model::Track>(vocal, [](auto& x) {
+            x.volumeDb = -7;
+            x.pan = -60;
+        });
+        t.modify<model::Route>({model::Kind::Route, 4}, [](auto& r) { r.volumeDb = -11; });
+        next = t.commit().value();
+    }
+    constexpr std::int64_t kCycles = 300;
+    std::vector<std::vector<float>> reference;
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 1}})
+        for (bool compiled : {true, false}) {
+            INFO("anticipative " << options.anticipative << ", compiled " << compiled);
+            auto pool = makePool();
+            MediaCache media;
+            DummyBackend backend(
+                {.mode = DummyBackend::Mode::Manual,
+                 .captureFrames = kCycles * 256,
+                 .input = [](float* const* in, std::uint32_t channels, std::uint32_t n,
+                             std::int64_t frame) {
+                     for (std::uint32_t i = 0; i < n; ++i) {
+                         const float v = static_cast<float>((frame + i) % 4800) / 4800.0f - 0.5f;
+                         in[0][i] = v;
+                         if (channels > 1) in[1][i] = -v;
+                     }
+                 }});
+            Engine engine(pool, media, options);
+            REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256, .inputs = 2}));
+            REQUIRE(engine.load(m.session));
+            const auto generation = engine.planGeneration();
+            REQUIRE(engine.load(compiled ? withMarker(next, 5) : next));
+            CHECK(engine.planGeneration() == generation + (compiled ? 1 : 0));
+            engine.play();
+            if (options.anticipative)
+                runAhead(engine, backend, kCycles, 256);
+            else
+                backend.run(kCycles);
+            CHECK(engine.anticipationMisses() == 0);
+            CHECK(engine.processErrors() == 0);
+            engine.stop();
+            const auto& cap = backend.capture().channels;
+            CHECK(peakOf(cap[0], 20000, 40000) > 0.01);
+            if (reference.empty())
+                reference = cap;
+            else
+                for (std::size_t c = 0; c < 2; ++c) CHECK(cap[c] == reference[c]);
+        }
+}
