@@ -10,13 +10,16 @@
 // resonant modes and filtered noise, fitted to recordings of the machine,
 // and played the way the machine played its own.
 //
-// The machine first: the LM-1. Each of its voices read an 8-bit recording
-// from an EPROM through a companding DAC clocked by the voice's tuning knob,
-// so tuning sped the whole recording up or slowed it down, and the DAC's
-// steps went out unsmoothed, their images above the clock and all. The kick,
-// toms and congas then went through a low-pass filter that closed after each
-// hit; the hi-hat's EPROM played round and round, and a VCA opened on it for
-// each hit, wherever the loop happened to be.
+// Two kits so far. The classic sounds are an early drum machine's. Each of
+// its voices read an 8-bit recording from an EPROM through a companding DAC
+// clocked by the voice's tuning knob, so tuning sped the whole recording up
+// or slowed it down, and the DAC's steps went out unsmoothed, their images
+// above the clock and all. The kick, toms and congas then went through a
+// low-pass filter that closed after each hit; the hi-hat's EPROM played
+// round and round, and a VCA opened on it for each hit, wherever the loop
+// happened to be. The studio sounds are recordings of real drums at about
+// 44 kHz, played through a linear 16-bit DAC whose clock the tuning sets,
+// with nothing after it.
 //
 // So a Drumlin voice makes its sound's recording a sample at a time, at the
 // DAC's clock (the recipe's clock at Tune 0, raised or lowered by Tune):
@@ -25,15 +28,15 @@
 // rate. The analog parts after the DAC run in real time: the filter, the
 // coupling to the output and the VCA. A recording stops where its EPROM
 // ended; it starts with what was on the tape before the hit, the lead-in
-// that makes the LM-1 sit a little behind the beat. Each voice's output is
-// brought down to the session's rate once.
+// that makes the classic kit sit a little behind the beat. Each voice's
+// output is brought down to the session's rate once.
 
 constexpr int kModes = 16;   // a recipe's resonant modes
 constexpr int kBands = 16;   // its bands of noise
-constexpr int kLoop = 4096;  // a looping EPROM's samples (the LM-1's hi-hat)
+constexpr int kLoop = 4096;  // a looping EPROM's samples (the classic hi-hat)
 constexpr int kWarm = 4096;  // a loop's recording made before what is kept
 constexpr int kSeam = 512;   // ... and its end crossfaded into its start over
-constexpr int kModels = 13;  // sounds with a recipe
+constexpr int kModels = 32;  // sounds with a recipe
 constexpr int kLoops = 2;    // looping recordings there is room for
 constexpr int kVoices = 32;
 constexpr int kPads = 16;
@@ -65,7 +68,7 @@ double fastTanh(double x) {
 // each sample; 0 for no time at all.
 double fallPer(double n) { return n > 0.0 ? exp(-1.0 / n) : 0.0; }
 
-// The LM-1's DAC, an AM6070: mu-255 companding, a sign, a chord of eight
+// The classic kit's DAC, an AM6070: mu-255 companding, a sign, a chord of eight
 // and a step of sixteen. x is in full scale (-1 .. 1); it comes back as the
 // level the DAC makes for the code x rounds to.
 double companded(double x) {
@@ -76,6 +79,17 @@ double companded(double x) {
     const double m = ((2.0 * step + 33.0) * unit - 33.0) / 8158.0;
     return x < 0.0 ? -m : m;
 }
+
+// A sample through a recipe's DAC: the AM6070 above when `steps` is 0, or
+// else a linear one with `steps` levels each side of zero (2^(bits - 1)).
+double converted(double x, double steps) {
+    if (steps <= 0.0) return companded(x);
+    const double v = clamp(x, -1.0, 1.0) * steps;
+    return clamp(roundToInt(v), -toInt(steps), toInt(steps) - 1) / steps;
+}
+
+// A DAC's levels each side of zero for `bits` (0: the AM6070's mu-law).
+double levelsOf(int bits) { return bits > 0 ? exp2(bits - 1) : 0.0; }
 
 // --- the recording: what a sound's EPROM holds -------------------------------------------
 //
@@ -112,9 +126,10 @@ struct Recipe {
     double length = 200.0;   // ms of EPROM: the recording stops there
     double start = 0.0;      // ms into it where the hit is
     double drive = 1.0;      // the recording into the DAC (1: full scale)
-    double strike = 0.0;     // ms: the modes' rise
-    double bend = 0.0;       // semitones the modes start above their pitch
-    double bendMs = 1.0;     // ... falling back with this time constant
+    int bits = 0;         // the DAC: 0 the classic kit's 8-bit mu-law, else linear, this many bits
+    double strike = 0.0;  // ms: the modes' rise
+    double bend = 0.0;    // semitones the modes start above their pitch
+    double bendMs = 1.0;  // ... falling back with this time constant
     int modes = 0;
     Array<Mode, kModes> mode;
     int bands = 0;
@@ -149,8 +164,9 @@ struct Voice {
     int end = 0;         // where the EPROM ends
     int from = 0;        // a loop's sample at the hit
     double drive = 1.0;
-    double held = 0.0;  // the DAC's output
-    double late = 0.0;  // the sample before, still taking its polyBLEP
+    double steps = 0.0;  // the DAC's levels each side of zero (0: mu-law)
+    double held = 0.0;   // the DAC's output
+    double late = 0.0;   // the sample before, still taking its polyBLEP
     bool ended = false;
     int rng = 1;   // the noise
     int seed = 0;  // the hit's: its noise and a clap's spacing
@@ -255,6 +271,7 @@ void strike(Voice& s, const Recipe& r, int model, int seed, double vary, int pic
     s.end = r.loop >= 0 ? kLoop : max(1, roundToInt(r.start * perMs + (r.length - r.start) * ring));
     s.from = r.loop >= 0 ? wrap(toInt((scatter(pick, 7919) + 1.0) * 0.5 * kLoop), kLoop) : 0;
     s.drive = r.drive;
+    s.steps = levelsOf(r.bits);
     s.hitAt = max(0, roundToInt(r.start * perMs));
     // How this hit strays: its pitch and each mode's and band's gain.
     const double spread = vary * (scatter(pick * 5, seed) * 0.15);
@@ -367,7 +384,7 @@ double nextValue(Voice& s, const Recipe& r, const Buffer<double>& loops) {
     }
     const double x = record(s, r);
     s.at += 1;
-    return companded(x * s.drive);
+    return converted(x * s.drive, s.steps);
 }
 
 // A looping recipe's recording, before the DAC, into its place in loops:
@@ -401,8 +418,9 @@ void loopRecording(const Recipe& r, Buffer<double>& loops) {
 // A looping recipe's EPROM, made once: its recording through the DAC.
 void makeLoop(const Recipe& r, Buffer<double>& loops) {
     loopRecording(r, loops);
+    const double steps = levelsOf(r.bits);
     for (int k = r.loop * kLoop; k < (r.loop + 1) * kLoop; ++k)
-        loops[k] = companded(loops[k] * r.drive);
+        loops[k] = converted(loops[k] * r.drive, steps);
 }
 
 // The analog parts' settings for the next kTick samples: the filter's corner
@@ -570,7 +588,7 @@ void addBand(Recipe& r, int shape, double hz, double q, double gain, double dela
 void recipes(Array<Recipe, kModels>& book) {
     Recipe none;
     for (int m = 0; m < kModels; ++m) book[m] = none;
-    // The LM-1 kick: Tune 0 is the bank's pitch 16.
+    // The classic kick: Tune 0 is the bank's pitch 16.
     recording(book[0], 22583.7, 181.4, 4.55769, 5.21748, 1.96748, 14.2827, 11.3546);
     machine(book[0], -2.13701, 5330.89, 3135.84, 296.225, 1.02577, 0.0, 0.0, 0.0);
     cut(book[0], 56.6474, 21.6677);
@@ -581,7 +599,7 @@ void recipes(Array<Recipe, kModels>& book) {
     addBand(book[0], 1, 181.017, 0.549967, 0.572453, 0.0, 0.0248783, 16.6303, 35.811, 0.176241);
     addBand(book[0], 1, 164.933, 0.713952, 0.322539, -19.4066, 0.287737, 5.50039, 2.30362,
             0.803626);
-    // The LM-1 snare: pitch 15.
+    // The classic snare: pitch 15.
     recording(book[1], 23385.7, 175.149, 10.8488, 4.0715, 0.0202537, 3.27204, 10.7066);
     machine(book[1], -0.938863, 0.0, 0.0, 1.0, 1.11199, 0.0, 0.0, 0.0);
     cut(book[1], 53.4612, 35.1279);
@@ -597,7 +615,7 @@ void recipes(Array<Recipe, kModels>& book) {
     addBand(book[1], 2, 3284.02, 0.207971, 0.041686, 19.9255, 0.361257, 1.46304, 23.0121, 0.521462);
     addBand(book[1], 1, 218.304, 3.18462, 0.0404812, -19.2641, 0.0519539, 16.2772, 23.2808,
             0.719744);
-    // The LM-1 rimshot: pitch 12.
+    // The classic rimshot: pitch 12.
     recording(book[2], 16365.5, 125.141, 1.00519, 7.62398, 0.181005, 0.0, 1.0);
     machine(book[2], -10.253, 0.0, 0.0, 1.0, 2.93652, 0.0, 0.0, 0.0);
     cut(book[2], 31.7719, 46.2633);
@@ -619,7 +637,7 @@ void recipes(Array<Recipe, kModels>& book) {
     addMode(book[2], 252.291, 0.0300188, 21.2232, 33.9196, 0.530641, -0.745302);
     addBand(book[2], 2, 4467.88, 0.610411, 0.0555083, -4.3335, 1.33128, 1.98959, 1.19279, 0.204813);
     addBand(book[2], 0, 704.591, 0.200135, 0.108558, 18.534, 0.0181044, 6.6754, 148.79, 0.691226);
-    // The LM-1 clap: pitch 13.
+    // The classic clap: pitch 13.
     recording(book[3], 22029.0, 185.936, 1.62687, 15.8018, 0.0, 0.0, 1.0);
     machine(book[3], -4.21888, 0.0, 0.0, 1.0, 10.3277, 0.0, 0.0, 0.0);
     claps(book[3], 4, 4.48425, 0.581706, 0.0359839);
@@ -630,7 +648,7 @@ void recipes(Array<Recipe, kModels>& book) {
     addBand(book[3], 0, 237.049, 0.203519, 0.018559, -10.0472, 21.4559, 4.58819, 112.156, 0.249829);
     addBand(book[3], 2, 5029.61, 0.968407, 0.00587639, 9.51244, 1.06489, 11.5782, 37.4514,
             0.774383);
-    // The LM-1 closed hat: the loop at pitch 15 (noise: broad bands, and narrow ones on the real
+    // The classic closed hat: the loop at pitch 15 (noise: broad bands, and narrow ones on the real
     // hat's peaks), under the VCA's decay B.
     recording(book[4], 20838.7, 10000.0, 0.0, 1.26096, 0.0, 0.0, 1.0);
     machine(book[4], -15.3321, 0.0, 0.0, 1.0, 7.36279, 6.02762, 28.0, 7.29387);
@@ -651,10 +669,10 @@ void recipes(Array<Recipe, kModels>& book) {
     addBand(book[4], 0, 6186.18, 133.182, 1.27862, 0.0, 0.0, 100000.0, 100000.0, 0.0);
     addBand(book[4], 0, 7341.86, 520.653, 4.03598, 0.0, 0.0, 100000.0, 100000.0, 0.0);
     addBand(book[4], 0, 8472.84, 668.232, 0.201555, 0.0, 0.0, 100000.0, 100000.0, 0.0);
-    // The LM-1 open hat: the same loop, the VCA open and at the accent's level.
+    // The classic open hat: the same loop, the VCA open and at the accent's level.
     book[5] = book[4];
     machine(book[5], -8.03823, 0.0, 0.0, 1.0, 7.36279, 6.02762, 267.0, 0.0);
-    // The LM-1 tom (both tom channels play it): pitch 12 of tom A.
+    // The classic tom (both tom channels play it): pitch 12 of tom A.
     recording(book[6], 16169.5, 253.316, 24.8979, 9.04559, 0.0173878, 2.44962, 47.9741);
     machine(book[6], -6.82592, 19744.3, 4805.26, 67.4938, 54.9183, 0.0, 0.0, 0.0);
     cut(book[6], 66.8923, 275.142);
@@ -667,7 +685,7 @@ void recipes(Array<Recipe, kModels>& book) {
     addMode(book[6], 475.566, 0.019308, 31.8369, 49.6584, 0.973495, -2.52873);
     addBand(book[6], 0, 4720.58, 1.15875, 0.192445, 0.87354, 0.111247, 9.64455, 6.86303, 0.188432);
     addBand(book[6], 1, 125.678, 1.78386, 0.128412, -10.1337, 0.322928, 22.3007, 6.47, 0.486037);
-    // The LM-1 conga (both conga channels): pitch 14 of conga A.
+    // The classic conga (both conga channels): pitch 14 of conga A.
     recording(book[7], 16225.8, 252.437, 2.34362, 1.74205, 0.0953833, 0.0251667, 44.3294);
     machine(book[7], -7.96999, 19212.1, 7477.52, 234.856, 1.18405, 0.0, 0.0, 0.0);
     cut(book[7], 120.21, 291.524);
@@ -681,7 +699,7 @@ void recipes(Array<Recipe, kModels>& book) {
     addMode(book[7], 584.972, 0.0953758, 43.8809, 23.2603, 0.691877, -2.62848);
     addBand(book[7], 0, 971.778, 2.92688, 0.393684, 8.83545, 0.0964609, 0.705223, 19.4817,
             0.639599);
-    // The LM-1 cabasa: pitch 13.
+    // The classic cabasa: pitch 13.
     recording(book[8], 18948.9, 108.08, 8.87534, 4.56363, 0.0, 0.0, 1.0);
     machine(book[8], -12.4256, 0.0, 0.0, 1.0, 6.05688, 0.0, 0.0, 0.0);
     cut(book[8], 41.1919, 10.5545);
@@ -689,7 +707,7 @@ void recipes(Array<Recipe, kModels>& book) {
     addBand(book[8], 0, 7167.94, 1.6496, 0.948462, -2.36819, 34.7057, 57.1942, 213.497, 0.166634);
     addBand(book[8], 0, 3990.36, 2.46039, 0.107046, 7.64607, 13.7188, 28.9264, 365.77, 0.457814);
     addBand(book[8], 2, 3643.12, 0.934587, 0.0206251, -13.033, 5.68685, 52.2797, 16.5163, 0.918118);
-    // The LM-1 tambourine: pitch 15 (its clocks found from its partials' images): its jingles'
+    // The classic tambourine: pitch 15 (its clocks found from its partials' images): its jingles'
     // partials as narrow bands, broad bands for the rest.
     recording(book[9], 19872.5, 206.11, 1.43956, 61.1774, 0.0, 0.0, 1.0);
     machine(book[9], -10.0325, 0.0, 0.0, 1.0, 15.5916, 0.0, 0.0, 0.0);
@@ -712,7 +730,7 @@ void recipes(Array<Recipe, kModels>& book) {
     addBand(book[9], 0, 7064.22, 578.621, 0.162433, 0.0, 1.7774, 62.6859, 22.1703, 0.821308);
     addBand(book[9], 0, 9044.23, 293.985, 0.859907, 0.0, 34.5574, 54.7498, 77.7269, 0.1997);
     addBand(book[9], 0, 9253.22, 185.725, 2.10415, 0.0, 72.7147, 33.7103, 16.5587, 0.508275);
-    // The LM-1 cowbell: pitch 12.
+    // The classic cowbell: pitch 12.
     recording(book[10], 20024.7, 102.274, 1.70998, 7.69814, 0.100339, 0.0, 1.0);
     machine(book[10], -11.3724, 0.0, 0.0, 1.0, 57.8169, 0.0, 0.0, 0.0);
     cut(book[10], 124.032, 17.4375);
@@ -792,6 +810,405 @@ void recipes(Array<Recipe, kModels>& book) {
     addBand(book[12], 0, 3629.58, 750.404, 0.0770406, 0.0, 256.641, 1.0, 636.098, 1.0);
     addBand(book[12], 0, 3818.99, 275.394, 0.582977, 0.0, 47.0599, 1.0, 246.95, 1.0);
     addBand(book[12], 0, 3984.23, 373.411, 0.063117, 0.0, 1.99561, 1.0, 596.331, 1.0);
+    // The studio kit: recordings of real drums at a clock of about 44 kHz, through a linear
+    // 16-bit DAC, nothing after it.
+    // The studio kick: Tune 0 is the bank's pitch 12 (as for every studio sound), its pitch
+    // falling into the body.
+    recording(book[13], 44100.0, 341.45, 1.497, 8.5352, 0.0425022, 21.3241, 7.75001);
+    machine(book[13], -3.3319, 0.0, 0.0, 1.0, 22.78, 0.0, 0.0, 0.0);
+    cut(book[13], 104.304, 294.195);
+    book[13].bits = 16;
+    addMode(book[13], 41.3046, 0.157885, 14.2726, 47.9284, 0.616432, -2.99822);
+    addMode(book[13], 686.384, 0.000880821, 1.63016, 2.39822, 0.0690575, -1.73476);
+    addMode(book[13], 1487.8, 0.00722328, 12.6486, 9.22366, 0.348148, 2.40213);
+    addMode(book[13], 1807.72, 0.0299379, 2.78115, 6.75562, 0.331681, 1.58925);
+    addMode(book[13], 2029.04, 0.00349112, 3.95689, 25.3379, 0.255245, 0.933542);
+    addBand(book[13], 0, 112.08, 11.9313, 0.999553, 9.4261, 32.5352, 26.7604, 1875.53, 0.0303796);
+    addBand(book[13], 0, 349.777, 0.440968, 0.252155, -1.00629, 0.221042, 3.83934, 1868.28,
+            0.000404957);
+    addBand(book[13], 0, 1445.76, 0.812301, 0.000334498, 0.118924, 0.0131498, 374.745, 28.8672,
+            0.320876);
+    addBand(book[13], 0, 7104.61, 6.4385, 0.000471864, 5.80063, 0.0101293, 4.4552, 13.8248,
+            0.0403437);
+    // The studio snare: modes for its shell below 1.5 kHz, its wires bands of noise.
+    recording(book[14], 44100.0, 331.5, 0.272, 2.20175, 0.0135083, 2.80967, 5.81315);
+    machine(book[14], -3.14699, 0.0, 0.0, 1.0, 8.51235, 0.0, 0.0, 0.0);
+    cut(book[14], 149.346, 51.4929);
+    book[14].bits = 16;
+    addMode(book[14], 155.076, 0.825153, 22.7213, 52.7552, 0.323941, 2.52855);
+    addMode(book[14], 338.814, 0.282634, 20.3147, 2.19405, 0.0734187, 0.535508);
+    addMode(book[14], 686.084, 0.000421141, 4.02323, 4.37002, 0.176879, 0.52609);
+    addBand(book[14], 0, 478.481, 0.548711, 0.0501597, 8.37504, 0.246102, 0.433589, 7.07949,
+            0.14295);
+    addBand(book[14], 0, 236.323, 4.95876, 2.70821, 11.3209, 0.402978, 43.8533, 9.00362, 0.619444);
+    addBand(book[14], 0, 245.802, 0.670838, 1.48927, 3.25821, 0.059232, 3.85502, 9.90231, 0.278723);
+    addBand(book[14], 0, 724.467, 0.36316, 0.163175, 3.59374, 6.7644, 30.6475, 50.3279, 0.304359);
+    addBand(book[14], 0, 1681.91, 1.21292, 0.0294793, 0.921498, 1.9324, 131.848, 60.4598, 0.157694);
+    addBand(book[14], 0, 4904.56, 2.84836, 0.00264603, 7.12065, 5.49571, 0.828597, 131.361,
+            0.518061);
+    addBand(book[14], 0, 5236.73, 4.88064, 0.380532, 5.70317, 2.58849, 1.56869, 84.3304, 0.303226);
+    addBand(book[14], 0, 3167.64, 2.00078, 0.961464, -0.0674305, 0.0937398, 3.99025, 45.302,
+            0.222547);
+    addBand(book[14], 0, 4090.32, 4.44036, 0.150175, 11.4726, 3.01203, 72.813, 102.654, 0.226331);
+    // The studio bright snare.
+    recording(book[15], 44100.0, 344.69, 0.204, 2.64734, 0.0191225, 4.84961, 0.824925);
+    machine(book[15], 4.57523, 0.0, 0.0, 1.0, 2.01815, 0.0, 0.0, 0.0);
+    cut(book[15], 91.6624, 53.8035);
+    book[15].bits = 16;
+    addMode(book[15], 168.087, 0.178223, 12.3941, 43.3028, 0.404033, 2.45444);
+    addMode(book[15], 392.638, 0.016143, 0.403182, 59.9955, 0.157394, 1.21283);
+    addMode(book[15], 1158.92, 0.00210896, 37.453, 14.1769, 0.862405, 2.35884);
+    addBand(book[15], 0, 239.228, 5.50815, 0.765203, 0.75253, 0.0872545, 2.74498, 47.3821,
+            0.451226);
+    addBand(book[15], 0, 174.512, 0.225814, 0.117328, 1.1933, 0.0227753, 31.6622, 158.439,
+            0.0411941);
+    addBand(book[15], 0, 1307.36, 0.435608, 0.00116111, 10.441, 18.745, 2.43685, 235.892, 0.196566);
+    addBand(book[15], 0, 1965.32, 3.75587, 0.0810125, 2.09338, 0.41056, 43.0742, 77.239, 0.158092);
+    addBand(book[15], 0, 1828.88, 0.695627, 0.00167615, 12.7544, 0.0643975, 21.8412, 22.6242,
+            0.319764);
+    addBand(book[15], 0, 5340.6, 3.78778, 0.0301518, -0.504976, 0.608627, 74.8494, 1273.99,
+            0.871883);
+    addBand(book[15], 0, 3788.84, 0.787822, 0.347169, 2.36573, 0.0751626, 0.545821, 1.03166,
+            0.16399);
+    addBand(book[15], 0, 3183.33, 6.30552, 0.154968, 1.35482, 23.4515, 52.3611, 61.0152, 0.547209);
+    addBand(book[15], 0, 18992.4, 0.458661, 0.00031644, 10.5405, 0.327898, 123.563, 1.93518,
+            0.304181);
+    // The studio deep snare: the longest.
+    recording(book[16], 44100.0, 538.71, 0.295, 1.54147, 0.0117325, 3.61349, 16.3328);
+    machine(book[16], -0.48859, 0.0, 0.0, 1.0, 19.1402, 0.0, 0.0, 0.0);
+    cut(book[16], 78.2551, 74.8468);
+    book[16].bits = 16;
+    addMode(book[16], 139.914, 0.397628, 37.9204, 50.7803, 0.403807, 1.678);
+    addMode(book[16], 192.37, 0.16943, 22.561, 377.409, 0.414272, -1.40462);
+    addMode(book[16], 703.103, 0.000591485, 17.8326, 104.223, 0.275057, -0.625032);
+    addBand(book[16], 0, 160.499, 2.79134, 2.01582, 0.00130703, 0.237194, 17.5676, 14.7253,
+            0.069089);
+    addBand(book[16], 0, 633.864, 0.447341, 0.00578696, 3.19409, 0.287593, 66.2799, 218.548,
+            0.153466);
+    addBand(book[16], 0, 329.415, 5.99337, 1.02961, 5.12803, 0.0348768, 57.2218, 34.6827, 0.623325);
+    addBand(book[16], 0, 2803.96, 1.46093, 0.269919, -0.822026, 0.675702, 57.6135, 5.19497,
+            0.502378);
+    addBand(book[16], 0, 1258.1, 0.791421, 0.0360351, 0.793417, 0.0723978, 7.66586, 166.181,
+            0.58574);
+    addBand(book[16], 0, 1573.34, 3.31916, 0.0882869, 5.28066, 0.014206, 8.50964, 28.1784,
+            0.0488827);
+    addBand(book[16], 0, 5191.37, 2.64336, 0.243404, 1.13468, 0.210424, 3.93527, 185.544, 0.284864);
+    addBand(book[16], 0, 6713.81, 8.15213, 0.0946921, 11.5391, 0.625181, 19.889, 702.929, 0.427158);
+    addBand(book[16], 0, 9715.1, 0.979713, 0.000427848, 0.544618, 0.109902, 77.1978, 31.4468,
+            0.342893);
+    // The studio tight snare: the shortest.
+    recording(book[17], 44100.0, 204.56, 0.249, 0.91938, 0.0166289, 3.38363, 6.14944);
+    machine(book[17], 5.45591, 0.0, 0.0, 1.0, 2.23159, 0.0, 0.0, 0.0);
+    cut(book[17], 108.9, 26.8175);
+    book[17].bits = 16;
+    addMode(book[17], 177.308, 0.529286, 38.8029, 6.8048, 0.610528, 2.39967);
+    addMode(book[17], 570.179, 0.021497, 37.71, 10.8017, 0.607235, 1.17277);
+    addMode(book[17], 642.593, 0.00192682, 81.5409, 9.06839, 0.159774, -0.496788);
+    addMode(book[17], 3263.92, 0.000628847, 26.377, 7.06346, 0.292882, -1.97007);
+    addMode(book[17], 7695.95, 0.0196194, 33.3618, 1.24834, 0.221755, 1.58139);
+    addMode(book[17], 9317.64, 0.0027477, 22.5554, 71.9435, 0.663567, 0.644474);
+    addBand(book[17], 0, 265.339, 2.16192, 1.26719, -1.11266, 1.64106, 38.9689, 36.5249, 0.55807);
+    addBand(book[17], 0, 201.379, 1.16479, 0.00190124, 9.35557, 1.40319, 51.2251, 38.9132,
+            0.204802);
+    addBand(book[17], 0, 2283.56, 0.81349, 0.287204, 1.74252, 0.0789249, 3.65463, 56.0942,
+            0.503064);
+    addBand(book[17], 0, 3006.03, 4.80503, 0.00106302, 0.967248, 0.0133526, 166.265, 11.0113,
+            0.383681);
+    addBand(book[17], 0, 5458.88, 2.50925, 0.0690788, 4.24464, 0.248432, 256.691, 218.582,
+            0.207042);
+    addBand(book[17], 0, 5931.85, 0.309258, 0.00208893, -0.546295, 0.0224673, 6.91161, 3.48309,
+            0.290262);
+    // The studio cross stick: modes for the shell below 1.5 kHz, the stick bands of noise.
+    recording(book[18], 44100.0, 197.03, 1.497, 0.386101, 0.0199587, 0.0, 1.0);
+    machine(book[18], 3.62008, 0.0, 0.0, 1.0, 3.07167, 0.0, 0.0, 0.0);
+    cut(book[18], 21.6033, 131.391);
+    book[18].bits = 16;
+    addMode(book[18], 178.706, 0.00418855, 6.74641, 579.796, 0.44718, 1.49039);
+    addMode(book[18], 207.914, 0.317522, 10.5033, 4.82397, 0.11182, 1.808);
+    addMode(book[18], 239.59, 0.0201348, 95.5683, 46.5869, 0.374999, 0.672472);
+    addMode(book[18], 372.215, 0.00630272, 60.2105, 16.6643, 0.298055, 2.9632);
+    addBand(book[18], 0, 275.323, 2.81088, 0.597192, 3.23895, 10.8016, 28.2227, 23.1409, 0.0514883);
+    addBand(book[18], 0, 150.706, 4.12123, 1.81889, 12.0473, 2.35073, 0.496944, 798.691, 0.0223377);
+    addBand(book[18], 0, 1356.77, 0.841665, 0.000662507, -1.16498, 21.1448, 9.14081, 302.012,
+            0.364104);
+    addBand(book[18], 0, 1940.43, 0.587503, 0.34005, -0.990603, 0.0346812, 17.4797, 81.8721,
+            0.0839916);
+    addBand(book[18], 0, 5155.78, 3.24936, 2.80432, 0.257709, 0.0171843, 25.3399, 2.43875,
+            0.759881);
+    addBand(book[18], 0, 6919.24, 5.97614, 0.572724, 5.45646, 18.257, 24.8857, 6.41864, 0.374114);
+    addBand(book[18], 0, 15304.5, 1.3403, 0.000459331, 0.854935, 0.163658, 4.9011, 36.4, 0.849684);
+    addBand(book[18], 0, 12454.0, 0.371694, 0.000804997, -0.47803, 4.00893, 85.3821, 28.4672,
+            0.0364739);
+    // The studio clap: one recipe for both of the bank's claps, its hands as band 0's bursts.
+    recording(book[19], 44100.0, 291.29, 1.678, 15.3625, 0.0, 0.0, 1.0);
+    machine(book[19], 4.29148, 0.0, 0.0, 1.0, 18.1997, 0.0, 0.0, 0.0);
+    claps(book[19], 3, 8.3836, 1.2165, 0.040728);
+    cut(book[19], 11.113, 75.4282);
+    book[19].bits = 16;
+    addBand(book[19], 0, 688.149, 1.88049, 0.00362633, -0.12748, 0.853928, 22.9088, 60.4481,
+            0.9799);
+    addBand(book[19], 0, 1369.41, 1.87178, 0.0527832, -0.847782, 0.207138, 195.376, 3.1287,
+            0.796502);
+    addBand(book[19], 0, 748.98, 1.79216, 0.0036785, 3.86388, 0.47605, 0.308534, 372.394, 0.294807);
+    addBand(book[19], 0, 5692.14, 0.20392, 0.00276127, -1.8237, 1.52663, 0.881886, 253.329,
+            0.0494396);
+    addBand(book[19], 0, 1720.08, 1.02981, 0.0940856, 14.9815, 1.7612, 46.2531, 6.36035, 0.777361);
+    addBand(book[19], 0, 5433.12, 8.22592, 0.0010537, 10.0992, 0.228966, 13.0626, 143.939,
+            0.0507136);
+    // The studio closed hat: a one-shot recording, not a loop; noise only, its metal
+    // narrow bands, no tones (a tone there rings).
+    recording(book[20], 44100.0, 166.35, 0.499, 1.07125, 0.0, 0.0, 1.0);
+    machine(book[20], -4.85503, 0.0, 0.0, 1.0, 6.23779, 0.0, 0.0, 0.0);
+    cut(book[20], 90.9639, 37.5686);
+    book[20].bits = 16;
+    addBand(book[20], 0, 177.227, 2.46053, 0.0603108, 1.69474, 11.5379, 9.74939, 12.0421, 0.503632);
+    addBand(book[20], 0, 118.307, 0.200069, 0.203679, 3.88214, 0.0663973, 27.0494, 75.9388,
+            0.190403);
+    addBand(book[20], 0, 250.742, 1.05446, 0.00132722, 6.46275, 3.70299, 2.65478, 6.64491,
+            0.492009);
+    addBand(book[20], 0, 963.866, 4.29733, 0.048921, 13.6774, 0.0354465, 3.4212, 50.5965, 0.187207);
+    addBand(book[20], 0, 1954.67, 0.689255, 0.0133125, 8.23591, 1.00054, 42.1992, 1373.01, 0.26138);
+    addBand(book[20], 0, 1855.25, 4.40246, 0.00114708, 8.433, 2.09581, 2.20612, 1.73022, 0.783787);
+    addBand(book[20], 0, 765.375, 2.55384, 0.0894529, -1.90242, 0.101047, 27.0335, 8.88286,
+            0.862225);
+    addBand(book[20], 0, 5618.38, 5.46086, 0.000365218, 1.62356, 0.028059, 15.088, 311.589,
+            0.0363069);
+    addBand(book[20], 0, 3400.5, 1.63114, 0.0416859, 10.6269, 53.641, 4.08808, 36.9443, 0.147294);
+    addBand(book[20], 0, 5925.14, 15.3862, 0.239869, 2.51368, 8.37144, 23.0376, 56.6486, 0.650572);
+    addBand(book[20], 0, 4467.52, 0.349433, 0.317171, 0.602706, 0.163805, 1.79994, 2.37833,
+            0.423605);
+    addBand(book[20], 0, 11907.3, 0.559109, 0.723012, -1.94069, 1.06035, 28.187, 33.1585, 0.761021);
+    // The studio open hat.
+    recording(book[21], 44100.0, 322.7, 0.227, 3.51552, 0.0, 0.0, 1.0);
+    machine(book[21], -8.6315, 0.0, 0.0, 1.0, 11.6664, 0.0, 0.0, 0.0);
+    cut(book[21], 206.045, 22.4533);
+    book[21].bits = 16;
+    addBand(book[21], 0, 176.256, 0.266123, 0.00185367, 5.73817, 15.1028, 2.11621, 1303.17,
+            0.312386);
+    addBand(book[21], 0, 877.111, 0.559276, 0.0299076, 10.3293, 1.39519, 60.8416, 16.812, 0.576486);
+    addBand(book[21], 0, 595.164, 38.9701, 0.00212104, 9.23147, 0.0657022, 5.81093, 63.0838,
+            0.05432);
+    addBand(book[21], 0, 234.116, 0.200313, 0.0700703, 0.72973, 0.699689, 51.7241, 335.132,
+            0.481755);
+    addBand(book[21], 0, 655.461, 4.24967, 0.000450889, 10.8495, 3.27625, 8.86117, 16.6585,
+            0.430105);
+    addBand(book[21], 0, 785.06, 10.4821, 0.00848091, -1.38473, 0.0870204, 0.955504, 59.9352,
+            0.0171262);
+    addBand(book[21], 0, 5835.49, 5.56719, 0.32058, 3.49206, 0.059054, 18.2438, 55.6197, 0.509812);
+    addBand(book[21], 0, 4806.73, 6.51194, 0.000418368, 12.4745, 0.0478244, 0.797774, 522.8,
+            0.14567);
+    addBand(book[21], 0, 9784.18, 0.840777, 0.0743064, 12.0389, 16.2441, 122.778, 1011.79, 0.29887);
+    addBand(book[21], 0, 7547.16, 8.94548, 0.484298, 4.03161, 0.927903, 102.951, 15.6628, 0.52781);
+    addBand(book[21], 0, 10275.0, 1.4174, 0.331996, 0.382959, 0.0723254, 139.571, 1.86069,
+            0.105735);
+    addBand(book[21], 0, 6464.59, 1.33717, 0.0229973, -1.06152, 0.178709, 14.2169, 391.963,
+            0.912253);
+    // The studio block.
+    recording(book[22], 44100.0, 314.2, 0.181, 1.32589, 0.0180666, 0.0, 1.0);
+    machine(book[22], -7.12002, 0.0, 0.0, 1.0, 59.8575, 0.0, 0.0, 0.0);
+    cut(book[22], 9.8391, 54.6097);
+    book[22].bits = 16;
+    addMode(book[22], 1144.51, 0.0153033, 22.2031, 33.509, 0.760652, -1.12324);
+    addMode(book[22], 1257.24, 0.655136, 4.90416, 2.42836, 0.154237, -1.85947);
+    addMode(book[22], 1387.75, 0.00171614, 48.9092, 8.79124, 0.374122, -2.11225);
+    addMode(book[22], 1489.9, 0.505008, 3.94152, 5.71682, 0.656906, 1.00901);
+    addMode(book[22], 2626.56, 0.0892291, 4.3652, 1.21433, 0.164987, -3.05604);
+    addMode(book[22], 3716.48, 0.125448, 0.357573, 5.01754, 0.608137, 2.36772);
+    addBand(book[22], 0, 471.579, 1.33119, 0.00383486, 3.37222, 59.1856, 1.30324, 23.1758,
+            0.704669);
+    addBand(book[22], 0, 1344.27, 7.5791, 0.0950791, 7.92912, 1.18632, 1.78913, 335.822, 0.926934);
+    addBand(book[22], 0, 5141.6, 4.01016, 0.559623, -1.18465, 0.0133001, 5.00361, 5.42415,
+            0.585328);
+    // The studio echo snare: a snare in a long room, the room's close modes below 1.5 kHz, bands
+    // of noise above.
+    recording(book[23], 44100.0, 583.29, 0.34, 3.79055, 0.167343, 0.0, 1.0);
+    machine(book[23], 0.74117, 0.0, 0.0, 1.0, 2.71768, 0.0, 0.0, 0.0);
+    cut(book[23], 93.972, 116.227);
+    book[23].bits = 16;
+    addMode(book[23], 168.483, 0.0913493, 2.5671, 41.658, 0.989312, 1.40152);
+    addMode(book[23], 752.006, 0.0202289, 1.2645, 13.1678, 0.228972, -0.491398);
+    addMode(book[23], 902.534, 0.0109838, 42.497, 1.64676, 0.423089, 0.467543);
+    addMode(book[23], 976.479, 0.000565302, 39.9495, 35.3344, 0.0764825, -0.523564);
+    addMode(book[23], 1071.85, 0.00502625, 3.86178, 4.08977, 0.387077, 1.71377);
+    addMode(book[23], 1254.62, 0.00428899, 5.94713, 13.8565, 0.322964, 1.43898);
+    addMode(book[23], 1423.23, 0.00204262, 21.918, 10.4812, 0.425434, 2.11111);
+    addBand(book[23], 0, 202.401, 10.6989, 2.00159, 14.3377, 0.333616, 1.15368, 939.602, 0.423895);
+    addBand(book[23], 0, 158.541, 7.22658, 2.18817, -1.00923, 0.1486, 251.567, 511.749, 0.65184);
+    addBand(book[23], 0, 1834.82, 1.51548, 0.122925, 14.7652, 1.34386, 50.4797, 2.10834, 0.546691);
+    addBand(book[23], 0, 1667.86, 3.38813, 0.828236, -1.00356, 0.272001, 91.4008, 1.47987,
+            0.960113);
+    addBand(book[23], 0, 3599.52, 5.16649, 0.191075, 14.4085, 0.179747, 28.7603, 55.3103, 0.731648);
+    addBand(book[23], 0, 1370.21, 9.56797, 0.00295646, 14.3526, 0.0346042, 2.34449, 429.041,
+            0.159736);
+    addBand(book[23], 0, 4290.38, 2.44685, 0.00188384, 9.11438, 8.4117, 0.730724, 43.0165,
+            0.104373);
+    addBand(book[23], 0, 18215.0, 0.604427, 0.00963955, -0.879179, 26.8472, 3.85479, 2.02788,
+            0.583417);
+    // The studio muted cowbell.
+    recording(book[24], 44100.0, 345.96, 0.635, 0.61109, 1.49149, 0.0, 1.0);
+    machine(book[24], 1.32391, 0.0, 0.0, 1.0, 4.05304, 0.0, 0.0, 0.0);
+    cut(book[24], 5.45399, 103.628);
+    book[24].bits = 16;
+    addMode(book[24], 420.963, 0.293339, 26.0138, 9.56548, 0.796315, -0.652558);
+    addMode(book[24], 472.812, 0.386751, 25.042, 10.6507, 0.577946, 2.54941);
+    addMode(book[24], 1120.33, 0.231273, 10.4438, 1.19838, 0.481484, -2.28813);
+    addMode(book[24], 1550.65, 0.000646126, 0.925552, 10.7726, 0.509024, 1.2594);
+    addMode(book[24], 1901.47, 0.01023, 0.643191, 25.0804, 0.684449, 2.64732);
+    addMode(book[24], 2596.17, 0.102397, 9.641, 45.9881, 0.941582, -1.88597);
+    addMode(book[24], 3450.58, 0.00608074, 1.49228, 18.2483, 0.89197, 0.312986);
+    addMode(book[24], 3573.78, 0.0143663, 1.58238, 5.19366, 0.585555, -0.97522);
+    addBand(book[24], 0, 401.269, 0.489973, 0.026751, 7.82966, 79.268, 6.93712, 640.134, 0.527426);
+    addBand(book[24], 0, 2341.82, 1.95029, 0.843036, -1.80061, 0.27455, 6.9709, 43.6629, 0.0955185);
+    addBand(book[24], 0, 6767.81, 1.81764, 0.00116474, 6.18792, 0.0901586, 6.95736, 42.8132,
+            0.197191);
+    // The studio open cowbell.
+    recording(book[25], 44100.0, 307.69, 0.771, 3.38178, 0.087378, 0.0, 1.0);
+    machine(book[25], -2.54998, 0.0, 0.0, 1.0, 3.93367, 0.0, 0.0, 0.0);
+    cut(book[25], 11.8783, 79.2455);
+    book[25].bits = 16;
+    addMode(book[25], 459.214, 0.0743156, 11.4464, 24.3925, 0.459962, 1.24229);
+    addMode(book[25], 508.989, 0.0984643, 2.87353, 26.3448, 0.453458, -1.99239);
+    addMode(book[25], 1193.0, 0.048125, 9.257, 20.9867, 0.209769, 0.6895);
+    addMode(book[25], 2118.9, 0.0214595, 84.324, 54.9187, 0.705698, -1.1037);
+    addMode(book[25], 2782.28, 0.0102829, 37.6095, 9.7603, 0.061511, -0.413435);
+    addMode(book[25], 3534.71, 0.0301737, 16.5991, 15.3362, 0.76554, -1.50573);
+    addMode(book[25], 5004.2, 0.0015151, 9.44262, 4.11476, 0.367773, -0.85479);
+    addMode(book[25], 6111.53, 0.00579228, 4.17136, 6.62794, 0.422012, -1.80388);
+    addBand(book[25], 0, 287.278, 1.4898, 0.00108177, 3.47944, 0.34847, 14.0433, 3.43448, 0.175031);
+    addBand(book[25], 0, 2368.52, 0.904796, 0.186228, -0.577938, 0.377673, 123.589, 6.62565,
+            0.959152);
+    addBand(book[25], 0, 12103.6, 0.993484, 0.00135971, 0.190973, 19.2921, 0.788774, 10.1704,
+            0.13533);
+    // The studio cowbell.
+    recording(book[26], 44100.0, 98.16, 0.907, 3.7416, 0.109433, 0.0, 1.0);
+    machine(book[26], -9.2368, 0.0, 0.0, 1.0, 3.9259, 0.0, 0.0, 0.0);
+    cut(book[26], 66.1343, 12.0259);
+    book[26].bits = 16;
+    addMode(book[26], 465.364, 0.352981, 12.6357, 6.10541, 0.119695, 1.51737);
+    addMode(book[26], 510.364, 0.466741, 17.3786, 9.5641, 0.728442, -1.53373);
+    addMode(book[26], 976.196, 0.00553628, 0.434867, 12.1081, 0.29685, 0.841843);
+    addMode(book[26], 1180.04, 0.0393382, 4.98466, 11.5821, 0.531575, 1.04705);
+    addMode(book[26], 1727.56, 0.0101591, 41.1966, 14.9588, 0.234227, 1.20043);
+    addMode(book[26], 2286.21, 0.242364, 1.1993, 14.2982, 0.560412, -0.191166);
+    addMode(book[26], 3079.74, 0.0295132, 19.6646, 8.15798, 0.0719439, -2.13026);
+    addMode(book[26], 3863.45, 0.426438, 2.04195, 9.37042, 0.420448, 0.602257);
+    addBand(book[26], 0, 582.43, 1.65114, 0.0318608, 0.899777, 7.10587, 1.611, 24.3625, 0.0375328);
+    addBand(book[26], 0, 1790.64, 0.456386, 0.132396, -1.79442, 0.165961, 3.01688, 38.4247,
+            0.302432);
+    addBand(book[26], 0, 7141.95, 3.37152, 0.0127392, 4.23046, 5.48021, 0.42007, 10.4777, 0.332816);
+    // The studio dark cowbell.
+    recording(book[27], 44100.0, 97.44, 1.02, 0.791811, 0.351021, 0.0, 1.0);
+    machine(book[27], -1.7275, 0.0, 0.0, 1.0, 94.6193, 0.0, 0.0, 0.0);
+    cut(book[27], 6.69844, 40.2493);
+    book[27].bits = 16;
+    addMode(book[27], 459.212, 0.316749, 5.43893, 26.1674, 0.628522, 0.361478);
+    addMode(book[27], 513.345, 0.358455, 21.049, 22.4024, 0.456076, -3.1347);
+    addMode(book[27], 848.588, 0.0769542, 25.9489, 6.67811, 0.456449, -0.891979);
+    addMode(book[27], 1363.85, 0.125086, 0.313259, 25.3327, 0.834479, 2.63737);
+    addMode(book[27], 1524.33, 0.106073, 19.8058, 27.9359, 0.589522, 2.60161);
+    addMode(book[27], 2051.21, 0.0388791, 16.5895, 70.0495, 0.369063, -0.467172);
+    addMode(book[27], 3063.04, 0.000333478, 41.8267, 1.28094, 0.170866, 2.68605);
+    addMode(book[27], 3292.85, 0.00749352, 4.38686, 82.259, 0.550653, -2.87616);
+    addBand(book[27], 0, 106.565, 0.514303, 0.0425381, 3.75957, 0.0329612, 13.8554, 6.38898,
+            0.527007);
+    addBand(book[27], 0, 2006.81, 0.518237, 0.626391, -0.546526, 0.619139, 6.69259, 187.784,
+            0.0589107);
+    addBand(book[27], 0, 16848.2, 0.552201, 0.0255631, -1.11916, 0.123755, 1.09157, 395.004,
+            0.302415);
+    // The studio tom (the kit tunes it apart, as the classic tom).
+    recording(book[28], 44100.0, 2532.61, 0.295, 5.21512, 0.0941791, 6.1761, 1.88268);
+    machine(book[28], -2.32844, 0.0, 0.0, 1.0, 18.1478, 0.0, 0.0, 0.0);
+    cut(book[28], 1638.67, 447.216);
+    book[28].bits = 16;
+    addMode(book[28], 116.934, 0.138233, 26.6635, 500.68, 0.248934, 1.85774);
+    addMode(book[28], 454.915, 0.0638068, 4.54894, 23.5346, 0.354161, 2.94661);
+    addMode(book[28], 549.629, 0.000566571, 0.444618, 7.12275, 0.519603, -0.562332);
+    addMode(book[28], 618.022, 0.00681078, 38.5279, 1.57437, 0.484665, -0.0530158);
+    addMode(book[28], 781.149, 0.00282264, 13.7918, 5.20475, 0.577571, -1.32297);
+    addMode(book[28], 1243.62, 0.00941139, 35.3341, 1.87004, 0.728854, 2.05705);
+    addMode(book[28], 1460.41, 0.0209217, 1.34227, 12.2044, 0.539887, 0.57636);
+    addMode(book[28], 1762.03, 0.0137084, 18.4425, 3.19257, 0.360919, 0.0853982);
+    addMode(book[28], 2001.85, 0.00357459, 4.9701, 26.6818, 0.727673, -1.79443);
+    addMode(book[28], 2121.42, 0.011229, 8.24135, 8.42276, 0.318763, -0.675204);
+    addBand(book[28], 0, 108.7, 7.4992, 2.0624, 4.42787, 0.0780057, 295.586, 42.2224, 0.886912);
+    addBand(book[28], 0, 3376.61, 3.64715, 0.000303504, 0.288317, 16.2441, 46.0104, 367.356,
+            0.336424);
+    addBand(book[28], 0, 3728.53, 1.39372, 0.142185, -1.38889, 0.144729, 1.08088, 3.74481,
+            0.473996);
+    // The studio short duck.
+    recording(book[29], 44100.0, 44.54, 0.181, 0.845887, 0.0, 0.0, 1.0);
+    machine(book[29], 1.67831, 0.0, 0.0, 1.0, 6.92456, 0.0, 0.0, 0.0);
+    cut(book[29], 24.6709, 2.91137);
+    book[29].bits = 16;
+    addBand(book[29], 0, 357.859, 14.7921, 0.00104467, 1.81728, 40.7882, 22.7693, 172.052,
+            0.747015);
+    addBand(book[29], 0, 677.768, 2.89592, 0.00686912, 3.10378, 72.3915, 0.841767, 144.786,
+            0.494254);
+    addBand(book[29], 0, 1165.45, 6.20975, 0.00752, 0.355871, 0.601452, 30.387, 3.58529, 0.926878);
+    addBand(book[29], 0, 485.324, 1.05717, 0.00035172, 6.75355, 57.6778, 2.6881, 6.97403, 0.503575);
+    addBand(book[29], 0, 1969.56, 5.85333, 1.64172, 3.66605, 0.115409, 8.54038, 2.07666, 0.367782);
+    addBand(book[29], 0, 3425.57, 6.06139, 2.12496, 0.487737, 0.0135535, 7.37174, 22.2796,
+            0.0185336);
+    addBand(book[29], 0, 2002.25, 3.96915, 0.322232, 7.04526, 0.353076, 2.52244, 115.756, 0.158741);
+    addBand(book[29], 0, 947.338, 2.53757, 0.00120214, -0.215563, 0.107336, 140.968, 372.093,
+            0.705274);
+    addBand(book[29], 0, 3135.73, 5.29303, 0.0219866, 7.53709, 0.0436372, 135.217, 202.903,
+            0.99228);
+    addBand(book[29], 0, 2479.96, 13.4499, 0.270633, -0.954746, 6.24364, 352.403, 934.525,
+            0.447219);
+    addBand(book[29], 0, 4059.18, 2.20698, 0.000599246, -0.869929, 0.320007, 16.1274, 20.7146,
+            0.245879);
+    addBand(book[29], 0, 5688.15, 16.3416, 0.00154674, 4.99879, 9.22851, 5.22759, 268.334,
+            0.330585);
+    // The studio long duck: noise only, its lead-in a band before the hit.
+    recording(book[30], 44100.0, 73.99, 15.306, 5.37938, 0.0, 0.0, 1.0);
+    machine(book[30], -6.5833, 0.0, 0.0, 1.0, 283.136, 0.0, 0.0, 0.0);
+    cut(book[30], 43.5379, 4.15747);
+    book[30].bits = 16;
+    addBand(book[30], 0, 83.0878, 16.1693, 0.165683, -7.97416, 3.03174, 0.679646, 995.292,
+            0.234217);
+    addBand(book[30], 0, 707.855, 2.22444, 0.0328145, 4.01045, 0.401949, 1.774, 13.9118, 0.562515);
+    addBand(book[30], 0, 188.423, 8.63456, 0.00162398, 8.55831, 1.64136, 25.2571, 182.97, 0.197203);
+    addBand(book[30], 0, 1438.62, 0.780199, 0.0110791, 11.126, 0.0198585, 0.662769, 7.95051,
+            0.581201);
+    addBand(book[30], 0, 2235.45, 0.54793, 0.0127557, 4.66376, 48.8791, 9.0191, 4.46472, 0.48855);
+    addBand(book[30], 0, 3016.51, 9.58375, 0.374933, 11.4251, 19.636, 395.737, 16.5636, 0.17013);
+    addBand(book[30], 0, 1111.38, 10.0706, 0.292309, -1.97526, 0.132292, 250.631, 7.38512,
+            0.967781);
+    addBand(book[30], 0, 2410.5, 7.04521, 0.0106864, 1.19562, 2.50008, 73.0751, 330.029, 0.26647);
+    addBand(book[30], 0, 3761.06, 8.70103, 0.579574, 10.6327, 7.9727, 96.2866, 120.075, 0.645719);
+    addBand(book[30], 0, 2464.94, 8.146, 0.189594, 5.79017, 0.339057, 75.6863, 122.938, 0.399184);
+    addBand(book[30], 0, 2736.23, 17.1848, 0.0144463, -1.5284, 0.0310742, 0.335418, 6.16833,
+            0.332525);
+    addBand(book[30], 0, 4773.31, 4.20713, 0.00422184, 6.43133, 55.9511, 87.8121, 26.1524,
+            0.529156);
+    // The studio explosion.
+    recording(book[31], 44100.0, 1342.47, 0.227, 42.1894, 7.3759, 0.0, 1.0);
+    machine(book[31], -7.1765, 0.0, 0.0, 1.0, 10.0979, 0.0, 0.0, 0.0);
+    cut(book[31], 222.539, 476.612);
+    book[31].bits = 16;
+    addMode(book[31], 156.954, 0.0428277, 0.66116, 151.794, 0.242737, -1.88422);
+    addMode(book[31], 190.208, 0.00540292, 5.27373, 145.886, 0.872361, -2.50226);
+    addMode(book[31], 258.61, 0.000747562, 859.851, 4.22807, 0.213972, -2.98974);
+    addMode(book[31], 328.018, 0.00263756, 5.26192, 13.0253, 0.751636, -0.835352);
+    addMode(book[31], 498.016, 0.00220071, 0.436862, 12.5269, 0.176851, -2.97315);
+    addMode(book[31], 666.871, 0.0187646, 1.98312, 28.9498, 0.0818102, 0.785608);
+    addMode(book[31], 870.334, 0.0045642, 26.9758, 324.841, 0.0228565, -1.01965);
+    addMode(book[31], 1004.98, 0.000472171, 18.9003, 40.5052, 0.571493, -0.0709644);
+    addMode(book[31], 1311.22, 0.0517068, 1.06401, 10.1673, 0.432087, -1.61815);
+    addMode(book[31], 1666.46, 0.00119951, 53.1655, 2.63636, 0.529883, 1.61221);
+    addBand(book[31], 0, 168.299, 1.54924, 0.690563, 0.110075, 0.170796, 279.818, 333.369,
+            0.300902);
+    addBand(book[31], 0, 630.915, 10.5936, 0.000782336, -0.95335, 0.108018, 137.36, 167.044,
+            0.21497);
+    addBand(book[31], 0, 718.686, 10.0557, 1.06683, 0.204961, 0.0750331, 13.1294, 2.07782,
+            0.0404016);
+    addBand(book[31], 0, 1627.72, 0.361914, 0.00410725, -1.32101, 0.188026, 20.4419, 8.68017,
+            0.560918);
+    addBand(book[31], 0, 1864.65, 2.44455, 0.00155915, -0.00689439, 1.80382, 42.401, 167.351,
+            0.447975);
+    addBand(book[31], 0, 12464.9, 9.32748, 0.000731949, 7.01066, 0.100149, 0.731505, 65.2877,
+            0.346167);
 }
 // --- end of generated recipes ------------------------------------------------------------
 
@@ -815,9 +1232,9 @@ struct Drumlin : Instrument {
         .id = "com.suppleaudio.drumlin",
         .vendor = "Supple Audio",
         .description =
-            "Drum machine: classic machines' sounds made anew without their samples, the LM-1's "
-            "first, on sixteen pads, each on a MIDI note of its own (padN.key; General MIDI's "
-            "drum map by default), with choke groups and eight extra outputs.",
+            "Drum machine: realistic drums, synthesized without samples, on sixteen pads, each on "
+            "a MIDI note of its own (padN.key; General MIDI's drum map by default), with choke "
+            "groups and eight extra outputs.",
         .features = {"drum-machine", "synthesizer"},
         .outputs = {"Out 1", "Out 2", "Out 3", "Out 4", "Out 5", "Out 6", "Out 7", "Out 8"},
         .voices = kVoices};
@@ -830,25 +1247,41 @@ struct Drumlin : Instrument {
     // writing a part all see the map: the default kit is on General MIDI's
     // drum keys, the notation's drum names.
 
-    // Pad 1: LM-1 Kick on key 36 (C2; notation: kick).
+    // Pad 1: Classic Kick on key 36 (C2; notation: kick).
     Param p1Key =
         integer("Pad 1 Key", 0, 127, 36)
             .withKey("pad1.key")
             .in("Pad 1")
             .help("The MIDI note that plays the pad (36, C2, by default: General MIDI's map).");
-    Param p1Sound = choice("Pad 1 Sound",
-                           {"LM-1 Kick", "LM-1 Snare", "LM-1 Rimshot", "LM-1 Clap",
-                            "LM-1 Closed Hat", "LM-1 Open Hat", "LM-1 Tom", "LM-1 Conga",
-                            "LM-1 Cabasa", "LM-1 Tambourine", "LM-1 Cowbell", "Crash", "Ride"},
-                           0)
-                        .keys({"lm1_kick", "lm1_snare", "lm1_rimshot", "lm1_clap", "lm1_closed_hat",
-                               "lm1_open_hat", "lm1_tom", "lm1_conga", "lm1_cabasa",
-                               "lm1_tambourine", "lm1_cowbell", "crash", "ride"})
-                        .withKey("pad1.sound")
-                        .in("Pad 1")
-                        .help(
-                            "What the pad plays: one of the machines' sounds. Its Key is the note "
-                            "that plays it.");
+    Param p1Sound =
+        choice("Pad 1 Sound", {"Classic Kick",         "Classic Snare",       "Classic Rimshot",
+                               "Classic Clap",         "Classic Closed Hat",  "Classic Open Hat",
+                               "Classic Tom",          "Classic Conga",       "Classic Cabasa",
+                               "Classic Tambourine",   "Classic Cowbell",     "Classic Crash",
+                               "Classic Ride",         "Studio Kick",         "Studio Snare",
+                               "Studio Bright Snare",  "Studio Deep Snare",   "Studio Tight Snare",
+                               "Studio Cross Stick",   "Studio Clap",         "Studio Closed Hat",
+                               "Studio Open Hat",      "Studio Block",        "Studio Echo Snare",
+                               "Studio Muted Cowbell", "Studio Open Cowbell", "Studio Cowbell",
+                               "Studio Dark Cowbell",  "Studio Tom",          "Studio Short Duck",
+                               "Studio Long Duck",     "Studio Explosion"},
+               0)
+            .keys({"classic_kick",         "classic_snare",       "classic_rimshot",
+                   "classic_clap",         "classic_closed_hat",  "classic_open_hat",
+                   "classic_tom",          "classic_conga",       "classic_cabasa",
+                   "classic_tambourine",   "classic_cowbell",     "classic_crash",
+                   "classic_ride",         "studio_kick",         "studio_snare",
+                   "studio_bright_snare",  "studio_deep_snare",   "studio_tight_snare",
+                   "studio_cross_stick",   "studio_clap",         "studio_closed_hat",
+                   "studio_open_hat",      "studio_block",        "studio_echo_snare",
+                   "studio_muted_cowbell", "studio_open_cowbell", "studio_cowbell",
+                   "studio_dark_cowbell",  "studio_tom",          "studio_short_duck",
+                   "studio_long_duck",     "studio_explosion"})
+            .withKey("pad1.sound")
+            .in("Pad 1")
+            .help(
+                "What the pad plays: one of the machines' sounds. Its Key is the note "
+                "that plays it.");
     Param p1Tune = semitones("Pad 1 Tune", -12, 12, 0)
                        .withKey("pad1.tune")
                        .in("Pad 1")
@@ -876,7 +1309,7 @@ struct Drumlin : Instrument {
                            .help(
                                "How much quieter a soft hit is than a hard one: at 100 %, 40 dB "
                                "across the range.");
-    Param p1Vary = percent("Pad 1 Vary", 0)
+    Param p1Vary = percent("Pad 1 Vary", 50)
                        .withKey("pad1.vary")
                        .in("Pad 1")
                        .help(
@@ -900,25 +1333,41 @@ struct Drumlin : Instrument {
                 "The main output, or one of the extra ones (Out 1 to Out 8), which takes the pad "
                 "out of the main mix.");
 
-    // Pad 2: LM-1 Rimshot on key 37 (C#2; notation: rim).
+    // Pad 2: Classic Rimshot on key 37 (C#2; notation: rim).
     Param p2Key =
         integer("Pad 2 Key", 0, 127, 37)
             .withKey("pad2.key")
             .in("Pad 2")
             .help("The MIDI note that plays the pad (37, C#2, by default: General MIDI's map).");
-    Param p2Sound = choice("Pad 2 Sound",
-                           {"LM-1 Kick", "LM-1 Snare", "LM-1 Rimshot", "LM-1 Clap",
-                            "LM-1 Closed Hat", "LM-1 Open Hat", "LM-1 Tom", "LM-1 Conga",
-                            "LM-1 Cabasa", "LM-1 Tambourine", "LM-1 Cowbell", "Crash", "Ride"},
-                           2)
-                        .keys({"lm1_kick", "lm1_snare", "lm1_rimshot", "lm1_clap", "lm1_closed_hat",
-                               "lm1_open_hat", "lm1_tom", "lm1_conga", "lm1_cabasa",
-                               "lm1_tambourine", "lm1_cowbell", "crash", "ride"})
-                        .withKey("pad2.sound")
-                        .in("Pad 2")
-                        .help(
-                            "What the pad plays: one of the machines' sounds. Its Key is the note "
-                            "that plays it.");
+    Param p2Sound =
+        choice("Pad 2 Sound", {"Classic Kick",         "Classic Snare",       "Classic Rimshot",
+                               "Classic Clap",         "Classic Closed Hat",  "Classic Open Hat",
+                               "Classic Tom",          "Classic Conga",       "Classic Cabasa",
+                               "Classic Tambourine",   "Classic Cowbell",     "Classic Crash",
+                               "Classic Ride",         "Studio Kick",         "Studio Snare",
+                               "Studio Bright Snare",  "Studio Deep Snare",   "Studio Tight Snare",
+                               "Studio Cross Stick",   "Studio Clap",         "Studio Closed Hat",
+                               "Studio Open Hat",      "Studio Block",        "Studio Echo Snare",
+                               "Studio Muted Cowbell", "Studio Open Cowbell", "Studio Cowbell",
+                               "Studio Dark Cowbell",  "Studio Tom",          "Studio Short Duck",
+                               "Studio Long Duck",     "Studio Explosion"},
+               2)
+            .keys({"classic_kick",         "classic_snare",       "classic_rimshot",
+                   "classic_clap",         "classic_closed_hat",  "classic_open_hat",
+                   "classic_tom",          "classic_conga",       "classic_cabasa",
+                   "classic_tambourine",   "classic_cowbell",     "classic_crash",
+                   "classic_ride",         "studio_kick",         "studio_snare",
+                   "studio_bright_snare",  "studio_deep_snare",   "studio_tight_snare",
+                   "studio_cross_stick",   "studio_clap",         "studio_closed_hat",
+                   "studio_open_hat",      "studio_block",        "studio_echo_snare",
+                   "studio_muted_cowbell", "studio_open_cowbell", "studio_cowbell",
+                   "studio_dark_cowbell",  "studio_tom",          "studio_short_duck",
+                   "studio_long_duck",     "studio_explosion"})
+            .withKey("pad2.sound")
+            .in("Pad 2")
+            .help(
+                "What the pad plays: one of the machines' sounds. Its Key is the note "
+                "that plays it.");
     Param p2Tune = semitones("Pad 2 Tune", -12, 12, 0)
                        .withKey("pad2.tune")
                        .in("Pad 2")
@@ -946,7 +1395,7 @@ struct Drumlin : Instrument {
                            .help(
                                "How much quieter a soft hit is than a hard one: at 100 %, 40 dB "
                                "across the range.");
-    Param p2Vary = percent("Pad 2 Vary", 0)
+    Param p2Vary = percent("Pad 2 Vary", 50)
                        .withKey("pad2.vary")
                        .in("Pad 2")
                        .help(
@@ -970,25 +1419,41 @@ struct Drumlin : Instrument {
                 "The main output, or one of the extra ones (Out 1 to Out 8), which takes the pad "
                 "out of the main mix.");
 
-    // Pad 3: LM-1 Snare on key 38 (D2; notation: snare).
+    // Pad 3: Classic Snare on key 38 (D2; notation: snare).
     Param p3Key =
         integer("Pad 3 Key", 0, 127, 38)
             .withKey("pad3.key")
             .in("Pad 3")
             .help("The MIDI note that plays the pad (38, D2, by default: General MIDI's map).");
-    Param p3Sound = choice("Pad 3 Sound",
-                           {"LM-1 Kick", "LM-1 Snare", "LM-1 Rimshot", "LM-1 Clap",
-                            "LM-1 Closed Hat", "LM-1 Open Hat", "LM-1 Tom", "LM-1 Conga",
-                            "LM-1 Cabasa", "LM-1 Tambourine", "LM-1 Cowbell", "Crash", "Ride"},
-                           1)
-                        .keys({"lm1_kick", "lm1_snare", "lm1_rimshot", "lm1_clap", "lm1_closed_hat",
-                               "lm1_open_hat", "lm1_tom", "lm1_conga", "lm1_cabasa",
-                               "lm1_tambourine", "lm1_cowbell", "crash", "ride"})
-                        .withKey("pad3.sound")
-                        .in("Pad 3")
-                        .help(
-                            "What the pad plays: one of the machines' sounds. Its Key is the note "
-                            "that plays it.");
+    Param p3Sound =
+        choice("Pad 3 Sound", {"Classic Kick",         "Classic Snare",       "Classic Rimshot",
+                               "Classic Clap",         "Classic Closed Hat",  "Classic Open Hat",
+                               "Classic Tom",          "Classic Conga",       "Classic Cabasa",
+                               "Classic Tambourine",   "Classic Cowbell",     "Classic Crash",
+                               "Classic Ride",         "Studio Kick",         "Studio Snare",
+                               "Studio Bright Snare",  "Studio Deep Snare",   "Studio Tight Snare",
+                               "Studio Cross Stick",   "Studio Clap",         "Studio Closed Hat",
+                               "Studio Open Hat",      "Studio Block",        "Studio Echo Snare",
+                               "Studio Muted Cowbell", "Studio Open Cowbell", "Studio Cowbell",
+                               "Studio Dark Cowbell",  "Studio Tom",          "Studio Short Duck",
+                               "Studio Long Duck",     "Studio Explosion"},
+               1)
+            .keys({"classic_kick",         "classic_snare",       "classic_rimshot",
+                   "classic_clap",         "classic_closed_hat",  "classic_open_hat",
+                   "classic_tom",          "classic_conga",       "classic_cabasa",
+                   "classic_tambourine",   "classic_cowbell",     "classic_crash",
+                   "classic_ride",         "studio_kick",         "studio_snare",
+                   "studio_bright_snare",  "studio_deep_snare",   "studio_tight_snare",
+                   "studio_cross_stick",   "studio_clap",         "studio_closed_hat",
+                   "studio_open_hat",      "studio_block",        "studio_echo_snare",
+                   "studio_muted_cowbell", "studio_open_cowbell", "studio_cowbell",
+                   "studio_dark_cowbell",  "studio_tom",          "studio_short_duck",
+                   "studio_long_duck",     "studio_explosion"})
+            .withKey("pad3.sound")
+            .in("Pad 3")
+            .help(
+                "What the pad plays: one of the machines' sounds. Its Key is the note "
+                "that plays it.");
     Param p3Tune = semitones("Pad 3 Tune", -12, 12, 0)
                        .withKey("pad3.tune")
                        .in("Pad 3")
@@ -1016,7 +1481,7 @@ struct Drumlin : Instrument {
                            .help(
                                "How much quieter a soft hit is than a hard one: at 100 %, 40 dB "
                                "across the range.");
-    Param p3Vary = percent("Pad 3 Vary", 0)
+    Param p3Vary = percent("Pad 3 Vary", 50)
                        .withKey("pad3.vary")
                        .in("Pad 3")
                        .help(
@@ -1040,25 +1505,41 @@ struct Drumlin : Instrument {
                 "The main output, or one of the extra ones (Out 1 to Out 8), which takes the pad "
                 "out of the main mix.");
 
-    // Pad 4: LM-1 Clap on key 39 (D#2; notation: clap).
+    // Pad 4: Classic Clap on key 39 (D#2; notation: clap).
     Param p4Key =
         integer("Pad 4 Key", 0, 127, 39)
             .withKey("pad4.key")
             .in("Pad 4")
             .help("The MIDI note that plays the pad (39, D#2, by default: General MIDI's map).");
-    Param p4Sound = choice("Pad 4 Sound",
-                           {"LM-1 Kick", "LM-1 Snare", "LM-1 Rimshot", "LM-1 Clap",
-                            "LM-1 Closed Hat", "LM-1 Open Hat", "LM-1 Tom", "LM-1 Conga",
-                            "LM-1 Cabasa", "LM-1 Tambourine", "LM-1 Cowbell", "Crash", "Ride"},
-                           3)
-                        .keys({"lm1_kick", "lm1_snare", "lm1_rimshot", "lm1_clap", "lm1_closed_hat",
-                               "lm1_open_hat", "lm1_tom", "lm1_conga", "lm1_cabasa",
-                               "lm1_tambourine", "lm1_cowbell", "crash", "ride"})
-                        .withKey("pad4.sound")
-                        .in("Pad 4")
-                        .help(
-                            "What the pad plays: one of the machines' sounds. Its Key is the note "
-                            "that plays it.");
+    Param p4Sound =
+        choice("Pad 4 Sound", {"Classic Kick",         "Classic Snare",       "Classic Rimshot",
+                               "Classic Clap",         "Classic Closed Hat",  "Classic Open Hat",
+                               "Classic Tom",          "Classic Conga",       "Classic Cabasa",
+                               "Classic Tambourine",   "Classic Cowbell",     "Classic Crash",
+                               "Classic Ride",         "Studio Kick",         "Studio Snare",
+                               "Studio Bright Snare",  "Studio Deep Snare",   "Studio Tight Snare",
+                               "Studio Cross Stick",   "Studio Clap",         "Studio Closed Hat",
+                               "Studio Open Hat",      "Studio Block",        "Studio Echo Snare",
+                               "Studio Muted Cowbell", "Studio Open Cowbell", "Studio Cowbell",
+                               "Studio Dark Cowbell",  "Studio Tom",          "Studio Short Duck",
+                               "Studio Long Duck",     "Studio Explosion"},
+               3)
+            .keys({"classic_kick",         "classic_snare",       "classic_rimshot",
+                   "classic_clap",         "classic_closed_hat",  "classic_open_hat",
+                   "classic_tom",          "classic_conga",       "classic_cabasa",
+                   "classic_tambourine",   "classic_cowbell",     "classic_crash",
+                   "classic_ride",         "studio_kick",         "studio_snare",
+                   "studio_bright_snare",  "studio_deep_snare",   "studio_tight_snare",
+                   "studio_cross_stick",   "studio_clap",         "studio_closed_hat",
+                   "studio_open_hat",      "studio_block",        "studio_echo_snare",
+                   "studio_muted_cowbell", "studio_open_cowbell", "studio_cowbell",
+                   "studio_dark_cowbell",  "studio_tom",          "studio_short_duck",
+                   "studio_long_duck",     "studio_explosion"})
+            .withKey("pad4.sound")
+            .in("Pad 4")
+            .help(
+                "What the pad plays: one of the machines' sounds. Its Key is the note "
+                "that plays it.");
     Param p4Tune = semitones("Pad 4 Tune", -12, 12, 0)
                        .withKey("pad4.tune")
                        .in("Pad 4")
@@ -1086,7 +1567,7 @@ struct Drumlin : Instrument {
                            .help(
                                "How much quieter a soft hit is than a hard one: at 100 %, 40 dB "
                                "across the range.");
-    Param p4Vary = percent("Pad 4 Vary", 0)
+    Param p4Vary = percent("Pad 4 Vary", 50)
                        .withKey("pad4.vary")
                        .in("Pad 4")
                        .help(
@@ -1110,25 +1591,41 @@ struct Drumlin : Instrument {
                 "The main output, or one of the extra ones (Out 1 to Out 8), which takes the pad "
                 "out of the main mix.");
 
-    // Pad 5: LM-1 Tom on key 41 (F2; notation: tom_floor).
+    // Pad 5: Classic Tom on key 41 (F2; notation: tom_floor).
     Param p5Key =
         integer("Pad 5 Key", 0, 127, 41)
             .withKey("pad5.key")
             .in("Pad 5")
             .help("The MIDI note that plays the pad (41, F2, by default: General MIDI's map).");
-    Param p5Sound = choice("Pad 5 Sound",
-                           {"LM-1 Kick", "LM-1 Snare", "LM-1 Rimshot", "LM-1 Clap",
-                            "LM-1 Closed Hat", "LM-1 Open Hat", "LM-1 Tom", "LM-1 Conga",
-                            "LM-1 Cabasa", "LM-1 Tambourine", "LM-1 Cowbell", "Crash", "Ride"},
-                           6)
-                        .keys({"lm1_kick", "lm1_snare", "lm1_rimshot", "lm1_clap", "lm1_closed_hat",
-                               "lm1_open_hat", "lm1_tom", "lm1_conga", "lm1_cabasa",
-                               "lm1_tambourine", "lm1_cowbell", "crash", "ride"})
-                        .withKey("pad5.sound")
-                        .in("Pad 5")
-                        .help(
-                            "What the pad plays: one of the machines' sounds. Its Key is the note "
-                            "that plays it.");
+    Param p5Sound =
+        choice("Pad 5 Sound", {"Classic Kick",         "Classic Snare",       "Classic Rimshot",
+                               "Classic Clap",         "Classic Closed Hat",  "Classic Open Hat",
+                               "Classic Tom",          "Classic Conga",       "Classic Cabasa",
+                               "Classic Tambourine",   "Classic Cowbell",     "Classic Crash",
+                               "Classic Ride",         "Studio Kick",         "Studio Snare",
+                               "Studio Bright Snare",  "Studio Deep Snare",   "Studio Tight Snare",
+                               "Studio Cross Stick",   "Studio Clap",         "Studio Closed Hat",
+                               "Studio Open Hat",      "Studio Block",        "Studio Echo Snare",
+                               "Studio Muted Cowbell", "Studio Open Cowbell", "Studio Cowbell",
+                               "Studio Dark Cowbell",  "Studio Tom",          "Studio Short Duck",
+                               "Studio Long Duck",     "Studio Explosion"},
+               6)
+            .keys({"classic_kick",         "classic_snare",       "classic_rimshot",
+                   "classic_clap",         "classic_closed_hat",  "classic_open_hat",
+                   "classic_tom",          "classic_conga",       "classic_cabasa",
+                   "classic_tambourine",   "classic_cowbell",     "classic_crash",
+                   "classic_ride",         "studio_kick",         "studio_snare",
+                   "studio_bright_snare",  "studio_deep_snare",   "studio_tight_snare",
+                   "studio_cross_stick",   "studio_clap",         "studio_closed_hat",
+                   "studio_open_hat",      "studio_block",        "studio_echo_snare",
+                   "studio_muted_cowbell", "studio_open_cowbell", "studio_cowbell",
+                   "studio_dark_cowbell",  "studio_tom",          "studio_short_duck",
+                   "studio_long_duck",     "studio_explosion"})
+            .withKey("pad5.sound")
+            .in("Pad 5")
+            .help(
+                "What the pad plays: one of the machines' sounds. Its Key is the note "
+                "that plays it.");
     Param p5Tune = semitones("Pad 5 Tune", -12, 12, -5)
                        .withKey("pad5.tune")
                        .in("Pad 5")
@@ -1156,7 +1653,7 @@ struct Drumlin : Instrument {
                            .help(
                                "How much quieter a soft hit is than a hard one: at 100 %, 40 dB "
                                "across the range.");
-    Param p5Vary = percent("Pad 5 Vary", 0)
+    Param p5Vary = percent("Pad 5 Vary", 50)
                        .withKey("pad5.vary")
                        .in("Pad 5")
                        .help(
@@ -1180,25 +1677,41 @@ struct Drumlin : Instrument {
                 "The main output, or one of the extra ones (Out 1 to Out 8), which takes the pad "
                 "out of the main mix.");
 
-    // Pad 6: LM-1 Closed Hat on key 42 (F#2; notation: hat).
+    // Pad 6: Classic Closed Hat on key 42 (F#2; notation: hat).
     Param p6Key =
         integer("Pad 6 Key", 0, 127, 42)
             .withKey("pad6.key")
             .in("Pad 6")
             .help("The MIDI note that plays the pad (42, F#2, by default: General MIDI's map).");
-    Param p6Sound = choice("Pad 6 Sound",
-                           {"LM-1 Kick", "LM-1 Snare", "LM-1 Rimshot", "LM-1 Clap",
-                            "LM-1 Closed Hat", "LM-1 Open Hat", "LM-1 Tom", "LM-1 Conga",
-                            "LM-1 Cabasa", "LM-1 Tambourine", "LM-1 Cowbell", "Crash", "Ride"},
-                           4)
-                        .keys({"lm1_kick", "lm1_snare", "lm1_rimshot", "lm1_clap", "lm1_closed_hat",
-                               "lm1_open_hat", "lm1_tom", "lm1_conga", "lm1_cabasa",
-                               "lm1_tambourine", "lm1_cowbell", "crash", "ride"})
-                        .withKey("pad6.sound")
-                        .in("Pad 6")
-                        .help(
-                            "What the pad plays: one of the machines' sounds. Its Key is the note "
-                            "that plays it.");
+    Param p6Sound =
+        choice("Pad 6 Sound", {"Classic Kick",         "Classic Snare",       "Classic Rimshot",
+                               "Classic Clap",         "Classic Closed Hat",  "Classic Open Hat",
+                               "Classic Tom",          "Classic Conga",       "Classic Cabasa",
+                               "Classic Tambourine",   "Classic Cowbell",     "Classic Crash",
+                               "Classic Ride",         "Studio Kick",         "Studio Snare",
+                               "Studio Bright Snare",  "Studio Deep Snare",   "Studio Tight Snare",
+                               "Studio Cross Stick",   "Studio Clap",         "Studio Closed Hat",
+                               "Studio Open Hat",      "Studio Block",        "Studio Echo Snare",
+                               "Studio Muted Cowbell", "Studio Open Cowbell", "Studio Cowbell",
+                               "Studio Dark Cowbell",  "Studio Tom",          "Studio Short Duck",
+                               "Studio Long Duck",     "Studio Explosion"},
+               4)
+            .keys({"classic_kick",         "classic_snare",       "classic_rimshot",
+                   "classic_clap",         "classic_closed_hat",  "classic_open_hat",
+                   "classic_tom",          "classic_conga",       "classic_cabasa",
+                   "classic_tambourine",   "classic_cowbell",     "classic_crash",
+                   "classic_ride",         "studio_kick",         "studio_snare",
+                   "studio_bright_snare",  "studio_deep_snare",   "studio_tight_snare",
+                   "studio_cross_stick",   "studio_clap",         "studio_closed_hat",
+                   "studio_open_hat",      "studio_block",        "studio_echo_snare",
+                   "studio_muted_cowbell", "studio_open_cowbell", "studio_cowbell",
+                   "studio_dark_cowbell",  "studio_tom",          "studio_short_duck",
+                   "studio_long_duck",     "studio_explosion"})
+            .withKey("pad6.sound")
+            .in("Pad 6")
+            .help(
+                "What the pad plays: one of the machines' sounds. Its Key is the note "
+                "that plays it.");
     Param p6Tune = semitones("Pad 6 Tune", -12, 12, 0)
                        .withKey("pad6.tune")
                        .in("Pad 6")
@@ -1226,7 +1739,7 @@ struct Drumlin : Instrument {
                            .help(
                                "How much quieter a soft hit is than a hard one: at 100 %, 40 dB "
                                "across the range.");
-    Param p6Vary = percent("Pad 6 Vary", 0)
+    Param p6Vary = percent("Pad 6 Vary", 50)
                        .withKey("pad6.vary")
                        .in("Pad 6")
                        .help(
@@ -1250,25 +1763,41 @@ struct Drumlin : Instrument {
                 "The main output, or one of the extra ones (Out 1 to Out 8), which takes the pad "
                 "out of the main mix.");
 
-    // Pad 7: LM-1 Tom on key 45 (A2; notation: tom_low).
+    // Pad 7: Classic Tom on key 45 (A2; notation: tom_low).
     Param p7Key =
         integer("Pad 7 Key", 0, 127, 45)
             .withKey("pad7.key")
             .in("Pad 7")
             .help("The MIDI note that plays the pad (45, A2, by default: General MIDI's map).");
-    Param p7Sound = choice("Pad 7 Sound",
-                           {"LM-1 Kick", "LM-1 Snare", "LM-1 Rimshot", "LM-1 Clap",
-                            "LM-1 Closed Hat", "LM-1 Open Hat", "LM-1 Tom", "LM-1 Conga",
-                            "LM-1 Cabasa", "LM-1 Tambourine", "LM-1 Cowbell", "Crash", "Ride"},
-                           6)
-                        .keys({"lm1_kick", "lm1_snare", "lm1_rimshot", "lm1_clap", "lm1_closed_hat",
-                               "lm1_open_hat", "lm1_tom", "lm1_conga", "lm1_cabasa",
-                               "lm1_tambourine", "lm1_cowbell", "crash", "ride"})
-                        .withKey("pad7.sound")
-                        .in("Pad 7")
-                        .help(
-                            "What the pad plays: one of the machines' sounds. Its Key is the note "
-                            "that plays it.");
+    Param p7Sound =
+        choice("Pad 7 Sound", {"Classic Kick",         "Classic Snare",       "Classic Rimshot",
+                               "Classic Clap",         "Classic Closed Hat",  "Classic Open Hat",
+                               "Classic Tom",          "Classic Conga",       "Classic Cabasa",
+                               "Classic Tambourine",   "Classic Cowbell",     "Classic Crash",
+                               "Classic Ride",         "Studio Kick",         "Studio Snare",
+                               "Studio Bright Snare",  "Studio Deep Snare",   "Studio Tight Snare",
+                               "Studio Cross Stick",   "Studio Clap",         "Studio Closed Hat",
+                               "Studio Open Hat",      "Studio Block",        "Studio Echo Snare",
+                               "Studio Muted Cowbell", "Studio Open Cowbell", "Studio Cowbell",
+                               "Studio Dark Cowbell",  "Studio Tom",          "Studio Short Duck",
+                               "Studio Long Duck",     "Studio Explosion"},
+               6)
+            .keys({"classic_kick",         "classic_snare",       "classic_rimshot",
+                   "classic_clap",         "classic_closed_hat",  "classic_open_hat",
+                   "classic_tom",          "classic_conga",       "classic_cabasa",
+                   "classic_tambourine",   "classic_cowbell",     "classic_crash",
+                   "classic_ride",         "studio_kick",         "studio_snare",
+                   "studio_bright_snare",  "studio_deep_snare",   "studio_tight_snare",
+                   "studio_cross_stick",   "studio_clap",         "studio_closed_hat",
+                   "studio_open_hat",      "studio_block",        "studio_echo_snare",
+                   "studio_muted_cowbell", "studio_open_cowbell", "studio_cowbell",
+                   "studio_dark_cowbell",  "studio_tom",          "studio_short_duck",
+                   "studio_long_duck",     "studio_explosion"})
+            .withKey("pad7.sound")
+            .in("Pad 7")
+            .help(
+                "What the pad plays: one of the machines' sounds. Its Key is the note "
+                "that plays it.");
     Param p7Tune = semitones("Pad 7 Tune", -12, 12, -2)
                        .withKey("pad7.tune")
                        .in("Pad 7")
@@ -1296,7 +1825,7 @@ struct Drumlin : Instrument {
                            .help(
                                "How much quieter a soft hit is than a hard one: at 100 %, 40 dB "
                                "across the range.");
-    Param p7Vary = percent("Pad 7 Vary", 0)
+    Param p7Vary = percent("Pad 7 Vary", 50)
                        .withKey("pad7.vary")
                        .in("Pad 7")
                        .help(
@@ -1320,25 +1849,41 @@ struct Drumlin : Instrument {
                 "The main output, or one of the extra ones (Out 1 to Out 8), which takes the pad "
                 "out of the main mix.");
 
-    // Pad 8: LM-1 Open Hat on key 46 (A#2; notation: ohat).
+    // Pad 8: Classic Open Hat on key 46 (A#2; notation: ohat).
     Param p8Key =
         integer("Pad 8 Key", 0, 127, 46)
             .withKey("pad8.key")
             .in("Pad 8")
             .help("The MIDI note that plays the pad (46, A#2, by default: General MIDI's map).");
-    Param p8Sound = choice("Pad 8 Sound",
-                           {"LM-1 Kick", "LM-1 Snare", "LM-1 Rimshot", "LM-1 Clap",
-                            "LM-1 Closed Hat", "LM-1 Open Hat", "LM-1 Tom", "LM-1 Conga",
-                            "LM-1 Cabasa", "LM-1 Tambourine", "LM-1 Cowbell", "Crash", "Ride"},
-                           5)
-                        .keys({"lm1_kick", "lm1_snare", "lm1_rimshot", "lm1_clap", "lm1_closed_hat",
-                               "lm1_open_hat", "lm1_tom", "lm1_conga", "lm1_cabasa",
-                               "lm1_tambourine", "lm1_cowbell", "crash", "ride"})
-                        .withKey("pad8.sound")
-                        .in("Pad 8")
-                        .help(
-                            "What the pad plays: one of the machines' sounds. Its Key is the note "
-                            "that plays it.");
+    Param p8Sound =
+        choice("Pad 8 Sound", {"Classic Kick",         "Classic Snare",       "Classic Rimshot",
+                               "Classic Clap",         "Classic Closed Hat",  "Classic Open Hat",
+                               "Classic Tom",          "Classic Conga",       "Classic Cabasa",
+                               "Classic Tambourine",   "Classic Cowbell",     "Classic Crash",
+                               "Classic Ride",         "Studio Kick",         "Studio Snare",
+                               "Studio Bright Snare",  "Studio Deep Snare",   "Studio Tight Snare",
+                               "Studio Cross Stick",   "Studio Clap",         "Studio Closed Hat",
+                               "Studio Open Hat",      "Studio Block",        "Studio Echo Snare",
+                               "Studio Muted Cowbell", "Studio Open Cowbell", "Studio Cowbell",
+                               "Studio Dark Cowbell",  "Studio Tom",          "Studio Short Duck",
+                               "Studio Long Duck",     "Studio Explosion"},
+               5)
+            .keys({"classic_kick",         "classic_snare",       "classic_rimshot",
+                   "classic_clap",         "classic_closed_hat",  "classic_open_hat",
+                   "classic_tom",          "classic_conga",       "classic_cabasa",
+                   "classic_tambourine",   "classic_cowbell",     "classic_crash",
+                   "classic_ride",         "studio_kick",         "studio_snare",
+                   "studio_bright_snare",  "studio_deep_snare",   "studio_tight_snare",
+                   "studio_cross_stick",   "studio_clap",         "studio_closed_hat",
+                   "studio_open_hat",      "studio_block",        "studio_echo_snare",
+                   "studio_muted_cowbell", "studio_open_cowbell", "studio_cowbell",
+                   "studio_dark_cowbell",  "studio_tom",          "studio_short_duck",
+                   "studio_long_duck",     "studio_explosion"})
+            .withKey("pad8.sound")
+            .in("Pad 8")
+            .help(
+                "What the pad plays: one of the machines' sounds. Its Key is the note "
+                "that plays it.");
     Param p8Tune = semitones("Pad 8 Tune", -12, 12, 0)
                        .withKey("pad8.tune")
                        .in("Pad 8")
@@ -1366,7 +1911,7 @@ struct Drumlin : Instrument {
                            .help(
                                "How much quieter a soft hit is than a hard one: at 100 %, 40 dB "
                                "across the range.");
-    Param p8Vary = percent("Pad 8 Vary", 0)
+    Param p8Vary = percent("Pad 8 Vary", 50)
                        .withKey("pad8.vary")
                        .in("Pad 8")
                        .help(
@@ -1390,25 +1935,41 @@ struct Drumlin : Instrument {
                 "The main output, or one of the extra ones (Out 1 to Out 8), which takes the pad "
                 "out of the main mix.");
 
-    // Pad 9: LM-1 Tom on key 47 (B2; notation: tom_mid).
+    // Pad 9: Classic Tom on key 47 (B2; notation: tom_mid).
     Param p9Key =
         integer("Pad 9 Key", 0, 127, 47)
             .withKey("pad9.key")
             .in("Pad 9")
             .help("The MIDI note that plays the pad (47, B2, by default: General MIDI's map).");
-    Param p9Sound = choice("Pad 9 Sound",
-                           {"LM-1 Kick", "LM-1 Snare", "LM-1 Rimshot", "LM-1 Clap",
-                            "LM-1 Closed Hat", "LM-1 Open Hat", "LM-1 Tom", "LM-1 Conga",
-                            "LM-1 Cabasa", "LM-1 Tambourine", "LM-1 Cowbell", "Crash", "Ride"},
-                           6)
-                        .keys({"lm1_kick", "lm1_snare", "lm1_rimshot", "lm1_clap", "lm1_closed_hat",
-                               "lm1_open_hat", "lm1_tom", "lm1_conga", "lm1_cabasa",
-                               "lm1_tambourine", "lm1_cowbell", "crash", "ride"})
-                        .withKey("pad9.sound")
-                        .in("Pad 9")
-                        .help(
-                            "What the pad plays: one of the machines' sounds. Its Key is the note "
-                            "that plays it.");
+    Param p9Sound =
+        choice("Pad 9 Sound", {"Classic Kick",         "Classic Snare",       "Classic Rimshot",
+                               "Classic Clap",         "Classic Closed Hat",  "Classic Open Hat",
+                               "Classic Tom",          "Classic Conga",       "Classic Cabasa",
+                               "Classic Tambourine",   "Classic Cowbell",     "Classic Crash",
+                               "Classic Ride",         "Studio Kick",         "Studio Snare",
+                               "Studio Bright Snare",  "Studio Deep Snare",   "Studio Tight Snare",
+                               "Studio Cross Stick",   "Studio Clap",         "Studio Closed Hat",
+                               "Studio Open Hat",      "Studio Block",        "Studio Echo Snare",
+                               "Studio Muted Cowbell", "Studio Open Cowbell", "Studio Cowbell",
+                               "Studio Dark Cowbell",  "Studio Tom",          "Studio Short Duck",
+                               "Studio Long Duck",     "Studio Explosion"},
+               6)
+            .keys({"classic_kick",         "classic_snare",       "classic_rimshot",
+                   "classic_clap",         "classic_closed_hat",  "classic_open_hat",
+                   "classic_tom",          "classic_conga",       "classic_cabasa",
+                   "classic_tambourine",   "classic_cowbell",     "classic_crash",
+                   "classic_ride",         "studio_kick",         "studio_snare",
+                   "studio_bright_snare",  "studio_deep_snare",   "studio_tight_snare",
+                   "studio_cross_stick",   "studio_clap",         "studio_closed_hat",
+                   "studio_open_hat",      "studio_block",        "studio_echo_snare",
+                   "studio_muted_cowbell", "studio_open_cowbell", "studio_cowbell",
+                   "studio_dark_cowbell",  "studio_tom",          "studio_short_duck",
+                   "studio_long_duck",     "studio_explosion"})
+            .withKey("pad9.sound")
+            .in("Pad 9")
+            .help(
+                "What the pad plays: one of the machines' sounds. Its Key is the note "
+                "that plays it.");
     Param p9Tune = semitones("Pad 9 Tune", -12, 12, 1)
                        .withKey("pad9.tune")
                        .in("Pad 9")
@@ -1436,7 +1997,7 @@ struct Drumlin : Instrument {
                            .help(
                                "How much quieter a soft hit is than a hard one: at 100 %, 40 dB "
                                "across the range.");
-    Param p9Vary = percent("Pad 9 Vary", 0)
+    Param p9Vary = percent("Pad 9 Vary", 50)
                        .withKey("pad9.vary")
                        .in("Pad 9")
                        .help(
@@ -1460,25 +2021,41 @@ struct Drumlin : Instrument {
                 "The main output, or one of the extra ones (Out 1 to Out 8), which takes the pad "
                 "out of the main mix.");
 
-    // Pad 10: Crash on key 49 (C#3; notation: crash).
+    // Pad 10: Classic Crash on key 49 (C#3; notation: crash).
     Param p10Key =
         integer("Pad 10 Key", 0, 127, 49)
             .withKey("pad10.key")
             .in("Pad 10")
             .help("The MIDI note that plays the pad (49, C#3, by default: General MIDI's map).");
-    Param p10Sound = choice("Pad 10 Sound",
-                            {"LM-1 Kick", "LM-1 Snare", "LM-1 Rimshot", "LM-1 Clap",
-                             "LM-1 Closed Hat", "LM-1 Open Hat", "LM-1 Tom", "LM-1 Conga",
-                             "LM-1 Cabasa", "LM-1 Tambourine", "LM-1 Cowbell", "Crash", "Ride"},
-                            11)
-                         .keys({"lm1_kick", "lm1_snare", "lm1_rimshot", "lm1_clap",
-                                "lm1_closed_hat", "lm1_open_hat", "lm1_tom", "lm1_conga",
-                                "lm1_cabasa", "lm1_tambourine", "lm1_cowbell", "crash", "ride"})
-                         .withKey("pad10.sound")
-                         .in("Pad 10")
-                         .help(
-                             "What the pad plays: one of the machines' sounds. Its Key is the note "
-                             "that plays it.");
+    Param p10Sound =
+        choice("Pad 10 Sound", {"Classic Kick",         "Classic Snare",       "Classic Rimshot",
+                                "Classic Clap",         "Classic Closed Hat",  "Classic Open Hat",
+                                "Classic Tom",          "Classic Conga",       "Classic Cabasa",
+                                "Classic Tambourine",   "Classic Cowbell",     "Classic Crash",
+                                "Classic Ride",         "Studio Kick",         "Studio Snare",
+                                "Studio Bright Snare",  "Studio Deep Snare",   "Studio Tight Snare",
+                                "Studio Cross Stick",   "Studio Clap",         "Studio Closed Hat",
+                                "Studio Open Hat",      "Studio Block",        "Studio Echo Snare",
+                                "Studio Muted Cowbell", "Studio Open Cowbell", "Studio Cowbell",
+                                "Studio Dark Cowbell",  "Studio Tom",          "Studio Short Duck",
+                                "Studio Long Duck",     "Studio Explosion"},
+               11)
+            .keys({"classic_kick",         "classic_snare",       "classic_rimshot",
+                   "classic_clap",         "classic_closed_hat",  "classic_open_hat",
+                   "classic_tom",          "classic_conga",       "classic_cabasa",
+                   "classic_tambourine",   "classic_cowbell",     "classic_crash",
+                   "classic_ride",         "studio_kick",         "studio_snare",
+                   "studio_bright_snare",  "studio_deep_snare",   "studio_tight_snare",
+                   "studio_cross_stick",   "studio_clap",         "studio_closed_hat",
+                   "studio_open_hat",      "studio_block",        "studio_echo_snare",
+                   "studio_muted_cowbell", "studio_open_cowbell", "studio_cowbell",
+                   "studio_dark_cowbell",  "studio_tom",          "studio_short_duck",
+                   "studio_long_duck",     "studio_explosion"})
+            .withKey("pad10.sound")
+            .in("Pad 10")
+            .help(
+                "What the pad plays: one of the machines' sounds. Its Key is the note "
+                "that plays it.");
     Param p10Tune = semitones("Pad 10 Tune", -12, 12, 0)
                         .withKey("pad10.tune")
                         .in("Pad 10")
@@ -1506,7 +2083,7 @@ struct Drumlin : Instrument {
                             .help(
                                 "How much quieter a soft hit is than a hard one: at 100 %, 40 dB "
                                 "across the range.");
-    Param p10Vary = percent("Pad 10 Vary", 0)
+    Param p10Vary = percent("Pad 10 Vary", 50)
                         .withKey("pad10.vary")
                         .in("Pad 10")
                         .help(
@@ -1530,25 +2107,41 @@ struct Drumlin : Instrument {
                 "The main output, or one of the extra ones (Out 1 to Out 8), which takes the pad "
                 "out of the main mix.");
 
-    // Pad 11: LM-1 Tom on key 50 (D3; notation: tom_high).
+    // Pad 11: Classic Tom on key 50 (D3; notation: tom_high).
     Param p11Key =
         integer("Pad 11 Key", 0, 127, 50)
             .withKey("pad11.key")
             .in("Pad 11")
             .help("The MIDI note that plays the pad (50, D3, by default: General MIDI's map).");
-    Param p11Sound = choice("Pad 11 Sound",
-                            {"LM-1 Kick", "LM-1 Snare", "LM-1 Rimshot", "LM-1 Clap",
-                             "LM-1 Closed Hat", "LM-1 Open Hat", "LM-1 Tom", "LM-1 Conga",
-                             "LM-1 Cabasa", "LM-1 Tambourine", "LM-1 Cowbell", "Crash", "Ride"},
-                            6)
-                         .keys({"lm1_kick", "lm1_snare", "lm1_rimshot", "lm1_clap",
-                                "lm1_closed_hat", "lm1_open_hat", "lm1_tom", "lm1_conga",
-                                "lm1_cabasa", "lm1_tambourine", "lm1_cowbell", "crash", "ride"})
-                         .withKey("pad11.sound")
-                         .in("Pad 11")
-                         .help(
-                             "What the pad plays: one of the machines' sounds. Its Key is the note "
-                             "that plays it.");
+    Param p11Sound =
+        choice("Pad 11 Sound", {"Classic Kick",         "Classic Snare",       "Classic Rimshot",
+                                "Classic Clap",         "Classic Closed Hat",  "Classic Open Hat",
+                                "Classic Tom",          "Classic Conga",       "Classic Cabasa",
+                                "Classic Tambourine",   "Classic Cowbell",     "Classic Crash",
+                                "Classic Ride",         "Studio Kick",         "Studio Snare",
+                                "Studio Bright Snare",  "Studio Deep Snare",   "Studio Tight Snare",
+                                "Studio Cross Stick",   "Studio Clap",         "Studio Closed Hat",
+                                "Studio Open Hat",      "Studio Block",        "Studio Echo Snare",
+                                "Studio Muted Cowbell", "Studio Open Cowbell", "Studio Cowbell",
+                                "Studio Dark Cowbell",  "Studio Tom",          "Studio Short Duck",
+                                "Studio Long Duck",     "Studio Explosion"},
+               6)
+            .keys({"classic_kick",         "classic_snare",       "classic_rimshot",
+                   "classic_clap",         "classic_closed_hat",  "classic_open_hat",
+                   "classic_tom",          "classic_conga",       "classic_cabasa",
+                   "classic_tambourine",   "classic_cowbell",     "classic_crash",
+                   "classic_ride",         "studio_kick",         "studio_snare",
+                   "studio_bright_snare",  "studio_deep_snare",   "studio_tight_snare",
+                   "studio_cross_stick",   "studio_clap",         "studio_closed_hat",
+                   "studio_open_hat",      "studio_block",        "studio_echo_snare",
+                   "studio_muted_cowbell", "studio_open_cowbell", "studio_cowbell",
+                   "studio_dark_cowbell",  "studio_tom",          "studio_short_duck",
+                   "studio_long_duck",     "studio_explosion"})
+            .withKey("pad11.sound")
+            .in("Pad 11")
+            .help(
+                "What the pad plays: one of the machines' sounds. Its Key is the note "
+                "that plays it.");
     Param p11Tune = semitones("Pad 11 Tune", -12, 12, 4)
                         .withKey("pad11.tune")
                         .in("Pad 11")
@@ -1576,7 +2169,7 @@ struct Drumlin : Instrument {
                             .help(
                                 "How much quieter a soft hit is than a hard one: at 100 %, 40 dB "
                                 "across the range.");
-    Param p11Vary = percent("Pad 11 Vary", 0)
+    Param p11Vary = percent("Pad 11 Vary", 50)
                         .withKey("pad11.vary")
                         .in("Pad 11")
                         .help(
@@ -1600,25 +2193,41 @@ struct Drumlin : Instrument {
                 "The main output, or one of the extra ones (Out 1 to Out 8), which takes the pad "
                 "out of the main mix.");
 
-    // Pad 12: Ride on key 51 (D#3; notation: ride).
+    // Pad 12: Classic Ride on key 51 (D#3; notation: ride).
     Param p12Key =
         integer("Pad 12 Key", 0, 127, 51)
             .withKey("pad12.key")
             .in("Pad 12")
             .help("The MIDI note that plays the pad (51, D#3, by default: General MIDI's map).");
-    Param p12Sound = choice("Pad 12 Sound",
-                            {"LM-1 Kick", "LM-1 Snare", "LM-1 Rimshot", "LM-1 Clap",
-                             "LM-1 Closed Hat", "LM-1 Open Hat", "LM-1 Tom", "LM-1 Conga",
-                             "LM-1 Cabasa", "LM-1 Tambourine", "LM-1 Cowbell", "Crash", "Ride"},
-                            12)
-                         .keys({"lm1_kick", "lm1_snare", "lm1_rimshot", "lm1_clap",
-                                "lm1_closed_hat", "lm1_open_hat", "lm1_tom", "lm1_conga",
-                                "lm1_cabasa", "lm1_tambourine", "lm1_cowbell", "crash", "ride"})
-                         .withKey("pad12.sound")
-                         .in("Pad 12")
-                         .help(
-                             "What the pad plays: one of the machines' sounds. Its Key is the note "
-                             "that plays it.");
+    Param p12Sound =
+        choice("Pad 12 Sound", {"Classic Kick",         "Classic Snare",       "Classic Rimshot",
+                                "Classic Clap",         "Classic Closed Hat",  "Classic Open Hat",
+                                "Classic Tom",          "Classic Conga",       "Classic Cabasa",
+                                "Classic Tambourine",   "Classic Cowbell",     "Classic Crash",
+                                "Classic Ride",         "Studio Kick",         "Studio Snare",
+                                "Studio Bright Snare",  "Studio Deep Snare",   "Studio Tight Snare",
+                                "Studio Cross Stick",   "Studio Clap",         "Studio Closed Hat",
+                                "Studio Open Hat",      "Studio Block",        "Studio Echo Snare",
+                                "Studio Muted Cowbell", "Studio Open Cowbell", "Studio Cowbell",
+                                "Studio Dark Cowbell",  "Studio Tom",          "Studio Short Duck",
+                                "Studio Long Duck",     "Studio Explosion"},
+               12)
+            .keys({"classic_kick",         "classic_snare",       "classic_rimshot",
+                   "classic_clap",         "classic_closed_hat",  "classic_open_hat",
+                   "classic_tom",          "classic_conga",       "classic_cabasa",
+                   "classic_tambourine",   "classic_cowbell",     "classic_crash",
+                   "classic_ride",         "studio_kick",         "studio_snare",
+                   "studio_bright_snare",  "studio_deep_snare",   "studio_tight_snare",
+                   "studio_cross_stick",   "studio_clap",         "studio_closed_hat",
+                   "studio_open_hat",      "studio_block",        "studio_echo_snare",
+                   "studio_muted_cowbell", "studio_open_cowbell", "studio_cowbell",
+                   "studio_dark_cowbell",  "studio_tom",          "studio_short_duck",
+                   "studio_long_duck",     "studio_explosion"})
+            .withKey("pad12.sound")
+            .in("Pad 12")
+            .help(
+                "What the pad plays: one of the machines' sounds. Its Key is the note "
+                "that plays it.");
     Param p12Tune = semitones("Pad 12 Tune", -12, 12, 0)
                         .withKey("pad12.tune")
                         .in("Pad 12")
@@ -1646,7 +2255,7 @@ struct Drumlin : Instrument {
                             .help(
                                 "How much quieter a soft hit is than a hard one: at 100 %, 40 dB "
                                 "across the range.");
-    Param p12Vary = percent("Pad 12 Vary", 0)
+    Param p12Vary = percent("Pad 12 Vary", 50)
                         .withKey("pad12.vary")
                         .in("Pad 12")
                         .help(
@@ -1670,25 +2279,41 @@ struct Drumlin : Instrument {
                 "The main output, or one of the extra ones (Out 1 to Out 8), which takes the pad "
                 "out of the main mix.");
 
-    // Pad 13: LM-1 Tambourine on key 54 (F#3; notation: tamb).
+    // Pad 13: Classic Tambourine on key 54 (F#3; notation: tamb).
     Param p13Key =
         integer("Pad 13 Key", 0, 127, 54)
             .withKey("pad13.key")
             .in("Pad 13")
             .help("The MIDI note that plays the pad (54, F#3, by default: General MIDI's map).");
-    Param p13Sound = choice("Pad 13 Sound",
-                            {"LM-1 Kick", "LM-1 Snare", "LM-1 Rimshot", "LM-1 Clap",
-                             "LM-1 Closed Hat", "LM-1 Open Hat", "LM-1 Tom", "LM-1 Conga",
-                             "LM-1 Cabasa", "LM-1 Tambourine", "LM-1 Cowbell", "Crash", "Ride"},
-                            9)
-                         .keys({"lm1_kick", "lm1_snare", "lm1_rimshot", "lm1_clap",
-                                "lm1_closed_hat", "lm1_open_hat", "lm1_tom", "lm1_conga",
-                                "lm1_cabasa", "lm1_tambourine", "lm1_cowbell", "crash", "ride"})
-                         .withKey("pad13.sound")
-                         .in("Pad 13")
-                         .help(
-                             "What the pad plays: one of the machines' sounds. Its Key is the note "
-                             "that plays it.");
+    Param p13Sound =
+        choice("Pad 13 Sound", {"Classic Kick",         "Classic Snare",       "Classic Rimshot",
+                                "Classic Clap",         "Classic Closed Hat",  "Classic Open Hat",
+                                "Classic Tom",          "Classic Conga",       "Classic Cabasa",
+                                "Classic Tambourine",   "Classic Cowbell",     "Classic Crash",
+                                "Classic Ride",         "Studio Kick",         "Studio Snare",
+                                "Studio Bright Snare",  "Studio Deep Snare",   "Studio Tight Snare",
+                                "Studio Cross Stick",   "Studio Clap",         "Studio Closed Hat",
+                                "Studio Open Hat",      "Studio Block",        "Studio Echo Snare",
+                                "Studio Muted Cowbell", "Studio Open Cowbell", "Studio Cowbell",
+                                "Studio Dark Cowbell",  "Studio Tom",          "Studio Short Duck",
+                                "Studio Long Duck",     "Studio Explosion"},
+               9)
+            .keys({"classic_kick",         "classic_snare",       "classic_rimshot",
+                   "classic_clap",         "classic_closed_hat",  "classic_open_hat",
+                   "classic_tom",          "classic_conga",       "classic_cabasa",
+                   "classic_tambourine",   "classic_cowbell",     "classic_crash",
+                   "classic_ride",         "studio_kick",         "studio_snare",
+                   "studio_bright_snare",  "studio_deep_snare",   "studio_tight_snare",
+                   "studio_cross_stick",   "studio_clap",         "studio_closed_hat",
+                   "studio_open_hat",      "studio_block",        "studio_echo_snare",
+                   "studio_muted_cowbell", "studio_open_cowbell", "studio_cowbell",
+                   "studio_dark_cowbell",  "studio_tom",          "studio_short_duck",
+                   "studio_long_duck",     "studio_explosion"})
+            .withKey("pad13.sound")
+            .in("Pad 13")
+            .help(
+                "What the pad plays: one of the machines' sounds. Its Key is the note "
+                "that plays it.");
     Param p13Tune = semitones("Pad 13 Tune", -12, 12, 0)
                         .withKey("pad13.tune")
                         .in("Pad 13")
@@ -1716,7 +2341,7 @@ struct Drumlin : Instrument {
                             .help(
                                 "How much quieter a soft hit is than a hard one: at 100 %, 40 dB "
                                 "across the range.");
-    Param p13Vary = percent("Pad 13 Vary", 0)
+    Param p13Vary = percent("Pad 13 Vary", 50)
                         .withKey("pad13.vary")
                         .in("Pad 13")
                         .help(
@@ -1740,25 +2365,41 @@ struct Drumlin : Instrument {
                 "The main output, or one of the extra ones (Out 1 to Out 8), which takes the pad "
                 "out of the main mix.");
 
-    // Pad 14: LM-1 Cowbell on key 56 (G#3; notation: cowbell).
+    // Pad 14: Classic Cowbell on key 56 (G#3; notation: cowbell).
     Param p14Key =
         integer("Pad 14 Key", 0, 127, 56)
             .withKey("pad14.key")
             .in("Pad 14")
             .help("The MIDI note that plays the pad (56, G#3, by default: General MIDI's map).");
-    Param p14Sound = choice("Pad 14 Sound",
-                            {"LM-1 Kick", "LM-1 Snare", "LM-1 Rimshot", "LM-1 Clap",
-                             "LM-1 Closed Hat", "LM-1 Open Hat", "LM-1 Tom", "LM-1 Conga",
-                             "LM-1 Cabasa", "LM-1 Tambourine", "LM-1 Cowbell", "Crash", "Ride"},
-                            10)
-                         .keys({"lm1_kick", "lm1_snare", "lm1_rimshot", "lm1_clap",
-                                "lm1_closed_hat", "lm1_open_hat", "lm1_tom", "lm1_conga",
-                                "lm1_cabasa", "lm1_tambourine", "lm1_cowbell", "crash", "ride"})
-                         .withKey("pad14.sound")
-                         .in("Pad 14")
-                         .help(
-                             "What the pad plays: one of the machines' sounds. Its Key is the note "
-                             "that plays it.");
+    Param p14Sound =
+        choice("Pad 14 Sound", {"Classic Kick",         "Classic Snare",       "Classic Rimshot",
+                                "Classic Clap",         "Classic Closed Hat",  "Classic Open Hat",
+                                "Classic Tom",          "Classic Conga",       "Classic Cabasa",
+                                "Classic Tambourine",   "Classic Cowbell",     "Classic Crash",
+                                "Classic Ride",         "Studio Kick",         "Studio Snare",
+                                "Studio Bright Snare",  "Studio Deep Snare",   "Studio Tight Snare",
+                                "Studio Cross Stick",   "Studio Clap",         "Studio Closed Hat",
+                                "Studio Open Hat",      "Studio Block",        "Studio Echo Snare",
+                                "Studio Muted Cowbell", "Studio Open Cowbell", "Studio Cowbell",
+                                "Studio Dark Cowbell",  "Studio Tom",          "Studio Short Duck",
+                                "Studio Long Duck",     "Studio Explosion"},
+               10)
+            .keys({"classic_kick",         "classic_snare",       "classic_rimshot",
+                   "classic_clap",         "classic_closed_hat",  "classic_open_hat",
+                   "classic_tom",          "classic_conga",       "classic_cabasa",
+                   "classic_tambourine",   "classic_cowbell",     "classic_crash",
+                   "classic_ride",         "studio_kick",         "studio_snare",
+                   "studio_bright_snare",  "studio_deep_snare",   "studio_tight_snare",
+                   "studio_cross_stick",   "studio_clap",         "studio_closed_hat",
+                   "studio_open_hat",      "studio_block",        "studio_echo_snare",
+                   "studio_muted_cowbell", "studio_open_cowbell", "studio_cowbell",
+                   "studio_dark_cowbell",  "studio_tom",          "studio_short_duck",
+                   "studio_long_duck",     "studio_explosion"})
+            .withKey("pad14.sound")
+            .in("Pad 14")
+            .help(
+                "What the pad plays: one of the machines' sounds. Its Key is the note "
+                "that plays it.");
     Param p14Tune = semitones("Pad 14 Tune", -12, 12, 0)
                         .withKey("pad14.tune")
                         .in("Pad 14")
@@ -1786,7 +2427,7 @@ struct Drumlin : Instrument {
                             .help(
                                 "How much quieter a soft hit is than a hard one: at 100 %, 40 dB "
                                 "across the range.");
-    Param p14Vary = percent("Pad 14 Vary", 0)
+    Param p14Vary = percent("Pad 14 Vary", 50)
                         .withKey("pad14.vary")
                         .in("Pad 14")
                         .help(
@@ -1810,25 +2451,41 @@ struct Drumlin : Instrument {
                 "The main output, or one of the extra ones (Out 1 to Out 8), which takes the pad "
                 "out of the main mix.");
 
-    // Pad 15: LM-1 Conga on key 63 (D#4; notation: n63, GM's open high conga).
+    // Pad 15: Classic Conga on key 63 (D#4; notation: n63, GM's open high conga).
     Param p15Key =
         integer("Pad 15 Key", 0, 127, 63)
             .withKey("pad15.key")
             .in("Pad 15")
             .help("The MIDI note that plays the pad (63, D#4, by default: General MIDI's map).");
-    Param p15Sound = choice("Pad 15 Sound",
-                            {"LM-1 Kick", "LM-1 Snare", "LM-1 Rimshot", "LM-1 Clap",
-                             "LM-1 Closed Hat", "LM-1 Open Hat", "LM-1 Tom", "LM-1 Conga",
-                             "LM-1 Cabasa", "LM-1 Tambourine", "LM-1 Cowbell", "Crash", "Ride"},
-                            7)
-                         .keys({"lm1_kick", "lm1_snare", "lm1_rimshot", "lm1_clap",
-                                "lm1_closed_hat", "lm1_open_hat", "lm1_tom", "lm1_conga",
-                                "lm1_cabasa", "lm1_tambourine", "lm1_cowbell", "crash", "ride"})
-                         .withKey("pad15.sound")
-                         .in("Pad 15")
-                         .help(
-                             "What the pad plays: one of the machines' sounds. Its Key is the note "
-                             "that plays it.");
+    Param p15Sound =
+        choice("Pad 15 Sound", {"Classic Kick",         "Classic Snare",       "Classic Rimshot",
+                                "Classic Clap",         "Classic Closed Hat",  "Classic Open Hat",
+                                "Classic Tom",          "Classic Conga",       "Classic Cabasa",
+                                "Classic Tambourine",   "Classic Cowbell",     "Classic Crash",
+                                "Classic Ride",         "Studio Kick",         "Studio Snare",
+                                "Studio Bright Snare",  "Studio Deep Snare",   "Studio Tight Snare",
+                                "Studio Cross Stick",   "Studio Clap",         "Studio Closed Hat",
+                                "Studio Open Hat",      "Studio Block",        "Studio Echo Snare",
+                                "Studio Muted Cowbell", "Studio Open Cowbell", "Studio Cowbell",
+                                "Studio Dark Cowbell",  "Studio Tom",          "Studio Short Duck",
+                                "Studio Long Duck",     "Studio Explosion"},
+               7)
+            .keys({"classic_kick",         "classic_snare",       "classic_rimshot",
+                   "classic_clap",         "classic_closed_hat",  "classic_open_hat",
+                   "classic_tom",          "classic_conga",       "classic_cabasa",
+                   "classic_tambourine",   "classic_cowbell",     "classic_crash",
+                   "classic_ride",         "studio_kick",         "studio_snare",
+                   "studio_bright_snare",  "studio_deep_snare",   "studio_tight_snare",
+                   "studio_cross_stick",   "studio_clap",         "studio_closed_hat",
+                   "studio_open_hat",      "studio_block",        "studio_echo_snare",
+                   "studio_muted_cowbell", "studio_open_cowbell", "studio_cowbell",
+                   "studio_dark_cowbell",  "studio_tom",          "studio_short_duck",
+                   "studio_long_duck",     "studio_explosion"})
+            .withKey("pad15.sound")
+            .in("Pad 15")
+            .help(
+                "What the pad plays: one of the machines' sounds. Its Key is the note "
+                "that plays it.");
     Param p15Tune = semitones("Pad 15 Tune", -12, 12, 0)
                         .withKey("pad15.tune")
                         .in("Pad 15")
@@ -1856,7 +2513,7 @@ struct Drumlin : Instrument {
                             .help(
                                 "How much quieter a soft hit is than a hard one: at 100 %, 40 dB "
                                 "across the range.");
-    Param p15Vary = percent("Pad 15 Vary", 0)
+    Param p15Vary = percent("Pad 15 Vary", 50)
                         .withKey("pad15.vary")
                         .in("Pad 15")
                         .help(
@@ -1880,25 +2537,41 @@ struct Drumlin : Instrument {
                 "The main output, or one of the extra ones (Out 1 to Out 8), which takes the pad "
                 "out of the main mix.");
 
-    // Pad 16: LM-1 Cabasa on key 69 (A4; notation: cabasa).
+    // Pad 16: Classic Cabasa on key 69 (A4; notation: cabasa).
     Param p16Key =
         integer("Pad 16 Key", 0, 127, 69)
             .withKey("pad16.key")
             .in("Pad 16")
             .help("The MIDI note that plays the pad (69, A4, by default: General MIDI's map).");
-    Param p16Sound = choice("Pad 16 Sound",
-                            {"LM-1 Kick", "LM-1 Snare", "LM-1 Rimshot", "LM-1 Clap",
-                             "LM-1 Closed Hat", "LM-1 Open Hat", "LM-1 Tom", "LM-1 Conga",
-                             "LM-1 Cabasa", "LM-1 Tambourine", "LM-1 Cowbell", "Crash", "Ride"},
-                            8)
-                         .keys({"lm1_kick", "lm1_snare", "lm1_rimshot", "lm1_clap",
-                                "lm1_closed_hat", "lm1_open_hat", "lm1_tom", "lm1_conga",
-                                "lm1_cabasa", "lm1_tambourine", "lm1_cowbell", "crash", "ride"})
-                         .withKey("pad16.sound")
-                         .in("Pad 16")
-                         .help(
-                             "What the pad plays: one of the machines' sounds. Its Key is the note "
-                             "that plays it.");
+    Param p16Sound =
+        choice("Pad 16 Sound", {"Classic Kick",         "Classic Snare",       "Classic Rimshot",
+                                "Classic Clap",         "Classic Closed Hat",  "Classic Open Hat",
+                                "Classic Tom",          "Classic Conga",       "Classic Cabasa",
+                                "Classic Tambourine",   "Classic Cowbell",     "Classic Crash",
+                                "Classic Ride",         "Studio Kick",         "Studio Snare",
+                                "Studio Bright Snare",  "Studio Deep Snare",   "Studio Tight Snare",
+                                "Studio Cross Stick",   "Studio Clap",         "Studio Closed Hat",
+                                "Studio Open Hat",      "Studio Block",        "Studio Echo Snare",
+                                "Studio Muted Cowbell", "Studio Open Cowbell", "Studio Cowbell",
+                                "Studio Dark Cowbell",  "Studio Tom",          "Studio Short Duck",
+                                "Studio Long Duck",     "Studio Explosion"},
+               8)
+            .keys({"classic_kick",         "classic_snare",       "classic_rimshot",
+                   "classic_clap",         "classic_closed_hat",  "classic_open_hat",
+                   "classic_tom",          "classic_conga",       "classic_cabasa",
+                   "classic_tambourine",   "classic_cowbell",     "classic_crash",
+                   "classic_ride",         "studio_kick",         "studio_snare",
+                   "studio_bright_snare",  "studio_deep_snare",   "studio_tight_snare",
+                   "studio_cross_stick",   "studio_clap",         "studio_closed_hat",
+                   "studio_open_hat",      "studio_block",        "studio_echo_snare",
+                   "studio_muted_cowbell", "studio_open_cowbell", "studio_cowbell",
+                   "studio_dark_cowbell",  "studio_tom",          "studio_short_duck",
+                   "studio_long_duck",     "studio_explosion"})
+            .withKey("pad16.sound")
+            .in("Pad 16")
+            .help(
+                "What the pad plays: one of the machines' sounds. Its Key is the note "
+                "that plays it.");
     Param p16Tune = semitones("Pad 16 Tune", -12, 12, 0)
                         .withKey("pad16.tune")
                         .in("Pad 16")
@@ -1926,7 +2599,7 @@ struct Drumlin : Instrument {
                             .help(
                                 "How much quieter a soft hit is than a hard one: at 100 %, 40 dB "
                                 "across the range.");
-    Param p16Vary = percent("Pad 16 Vary", 0)
+    Param p16Vary = percent("Pad 16 Vary", 50)
                         .withKey("pad16.vary")
                         .in("Pad 16")
                         .help(
@@ -2284,14 +2957,15 @@ struct Drumlin : Instrument {
 
     // --- The editor ---------------------------------------------------------------------------
     //
-    // A header with the level; the sixteen pads, four by four with pad 1 at
-    // the bottom left as on hardware, each with its sound's name and shape
-    // and a light while it sounds; pressing a pad plays it, harder the higher
-    // up, and selects it. Beside them the selected pad: its sound, chosen from
-    // the machines', drawn as it will play (its tune and decay), and its
-    // settings. Every dial drags up and down (Shift finely), turns with the
-    // wheel and goes back to its default on a double click; a button sets
-    // its choice.
+    // A header with the voices and the level; the sixteen pads, four by four
+    // with pad 1 at the bottom left as on hardware, each with its sound's
+    // name, kit and shape and a light while it sounds; pressing a pad plays
+    // it, harder the higher up, and selects it. Beside them the selected pad:
+    // its sound, chosen from a kit's (a tab for each kit, a button for each of
+    // its sounds, and a step to the previous or next of all of them), drawn
+    // as it will play (its tune and decay), and its settings. Every dial drags
+    // up and down (Shift finely), turns with the wheel and goes back to its
+    // default on a double click; a button sets its choice.
 
     static constexpr double kW = 1180;
     static constexpr double kH = 716;
@@ -2310,14 +2984,25 @@ struct Drumlin : Instrument {
     static constexpr double cellW = 118;
     static constexpr double cellH = 122;
     static constexpr double cellGap = 6;
-    static constexpr double wavX = selX + 16;  // the selected pad's sound
-    static constexpr double wavY = selY + 112;
+    static constexpr double rowX = selX + 92;  // the selected pad's rows of buttons
+    static constexpr double rowW = selW - 110;
+    static constexpr double kitY = selY + 46;     // its sound: the kits' tabs
+    static constexpr double soundsY = selY + 78;  // ... and the kit's sounds
+    static constexpr int kAcross = 5;
+    static constexpr double soundH = 22;
+    static constexpr double soundGap = 5;
+    static constexpr double wavX = selX + 16;  // the selected pad's sound, drawn
+    static constexpr double wavY = selY + 196;
     static constexpr double wavW = selW - 32;
-    static constexpr double wavH = 168;
-    static constexpr double dialsY = selY + 350;
-    static constexpr double chokeY = selY + 440;
-    static constexpr double outY = selY + 476;
+    static constexpr double wavH = 144;
+    static constexpr double dialsY = selY + 404;
+    static constexpr double chokeY = selY + 458;
+    static constexpr double outY = selY + 490;
     static constexpr int kColumns = 240;  // points across a sound's shape
+
+    // The kits: the classic sounds first, then the studio sounds.
+    static constexpr int kKits = 2;
+    static constexpr int kStudio = 13;  // the first studio sound
 
     // The palette: the theme's, and the till's.
     static constexpr int kInk = 0x1A1411;
@@ -2348,6 +3033,10 @@ struct Drumlin : Instrument {
     static constexpr int cOutput = 8;
     static constexpr int cKey = 9;
     static constexpr int cOut = 101;
+    // The editor's own: the kit whose sounds it shows (102), and a step
+    // through every sound (103: -1 back, +1 on).
+    static constexpr int cKit = 102;
+    static constexpr int cStep = 103;
 
     int selected = 0;
     int dragging = 0;  // 1 a dial, 3 a pad played
@@ -2358,12 +3047,15 @@ struct Drumlin : Instrument {
     int hotDial = -1;
     int hotButton = -1;
     int hotPad = -1;
+    int kit = 0;          // the kit whose sounds show
+    int shownSound = -1;  // the selected pad's sound when the kit last followed it
     Array<int, 32> dialCode;
     Array<double, 32> dialX, dialY, dialR;
     Array<int, 32> dialColour;
+    Array<bool, 32> dialSide;  // its name and value beside it, not over and under
     int dials = 0;
-    Array<int, 40> buttonCode, buttonValue, buttonColour;
-    Array<double, 40> buttonX, buttonY, buttonW, buttonH;
+    Array<int, 48> buttonCode, buttonValue, buttonColour;
+    Array<double, 48> buttonX, buttonY, buttonW, buttonH;
     int buttons = 0;
     // Each pad's sound as the editor drew it: its peaks over kColumns, how
     // long that is, and what it was drawn for.
@@ -2631,13 +3323,23 @@ struct Drumlin : Instrument {
     // (1), or choice (2): the selected pad's, or every pad's.
     double readParam(int code, int how) const {
         if (code == cOut) return readOn(output, how);
+        if (code == cKit) return kit;
+        if (code == cStep) return 0.0;
         return padRead(selected, code, how);
     }
     // To a value (how 0), a position (1) or its default (2).
     void editParam(int code, int how, double v) {
         if (code == cOut) editOn(output, how, v);
+        if (code == cKit) kit = clamp(roundToInt(v), 0, kKits - 1);
+        if (code == cStep) {
+            const int sound = wrap(choiceOf(cSound) + roundToInt(v), kModels);
+            padWrite(selected, cSound, 0, sound);
+        }
         if (code < 100) padWrite(selected, code, how, v);
     }
+    // A sound's kit, and the colour it is shown in.
+    int kitOf(int sound) const { return sound < kStudio ? 0 : 1; }
+    int kitColour(int k) const { return k == 0 ? kTurf : kClay; }
     int choiceOf(int code) const { return roundToInt(readParam(code, 2)); }
     double padValue(int p, int what) const { return padRead(p, what, 1); }
     int padChoice(int p, int what) const { return roundToInt(padRead(p, what, 2)); }
@@ -2677,13 +3379,32 @@ struct Drumlin : Instrument {
         if (sound == 10) g.fillText("COWBELL", x, y);
         if (sound == 11) g.fillText("CRASH", x, y);
         if (sound == 12) g.fillText("RIDE", x, y);
+        if (sound == 13) g.fillText("KICK", x, y);
+        if (sound == 14) g.fillText("SNARE", x, y);
+        if (sound == 15) g.fillText("BRIGHT SNARE", x, y);
+        if (sound == 16) g.fillText("DEEP SNARE", x, y);
+        if (sound == 17) g.fillText("TIGHT SNARE", x, y);
+        if (sound == 18) g.fillText("CROSS STICK", x, y);
+        if (sound == 19) g.fillText("CLAP", x, y);
+        if (sound == 20) g.fillText("CLOSED HAT", x, y);
+        if (sound == 21) g.fillText("OPEN HAT", x, y);
+        if (sound == 22) g.fillText("BLOCK", x, y);
+        if (sound == 23) g.fillText("ECHO SNARE", x, y);
+        if (sound == 24) g.fillText("MUTED COWBELL", x, y);
+        if (sound == 25) g.fillText("OPEN COWBELL", x, y);
+        if (sound == 26) g.fillText("COWBELL", x, y);
+        if (sound == 27) g.fillText("DARK COWBELL", x, y);
+        if (sound == 28) g.fillText("TOM", x, y);
+        if (sound == 29) g.fillText("SHORT DUCK", x, y);
+        if (sound == 30) g.fillText("LONG DUCK", x, y);
+        if (sound == 31) g.fillText("EXPLOSION", x, y);
     }
-    // ... and the machine it is from.
-    void fillMachine(Canvas& g, int sound, double x, double y) const {
-        if (sound <= 10)
-            g.fillText("LM-1", x, y);
+    // ... and its kit's.
+    void fillKit(Canvas& g, int kit, double x, double y) const {
+        if (kit == 0)
+            g.fillText("CLASSIC", x, y);
         else
-            g.fillText("CYMBAL", x, y);
+            g.fillText("STUDIO", x, y);
     }
 
     void fillParam(Canvas& g, int code, double x, double y) {
@@ -2712,6 +3433,7 @@ struct Drumlin : Instrument {
 
     void fillButton(Canvas& g, int code, int value, double x, double y) const {
         if (code == cSound) fillSound(g, value, x, y);
+        if (code == cKit) fillKit(g, value, x, y);
         if (code == cChoke) {
             if (value == 0)
                 g.fillText("OFF", x, y);
@@ -2735,11 +3457,12 @@ struct Drumlin : Instrument {
         dialY[dials] = y;
         dialR[dials] = r;
         dialColour[dials] = colour;
+        dialSide[dials] = false;
         ++dials;
     }
 
     void button(int code, int value, double x, double y, double w, double h, int colour) {
-        if (buttons >= 40) return;
+        if (buttons >= 48) return;
         buttonCode[buttons] = code;
         buttonValue[buttons] = value;
         buttonX[buttons] = x;
@@ -2761,15 +3484,24 @@ struct Drumlin : Instrument {
     void place() {
         dials = 0;
         buttons = 0;
-        // The sounds: the LM-1's eleven, then the cymbals.
-        const double each = (selW - 92 - 25) / 6.0;
-        for (int k = 0; k < 6; ++k)
-            button(cSound, k, selX + 74 + k * (each + 5), selY + 46, each, 24, kTurf);
-        for (int k = 0; k < 5; ++k)
-            button(cSound, 6 + k, selX + 74 + k * (each + 5), selY + 76, each, 24, kTurf);
-        const double half = (each - 4) * 0.5;
-        button(cSound, 11, selX + 74 + 5 * (each + 5), selY + 76, half, 24, kStone);
-        button(cSound, 12, selX + 74 + 5 * (each + 5) + half + 4, selY + 76, half, 24, kStone);
+        // The kit shown follows the selected pad's sound whenever that changes
+        // (another pad selected, a step, the host); a tab shows another.
+        const int sound = choiceOf(cSound);
+        if (sound != shownSound) {
+            shownSound = sound;
+            kit = kitOf(sound);
+        }
+        // The kits' tabs and the step through every sound, then the kit's sounds.
+        button(cKit, 0, rowX, kitY, 96, 24, kitColour(0));
+        button(cKit, 1, rowX + 101, kitY, 96, 24, kitColour(1));
+        button(cStep, -1, rowX + rowW - 61, kitY, 28, 24, kLinen);
+        button(cStep, 1, rowX + rowW - 28, kitY, 28, 24, kLinen);
+        const int first = kit == 0 ? 0 : kStudio;
+        const int count = kit == 0 ? kStudio : kModels - kStudio;
+        const double each = (rowW - soundGap * (kAcross - 1)) / kAcross;
+        for (int k = 0; k < count; ++k)
+            button(cSound, first + k, rowX + imod(k, kAcross) * (each + soundGap),
+                   soundsY + idiv(k, kAcross) * (soundH + soundGap), each, soundH, kitColour(kit));
         const double r = 19;
         const double step = (selW - 80) / 6.0;
         dial(cKey, selX + 40 + 0 * step, dialsY, r, kLinen);
@@ -2779,9 +3511,11 @@ struct Drumlin : Instrument {
         dial(cPan, selX + 40 + 4 * step, dialsY, r, kTurf);
         dial(cVelocity, selX + 40 + 5 * step, dialsY, r, kTurf);
         dial(cVary, selX + 40 + 6 * step, dialsY, r, kTurf);
-        row(cChoke, 0, 9, selX + 92, chokeY, 330, 22, kSeaGlass);
-        row(cOutput, 0, 9, selX + 92, outY, 330, 22, kSeaGlass);
-        dial(cOut, padsX + 52, barY + barH * 0.5 + 4, 15, kLinen);
+        row(cChoke, 0, 9, rowX, chokeY, 330, 22, kSeaGlass);
+        row(cOutput, 0, 9, rowX, outY, 330, 22, kSeaGlass);
+        // Every pad's: a small dial in the bar, its name and value beside it.
+        dial(cOut, padsX + 34, barY + barH * 0.5, 14, kLinen);
+        dialSide[dials - 1] = true;
     }
 
     int dialAt(double x, double y) const {
@@ -2848,7 +3582,8 @@ struct Drumlin : Instrument {
         for (int c = 0; c < kColumns; ++c) shapes[p * kColumns + c] = 0.0;
         double top = 1e-9;
         for (int k = 0; k < n; ++k) {
-            double v = abs(companded(record(s, flat) * flat.drive));
+            const double x = record(s, flat);
+            double v = abs(converted(x * flat.drive, s.steps));
             s.at += 1;
             if (loop) {
                 const double ms = k / flat.clock * 1000.0;
@@ -2975,8 +3710,16 @@ struct Drumlin : Instrument {
         g.stroke();
         g.fillStyle(Theme::textFaint);
         g.boldFont(8);
-        g.textAlign(TextAlign::Center);
         g.textBaseline(TextBaseline::Middle);
+        if (dialSide[k]) {
+            g.textAlign(TextAlign::Left);
+            fillDialName(g, code, x + r + 10, y - 7);
+            g.fillStyle(hot ? Theme::text : Theme::textMuted);
+            g.monoFont(9.5);
+            fillParam(g, code, x + r + 10, y + 7);
+            return;
+        }
+        g.textAlign(TextAlign::Center);
         fillDialName(g, code, x, y - r - 9);
         g.fillStyle(hot ? Theme::text : Theme::textMuted);
         g.monoFont(9.5);
@@ -2987,6 +3730,23 @@ struct Drumlin : Instrument {
         const double x = buttonX[k], y = buttonY[k], w = buttonW[k], h = buttonH[k];
         const bool lit = choiceOf(buttonCode[k]) == buttonValue[k];
         const bool hot = k == hotButton;
+        if (buttonCode[k] == cKit) {
+            // A tab: the kit shown outlined in its colour, not filled as a
+            // choice is, so that it does not read as the pad's sound.
+            g.fillStyle(lit ? kInk : (hot ? 0x3A2F27 : Theme::raised));
+            g.beginPath();
+            g.roundRect(x + 0.5, y + 0.5, w - 1, h - 1, 6);
+            g.fill();
+            g.strokeStyle(lit ? buttonColour[k] : Theme::line);
+            g.lineWidth(lit ? 1.5 : 1.0);
+            g.stroke();
+            g.fillStyle(lit ? buttonColour[k] : (hot ? Theme::text : Theme::textMuted));
+            g.boldFont(9);
+            g.textAlign(TextAlign::Center);
+            g.textBaseline(TextBaseline::Middle);
+            fillKit(g, buttonValue[k], x + w * 0.5, y + h * 0.5 + 0.5);
+            return;
+        }
         g.fillStyle(lit ? buttonColour[k] : (hot ? 0x3A2F27 : Theme::raised));
         g.beginPath();
         g.roundRect(x, y, w, h, min(h * 0.5, 11.0));
@@ -2997,6 +3757,17 @@ struct Drumlin : Instrument {
             g.stroke();
         }
         g.fillStyle(lit ? kInk : (hot ? Theme::text : Theme::textMuted));
+        if (buttonCode[k] == cStep) {
+            // A small arrowhead, back or on.
+            const double cx = x + w * 0.5, cy = y + h * 0.5, d = buttonValue[k];
+            g.beginPath();
+            g.moveTo(cx + 3.5 * d, cy);
+            g.lineTo(cx - 2.5 * d, cy - 4.5);
+            g.lineTo(cx - 2.5 * d, cy + 4.5);
+            g.closePath();
+            g.fill();
+            return;
+        }
         g.boldFont(buttonCode[k] == cSound ? 8.5 : 9);
         g.textAlign(TextAlign::Center);
         g.textBaseline(TextBaseline::Middle);
@@ -3059,15 +3830,16 @@ struct Drumlin : Instrument {
         const double x = 72 + g.measureText("Drumlin");
         g.fillStyle(Theme::textMuted);
         g.serifItalicFont(13);
-        g.fillText("the LM-1's sounds, made anew, on General MIDI's drum keys", x, 45);
-        label(g, "VOICES", 972, 24, TextAlign::Center);
+        g.fillText("realistic drums, synthesized, on General MIDI's drum keys", x, 45);
+        // The voices playing, then the main output's level, well apart.
+        label(g, "VOICES", 876, 26, TextAlign::Left);
         g.fillStyle(Theme::text);
         g.monoFont(13);
-        g.textAlign(TextAlign::Center);
+        g.textAlign(TextAlign::Left);
         g.textBaseline(TextBaseline::Middle);
-        g.fillText(format("%d / %d", soundingNow.get(), kVoices), 972, 42);
-        label(g, "MAIN", 1020, 30, TextAlign::Right);
-        drawLevel(g, 1028, 25, 120, outLeft.get(), outRight.get());
+        g.fillText(format("%d / %d", soundingNow.get(), kVoices), 876, 43);
+        label(g, "MAIN", 984, 26, TextAlign::Left);
+        drawLevel(g, 984, 37, 164, outLeft.get(), outRight.get());
     }
 
     // --- the pads -----------------------------------------------------------------------------
@@ -3113,7 +3885,7 @@ struct Drumlin : Instrument {
         const int sound = padChoice(p, cSound);
         shape(p);
         drawShape(g, p, x + 8, y + cellH * 0.5 + 4, cellW - 16, cellH * 0.5 - 30,
-                  lit > 0.001 ? kLinen : kTurf, lit > 0.001 ? 0.95 : 0.7);
+                  lit > 0.001 ? kLinen : kitColour(kitOf(sound)), lit > 0.001 ? 0.95 : 0.7);
         g.fillStyle(Theme::text);
         g.boldFont(9);
         g.textAlign(TextAlign::Left);
@@ -3121,7 +3893,7 @@ struct Drumlin : Instrument {
         fillSound(g, sound, x + 8, y + cellH - 22);
         g.fillStyle(Theme::textFaint);
         g.monoFont(8);
-        fillMachine(g, sound, x + 8, y + cellH - 10);
+        fillKit(g, kitOf(sound), x + 8, y + cellH - 10);
         const double tune = padValue(p, cTune);
         g.textAlign(TextAlign::Right);
         if (tune != 0) g.fillText(format("%+g st", tune), x + cellW - 8, y + cellH - 10);
@@ -3154,7 +3926,7 @@ struct Drumlin : Instrument {
             g.stroke();
         }
         drawShape(g, selected, inX, wavY + (wavH - 16) * 0.5 + 2, inW, (wavH - 30) * 0.5,
-                  glow[selected] > 0.001 ? kLinen : kTurf, 0.9);
+                  glow[selected] > 0.001 ? kLinen : kitColour(kitOf(choiceOf(cSound))), 0.9);
         g.fillStyle(Theme::textFaint);
         g.monoFont(9);
         g.textAlign(TextAlign::Right);
@@ -3179,19 +3951,19 @@ struct Drumlin : Instrument {
         padText(g, selected, cSound, selX + 130, selY + 25);
         aside(g, "as it plays: tune and decay included", selX + selW - 18, selY + 25,
               TextAlign::Right);
-        label(g, "SOUND", selX + 18, selY + 58, TextAlign::Left);
-        label(g, "PLAYS", selX + 18, dialsY - 50, TextAlign::Left);
+        label(g, "SOUND", selX + 18, kitY + 12, TextAlign::Left);
         drawWave(g);
+        label(g, "PLAYS", selX + 18, dialsY - 46, TextAlign::Left);
         label(g, "CHOKE", selX + 18, chokeY + 11, TextAlign::Left);
         label(g, "OUTPUT", selX + 18, outY + 11, TextAlign::Left);
         if (choiceOf(cOutput) > 0)
-            aside(g, "out of the main mix", selX + 434, outY + 11, TextAlign::Left);
+            aside(g, "out of the main mix", rowX + 342, outY + 11, TextAlign::Left);
         if (choiceOf(cChoke) > 0)
-            aside(g, "cuts its group, itself too", selX + 434, chokeY + 11, TextAlign::Left);
-        aside(g, "Decay at 100 % rings as the machine did; a hi-hat's is its VCA",
-              selX + selW * 0.5, selY + selH - 40, TextAlign::Center);
+            aside(g, "cuts its group, itself too", rowX + 342, chokeY + 11, TextAlign::Left);
+        aside(g, "Decay at 100 % rings as the recording did; a classic hi-hat's is its VCA",
+              selX + selW * 0.5, selY + selH - 34, TextAlign::Center);
         aside(g, "Vary makes each hit a little different, as a real drum's are", selX + selW * 0.5,
-              selY + selH - 22, TextAlign::Center);
+              selY + selH - 17, TextAlign::Center);
     }
 
     void drawBar(Canvas& g) {
@@ -3290,14 +4062,14 @@ struct Drumlin : Instrument {
 
     // --- Factory kits ---------------------------------------------------------------------
     //
-    // Each sets what differs from the default kit (LM-1 Kit). Pads keep their
+    // Each sets what differs from the default kit (Classic Kit). Pads keep their
     // keys: a kit changes sounds, never the map.
 
     void factoryPatches(Patches& p) {
-        p.add("LM-1 Kit");
+        p.add("Classic Kit");
         // Short and dry: the kick and snare cut tight, the hats at the
         // machine's shortest decay, the toms clipped.
-        p.add("Tight LM-1")
+        p.add("Classic Tight")
             .set(p1Decay, 60)
             .set(p3Decay, 55)
             .set(p4Decay, 60)
@@ -3310,7 +4082,7 @@ struct Drumlin : Instrument {
             .set(p14Decay, 60)
             .set(p15Decay, 60);
         // Slow and low: everything tuned down, the hats at a long decay.
-        p.add("Low LM-1")
+        p.add("Classic Low")
             .set(p1Tune, -3)
             .set(p2Tune, -4)
             .set(p3Tune, -4)
@@ -3327,7 +4099,7 @@ struct Drumlin : Instrument {
             .set(p15Tune, -6)
             .set(p16Tune, -4);
         // High and bright: the machine's knobs turned up.
-        p.add("High LM-1")
+        p.add("Classic High")
             .set(p1Tune, 3)
             .set(p2Tune, 5)
             .set(p3Tune, 5)
@@ -3342,36 +4114,36 @@ struct Drumlin : Instrument {
             .set(p14Tune, 6)
             .set(p15Tune, 6)
             .set(p16Tune, 4);
-        // Each hit a little different, as played drums are.
-        p.add("Played LM-1")
-            .set(p1Vary, 25)
-            .set(p2Vary, 40)
-            .set(p3Vary, 40)
-            .set(p4Vary, 50)
-            .set(p5Vary, 35)
-            .set(p6Vary, 40)
-            .set(p7Vary, 35)
-            .set(p8Vary, 40)
-            .set(p9Vary, 35)
-            .set(p10Vary, 30)
-            .set(p11Vary, 35)
-            .set(p12Vary, 30)
-            .set(p13Vary, 50)
-            .set(p14Vary, 30)
-            .set(p15Vary, 40)
-            .set(p16Vary, 50);
+        // Every hit the recording's, note for note: Vary at 0 on every pad.
+        p.add("Classic Exact")
+            .set(p1Vary, 0)
+            .set(p2Vary, 0)
+            .set(p3Vary, 0)
+            .set(p4Vary, 0)
+            .set(p5Vary, 0)
+            .set(p6Vary, 0)
+            .set(p7Vary, 0)
+            .set(p8Vary, 0)
+            .set(p9Vary, 0)
+            .set(p10Vary, 0)
+            .set(p11Vary, 0)
+            .set(p12Vary, 0)
+            .set(p13Vary, 0)
+            .set(p14Vary, 0)
+            .set(p15Vary, 0)
+            .set(p16Vary, 0);
         // The hand percussion forward: congas on the toms' keys, the
         // cowbell, tambourine and cabasa up, the kick and snare softer.
-        p.add("LM-1 Percussion")
+        p.add("Classic Percussion")
             .set(p1Level, -4)
             .set(p3Level, -5)
-            .set(p5Sound, "lm1_conga")
+            .set(p5Sound, "classic_conga")
             .set(p5Tune, -6)
-            .set(p7Sound, "lm1_conga")
+            .set(p7Sound, "classic_conga")
             .set(p7Tune, -3)
-            .set(p9Sound, "lm1_conga")
+            .set(p9Sound, "classic_conga")
             .set(p9Tune, 0)
-            .set(p11Sound, "lm1_conga")
+            .set(p11Sound, "classic_conga")
             .set(p11Tune, 3)
             .set(p13Level, 0)
             .set(p14Level, -1)
@@ -3379,7 +4151,7 @@ struct Drumlin : Instrument {
         // Each kind of drum on an output of its own, for mixing the kit on
         // separate tracks: kick; snare and rim; clap; toms; hats; cymbals;
         // tambourine and cabasa; cowbell and conga.
-        p.add("LM-1 Separate Outs")
+        p.add("Classic Separate Outs")
             .set(p1Output, "out1")
             .set(p2Output, "out2")
             .set(p3Output, "out2")
@@ -3396,5 +4168,41 @@ struct Drumlin : Instrument {
             .set(p14Output, "out8")
             .set(p15Output, "out8")
             .set(p16Output, "out7");
+        // The studio sounds wherever the studio kit has the drum: the classic
+        // cymbals, tambourine and cabasa stay, the block on the conga's key.
+        p.add("Studio Kit")
+            .set(p1Sound, "studio_kick")
+            .set(p2Sound, "studio_cross_stick")
+            .set(p3Sound, "studio_snare")
+            .set(p4Sound, "studio_clap")
+            .set(p5Sound, "studio_tom")
+            .set(p6Sound, "studio_closed_hat")
+            .set(p7Sound, "studio_tom")
+            .set(p8Sound, "studio_open_hat")
+            .set(p9Sound, "studio_tom")
+            .set(p11Sound, "studio_tom")
+            .set(p14Sound, "studio_open_cowbell")
+            .set(p15Sound, "studio_block");
+        // The studio kit's percussion: its four cowbells on the toms' keys,
+        // the block, the two ducks and the explosion on the top row.
+        p.add("Studio Percussion")
+            .set(p1Sound, "studio_kick")
+            .set(p2Sound, "studio_cross_stick")
+            .set(p3Sound, "studio_snare")
+            .set(p4Sound, "studio_clap")
+            .set(p5Sound, "studio_muted_cowbell")
+            .set(p5Tune, 0)
+            .set(p6Sound, "studio_closed_hat")
+            .set(p7Sound, "studio_cowbell")
+            .set(p7Tune, 0)
+            .set(p8Sound, "studio_open_hat")
+            .set(p9Sound, "studio_dark_cowbell")
+            .set(p9Tune, 0)
+            .set(p11Sound, "studio_open_cowbell")
+            .set(p11Tune, 0)
+            .set(p13Sound, "studio_block")
+            .set(p14Sound, "studio_short_duck")
+            .set(p15Sound, "studio_long_duck")
+            .set(p16Sound, "studio_explosion");
     }
 };

@@ -619,16 +619,19 @@ instructions are in `docs/guides/installing.md`.
   Drumlin, the drum machine (`plugins/drumlin`, `docs/specs/drumlin.md`),
   has no predecessor. Sixteen pads, each on a MIDI note of its own
   (`padN.key`, General MIDI's drum map by default, so agents and the
-  notation's drum names find each drum), playing the LM-1's eleven sounds
-  and a crash and a ride without samples: each a recipe of modes and noise
-  bands made a sample at a time at the machine's DAC clock, through its
-  8-bit companded DAC with unsmoothed steps, the kick, tom and conga filter,
-  and the hi-hat's VCA over one looping recording. The recipes were fitted
-  to a bank of real LM-1 recordings by `plugins/drumlin/fit` (CMA-ES over
+  notation's drum names find each drum), synthesizing thirty-two realistic
+  drum sounds without samples: the classic kit's thirteen and the studio
+  kit's nineteen. Each is a recipe of modes and noise bands made a sample
+  at a time at a DAC clock, through that DAC with unsmoothed steps (the
+  classic kit's 8-bit companded, the studio kit's linear 16-bit), and for
+  the classic kit the kick, tom and conga filter and the hi-hat's VCA over
+  one looping recording. The recipes were
+  fitted to banks of real recordings by `plugins/drumlin/fit` (CMA-ES over
   the script compiled natively); the recordings are not in the repository.
-  Tune, Decay (the machine's own at 100 %), choke groups, variation per hit,
-  eight extra outputs, seven kits. 0.41 % of a core at the defaults. Not yet: other machines' sounds and real
-  drums, and a sound of the user's own fitting.
+  Tune, Decay (the recording's own at 100 %), choke groups, variation per
+  hit (Vary, 50 % by default), eight extra outputs, nine kits; the editor
+  picks a pad's sound by kit. 0.31 % of a core at the defaults. Not yet:
+  more kits, and a sound of the user's own fitting.
 
 - **DSP scripting** (ADR-0032): plugins written in a checked subset of
   C++, run by a JIT player plugin, exported as plugins or C++ projects. The

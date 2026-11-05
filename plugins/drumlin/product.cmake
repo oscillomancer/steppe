@@ -13,7 +13,7 @@
 set(PRODUCT_NAME        "Drumlin")
 set(PRODUCT_ID          "com.suppleaudio.drumlin")
 set(PRODUCT_VERSION     "1.0.0")
-set(PRODUCT_DESCRIPTION "Drum machine: classic machines' sounds made anew without their samples, the LM-1's first, on sixteen pads from C2 with choke groups and eight extra outputs.")
+set(PRODUCT_DESCRIPTION "Drum machine: realistic drums, synthesized without samples, on sixteen pads from C2 with choke groups and eight extra outputs.")
 set(PRODUCT_VENDOR      "Supple Audio")
 set(PRODUCT_URL         "")
 set(PRODUCT_COPYRIGHT   "Copyright (c) 2026 Supple Audio")

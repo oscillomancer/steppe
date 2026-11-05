@@ -1,25 +1,29 @@
 # Spec: Drumlin — the stock drum machine
 
-**Status:** Implemented: sixteen pads, each on a MIDI note of its own, the
-LM-1's eleven sounds and a crash and a ride, synthesized from recipes fitted
-to recordings of a real LM-1; choke groups, variation per hit, eight extra
-outputs, seven kits and the editor. The drum machine guide
-(`skill/guides/drum-machine.md`) describes it for agents.
+**Status:** Implemented: sixteen pads, each on a MIDI note of its own,
+thirty-two realistic drum sounds synthesized from recipes fitted to
+recordings (the classic kit's thirteen and the studio kit's nineteen);
+choke groups, variation per hit, eight extra outputs, nine factory kits and
+the editor. The drum machine guide (`skill/guides/drum-machine.md`)
+describes it for agents.
 **Plugin:** `plugins/drumlin`, CLAP id `com.suppleaudio.drumlin`,
 instrument. A DSP script compiled natively (ADR-0047),
 `plugins/drumlin/script/drumlin.cpp`; its recipes are fitted by
 `plugins/drumlin/fit` (`README.md` there).
 
-Drumlin plays the sounds of classic drum machines without their samples:
-each sound is a recipe (resonant modes, bands of filtered noise, a clap's
-bursts, a hi-hat's loop), played the way the machine played its own
-recordings. The LM-1 comes first; other machines' sounds, and real drums',
-are added to the same list later. It has no predecessor. A sequencer, swing,
-pad sends and effects are left out.
+Drumlin synthesizes realistic drums without samples: each sound is a
+recipe (resonant modes, bands of filtered noise, a clap's bursts, a
+hi-hat's loop), played the way the machine that held its recording played
+it. Sounds are grouped in kits, the classic kit and the studio kit so far;
+more are added to the same list later.
+It has no predecessor. A sequencer, swing, pad sends and effects are left
+out.
 
-## 1. The machine it models
+## 1. The machines it models
 
-Measured from a bank of LM-1 recordings (every pitch-knob position of every
+### 1.1 The classic kit
+
+Measured from a bank of recordings (every pitch-knob position of every
 voice) and from the machine's published design:
 
 - **A voice is an EPROM played by a DAC at a clock** the voice's tuning
@@ -35,7 +39,7 @@ voice) and from the machine's published design:
   the hit and closes over tens of milliseconds, at the same frequencies
   whatever the tuning.
 - **The hi-hat's EPROM** (4096 samples) plays round and round; a VCA opens on
-  it for each hit wherever the loop happens to be, which is why no two LM-1
+  it for each hit wherever the loop happens to be, which is why no two of its
   hat hits are the same. Closed, accented and open hats are the one loop
   under different VCA settings: the closed hat's decay A to D is a time
   constant of about 9, 28, 54 and 77 ms after a 5 ms hold, the open hat's
@@ -43,10 +47,29 @@ voice) and from the machine's published design:
   closed hat.
 - **The lead-in.** The kick, snare and tom recordings start with a quiet,
   low pre-sound before the hit (about 12 ms at the middle of the knob),
-  which makes the LM-1 sit a little behind the beat. Drumlin keeps it
+  which makes the machine sit a little behind the beat. Drumlin keeps it
   always; it scales with Tune as the machine's did.
-- The tom's and conga's two channels play one EPROM each; the crash and
-  ride are not LM-1 sounds but are played by the same kind of DAC.
+- The tom's and conga's two channels play one EPROM each. The crash and
+  ride were not the machine's own but are played by the same kind of DAC.
+
+### 1.2 The studio kit
+
+Measured from a bank of recordings (each sound at twenty-four positions of
+its pitch control):
+
+- **A sound is one recording played at a clock**, as the classic kit's
+  are: the positions of a sound are the same recording faster or slower
+  (aligned by resampling they correlate above 0.95, the hi-hats' noise
+  apart), about 21 semitones from the slowest to the fastest. Tune 0 is the
+  bank's twelfth position.
+- **The DAC is linear and fine** (the recipes use 16 bits; 8-bit companding
+  fits worse, and 12 bits no better) and clocked at about 44 kHz at Tune 0:
+  a sound's band ends near half the clock at the slow positions, and the
+  hold's images show above it. Nothing follows the DAC: no filter that
+  closes, no VCA.
+- **The clap** is one recipe fitted to both of the bank's clap
+  recordings, the first weighted four times the second (whose hit has a
+  quiet flam before it that the first lacks).
 
 ## 2. Signal flow (per hit)
 
@@ -59,7 +82,8 @@ voice) and from the machine's published design:
      a clap's repeated bursts) + the lead-in, cut short where the recording was,
      ending where the EPROM ends; or a hi-hat's loop, made once, from a point of its own
         ▼
-   DAC: 8-bit mu-law, held (polyBLEP steps at 2x) ── low-pass closing (kick, tom, conga)
+   DAC: 8-bit mu-law (classic) or linear 16-bit (studio), held (polyBLEP steps at 2x)
+   ── low-pass closing (classic kick, tom, conga)
    ── output coupling (high pass) ── VCA (a hi-hat's decay; Decay for others scales the recording)
    ── level × velocity (a closed hat's accent at the top), pan
         ▼
@@ -85,19 +109,21 @@ voice) and from the machine's published design:
   samples of a voice's life.
 - **Choke.** A hit on a pad in a group (1 to 8) fades out every sounding
   voice of the group's pads over 10 ms, its own pad's included.
-- **Variation** (`Vary`, per pad): at 0 every hit is the machine's, note for
-  note (the noise has the same seed every time). Above it each hit draws new
-  noise and moves its pitch by up to ±0.15 st × Vary and each mode's and
-  band's level by up to ±1.5 dB × Vary, from the pad's hit count since the
-  plugin started or was reset, so a render is the same every time. A
-  hi-hat's loop starts from a point drawn from the hit count at any Vary.
+- **Variation** (`Vary`, per pad, 50 % by default): at 0 every hit is the
+  recording's, note for note (the noise has the same seed every time).
+  Above it each hit draws new noise and moves its pitch by up to ±0.15 st ×
+  Vary and each mode's and band's level by up to ±1.5 dB × Vary, from the
+  pad's hit count since the plugin started or was reset, so a render is the
+  same every time. A classic hi-hat's loop starts from a point drawn from
+  the hit count at any Vary.
 - **Decay** (25 … 400 %, 100 the machine's): a hi-hat's VCA time constant
   times Decay; for the other sounds the recording's decays, its cut and its
   EPROM's end stretched by it (the attack and lead-in are not).
 - **Velocity:** `-(1 − velocity) × 40 dB × Velocity`, as Pollard's; a sound
-  with an accent (the closed hat) adds it in the top 40 % of the velocity
-  range, rising to its full level (about 6 dB as fitted) and a decay a tenth
-  longer at velocity 1, as the machine's accented hats measure.
+  with an accent (the classic closed hat) adds it in the top 40 % of the
+  velocity range, rising to its full level (about 6 dB as fitted) and a
+  decay a tenth longer at velocity 1, as the machine's accented hats
+  measure.
 - **Latency:** 2 samples (the DAC's step a sample late at 2x, and the
   downsampler), reported.
 
@@ -108,13 +134,13 @@ voice) and from the machine's published design:
 | Key | Unit, range | Default | Meaning |
 |---|---|---|---|
 | `padN.key` | 0 … 127 | GM's map (below) | The MIDI note that plays the pad; of pads sharing a key, the lowest-numbered plays |
-| `padN.sound` | choice | the kit's | `lm1_kick`, `lm1_snare`, `lm1_rimshot`, `lm1_clap`, `lm1_closed_hat`, `lm1_open_hat`, `lm1_tom`, `lm1_conga`, `lm1_cabasa`, `lm1_tambourine`, `lm1_cowbell`, `crash`, `ride`; new sounds are appended, keys never change |
+| `padN.sound` | choice | the kit's | §3.3; new sounds are appended |
 | `padN.tune` | st, ±12 | 0 (toms −5, −2, +1, +4) | The DAC's clock |
 | `padN.decay` | %, 25 … 400, log | 100 | How long it rings (§2) |
 | `padN.level` | dB, −60 … +12 | the kit's | |
 | `padN.pan` | %, ±100 | the kit's | Balance: the centre leaves both sides as they are |
 | `padN.velocity` | %, 0 … 100 | 70 | §2 |
-| `padN.vary` | %, 0 … 100 | 0 | §2 |
+| `padN.vary` | %, 0 … 100 | 50 | §2 |
 | `padN.choke` | `off`, `group1` … `group8` | hats `group1` | |
 | `padN.output` | `main`, `out1` … `out8` | `main` | |
 
@@ -124,61 +150,102 @@ voice) and from the machine's published design:
 |---|---|---|---|
 | `output` | dB, −36 … +12 | 0 | Every output's level; a gentle limit bends the output above −1 dBFS |
 
+### 3.3 The sounds
+
+A choice saves its index, so the order is fixed: new sounds are appended.
+The classic sounds' keys were renamed on 2026-11-05, each now starting
+`classic_`: sessions keep their sounds,
+but a patch that names an old key no longer applies. Vary's default
+became 50 % the same day, so a session that left it at the old default 0
+plays with variation.
+
+| # | key | name | | # | key | name |
+|---:|---|---|---|---:|---|---|
+| 0 | `classic_kick` | Classic Kick | | 13 | `studio_kick` | Studio Kick |
+| 1 | `classic_snare` | Classic Snare | | 14 | `studio_snare` | Studio Snare |
+| 2 | `classic_rimshot` | Classic Rimshot | | 15 | `studio_bright_snare` | Studio Bright Snare |
+| 3 | `classic_clap` | Classic Clap | | 16 | `studio_deep_snare` | Studio Deep Snare |
+| 4 | `classic_closed_hat` | Classic Closed Hat | | 17 | `studio_tight_snare` | Studio Tight Snare |
+| 5 | `classic_open_hat` | Classic Open Hat | | 18 | `studio_cross_stick` | Studio Cross Stick |
+| 6 | `classic_tom` | Classic Tom | | 19 | `studio_clap` | Studio Clap |
+| 7 | `classic_conga` | Classic Conga | | 20 | `studio_closed_hat` | Studio Closed Hat |
+| 8 | `classic_cabasa` | Classic Cabasa | | 21 | `studio_open_hat` | Studio Open Hat |
+| 9 | `classic_tambourine` | Classic Tambourine | | 22 | `studio_block` | Studio Block |
+| 10 | `classic_cowbell` | Classic Cowbell | | 23 | `studio_echo_snare` | Studio Echo Snare |
+| 11 | `classic_crash` | Classic Crash | | 24 | `studio_muted_cowbell` | Studio Muted Cowbell |
+| 12 | `classic_ride` | Classic Ride | | 25 | `studio_open_cowbell` | Studio Open Cowbell |
+| | | | | 26 | `studio_cowbell` | Studio Cowbell |
+| | | | | 27 | `studio_dark_cowbell` | Studio Dark Cowbell |
+| | | | | 28 | `studio_tom` | Studio Tom |
+| | | | | 29 | `studio_short_duck` | Studio Short Duck |
+| | | | | 30 | `studio_long_duck` | Studio Long Duck |
+| | | | | 31 | `studio_explosion` | Studio Explosion |
+
 ## 4. The kits
 
 Each pad keeps its key in every kit, so a part written for one plays the
-same drums' places in another. The default, **LM-1 Kit**, on the notation's
-drum names:
+same drums' places in another. The default, **Classic Kit**, on the
+notation's drum names, and **Studio Kit**, which takes the studio sounds
+wherever the studio kit has the drum (it has no cymbals, tambourine or
+cabasa):
 
-| pad | key | name | sound |
-|---:|---:|---|---|
-| 1 | 36 | `kick` | LM-1 Kick |
-| 2 | 37 | `rim` | LM-1 Rimshot |
-| 3 | 38 | `snare` | LM-1 Snare |
-| 4 | 39 | `clap` | LM-1 Clap |
-| 5 | 41 | `tom_floor` | LM-1 Tom −5 st |
-| 6 | 42 | `hat` | LM-1 Closed Hat, choke 1 |
-| 7 | 45 | `tom_low` | LM-1 Tom −2 st |
-| 8 | 46 | `ohat` | LM-1 Open Hat, choke 1 |
-| 9 | 47 | `tom_mid` | LM-1 Tom +1 st |
-| 10 | 49 | `crash` | Crash |
-| 11 | 50 | `tom_high` | LM-1 Tom +4 st |
-| 12 | 51 | `ride` | Ride |
-| 13 | 54 | `tamb` | LM-1 Tambourine |
-| 14 | 56 | `cowbell` | LM-1 Cowbell |
-| 15 | 63 | (GM's open high conga) | LM-1 Conga |
-| 16 | 69 | `cabasa` | LM-1 Cabasa |
+| pad | key | name | Classic Kit | Studio Kit |
+|---:|---:|---|---|---|
+| 1 | 36 | `kick` | Classic Kick | Studio Kick |
+| 2 | 37 | `rim` | Classic Rimshot | Studio Cross Stick |
+| 3 | 38 | `snare` | Classic Snare | Studio Snare |
+| 4 | 39 | `clap` | Classic Clap | Studio Clap |
+| 5 | 41 | `tom_floor` | Classic Tom −5 st | Studio Tom −5 st |
+| 6 | 42 | `hat` | Classic Closed Hat, choke 1 | Studio Closed Hat, choke 1 |
+| 7 | 45 | `tom_low` | Classic Tom −2 st | Studio Tom −2 st |
+| 8 | 46 | `ohat` | Classic Open Hat, choke 1 | Studio Open Hat, choke 1 |
+| 9 | 47 | `tom_mid` | Classic Tom +1 st | Studio Tom +1 st |
+| 10 | 49 | `crash` | Classic Crash | Classic Crash |
+| 11 | 50 | `tom_high` | Classic Tom +4 st | Studio Tom +4 st |
+| 12 | 51 | `ride` | Classic Ride | Classic Ride |
+| 13 | 54 | `tamb` | Classic Tambourine | Classic Tambourine |
+| 14 | 56 | `cowbell` | Classic Cowbell | Studio Open Cowbell |
+| 15 | 63 | (GM's open high conga) | Classic Conga | Studio Block |
+| 16 | 69 | `cabasa` | Classic Cabasa | Classic Cabasa |
 
 | Kit | What it changes |
 |---|---|
-| LM-1 Kit | the default |
-| Tight LM-1 | shorter decays, the hats at the machine's decay A |
-| Low LM-1 | everything tuned down, the hats long |
-| High LM-1 | everything tuned up |
-| Played LM-1 | Vary 25–50 % on every pad |
-| LM-1 Percussion | congas on the tom keys, the hand percussion forward |
-| LM-1 Separate Outs | kick; snare and rim; clap; toms; hats; cymbals; shakers; cowbell and conga, each on an output |
+| Classic Kit | the default |
+| Classic Tight | shorter decays, the hats at the machine's decay A |
+| Classic Low | everything tuned down, the hats long |
+| Classic High | everything tuned up |
+| Classic Exact | Vary 0 on every pad: each hit the recording's, note for note |
+| Classic Percussion | congas on the tom keys, the hand percussion forward |
+| Classic Separate Outs | kick; snare and rim; clap; toms; hats; cymbals; shakers; cowbell and conga, each on an output |
+| Studio Kit | the studio sounds (above) |
+| Studio Percussion | Studio Kit with the four cowbells on the tom keys, and the block, the two ducks and the explosion on pads 13 to 16 |
 
 ## 5. The editor
 
 1180 × 716. A header with the name, the voices playing and the main level;
 the sixteen pads four by four, pad 1 at the bottom left, each with its
-number, key and note, its sound and machine, its shape (drawn from its
-recipe at its tune and decay) and a light while it sounds or its key is
-held; pressing a pad plays it, harder the higher up, and selects it. Beside
-them the selected pad: its sound (a button for each), its shape larger with
+number, key and note, its sound and kit, its shape (drawn from its recipe
+at its tune and decay, in its kit's colour) and a light while it sounds or
+its key is held; pressing a pad plays it, harder the higher up, and selects
+it. Beside them the selected pad. Its sound: a tab for each kit (the one
+shown outlined; it follows the pad's sound whenever that changes), a
+button for each of the kit's sounds, five across, and two arrows that step
+the pad's sound back or on through every sound. Then its shape larger with
 a time ruler, dials for Key, Tune, Decay, Level, Pan, Velocity and Vary,
-and Choke and Output buttons. A bar below holds Output. Dials drag (Shift
-finely), turn with the wheel and reset on a double click.
+and Choke and Output buttons. A bar below holds Output, a small dial with
+its name and value beside it. Dials drag (Shift finely), turn with the
+wheel and reset on a double click.
 
 ## 6. Performance
 
-Release build, one core, 48 kHz, `clap-bench` (2026-10-29), whose notes
-fall on keys 40 to 79, so about a third of them play a pad: 0.41 % of a
-core for the default kit (4.55 refs), the factory kits 4.59 refs on
-average (Tight LM-1 4.38 to LM-1 Separate Outs 5.23, which keeps eight
-outputs' downsamplers running). Pollard: 0.45 % (5.05 refs). The release
-`Drumlin.clap` is 2,509,256 bytes; it holds no samples.
+Release build, one core, 48 kHz, `clap-bench` (2026-11-05), whose notes
+fall on keys 40 to 79, so about a third of them play a pad: 0.31 % of a
+core for the default kit (3.35 refs), the factory kits 3.52 refs on
+average (Classic Kit 3.25 to Studio Percussion 4.30; the studio sounds run
+their DAC at about twice the classic clock, and Classic Separate Outs,
+3.73, keeps eight outputs' downsamplers running). Pollard on the same run:
+0.33 % (3.54 refs). The release `Drumlin.clap` is 2,562,784 bytes; it
+holds no samples.
 
 ## 7. Fitting
 
@@ -187,9 +254,14 @@ searches a recipe's free numbers with CMA-ES on every core, scoring renders
 against recordings in band levels over time around the hit and through the
 body, the level envelope, the body's fine spectrum (which tells noise from
 tones and a cymbal's narrow partials from a few loud ones), the crest factor
-through the hit (how far it is clipped) and, for tonal sounds, the waveform
-at the hit. The cymbals and the hi-hat start from partials measured in their
-recordings (frequency, width, rise and decay; `plugins/drumlin/fit/measure.py`).
-Each recipe was fitted to three or four recordings at different knob
-positions, played at their measured clocks, so one recipe holds across the
-knob's range. The recordings stay outside the repository.
+through the hit (how far it is clipped), the narrow peaks a render has and
+its recording does not (a ring: a pure tone where the drum has noise, which
+whistles and which the other parts barely see) and, for tonal sounds, the
+waveform at the hit. Modes are kept to partials the recording really rings
+with; high partials and those of hats, cymbals, claps and rooms are bands
+of noise (`plugins/drumlin/fit/README.md`, "Rings"). The classic cymbals
+and hi-hat start from partials measured in their recordings (frequency,
+width, rise and decay; `plugins/drumlin/fit/measure.py`). Each recipe was
+fitted to two to four recordings at different knob positions, played at
+their measured clocks, so one recipe holds across the knob's range. The
+recordings stay outside the repository.

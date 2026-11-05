@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Supple Audio
 # Drumlin, measured through the built plugin (dsp.test): its default kit
-# sounds on General MIDI's drum keys and nowhere else, a pad's Key moves it,
-# Tune plays its recording faster (shorter as well as higher), the closed hat
-# chokes the open one, and a pad on an extra output leaves the main one.
+# sounds on General MIDI's drum keys and nowhere else, every sound plays, a
+# pad's Key moves it, Tune plays its recording faster (shorter as well as
+# higher), the closed hat chokes the open one, and a pad on an extra output
+# leaves the main one.
 # Required: SANDBOX (steppe-sandbox), PLUGIN (Drumlin.clap), WORK.
 foreach(var SANDBOX PLUGIN WORK)
     if(NOT DEFINED ${var} OR "${${var}}" STREQUAL "")
@@ -57,6 +58,21 @@ foreach(key 36 37 38 39 41 42 45 46 47 49 50 51 54 56 63 69 40 60)
     endif()
 endforeach()
 message(STATUS "the default kit: General MIDI's drum keys play, 40 and 60 are silent")
+
+# Every sound plays: each on pad 1, a hit peaks above -40 dBFS and lasts.
+foreach(sound
+    classic_kick classic_snare classic_rimshot classic_clap classic_closed_hat classic_open_hat
+    classic_tom classic_conga classic_cabasa classic_tambourine classic_cowbell classic_crash
+    classic_ride studio_kick studio_snare studio_bright_snare studio_deep_snare
+    studio_tight_snare studio_cross_stick studio_clap studio_closed_hat studio_open_hat
+    studio_block studio_echo_snare studio_muted_cowbell studio_open_cowbell studio_cowbell
+    studio_dark_cowbell studio_tom studio_short_duck studio_long_duck studio_explosion)
+    hit(36 "{\"params\":{\"pad1.sound\":\"${sound}\"}}" peak release)
+    if(peak LESS -40 OR release LESS 10)
+        message(FATAL_ERROR "${sound} on pad 1 peaks at ${peak} dBFS and lasts ${release} ms")
+    endif()
+endforeach()
+message(STATUS "every sound plays")
 
 # A pad's Key moves it: the kick on key 60 leaves key 36.
 hit(60 "{\"params\":{\"pad1.key\":60}}" moved release)
