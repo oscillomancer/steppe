@@ -37,7 +37,13 @@ instead of the compiled curve.
   Nothing reports a strip control's release yet; a plug-in's own gesture end
   still releases its touch envelope.
 - Ending a hold whose curve is stale compiles the session, so the written
-  envelope plays from then on. A compile during a pass keeps the holds.
+  envelope plays from then on. A compile during a pass keeps the holds. Every
+  load path carries hold changes, the playrate scalar's shortcut included.
+- Holds exist only while the transport plays. Undo, redo and a branch switch
+  mid-pass start the pass again where it is: the writes so far belong to the
+  version left behind, so they are no longer held and get no latch tail at
+  stop. A halt ends the pass that was playing: its successor, whether it
+  plays or records, inherits no holds and writes no latch tail from it.
 - Mute, plug-in parameters and the master playrate are not held and compile
   as before.
 

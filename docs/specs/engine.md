@@ -187,7 +187,11 @@ at compile time). Per block, each automated target evaluates its segments:
   or stop; touch until 500 ms after its last write (`EngineApp`'s service
   clock: nothing reports a strip control's release). Ending a hold compiles
   the session, so the written curve plays from there; a held value ramps over
-  the smoothing time like a static one. Mute, plug-in parameters and the
+  the smoothing time like a static one. Any load carries hold changes,
+  including the playrate scalar's shortcut, and a released stale curve always
+  compiles. Holds exist only while the transport plays; undo, redo and a
+  branch switch mid-pass start the pass again at that point, so the
+  abandoned writes neither stay held nor get a latch tail at stop. Mute, plug-in parameters and the
   master playrate are not held: their writes compile as before.
 
 ### 1.5 Transport and time

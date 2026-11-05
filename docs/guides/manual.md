@@ -246,6 +246,10 @@ takes over again half a second after your last move; holding the control
 still for longer than that hands back to the old automation. Mute and
 plug-in parameters play from their envelopes while you write them.
 
+Undo, redo or switching branches while playing starts a fresh automation
+pass at the current position. Earlier moves no longer override the envelope
+or extend their last value to where you stop.
+
 To edit an automation item's points, its amplitude magnitude must be greater than
 0.000000001. If it is zero or too small to invert, the app asks you to restore
 the amplitude first; the source curve is preserved.

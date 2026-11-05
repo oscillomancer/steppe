@@ -48,16 +48,17 @@ Id synthTrack(model::EditTxn& t, Id parent, std::uint8_t key) {
     t.modify<model::Track>(track, [&](model::Track& x) { x.chain.push_back(f); });
     model::MidiSource src;
     src.sequence.ppq = 960;
-    src.sequence.length = 8 * 960;
-    for (int i = 0; i < 8; ++i)
-        src.sequence.notes.push_back({i * 960, 900, 0, static_cast<std::uint8_t>(key + i), 100, 0});
+    src.sequence.length = 16 * 960;  // 8 s at 120 BPM: longer than any test plays
+    for (int i = 0; i < 16; ++i)
+        src.sequence.notes.push_back(
+            {i * 960, 900, 0, static_cast<std::uint8_t>(key + i % 8), 100, 0});
     const Id mi = t.create(src);
     model::Take take;
     take.source = mi;
     const Id tk = t.create(take);
     model::Item item;
     item.track = track;
-    item.length = 4.0;
+    item.length = 16.0;  // beats
     item.takes = {tk};
     item.activeTake = tk;
     t.create(item);
@@ -491,10 +492,145 @@ TEST_CASE("a touch pass lets go of a level half a second after its last write") 
     h.app->tick();
     CHECK(h.engine().writeHolds().size() == 1);
     h.app->setFixedClock(10'800);
+    REQUIRE(h.app->nextServiceDeadline());  // overdue work must still wake service
     h.app->tick();
     CHECK(h.engine().writeHolds().empty());
     CHECK(h.engine().planGeneration() == generation + 1);  // its curve compiles
     h.app->tick();
     CHECK(h.engine().planGeneration() == generation + 1);
     CHECK_FALSE(h.app->nextServiceDeadline());
+}
+
+TEST_CASE("a touch release compiles its stale curve when another strip moves") {
+    WriteHost h("touch");
+    h.run("track.add");
+    h.fader(-6);
+    const auto generation = h.engine().planGeneration();
+    h.app->setFixedClock(10'500);
+    h.run("track.set", R"({"track":"tr_2","volume_db":-3})");
+    CHECK(h.engine().writeHolds().empty());
+    CHECK(h.engine().planGeneration() == generation + 1);
+    h.app->tick();
+    CHECK(h.engine().planGeneration() == generation + 1);
+}
+
+TEST_CASE("a released touch deadline does not keep servicing an unrelated latch hold") {
+    WriteHost h("touch");
+    h.run("track.add");
+    h.run("env.add", R"({"track":"tr_2","param":"volume","points":[{"beat":0,"value":0}]})");
+    h.run("env.set", R"({"env":"en_2","mode":"latch"})");
+    h.fader(-6);
+    h.run("track.set", R"({"track":"tr_2","volume_db":-3})");
+    REQUIRE(h.engine().writeHolds().size() == 2);
+    h.app->setFixedClock(10'500);
+    REQUIRE(h.app->nextServiceDeadline());
+    h.app->tick();
+    CHECK(h.engine().writeHolds() ==
+          std::vector<model::EnvTarget>{{{model::Kind::Track, 2}, "volume"}});
+    CHECK_FALSE(h.app->nextServiceDeadline());
+}
+
+TEST_CASE("undo mid-pass plays the restored envelope and leaves no latch tail") {
+    WriteHost h("latch");
+    h.fader(-6);
+    REQUIRE(h.engine().writeHolds().size() == 1);
+    h.run("history.undo");
+    CHECK(h.engine().writeHolds().empty());
+    const auto& points = h.app->head().envelopes.begin()->value->points;
+    REQUIRE(points.size() == 1);
+    CHECK(points[0].value == 0);
+    h.backend.run(4);
+    h.run("transport.pause");  // the undone write gets no latch tail
+    CHECK(h.app->head().envelopes.begin()->value->points.size() == 1);
+}
+
+TEST_CASE("an engine started again after a halt holds nothing from the old pass") {
+    WriteHost h("latch");
+    h.fader(-6);
+    REQUIRE(h.engine().writeHolds().size() == 1);
+    const auto written = h.app->head().envelopes.begin()->value->points.size();
+    h.app->stopEngine();
+    REQUIRE(h.app->startEngine(h.backend, {.sampleRate = 48000, .blockSize = 128},
+                               {.anticipative = false, .workers = 0}));
+    h.backend.run(2);
+    h.app->tick();
+    CHECK_FALSE(h.engine().transport().playing);
+    CHECK(h.engine().writeHolds().empty());
+    // Recording starts no new pass: the halted one must not come back either.
+    h.run("track.set", R"({"track":"tr_0","armed":true})");
+    h.run("transport.record");
+    h.backend.run(4);
+    h.app->tick();
+    CHECK(h.engine().writeHolds().empty());
+    h.run("transport.stop");
+    // What the halted pass wrote stays, with no latch tail from it.
+    CHECK(h.app->head().envelopes.begin()->value->points.size() == written);
+}
+
+TEST_CASE("a scalar playrate edit carries hold changes and compiles a released stale curve" *
+          doctest::description("rt")) {
+    Mix m = mixSession();
+    const model::EnvTarget target{m.a, "volume"};
+    auto rated = [](const model::Session& s, double rate, std::uint64_t version) {
+        model::EditTxn t(s, version);
+        auto project = t.project();
+        project.playrate.rate = rate;
+        t.setProject(project);
+        return t.commit().value();
+    };
+    {
+        model::EditTxn t(m.session, 2);
+        auto project = t.project();
+        project.console9 = false;
+        project.playrate.rate = 1.1;
+        t.setProject(project);
+        t.modify<model::Track>(m.b, [](auto& x) { x.volumeDb = model::kSilenceDb; });
+        t.modify<model::Route>(m.sendA, [](auto& r) { r.mute = true; });
+        t.modify<model::Route>(m.sendB, [](auto& r) { r.mute = true; });
+        t.modify<model::TrackGroup>(m.vca, [](auto& g) { g.vca->volumeDb = 0; });
+        model::Envelope env;
+        env.target = target;
+        env.mode = model::EnvMode::Latch;
+        env.timebase = model::Timebase::Time;
+        env.points = {{0, 0}};  // the curve plays 0 dB; the static level is silence
+        t.create(env);
+        t.modify<model::Track>(m.a, [](auto& x) { x.volumeDb = model::kSilenceDb; });
+        m.session = t.commit().value();
+    }
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 600 * 256});
+    Engine engine(pool, media, kInCallback);
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256}));
+    REQUIRE(engine.load(m.session));
+    engine.play();
+    backend.run(200);  // past a rate plan's silent lead-in
+    // A clean release: the plan's curve is current, the hold flag must go.
+    CHECK_FALSE(engine.setWriteHolds({target}));
+    backend.run(60);
+    CHECK_FALSE(engine.setWriteHolds({}, false));  // the next load carries it
+    auto generation = engine.planGeneration();
+    REQUIRE(engine.load(rated(m.session, 1.15, 3)));
+    CHECK(engine.planGeneration() == generation);  // the scalar shortcut
+    backend.run(80);
+    // A stale release: written points never compiled, so the load compiles.
+    CHECK_FALSE(engine.setWriteHolds({target}));
+    model::EditTxn t(rated(m.session, 1.15, 4), 5);
+    t.modify<model::Envelope>({model::Kind::Envelope, 1},
+                              [](auto& e) { e.points.push_back({.5, 0}); });
+    const auto written = t.commit().value();
+    REQUIRE(engine.load(written));
+    CHECK(engine.planGeneration() == generation);
+    backend.run(60);
+    CHECK(engine.setWriteHolds({}, false));
+    REQUIRE(engine.load(rated(written, 1.2, 6)));
+    CHECK(engine.planGeneration() > generation);
+    backend.run(120);
+    engine.stop();
+    const auto& L = backend.capture().channels[0];
+    CHECK(peakOf(L, 150 * 256, 200 * 256) > 0.01);  // the curve
+    CHECK(peakOf(L, 204 * 256, 260 * 256) == 0.0);  // held at silence
+    CHECK(peakOf(L, 280 * 256, 340 * 256) > 0.01);  // released by the rate edit
+    CHECK(peakOf(L, 344 * 256, 400 * 256) == 0.0);  // held again
+    CHECK(peakOf(L, 440 * 256, 520 * 256) > 0.01);  // the compiled curve
 }

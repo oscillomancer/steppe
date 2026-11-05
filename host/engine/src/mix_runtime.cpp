@@ -103,24 +103,38 @@ bool Engine::loadMixValues(const model::Session& session, const std::filesystem:
     if (!backend_ || !latest_ || !p || rateSeekTarget_ || rateLoopTarget_ || notificationReload_ ||
         rateDeferred_ || scalarPending_ || dir != p->projectDir)
         return false;
+    // A hold can end in headChanged alongside an unrelated mix edit. Its
+    // stale curve must be compiled before that edit may take the fast path.
+    if (releasesStaleCurve()) return false;
     bool changed = false;
     std::vector<model::EnvTarget> stale = staleCurves_;
     if (!mixOnly(*latest_, session, writeHolds_, changed, stale) || !changed) return false;
     detail::publishMix(*p, session, writeHolds_);
+    holdsPending_ = false;
     staleCurves_ = std::move(stale);
     latest_ = std::make_shared<const model::Session>(session);
     ++mixEdits_;
     return true;
 }
 
+bool Engine::releasesStaleCurve() const {
+    return std::any_of(staleCurves_.begin(), staleCurves_.end(),
+                       [&](const auto& t) { return !contains(writeHolds_, t); });
+}
+
+void Engine::applyPendingHolds() {
+    auto* p = latestPlan_.load(std::memory_order_acquire);
+    if (!holdsPending_ || !p || !latest_ || rateDeferred_) return;
+    detail::publishMix(*p, *latest_, writeHolds_);
+    holdsPending_ = false;
+}
+
 bool Engine::setWriteHolds(std::vector<model::EnvTarget> holds, bool apply) {
     if (holds == writeHolds_) return false;
     writeHolds_ = std::move(holds);
-    const bool covered = std::all_of(staleCurves_.begin(), staleCurves_.end(),
-                                     [&](const auto& t) { return contains(writeHolds_, t); });
-    if (!covered) return true;  // the released curve is stale: compile it
-    auto* p = latestPlan_.load(std::memory_order_acquire);
-    if (apply && p && latest_ && !rateDeferred_) detail::publishMix(*p, *latest_, writeHolds_);
+    holdsPending_ = true;                   // until a plan carries them
+    if (releasesStaleCurve()) return true;  // the released curve is stale: compile it
+    if (apply) applyPendingHolds();
     return false;
 }
 

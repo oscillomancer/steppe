@@ -770,6 +770,9 @@ class Engine {
     bool loadMixValues(const model::Session& session, const std::filesystem::path& projectDir);
     std::vector<model::EnvTarget> writeHolds_, staleCurves_;
     std::uint64_t mixEdits_ = 0;
+    bool holdsPending_ = false;       // writeHolds_ not yet in the newest plan
+    bool releasesStaleCurve() const;  // a load must compile
+    void applyPendingHolds();         // after a shortcut that publishes no plan
     double ratePreparationSeconds_ = 0;
 
     std::atomic<std::int64_t> rtStream_{0};     // (frames played in the epoch)

@@ -638,6 +638,7 @@ class EngineApp : public cmd::Host {
     // a released curve needs compiling.
     std::vector<model::EnvTarget> writeHolds() const;
     void updateWriteHolds();
+    void restartAutomationPass();  // undo, redo and branch switches mid-pass
     std::map<model::Id, AutoWrite> autoWrite_;
     std::optional<std::map<model::Id, AutoWrite>> autoWriteRollback_;
     struct OutputGesture {

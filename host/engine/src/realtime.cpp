@@ -448,8 +448,14 @@ void Engine::stop() {
 
 Status Engine::load(const model::Session& session, const std::filesystem::path& projectDir) {
     if (recording()) SUPPLE_TRY(model::validateRecordingPlayrate(session));
-    if (loadScalarRate(session, projectDir)) return {};
-    if (loadMixValues(session, projectDir)) return {};
+    // Neither shortcut may release a hold whose compiled curve is stale; the
+    // scalar one publishes no mix values, so it carries pending holds after.
+    const bool compile = releasesStaleCurve();
+    if (!compile && loadScalarRate(session, projectDir)) {
+        applyPendingHolds();
+        return {};
+    }
+    if (!compile && loadMixValues(session, projectDir)) return {};
     const auto controlEpoch = epoch_.load(std::memory_order_acquire);
     const auto lead =
         options_.anticipative
@@ -672,6 +678,7 @@ Status Engine::load(const model::Session& session, const std::filesystem::path& 
     }
     // Compiled from the session: no curve is stale; holds carry over (ADR-0061).
     if (!writeHolds_.empty()) detail::publishMix(*plan, session, writeHolds_);
+    holdsPending_ = false;
     staleCurves_.clear();
     latestPlan_.store(plan.get(), std::memory_order_release);
     if (recoverySeek)
