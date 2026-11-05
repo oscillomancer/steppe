@@ -157,19 +157,22 @@ struct VcaControl {
     double volumeDb = 0;
     bool mute = false;
     Automation volume, gate;
+    std::uint32_t slot = 0;  // into MixSlots::vcas
+    bool hold = false;       // a write pass holds the level (ADR-0061)
+    bool curve() const SUPPLE_RT { return volume.active() && !hold; }
 };
 struct VcaControls {
     std::vector<VcaControl> values;
     bool empty() const SUPPLE_RT { return values.empty(); }
     bool automated() const SUPPLE_RT {
         for (const auto& v : values)
-            if (v.volume.active()) return true;
+            if (v.curve()) return true;
         return false;
     }
     void evaluate(std::int64_t at, double& db, bool& muted) SUPPLE_RT {
         bool silence = db <= model::kSilenceDb;
         for (auto& v : values) {
-            const double value = v.volume.active() ? v.volume.at(at) : v.volumeDb;
+            const double value = v.curve() ? v.volume.at(at) : v.volumeDb;
             silence |= value <= model::kSilenceDb;
             db += value;
             muted |= v.gate.active() ? v.gate.at(at) >= .5 : v.mute;
@@ -292,6 +295,7 @@ struct ChunkRing {
 
 struct Edge {
     std::size_t from = 0;     // node index
+    std::size_t to = 0;       // node index of the destination
     std::optional<Id> route;  // empty for parent sends
     // A key route (ADR-0018): the destination chain stage whose sidechain
     // input this feeds (-1: the node's input sum).
@@ -315,6 +319,13 @@ struct Edge {
     VcaControls vcas;
     Automation stripVolume, stripPan, stripMute;  // private copies: source-owned
     bool encode = false, followPan = true, muted = false;
+    // A write pass holds the route's or its source strip's level or pan at
+    // the static value instead of the compiled curve (ADR-0061).
+    bool holdVolume = false, holdPan = false, holdStripVolume = false, holdStripPan = false;
+    bool volumeCurve() const SUPPLE_RT { return autoVolume.active() && !holdVolume; }
+    bool panCurve() const SUPPLE_RT { return autoPan.active() && !holdPan; }
+    bool stripVolumeCurve() const SUPPLE_RT { return stripVolume.active() && !holdStripVolume; }
+    bool stripPanCurve() const SUPPLE_RT { return stripPan.active() && !holdStripPan; }
     ConsoleStage<console9::Channel> encoder;
     FaderControl fader;
     Stereo encoded;
@@ -618,6 +629,9 @@ struct Node {
     std::array<std::uint8_t, 16 * 128> liveHeld{};  // device notes sounding (per channel/key)
     bool live = false;
     Automation autoVolume, autoPan, autoMute;
+    bool holdVolume = false, holdPan = false;  // a write pass holds them (ADR-0061)
+    bool volumeCurve() const SUPPLE_RT { return autoVolume.active() && !holdVolume; }
+    bool panCurve() const SUPPLE_RT { return autoPan.active() && !holdPan; }
     VcaControls vcas;
     std::vector<float> auxPostGain;  // source-owned main-to-aux post-fader gain
     // Metering (engine.md §2.3, P5.3c): the bank slot this strip's post signal
@@ -653,6 +667,25 @@ struct RecordTap {
 struct OutputTap {
     std::size_t node = 0;
     int left = 0, right = 1;
+};
+
+// Mix values a mix-only edit publishes into a running plan (ADR-0060), and
+// the write holds of an automation pass (ADR-0061). The main thread is the
+// only writer: it brackets each publication with an odd `sequence` (a
+// seqlock). Each executor copies what its nodes and edges read at the start
+// of a block (syncMix) when the sequence moved; a copy that raced a
+// publication keeps its old sequence and repeats at the next block.
+struct MixSlots {
+    struct Value {
+        std::atomic<double> volumeDb{0}, pan{0};  // a route's pan resolved against its source
+        std::atomic<bool> holdVolume{false}, holdPan{false};
+    };
+    std::unique_ptr<Value[]> strips;  // per node
+    std::unique_ptr<Value[]> routes;  // per edge (parent sends keep their compiled values)
+    std::unique_ptr<Value[]> vcas;    // per VCA group (pan unused)
+    std::vector<Id> vcaIds;           // main thread: the group of each VCA slot
+    std::atomic<std::uint64_t> sequence{0};
+    std::array<std::uint64_t, 2> seen{};  // per executor class (0: renderer or all, 1: live)
 };
 
 struct Plan {
@@ -707,6 +740,7 @@ struct Plan {
     }
     double rate = 48000.0;
     std::uint32_t smoothFrames = 480;  // 10 ms: ramps at plan swaps (carryMix)
+    std::unique_ptr<MixSlots> mix = std::make_unique<MixSlots>();
     double startSeconds = 0.0;
     std::int64_t outputLatency = 0;
     std::uint32_t block = 512;
@@ -853,6 +887,17 @@ void carryLiveNotes(Plan& from, Plan& to, bool liveOnly) SUPPLE_RT;
 Status configureRateTransition(Plan& p, Plan* previous, PlayrateTimeline& old, std::int64_t device);
 void carryRateSources(Plan& from, Plan& to, int liveClass) SUPPLE_RT;
 void carryMix(Plan& from, Plan& to, int liveClass) SUPPLE_RT;
+
+// A strip's static fader gain (masters: plain gain; channels and busses: the
+// Console 9 fader law) and a send's (route plus, post fader, source level).
+double stripGain(bool master, double db) SUPPLE_RT;
+double sendGain(double routeDb, model::Tap tap, double sourceDb) SUPPLE_RT;
+// Mix-value publication (ADR-0060). `holds`: the volume/pan targets a write
+// pass holds (ADR-0061). Main thread, before or after the plan is published.
+void publishMix(Plan& p, const model::Session& s, std::span<const model::EnvTarget> holds);
+// An executor's copy of the published values into the nodes and edges its
+// class reads (`liveClass` as for wrapTo), at the start of a block.
+void syncMix(Plan& p, int liveClass) SUPPLE_RT;
 // The device output for `k` frames (ADR-0056): every output master's main
 // pair at its channels (taps beyond `width` are skipped), the rest silent.
 // `out[c] + offset` receives channel c. A channel's first tap is copied, so a

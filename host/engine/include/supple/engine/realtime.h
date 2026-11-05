@@ -382,8 +382,20 @@ class Engine {
     void stop();
     bool running() const { return backend_ != nullptr; }
 
-    // Compiles `session` and hands the plan to the audio thread.
+    // Compiles `session` and hands the plan to the audio thread. A session
+    // that differs from the last one only in strip, send and VCA levels and
+    // pans (and in the points of envelopes a write pass holds) updates the
+    // running plan instead, without compiling (ADR-0060).
     Status load(const model::Session& session, const std::filesystem::path& projectDir = {});
+    // Automation writing (ADR-0061): the volume/pan targets a write pass
+    // holds at their static value instead of their envelope. Returns true
+    // when releasing a hold needs a load() of the current session to restore
+    // the envelope's curve; otherwise `apply` publishes the holds to the
+    // running plan (false: a load() follows, and takes them).
+    bool setWriteHolds(std::vector<model::EnvTarget> holds, bool apply = true);
+    const std::vector<model::EnvTarget>& writeHolds() const { return writeHolds_; }
+    // Edits load() applied to the running plan without compiling (ADR-0060).
+    std::uint64_t mixEdits() const { return mixEdits_; }  // main thread
     void play();
     void pause();  // stops the transport; plugin state is reset (no hanging notes)
     void seek(double seconds);
@@ -753,6 +765,11 @@ class Engine {
     std::array<std::uint64_t, 13> readRateClock() const;
     Status prepareRatePlan(detail::Plan& plan);
     bool loadScalarRate(const model::Session& session, const std::filesystem::path& projectDir);
+    // ADR-0060/0061 (main thread): the mix-only edit path of load(), the
+    // write holds, and the held targets whose compiled curves are stale.
+    bool loadMixValues(const model::Session& session, const std::filesystem::path& projectDir);
+    std::vector<model::EnvTarget> writeHolds_, staleCurves_;
+    std::uint64_t mixEdits_ = 0;
     double ratePreparationSeconds_ = 0;
 
     std::atomic<std::int64_t> rtStream_{0};     // (frames played in the epoch)

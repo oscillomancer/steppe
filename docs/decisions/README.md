@@ -75,3 +75,4 @@ current state.
 | [0057](0057-master-recording.md) | Masters record their output and play their own items | Accepted |
 | [0058](0058-strip-and-send-learn.md) | MIDI learn on strips' and sends' own controls | Accepted |
 | [0059](0059-renamed-to-steppe.md) | The DAW is renamed Steppe | Accepted |
+| [0060](0060-mix-value-edits.md) | Mix-value edits update the running plan | Accepted |

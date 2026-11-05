@@ -310,9 +310,7 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
             n.silentFrom = time::samplesAt(recorded->startSeconds, p.rate) - origin;
             n.silentTo = time::samplesAt(recorded->endSeconds, p.rate) - origin;
         }
-        n.staticGain = n.master                          ? dbToGain(t.volumeDb)
-                       : t.volumeDb <= model::kSilenceDb ? 0.0
-                                                         : console9::faderGain(t.volumeDb);
+        n.staticGain = stripGain(n.master, t.volumeDb);
         n.staticPan = console9::nativePan(t.pan);
         n.encoder.init(console9::seedsFor(s.project->seed, (n.id.n << 3) | 1), p.linearConsole);
         n.keyEncoder.init(console9::seedsFor(s.project->seed, (n.id.n << 3) | 1), p.linearConsole);
@@ -518,6 +516,7 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
     });
     for (auto& pe : pending) {
         p.nodes[pe.to].in.push_back(p.edges.size());
+        pe.e.to = pe.to;
         p.edges.push_back(std::move(pe.e));
     }
     // Solo: with any track soloed, a track stays audible only if it is soloed,
@@ -702,6 +701,8 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         VcaControl v;
         v.volumeDb = e.value->vca->volumeDb;
         v.mute = e.value->vca->mute;
+        v.slot = static_cast<std::uint32_t>(p.mix->vcaIds.size());
+        p.mix->vcaIds.push_back(e.id);
         for (const auto& lane : s.envelopes) {
             if (lane.value->target.object != e.id || !lane.value->active) continue;
             const auto points = model::effectivePoints(s, lane.id);
@@ -751,11 +752,7 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         e.stripVolume = source.autoVolume;
         e.stripPan = source.autoPan;
         e.stripMute = source.autoMute;
-        const double db = e.volumeDb <= model::kSilenceDb || (e.tap == model::Tap::PostFader &&
-                                                              source.volumeDb <= model::kSilenceDb)
-                              ? model::kSilenceDb
-                              : e.volumeDb + (e.tap == model::Tap::PostFader ? source.volumeDb : 0);
-        e.staticGain = db <= model::kSilenceDb ? 0.0 : console9::faderGain(db);
+        e.staticGain = sendGain(e.volumeDb, e.tap, source.volumeDb);
         e.staticPan = console9::nativePan(e.pan);
         const auto salt = std::rotl(source.id.n, 32) ^ ((e.route->n << 3) | 3);
         e.encoder.init(console9::seedsFor(s.project->seed, salt), p.linearConsole);
@@ -764,6 +761,21 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         if (edge.stage >= 0 && edge.tap == model::Tap::PostFader)
             p.nodes[edge.from].postKeyed = true;
     SUPPLE_TRY(checkStrips(p));
+    // Mix-value slots (ADR-0060), holding what was compiled until a publication.
+    MixSlots& mix = *p.mix;
+    mix.strips = std::make_unique<MixSlots::Value[]>(p.nodes.size());
+    mix.routes = std::make_unique<MixSlots::Value[]>(p.edges.size());
+    mix.vcas = std::make_unique<MixSlots::Value[]>(mix.vcaIds.size());
+    for (std::size_t i = 0; i < p.nodes.size(); ++i) {
+        mix.strips[i].volumeDb.store(p.nodes[i].volumeDb, std::memory_order_relaxed);
+        mix.strips[i].pan.store(p.nodes[i].pan, std::memory_order_relaxed);
+    }
+    for (std::size_t i = 0; i < p.edges.size(); ++i) {
+        mix.routes[i].volumeDb.store(p.edges[i].volumeDb, std::memory_order_relaxed);
+        mix.routes[i].pan.store(p.edges[i].pan, std::memory_order_relaxed);
+    }
+    for (const auto& [id, v] : controls)
+        mix.vcas[v.slot].volumeDb.store(v.volumeDb, std::memory_order_relaxed);
     return p;
 }
 
@@ -1529,10 +1541,10 @@ void addEdge(Plan& p, Edge& e, double panLawDb, Stereo& into, std::int64_t pos,
             const auto at = pos + i;
             const bool muted = e.autoMute.active() ? e.autoMute.at(at) >= .5 : e.muted;
             const double g =
-                muted ? 0 : dbToGain(e.autoVolume.active() ? e.autoVolume.at(at) : e.volumeDb);
-            const auto [pl, pr] = panGains((e.autoPan.active()                   ? e.autoPan.at(at)
-                                            : e.followPan && e.stripPan.active() ? e.stripPan.at(at)
-                                                                                 : e.pan) /
+                muted ? 0 : dbToGain(e.volumeCurve() ? e.autoVolume.at(at) : e.volumeDb);
+            const auto [pl, pr] = panGains((e.panCurve()                       ? e.autoPan.at(at)
+                                            : e.followPan && e.stripPanCurve() ? e.stripPan.at(at)
+                                                                               : e.pan) /
                                                100,
                                            panLawDb);
             if (e.mono) l = r = .5f * (l + r);
@@ -2496,19 +2508,17 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
     // Fader controls and mute act before the channel encode; masters balance decoded audio.
     for (std::uint32_t i = 0; i < n; ++i) {
         const auto at = pos + i;
-        double db = node.autoVolume.active() ? node.autoVolume.at(at) : node.volumeDb;
-        const double pan = node.autoPan.active() ? node.autoPan.at(at) : node.pan;
+        const bool volumeCurve = node.volumeCurve(), panCurve = node.panCurve();
+        double db = volumeCurve ? node.autoVolume.at(at) : node.volumeDb;
+        const double pan = panCurve ? node.autoPan.at(at) : node.pan;
         bool ownMuted = node.autoMute.active() ? node.autoMute.at(at) >= .5 : node.mute;
         node.vcas.evaluate(at, db, ownMuted);
         if (!node.vcas.empty()) db = std::min(db, model::kFaderCeilingDb);
         const bool muted = node.soloSilenced || ownMuted;
-        const double g = node.autoVolume.active() || !node.vcas.empty()
-                             ? (node.master               ? dbToGain(db)
-                                : db <= model::kSilenceDb ? 0.0
-                                                          : console9::faderGain(db))
-                             : node.staticGain;
-        node.fader.set(g, node.autoPan.active() ? console9::nativePan(pan) : node.staticPan, muted,
-                       node.autoVolume.active() || node.vcas.automated() || node.autoPan.active(),
+        const double g =
+            volumeCurve || !node.vcas.empty() ? stripGain(node.master, db) : node.staticGain;
+        const bool automated = volumeCurve || node.vcas.automated() || panCurve;
+        node.fader.set(g, panCurve ? console9::nativePan(pan) : node.staticPan, muted, automated,
                        p.smoothFrames);
         const double gate = node.fader.gate.next();
         const double gain = node.fader.gain.next() * gate;
@@ -2516,10 +2526,8 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
         if (!node.vcas.empty()) node.auxPostGain[i] = static_cast<float>(gain);
         double keyGain = 0, keyGate = 0, keyPan = nativePan;
         if (node.postKeyed) {
-            node.keyFader.set(
-                g, node.autoPan.active() ? console9::nativePan(pan) : node.staticPan, ownMuted,
-                node.autoVolume.active() || node.vcas.automated() || node.autoPan.active(),
-                p.smoothFrames);
+            node.keyFader.set(g, panCurve ? console9::nativePan(pan) : node.staticPan, ownMuted,
+                              automated, p.smoothFrames);
             keyGate = node.keyFader.gate.next();
             keyGain = node.keyFader.gain.next() * keyGate;
             keyPan = node.keyFader.pan.next();
@@ -2584,7 +2592,9 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
         for (std::uint32_t i = 0; i < n; ++i) {
             const auto at = pos + i;
             const bool post = e.tap == model::Tap::PostFader;
-            double sourceDb = e.stripVolume.active() ? e.stripVolume.at(at) : node.volumeDb;
+            const bool volumeCurve = e.volumeCurve(), panCurve = e.panCurve();
+            const bool stripVolumeCurve = e.stripVolumeCurve(), stripPanCurve = e.stripPanCurve();
+            double sourceDb = stripVolumeCurve ? e.stripVolume.at(at) : node.volumeDb;
             bool sourceMute = e.stripMute.active() ? e.stripMute.at(at) >= .5 : node.mute;
             if (post) {
                 e.vcas.evaluate(at, sourceDb, sourceMute);
@@ -2592,11 +2602,9 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
                 // attenuation cannot recover gain beyond the member's ceiling.
                 if (!e.vcas.empty()) sourceDb = std::min(sourceDb, model::kFaderCeilingDb);
             }
-            const double routeDb = e.autoVolume.active() ? e.autoVolume.at(at) : e.volumeDb;
-            const double sourcePan = e.stripPan.active() ? e.stripPan.at(at) : node.pan;
-            const double pan = e.autoPan.active() ? e.autoPan.at(at)
-                               : e.followPan      ? sourcePan
-                                                  : e.pan;
+            const double routeDb = volumeCurve ? e.autoVolume.at(at) : e.volumeDb;
+            const double sourcePan = stripPanCurve ? e.stripPan.at(at) : node.pan;
+            const double pan = panCurve ? e.autoPan.at(at) : e.followPan ? sourcePan : e.pan;
             const bool muted = node.soloSilenced || (post && sourceMute) ||
                                (e.autoMute.active() ? e.autoMute.at(at) >= .5 : e.muted);
             // -inf plus a send boost remains -inf.
@@ -2604,17 +2612,15 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
                 (routeDb <= model::kSilenceDb || (post && sourceDb <= model::kSilenceDb))
                     ? model::kSilenceDb
                     : routeDb + (post ? sourceDb : 0);
-            const double g =
-                e.autoVolume.active() || (post && (e.stripVolume.active() || !e.vcas.empty()))
-                    ? db <= model::kSilenceDb ? 0.0 : console9::faderGain(db)
-                    : e.staticGain;
-            const double nativePan = e.autoPan.active() || (e.followPan && e.stripPan.active())
-                                         ? console9::nativePan(pan)
-                                         : e.staticPan;
+            const double g = volumeCurve || (post && (stripVolumeCurve || !e.vcas.empty()))
+                                 ? db <= model::kSilenceDb ? 0.0 : console9::faderGain(db)
+                                 : e.staticGain;
+            const double nativePan =
+                panCurve || (e.followPan && stripPanCurve) ? console9::nativePan(pan) : e.staticPan;
             e.fader.set(g, nativePan, muted,
-                        e.autoVolume.active() || e.autoPan.active() ||
-                            (post && (e.stripVolume.active() || e.vcas.automated())) ||
-                            (e.followPan && e.stripPan.active()),
+                        volumeCurve || panCurve ||
+                            (post && (stripVolumeCurve || e.vcas.automated())) ||
+                            (e.followPan && stripPanCurve),
                         p.smoothFrames);
             float l = input.l[i], r = input.r[i];
             if (e.mono) l = r = .5f * (l + r);
@@ -2640,6 +2646,7 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
 bool processBlock(Plan& p, std::int64_t pos, std::uint32_t n, bool playing,
                   const LoopRange* loop) SUPPLE_RT {
     prepareRateWindow(p, pos, n, -1, loop);
+    syncMix(p, -1);
     host::Transport transport = transportAt(p, pos, loop);
     transport.playing = playing;
     for (std::size_t i = 0; i < p.nodes.size(); ++i)
@@ -2669,6 +2676,7 @@ bool processCallbackBlock(LiveWorkers* workers, Plan& p, std::int64_t pos, std::
                           bool playing, bool split, const void* self,
                           const LoopRange* loop) SUPPLE_RT {
     prepareRateWindow(p, pos, n, split ? 1 : -1, loop);
+    syncMix(p, split ? 1 : -1);
     host::Transport transport = transportAt(p, pos, loop, split);
     transport.playing = playing;
     BlockRun run{&p, pos, n, &transport, split ? &p.liveNodes : nullptr, self};
@@ -2683,6 +2691,7 @@ bool processCallbackBlock(LiveWorkers* workers, Plan& p, std::int64_t pos, std::
 bool processRendererBlock(Workers* workers, Plan& p, std::int64_t pos, std::uint32_t n,
                           const void* self, const LoopRange* loop, bool playing) {
     prepareRateWindow(p, pos, n, 0, loop);
+    syncMix(p, 0);
     host::Transport transport = transportAt(p, pos, loop);
     transport.playing = playing;
     if (!workers || workers->helpers() == 0) {
@@ -2791,6 +2800,7 @@ void locateClass(Plan& p, std::int64_t pos, bool live, bool restartConsole) SUPP
 
 bool processBlockOn(Workers& workers, Plan& p, std::int64_t pos, std::uint32_t n) {
     prepareRateWindow(p, pos, n, -1);
+    syncMix(p, -1);
     const host::Transport transport = transportAt(p, pos);
     BlockRun run{&p, pos, n, &transport};
     workers.run(*p.graph, &runNode, &run);
@@ -3082,6 +3092,110 @@ void carryMix(Plan& from, Plan& to, int liveClass) SUPPLE_RT {
             break;
         }
     }
+}
+
+double stripGain(bool master, double db) SUPPLE_RT {
+    return master ? dbToGain(db) : db <= model::kSilenceDb ? 0.0 : console9::faderGain(db);
+}
+
+double sendGain(double routeDb, model::Tap tap, double sourceDb) SUPPLE_RT {
+    const bool post = tap == model::Tap::PostFader;
+    // -inf plus a send boost remains -inf.
+    const double db = routeDb <= model::kSilenceDb || (post && sourceDb <= model::kSilenceDb)
+                          ? model::kSilenceDb
+                          : routeDb + (post ? sourceDb : 0);
+    return db <= model::kSilenceDb ? 0.0 : console9::faderGain(db);
+}
+
+namespace {
+bool held(std::span<const model::EnvTarget> holds, Id object, std::string_view param) {
+    return std::any_of(holds.begin(), holds.end(), [&](const model::EnvTarget& t) {
+        return t.object == object && t.param == param;
+    });
+}
+}  // namespace
+
+void publishMix(Plan& p, const model::Session& s, std::span<const model::EnvTarget> holds) {
+    MixSlots& mix = *p.mix;
+    constexpr auto relaxed = std::memory_order_relaxed;
+    const std::uint64_t sequence = mix.sequence.load(relaxed);
+    mix.sequence.store(sequence + 1, relaxed);  // odd: being written
+    std::atomic_thread_fence(std::memory_order_release);
+    auto store = [&](MixSlots::Value& slot, double db, double pan, bool holdVolume, bool holdPan) {
+        slot.volumeDb.store(db, relaxed);
+        slot.pan.store(pan, relaxed);
+        slot.holdVolume.store(holdVolume, relaxed);
+        slot.holdPan.store(holdPan, relaxed);
+    };
+    for (std::size_t i = 0; i < p.nodes.size(); ++i) {
+        const Id id = p.nodes[i].id;
+        const model::Track* t = s.tracks.find(id);
+        if (!t) continue;
+        store(mix.strips[i], t->volumeDb, t->pan, held(holds, id, "volume"),
+              held(holds, id, "pan"));
+    }
+    for (std::size_t i = 0; i < p.edges.size(); ++i) {
+        const Edge& e = p.edges[i];
+        const model::Route* r = e.route ? s.routes.find(*e.route) : nullptr;
+        const model::Track* source = r && r->from.track ? s.tracks.find(*r->from.track) : nullptr;
+        if (!r || !source) continue;  // a parent send: nothing to publish
+        store(mix.routes[i], r->volumeDb, r->pan.resolve(source->pan),
+              held(holds, *e.route, "volume"), held(holds, *e.route, "pan"));
+    }
+    for (std::size_t i = 0; i < mix.vcaIds.size(); ++i) {
+        const model::TrackGroup* g = s.groups.find(mix.vcaIds[i]);
+        if (!g || !g->vca) continue;
+        store(mix.vcas[i], g->vca->volumeDb, 0, held(holds, mix.vcaIds[i], "volume"), false);
+    }
+    mix.sequence.store(sequence + 2, std::memory_order_release);
+}
+
+void syncMix(Plan& p, int liveClass) SUPPLE_RT {
+    MixSlots& mix = *p.mix;
+    std::uint64_t& seen = mix.seen[liveClass == 1 ? 1 : 0];
+    const std::uint64_t sequence = mix.sequence.load(std::memory_order_acquire);
+    if (sequence == seen || (sequence & 1)) return;
+    constexpr auto relaxed = std::memory_order_relaxed;
+    auto ours = [&](const Node& n) { return liveClass < 0 || n.live == (liveClass == 1); };
+    auto syncVcas = [&](VcaControls& vcas) {
+        for (VcaControl& v : vcas.values) {
+            v.volumeDb = mix.vcas[v.slot].volumeDb.load(relaxed);
+            v.hold = mix.vcas[v.slot].holdVolume.load(relaxed);
+        }
+    };
+    for (std::size_t i = 0; i < p.nodes.size(); ++i) {
+        Node& n = p.nodes[i];
+        if (!ours(n)) continue;
+        const MixSlots::Value& slot = mix.strips[i];
+        n.volumeDb = slot.volumeDb.load(relaxed);
+        n.pan = slot.pan.load(relaxed);
+        n.holdVolume = slot.holdVolume.load(relaxed);
+        n.holdPan = slot.holdPan.load(relaxed);
+        n.staticGain = stripGain(n.master, n.volumeDb);
+        n.staticPan = console9::nativePan(n.pan);
+        syncVcas(n.vcas);
+    }
+    // An edge belongs to whoever reads it: a key route to its destination
+    // (addEdge), any other to its source (the send's encode). The source's
+    // level comes from its slot: the source node can belong to the other
+    // executor.
+    for (std::size_t i = 0; i < p.edges.size(); ++i) {
+        Edge& e = p.edges[i];
+        if (!e.route || !ours(p.nodes[e.stage >= 0 ? e.to : e.from])) continue;
+        const MixSlots::Value& slot = mix.routes[i];
+        const MixSlots::Value& source = mix.strips[e.from];
+        e.volumeDb = slot.volumeDb.load(relaxed);
+        e.pan = slot.pan.load(relaxed);
+        e.holdVolume = slot.holdVolume.load(relaxed);
+        e.holdPan = slot.holdPan.load(relaxed);
+        e.holdStripVolume = source.holdVolume.load(relaxed);
+        e.holdStripPan = source.holdPan.load(relaxed);
+        e.staticGain = sendGain(e.volumeDb, e.tap, source.volumeDb.load(relaxed));
+        e.staticPan = console9::nativePan(e.pan);
+        syncVcas(e.vcas);
+    }
+    std::atomic_thread_fence(std::memory_order_acquire);
+    if (mix.sequence.load(relaxed) == sequence) seen = sequence;
 }
 
 }  // namespace supple::engine::detail
