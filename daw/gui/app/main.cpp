@@ -1165,6 +1165,12 @@ int main(int argc, char** argv) {
                 return 1;
             }
         }
+        // A control's drag reaches the model once per frame (Root::handle):
+        // its latest position goes now, as input, when a frame is due.
+        for (ui::Root* r : {&root, fxPanel.isOpen() ? &fxPanel.root() : nullptr,
+                            routingPanel.isOpen() ? &routingPanel.root() : nullptr})
+            if (r && r->motionPending() && r->frameReady(Clock::now()))
+                timed([&] { preserveUi([&] { r->flushMotion(); }); });
         if (inputChanged) next = service();
         if (o.script && warm) {
             views::ArrangeView& arrange = *shell.arrange();

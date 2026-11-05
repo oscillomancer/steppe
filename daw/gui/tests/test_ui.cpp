@@ -1216,3 +1216,87 @@ TEST_CASE("form controls: dropdown, editable dropdown, checkbox, fold section, c
     root.click("list.item.0");
     CHECK(checked == std::vector<std::string>{"tr_1"});
 }
+
+TEST_CASE("a control's drag reaches its callback once per frame, the latest position first") {
+    REQUIRE_GL();
+    Root root(*fixture().window, fixture().fonts, Theme::dark());
+    auto content = std::make_unique<Node>("root");
+    content->layout.dir = Layout::Dir::Row;
+    content->layout.padding = Insets::all(8);
+    auto& fader = content->emplace<Fader>("fader");
+    int plainMoves = 0;
+    struct Probe : Node {
+        int* moves;
+        Probe(int* m) : Node("probe"), moves(m) { interactive = true; }
+        bool onPointer(const PointerEvent& e) override {
+            if (e.type == PointerEvent::Type::Down) {
+                if (Root* r = root()) r->capture(this);
+                return true;
+            }
+            if (e.type == PointerEvent::Type::Move) ++*moves;
+            return true;
+        }
+    };
+    auto& probe = content->emplace<Probe>(&plainMoves);
+    probe.layout.width = SizeRule::fixed(100);
+    probe.layout.height = SizeRule::fixed(40);
+    std::vector<std::pair<double, Gesture>> calls;
+    fader.onChange = [&](double db, Gesture g) { calls.emplace_back(db, g); };
+    root.setContent(std::move(content));
+    root.frame(false);
+    const float scale = fixture().window->inputScale();
+    auto sdl = [&](SDL_EventType type, Point p) {
+        SDL_Event e{};
+        e.type = type;
+        if (type == SDL_EVENT_MOUSE_MOTION) {
+            e.motion.x = p.x * scale;
+            e.motion.y = p.y * scale;
+        } else {
+            e.button.button = SDL_BUTTON_LEFT;
+            e.button.clicks = 1;
+            e.button.x = p.x * scale;
+            e.button.y = p.y * scale;
+        }
+        root.handle(e);
+    };
+    const Rect b = fader.bounds();
+    const Point cap{b.x + b.w / 2,
+                    b.bottom() - 8 - static_cast<float>(faderPosition(0)) * (b.h - 16)};
+    sdl(SDL_EVENT_MOUSE_BUTTON_DOWN, cap);
+    REQUIRE(calls.size() == 1);
+    CHECK(calls.back().second == Gesture::Begin);
+    for (float dy : {10.f, 20.f, 30.f}) sdl(SDL_EVENT_MOUSE_MOTION, {cap.x, cap.y - dy});
+    CHECK(calls.size() == 1);  // held for the frame
+    CHECK(root.motionPending());
+    CHECK(root.wantsFrame());
+    root.frame(false);
+    REQUIRE(calls.size() == 2);
+    CHECK(calls.back().second == Gesture::Move);
+    const double top = calls.back().first;
+    CHECK(top > 0);
+    // A release follows the drag's latest position.
+    sdl(SDL_EVENT_MOUSE_MOTION, {cap.x, cap.y - 35});
+    sdl(SDL_EVENT_MOUSE_MOTION, {cap.x, cap.y - 40});
+    sdl(SDL_EVENT_MOUSE_BUTTON_UP, {cap.x, cap.y - 40});
+    REQUIRE(calls.size() == 4);
+    CHECK(calls[2].second == Gesture::Move);
+    CHECK(calls[2].first > top);
+    CHECK(calls[3].second == Gesture::End);
+    CHECK_FALSE(root.motionPending());
+    // A capture that does not coalesce sees every motion.
+    const Rect pb = probe.bounds();
+    REQUIRE(pb.h > 10);
+    sdl(SDL_EVENT_MOUSE_BUTTON_DOWN, {pb.x + 5, pb.y + 5});
+    for (float dx : {1.f, 2.f, 3.f}) sdl(SDL_EVENT_MOUSE_MOTION, {pb.x + 5 + dx, pb.y + 5});
+    CHECK(plainMoves == 3);
+    sdl(SDL_EVENT_MOUSE_BUTTON_UP, {pb.x + 8, pb.y + 5});
+    // A control hidden mid-drag takes no more of it.
+    sdl(SDL_EVENT_MOUSE_BUTTON_DOWN, cap);
+    const auto before = calls.size();
+    sdl(SDL_EVENT_MOUSE_MOTION, {cap.x, cap.y - 50});
+    root.releaseWithin(&fader);
+    CHECK_FALSE(root.motionPending());
+    root.frame(false);
+    REQUIRE(calls.size() == before + 1);
+    CHECK(calls.back().second == Gesture::End);
+}

@@ -146,6 +146,10 @@ class Node {
     }
     virtual void onFocus(bool focused) { (void)focused; }
     virtual void onHover(bool hovered) { (void)hovered; }
+    // A continuous control whose drag only needs the latest pointer position:
+    // while it holds the capture, window motion reaches it once per frame
+    // (Root::handle) rather than once per motion event.
+    virtual bool coalescesDrag() const { return false; }
     bool hovered() const;
     bool focused() const;
     bool visibleInTree() const;

@@ -160,7 +160,8 @@ instructions are in `docs/guides/installing.md`.
   deadlines (ADR-0030), including MIDI controls, plug-in subscriptions,
   render-ahead output consumption, jobs, restart and autosave; smooth plan swaps (10 ms ramps);
   strip, send and VCA level and pan edits applied to the running plan without
-  compiling, also once playrate scheduling has started (ADR-0060);
+  compiling, also once playrate scheduling has started (ADR-0060), and control
+  drags sent once per frame rather than per pointer motion;
   every node, plug-ins and bridged plug-ins included, runs with FTZ/DAZ in
   every executor, and owned audio threads prefault their stacks (ADR-0025).
 - **Strips and routing** (ADR-0019 to ADR-0022): typed channel, buss and
