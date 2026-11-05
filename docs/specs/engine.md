@@ -16,9 +16,11 @@ processing, flexible isolation).
 
 ## 1. Compilation: Session version → RenderPlan
 
-The model thread (or a worker it delegates to) compiles a version into an
-immutable `RenderPlan`. Plans are never edited; a new version means a new
-plan (built incrementally from the previous one where possible, §1.6).
+The model thread (or a worker it delegates to) compiles a version into a
+`RenderPlan` whose graph and setup are immutable: a structural change means a
+new plan (built incrementally from the previous one where possible, §1.6).
+Its DSP state belongs to the executors, and strip, send and VCA levels and
+pans arrive through its mix slots (ADR-0060, §1.6) without a new plan.
 
 ### 1.1 Nodes
 
@@ -191,8 +193,9 @@ at compile time). Per block, each automated target evaluates its segments:
   including the playrate scalar's shortcut, and a released stale curve always
   compiles. Holds exist only while the transport plays; undo, redo and a
   branch switch mid-pass start the pass again at that point, so the
-  abandoned writes neither stay held nor get a latch tail at stop. Mute, plug-in parameters and the
-  master playrate are not held: their writes compile as before.
+  abandoned writes neither stay held nor get a latch tail at stop. A halt
+  ends the pass that was playing. Mute, plug-in parameters and the master
+  playrate are not held: their writes compile as before.
 
 ### 1.5 Transport and time
 
@@ -249,7 +252,10 @@ come from the same functions compile uses, so the plan then holds exactly
 what compiling the session would, and the fader ramps carry the change over
 the smoothing time as a plan swap does (an edit while playing is
 bit-identical to a compiled reload at the same block). A copy that raced a
-publication keeps its old sequence and repeats at the next block. The edit
+publication keeps its old sequence and repeats at the next block: for that
+block the executor can play a mixture of the old and new values (each a
+whole atomic value, ramped as usual), and the plan matches the compiled
+session from the first block whose copy completes. The edit
 publishes no plan, prepares no rate transition and changes no epoch, also
 after rate scheduling has started (§ Master playrate); a plan still queued
 for adoption takes the values when it is adopted.
