@@ -171,6 +171,15 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   for fine adjustment; double-click resets to the configured default. Model
   readback is ignored while a knob is being dragged. Every drag reports
   Begin/Move/End and each one-shot change reports Set.
+  Faders, pan controls, sliders and knobs coalesce their drags (ADR-0060):
+  while one holds the pointer capture, window motion events are kept, the
+  latest only, and reach it once per frame, so a drag's edits go out at the
+  frame rate rather than the pointer's event rate (125–1000 a second). Any
+  other input, such as the release, first delivers the kept motion; hiding the
+  control mid-drag drops it. The main loop delivers it as input just before a
+  frame, then services the model. `Root::pointer` (tests, scripts) delivers
+  every motion at once, as does a capture that does not coalesce (item and
+  envelope drags, drawing tools).
 - **Damage.** Each window keeps a dirty-rect list; nodes invalidate
   themselves; a frame redraws only damaged regions (scissored). Removed nodes
   survive the current input dispatch; focus, hover and capture are resolved

@@ -79,6 +79,7 @@ Root::~Root() {
 
 void Root::setContent(std::unique_ptr<Node> content) {
     focused_ = hovered_ = captured_ = nullptr;
+    pendingMotion_.reset();
     if (content_) {
         content_->attach(nullptr);
         retire(std::move(content_));
@@ -106,6 +107,7 @@ void Root::releaseWithin(const Node* subtree) {
         return false;
     };
     if (within(captured_)) {
+        pendingMotion_.reset();  // a hidden control takes no more of its drag
         Node* target = std::exchange(captured_, nullptr);
         // Cancel reaches disabled controls too: their gesture still needs ending.
         for (Node* n = target; n && attached(n);) {
@@ -263,6 +265,7 @@ void Root::paintGl(Node& node, const Rect& clip) {
 }
 
 void Root::frame(bool present) {
+    flushMotion();  // the drag's latest position, painted in this frame
     Canvas canvas(window_.vg(), fonts_, theme_);
     NVGcontext* vg = window_.vg();
     window_.forceCurrent();  // a plugin editor may have switched contexts since the last frame
@@ -367,7 +370,14 @@ void Root::focus(Node* node) {
 void Root::forget(Node* node) {
     if (focused_ == node) focused_ = nullptr;
     if (hovered_ == node) hovered_ = nullptr;
-    if (captured_ == node) captured_ = nullptr;
+    if (captured_ == node) {
+        captured_ = nullptr;
+        pendingMotion_.reset();
+    }
+}
+
+void Root::flushMotion() {
+    if (auto motion = std::exchange(pendingMotion_, std::nullopt)) pointer(*motion);
 }
 
 void Root::pointer(PointerEvent e) {
@@ -479,14 +489,26 @@ void Root::handle(const SDL_Event& e) {
     // Input and window events of another window (a plug-in editor) are not
     // ours: their coordinates are that window's.
     if (SDL_Window* target = SDL_GetWindowFromEvent(&e); target && target != window_.sdl()) return;
+    // Other input comes after the drag's latest position (a release ends the
+    // drag where it was); wake-ups and other user events leave it pending.
+    if (e.type != SDL_EVENT_MOUSE_MOTION && e.type < SDL_EVENT_USER) flushMotion();
     switch (e.type) {
-        case SDL_EVENT_MOUSE_MOTION:
-            pointer({PointerEvent::Type::Move,
-                     {e.motion.x / window_.inputScale(), e.motion.y / window_.inputScale()},
-                     0,
-                     1,
-                     modsFrom(SDL_GetModState())});
+        case SDL_EVENT_MOUSE_MOTION: {
+            const PointerEvent motion{
+                PointerEvent::Type::Move,
+                {e.motion.x / window_.inputScale(), e.motion.y / window_.inputScale()},
+                0,
+                1,
+                modsFrom(SDL_GetModState())};
+            if (attached(captured_) && captured_->coalescesDrag()) {
+                pendingMotion_ = motion;  // one edit per frame, not per motion event
+                animate_ = true;
+                break;
+            }
+            flushMotion();
+            pointer(motion);
             break;
+        }
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
         case SDL_EVENT_MOUSE_BUTTON_UP:
             pointer({e.type == SDL_EVENT_MOUSE_BUTTON_DOWN ? PointerEvent::Type::Down

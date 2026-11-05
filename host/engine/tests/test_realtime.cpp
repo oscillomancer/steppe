@@ -4527,8 +4527,11 @@ TEST_CASE("live multiprocessing: delayed departure protects plans during transpo
             engine.seek(0.125);
             engine.setLoop(0.125, 0.129, true);  // non-block-aligned wrap
             model::EditTxn edit(session, 3);
-            edit.modify<model::Track>(Id{model::Kind::Track, 1},
-                                      [](model::Track& t) { t.volumeDb = -21; });
+            // A rename makes the level edit compile (ADR-0060): a plan reload.
+            edit.modify<model::Track>(Id{model::Kind::Track, 1}, [](model::Track& t) {
+                t.volumeDb = -21;
+                t.name = "reloaded";
+            });
             REQUIRE(engine.load(edit.commit().value()));
             engine.service();
             if (delayed) {

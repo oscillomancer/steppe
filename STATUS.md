@@ -159,6 +159,9 @@ instructions are in `docs/guides/installing.md`.
   (ADR-0028); headless main-thread service driven by notifications and
   deadlines (ADR-0030), including MIDI controls, plug-in subscriptions,
   render-ahead output consumption, jobs, restart and autosave; smooth plan swaps (10 ms ramps);
+  strip, send and VCA level and pan edits applied to the running plan without
+  compiling, also once playrate scheduling has started (ADR-0060), and control
+  drags sent once per frame rather than per pointer motion;
   every node, plug-ins and bridged plug-ins included, runs with FTZ/DAZ in
   every executor, and owned audio threads prefault their stacks (ADR-0025).
 - **Strips and routing** (ADR-0019 to ADR-0022): typed channel, buss and
@@ -204,7 +207,9 @@ instructions are in `docs/guides/installing.md`.
   tempo and meter maps, the item clipboard, a piano roll with velocity and
   CC lanes, an event list and a notation panel.
 - **Automation**: envelopes on strip, route and plugin parameters,
-  automation items with pools, take envelopes, touch/latch/write recording;
+  automation items with pools, take envelopes, touch/latch/write recording
+  (a written level or pan is heard as the hand moves it, held over its curve
+  until the pass ends, or for touch 500 ms after the last move: ADR-0061);
   automation points selected (click, Ctrl+click, or the arrange marquee,
   which takes items and points on any track at once) and moved, deleted,
   copied, pasted and reshaped together, across lanes, from the lane's menu or
@@ -721,6 +726,13 @@ Engine and hosting:
   latency preferences report unsupported on other platforms. Windows MCP is
   intended for piped/file input; cancelling an interactive console read can
   await a keypress during shutdown.
+- Only level and pan edits skip compiling (ADR-0060). Mute, solo, routing and
+  plug-in changes compile the session, and with playrate scheduling started
+  each also prepares a rate plan, which costs several milliseconds per edit in
+  a session of a few dozen tracks.
+- A touch-mode write hold ends 500 ms after the last move, not when the
+  control is let go (ADR-0061): nothing reports a strip control's release to
+  the engine, so a fader held still longer than that hears its old curve.
 - REAPER's default anticipative FX sustains about 10 % more tracks than
   Steppe with anticipation on B1's session (82 to 83 against 75, B2). The
   anticipative renderer is the limit: it ran at 78 % of real time at 64
@@ -840,8 +852,8 @@ Session and editing:
   knob ranges are UI state and never clamp saved values. Seeded stretch phase
   variation uses a portable integer RNG, so it matches across standard
   libraries. Non-unity audio/MIDI
-  recording is refused, including queued transitions. Writing retains coarse
-  strip semantics. Compatible scalar-only live edits publish bounded clock
+  recording is refused, including queued transitions. Writing the playrate
+  holds nothing over its curve (strip levels and pans do, ADR-0061). Compatible scalar-only live edits publish bounded clock
   controls, retain source/converter state and glide over the time between
   moves through a 150 ms low-pass (one smooth pitch glide for a mouse drag or
   MIDI knob, at the cost of some extra lag) without graph

@@ -65,7 +65,11 @@ class Root {
     void setTheme(Theme theme);
 
     // --- window integration
+    // Motion while a coalescesDrag() control holds the capture is kept, the
+    // latest only, until flushMotion(): by frame(), or before any other input.
     void handle(const SDL_Event& e);
+    bool motionPending() const { return pendingMotion_.has_value(); }
+    void flushMotion();
     bool wantsFrame() const;
     // Lays out if needed, repaints damage into the cache, blits it, paints the
     // overlays. present=false composes a snapshot for readBack().
@@ -153,6 +157,7 @@ class Root {
     Node* hovered_ = nullptr;
     std::optional<Point> lastPointer_;
     Node* captured_ = nullptr;
+    std::optional<PointerEvent> pendingMotion_;  // for captured_ (handle)
     std::vector<Rect> damage_;
     bool layoutPending_ = true, animate_ = false;
     std::optional<std::chrono::steady_clock::time_point> presented_;

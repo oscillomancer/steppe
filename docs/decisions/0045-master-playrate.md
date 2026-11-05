@@ -5,6 +5,10 @@ precede DSP integration. Until that integration, playback and rendering remain
 at 1x even when the project stores another rate. No GUI is introduced by the
 model/command stages.
 
+**Automation amendment, 2026-11-05:** [ADR-0061](0061-automation-write-holds.md)
+holds strip, send and VCA levels and pans while they are written; the
+playrate keeps the coarse writing of decision 7.
+
 Amends the transport, automation and recording contracts in ADR-0012,
 ADR-0014 and ADR-0015. Preserves ADR-0019's Console 9 staging and ADR-0024's
 separate live executor. Contracts: `specs/engine.md`, `specs/session-model.md`.

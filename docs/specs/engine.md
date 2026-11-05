@@ -16,9 +16,11 @@ processing, flexible isolation).
 
 ## 1. Compilation: Session version → RenderPlan
 
-The model thread (or a worker it delegates to) compiles a version into an
-immutable `RenderPlan`. Plans are never edited; a new version means a new
-plan (built incrementally from the previous one where possible, §1.6).
+The model thread (or a worker it delegates to) compiles a version into a
+`RenderPlan` whose graph and setup are immutable: a structural change means a
+new plan (built incrementally from the previous one where possible, §1.6).
+Its DSP state belongs to the executors, and strip, send and VCA levels and
+pans arrive through its mix slots (ADR-0060, §1.6) without a new plan.
 
 ### 1.1 Nodes
 
@@ -179,6 +181,21 @@ at compile time). Per block, each automated target evaluates its segments:
   stored domain (seconds for `time`, tempo-map beats otherwise). Plugin-output
   recording follows the same conversion, and replay carries time-envelope
   points as explicit seconds through `env.points.set`.
+- write holds (ADR-0061): once a pass has written a strip's or send's
+  volume or pan, or a VCA's volume, the engine plays that target's static
+  value (the hand) instead of its compiled curve until the hold ends, and
+  the points the pass keeps writing reach the model without compiling
+  (§1.6). Latch, latch_preview and write hold until the pass ends at pause
+  or stop; touch until 500 ms after its last write (`EngineApp`'s service
+  clock: nothing reports a strip control's release). Ending a hold compiles
+  the session, so the written curve plays from there; a held value ramps over
+  the smoothing time like a static one. Any load carries hold changes,
+  including the playrate scalar's shortcut, and a released stale curve always
+  compiles. Holds exist only while the transport plays; undo, redo and a
+  branch switch mid-pass start the pass again at that point, so the
+  abandoned writes neither stay held nor get a latch tail at stop. A halt
+  ends the pass that was playing. Mute, plug-in parameters and the master
+  playrate are not held: their writes compile as before.
 
 ### 1.5 Transport and time
 
@@ -214,6 +231,34 @@ the RT thread picks up the new pointer at the next cycle start and
 acknowledges via an epoch counter; the model thread destroys the old plan
 (and deactivates removed plugins) only after the acknowledgement. Nothing on
 the RT thread frees memory.
+
+**Mix-value edits (ADR-0060).** A session that differs from the last one
+`Engine::load` took only in strip `volume_db`/`pan`, send `volume_db`/`pan`
+and VCA `volume_db` (and in the points of envelopes a write pass holds,
+§1.4) is not compiled. The comparison copies each changed track, route, group
+and envelope with those fields taken from the new one and compares the whole
+object, so any other change (mute, solo, a name, an FX or a route's tap)
+compiles. A send whose level moves to or from exactly 0 dB, or whose pan
+starts or stops following its source, compiles: that decides whether it is
+encoded. An unchanged session is a maintenance reload and compiles too. A
+qualifying edit writes the values into the newest plan's mix slots (per
+node, per route edge, per VCA; parent sends carry no values) between an odd
+and an even sequence number. Each executor, at the start of a block
+(`syncMix`, `SUPPLE_RT`), copies the slots its nodes and edges read when the
+sequence moved: a node's own values; an edge's for its encoder (source side)
+or, for a key route, its destination; the source level a send's static gain
+needs comes from the slot, not the other executor's node. The static gains
+come from the same functions compile uses, so the plan then holds exactly
+what compiling the session would, and the fader ramps carry the change over
+the smoothing time as a plan swap does (an edit while playing is
+bit-identical to a compiled reload at the same block). A copy that raced a
+publication keeps its old sequence and repeats at the next block: for that
+block the executor can play a mixture of the old and new values (each a
+whole atomic value, ramped as usual), and the plan matches the compiled
+session from the first block whose copy completes. The edit
+publishes no plan, prepares no rate transition and changes no epoch, also
+after rate scheduling has started (§ Master playrate); a plan still queued
+for adoption takes the values when it is adopted.
 
 ## 2. Real-time execution
 
@@ -1889,6 +1934,8 @@ reloads retain graph compilation. A rate-enabled plan glides through exactly
 1.0 like any value (a MIDI knob's centre lands there), on the converters it was
 compiled with; once rate scheduling has started the engine keeps rate-enabled
 plans until it stops, and tape reads at exactly 1.0 are the original samples.
+Each structural edit then prepares a rate plan; level and pan edits do not
+(ADR-0060, §1.6).
 Two cases prepare a plan instead: leaving the unity bypass (no rate plan yet),
 and leaving 1.0 on a preserve-pitch plan compiled at 1.0, whose sources read as
 tape and need the stretch converter. When that prepared transition only changes

@@ -432,6 +432,7 @@ void Engine::stop() {
     rateSafeStream_.store(0);
     rateSafeEpoch_.store(0);
     rateScheduling_.store(false);
+    staleCurves_.clear();  // no plan left to be stale
     effectivePlayrate_.store(1);
     rtTimeline_.store(0);
     timelineEpoch_.store(0);
@@ -447,7 +448,14 @@ void Engine::stop() {
 
 Status Engine::load(const model::Session& session, const std::filesystem::path& projectDir) {
     if (recording()) SUPPLE_TRY(model::validateRecordingPlayrate(session));
-    if (loadScalarRate(session, projectDir)) return {};
+    // Neither shortcut may release a hold whose compiled curve is stale; the
+    // scalar one publishes no mix values, so it carries pending holds after.
+    const bool compile = releasesStaleCurve();
+    if (!compile && loadScalarRate(session, projectDir)) {
+        applyPendingHolds();
+        return {};
+    }
+    if (!compile && loadMixValues(session, projectDir)) return {};
     const auto controlEpoch = epoch_.load(std::memory_order_acquire);
     const auto lead =
         options_.anticipative
@@ -668,6 +676,10 @@ Status Engine::load(const model::Session& session, const std::filesystem::path& 
             planHandoffs_.push(plan.get());
         ratePreparedTail_ = plan.get();
     }
+    // Compiled from the session: no curve is stale; holds carry over (ADR-0061).
+    if (!writeHolds_.empty()) detail::publishMix(*plan, session, writeHolds_);
+    holdsPending_ = false;
+    staleCurves_.clear();
     latestPlan_.store(plan.get(), std::memory_order_release);
     if (recoverySeek)
         writeTransport([&] {

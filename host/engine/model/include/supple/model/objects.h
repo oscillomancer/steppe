@@ -70,6 +70,7 @@ enum class RecordMode : std::uint8_t { Input, Output, MidiOverdub, MidiReplace }
 
 struct ParentSend {
     bool enabled = true;
+    bool operator==(const ParentSend&) const = default;
 };
 
 struct RecordSettings {
@@ -77,6 +78,7 @@ struct RecordSettings {
     std::optional<Id> input;  // a route from hw_input/midi_input
     Monitor monitor = Monitor::Off;
     RecordMode mode = RecordMode::Input;
+    bool operator==(const RecordSettings&) const = default;
 };
 
 enum class StripType : std::uint8_t { Channel, Buss, Master };
@@ -99,6 +101,7 @@ struct TrackFreeze {
     Id source;
     std::int64_t contentFrames = 0, tailFrames = 0, latencyFrames = 0;
     std::string dependencyHash;
+    bool operator==(const TrackFreeze&) const = default;
 };
 
 // MIDI learn (ADR-0027): a controller message that drives a parameter. The
@@ -164,6 +167,7 @@ struct Track {
     std::optional<TrackFreeze> freeze;
     int folderCompact = 0;            // 0 normal, 1 small, 2 collapsed
     std::vector<ControlLearn> learn;  // MIDI learn, one per control (ADR-0058)
+    bool operator==(const Track&) const = default;
 };
 
 // A master's device output channels (1-based), with the default resolved.
@@ -180,6 +184,7 @@ struct Vca {
     bool mute = false, solo = false;
     std::vector<Id> followers;
     std::vector<ControlLearn> learn;  // MIDI learn, one per control (ADR-0058)
+    bool operator==(const Vca&) const = default;
 };
 struct TrackGroup {
     std::string name, color;
@@ -187,6 +192,7 @@ struct TrackGroup {
     std::vector<Id> members;
     std::vector<std::string> links{"volume", "mute", "solo"};
     std::optional<Vca> vca;
+    bool operator==(const TrackGroup&) const = default;
 };
 
 enum class FadeShape : std::uint8_t { Linear, Slow, Fast, SlowFast, FastSlow, Cos, Exp };
@@ -319,15 +325,18 @@ struct RouteEnd {
     std::optional<Id> fx;  // to only: a plug-in's sidechain input (key), ADR-0018
     std::optional<std::vector<int>> hwChannels;  // hw_input (from) / hw_output (to), 1-based
     std::optional<std::string> midiDevice;       // midi_input (from only)
+    bool operator==(const RouteEnd&) const = default;
 };
 
 struct ChannelMap {
     std::vector<int> from, to;  // 1-based; empty = identity on the first N
+    bool operator==(const ChannelMap&) const = default;
 };
 
 struct MidiRouting {
     int fromChannel = 0;  // 0 = all
     int toChannel = 0;    // 0 = original
+    bool operator==(const MidiRouting&) const = default;
 };
 
 // A send follows its source strip's pan unless explicitly positioned.
@@ -336,6 +345,7 @@ struct RoutePan {
     RoutePan() = default;
     RoutePan(double value) : percent(value) {}
     double resolve(double stripPan) const { return percent.value_or(stripPan); }
+    bool operator==(const RoutePan&) const = default;
 };
 
 struct Route {
@@ -347,6 +357,7 @@ struct Route {
     ChannelMap channels;
     std::optional<MidiRouting> midi;  // empty = audio only
     std::vector<ControlLearn> learn;  // MIDI learn, one per control (ADR-0058)
+    bool operator==(const Route&) const = default;
 };
 
 enum class EnvMode : std::uint8_t { Trim, Read, Touch, Latch, LatchPreview, Write };
@@ -356,11 +367,13 @@ struct EnvPoint {
     double pos = 0.0, value = 0.0;
     PointShape shape = PointShape::Linear;
     double tension = 0.0;
+    bool operator==(const EnvPoint&) const = default;
 };
 
 struct EnvTarget {
     Id object = kMaster;  // tr_*, sd_*, fx_*, tk_* or a VCA gr_*
     std::string param;    // volume|pan|mute, pitch for takes, playrate on tr_0, or plugin key/id
+    bool operator==(const EnvTarget&) const = default;
 };
 
 struct Envelope {
@@ -369,6 +382,7 @@ struct Envelope {
     bool active = true, armed = false, visible = true;
     Timebase timebase = Timebase::Beats;
     std::vector<EnvPoint> points;  // sorted by pos
+    bool operator==(const Envelope&) const = default;
 };
 
 // An automation item (gap log #28): a block of envelope on its lane that

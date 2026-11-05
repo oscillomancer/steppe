@@ -40,6 +40,7 @@ class Fader : public Node {
     bool onPointer(const PointerEvent& e) override;
     bool onKey(const KeyEvent& e) override;
     std::string valueText() const override;
+    bool coalescesDrag() const override { return true; }
 
   private:
     Rect track() const;
@@ -74,6 +75,7 @@ class Slider : public Node {
     bool onPointer(const PointerEvent& e) override;
     bool onKey(const KeyEvent& e) override;
     std::string valueText() const override;
+    bool coalescesDrag() const override { return true; }
 
   protected:
     virtual double dragDelta(Point from, Point to) const;
@@ -115,6 +117,7 @@ class PanControl : public Node {
     bool onPointer(const PointerEvent& e) override;
     bool onKey(const KeyEvent& e) override;
     std::string valueText() const override;
+    bool coalescesDrag() const override { return true; }
 
   private:
     void change(double pan, Gesture g);

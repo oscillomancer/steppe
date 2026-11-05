@@ -26,7 +26,7 @@ decisions behind it are in `docs/decisions/` (ADRs) and the contracts in
         │ immutable versioned tree, stable    │     │ (core-analysis), file I/O, │
         │ IDs, branches, per-branch undo      │     │ plugin scanning, optimizer │
         └──────────────┬─────────────────────┘     └───────────────────────────┘
-                       │ compile version → RenderPlan (immutable)
+                       │ compile version → RenderPlan (immutable graph)
                        │ wait-free pointer swap
                        ▼
         ┌────────────────────────────────────────────────────────────────────┐
@@ -153,7 +153,8 @@ app/panel deadline. Playback frames and transport counters stop with transport;
 meters animate only while moving, and arm one activity wake at rest. Input and
 commands arm a coalesced UI sidecar check; writer completion posts to main.
 
-Model → audio: immutable `RenderPlan` swapped with an atomic pointer;
+Model → audio: a `RenderPlan` with an immutable graph, swapped with an
+atomic pointer; level and pan edits published into its mix slots (ADR-0060);
 parameter changes and transport commands via bounded SPSC queues. Audio →
 model: two kinds of channel, never confused:
 

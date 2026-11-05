@@ -238,6 +238,18 @@ appear under the track it leaves, after the track's own. Record a send's
 moves as you would the fader's: set the lane's mode to touch, latch or write
 and move the send's level or pan in the routing matrix while playing.
 
+While you write a level or pan (a track's or send's level or pan, or a VCA's
+level), you hear the control as you move it rather than the envelope's older
+points. In latch and write mode it keeps the last value until you stop or
+pause, which is also what the envelope stores. In touch mode the envelope
+takes over again half a second after your last move; holding the control
+still for longer than that hands back to the old automation. Mute and
+plug-in parameters play from their envelopes while you write them.
+
+Undo, redo or switching branches while playing starts a fresh automation
+pass at the current position. Earlier moves no longer override the envelope
+or extend their last value to where you stop.
+
 To edit an automation item's points, its amplitude magnitude must be greater than
 0.000000001. If it is zero or too small to invert, the app asks you to restore
 the amplitude first; the source curve is preserved.
