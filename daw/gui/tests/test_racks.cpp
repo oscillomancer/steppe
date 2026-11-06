@@ -689,3 +689,44 @@ TEST_CASE("rack window: the browser's tags fold into one row, opened by +N") {
     CHECK(f.racks->browserShows().size() > shows.size());
     f.snapshot("rack-tags-folded.png");
 }
+
+TEST_CASE("rack window: a knob learns a MIDI controller from its menu, shows it and forgets it") {
+    Fixture f;
+    if (!f.ok) return;
+    Patch p(f);
+    f.racks->open();
+    f.frame();
+    const model::Id vca = *model::Id::parse(p.vca);
+    auto menu = [&] {
+        const ui::Point level = *f.racks->space()->controlAt(vca, "level");
+        f.pointer(ui::PointerEvent::Type::Down, level, 3);
+        f.pointer(ui::PointerEvent::Type::Up, level, 3);
+        REQUIRE(f.r().find("rack.param.menu"));
+    };
+    menu();
+    REQUIRE(f.pick("rack.param.menu", "MIDI learn"));
+    REQUIRE(f.r().find("learn"));
+    engine::EngineApp::ControlEvent e;
+    e.midi.bytes[0] = 0xb0;
+    e.midi.bytes[1] = 9;
+    e.midi.bytes[2] = 127;
+    f.actions->control({e});
+    f.frame();
+    REQUIRE(f.r().click("learn.ok"));
+    f.frame();
+    const auto& learn = f.app->head().modules.find(vca)->learn;
+    REQUIRE(learn.size() == 1);
+    CHECK(learn[0].param == "level");
+    CHECK(learn[0].control.number == 9);
+    CHECK(f.racks->space()->scene().module(vca)->learned.contains("level"));
+    f.racks->space()->setView({420, 40, 2.0});
+    f.snapshot("rack-learned.png");
+    // The menu names the controller, and removes it.
+    menu();
+    const auto items = ui::menuItems(*f.r().find("rack.param.menu"));
+    CHECK(std::any_of(items.begin(), items.end(),
+                      [](const ui::MenuItem& m) { return m.label.rfind("MIDI: CC 9", 0) == 0; }));
+    REQUIRE(f.pick("rack.param.menu", "Remove MIDI learn"));
+    CHECK(f.app->head().modules.find(vca)->learn.empty());
+    CHECK_FALSE(f.racks->space()->scene().module(vca)->learned.contains("level"));
+}

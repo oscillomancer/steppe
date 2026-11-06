@@ -89,6 +89,8 @@ class RackWindow {
     void spaceMenu(ui::Point at, ui::Point space);
     void paramMenu(model::Id module, int index, ui::Point at);
     void tabMenu(model::Id rack, ui::Point at);
+    // MIDI learn for a knob: the learn dialog listens, then module.learn.set.
+    void learn(model::Id module, int index);
     void rename(model::Id module);
 
   public:

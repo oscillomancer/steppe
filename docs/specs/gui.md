@@ -1210,7 +1210,13 @@ a new channel). It follows rack.md §8.
   choice's options, and Automate: an envelope on the knob holding its value
   (`env.add {module, param, points}`), shown as a lane under the rack's home
   channel ("Rack › Module · knob", on the knob's own scale); once there, the
-  item shows or hides that lane. MIDI learn for module knobs *(planned)*.
+  item shows or hides that lane. MIDI learn… opens the learn dialog (§6)
+  for the knob: it listens, and OK binds what it heard (`module.learn.set`;
+  a toggle's CC defaults to toggle mode, others offer soft takeover). A
+  bound knob carries a small accent dot in its gap (a control, at its
+  corner), and its menu names the controller ("MIDI: CC 21 · ch 1…") and
+  offers Remove MIDI learn (`module.learn.remove`). A plugin module's
+  knobs are its plug-in's (the FX window's learn).
 - **Browser.** A column on the left (the header's Modules button shows or
   hides it): a search field (words match name, id, description and tags),
   the catalog's tags as chips that filter (one row: the chosen tag, then

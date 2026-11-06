@@ -170,6 +170,7 @@ RackScene RackScene::build(const model::Session& s, model::Id rackId, const rack
         v.x = m.x;
         v.y = m.y;
         v.bypass = m.bypass;
+        for (const auto& l : m.learn) v.learned.insert(l.param);
         v.fx = m.fx;
         v.plugin = m.type == model::kPluginModule;
         v.out = m.type == model::kOutModule;

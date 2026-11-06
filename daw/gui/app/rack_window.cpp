@@ -9,7 +9,9 @@
 #include <cmath>
 #include <set>
 
+#include "learn_dialog.h"
 #include "plugin_browser.h"
+#include "supple/engine/midi_control.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/text_area.h"
 #include "supple/ui/text_field.h"
@@ -1273,6 +1275,24 @@ void RackWindow::paramMenu(model::Id module, int index, ui::Point at) {
                              }});
         }
     }
+    // MIDI learn: the dialog listens; module.learn.set binds (one per knob).
+    const model::RackModule* rm = app_.head().modules.find(module);
+    const model::ParamLearn* bound = nullptr;
+    if (rm)
+        for (const auto& l : rm->learn)
+            if (l.param == p.key) bound = &l;
+    if (rm && !m->plugin) {
+        items.push_back(
+            {bound ? "MIDI: " + engine::describe(bound->control) + "\u2026" : "MIDI learn\u2026",
+             "", [this, module, index] { learn(module, index); }});
+        if (bound)
+            items.push_back({"Remove MIDI learn", "", [this, module, key = p.key] {
+                                 json::Value args = json::Value::object();
+                                 args["module"] = module.str();
+                                 args["param"] = key;
+                                 (void)exec("module.learn.remove", std::move(args));
+                             }});
+    }
     if (p.kind == script::detail::ParamModel::Kind::Choice) {
         items.push_back({"", "", {}, true, true});
         const double v = static_cast<std::size_t>(index) < m->values.size()
@@ -1288,6 +1308,37 @@ void RackWindow::paramMenu(model::Id module, int index, ui::Point at) {
     root().openPopup(
         ui::makeMenu("rack.param.menu", std::move(items), [this] { root().closePopup(); }),
         {at.x, at.y, 1, 1});
+}
+
+void RackWindow::learn(model::Id module, int index) {
+    const auto* m = space_ ? space_->scene().module(module) : nullptr;
+    if (!m || !m->type || index < 0 || static_cast<std::size_t>(index) >= m->type->params().size())
+        return;
+    const auto& p = m->type->params()[static_cast<std::size_t>(index)];
+    const model::Session s = app_.head();
+    const model::RackModule* rm = s.modules.find(module);
+    if (!rm) return;
+    LearnRequest request;
+    request.title = model::rackLabel(s, rm->rack) + " \u203a " + m->title + " \u00b7 " + p.name;
+    const bool toggle = p.kind == script::detail::ParamModel::Kind::Toggle;
+    request.takeover = !toggle;
+    request.mode = toggle ? model::ControlMode::Toggle : model::ControlMode::Absolute;
+    for (const auto& l : rm->learn)
+        if (l.param == p.key)
+            request.current = LearnChoice(static_cast<const model::ControlBinding&>(l));
+    request.onOk = [this, module, key = p.key](const LearnChoice& choice) {
+        json::Value args = learnArgs(choice);
+        args["module"] = module.str();
+        args["param"] = key;
+        (void)exec("module.learn.set", std::move(args));
+    };
+    request.onRemove = [this, module, key = p.key] {
+        json::Value args = json::Value::object();
+        args["module"] = module.str();
+        args["param"] = key;
+        (void)exec("module.learn.remove", std::move(args));
+    };
+    openLearnDialog(root(), actions_, app_, std::move(request));
 }
 
 void RackWindow::tabMenu(model::Id rack, ui::Point at) {

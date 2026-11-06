@@ -555,6 +555,16 @@ void RackSpace::paintItem(ui::Canvas& c, const RackScene::Module& m, const Panel
         default:
             break;
     }
+    // A knob a MIDI controller turns: a small mark, in the knob's gap or at
+    // the control's corner.
+    if (m.learned.contains(p.key)) {
+        const ui::Point at =
+            item.kind == Kind::Knob
+                ? ui::Point{centre.x, centre.y + static_cast<float>(item.w) / 2 - 1}
+                : ui::Point{rectOf(m, item).right() - 1, rectOf(m, item).y + 1};
+        c.fillCircle(at, 2.4f, face);
+        c.fillCircle(at, 1.6f, accent);
+    }
 }
 
 void RackSpace::paintModule(ui::Canvas& c, const RackScene::Module& m, bool selected,
