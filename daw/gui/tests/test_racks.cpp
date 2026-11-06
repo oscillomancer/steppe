@@ -732,6 +732,109 @@ TEST_CASE("rack window: a knob learns a MIDI controller from its menu, shows it 
     CHECK_FALSE(f.racks->space()->scene().module(vca)->learned.contains("level"));
 }
 
+TEST_CASE(
+    "rack window: a cable dropped on a plugin module modulates a parameter picked from a list") {
+    Fixture f(ui::Theme::dark(), {FIXTURE_CLAP_PATH});
+    if (!f.ok) return;
+    Patch p(f);
+    const std::string gain =
+        f.exec("module.add",
+               R"({"rack":")" + p.rack +
+                   R"(","plugin":"com.suppleaudio.test.gain","x":840,"y":300})")["module"]
+            .asString();
+    f.racks->open();
+    f.frame();
+    gui::RackSpace& space = *f.racks->space();
+    space.frameAll();
+    f.frame();
+    const model::Id id = *model::Id::parse(gain), osc = *model::Id::parse(p.osc);
+    const model::Id fx = *f.app->head().modules.find(id)->fx;
+    const std::size_t cables = f.app->head().cables.size();
+    // Dropped on the body: the plug-in's modulatable parameters (Gain; not
+    // the stepped Latency), searchable.
+    f.drag(*space.jackAt(osc, "out", true), *space.bodyAt(id));
+    const ui::Node* picker = f.r().find("rack.params");
+    REQUIRE(picker);
+    CHECK(picker->valueText() == "Gain");
+    f.snapshot("rack-plugin-params.png");
+    f.r().text("lat");
+    f.frame();
+    CHECK(f.r().find("rack.params")->valueText().empty());
+    f.r().key(SDLK_BACKSPACE);
+    f.r().key(SDLK_BACKSPACE);
+    f.r().key(SDLK_BACKSPACE);
+    f.r().text("ga");
+    f.frame();
+    CHECK(f.r().find("rack.params")->valueText() == "Gain");
+    f.r().key(SDLK_RETURN);
+    f.frame();
+    CHECK_FALSE(f.r().find("rack.params"));
+    REQUIRE(f.app->head().cables.size() == cables + 1);
+    std::optional<model::Id> made;
+    for (const auto& c : f.app->head().cables)
+        if (c.value->to.object == fx) made = c.id;
+    REQUIRE(made);
+    const model::Cable& cable = *f.app->head().cables.find(*made);
+    CHECK(cable.to.key == "gain");
+    CHECK(cable.amount == 0.5);
+    // It ends in a socket on the module's edge, named on hover.
+    const auto* m = space.scene().module(id);
+    REQUIRE(m);
+    CHECK(m->mods == std::vector<std::string>{"gain"});
+    const ui::Point socket = *space.socketAt(id, "gain");
+    f.pointer(ui::PointerEvent::Type::Move, socket, 0);
+    CHECK(space.hoverText() == "Gain · +50 %");
+    space.setView({780, 220, 2.0});
+    f.frame();
+    f.pointer(ui::PointerEvent::Type::Move, *space.socketAt(id, "gain"), 0);
+    f.snapshot("rack-plugin-mod.png");
+    // Its amount drags like a knob's ring: one undo step.
+    {
+        const ui::Point at = *space.socketAt(id, "gain");
+        f.drag(at, {at.x, at.y - 40});
+    }
+    CHECK(f.app->head().cables.find(*made)->amount == doctest::Approx(0.75));
+    REQUIRE(f.exec("history.undo", "{}").isObject());
+    f.frame();
+    CHECK(f.app->head().cables.find(*made)->amount == doctest::Approx(0.5));
+    // The cable's right-click names the parameter, sets the amount, removes it.
+    auto menu = [&] {
+        const ui::Point at = *space.socketAt(id, "gain");
+        f.pointer(ui::PointerEvent::Type::Down, at, 3);
+        f.pointer(ui::PointerEvent::Type::Up, at, 3);
+        REQUIRE(f.r().find("rack.cable.menu"));
+    };
+    menu();
+    const auto items = ui::menuItems(*f.r().find("rack.cable.menu"));
+    REQUIRE(items.size() >= 2);
+    CHECK(items[0].label == "Gain on Test Gain");
+    CHECK(items[1].label == "Amount: +50 %…");
+    REQUIRE(f.pick("rack.cable.menu", "Amount"));
+    auto* amount = dynamic_cast<ui::TextField*>(f.r().find("rack.cable.amount"));
+    REQUIRE(amount);
+    amount->setText("-25 %");
+    f.r().key(SDLK_RETURN);
+    f.frame();
+    CHECK(f.app->head().cables.find(*made)->amount == doctest::Approx(-0.25));
+    // Right-clicking the cord itself opens the same menu.
+    space.frameAll();
+    f.frame();
+    const ui::Point cord = *space.cableAt(*made);
+    f.pointer(ui::PointerEvent::Type::Move, cord, 0);
+    f.pointer(ui::PointerEvent::Type::Down, cord, 3);
+    f.pointer(ui::PointerEvent::Type::Up, cord, 3);
+    REQUIRE(f.pick("rack.cable.menu", "Remove cable"));
+    CHECK_FALSE(f.app->head().cables.find(*made));
+    CHECK(space.scene().module(id)->mods.empty());
+    // A VST3 plug-in says it takes no modulation.
+    model::FxInstance vst3 = *f.app->head().fx.find(fx);
+    vst3.plugin.format = "vst3";
+    const gui::racks::PluginParams none = gui::racks::pluginParams(*f.app, vst3);
+    CHECK(none.note == "VST3 plug-ins take no modulation.");
+    CHECK(std::none_of(none.params.begin(), none.params.end(),
+                       [](const gui::racks::PluginParam& q) { return q.modulatable; }));
+}
+
 TEST_CASE("rack window: modules saved as a rack preset load into another rack from the browser") {
     Fixture f;
     if (!f.ok) return;

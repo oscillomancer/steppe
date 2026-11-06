@@ -322,7 +322,8 @@ own colour, and a jack glows with its level. Drop a cable on a knob to
 modulate it; the ring around the knob shows how far, and dragging the ring
 changes the amount. Drag a cable off an input to move it, or drop it on
 nothing to remove it. A cable that loops back is dashed: it carries the
-signal one sample late.
+signal one sample late. Right-click a cable to see what it reaches, type
+its amount, or remove it.
 
 Some modules' displays answer the mouse as well: drag or scroll on them to
 change what they show (each drag or scroll is one undo step), and move the
@@ -350,8 +351,12 @@ A rack sends audio both ways. Its Out modules are channel inputs, and an
 and the rack becomes an effect. A **Notes** module plays its channel's
 MIDI (or another track's, or a MIDI input's) as pitch, gate and velocity
 cables, a voice per note; **Transport** gives the song's clock. A plugin
-module's own parameters take cables too: a cable into one modulates it
-around where its knob stands (CLAP plug-ins; VST3 has no modulation).
+module's own parameters take cables too: drop a cable on the module and
+pick a parameter from the list (type to search). It modulates the
+parameter around where its knob stands, half the range each way at first.
+The cable ends in a small socket on the module's top edge: hover it to see
+the parameter, and drag it up or down to change the amount. Only CLAP
+plug-ins take modulation; a VST3 plug-in's list says so.
 
 Your own modules live in the library folder, and the project you save
 keeps a copy of each one it uses beside it (in `modules`), as it keeps its

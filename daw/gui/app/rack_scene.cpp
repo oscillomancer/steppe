@@ -200,6 +200,11 @@ RackScene RackScene::build(const model::Session& s, model::Id rackId, const rack
         v.param = c.amount.has_value();
         v.amount = c.amount.value_or(0);
         v.signal = scene.signalOf(c.from, true);
+        if (c.to.object.kind == model::Kind::Fx)
+            for (Module& m : scene.modules)
+                if (m.fx == c.to.object &&
+                    std::find(m.mods.begin(), m.mods.end(), c.to.key) == m.mods.end())
+                    m.mods.push_back(c.to.key);
         scene.cables.push_back(std::move(v));
     }
     return scene;
@@ -216,15 +221,14 @@ RackScene::Module* RackScene::module(model::Id id) {
 }
 
 std::optional<ui::Point> RackScene::endPoint(const model::CableEnd& end, bool output) const {
-    const Module* m = nullptr;
     if (end.object.kind == model::Kind::Fx) {
-        for (const Module& x : modules)
-            if (x.fx == end.object) m = &x;
+        const Module* m = moduleOfFx(end.object);
         if (!m) return std::nullopt;
-        // A plug-in's parameter: the top edge of its module, right of centre.
-        return ui::Point{static_cast<float>(m->x + m->w - 14), static_cast<float>(m->y + 2)};
+        const auto it = std::find(m->mods.begin(), m->mods.end(), end.key);
+        return modSocket(*m,
+                         it == m->mods.end() ? 0 : static_cast<std::size_t>(it - m->mods.begin()));
     }
-    m = module(end.object);
+    const Module* m = module(end.object);
     if (!m) return std::nullopt;
     const rack::PanelLayout* l = m->type ? &m->face : nullptr;
     if (!l)
@@ -256,6 +260,21 @@ std::optional<ui::Point> RackScene::endPoint(const model::CableEnd& end, bool ou
     // Not on the face (a hidden parameter): the module's edge.
     return ui::Point{static_cast<float>(m->x + (output ? m->w : 0)),
                      static_cast<float>(m->y + rack::kTitleHeight / 2)};
+}
+
+const RackScene::Module* RackScene::moduleOfFx(model::Id fx) const {
+    for (const Module& m : modules)
+        if (m.fx == fx) return &m;
+    return nullptr;
+}
+
+// A plug-in parameter's socket: on the top edge, from the left, 16 apart
+// (closer when many, so that 16 fit; the editor's mark keeps the right).
+ui::Point RackScene::modSocket(const Module& m, std::size_t i) {
+    const double room = std::max(0.0, m.w - 46);
+    const double step =
+        m.mods.size() > 1 ? std::min(16.0, room / static_cast<double>(m.mods.size() - 1)) : 0;
+    return {static_cast<float>(m.x + 14 + step * static_cast<double>(i)), static_cast<float>(m.y)};
 }
 
 Signal RackScene::signalOf(const model::CableEnd& end, bool output) const {
