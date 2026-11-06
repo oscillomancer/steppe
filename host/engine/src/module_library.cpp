@@ -107,13 +107,13 @@ std::shared_ptr<const rack::Catalog> loadFolder(const std::shared_ptr<const rack
             continue;
         }
         const auto* taken = catalog->find(compiled.type->id());
-        if (taken && (taken->type->origin() == origin ||
-                      taken->type->origin() == rack::Origin::Host ||
-                      taken->type->origin() == rack::Origin::Stock)) {
-            skip(name, "its id " + compiled.type->id() + " is taken by " +
-                           (taken->type->origin() == origin ? "the folder's " +
-                                                                  moduleName(*taken->type)
-                                                            : std::string("a built-in module")));
+        if (taken &&
+            (taken->type->origin() == origin || taken->type->origin() == rack::Origin::Host ||
+             taken->type->origin() == rack::Origin::Stock)) {
+            skip(name,
+                 "its id " + compiled.type->id() + " is taken by " +
+                     (taken->type->origin() == origin ? "the folder's " + moduleName(*taken->type)
+                                                      : std::string("a built-in module")));
             continue;
         }
         if (std::string problems = catalog->add(compiled.type); !problems.empty())

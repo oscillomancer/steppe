@@ -575,10 +575,10 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
         std::vector<std::string> types;
         for (const auto& e : head().modules) types.push_back(e.value->type);
         if (Status copied = detail::saveProjectModules(*modules_, types, dir); !copied && warnings)
-            warnings->push_back({"project.modules",
-                                 "the project's module copies were not written: " +
-                                     copied.error().message,
-                                 dir.string()});
+            warnings->push_back(
+                {"project.modules",
+                 "the project's module copies were not written: " + copied.error().message,
+                 dir.string()});
     }
     projectPath_ = path;
     autosaveMarked_ = true;  // the file itself is the newest copy
