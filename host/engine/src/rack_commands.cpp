@@ -1718,6 +1718,8 @@ Result<json::Value> readPreset(const fs::path& file) {
     const auto* name = doc.find("name");
     if (!name || !name->isString() || name->asString().empty())
         return bad("/name", "it has no name");
+    if (const auto* description = doc.find("description"); description && !description->isString())
+        return bad("/description", "description is not a string");
     const auto* modules = doc.find("modules");
     if (!modules || !modules->isArray() || modules->asArray().empty())
         return bad("/modules", "it has no modules");

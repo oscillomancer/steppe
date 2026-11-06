@@ -498,13 +498,25 @@ TEST_CASE("module library: a project keeps copies of the modules it plays") {
     json::Value got = there.run("module.get", R"({"type": "com.example.level"})");
     CHECK(got["origin"].asString() == "project");
     // Edited there, it goes into that library and plays; the next save copies it.
-    json::Value edited = there.run(
-        "module.edit",
-        R"({"type": "com.example.level", "edits": [{"old": "0.25", "new": "0.5"}]})");
+    json::Value edited =
+        there.run("module.edit",
+                  R"({"type": "com.example.level", "edits": [{"old": "0.25", "new": "0.5"}]})");
     CHECK(edited["ok"].asBool());
     CHECK(there.level() == doctest::Approx(0.5 * 0.472135955).epsilon(1e-3));
     REQUIRE(there.call("project.save", args));
     auto saved = readTextFile(copy, 1 << 20);
     REQUIRE(saved);
     CHECK(saved->find("0.5") != std::string::npos);
+}
+
+TEST_CASE("rack presets: a malformed file is skipped with a warning") {
+    Fixture f;
+    REQUIRE(
+        writeFileAtomic(f.app->rackPresetDir() / "bad.json",
+                        R"({"schema": "supple.rack-preset/1.0", "name": "Bad", "description": 42,
+                                "modules": [{"type": "com.suppleaudio.rack.out"}], "cables": []})"));
+    json::Value list = f.run("rack.preset.list");
+    CHECK(list["presets"].asArray().empty());
+    REQUIRE(list.find("warnings") != nullptr);
+    CHECK(list["warnings"].at(0).find("code")->asString() == "rack.preset_invalid");
 }
