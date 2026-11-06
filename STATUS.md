@@ -324,6 +324,17 @@ instructions are in `docs/guides/installing.md`.
   still load. Every wheel combination over the TCP, the arrangement's lanes
   and ruler, and the MIDI editor can be rebound in Edit > Mouse
   modifiers.
+- **Rack window** (ADR-0062, gui.md §4.12): a separate window with a tab per
+  rack (`+` adds one), a plain pannable, zoomable space (25-400 %, each
+  rack's view in the UI sidecar), modules drawn from their faces with knobs,
+  toggles, choices and jacks in signal colours, hanging cables, selection,
+  marquee and group moves, knob drags, cables drawn jack to jack or onto a
+  knob, modulation rings, telemetry glow, a searchable module browser
+  (double-click or drag in) and context menus; View → Racks and the toolbar.
+  Not yet: module displays (`draw()`), MIDI learn and automation from a
+  knob, the source view, the input menu's Out modules, a channel menu's
+  Show/Add rack. A saved `menus.json` keeps its own toolbar and menus, so
+  existing users add Racks themselves (Edit the toolbar).
 - **MIDI learn** (ADR-0027): any plug-in parameter (the FX window's MIDI
   button, or `fx.learn.set` for agents) and any action (Ctrl+L in the
   actions list) learns a controller by moving it: CC, note, pitch bend or

@@ -1,0 +1,173 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (c) 2026 Supple Audio
+// The rack window's space (docs/specs/rack.md §8): a plain background where
+// modules sit anywhere, drawn from a RackScene. Middle-drag or Space-drag
+// pans, Ctrl+wheel zooms at the pointer (25-400 %), the wheel scrolls.
+// Modules are dragged by their body, selected by a click, Ctrl+click or a
+// marquee, and move together. Jacks are circles in their signal's colour,
+// lit by level; a drag from one draws a cable to a jack of the other
+// direction or a knob. Cables sag and sit above the modules. Knobs drag
+// vertically (Shift: fine) and show their modulated value as an arc.
+//
+// The node only draws and gestures; what an edit means is the window's
+// (Hooks), which dispatches commands.
+#pragma once
+
+#include <functional>
+#include <optional>
+#include <set>
+#include <string>
+#include <vector>
+
+#include "rack_scene.h"
+#include "supple/ui/controls.h"
+#include "supple/ui/node.h"
+
+namespace supple::gui {
+
+class RackSpace : public ui::Node {
+  public:
+    // What the space shows: the space point at its top-left, and the zoom.
+    struct View {
+        double x = 0, y = 0, zoom = 1;
+        bool operator==(const View&) const = default;
+    };
+    static constexpr double kMinZoom = 0.25, kMaxZoom = 4.0;
+
+    struct Move {
+        model::Id module;
+        double x = 0, y = 0;  // its new top-left
+    };
+    struct Hooks {
+        // Modules dragged to new places (one undo step).
+        std::function<void(const std::vector<Move>&)> move;
+        // A plugin module's body clicked (not dragged): its editor.
+        std::function<void(model::Id module)> open;
+        // A right-click on a module (selected first), or on the space.
+        std::function<void(model::Id module, ui::Point at)> moduleMenu;
+        std::function<void(ui::Point at, ui::Point space)> spaceMenu;
+        // A knob or other control moved: parameter `param` of `module`, physical.
+        std::function<void(model::Id module, int param, double value, ui::Gesture g)> param;
+        // A right-click on a control: its MIDI learn and automation menu.
+        std::function<void(model::Id module, int param, ui::Point at)> paramMenu;
+        // A cable drawn from `from` (an output) to `to` (an input or a
+        // parameter); `replace`: the cable it moves, if any.
+        std::function<void(const model::CableEnd& from, const model::CableEnd& to,
+                           std::optional<model::Id> replace)>
+            connect;
+        // A cable dragged off its input and dropped on nothing.
+        std::function<void(model::Id cable)> disconnect;
+        // A modulation cable's amount dragged on the ring around its knob.
+        std::function<void(model::Id cable, double amount, ui::Gesture g)> amount;
+        std::function<void(const std::set<model::Id>&)> selectionChanged;
+        std::function<void(const View&)> viewChanged;
+        std::function<void()> deleteSelected;
+        std::function<void()> spaceTap;  // Space pressed and released without a drag
+        // Something dropped on the space from the browser (a type id).
+        std::function<void(const std::string& type, ui::Point space)> dropType;
+    };
+
+    explicit RackSpace(Hooks hooks);
+
+    // The rack to draw. Selection and gestures on modules that stay are kept.
+    void setScene(RackScene scene);
+    const RackScene& scene() const { return scene_; }
+    RackScene& scene() { return scene_; }
+    // New telemetry was read into the scene's modules: repaint.
+    void telemetryChanged() { invalidate(); }
+
+    const View& view() const { return view_; }
+    void setView(View v);
+    // Zoom `factor` around a window point (the pointer).
+    void zoomAt(ui::Point at, double factor);
+    // Everything in view, at most 100 % (an empty rack: the origin at 100 %).
+    void frameAll();
+    // frameAll() once the space has its size (before its first layout).
+    void frameAllWhenLaidOut() {
+        if (bounds().empty())
+            frameOnLayout_ = true;
+        else
+            frameAll();
+    }
+    void arrange(const ui::Canvas& canvas, const ui::Rect& bounds) override;
+    // The modules' space rectangle that is visible (for telemetry watching).
+    ui::Rect visibleSpace() const;
+    ui::Point toSpace(ui::Point window) const;
+    ui::Point toWindow(ui::Point space) const;
+
+    const std::set<model::Id>& selection() const { return selection_; }
+    void select(std::set<model::Id> ids);
+    // An empty-state line shown in the middle ("" for none: a blank space).
+    void setEmptyText(std::string text);
+
+    // A browser drag that is over the space (a type id), for the drop's ghost.
+    void dragTypeOver(const std::string& name, std::optional<ui::Point> window);
+
+    // --- for tests: a module's control or jack in window coordinates.
+    std::optional<ui::Point> jackAt(model::Id module, const std::string& key, bool output) const;
+    std::optional<ui::Point> controlAt(model::Id module, const std::string& key) const;
+    std::optional<ui::Point> bodyAt(model::Id module) const;  // a point on its body
+    std::string valueText() const override;
+
+    void paint(ui::Canvas& c) override;
+    bool onPointer(const ui::PointerEvent& e) override;
+    bool onKey(const ui::KeyEvent& e) override;
+    bool onKeyUp(const ui::KeyEvent& e) override;
+    bool coalescesDrag() const override;
+
+  private:
+    struct Hit {
+        enum class Kind { None, Body, Control, Jack, Ring } kind = Kind::None;
+        std::size_t module = 0;
+        std::size_t item = 0;            // in the module's face
+        std::optional<model::Id> cable;  // Ring: the modulation cable
+    };
+    Hit hitAt(ui::Point space) const;
+    std::optional<std::size_t> cableNear(ui::Point space) const;
+    void paintModule(ui::Canvas& c, const RackScene::Module& m, bool selected, bool hot) const;
+    void paintItem(ui::Canvas& c, const RackScene::Module& m, const rack::PanelItem& item,
+                   std::size_t index, bool hot) const;
+    void paintCables(ui::Canvas& c) const;
+    double jackLevel(const RackScene::Module& m, const rack::PanelItem& item) const;
+    bool connected(const RackScene::Module& m, const rack::PanelItem& item) const;
+    model::CableEnd endOf(const RackScene::Module& m, const rack::PanelItem& item) const;
+    void endDrag(bool commit);
+    void hover(std::optional<model::Id> module);
+
+    struct Drag {
+        enum class Kind { None, Pan, Marquee, Move, Control, Cable, Amount } kind = Kind::None;
+        ui::Point start;  // window
+        ui::Point last;   // window
+        View view;        // at the start (Pan)
+        bool moved = false;
+        std::size_t module = 0, item = 0;
+        double value = 0;  // a control's at the start (a position 0..1)
+        unsigned mods = 0;
+        // Move: each module's place at the start.
+        std::vector<std::pair<std::size_t, ui::Point>> origins;
+        std::set<model::Id> before;  // Marquee with Ctrl: the selection it adds to
+        // Cable: the output it starts from, and the cable it moves (from an
+        // input), with that cable's end left behind.
+        model::CableEnd from;
+        bool fromOutput = true;
+        std::optional<model::Id> replace;
+        std::optional<model::Id> cable;  // Amount
+        double amount = 0;
+    };
+
+    Hooks hooks_;
+    RackScene scene_;
+    View view_;
+    std::set<model::Id> selection_;
+    std::optional<model::Id> hot_;  // the module under the pointer
+    std::optional<std::size_t> hotCable_;
+    std::optional<ui::Point> pointer_;  // window
+    std::string emptyText_;
+    std::string dropName_;
+    std::optional<ui::Point> dropAt_;
+    Drag drag_;
+    bool spaceHeld_ = false, spaceUsed_ = false, frameOnLayout_ = false;
+    int gesture_ = 0;
+};
+
+}  // namespace supple::gui

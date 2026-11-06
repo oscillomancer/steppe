@@ -152,7 +152,9 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   hover, wheel with precision (trackpad deltas), modifiers, double-click.
   Keyboard: focus chain, Tab navigation, shortcuts resolved by the actions
   system (§6) with context sections (arrange, MIDI editor, mixer, text
-  field). Text input through SDL3 text-input events (IME composition shown
+  field). Key releases reach the focused node and its parents
+  (`Node::onKeyUp`), for keys held as a gesture's modifier (Space-drag
+  pans the rack window); key presses say whether they repeat. Text input through SDL3 text-input events (IME composition shown
   inline). Replacing multiline editor text preserves the caret's line and
   code-point column (clamped to the new text); diagnostic columns remain byte
   offsets. Hiding a dock or panel releases focus and pointer capture within
@@ -1142,6 +1144,79 @@ selected channel or buss, as above; Track > Add from template… lists them, a
 click adds that strip last under the master and selects it, and a right click
 offers Delete.
 
+### 4.12 Racks (ADR-0062)
+
+The rack window (`daw/gui/app/rack_*`) is a separate, resizable utility
+window, as the routing matrix's, its placement in the UI sidecar
+(`windows.rack`). View → Racks and the toolbar's Racks button (`ui.rack`)
+open and close it; `ui.rack.show {track}` opens a channel's first rack and
+`ui.rack.add {track?}` adds one (on the given or selected channel, else on
+a new channel). It follows rack.md §8.
+
+- **Tabs.** One per rack, its home channel's colour as a dot and its label
+  (its name, else the channel's); `+` adds a rack. A double click renames
+  (`rack.set name`); a right-click offers Rename, the home channel and
+  Remove rack. The window's title names the rack shown.
+- **The space** is the theme's ground and nothing else; an empty project
+  says only "No racks yet. + adds one on the selected channel." Middle-drag
+  or Space-drag pans (Space alone, released without a drag, still plays and
+  stops), Ctrl+wheel zooms at the pointer from 25 to 400 %, the wheel
+  scrolls (Shift: across), Ctrl+= and Ctrl+- zoom, Ctrl+0 is 100 %, Home
+  shows everything. The zoom readout in the header toggles 100 % and
+  everything. Each rack's view (offset, zoom) and the rack shown are in the
+  UI sidecar (`racks`); a rack without one opens showing everything.
+- **Modules** are drawn from their type's face (rack.md §4.5, or the
+  module's `panel()`): a title strip with the label (the type's name; an
+  Out or In module's `moduleLabel`), knobs, toggles, choices, sliders,
+  readouts, display wells, and jacks. An Out module carries a tag under it
+  naming the channel it feeds. A plugin module shows the plug-in's name and
+  vendor on its plate and a window mark; a click (not a drag) opens the
+  plug-in's editor, as the mixer's slot does. A module of an unknown type is
+  kept, outlined in the clip colour, saying "Missing module" and its id.
+  Bypassed modules are veiled and say so. Modules have a soft shadow and
+  are dragged by any part that is not a control: a click selects, Ctrl+click
+  toggles, a drag on the space draws a marquee (Ctrl or Shift adds), and
+  the selection moves together as one undo step (`module.set x, y` in one
+  transaction). Delete removes the selection; Ctrl+A selects every module.
+  A right-click offers Open editor (plugins), Rename…, Bypass, Duplicate,
+  Randomize, Presets… (the type's factory patches), Show source *(planned)*
+  and Delete; on the space, Add <module> at that point and Show everything.
+- **Jacks** are circles ringed in their signal kind's colour (§7); outputs
+  sit on a plate, as on hardware. A jack glows by its level from the
+  module's telemetry (an input by its cables' sources'); a poly output shows
+  its channel count. Dragging from an output draws a cable that follows the
+  pointer, and the jacks it may end on answer with a ring; dropping on an
+  input connects (`cable.add`), on a knob makes a modulation cable. Dragging
+  from an empty input draws one backwards to an output. Dragging a
+  connected input picks up its last cable by the plug: dropped elsewhere it
+  moves (one undo step), dropped on nothing it is removed.
+- **Cables** hang between their ends, deeper the longer they are, drawn
+  above the modules in their output's signal colour (or the cable's own
+  colour), with a dark edge and a highlight, plugs at both ends; a
+  modulation cable plugs into its knob's rim. Poly cables are thicker. With
+  eight or more cables, those not on the hovered or selected modules (or
+  hovered themselves) fade.
+- **Knobs** drag vertically, 160 points end to end at any zoom (Shift:
+  ten times finer), double-click resets, and show their value while hovered
+  or dragged; a drag is one undo step (`module.set params` coalesced by
+  gesture). Choices and short integer ranges show their steps as dots;
+  a choice drawn as a box steps on a click. Modulated knobs carry a ring
+  outside the travel: faint for the range the cables' amounts span, bright
+  to the value they make now (telemetry); dragging that ring sets the last
+  cable's amount (`cable.set`). A right-click offers the default value and
+  a choice's options; MIDI learn and automation *(planned)*.
+- **Browser.** A column on the left (the header's Modules button shows or
+  hides it): a search field (words match name, id, description and tags),
+  the catalog's tags as chips that filter, and the types by origin (host,
+  stock, library, project) with their one-line description. A double click
+  or Enter adds the type in the middle of the view; dragging a row into the
+  space adds it where it is dropped.
+- **Telemetry.** While the window is open the visible modules are watched
+  (`Instance::watch`) and read about 30 times a second; hidden or scrolled-
+  off modules are not.
+- **Displays** of modules with `draw()` are wells *(planned: the hook drawn
+  with the module's Shared state)*.
+
 ## 5. Agent panel (removed)
 
 The app has no built-in agent (ADR-0043). Agents drive it from an external
@@ -1452,6 +1527,12 @@ Steppe's own character, not a REAPER clone or a generic dark theme
   Delete; the same in the TCP and the mixer) or the `ui.track.color` action.
   A pick colours every selected track when the track is one of them (the
   action always works on the selection), as one undo step.
+- **Signal kinds, for patching:** jacks and cables in the rack window are
+  coloured by what they carry: audio amber, pitch blue, gate red, CV violet,
+  unipolar green, phase teal (`signal-*` tokens, deepened in the light
+  theme). Hues apart and weights alike, so no kind shouts, and none is a
+  state colour. Module faces have their own tokens (`module`,
+  `module-title`, `module-well`, `jack-hole`).
 - **Calm by default:** colour reserved for state (armed, clipping, selected,
   agent-changed), meters and waveforms in ink tones; motion only for
   feedback. The TCP keeps its boxed toggles.

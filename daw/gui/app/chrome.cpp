@@ -94,7 +94,7 @@ ChromeLayout ChromeLayout::defaults() {
          {"history.undo", "history.redo", "-", "ui.actions", "ui.mouse", "-", "ui.preferences",
           "ui.audio.device"}},
         {"View",
-         {"ui.actions", "ui.mixer", "ui.routing", "ui.history", "-", "ui.theme.mode",
+         {"ui.actions", "ui.mixer", "ui.routing", "ui.rack", "ui.history", "-", "ui.theme.mode",
           "ui.theme.palette", "-", "ui.screenset.save", "ui.screenset.load",
           "ui.screenset.delete"}},
         // Adding strips and templates only: a track's own edits are in its
@@ -113,7 +113,7 @@ ChromeLayout ChromeLayout::defaults() {
         {"Help", {"ui.help.skill", "ui.help.skill_link", "ui.help.mcp", "ui.help.agent"}},
     };
     // Transport actions live in the transport bar's own row; not duplicated here.
-    l.toolbar = {"history.undo", "history.redo", "track.add:channel", "ui.actions"};
+    l.toolbar = {"history.undo", "history.redo", "track.add:channel", "ui.rack", "ui.actions"};
     return l;
 }
 
