@@ -8609,6 +8609,149 @@ Result:
 
 ```
 
+## `module.learn.list@1`
+
+List the MIDI controllers of module knobs.
+
+Every module's, or one module's. control names the message in words.
+
+Kind: `query`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `module` | string |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
+
+**Every binding** (`song_with_rack_learn`)
+
+```json
+{}
+
+```
+
+Result:
+
+```json
+{
+  "learn": [
+    {
+      "module": "mo_3",
+      "param": "level",
+      "midi": {
+        "kind": "cc",
+        "channel": 1,
+        "number": 21
+      },
+      "control": "CC 21 · ch 1"
+    }
+  ]
+}
+
+```
+
+## `module.learn.remove@1`
+
+Remove a module knob's MIDI controller.
+
+
+
+Kind: `edit`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `module` | string |  |  |  |  |
+| `param` | string |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
+
+**Free the level** (`song_with_rack_learn`)
+
+```json
+{
+  "module": "mo_3",
+  "param": "level"
+}
+
+```
+
+Result:
+
+```json
+{}
+
+```
+
+## `module.learn.set@1`
+
+Let a MIDI controller turn a module's knob.
+
+One binding per knob (a new one replaces it). midi.device: a substring of the MIDI input's name (empty: any). mode for a CC: absolute, relative1 (127 = -1, 1 = +1), relative2 (63 = -1, 65 = +1), relative3 (65 = -1, 1 = +1) or toggle. soft_takeover: an absolute control acts once it reaches the knob. A knob turns along its travel (a frequency's is logarithmic); each movement is one undo step. A plugin module's knobs are its plug-in's: fx.learn.set.
+
+Kind: `edit`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `module` | string |  |  |  |  |
+| `param` | string |  |  |  |  |
+| `midi` | object |  |  |  |  |
+| `mode` | string |  |  |  |  |
+| `soft_takeover` | boolean |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
+
+**The VCA's level on CC 21** (`song_with_rack`)
+
+```json
+{
+  "module": "mo_3",
+  "param": "level",
+  "midi": {
+    "kind": "cc",
+    "channel": 1,
+    "number": 21
+  }
+}
+
+```
+
+Result:
+
+```json
+{
+  "param": "level",
+  "control": "CC 21 · ch 1"
+}
+
+```
+
 ## `module.list@1`
 
 List module types: id, name, tags, what they do.
@@ -8633,11 +8776,11 @@ Kind: `query`. Exposure: `mcp-tool`.
 
 ### Examples
 
-**Amplifiers** (`empty`)
+**Find the VCA** (`empty`)
 
 ```json
 {
-  "tag": "amplifier"
+  "query": "vca"
 }
 
 ```
@@ -10386,6 +10529,337 @@ Result:
       ]
     }
   ]
+}
+
+```
+
+## `rack.patch@1`
+
+Add named modules and the cables among them in one step.
+
+modules: {name: {type | plugin, params?, preset?, label?, x?, y?, source?, device?}} as module.add takes them; a name is lower-case letters, digits and '_'. cables: [{from, to, amount?, color?}] or [from, to, amount?], an end "name.port" or "name.knob" (a plugin module's knob is its plug-in's: "synth.cutoff"), or an existing module's "mo_N.port" (the rack's Out from rack.add). Modules without x, y are laid out left to right by signal flow from x, y (default right of the rack's modules). Everything is checked as module.add and cable.add check it; one error changes nothing. Returns the ids by name.
+
+Kind: `edit`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `rack` | string |  |  |  |  |
+| `modules` | value |  |  |  |  |
+| `cables` | array |  |  |  |  |
+| `x` | number |  | -1e+06..1e+06 |  |  |
+| `y` | number |  | -1e+06..1e+06 |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Errors
+
+- `rack.patch`: a name, an end or a field the patch cannot use Hint: names: lower-case letters, digits and '_'; ends: name.port
+
+### Examples
+
+**A tremolo into the Out** (`song_with_rack`)
+
+```json
+{
+  "rack": "rk_1",
+  "modules": {
+    "osc": {
+      "type": "vco"
+    },
+    "lfo": {
+      "type": "lfo",
+      "params": {
+        "rate": 5
+      }
+    },
+    "amp": {
+      "type": "vca"
+    }
+  },
+  "cables": [
+    ["osc.saw", "amp.in"],
+    ["lfo.out", "amp.level", 6],
+    {
+      "from": "amp.out",
+      "to": "mo_1.l"
+    }
+  ]
+}
+
+```
+
+Result:
+
+```json
+{
+  "modules": {
+    "osc": "mo_4",
+    "lfo": "mo_5",
+    "amp": "mo_6"
+  },
+  "cables": ["cb_2", "cb_3", "cb_4"]
+}
+
+```
+
+## `rack.preset.delete@1`
+
+Delete a saved rack preset.
+
+
+
+Kind: `action`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `name` | string |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
+
+**Delete a preset** (`song_with_rack_preset`)
+
+```json
+{
+  "name": "Gated VCA"
+}
+
+```
+
+Result:
+
+```json
+{
+  "path": "<any>"
+}
+
+```
+
+## `rack.preset.list@1`
+
+List saved rack presets: names and contents.
+
+query: a part of the name or description. Each preset: name, path, description, its module and cable counts and its module types. Files that are not rack presets are skipped with a warning (warnings).
+
+Kind: `query`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `query` | string |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
+
+**The saved presets** (`song_with_rack_preset`)
+
+```json
+{}
+
+```
+
+Result:
+
+```json
+{
+  "presets": [
+    {
+      "name": "Gated VCA",
+      "path": "<any>",
+      "modules": 3,
+      "cables": 1,
+      "types": [
+        "com.suppleaudio.rack.notes",
+        "com.suppleaudio.rack.out",
+        "com.suppleaudio.rack.vca"
+      ]
+    }
+  ]
+}
+
+```
+
+## `rack.preset.load@1`
+
+Add a saved preset's modules and cables to a rack.
+
+name (rack.preset.list) or path (a preset file). x, y: the group's top-left (default right of the rack's modules). io: join (default) gives the preset's Out and In modules' cables to the rack's own Outs and Ins in order, so a whole patch sounds at once (extra ones are added); add makes new ones. Notes modules play the rack's channel. Knobs and cables the module types no longer have are left out with a warning (warnings); a module type or plug-in that is not installed is an error, and nothing changes.
+
+Kind: `edit`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `rack` | string |  |  |  |  |
+| `name` | string |  |  |  |  |
+| `path` | string |  |  |  |  |
+| `x` | number |  | -1e+06..1e+06 |  |  |
+| `y` | number |  | -1e+06..1e+06 |  |  |
+| `io` | string |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Errors
+
+- `rack.preset_source`: name and path both or neither Hint: give one
+- `rack.unknown_type`: the preset needs a module type that is not installed Hint: module.write it, or load another preset
+- `chain.plugin_missing`: the preset needs a plug-in that is not installed Hint: install it
+- `rack.preset_invalid`: not a rack preset Hint: save it again
+
+### Examples
+
+**Load a saved patch into a new rack** (`song_with_rack_preset`)
+
+```json
+{
+  "rack": "rk_2",
+  "name": "Gated VCA"
+}
+
+```
+
+Result:
+
+```json
+{
+  "modules": ["mo_5", "mo_6"],
+  "cables": ["cb_2"]
+}
+
+```
+
+## `rack.preset.save@1`
+
+Save a rack's modules and cables as a preset.
+
+modules: which (default the whole rack); the cables among them come too. Plugin modules keep their plug-in's settings. A Notes module's source track, MIDI learn, envelopes, sends and the channels an Out feeds stay with the project. Saved by name in the user's rack presets; replace: true overwrites one.
+
+Kind: `action`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `rack` | string |  |  |  |  |
+| `name` | string |  |  |  |  |
+| `modules` | array |  |  |  |  |
+| `description` | string |  |  |  |  |
+| `replace` | boolean |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Errors
+
+- `rack.preset_name`: not a usable name Hint: a name without path characters
+- `rack.preset_exists`: a preset has the name Hint: replace: true or a new name
+
+### Examples
+
+**Save the whole rack** (`song_with_rack`)
+
+```json
+{
+  "rack": "rk_1",
+  "name": "Gated VCA"
+}
+
+```
+
+Result:
+
+```json
+{
+  "path": "<any>",
+  "modules": 3,
+  "cables": 1
+}
+
+```
+
+## `rack.probe@1`
+
+Listen to a rack's ports: level, pitch, gate rate, notes, a CV's range.
+
+Renders the project offline from from_beat (default 0) for seconds (default 2, at most 10) with a listener on each port ("mo_N.<output key>", at most 8) and describes what each carried: audio's peak and rms (dB) and its pitch when periodic (a poly cable's first 4 voices summed); gates counted over the voices, per beat, and how long any is high; the notes the voices' pitches visit; a CV's range and speed (voice 1). notes: notation (as midi.write takes it) the rack's Notes modules play from from_beat, besides what their tracks hold. Nothing is changed; playback is not disturbed.
+
+Kind: `query`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `rack` | string |  |  |  | Rack id |
+| `ports` | array |  |  |  |  |
+| `seconds` | number |  | 0.05..10.0 |  |  |
+| `from_beat` | number |  | 0.0.. |  |  |
+| `notes` | string |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Errors
+
+- `rack.unknown`: no such rack Hint: rack.list
+- `rack.port`: not an output of a module in the rack Hint: rack.get lists them
+
+### Examples
+
+**Listen to Notes' gate and the VCA while a chord plays** (`song_with_rack`)
+
+```json
+{
+  "rack": "rk_1",
+  "ports": ["mo_2.gate", "mo_3.out"],
+  "seconds": 1,
+  "notes": "voice v; 1: [C4 E4 G4]:h r:h"
+}
+
+```
+
+Result:
+
+```json
+{
+  "seconds": 1.0,
+  "from_beat": 0.0,
+  "ports": "<any>"
 }
 
 ```

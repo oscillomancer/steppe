@@ -115,6 +115,7 @@ class ComponentPaths(unittest.TestCase):
         for path, expected in (("cmake/product.h.in", True),
                                ("libs/core-base/src/files.cpp", True),
                                ("plugins/suite/compiler/src/codegen.cpp", True),
+                               ("modules/stock/vca.cpp", True),
                                ("libs/command-bus/src/bus.cpp", False),
                                ("host/engine/src/app.cpp", False)):
             with self.subTest(path=path):

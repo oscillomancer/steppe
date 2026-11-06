@@ -116,7 +116,8 @@ struct Type {
     StructDecl* structDecl = nullptr;
     EnumDecl* enumDecl = nullptr;
     const BuiltinClass* builtin = nullptr;
-    bool shared = false;  // a SharedArray<T, N>: an Array the editor sees
+    bool members = false;  // Params<N>, Inputs<N>, Outputs<N> (with a spare sample)
+    bool shared = false;   // a SharedArray<T, N>: an Array the editor sees
 
     bool isArithmetic() const {
         return kind == TypeKind::Bool || kind == TypeKind::Int || kind == TypeKind::Float ||

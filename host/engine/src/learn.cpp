@@ -12,6 +12,7 @@
 #include "learn_binding.h"
 #include "supple/engine/app.h"
 #include "supple/engine/midi_control.h"
+#include "supple/engine/racks.h"
 #include "supple/model/schemas.h"
 #include "supple/params/params.h"
 
@@ -138,6 +139,8 @@ bool EngineApp::hasLearn() const {
         if (!e.value->learn.empty()) return true;
     for (const auto& e : s.groups)
         if (e.value->vca && !e.value->vca->learn.empty()) return true;
+    for (const auto& e : s.modules)
+        if (!e.value->learn.empty()) return true;
     return false;
 }
 
@@ -175,7 +178,59 @@ void EngineApp::applyLearn(const std::vector<ControlEvent>& events) {
                 });
         }
     }
+    for (const auto& entry : s.modules) {  // rack modules' knobs (rack.md §6)
+        for (const model::ParamLearn& learn : entry.value->learn) {
+            if (!heardControl(events, learn.control)) continue;
+            Takeover& takeover = learnState_[{entry.id, learn.param}].takeover;
+            driveLearned(
+                events, learn, takeover,
+                [&](const auto& next) { return moveKnob(entry.id, learn.param, next); },
+                [&](double current, const ControlReading& r, double step) {
+                    return nextValue(current, r, learn.mode, learn.softTakeover, step, takeover);
+                });
+        }
+    }
     applyControlLearn(events);  // tracks', sends' and VCAs' own controls (ADR-0058)
+}
+
+std::optional<double> EngineApp::moveKnob(
+    model::Id id, const std::string& key,
+    const std::function<std::optional<double>(double current, double step)>& next) {
+    const model::RackModule* m = head().modules.find(id);
+    if (!m || !modules_) return std::nullopt;
+    const rack::Catalog::Entry* entry = modules_->find(m->type);
+    if (!entry) return std::nullopt;
+    const rack::ModuleType& type = *entry->type;
+    const int index = type.param(key);
+    if (index < 0) return std::nullopt;
+    const script::detail::ParamModel& p = type.params()[static_cast<std::size_t>(index)];
+    if (p.output) return std::nullopt;
+    const double value = moduleParamValue(p, m->params.isObject() ? m->params.find(key) : nullptr);
+    const double current = rack::knobPosition(p, value);
+    const bool stepped = p.kind != script::detail::ParamModel::Kind::Continuous;
+    const double span = p.max - p.min;
+    const double step = stepped && span > 0 && span <= 127 ? 1.0 / span : kFineStep;
+    auto moved = next(current, step);
+    if (!moved) return std::nullopt;
+    const double to = rack::knobValue(p, *moved);
+    if (std::abs(to - value) < 1e-12) return std::nullopt;
+    const std::uint64_t now = serviceClockMs();
+    LearnState& state = learnState_[{id, key}];
+    if (now > state.lastMs + kGestureMs) ++state.serial;
+    state.lastMs = now;
+    json::Value params = json::Value::object();
+    params[key] = moduleParamJson(p, to);
+    json::Value args = json::Value::object();
+    args["module"] = id.str();
+    args["params"] = std::move(params);
+    const cmd::Origin origin{cmd::Origin::Type::Internal, "midi", "",
+                             "midi:" + id.str() + ":" + key + ":" + std::to_string(state.serial)};
+    if (!commands_) return std::nullopt;
+    if (auto set = commands_->execute({"module.set", std::move(args), origin}); !set) {
+        emit("engine.error", pluginErrorJson(set.error()));
+        return std::nullopt;
+    }
+    return rack::knobPosition(p, to);
 }
 
 std::optional<double> EngineApp::moveParam(

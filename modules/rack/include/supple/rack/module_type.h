@@ -114,6 +114,13 @@ class ModuleType {
     PanelLayout layout_;
 };
 
+// A knob's travel: where `value` (physical) sits from 0 to 1 along the knob,
+// following its curve (a frequency's is logarithmic), and back. The rack
+// window's knobs and MIDI learn turn knobs alike; whole numbers for integer
+// and choice knobs.
+double knobPosition(const sd::ParamModel& param, double value);
+double knobValue(const sd::ParamModel& param, double position);
+
 // The automatic layout for a description (rack.md §4.5).
 PanelLayout automaticLayout(const std::vector<sd::ParamModel>& params,
                             const std::vector<sd::PortModel>& ports, int width = 0, int height = 0);

@@ -2987,12 +2987,23 @@ struct Gain : Effect {
     }
     run("track.add", R"({"name": "Bass"})");
     if (fixture == "song") return;
-    if (fixture == "song_with_rack") {
+    if (fixture == "song_with_rack" || fixture == "song_with_rack_preset" ||
+        fixture == "song_with_rack_learn") {
         // + rk_1 on tr_1: mo_1 Out (tr_1's input), mo_2 Notes, mo_3 VCA; cb_1 mo_3.out -> mo_1.l
         run("rack.add", R"({"track": "tr_1"})");
         run("module.add", R"({"rack": "rk_1", "type": "notes", "x": 40, "y": 40})");
         run("module.add", R"({"rack": "rk_1", "type": "vca", "x": 300, "y": 40})");
         run("cable.add", R"({"from": "mo_3.out", "to": "mo_1.l"})");
+        if (fixture == "song_with_rack") return;
+        if (fixture == "song_with_rack_learn") {  // + mo_3's level on CC 21, channel 1
+            run("module.learn.set",
+                R"({"module": "mo_3", "param": "level", "midi": {"kind": "cc", "channel": 1, "number": 21}})");
+            return;
+        }
+        // + the rack saved as the preset "Gated VCA"; tr_2 "Lead" with rk_2 (mo_4 its Out)
+        run("rack.preset.save", R"({"rack": "rk_1", "name": "Gated VCA"})");
+        run("track.add", R"({"name": "Lead"})");
+        run("rack.add", R"({"track": "tr_2"})");
         return;
     }
     if (fixture == "song_with_module") {  // + wobble in the module library

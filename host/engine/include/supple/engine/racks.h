@@ -6,6 +6,7 @@
 #pragma once
 
 #include <memory>
+#include <string>
 
 #include "supple/json/value.h"
 #include "supple/rack/module_type.h"
@@ -21,5 +22,9 @@ json::Value moduleParamJson(const script::detail::ParamModel& param, double phys
 // The plugin module's type (com.suppleaudio.rack.plugin): in_l, in_r, pitch,
 // gate, velocity in; out_l, out_r out. Its knobs are its plug-in's.
 std::shared_ptr<const rack::ModuleType> pluginModuleType();
+// Every built-in module type (host and stock) as a Markdown reference: ports,
+// knobs with their ranges, units and defaults, factory presets. The engine
+// CLI prints it (`modules --markdown`) into skill/generated/rack-modules.md.
+std::string moduleReference();
 
 }  // namespace supple::engine

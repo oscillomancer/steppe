@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <functional>
 
 #include "rack_runtime.h"
 #include "supple/base/files.h"
@@ -208,4 +209,231 @@ struct Tone : Module {
     REQUIRE_FALSE(missing);
     CHECK(missing.error().code == "rack.preset");
     (void)got;
+}
+
+TEST_CASE("rack.probe: pitch, gates, notes and a CV's speed") {
+    Fixture f;
+    f.write("sine", R"(#include <supple/script.h>
+
+struct Sine : Module {
+    static constexpr ModuleInfo info = {.name = "Sine", .id = "com.example.sine",
+                                        .vendor = "Example", .description = "A test sine."};
+    Param freq = frequency("Frequency", 20, 2000, 220);
+    Output out = audioOut("Out");
+    double phase = 0;
+
+    void process(int frames) {
+        for (int i = 0; i < frames; ++i) {
+            out[0][i] = 0.5 * sin(2 * pi * phase);
+            phase += freq.at(i) / sampleRate();
+            phase -= floor(phase);
+        }
+    }
+};
+)");
+    f.run("track.add", R"({"name": "Synth"})");
+    f.run("rack.add", R"({"track": "tr_1"})");                                         // mo_1 Out
+    f.run("module.add", R"({"rack": "rk_1", "type": "com.example.sine"})");            // mo_2
+    f.run("module.add", R"({"rack": "rk_1", "type": "notes"})");                       // mo_3
+    f.run("module.add", R"({"rack": "rk_1", "type": "lfo", "params": {"rate": 2}})");  // mo_4
+    json::Value r = f.run("rack.probe", R"({"rack": "rk_1", "seconds": 2,
+        "ports": ["mo_2.out", "mo_3.gate", "mo_3.pitch", "mo_4.out"],
+        "notes": "voice v; 1: C4:q r:q E4:q r:q"})");
+    auto& ports = r["ports"].asArray();
+    REQUIRE(ports.size() == 4);
+    CHECK(ports[0]["pitch"]["hz"].asDouble() == doctest::Approx(220).epsilon(0.002));
+    CHECK(ports[0]["pitch"]["note"].asString() == "A3");
+    CHECK(ports[0]["peak"].asDouble() == doctest::Approx(0.5).epsilon(0.01));
+    CHECK(ports[1]["gates"]["per_beat"].asDouble() == doctest::Approx(0.5));  // 2 in 4 beats
+    CHECK(ports[1]["gates"]["duty"].asDouble() == doctest::Approx(0.5).epsilon(0.02));
+    auto& notes = ports[2]["notes"].asArray();
+    REQUIRE(notes.size() >= 2);
+    bool c4 = false, e4 = false;
+    for (auto& n : notes) {
+        c4 = c4 || n.asString() == "C4";
+        e4 = e4 || n.asString() == "E4";
+    }
+    CHECK(c4);
+    CHECK(e4);
+    CHECK(ports[3]["rate_hz"].asDouble() == doctest::Approx(2).epsilon(0.05));
+    // Nothing changed.
+    CHECK(f.app->head().modules.size() == 4);
+}
+
+TEST_CASE("rack presets: a patch saved from one rack plays in another") {
+    Fixture f;
+    f.run("track.add", R"({"name": "Synth"})");
+    f.run("rack.add", R"({"track": "tr_1"})");  // mo_1 Out
+    f.run("module.add",
+          R"({"rack": "rk_1", "type": "vca", "label": "Amp", "params": {"level": -6}})");  // mo_2
+    f.run("module.add", R"({"rack": "rk_1", "type": "lfo", "params": {"rate": 3}})");      // mo_3
+    f.run("module.add", R"({"rack": "rk_1", "plugin": "com.suppleaudio.test.gain"})");     // mo_4
+    f.run("fx.patch.merge", R"({"fx": "fx_1", "patch": {"params": {"gain": "-9 dB"}}})");
+    f.run("cable.add", R"({"from": "mo_3.out", "to": "mo_2.level", "amount": 4})");
+    f.run("cable.add", R"({"from": "mo_2.out", "to": "mo_4.in_l"})");
+    f.run("cable.add", R"({"from": "mo_3.out", "to": "fx_1.gain", "amount": 0.3})");
+    f.run("cable.add", R"({"from": "mo_4.out_l", "to": "mo_1.l", "color": "teal"})");
+
+    json::Value saved = f.run("rack.preset.save",
+                              R"({"rack": "rk_1", "name": "Tremolo", "description": "A wobble"})");
+    CHECK(saved["modules"].asInt() == 4);
+    CHECK(saved["cables"].asInt() == 4);
+    auto again = f.call("rack.preset.save", *json::parse(R"({"rack": "rk_1", "name": "Tremolo"})"));
+    REQUIRE_FALSE(again);
+    CHECK(again.error().code == "rack.preset_exists");
+    auto badName = f.call("rack.preset.save", *json::parse(R"({"rack": "rk_1", "name": "a/b"})"));
+    REQUIRE_FALSE(badName);
+    CHECK(badName.error().code == "rack.preset_name");
+    // The file is canonical: saving the same patch again writes the same bytes.
+    const auto file = std::filesystem::path(saved["path"].asString());
+    auto first = readTextFile(file, 1 << 20);
+    REQUIRE(first);
+    f.run("rack.preset.save", R"({"rack": "rk_1", "name": "Tremolo", "description": "A wobble",
+                                  "replace": true})");
+    CHECK(*readTextFile(file, 1 << 20) == *first);
+
+    json::Value list = f.run("rack.preset.list", R"({"query": "wobble"})");
+    REQUIRE(list["presets"].asArray().size() == 1);
+    CHECK(list["presets"].at(0).find("name")->asString() == "Tremolo");
+    CHECK(list["presets"].at(0).find("modules")->asInt() == 4);
+    CHECK(f.run("rack.preset.list", R"({"query": "nothing"})")["presets"].asArray().empty());
+
+    // Into a second rack: its Out takes the preset Out's cable (io: join).
+    f.run("track.add", R"({"name": "Lead"})");
+    f.run("rack.add", R"({"track": "tr_2"})");  // rk_2, mo_5 Out
+    json::Value loaded = f.run("rack.preset.load", R"({"rack": "rk_2", "name": "Tremolo"})");
+    REQUIRE(loaded["modules"].asArray().size() == 3);  // mo_6 VCA, mo_7 LFO, mo_8 plugin
+    REQUIRE(loaded["cables"].asArray().size() == 4);
+    CHECK(loaded.find("warnings") == nullptr);
+    const model::Session& s = f.app->head();
+    const model::RackModule* vca = s.modules.find({model::Kind::Module, 6});
+    REQUIRE(vca != nullptr);
+    CHECK(vca->rack == model::Id{model::Kind::Rack, 2});
+    CHECK(vca->label == "Amp");
+    CHECK(json::writeCompact(vca->params) == R"({"level":-6.0})");
+    const model::RackModule* plugin = s.modules.find({model::Kind::Module, 8});
+    REQUIRE(plugin != nullptr);
+    REQUIRE(plugin->fx);
+    CHECK(*plugin->fx != model::Id{model::Kind::Fx, 1});
+    CHECK(s.fx.find(*plugin->fx)->plugin.id == "com.suppleaudio.test.gain");
+    CHECK(json::writeCompact(f.run("fx.patch.get", "{\"fx\": \"" + plugin->fx->str() + "\"}")) ==
+          json::writeCompact(f.run("fx.patch.get", R"({"fx": "fx_1"})")));
+    bool toOut = false, toKnob = false, toPlugin = false;
+    for (const auto& e : s.cables) {
+        const model::Cable& cb = *e.value;
+        toOut |= cb.from.str() == "mo_8.out_l" && cb.to.str() == "mo_5.l" && cb.color == "teal";
+        toKnob |= cb.from.str() == "mo_7.out" && cb.to.str() == "mo_6.level" && cb.amount == 4.0;
+        toPlugin |= cb.from.str() == "mo_7.out" && cb.to == model::CableEnd{*plugin->fx, "gain"} &&
+                    cb.amount == 0.3;
+    }
+    CHECK(toOut);
+    CHECK(toKnob);
+    CHECK(toPlugin);
+    // One undo step takes it all away.
+    f.run("history.undo");
+    CHECK(f.app->head().modules.size() == 5);
+
+    // io: add brings the preset's own Out.
+    json::Value added = f.run("rack.preset.load", R"({"rack": "rk_2", "name": "Tremolo",
+                                                       "io": "add", "x": 0, "y": 500})");
+    CHECK(added["modules"].asArray().size() == 4);
+
+    // A knob the module no longer has is left out with a warning; a type that
+    // is not installed refuses the whole preset.
+    auto edited = [&](const std::function<void(json::Value&)>& change) {
+        json::Value doc = *json::parse(*first);
+        for (auto& m : doc["modules"].asArray()) change(m);
+        return json::writeCanonical(doc);
+    };
+    REQUIRE(writeFileAtomic(file.parent_path() / "Old.json", edited([](json::Value& m) {
+                                if (m["type"].asString() == "com.suppleaudio.rack.vca")
+                                    m["params"]["nope"] = 1;
+                            })));
+    json::Value old =
+        f.run("rack.preset.load", R"({"rack": "rk_2", "path": ")" +
+                                      (file.parent_path() / "Old.json").generic_string() + R"("})");
+    REQUIRE(old.find("warnings") != nullptr);
+    CHECK(old["warnings"].at(0).find("code")->asString() == "rack.preset_knob");
+    CHECK(old["modules"].asArray().size() == 3);
+    const std::size_t before = f.app->head().modules.size();
+    REQUIRE(writeFileAtomic(file.parent_path() / "Missing.json", edited([](json::Value& m) {
+                                if (m["type"].asString() == "com.suppleaudio.rack.lfo")
+                                    m["type"] = "com.example.not.here";
+                            })));
+    auto missing =
+        f.call("rack.preset.load", *json::parse(R"({"rack": "rk_2", "name": "Missing"})"));
+    REQUIRE_FALSE(missing);
+    CHECK(missing.error().code == "rack.unknown_type");
+    CHECK(f.app->head().modules.size() == before);
+
+    json::Value gone = f.run("rack.preset.delete", R"({"name": "Tremolo"})");
+    CHECK_FALSE(std::filesystem::exists(gone["path"].asString()));
+}
+
+TEST_CASE("module.duplicate keeps cables into a plugin module's plug-in") {
+    Fixture f;
+    f.run("track.add", R"({"name": "Synth"})");
+    f.run("rack.add", R"({"track": "tr_1"})");                                          // mo_1 Out
+    f.run("module.add", R"({"rack": "rk_1", "type": "lfo"})");                          // mo_2
+    f.run("module.add", R"({"rack": "rk_1", "plugin": "com.suppleaudio.test.gain"})");  // mo_3
+    f.run("cable.add", R"({"from": "mo_2.out", "to": "mo_3.in_l"})");
+    f.run("cable.add", R"({"from": "mo_2.out", "to": "fx_1.gain", "amount": 0.3})");
+    json::Value copies = f.run("module.duplicate", R"({"modules": ["mo_2", "mo_3"]})");
+    REQUIRE(copies["cables"].asArray().size() == 2);
+    const model::RackModule* copy = f.app->head().modules.find({model::Kind::Module, 5});
+    REQUIRE(copy != nullptr);
+    REQUIRE(copy->fx);
+    bool reached = false;
+    for (const auto& e : f.app->head().cables)
+        reached |= e.value->from.str() == "mo_4.out" &&
+                   e.value->to == model::CableEnd{*copy->fx, "gain"} && e.value->amount == 0.3;
+    CHECK(reached);
+}
+
+TEST_CASE("rack.patch: named modules and cables in one step, all or nothing") {
+    Fixture f;
+    f.run("track.add", R"({"name": "Synth"})");
+    f.run("rack.add", R"({"track": "tr_1"})");  // mo_1 Out
+    json::Value made = f.run("rack.patch", R"({"rack": "rk_1",
+        "modules": {"keys": {"type": "notes"}, "osc": {"type": "vco"},
+                    "env": {"type": "adsr", "params": {"release": 200}},
+                    "amp": {"type": "vca"}, "fx": {"plugin": "com.suppleaudio.test.gain"},
+                    "wobble": {"type": "lfo", "params": {"rate": 4}}},
+        "cables": [["keys.pitch", "osc.pitch"], ["keys.gate", "env.gate"],
+                   ["osc.saw", "amp.in"], ["env.envelope", "amp.cv"],
+                   ["amp.out", "fx.in_l"], ["wobble.out", "fx.gain", 0.25],
+                   {"from": "fx.out_l", "to": "mo_1.l", "color": "teal"}]})");
+    const auto& ids = made["modules"];
+    REQUIRE(ids.find("fx") != nullptr);
+    CHECK(made["cables"].asArray().size() == 7);
+    const model::Session& s = f.app->head();
+    auto module = [&](const char* name) {
+        return s.modules.find(*model::Id::parse(ids.find(name)->asString()));
+    };
+    CHECK(json::writeCompact(module("env")->params) == R"({"release":200.0})");
+    // Laid out by signal flow: each stage right of what feeds it.
+    CHECK(module("keys")->x < module("osc")->x);
+    CHECK(module("osc")->x < module("amp")->x);
+    CHECK(module("amp")->x < module("fx")->x);
+    // A plugin module's knob is its plug-in's.
+    bool knob = false;
+    for (const auto& e : s.cables)
+        knob |=
+            e.value->to == model::CableEnd{*module("fx")->fx, "gain"} && e.value->amount == 0.25;
+    CHECK(knob);
+
+    // One bad cable: nothing changes.
+    const std::size_t modules = s.modules.size(), cables = s.cables.size();
+    auto bad = f.call("rack.patch", *json::parse(R"({"rack": "rk_1",
+        "modules": {"osc2": {"type": "vco"}}, "cables": [["osc2.nope", "mo_1.l"]]})"));
+    REQUIRE_FALSE(bad);
+    CHECK(bad.error().code == "rack.port");
+    CHECK(bad.error().path.rfind("/args/cables/0", 0) == 0);
+    CHECK(f.app->head().modules.size() == modules);
+    CHECK(f.app->head().cables.size() == cables);
+    auto unknown = f.call("rack.patch", *json::parse(R"({"rack": "rk_1",
+        "modules": {"osc2": {"type": "vcoo"}}})"));
+    REQUIRE_FALSE(unknown);
+    CHECK(unknown.error().code == "rack.unknown_type");
+    CHECK(unknown.error().path == "/args/modules/osc2/type");
 }

@@ -169,6 +169,26 @@ At most 32 inputs, 32 outputs and 256 parameters.
 
 Outputs arrive zeroed for each block.
 
+**Declaration arrays.** `Params<N>`, `Inputs<N>` and `Outputs<N>` are direct
+module members initialized from one parameter/port factory spec. Declare
+one bank per line. `N` is a positive literal or constexpr int. Indexing is
+zero-based, accepts a runtime int and yields an ordinary `Param`, `Input`
+or `Output` reference; `.size()` is the fixed count. Element names append
+`" 1"` .. `" N"` to the spec's name, and keys append `_1` .. `_N` to the
+member's snake_case key (or the `.withKey()` stem). Display names do not
+choose keys in either backend. A bank derives each parameter ID from the
+complete element key; `.withId()` is refused. All other spec modifiers are
+replicated; declaration-time element references in presets and activity
+conditions require constant indices. Do not assign or copy banks in scripts;
+helper parameters may be references.
+
+Each module has at most **256 parameters total**, array elements included,
+and **32 inputs and 32 outputs total**. An out-of-range bank index reports
+a fault and returns a reset spare: parameters and input samples read zero,
+output writes are discarded; additional channel/frame faults are reported
+normally. Indexing never allocates. The flat metadata and automatic layout
+see each element as an ordinary declaration.
+
 ### 3.3 The module base
 
 | Method | |
@@ -202,6 +222,25 @@ A cable moves a parameter by `amount × value`: for a frequency the amount is
 in octaves (`value · 2^(amount·x)`), otherwise in the parameter's unit (a
 percent in percent, dB, semitones, ms), clamped to the parameter's range.
 
+**Helpers.** Member/free functions may take `const Input&`, `Output&`,
+`Param&` and `const Param&`, including indexed elements. They preserve the
+host bindings and obey the ordinary audio/UI, read-only-parameter and
+evaluation-order rules.
+
+**Defined bits.** `shl(x, n)`, `shr(x, n)`, `bit(x, n)` and `popcount(x)`
+operate on the 32-bit representation of ints. Left shifts discard overflow;
+right shifts zero-fill; `bit` returns 0/1. Counts outside 0..31 return zero
+for shifts and bit reads. `popcount` counts ones, including the sign bit.
+Ordinary shift operators retain their constant-count restrictions.
+
+**Gates.** `Trigger::rose(x)` updates a hysteresis gate (rise at >=0.5,
+fall below 0.25) and reports only a rising edge; `high()` reads it and
+`clear()` resets it. `Pulse::fire()` restarts a 1 ms pulse, rounded up to a
+whole frame at the instance's sample rate; `fire(frames)` sets an explicit
+length (nonpositive clears). `next()` consumes one frame, returning 1 while
+active and 0 afterwards; `clear()` resets it. Both are small copyable value
+types, usually held in `Array<Trigger, 16>` / `Array<Pulse, 16>` for polyphony.
+
 ### 3.5 The face
 
 Without `panel()`, the automatic layout (§4.5). With it:
@@ -233,14 +272,25 @@ but discouraged. Each refusal names the module way (`script.module.*`).
 
 ### 3.7 Code interface
 
-The compiler's `Program` and `NativeModuleCode<T>` (a module compiled as
-C++) implement `supple::script::detail::ModuleCode`
-(`supple/script_module.h`): the module's `ModuleInfoModel`, parameters
-(`ParamModel`), ports (`PortModel`), shared state, factory patches, the
-struct's create/destroy/copy, and the hooks `prepare`, `update`,
-`process(ctx, self, frames)`, `panel`, `draw`, `pointer`. The runtime
-record is `supple::script::detail::Instance` with a `ModuleBinding` for
-ports and channels.
+`scriptc::moduleCode(std::shared_ptr<const Program>)` returns a retaining
+adapter implementing `supple::script::detail::ModuleCode`; null for a plugin
+or null Program. `NativeModuleCode<T>` implements the same interface for
+C++ modules. It exposes `valid()` and `error()` for native description
+validation: above 256 parameters or 32 ports per direction it retains the
+inspectable description but refuses `create()` (null) and all hooks (null),
+without throwing a validation exception.
+
+`ModuleCode` (`supple/script_module.h`) describes the `ModuleInfoModel`,
+parameters (`ParamModel`), ports (`PortModel`), shared state and factory
+patches, and exposes create/destroy/copy and hooks `prepare`, `update`,
+`process(ctx, self, frames)`, `panel`, `draw`, `pointer`. Array elements are
+flat models with independent keys and offsets. `Program::kind()` reports
+`PluginKind::Module`; its plugin `process()` hook is null for a module.
+The runtime record is `supple::script::detail::Instance`: `PortBinding`
+binds ports, `ParamBinding` binds parameters and cable modulation, and
+`Instance::channels`, `transport`, `seed` carry the module's context. The
+caller installs `CurrentScope` around hooks and sets the process budget to
+`65536 * frames`.
 
 ### 3.8 The library
 
@@ -358,7 +408,8 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   to it; liveness propagates to what it feeds.
 - **Parameters.** Knob edits on a running rack go to atomic slots (no
   compile). Envelopes on module parameters compile to curves the schedule
-  samples on the grid. MIDI learn drives the same slots.
+  samples on the grid. MIDI learn (`module.learn.*`) moves a knob through
+  `module.set`, so it reaches the same slots.
 - **Plugin modules.** Their instances come from the instance pool by fx id
   and run as stages of the rack node (`Node::rackStages`, prepared and
   automated as chain stages), in sub-blocks on the grid, with notes made
@@ -385,10 +436,12 @@ examples run as tests. Ends are strings: `"mo_3.out"`.
 | `rack.set` | edit | `{rack, name?, track?}` |
 | `rack.list` | query | `{}` → racks with their home tracks, module counts and Out modules |
 | `rack.get` | query | `{rack, detail?: brief\|full}` → modules (id, type, label, changed params, position, size), cables (with `feedback`), Out modules and the channels they feed, problems |
-| `rack.probe` | action | `{rack, ports: [...], seconds?, notes?, from_beat?}` → per port: peak, rms, dc, range, pitch (Hz and note) when periodic, gate rate and duty when gated, a one-line description |
-| `rack.preset.save` | action | `{rack, name, modules?}` → `{path}` |
-| `rack.preset.load` | edit | `{rack, name\|path, x?, y?}` → `{modules, cables}` |
-| `rack.preset.list` | query | `{}` |
+| `rack.probe` | query | `{rack, ports: ["mo_N.<output>", …≤8], seconds? (≤10, 2), from_beat?, notes? (notation the rack's Notes modules play)}` → per port: peak, rms, dc, min, max; audio (the first 4 voices summed): dB and pitch (Hz, note, cents) when periodic; gates over the voices: count, per second, per beat, duty; pitch: the notes visited; CV: rate; a one-line description. An offline render of a copy with a listener (`ProbeModule`) on each port; nothing changes |
+| `rack.patch` | edit | `{rack, modules: {name: {type\|plugin, params?, preset?, label?, x?, y?, source?, device?}}, cables?: [[from, to, amount?, color?] \| {from, to, amount?, color?}], x?, y?}` → `{modules: {name: id}, cables}`: ends `"name.port"`, `"name.knob"` (a plugin module's: its plug-in's) or `"mo_N.port"`; modules without a place laid out by signal flow; checked as `module.add` and `cable.add` check, all or nothing |
+| `rack.preset.save` | action | `{rack, name, modules?, description?, replace?}` → `{path, modules, cables}`: the modules (default the whole rack) and the cables among them |
+| `rack.preset.load` | edit | `{rack, name\|path, x?, y?, io?: join\|add}` → `{modules, cables, warnings?}`: one undo step |
+| `rack.preset.list` | query | `{query?}` → presets: name, path, description, module and cable counts, module types |
+| `rack.preset.delete` | action | `{name}` → `{path}` |
 | `module.list` | query | `{query?, tag?}` → types: id, name, tags, one line, origin |
 | `module.describe` | query | `{type\|module}` → parameters (key, unit, range, default, help, group, choices), ports (key, signal, help, normal), size, presets |
 | `module.add` | edit | `{rack, type\|plugin, label?, x?, y?, params?, preset?, source?, device?}` → `{module, type, x, y, width, height, inputs, outputs, knobs, fx?, plugin?}` |
@@ -401,6 +454,9 @@ examples run as tests. Ends are strings: `"mo_3.out"`.
 | `module.check` | query | `{source\|name}` → `{ok, diagnostics, type?}` |
 | `module.get` | query | `{type\|name}` → `{type, origin, source, name?, path?}` (host modules have none) |
 | `module.fork` | action | `{type, id, name?}` → as `module.write`: the type's source under a new id, in the library |
+| `module.learn.set` | edit | `{module, param, midi, mode?, soft_takeover?}` → `{param, control}`: a MIDI controller turns the knob along its travel (`rack::knobPosition`), one undo step per movement; not a plugin module's (`fx.learn.set`) |
+| `module.learn.remove` | edit | `{module, param}` |
+| `module.learn.list` | query | `{module?}` → `{learn: [{module, param, midi, control, mode?, soft_takeover?}]}` |
 | `cable.add` | edit | `{from, to, amount?, color?}` → `{cable, feedback, warnings}` |
 | `cable.remove` | edit | `{cable}` or `{from, to}` |
 | `cable.set` | edit | `{cable, amount?, color?}` |
@@ -415,7 +471,44 @@ are its plug-in's (`env.add {fx}`). `preset` on `module.add` and
 lists them): every knob goes to it, then `params` apply on top. The app
 reaches racks through `EngineApp::modules()` (the catalog),
 `EngineApp::moduleInstance()` (a running module's telemetry) and
-`supple/engine/racks.h`.
+`supple/engine/racks.h`. `<slug>-engine modules --markdown` prints every
+built-in type's ports and knobs (`moduleReference()`), committed as
+`skill/generated/rack-modules.md` and checked by `engine.registry-drift`.
+
+### 7.1 Rack presets
+
+A rack preset is a group of modules and the cables among them, kept
+apart from any project in `<rackPresetDir>/<name>.json`
+(`AppOptions::rackPresetDir`; the app's is `<data>/<slug>/rack-presets`,
+default `<workdir>/rack-presets`). A name is 1–200 characters without
+`/ \ : * ? " < > |` or control characters, not ending in a space or a
+dot. The file is canonical JSON:
+
+```json
+{"schema": "supple.rack-preset/1.0", "name": "Tremolo", "description": "…",
+ "modules": [{"type": "com.suppleaudio.rack.vca", "version": "1.0.0", "label": "Amp",
+              "x": 0, "y": 0, "params": {"level": -6}, "bypass": false},
+             {"type": "com.suppleaudio.rack.plugin", "x": 220, "y": 0, "fx": {…}}],
+ "cables": [{"from": {"module": 2, "port": "out"},
+             "to": {"module": 1, "port": "gain", "plugin": true}, "amount": 0.3}]}
+```
+
+Modules are by index, placed relative to the group's top-left. A cable's
+end names a module by index and a port, or with `plugin: true` a
+parameter of that plugin module's plug-in. A plugin module's `fx` is an
+FX chain entry (the plug-in, its semantic patch or base64 state). What
+belongs to a project stays out: a Notes module's source track (it plays
+the rack's channel), MIDI learn, envelopes, sends and the channels an
+Out feeds.
+
+A load checks everything before the model changes. A module type or
+plug-in that is not installed refuses the preset (`rack.unknown_type`,
+`chain.plugin_missing`); a knob or port its type no longer has is left
+out with a warning (`rack.preset_knob`, `rack.preset_cable`). With
+`io: join` (the default) the preset's Out and In modules are the rack's
+own, in order: their cables reach the rack's Outs and Ins, so a whole
+patch saved from one rack sounds in a new one at once; extra ones are
+added. `io: add` adds them all.
 
 ## 8. The rack window (`daw/gui`)
 

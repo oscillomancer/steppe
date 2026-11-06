@@ -360,6 +360,14 @@ static_assert(FileBinding::audioFileContents() == 0 && FileBinding::convolverCon
 
 // How the glue reaches a Param's fields.
 struct ParamBinding {
+    static void reset(Param& p) {
+        p.value_ = p.min_ = p.reported_ = 0.0;
+        p.glide_ = p.mod_ = nullptr;
+        p.glideFrames_ = p.modStride_ = p.modChannels_ = 0;
+        p.changed_ = true;
+        p.offAtMinimum_ = false;
+        p.slot_ = -1;
+    }
     static void setValue(Param& p, double value, bool changed) {
         p.value_ = value;
         p.changed_ = changed;

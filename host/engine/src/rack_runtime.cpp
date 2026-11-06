@@ -91,6 +91,38 @@ json::Value moduleParamJson(const sd::ParamModel& param, double physical) {
 
 namespace supple::engine::detail {
 
+std::shared_ptr<const rack::ModuleType> probeModuleType() {
+    static const auto t = [] {
+        sd::ModuleInfoModel info;
+        info.name = "Probe";
+        info.id = std::string(kProbeModule);
+        info.vendor = "Supple Audio";
+        info.description = "rack.probe's listener.";
+        sd::ParamModel seconds;
+        seconds.key = seconds.member = "seconds";
+        seconds.name = "Seconds";
+        seconds.min = 0;
+        seconds.max = 11;
+        seconds.def = 2;
+        sd::PortModel in;
+        in.key = in.member = "in";
+        in.name = "In";
+        in.signal = sd::PortModel::Signal::Cv;
+        return rack::ModuleType::host(std::move(info), {seconds}, {in});
+    }();
+    return t;
+}
+
+void ProbeModule::process(const rack::HostContext& ctx) SUPPLE_RT {
+    const script::Input& in = ctx.instance->inputMember(0);
+    width = std::max(width, in.channels());
+    for (int c = 0; c < kProbeChannels; ++c) {
+        std::vector<float>& to = recorded[static_cast<std::size_t>(c)];
+        for (int i = 0; i < ctx.frames && to.size() < to.capacity(); ++i)
+            to.push_back(static_cast<float>(in[c][i]));
+    }
+}
+
 std::shared_ptr<const rack::Catalog> builtinModuleCatalog() {
     static const std::shared_ptr<const rack::Catalog> catalog = [] {
         auto c = std::make_shared<rack::Catalog>();
@@ -148,6 +180,8 @@ rack::Instance* RackPool::get(Id id, const model::RackModule& module,
             type->type->code() ? rack::Instance::make(type->type, setup)
             : module.type == model::kPluginModule
                 ? rack::Instance::make(type->type, std::make_unique<PluginModule>(), setup)
+            : module.type == kProbeModule
+                ? rack::Instance::make(type->type, std::make_unique<ProbeModule>(), setup)
                 : rack::host::make(type->type, setup);
         if (!made) return nullptr;  // a host type this engine does not make here
         it = modules_
@@ -156,6 +190,10 @@ rack::Instance* RackPool::get(Id id, const model::RackModule& module,
                  .first;
     }
     setParams(*it->second.instance, module);
+    if (auto* probe = dynamic_cast<ProbeModule*>(it->second.instance->host()))
+        probe->reserve(
+            static_cast<std::size_t>(std::ceil(it->second.instance->param(0) * setup.sampleRate)) +
+            rack::kGrid);
     return it->second.instance.get();
 }
 

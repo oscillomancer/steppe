@@ -18,8 +18,10 @@
 #include "supple/script_module.h"
 
 namespace supple::script::module_test {
+#include "module_array_bounds.h"
+#include "module_arrays.h"
 #include "module_surface.h"
-}
+}  // namespace supple::script::module_test
 
 using namespace supple;
 using scripttest::Audio;
@@ -1518,4 +1520,334 @@ TEST_CASE("module identity and context checks preserve the script subset") {
     CHECK(
         firstError(moduleScript("Param p = frequency(\"P\", 20, 20000, 1000).polyModulated();")) ==
         "script.module.modulation");
+}
+
+TEST_CASE("defined 32-bit helpers cover every shift count without UB") {
+    CHECK(ss::shl(1, 31) == std::numeric_limits<int>::min());
+    CHECK(ss::shr(-1, 1) == std::numeric_limits<int>::max());
+    CHECK(ss::popcount(-1) == 32);
+    CHECK(ss::popcount(std::numeric_limits<int>::min()) == 1);
+    for (int n :
+         {std::numeric_limits<int>::min(), -32, -1, 32, 33, std::numeric_limits<int>::max()}) {
+        CHECK(ss::shl(-1, n) == 0);
+        CHECK(ss::shr(-1, n) == 0);
+        CHECK(ss::bit(-1, n) == 0);
+    }
+    const auto source = moduleScript("Output out = audioOut(\"Out\");", R"(
+        void process(int frames) {
+            for (int n = -2; n < 34; ++n) {
+                int x = n - 2;
+                int y = shl(x, n);
+                int z = shr(x, n);
+                out[0][0] += y * 0.000001 + z * 0.0000001 + bit(x, n) + popcount(x);
+            }
+        })");
+    for (bool interpret : {false, true}) {
+        auto r = compileOk(source, {.interpret = interpret});
+        auto code = scriptc::moduleCode(r.program);
+        void* self = code->create();
+        sd::Instance record;
+        sd::Instance::bind(*static_cast<ss::Plugin*>(self), &record);
+        double sample = 0, spare = 0;
+        auto& port = *reinterpret_cast<ss::Output*>(static_cast<unsigned char*>(self) +
+                                                    code->ports()[0].offset);
+        sd::PortBinding::bindOutput(port, &sample, &spare, 1, 1, 1);
+        sd::CurrentScope scope(&record);
+        if (interpret)
+            code->process()(&record, self, 1);
+        else
+            callRealtimeModule(code->process(), &record, self, 1);
+        double expected = 0;
+        for (int n = -2; n < 34; ++n) {
+            int x = n - 2;
+            int y = ss::shl(x, n), z = ss::shr(x, n);
+            expected += y * 0.000001 + z * 0.0000001 + ss::bit(x, n) + ss::popcount(x);
+        }
+        CHECK(std::bit_cast<std::uint64_t>(sample) == std::bit_cast<std::uint64_t>(expected));
+        code->destroy(self);
+    }
+}
+
+TEST_CASE("gate helpers follow hysteresis and frame-count pulse lengths") {
+    ss::Trigger t;
+    CHECK_FALSE(t.high());
+    CHECK_FALSE(t.rose(0.49));
+    CHECK(t.rose(0.5));
+    CHECK(t.high());
+    CHECK_FALSE(t.rose(0.25));
+    CHECK(t.high());
+    CHECK_FALSE(t.rose(0.249));
+    CHECK_FALSE(t.high());
+    CHECK(t.rose(1));
+    ss::Trigger copy = t;
+    t.clear();
+    CHECK_FALSE(t.high());
+    CHECK(copy.high());
+    ss::Pulse p;
+    CHECK(p.next() == 0);
+    for (double rate : {1000.0, 44100.0, 48000.0, 96000.0}) {
+        sd::Instance record;
+        record.sampleRate = rate;
+        sd::CurrentScope scope(&record);
+        p.fire();
+        const int frames = ss::ceilToInt(rate * 0.001);
+        for (int i = 0; i < frames; ++i) CHECK(p.next() == 1);
+        CHECK(p.next() == 0);
+    }
+    p.fire(2);
+    ss::Pulse copyPulse = p;
+    CHECK(p.next() == 1);
+    p.fire(1);
+    CHECK(p.next() == 1);
+    CHECK(p.next() == 0);
+    CHECK(copyPulse.next() == 1);
+    p.fire(-1);
+    CHECK(p.next() == 0);
+    copyPulse.clear();
+    CHECK(copyPulse.next() == 0);
+}
+
+TEST_CASE("module declaration arrays flatten metadata and preserve helper references") {
+    const std::string file = __FILE__;
+    std::ifstream in(file.substr(0, file.find_last_of("/\\") + 1) + "module_arrays.h");
+    REQUIRE(in);
+    std::stringstream text;
+    text << in.rdbuf();
+    const sd::NativeModuleCode<script::module_test::ArrayModule> native(
+        {{&script::module_test::ArrayModule::pitch, "pitch"},
+         {&script::module_test::ArrayModule::enabled, "enabled"},
+         {&script::module_test::ArrayModule::amount, "amount"}},
+        {{&script::module_test::ArrayModule::signalIn, "signal_in"},
+         {&script::module_test::ArrayModule::signalOut, "signal_out"},
+         {&script::module_test::ArrayModule::gate, "gate"},
+         {&script::module_test::ArrayModule::triggerOut, "trigger_out"}});
+    REQUIRE(native.valid());
+    REQUIRE(native.params().size() == 8);
+    REQUIRE(native.ports().size() == 6);
+    CHECK(native.params()[0].name == "Step Pitch 1");
+    CHECK(native.params()[3].name == "Step Pitch 4");
+    CHECK(native.params()[3].key == "note_4");
+    CHECK(native.params()[6].key == "amount_1");
+    CHECK(native.ports()[0].key == "signal_in_1");
+    CHECK(native.ports()[3].key == "signal_out_2");
+    for (bool interpret : {false, true}) {
+        auto r = compileOk(text.str(), {.interpret = interpret});
+        auto code = scriptc::moduleCode(r.program);
+        REQUIRE(code->params().size() == native.params().size());
+        for (std::size_t i = 0; i < native.params().size(); ++i) {
+            CHECK(native.params()[i].name == code->params()[i].name);
+            CHECK(native.params()[i].key == code->params()[i].key);
+            CHECK(native.params()[i].id == code->params()[i].id);
+            CHECK(native.params()[i].activeWhen == code->params()[i].activeWhen);
+        }
+        CHECK(native.factoryPatches() == code->factoryPatches());
+        void* self = code->create();
+        sd::Instance record;
+        sd::Instance::bind(*static_cast<ss::Plugin*>(self), &record);
+        ss::Panel panel;
+        PanelCalls calls;
+        sd::Layout::bind(panel, &calls);
+        sd::CurrentScope scope(&record);
+        code->panel()(&record, self, &panel);
+        CHECK_FALSE(calls.calls.empty());
+        code->destroy(self);
+    }
+}
+
+namespace {
+struct NativeAtLimit : ss::Module {
+    static constexpr ss::ModuleInfo info = {.name = "Limit", .id = "com.example.limit"};
+    ss::Params<256> values = ss::percent("Value", 50);
+    void process(int) {}
+};
+struct NativeOverPorts : ss::Module {
+    static constexpr ss::ModuleInfo info = {.name = "Ports", .id = "com.example.ports"};
+    ss::Inputs<32> in = ss::audioIn("In");
+    ss::Input extra = ss::audioIn("Extra");
+};
+struct NativeOverLimit : ss::Module {
+    static constexpr ss::ModuleInfo info = {.name = "Too Many", .id = "com.example.too-many"};
+    ss::Params<128> a = ss::percent("A", 50);
+    ss::Params<128> b = ss::percent("B", 50);
+    ss::Param extra = ss::percent("Extra", 50);
+    void process(int) {}
+};
+}  // namespace
+
+TEST_CASE("declaration arrays respect total module limits and storage rules") {
+    const sd::NativeModuleCode<NativeAtLimit> atLimit({{&NativeAtLimit::values, "values"}});
+    REQUIRE(atLimit.valid());
+    REQUIRE(atLimit.params().size() == 256);
+    CHECK(atLimit.params().back().key == "values_256");
+    const sd::NativeModuleCode<NativeOverLimit> overLimit;
+    CHECK_FALSE(overLimit.valid());
+    CHECK(overLimit.error() == "script.module.param_limit: a module has at most 256 parameters");
+    CHECK(overLimit.params().size() == 257);
+    CHECK(overLimit.create() == nullptr);
+    CHECK(overLimit.process() == nullptr);
+    const sd::NativeModuleCode<NativeOverPorts> tooManyPorts;
+    CHECK_FALSE(tooManyPorts.valid());
+    CHECK(tooManyPorts.error() ==
+          "script.module.port_limit: a module has at most 32 inputs and 32 outputs");
+    CHECK(tooManyPorts.create() == nullptr);
+    compileOk(moduleScript("Params<256> values = percent(\"Value\", 50);"));
+    CHECK(firstError(moduleScript("Params<128> a = percent(\"A\", 50);\nParams<128> b = "
+                                  "percent(\"B\", 50);\nParam extra = percent(\"Extra\", 50);")) ==
+          "script.module.param_limit");
+    CHECK(firstError(moduleScript("Params<257> values = percent(\"Value\", 50);")) ==
+          "script.module.array_size");
+    CHECK(firstError(moduleScript(
+              "Inputs<32> in = audioIn(\"In\");\nInput extra = audioIn(\"Extra\");")) ==
+          "script.module.port_limit");
+    CHECK(firstError(
+              moduleScript("Outputs<16> a = audioOut(\"A\");\nOutputs<17> b = audioOut(\"B\");")) ==
+          "script.module.port_limit");
+    CHECK(firstError(moduleScript("Inputs<0> in = audioIn(\"In\");")) ==
+          "script.module.array_size");
+    CHECK(firstError(moduleScript("Outputs<33> out = audioOut(\"Out\");")) ==
+          "script.module.array_size");
+    CHECK(firstError(moduleScript("Inputs<2> in = audioOut(\"In\");")) ==
+          "script.module.port_direction");
+    CHECK(firstError(moduleScript("Params<2> values;")) == "script.module.array_declaration");
+    CHECK(firstError(moduleScript("Params<2> values = percent(\"Value\", 50).withId(13);")) ==
+          "script.module.array_id");
+    CHECK(firstError(moduleScript("Params<2> values = percent(\"Value\", 50);\nParam clash = "
+                                  "percent(\"Clash\", 50).withKey(\"values_2\");")) ==
+          "script.module.key");
+    CHECK(firstError(moduleScript("Params<2> values = percent(\"Value\", 50);",
+                                  "void process(int frames) { auto copy = values; }")) ==
+          "script.module.array_location");
+    CHECK(firstError(moduleScript("Params<2> values = percent(\"Value\", 50);",
+                                  "void process(int frames) { values = values; }")) ==
+          "script.module.array_assignment");
+    CHECK(firstError(moduleScript("Params<2> values = percent(\"Value\", 50);",
+                                  "void process(int frames) { values.fill(values[0]); }")) ==
+          "script.module.array_method");
+    CHECK(firstError(moduleScript("Params<2> values = percent(\"Value\", 50);",
+                                  "void process(int frames) { values[0] = values[1]; }")) ==
+          "script.param.read_only");
+    CHECK(firstError(moduleScript(
+              "", "void process(int frames) { Params<2> values = percent(\"Value\", 50); }")) ==
+          "script.module.array_location");
+    CHECK(firstError(moduleScript(
+              "Inputs<2> in = audioIn(\"In\");",
+              "void process(int frames) {} void draw(Canvas& g) { double x = in[0][0][0]; }")) ==
+          "script.editor.port");
+}
+
+TEST_CASE("invalid declaration-array elements are reset zero-valued disconnected spares") {
+    using T = script::module_test::ArrayBounds;
+    const sd::NativeModuleCode<T> native({{&T::knobs, "knobs"}},
+                                         {{&T::in, "in"}, {&T::out, "out"}});
+    const std::string file = __FILE__;
+    std::ifstream in(file.substr(0, file.find_last_of("/\\") + 1) + "module_array_bounds.h");
+    REQUIRE(in);
+    std::stringstream source;
+    source << in.rdbuf();
+    for (bool interpret : {false, true}) {
+        auto r = compileOk(source.str(), {.interpret = interpret});
+        auto jit = scriptc::moduleCode(r.program);
+        std::array<double, 8> expected{};
+        std::uint32_t faults = 0;
+        for (const sd::ModuleCode* code :
+             {static_cast<const sd::ModuleCode*>(&native), jit.get()}) {
+            void* self = code->create();
+            sd::Instance record;
+            record.channels = 1;
+            sd::Instance::bind(*static_cast<ss::Plugin*>(self), &record);
+            std::array<double, 8> audio{};
+            const double normal[4] = {0.5, 0.5, 0.5, 0.5}, zero[4] = {};
+            double spare = 0;
+            auto* base = static_cast<unsigned char*>(self);
+            for (const auto& param : code->params()) {
+                auto& p = *reinterpret_cast<ss::Param*>(base + param.offset);
+                sd::ParamBinding::setValue(p, 0.25, true);
+            }
+            for (const auto& port : code->ports()) {
+                if (port.output)
+                    sd::PortBinding::bindOutput(*reinterpret_cast<ss::Output*>(base + port.offset),
+                                                audio.data() + port.index * 4, &spare, 4, 1, 4);
+                else
+                    sd::PortBinding::bindInput(*reinterpret_cast<ss::Input*>(base + port.offset),
+                                               normal, zero, 0, 0, 4);
+            }
+            sd::CurrentScope scope(&record);
+            record.budget = 65536 * 4;
+            if (interpret)
+                code->process()(&record, self, 4);
+            else
+                callRealtimeModule(code->process(), &record, self, 4);
+            CHECK(audio[0] == 0.75);
+            CHECK(audio[1] == 0);
+            CHECK(audio[2] == 0);
+            CHECK(audio[3] == 1);
+            CHECK(audio[4] == 0.75);
+            CHECK(record.status.outOfRange.load() == 20);
+            CHECK(record.status.budgetExceeded.load() == 0);
+            if (code == &native) {
+                expected = audio;
+                faults = record.status.outOfRange.load();
+            } else {
+                CHECK(audio == expected);
+                CHECK(record.status.outOfRange.load() == faults);
+            }
+            code->destroy(self);
+        }
+    }
+}
+
+TEST_CASE("module banks and gate helpers run in real-time native and generated hooks") {
+    using T = script::module_test::ArrayModule;
+    const sd::NativeModuleCode<T> native(
+        {{&T::pitch, "pitch"}, {&T::enabled, "enabled"}, {&T::amount, "amount"}},
+        {{&T::signalIn, "signal_in"},
+         {&T::signalOut, "signal_out"},
+         {&T::gate, "gate"},
+         {&T::triggerOut, "trigger_out"}});
+    const std::string file = __FILE__;
+    std::ifstream in(file.substr(0, file.find_last_of("/\\") + 1) + "module_arrays.h");
+    REQUIRE(in);
+    std::stringstream source;
+    source << in.rdbuf();
+    auto r = compileOk(source.str());
+    auto jit = scriptc::moduleCode(r.program);
+    std::array<double, 192> expected{};
+    for (const sd::ModuleCode* code : {static_cast<const sd::ModuleCode*>(&native), jit.get()}) {
+        void* self = code->create();
+        sd::Instance record;
+        record.channels = 4;
+        record.sampleRate = 44100;
+        sd::Instance::bind(*static_cast<ss::Plugin*>(self), &record);
+        std::array<double, 192> audio{};
+        std::array<double, 64> input{};
+        input.fill(0.5);
+        double spare = 0;
+        auto* base = static_cast<unsigned char*>(self);
+        for (const auto& param : code->params()) {
+            auto& p = *reinterpret_cast<ss::Param*>(base + param.offset);
+            sd::ParamBinding::setValue(
+                p, param.def * (param.unit == sd::ParamModel::Unit::Percent ? 0.01 : 1.0), true);
+        }
+        for (const auto& port : code->ports()) {
+            if (port.output)
+                sd::PortBinding::bindOutput(*reinterpret_cast<ss::Output*>(base + port.offset),
+                                            audio.data() + port.index * 64, &spare, 4, 4, 4);
+            else
+                sd::PortBinding::bindInput(*reinterpret_cast<ss::Input*>(base + port.offset),
+                                           input.data(), input.data(), 4, 4, 4);
+        }
+        sd::CurrentScope scope(&record);
+        record.budget = 65536 * 4;
+        callRealtimeModule(code->process(), &record, self, 4);
+        CHECK(record.status.outOfRange.load() == 0);
+        CHECK(record.status.budgetExceeded.load() == 0);
+        CHECK(audio[128] == 1);  // Trigger -> Pulse at 44.1 kHz, independently for each channel.
+        if (code == &native)
+            expected = audio;
+        else
+            for (std::size_t i = 0; i < audio.size(); ++i)
+                CHECK(std::bit_cast<std::uint64_t>(audio[i]) ==
+                      std::bit_cast<std::uint64_t>(expected[i]));
+        code->destroy(self);
+    }
 }

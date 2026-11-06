@@ -6339,6 +6339,113 @@
     }
   },
   {
+    "name": "module_learn_list",
+    "title": "List the MIDI controllers of module knobs.",
+    "description": "List the MIDI controllers of module knobs. Every module's, or one module's. control names the message in words. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "module_learn_list_args",
+      "properties": {
+        "module": {
+          "type": "string",
+          "pattern": "^mo_[0-9]+$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "module_learn_remove",
+    "title": "Remove a module knob's MIDI controller.",
+    "description": "Remove a module knob's MIDI controller.  See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "module_learn_remove_args",
+      "properties": {
+        "module": {
+          "type": "string",
+          "pattern": "^mo_[0-9]+$"
+        },
+        "param": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["module", "param"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "module_learn_set",
+    "title": "Let a MIDI controller turn a module's knob.",
+    "description": "Let a MIDI controller turn a module's knob. One binding per knob (a new one replaces it). midi.device: a substring of the MIDI input's name (empty: any). mode for a CC: absolute, relative1 (127 = -1, 1 = +1), relative2 (63 = -1, 65 = +1), relative3 (65 = -1, 1 = +1) or toggle. soft_takeover: an absolute control acts once it reaches the knob. A knob turns along its travel (a frequency's is logarithmic); each movement is one undo step. A plugin module's knobs are its plug-in's: fx.learn.set. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "module_learn_set_args",
+      "properties": {
+        "module": {
+          "type": "string",
+          "pattern": "^mo_[0-9]+$"
+        },
+        "param": {
+          "type": "string",
+          "minLength": 1
+        },
+        "midi": {
+          "type": "object",
+          "title": "midi_control",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": ["cc", "note", "pitch_bend", "program"]
+            },
+            "channel": {
+              "type": "integer",
+              "minimum": 1.0,
+              "maximum": 16.0
+            },
+            "number": {
+              "type": "integer",
+              "minimum": 0.0,
+              "maximum": 127.0,
+              "default": 0
+            },
+            "device": {
+              "type": "string",
+              "default": ""
+            }
+          },
+          "required": ["kind", "channel"],
+          "additionalProperties": false
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["absolute", "relative1", "relative2", "relative3", "toggle"]
+        },
+        "soft_takeover": {
+          "type": "boolean"
+        }
+      },
+      "required": ["module", "param", "midi"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true
+    }
+  },
+  {
     "name": "module_list",
     "title": "List module types: id, name, tags, what they do.",
     "description": "List module types: id, name, tags, what they do. Host modules (Out, In, Notes, Transport) first, then stock, the user's library and the project's. query matches names, ids, tags and descriptions; tag one tag. See describe for errors and examples.",
@@ -7841,6 +7948,213 @@
       "type": "object",
       "title": "no_args",
       "properties": {},
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "rack_patch",
+    "title": "Add named modules and the cables among them in one step.",
+    "description": "Add named modules and the cables among them in one step. modules: {name: {type | plugin, params?, preset?, label?, x?, y?, source?, device?}} as module.add takes them; a name is lower-case letters, digits and '_'. cables: [{from, to, amount?, color?}] or [from, to, amount?], an end \"name.port\" or \"name.knob\" (a plugin module's knob is its plug-in's: \"synth.cutoff\"), or an existing module's \"mo_N.port\" (the rack's Out from rack.add). Modules without x, y are laid out left to right by signal flow from x, y (default right of the rack's modules). Everything is checked as module.add and cable.add check it; one error changes nothing. Returns the ids by name. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "rack_patch_args",
+      "properties": {
+        "rack": {
+          "type": "string",
+          "pattern": "^rk_[0-9]+$"
+        },
+        "modules": {},
+        "cables": {
+          "type": "array",
+          "items": {}
+        },
+        "x": {
+          "type": "number",
+          "minimum": -1e+06,
+          "maximum": 1e+06
+        },
+        "y": {
+          "type": "number",
+          "minimum": -1e+06,
+          "maximum": 1e+06
+        }
+      },
+      "required": ["rack", "modules"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "rack_preset_delete",
+    "title": "Delete a saved rack preset.",
+    "description": "Delete a saved rack preset.  See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "rack_preset_delete_args",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["name"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "rack_preset_list",
+    "title": "List saved rack presets: names and contents.",
+    "description": "List saved rack presets: names and contents. query: a part of the name or description. Each preset: name, path, description, its module and cable counts and its module types. Files that are not rack presets are skipped with a warning (warnings). See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "rack_preset_list_args",
+      "properties": {
+        "query": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "rack_preset_load",
+    "title": "Add a saved preset's modules and cables to a rack.",
+    "description": "Add a saved preset's modules and cables to a rack. name (rack.preset.list) or path (a preset file). x, y: the group's top-left (default right of the rack's modules). io: join (default) gives the preset's Out and In modules' cables to the rack's own Outs and Ins in order, so a whole patch sounds at once (extra ones are added); add makes new ones. Notes modules play the rack's channel. Knobs and cables the module types no longer have are left out with a warning (warnings); a module type or plug-in that is not installed is an error, and nothing changes. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "rack_preset_load_args",
+      "properties": {
+        "rack": {
+          "type": "string",
+          "pattern": "^rk_[0-9]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "x": {
+          "type": "number",
+          "minimum": -1e+06,
+          "maximum": 1e+06
+        },
+        "y": {
+          "type": "number",
+          "minimum": -1e+06,
+          "maximum": 1e+06
+        },
+        "io": {
+          "type": "string",
+          "pattern": "^(join|add)$"
+        }
+      },
+      "required": ["rack"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "rack_preset_save",
+    "title": "Save a rack's modules and cables as a preset.",
+    "description": "Save a rack's modules and cables as a preset. modules: which (default the whole rack); the cables among them come too. Plugin modules keep their plug-in's settings. A Notes module's source track, MIDI learn, envelopes, sends and the channels an Out feeds stay with the project. Saved by name in the user's rack presets; replace: true overwrites one. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "rack_preset_save_args",
+      "properties": {
+        "rack": {
+          "type": "string",
+          "pattern": "^rk_[0-9]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "modules": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^mo_[0-9]+$"
+          }
+        },
+        "description": {
+          "type": "string"
+        },
+        "replace": {
+          "type": "boolean"
+        }
+      },
+      "required": ["rack", "name"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "rack_probe",
+    "title": "Listen to a rack's ports: level, pitch, gate rate, notes, a CV's range.",
+    "description": "Listen to a rack's ports: level, pitch, gate rate, notes, a CV's range. Renders the project offline from from_beat (default 0) for seconds (default 2, at most 10) with a listener on each port (\"mo_N.<output key>\", at most 8) and describes what each carried: audio's peak and rms (dB) and its pitch when periodic (a poly cable's first 4 voices summed); gates counted over the voices, per beat, and how long any is high; the notes the voices' pitches visit; a CV's range and speed (voice 1). notes: notation (as midi.write takes it) the rack's Notes modules play from from_beat, besides what their tracks hold. Nothing is changed; playback is not disturbed. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "rack_probe_args",
+      "properties": {
+        "rack": {
+          "type": "string",
+          "pattern": "^rk_[0-9]+$",
+          "description": "Rack id"
+        },
+        "ports": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^mo_[0-9]+\\.[a-z][a-z0-9_]*$"
+          },
+          "minItems": 1,
+          "maxItems": 8
+        },
+        "seconds": {
+          "type": "number",
+          "minimum": 0.05,
+          "maximum": 10.0
+        },
+        "from_beat": {
+          "type": "number",
+          "minimum": 0.0
+        },
+        "notes": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["rack", "ports"],
       "additionalProperties": false
     },
     "annotations": {

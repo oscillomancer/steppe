@@ -30,6 +30,22 @@ using engine::moduleParamJson;
 using engine::moduleParamValue;
 using engine::pluginModuleType;
 
+// rack.probe's listener (never saved, in no catalog but a probe's): records
+// the first kProbeChannels channels (voices) of its input, `seconds` (its
+// knob) long.
+inline constexpr std::string_view kProbeModule = "com.suppleaudio.rack.probe";
+inline constexpr int kProbeChannels = 4;
+std::shared_ptr<const rack::ModuleType> probeModuleType();
+class ProbeModule final : public rack::HostModule {
+  public:
+    void process(const rack::HostContext& ctx) SUPPLE_RT override;
+    void reserve(std::size_t frames) {
+        for (auto& c : recorded) c.reserve(frames);
+    }
+    std::array<std::vector<float>, kProbeChannels> recorded;
+    int width = 0;  // the most channels its input had
+};
+
 // A plugin module (rack.md §5): its plug-in, a stage of the rack node, runs
 // on the rack's grid. Audio in_l/in_r (R normalled to L) to out_l/out_r;
 // poly pitch and gate cables play notes to an instrument (velocity 0..1).

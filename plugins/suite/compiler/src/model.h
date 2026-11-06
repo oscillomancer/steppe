@@ -46,6 +46,11 @@ struct ParamSlot {
     bool offAtMinimum = false;
 };
 
+struct MemberSpare {
+    int offset = 0, first = 0;
+    const BuiltinClass* cls = nullptr;
+};
+
 struct PluginModel {
     StructDecl* decl = nullptr;
     PluginKind kind = PluginKind::None;
@@ -75,6 +80,7 @@ struct PluginModel {
     int size = 0, align = 8;
     std::vector<ObjectSlot> objects;
     std::vector<InitialValue> initial;
+    std::vector<MemberSpare> memberSpares;
     std::vector<ParamSlot> paramSlots;
     std::vector<SourceSlot> sourceSlots;
 };

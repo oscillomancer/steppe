@@ -1,6 +1,8 @@
 # ADR-0033: DAW and plugin licensing
 
 **Status:** Accepted, 2026-10-14. Amends ADR-0003.
+(2026-11-06: amended by ADR-0062 §9: `modules/`, the rack runtime and the
+stock modules, is MIT like `plugins/`.)
 
 ## Context
 
