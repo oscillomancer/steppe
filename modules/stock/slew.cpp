@@ -6,7 +6,7 @@
 // allows going up and Fall going down (each the time a whole unit, an
 // octave of pitch, takes). Shape bends the move from a straight line (a
 // constant rate, a constant glide in pitch) to an exponential lag that
-// slows as it arrives. Glide Limit makes it a portamento for close notes
+// slows as it arrives. Limit makes it a portamento for close notes
 // only: a jump wider than it is taken at once, so leaps stay crisp and
 // steps glide. Smooths stepped CV, rounds a square into a shark fin, glides
 // a melody.
@@ -30,7 +30,7 @@ struct Slew : Module {
                 "0 % moves at a constant rate; 100 % is an exponential lag, fast at first and "
                 "settling, which takes about the time given whatever the distance.");
     Param glideLimit =
-        semitones("Glide Limit", 0, 48, 48)
+        semitones("Limit", 0, 48, 48)
             .help(
                 "Jumps wider than this many semitones are taken at once; at 48 every jump slews.");
 

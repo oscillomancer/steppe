@@ -110,11 +110,10 @@ struct RandomModule : Module {
                    "a_sharp", "b"})
             .in("Notes")
             .help("The scale's first note.");
-    Param gateChance = percent("Gate Chance", 50)
-                           .in("Gates")
-                           .help("How likely a step is to fire one of the gates.");
+    Param gateChance =
+        percent("Gates", 50).in("Gates").help("How likely a step is to fire one of the gates.");
     Param gateBias =
-        percent("Gate Bias", 0, -100, 100)
+        percent("Gate Mix", 0, -100, 100)
             .in("Gates")
             .help("Which gate fires more: towards A below 0, towards C above, evenly at 0.");
     Param voices = integer("Voices", 1, 16, 1)

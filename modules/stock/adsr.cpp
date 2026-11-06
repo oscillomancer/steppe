@@ -54,19 +54,19 @@ struct Envelope : Module {
                         .in("Envelope")
                         .help("How long it takes to fall to 0 once the gate is low.");
     Param attackCurve =
-        percent("Attack Curve", 20, -100, 100)
+        percent("A Curve", 20, -100, 100)
             .in("Curves")
             .help(
                 "Positive rises fast and eases into the top, as an analog envelope; negative "
                 "starts slowly and arrives suddenly; 0 is a straight line.");
     Param decayCurve =
-        percent("Decay Curve", 60, -100, 100)
+        percent("D Curve", 60, -100, 100)
             .in("Curves")
             .help(
                 "Positive drops fast and settles into the sustain (natural for plucks); negative "
                 "holds near the top, then falls.");
     Param releaseCurve =
-        percent("Release Curve", 60, -100, 100)
+        percent("R Curve", 60, -100, 100)
             .in("Curves")
             .help(
                 "Positive fades fast then lingers, as a sound dies away; negative holds, then "
@@ -79,11 +79,9 @@ struct Envelope : Module {
 
     Input gate = gateIn("Gate").help(
         "High starts the attack (rises at 0.5, falls below 0.25); low starts the release.");
-    Input retrigger =
-        gateIn("Retrigger")
-            .help(
-                "A rising edge restarts the attack from the present level (while the gate is high, "
-                "when gated).");
+    Input retrigger = gateIn("Retrig").help(
+        "A rising edge restarts the attack from the present level (while the gate is high, "
+        "when gated).");
     Input velocity =
         unipolarIn("Velocity")
             .normal(1.0)
@@ -93,8 +91,7 @@ struct Envelope : Module {
     Output inverted =
         unipolarOut("Inverted").help("1 minus the envelope: it closes as the envelope opens.");
     Output endOfCycle =
-        gateOut("End of Cycle")
-            .help("A 1 ms trigger as each shape reaches 0 (each cycle, when looping).");
+        gateOut("End").help("A 1 ms trigger as each shape reaches 0 (each cycle, when looping).");
 
     struct Voice {
         Stage stage = Stage::Idle;

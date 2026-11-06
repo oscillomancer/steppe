@@ -22,7 +22,7 @@ struct Chance : Module {
     Param latch =
         toggle("Latch", false)
             .help("Hold A or B high from one toss to the next, instead of passing each gate.");
-    Param ratchetChance = percent("Ratchet Chance", 0)
+    Param ratchetChance = percent("Ratchet", 0)
                               .activeUnless(latch)
                               .help("How likely a gate is to become a burst of pulses.");
     Param ratchets =

@@ -19,7 +19,7 @@ struct Switch : Module {
         .description = "A sequential switch, four to one and one to four, stepped or selected.",
         .tags = {"utility", "sequencer", "poly"}};
 
-    Param positions = integer("Positions", 2, 4, 4).help("How many positions it steps through.");
+    Param positions = integer("Count", 2, 4, 4).help("How many positions it steps through.");
     Param select = percent("Select", 0)
                        .help(
                            "Moves the position on by this share of the positions: a cable chooses "

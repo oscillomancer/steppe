@@ -6,7 +6,7 @@
 // Release set how fast the level rises and falls; Detector follows the
 // peaks (quick, for drums) or the RMS over about 20 ms (the loudness, for anything
 // sustained). Gain scales the envelope. Gate is high while the level is
-// above Threshold, and falls only once it drops Hysteresis below it, so a
+// above Thresh, and falls only once it drops Hyst below it, so a
 // wobbling level does not chatter; Onset fires as the gate opens. Duck one
 // sound under another with Inverted into a VCA, or trigger an envelope
 // from a drum loop.
@@ -32,11 +32,11 @@ struct Follower : Module {
     Param gain = decibels("Gain", -24, 24, 0)
                      .in("Envelope")
                      .help("Scales the envelope out: up for quiet sources.");
-    Param threshold = decibels("Threshold", -60, 0, -24)
+    Param threshold = decibels("Thresh", -60, 0, -24)
                           .in("Gate")
                           .help("The level, in dBFS, above which the gate opens.");
     Param hysteresis =
-        decibels("Hysteresis", 0, 12, 3)
+        decibels("Hyst", 0, 12, 3)
             .in("Gate")
             .help("How far below the threshold the level must fall for the gate to close.");
 

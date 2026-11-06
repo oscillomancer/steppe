@@ -32,9 +32,8 @@ struct Euclid : Module {
     Param accents = integer("Accents", 0, 32, 2)
                         .in("Accents")
                         .help("How many of the hits are accented, spread evenly over them.");
-    Param accentShift = integer("Accent Shift", 0, 31, 0)
-                            .in("Accents")
-                            .help("How many hits later the accents start.");
+    Param accentShift =
+        integer("Shift", 0, 31, 0).in("Accents").help("How many hits later the accents start.");
 
     Input clock = gateIn("Clock").help(
         "Each rising edge plays the next step; with nothing here, the song's sixteenths.");
