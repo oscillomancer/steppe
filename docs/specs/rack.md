@@ -408,7 +408,8 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   to it; liveness propagates to what it feeds.
 - **Parameters.** Knob edits on a running rack go to atomic slots (no
   compile). Envelopes on module parameters compile to curves the schedule
-  samples on the grid. MIDI learn drives the same slots.
+  samples on the grid. MIDI learn (`module.learn.*`) moves a knob through
+  `module.set`, so it reaches the same slots.
 - **Plugin modules.** Their instances come from the instance pool by fx id
   and run as stages of the rack node (`Node::rackStages`, prepared and
   automated as chain stages), in sub-blocks on the grid, with notes made
@@ -436,6 +437,7 @@ examples run as tests. Ends are strings: `"mo_3.out"`.
 | `rack.list` | query | `{}` → racks with their home tracks, module counts and Out modules |
 | `rack.get` | query | `{rack, detail?: brief\|full}` → modules (id, type, label, changed params, position, size), cables (with `feedback`), Out modules and the channels they feed, problems |
 | `rack.probe` | query | `{rack, ports: ["mo_N.<output>", …≤8], seconds? (≤10, 2), from_beat?, notes? (notation the rack's Notes modules play)}` → per port: peak, rms, dc, min, max; audio (the first 4 voices summed): dB and pitch (Hz, note, cents) when periodic; gates over the voices: count, per second, per beat, duty; pitch: the notes visited; CV: rate; a one-line description. An offline render of a copy with a listener (`ProbeModule`) on each port; nothing changes |
+| `rack.patch` | edit | `{rack, modules: {name: {type\|plugin, params?, preset?, label?, x?, y?, source?, device?}}, cables?: [[from, to, amount?, color?] \| {from, to, amount?, color?}], x?, y?}` → `{modules: {name: id}, cables}`: ends `"name.port"`, `"name.knob"` (a plugin module's: its plug-in's) or `"mo_N.port"`; modules without a place laid out by signal flow; checked as `module.add` and `cable.add` check, all or nothing |
 | `rack.preset.save` | action | `{rack, name, modules?, description?, replace?}` → `{path, modules, cables}`: the modules (default the whole rack) and the cables among them |
 | `rack.preset.load` | edit | `{rack, name\|path, x?, y?, io?: join\|add}` → `{modules, cables, warnings?}`: one undo step |
 | `rack.preset.list` | query | `{query?}` → presets: name, path, description, module and cable counts, module types |
@@ -452,6 +454,9 @@ examples run as tests. Ends are strings: `"mo_3.out"`.
 | `module.check` | query | `{source\|name}` → `{ok, diagnostics, type?}` |
 | `module.get` | query | `{type\|name}` → `{type, origin, source, name?, path?}` (host modules have none) |
 | `module.fork` | action | `{type, id, name?}` → as `module.write`: the type's source under a new id, in the library |
+| `module.learn.set` | edit | `{module, param, midi, mode?, soft_takeover?}` → `{param, control}`: a MIDI controller turns the knob along its travel (`rack::knobPosition`), one undo step per movement; not a plugin module's (`fx.learn.set`) |
+| `module.learn.remove` | edit | `{module, param}` |
+| `module.learn.list` | query | `{module?}` → `{learn: [{module, param, midi, control, mode?, soft_takeover?}]}` |
 | `cable.add` | edit | `{from, to, amount?, color?}` → `{cable, feedback, warnings}` |
 | `cable.remove` | edit | `{cable}` or `{from, to}` |
 | `cable.set` | edit | `{cable, amount?, color?}` |

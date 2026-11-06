@@ -857,6 +857,20 @@ q = nil
 ---@field type? string
 ---@field name? string
 
+---@class Steppe.module_learn_list_args
+---@field module? string
+
+---@class Steppe.module_learn_remove_args
+---@field module string
+---@field param string
+
+---@class Steppe.module_learn_set_args
+---@field module string
+---@field param string
+---@field midi table
+---@field mode? "absolute"|"relative1"|"relative2"|"relative3"|"toggle"
+---@field soft_takeover? boolean
+
 ---@class Steppe.module_list_args
 ---@field query? string
 ---@field tag? string
@@ -1004,6 +1018,13 @@ q = nil
 ---@class Steppe.rack_get_args
 ---@field rack string
 ---@field detail? string
+
+---@class Steppe.rack_patch_args
+---@field rack string
+---@field modules any
+---@field cables? any[]
+---@field x? number
+---@field y? number
 
 ---@class Steppe.rack_preset_delete_args
 ---@field name string
@@ -1934,6 +1955,11 @@ q = nil
 ---@field set fun(args: Steppe.module_set_args): table Set a module's knobs, label, place or bypass.
 ---@field write fun(args: Steppe.module_write_args): table Write a module to the library and compile it; racks use it at once.
 
+---@class Steppe.module.learn
+---@field list fun(args?: Steppe.module_learn_list_args): table List the MIDI controllers of module knobs.
+---@field remove fun(args: Steppe.module_learn_remove_args): table Remove a module knob's MIDI controller.
+---@field set fun(args: Steppe.module_learn_set_args): table Let a MIDI controller turn a module's knob.
+
 ---@class Steppe.plugin
 ---@field list fun(args?: Steppe.plugin_list_args): Steppe.plugin_list_result List scanned plugins; filter matches id, name, or vendor.
 ---@field scan fun(args?: Steppe.plugin_scan_args): Steppe.plugin_scan_result Rescan configured plugin paths and return the available plugins.
@@ -1957,6 +1983,7 @@ q = nil
 ---@field add fun(args?: Steppe.rack_add_args): table Add a modular rack on a channel, its Out the input.
 ---@field get fun(args: Steppe.rack_get_args): table A rack's modules, cables, Out modules and problems.
 ---@field list fun(): table List racks: home channels, module counts, Outs.
+---@field patch fun(args: Steppe.rack_patch_args): table Add named modules and the cables among them in one step.
 ---@field probe fun(args: Steppe.rack_probe_args): table Listen to a rack's ports: level, pitch, gate rate, notes, a CV's range.
 ---@field remove fun(args: Steppe.rack_remove_args): table Remove a rack with its modules and cables.
 ---@field set fun(args: Steppe.rack_set_args): table Rename a rack or move it to another channel.

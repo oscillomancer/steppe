@@ -12,6 +12,7 @@
 
 #include "command_validation.h"
 #include "fx_presets.h"
+#include "learn_binding.h"
 #include "rack_runtime.h"
 #include "supple/base/files.h"
 #include "supple/engine/app.h"
@@ -20,6 +21,8 @@
 namespace supple::engine {
 
 void registerRackPresetCommands(cmd::Registry& registry);
+void registerModuleLearnCommands(cmd::Registry& registry);
+void registerRackPatchCommand(cmd::Registry& registry);
 
 namespace {
 
@@ -848,7 +851,7 @@ void registerRackCommands(cmd::Registry& registry) {
                      .field("query", &ModuleList::query, schema::string())
                      .field("tag", &ModuleList::tag, schema::string())
                      .build();
-        c.examples = {{"Amplifiers", j(R"({"tag": "amplifier"})"),
+        c.examples = {{"Find the VCA", j(R"({"query": "vca"})"),
                        j(R"({"types": [{"type": "com.suppleaudio.rack.vca", "name": "VCA",
                              "tags": ["amplifier", "utility"], "origin": "stock",
                              "description": "<any>"}]})"),
@@ -1473,6 +1476,8 @@ void registerRackCommands(cmd::Registry& registry) {
         addChecked(registry, std::move(c));
     }();
     registerRackPresetCommands(registry);
+    registerModuleLearnCommands(registry);
+    registerRackPatchCommand(registry);
 }
 
 // --- rack presets (rack.md §7) --------------------------------------------------------
@@ -1925,17 +1930,17 @@ void registerRackPresetCommands(cmd::Registry& registry) {
             std::vector<Planned> planned;
             const json::Value* cables = doc.find("cables");
             for (std::size_t k = 0; cables && k < cables->asArray().size(); ++k) {
-                const json::Value& c = cables->asArray()[k];
+                const json::Value& entry = cables->asArray()[k];
                 const std::string at = "/cables/" + std::to_string(k);
-                const json::Value& f = *c.find("from");
-                const json::Value& t = *c.find("to");
+                const json::Value& f = *entry.find("from");
+                const json::Value& t = *entry.find("to");
                 Planned p{static_cast<std::size_t>(f.find("module")->asInt()),
                           static_cast<std::size_t>(t.find("module")->asInt()),
                           f.find("port")->asString(),
                           t.find("port")->asString(),
                           t.find("plugin") && t.find("plugin")->asBool(),
                           std::nullopt,
-                          stringOr(c, "color")};
+                          stringOr(entry, "color")};
                 auto skip = [&](const std::string& why) {
                     warn("rack.preset_cable",
                          "cable " + std::to_string(k) + ": " + why + "; left out", at);
@@ -1951,7 +1956,7 @@ void registerRackPresetCommands(cmd::Registry& registry) {
                     skip(src->info().name + " has no output " + p.fromKey);
                     continue;
                 }
-                const auto* amount = c.find("amount");
+                const auto* amount = entry.find("amount");
                 if (p.plugin) {
                     if (!plugins[p.to]) {
                         skip("module " + std::to_string(p.to) + " is not a plugin module");
@@ -2111,6 +2116,398 @@ void registerRackPresetCommands(cmd::Registry& registry) {
         };
         addChecked(registry, std::move(c));
     }();
+}
+
+// --- MIDI learn on module knobs (rack.md §7) ------------------------------------------
+
+namespace {
+
+struct KnobLearnArgs : LearnBindingArgs {
+    std::string module, param;
+};
+struct KnobLearnRef {
+    std::string module, param;
+};
+struct KnobLearnList {
+    std::optional<std::string> module;
+};
+
+// The module and its knob a binding names; refused for switches' meters and
+// plugin modules (their knobs are their plug-in's: fx.learn.set).
+Result<std::pair<Id, std::string>> learnTarget(EngineApp& e, const model::Session& s,
+                                               const std::string& module,
+                                               const std::string& param) {
+    auto id = moduleId(s, module);
+    if (!id) return std::move(id).error();
+    const model::RackModule& m = *s.modules.find(*id);
+    if (m.fx)
+        return Error("rack.param", "a plugin module's knobs are its plug-in's", "/module",
+                     "fx.learn.set {fx: \"" + m.fx->str() + "\"}");
+    const auto type = typeOfModule(e, m);
+    if (!type)
+        return Error("rack.unknown_type", "its type " + m.type + " is not installed", "/module",
+                     "module.list");
+    const int index = type->param(param);
+    if (index < 0 || type->params()[static_cast<std::size_t>(index)].output)
+        return Error("rack.param", type->info().name + " has no knob " + param, "/param",
+                     type->info().name + " has " + keysOf(*type, false, false, true));
+    return std::pair<Id, std::string>{*id, param};
+}
+
+json::Value knobLearnJson(Id module, const model::ParamLearn& l) {
+    json::Value v = json::Value::object();
+    v["module"] = module.str();
+    v["param"] = l.param;
+    v["midi"] = model::midiControlSchema().encode(l.control);
+    v["control"] = describe(l.control);
+    if (l.mode != model::ControlMode::Absolute)
+        v["mode"] = model::controlModeSchema().encode(l.mode);
+    if (l.softTakeover) v["soft_takeover"] = true;
+    return v;
+}
+
+}  // namespace
+
+void registerModuleLearnCommands(cmd::Registry& registry) {
+    [&] {
+        Command<KnobLearnArgs, json::Value> c;
+        common(c, "module.learn.set", Kind::Edit, "Let a MIDI controller turn a module's knob.");
+        c.description =
+            "One binding per knob (a new one replaces it). midi.device: a substring of the MIDI "
+            "input's name (empty: any). mode for a CC: absolute, relative1 (127 = -1, 1 = +1), "
+            "relative2 (63 = -1, 65 = +1), relative3 (65 = -1, 1 = +1) or toggle. soft_takeover: "
+            "an absolute control acts once it reaches the knob. A knob turns along its travel "
+            "(a frequency's is logarithmic); each movement is one undo step. A plugin module's "
+            "knobs are its plug-in's: fx.learn.set.";
+        c.tags = {"rack", "modular", "midi"};
+        auto args = schema::object<KnobLearnArgs>("module_learn_set_args");
+        args.field("module", &KnobLearnArgs::module, idOf("mo", "Module"))
+            .field("param", &KnobLearnArgs::param, schema::string().minLength(1));
+        learnBindingArgFields(args);
+        c.args = args.build();
+        c.examples = {{"The VCA's level on CC 21", j(R"({"module": "mo_3", "param": "level",
+                             "midi": {"kind": "cc", "channel": 1, "number": 21}})"),
+                       j(R"({"param": "level", "control": "CC 21 · ch 1"})"), "song_with_rack"}};
+        c.run = [](const KnobLearnArgs& a, Context& ctx) -> Result<json::Value> {
+            EngineApp& e = app(ctx);
+            const model::Session s = e.view();
+            auto target = learnTarget(e, s, a.module, a.param);
+            if (!target) return std::move(target).error();
+            model::ParamLearn learn;
+            static_cast<model::ControlBinding&>(learn) = a.binding();
+            learn.param = target->second;
+            e.txn().modify<model::RackModule>(target->first, [&](model::RackModule& m) {
+                std::erase_if(m.learn, [&](const auto& l) { return l.param == learn.param; });
+                m.learn.push_back(learn);
+                std::sort(m.learn.begin(), m.learn.end(),
+                          [](const auto& x, const auto& y) { return x.param < y.param; });
+            });
+            json::Value out = json::Value::object();
+            out["param"] = learn.param;
+            out["control"] = describe(learn.control);
+            return out;
+        };
+        addChecked(registry, std::move(c));
+    }();
+    [&] {
+        Command<KnobLearnRef, json::Value> c;
+        common(c, "module.learn.remove", Kind::Edit, "Remove a module knob's MIDI controller.");
+        c.tags = {"rack", "modular", "midi"};
+        c.args = schema::object<KnobLearnRef>("module_learn_remove_args")
+                     .field("module", &KnobLearnRef::module, idOf("mo", "Module"))
+                     .field("param", &KnobLearnRef::param, schema::string().minLength(1))
+                     .build();
+        c.examples = {{"Free the level", j(R"({"module": "mo_3", "param": "level"})"), j("{}"),
+                       "song_with_rack_learn"}};
+        c.run = [](const KnobLearnRef& a, Context& ctx) -> Result<json::Value> {
+            EngineApp& e = app(ctx);
+            const model::Session s = e.view();
+            auto id = moduleId(s, a.module);
+            if (!id) return std::move(id).error();
+            const auto& learn = s.modules.find(*id)->learn;
+            if (std::none_of(learn.begin(), learn.end(),
+                             [&](const auto& l) { return l.param == a.param; }))
+                return Error("module.learn_unknown", a.param + " has no MIDI controller", "/param",
+                             "module.learn.list shows the bound knobs");
+            e.txn().modify<model::RackModule>(*id, [&](model::RackModule& m) {
+                std::erase_if(m.learn, [&](const auto& l) { return l.param == a.param; });
+            });
+            return json::Value::object();
+        };
+        addChecked(registry, std::move(c));
+    }();
+    [&] {
+        Command<KnobLearnList, json::Value> c;
+        common(c, "module.learn.list", Kind::Query, "List the MIDI controllers of module knobs.");
+        c.description = "Every module's, or one module's. control names the message in words.";
+        c.tags = {"rack", "modular", "midi"};
+        c.args = schema::object<KnobLearnList>("module_learn_list_args")
+                     .field("module", &KnobLearnList::module, idOf("mo", "Module"))
+                     .build();
+        c.examples = {{"Every binding", json::Value::object(),
+                       j(R"({"learn": [{"module": "mo_3", "param": "level",
+                             "midi": {"kind": "cc", "channel": 1, "number": 21},
+                             "control": "CC 21 · ch 1"}]})"),
+                       "song_with_rack_learn"}};
+        c.run = [](const KnobLearnList& a, Context& ctx) -> Result<json::Value> {
+            const model::Session s = app(ctx).view();
+            json::Value learn = json::Value::array();
+            if (a.module) {
+                auto id = moduleId(s, *a.module);
+                if (!id) return std::move(id).error();
+                for (const auto& l : s.modules.find(*id)->learn)
+                    learn.push_back(knobLearnJson(*id, l));
+            } else {
+                for (const auto& m : s.modules)
+                    for (const auto& l : m.value->learn) learn.push_back(knobLearnJson(m.id, l));
+            }
+            json::Value out = json::Value::object();
+            out["learn"] = std::move(learn);
+            return out;
+        };
+        registry.add(std::move(c));
+    }();
+}
+
+// --- rack.patch: a whole patch in one call (rack.md §7) --------------------------------
+
+namespace {
+
+struct RackPatchArgs {
+    std::string rack;
+    json::Value modules = json::Value::object();
+    std::optional<std::vector<json::Value>> cables;
+    std::optional<double> x, y;
+};
+
+bool validLocalName(const std::string& name) {
+    if (name.empty() || name.size() > 32 || name[0] < 'a' || name[0] > 'z') return false;
+    if (!std::all_of(name.begin(), name.end(), [](char c) {
+            return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
+        }))
+        return false;
+    const auto id = Id::parse(name);  // "mo_3" names a module already there
+    return !id;
+}
+
+Result<json::Value> invokeCommand(const char* name, json::Value args, Context& ctx,
+                                  const std::string& at) {
+    auto r = ctx.service<const cmd::Registry>().find(name)->invoke(args, ctx);
+    if (!r) {
+        Error error = std::move(r).error();
+        error.path.insert(0, at);
+        return error;
+    }
+    return r;
+}
+
+}  // namespace
+
+void registerRackPatchCommand(cmd::Registry& registry) {
+    Command<RackPatchArgs, json::Value> c;
+    common(c, "rack.patch", Kind::Edit, "Add named modules and the cables among them in one step.");
+    c.description =
+        "modules: {name: {type | plugin, params?, preset?, label?, x?, y?, source?, device?}} as "
+        "module.add takes them; a name is lower-case letters, digits and '_'. cables: [{from, "
+        "to, amount?, color?}] or [from, to, amount?], an end \"name.port\" or \"name.knob\" "
+        "(a plugin module's knob is its plug-in's: \"synth.cutoff\"), or an existing module's "
+        "\"mo_N.port\" (the rack's Out from rack.add). Modules without x, y are laid out left "
+        "to right by signal flow from x, y (default right of the rack's modules). Everything "
+        "is checked as module.add and cable.add check it; one error changes nothing. Returns "
+        "the ids by name.";
+    c.args = schema::object<RackPatchArgs>("rack_patch_args")
+                 .field("rack", &RackPatchArgs::rack, idOf("rk", "Rack"))
+                 .field("modules", &RackPatchArgs::modules, schema::any())
+                 .field("cables", &RackPatchArgs::cables, schema::arrayOf(schema::any()))
+                 .field("x", &RackPatchArgs::x, coordinate())
+                 .field("y", &RackPatchArgs::y, coordinate())
+                 .build();
+    c.examples = {{"A tremolo into the Out",
+                   j(R"({"rack": "rk_1", "modules": {"osc": {"type": "vco"},
+               "lfo": {"type": "lfo", "params": {"rate": 5}}, "amp": {"type": "vca"}},
+               "cables": [["osc.saw", "amp.in"], ["lfo.out", "amp.level", 6],
+                          {"from": "amp.out", "to": "mo_1.l"}]})"),
+                   j(R"({"modules": {"osc": "mo_4", "lfo": "mo_5", "amp": "mo_6"},
+               "cables": ["cb_2", "cb_3", "cb_4"]})"),
+                   "song_with_rack"}};
+    c.errors = {{"rack.patch", "a name, an end or a field the patch cannot use",
+                 "names: lower-case letters, digits and '_'; ends: name.port"}};
+    c.run = [](const RackPatchArgs& a, Context& ctx) -> Result<json::Value> {
+        EngineApp& e = app(ctx);
+        const model::Session s = e.view();
+        auto rack = rackId(s, a.rack);
+        if (!rack) return std::move(rack).error();
+        if (!a.modules.isObject())
+            return Error("rack.patch", "modules is an object of modules by name", "/modules",
+                         "{\"osc\": {\"type\": \"vco\"}}");
+        static const std::set<std::string> fields = {"type", "plugin", "params", "preset", "label",
+                                                     "x",    "y",      "source", "device"};
+        // Names, and each module's size for the layout.
+        std::vector<std::string> names;
+        std::map<std::string, std::pair<double, double>> sizes;
+        for (const auto& m : a.modules.asObject()) {
+            const std::string at = json::pointerJoin("/modules", m.key);
+            if (!validLocalName(m.key))
+                return Error("rack.patch", "\"" + m.key + "\" is not a module name", at,
+                             "use 1-32 lower-case letters, digits or '_', starting with a "
+                             "letter, not an id: \"osc\", \"env_2\"");
+            if (!m.value.isObject())
+                return Error("rack.patch", m.key + " is not an object", at,
+                             "{\"type\": \"vco\", \"params\": {...}}");
+            for (const auto& f : m.value.asObject())
+                if (!fields.count(f.key))
+                    return Error("rack.patch", m.key + " has no field " + f.key,
+                                 json::pointerJoin(at, f.key),
+                                 "fields: type or plugin, params, preset, label, x, y, source, "
+                                 "device");
+            const json::Value* type = m.value.find("type");
+            std::shared_ptr<const rack::ModuleType> t;
+            if (m.value.find("plugin"))
+                t = pluginModuleType();
+            else if (type && type->isString())
+                if (auto found = typeOf(e, type->asString(), (at + "/type").c_str())) t = *found;
+            sizes[m.key] = sizeOf(t.get());
+            names.push_back(m.key);
+        }
+        if (names.empty())
+            return Error("rack.patch", "no modules", "/modules", "name at least one module");
+
+        // Cables as [from, to, amount?, color?], their ends split.
+        struct End {
+            std::string name, key;
+        };
+        struct Wire {
+            End from, to;
+            std::optional<double> amount;
+            std::optional<std::string> color;
+        };
+        std::vector<Wire> wires;
+        auto splitEnd = [](const json::Value* v, End& out) {
+            if (!v || !v->isString()) return false;
+            const std::string& text = v->asString();
+            const auto dot = text.find('.');
+            if (dot == std::string::npos || dot == 0 || dot + 1 == text.size()) return false;
+            out = {text.substr(0, dot), text.substr(dot + 1)};
+            return true;
+        };
+        for (std::size_t k = 0; a.cables && k < a.cables->size(); ++k) {
+            const json::Value& entry = (*a.cables)[k];
+            const std::string at = "/cables/" + std::to_string(k);
+            Wire w;
+            const json::Value *from = nullptr, *to = nullptr, *amount = nullptr, *color = nullptr;
+            if (entry.isArray()) {
+                const auto& v = entry.asArray();
+                if (v.size() >= 2) {
+                    from = &v[0];
+                    to = &v[1];
+                }
+                if (v.size() >= 3) amount = &v[2];
+                if (v.size() >= 4) color = &v[3];
+                if (v.size() > 4) from = nullptr;
+            } else if (entry.isObject()) {
+                from = entry.find("from");
+                to = entry.find("to");
+                amount = entry.find("amount");
+                color = entry.find("color");
+            }
+            if (!splitEnd(from, w.from) || !splitEnd(to, w.to))
+                return Error("rack.patch", "a cable is [from, to, amount?] or {from, to, ...}", at,
+                             "ends are \"name.port\": [\"osc.saw\", \"amp.in\"]");
+            if (amount && !amount->isNull()) {
+                if (!amount->isNumber())
+                    return Error("rack.patch", "amount is a number", at + "/amount",
+                                 "the knob's movement at a signal of 1");
+                w.amount = amount->asDouble();
+            }
+            if (color && !color->isNull()) {
+                if (!color->isString())
+                    return Error("rack.patch", "color is a string", at + "/color",
+                                 "a track colour or \"#rrggbb\"");
+                w.color = color->asString();
+            }
+            for (const End* end : {&w.from, &w.to})
+                if (!sizes.count(end->name) && !Id::parse(end->name))
+                    return Error("rack.patch", "no module named " + end->name, at,
+                                 "name a module of this patch or give a module's id (mo_N)");
+            wires.push_back(std::move(w));
+        }
+
+        // The layout: columns by signal flow among the new modules.
+        std::map<std::string, int> depth;
+        for (const auto& n : names) depth[n] = 0;
+        for (std::size_t pass = 0; pass < names.size(); ++pass) {
+            bool moved = false;
+            for (const Wire& w : wires)
+                if (depth.count(w.from.name) && depth.count(w.to.name) &&
+                    depth[w.to.name] < depth[w.from.name] + 1 &&
+                    depth[w.from.name] + 1 < static_cast<int>(names.size())) {
+                    depth[w.to.name] = depth[w.from.name] + 1;
+                    moved = true;
+                }
+            if (!moved) break;
+        }
+        const auto place = freePlace(e, s, *rack);
+        const double x0 = a.x.value_or(place.first), y0 = a.y.value_or(place.second);
+        std::map<int, double> columnWidth, columnHeight;
+        for (const auto& n : names)
+            columnWidth[depth[n]] = std::max(columnWidth[depth[n]], sizes[n].first);
+        std::map<int, double> columnX;
+        double x = x0;
+        for (const auto& [column, width] : columnWidth) {
+            columnX[column] = x;
+            x += width + 40;
+        }
+
+        std::map<std::string, Id> made;
+        std::map<std::string, std::string> fxOf;
+        json::Value ids = json::Value::object();
+        for (const auto& n : names) {
+            const json::Value& spec = *a.modules.find(n);
+            json::Value args = spec;
+            args["rack"] = a.rack;
+            if (!spec.find("x"))
+                args["x"] = std::clamp(columnX[depth[n]], -model::kMaxRackCoordinate,
+                                       model::kMaxRackCoordinate);
+            if (!spec.find("y")) {
+                args["y"] = std::clamp(y0 + columnHeight[depth[n]], -model::kMaxRackCoordinate,
+                                       model::kMaxRackCoordinate);
+                columnHeight[depth[n]] += sizes[n].second + 30;
+            }
+            auto added =
+                invokeCommand("module.add", std::move(args), ctx, json::pointerJoin("/modules", n));
+            if (!added) return std::move(added).error();
+            made[n] = *Id::parse((*added)["module"].asString());
+            if (const auto* fx = added->find("fx")) fxOf[n] = fx->asString();
+            ids[n] = made[n].str();
+        }
+        static const std::set<std::string> pluginPorts = {"in_l",     "in_r",  "pitch", "gate",
+                                                          "velocity", "out_l", "out_r"};
+        auto endText = [&](const End& end, bool to) {
+            if (auto it = made.find(end.name); it != made.end()) {
+                if (to && fxOf.count(end.name) && !pluginPorts.count(end.key))
+                    return fxOf[end.name] + "." + end.key;
+                return it->second.str() + "." + end.key;
+            }
+            return end.name + "." + end.key;
+        };
+        json::Value cables = json::Value::array();
+        for (std::size_t k = 0; k < wires.size(); ++k) {
+            json::Value args = json::Value::object();
+            args["from"] = endText(wires[k].from, false);
+            args["to"] = endText(wires[k].to, true);
+            if (wires[k].amount) args["amount"] = *wires[k].amount;
+            if (wires[k].color) args["color"] = *wires[k].color;
+            auto added =
+                invokeCommand("cable.add", std::move(args), ctx, "/cables/" + std::to_string(k));
+            if (!added) return std::move(added).error();
+            cables.push_back((*added)["cable"].asString());
+        }
+        json::Value out = json::Value::object();
+        out["modules"] = std::move(ids);
+        out["cables"] = std::move(cables);
+        return out;
+    };
+    addChecked(registry, std::move(c));
 }
 
 }  // namespace supple::engine

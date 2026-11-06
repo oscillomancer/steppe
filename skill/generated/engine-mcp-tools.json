@@ -6339,6 +6339,113 @@
     }
   },
   {
+    "name": "module_learn_list",
+    "title": "List the MIDI controllers of module knobs.",
+    "description": "List the MIDI controllers of module knobs. Every module's, or one module's. control names the message in words. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "module_learn_list_args",
+      "properties": {
+        "module": {
+          "type": "string",
+          "pattern": "^mo_[0-9]+$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "module_learn_remove",
+    "title": "Remove a module knob's MIDI controller.",
+    "description": "Remove a module knob's MIDI controller.  See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "module_learn_remove_args",
+      "properties": {
+        "module": {
+          "type": "string",
+          "pattern": "^mo_[0-9]+$"
+        },
+        "param": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["module", "param"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "module_learn_set",
+    "title": "Let a MIDI controller turn a module's knob.",
+    "description": "Let a MIDI controller turn a module's knob. One binding per knob (a new one replaces it). midi.device: a substring of the MIDI input's name (empty: any). mode for a CC: absolute, relative1 (127 = -1, 1 = +1), relative2 (63 = -1, 65 = +1), relative3 (65 = -1, 1 = +1) or toggle. soft_takeover: an absolute control acts once it reaches the knob. A knob turns along its travel (a frequency's is logarithmic); each movement is one undo step. A plugin module's knobs are its plug-in's: fx.learn.set. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "module_learn_set_args",
+      "properties": {
+        "module": {
+          "type": "string",
+          "pattern": "^mo_[0-9]+$"
+        },
+        "param": {
+          "type": "string",
+          "minLength": 1
+        },
+        "midi": {
+          "type": "object",
+          "title": "midi_control",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": ["cc", "note", "pitch_bend", "program"]
+            },
+            "channel": {
+              "type": "integer",
+              "minimum": 1.0,
+              "maximum": 16.0
+            },
+            "number": {
+              "type": "integer",
+              "minimum": 0.0,
+              "maximum": 127.0,
+              "default": 0
+            },
+            "device": {
+              "type": "string",
+              "default": ""
+            }
+          },
+          "required": ["kind", "channel"],
+          "additionalProperties": false
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["absolute", "relative1", "relative2", "relative3", "toggle"]
+        },
+        "soft_takeover": {
+          "type": "boolean"
+        }
+      },
+      "required": ["module", "param", "midi"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true
+    }
+  },
+  {
     "name": "module_list",
     "title": "List module types: id, name, tags, what they do.",
     "description": "List module types: id, name, tags, what they do. Host modules (Out, In, Notes, Transport) first, then stock, the user's library and the project's. query matches names, ids, tags and descriptions; tag one tag. See describe for errors and examples.",
@@ -7845,6 +7952,43 @@
     },
     "annotations": {
       "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "rack_patch",
+    "title": "Add named modules and the cables among them in one step.",
+    "description": "Add named modules and the cables among them in one step. modules: {name: {type | plugin, params?, preset?, label?, x?, y?, source?, device?}} as module.add takes them; a name is lower-case letters, digits and '_'. cables: [{from, to, amount?, color?}] or [from, to, amount?], an end \"name.port\" or \"name.knob\" (a plugin module's knob is its plug-in's: \"synth.cutoff\"), or an existing module's \"mo_N.port\" (the rack's Out from rack.add). Modules without x, y are laid out left to right by signal flow from x, y (default right of the rack's modules). Everything is checked as module.add and cable.add check it; one error changes nothing. Returns the ids by name. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "rack_patch_args",
+      "properties": {
+        "rack": {
+          "type": "string",
+          "pattern": "^rk_[0-9]+$"
+        },
+        "modules": {},
+        "cables": {
+          "type": "array",
+          "items": {}
+        },
+        "x": {
+          "type": "number",
+          "minimum": -1e+06,
+          "maximum": 1e+06
+        },
+        "y": {
+          "type": "number",
+          "minimum": -1e+06,
+          "maximum": 1e+06
+        }
+      },
+      "required": ["rack", "modules"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
       "destructiveHint": false,
       "idempotentHint": false
     }

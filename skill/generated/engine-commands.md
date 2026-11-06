@@ -8609,6 +8609,149 @@ Result:
 
 ```
 
+## `module.learn.list@1`
+
+List the MIDI controllers of module knobs.
+
+Every module's, or one module's. control names the message in words.
+
+Kind: `query`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `module` | string |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
+
+**Every binding** (`song_with_rack_learn`)
+
+```json
+{}
+
+```
+
+Result:
+
+```json
+{
+  "learn": [
+    {
+      "module": "mo_3",
+      "param": "level",
+      "midi": {
+        "kind": "cc",
+        "channel": 1,
+        "number": 21
+      },
+      "control": "CC 21 · ch 1"
+    }
+  ]
+}
+
+```
+
+## `module.learn.remove@1`
+
+Remove a module knob's MIDI controller.
+
+
+
+Kind: `edit`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `module` | string |  |  |  |  |
+| `param` | string |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
+
+**Free the level** (`song_with_rack_learn`)
+
+```json
+{
+  "module": "mo_3",
+  "param": "level"
+}
+
+```
+
+Result:
+
+```json
+{}
+
+```
+
+## `module.learn.set@1`
+
+Let a MIDI controller turn a module's knob.
+
+One binding per knob (a new one replaces it). midi.device: a substring of the MIDI input's name (empty: any). mode for a CC: absolute, relative1 (127 = -1, 1 = +1), relative2 (63 = -1, 65 = +1), relative3 (65 = -1, 1 = +1) or toggle. soft_takeover: an absolute control acts once it reaches the knob. A knob turns along its travel (a frequency's is logarithmic); each movement is one undo step. A plugin module's knobs are its plug-in's: fx.learn.set.
+
+Kind: `edit`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `module` | string |  |  |  |  |
+| `param` | string |  |  |  |  |
+| `midi` | object |  |  |  |  |
+| `mode` | string |  |  |  |  |
+| `soft_takeover` | boolean |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
+
+**The VCA's level on CC 21** (`song_with_rack`)
+
+```json
+{
+  "module": "mo_3",
+  "param": "level",
+  "midi": {
+    "kind": "cc",
+    "channel": 1,
+    "number": 21
+  }
+}
+
+```
+
+Result:
+
+```json
+{
+  "param": "level",
+  "control": "CC 21 · ch 1"
+}
+
+```
+
 ## `module.list@1`
 
 List module types: id, name, tags, what they do.
@@ -8633,11 +8776,11 @@ Kind: `query`. Exposure: `mcp-tool`.
 
 ### Examples
 
-**Amplifiers** (`empty`)
+**Find the VCA** (`empty`)
 
 ```json
 {
-  "tag": "amplifier"
+  "query": "vca"
 }
 
 ```
@@ -10386,6 +10529,82 @@ Result:
       ]
     }
   ]
+}
+
+```
+
+## `rack.patch@1`
+
+Add named modules and the cables among them in one step.
+
+modules: {name: {type | plugin, params?, preset?, label?, x?, y?, source?, device?}} as module.add takes them; a name is lower-case letters, digits and '_'. cables: [{from, to, amount?, color?}] or [from, to, amount?], an end "name.port" or "name.knob" (a plugin module's knob is its plug-in's: "synth.cutoff"), or an existing module's "mo_N.port" (the rack's Out from rack.add). Modules without x, y are laid out left to right by signal flow from x, y (default right of the rack's modules). Everything is checked as module.add and cable.add check it; one error changes nothing. Returns the ids by name.
+
+Kind: `edit`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `rack` | string |  |  |  |  |
+| `modules` | value |  |  |  |  |
+| `cables` | array |  |  |  |  |
+| `x` | number |  | -1e+06..1e+06 |  |  |
+| `y` | number |  | -1e+06..1e+06 |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Errors
+
+- `rack.patch`: a name, an end or a field the patch cannot use Hint: names: lower-case letters, digits and '_'; ends: name.port
+
+### Examples
+
+**A tremolo into the Out** (`song_with_rack`)
+
+```json
+{
+  "rack": "rk_1",
+  "modules": {
+    "osc": {
+      "type": "vco"
+    },
+    "lfo": {
+      "type": "lfo",
+      "params": {
+        "rate": 5
+      }
+    },
+    "amp": {
+      "type": "vca"
+    }
+  },
+  "cables": [
+    ["osc.saw", "amp.in"],
+    ["lfo.out", "amp.level", 6],
+    {
+      "from": "amp.out",
+      "to": "mo_1.l"
+    }
+  ]
+}
+
+```
+
+Result:
+
+```json
+{
+  "modules": {
+    "osc": "mo_4",
+    "lfo": "mo_5",
+    "amp": "mo_6"
+  },
+  "cables": ["cb_2", "cb_3", "cb_4"]
 }
 
 ```

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <set>
 
 #include "supple/script_runtime.h"
@@ -136,6 +137,32 @@ std::string ModuleType::problems() const {
 }
 
 // --- layout -------------------------------------------------------------------------
+
+double knobPosition(const sd::ParamModel& p, double v) {
+    if (!(p.max > p.min)) return 0;
+    v = std::clamp(v, p.min, p.max);
+    if (p.kind == sd::ParamModel::Kind::Continuous) {
+        if (p.curve == sd::ParamModel::Curve::Log && p.min > 0)
+            return std::log(v / p.min) / std::log(p.max / p.min);
+        if (p.curve == sd::ParamModel::Curve::Pow && p.curveK > 0)
+            return std::pow((v - p.min) / (p.max - p.min), 1.0 / p.curveK);
+    }
+    return (v - p.min) / (p.max - p.min);
+}
+
+double knobValue(const sd::ParamModel& p, double t) {
+    t = std::clamp(t, 0.0, 1.0);
+    double v = p.min + (p.max - p.min) * t;
+    if (p.kind == sd::ParamModel::Kind::Continuous) {
+        if (p.curve == sd::ParamModel::Curve::Log && p.min > 0)
+            v = p.min * std::pow(p.max / p.min, t);
+        else if (p.curve == sd::ParamModel::Curve::Pow && p.curveK > 0)
+            v = p.min + (p.max - p.min) * std::pow(t, p.curveK);
+    } else {
+        v = std::round(v);
+    }
+    return std::clamp(v, p.min, p.max);
+}
 
 PanelLayout automaticLayout(const std::vector<sd::ParamModel>& params,
                             const std::vector<sd::PortModel>& ports, int width, int height) {

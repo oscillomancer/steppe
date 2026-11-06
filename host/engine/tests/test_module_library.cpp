@@ -389,3 +389,51 @@ TEST_CASE("module.duplicate keeps cables into a plugin module's plug-in") {
                    e.value->to == model::CableEnd{*copy->fx, "gain"} && e.value->amount == 0.3;
     CHECK(reached);
 }
+
+TEST_CASE("rack.patch: named modules and cables in one step, all or nothing") {
+    Fixture f;
+    f.run("track.add", R"({"name": "Synth"})");
+    f.run("rack.add", R"({"track": "tr_1"})");  // mo_1 Out
+    json::Value made = f.run("rack.patch", R"({"rack": "rk_1",
+        "modules": {"keys": {"type": "notes"}, "osc": {"type": "vco"},
+                    "env": {"type": "adsr", "params": {"release": 200}},
+                    "amp": {"type": "vca"}, "fx": {"plugin": "com.suppleaudio.test.gain"},
+                    "wobble": {"type": "lfo", "params": {"rate": 4}}},
+        "cables": [["keys.pitch", "osc.pitch"], ["keys.gate", "env.gate"],
+                   ["osc.saw", "amp.in"], ["env.envelope", "amp.cv"],
+                   ["amp.out", "fx.in_l"], ["wobble.out", "fx.gain", 0.25],
+                   {"from": "fx.out_l", "to": "mo_1.l", "color": "teal"}]})");
+    const auto& ids = made["modules"];
+    REQUIRE(ids.find("fx") != nullptr);
+    CHECK(made["cables"].asArray().size() == 7);
+    const model::Session& s = f.app->head();
+    auto module = [&](const char* name) {
+        return s.modules.find(*model::Id::parse(ids.find(name)->asString()));
+    };
+    CHECK(json::writeCompact(module("env")->params) == R"({"release":200.0})");
+    // Laid out by signal flow: each stage right of what feeds it.
+    CHECK(module("keys")->x < module("osc")->x);
+    CHECK(module("osc")->x < module("amp")->x);
+    CHECK(module("amp")->x < module("fx")->x);
+    // A plugin module's knob is its plug-in's.
+    bool knob = false;
+    for (const auto& e : s.cables)
+        knob |=
+            e.value->to == model::CableEnd{*module("fx")->fx, "gain"} && e.value->amount == 0.25;
+    CHECK(knob);
+
+    // One bad cable: nothing changes.
+    const std::size_t modules = s.modules.size(), cables = s.cables.size();
+    auto bad = f.call("rack.patch", *json::parse(R"({"rack": "rk_1",
+        "modules": {"osc2": {"type": "vco"}}, "cables": [["osc2.nope", "mo_1.l"]]})"));
+    REQUIRE_FALSE(bad);
+    CHECK(bad.error().code == "rack.port");
+    CHECK(bad.error().path.rfind("/args/cables/0", 0) == 0);
+    CHECK(f.app->head().modules.size() == modules);
+    CHECK(f.app->head().cables.size() == cables);
+    auto unknown = f.call("rack.patch", *json::parse(R"({"rack": "rk_1",
+        "modules": {"osc2": {"type": "vcoo"}}})"));
+    REQUIRE_FALSE(unknown);
+    CHECK(unknown.error().code == "rack.unknown_type");
+    CHECK(unknown.error().path == "/args/modules/osc2/type");
+}
