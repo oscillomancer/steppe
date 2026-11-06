@@ -258,3 +258,23 @@ struct Sine : Module {
     // Nothing changed.
     CHECK(f.app->head().modules.size() == 4);
 }
+
+TEST_CASE("module.duplicate keeps cables into a plugin module's plug-in") {
+    Fixture f;
+    f.run("track.add", R"({"name": "Synth"})");
+    f.run("rack.add", R"({"track": "tr_1"})");                                          // mo_1 Out
+    f.run("module.add", R"({"rack": "rk_1", "type": "lfo"})");                          // mo_2
+    f.run("module.add", R"({"rack": "rk_1", "plugin": "com.suppleaudio.test.gain"})");  // mo_3
+    f.run("cable.add", R"({"from": "mo_2.out", "to": "mo_3.in_l"})");
+    f.run("cable.add", R"({"from": "mo_2.out", "to": "fx_1.gain", "amount": 0.3})");
+    json::Value copies = f.run("module.duplicate", R"({"modules": ["mo_2", "mo_3"]})");
+    REQUIRE(copies["cables"].asArray().size() == 2);
+    const model::RackModule* copy = f.app->head().modules.find({model::Kind::Module, 5});
+    REQUIRE(copy != nullptr);
+    REQUIRE(copy->fx);
+    bool reached = false;
+    for (const auto& e : f.app->head().cables)
+        reached |= e.value->from.str() == "mo_4.out" &&
+                   e.value->to == model::CableEnd{*copy->fx, "gain"} && e.value->amount == 0.3;
+    CHECK(reached);
+}

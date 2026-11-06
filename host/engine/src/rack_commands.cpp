@@ -1208,13 +1208,17 @@ void registerRackCommands(cmd::Registry& registry) {
                 dy = low - top + 40;
             }
             model::EditTxn& t = e.txn();
-            std::map<Id, Id> copies;
+            std::map<Id, Id> copies;  // modules and their plug-ins (cables reach both)
             json::Value made = json::Value::array(), cables = json::Value::array();
             for (Id id : ids) {
                 model::RackModule m = *s.modules.find(id);
                 m.x = std::clamp(m.x + dx, -model::kMaxRackCoordinate, model::kMaxRackCoordinate);
                 m.y = std::clamp(m.y + dy, -model::kMaxRackCoordinate, model::kMaxRackCoordinate);
-                if (m.fx) m.fx = t.create(*s.fx.find(*m.fx));
+                if (m.fx) {
+                    const Id original = *m.fx;
+                    m.fx = t.create(*s.fx.find(original));
+                    copies[original] = *m.fx;
+                }
                 if (!m.label.empty() && m.type == model::kOutModule) m.label += " copy";
                 copies[id] = t.create(m);
                 made.push_back(copies[id].str());
