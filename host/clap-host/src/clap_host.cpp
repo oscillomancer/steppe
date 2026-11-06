@@ -114,6 +114,7 @@ union ClapEvent {
     clap_event_header_t header;
     clap_event_note_t note;
     clap_event_param_value_t param;
+    clap_event_param_mod_t mod;
     clap_event_midi_t midi;
 };
 
@@ -1247,6 +1248,19 @@ bool Instance::process(const ProcessBlock& b, OutputEvents* out) SUPPLE_RT {
             case Event::Kind::Param:
                 appendParam(h, t, e.paramId, e.value);
                 break;
+            case Event::Kind::ParamMod: {
+                ClapEvent& ce = h.events[h.eventCount++];
+                ce.mod = {};
+                ce.mod.header = {sizeof(clap_event_param_mod_t), t, CLAP_CORE_EVENT_SPACE_ID,
+                                 CLAP_EVENT_PARAM_MOD, 0};
+                ce.mod.param_id = e.paramId;
+                ce.mod.note_id = -1;
+                ce.mod.port_index = -1;
+                ce.mod.channel = -1;
+                ce.mod.key = -1;
+                ce.mod.amount = e.value;
+                break;
+            }
             case Event::Kind::NoteOn:
             case Event::Kind::NoteOff:
             case Event::Kind::NoteChoke: {

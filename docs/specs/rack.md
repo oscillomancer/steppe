@@ -413,13 +413,21 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
 - **Plugin modules.** Their instances come from the instance pool by fx id
   and run as stages of the rack node (`Node::rackStages`, prepared and
   automated as chain stages), in sub-blocks on the grid, with notes made
-  from their pitch and gate cables and parameter modulation from cables as
-  CLAP `param_mod` events (not yet: such cables are reported and ignored).
+  from their pitch and gate cables. A cable into `fx_N.<key>` (a semantic
+  key, a parameter id or its name) rides one of the plugin module's 16
+  hidden knobs `mod_1`..`mod_16` (−1..1, never listed); once per grid
+  block the module sends each parameter its cables' sum (first voice) times
+  the parameter's CLAP range as a CLAP `param_mod` event, and 0 once when
+  its last cable goes. The parameter must be modulatable; VST3 plug-ins take
+  no modulation (a plan warning says so, as for a seventeenth cable).
   Their latency is not compensated inside the rack. A bridged plugin module
   in a live rack passes through, as on a live strip.
 - **State.** Module instances are kept per rack across plans (keyed by
   module id and code generation) as plugin instances are; offline renders
-  build their own from the session.
+  build their own from the session. What a plan gives a module (a plugin
+  module's stage, buffers and modulation, an In module's buffers) lives in
+  the plan and is attached on the audio thread each block, since the
+  previous plan may still be running the same instance.
 - **Errors.** `rack.cycle`, `rack.unknown_type`, `rack.port`, `rack.param`,
   `rack.limit` at edit time; plan warnings for missing types and plugin
   latency inside a rack.

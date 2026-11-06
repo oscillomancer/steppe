@@ -12,6 +12,7 @@
 
 #include "plan.h"
 #include "rack_runtime.h"
+#include "supple/params/params.h"
 
 using namespace supple;
 using namespace supple::engine;
@@ -416,4 +417,61 @@ TEST_CASE("racks: Notes' pitch and gate play a plugin module's instrument") {
     CHECK(crossings == doctest::Approx(440 * 0.3).epsilon(0.02));  // 0.3 s of A4
     CHECK(after == 0.0);
     CHECK(l == renderLeft(s, 1.5, 37));
+}
+
+TEST_CASE("racks: a cable modulates a plug-in's parameter, and stops when it goes" *
+          doctest::description("rt")) {
+    // Transport's `playing` (1 while playing) through the gain fixture at -6
+    // dB, and into its gain: CLAP param_mod of `amount` in its CLAP units.
+    auto build = [](bool modulated) {
+        model::Project project;
+        project.console9 = false;
+        model::EditTxn t(model::Session::create(project), 1);
+        const Id channel = addChannel(t);
+        const Id rack = t.create(model::Rack{channel, ""});
+        const Id transport = addModule(t, rack, "com.suppleaudio.rack.transport");
+        const Id gain = addPlugin(
+            t, rack, "com.suppleaudio.test.gain",
+            json::parse(R"({"schema":"supple.test-gain-patch/1.0","params":{"gain":-6}})").value());
+        const Id out = addModule(t, rack, "com.suppleaudio.rack.out");
+        cable(t, transport, "playing", gain, "in_l");
+        cable(t, gain, "out_l", out, "l");
+        listen(t, out, channel);
+        auto s = t.preview();
+        const Id fx = *s.modules.find(gain)->fx;
+        if (modulated) cable(t, transport, "playing", fx, "gain", 0.1);
+        return commit(t);
+    };
+    // The fixture's gain: -60..12 dB, its CLAP value normalized (ADR-0010).
+    params::ParamSpec spec;
+    spec.type = params::Type::Float;
+    spec.unit = units::Unit::dB;
+    spec.min = -60;
+    spec.max = 12;
+    const double modDb = params::fromClap(spec, params::toClap(spec, -6) + 0.1);
+    REQUIRE(modDb > -6);
+    const double base = 0.472135955;  // the channel's fader law at unity
+    const auto modulated = build(true), plain = build(false);
+    const auto l = renderLeft(modulated, 0.5);
+    CHECK(double(l[12000]) == doctest::Approx(base * std::pow(10.0, modDb / 20.0)).epsilon(1e-3));
+    CHECK(l == renderLeft(modulated, 0.5, 37));
+
+    // The running engine: the cable goes, the plug-in goes back to -6 dB.
+    InstancePool pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000});
+    Engine engine(pool, media, {.anticipative = false, .workers = 0});
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 96}));
+    REQUIRE(engine.load(modulated));
+    engine.play();
+    backend.run(100);
+    REQUIRE(engine.load(plain));
+    backend.run(100);
+    engine.stop();
+    CHECK(engine.processErrors() == 0);
+    const auto& cap = backend.capture();
+    CHECK(double(cap.channels[0][9000]) ==
+          doctest::Approx(base * std::pow(10.0, modDb / 20.0)).epsilon(1e-3));
+    CHECK(double(cap.channels[0][19000]) ==
+          doctest::Approx(base * std::pow(10.0, -6.0 / 20.0)).epsilon(1e-3));
 }

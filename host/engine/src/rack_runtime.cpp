@@ -3,7 +3,11 @@
 #include "rack_runtime.h"
 
 #include <algorithm>
+#include <cctype>
+#include <charconv>
 #include <cmath>
+#include <map>
+#include <optional>
 
 #include "supple/rack/stock.h"
 
@@ -44,7 +48,23 @@ std::shared_ptr<const rack::ModuleType> pluginModuleType() {
              "Each voice's velocity at its gate's rise, 0 to 1.", 0.8);
         port("out_l", "Out L", Signal::Audio, true, "The plug-in's left output.");
         port("out_r", "Out R", Signal::Audio, true, "Its right output.");
-        return rack::ModuleType::host(std::move(info), {}, std::move(ports));
+        // Hidden: cables into the plug-in's parameters ride these (rack.md §6).
+        std::vector<sd::ParamModel> params;
+        for (int k = 1; k <= detail::kPluginMods; ++k) {
+            sd::ParamModel p;
+            p.key = "mod_" + std::to_string(k);
+            p.member = p.key;
+            p.id = static_cast<std::uint32_t>(k);
+            p.name = "Mod " + std::to_string(k);
+            p.min = -1;
+            p.max = 1;
+            p.def = 0;
+            p.hidden = true;
+            p.automatable = false;
+            p.description = "A cable into the plug-in's parameters.";
+            params.push_back(std::move(p));
+        }
+        return rack::ModuleType::host(std::move(info), std::move(params), std::move(ports));
     }();
     return t;
 }
@@ -235,6 +255,55 @@ script::Transport RackClock::transport(std::int64_t position) SUPPLE_RT {
 
 // --- compile -----------------------------------------------------------------------------
 
+namespace {
+
+struct ModTarget {
+    std::uint32_t param = 0;
+    double scale = 0;  // the parameter's CLAP range
+};
+
+bool sameName(std::string_view a, std::string_view b) {
+    return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
+               return std::tolower(static_cast<unsigned char>(x)) ==
+                      std::tolower(static_cast<unsigned char>(y));
+           });
+}
+
+// The CLAP parameter a cable into the plug-in's `key` moves: a semantic key
+// (by `schema`, its semantic description), a parameter's id or its name. It
+// must be modulatable; a VST3 plug-in takes no modulation.
+Result<ModTarget> modTarget(host::Instance& instance, const json::Value* schema,
+                            const std::string& key) {
+    if (instance.info().format == "vst3")
+        return Error("rack.modulation", "VST3 plug-ins take no modulation", "",
+                     "use a CLAP plug-in, or automate the parameter (env.add {fx})");
+    std::optional<std::uint32_t> id;
+    std::uint32_t number = 0;
+    const auto [end, ec] = std::from_chars(key.data(), key.data() + key.size(), number);
+    if (ec == std::errc{} && end == key.data() + key.size()) id = number;
+    if (!id && schema && schema->isObject())
+        if (const json::Value* ps = schema->find("params"); ps && ps->isObject())
+            if (const json::Value* d = ps->find(key); d && d->isObject())
+                if (const json::Value* v = d->find("id"); v && v->isNumber())
+                    id = static_cast<std::uint32_t>(v->asInt());
+    const std::vector<host::ParamInfo> list = instance.params();
+    const host::ParamInfo* found = nullptr;
+    for (const host::ParamInfo& info : list)
+        if (id ? info.id == *id : sameName(info.name, key)) {
+            found = &info;
+            break;
+        }
+    if (!found)
+        return Error("rack.port", "the plug-in has no parameter " + key, "",
+                     "fx.describe lists its parameters");
+    if (!(found->flags & CLAP_PARAM_IS_MODULATABLE))
+        return Error("rack.modulation", found->name + " is not modulatable", "",
+                     "automate it instead (env.add {fx})");
+    return ModTarget{found->id, found->max - found->min};
+}
+
+}  // namespace
+
 Status compileRack(Plan& p, Node& n, const Session& s, Id rackId, InstancePool& plugins) {
     RackPool& pool = plugins.racks();
     auto r = std::make_shared<RackNode>();
@@ -243,6 +312,12 @@ Status compileRack(Plan& p, Node& n, const Session& s, Id rackId, InstancePool& 
     r->clock.rack = r.get();  // its plan is set per block: plans move after compile
     rack::Patch patch;
     std::map<Id, int> index;
+    struct Owner {
+        std::size_t binding = 0;
+        int module = 0;  // in the patch
+    };
+    std::map<Id, Owner> pluginOfFx;  // a plugin module's plug-in: its binding
+    std::map<host::Instance*, std::optional<json::Value>> schemas;  // asked once a compile
     for (const auto& e : s.modules) {
         const model::RackModule& m = *e.value;
         if (m.rack != rackId) continue;
@@ -273,7 +348,8 @@ Status compileRack(Plan& p, Node& n, const Session& s, Id rackId, InstancePool& 
             r->notes.push_back(std::move(feed));
         } else if (auto* plugin = dynamic_cast<PluginModule*>(in->host())) {
             // Its plug-in: a stage of the rack node, from the instance pool.
-            plugin->stage = -1;
+            PluginBinding binding;
+            binding.module = plugin;
             const model::FxInstance* fx = m.fx ? s.fx.find(*m.fx) : nullptr;
             if (fx) {
                 Stage st;
@@ -288,10 +364,11 @@ Status compileRack(Plan& p, Node& n, const Session& s, Id rackId, InstancePool& 
                     else
                         st.instance = *instance;
                 }
-                plugin->stage = static_cast<int>(n.rackStages.size());
+                binding.stage = static_cast<int>(n.rackStages.size());
                 n.rackStages.push_back(std::move(st));
+                pluginOfFx[*m.fx] = {r->plugins.size(), index[e.id]};
             }
-            r->plugins.push_back(plugin);
+            r->plugins.push_back(std::move(binding));
         }
     }
     for (const auto& e : s.cables) {
@@ -300,8 +377,48 @@ Status compileRack(Plan& p, Node& n, const Session& s, Id rackId, InstancePool& 
         if (from == index.end()) continue;  // another rack's
         const rack::Instance* src = patch.modules[static_cast<std::size_t>(from->second)].instance;
         if (c.to.object.kind != Kind::Module) {
-            p.warnings.push_back(e.id.str() + ": cables into a plug-in's parameters (" +
-                                 c.to.str() + ") are not heard yet");
+            // Into a plugin module's plug-in: one of its modulation slots.
+            auto owner = pluginOfFx.find(c.to.object);
+            if (owner == pluginOfFx.end() || !src) continue;
+            PluginBinding& b = r->plugins[owner->second.binding];
+            const Stage& st = n.rackStages[static_cast<std::size_t>(b.stage)];
+            if (!st.instance) continue;  // a plug-in that did not load: silent
+            const int output = src->type().output(c.from.key);
+            if (output < 0) {
+                p.warnings.push_back(e.id.str() + ": " + c.from.str() + " is not an output of " +
+                                     src->type().id() + "; the cable is ignored");
+                continue;
+            }
+            auto schema = schemas.find(st.instance);
+            if (schema == schemas.end()) {
+                std::optional<json::Value> described;
+                if (st.instance->info().semantic)
+                    if (auto got = st.instance->semanticSchema()) described = std::move(*got);
+                schema = schemas.emplace(st.instance, std::move(described)).first;
+            }
+            auto target =
+                modTarget(*st.instance, schema->second ? &*schema->second : nullptr, c.to.key);
+            if (!target) {
+                p.warnings.push_back(e.id.str() + ": " + c.to.str() + ": " +
+                                     target.error().message + "; the cable is not heard");
+                continue;
+            }
+            if (b.modCount >= kPluginMods) {
+                p.warnings.push_back(e.id.str() + ": " + c.to.object.str() + " takes at most " +
+                                     std::to_string(kPluginMods) +
+                                     " cables into its parameters; the cable is not heard");
+                continue;
+            }
+            const int slot = b.modCount++;
+            b.mods[static_cast<std::size_t>(slot)] = {slot, target->param, target->scale};
+            rack::Patch::Cable cable;
+            cable.from = from->second;
+            cable.output = output;
+            cable.to = owner->second.module;
+            cable.param = true;
+            cable.index = slot;
+            cable.amount = c.amount.value_or(0.5);
+            patch.cables.push_back(cable);
             continue;
         }
         auto to = index.find(c.to.object);
@@ -381,18 +498,17 @@ void prepareRack(Plan& p, Node& n, const Session& s) {
     // lines up with it; every grid block's notes and parameter events fit.
     for (Stage& st : n.rackStages) {
         st.inputLatency = n.timelineShift;
-        std::size_t need = 4 * static_cast<std::size_t>(rack::kChannels) * rack::kGrid + 1;
+        std::size_t need = 4 * static_cast<std::size_t>(rack::kChannels) * rack::kGrid + 1 +
+                           2 * static_cast<std::size_t>(kPluginMods);
         for (ParamLane& ln : st.lanes) {
             ln.curve.shift(n.timelineShift);
             need += rack::kGrid / kAutomationStep + 2 + ln.curve.points.size();
         }
         st.blockEvents.reserve(need);
     }
-    for (PluginModule* plugin : r.plugins) plugin->io.init(p.block);
+    for (PluginBinding& b : r.plugins) b.io.init(p.block);
     for (Stereo& out : n.rackOuts) out.init(p.block);
     for (Stereo& in : n.rackIns) in.init(p.block);
-    for (std::size_t k = 0; k < r.ins.size(); ++k)
-        r.ins[k]->bind(n.rackIns[k].l.data(), n.rackIns[k].r.data());
     r.live = n.live;
     // A Notes module plays its source track's MIDI (its rack's home track
     // when unset), as that track's instrument would hear it.
@@ -462,9 +578,13 @@ bool processRack(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames,
                  const host::Transport& transport, const void* self) SUPPLE_RT {
     RackNode& r = *n.rack;
     r.clock.plan = &p;
-    for (PluginModule* plugin : r.plugins) {
+    // The modules outlive this plan: what it gives them is attached here, on
+    // the audio thread, every block (a previous plan may have run them).
+    for (PluginBinding& b : r.plugins) {
+        PluginModule* plugin = b.module;
         plugin->plan = &p;
         plugin->node = &n;
+        plugin->binding = &b;
         plugin->transport = &transport;
         plugin->self = self;
         plugin->pos = pos;
@@ -472,6 +592,8 @@ bool processRack(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames,
     }
     // Sends into the In modules, each through its compensation delay.
     for (std::size_t k = 0; k < n.rackIns.size(); ++k) n.rackIns[k].clear(frames);
+    for (std::size_t k = 0; k < r.ins.size() && k < n.rackIns.size(); ++k)
+        r.ins[k]->bind(n.rackIns[k].l.data(), n.rackIns[k].r.data());
     for (std::size_t ei : n.in) {
         Edge& e = p.edges[ei];
         if (e.rackIn >= 0 && static_cast<std::size_t>(e.rackIn) < n.rackIns.size())
@@ -522,8 +644,8 @@ bool processRack(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames,
     r.playing = playing;
     r.schedule->process(r.own, static_cast<int>(frames), r.clock);
     r.own += frames;
-    for (const PluginModule* plugin : r.plugins)
-        if (plugin->failed) return false;
+    for (const PluginBinding& b : r.plugins)
+        if (b.module->failed) return false;
     return true;
 }
 
@@ -533,8 +655,9 @@ void PluginModule::process(const rack::HostContext& ctx) SUPPLE_RT {
     script::Output& outR = in.outputMember(1);
     outL.setChannels(1);
     outR.setChannels(1);
-    if (stage < 0 || !plan || !node || failed) return;
-    Stage& st = node->rackStages[static_cast<std::size_t>(stage)];
+    if (!binding || binding->stage < 0 || !plan || !node || failed) return;
+    Stage& st = node->rackStages[static_cast<std::size_t>(binding->stage)];
+    Stereo& io = binding->io;
     const script::Input& l = in.inputMember(0);
     const script::Input& r = in.inputMember(1);
     const script::Input& pitch = in.inputMember(2);
@@ -594,6 +717,50 @@ void PluginModule::process(const rack::HostContext& ctx) SUPPLE_RT {
         off.velocity = 0;
         st.blockEvents.push_back(off);
         v.key = -1;
+    }
+    // Modulation: each parameter's cables summed, once a grid block, as CLAP
+    // param_mod; a parameter whose cables went goes back to 0.
+    std::array<Sent, kPluginMods> now{};
+    int count = 0;
+    for (int k = 0; k < binding->modCount; ++k) {
+        const PluginMod& m = binding->mods[static_cast<std::size_t>(k)];
+        const double amount = in.paramMember(m.slot).at(0, 0) * m.scale;
+        int j = 0;
+        while (j < count && now[static_cast<std::size_t>(j)].param != m.param) ++j;
+        if (j == count) now[static_cast<std::size_t>(count++)] = {m.param, 0.0};
+        now[static_cast<std::size_t>(j)].amount += amount;
+    }
+    auto modEvent = [&](std::uint32_t param, double amount) {
+        if (st.blockEvents.size() >= st.blockEvents.capacity()) return false;
+        host::Event e;
+        e.kind = host::Event::Kind::ParamMod;
+        e.time = 0;
+        e.paramId = param;
+        e.value = amount;
+        st.blockEvents.push_back(e);
+        return true;
+    };
+    for (int k = 0; k < sentCount_;) {
+        const Sent& old = sent_[static_cast<std::size_t>(k)];
+        bool kept = false;
+        for (int j = 0; j < count; ++j) kept |= now[static_cast<std::size_t>(j)].param == old.param;
+        if (kept || !modEvent(old.param, 0.0)) {
+            ++k;
+            continue;
+        }
+        sent_[static_cast<std::size_t>(k)] = sent_[static_cast<std::size_t>(--sentCount_)];
+    }
+    for (int j = 0; j < count; ++j) {
+        const Sent& want = now[static_cast<std::size_t>(j)];
+        int k = 0;
+        while (k < sentCount_ && sent_[static_cast<std::size_t>(k)].param != want.param) ++k;
+        if (k < sentCount_ && sent_[static_cast<std::size_t>(k)].amount == want.amount) continue;
+        if (!modEvent(want.param, want.amount)) continue;
+        if (k == sentCount_) {
+            if (sentCount_ == kPluginMods) continue;
+            ++sentCount_;
+        }
+        sent_[static_cast<std::size_t>(k)] = want;
     }
     const auto frames = static_cast<std::uint32_t>(ctx.frames);
     if (!runModuleStage(*plan, st, io, frames, *transport, pos + ctx.offset, self)) {

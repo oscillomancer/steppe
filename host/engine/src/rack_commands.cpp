@@ -138,7 +138,7 @@ std::string keysOf(const rack::ModuleType& t, bool inputs, bool outputs, bool pa
         for (int k : t.outputs()) add(t.ports()[static_cast<std::size_t>(k)].key);
     if (params)
         for (const auto& p : t.params())
-            if (!p.output) add(p.key);
+            if (!p.output && !p.hidden) add(p.key);
     return out.empty() ? "none" : out;
 }
 
@@ -215,7 +215,8 @@ Result<json::Value> mergeParams(const rack::ModuleType& t, const json::Value& ba
     for (const auto& m : given.asObject()) {
         const int index = t.param(m.key);
         const std::string at = json::pointerJoin(path, m.key);
-        if (index < 0 || t.params()[static_cast<std::size_t>(index)].output)
+        if (index < 0 || t.params()[static_cast<std::size_t>(index)].output ||
+            t.params()[static_cast<std::size_t>(index)].hidden)
             return Error("rack.param", t.info().name + " has no knob " + m.key, at,
                          t.info().name + " has " + keysOf(t, false, false, true));
         const sd::ParamModel& p = t.params()[static_cast<std::size_t>(index)];
@@ -341,7 +342,7 @@ json::Value describeModuleType(const rack::ModuleType& t) {
     out["height"] = t.layout().height;
     json::Value knobs = json::Value::array();
     for (const auto& p : t.params()) {
-        if (p.output) continue;
+        if (p.output || p.hidden) continue;
         json::Value k = json::Value::object();
         k["key"] = p.key;
         k["name"] = p.name;
@@ -576,7 +577,7 @@ json::Value moduleEntry(EngineApp& a, const model::Session& s, Id id, bool full)
         for (int k : type->outputs())
             outs.push_back(type->ports()[static_cast<std::size_t>(k)].key);
         for (const auto& p : type->params())
-            if (!p.output) knobs.push_back(p.key);
+            if (!p.output && !p.hidden) knobs.push_back(p.key);
         e["inputs"] = std::move(ins);
         e["outputs"] = std::move(outs);
         e["knobs"] = std::move(knobs);
@@ -1364,7 +1365,7 @@ void registerRackCommands(cmd::Registry& registry) {
             std::uniform_real_distribution<double> unit(0.0, 1.0);
             json::Value given = json::Value::object();
             for (const auto& p : type->params()) {
-                if (p.output || p.kind == sd::ParamModel::Kind::Toggle) continue;
+                if (p.output || p.hidden || p.kind == sd::ParamModel::Kind::Toggle) continue;
                 const double now = detail::moduleParamValue(p, m.params.find(p.key));
                 if (p.kind == sd::ParamModel::Kind::Choice) {
                     if (unit(rng) < amount && p.choices.size() > 1) {
@@ -1396,7 +1397,9 @@ void registerRackCommands(cmd::Registry& registry) {
         c.description =
             "from: \"mo_N.<output>\"; to: \"mo_N.<input>\" or \"mo_N.<knob>\" (a modulation "
             "cable: amount is the knob's movement at a signal of 1, in octaves for a frequency, "
-            "the knob's unit otherwise; default an octave or half the range). Several cables "
+            "the knob's unit otherwise; default an octave or half the range), or a plugin "
+            "module's plug-in parameter \"fx_N.<key>\" (CLAP modulation, amount a fraction "
+            "of its range, default 0.5; it must be modulatable). Several cables "
             "into one input sum; a mono cable reaches every voice of a poly module. feedback: "
             "it closes a loop, so it carries the previous frame (a one-sample delay).";
         c.args = schema::object<CableAdd>("cable_add_args")
@@ -1453,9 +1456,10 @@ void registerRackCommands(cmd::Registry& registry) {
                             return Error(
                                 "rack.port", "amount is a modulation cable's", "/amount",
                                 to->key + " is an input; leave out amount, or reach a knob");
-                    } else if (const int p = dstType->param(to->key); p >= 0) {
+                    } else if (const int p = dstType->param(to->key);
+                               p >= 0 && !dstType->params()[static_cast<std::size_t>(p)].hidden) {
                         const sd::ParamModel& pm = dstType->params()[static_cast<std::size_t>(p)];
-                        if (pm.kind == sd::ParamModel::Kind::Toggle || pm.output)
+                        if (pm.kind == sd::ParamModel::Kind::Toggle || pm.output || pm.hidden)
                             return Error(
                                 "rack.port", to->key + " is a switch or a meter", "/to",
                                 "cables move knobs: " + keysOf(*dstType, false, false, true));
@@ -2048,9 +2052,10 @@ void registerRackPresetCommands(cmd::Registry& registry) {
                     p.amount = amount ? amount->asDouble() : 0.5;
                 } else if (dst && dst->input(p.toKey) >= 0) {
                     // an input: no amount
-                } else if (const int q = dst ? dst->param(p.toKey) : -1; q >= 0) {
+                } else if (const int q = dst ? dst->param(p.toKey) : -1;
+                           q >= 0 && !dst->params()[static_cast<std::size_t>(q)].hidden) {
                     const sd::ParamModel& pm = dst->params()[static_cast<std::size_t>(q)];
-                    if (pm.kind == sd::ParamModel::Kind::Toggle || pm.output) {
+                    if (pm.kind == sd::ParamModel::Kind::Toggle || pm.output || pm.hidden) {
                         skip(p.toKey + " is a switch or a meter");
                         continue;
                     }
@@ -2231,7 +2236,8 @@ Result<std::pair<Id, std::string>> learnTarget(EngineApp& e, const model::Sessio
         return Error("rack.unknown_type", "its type " + m.type + " is not installed", "/module",
                      "module.list");
     const int index = type->param(param);
-    if (index < 0 || type->params()[static_cast<std::size_t>(index)].output)
+    if (index < 0 || type->params()[static_cast<std::size_t>(index)].output ||
+        type->params()[static_cast<std::size_t>(index)].hidden)
         return Error("rack.param", type->info().name + " has no knob " + param, "/param",
                      type->info().name + " has " + keysOf(*type, false, false, true));
     return std::pair<Id, std::string>{*id, param};

@@ -750,11 +750,10 @@ Library boundaries:
 
 Engine and hosting:
 - Modular racks (ADR-0062): racks do not follow a track's playrate map;
-  cables into a plugin module's parameters are saved but not heard (CLAP
-  `param_mod` is not sent yet); a plug-in's latency inside a rack is not
-  compensated; recording an armed channel whose input is a rack's Out is
+  cables into a plugin module's parameters modulate CLAP plug-ins only
+  (VST3 has no modulation), by their first voice, at most 16 per plug-in;
+  a plug-in's latency inside a rack is not compensated; recording an armed channel whose input is a rack's Out is
   not supported; post-fader sends into an In module take the linear path.
-  Project-folder module types (`Origin::Project`) are not loaded yet.
 - The headless platform layer (ADR-0035) has natively tested macOS/Windows
   address waits, wake sources, control socket/MCP paths and user directory roots.
   Both native engines run with dummy/offline audio and native RT/offline
