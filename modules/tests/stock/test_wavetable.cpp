@@ -126,7 +126,7 @@ TEST_CASE("wavetable: every wave peaks near 1") {
 TEST_CASE("wavetable: Unison spreads copies over Detune; FM and poly") {
     const auto y = play({{"position", 0}, {"unison", 3}, {"detune", 30}}, 0.0, 96000);
     const double up = kC4 * std::exp2(30.0 / 1200), down = kC4 / std::exp2(30.0 / 1200);
-    const double each = 1.0 / std::sqrt(3.0);
+    const double each = std::pow(3.0, -0.8);
     CHECK(amplitudeAt(y, up, 48000) == doctest::Approx(each).epsilon(0.05));
     CHECK(amplitudeAt(y, down, 48000) == doctest::Approx(each).epsilon(0.05));
     CHECK(amplitudeAt(y, kC4, 48000) == doctest::Approx(each).epsilon(0.05));
