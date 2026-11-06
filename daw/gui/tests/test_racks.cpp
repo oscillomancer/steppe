@@ -20,12 +20,14 @@
 #include "floating_panel.h"
 #include "plugin_scales.h"
 #include "rack_engine.h"
+#include "rack_labels.h"
 #include "rack_window.h"
 #include "supple/engine/realtime.h"
 #include "supple/gui/png.h"
 #include "supple/gui/window.h"
 #include "supple/script_compiler.hpp"
 #include "supple/script_module.h"
+#include "supple/ui/canvas.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/root.h"
 #include "supple/ui/text_area.h"
@@ -1182,4 +1184,106 @@ TEST_CASE("rack window: modules saved as a rack preset load into another rack fr
     REQUIRE(f.pick("rack.browser.menu", "Delete preset"));
     shows = f.racks->browserShows();
     CHECK(std::find(shows.begin(), shows.end(), "preset:Voice") == shows.end());
+}
+
+TEST_CASE("face labels keep to their own room on every stock and host module") {
+    Fixture f;
+    if (!f.ok) return;
+    const ui::Theme theme = ui::Theme::dark();
+    ui::Canvas c(f.window->vg(), f.fonts, theme);
+    const auto measure = [&](std::string_view s, float size) {
+        return c.textWidth(s, ui::Font::Ui, size);
+    };
+    // Boxes may touch: a hair is not a collision.
+    const auto meets = [](const ui::Rect& a, const ui::Rect& b) {
+        const ui::Rect i = a.intersect(b);
+        return i.w > 0.25f && i.h > 0.25f;
+    };
+    int types = 0, labels = 0;
+    for (const auto* e : gui::racks::catalog(*f.app)->list()) {
+        const rack::ModuleType& type = *e->type;
+        if (type.origin() != rack::Origin::Stock && type.origin() != rack::Origin::Host) continue;
+        ++types;
+        const rack::PanelLayout& face = type.layout();
+        const auto out = gui::racks::faceLabels(type, face, measure);
+        for (std::size_t i = 0; i < out.size(); ++i) {
+            const auto& l = out[i];
+            CAPTURE(type.id());
+            CAPTURE(l.text);
+            ++labels;
+            REQUIRE(!l.lines.empty());
+            // Every label is shown whole, at a size that can be read.
+            CHECK(l.lines[0].find("…") == std::string::npos);
+            CHECK(l.size >= gui::racks::kLabelMin);
+            float widest = 0;
+            for (const auto& line : l.lines) widest = std::max(widest, measure(line, l.size));
+            CHECK(widest <= l.box.w + 0.01f);
+            CHECK(l.box.x >= 0);
+            CHECK(l.box.right() <= static_cast<float>(face.width));
+            for (std::size_t k = 0; k < face.items.size(); ++k)
+                if (k != l.item && meets(l.box, gui::racks::footprint(face.items[k]))) {
+                    CAPTURE(k);
+                    CHECK_MESSAGE(false, "under another control");
+                }
+            for (std::size_t j = i + 1; j < out.size(); ++j)
+                if (meets(l.box, out[j].box)) {
+                    CAPTURE(out[j].text);
+                    CHECK_MESSAGE(false, "into another label");
+                }
+        }
+    }
+    CHECK(types > 40);
+    CHECK(labels > 400);
+}
+
+TEST_CASE("rack window: every stock module's face, at 100 %") {
+    Fixture f(ui::Theme::dark(), {}, 1400, 900);
+    if (!f.ok) return;
+    auto made = f.exec("rack.add", R"({"name":"Faces"})");
+    const std::string rack = made["rack"].asString();
+    // In rows as wide as the space in the window, as many whole rows to a
+    // page as fit its height.
+    struct Row {
+        std::vector<const rack::ModuleType*> types;
+        double height = 0;
+    };
+    std::vector<Row> rows(1);
+    double x = 0;
+    for (const auto* e : gui::racks::catalog(*f.app)->list()) {
+        if (e->type->origin() != rack::Origin::Stock) continue;
+        const auto& l = e->type->layout();
+        if (x > 0 && x + l.width > 1120) {
+            rows.emplace_back();
+            x = 0;
+        }
+        rows.back().types.push_back(e->type.get());
+        rows.back().height = std::max(rows.back().height, static_cast<double>(l.height));
+        x += l.width + 20;
+    }
+    std::vector<double> pages{0};
+    double y = 0;
+    int count = 0;
+    for (const Row& r : rows) {
+        if (y > pages.back() && y + r.height - pages.back() > 760) pages.push_back(y);
+        x = 0;
+        for (const rack::ModuleType* t : r.types) {
+            f.add(rack, t->id(), static_cast<int>(x), static_cast<int>(y));
+            x += t->layout().width + 20;
+            ++count;
+        }
+        y += r.height + 30;
+    }
+    // The rack's own Out is a stock face too: after the rest.
+    f.exec("module.set", R"({"module":")" + made["out"].asString() + R"(","x":0,"y":)" +
+                             std::to_string(static_cast<int>(y)) + "}");
+    if (y > pages.back() && y + 200 - pages.back() > 760) pages.push_back(y);
+    CHECK(count > 40);
+    f.racks->open();
+    f.frame();
+    for (std::size_t i = 0; i < pages.size(); ++i) {
+        f.racks->space()->setView({-20, pages[i] - 20, 1.0});
+        f.frame();
+        const std::string name = "rack-faces-" + std::to_string(i + 1) + ".png";
+        f.snapshot(name.c_str());
+    }
 }

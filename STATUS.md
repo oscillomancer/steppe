@@ -346,7 +346,7 @@ instructions are in `docs/guides/installing.md`.
   and ruler, and the MIDI editor can be rebound in Edit > Mouse
   modifiers.
 - **Rack window** (ADR-0062, gui.md §4.12): a separate window with a tab per
-  rack (`+` adds one), a plain pannable, zoomable space (25-400 %, each
+  rack (`+` adds one), a plain pannable, zoomable space (10-400 %, each
   rack's view in the UI sidecar), modules drawn from their faces with knobs,
   toggles, choices and jacks in signal colours, hanging cables, selection,
   marquee and group moves, knob drags, cables drawn jack to jack or onto a
@@ -367,6 +367,8 @@ instructions are in `docs/guides/installing.md`.
   and duplicate with the cables among the modules, arrow-key nudges, fit to
   the selection, zoom out to 10 % with module names drawn readable, and the
   hovered or selected modules' cables brought forward while the rest fade.
+  Knob and jack names keep to cells of their own (smaller, wrapped or cut
+  rather than running into a neighbour or under a control).
   Pasting into another rack or after a cut rebuilds through `rack.patch`, so
   a plugin module's plug-in starts from its defaults there.
 - **MIDI learn** (ADR-0027): any plug-in parameter (the FX window's MIDI

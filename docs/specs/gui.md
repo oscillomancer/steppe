@@ -1172,8 +1172,19 @@ a new channel). It follows rack.md §8.
 - **Modules** are drawn from their type's face (rack.md §4.5, or the
   module's `panel()`): a title strip with the label (the type's name; an
   Out or In module's `moduleLabel`), knobs, toggles, choices, sliders,
-  readouts, displays, and jacks. A label too long for its place is drawn
-  smaller, down to three quarters of its size, before it is cut short. An
+  readouts, displays, and jacks. A knob's or jack's name sits under it in
+  a cell of its own (`rack_labels.cpp`): the line stops short of the
+  controls beside it, and two names on one line split the room between
+  them at one point (each its need, the rest shared). A control right
+  under the name shortens the line; one its width would reach shortens it
+  to no less than 8.75 units, below which the name narrows instead. A name
+  that does not fit its cell is drawn smaller (8.5 down to 7.25), then on
+  two lines where the space under it is free, then cut with an ellipsis;
+  a hovered knob's value shows in the same cell. Whatever the layout,
+  automatic or a module's `panel()`, no name runs into another or under a
+  control (a test holds every stock and host face to it). Other words too
+  long for their place (toggles, choices) are drawn smaller, down to three
+  quarters of their size, or on two lines, before they are cut short. An
   Out module carries a tag under it naming the channel it feeds. A plugin module shows the plug-in's name and
   vendor on its plate and a window mark; a click (not a drag) opens the
   plug-in's editor, as the mixer's slot does. A module of an unknown type is

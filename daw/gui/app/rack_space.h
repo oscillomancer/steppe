@@ -172,6 +172,8 @@ class RackSpace : public ui::Node {
     void nudge(double dx, double dy);
     std::optional<std::size_t> cableNear(ui::Point space) const;
     void paintModule(ui::Canvas& c, const RackScene::Module& m, bool selected, bool hot) const;
+    void paintLabels(ui::Canvas& c, const RackScene::Module& m,
+                     std::optional<std::size_t> hotItem) const;
     void paintItem(ui::Canvas& c, const RackScene::Module& m, const rack::PanelItem& item,
                    std::size_t index, bool hot) const;
     void paintCables(ui::Canvas& c) const;
