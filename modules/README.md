@@ -50,3 +50,4 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `euclid` | A Euclidean rhythm with its own accent spread, gate, accent and off-beat outputs, circle face |
 | `turing` | Shift Register: a looping random register, locked to chaotic by Flip, with a CV and four bit gates |
 | `chance` | A coin toss per gate to A or B, latched as a random switch, or a burst of ratchets; poly |
+| `chord` | A note to a poly chord: 22 types or a key's own thirds, inversions, voicings and a strum |
