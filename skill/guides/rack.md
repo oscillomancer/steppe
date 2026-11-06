@@ -117,6 +117,8 @@ feedback FM, Karplus-like loops and self-patched chaos.
 
 ## Recipes
 
+<!-- host/engine/tests/test_rack_recipes.cpp patches every JSON block here as printed. -->
+
 These were run and probed as written. Each starts from `rack.add {track}`;
 the Out is then `mo_1`.
 
