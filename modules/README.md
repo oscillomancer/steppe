@@ -58,3 +58,4 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `chaos` | A Lorenz or Thomas attractor: X, Y and Z as slow organic CVs, poly copies that drift apart |
 | `rhythm` | Drum patterns from a map of nine grooves morphed by X and Y, densities per voice, chaos, accents |
 | `mixer` | Four channels with level, pan and mute to stereo and mono, through a master; poly summed |
+| `scale` | Four attenuverters with offsets; a row with nothing in it is a constant |
