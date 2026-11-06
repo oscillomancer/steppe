@@ -40,7 +40,7 @@ CompiledModule compileModule(std::string_view source, rack::Origin origin,
 
 // A library module's file: <dir>/<name>/<name>.cpp.
 std::filesystem::path modulePath(const std::filesystem::path& dir, std::string_view name);
-// Its name, from a type's path (empty when it is not a library file).
+// Its name, from a type's path (empty when it is not a library or project file).
 std::string moduleName(const rack::ModuleType& type);
 // A library name: 1-64 lower-case letters, digits, '_' or '-', from a letter.
 Status validModuleName(std::string_view name, const std::string& path);
@@ -51,6 +51,20 @@ Status validModuleName(std::string_view name, const std::string& path);
 std::shared_ptr<const rack::Catalog> loadModuleLibrary(
     const std::shared_ptr<const rack::Catalog>& base, const std::filesystem::path& dir,
     std::vector<std::string>* skipped = nullptr);
+
+// `base` with a project's copies of the user's modules (<project folder>/
+// modules, as the library) in place of its project types: each that compiles,
+// as Origin::Project, which wins over the library's type of the same id
+// (never over a built-in id).
+std::shared_ptr<const rack::Catalog> loadProjectModules(
+    const std::shared_ptr<const rack::Catalog>& base, const std::filesystem::path& dir,
+    std::vector<std::string>* skipped = nullptr);
+
+// Writes the source of every library or project module `modules` uses into
+// <dir>/<name>/<name>.cpp, leaving files that already hold it alone, so a
+// project carries its custom modules as it carries its media (ADR-0062).
+Status saveProjectModules(const rack::Catalog& catalog, const std::vector<std::string>& types,
+                          const std::filesystem::path& dir);
 
 json::Value diagnosticsJson(const std::vector<ModuleDiagnostic>& diagnostics);
 

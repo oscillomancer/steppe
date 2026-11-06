@@ -475,3 +475,36 @@ TEST_CASE("rack presets: a patch brings its own modules to another library") {
     REQUIRE((*differs).find("warnings") != nullptr);
     CHECK((*differs)["warnings"].at(0).find("code")->asString() == "rack.preset_module");
 }
+
+TEST_CASE("module library: a project keeps copies of the modules it plays") {
+    Fixture here;
+    here.write("level", kLevel);
+    here.run("project.set", R"({"console9": false})");
+    here.run("track.add", R"({"name": "Synth"})");
+    here.run("rack.add", R"({"track": "tr_1"})");
+    here.run("rack.patch", R"({"rack": "rk_1", "modules": {"lvl": {"type": "com.example.level"}},
+                               "cables": [["lvl.out", "mo_1.l"]]})");
+    const auto song = here.dir / "song" / "song.json";
+    json::Value args = json::Value::object();
+    args["path"] = song.string();
+    REQUIRE(here.call("project.save", args));
+    const auto copy = song.parent_path() / "modules" / "level" / "level.cpp";
+    REQUIRE(std::filesystem::exists(copy));
+
+    // Opened where the library lacks it: the project's copy plays.
+    Fixture there;
+    REQUIRE(there.call("project.open", args));
+    CHECK(there.level() == doctest::Approx(0.25 * 0.472135955).epsilon(1e-3));
+    json::Value got = there.run("module.get", R"({"type": "com.example.level"})");
+    CHECK(got["origin"].asString() == "project");
+    // Edited there, it goes into that library and plays; the next save copies it.
+    json::Value edited = there.run(
+        "module.edit",
+        R"({"type": "com.example.level", "edits": [{"old": "0.25", "new": "0.5"}]})");
+    CHECK(edited["ok"].asBool());
+    CHECK(there.level() == doctest::Approx(0.5 * 0.472135955).epsilon(1e-3));
+    REQUIRE(there.call("project.save", args));
+    auto saved = readTextFile(copy, 1 << 20);
+    REQUIRE(saved);
+    CHECK(saved->find("0.5") != std::string::npos);
+}

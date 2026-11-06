@@ -267,7 +267,8 @@ instructions are in `docs/guides/installing.md`.
   with `rack.probe` (pitch, levels, gates, notes, CV rates from an offline
   render of a copy), write and edit library modules (`module.write`, hot
   reload in the running engine, `module.fork`), keep patches as rack
-  presets (`rack.preset.*`), automate knobs (`env.add {module}`) and learn
+  presets (`rack.preset.*`, carrying the user's modules' source; projects
+  keep copies of theirs too), automate knobs (`env.add {module}`) and learn
   MIDI controllers on them (`module.learn.*`). The agent guide is
   `skill/guides/rack.md`; `skill/generated/rack-modules.md` lists every
   built-in module. Linux only so far: native macOS/Windows CI has not run

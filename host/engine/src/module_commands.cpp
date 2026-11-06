@@ -158,6 +158,9 @@ Result<json::Value> saveLibraryModule(EngineApp& e, const std::string& name,
             next->remove(before->id(), rack::Origin::Library);
         if (std::string problems = next->add(compiled.type); !problems.empty())
             return Error("module.description", problems, path, "fix what it names");
+        // A project's copy of it gives way: the edit is what plays, and the
+        // project's next save copies it.
+        next->remove(compiled.type->id(), rack::Origin::Project);
         const std::string id = compiled.type->id();
         out["type"] = describeModuleType(*compiled.type);
         e.setModules(std::move(next));
@@ -244,6 +247,7 @@ void registerModuleCommands(cmd::Registry& registry) {
         c.run = [](const EditArgs& a, Context& ctx) -> Result<json::Value> {
             EngineApp& e = app(ctx);
             std::string name;
+            std::optional<std::string> project;  // a project's copy: edited into the library
             if (a.name.has_value() == a.type.has_value())
                 return Error("command.invalid_args", "give name or type", "/name",
                              "e.g. {\"name\": \"wobble\", \"edits\": [...]}");
@@ -257,8 +261,9 @@ void registerModuleCommands(cmd::Registry& registry) {
                     return Error("module.built_in", (*t)->id() + " is built in and is not edited",
                                  "/type",
                                  "module.fork copies it into the library under your own id");
+                if ((*t)->origin() == rack::Origin::Project) project = (*t)->source();
             }
-            auto text = readModule(e, name, "/name");
+            auto text = project ? Result<std::string>(*project) : readModule(e, name, "/name");
             if (!text) return std::move(text).error();
             auto edited = dsp_commands::detail::applyEdits(std::move(*text), a.edits, "module.edit",
                                                            "module.get");

@@ -309,6 +309,17 @@ library module may not take a host or stock type's id (`module.fork`
 copies one under a new id). Offline renders and background jobs use the
 catalog of the moment they start (`OfflineSettings::modules`).
 
+A saved project keeps a copy of each library or project module it plays
+in `<project folder>/modules/<name>/<name>.cpp` (`saveProjectModules`;
+not when that folder is the library), as it keeps its media; a file that
+already holds the source is left alone. Opening it compiles the copies as
+project types (`Origin::Project`), which win over the library's for the
+same id, so the project sounds as it was saved on any machine. A
+`module.write` or `module.edit` of the same id in the library replaces the
+project's copy in the catalog (the edit plays, and the next save copies
+it); `module.edit {type}` of a project-only type writes it into the
+library.
+
 ## 4. The rack runtime (`modules/rack`)
 
 ### 4.1 Types
