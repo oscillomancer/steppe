@@ -7968,6 +7968,28 @@
     }
   },
   {
+    "name": "rack_levels",
+    "title": "Read every module output's linear peak, without subscribing to telemetry.",
+    "description": "Read every module output's linear peak, without subscribing to telemetry. Returns {modules: {mo_N: {port: level}}}. Each level is the maximum absolute sample across all channels in the latest processed rack block (at most 32 frames), including unconnected outputs. Levels may exceed 1. Stopped, silent or uninstantiated modules read zero; unavailable types have no known ports. Anticipative levels can lead the heard audio. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "rack_levels_args",
+      "properties": {
+        "rack": {
+          "type": "string",
+          "pattern": "^rk_[0-9]+$"
+        }
+      },
+      "required": ["rack"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
     "name": "rack_list",
     "title": "List racks: home channels, module counts, Outs.",
     "description": "List racks: home channels, module counts, Outs.  See describe for errors and examples.",

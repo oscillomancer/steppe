@@ -10527,6 +10527,65 @@ Result:
 
 ```
 
+## `rack.levels@1`
+
+Read every module output's linear peak, without subscribing to telemetry.
+
+Returns {modules: {mo_N: {port: level}}}. Each level is the maximum absolute sample across all channels in the latest processed rack block (at most 32 frames), including unconnected outputs. Levels may exceed 1. Stopped, silent or uninstantiated modules read zero; unavailable types have no known ports. Anticipative levels can lead the heard audio.
+
+Kind: `query`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `rack` | string |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Errors
+
+- `rack.unknown`: no such rack Hint: use a rack.list id
+
+### Examples
+
+**Read output peaks while stopped** (`song_with_rack`)
+
+```json
+{
+  "rack": "rk_1"
+}
+
+```
+
+Result:
+
+```json
+{
+  "modules": {
+    "mo_1": {},
+    "mo_2": {
+      "pitch": 0.0,
+      "gate": 0.0,
+      "velocity": 0.0,
+      "pressure": 0.0,
+      "retrigger": 0.0,
+      "modwheel": 0.0,
+      "bend": 0.0
+    },
+    "mo_3": {
+      "out": 0.0
+    }
+  }
+}
+
+```
+
 ## `rack.list@1`
 
 List racks: home channels, module counts, Outs.

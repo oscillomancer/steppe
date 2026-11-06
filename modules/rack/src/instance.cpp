@@ -118,6 +118,10 @@ void Instance::bindMembers() {
         slot.shared.assign(sharedBytes, 0);
     }
     peaks_.assign(outputs_.size(), 0.0f);
+    static_assert(std::atomic<float>::is_always_lock_free);
+    outputLevels_ = std::make_unique<std::atomic<float>[]>(outputs_.size());
+    for (std::size_t o = 0; o < outputs_.size(); ++o)
+        outputLevels_[o].store(0.0f, std::memory_order_relaxed);
 }
 
 void Instance::prepare() {
@@ -140,7 +144,14 @@ void Instance::prepare() {
     first_ = true;
 }
 
+float Instance::outputLevel(int output) const {
+    if (output < 0 || static_cast<std::size_t>(output) >= outputs_.size()) return 0.0f;
+    return outputLevels_[static_cast<std::size_t>(output)].load(std::memory_order_relaxed);
+}
+
 void Instance::reset() {
+    for (std::size_t o = 0; o < outputs_.size(); ++o)
+        outputLevels_[o].store(0.0f, std::memory_order_relaxed);
     if (host_) {
         host_->prepare(*this);
         first_ = true;
@@ -218,6 +229,19 @@ bool Instance::beginParam(int i, double automation, int frames) SUPPLE_RT {
 
 void Instance::observe(int frames) SUPPLE_RT {
     first_ = false;
+    for (std::size_t o = 0; o < outputs_.size(); ++o) {
+        const script::Output& out = *outputs_[o];
+        double peak = 0.0;
+        for (int c = 0; c < sd::PortBinding::channels(out); ++c) {
+            const script::Channel ch = out[c];
+            for (int f = 0; f < frames && f < ch.size(); ++f)
+                peak = std::max(peak, std::abs(ch.data_[f]));
+        }
+        // Keep the public reading finite even if a faulty module emits Inf.
+        outputLevels_[o].store(static_cast<float>(std::min(
+                                   peak, static_cast<double>(std::numeric_limits<float>::max()))),
+                               std::memory_order_relaxed);
+    }
     if (!watched_.load(std::memory_order_relaxed)) return;
     for (std::size_t o = 0; o < outputs_.size(); ++o) {
         const script::Output& out = *outputs_[o];

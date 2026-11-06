@@ -402,6 +402,21 @@ audio: each output port's last value and peak (channel 0) and channel
 count, each parameter's last modulated value (channel 0), and the `Shared`
 bytes. The GUI reads the newest; nothing waits.
 
+Independently of `watch()`, every processed instance publishes each output's
+peak absolute sample across all its poly channels for the latest processed
+rack block (at most 32 frames; a host block may split it).
+`float Instance::outputLevel(int output) const` reads a non-consuming, lock-free
+atomic float, initially zero and cleared by reset. Slots are allocated once
+when the instance is built; observation never allocates, locks, logs or
+changes the audio buffers. An unconnected output is measured too. Readings are
+linear, nonnegative and may exceed 1; infinite peaks saturate at the largest
+finite float. NaN samples contribute no peak. These readings may precede heard
+audio in the anticipative executor. `EngineApp::moduleOutputLevel(model::Id,
+std::string_view) const` returns the reading by output key, or zero for a
+stopped transport/engine or unknown or uninstantiated module/output. The main
+thread may poll it without JSON or a telemetry subscription. Each output is
+read independently, not as a coherent snapshot of an entire rack.
+
 ## 5. Host modules
 
 All `com.suppleaudio.rack.<name>`, version 1.0.0.
@@ -477,6 +492,7 @@ examples run as tests. Ends are strings: `"mo_3.out"`.
 | `rack.list` | query | `{}` → racks with their home tracks, module counts and Out modules |
 | `rack.get` | query | `{rack, detail?: brief\|full}` → modules (id, type, label, changed params, position, size), cables (with `feedback`), Out modules and the channels they feed, problems |
 | `rack.probe` | query | `{rack, ports: ["mo_N.<output>", …≤8], seconds? (≤10, 2), from_beat?, notes? (notation the rack's Notes modules play)}` → per port: peak, rms, dc, min, max; audio (the first 4 voices summed): dB and pitch (Hz, note, cents) when periodic; gates over the voices: count, per second, per beat, duty; pitch: the notes visited; CV: rate; a one-line description. An offline render of a copy with a listener (`ProbeModule`) on each port; nothing changes |
+| `rack.levels` | query | `{rack}` → `{modules: {mo_N: {port: level}}}`: every module and known output port, latest block's linear peak across all channels; stopped or silent reads zero, missing types have an empty port object |
 | `rack.patch` | edit | `{rack, modules: {name: {type\|plugin, params?, preset?, label?, x?, y?, source?, device?}}, cables?: [[from, to, amount?, color?] \| {from, to, amount?, color?}], x?, y?}` → `{modules: {name: id}, cables}`: ends `"name.port"`, `"name.knob"` (a plugin module's: its plug-in's) or `"mo_N.port"`; modules without a place laid out by signal flow; checked as `module.add` and `cable.add` check, all or nothing |
 | `rack.preset.save` | action | `{rack, name, modules?, description?, replace?}` → `{path, modules, cables}`: the modules (default the whole rack) and the cables among them |
 | `rack.preset.load` | edit | `{rack, name\|path, x?, y?, io?: join\|add}` → `{modules, cables, installed?, warnings?}`: one undo step; `installed` names the library modules it brought |
@@ -512,7 +528,8 @@ are its plug-in's (`env.add {fx}`). `preset` on `module.add` and
 `module.set` is one of the type's factory presets (`module.describe`
 lists them): every knob goes to it, then `params` apply on top. The app
 reaches racks through `EngineApp::modules()` (the catalog),
-`EngineApp::moduleInstance()` (a running module's telemetry) and
+`EngineApp::moduleInstance()` (a running module's telemetry),
+`EngineApp::moduleOutputLevel()` (an always-published per-output peak) and
 `supple/engine/racks.h`. `<slug>-engine modules --markdown` prints every
 built-in type's ports and knobs (`moduleReference()`), committed as
 `skill/generated/rack-modules.md` and checked by `engine.registry-drift`.

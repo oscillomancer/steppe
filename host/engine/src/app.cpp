@@ -2719,6 +2719,15 @@ rack::Instance* EngineApp::moduleInstance(model::Id module) const {
     return pool_->racks().find(module);
 }
 
+float EngineApp::moduleOutputLevel(model::Id module, std::string_view port) const {
+    if (!engine_ || !engine_->running() || !engine_->transport().playing ||
+        !head().modules.contains(module))
+        return 0.0f;
+    const auto* instance = moduleInstance(module);
+    if (!instance) return 0.0f;
+    return instance->outputLevel(instance->type().output(port));
+}
+
 void EngineApp::setModules(std::shared_ptr<const rack::Catalog> catalog) {
     modules_ = std::move(catalog);
     pool_->racks().setCatalog(modules_);

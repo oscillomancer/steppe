@@ -1022,6 +1022,9 @@ q = nil
 ---@field rack string
 ---@field detail? string
 
+---@class Steppe.rack_levels_args
+---@field rack string
+
 ---@class Steppe.rack_paste_args
 ---@field rack string
 ---@field x? number
@@ -1991,6 +1994,7 @@ q = nil
 ---@class Steppe.rack
 ---@field add fun(args?: Steppe.rack_add_args): table Add a modular rack on a channel, its Out the input.
 ---@field get fun(args: Steppe.rack_get_args): table A rack's modules, cables, Out modules and problems.
+---@field levels fun(args: Steppe.rack_levels_args): table Read every module output's linear peak, without subscribing to telemetry.
 ---@field list fun(): table List racks: home channels, module counts, Outs.
 ---@field paste fun(args: Steppe.rack_paste_args): table Paste the module clipboard with its plug-in settings as one undo step.
 ---@field patch fun(args: Steppe.rack_patch_args): table Add named modules and the cables among them in one step.

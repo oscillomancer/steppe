@@ -75,6 +75,13 @@ space to the right, y=40. External routes and automation are not copied.
 If a type, plug-in or Notes source is missing, paste returns an actionable
 error and changes nothing. Restore it or copy a different selection.
 
+`rack.levels {rack: "rk_1"}` returns `{modules: {mo_N: {port: level}}}` for
+every module's known outputs, including outputs with no cable. Each level
+is the latest rack block's peak absolute sample across all poly channels,
+linear (1 is full scale; larger is allowed). A stopped or silent output reads
+0. No telemetry subscription or visible rack window is needed. Anticipative
+levels may lead the audio you hear; use them for activity, not timing.
+
 ## Signals
 
 | Kind | Range | Meaning |
