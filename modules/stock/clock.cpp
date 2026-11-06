@@ -145,12 +145,7 @@ struct Clock : Module {
     Input reset =
         gateIn("Reset").help("A rising edge starts every output over from its first tick.");
 
-    Output out_1 = gateOut("Out 1").help("Ticks at Ratio 1.");
-    Output out_2 = gateOut("Out 2").help("Ticks at Ratio 2.");
-    Output out_3 = gateOut("Out 3").help("Ticks at Ratio 3.");
-    Output out_4 = gateOut("Out 4").help("Ticks at Ratio 4.");
-    Output out_5 = gateOut("Out 5").help("Ticks at Ratio 5.");
-    Output out_6 = gateOut("Out 6").help("Ticks at Ratio 6.");
+    Outputs<6> out = gateOut("Out").help("Ticks at the Ratio beside it.");
     Output resetOut =
         gateOut("Reset Out")
             .help("A 1 ms trigger as it starts (at play, following the song) and at each reset.");
@@ -165,11 +160,10 @@ struct Clock : Module {
     int sincePulse = 0;
     int pulsePeriod = 0;  // frames between its last two pulses; 0 unknown
     bool running = false;
-    bool clockHigh = false;
-    bool resetHigh = false;
+    Trigger clockEdge;
+    Trigger resetEdge;
     bool restart = true;  // the next position starts the counts afresh
-    int resetPulse = 0;
-    int pulseFrames = 48;
+    Pulse resetPulse;
 
     void factoryPatches(Patches& p) {
         p.add("Song Grid");
@@ -185,7 +179,6 @@ struct Clock : Module {
     }
 
     void prepare() {
-        pulseFrames = max(1, roundToInt(0.001 * sampleRate()));
         for (int k = 0; k < 6; ++k) {
             lastCount[k] = 0.0;
             gateLeft[k] = 0;
@@ -211,36 +204,8 @@ struct Clock : Module {
         }
     }
 
-    void write(int k, int i, double value) {
-        switch (k) {
-            case 0:
-                out_1[0][i] = value;
-                break;
-            case 1:
-                out_2[0][i] = value;
-                break;
-            case 2:
-                out_3[0][i] = value;
-                break;
-            case 3:
-                out_4[0][i] = value;
-                break;
-            case 4:
-                out_5[0][i] = value;
-                break;
-            default:
-                out_6[0][i] = value;
-                break;
-        }
-    }
-
     void process(int frames) {
-        out_1.setChannels(1);
-        out_2.setChannels(1);
-        out_3.setChannels(1);
-        out_4.setChannels(1);
-        out_5.setChannels(1);
-        out_6.setChannels(1);
+        for (int k = 0; k < 6; ++k) out[k].setChannels(1);
         resetOut.setChannels(1);
         const Transport t = transport();
         const bool external = clock.connected();
@@ -248,18 +213,11 @@ struct Clock : Module {
         const double songBeatsPerFrame = t.tempo / 60.0 / sampleRate();
         for (int i = 0; i < frames; ++i) {
             const double songBeats = t.beats + i * songBeatsPerFrame;
-            const double r = reset[0][i];
-            bool resetNow = false;
-            if (!resetHigh && r >= 0.5) {
-                resetHigh = true;
-                resetNow = true;
-            } else if (resetHigh && r < 0.25) {
-                resetHigh = false;
-            }
+            const bool resetNow = resetEdge.rose(reset[0][i]);
             const bool go = run[0][i] >= 0.5 && (!song || t.playing);
             if (go && !running) {
                 restart = true;
-                resetPulse = pulseFrames;
+                resetPulse.fire();
             }
             running = go;
             if (resetNow) {
@@ -267,21 +225,17 @@ struct Clock : Module {
                 anchor = songBeats;
                 pulses = -1;
                 restart = true;
-                resetPulse = pulseFrames;
+                resetPulse.fire();
             }
 
             // The base position and a beat's length in frames.
             double beatFrames = 60.0 * sampleRate() / clamp(tempo.at(i), 20.0, 300.0);
             if (external) {
-                const double c = clock[0][i];
                 ++sincePulse;
-                if (!clockHigh && c >= 0.5) {
-                    clockHigh = true;
+                if (clockEdge.rose(clock[0][i])) {
                     if (pulses >= 0) pulsePeriod = sincePulse;
                     sincePulse = 0;
                     ++pulses;
-                } else if (clockHigh && c < 0.25) {
-                    clockHigh = false;
                 }
                 const double fraction =
                     pulses >= 0 && pulsePeriod > 0
@@ -322,13 +276,12 @@ struct Clock : Module {
                     high = false;
                     lowFrame[k] = false;
                 }
-                write(k, i, high ? 1.0 : 0.0);
+                out[k][0][i] = high ? 1.0 : 0.0;
                 wasHigh[k] = high;
                 if (gateLeft[k] > 0) --gateLeft[k];
             }
             if (running && beats >= 0.0) restart = false;
-            resetOut[0][i] = resetPulse > 0 ? 1.0 : 0.0;
-            if (resetPulse > 0) --resetPulse;
+            resetOut[0][i] = resetPulse.next();
             if (running && !external && !song) beats += 1.0 / beatFrames;
         }
     }
@@ -343,17 +296,17 @@ struct Clock : Module {
         p.input(run, 88, 128);
         p.input(reset, 146, 128);
         p.choice(ratio_1, 8, 160, 116, 18);
-        p.output(out_1, 152, 169);
+        p.output(out[0], 152, 169);
         p.choice(ratio_2, 8, 194, 116, 18);
-        p.output(out_2, 152, 203);
+        p.output(out[1], 152, 203);
         p.choice(ratio_3, 8, 228, 116, 18);
-        p.output(out_3, 152, 237);
+        p.output(out[2], 152, 237);
         p.choice(ratio_4, 8, 262, 116, 18);
-        p.output(out_4, 152, 271);
+        p.output(out[3], 152, 271);
         p.choice(ratio_5, 8, 296, 116, 18);
-        p.output(out_5, 152, 305);
+        p.output(out[4], 152, 305);
         p.choice(ratio_6, 8, 330, 116, 18);
-        p.output(out_6, 152, 339);
+        p.output(out[5], 152, 339);
         p.output(resetOut, 152, 380);
     }
 };

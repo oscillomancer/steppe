@@ -44,10 +44,11 @@ struct Turing : Module {
     Output bit_4 = gateOut("Bit 4").help("High with the clock while bit 4 is set.");
     Output bit_8 = gateOut("Bit 8").help("High with the clock while bit 8 is set.");
 
-    Array<int, 16> bits;
+    int bits = 0;  // the register, bit 0 the newest
     Random rng;
-    bool clockHigh = false;
-    bool resetHigh = false;
+    Trigger clockEdge;
+    Trigger resetEdge;
+    bool clockHigh = false;  // the song's sixteenths, high for their first half
     bool wasPlaying = false;
     int salt = 0;
 
@@ -65,7 +66,9 @@ struct Turing : Module {
 
     void startOver() {
         rng.seed(salt);
-        for (int k = 0; k < 16; ++k) bits[k] = rng.next() < 0.5 ? 1 : 0;
+        bits = 0;
+        for (int k = 0; k < 16; ++k)
+            if (rng.next() < 0.5) bits = bits | shl(1, k);
     }
 
     void prepare() {
@@ -78,7 +81,7 @@ struct Turing : Module {
         double v = 0.0;
         double weight = 0.5;
         for (int k = 0; k < 8; ++k) {
-            v += bits[k] * weight;
+            v += bit(bits, k) * weight;
             weight *= 0.5;
         }
         return v / (1.0 - 1.0 / 256.0);
@@ -89,12 +92,11 @@ struct Turing : Module {
         // Every step draws once, whatever the knobs: a sequence depends only
         // on its seed and its clocks.
         const double draw = rng.next();
-        int recycled = bits[n - 1];
+        int recycled = bit(bits, n - 1);
         if (draw < clamp(flip.at(i), 0.0, 1.0)) recycled = 1 - recycled;
         if (clear[0][i] >= 0.5) recycled = 0;
         if (write[0][i] >= 0.5) recycled = 1;
-        for (int k = 15; k > 0; --k) bits[k] = bits[k - 1];
-        bits[0] = recycled;
+        bits = (shl(bits, 1) | recycled) & 65535;
         for (int k = 0; k < 31; ++k) shownHistory[k] = shownHistory[k + 1];
         shownHistory[31] = static_cast<float>(value());
     }
@@ -111,32 +113,28 @@ struct Turing : Module {
         wasPlaying = t.playing;
         const double perFrame = t.tempo / 15.0 / sampleRate();
         for (int i = 0; i < frames; ++i) {
-            const double r = reset[0][i];
-            if (!resetHigh && r >= 0.5) {
-                resetHigh = true;
-                startOver();
-            } else if (resetHigh && r < 0.25) {
-                resetHigh = false;
-            }
+            if (resetEdge.rose(reset[0][i])) startOver();
             bool high = false;
+            bool rose = false;
             if (internal) {
                 if (t.playing) {
                     const double position = t.beats * 4.0 + i * perFrame + 1e-7;
                     high = position - floor(position) < 0.5;
                 }
+                rose = high && !clockHigh;
+                clockHigh = high;
             } else {
-                const double c = clock[0][i];
-                high = clockHigh ? c >= 0.25 : c >= 0.5;
+                rose = clockEdge.rose(clock[0][i]);
+                high = clockEdge.high();
             }
-            if (high && !clockHigh) shift(i);
-            clockHigh = high;
+            if (rose) shift(i);
             out[0][i] = value() * scale.at(i) + offset.at(i);
-            bit_1[0][i] = high && bits[0] == 1 ? 1.0 : 0.0;
-            bit_2[0][i] = high && bits[1] == 1 ? 1.0 : 0.0;
-            bit_4[0][i] = high && bits[3] == 1 ? 1.0 : 0.0;
-            bit_8[0][i] = high && bits[7] == 1 ? 1.0 : 0.0;
+            bit_1[0][i] = high && bit(bits, 0) == 1 ? 1.0 : 0.0;
+            bit_2[0][i] = high && bit(bits, 1) == 1 ? 1.0 : 0.0;
+            bit_4[0][i] = high && bit(bits, 3) == 1 ? 1.0 : 0.0;
+            bit_8[0][i] = high && bit(bits, 7) == 1 ? 1.0 : 0.0;
         }
-        for (int k = 0; k < 16; ++k) shownBits[k] = bits[k];
+        for (int k = 0; k < 16; ++k) shownBits[k] = bit(bits, k);
         shownLength.set(clamp(length.index(), 2, 16));
     }
 
