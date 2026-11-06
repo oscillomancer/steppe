@@ -59,6 +59,7 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `comb` | A tuned comb filter that rings at the pitch: feedback positive (every harmonic) or negative (odd only), damping in the loop kept in tune, mix, poly |
 | `wavetable` | A wavetable oscillator with seven tables of its own (classic, sync, fold, formant, vowel, organ, digital): position to sweep, unison with detune, a display of the wave, never aliases, poly |
 | `pitchshift` | A pitch shifter, two octaves either way: two delay taps cross-fading in step with the input (a held note keeps its pitch), fine, window size, feedback for shimmer, mix, poly |
+| `freeze` | A spectral freeze: a gate or switch holds the spectrum and plays it on, partials at their exact pitches; blur to smear in time, shift by semitones keeping each partial whole, tilt, poly |
 
 ### Modulation, sequencing, generative and utilities
 
