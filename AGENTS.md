@@ -26,8 +26,9 @@ same change, and say what you found.
 
 ## Rules
 
-1. **Licensing.** First-party DAW code is GPL-3.0-or-later; `plugins/`
-   and the plugin-linked libraries remain MIT (ADR-0033). All first-party
+1. **Licensing.** First-party DAW code is GPL-3.0-or-later; `plugins/`,
+   `modules/` and the plugin-linked libraries remain MIT (ADR-0033,
+   ADR-0062). All first-party
    code and assets are original: never copy code from GPL/AGPL projects
    such as Ardour, or code, themes, icons or other assets from proprietary
    software. Do not read GPL source while implementing; notes about GPL

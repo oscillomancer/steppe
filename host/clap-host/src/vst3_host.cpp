@@ -886,6 +886,7 @@ bool Vst3Instance::process(const ProcessBlock& block, OutputEvents* out) SUPPLE_
             }
         }
         const auto time = std::min(event.time, block.frames ? block.frames - 1 : 0u);
+        if (event.kind == Event::Kind::ParamMod) continue;  // VST3 has no modulation
         if (event.kind == Event::Kind::Param) {
             addNormalized(event.paramId, event.value, time);
             continue;

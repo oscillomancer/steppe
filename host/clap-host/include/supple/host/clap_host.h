@@ -125,8 +125,10 @@ struct ParamInfo {
 
 // --- events ----------------------------------------------------------------------
 
+// ParamMod: CLAP param_mod, `value` the modulation amount added to the
+// parameter in its CLAP value units (a VST3 plug-in ignores it).
 struct Event {
-    enum class Kind : std::uint8_t { NoteOn, NoteOff, NoteChoke, Param, Midi };
+    enum class Kind : std::uint8_t { NoteOn, NoteOff, NoteChoke, Param, Midi, ParamMod };
     Kind kind = Kind::NoteOn;
     std::uint32_t time = 0;  // sample offset within the block
     // notes

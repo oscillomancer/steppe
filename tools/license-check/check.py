@@ -21,7 +21,8 @@ import pathlib
 import re
 import sys
 
-FIRST_PARTY_DIRS = ["cmake", "libs", "host", "plugins", "daw", "mcp", "tools", "tests", "skill", "docs", ".github"]
+FIRST_PARTY_DIRS = ["cmake", "libs", "host", "plugins", "modules", "daw", "mcp", "tools", "tests", "skill", "docs",
+                    ".github"]
 SOURCE_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".hh", ".m", ".mm", ".py", ".lua", ".cmake",
                    ".sh", ".ps1", ".nsi", ".yml", ".yaml"}
 # Keep GPL approvals separate from the permissive dependency allow-list.
@@ -37,7 +38,7 @@ SPDX_RE = re.compile("SPDX-License-" + r"Identifier:[ \t]*([^\n]+)")
 def mit_component(rel):
     rel = pathlib.PurePosixPath(rel)
     parts = rel.parts
-    return (parts[0] == "plugins" or
+    return (parts[0] in ("plugins", "modules") or  # modules/: ADR-0062 §9
             (len(parts) > 1 and parts[0] == "libs" and parts[1] in MIT_LIBRARIES) or
             str(rel) == "cmake/product.h.in")
 

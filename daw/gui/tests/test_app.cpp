@@ -39,6 +39,7 @@
 #include "supple/gui/png.h"
 #include "supple/host/clap_host.h"
 #include "supple/json/parse.h"
+#include "supple/json/write.h"
 #include "supple/peaks/peaks.h"
 #include "supple/ui/controls.h"
 #include "supple/ui/list.h"
@@ -372,6 +373,39 @@ TEST_CASE("the Item menu is built by its source; an older file's item entries ar
     CHECK(rows[0].label == "Built");
     CHECK(rows[1].separator);
     CHECK_FALSE(rows[2].separator);
+}
+
+TEST_CASE("a saved layout gains defaults added since, in their place, but not ones removed") {
+    App a;
+    if (!a.ok) return;
+    // Saved before the rack window: no "known"; Racks appears where the
+    // defaults put it.
+    const auto old = a.dir / "old.json";
+    REQUIRE(writeFileAtomic(old, R"({"schema":"supple.menus/1.0","menus":[{"title":"View",
+        "items":["ui.mixer","ui.routing","ui.history"]}],
+        "toolbar":["history.undo","track.add:channel","ui.actions"]})"));
+    auto layout = gui::ChromeLayout::load(old);
+    REQUIRE(layout);
+    CHECK(layout->menus.front().items ==
+          std::vector<std::string>{"ui.mixer", "ui.routing", "ui.rack", "ui.history"});
+    CHECK(layout->toolbar ==
+          std::vector<std::string>{"history.undo", "track.add:channel", "ui.rack", "ui.actions"});
+    // Saving records every default as known.
+    const json::Value saved = layout->toJson();
+    REQUIRE(saved.find("known"));
+    // The user then removes it: it stays removed.
+    const auto later = a.dir / "later.json";
+    REQUIRE(writeFileAtomic(later, R"({"schema":"supple.menus/1.0","menus":[{"title":"View",
+        "items":["ui.mixer","ui.routing","ui.history"]}],
+        "toolbar":["history.undo","track.add:channel","ui.actions"],
+        "known":)" + json::writeCompact(*saved.find("known")) +
+                                       "}"));
+    layout = gui::ChromeLayout::load(later);
+    REQUIRE(layout);
+    CHECK(layout->menus.front().items ==
+          std::vector<std::string>{"ui.mixer", "ui.routing", "ui.history"});
+    CHECK(layout->toolbar ==
+          std::vector<std::string>{"history.undo", "track.add:channel", "ui.actions"});
 }
 
 TEST_CASE("the toolbar and menus are edited in the app and saved (gap log #37)") {
@@ -2131,9 +2165,10 @@ TEST_CASE("the TCP's input menu lists the device's ports and picks one (P5.13)")
     CHECK(inputButton()->valueText() == "in \u2014");  // nothing chosen yet
     // The strip shows the port names; a narrow strip clips the tail, so the
     // name is a prefix (the menu shows them whole).
+    // After the ports: a separator and "New rack on this channel".
     ui::List* menu = openMenu();
     REQUIRE(menu);
-    CHECK(menu->count() == 9);
+    CHECK(menu->count() == 11);
     menu->onActivate(1);                      // "in 2" -> record_input [2]
     CHECK(a.root->find("popup") == nullptr);  // it closed
     shell.sync();
@@ -2169,12 +2204,35 @@ TEST_CASE("the TCP's input menu lists the device's ports and picks one (P5.13)")
     running = false;
     menu = openMenu();
     REQUIRE(menu);
-    CHECK(menu->count() == 1);
+    CHECK(menu->count() == 3);
     menu->onActivate(0);
     shell.sync();
     a.root->frame(false);
     REQUIRE(inputButton());
     CHECK(inputButton()->valueText().rfind("Keystat", 0) == 0);  // unchanged
+    // A rack's Out module is listed whatever the device, "<rack> › <Out>",
+    // and picked as the channel's input (ADR-0062).
+    json::Value rack = json::Value::object();
+    rack["name"] = "Bells";
+    auto made = a.dispatcher->execute({"rack.add", std::move(rack), ui});
+    REQUIRE(made);
+    const model::Id out = *model::Id::parse((*made)["out"].asString());
+    a.root->closePopups();
+    shell.sync();
+    a.root->frame(false);
+    menu = openMenu();
+    REQUIRE(menu);
+    REQUIRE(menu->count() == 4);
+    menu->onActivate(2);
+    shell.sync();
+    a.root->frame(false);
+    tr = a.app->head().tracks.find(id);
+    REQUIRE(tr->record.input);
+    route = a.app->head().routes.find(*tr->record.input);
+    REQUIRE(route);
+    CHECK(route->from.module == out);
+    REQUIRE(inputButton());
+    CHECK(shell.inputLabel(id) == "Bells \u203a " + model::moduleLabel(a.app->head(), out));
     // Detach the shell's tree while the shell (and the meter feed it holds a
     // reference to) is still alive: its rows release their meters on the way
     // out.

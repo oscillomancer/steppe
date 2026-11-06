@@ -49,18 +49,42 @@ class ProbeModule final : public rack::HostModule {
 // A plugin module (rack.md §5): its plug-in, a stage of the rack node, runs
 // on the rack's grid. Audio in_l/in_r (R normalled to L) to out_l/out_r;
 // poly pitch and gate cables play notes to an instrument (velocity 0..1).
+// A plugin module's hidden knobs mod_1..mod_16: each cable into one of its
+// plug-in's parameters moves one (rack.md §6).
+inline constexpr int kPluginMods = 16;
+
+// A cable into a plug-in's parameter: its slot (mod_<slot + 1>), the CLAP
+// parameter, and the scale from the slot's -1..1 to the parameter's CLAP range.
+struct PluginMod {
+    int slot = 0;
+    std::uint32_t param = 0;
+    double scale = 0;
+};
+
+class PluginModule;
+
+// What one plan gives a plugin module: module instances outlive plans (the
+// rack pool keeps them), so a plan's stage, buffers and modulation live
+// here, in the plan, and the audio thread attaches them every block.
+struct PluginBinding {
+    PluginModule* module = nullptr;
+    int stage = -1;  // in Node::rackStages; -1: no plug-in (silent)
+    Stereo io;
+    std::array<PluginMod, kPluginMods> mods{};
+    int modCount = 0;
+};
+
 class PluginModule final : public rack::HostModule {
   public:
     void process(const rack::HostContext& ctx) SUPPLE_RT override;
-    // Set by processRack for each block.
+    // Set by processRack for each block (audio thread).
     Plan* plan = nullptr;
     Node* node = nullptr;
+    PluginBinding* binding = nullptr;
     const host::Transport* transport = nullptr;
     const void* self = nullptr;
     std::int64_t pos = 0;  // the host block's plan sample
     bool failed = false;
-    int stage = -1;  // in Node::rackStages; -1: no plug-in (silent)
-    Stereo io;
 
   private:
     struct Voice {
@@ -68,6 +92,14 @@ class PluginModule final : public rack::HostModule {
         int key = -1;
     };
     std::array<Voice, rack::kChannels> voices_{};
+    // The modulation last sent to the plug-in, by parameter: a parameter whose
+    // cables go is set back to 0 once.
+    struct Sent {
+        std::uint32_t param = 0;
+        double amount = 0;
+    };
+    std::array<Sent, kPluginMods> sent_{};
+    int sentCount_ = 0;
 };
 
 // Module instances by module id, kept while the module's type, its code and
@@ -137,7 +169,7 @@ struct RackNode {
     std::vector<rack::host::In*> ins;  // Node::rackIns
     std::vector<Id> inIds;
     std::vector<NotesFeed> notes;
-    std::vector<PluginModule*> plugins;
+    std::vector<PluginBinding> plugins;
     std::vector<std::unique_ptr<RackCurve>> curves;
     RackClock clock;
     std::int64_t origin = 0;  // the absolute timeline sample of plan sample 0

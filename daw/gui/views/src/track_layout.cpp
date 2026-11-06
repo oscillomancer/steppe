@@ -200,7 +200,8 @@ bool TrackLayout::show(const model::Session& session, const std::vector<model::C
                    (env->target.object.kind == model::Kind::Track ||
                     env->target.object.kind == model::Kind::Group ||
                     env->target.object.kind == model::Kind::Fx ||
-                    env->target.object.kind == model::Kind::Route);
+                    env->target.object.kind == model::Kind::Route ||
+                    env->target.object.kind == model::Kind::Module);
         };
         geometry |= (lane(after) && scaleOf(*after).has_value()) != scaledEnvs_.contains(id);
         geometry |=
@@ -248,16 +249,21 @@ bool TrackLayout::show(const model::Session& session, const std::vector<model::C
     // A send's lanes are under the strip it leaves (hardware inputs have none).
     for (const auto& route : session_.routes)
         if (route.value->from.track) owners[route.id] = *route.value->from.track;
+    // A rack module's knobs automate on its rack's home channel (ADR-0062).
+    for (const auto& m : session_.modules)
+        if (const model::Rack* rk = session_.racks.find(m.value->rack)) owners[m.id] = rk->track;
     std::map<model::Id, std::vector<std::pair<int, model::Id>>> lanes;
     for (const auto& envelope : session_.envelopes) {
         if (!envelope.value->visible || !scaleOf(*envelope.value)) continue;
         if (envelope.value->target.object.kind == model::Kind::Track ||
             envelope.value->target.object.kind == model::Kind::Group ||
             envelope.value->target.object.kind == model::Kind::Fx ||
-            envelope.value->target.object.kind == model::Kind::Route)
+            envelope.value->target.object.kind == model::Kind::Route ||
+            envelope.value->target.object.kind == model::Kind::Module)
             scaledEnvs_.insert(envelope.id);
         auto owner = envelope.value->target.object;
-        if (owner.kind == model::Kind::Fx || owner.kind == model::Kind::Route) {
+        if (owner.kind == model::Kind::Fx || owner.kind == model::Kind::Route ||
+            owner.kind == model::Kind::Module) {
             const auto found = owners.find(owner);
             if (found == owners.end()) continue;
             owner = found->second;
@@ -339,7 +345,10 @@ std::optional<std::size_t> TrackLayout::indexOfEnv(model::Id env) const {
 
 std::optional<EnvScale> TrackLayout::scaleOf(const model::Envelope& env) const {
     if (auto mixer = envScale(env)) return mixer;
-    if (env.target.object.kind == model::Kind::Fx && pluginScales) return pluginScales(env);
+    if ((env.target.object.kind == model::Kind::Fx ||
+         env.target.object.kind == model::Kind::Module) &&
+        pluginScales)
+        return pluginScales(env);
     return std::nullopt;
 }
 

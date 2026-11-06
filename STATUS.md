@@ -107,8 +107,9 @@ instructions are in `docs/guides/installing.md`.
 
 ## What works
 
-- **Licensing** (ADR-0033): DAW code is GPL-3.0-or-later; stock plugins
-  and their shared libraries are MIT.
+- **Licensing** (ADR-0033, ADR-0062): DAW code is GPL-3.0-or-later; stock
+  plugins, their shared libraries and `modules/` (the rack runtime and the
+  stock modules) are MIT.
 
 - **Session and history** (`specs/session-model.md`, ADR-0008): immutable
   versions with stable ids, per-branch undo, branches with object-level diff
@@ -252,6 +253,26 @@ instructions are in `docs/guides/installing.md`.
   CLAP descriptor dispatch ignores registrations removed by an earlier
   callback in the same readiness snapshot, as VST3 dispatch already does;
   the Linux regression passes and macOS validation is pending.
+- **Modular racks** (ADR-0062, `specs/rack.md`): racks of modules and
+  cables on a channel, in the project (schema 2.7) with undo and branches.
+  Out modules are channel inputs, In modules take sends, Notes modules play
+  a track's MIDI or a live input, Transport gives the song's clock, plugin
+  modules host CLAP/VST3 plug-ins (instruments played from pitch and gate
+  cables). 53 stock modules (`modules/stock`: oscillators, filters,
+  envelopes, sequencers, generative and utility modules, effects) compile
+  as scripts and as C++ alike. Each rack is a node of the render plan on a
+  32-frame grid; real-time output equals offline renders, and the audio
+  path passes RealtimeSanitizer. Agents patch with `rack.patch` (named
+  modules and cables in one step) or `module.add`/`cable.add`, hear a patch
+  with `rack.probe` (pitch, levels, gates, notes, CV rates from an offline
+  render of a copy), write and edit library modules (`module.write`, hot
+  reload in the running engine, `module.fork`), keep patches as rack
+  presets (`rack.preset.*`, carrying the user's modules' source; projects
+  keep copies of theirs too), automate knobs (`env.add {module}`) and learn
+  MIDI controllers on them (`module.learn.*`). The agent guide is
+  `skill/guides/rack.md`; `skill/generated/rack-modules.md` lists every
+  built-in module. Linux only so far: native macOS/Windows CI has not run
+  on racks.
 - **GUI** (`specs/gui.md`): arrange view, track panel, mixer, FX chains and
   the plugin browser, routing matrix, MIDI editor, render dialog (the
   project's render settings with dropdowns, foldable sections, presets, a
@@ -324,6 +345,19 @@ instructions are in `docs/guides/installing.md`.
   still load. Every wheel combination over the TCP, the arrangement's lanes
   and ruler, and the MIDI editor can be rebound in Edit > Mouse
   modifiers.
+- **Rack window** (ADR-0062, gui.md §4.12): a separate window with a tab per
+  rack (`+` adds one), a plain pannable, zoomable space (25-400 %, each
+  rack's view in the UI sidecar), modules drawn from their faces with knobs,
+  toggles, choices and jacks in signal colours, hanging cables, selection,
+  marquee and group moves, knob drags, cables drawn jack to jack or onto a
+  knob, modulation rings, telemetry glow, a searchable module browser
+  (double-click or drag in) and context menus; View → Racks and the toolbar.
+  Module displays (`draw()`), dashed feedback cables, plugin modules (a
+  click opens the editor), Automate on a knob (a lane under the home
+  channel), the source view with Make editable copy, rack Outs in a
+  channel's input menu, and Show/Add rack in its right-click menu. Not yet
+  in the window: MIDI learn from a knob (agents have `module.learn.*`),
+  rack presets, pointer input on displays.
 - **MIDI learn** (ADR-0027): any plug-in parameter (the FX window's MIDI
   button, or `fx.learn.set` for agents) and any action (Ctrl+L in the
   actions list) learns a controller by moving it: CC, note, pitch bend or
@@ -716,6 +750,11 @@ Library boundaries:
   on Linux, and native macOS/Windows CI has not run on it.
 
 Engine and hosting:
+- Modular racks (ADR-0062): racks do not follow a track's playrate map;
+  cables into a plugin module's parameters modulate CLAP plug-ins only
+  (VST3 has no modulation), by their first voice, at most 16 per plug-in;
+  a plug-in's latency inside a rack is not compensated; recording an armed channel whose input is a rack's Out is
+  not supported; post-fader sends into an In module take the linear path.
 - The headless platform layer (ADR-0035) has natively tested macOS/Windows
   address waits, wake sources, control socket/MCP paths and user directory roots.
   Both native engines run with dummy/offline audio and native RT/offline

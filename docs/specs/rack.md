@@ -309,6 +309,17 @@ library module may not take a host or stock type's id (`module.fork`
 copies one under a new id). Offline renders and background jobs use the
 catalog of the moment they start (`OfflineSettings::modules`).
 
+A saved project keeps a copy of each library or project module it plays
+in `<project folder>/modules/<name>/<name>.cpp` (`saveProjectModules`;
+not when that folder is the library), as it keeps its media; a file that
+already holds the source is left alone. Opening it compiles the copies as
+project types (`Origin::Project`), which win over the library's for the
+same id, so the project sounds as it was saved on any machine. A
+`module.write` or `module.edit` of the same id in the library replaces the
+project's copy in the catalog (the edit plays, and the next save copies
+it); `module.edit {type}` of a project-only type writes it into the
+library.
+
 ## 4. The rack runtime (`modules/rack`)
 
 ### 4.1 Types
@@ -408,17 +419,26 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   to it; liveness propagates to what it feeds.
 - **Parameters.** Knob edits on a running rack go to atomic slots (no
   compile). Envelopes on module parameters compile to curves the schedule
-  samples on the grid. MIDI learn drives the same slots.
+  samples on the grid. MIDI learn (`module.learn.*`) moves a knob through
+  `module.set`, so it reaches the same slots.
 - **Plugin modules.** Their instances come from the instance pool by fx id
   and run as stages of the rack node (`Node::rackStages`, prepared and
   automated as chain stages), in sub-blocks on the grid, with notes made
-  from their pitch and gate cables and parameter modulation from cables as
-  CLAP `param_mod` events (not yet: such cables are reported and ignored).
+  from their pitch and gate cables. A cable into `fx_N.<key>` (a semantic
+  key, a parameter id or its name) rides one of the plugin module's 16
+  hidden knobs `mod_1`..`mod_16` (−1..1, never listed); once per grid
+  block the module sends each parameter its cables' sum (first voice) times
+  the parameter's CLAP range as a CLAP `param_mod` event, and 0 once when
+  its last cable goes. The parameter must be modulatable; VST3 plug-ins take
+  no modulation (a plan warning says so, as for a seventeenth cable).
   Their latency is not compensated inside the rack. A bridged plugin module
   in a live rack passes through, as on a live strip.
 - **State.** Module instances are kept per rack across plans (keyed by
   module id and code generation) as plugin instances are; offline renders
-  build their own from the session.
+  build their own from the session. What a plan gives a module (a plugin
+  module's stage, buffers and modulation, an In module's buffers) lives in
+  the plan and is attached on the audio thread each block, since the
+  previous plan may still be running the same instance.
 - **Errors.** `rack.cycle`, `rack.unknown_type`, `rack.port`, `rack.param`,
   `rack.limit` at edit time; plan warnings for missing types and plugin
   latency inside a rack.
@@ -436,8 +456,9 @@ examples run as tests. Ends are strings: `"mo_3.out"`.
 | `rack.list` | query | `{}` → racks with their home tracks, module counts and Out modules |
 | `rack.get` | query | `{rack, detail?: brief\|full}` → modules (id, type, label, changed params, position, size), cables (with `feedback`), Out modules and the channels they feed, problems |
 | `rack.probe` | query | `{rack, ports: ["mo_N.<output>", …≤8], seconds? (≤10, 2), from_beat?, notes? (notation the rack's Notes modules play)}` → per port: peak, rms, dc, min, max; audio (the first 4 voices summed): dB and pitch (Hz, note, cents) when periodic; gates over the voices: count, per second, per beat, duty; pitch: the notes visited; CV: rate; a one-line description. An offline render of a copy with a listener (`ProbeModule`) on each port; nothing changes |
+| `rack.patch` | edit | `{rack, modules: {name: {type\|plugin, params?, preset?, label?, x?, y?, source?, device?}}, cables?: [[from, to, amount?, color?] \| {from, to, amount?, color?}], x?, y?}` → `{modules: {name: id}, cables}`: ends `"name.port"`, `"name.knob"` (a plugin module's: its plug-in's) or `"mo_N.port"`; modules without a place laid out by signal flow; checked as `module.add` and `cable.add` check, all or nothing |
 | `rack.preset.save` | action | `{rack, name, modules?, description?, replace?}` → `{path, modules, cables}`: the modules (default the whole rack) and the cables among them |
-| `rack.preset.load` | edit | `{rack, name\|path, x?, y?, io?: join\|add}` → `{modules, cables, warnings?}`: one undo step |
+| `rack.preset.load` | edit | `{rack, name\|path, x?, y?, io?: join\|add}` → `{modules, cables, installed?, warnings?}`: one undo step; `installed` names the library modules it brought |
 | `rack.preset.list` | query | `{query?}` → presets: name, path, description, module and cable counts, module types |
 | `rack.preset.delete` | action | `{name}` → `{path}` |
 | `module.list` | query | `{query?, tag?}` → types: id, name, tags, one line, origin |
@@ -452,6 +473,9 @@ examples run as tests. Ends are strings: `"mo_3.out"`.
 | `module.check` | query | `{source\|name}` → `{ok, diagnostics, type?}` |
 | `module.get` | query | `{type\|name}` → `{type, origin, source, name?, path?}` (host modules have none) |
 | `module.fork` | action | `{type, id, name?}` → as `module.write`: the type's source under a new id, in the library |
+| `module.learn.set` | edit | `{module, param, midi, mode?, soft_takeover?}` → `{param, control}`: a MIDI controller turns the knob along its travel (`rack::knobPosition`), one undo step per movement; not a plugin module's (`fx.learn.set`) |
+| `module.learn.remove` | edit | `{module, param}` |
+| `module.learn.list` | query | `{module?}` → `{learn: [{module, param, midi, control, mode?, soft_takeover?}]}` |
 | `cable.add` | edit | `{from, to, amount?, color?}` → `{cable, feedback, warnings}` |
 | `cable.remove` | edit | `{cable}` or `{from, to}` |
 | `cable.set` | edit | `{cable, amount?, color?}` |
@@ -466,7 +490,9 @@ are its plug-in's (`env.add {fx}`). `preset` on `module.add` and
 lists them): every knob goes to it, then `params` apply on top. The app
 reaches racks through `EngineApp::modules()` (the catalog),
 `EngineApp::moduleInstance()` (a running module's telemetry) and
-`supple/engine/racks.h`.
+`supple/engine/racks.h`. `<slug>-engine modules --markdown` prints every
+built-in type's ports and knobs (`moduleReference()`), committed as
+`skill/generated/rack-modules.md` and checked by `engine.registry-drift`.
 
 ### 7.1 Rack presets
 
@@ -483,7 +509,8 @@ dot. The file is canonical JSON:
               "x": 0, "y": 0, "params": {"level": -6}, "bypass": false},
              {"type": "com.suppleaudio.rack.plugin", "x": 220, "y": 0, "fx": {…}}],
  "cables": [{"from": {"module": 2, "port": "out"},
-             "to": {"module": 1, "port": "gain", "plugin": true}, "amount": 0.3}]}
+             "to": {"module": 1, "port": "gain", "plugin": true}, "amount": 0.3}],
+ "sources": {"com.example.wobble": {"name": "wobble", "source": "#include …"}}}
 ```
 
 Modules are by index, placed relative to the group's top-left. A cable's
@@ -494,7 +521,14 @@ belongs to a project stays out: a Notes module's source track (it plays
 the rack's channel), MIDI learn, envelopes, sends and the channels an
 Out feeds.
 
-A load checks everything before the model changes. A module type or
+`sources` holds the source of every library or project module the preset
+uses, by type id, with its library name, so one file carries a patch and
+its custom modules (ADR-0062). A load first writes each one the catalog
+lacks into the library (under its name, or `<name>-2`… when that name is
+taken), as `module.write` does, and lists them in `installed`; one the
+catalog has plays as installed, with a warning (`rack.preset_module`) when
+its source differs, and one that does not compile here refuses the load.
+Then a load checks everything else before the model changes. A module type or
 plug-in that is not installed refuses the preset (`rack.unknown_type`,
 `chain.plugin_missing`); a knob or port its type no longer has is left
 out with a warning (`rack.preset_knob`, `rack.preset_cable`). With

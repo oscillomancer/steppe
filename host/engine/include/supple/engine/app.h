@@ -317,6 +317,10 @@ class EngineApp : public cmd::Host {
     std::filesystem::path moduleDir() const {
         return options_.moduleDir.empty() ? options_.workdir / "modules" : options_.moduleDir;
     }
+    // Where a project saved at `project` keeps its copies of the user's
+    // modules (<folder>/modules); empty when unsaved or when that folder is
+    // the library.
+    std::filesystem::path projectModuleDir(const std::filesystem::path& project) const;
     std::filesystem::path rackPresetDir() const {
         return options_.rackPresetDir.empty() ? options_.workdir / "rack-presets"
                                               : options_.rackPresetDir;
@@ -487,7 +491,7 @@ class EngineApp : public cmd::Host {
     std::function<bool(model::Id fx, const model::ParamLearn& learn)> learnGate;
     void setLearning(bool on) { learning_ = on; }
     bool learning() const { return learning_; }
-    bool hasLearn() const;  // any effect, track, send or VCA of the head has a learned control
+    bool hasLearn() const;  // any effect, track, send, VCA or module has a learned control
     // Moves a parameter as a learned control does: `next` gets its current
     // normalized value and one encoder step, and returns the new value (none:
     // leave it). Returns the value set (rounded for a stepped parameter), or
@@ -502,6 +506,12 @@ class EngineApp : public cmd::Host {
     // vca.set, one undo step per movement.
     std::optional<double> moveControl(
         model::Id object, const std::string& param,
+        const std::function<std::optional<double>(double current, double step)>& next);
+    // The same for a rack module's knob (`key`): `current` is the knob's
+    // travel (rack::knobPosition); the move goes through module.set, one undo
+    // step per movement.
+    std::optional<double> moveKnob(
+        model::Id module, const std::string& key,
         const std::function<std::optional<double>(double current, double step)>& next);
 
     // The parameter edited last in the window (the FX window's panel, a

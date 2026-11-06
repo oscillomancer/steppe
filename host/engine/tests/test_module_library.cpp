@@ -389,3 +389,122 @@ TEST_CASE("module.duplicate keeps cables into a plugin module's plug-in") {
                    e.value->to == model::CableEnd{*copy->fx, "gain"} && e.value->amount == 0.3;
     CHECK(reached);
 }
+
+TEST_CASE("rack.patch: named modules and cables in one step, all or nothing") {
+    Fixture f;
+    f.run("track.add", R"({"name": "Synth"})");
+    f.run("rack.add", R"({"track": "tr_1"})");  // mo_1 Out
+    json::Value made = f.run("rack.patch", R"({"rack": "rk_1",
+        "modules": {"keys": {"type": "notes"}, "osc": {"type": "vco"},
+                    "env": {"type": "adsr", "params": {"release": 200}},
+                    "amp": {"type": "vca"}, "fx": {"plugin": "com.suppleaudio.test.gain"},
+                    "wobble": {"type": "lfo", "params": {"rate": 4}}},
+        "cables": [["keys.pitch", "osc.pitch"], ["keys.gate", "env.gate"],
+                   ["osc.saw", "amp.in"], ["env.envelope", "amp.cv"],
+                   ["amp.out", "fx.in_l"], ["wobble.out", "fx.gain", 0.25],
+                   {"from": "fx.out_l", "to": "mo_1.l", "color": "teal"}]})");
+    const auto& ids = made["modules"];
+    REQUIRE(ids.find("fx") != nullptr);
+    CHECK(made["cables"].asArray().size() == 7);
+    const model::Session& s = f.app->head();
+    auto module = [&](const char* name) {
+        return s.modules.find(*model::Id::parse(ids.find(name)->asString()));
+    };
+    CHECK(json::writeCompact(module("env")->params) == R"({"release":200.0})");
+    // Laid out by signal flow: each stage right of what feeds it.
+    CHECK(module("keys")->x < module("osc")->x);
+    CHECK(module("osc")->x < module("amp")->x);
+    CHECK(module("amp")->x < module("fx")->x);
+    // A plugin module's knob is its plug-in's.
+    bool knob = false;
+    for (const auto& e : s.cables)
+        knob |=
+            e.value->to == model::CableEnd{*module("fx")->fx, "gain"} && e.value->amount == 0.25;
+    CHECK(knob);
+
+    // One bad cable: nothing changes.
+    const std::size_t modules = s.modules.size(), cables = s.cables.size();
+    auto bad = f.call("rack.patch", *json::parse(R"({"rack": "rk_1",
+        "modules": {"osc2": {"type": "vco"}}, "cables": [["osc2.nope", "mo_1.l"]]})"));
+    REQUIRE_FALSE(bad);
+    CHECK(bad.error().code == "rack.port");
+    CHECK(bad.error().path.rfind("/args/cables/0", 0) == 0);
+    CHECK(f.app->head().modules.size() == modules);
+    CHECK(f.app->head().cables.size() == cables);
+    auto unknown = f.call("rack.patch", *json::parse(R"({"rack": "rk_1",
+        "modules": {"osc2": {"type": "vcoo"}}})"));
+    REQUIRE_FALSE(unknown);
+    CHECK(unknown.error().code == "rack.unknown_type");
+    CHECK(unknown.error().path == "/args/modules/osc2/type");
+}
+
+TEST_CASE("rack presets: a patch brings its own modules to another library") {
+    Fixture here;
+    here.write("level", kLevel);
+    here.run("track.add", R"({"name": "Synth"})");
+    here.run("rack.add", R"({"track": "tr_1"})");  // mo_1 Out
+    here.run("rack.patch", R"({"rack": "rk_1", "modules": {"lvl": {"type": "com.example.level"}},
+                               "cables": [["lvl.out", "mo_1.l"]]})");
+    json::Value saved = here.run("rack.preset.save", R"({"rack": "rk_1", "name": "Constant"})");
+    auto text = readTextFile(saved["path"].asString(), 1 << 20);
+    REQUIRE(text);
+    CHECK(text->find("\"sources\"") != std::string::npos);
+
+    // Another machine: an empty library. The preset installs the module and plays it.
+    Fixture there;
+    there.run("project.set", R"({"console9": false})");
+    there.run("track.add", R"({"name": "Synth"})");
+    there.run("rack.add", R"({"track": "tr_1"})");
+    json::Value args = json::Value::object();
+    args["rack"] = "rk_1";
+    args["path"] = saved["path"].asString();
+    auto loaded = there.call("rack.preset.load", args);
+    REQUIRE_MESSAGE(loaded, (loaded ? "" : loaded.error().toString()));
+    REQUIRE((*loaded).find("installed") != nullptr);
+    CHECK((*loaded)["installed"].at(0).asString() == "level");
+    CHECK(there.level() == doctest::Approx(0.25 * 0.472135955).epsilon(1e-3));
+    // Loaded again, the library has it: nothing to install, no warning.
+    auto again = there.call("rack.preset.load", args);
+    REQUIRE(again);
+    CHECK((*again).find("installed") == nullptr);
+    CHECK((*again).find("warnings") == nullptr);
+    // A different module under the same id: the installed one plays, with a warning.
+    there.run("module.edit", R"({"name": "level", "edits": [{"old": "0.25", "new": "0.5"}]})");
+    auto differs = there.call("rack.preset.load", args);
+    REQUIRE(differs);
+    REQUIRE((*differs).find("warnings") != nullptr);
+    CHECK((*differs)["warnings"].at(0).find("code")->asString() == "rack.preset_module");
+}
+
+TEST_CASE("module library: a project keeps copies of the modules it plays") {
+    Fixture here;
+    here.write("level", kLevel);
+    here.run("project.set", R"({"console9": false})");
+    here.run("track.add", R"({"name": "Synth"})");
+    here.run("rack.add", R"({"track": "tr_1"})");
+    here.run("rack.patch", R"({"rack": "rk_1", "modules": {"lvl": {"type": "com.example.level"}},
+                               "cables": [["lvl.out", "mo_1.l"]]})");
+    const auto song = here.dir / "song" / "song.json";
+    json::Value args = json::Value::object();
+    args["path"] = song.string();
+    REQUIRE(here.call("project.save", args));
+    const auto copy = song.parent_path() / "modules" / "level" / "level.cpp";
+    REQUIRE(std::filesystem::exists(copy));
+
+    // Opened where the library lacks it: the project's copy plays.
+    Fixture there;
+    REQUIRE(there.call("project.open", args));
+    CHECK(there.level() == doctest::Approx(0.25 * 0.472135955).epsilon(1e-3));
+    json::Value got = there.run("module.get", R"({"type": "com.example.level"})");
+    CHECK(got["origin"].asString() == "project");
+    // Edited there, it goes into that library and plays; the next save copies it.
+    json::Value edited = there.run(
+        "module.edit",
+        R"({"type": "com.example.level", "edits": [{"old": "0.25", "new": "0.5"}]})");
+    CHECK(edited["ok"].asBool());
+    CHECK(there.level() == doctest::Approx(0.5 * 0.472135955).epsilon(1e-3));
+    REQUIRE(there.call("project.save", args));
+    auto saved = readTextFile(copy, 1 << 20);
+    REQUIRE(saved);
+    CHECK(saved->find("0.5") != std::string::npos);
+}

@@ -36,6 +36,7 @@ class Canvas {
         : vg_(vg), fonts_(fonts), theme_(theme) {}
     NVGcontext* vg() const { return vg_; }
     const Theme& theme() const { return theme_; }
+    const gui::Fonts& fonts() const { return fonts_; }  // for code that draws with NanoVG itself
 
     void fillRect(const Rect& r, Color c);
     void fillRound(const Rect& r, float radius, Color c);

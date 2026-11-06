@@ -2,7 +2,8 @@
 // Copyright (c) 2026 Supple Audio
 // A track's right-click menu, shared by the TCP and the mixer: Rename, Color…
 // (the swatch menu), Timebase… (channels), Channels… (ADR-0020: the main pair
-// and auxiliary channels 3-8), Duplicate and Delete. Each pick is one undo step.
+// and auxiliary channels 3-8), a channel's racks (ADR-0062: Show rack, Add
+// rack), Duplicate and Delete. Each pick is one undo step.
 #pragma once
 
 #include <functional>
@@ -36,6 +37,8 @@ struct TrackMenu {
     // duplicates them all, and the copies become the selection.
     std::function<std::vector<std::string>()> selection;
     std::function<void(std::vector<std::string>)> select;
+    // Runs a UI action with {"track": id} (a channel's Show rack, Add rack).
+    std::function<void(const char* action, const model::Id& track)> action;
 
     // `rename` starts the view's own rename (the TCP edits in place); empty:
     // a small rename field opens at the anchor (the mixer).

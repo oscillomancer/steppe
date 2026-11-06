@@ -15,7 +15,8 @@ cmake --build --preset dev --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-2}" --targe
 "$engine" registry --markdown > skill/generated/engine-commands.md
 "$engine" registry --mcp-tools > skill/generated/engine-mcp-tools.json
 "$engine" registry --lua > skill/generated/engine.lua
+"$engine" modules --markdown > skill/generated/rack-modules.md
 cmake --build --preset dev --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-2}" --target notation-ref >/dev/null
 build/dev/libs/notation/notation-ref > skill/generated/notation-reference.md
 cmake -DEXAMPLES=plugins/suite/examples -DOUT=skill/generated/dsp-examples.md -P tools/gen/dsp_examples.cmake
-echo "updated skill/generated/{sandbox,engine}-{commands.md,mcp-tools.json,lua}, notation-reference.md and dsp-examples.md"
+echo "updated skill/generated/{sandbox,engine}-{commands.md,mcp-tools.json,lua}, rack-modules.md, notation-reference.md and dsp-examples.md"

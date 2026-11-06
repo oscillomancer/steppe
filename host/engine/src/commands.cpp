@@ -531,7 +531,7 @@ Result<EnvDomain> envDomain(EngineApp& app, const model::Session& s, const model
                          path, "module.list shows what is");
         std::string keys;
         for (const auto& p : type->type->params()) {
-            if (p.output) continue;
+            if (p.output || p.hidden) continue;
             if (p.key == t.param) {
                 d.knob = p;
                 return d;
