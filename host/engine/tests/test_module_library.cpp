@@ -438,6 +438,176 @@ TEST_CASE("rack.patch: named modules and cables in one step, all or nothing") {
     CHECK(unknown.error().path == "/args/modules/osc2/type");
 }
 
+TEST_CASE("rack.patch: a module's name is its label") {
+    Fixture f;
+    f.run("track.add", R"({"name": "Synth"})");
+    f.run("rack.add", R"({"track": "tr_1"})");
+    json::Value made = f.run("rack.patch", R"({"rack": "rk_1",
+        "modules": {"vco": {"type": "vco"}, "vco2": {"type": "vco"}, "adsr_3": {"type": "adsr"},
+                    "kick": {"type": "drum"}, "bass_env": {"type": "adsr"},
+                    "osc1": {"type": "vco"}, "lfo": {"type": "function"},
+                    "named": {"type": "vca", "label": "Mine"},
+                    "fx": {"plugin": "com.suppleaudio.test.gain"}}})");
+    const model::Session& s = f.app->head();
+    auto label = [&](const char* name) {
+        return s.modules.find(*model::Id::parse(made["modules"].find(name)->asString()))->label;
+    };
+    CHECK(label("vco") == "");
+    CHECK(label("vco2") == "VCO 2");
+    CHECK(label("adsr_3") == "ADSR 3");
+    CHECK(label("kick") == "Kick");
+    CHECK(label("bass_env") == "Bass env");
+    CHECK(label("osc1") == "Osc 1");
+    CHECK(label("lfo") == "LFO");  // a type's key, spelled as that type's name
+    CHECK(label("named") == "Mine");
+    CHECK(label("fx") == "");  // a plugin module keeps its plug-in's name
+}
+
+namespace {
+
+struct Placed {
+    std::string name;
+    double x, y, w, h;
+};
+
+std::vector<Placed> placesOf(const Fixture& f, const json::Value& ids) {
+    std::vector<Placed> out;
+    for (const auto& m : ids.asObject()) {
+        const model::RackModule* r =
+            f.app->head().modules.find(*model::Id::parse(m.value.asString()));
+        auto type = f.app->modules()->find(r->type);
+        REQUIRE(type != nullptr);
+        out.push_back({m.key, r->x, r->y, type->type->layout().width, type->type->layout().height});
+    }
+    return out;
+}
+
+bool overlap(const Placed& a, const Placed& b) {
+    return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+}
+
+}  // namespace
+
+TEST_CASE("rack.patch: a big patch is laid out near a window's shape, by signal flow") {
+    Fixture f;
+    f.run("track.add", R"({"name": "Synth"})");
+    f.run("rack.add", R"({"track": "tr_1"})");  // mo_1 Out
+    // Two voices, drums and a modulation web: 24 modules.
+    const char* patch = R"({"rack": "rk_1",
+        "modules": {"clock": {"type": "clock"}, "seq": {"type": "sequencer"},
+                    "quant": {"type": "quantizer"}, "osc1": {"type": "vco"},
+                    "osc2": {"type": "vco"}, "env1": {"type": "adsr"}, "env2": {"type": "adsr"},
+                    "amp1": {"type": "vca"}, "amp2": {"type": "vca"}, "lfo1": {"type": "lfo"},
+                    "lfo2": {"type": "lfo"}, "kick": {"type": "drum"}, "snare": {"type": "drum"},
+                    "hat": {"type": "drum"}, "euclid1": {"type": "euclid"},
+                    "euclid2": {"type": "euclid"}, "euclid3": {"type": "euclid"},
+                    "mix": {"type": "mixer"}, "drift": {"type": "drift"},
+                    "chaos": {"type": "chaos"}, "slew": {"type": "slew"},
+                    "noise": {"type": "noise"}, "turing": {"type": "turing"},
+                    "chance": {"type": "chance"}},
+        "cables": [["clock.out_1", "seq.clock"], ["seq.pitch", "quant.pitch"],
+                   ["quant.out", "osc1.pitch"], ["turing.out", "osc2.pitch"],
+                   ["clock.out_2", "turing.clock"], ["seq.gate", "env1.gate"],
+                   ["clock.out_3", "chance.gate"], ["chance.a", "env2.gate"],
+                   ["osc1.saw", "amp1.in"], ["osc2.saw", "amp2.in"],
+                   ["env1.envelope", "amp1.cv"], ["env2.envelope", "amp2.cv"],
+                   ["lfo1.out", "osc1.pulse_width"], ["lfo2.out", "osc2.pulse_width"],
+                   ["clock.out_1", "euclid1.clock"], ["clock.out_1", "euclid2.clock"],
+                   ["clock.out_1", "euclid3.clock"], ["euclid1.gate", "kick.trigger"],
+                   ["euclid2.gate", "snare.trigger"], ["euclid3.gate", "hat.trigger"],
+                   ["amp1.out", "mix.in_1"], ["amp2.out", "mix.in_2"], ["kick.out", "mix.in_3"],
+                   ["snare.out", "mix.in_4"], ["drift.out", "lfo1.rate"],
+                   ["chaos.x", "slew.in"], ["slew.out", "lfo2.rate"],
+                   ["noise.pink", "osc2.lin_fm"], ["hat.out", "mo_1.r"], ["mix.left", "mo_1.l"]]})";
+    json::Value made = f.run("rack.patch", patch);
+    const auto placed = placesOf(f, made["modules"]);
+    REQUIRE(placed.size() == 24);
+    double left = 1e9, top = 1e9, right = -1e9, bottom = -1e9;
+    for (std::size_t i = 0; i < placed.size(); ++i) {
+        left = std::min(left, placed[i].x);
+        top = std::min(top, placed[i].y);
+        right = std::max(right, placed[i].x + placed[i].w);
+        bottom = std::max(bottom, placed[i].y + placed[i].h);
+        for (std::size_t k = i + 1; k < placed.size(); ++k) {
+            INFO(placed[i].name << " and " << placed[k].name);
+            CHECK_FALSE(overlap(placed[i], placed[k]));
+        }
+    }
+    // Near a window's shape rather than a tall column.
+    const double aspect = (right - left) / (bottom - top);
+    INFO("the patch is " << right - left << " by " << bottom - top);
+    CHECK(aspect > 0.8);
+    CHECK(aspect < 3.2);
+    // Left to right by signal flow, and a modulator just left of its target.
+    auto at = [&](const char* name) {
+        for (const auto& p : placed)
+            if (p.name == name) return p;
+        FAIL("no " << name);
+        return placed[0];
+    };
+    CHECK(at("clock").x < at("seq").x);
+    CHECK(at("seq").x < at("quant").x);
+    CHECK(at("osc1").x < at("amp1").x);
+    CHECK(at("amp1").x < at("mix").x);
+    CHECK(at("lfo1").x < at("osc1").x);
+    CHECK(at("drift").x < at("lfo1").x);
+    CHECK(at("lfo1").x > at("clock").x);  // pulled right, toward what it modulates
+
+    // The same patch into the same rack lays out the same way.
+    Fixture g;
+    g.run("track.add", R"({"name": "Synth"})");
+    g.run("rack.add", R"({"track": "tr_1"})");
+    const auto again = placesOf(g, g.run("rack.patch", patch)["modules"]);
+    REQUIRE(again.size() == placed.size());
+    for (std::size_t i = 0; i < placed.size(); ++i) {
+        CHECK(again[i].x == placed[i].x);
+        CHECK(again[i].y == placed[i].y);
+    }
+}
+
+TEST_CASE("rack.arrange: lays out a rack's modules in one undo step") {
+    Fixture f;
+    f.run("track.add", R"({"name": "Synth"})");
+    f.run("rack.add", R"({"track": "tr_1"})");  // mo_1 Out
+    json::Value made = f.run("rack.patch", R"({"rack": "rk_1",
+        "modules": {"osc": {"type": "vco", "x": 900, "y": 700},
+                    "amp": {"type": "vca", "x": 20, "y": 20},
+                    "lfo": {"type": "lfo", "x": 500, "y": 0},
+                    "env": {"type": "adsr", "x": 0, "y": 600}},
+        "cables": [["osc.saw", "amp.in"], ["lfo.out", "osc.exp_fm"], ["env.envelope", "amp.cv"],
+                   ["amp.out", "mo_1.l"]]})");
+    auto module = [&](const char* name) {
+        return f.app->head().modules.find(
+            *model::Id::parse(made["modules"].find(name)->asString()));
+    };
+    const double before = module("osc")->x;
+    json::Value moved = f.run("rack.arrange", R"({"rack": "rk_1"})");
+    CHECK(moved["modules"].asObject().size() == 5);
+    CHECK(module("lfo")->x < module("osc")->x);
+    CHECK(module("osc")->x < module("amp")->x);
+    CHECK(module("env")->x < module("amp")->x);
+    CHECK(f.app->head().modules.find({model::Kind::Module, 1})->x > module("amp")->x);  // Out
+    // From the modules' top-left corner.
+    double left = 1e9;
+    for (const auto& e : f.app->head().modules) left = std::min(left, e.value->x);
+    CHECK(left == 0);
+    f.run("history.undo", "{}");
+    CHECK(module("osc")->x == before);
+    CHECK(module("amp")->x == 20);
+
+    // Some modules only, from a given corner.
+    f.run("rack.arrange", R"({"rack": "rk_1", "modules": ["mo_2", "mo_3"], "x": 100, "y": 100})");
+    CHECK(module("lfo")->x == 500);  // not named, not moved
+    CHECK(std::min(module("osc")->x, module("amp")->x) == 100);
+    CHECK(module("osc")->x < module("amp")->x);
+
+    f.run("rack.add", R"({"track": "tr_1"})");  // rk_2, mo_6 Out
+    auto other = f.call("rack.arrange", *json::parse(R"({"rack": "rk_1", "modules": ["mo_6"]})"));
+    REQUIRE_FALSE(other);
+    CHECK(other.error().code == "rack.module");
+    CHECK(other.error().path == "/args/modules/0");
+}
+
 TEST_CASE("rack presets: a patch brings its own modules to another library") {
     Fixture here;
     here.write("level", kLevel);

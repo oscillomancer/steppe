@@ -477,7 +477,8 @@ examples run as tests. Ends are strings: `"mo_3.out"`.
 | `rack.list` | query | `{}` → racks with their home tracks, module counts and Out modules |
 | `rack.get` | query | `{rack, detail?: brief\|full}` → modules (id, type, label, changed params, position, size), cables (with `feedback`), Out modules and the channels they feed, problems |
 | `rack.probe` | query | `{rack, ports: ["mo_N.<output>", …≤8], seconds? (≤10, 2), from_beat?, notes? (notation the rack's Notes modules play)}` → per port: peak, rms, dc, min, max; audio (the first 4 voices summed): dB and pitch (Hz, note, cents) when periodic; gates over the voices: count, per second, per beat, duty; pitch: the notes visited; CV: rate; a one-line description. An offline render of a copy with a listener (`ProbeModule`) on each port; nothing changes |
-| `rack.patch` | edit | `{rack, modules: {name: {type\|plugin, params?, preset?, label?, x?, y?, source?, device?}}, cables?: [[from, to, amount?, color?] \| {from, to, amount?, color?}], x?, y?}` → `{modules: {name: id}, cables}`: ends `"name.port"`, `"name.knob"` (a plugin module's: its plug-in's) or `"mo_N.port"`; modules without a place laid out by signal flow; checked as `module.add` and `cable.add` check, all or nothing |
+| `rack.patch` | edit | `{rack, modules: {name: {type\|plugin, params?, preset?, label?, x?, y?, source?, device?}}, cables?: [[from, to, amount?, color?] \| {from, to, amount?, color?}], x?, y?}` → `{modules: {name: id}, cables}`: ends `"name.port"`, `"name.knob"` (a plugin module's: its plug-in's) or `"mo_N.port"`; modules without a place laid out as §7.2; a name labels its module (§7.2); checked as `module.add` and `cable.add` check, all or nothing |
+| `rack.arrange` | edit | `{rack, modules?, x?, y?}` → `{modules: {mo_N: {x, y}}}`: lays out the modules (default all the rack's) as §7.2 from x, y (default their top-left corner), along the cables among them; one undo step |
 | `rack.preset.save` | action | `{rack, name, modules?, description?, replace?}` → `{path, modules, cables}`: the modules (default the whole rack) and the cables among them |
 | `rack.preset.load` | edit | `{rack, name\|path, x?, y?, io?: join\|add}` → `{modules, cables, installed?, warnings?}`: one undo step; `installed` names the library modules it brought |
 | `rack.preset.list` | query | `{query?}` → presets: name, path, description, module and cable counts, module types |
@@ -561,6 +562,41 @@ out with a warning (`rack.preset_knob`, `rack.preset_cable`). With
 own, in order: their cables reach the rack's Outs and Ins, so a whole
 patch saved from one rack sounds in a new one at once; extra ones are
 added. `io: add` adds them all.
+
+### 7.2 Patch layout and labels
+
+`rack.patch` places the modules it is given no `x`, `y` for, and
+`rack.arrange` re-places a rack's modules, the same way, along the cables
+among the modules placed (a cable into a plugin module's parameter counts
+as one into the module):
+
+1. Columns by signal flow: a module goes one column right of the longest
+   chain of cables feeding it (a feedback loop stops at as many columns as
+   modules). Then each moves right to one column left of its nearest
+   consumer, so a modulator sits beside what it modulates, and a last stage
+   (fed, feeding nothing placed: one into an Out) goes to the last column.
+   A module with no cables stays in the first.
+2. Within a column, modules are ordered by the mean place of their
+   neighbours, swept forward and back four times, so cables cross less.
+3. Shape: a column may split into side-by-side stacks at any height at
+   least the tallest module's, and the row of stacks may wrap into up to
+   six bands, one under the other (60 units apart). Of these, the one
+   kept scores best on |ln(aspect / 1.6)| + 0.5 ln(bounding area / the
+   modules' area with gaps) + 0.3 per band beyond the first: about a
+   window's shape, compact, with the flow rarely broken.
+4. Modules are 40 units apart across and 30 down, each centred in its
+   stack, each stack centred in its band, from the corner given
+   (`rack.patch`: right of the rack's modules; `rack.arrange`: their
+   top-left corner). Coordinates are whole units, and the same patch lays
+   out the same way.
+
+A name in `rack.patch` labels its module unless `label` is given: none
+when it is the type's key (`"vco"`); the type's name and the number when it
+is the key and a number (`"vco2"`, `"vco_2"`: "VCO 2"); else the name made
+readable: `_` to spaces, a trailing number apart, the first letter
+capitalised, and a word that is a type's key spelled as that type's
+one-word name (`"bass_env"`: "Bass env", `"osc1"`: "Osc 1", `"lfo"`:
+"LFO"). A plugin module keeps its plug-in's name.
 
 ## 8. The rack window (`daw/gui`)
 

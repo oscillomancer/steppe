@@ -6,6 +6,7 @@
 #include <cstring>
 #include <filesystem>
 #include <functional>
+#include <limits>
 #include <map>
 #include <random>
 #include <set>
@@ -2481,9 +2482,337 @@ Result<json::Value> invokeCommand(const char* name, json::Value args, Context& c
     return r;
 }
 
+// --- The automatic layout (rack.md §7.2) ---
+
+constexpr double kLayoutGapX = 40, kLayoutGapY = 30, kLayoutBandGap = 60;
+constexpr double kLayoutAspect = 1.6;  // width to height, about a window's
+
+struct LayoutBox {
+    double width = 120, height = 120;
+};
+
+// Places boxes joined by `edges` (from, to; indices into `boxes`) left to right
+// by signal flow, top-left at x0, y0. Each box goes one column right of the
+// longest chain feeding it, then as far right as its consumers allow, so a
+// modulator sits just left of what it modulates. Within a column, boxes are
+// ordered by the places of their neighbours (barycentres, swept both ways) so
+// cables cross less. A column taller than a window-shaped patch would be is
+// split into several, and a row of columns far wider than that wraps into
+// bands, one under the other. Deterministic: ties keep the order of `boxes`.
+std::vector<std::pair<double, double>> layoutBoxes(const std::vector<LayoutBox>& boxes,
+                                                   const std::vector<std::pair<int, int>>& edges,
+                                                   double x0, double y0) {
+    const int n = static_cast<int>(boxes.size());
+    std::vector<std::pair<double, double>> out(boxes.size(), {x0, y0});
+    if (n == 0) return out;
+    std::vector<std::vector<int>> outs(n), ins(n);
+    for (const auto& [from, to] : edges) {
+        if (from == to || from < 0 || to < 0 || from >= n || to >= n) continue;
+        if (std::find(outs[from].begin(), outs[from].end(), to) != outs[from].end()) continue;
+        outs[from].push_back(to);
+        ins[to].push_back(from);
+    }
+    // Longest chain feeding each box; a feedback loop stops at n columns.
+    std::vector<int> depth(n, 0);
+    for (int pass = 0; pass < n; ++pass) {
+        bool moved = false;
+        for (int u = 0; u < n; ++u)
+            for (int v : outs[u])
+                if (depth[v] < depth[u] + 1 && depth[u] + 1 < n) {
+                    depth[v] = depth[u] + 1;
+                    moved = true;
+                }
+        if (!moved) break;
+    }
+    // Then right, up to one column left of its nearest consumer.
+    std::vector<int> order(n);
+    for (int i = 0; i < n; ++i) order[i] = i;
+    std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return depth[a] > depth[b]; });
+    for (int u : order) {
+        int nearest = -1;
+        for (int v : outs[u])
+            if (depth[v] > depth[u]) nearest = nearest < 0 ? depth[v] : std::min(nearest, depth[v]);
+        if (nearest > depth[u] + 1) depth[u] = nearest - 1;
+    }
+    // A last stage (fed, feeding nothing here) in the last column.
+    int last = 0;
+    for (int u = 0; u < n; ++u) last = std::max(last, depth[u]);
+    for (int u = 0; u < n; ++u)
+        if (outs[u].empty() && !ins[u].empty()) depth[u] = last;
+    // Columns, without empty ones.
+    std::map<int, std::vector<int>> byDepth;
+    for (int i = 0; i < n; ++i) byDepth[depth[i]].push_back(i);
+    std::vector<std::vector<int>> columns;
+    for (auto& [d, members] : byDepth) columns.push_back(std::move(members));
+    // Order within columns by the neighbours' places.
+    std::vector<double> place(n, 0);
+    auto rank = [&] {
+        for (const auto& column : columns)
+            for (std::size_t k = 0; k < column.size(); ++k)
+                place[column[k]] = (k + 0.5) / static_cast<double>(column.size());
+    };
+    rank();
+    for (int sweep = 0; sweep < 4; ++sweep) {
+        const bool forward = sweep % 2 == 0;
+        for (std::size_t c = 0; c < columns.size(); ++c) {
+            auto& column = columns[forward ? c : columns.size() - 1 - c];
+            std::vector<double> key(n, 0);
+            for (int u : column) {
+                const auto& near = forward ? ins[u] : outs[u];
+                double sum = 0;
+                for (int v : near) sum += place[v];
+                key[u] = near.empty() ? place[u] : sum / static_cast<double>(near.size());
+            }
+            std::stable_sort(column.begin(), column.end(),
+                             [&](int a, int b) { return key[a] < key[b]; });
+            for (std::size_t k = 0; k < column.size(); ++k)
+                place[column[k]] = (k + 0.5) / static_cast<double>(column.size());
+        }
+    }
+    // Split tall columns into stacks no taller than `limit`, wrap the row of
+    // stacks into bands no wider than `wide`, and place the boxes.
+    struct Stack {
+        std::vector<int> members;
+        double width = 0, height = 0;
+    };
+    struct Shape {
+        std::vector<std::pair<double, double>> at;
+        double width = 0, height = 0;
+        int bands = 0;
+    };
+    auto shape = [&](double limit, double wide) {
+        std::vector<Stack> stacks;
+        for (const auto& column : columns) {
+            Stack s;
+            for (int u : column) {
+                const double h =
+                    s.members.empty() ? boxes[u].height : s.height + kLayoutGapY + boxes[u].height;
+                if (!s.members.empty() && h > limit) {
+                    stacks.push_back(std::move(s));
+                    s = Stack{};
+                }
+                s.height =
+                    s.members.empty() ? boxes[u].height : s.height + kLayoutGapY + boxes[u].height;
+                s.width = std::max(s.width, boxes[u].width);
+                s.members.push_back(u);
+            }
+            stacks.push_back(std::move(s));
+        }
+        std::vector<std::vector<const Stack*>> bands(1);
+        double row = 0;
+        for (const Stack& s : stacks) {
+            if (!bands.back().empty() && row + kLayoutGapX + s.width > wide) {
+                bands.emplace_back();
+                row = 0;
+            }
+            row += (bands.back().empty() ? 0 : kLayoutGapX) + s.width;
+            bands.back().push_back(&s);
+        }
+        Shape out;
+        out.at.assign(boxes.size(), {x0, y0});
+        out.bands = static_cast<int>(bands.size());
+        double top = y0;
+        for (const auto& band : bands) {
+            double bandHeight = 0;
+            for (const Stack* s : band) bandHeight = std::max(bandHeight, s->height);
+            double left = x0;
+            for (const Stack* s : band) {
+                double y = top + std::round((bandHeight - s->height) / 2);
+                for (int u : s->members) {
+                    out.at[u] = {left + std::round((s->width - boxes[u].width) / 2), y};
+                    y += boxes[u].height + kLayoutGapY;
+                }
+                left += s->width + kLayoutGapX;
+            }
+            out.width = std::max(out.width, left - kLayoutGapX - x0);
+            out.height = top + bandHeight - y0;
+            top += bandHeight + kLayoutBandGap;
+        }
+        return out;
+    };
+    // Try the heights at which a column could split and a few band widths;
+    // keep the shape nearest a window's, compact, with the fewest breaks in
+    // the flow.
+    double area = 0, tallest = 0;
+    for (const auto& b : boxes) {
+        area += (b.width + kLayoutGapX) * (b.height + kLayoutGapY);
+        tallest = std::max(tallest, b.height);
+    }
+    std::set<double> limits = {tallest};
+    for (const auto& column : columns) {
+        double h = -kLayoutGapY;
+        for (int u : column) limits.insert(std::max(tallest, h += kLayoutGapY + boxes[u].height));
+    }
+    Shape best;
+    double bestScore = std::numeric_limits<double>::infinity();
+    for (double limit : limits) {
+        const Shape one = shape(limit, std::numeric_limits<double>::infinity());
+        for (int b = 1; b <= 6; ++b) {
+            const Shape s = b == 1 ? one : shape(limit, std::ceil(one.width / b));
+            if (b > 1 && s.bands == 1) continue;
+            const double score =
+                std::abs(std::log(s.width / std::max(s.height, 1.0) / kLayoutAspect)) +
+                0.5 * std::log(s.width * s.height / std::max(area, 1.0)) + 0.3 * (s.bands - 1);
+            if (score < bestScore - 1e-9) {
+                bestScore = score;
+                best = s;
+            }
+        }
+    }
+    return best.at;
+}
+
+double clampCoordinate(double v) {
+    return std::clamp(v, -model::kMaxRackCoordinate, model::kMaxRackCoordinate);
+}
+
+// The label a patch's name gives its module (rack.md §7): none when the name
+// is the type's ("vco"), the type's name and a number for the type's with a
+// number ("vco2", "vco_2": "VCO 2"), else the name made readable ("bass_env":
+// "Bass env", "osc1": "Osc 1"), a word that is a type's key spelled as that
+// type's name ("lfo": "LFO").
+std::string labelFromName(const rack::Catalog& catalog, const std::string& name,
+                          const rack::ModuleType* type) {
+    const auto keyOfId = [](const std::string& id) { return id.substr(id.rfind('.') + 1); };
+    if (type) {
+        const std::string key = keyOfId(type->id());
+        if (name == key) return {};
+        if (name.size() > key.size() && name.compare(0, key.size(), key) == 0) {
+            std::string rest = name.substr(key.size());
+            if (rest[0] == '_') rest.erase(0, 1);
+            if (!rest.empty() &&
+                std::all_of(rest.begin(), rest.end(), [](char c) { return c >= '0' && c <= '9'; }))
+                return type->info().name + " " + rest;
+        }
+    }
+    // Words: split at '_' and between letters and a trailing number.
+    std::vector<std::string> words;
+    std::string word;
+    for (char c : name) {
+        if (c == '_') {
+            if (!word.empty()) words.push_back(std::move(word));
+            word.clear();
+            continue;
+        }
+        const bool digit = c >= '0' && c <= '9';
+        if (digit && !word.empty() && !(word.back() >= '0' && word.back() <= '9')) {
+            words.push_back(std::move(word));
+            word.clear();
+        }
+        word += c;
+    }
+    if (!word.empty()) words.push_back(std::move(word));
+    std::string out;
+    for (std::size_t k = 0; k < words.size(); ++k) {
+        std::string w = words[k];
+        const auto* e = findType(catalog, w);
+        const std::string spelled = e ? e->type->info().name : std::string();
+        if (e && keyOfId(e->type->id()) == w && spelled.find(' ') == std::string::npos) {
+            std::string lower = spelled;
+            std::transform(lower.begin(), lower.end(), lower.begin(),
+                           [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+            if (lower == w) w = spelled;
+        }
+        if (k == 0 && !w.empty() && w[0] >= 'a' && w[0] <= 'z') w[0] = static_cast<char>(w[0] - 32);
+        out += (out.empty() ? "" : " ") + w;
+    }
+    return out;
+}
+
+struct RackArrangeArgs {
+    std::string rack;
+    std::optional<std::vector<std::string>> modules;
+    std::optional<double> x, y;
+};
+
+void registerRackArrangeCommand(cmd::Registry& registry) {
+    Command<RackArrangeArgs, json::Value> c;
+    common(c, "rack.arrange", Kind::Edit, "Lay out a rack's modules by signal flow.");
+    c.description =
+        "Moves the modules (default all the rack's) as rack.patch lays out new ones: left to "
+        "right by signal flow along their cables, ordered within columns so cables cross less, "
+        "wrapped to about a window's shape. From x, y (default the modules' top-left corner). "
+        "One undo step; returns the new places.";
+    c.args = schema::object<RackArrangeArgs>("rack_arrange_args")
+                 .field("rack", &RackArrangeArgs::rack, idOf("rk", "Rack"))
+                 .field("modules", &RackArrangeArgs::modules, schema::arrayOf(idOf("mo", "Module")))
+                 .field("x", &RackArrangeArgs::x, coordinate())
+                 .field("y", &RackArrangeArgs::y, coordinate())
+                 .build();
+    c.examples = {{"Tidy up a rack", j(R"({"rack": "rk_1"})"),
+                   j(R"({"modules": {"mo_1": {"x": 328, "y": 138},
+                   "mo_2": {"x": 40, "y": 40}, "mo_3": {"x": 184, "y": 115}}})"),
+                   "song_with_rack"}};
+    c.errors = {{"rack.module", "a module that is not in the rack", "name modules of this rack"}};
+    c.run = [](const RackArrangeArgs& a, Context& ctx) -> Result<json::Value> {
+        EngineApp& e = app(ctx);
+        const model::Session s = e.view();
+        auto rack = rackId(s, a.rack);
+        if (!rack) return std::move(rack).error();
+        std::vector<Id> ids;
+        if (a.modules) {
+            for (std::size_t k = 0; k < a.modules->size(); ++k) {
+                const auto id = Id::parse((*a.modules)[k]);
+                const model::RackModule* m = id ? s.modules.find(*id) : nullptr;
+                if (!m || m->rack != *rack)
+                    return Error("rack.module", (*a.modules)[k] + " is not a module of " + a.rack,
+                                 "/modules/" + std::to_string(k),
+                                 "rack.get lists the rack's modules");
+                if (std::find(ids.begin(), ids.end(), *id) == ids.end()) ids.push_back(*id);
+            }
+        } else {
+            for (const auto& m : s.modules)
+                if (m.value->rack == *rack) ids.push_back(m.id);
+        }
+        std::vector<LayoutBox> boxes;
+        std::map<Id, int> index;  // a module or its plug-in's fx
+        double left = 0, top = 0;
+        for (std::size_t k = 0; k < ids.size(); ++k) {
+            const model::RackModule& m = *s.modules.find(ids[k]);
+            const auto [w, h] = sizeOf(typeOfModule(e, m).get());
+            boxes.push_back({w, h});
+            index[ids[k]] = static_cast<int>(k);
+            if (m.fx) index[*m.fx] = static_cast<int>(k);
+            left = k == 0 ? m.x : std::min(left, m.x);
+            top = k == 0 ? m.y : std::min(top, m.y);
+        }
+        std::vector<std::pair<int, int>> edges;
+        for (const auto& cable : s.cables) {
+            const auto from = index.find(cable.value->from.object);
+            const auto to = index.find(cable.value->to.object);
+            if (from != index.end() && to != index.end())
+                edges.emplace_back(from->second, to->second);
+        }
+        const auto places = layoutBoxes(boxes, edges, a.x.value_or(left), a.y.value_or(top));
+        json::Value moved = json::Value::object();
+        for (std::size_t k = 0; k < ids.size(); ++k) {
+            const model::RackModule& m = *s.modules.find(ids[k]);
+            const double x = clampCoordinate(places[k].first),
+                         y = clampCoordinate(places[k].second);
+            json::Value at = json::Value::object();
+            at["x"] = x;
+            at["y"] = y;
+            moved[ids[k].str()] = std::move(at);
+            if (x == m.x && y == m.y) continue;
+            json::Value args = json::Value::object();
+            args["module"] = ids[k].str();
+            args["x"] = x;
+            args["y"] = y;
+            auto set =
+                invokeCommand("module.set", std::move(args), ctx, "/modules/" + std::to_string(k));
+            if (!set) return std::move(set).error();
+        }
+        json::Value out = json::Value::object();
+        out["modules"] = std::move(moved);
+        return out;
+    };
+    addChecked(registry, std::move(c));
+}
+
 }  // namespace
 
 void registerRackPatchCommand(cmd::Registry& registry) {
+    registerRackArrangeCommand(registry);
     Command<RackPatchArgs, json::Value> c;
     common(c, "rack.patch", Kind::Edit, "Add named modules and the cables among them in one step.");
     c.description =
@@ -2492,9 +2821,10 @@ void registerRackPatchCommand(cmd::Registry& registry) {
         "to, amount?, color?}] or [from, to, amount?], an end \"name.port\" or \"name.knob\" "
         "(a plugin module's knob is its plug-in's: \"synth.cutoff\"), or an existing module's "
         "\"mo_N.port\" (the rack's Out from rack.add). Modules without x, y are laid out left "
-        "to right by signal flow from x, y (default right of the rack's modules). Everything "
-        "is checked as module.add and cable.add check it; one error changes nothing. Returns "
-        "the ids by name.";
+        "to right by signal flow from x, y (default right of the rack's modules), as "
+        "rack.arrange does. A name labels its module unless label is given: \"kick\" is "
+        "Kick, \"vco2\" is VCO 2, a type's own key (\"vco\") none. Everything is checked as "
+        "module.add and cable.add check it; one error changes nothing. Returns the ids by name.";
     c.args = schema::object<RackPatchArgs>("rack_patch_args")
                  .field("rack", &RackPatchArgs::rack, idOf("rk", "Rack"))
                  .field("modules", &RackPatchArgs::modules, schema::any())
@@ -2612,31 +2942,24 @@ void registerRackPatchCommand(cmd::Registry& registry) {
             wires.push_back(std::move(w));
         }
 
-        // The layout: columns by signal flow among the new modules.
-        std::map<std::string, int> depth;
-        for (const auto& n : names) depth[n] = 0;
-        for (std::size_t pass = 0; pass < names.size(); ++pass) {
-            bool moved = false;
-            for (const Wire& w : wires)
-                if (depth.count(w.from.name) && depth.count(w.to.name) &&
-                    depth[w.to.name] < depth[w.from.name] + 1 &&
-                    depth[w.from.name] + 1 < static_cast<int>(names.size())) {
-                    depth[w.to.name] = depth[w.from.name] + 1;
-                    moved = true;
-                }
-            if (!moved) break;
+        // The layout (rack.md §7.2) of the modules without a place.
+        std::vector<std::string> placed;
+        std::map<std::string, int> slot;
+        for (const auto& n : names) {
+            const json::Value& spec = *a.modules.find(n);
+            if (spec.find("x") && spec.find("y")) continue;
+            slot[n] = static_cast<int>(placed.size());
+            placed.push_back(n);
         }
+        std::vector<LayoutBox> boxes;
+        for (const auto& n : placed) boxes.push_back({sizes[n].first, sizes[n].second});
+        std::vector<std::pair<int, int>> edges;
+        for (const Wire& w : wires)
+            if (slot.count(w.from.name) && slot.count(w.to.name))
+                edges.emplace_back(slot[w.from.name], slot[w.to.name]);
         const auto place = freePlace(e, s, *rack);
-        const double x0 = a.x.value_or(place.first), y0 = a.y.value_or(place.second);
-        std::map<int, double> columnWidth, columnHeight;
-        for (const auto& n : names)
-            columnWidth[depth[n]] = std::max(columnWidth[depth[n]], sizes[n].first);
-        std::map<int, double> columnX;
-        double x = x0;
-        for (const auto& [column, width] : columnWidth) {
-            columnX[column] = x;
-            x += width + 40;
-        }
+        const auto places =
+            layoutBoxes(boxes, edges, a.x.value_or(place.first), a.y.value_or(place.second));
 
         std::map<std::string, Id> made;
         std::map<std::string, std::string> fxOf;
@@ -2645,13 +2968,18 @@ void registerRackPatchCommand(cmd::Registry& registry) {
             const json::Value& spec = *a.modules.find(n);
             json::Value args = spec;
             args["rack"] = a.rack;
-            if (!spec.find("x"))
-                args["x"] = std::clamp(columnX[depth[n]], -model::kMaxRackCoordinate,
-                                       model::kMaxRackCoordinate);
-            if (!spec.find("y")) {
-                args["y"] = std::clamp(y0 + columnHeight[depth[n]], -model::kMaxRackCoordinate,
-                                       model::kMaxRackCoordinate);
-                columnHeight[depth[n]] += sizes[n].second + 30;
+            if (const auto at = slot.find(n); at != slot.end()) {
+                if (!spec.find("x")) args["x"] = clampCoordinate(places[at->second].first);
+                if (!spec.find("y")) args["y"] = clampCoordinate(places[at->second].second);
+            }
+            if (!spec.find("label") && !spec.find("plugin")) {
+                const json::Value* type = spec.find("type");
+                const auto* entry =
+                    type && type->isString() ? findType(catalog(e), type->asString()) : nullptr;
+                if (std::string label =
+                        labelFromName(catalog(e), n, entry ? entry->type.get() : nullptr);
+                    !label.empty())
+                    args["label"] = std::move(label);
             }
             auto added =
                 invokeCommand("module.add", std::move(args), ctx, json::pointerJoin("/modules", n));

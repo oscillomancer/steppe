@@ -7915,6 +7915,45 @@
     }
   },
   {
+    "name": "rack_arrange",
+    "title": "Lay out a rack's modules by signal flow.",
+    "description": "Lay out a rack's modules by signal flow. Moves the modules (default all the rack's) as rack.patch lays out new ones: left to right by signal flow along their cables, ordered within columns so cables cross less, wrapped to about a window's shape. From x, y (default the modules' top-left corner). One undo step; returns the new places. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "rack_arrange_args",
+      "properties": {
+        "rack": {
+          "type": "string",
+          "pattern": "^rk_[0-9]+$"
+        },
+        "modules": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^mo_[0-9]+$"
+          }
+        },
+        "x": {
+          "type": "number",
+          "minimum": -1e+06,
+          "maximum": 1e+06
+        },
+        "y": {
+          "type": "number",
+          "minimum": -1e+06,
+          "maximum": 1e+06
+        }
+      },
+      "required": ["rack"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
     "name": "rack_get",
     "title": "A rack's modules, cables, Out modules and problems.",
     "description": "A rack's modules, cables, Out modules and problems. Modules with their type, label, place and size and the knobs that differ from their defaults (detail full: also their input, output and knob keys); cables with feedback (true: it closes a loop and carries the previous frame); Out modules and the channels they feed; problems (missing types, cables that do not fit). See describe for errors and examples.",
@@ -7959,7 +7998,7 @@
   {
     "name": "rack_patch",
     "title": "Add named modules and the cables among them in one step.",
-    "description": "Add named modules and the cables among them in one step. modules: {name: {type | plugin, params?, preset?, label?, x?, y?, source?, device?}} as module.add takes them; a name is lower-case letters, digits and '_'. cables: [{from, to, amount?, color?}] or [from, to, amount?], an end \"name.port\" or \"name.knob\" (a plugin module's knob is its plug-in's: \"synth.cutoff\"), or an existing module's \"mo_N.port\" (the rack's Out from rack.add). Modules without x, y are laid out left to right by signal flow from x, y (default right of the rack's modules). Everything is checked as module.add and cable.add check it; one error changes nothing. Returns the ids by name. See describe for errors and examples.",
+    "description": "Add named modules and the cables among them in one step. modules: {name: {type | plugin, params?, preset?, label?, x?, y?, source?, device?}} as module.add takes them; a name is lower-case letters, digits and '_'. cables: [{from, to, amount?, color?}] or [from, to, amount?], an end \"name.port\" or \"name.knob\" (a plugin module's knob is its plug-in's: \"synth.cutoff\"), or an existing module's \"mo_N.port\" (the rack's Out from rack.add). Modules without x, y are laid out left to right by signal flow from x, y (default right of the rack's modules), as rack.arrange does. A name labels its module unless label is given: \"kick\" is Kick, \"vco2\" is VCO 2, a type's own key (\"vco\") none. Everything is checked as module.add and cable.add check it; one error changes nothing. Returns the ids by name. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "rack_patch_args",

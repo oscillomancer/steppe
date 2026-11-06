@@ -56,7 +56,12 @@ with their ranges and defaults; read it before patching. `module.describe
   color}`. An end is `"name.port"` or `"name.knob"`, or `"mo_N.port"` for
   a module already in the rack: the Out from `rack.add` is `"mo_1.l"` in a
   new rack.
-- Modules without `x`, `y` are laid out left to right by signal flow.
+- Modules without `x`, `y` are laid out left to right by signal flow, in
+  columns ordered to cross few cables, wrapped to about a window's shape.
+  `rack.arrange {rack}` tidies a whole rack the same way (one undo step).
+- A name labels its module on the face: `"kick"` shows "Kick", `"vco2"`
+  "VCO 2", while a type's own key (`"vco"`) adds no label. Give names that
+  say the role (`"bass_osc"`, `"hat_env"`) so a person can read the rack.
 - One bad name, port or value refuses the whole patch; the error's path
   names it (`/args/cables/3/to`). It returns the ids by name.
 

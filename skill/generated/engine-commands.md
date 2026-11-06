@@ -10425,6 +10425,67 @@ Result:
 
 ```
 
+## `rack.arrange@1`
+
+Lay out a rack's modules by signal flow.
+
+Moves the modules (default all the rack's) as rack.patch lays out new ones: left to right by signal flow along their cables, ordered within columns so cables cross less, wrapped to about a window's shape. From x, y (default the modules' top-left corner). One undo step; returns the new places.
+
+Kind: `edit`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `rack` | string |  |  |  |  |
+| `modules` | array |  |  |  |  |
+| `x` | number |  | -1e+06..1e+06 |  |  |
+| `y` | number |  | -1e+06..1e+06 |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Errors
+
+- `rack.module`: a module that is not in the rack Hint: name modules of this rack
+
+### Examples
+
+**Tidy up a rack** (`song_with_rack`)
+
+```json
+{
+  "rack": "rk_1"
+}
+
+```
+
+Result:
+
+```json
+{
+  "modules": {
+    "mo_1": {
+      "x": 328,
+      "y": 138
+    },
+    "mo_2": {
+      "x": 40,
+      "y": 40
+    },
+    "mo_3": {
+      "x": 184,
+      "y": 115
+    }
+  }
+}
+
+```
+
 ## `rack.get@1`
 
 A rack's modules, cables, Out modules and problems.
@@ -10537,7 +10598,7 @@ Result:
 
 Add named modules and the cables among them in one step.
 
-modules: {name: {type | plugin, params?, preset?, label?, x?, y?, source?, device?}} as module.add takes them; a name is lower-case letters, digits and '_'. cables: [{from, to, amount?, color?}] or [from, to, amount?], an end "name.port" or "name.knob" (a plugin module's knob is its plug-in's: "synth.cutoff"), or an existing module's "mo_N.port" (the rack's Out from rack.add). Modules without x, y are laid out left to right by signal flow from x, y (default right of the rack's modules). Everything is checked as module.add and cable.add check it; one error changes nothing. Returns the ids by name.
+modules: {name: {type | plugin, params?, preset?, label?, x?, y?, source?, device?}} as module.add takes them; a name is lower-case letters, digits and '_'. cables: [{from, to, amount?, color?}] or [from, to, amount?], an end "name.port" or "name.knob" (a plugin module's knob is its plug-in's: "synth.cutoff"), or an existing module's "mo_N.port" (the rack's Out from rack.add). Modules without x, y are laid out left to right by signal flow from x, y (default right of the rack's modules), as rack.arrange does. A name labels its module unless label is given: "kick" is Kick, "vco2" is VCO 2, a type's own key ("vco") none. Everything is checked as module.add and cable.add check it; one error changes nothing. Returns the ids by name.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 

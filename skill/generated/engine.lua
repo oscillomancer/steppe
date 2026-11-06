@@ -1015,6 +1015,12 @@ q = nil
 ---@field track? string
 ---@field name? string
 
+---@class Steppe.rack_arrange_args
+---@field rack string
+---@field modules? string[]
+---@field x? number
+---@field y? number
+
 ---@class Steppe.rack_get_args
 ---@field rack string
 ---@field detail? string
@@ -1981,6 +1987,7 @@ q = nil
 
 ---@class Steppe.rack
 ---@field add fun(args?: Steppe.rack_add_args): table Add a modular rack on a channel, its Out the input.
+---@field arrange fun(args: Steppe.rack_arrange_args): table Lay out a rack's modules by signal flow.
 ---@field get fun(args: Steppe.rack_get_args): table A rack's modules, cables, Out modules and problems.
 ---@field list fun(): table List racks: home channels, module counts, Outs.
 ---@field patch fun(args: Steppe.rack_patch_args): table Add named modules and the cables among them in one step.
