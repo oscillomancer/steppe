@@ -103,3 +103,8 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `polyrhythm` | Four rhythms of 1 to 16 beats against a beat to four bars of the song: ramps, gates, Any and Hits |
 | `life` | An 8x8 Game of Life (five rules) played a column a clock: eight poly gates, a CV, counts and a generation trigger |
 | `lsystem` | L-System: a self-similar melody grown by rewriting A, B and C, each moving the tune by scale degrees |
+| `bounce` | A bouncing ball: hits that come quicker and softer until it settles, its height and each hit's strength; poly |
+| `swarm` | Two to eight coupled LFOs that pull into step, or push apart, like fireflies; how in step they are as Sync; poly |
+| `canon` | A round from any line: up to three followers replay the lead's notes and gates some steps later, transposed; poly out for one voice |
+| `changes` | A chord progression that writes itself in a key and mode: functional moves, a loop that slowly changes, voice leading; poly chord, root and gate |
+| `dust` | Random triggers with no clock, evenly scattered or in bursts, optionally held to the song's grid; a velocity and a random value each; poly |
