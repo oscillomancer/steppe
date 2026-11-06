@@ -95,3 +95,4 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `looper` | Records a CV and a gate over a beat to eight bars in time with the song and loops them; punch in by the loop |
 | `stages` | A function generator of two to six stages (level, time, curve): once, looping, or gated with a hold; poly |
 | `matrix` | Four inputs to four outputs through sixteen attenuverters; an unpatched input is an offset; poly |
+| `polyrhythm` | Four rhythms of 1 to 16 beats against a beat to four bars of the song: ramps, gates, Any and Hits |
