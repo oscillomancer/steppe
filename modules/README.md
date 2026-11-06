@@ -65,3 +65,4 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `macro` | Eight knobs out of eight jacks, unipolar or bipolar, glided: a patch's performance controls |
 | `poly` | Merge eight monos to a poly cable, split one to eight, sum it, or spread it across stereo |
 | `scope` | An oscilloscope: two traces with afterglow, triggered, free or locked to the song, and X-Y |
+| `pitch` | A constant pitch or a transposer: octave, semitone and fine on a poly pitch, with a tuner display |
