@@ -63,6 +63,14 @@ extern "C" void supple_script_budget(void* ctx, int line) {
     if (in->status.budgetExceeded.fetch_add(1, std::memory_order_relaxed) == 0)
         in->status.budgetLine.store(static_cast<std::uint32_t>(line), std::memory_order_relaxed);
 }
+extern "C" double supple_script_param_at(const S::Param* p, int i, int c) { return p->at(i, c); }
+extern "C" void supple_script_transport(const S::Module* p, S::Transport* out) {
+    *out = p->transport();
+}
+extern "C" void supple_script_input(const S::Input* p, int c, S::InputChannel* out) {
+    *out = (*p)[c];
+}
+extern "C" void supple_script_output(const S::Output* p, int c, S::Channel* out) { *out = (*p)[c]; }
 extern "C" int supple_script_round(double x) { return S::roundToInt(x); }
 extern "C" void supple_script_resize_d(void* b, int n) {
     static_cast<S::Buffer<double>*>(b)->resize(n);
@@ -541,6 +549,15 @@ MIR_reg_t Codegen::aggregate(Expr* e) {
     if (e->lvalue && e->kind != ExprKind::Call) return addressOf(placeOf(e));
     int offset = 0;
     MIR_reg_t addr = frameSlot(t->size, t->align, offset);
+    if (e->kind == ExprKind::Call) {
+        auto* call = static_cast<CallExpr*>(e);
+        if (call->builtinMethod && call->builtinMethod->intrinsic == Intrinsic::ModuleTransport) {
+            MIR_reg_t self = call->object ? aggregate(call->object) : selfReg_;
+            callC(reinterpret_cast<void*>(&supple_script_transport),
+                  {Abi::Void, Abi::Ptr, Abi::Ptr}, {reg(self), reg(addr)});
+            return addr;
+        }
+    }
     if (t->kind == TypeKind::Object &&
         (t->builtin == b_.channel() || t->builtin == b_.inputChannel())) {
         MIR_reg_t data = 0, frames = 0, spare = 0;
@@ -660,6 +677,23 @@ void Codegen::channelOf(Expr* e, MIR_reg_t& data, MIR_reg_t& frames, MIR_reg_t& 
         auto* x = static_cast<IndexExpr*>(e);
         MIR_reg_t block = aggregate(x->object);
         MIR_reg_t index = toReg(value(x->index), VK::I);
+        if (b_.isPort(x->object->type())) {
+            const bool input = x->object->type()->builtin == b_.cls("Input");
+            int offset = 0;
+            MIR_reg_t view =
+                frameSlot(input ? sizeof(S::InputChannel) : sizeof(S::Channel), 8, offset);
+            callC(input ? reinterpret_cast<void*>(&supple_script_input)
+                        : reinterpret_cast<void*>(&supple_script_output),
+                  {Abi::Void, Abi::Ptr, Abi::I32, Abi::Ptr}, {reg(block), reg(index), reg(view)});
+            // Both views begin with data_, frames_; Channel also has spare_.
+            emit(MIR_MOV, reg(data), mem(MIR_T_P, view, offsetof(S::InputChannel, data_)));
+            emit(MIR_MOV, reg(frames), mem(MIR_T_I32, view, offsetof(S::InputChannel, frames_)));
+            if (input)
+                emit(MIR_MOV, reg(spare), imm(0));
+            else
+                emit(MIR_MOV, reg(spare), mem(MIR_T_P, view, offsetof(S::Channel, spare_)));
+            return;
+        }
         fromBlock(block, index, offsetof(S::Block, data_), 0, true, false);
         return;
     }
@@ -1162,20 +1196,12 @@ MIR_op_t Codegen::intrinsic(CallExpr* c, Intrinsic which) {
             return reg(r);
         }
         case Intrinsic::ParamAt: {
-            // glide_ && (unsigned)i < glideFrames_ ? glide_[i] : value_
             MIR_reg_t p = objectAddress();
-            MIR_reg_t i = toReg(args(0), VK::I);
-            MIR_reg_t glide = ptemp(), frames = ptemp(), r = temp(VK::D);
-            MIR_label_t fallback = newLabel(), done = newLabel();
-            emit(MIR_MOV, reg(glide), mem(MIR_T_P, p, D::Layout::paramGlide));
-            emit(MIR_BF, label(fallback), reg(glide));
-            emit(MIR_MOV, reg(frames), mem(MIR_T_I32, p, D::Layout::paramGlideFrames));
-            emit(MIR_UBGE, label(fallback), reg(i), reg(frames));
-            emit(MIR_DMOV, reg(r), MIR_new_mem_op(ctx_, MIR_T_D, 0, glide, i, 8));
-            emit(MIR_JMP, label(done));
-            place(fallback);
-            emit(MIR_DMOV, reg(r), mem(MIR_T_D, p, D::Layout::paramValue));
-            place(done);
+            MIR_op_t i = args(0);
+            MIR_op_t channel = c->args.size() == 2 ? args(1) : imm(0);
+            MIR_reg_t r = temp(VK::D);
+            callC(reinterpret_cast<void*>(&supple_script_param_at),
+                  {Abi::F64, Abi::Ptr, Abi::I32, Abi::I32}, {reg(p), i, channel}, r);
             return reg(r);
         }
         case Intrinsic::ParamIndex: {
@@ -1753,6 +1779,8 @@ std::shared_ptr<const Program> Codegen::run() {
     PluginModel& model = an_.plugin;
     ProgramData& d = *program->d_;
     d.info = model.info;
+    d.moduleInfo = model.moduleInfo;
+    d.ports = model.ports;
     d.typeName = model.decl ? model.decl->name : std::string();
     d.kind = model.kind;
     d.params = model.params;
@@ -1863,7 +1891,10 @@ std::shared_ptr<const Program> Codegen::run() {
     };
     d.prepare = reinterpret_cast<Program::Hook>(hook(model.prepare));
     d.update = reinterpret_cast<Program::Hook>(hook(model.update));
-    d.process = reinterpret_cast<Program::ProcessHook>(hook(model.process));
+    if (model.kind == PluginKind::Module)
+        d.moduleProcess = reinterpret_cast<D::ModuleCode::ProcessHook>(hook(model.process));
+    else
+        d.process = reinterpret_cast<Program::ProcessHook>(hook(model.process));
     d.startVoice = reinterpret_cast<Program::VoiceHook>(hook(model.startVoice));
     d.startVoiceRetrigger = reinterpret_cast<Program::StartHook>(hook(model.startVoiceRetrigger));
     d.releaseVoice = reinterpret_cast<Program::VoiceHook>(hook(model.releaseVoice));
@@ -1911,7 +1942,15 @@ Program::VoiceHook Program::startVoice() const { return d_->startVoice; }
 Program::StartHook Program::startVoiceRetrigger() const { return d_->startVoiceRetrigger; }
 Program::VoiceHook Program::releaseVoice() const { return d_->releaseVoice; }
 Program::VoiceHook Program::stopVoice() const { return d_->stopVoice; }
-Program::UiHook Program::editor() const { return d_->editor; }
+Program::UiHook Program::editor() const {
+    return d_->kind == PluginKind::Module ? nullptr : d_->editor;
+}
+Program::UiHook Program::panel() const {
+    return d_->kind == PluginKind::Module ? d_->editor : nullptr;
+}
+const ModuleInfoModel& Program::moduleInfo() const { return d_->moduleInfo; }
+const std::vector<PortModel>& Program::ports() const { return d_->ports; }
+D::ModuleCode::ProcessHook Program::moduleProcess() const { return d_->moduleProcess; }
 Program::UiHook Program::draw() const { return d_->draw; }
 Program::UiHook Program::pointer() const { return d_->pointer; }
 
@@ -1956,6 +1995,19 @@ void* Program::create() const {
         spec.perVoice = s.perVoice;
         spec.bipolar = s.bipolar;
         new (base + s.offset) S::Source(spec);
+    }
+    for (const PortModel& port : d_->ports) {
+        S::PortSpec spec;
+        spec.output = port.output;
+        spec.signal = static_cast<S::SignalKind>(port.signal);
+        spec.normalValue = port.normal;
+        if (port.output) {
+            auto* out = new (base + port.offset) S::Output(spec);
+            D::PortBinding::setSlot(*out, port.index);
+        } else {
+            auto* in = new (base + port.offset) S::Input(spec);
+            D::PortBinding::setSlot(*in, port.index);
+        }
     }
     return self;
 }

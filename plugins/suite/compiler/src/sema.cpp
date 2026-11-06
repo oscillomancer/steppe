@@ -570,13 +570,33 @@ void Sema::layout(StructDecl* s) {
                   "hold the value itself, or an index into an Array");
             continue;
         }
+        const Type* held = ft;
+        while (held->kind == TypeKind::Array || held->kind == TypeKind::Buffer)
+            held = held->element;
+        if (b_.isPort(held)) {
+            if (s->base != PluginKind::Module || held != ft || f->isStatic)
+                error(f->loc, "script.module.port_location", "ports are direct members of a module",
+                      "declare Input or Output one by one in the struct deriving from Module");
+            if (!f->oneDeclarator)
+                error(f->loc, "script.module.port_declaration", "declare each port separately",
+                      "write Input a = audioIn(\"A\"); Input b = audioIn(\"B\");");
+        }
+        if (s->base == PluginKind::Module && b_.isSource(held))
+            error(f->loc, "script.module.source",
+                  "modules use cable inputs instead of Source members",
+                  "declare a cvIn() or unipolarIn() Input and connect it with a cable");
+        if (s->base == PluginKind::Module && b_.isFile(held))
+            error(f->loc, "script.module.file", "file members are not yet in modules",
+                  "use a plugin for AudioFile or Convolver; modules currently use cable inputs");
         if (f->isStatic) {
             if (!f->spec->isConstexpr && !f->spec->isConst) {
                 error(f->loc, "script.type.static_member",
                       "a static member would be shared by every instance of the plugin",
                       "make it a plain member, or a constant: static constexpr");
             }
-            if (!(ft->isScalar() || (ft->kind == TypeKind::Object && ft->builtin == b_.info()))) {
+            if (!(ft->isScalar() ||
+                  (ft->kind == TypeKind::Object &&
+                   (ft->builtin == b_.info() || ft->builtin == b_.cls("ModuleInfo"))))) {
                 error(f->loc, "script.type.static_member",
                       "static constexpr members are numbers (or the plugin's Info)",
                       "make it a plain member, set in prepare()");
@@ -587,10 +607,13 @@ void Sema::layout(StructDecl* s) {
             error(f->loc, "script.type.const_member", "a const member has no use in a script",
                   "make it static constexpr (a constant shared by all) or a plain member");
         }
-        if (ft->kind == TypeKind::Object && ft->builtin == b_.info()) {
-            error(f->loc, "script.plugin.info",
-                  "Info is declared static constexpr: static constexpr Info info = {...};",
-                  "static constexpr Info info = {.name = \"...\", .id = \"...\"};");
+        if (ft->kind == TypeKind::Object &&
+            (ft->builtin == b_.info() || ft->builtin == b_.cls("ModuleInfo"))) {
+            const bool module = ft->builtin == b_.cls("ModuleInfo");
+            const std::string identity = module ? "ModuleInfo" : "Info";
+            error(f->loc, module ? "script.module.info" : "script.plugin.info",
+                  identity + " is declared static constexpr",
+                  "static constexpr " + identity + " info = {.name = \"...\", .id = \"...\"};");
             continue;
         }
         if (ft->kind == TypeKind::Object && ft->builtin == b_.param() &&
@@ -701,6 +724,12 @@ void Sema::checkStructs() {
                           "a parameter is declared with its description",
                           "Param " + f->name + " = decibels(\"Gain\", -24, 24, 0);");
                 continue;  // evaluated with the plugin
+            }
+            if (b_.isPort(t)) {
+                if (!f->init)
+                    error(f->loc, "script.module.port_declaration", "a port needs its description",
+                          "Input in = audioIn(\"In\"); Output out = audioOut(\"Out\");");
+                continue;
             }
             if (Builtins::isShared(t)) {
                 if (s->base == PluginKind::None)
@@ -839,6 +868,15 @@ void Sema::signature(FunctionDecl* f) {
         const Type* t = resolve(p->spec, scope);
         p->qt = QualType{t, p->spec->isConst, p->spec->isRef};
         if (!t) continue;
+        const bool hasModule =
+            std::any_of(allStructs_.begin(), allStructs_.end(),
+                        [](const StructDecl* s) { return s->base == PluginKind::Module; });
+        if (b_.isPort(t) && !hasModule)
+            error(p->loc, "script.module.port_location", "ports belong to a Module",
+                  "plugins process a Block; modules use Input and Output members");
+        if (t->kind == TypeKind::Object && t->builtin == b_.cls("Panel") && !hasModule)
+            error(p->loc, "script.plugin.panel", "Panel is a module's layout builder",
+                  "use Editor& in a plugin's editor() hook");
         if (!p->spec->isRef && !t->isScalar() && t->kind != TypeKind::String) {
             if (t->kind == TypeKind::Object && t->builtin == b_.block())
                 error(p->loc, "script.function.parameter",
@@ -905,6 +943,11 @@ void Sema::checkLocalDecl(VarDecl* v) {
                   "write its type instead of auto, and give it a number");
             return;
         }
+        if (!spec->isRef && b_.isPort(t)) {
+            error(v->loc, "script.module.port_location", "auto would copy a module port",
+                  "refer to the module's port with auto& or const auto&");
+            return;
+        }
         if (!spec->isRef && Builtins::isShared(t)) {
             error(v->loc, "script.shared.where", "auto would copy the " + t->name + " member",
                   t->kind == TypeKind::Array ? "refer to it: const auto& " + v->name + " = ...;"
@@ -967,6 +1010,11 @@ void Sema::checkLocalDecl(VarDecl* v) {
         error(v->loc, "script.local.static", "a static local would be shared by every instance",
               "make it a member");
     if (!spec->isRef) {
+        if (b_.isPort(t)) {
+            error(v->loc, "script.module.port_location", "ports are members of the module struct",
+                  "declare an Input or Output member from a port factory; pass it by reference");
+            return;
+        }
         if (Builtins::isShared(t)) {
             error(
                 v->loc, "script.shared.where", "Shared members belong to the plugin struct",
@@ -1416,12 +1464,17 @@ void Sema::extractPlugin() {
     FieldDecl* infoField = nullptr;
     for (FieldDecl* f : s->fields)
         if (f->isStatic && f->qt.type && f->qt.type->kind == TypeKind::Object &&
-            f->qt.type->builtin == b_.info())
+            f->qt.type->builtin ==
+                (p.kind == PluginKind::Module ? b_.cls("ModuleInfo") : b_.info()) &&
+            (p.kind != PluginKind::Module || (f->name == "info" && f->spec->isConstexpr)))
             infoField = f;
     if (!infoField) {
-        error(s->loc, "script.plugin.info", s->name + " needs its identity",
-              "add  static constexpr Info info = {.name = \"" + s->name +
-                  "\", .id = \"com.example." + snakeCase(s->name) + "\"};");
+        error(s->loc, p.kind == PluginKind::Module ? "script.module.info" : "script.plugin.info",
+              s->name + " needs its identity",
+              "add  static constexpr " +
+                  std::string(p.kind == PluginKind::Module ? "ModuleInfo" : "Info") +
+                  " info = {.name = \"" + s->name + "\", .id = \"com.example." +
+                  snakeCase(s->name) + "\"};");
     } else {
         evaluateInfo(infoField);
     }
@@ -1438,12 +1491,17 @@ void Sema::extractPlugin() {
     for (size_t i = 0; i < p.params.size(); ++i) {
         const ParamModel& pm = p.params[i];
         const Loc at = p.paramFields[i]->loc;
-        if (pm.polyModulatable && p.kind != PluginKind::Instrument)
+        if (pm.polyModulatable && p.kind == PluginKind::Module)
+            error(at, "script.module.modulation",
+                  "module modulation uses polyphonic parameter cables",
+                  "drop .polyModulated() and read the module parameter with at(i, c)");
+        else if (pm.polyModulatable && p.kind != PluginKind::Instrument)
             error(at, "script.param.poly",
                   "only an instrument's parameters are modulated per voice",
                   "drop .polyModulated(), or derive from Instrument");
         if (!keys.insert(pm.key).second)
-            error(at, "script.param.key", "two parameters have the key '" + pm.key + "'",
+            error(at, p.kind == PluginKind::Module ? "script.module.key" : "script.param.key",
+                  "two parameters have the key '" + pm.key + "'",
                   "rename one, or give it a key of its own: .withKey(\"other_key\")");
         auto [it, fresh] = ids.emplace(pm.id, pm.key);
         if (!fresh)
@@ -1453,6 +1511,24 @@ void Sema::extractPlugin() {
                   "give one an explicit id: .withId(n)");
     }
     resolveActivity();
+    int inputs = 0, outputs = 0;
+    for (FieldDecl* f : s->fields) {
+        if (!b_.isPort(f->qt.type) || f->isStatic || !f->init) continue;
+        if (p.kind != PluginKind::Module) continue;
+        const size_t before = p.ports.size();
+        evaluatePort(f);
+        if (p.ports.size() == before) continue;
+        PortModel& port = p.ports.back();
+        port.index = port.output ? outputs++ : inputs++;
+        if (!keys.insert(port.key).second)
+            error(f->loc, "script.module.key",
+                  "a port or parameter already has key '" + port.key + "'",
+                  "rename this module member or give it .withKey(\"other_key\")");
+        if (port.index >= 32)
+            error(f->loc, "script.module.port_limit",
+                  "a module has at most 32 inputs and 32 outputs",
+                  "combine signals in polyphonic module ports or use another module");
+    }
     // Files.
     for (FieldDecl* f : s->fields)
         if (!f->isStatic && f->init && b_.isFile(f->qt.type)) evaluateFile(f);
@@ -1496,7 +1572,8 @@ void Sema::extractPlugin() {
         const std::string& n = f->name;
         auto expectSignature = [&](bool ok, const std::string& want) {
             if (!ok)
-                error(f->loc, "script.plugin.hook",
+                error(f->loc,
+                      p.kind == PluginKind::Module ? "script.module.hook" : "script.plugin.hook",
                       n + "() is a hook the runtime calls; declare it as " + want, want);
             return ok;
         };
@@ -1512,6 +1589,15 @@ void Sema::extractPlugin() {
         } else if (n == "update") {
             if (expectSignature(isVoid && f->params.empty() && !f->isConst, "void update()"))
                 p.update = f;
+        } else if (n == "process" && p.kind == PluginKind::Module) {
+            const bool ok = isVoid && !f->isConst && f->params.size() == 1 &&
+                            f->params[0]->qt.type == b_.intType() && !f->params[0]->qt.isRef;
+            if (!ok)
+                error(f->loc, "script.module.process",
+                      "a module processes its ports for a frame count",
+                      "declare void process(int frames), then read Input and write Output members");
+            else
+                p.process = f;
         } else if (n == "process") {
             const bool ok = isVoid && f->params.size() == 1 && f->params[0]->qt.type &&
                             f->params[0]->qt.type->kind == TypeKind::Object &&
@@ -1519,6 +1605,12 @@ void Sema::extractPlugin() {
                             f->params[0]->qt.isRef && !f->params[0]->qt.isConst && !f->isConst;
             if (expectSignature(ok, "void process(Block& io)")) p.process = f;
         } else if (n == "startVoice" || n == "releaseVoice" || n == "stopVoice") {
+            if (p.kind == PluginKind::Module) {
+                error(f->loc, "script.module.voice",
+                      "modules have polyphonic cables, not voice hooks",
+                      "use pitchIn() and gateIn() inputs and per-channel state in the module");
+                continue;
+            }
             if (p.kind != PluginKind::Instrument) {
                 error(f->loc, "script.plugin.hook",
                       n + "() is an instrument's hook, and " + s->name + " gets no notes",
@@ -1539,14 +1631,21 @@ void Sema::extractPlugin() {
                                        "void " + n + "(int v)")) {
                 (n == "releaseVoice" ? p.releaseVoice : p.stopVoice) = f;
             }
-        } else if (n == "editor" || n == "draw") {
+        } else if (n == "editor" && p.kind == PluginKind::Module) {
+            error(f->loc, "script.module.editor", "modules lay out a Panel",
+                  "declare void panel(Panel& p) to place module controls and jacks");
+        } else if (n == "editor" || n == "draw" || (n == "panel" && p.kind == PluginKind::Module)) {
             const bool isDraw = n == "draw";
-            const BuiltinClass* want = isDraw ? b_.canvas() : b_.editor();
+            const BuiltinClass* want = isDraw         ? b_.canvas()
+                                       : n == "panel" ? b_.cls("Panel")
+                                                      : b_.editor();
             const bool ok = isVoid && f->params.size() == 1 && f->params[0]->qt.type &&
                             f->params[0]->qt.type->kind == TypeKind::Object &&
                             f->params[0]->qt.type->builtin == want && f->params[0]->qt.isRef &&
                             !f->params[0]->qt.isConst && !f->isConst;
-            if (expectSignature(ok, isDraw ? "void draw(Canvas& g)" : "void editor(Editor& e)"))
+            if (expectSignature(ok, isDraw         ? "void draw(Canvas& g)"
+                                    : n == "panel" ? "void panel(Panel& p)"
+                                                   : "void editor(Editor& e)"))
                 (isDraw ? p.draw : p.editor) = f;
         } else if (n == "pointer") {
             const bool ok = isVoid && f->params.size() == 1 && f->params[0]->qt.type &&
@@ -1606,7 +1705,10 @@ void Sema::extractPlugin() {
                   "the runtime calls it when voice v's key is up: start its release there, and "
                   "call voiceFinished(v) in process() once it has died away");
     }
-    if (!p.process && p.kind != PluginKind::NoteEffect)
+    if (!p.process && p.kind == PluginKind::Module)
+        error(s->loc, "script.module.process", "a module needs void process(int frames)",
+              "read Input and write Output members for frames frames");
+    else if (!p.process && p.kind != PluginKind::NoteEffect)
         error(s->loc, "script.plugin.process", s->name + " needs  void process(Block& io)",
               p.kind == PluginKind::Effect
                   ? "io[channel][frame] holds the input; write the output in place"
@@ -1675,7 +1777,12 @@ void Sema::evaluatePatches(FunctionDecl* f) {
         for (size_t i = 1; i < chain.size(); ++i) {
             auto* set = chain[i];
             if (static_cast<MemberExpr*>(set->callee)->member == "route") {
-                evaluateRoute(set, patch, routed);
+                if (out_.plugin.kind == PluginKind::Module)
+                    error(
+                        set->loc, "script.module.route", "modules are joined by rack cables",
+                        "connect module ports or parameters with a rack cable; patches set knobs");
+                else
+                    evaluateRoute(set, patch, routed);
                 continue;
             }
             if (static_cast<MemberExpr*>(set->callee)->member == "file") {
@@ -1847,19 +1954,32 @@ void Sema::evaluateRoute(CallExpr* call, FactoryPatchModel& patch, std::set<std:
 
 void Sema::evaluateInfo(FieldDecl* f) {
     InfoModel& info = out_.plugin.info;
+    ModuleInfoModel& module = out_.plugin.moduleInfo;
+    const bool isModule = out_.plugin.kind == PluginKind::Module;
+    const std::string code = isModule ? "script.module.info" : "script.plugin.info";
+    const std::string identity = isModule ? "ModuleInfo" : "Info";
     if (!f->init || f->init->kind != ExprKind::InitList) {
-        error(f->loc, "script.plugin.info", "Info is written with designated members",
-              "static constexpr Info info = {.name = \"Tilt\", .id = \"com.example.tilt\"};");
+        error(f->loc, code, identity + " is written with designated members",
+              "static constexpr " + identity +
+                  " info = {.name = \"Tilt\", .id = \"com.example.tilt\"};");
         return;
     }
-    static const std::vector<std::string> order = {
-        "name",     "id",        "vendor",  "version", "description", "url", "features",
-        "channels", "sidechain", "outputs", "voices",  "latency",     "tail"};
+    const std::vector<std::string> order =
+        isModule
+            ? std::vector<std::string>{"name", "id",   "vendor", "version", "description",
+                                       "url",  "tags", "width",  "height"}
+            : std::vector<std::string>{"name",   "id",       "vendor",   "version",   "description",
+                                       "url",    "features", "channels", "sidechain", "outputs",
+                                       "voices", "latency",  "tail"};
     auto* list = static_cast<InitListExpr*>(f->init);
     size_t last = 0;
+    std::set<std::string> given;
     for (auto& item : list->items) {
+        if (isModule && !given.insert(item.designator).second)
+            error(item.loc, code, "a ModuleInfo member is initialized twice",
+                  "give each module identity member once");
         if (item.designator.empty()) {
-            error(item.loc, "script.plugin.info", "name each of Info's members: .name = \"...\"",
+            error(item.loc, code, "name each of Info's members: .name = \"...\"",
                   "{.name = \"Tilt\", .id = \"com.example.tilt\"}");
             continue;
         }
@@ -1867,7 +1987,7 @@ void Sema::evaluateInfo(FieldDecl* f) {
         if (pos == order.end()) {
             std::string all;
             for (const auto& o : order) all += (all.empty() ? "" : ", ") + o;
-            error(item.loc, "script.plugin.info", "Info has no member '" + item.designator + "'",
+            error(item.loc, code, "Info has no member '" + item.designator + "'",
                   "its members: " + all);
             continue;
         }
@@ -1876,7 +1996,10 @@ void Sema::evaluateInfo(FieldDecl* f) {
             error(item.loc, "script.type.designator_order",
                   "designated initializers must follow Info's order: name, id, vendor, version, "
                   "description, url, features, channels, sidechain, outputs, voices, latency, tail",
-                  "move ." + item.designator + " earlier");
+                  "move ." + item.designator + " earlier" +
+                      (isModule ? "; ModuleInfo order: name, id, vendor, version, description, "
+                                  "url, tags, width, height"
+                                : ""));
         }
         last = index;
         auto v = evaluate(item.value, out_.plugin.decl);
@@ -1884,21 +2007,26 @@ void Sema::evaluateInfo(FieldDecl* f) {
         const std::string& d = item.designator;
         auto text = [&](std::string& target) {
             if (v->kind != Constant::Kind::String) {
-                error(item.loc, "script.plugin.info", "." + d + " is text in quotes",
-                      "." + d + " = \"...\"");
+                error(item.loc, code, "." + d + " is text in quotes", "." + d + " = \"...\"");
                 return;
             }
             target = v->stringValue;
         };
         auto integer = [&](int& target) {
             if (v->kind != Constant::Kind::Int) {
-                error(item.loc, "script.plugin.info", "." + d + " is a whole number",
-                      "." + d + " = 0");
+                error(item.loc, code, "." + d + " is a whole number", "." + d + " = 0");
                 return;
             }
             target = static_cast<int>(v->intValue);
         };
-        if (d == "name")
+        if (isModule && (d == "width" || d == "height")) {
+            int& dimension = d == "width" ? module.width : module.height;
+            if (v->kind != Constant::Kind::Int || v->intValue < 0 || v->intValue > 2147483647)
+                error(item.loc, code, "a module dimension is a nonnegative int",
+                      "." + d + " = 0 for automatic layout");
+            else
+                dimension = static_cast<int>(v->intValue);
+        } else if (d == "name")
             text(info.name);
         else if (d == "id")
             text(info.id);
@@ -1912,8 +2040,7 @@ void Sema::evaluateInfo(FieldDecl* f) {
             text(info.url);
         else if (d == "sidechain") {
             if (v->kind != Constant::Kind::Bool)
-                error(item.loc, "script.plugin.info", ".sidechain is true or false",
-                      ".sidechain = true");
+                error(item.loc, code, ".sidechain is true or false", ".sidechain = true");
             info.sidechain = v->boolValue;
         } else if (d == "voices")
             integer(info.voices);
@@ -1923,28 +2050,27 @@ void Sema::evaluateInfo(FieldDecl* f) {
             integer(info.tail);
         else if (d == "channels") {
             if (v->kind != Constant::Kind::List) {
-                error(item.loc, "script.plugin.info", ".channels is a list: {2, 1}",
+                error(item.loc, code, ".channels is a list: {2, 1}",
                       ".channels = {2, 1}: stereo, else mono");
                 continue;
             }
             for (const Constant& c : v->list) {
                 if (c.kind != Constant::Kind::Int || c.intValue < 1 || c.intValue > 16) {
-                    error(item.loc, "script.plugin.info", ".channels lists bus widths from 1 to 16",
+                    error(item.loc, code, ".channels lists bus widths from 1 to 16",
                           ".channels = {2, 1}");
                     break;
                 }
                 info.channels.push_back(static_cast<int>(c.intValue));
             }
             if (info.channels.size() > 4)
-                error(item.loc, "script.plugin.info", "at most four channel layouts",
+                error(item.loc, code, "at most four channel layouts",
                       "keep the four layouts the plugin needs most");
-        } else if (d == "features") {
+        } else if (d == "features" || d == "tags") {
             // CLAP's spelling: lower case, digits and '-'. The main category
             // comes from the kind, so it is not repeated here.
             if (v->kind != Constant::Kind::List) {
-                error(item.loc, "script.plugin.info",
-                      ".features is a list of CLAP features: {\"reverb\"}",
-                      ".features = {\"reverb\"}");
+                error(item.loc, code, "." + d + " is a list of tags: {\"utility\"}",
+                      "." + d + " = {\"utility\"}");
                 continue;
             }
             for (const Constant& c : v->list) {
@@ -1953,14 +2079,14 @@ void Sema::evaluateInfo(FieldDecl* f) {
                 for (char ch : ok ? c.stringValue : std::string())
                     ok = ok && ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-');
                 if (!ok) {
-                    error(item.loc, "script.plugin.info",
-                          ".features lists CLAP features: lower case, digits and '-'",
-                          ".features = {\"reverb\", \"stereo\"}");
+                    error(item.loc, code, "." + d + " lists tags: lower case, digits and '-'",
+                          "." + d + " = {\"utility\", \"poly\"}");
                     break;
                 }
-                if (c.stringValue == "instrument" || c.stringValue == "audio-effect" ||
-                    c.stringValue == "note-effect") {
-                    error(item.loc, "script.plugin.info",
+                if (!isModule &&
+                    (c.stringValue == "instrument" || c.stringValue == "audio-effect" ||
+                     c.stringValue == "note-effect")) {
+                    error(item.loc, code,
                           "'" + c.stringValue + "' is the main category, which the kind gives",
                           "leave it out; list what the plugin is: .features = {\"reverb\"}");
                     break;
@@ -1968,32 +2094,33 @@ void Sema::evaluateInfo(FieldDecl* f) {
                 info.features.push_back(c.stringValue);
             }
             if (info.features.size() > 4)
-                error(item.loc, "script.plugin.info", "at most four features",
-                      "keep what the plugin is first, and three more");
+                error(item.loc, code, "at most four " + d,
+                      "keep the main category first and three more");
         } else if (d == "outputs") {
             if (v->kind != Constant::Kind::List) {
-                error(item.loc, "script.plugin.info",
-                      ".outputs is a list of names: {\"Kick\", \"Snare\"}",
+                error(item.loc, code, ".outputs is a list of names: {\"Kick\", \"Snare\"}",
                       ".outputs = {\"Kick\", \"Snare\"}");
                 continue;
             }
             for (const Constant& c : v->list) {
                 if (c.kind != Constant::Kind::String || c.stringValue.empty()) {
-                    error(item.loc, "script.plugin.info", ".outputs lists names in quotes",
+                    error(item.loc, code, ".outputs lists names in quotes",
                           ".outputs = {\"Kick\", \"Snare\"}");
                     break;
                 }
                 info.outputs.push_back(c.stringValue);
             }
             if (info.outputs.size() > 8)
-                error(item.loc, "script.plugin.info", "at most eight extra outputs",
+                error(item.loc, code, "at most eight extra outputs",
                       "keep eight; mix the rest into the main output");
         }
     }
     if (info.name.empty())
-        error(f->loc, "script.plugin.name", "Info needs a .name", ".name = \"My Effect\"");
+        error(f->loc, isModule ? "script.module.name" : "script.plugin.name", "Info needs a .name",
+              ".name = \"My Effect\"");
     if (info.name.size() > 63)
-        error(f->loc, "script.plugin.name", "the plugin's name is longer than 63 bytes",
+        error(f->loc, isModule ? "script.module.name" : "script.plugin.name",
+              "the plugin's name is longer than 63 bytes",
               "shorten it; .description holds the rest");
     // Reverse-DNS, as plugin formats and the framework take it: labels of
     // letters, digits and '-', two or more, joined by '.'.
@@ -2001,7 +2128,7 @@ void Sema::evaluateInfo(FieldDecl* f) {
     for (char& c : suggested)
         if (c == '_') c = '-';
     if (info.id.empty()) {
-        error(f->loc, "script.plugin.id",
+        error(f->loc, isModule ? "script.module.id" : "script.plugin.id",
               "Info needs an .id: a reverse-DNS name that identifies the plugin forever",
               ".id = \"com.yourname." + suggested + "\"");
     } else {
@@ -2011,7 +2138,7 @@ void Sema::evaluateInfo(FieldDecl* f) {
         for (char c : info.id)
             ok = ok && (std::isalnum(static_cast<unsigned char>(c)) || c == '.' || c == '-');
         if (!ok)
-            error(f->loc, "script.plugin.id",
+            error(f->loc, isModule ? "script.module.id" : "script.plugin.id",
                   "Info's .id is a reverse-DNS name: words of letters, digits and '-', joined by "
                   "'.'",
                   ".id = \"com.yourname." + suggested + "\"");
@@ -2031,18 +2158,55 @@ void Sema::evaluateInfo(FieldDecl* f) {
             }
         }
         if (!ok || !digits || parts != 2)
-            error(f->loc, "script.plugin.info", "'" + info.version + "' is not a version",
+            error(f->loc, code, "'" + info.version + "' is not a version",
                   ".version = \"1.2.0\" (major, minor, patch)");
     }
     if (info.voices < 0 || info.voices > 64)
-        error(f->loc, "script.plugin.info", ".voices is from 1 to 64 (0: the default, 8)",
-              ".voices = 8");
+        error(f->loc, code, ".voices is from 1 to 64 (0: the default, 8)", ".voices = 8");
     if (info.latency < 0)
-        error(f->loc, "script.plugin.info", ".latency cannot be negative",
+        error(f->loc, code, ".latency cannot be negative",
               ".latency = 0, or the delay the plugin adds, in samples");
     if (info.tail < -1)
-        error(f->loc, "script.plugin.info", ".tail is samples, or -1 for forever",
+        error(f->loc, code, ".tail is samples, or -1 for forever",
               ".tail = 0 (it stops with its input), the tail in samples, or -1 (it rings forever)");
+    if (isModule) {
+        module.name = info.name;
+        module.id = info.id;
+        module.vendor = info.vendor;
+        module.version = info.version;
+        module.description = info.description;
+        module.url = info.url;
+        module.tags = info.features;
+    }
+}
+
+void Sema::evaluatePort(FieldDecl* f) {
+    auto v = evaluate(f->init, out_.plugin.decl);
+    if (!v) return;
+    if (v->kind != Constant::Kind::Port) {
+        error(f->loc, "script.module.port_declaration", "a module port needs a port factory",
+              "declare Input in = audioIn(\"In\"); or Output out = audioOut(\"Out\");");
+        return;
+    }
+    PortModel port = v->port;
+    if (port.output != (f->qt.type->builtin == b_.cls("Output"))) {
+        error(f->loc, "script.module.port_direction", "the factory must match Input or Output",
+              "use a ...In factory for Input and a ...Out factory for Output");
+        return;
+    }
+    port.member = f->name;
+    port.offset = f->offset;
+    if (port.key.empty()) port.key = snakeCase(f->name);
+    if (!validKey(port.key))
+        error(f->loc, "script.module.key", "invalid module port key '" + port.key + "'",
+              "use lower case letters, digits and underscores: .withKey(\"signal_in\")");
+    if (port.name.empty() || port.name.size() > 63)
+        error(f->loc, "script.module.port_name", "a port needs a name of 1 to 63 bytes",
+              "use a short name in the module's port factory");
+    if (!std::isfinite(port.normal))
+        error(f->loc, "script.module.port_normal", "a port's normal must be finite",
+              "give .normal() a finite constant value");
+    out_.plugin.ports.push_back(std::move(port));
 }
 
 void Sema::evaluateSource(FieldDecl* f) {
@@ -3265,6 +3429,13 @@ void Sema::editorRules() {
                          static_cast<MemberExpr*>(e)->object->kind == ExprKind::This))
                         uses[field].push_back(Use{f, e->loc});
                     return true;
+                case ExprKind::Index:
+                    if (ui && b_.isPort(static_cast<IndexExpr*>(e)->object->type()))
+                        error(e->loc, "script.editor.port",
+                              "port samples belong to the module's audio code",
+                              "send what the face displays through a Shared member; panel() places "
+                              "jacks by port member");
+                    return true;
                 case ExprKind::Assign:
                     changes(static_cast<AssignExpr*>(e)->target, e->loc);
                     return true;
@@ -3328,7 +3499,8 @@ void Sema::editorRules() {
                     }
                     // A control's parameter or file, named in editor(), is
                     // not a use of it: the control finds it by name.
-                    if (c->builtinMethod && c->builtinMethod->owner == b_.editor()) {
+                    if (c->builtinMethod && (c->builtinMethod->owner == b_.editor() ||
+                                             c->builtinMethod->owner == b_.cls("Panel"))) {
                         walkExpr(c->object, visit);
                         for (size_t i = 0; i < c->args.size(); ++i) {
                             const Type* pt = i < c->builtinMethod->params.size()

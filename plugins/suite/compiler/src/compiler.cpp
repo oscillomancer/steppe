@@ -41,6 +41,37 @@ Result compile(std::string_view source, const Options& options) {
 }
 
 namespace {
+class ModuleProgram final : public script::detail::ModuleCode {
+  public:
+    explicit ModuleProgram(std::shared_ptr<const Program> p) : p_(std::move(p)) {}
+    const ModuleInfoModel& info() const override { return p_->moduleInfo(); }
+    const std::vector<ParamModel>& params() const override { return p_->params(); }
+    const std::vector<PortModel>& ports() const override { return p_->ports(); }
+    const std::vector<SharedModel>& shared() const override { return p_->shared(); }
+    const std::vector<FactoryPatchModel>& factoryPatches() const override {
+        return p_->factoryPatches();
+    }
+    void* create() const override { return p_->create(); }
+    void destroy(void* self) const override { p_->destroy(self); }
+    void copy(void* dst, const void* src) const override { p_->copy(dst, src); }
+    Hook prepare() const override { return p_->prepare(); }
+    Hook update() const override { return p_->update(); }
+    ProcessHook process() const override { return p_->moduleProcess(); }
+    UiHook panel() const override { return p_->panel(); }
+    UiHook draw() const override { return p_->draw(); }
+    UiHook pointer() const override { return p_->pointer(); }
+
+  private:
+    std::shared_ptr<const Program> p_;
+};
+}  // namespace
+
+std::shared_ptr<const script::detail::ModuleCode> moduleCode(std::shared_ptr<const Program> p) {
+    if (!p || p->kind() != PluginKind::Module) return nullptr;
+    return std::make_shared<ModuleProgram>(std::move(p));
+}
+
+namespace {
 std::string quoted(const std::string& s) {
     std::string out = "\"";
     for (char c : s) {

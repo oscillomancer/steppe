@@ -20,7 +20,7 @@ namespace supple::scriptc {
 
 // A value known at compile time.
 struct Constant {
-    enum class Kind { None, Bool, Int, Double, String, List, Spec, File, Source, Enum };
+    enum class Kind { None, Bool, Int, Double, String, List, Spec, File, Source, Port, Enum };
     Kind kind = Kind::None;
     bool boolValue = false;
     std::int64_t intValue = 0;
@@ -41,7 +41,8 @@ struct Constant {
         Loc loc;
     };
     std::vector<Condition> conditions;
-    FileModel file;      // a FileSpec under construction
+    FileModel file;  // a FileSpec under construction
+    PortModel port;
     SourceModel source;  // a SourceSpec under construction
     const Type* enumType = nullptr;
     std::string builtinEnum;  // "Curve" or "Unit" for the runtime's enums (no enumType)
@@ -176,6 +177,7 @@ class Sema {
     void checkStructs();
     void extractPlugin();
     void evaluateInfo(FieldDecl* f);
+    void evaluatePort(FieldDecl* f);
     void evaluateParam(FieldDecl* f);
     void resolveActivity();
     std::vector<std::vector<Constant::Condition>> conditions_;  // by parameter index
