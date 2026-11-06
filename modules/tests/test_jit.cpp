@@ -6,12 +6,19 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <tuple>
 
 #include "module_harness.h"
 #include "supple/rack/stock.h"
 #include "supple/script_compiler.hpp"
 #include "supple/script_program.hpp"
+
+namespace supple::script::array_test {
+#include "../../plugins/suite/compiler/tests/module_arrays.h"
+}
 
 namespace {
 namespace sd = supple::script::detail;
@@ -148,6 +155,41 @@ TEST_CASE("every stock module agrees with JIT and MIR interpreter") {
                     compiled.run(1024);
                     sameAudio(native, compiled, *jit);
                 }
+            }
+        }
+    }
+}
+
+TEST_CASE(
+    "module arrays, bit operations, gate helpers and reference arguments agree in all backends") {
+    using T = supple::script::array_test::ArrayModule;
+    const sd::NativeModuleCode<T> native(
+        {{&T::pitch, "pitch"}, {&T::enabled, "enabled"}, {&T::amount, "amount"}},
+        {{&T::signalIn, "signal_in"},
+         {&T::signalOut, "signal_out"},
+         {&T::gate, "gate"},
+         {&T::triggerOut, "trigger_out"}});
+    REQUIRE(native.valid());
+    const auto sourcePath =
+        std::filesystem::path(__FILE__).parent_path().parent_path().parent_path() /
+        "plugins/suite/compiler/tests/module_arrays.h";
+    std::ifstream in(sourcePath);
+    REQUIRE(in);
+    std::stringstream source;
+    source << in.rdbuf();
+    for (bool interpret : {false, true}) {
+        auto result = supple::scriptc::compile(source.str(), {.interpret = interpret});
+        REQUIRE_MESSAGE(result.program, supple::scriptc::toText(result.diagnostics));
+        auto jit = supple::scriptc::moduleCode(result.program);
+        sameDescription(native, *jit);
+        for (int channels : {1, 4}) {
+            ModuleHarness a(native), b(*jit);
+            for (int stage = 0; stage < 3; ++stage) {
+                drive(a, native, channels, stage);
+                drive(b, *jit, channels, stage);
+                a.run(1024);
+                b.run(1024);
+                sameAudio(a, b, *jit);
             }
         }
     }

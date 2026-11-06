@@ -115,7 +115,8 @@ class Sema {
 
     // Types.
     const Type* resolve(TypeSpec* spec, StructDecl* scope, bool allowVoid = false);
-    const Type* arrayType(const Type* element, int count, bool shared = false);
+    const Type* arrayType(const Type* element, int count, bool shared = false,
+                          const std::string& members = {});
     const Type* bufferType(const Type* element);
     StructDecl* findStruct(const std::string& name, StructDecl* scope) const;
     EnumDecl* findEnum(const std::string& name, StructDecl* scope) const;
@@ -179,6 +180,7 @@ class Sema {
     void evaluateInfo(FieldDecl* f);
     void evaluatePort(FieldDecl* f);
     void evaluateParam(FieldDecl* f);
+    std::string paramMember(Expr* e);
     void resolveActivity();
     std::vector<std::vector<Constant::Condition>> conditions_;  // by parameter index
     void evaluateFile(FieldDecl* f);

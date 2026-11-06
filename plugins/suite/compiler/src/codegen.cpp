@@ -71,6 +71,11 @@ extern "C" void supple_script_input(const S::Input* p, int c, S::InputChannel* o
     *out = (*p)[c];
 }
 extern "C" void supple_script_output(const S::Output* p, int c, S::Channel* out) { *out = (*p)[c]; }
+extern "C" void supple_script_reset_param(S::Param* p, double* spare) { D::resetMember(*p, spare); }
+extern "C" void supple_script_reset_input(S::Input* p, double* spare) { D::resetMember(*p, spare); }
+extern "C" void supple_script_reset_output(S::Output* p, double* spare) {
+    D::resetMember(*p, spare);
+}
 extern "C" int supple_script_round(double x) { return S::roundToInt(x); }
 extern "C" void supple_script_resize_d(void* b, int n) {
     static_cast<S::Buffer<double>*>(b)->resize(n);
@@ -299,7 +304,7 @@ class Codegen {
     MIR_op_t comparison(const std::string& op, const Type* t, MIR_op_t a, MIR_op_t b);
     Place checkedElement(MIR_reg_t base, MIR_reg_t index, int count, MIR_reg_t countReg,
                          int elementSize, MIR_reg_t spare, const Type* elementType, int line,
-                         bool clearSpare);
+                         bool clearSpare, bool members = false);
     void channelOf(Expr* blockOrChannel, MIR_reg_t& data, MIR_reg_t& frames, MIR_reg_t& spare);
     Place channelElement(Expr* indexExpr, bool clearSpare);
     void initialize(MIR_reg_t address, const Type* t, Expr* init, int line);
@@ -480,7 +485,7 @@ Codegen::Place Codegen::placeOf(Expr* e) {
                 emit(MIR_ADD, reg(spare), reg(addr),
                      imm(static_cast<std::int64_t>(ot->count) * ot->element->size));
                 return checkedElement(addr, index, ot->count, 0, ot->element->size, spare,
-                                      ot->element, x->loc.line, true);
+                                      ot->element, x->loc.line, true, ot->members);
             }
             if (ot->kind == TypeKind::Buffer) {
                 Place base = placeOf(x->object);
@@ -628,7 +633,8 @@ void Codegen::initialize(MIR_reg_t address, const Type* t, Expr* init, int line)
 // first when trivially copyable), and the line reported.
 Codegen::Place Codegen::checkedElement(MIR_reg_t base, MIR_reg_t index, int count,
                                        MIR_reg_t countReg, int elementSize, MIR_reg_t spare,
-                                       const Type* elementType, int line, bool clearSpare) {
+                                       const Type* elementType, int line, bool clearSpare,
+                                       bool members) {
     MIR_reg_t addr = ptemp();
     MIR_label_t bad = newLabel(), done = newLabel();
     if (count >= 0)
@@ -642,7 +648,17 @@ Codegen::Place Codegen::checkedElement(MIR_reg_t base, MIR_reg_t index, int coun
     place(bad);
     callC(reinterpret_cast<void*>(&supple_script_oob), {Abi::Void, Abi::I32}, {imm(line)});
     emit(MIR_MOV, reg(addr), reg(spare));
-    if (clearSpare && triviallyCopyable(elementType)) initialize(addr, elementType, nullptr, line);
+    if (members) {
+        MIR_reg_t sample = ptemp();
+        emit(MIR_ADD, reg(sample), reg(spare), imm(elementType->size));
+        void* reset = elementType->builtin == b_.param()
+                          ? reinterpret_cast<void*>(&supple_script_reset_param)
+                      : elementType->builtin == b_.cls("Input")
+                          ? reinterpret_cast<void*>(&supple_script_reset_input)
+                          : reinterpret_cast<void*>(&supple_script_reset_output);
+        callC(reset, {Abi::Void, Abi::Ptr, Abi::Ptr}, {reg(spare), reg(sample)});
+    } else if (clearSpare && triviallyCopyable(elementType))
+        initialize(addr, elementType, nullptr, line);
     place(done);
     return Place{false, addr, 0};
 }
@@ -1793,6 +1809,7 @@ std::shared_ptr<const Program> Codegen::run() {
     d.objects = model.objects;
     d.initial = model.initial;
     d.paramSlots = model.paramSlots;
+    d.memberSpares = model.memberSpares;
     d.sourceSlots = model.sourceSlots;
     d.interpreted = options_.interpret;
 
@@ -2007,6 +2024,22 @@ void* Program::create() const {
         } else {
             auto* in = new (base + port.offset) S::Input(spec);
             D::PortBinding::setSlot(*in, port.index);
+        }
+    }
+    for (const MemberSpare& slot : d_->memberSpares) {
+        double* sample = reinterpret_cast<double*>(base + slot.offset + slot.cls->type->size);
+        if (slot.cls == Builtins::get().param()) {
+            auto* p =
+                new (base + slot.offset) S::Param(*reinterpret_cast<S::Param*>(base + slot.first));
+            D::resetMember(*p, sample);
+        } else if (slot.cls == Builtins::get().cls("Input")) {
+            auto* p =
+                new (base + slot.offset) S::Input(*reinterpret_cast<S::Input*>(base + slot.first));
+            D::resetMember(*p, sample);
+        } else {
+            auto* p = new (base + slot.offset)
+                S::Output(*reinterpret_cast<S::Output*>(base + slot.first));
+            D::resetMember(*p, sample);
         }
     }
     return self;

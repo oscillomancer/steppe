@@ -19,6 +19,7 @@
 #include <cstring>
 #include <new>
 #include <set>
+#include <string>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -358,6 +359,34 @@ template class Buffer<float>;
 template class Buffer<int>;
 
 // --- parameters ----------------------------------------------------------------
+
+namespace detail {
+namespace {
+template <class T, class Spec>
+T numbered(const Spec& spec, int index) {
+    const std::string suffix = std::to_string(index + 1);
+    const std::string name = std::string(spec.name ? spec.name : "") + " " + suffix;
+    const std::string key = spec.key && *spec.key ? std::string(spec.key) + "_" + suffix : "";
+    Spec element = spec;
+    element.name = name.c_str();
+    element.key = key.c_str();
+    return T(element);
+}
+}  // namespace
+Param numberedParam(const ParamSpec& s, int i) { return numbered<Param>(s, i); }
+Input numberedInput(const PortSpec& s, int i) { return numbered<Input>(s, i); }
+Output numberedOutput(const PortSpec& s, int i) { return numbered<Output>(s, i); }
+void resetMember(Param& p, double*) { ParamBinding::reset(p); }
+void resetMember(Input& p, double*) {
+    PortBinding::bindInput(p, nullptr, nullptr, 0, 0, 0);
+    PortBinding::setSlot(p, -1);
+}
+void resetMember(Output& p, double* spare) {
+    *spare = 0.0;
+    PortBinding::bindOutput(p, nullptr, spare, 0, 1, 0);
+    PortBinding::setSlot(p, -1);
+}
+}  // namespace detail
 
 Param::Param(const ParamSpec& spec) {
     value_ = spec.def;

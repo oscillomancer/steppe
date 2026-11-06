@@ -20,6 +20,7 @@
 #include <initializer_list>
 #include <new>
 #include <type_traits>
+#include <utility>
 
 namespace supple::script {
 
@@ -1105,6 +1106,81 @@ class Output {
     int frames_ = 0;
     int slot_ = -1;
 };
+
+namespace detail {
+// Construction runs only on the main thread, with a registrar installed.
+Param numberedParam(const ParamSpec& spec, int index);
+Input numberedInput(const PortSpec& spec, int index);
+Output numberedOutput(const PortSpec& spec, int index);
+// An invalid declaration-array access uses a disconnected, zero-valued
+// spare; resetting it never registers, allocates or follows a stale binding.
+void resetMember(Param& p, double* spare);
+void resetMember(Input& p, double* spare);
+void resetMember(Output& p, double* spare);
+
+template <class T, class Spec, int N>
+class Members {
+    static_assert(N > 0, "a declaration array needs a positive size");
+    static_assert(N <= (std::is_same_v<T, Param> ? 256 : 32), "too many declarations");
+    template <std::size_t... I>
+    Members(const Spec& spec, std::index_sequence<I...>)
+        : items_{make(spec, static_cast<int>(I))...}, spare_(items_[0]) {
+        resetMember(spare_, &spareSample_);
+    }
+    template <std::size_t... I>
+    Members(const Members& other, std::index_sequence<I...>)
+        : items_{other.items_[I]...}, spare_(items_[0]) {
+        resetMember(spare_, &spareSample_);
+    }
+    static T make(const Spec& spec, int i) {
+        if constexpr (std::is_same_v<T, Param>)
+            return numberedParam(spec, i);
+        else if constexpr (std::is_same_v<T, Input>)
+            return numberedInput(spec, i);
+        else
+            return numberedOutput(spec, i);
+    }
+
+  public:
+    Members(const Spec& spec) : Members(spec, std::make_index_sequence<N>{}) {}
+    Members(const Members& other) : Members(other, std::make_index_sequence<N>{}) {}
+    Members& operator=(const Members& other) {
+        if (this != &other) {
+            for (int i = 0; i < N; ++i) items_[i] = other.items_[i];
+            resetMember(spare_, &spareSample_);
+        }
+        return *this;
+    }
+    T& operator[](int i) {
+        if (static_cast<unsigned>(i) < static_cast<unsigned>(N)) return items_[i];
+        outOfRange(0);
+        resetMember(spare_, &spareSample_);
+        return spare_;
+    }
+    const T& operator[](int i) const { return const_cast<Members&>(*this)[i]; }
+    static constexpr int size() { return N; }
+    T* begin() { return items_; }
+    T* end() { return items_ + N; }
+    const T* begin() const { return items_; }
+    const T* end() const { return items_ + N; }
+
+  private:
+    T items_[N];
+    T spare_;
+    double spareSample_ = 0.0;
+};
+}  // namespace detail
+
+// Module declarations replicated from one spec. Each element is an ordinary
+// Param/Input/Output in the module's metadata. Index 0 is displayed as 1;
+// names are "Name 1".."Name N", keys "member_1".."member_N". withKey()
+// changes the key stem. Declare one bank per line, directly in a Module.
+template <int N>
+using Params = detail::Members<Param, ParamSpec, N>;
+template <int N>
+using Inputs = detail::Members<Input, PortSpec, N>;
+template <int N>
+using Outputs = detail::Members<Output, PortSpec, N>;
 
 // What every module struct derives from. channels() is its polyphony: the
 // widest connected input or modulating cable, at least 1.

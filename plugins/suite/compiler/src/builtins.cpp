@@ -322,7 +322,8 @@ bool Builtins::reserved(const std::string& name) const {
     return byName_.count(name) || classByName_.count(name) || enumByName_.count(name) ||
            constants_.count(name) || factories.count(name) || name == "pi" || name == "twoPi" ||
            name == "Array" || name == "Buffer" || name == "Unit" || name == "Curve" ||
-           name == "Shared" || name == "SharedArray";
+           name == "Shared" || name == "SharedArray" || name == "Params" || name == "Inputs" ||
+           name == "Outputs";
 }
 
 const BuiltinClass* Builtins::shared(const Type* value) const {

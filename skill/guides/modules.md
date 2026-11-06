@@ -50,7 +50,8 @@ gets an id of its own.
 ## Ports and signals
 
 Declare each `Input` or `Output` separately as a direct member of the
-module struct. No arrays of ports or ports inside helper structs.
+module struct. For repeated declarations use `Inputs<N>` or `Outputs<N>`
+(see Declaration arrays); no C arrays or ports inside helper structs.
 
 | Input factory | Output factory | Convention |
 |---|---|---|
@@ -120,6 +121,46 @@ the moved value stays in the parameter's range. Toggles take no cables.
 Read `at(i, c)` where a cable should move DSP per frame: a level, cutoff
 or rate. `update()` follows knob changes; it is not called per cable sample.
 
+## Declaration arrays
+
+`Params<N>`, `Inputs<N>` and `Outputs<N>` replicate one factory spec, as
+direct members of `Module`, one declaration per line:
+
+```cpp
+Params<16> stepPitch = semitones("Pitch", -24, 24, 0).help("The step's pitch.");
+Inputs<4> audio = audioIn("In").normal(0.0).in("Inputs");
+Outputs<4> out = audioOut("Out").in("Outputs");
+```
+
+`N` is a positive literal or `constexpr int`. Each bank has `.size()` and
+zero-based indexing by a runtime `int`: `stepPitch[0].at(i, c)`,
+`audio[p][c][i]`, `out[p][c][i] = x`. Range-based `for` accepts references
+to its elements. Do not copy or assign a whole bank in a script; helpers
+can take a bank or element by reference.
+
+An element is an ordinary parameter or port in the rack: its display name
+is `"Pitch 1"` through `"Pitch 16"`, and its key is the member's snake_case
+name plus `_1` through `_16` (`step_pitch_1`, `step_pitch_16`). Display
+names never determine keys, in either the JIT or the native stock build.
+`.withKey("note")` changes the stem to `note_1` ... `note_16`; other spec
+modifiers apply to every element. Each parameter ID is derived from its
+complete element key; `.withId()` is refused on a bank. Names including
+the numeric suffix fit the usual 63-byte limit.
+
+A module has at most **256 parameters total**, including every array
+element, and **32 inputs and 32 outputs total**. Keys of scalar and array
+elements share the same namespace. The automatic layout uses the flattened
+declarations without special handling.
+
+Outside `0 .. size()-1`, an access reports an out-of-range fault and returns
+a reset spare: parameter values read 0, input samples read 0, output writes
+are discarded. Subsequent port/channel/frame bounds checks still report
+faults as usual. No allocation or registration occurs during indexing.
+
+Factory patches can `.set(stepPitch[0], 7)`, and activity modifiers can
+name an element (`.activeWhen(enabled[0])`); these declaration-time indices
+must be constant. In `process()`, use runtime indices freely.
+
 ## Bit operations and gates
 
 Use `shl(x, n)`, `shr(x, n)`, `bit(x, n)` and `popcount(x)` on `int`s.
@@ -137,12 +178,49 @@ between. `t.high()` reads its state; `t.clear()` returns it low.
 sample rate, rounded up to a whole frame (45 frames at 44.1 kHz).
 `p.fire(frames)` chooses an explicit length; zero or negative clears it.
 Each `p.next()` returns 1 while consuming a frame, then 0; `p.clear()`
-clears it. Both are small, copyable value types. Keep one per channel in
-`Array<Trigger, 16>` and `Array<Pulse, 16>`.
+clears it. Both are small, copyable value types. Keep one per channel:
+
+```cpp
+#include <supple/script.h>
+
+struct Steps : Module {
+    static constexpr ModuleInfo info = {
+        .name = "Steps", .id = "com.example.steps", .tags = {"sequencer"}};
+    Params<4> notes = semitones("Pitch", -24, 24, 0).help("Each step's pitch.");
+    Input clock = gateIn("Clock").help("A rising edge advances one step.");
+    Outputs<2> pitch = pitchOut("Pitch").help("The current pitch, in octaves.");
+    Output gate = gateOut("Gate").help("A 1 ms pulse on each step.");
+    Array<Trigger, 16> edge;
+    Array<Pulse, 16> pulse;
+    Array<int, 16> step;
+
+    void prepare() { step.fill(-1); }
+    void write(Param& note, Output& port, int c, int i) {
+        port[c][i] = note.at(i, c) / 12.0;
+    }
+    void process(int frames) {
+        for (int c = 0; c < channels(); ++c)
+            for (int i = 0; i < frames; ++i) {
+                if (edge[c].rose(clock[c][i])) {
+                    step[c] = imod(step[c] + 1, notes.size());
+                    pulse[c].fire();
+                }
+                for (int p = 0; p < pitch.size(); ++p)
+                    write(notes[max(0, step[c])], pitch[p], c, i);
+                gate[c][i] = pulse[c].next();
+            }
+    }
+    void factoryPatches(Patches& p) {
+        p.add("Up").set(notes[0], 0).set(notes[1], 4).set(notes[2], 7).set(notes[3], 12);
+    }
+};
+```
 
 Member and free helper functions may take `const Input&`, `Output&`,
-`Param&` or `const Param&`, preserving the member's host binding and the
-ordinary audio/UI and evaluation-order checks.
+`Param&` or `const Param&`. These refer to the actual member or array
+element, preserving its host binding. Parameters remain read-only values:
+a reference does not permit assigning a `Param`. Existing audio/UI context
+and evaluation-order rules apply to helpers and their calls.
 
 ## Hooks and the rack's grid
 
@@ -236,7 +314,7 @@ codes and give a hint naming the module way. Plugins in turn cannot use
 module ports, `Panel`, `at(i, c)`, `transport()` or `seed()`.
 
 Stock modules follow `modules/AGENTS.md`: original MIT code, one
-`stock/<name>.cpp`, matching member and display names or explicit keys,
+`stock/<name>.cpp`, permanent member-derived keys (or explicit keys),
 help on every port and parameter, musical defaults, grouped controls,
 smoothing on audio levels. Gate inputs use hysteresis (rise at ≥0.5,
 fall below 0.25); trigger outputs stay high for 1 ms. Keep per-channel

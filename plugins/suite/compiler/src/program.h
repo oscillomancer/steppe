@@ -28,6 +28,7 @@ struct ProgramData {
     int size = 0, align = 8;
     std::vector<ObjectSlot> objects;
     std::vector<InitialValue> initial;
+    std::vector<MemberSpare> memberSpares;
     std::vector<ParamSlot> paramSlots;
     std::vector<SourceSlot> sourceSlots;
     Program::Hook prepare = nullptr, update = nullptr;
