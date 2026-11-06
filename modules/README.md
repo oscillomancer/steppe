@@ -51,6 +51,7 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `phasor` | A phase generator: a 0..1 ramp at the pitch with skew, offset, sync and a wrap trigger, poly |
 | `shaper` | Phase in, wave out by a curve (sine, triangle, saw, pulse, smooth step, window) with skew and fold: phase distortion by cables, poly |
 | `harmonic` | An additive oscillator, up to 32 partials: brightness, odd/even, stretch, a spectral comb that sweeps; odd and even outputs, never aliases, poly |
+| `drive` | A distortion with seven curves (soft, tube, hard clip, fold, rectify, bitcrush, downsample): drive, bias, tone, mix, 4x oversampled, poly |
 
 ### Modulation, sequencing, generative and utilities
 
