@@ -449,7 +449,7 @@ TEST_CASE("TCP: a selection survives a right-click; Delete removes all of it in 
     ui::Node* m = f.root->find(menu);
     REQUIRE(m);
     const auto before = f.history();
-    const ui::Point del{m->bounds().x + 40, m->bounds().y + 8 * 26 + 13};  // Delete
+    const ui::Point del{m->bounds().x + 40, m->bounds().y + 10 * 26 + 13};  // Delete
     f.pointer(Pointer::Move, del);
     f.pointer(Pointer::Down, del);
     f.pointer(Pointer::Up, del);
@@ -498,7 +498,8 @@ TEST_CASE("TCP: the right-click menu renames, colours and deletes a track (one u
         f.root->frame(false);
     };
     // Menu rows are 26 px: Rename, Color…, Timebase…, Freeze, Channels…,
-    // Groups…, (separator), Duplicate, Delete.
+    // Groups…, (separator), [Show rack], Add rack, (separator), Duplicate,
+    // Delete.
     auto pickRow = [&](const std::string& menu, int index) {
         ui::Node* m = f.root->find(menu);
         REQUIRE(m);
@@ -548,10 +549,33 @@ TEST_CASE("TCP: the right-click menu renames, colours and deletes a track (one u
     pickRow("track.channels." + f.a.str(), 2);
     CHECK(f.app->head().tracks.find(f.a)->channels == 4);
     CHECK(f.history() == before + 1);
+    // A channel's racks (ADR-0062): Add rack, then Show rack and Add another.
+    std::vector<std::string> added, shown;
+    auto record = [](std::vector<std::string>& into) {
+        return [&into](const json::Value& v) -> Status {
+            into.push_back(v.asString());
+            return {};
+        };
+    };
+    f.actions->addUi("ui.rack.add", "Racks: add rack", "track", record(added));
+    f.actions->addUi("ui.rack.show", "Racks: show rack", "track", record(shown));
+    rightClick();
+    pickRow(menu, 7);
+    CHECK(added == std::vector<std::string>{f.a.str()});
+    json::Value rack = json::Value::object();
+    rack["track"] = f.a.str();
+    f.exec("rack.add", std::move(rack));
+    f.sync();
+    rightClick();
+    pickRow(menu, 7);
+    CHECK(shown == std::vector<std::string>{f.a.str()});
+    rightClick();
+    pickRow(menu, 8);
+    CHECK(added == std::vector<std::string>{f.a.str(), f.a.str()});
     // Delete removes it.
     before = f.history();
     rightClick();
-    pickRow(menu, 8);
+    pickRow(menu, 11);
     CHECK_FALSE(f.app->head().tracks.find(f.a));
     CHECK(f.history() == before + 1);
 }

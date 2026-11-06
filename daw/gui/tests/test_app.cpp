@@ -2165,9 +2165,10 @@ TEST_CASE("the TCP's input menu lists the device's ports and picks one (P5.13)")
     CHECK(inputButton()->valueText() == "in \u2014");  // nothing chosen yet
     // The strip shows the port names; a narrow strip clips the tail, so the
     // name is a prefix (the menu shows them whole).
+    // After the ports: a separator and "New rack on this channel".
     ui::List* menu = openMenu();
     REQUIRE(menu);
-    CHECK(menu->count() == 9);
+    CHECK(menu->count() == 11);
     menu->onActivate(1);                      // "in 2" -> record_input [2]
     CHECK(a.root->find("popup") == nullptr);  // it closed
     shell.sync();
@@ -2203,12 +2204,35 @@ TEST_CASE("the TCP's input menu lists the device's ports and picks one (P5.13)")
     running = false;
     menu = openMenu();
     REQUIRE(menu);
-    CHECK(menu->count() == 1);
+    CHECK(menu->count() == 3);
     menu->onActivate(0);
     shell.sync();
     a.root->frame(false);
     REQUIRE(inputButton());
     CHECK(inputButton()->valueText().rfind("Keystat", 0) == 0);  // unchanged
+    // A rack's Out module is listed whatever the device, "<rack> › <Out>",
+    // and picked as the channel's input (ADR-0062).
+    json::Value rack = json::Value::object();
+    rack["name"] = "Bells";
+    auto made = a.dispatcher->execute({"rack.add", std::move(rack), ui});
+    REQUIRE(made);
+    const model::Id out = *model::Id::parse((*made)["out"].asString());
+    a.root->closePopups();
+    shell.sync();
+    a.root->frame(false);
+    menu = openMenu();
+    REQUIRE(menu);
+    REQUIRE(menu->count() == 4);
+    menu->onActivate(2);
+    shell.sync();
+    a.root->frame(false);
+    tr = a.app->head().tracks.find(id);
+    REQUIRE(tr->record.input);
+    route = a.app->head().routes.find(*tr->record.input);
+    REQUIRE(route);
+    CHECK(route->from.module == out);
+    REQUIRE(inputButton());
+    CHECK(shell.inputLabel(id) == "Bells \u203a " + model::moduleLabel(a.app->head(), out));
     // Detach the shell's tree while the shell (and the meter feed it holds a
     // reference to) is still alive: its rows release their meters on the way
     // out.

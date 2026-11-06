@@ -119,6 +119,16 @@ void TrackMenu::open(const model::Id& track, const ui::Rect& anchor,
         openGroups(std::move(selected), anchor);
     };
     items.push_back(std::move(m));
+    // A channel's racks (ADR-0062): the window on its first, or a new one.
+    if (action && app.head().tracks.find(track)->type == model::StripType::Channel) {
+        bool hasRack = false;
+        for (const auto& e : app.head().racks) hasRack = hasRack || e.value->track == track;
+        items.push_back({"", "", {}, true, true});
+        if (hasRack)
+            items.push_back({"Show rack", "", [this, track] { action("ui.rack.show", track); }});
+        items.push_back({hasRack ? "Add another rack" : "Add rack", "",
+                         [this, track] { action("ui.rack.add", track); }});
+    }
     items.push_back({"", "", {}, true, true});  // separator
     // Duplicate and Delete: the whole selection when the track is part of it.
     std::vector<std::string> doomed{track.str()};

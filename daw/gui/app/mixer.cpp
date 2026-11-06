@@ -668,6 +668,14 @@ Mixer::Mixer(ui::Root& root, AppActions& actions, cmd::Dispatcher& dispatcher,
                  [this] { return actions_.ui().selectedTracks; },
                  [this](std::vector<std::string> tracks) {
                      actions_.ui().selectedTracks = std::move(tracks);
+                 },
+                 [this](const char* id, const model::Id& track) {
+                     const actions::Action* a = actions_.registry().find(id);
+                     if (!a) return;
+                     json::Value args = json::Value::object();
+                     args["track"] = track.str();
+                     if (auto r = actions_.run(*a, args); !r && actions_.onError)
+                         actions_.onError(r.error().message);
                  }} {
     actions_.addUi("ui.mixer", "View: mixer", [this] { toggle(); });
 }
