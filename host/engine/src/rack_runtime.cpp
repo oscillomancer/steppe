@@ -143,6 +143,67 @@ void ProbeModule::process(const rack::HostContext& ctx) SUPPLE_RT {
     }
 }
 
+std::shared_ptr<const rack::ModuleType> captureModuleType() {
+    static const auto t = [] {
+        sd::ModuleInfoModel info;
+        info.name = "Capture";
+        info.id = std::string(kCaptureModule);
+        info.vendor = "Supple Audio";
+        info.description = "rack.capture's listener.";
+        sd::ParamModel velocity;
+        velocity.key = velocity.member = "use_velocity";
+        velocity.name = "Use velocity";
+        velocity.min = 0;
+        velocity.max = 1;
+        velocity.def = 0;
+        std::vector<sd::PortModel> ports(3);
+        const char* const keys[] = {"pitch", "gate", "velocity"};
+        const char* const names[] = {"Pitch", "Gate", "Velocity"};
+        const sd::PortModel::Signal signals[] = {sd::PortModel::Signal::Pitch,
+                                                 sd::PortModel::Signal::Gate,
+                                                 sd::PortModel::Signal::Unipolar};
+        for (int k = 0; k < 3; ++k) {
+            ports[k].key = ports[k].member = keys[k];
+            ports[k].name = names[k];
+            ports[k].signal = signals[k];
+            ports[k].index = k;
+        }
+        return rack::ModuleType::host(std::move(info), {velocity}, std::move(ports));
+    }();
+    return t;
+}
+
+void CaptureModule::process(const rack::HostContext& ctx) SUPPLE_RT {
+    const script::Input& pitch = ctx.instance->inputMember(0);
+    const script::Input& gate = ctx.instance->inputMember(1);
+    const script::Input& velocity = ctx.instance->inputMember(2);
+    const bool useVelocity = ctx.instance->param(0) >= 0.5 && velocity.connected();
+    const int voices = std::min(gate.channels(), kCaptureVoices);
+    const int pitches = std::max(pitch.channels(), 1),
+              velocities = std::max(velocity.channels(), 1);
+    for (int i = 0; i < ctx.frames; ++i)
+        for (int c = 0; c < voices; ++c) {
+            const double g = gate[c][i];
+            const bool rise = !on_[static_cast<std::size_t>(c)] && g >= 0.5;
+            const bool fall = on_[static_cast<std::size_t>(c)] && g < 0.25;
+            if (!rise && !fall) continue;
+            on_[static_cast<std::size_t>(c)] = rise;
+            if (events.size() == events.capacity()) {
+                full = true;
+                continue;
+            }
+            Event e;
+            e.frame = frames + i;
+            e.voice = c;
+            e.on = rise;
+            e.pitch = static_cast<float>(pitch[std::min(c, pitches - 1)][i]);
+            e.velocity =
+                useVelocity ? static_cast<float>(velocity[std::min(c, velocities - 1)][i]) : -1.0f;
+            events.push_back(e);
+        }
+    frames += ctx.frames;
+}
+
 std::shared_ptr<const rack::Catalog> builtinModuleCatalog() {
     static const std::shared_ptr<const rack::Catalog> catalog = [] {
         auto c = std::make_shared<rack::Catalog>();
@@ -202,6 +263,8 @@ rack::Instance* RackPool::get(Id id, const model::RackModule& module,
                 ? rack::Instance::make(type->type, std::make_unique<PluginModule>(), setup)
             : module.type == kProbeModule
                 ? rack::Instance::make(type->type, std::make_unique<ProbeModule>(), setup)
+            : module.type == kCaptureModule
+                ? rack::Instance::make(type->type, std::make_unique<CaptureModule>(), setup)
                 : rack::host::make(type->type, setup);
         if (!made) return nullptr;  // a host type this engine does not make here
         it = modules_
@@ -214,6 +277,8 @@ rack::Instance* RackPool::get(Id id, const model::RackModule& module,
         probe->reserve(
             static_cast<std::size_t>(std::ceil(it->second.instance->param(0) * setup.sampleRate)) +
             rack::kGrid);
+    if (auto* capture = dynamic_cast<CaptureModule*>(it->second.instance->host()))
+        capture->reserve();
     return it->second.instance.get();
 }
 

@@ -9,6 +9,7 @@
 #include <cmath>
 #include <set>
 
+#include "command_validation.h"
 #include "rack_runtime.h"
 #include "supple/engine/app.h"
 #include "supple/engine/offline.h"
@@ -27,6 +28,12 @@ using model::Id;
 namespace sd = script::detail;
 
 json::Value j(std::string_view text) { return json::parse(text).value(); }
+
+struct CaptureArgs {
+    std::string rack, pitch, gate, track;
+    std::optional<std::string> velocity, notes, name;
+    std::optional<double> beats, fromBeat, at, quantize;
+};
 
 struct ProbeArgs {
     std::string rack;
@@ -232,9 +239,68 @@ json::Value describe(const std::vector<std::vector<double>>& voices, int width,
     return out;
 }
 
+// `text` as an output of a module in `rack`: the end and its port.
+Result<std::pair<model::CableEnd, const sd::PortModel*>> outputEnd(EngineApp& e,
+                                                                   const model::Session& s, Id rack,
+                                                                   const std::string& text,
+                                                                   const std::string& path,
+                                                                   const char* code) {
+    const auto end = model::CableEnd::parse(text);
+    const model::RackModule* m = end ? s.modules.find(end->object) : nullptr;
+    if (!m || m->rack != rack)
+        return Error(code, text + " is not a module of " + rack.str(), path,
+                     "rack.get lists its modules");
+    const auto* type = e.modules()->find(m->type);
+    const int output = type ? type->type->output(end->key) : -1;
+    if (output < 0) {
+        std::string keys;
+        if (type)
+            for (int o : type->type->outputs())
+                keys += (keys.empty() ? "" : ", ") +
+                        type->type->ports()[static_cast<std::size_t>(o)].key;
+        return Error(code, text + " is not an output", path,
+                     keys.empty() ? "module.describe lists outputs"
+                                  : end->object.str() + " has outputs " + keys);
+    }
+    return std::pair{*end, &type->type->output(output)};
+}
+
+// Items on the tracks the rack's Notes modules play, holding `notes`
+// (notation) from `fromBeat`: what rack.probe and rack.capture play.
+Status addNotes(model::EditTxn& t, const model::Session& s, Id rack, const std::string& notes,
+                double fromBeat) {
+    auto midi = notationSource(s, notes, fromBeat);
+    if (!midi) {
+        Error err = std::move(midi).error();
+        err.path = "/notes";
+        return err;
+    }
+    std::set<Id> tracks;
+    for (const auto& m : s.modules)
+        if (m.value->rack == rack && m.value->type == model::kNotesModule)
+            tracks.insert(m.value->source.value_or(s.racks.find(rack)->track));
+    for (Id track : tracks) {
+        const Id source = t.create(midi->first);
+        model::Take take;
+        take.source = source;
+        const Id tk = t.create(take);
+        model::Item item;
+        item.track = track;
+        item.position = fromBeat;
+        item.length = std::max(midi->second, 1e-3);
+        item.takes = {tk};
+        item.activeTake = tk;
+        t.create(item);
+    }
+    return {};
+}
+
 }  // namespace
 
+void registerRackCapture(cmd::Registry& registry);
+
 void registerRackProbe(cmd::Registry& registry) {
+    registerRackCapture(registry);
     Command<ProbeArgs, json::Value> c;
     c.name = "rack.probe";
     c.kind = Kind::Query;
@@ -279,24 +345,9 @@ void registerRackProbe(cmd::Registry& registry) {
         model::EditTxn t(s, s.version + 1);
         std::vector<std::pair<Id, const sd::PortModel*>> probes;
         for (std::size_t k = 0; k < a.ports.size(); ++k) {
-            const std::string path = "/ports/" + std::to_string(k);
-            const auto end = model::CableEnd::parse(a.ports[k]);
-            const model::RackModule* m = end ? s.modules.find(end->object) : nullptr;
-            if (!m || m->rack != *rack)
-                return Error("rack.port", a.ports[k] + " is not a module of " + a.rack, path,
-                             "rack.get lists its modules");
-            const auto* type = e.modules()->find(m->type);
-            const int output = type ? type->type->output(end->key) : -1;
-            if (output < 0) {
-                std::string keys;
-                if (type)
-                    for (int o : type->type->outputs())
-                        keys += (keys.empty() ? "" : ", ") +
-                                type->type->ports()[static_cast<std::size_t>(o)].key;
-                return Error("rack.port", a.ports[k] + " is not an output", path,
-                             keys.empty() ? "module.describe lists outputs"
-                                          : end->object.str() + " has outputs " + keys);
-            }
+            auto end =
+                outputEnd(e, s, *rack, a.ports[k], "/ports/" + std::to_string(k), "rack.port");
+            if (!end) return std::move(end).error();
             model::RackModule probe;
             probe.rack = *rack;
             probe.type = std::string(detail::kProbeModule);
@@ -304,34 +355,10 @@ void registerRackProbe(cmd::Registry& registry) {
             probe.params = json::Value::object();
             probe.params["seconds"] = seconds + 0.01;
             const Id id = t.create(probe);
-            t.create(model::Cable{*end, {id, "in"}, std::nullopt, ""});
-            probes.emplace_back(id, &type->type->output(output));
+            t.create(model::Cable{end->first, {id, "in"}, std::nullopt, ""});
+            probes.emplace_back(id, end->second);
         }
-        if (a.notes) {
-            auto midi = notationSource(s, *a.notes, fromBeat);
-            if (!midi) {
-                Error err = std::move(midi).error();
-                err.path = "/notes";
-                return err;
-            }
-            std::set<Id> tracks;
-            for (const auto& m : s.modules)
-                if (m.value->rack == *rack && m.value->type == model::kNotesModule)
-                    tracks.insert(m.value->source.value_or(s.racks.find(*rack)->track));
-            for (Id track : tracks) {
-                const Id source = t.create(midi->first);
-                model::Take take;
-                take.source = source;
-                const Id tk = t.create(take);
-                model::Item item;
-                item.track = track;
-                item.position = fromBeat;
-                item.length = std::max(midi->second, 1e-3);
-                item.takes = {tk};
-                item.activeTake = tk;
-                t.create(item);
-            }
-        }
+        if (a.notes) SUPPLE_TRY(addNotes(t, s, *rack, *a.notes, fromBeat));
         auto copy = t.commit();
         if (!copy) return std::move(copy).error();
         InstancePool pool([&e](const model::PluginRef& ref) { return e.findPlugin(ref.id); },
@@ -373,6 +400,195 @@ void registerRackProbe(cmd::Registry& registry) {
         return out;
     };
     registry.add(std::move(c));
+}
+
+// rack.capture (rack.md §7.3): a rack's notes, printed as a MIDI item.
+void registerRackCapture(cmd::Registry& registry) {
+    Command<CaptureArgs, json::Value> c;
+    c.name = "rack.capture";
+    c.kind = Kind::Edit;
+    c.exposure = cmd::Exposure::McpTool;
+    c.summary = "Record a rack's pitch and gate as notes in a MIDI item on a track.";
+    c.description =
+        "Renders the project offline from from_beat (default 0) for beats (default 16, at most "
+        "1024) and writes the notes that the pitch and gate outputs (\"mo_N.<output>\", poly: "
+        "a note per voice) play as a MIDI item on track at at (default from_beat): a gate's "
+        "rise starts a note at the pitch then (round(60 + 12 x pitch)), its fall ends it. "
+        "velocity: an output (0..1) read at each rise; default 96. quantize: a grid in beats "
+        "(0.25 = sixteenths) for starts and lengths. notes: notation the rack's Notes modules "
+        "play, as rack.probe takes it. The rack is not changed; edit the notes with midi.edit, "
+        "or play them through any instrument.";
+    c.tags = {"rack", "modular", "midi"};
+    c.args = schema::object<CaptureArgs>("rack_capture_args")
+                 .field("rack", &CaptureArgs::rack,
+                        schema::string().pattern("^rk_[0-9]+$", "Rack id").doc("Rack id"))
+                 .field("pitch", &CaptureArgs::pitch,
+                        schema::string().pattern("^mo_[0-9]+\\.[a-z][a-z0-9_]*$", "an output port"))
+                 .field("gate", &CaptureArgs::gate,
+                        schema::string().pattern("^mo_[0-9]+\\.[a-z][a-z0-9_]*$", "an output port"))
+                 .field("velocity", &CaptureArgs::velocity,
+                        schema::string().pattern("^mo_[0-9]+\\.[a-z][a-z0-9_]*$", "an output port"))
+                 .field("track", &CaptureArgs::track,
+                        schema::string().pattern("^tr_[0-9]+$", "Track id").doc("Track id"))
+                 .field("beats", &CaptureArgs::beats, schema::number().range(0.25, 1024))
+                 .field("from_beat", &CaptureArgs::fromBeat, schema::number().min(0))
+                 .field("at", &CaptureArgs::at, schema::number().min(0))
+                 .field("quantize", &CaptureArgs::quantize, schema::number().range(1.0 / 64, 4))
+                 .field("notes", &CaptureArgs::notes, schema::string().minLength(1))
+                 .field("name", &CaptureArgs::name, schema::string())
+                 .build();
+    c.result = schema::any();
+    c.errors = {{"rack.unknown", "no such rack", "rack.list"},
+                {"rack.port", "not an output of a module in the rack", "rack.get lists them"},
+                {"rack.capture", "the render is too long", "capture at most 600 seconds"}};
+    c.examples = {{"Print a chord the rack plays to a MIDI item on the second track",
+                   j(R"({"rack": "rk_1", "pitch": "mo_2.pitch", "gate": "mo_2.gate",
+               "track": "tr_2", "beats": 4, "notes": "voice v; 1: [C4 E4 G4]:h r:h"})"),
+                   j(R"({"item": "<any>", "take": "<any>", "source": "<any>", "position": 0.0,
+               "length": 4.0, "notes": 3, "voices": 3})"),
+                   "song_with_rack_preset"}};
+    c.run = [](const CaptureArgs& a, Context& ctx) -> Result<json::Value> {
+        EngineApp& e = ctx.service<EngineApp>();
+        const model::Session s = e.view();
+        const auto rack = Id::parse(a.rack);
+        if (!rack || !s.racks.contains(*rack))
+            return Error("rack.unknown", "no rack " + a.rack, "/rack", "rack.list");
+        const auto track = Id::parse(a.track);
+        const model::Track* to = track ? s.tracks.find(*track) : nullptr;
+        if (!to) return Error("tr.unknown", "no track " + a.track, "/track", "see track.list");
+        SUPPLE_TRY(checkItemTrack(s, *track, {}, "/track"));
+        if (to->type == model::StripType::Master)
+            return Error("track.strip_type", "a master holds audio items only", "/track",
+                         "capture onto a channel");
+        const double fromBeat = a.fromBeat.value_or(0.0), at = a.at.value_or(fromBeat);
+        const double beats = a.beats.value_or(16.0);
+        SUPPLE_TRY(model::checkedBeat(s, at + beats, "/beats"));
+        const double start = s.timeMap->secondsAt(fromBeat);
+        const double seconds = s.timeMap->secondsAt(fromBeat + beats) - start;
+        if (seconds > 600)
+            return Error(
+                "rack.capture",
+                "the capture lasts " + std::to_string(static_cast<int>(seconds)) + " seconds",
+                "/beats", "capture at most 600 seconds at a time");
+        // A copy with the listener cabled in.
+        model::EditTxn copyTxn(s, s.version + 1);
+        auto pitch = outputEnd(e, s, *rack, a.pitch, "/pitch", "rack.port");
+        if (!pitch) return std::move(pitch).error();
+        auto gate = outputEnd(e, s, *rack, a.gate, "/gate", "rack.port");
+        if (!gate) return std::move(gate).error();
+        model::RackModule listener;
+        listener.rack = *rack;
+        listener.type = std::string(detail::kCaptureModule);
+        listener.version = "1.0.0";
+        listener.params = json::Value::object();
+        listener.params["use_velocity"] = a.velocity ? 1.0 : 0.0;
+        const Id id = copyTxn.create(listener);
+        copyTxn.create(model::Cable{pitch->first, {id, "pitch"}, std::nullopt, ""});
+        copyTxn.create(model::Cable{gate->first, {id, "gate"}, std::nullopt, ""});
+        if (a.velocity) {
+            auto velocity = outputEnd(e, s, *rack, *a.velocity, "/velocity", "rack.port");
+            if (!velocity) return std::move(velocity).error();
+            copyTxn.create(model::Cable{velocity->first, {id, "velocity"}, std::nullopt, ""});
+        }
+        if (a.notes) SUPPLE_TRY(addNotes(copyTxn, s, *rack, *a.notes, fromBeat));
+        auto copy = copyTxn.commit();
+        if (!copy) return std::move(copy).error();
+        InstancePool pool([&e](const model::PluginRef& ref) { return e.findPlugin(ref.id); },
+                          e.options().identity);
+        auto catalog = std::make_shared<rack::Catalog>(*e.modules());
+        catalog->add(detail::captureModuleType());
+        OfflineSettings settings;
+        settings.startSeconds = start;
+        settings.endSeconds = start + seconds;
+        settings.projectDir = e.projectDir();
+        settings.modules = std::move(catalog);
+        auto rendered = renderOffline(*copy, pool, settings);
+        if (!rendered) return std::move(rendered).error();
+        const rack::Instance* in = pool.racks().find(id);
+        const auto* capture = in ? dynamic_cast<const detail::CaptureModule*>(in->host()) : nullptr;
+        if (!capture) return Error("rack.capture", "the listener did not run", "/rack", "");
+        // Events to notes, in beats from the capture's start.
+        const double rate = copy->project->sampleRate;
+        midi::Sequence seq;
+        const double ppq = seq.ppq;
+        auto beatOf = [&](std::int64_t frame) {
+            return copy->timeMap->beatAt(start + static_cast<double>(frame) / rate) - fromBeat;
+        };
+        auto snap = [&](double beat) {
+            return a.quantize ? std::round(beat / *a.quantize) * *a.quantize : beat;
+        };
+        struct Open {
+            bool on = false;
+            double beat = 0;
+            int pitch = 60, velocity = 96;
+        };
+        std::array<Open, detail::kCaptureVoices> open{};
+        std::set<int> voices;
+        auto close = [&](Open& o, double endBeat) {
+            o.on = false;
+            const double from = std::max(0.0, snap(o.beat));
+            double until = std::min(beats, snap(endBeat));
+            if (a.quantize) until = std::max(until, from + *a.quantize);
+            if (from >= beats || until <= from) return;
+            until = std::min(until, beats);
+            midi::Note n;
+            n.start = std::llround(from * ppq);
+            n.length = std::max<std::int64_t>(1, std::llround(until * ppq) - n.start);
+            n.pitch = static_cast<std::uint8_t>(o.pitch);
+            n.velocity = static_cast<std::uint8_t>(o.velocity);
+            seq.notes.push_back(n);
+        };
+        for (const auto& ev : capture->events) {
+            Open& o = open[static_cast<std::size_t>(ev.voice)];
+            const double beat = beatOf(ev.frame);
+            if (o.on) close(o, beat);
+            if (!ev.on) continue;
+            o.on = true;
+            o.beat = beat;
+            o.pitch = static_cast<int>(std::clamp(std::lround(60 + 12 * ev.pitch), 0L, 127L));
+            o.velocity =
+                ev.velocity < 0
+                    ? 96
+                    : static_cast<int>(std::clamp(std::lround(127 * ev.velocity), 1L, 127L));
+            voices.insert(ev.voice);
+        }
+        for (Open& o : open)
+            if (o.on) close(o, beats);
+        seq.length = std::llround(beats * ppq);
+        seq.canonicalize();
+        const std::int64_t count = static_cast<std::int64_t>(seq.notes.size());
+        // The item.
+        model::EditTxn& t = e.txn();
+        model::MidiSource src;
+        src.sequence = std::move(seq);
+        const Id mi = t.create(std::move(src));
+        model::Take take;
+        take.name = a.name.value_or(model::rackLabel(s, *rack));
+        take.source = mi;
+        const Id tk = t.create(std::move(take));
+        model::Item item;
+        item.track = *track;
+        model::placeItem(s, item, at, beats);
+        item.takes = {tk};
+        item.activeTake = tk;
+        const Id it = t.create(std::move(item));
+        json::Value out = json::Value::object();
+        out["item"] = it.str();
+        out["take"] = tk.str();
+        out["source"] = mi.str();
+        out["position"] = at;
+        out["length"] = beats;
+        out["notes"] = count;
+        out["voices"] = static_cast<std::int64_t>(voices.size());
+        json::Value warnings = json::Value::array();
+        if (capture->full)
+            warnings.push_back("more than " + std::to_string(detail::kCaptureEvents) +
+                               " gate changes: the later ones are left out");
+        for (const auto& w : rendered->warnings) warnings.push_back(w);
+        if (!warnings.asArray().empty()) out["warnings"] = std::move(warnings);
+        return out;
+    };
+    addChecked(registry, std::move(c));
 }
 
 }  // namespace supple::engine

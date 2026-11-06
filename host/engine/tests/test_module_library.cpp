@@ -390,6 +390,65 @@ TEST_CASE("module.duplicate keeps cables into a plugin module's plug-in") {
     CHECK(reached);
 }
 
+TEST_CASE("rack.capture: a rack's notes become a MIDI item") {
+    Fixture f;
+    f.run("track.add", R"({"name": "Synth"})");
+    f.run("track.add", R"({"name": "Keys"})");
+    f.run("rack.add", R"({"track": "tr_1"})");                    // mo_1 Out
+    f.run("module.add", R"({"rack": "rk_1", "type": "notes"})");  // mo_2
+    const std::size_t modules = f.app->head().modules.size();
+    json::Value r = f.run("rack.capture", R"({"rack": "rk_1", "pitch": "mo_2.pitch",
+        "gate": "mo_2.gate", "velocity": "mo_2.velocity", "track": "tr_2", "beats": 4,
+        "at": 8, "quantize": 0.25, "notes": "voice v; 1: C4:q E4:e r:e [G4 B4]:h"})");
+    CHECK(r["notes"].asInt() == 4);
+    CHECK(r["voices"].asInt() >= 2);
+    CHECK(r["position"].asDouble() == 8);
+    const model::Session& s = f.app->head();
+    CHECK(s.modules.size() == modules);  // the rack is not changed
+    const model::Item* item = s.items.find(*model::Id::parse(r["item"].asString()));
+    REQUIRE(item != nullptr);
+    CHECK(item->track == model::Id{model::Kind::Track, 2});
+    const auto* src = s.midi.find(*model::Id::parse(r["source"].asString()));
+    REQUIRE(src != nullptr);
+    const auto& notes = src->sequence.notes;
+    REQUIRE(notes.size() == 4);
+    const int ppq = src->sequence.ppq;
+    CHECK(notes[0].pitch == 60);
+    CHECK(notes[0].start == 0);
+    CHECK(notes[0].length == ppq);
+    CHECK(notes[1].pitch == 64);
+    CHECK(notes[1].start == ppq);
+    CHECK(notes[1].length == ppq / 2);
+    std::set<int> chord;
+    for (std::size_t k = 2; k < 4; ++k) {
+        chord.insert(notes[k].pitch);
+        CHECK(notes[k].start == 2 * ppq);
+        CHECK(notes[k].length == 2 * ppq);
+        CHECK(notes[k].velocity > 0);
+    }
+    CHECK(chord == std::set<int>{67, 71});
+    // The same capture again is the same notes.
+    json::Value again = f.run("rack.capture", R"({"rack": "rk_1", "pitch": "mo_2.pitch",
+        "gate": "mo_2.gate", "velocity": "mo_2.velocity", "track": "tr_2", "beats": 4,
+        "at": 16, "quantize": 0.25, "notes": "voice v; 1: C4:q E4:e r:e [G4 B4]:h"})");
+    CHECK(f.app->head().midi.find(*model::Id::parse(again["source"].asString()))->sequence.notes ==
+          notes);
+    // One undo step removes it.
+    f.run("history.undo", "{}");
+    CHECK(f.app->head().items.find(*model::Id::parse(again["item"].asString())) == nullptr);
+    CHECK(f.app->head().items.find(*model::Id::parse(r["item"].asString())) != nullptr);
+
+    auto master = f.call("rack.capture", *json::parse(R"({"rack": "rk_1",
+        "pitch": "mo_2.pitch", "gate": "mo_2.gate", "track": "tr_0"})"));
+    REQUIRE_FALSE(master);
+    CHECK(master.error().code == "track.strip_type");
+    auto input = f.call("rack.capture", *json::parse(R"({"rack": "rk_1",
+        "pitch": "mo_1.l", "gate": "mo_2.gate", "track": "tr_2"})"));
+    REQUIRE_FALSE(input);
+    CHECK(input.error().code == "rack.port");
+    CHECK(input.error().path == "/args/pitch");
+}
+
 TEST_CASE("rack.patch: named modules and cables in one step, all or nothing") {
     Fixture f;
     f.run("track.add", R"({"name": "Synth"})");

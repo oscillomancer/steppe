@@ -1021,6 +1021,19 @@ q = nil
 ---@field x? number
 ---@field y? number
 
+---@class Steppe.rack_capture_args
+---@field rack string Rack id
+---@field pitch string
+---@field gate string
+---@field velocity? string
+---@field track string Track id
+---@field beats? number
+---@field from_beat? number
+---@field at? number
+---@field quantize? number
+---@field notes? string
+---@field name? string
+
 ---@class Steppe.rack_get_args
 ---@field rack string
 ---@field detail? string
@@ -1988,6 +2001,7 @@ q = nil
 ---@class Steppe.rack
 ---@field add fun(args?: Steppe.rack_add_args): table Add a modular rack on a channel, its Out the input.
 ---@field arrange fun(args: Steppe.rack_arrange_args): table Lay out a rack's modules by signal flow.
+---@field capture fun(args: Steppe.rack_capture_args): table Record a rack's pitch and gate as notes in a MIDI item on a track.
 ---@field get fun(args: Steppe.rack_get_args): table A rack's modules, cables, Out modules and problems.
 ---@field list fun(): table List racks: home channels, module counts, Outs.
 ---@field patch fun(args: Steppe.rack_patch_args): table Add named modules and the cables among them in one step.

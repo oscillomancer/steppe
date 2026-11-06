@@ -7954,6 +7954,71 @@
     }
   },
   {
+    "name": "rack_capture",
+    "title": "Record a rack's pitch and gate as notes in a MIDI item on a track.",
+    "description": "Record a rack's pitch and gate as notes in a MIDI item on a track. Renders the project offline from from_beat (default 0) for beats (default 16, at most 1024) and writes the notes that the pitch and gate outputs (\"mo_N.<output>\", poly: a note per voice) play as a MIDI item on track at at (default from_beat): a gate's rise starts a note at the pitch then (round(60 + 12 x pitch)), its fall ends it. velocity: an output (0..1) read at each rise; default 96. quantize: a grid in beats (0.25 = sixteenths) for starts and lengths. notes: notation the rack's Notes modules play, as rack.probe takes it. The rack is not changed; edit the notes with midi.edit, or play them through any instrument. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "rack_capture_args",
+      "properties": {
+        "rack": {
+          "type": "string",
+          "pattern": "^rk_[0-9]+$",
+          "description": "Rack id"
+        },
+        "pitch": {
+          "type": "string",
+          "pattern": "^mo_[0-9]+\\.[a-z][a-z0-9_]*$"
+        },
+        "gate": {
+          "type": "string",
+          "pattern": "^mo_[0-9]+\\.[a-z][a-z0-9_]*$"
+        },
+        "velocity": {
+          "type": "string",
+          "pattern": "^mo_[0-9]+\\.[a-z][a-z0-9_]*$"
+        },
+        "track": {
+          "type": "string",
+          "pattern": "^tr_[0-9]+$",
+          "description": "Track id"
+        },
+        "beats": {
+          "type": "number",
+          "minimum": 0.25,
+          "maximum": 1024.0
+        },
+        "from_beat": {
+          "type": "number",
+          "minimum": 0.0
+        },
+        "at": {
+          "type": "number",
+          "minimum": 0.0
+        },
+        "quantize": {
+          "type": "number",
+          "minimum": 0.015625,
+          "maximum": 4.0
+        },
+        "notes": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": ["rack", "pitch", "gate", "track"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
     "name": "rack_get",
     "title": "A rack's modules, cables, Out modules and problems.",
     "description": "A rack's modules, cables, Out modules and problems. Modules with their type, label, place and size and the knobs that differ from their defaults (detail full: also their input, output and knob keys); cables with feedback (true: it closes a loop and carries the previous frame); Out modules and the channels they feed; problems (missing types, cables that do not fit). See describe for errors and examples.",

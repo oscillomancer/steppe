@@ -10486,6 +10486,74 @@ Result:
 
 ```
 
+## `rack.capture@1`
+
+Record a rack's pitch and gate as notes in a MIDI item on a track.
+
+Renders the project offline from from_beat (default 0) for beats (default 16, at most 1024) and writes the notes that the pitch and gate outputs ("mo_N.<output>", poly: a note per voice) play as a MIDI item on track at at (default from_beat): a gate's rise starts a note at the pitch then (round(60 + 12 x pitch)), its fall ends it. velocity: an output (0..1) read at each rise; default 96. quantize: a grid in beats (0.25 = sixteenths) for starts and lengths. notes: notation the rack's Notes modules play, as rack.probe takes it. The rack is not changed; edit the notes with midi.edit, or play them through any instrument.
+
+Kind: `edit`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `rack` | string |  |  |  | Rack id |
+| `pitch` | string |  |  |  |  |
+| `gate` | string |  |  |  |  |
+| `velocity` | string |  |  |  |  |
+| `track` | string |  |  |  | Track id |
+| `beats` | number |  | 0.25..1024.0 |  |  |
+| `from_beat` | number |  | 0.0.. |  |  |
+| `at` | number |  | 0.0.. |  |  |
+| `quantize` | number |  | 0.015625..4.0 |  |  |
+| `notes` | string |  |  |  |  |
+| `name` | string |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Errors
+
+- `rack.unknown`: no such rack Hint: rack.list
+- `rack.port`: not an output of a module in the rack Hint: rack.get lists them
+- `rack.capture`: the render is too long Hint: capture at most 600 seconds
+
+### Examples
+
+**Print a chord the rack plays to a MIDI item on the second track** (`song_with_rack_preset`)
+
+```json
+{
+  "rack": "rk_1",
+  "pitch": "mo_2.pitch",
+  "gate": "mo_2.gate",
+  "track": "tr_2",
+  "beats": 4,
+  "notes": "voice v; 1: [C4 E4 G4]:h r:h"
+}
+
+```
+
+Result:
+
+```json
+{
+  "item": "<any>",
+  "take": "<any>",
+  "source": "<any>",
+  "position": 0.0,
+  "length": 4.0,
+  "notes": 3,
+  "voices": 3
+}
+
+```
+
 ## `rack.get@1`
 
 A rack's modules, cables, Out modules and problems.

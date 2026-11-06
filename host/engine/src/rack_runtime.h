@@ -46,6 +46,31 @@ class ProbeModule final : public rack::HostModule {
     int width = 0;  // the most channels its input had
 };
 
+// rack.capture's listener (never saved, in no catalog but a capture's): the
+// notes on its pitch, gate and velocity inputs, voice by voice (a gate's rise
+// past 0.5 starts one, its fall below 0.25 ends it), as events in time order.
+// Its knob `use_velocity` (0 or 1): whether its velocity input is used.
+inline constexpr std::string_view kCaptureModule = "com.suppleaudio.rack.capture";
+inline constexpr int kCaptureVoices = 16;
+inline constexpr std::size_t kCaptureEvents = 1 << 16;
+std::shared_ptr<const rack::ModuleType> captureModuleType();
+class CaptureModule final : public rack::HostModule {
+  public:
+    struct Event {
+        std::int64_t frame = 0;  // from the render's start
+        int voice = 0;
+        bool on = false;
+        float pitch = 0, velocity = 0;
+    };
+    void process(const rack::HostContext& ctx) SUPPLE_RT override;
+    void reserve() { events.reserve(kCaptureEvents); }
+    std::vector<Event> events;
+    std::int64_t frames = 0;  // processed so far
+    bool full = false;        // events were dropped
+  private:
+    std::array<bool, kCaptureVoices> on_{};
+};
+
 // A plugin module (rack.md §5): its plug-in, a stage of the rack node, runs
 // on the rack's grid. Audio in_l/in_r (R normalled to L) to out_l/out_r;
 // poly pitch and gate cables play notes to an instrument (velocity 0..1).

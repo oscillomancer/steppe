@@ -29,7 +29,12 @@ with their ranges and defaults; read it before patching. `module.describe
    `module.set {module, preset}` (a module's factory preset).
 5. Render or listen as for any track. Ask the human to listen when it
    matters.
-6. Keep what works: `rack.preset.save {rack, name}`; later
+6. Print generative notes to MIDI: `rack.capture {rack, pitch, gate,
+   velocity?, track, beats, quantize?}` renders the patch offline and writes
+   what a pitch and gate pair plays (a note per voice) as a MIDI item on
+   any channel. Edit it with `midi.edit`, read it with `midi.get`, play it
+   through any instrument. The rack is not changed.
+7. Keep what works: `rack.preset.save {rack, name}`; later
    `rack.preset.load {rack, name}` puts it in any rack. A preset carries
    the source of your own modules it uses, and loading it on another
    machine installs them into that library.

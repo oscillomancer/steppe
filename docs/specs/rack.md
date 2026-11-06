@@ -477,6 +477,7 @@ examples run as tests. Ends are strings: `"mo_3.out"`.
 | `rack.list` | query | `{}` → racks with their home tracks, module counts and Out modules |
 | `rack.get` | query | `{rack, detail?: brief\|full}` → modules (id, type, label, changed params, position, size), cables (with `feedback`), Out modules and the channels they feed, problems |
 | `rack.probe` | query | `{rack, ports: ["mo_N.<output>", …≤8], seconds? (≤10, 2), from_beat?, notes? (notation the rack's Notes modules play)}` → per port: peak, rms, dc, min, max; audio (the first 4 voices summed): dB and pitch (Hz, note, cents) when periodic; gates over the voices: count, per second, per beat, duty; pitch: the notes visited; CV: rate; a one-line description. An offline render of a copy with a listener (`ProbeModule`) on each port; nothing changes |
+| `rack.capture` | edit | `{rack, pitch, gate, velocity?, track, beats? (≤1024, 16), from_beat?, at?, quantize?, notes?, name?}` → `{item, take, source, position, length, notes, voices, warnings?}`: an offline render of a copy as `rack.probe`'s, with a listener (`CaptureModule`) on the ports, written as a MIDI item (§7.3); one undo step |
 | `rack.patch` | edit | `{rack, modules: {name: {type\|plugin, params?, preset?, label?, x?, y?, source?, device?}}, cables?: [[from, to, amount?, color?] \| {from, to, amount?, color?}], x?, y?}` → `{modules: {name: id}, cables}`: ends `"name.port"`, `"name.knob"` (a plugin module's: its plug-in's) or `"mo_N.port"`; modules without a place laid out as §7.2; a name labels its module (§7.2); checked as `module.add` and `cable.add` check, all or nothing |
 | `rack.arrange` | edit | `{rack, modules?, x?, y?}` → `{modules: {mo_N: {x, y}}}`: lays out the modules (default all the rack's) as §7.2 from x, y (default their top-left corner), along the cables among them; one undo step |
 | `rack.preset.save` | action | `{rack, name, modules?, description?, replace?}` → `{path, modules, cables}`: the modules (default the whole rack) and the cables among them |
@@ -597,6 +598,24 @@ readable: `_` to spaces, a trailing number apart, the first letter
 capitalised, and a word that is a type's key spelled as that type's
 one-word name (`"bass_env"`: "Bass env", `"osc1"`: "Osc 1", `"lfo"`:
 "LFO"). A plugin module keeps its plug-in's name.
+
+### 7.3 Capture
+
+`rack.capture` turns what a rack plays into notes. It renders a copy of the
+project offline from `from_beat` for `beats` (at most 600 seconds), the
+rack's Notes modules also playing `notes` as `rack.probe`'s do, with a
+listener cabled to the `pitch`, `gate` and optional `velocity` outputs. The
+listener follows each gate voice (up to 16) as the probe counts gates: a rise
+past 0.5 starts a note at that voice's pitch (`round(60 + 12 × pitch)`,
+clamped to 0..127; a mono pitch serves every voice) and velocity
+(`round(127 × v)`, 1..127; 96 without `velocity`), and a fall below 0.25 ends
+it. A note still sounding at the end ends there. It keeps up to 65,536 gate
+changes and warns when there were more. With `quantize` (beats, 1/64..4)
+starts and ends go to the nearest grid line and a note lasts at least one
+step. The notes, in beats from `from_beat`, become a MIDI source, a take
+named `name` (default the rack's name) and an item at `at` (default
+`from_beat`) on `track`, a channel, `beats` long. The same project and
+arguments give the same notes.
 
 ## 8. The rack window (`daw/gui`)
 
