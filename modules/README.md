@@ -103,3 +103,4 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `bounce` | A bouncing ball: hits that come quicker and softer until it settles, its height and each hit's strength; poly |
 | `swarm` | Two to eight coupled LFOs that pull into step, or push apart, like fireflies; how in step they are as Sync; poly |
 | `canon` | A round from any line: up to three followers replay the lead's notes and gates some steps later, transposed; poly out for one voice |
+| `changes` | A chord progression that writes itself in a key and mode: functional moves, a loop that slowly changes, voice leading; poly chord, root and gate |
