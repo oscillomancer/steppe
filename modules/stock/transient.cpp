@@ -12,10 +12,11 @@
 // over Length, and holding its peaks and falling slowly. Where the level is
 // ahead of the smoothed one, a hit is starting; where it is behind it and
 // the held one is above it, the hit is dying away. The gain follows their
-// differences in dB, by Attack and Sustain, up to 18 dB either way. A
-// steady sound is left alone, and at 0 and 0 everything passes untouched.
+// differences in dB, by Attack and Sustain: up to 12 dB either way at 100,
+// and in proportion below, so a hit out of silence is not boosted the most
+// at any setting. A steady sound is left alone, and at 0 and 0 everything passes untouched.
 
-constexpr double kMostDb = 18.0;
+constexpr double kMostDb = 12.0;
 constexpr double kLevelMs = 3.0;
 constexpr double kHoldMs = 400.0;
 
@@ -64,19 +65,19 @@ struct Transient : Module {
                 // Only while the level is falling, below its smoothed self:
                 // a hit starting after a gap is not taken for a tail.
                 const double falling = a < f.slow ? 20.0 * log10(f.hold + 1e-6) - q : 0.0;
-                const double gainDb =
-                    clamp(attack.at(i, c) * max(rising, 0.0) + sustain.at(i, c) * max(falling, 0.0),
-                          -kMostDb, kMostDb);
+                const double gainDb = clamp(attack.at(i, c) * clamp(rising, 0.0, kMostDb) +
+                                                sustain.at(i, c) * clamp(falling, 0.0, kMostDb),
+                                            -kMostDb, kMostDb);
                 out[c][i] = x * pow(10.0, (gainDb + level.at(i, c)) / 20.0);
             }
         }
     }
 
     void factoryPatches(Patches& p) {
-        p.add("Punch").set(attack, 60).set(sustain, -10);
+        p.add("Punch").set(attack, 60).set(sustain, -10).set(level, -3);
         p.add("Tighten").set(attack, 10).set(sustain, -60).set(length, 15);
         p.add("Soften").set(attack, -60).set(length, 30);
         p.add("Room").set(attack, 0).set(sustain, 70).set(level, -3);
-        p.add("Snap").set(attack, 100).set(length, 6);
+        p.add("Snap").set(attack, 100).set(length, 6).set(level, -6);
     }
 };

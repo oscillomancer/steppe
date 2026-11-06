@@ -56,7 +56,13 @@ TEST_CASE("transient: at 0 and 0 the sound passes untouched; a steady one stays"
 TEST_CASE("transient: Attack turns each hit's start up or down, not its tail") {
     const auto [upStart, upTail] = startAndTail(shaped({{"attack", 100}}));
     CHECK(upStart > 6);
+    CHECK(upStart < 12.5);
     CHECK(std::abs(upTail) < 1.5);
+    // Out of silence, the most it boosts goes with Attack: 12 dB at 100,
+    // about 7 at 60.
+    const auto [someStart, someTail] = startAndTail(shaped({{"attack", 60}}));
+    CHECK(someStart > 3);
+    CHECK(someStart < 7.5);
     const auto [downStart, downTail] = startAndTail(shaped({{"attack", -100}}));
     CHECK(downStart < -6);
     CHECK(std::abs(downTail) < 1.5);
