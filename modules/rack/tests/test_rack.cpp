@@ -38,7 +38,7 @@ std::shared_ptr<const ModuleType> vcaType() {
 struct Rig {
     std::unique_ptr<Instance> transport, vca, out;
     std::unique_ptr<Schedule> schedule;
-    Rig() {
+    explicit Rig(ParamCurve* level = nullptr) {
         Instance::Setup setup;
         transport = host::make(host::transportType(), setup);
         vca = Instance::make(vcaType(), setup);
@@ -46,19 +46,20 @@ struct Rig {
         Patch p;
         p.modules = {
             {1, transport.get(), false, {}}, {2, vca.get(), false, {}}, {3, out.get(), false, {}}};
+        if (level) p.modules[1].automation.emplace_back(0, level);
         p.cables = {{0, 6, 1, false, 0, 1.0},   // beat phase -> vca in
                     {1, 0, 2, false, 0, 1.0}};  // vca out -> out l
         std::string error;
         schedule = Schedule::build(p, &error);
         REQUIRE_MESSAGE(schedule, error);
     }
-    std::vector<float> render(int frames, int block, FixedClock& clock) {
+    std::vector<float> render(int frames, int block, FixedClock& clock, std::int64_t origin = 0) {
         std::vector<float> l(static_cast<std::size_t>(frames), 0.0f), r = l;
         auto* o = static_cast<host::Out*>(out->host());
         for (int at = 0; at < frames; at += block) {
             const int n = std::min(block, frames - at);
             o->bind(l.data() + at, r.data() + at);
-            schedule->process(at, n, clock);
+            schedule->process(origin + at, n, clock);
         }
         return l;
     }
@@ -88,6 +89,55 @@ TEST_CASE("rack: the output does not depend on the host's block") {
     const auto z = c.render(20000, 333, clock);
     CHECK(x == y);
     CHECK(x == z);
+}
+
+namespace {
+struct LevelCurve final : ParamCurve {
+    double offset = 0;
+    int calls = 0;
+    bool offGrid = false;
+    double at(std::int64_t position) override {
+        ++calls;
+        offGrid |= position % kGrid != 0;
+        return -20.0 + offset + static_cast<double>(position) * 0.0002;
+    }
+};
+}  // namespace
+
+TEST_CASE("rack: smoothed automation holds across host block fragments" *
+          doctest::description("rt")) {
+    for (std::int64_t origin : {0, 7, -7}) {
+        INFO("origin " << origin);
+        FixedClock clock;
+        clock.t.playing = true;
+        clock.t.tempo = 133;
+        LevelCurve a, b;
+        Rig large(&a), small(&b);
+        const auto x = large.render(20000, 1024, clock, origin);
+        const auto y = small.render(20000, 37, clock, origin);
+        CHECK(x == y);
+        CHECK_FALSE(a.offGrid);
+        CHECK_FALSE(b.offGrid);
+        CHECK(a.calls == b.calls);
+    }
+}
+
+TEST_CASE("rack: automation resamples after a locate within the same grid interval" *
+          doctest::description("rt")) {
+    LevelCurve curve;
+    Rig rig(&curve);
+    FixedClock clock;
+    rig.schedule->process(0, 7, clock);
+    CHECK(rig.vca->paramMember(0).value() == -20.0);
+    curve.offset = 10;
+    rig.schedule->process(7, 0, clock);
+    rig.schedule->process(7, 1, clock);  // contiguous: hold this interval's target
+    CHECK(rig.vca->paramMember(0).value() == -20.0);
+    CHECK(curve.calls == 1);
+    rig.schedule->process(13, 1, clock);  // locate: sample the containing interval again
+    CHECK(rig.vca->paramMember(0).value() == -10.0);
+    CHECK(curve.calls == 2);
+    CHECK_FALSE(curve.offGrid);
 }
 
 TEST_CASE("rack: a loop runs frame by frame with one frame of delay") {

@@ -261,8 +261,9 @@ instructions are in `docs/guides/installing.md`.
   cables). 61 stock modules (`modules/stock`: oscillators, filters,
   envelopes, sequencers, generative and utility modules, effects) compile
   as scripts and as C++ alike. Each rack is a node of the render plan on a
-  32-frame grid; real-time output equals offline renders, and the audio
-  path passes RealtimeSanitizer. Agents patch with `rack.patch` (named
+  32-frame grid; module automation holds across host block fragments.
+  Real-time output equals offline renders, and the audio path passes
+  RealtimeSanitizer. Agents patch with `rack.patch` (named
   modules and cables in one step) or `module.add`/`cable.add`, hear a patch
   with `rack.probe` (pitch, levels, gates, notes, CV rates from an offline
   render of a copy), write and edit library modules (`module.write`, hot
