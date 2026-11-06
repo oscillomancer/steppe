@@ -1425,9 +1425,9 @@ void registerRackCommands(cmd::Registry& registry) {
             const model::Session s = app(ctx).view();
             std::optional<Id> id;
             if (a.cable) {
-                auto c = cableId(s, *a.cable);
-                if (!c) return std::move(c).error();
-                id = *c;
+                auto found = cableId(s, *a.cable);
+                if (!found) return std::move(found).error();
+                id = *found;
             } else if (a.from && a.to) {
                 for (const auto& cb : s.cables)
                     if (cb.value->from.str() == *a.from && cb.value->to.str() == *a.to) id = cb.id;
