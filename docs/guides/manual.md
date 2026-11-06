@@ -333,7 +333,8 @@ Drag a knob up or down to turn it (Shift for fine), double-click to reset
 it, and right-click it for **Automate**, which adds an automation lane for
 it under the rack's channel, or **MIDI learn…**: move a control on your
 MIDI controller and click OK, and that control turns the knob (a small
-dot marks it). Right-click a module to rename, bypass,
+dot marks it), which moves on screen as you turn it; right-click it again
+to see the binding or remove it. Right-click a module to rename, bypass,
 duplicate, randomize or delete it, to load one of its presets, or to **Show
 source**. Modules from your library (in the data folder's `modules`) can be
 edited and saved there and then; a stock module offers **Make editable

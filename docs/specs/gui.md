@@ -1238,8 +1238,10 @@ a new channel). It follows rack.md §8.
   a toggle's CC defaults to toggle mode, others offer soft takeover). A
   bound knob carries a small accent dot in its gap (a control, at its
   corner), and its menu names the controller ("MIDI: CC 21 · ch 1…") and
-  offers Remove MIDI learn (`module.learn.remove`). A plugin module's
-  knobs are its plug-in's (the FX window's learn).
+  offers Remove MIDI learn (`module.learn.remove`). The controller moves
+  the knob through `module.set`, so the window's knob follows it along the
+  same travel (tested end to end with a dummy device's CCs). A plugin
+  module's knobs are its plug-in's (the FX window's learn).
 - **Browser.** A column on the left (the header's Modules button shows or
   hides it): a search field (words match name, id, description and tags),
   the catalog's tags as chips that filter (one row: the chosen tag, then

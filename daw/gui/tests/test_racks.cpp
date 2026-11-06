@@ -11,13 +11,16 @@
 #include <SDL3/SDL.h>
 
 #include <cmath>
+#include <deque>
 #include <filesystem>
+#include <mutex>
 
 #include "app_actions.h"
 #include "floating_panel.h"
 #include "plugin_scales.h"
 #include "rack_engine.h"
 #include "rack_window.h"
+#include "supple/engine/realtime.h"
 #include "supple/gui/png.h"
 #include "supple/gui/window.h"
 #include "supple/script_compiler.hpp"
@@ -833,6 +836,74 @@ TEST_CASE(
     CHECK(none.note == "VST3 plug-ins take no modulation.");
     CHECK(std::none_of(none.params.begin(), none.params.end(),
                        [](const gui::racks::PluginParam& q) { return q.modulatable; }));
+}
+
+TEST_CASE("rack window: a knob learned in the window turns on screen when its controller moves") {
+    // A device the test plays (engine/tests/test_learn.cpp's rig): a manual
+    // dummy backend with a MIDI input whose messages the test queues.
+    std::mutex lock;
+    std::deque<engine::MidiInputEvent> queued;
+    engine::DummyBackend backend(engine::DummyBackend::Options{
+        .mode = engine::DummyBackend::Mode::Manual,
+        .midiPorts = {"nanoKONTROL2 CTRL"},
+        .midi = [&](std::vector<engine::MidiInputEvent>& out, std::uint32_t, std::int64_t) {
+            std::lock_guard<std::mutex> g(lock);
+            while (!queued.empty()) {
+                out.push_back(queued.front());
+                queued.pop_front();
+            }
+        }});
+    Fixture f;
+    if (!f.ok) return;
+    Patch p(f);
+    f.app->attachCommands(*f.dispatcher);
+    f.racks->open();
+    f.frame();
+    const model::Id vca = *model::Id::parse(p.vca);
+    // Bound through the knob's menu and the learn dialog.
+    const ui::Point level = *f.racks->space()->controlAt(vca, "level");
+    f.pointer(ui::PointerEvent::Type::Down, level, 3);
+    f.pointer(ui::PointerEvent::Type::Up, level, 3);
+    REQUIRE(f.pick("rack.param.menu", "MIDI learn"));
+    engine::EngineApp::ControlEvent heard;
+    heard.midi.bytes[0] = 0xb0;
+    heard.midi.bytes[1] = 21;
+    heard.midi.bytes[2] = 64;
+    f.actions->control({heard});
+    f.frame();
+    REQUIRE(f.r().click("learn.ok"));
+    f.frame();
+    REQUIRE(f.app->head().modules.find(vca)->learn.size() == 1);
+    // The controller turns it; the window's knob follows, along the same travel.
+    REQUIRE(f.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 256, .midiInputs = true},
+                               {.anticipative = false}));
+    auto turn = [&](std::uint8_t value) {
+        {
+            std::lock_guard<std::mutex> g(lock);
+            engine::MidiInputEvent e;
+            e.size = 3;
+            e.bytes[0] = 0xb0;
+            e.bytes[1] = 21;
+            e.bytes[2] = value;
+            queued.push_back(e);
+        }
+        backend.run(1);
+        f.app->pollControl();
+        f.frame();
+        const auto* m = f.racks->space()->scene().module(vca);
+        REQUIRE(m);
+        const int index = m->type->param("level");
+        REQUIRE(index >= 0);
+        const auto& param = m->type->params()[static_cast<std::size_t>(index)];
+        return std::pair{param, m->values[static_cast<std::size_t>(index)]};
+    };
+    for (std::uint8_t value : {std::uint8_t{127}, std::uint8_t{0}, std::uint8_t{90}}) {
+        const auto [param, shown] = turn(value);
+        INFO("CC value " << int(value));
+        CHECK(shown == doctest::Approx(rack::knobValue(param, value / 127.0)));
+        CHECK(rack::knobPosition(param, shown) == doctest::Approx(value / 127.0));
+    }
+    f.app->stopEngine();
 }
 
 TEST_CASE("rack window: modules saved as a rack preset load into another rack from the browser") {
