@@ -139,7 +139,10 @@ struct Looper : Module {
                 if (freePhase >= span) freePhase -= span;
             }
             const double pos = clamp(into / span, 0.0, 1.0);
-            const bool wrapped = lastPos < 0.0 || pos < lastPos || resetNow;
+            // The loop's top: where its phase begins, not where playback
+            // starts or jumps into the middle of it.
+            const bool wrapped =
+                resetNow || ((lastPos < 0.0 || pos < lastPos) && into <= 1.5 * beatsPerFrame);
             lastPos = pos;
             if (wrapped) loopPulse.fire();
             if (recEdge.rose(rec[0][i]) && quantized) armed = true;

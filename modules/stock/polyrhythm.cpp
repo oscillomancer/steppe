@@ -123,6 +123,7 @@ struct Polyrhythm : Module {
             if (resetNow) {
                 origin = songAt;
                 freeAt = 0.0;
+                for (int k = 0; k < 4; ++k) beatAt[k] = -1;
             }
             double into = 0.0;
             if (t.playing) {
@@ -134,7 +135,7 @@ struct Polyrhythm : Module {
                 if (freeAt >= length) freeAt -= length;
             }
             const double pos = clamp(into / length, 0.0, 1.0 - 1e-12);
-            const bool wrapped = lastPos < 0.0 || pos < lastPos || resetNow;
+            const bool wrapped = pos < lastPos || resetNow;
             lastPos = pos;
             const double share = clamp(width.at(i), 0.01, 0.95);
             int started = 0;
@@ -143,7 +144,10 @@ struct Polyrhythm : Module {
                 const double x = pos * n + 1e-9;
                 const int beat = clamp(floorToInt(x), 0, n - 1);
                 const double phase = clamp(x - beat, 0.0, 1.0);
-                if (wrapped || beat != beatAt[k]) ++started;
+                // A beat starts where its phase begins: not where playback
+                // starts or jumps into the middle of one.
+                if ((wrapped || beat != beatAt[k]) && phase * length <= n * 1.5 * beatsPerFrame)
+                    ++started;
                 beatAt[k] = beat;
                 ramp[k][0][i] = phase;
                 gate[k][0][i] = phase < share ? 1.0 : 0.0;
