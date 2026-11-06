@@ -55,3 +55,4 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `slew` | A slew limiter and portamento, linear to exponential, that can leave leaps alone; poly |
 | `hold` | Sample and hold or track and hold, noise when nothing is in, a value per voice; poly |
 | `follower` | An envelope follower, peak or RMS, with a gate above a threshold and an onset trigger; poly |
+| `chaos` | A Lorenz or Thomas attractor: X, Y and Z as slow organic CVs, poly copies that drift apart |
