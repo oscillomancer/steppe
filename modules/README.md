@@ -54,3 +54,4 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `arp` | An arpeggiator over held poly notes: six orders, octaves, gate length, latch |
 | `slew` | A slew limiter and portamento, linear to exponential, that can leave leaps alone; poly |
 | `hold` | Sample and hold or track and hold, noise when nothing is in, a value per voice; poly |
+| `follower` | An envelope follower, peak or RMS, with a gate above a threshold and an onset trigger; poly |
