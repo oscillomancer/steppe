@@ -324,6 +324,10 @@ changes the amount. Drag a cable off an input to move it, or drop it on
 nothing to remove it. A cable that loops back is dashed: it carries the
 signal one sample late.
 
+Some modules' displays answer the mouse as well: drag or scroll on them to
+change what they show (each drag or scroll is one undo step), and move the
+module by its title instead.
+
 Drag a knob up or down to turn it (Shift for fine), double-click to reset
 it, and right-click it for **Automate**, which adds an automation lane for
 it under the rack's channel. Right-click a module to rename, bypass,

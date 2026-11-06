@@ -334,8 +334,9 @@ instructions are in `docs/guides/installing.md`.
   Module displays (`draw()`), dashed feedback cables, plugin modules (a
   click opens the editor), Automate on a knob (a lane under the home
   channel), the source view with Make editable copy, rack Outs in a
-  channel's input menu, and Show/Add rack in its right-click menu. Not yet:
-  MIDI learn for module knobs, pointer input on displays.
+  channel's input menu, Show/Add rack in its right-click menu, and pointer
+  input on module displays (`pointer()`). Not yet: MIDI learn for module
+  knobs.
 - **MIDI learn** (ADR-0027): any plug-in parameter (the FX window's MIDI
   button, or `fx.learn.set` for agents) and any action (Ctrl+L in the
   actions list) learns a controller by moving it: CC, note, pitch bend or

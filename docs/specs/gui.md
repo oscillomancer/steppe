@@ -1233,8 +1233,16 @@ a new channel). It follows rack.md §8.
   in its own coordinates, through the window's copy of the module: its knob
   values and the `Shared` state the telemetry carries. Its palette is the
   app's theme. A hook that spends its budget stops and says "draw() ran too
-  long"; the rest of the window draws on. Pointer input on displays
-  *(planned)*.
+  long"; the rest of the window draws on. A module with `pointer()` hears
+  the mouse on its displays (`panel()`'s `display` rectangles) where no
+  control is, in its own coordinates, as a plugin editor's does: a press,
+  each move while held (a drag, wherever it goes) and the release; a hover
+  and its leaving; the wheel. Its knob edits (`Param::edit`) are
+  `module.set`, one undo step a press or a burst of the wheel; on a hover
+  they do nothing. There a press does not move the module, and the wheel is
+  the module's; Ctrl+wheel still zooms, the right button still opens the
+  module's menu and the middle one still pans. A module without `pointer()`
+  is dragged by its displays as by the rest of its body.
 - **Elsewhere.** A channel's input menu lists every rack's Out modules
   ("<rack> › <Out>", with the home channel's colour) after the device's
   inputs, and New rack on this channel; picking one is `track.set

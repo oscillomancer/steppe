@@ -605,6 +605,21 @@ void RackWindow::open(std::optional<model::Id> rack) {
         if (!openEditor) return;
         if (auto r = openEditor(*m->fx); !r) report(r.error());
     };
+    sh.displayEdit = [this](model::Id module, const std::vector<ModuleFace::Edit>& edits,
+                            const std::string& gesture) {
+        const auto* m = space_ ? space_->scene().module(module) : nullptr;
+        if (!m || !m->type) return;
+        json::Value params = json::Value::object();
+        for (const auto& e : edits)
+            if (e.param >= 0 && static_cast<std::size_t>(e.param) < m->type->params().size()) {
+                const auto& p = m->type->params()[static_cast<std::size_t>(e.param)];
+                params[p.key] = racks::paramJson(p, e.value);
+            }
+        json::Value args = json::Value::object();
+        args["module"] = module.str();
+        args["params"] = std::move(params);
+        (void)exec("module.set", std::move(args), gesture);
+    };
     sh.moduleMenu = [this](model::Id module, ui::Point at) { moduleMenu(module, at); };
     sh.spaceMenu = [this](ui::Point at, ui::Point sp) { spaceMenu(at, sp); };
     sh.param = [this](model::Id module, int index, double value, ui::Gesture g) {

@@ -97,6 +97,24 @@ struct Scope : Module {
         g.fillStyle(Theme::textMuted);
         g.font(8);
         g.fillText(format("%.0f ms", time.value()), 14, 92);
+        if (over) {
+            g.strokeStyle(Theme::accent);
+            g.lineWidth(1);
+            g.strokeRect(10, 32, 130, 64);
+        }
+    }
+    // The display sets the window: across it, or by the wheel. A hover may
+    // not edit (that edit is ignored).
+    bool over = false;
+    void pointer(const Pointer& p) {
+        if (p.action() == PointerAction::Press || p.action() == PointerAction::Drag)
+            time.editNormalized((p.x() - 10) / 130);
+        if (p.action() == PointerAction::Wheel) time.edit(time.value() + 10 * p.wheel());
+        if (p.action() == PointerAction::Move) {
+            over = true;
+            time.edit(999);
+        }
+        if (p.action() == PointerAction::Leave) over = false;
     }
     void panel(Panel& p) {
         p.size(150, 196);
@@ -584,4 +602,51 @@ TEST_CASE("rack window: a plugin module shows the plug-in's name and a click ope
     f.pointer(ui::PointerEvent::Type::Up, at);
     CHECK(opened == std::vector<model::Id>{*rm->fx});
     f.snapshot("rack-plugin.png");
+}
+
+TEST_CASE("rack window: a display hears the pointer; its edits are one undo step a press") {
+    Fixture f;
+    if (!f.ok) return;
+    Patch p(f);
+    f.racks->open();
+    f.frame();
+    gui::RackSpace& space = *f.racks->space();
+    const model::Id scope = *model::Id::parse(p.scope);
+    auto time = [&]() -> double {
+        const json::Value* t = f.app->head().modules.find(scope)->params.find("time");
+        return t ? t->asDouble() : 20.0;
+    };
+    // The display is at (10, 32) 130 x 64 on the module at (620, 300).
+    auto at = [&](double x, double y) {
+        return space.toWindow({620.0f + float(x), 300.0f + float(y)});
+    };
+    const std::size_t steps = f.exec("history.list", "{}")["versions"].size();
+    // A hover is heard (the display outlines itself) but edits nothing.
+    f.pointer(ui::PointerEvent::Type::Move, at(70, 60), 0);
+    CHECK(time() == doctest::Approx(20));
+    f.snapshot("rack-display-hover.png");
+    // A drag across it sets Time, and the module stays where it is.
+    f.drag(at(12, 60), at(138, 60));
+    CHECK(time() > 800);  // 98 % across, on its log scale
+    CHECK(f.app->head().modules.find(scope)->x == doctest::Approx(620));
+    CHECK(f.exec("history.list", "{}")["versions"].size() == steps + 1);
+    f.exec("history.undo", "{}");
+    f.frame();
+    CHECK(time() == doctest::Approx(20));
+    // The wheel over it, one step; Ctrl+wheel still zooms the space.
+    ui::PointerEvent wheel;
+    wheel.type = ui::PointerEvent::Type::Wheel;
+    wheel.pos = at(70, 60);
+    wheel.wheelY = 1;
+    f.r().pointer(wheel);
+    f.frame();
+    CHECK(time() == doctest::Approx(30));
+    const double zoom = space.view().zoom;
+    wheel.mods = ui::kCtrl;
+    f.r().pointer(wheel);
+    CHECK(space.view().zoom > zoom);
+    CHECK(time() == doctest::Approx(30));
+    // Elsewhere on the module, a drag still moves it.
+    f.drag(at(75, 10), at(95, 10));
+    CHECK(f.app->head().modules.find(scope)->x > 620);
 }

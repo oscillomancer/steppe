@@ -13,6 +13,7 @@
 // (Hooks), which dispatches commands.
 #pragma once
 
+#include <chrono>
 #include <functional>
 #include <map>
 #include <optional>
@@ -59,6 +60,11 @@ class RackSpace : public ui::Node {
             connect;
         // A cable dragged off its input and dropped on nothing.
         std::function<void(model::Id cable)> disconnect;
+        // A module's pointer() changed knobs on its display: one undo step
+        // per `gesture` (a press to its release, or a burst of the wheel).
+        std::function<void(model::Id module, const std::vector<ModuleFace::Edit>& edits,
+                           const std::string& gesture)>
+            displayEdit;
         // A modulation cable's amount dragged on the ring around its knob.
         std::function<void(model::Id cable, double amount, ui::Gesture g)> amount;
         std::function<void(const std::set<model::Id>&)> selectionChanged;
@@ -119,7 +125,7 @@ class RackSpace : public ui::Node {
 
   private:
     struct Hit {
-        enum class Kind { None, Body, Control, Jack, Ring } kind = Kind::None;
+        enum class Kind { None, Body, Control, Jack, Ring, Display } kind = Kind::None;
         std::size_t module = 0;
         std::size_t item = 0;            // in the module's face
         std::optional<model::Id> cable;  // Ring: the modulation cable
@@ -135,9 +141,25 @@ class RackSpace : public ui::Node {
     model::CableEnd endOf(const RackScene::Module& m, const rack::PanelItem& item) const;
     void endDrag(bool commit);
     void hover(std::optional<model::Id> module);
+    // The module's display copy (made on first use; null without draw() or
+    // pointer()), and pointer() run on it with a window point.
+    ModuleFace* faceOf(const RackScene::Module& m) const;
+    void sendPointer(model::Id module, script::PointerAction action, ui::Point window,
+                     ui::Point moved, double wheel, bool doubleClick, unsigned mods,
+                     const std::string& gesture);
+    std::string nextDisplayGesture(model::Id module);
 
     struct Drag {
-        enum class Kind { None, Pan, Marquee, Move, Control, Cable, Amount } kind = Kind::None;
+        enum class Kind {
+            None,
+            Pan,
+            Marquee,
+            Move,
+            Control,
+            Cable,
+            Amount,
+            Display
+        } kind = Kind::None;
         ui::Point start;  // window
         ui::Point last;   // window
         View view;        // at the start (Pan)
@@ -155,6 +177,8 @@ class RackSpace : public ui::Node {
         std::optional<model::Id> replace;
         std::optional<model::Id> cable;  // Amount
         double amount = 0;
+        model::Id display;    // Display: the module pressed
+        std::string gesture;  // Display: the press's undo step
     };
 
     Hooks hooks_;
@@ -172,6 +196,14 @@ class RackSpace : public ui::Node {
     Drag drag_;
     bool spaceHeld_ = false, spaceUsed_ = false, frameOnLayout_ = false;
     int gesture_ = 0;
+    // pointer(): the display under the pointer (it hears Leave when it goes),
+    // and the wheel's burst.
+    std::optional<model::Id> displayHot_;
+    ui::Point displayLast_;
+    int displayGesture_ = 0;
+    std::optional<model::Id> wheelModule_;
+    std::chrono::steady_clock::time_point wheelAt_;
+    std::string wheelGesture_;
 };
 
 }  // namespace supple::gui
