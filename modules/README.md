@@ -63,3 +63,4 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `logic` | AND, OR, XOR, NOT, a flip-flop and a trigger on every change; poly |
 | `switcher` | A sequential switch both ways (four to one, one to four), stepped or selected, with a crossfade; poly |
 | `macro` | Eight knobs out of eight jacks, unipolar or bipolar, glided: a patch's performance controls |
+| `poly` | Merge eight monos to a poly cable, split one to eight, sum it, or spread it across stereo |
