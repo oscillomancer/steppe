@@ -200,6 +200,23 @@ class EditorBuilder {
     ~EditorBuilder() = default;
 };
 
+// What a module's Panel lays out with (the rack's). Parameters are by table
+// index (Param's slot); ports by their index among the module's inputs or
+// outputs (declaration order).
+class PanelBuilder {
+  public:
+    enum class Control { Knob, Slider, Toggle, Choice, Readout };
+    virtual void size(double width, double height) = 0;
+    // A knob's x, y are its centre and w its diameter (h unused); the other
+    // controls' a rectangle.
+    virtual void control(Control kind, int slot, double x, double y, double w, double h) = 0;
+    virtual void jack(bool output, int index, double x, double y) = 0;
+    virtual void display(double x, double y, double w, double h) = 0;
+
+  protected:
+    ~PanelBuilder() = default;
+};
+
 // Only used while a native plugin's metadata is collected, never by hooks.
 class PatchBuilder {
   public:
@@ -238,6 +255,11 @@ struct Instance {
     EditorServices* editor = nullptr;  // the editor's copy of the plugin: text, names
     // While a host traces the plugin, where trace() records.
     std::atomic<TraceLog*> trace{nullptr};
+    // A module's (ADR-0062): the transport at the block's start, which
+    // Module::transport() gives, and its seed (Module::seed()). For a module
+    // `channels` is its polyphony this block, which the rack sets.
+    Transport transport;
+    int seed = 0;
 
     static void bind(Plugin& plugin, Instance* instance) { plugin.instance_ = instance; }
 };
@@ -278,9 +300,23 @@ struct Layout {
     static constexpr int sourceLow = offsetof(Source, low_);
     static constexpr int sourcePerVoice = offsetof(Source, perVoice_);
     static constexpr int pluginInstance = offsetof(Plugin, instance_);
+    static constexpr int paramMod = offsetof(Param, mod_);
+    static constexpr int paramModStride = offsetof(Param, modStride_);
+    static constexpr int paramModChannels = offsetof(Param, modChannels_);
+    static constexpr int inputBase = offsetof(Input, base_);
+    static constexpr int inputZero = offsetof(Input, zero_);
+    static constexpr int inputStride = offsetof(Input, stride_);
+    static constexpr int inputChannels = offsetof(Input, channels_);
+    static constexpr int inputFrames = offsetof(Input, frames_);
+    static constexpr int outputBase = offsetof(Output, base_);
+    static constexpr int outputSpare = offsetof(Output, spare_);
+    static constexpr int outputStride = offsetof(Output, stride_);
+    static constexpr int outputChannels = offsetof(Output, channels_);
+    static constexpr int outputFrames = offsetof(Output, frames_);
     // The glue's: a Canvas, Editor or Pointer made for a hook.
     static void bind(Canvas& canvas, Painter* painter) { canvas.painter_ = painter; }
     static void bind(Editor& editor, EditorBuilder* builder) { editor.builder_ = builder; }
+    static void bind(Panel& panel, PanelBuilder* builder) { panel.builder_ = builder; }
     static void set(Pointer& p, PointerAction action, double x, double y, double dx, double dy,
                     double wheel, bool doubleClick, bool shift, bool ctrl, bool alt) {
         p.action_ = action;
@@ -339,6 +375,40 @@ struct ParamBinding {
     static double reported(const Param& p) { return p.reported_; }
     static int slot(const Param& p) { return p.slot_; }
     static void setSlot(Param& p, int slot) { p.slot_ = slot; }
+    // A module's cable modulation: channel k's moved values at mod +
+    // k * stride, for k < channels (0: none). Frames as setGlide's.
+    static void setModulation(Param& p, const double* mod, int stride, int channels) {
+        p.mod_ = mod;
+        p.modStride_ = stride;
+        p.modChannels_ = channels;
+    }
+};
+
+// How the rack reaches a module's ports (ADR-0062). An input's channel c
+// starts at base + c * stride (stride 0: one buffer every channel reads);
+// `zero` is frames of zeros, what a poly cable's missing channels read.
+struct PortBinding {
+    static void bindInput(Input& in, const double* base, const double* zero, int stride,
+                          int channels, int frames) {
+        in.base_ = base;
+        in.zero_ = zero;
+        in.stride_ = stride;
+        in.channels_ = channels;
+        in.frames_ = frames;
+    }
+    static void bindOutput(Output& out, double* base, double* spare, int stride, int channels,
+                           int frames) {
+        out.base_ = base;
+        out.spare_ = spare;
+        out.stride_ = stride;
+        out.channels_ = channels;
+        out.frames_ = frames;
+    }
+    static int channels(const Output& out) { return out.channels_; }
+    static int slot(const Input& in) { return in.slot_; }
+    static int slot(const Output& out) { return out.slot_; }
+    static void setSlot(Input& in, int slot) { in.slot_ = slot; }
+    static void setSlot(Output& out, int slot) { out.slot_ = slot; }
 };
 
 // Collects the parameters a plugin struct declares while it is constructed
@@ -354,6 +424,8 @@ class ParamRegistrar {
     virtual void declareShared(void* member, int bytes) { (void)member, (void)bytes; }
     // A Source member.
     virtual void declareSource(Source& source, const SourceSpec& spec) { (void)source, (void)spec; }
+    // An Input or Output member of a module (`member` points at it).
+    virtual void declarePort(void* member, const PortSpec& spec) { (void)member, (void)spec; }
 };
 ParamRegistrar* registrar();
 void setRegistrar(ParamRegistrar* registrar);

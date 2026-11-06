@@ -470,8 +470,19 @@ class Param {
     operator double() const { return value_; }
     double value() const { return value_; }
     // The value at frame i of the current block: glided for a smoothed()
-    // parameter, the block's value otherwise.
-    double at(int i) const {
+    // parameter, the block's value otherwise. In a module, with the cables
+    // into it of channel 0 (ADR-0062).
+    double at(int i) const { return at(i, 0); }
+    // A module's: the value at frame i with the cables into it of channel c
+    // (a mono cable reaches every channel; past a poly cable's channels, the
+    // knob alone). at(i) for a plugin's.
+    double at(int i, int c) const {
+        if (modChannels_ > 0) {
+            const int k = modChannels_ == 1 ? 0 : c;
+            if (static_cast<unsigned>(k) < static_cast<unsigned>(modChannels_) &&
+                static_cast<unsigned>(i) < static_cast<unsigned>(glideFrames_))
+                return mod_[k * modStride_ + i];
+        }
         if (glide_ && static_cast<unsigned>(i) < static_cast<unsigned>(glideFrames_))
             return glide_[i];
         return value_;
@@ -518,6 +529,12 @@ class Param {
     double value_ = 0.0;
     const double* glide_ = nullptr;
     int glideFrames_ = 0;
+    // A module's cable modulation (the rack runtime's): the moved value of
+    // channel k at frame i is mod_[k * modStride_ + i], for k < modChannels_
+    // (0: no cables; 1: one value for every channel). Frames as glide's.
+    const double* mod_ = nullptr;
+    int modStride_ = 0;
+    int modChannels_ = 0;
     bool changed_ = true;
     bool offAtMinimum_ = false;
     double min_ = 0.0;
@@ -849,6 +866,7 @@ class Plugin {
     friend struct detail::Instance;
     friend struct detail::Layout;
     friend class Instrument;
+    friend class Module;
     detail::Instance* instance_ = nullptr;
 };
 
@@ -918,6 +936,180 @@ class Instrument : public Plugin {
 // Notes in, notes out. Not available to scripts yet, and the compiler says
 // so.
 class NoteEffect : public Plugin {};
+
+// --- modules (ADR-0062) -----------------------------------------------------------
+//
+// A module is a unit of a modular rack: ports joined by cables, parameters
+// (knobs) that cables also move. Its struct derives from Module and declares
+// `static constexpr ModuleInfo info`, its parameters (Param, as a plugin's),
+// its ports (Input, Output) and the hooks
+//
+//   void prepare()               before audio: sizes, seeds (seed())
+//   void update()                when a knob moved, at a block's start
+//   void process(int frames)     every block of 1..32 frames: read inputs and
+//                                at(i, c), write outputs
+//   void panel(Panel& p)         (optional) where its controls and jacks sit
+//   void draw(Canvas& g)         (optional) what its face shows
+//   void pointer(const Pointer&) (optional) the mouse on its face
+//
+// The rack runs every module on a 32-frame grid of the timeline, so a patch
+// renders the same in real time and offline. Module guide:
+// skill/guides/modules.md.
+
+// The most channels a cable carries (its polyphony).
+inline constexpr int kMaxChannels = 16;
+
+// What a port carries, by convention: audio (+-1), pitch (octaves, 0 at
+// C4), a gate (0 or 1, high at 0.5 and above; a trigger is a 1 ms gate),
+// bipolar CV (-1..1), unipolar CV (0..1) or a phase (a 0..1 ramp a cycle).
+enum class SignalKind { Audio, Pitch, Gate, Cv, Unipolar, Phase };
+
+// A module's identity: `static constexpr ModuleInfo info = {...}` in its
+// struct. The ID never changes once the module is shared.
+struct ModuleInfo {
+    const char* name = "";
+    const char* id = "";  // reverse-DNS: "com.example.fold"
+    const char* vendor = "";
+    const char* version = "1.0.0";
+    const char* description = "";
+    const char* url = "";
+    // What it is, first ("oscillator", "filter", "sequencer"): the browser
+    // sorts by them. Lower case, digits and '-'.
+    const char* tags[4] = {};
+    // Its face in design units; 0 takes the automatic layout's.
+    int width = 0, height = 0;
+};
+
+// A port's description, made by the factories below: audioIn("In").help("...").
+struct PortSpec {
+    const char* name = "";
+    const char* description = "";
+    const char* key = "";    // the key; the member's name when empty
+    const char* group = "";  // its section in the automatic layout
+    SignalKind signal = SignalKind::Audio;
+    bool output = false;
+    double normalValue = 0.0;  // an input's value while nothing is connected
+
+    PortSpec help(const char* text) const {
+        PortSpec p = *this;
+        p.description = text;
+        return p;
+    }
+    PortSpec in(const char* g) const {
+        PortSpec p = *this;
+        p.group = g;
+        return p;
+    }
+    PortSpec withKey(const char* k) const {
+        PortSpec p = *this;
+        p.key = k;
+        return p;
+    }
+    // An input's value while nothing is connected (0 unless given).
+    PortSpec normal(double value) const {
+        PortSpec p = *this;
+        p.normalValue = value;
+        return p;
+    }
+};
+
+inline PortSpec portSpec(const char* name, SignalKind signal, bool output) {
+    PortSpec p;
+    p.name = name;
+    p.signal = signal;
+    p.output = output;
+    return p;
+}
+inline PortSpec audioIn(const char* name) { return portSpec(name, SignalKind::Audio, false); }
+inline PortSpec pitchIn(const char* name) { return portSpec(name, SignalKind::Pitch, false); }
+inline PortSpec gateIn(const char* name) { return portSpec(name, SignalKind::Gate, false); }
+inline PortSpec cvIn(const char* name) { return portSpec(name, SignalKind::Cv, false); }
+inline PortSpec unipolarIn(const char* name) { return portSpec(name, SignalKind::Unipolar, false); }
+inline PortSpec phaseIn(const char* name) { return portSpec(name, SignalKind::Phase, false); }
+inline PortSpec audioOut(const char* name) { return portSpec(name, SignalKind::Audio, true); }
+inline PortSpec pitchOut(const char* name) { return portSpec(name, SignalKind::Pitch, true); }
+inline PortSpec gateOut(const char* name) { return portSpec(name, SignalKind::Gate, true); }
+inline PortSpec cvOut(const char* name) { return portSpec(name, SignalKind::Cv, true); }
+inline PortSpec unipolarOut(const char* name) { return portSpec(name, SignalKind::Unipolar, true); }
+inline PortSpec phaseOut(const char* name) { return portSpec(name, SignalKind::Phase, true); }
+
+namespace detail {
+struct PortBinding;
+}  // namespace detail
+
+// An input: in[c][i] is channel c at frame i of the block. A mono cable
+// reaches every channel; past a poly cable's channels it reads 0; with
+// nothing connected, the normal value. Several cables into one input sum.
+class Input {
+  public:
+    Input(const PortSpec& spec);  // registers it with the module under construction
+    Input(const Input& other) = default;
+    Input& operator=(const Input& other) = default;
+
+    InputChannel operator[](int c) const {
+        if (static_cast<unsigned>(c) >= static_cast<unsigned>(kMaxChannels) || !base_) {
+            detail::outOfRange(0);
+            return InputChannel{nullptr, 0};
+        }
+        if (stride_ != 0 && c >= channels_) return InputChannel{zero_, frames_};
+        return InputChannel{base_ + c * stride_, frames_};
+    }
+    // 0 while nothing is connected; else the cable's channels (the widest).
+    int channels() const { return channels_; }
+    bool connected() const { return channels_ > 0; }
+
+  private:
+    friend struct detail::Layout;
+    friend struct detail::PortBinding;
+    // Channel c's frames start at base_ + c * stride_ (stride 0: one buffer
+    // for every channel, a mono cable or the normal value).
+    const double* base_ = nullptr;
+    const double* zero_ = nullptr;
+    int stride_ = 0;
+    int channels_ = 0;
+    int frames_ = 0;
+    int slot_ = -1;
+};
+
+// An output: out[c][i] = x. It has channels() channels: the module's
+// channels() unless setChannels() says, each block. It arrives zeroed.
+class Output {
+  public:
+    Output(const PortSpec& spec);  // registers it with the module under construction
+    Output(const Output& other) = default;
+    Output& operator=(const Output& other) = default;
+
+    Channel operator[](int c) const {
+        if (static_cast<unsigned>(c) < static_cast<unsigned>(kMaxChannels) && base_)
+            return Channel{base_ + c * stride_, frames_, spare_};
+        detail::outOfRange(0);
+        return Channel{spare_, 0, spare_};
+    }
+    int channels() const { return channels_; }
+    // In process(): how many channels this output carries this block, 1..16.
+    void setChannels(int n) { channels_ = n < 1 ? 1 : (n > kMaxChannels ? kMaxChannels : n); }
+
+  private:
+    friend struct detail::Layout;
+    friend struct detail::PortBinding;
+    double* base_ = nullptr;
+    double* spare_ = nullptr;
+    int stride_ = 0;
+    int channels_ = 1;
+    int frames_ = 0;
+    int slot_ = -1;
+};
+
+// What every module struct derives from. channels() is its polyphony: the
+// widest connected input or modulating cable, at least 1.
+class Module : public Plugin {
+  public:
+    // The host's transport at the block's start.
+    Transport transport() const;
+    // A seed from the project's seed and the module's id: the same in every
+    // render, different for each module (Random::seed(seed())).
+    int seed() const;
+};
 
 // --- DSP -------------------------------------------------------------------------
 
@@ -1428,6 +1620,39 @@ class Editor {
   private:
     friend struct detail::Layout;
     detail::EditorBuilder* builder_ = nullptr;
+};
+
+namespace detail {
+class PanelBuilder;
+}  // namespace detail
+
+// What a module's panel() lays out on its face, in design units from its
+// top-left corner: its size, and where each control and jack sits. Knobs and
+// jacks are placed by their centre; a control is labelled with its
+// parameter's name, a jack with its port's. Without panel() a module gets
+// the automatic layout. draw() paints under them.
+class Panel {
+  public:
+    void size(double width, double height);
+    // A knob, 36 units across unless `size` says (24 small, 52 large).
+    void knob(const Param& p, double x, double y);
+    void knob(const Param& p, double x, double y, double size);
+    void slider(const Param& p, double x, double y, double w, double h);  // along its longer side
+    void toggle(const Param& p, double x, double y, double w, double h);
+    // A choice's options: buttons side by side for up to four, a menu for more.
+    void choice(const Param& p, double x, double y, double w, double h);
+    // A value shown, not edited: a meter().
+    void readout(const Param& p, double x, double y, double w, double h);
+    // A jack, by its centre.
+    void input(const Input& in, double x, double y);
+    void output(const Output& out, double x, double y);
+    // Where draw() shows something (a scope, a step grid): kept clear of
+    // controls by layout checks.
+    void display(double x, double y, double w, double h);
+
+  private:
+    friend struct detail::Layout;
+    detail::PanelBuilder* builder_ = nullptr;
 };
 
 }  // namespace supple::script

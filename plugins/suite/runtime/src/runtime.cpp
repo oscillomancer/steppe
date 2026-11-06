@@ -363,10 +363,20 @@ Source::Source(const SourceSpec& spec) {
 
 Param::Param(const Param& other) { *this = other; }
 
+Input::Input(const PortSpec& spec) {
+    if (auto* r = detail::registrar()) r->declarePort(this, spec);
+}
+Output::Output(const PortSpec& spec) {
+    if (auto* r = detail::registrar()) r->declarePort(this, spec);
+}
+
 Param& Param::operator=(const Param& other) {
     value_ = other.value_;
     glide_ = other.glide_;
     glideFrames_ = other.glideFrames_;
+    mod_ = other.mod_;
+    modStride_ = other.modStride_;
+    modChannels_ = other.modChannels_;
     changed_ = other.changed_;
     offAtMinimum_ = other.offAtMinimum_;
     min_ = other.min_;
@@ -1378,6 +1388,41 @@ void Editor::meters(double x, double y, double w, double h) {
 
 void Editor::routes(double x, double y, double w, double h) {
     if (builder_) builder_->routes(x, y, w, h);
+}
+
+// --- modules ------------------------------------------------------------------------
+
+Transport Module::transport() const { return instanceOf(instance_).transport; }
+int Module::seed() const { return instanceOf(instance_).seed; }
+
+void Panel::size(double width, double height) {
+    if (builder_) builder_->size(width, height);
+}
+void Panel::knob(const Param& p, double x, double y) { knob(p, x, y, 36.0); }
+void Panel::knob(const Param& p, double x, double y, double size) {
+    if (builder_)
+        builder_->control(detail::PanelBuilder::Control::Knob, slotOf(p), x, y, size, size);
+}
+void Panel::slider(const Param& p, double x, double y, double w, double h) {
+    if (builder_) builder_->control(detail::PanelBuilder::Control::Slider, slotOf(p), x, y, w, h);
+}
+void Panel::toggle(const Param& p, double x, double y, double w, double h) {
+    if (builder_) builder_->control(detail::PanelBuilder::Control::Toggle, slotOf(p), x, y, w, h);
+}
+void Panel::choice(const Param& p, double x, double y, double w, double h) {
+    if (builder_) builder_->control(detail::PanelBuilder::Control::Choice, slotOf(p), x, y, w, h);
+}
+void Panel::readout(const Param& p, double x, double y, double w, double h) {
+    if (builder_) builder_->control(detail::PanelBuilder::Control::Readout, slotOf(p), x, y, w, h);
+}
+void Panel::input(const Input& in, double x, double y) {
+    if (builder_) builder_->jack(false, detail::PortBinding::slot(in), x, y);
+}
+void Panel::output(const Output& out, double x, double y) {
+    if (builder_) builder_->jack(true, detail::PortBinding::slot(out), x, y);
+}
+void Panel::display(double x, double y, double w, double h) {
+    if (builder_) builder_->display(x, y, w, h);
 }
 
 }  // namespace supple::script

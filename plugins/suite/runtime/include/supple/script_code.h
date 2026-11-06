@@ -20,7 +20,7 @@
 
 namespace supple::script::detail {
 
-enum class PluginKind : std::uint8_t { None, Effect, Instrument, NoteEffect };
+enum class PluginKind : std::uint8_t { None, Effect, Instrument, NoteEffect, Module };
 
 // A parameter as the script declares it (script.h's ParamSpec, evaluated).
 // min, max and def are physical: a percent in percent, a choice an index.
