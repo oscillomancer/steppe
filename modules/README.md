@@ -35,6 +35,7 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | Module | What it is |
 |---|---|
 | `vca` | An amplifier a CV opens, exponential or linear |
+| `vco` | The analog-style workhorse: sine, triangle, saw, pulse and sub at once, exp and through-zero FM, hard sync, poly |
 
 ### Modulation, sequencing, generative and utilities
 
