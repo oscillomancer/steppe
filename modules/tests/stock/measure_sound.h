@@ -126,4 +126,18 @@ inline double bandPower(const std::vector<double>& y, double hz, double sampleRa
     return y.empty() ? 0.0 : sum / static_cast<double>(y.size());
 }
 
+// The strongest component between lo and hi Hz, scanned in steps of `step`.
+inline double peakHz(const std::vector<double>& y, double lo, double hi, double sampleRate,
+                     double step = 0.25) {
+    double best = lo, most = -1;
+    for (double hz = lo; hz <= hi; hz += step) {
+        const double a = amplitudeAt(y, hz, sampleRate);
+        if (a > most) {
+            most = a;
+            best = hz;
+        }
+    }
+    return best;
+}
+
 }  // namespace supple::rack::test
