@@ -47,6 +47,20 @@ TEST_CASE("delay: echoes at the time, each feedback's share of the last") {
     CHECK(h.output("out_r")[4800] == doctest::Approx(first));  // the left feeds both
 }
 
+TEST_CASE("delay: at its defaults, the dry is whole and the first echo 6 dB under it") {
+    // Echoes landing on later notes add to them: a default that leaves room.
+    ModuleHarness h(stock("delay"));
+    h.set("wow", 0);
+    h.set("flutter", 0);
+    h.set("tone", 0);
+    h.input("in_l", 1, click());
+    h.run(48000);
+    const auto& y = h.output("out_l");
+    CHECK(y[0] == doctest::Approx(1.0));
+    CHECK(loudest(y, 1000, 30000) == 18000);  // 375 ms
+    CHECK(y[18000] == doctest::Approx(0.5).epsilon(0.03));
+}
+
 TEST_CASE("delay: synced to the tempo in note values") {
     ModuleHarness h(stock("delay"));
     plain(h);
