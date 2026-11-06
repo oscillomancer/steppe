@@ -482,7 +482,8 @@ struct FieldDecl : Decl {
     // Sema.
     QualType qt;
     int offset = 0;
-    int paramIndex = -1;   // a Param member: its place in the parameter table
+    int paramIndex = -1;  // a Param member: its place in the parameter table
+    bool oneDeclarator = true;
     int sourceIndex = -1;  // a Source member: its place among the sources
     explicit FieldDecl(Loc l) : Decl(DeclKind::Field, l) {}
 };

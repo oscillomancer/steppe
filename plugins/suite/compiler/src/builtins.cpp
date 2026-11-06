@@ -314,9 +314,11 @@ std::vector<const BuiltinFunction*> Builtins::functions(const std::string& name)
 bool Builtins::reserved(const std::string& name) const {
     // The parameter factories, which Sema::evaluate knows by name.
     static const std::set<std::string> factories = {
-        "continuous", "decibels",  "frequency",       "milliseconds", "percent",    "ratio",
-        "semitones",  "cents",     "octaves",         "degrees",      "integer",    "choice",
-        "toggle",     "audioFile", "impulseResponse", "source",       "voiceSource"};
+        "continuous", "decibels",  "frequency",       "milliseconds", "percent",     "ratio",
+        "semitones",  "cents",     "octaves",         "degrees",      "integer",     "choice",
+        "toggle",     "audioFile", "impulseResponse", "source",       "voiceSource", "portSpec",
+        "audioIn",    "audioOut",  "pitchIn",         "pitchOut",     "gateIn",      "gateOut",
+        "cvIn",       "cvOut",     "unipolarIn",      "unipolarOut",  "phaseIn",     "phaseOut"};
     return byName_.count(name) || classByName_.count(name) || enumByName_.count(name) ||
            constants_.count(name) || factories.count(name) || name == "pi" || name == "twoPi" ||
            name == "Array" || name == "Buffer" || name == "Unit" || name == "Curve" ||
@@ -388,6 +390,7 @@ void Builtins::addClasses() {
     param->declarable = true;  // as a member of the plugin struct only (sema checks)
     r.inlineMethod(param, "double value() const", Intrinsic::ParamValue);
     r.inlineMethod(param, "double at(int i) const", Intrinsic::ParamAt);
+    r.inlineMethod(param, "double at(int i, int c) const", Intrinsic::ParamAt);
     r.inlineMethod(param, "int index() const", Intrinsic::ParamIndex);
     r.inlineMethod(param, "bool on() const", Intrinsic::ParamOn);
     r.inlineMethod(param, "bool changed() const", Intrinsic::ParamChanged);
@@ -536,6 +539,29 @@ void Builtins::addClasses() {
         +[](const S::Plugin* p, const char* name, double v, int i) { p->trace(name, v, i); },
         Writes::Nothing, kInit | kAudio);
     plugin_ = plugin;
+    addClass("Module", sizeof(S::Module), alignof(S::Module))->declarable = false;
+    addClass("ModuleInfo", sizeof(S::ModuleInfo), alignof(S::ModuleInfo))->declarable = false;
+    addClass("PortSpec", sizeof(S::PortSpec), alignof(S::PortSpec))->declarable = false;
+    addEnum("SignalKind",
+            {{"Audio", 0}, {"Pitch", 1}, {"Gate", 2}, {"Cv", 3}, {"Unipolar", 4}, {"Phase", 5}});
+    r.inlineMethod(plugin, "Transport transport() const", Intrinsic::ModuleTransport);
+    plugin->methods.back().module = true;
+    r.method(plugin, "int seed() const", +[](const S::Module* p) { return p->seed(); });
+    plugin->methods.back().module = true;
+    auto* in = addClass("Input", sizeof(S::Input), alignof(S::Input));
+    r.method(
+        in, "int channels() const", +[](const S::Input* p) { return p->channels(); },
+        Writes::Nothing, kInit | kAudio);
+    r.method(
+        in, "bool connected() const", +[](const S::Input* p) -> int { return p->connected(); },
+        Writes::Nothing, kInit | kAudio);
+    auto* out = addClass("Output", sizeof(S::Output), alignof(S::Output));
+    r.method(
+        out, "int channels() const", +[](const S::Output* p) { return p->channels(); },
+        Writes::Nothing, kInit | kAudio);
+    r.method(
+        out, "void setChannels(int n)", +[](S::Output* p, int n) { p->setChannels(n); },
+        Writes::Self, kAudio);
 
     // DSP objects.
     auto* biquad = addClass("Biquad", sizeof(S::Biquad), alignof(S::Biquad));
@@ -791,6 +817,62 @@ void Builtins::addClasses() {
 }
 
 void Builtins::addEditor() {
+    {
+        Registrar r{*this};
+        auto* panel = addClass("Panel", sizeof(S::Panel), alignof(S::Panel));
+        panel->declarable = false;
+        r.method(
+            panel, "void size(double w, double h)",
+            +[](S::Panel* p, double w, double h) { p->size(w, h); }, Writes::Self, kUi);
+        r.method(
+            panel, "void knob(const Param& v, double x, double y)",
+            +[](S::Panel* p, const S::Param* v, double x, double y) { p->knob(*v, x, y); },
+            Writes::Self, kUi);
+        r.method(
+            panel, "void knob(const Param& v, double x, double y, double size)",
+            +[](S::Panel* p, const S::Param* v, double x, double y, double s) {
+                p->knob(*v, x, y, s);
+            },
+            Writes::Self, kUi);
+        r.method(
+            panel, "void slider(const Param& v, double x, double y, double w, double h)",
+            +[](S::Panel* p, const S::Param* v, double x, double y, double w, double h) {
+                p->slider(*v, x, y, w, h);
+            },
+            Writes::Self, kUi);
+        r.method(
+            panel, "void toggle(const Param& v, double x, double y, double w, double h)",
+            +[](S::Panel* p, const S::Param* v, double x, double y, double w, double h) {
+                p->toggle(*v, x, y, w, h);
+            },
+            Writes::Self, kUi);
+        r.method(
+            panel, "void choice(const Param& v, double x, double y, double w, double h)",
+            +[](S::Panel* p, const S::Param* v, double x, double y, double w, double h) {
+                p->choice(*v, x, y, w, h);
+            },
+            Writes::Self, kUi);
+        r.method(
+            panel, "void readout(const Param& v, double x, double y, double w, double h)",
+            +[](S::Panel* p, const S::Param* v, double x, double y, double w, double h) {
+                p->readout(*v, x, y, w, h);
+            },
+            Writes::Self, kUi);
+
+        r.method(
+            panel, "void input(const Input& v, double x, double y)",
+            +[](S::Panel* p, const S::Input* v, double x, double y) { p->input(*v, x, y); },
+            Writes::Self, kUi);
+        r.method(
+            panel, "void output(const Output& v, double x, double y)",
+            +[](S::Panel* p, const S::Output* v, double x, double y) { p->output(*v, x, y); },
+            Writes::Self, kUi);
+        r.method(
+            panel, "void display(double x, double y, double w, double h)",
+            +[](S::Panel* p, double x, double y, double w, double h) { p->display(x, y, w, h); },
+            Writes::Self, kUi);
+    }
+
     Registrar r{*this};
 
     // Shared<T>: a T at the member's start, read and written inline.

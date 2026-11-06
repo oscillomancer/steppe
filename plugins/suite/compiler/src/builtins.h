@@ -44,6 +44,7 @@ enum class Intrinsic : std::uint8_t {
     MaxBlockSize,
     Channels,
     Offline,
+    ModuleTransport,
     // Containers
     ArraySize,
     ArrayFill,
@@ -84,6 +85,7 @@ struct BuiltinMethod {
     std::vector<Abi> abi;  // result, self, parameters
     std::uint8_t contexts = kInit | kAudio | kUi;
     std::string doc;          // for errors: "prepare(int maxDelaySamples)"
+    bool module = false;      // a base method only a module has
     bool instrument = false;  // a plugin base method only an instrument has
 };
 
@@ -160,6 +162,10 @@ class Builtins {
     const BuiltinClass* source() const { return source_; }
     bool isSource(const Type* t) const {
         return t && t->kind == TypeKind::Object && t->builtin == source_;
+    }
+    bool isPort(const Type* t) const {
+        return t && t->kind == TypeKind::Object &&
+               (t->builtin == cls("Input") || t->builtin == cls("Output"));
     }
     // Shared<T> for T (double, float, int, bool), or null.
     const BuiltinClass* shared(const Type* value) const;

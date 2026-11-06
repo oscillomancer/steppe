@@ -808,6 +808,12 @@ Expr* Sema::checkMember(MemberExpr* m) {
             n->function = fm;
             return n;
         }
+        if (self_->base == PluginKind::Module)
+            for (const BuiltinMethod& bm : b_.pluginBase()->methods)
+                if (bm.name == m->member) {
+                    n->ref = RefKind::BuiltinMethod;
+                    return n;
+                }
         error(m->loc, "script.name.member", self_->name + " has no member '" + m->member + "'",
               "check the spelling, or declare it in " + self_->name);
         return n;
@@ -910,6 +916,12 @@ Expr* Sema::checkIndex(IndexExpr* x) {
         if (!x->object->lvalue)
             error(x->loc, "script.type.temporary", "indexing a temporary value",
                   "store it in a variable first");
+        return x;
+    }
+    if (b_.isPort(t)) {
+        x->qt = QualType{b_.cls(t->builtin == b_.cls("Input") ? "InputChannel" : "Channel")->type,
+                         false, false};
+        x->lvalue = false;
         return x;
     }
     if (t->kind == TypeKind::Object && t->builtin == b_.block()) {
@@ -1106,6 +1118,14 @@ Expr* Sema::checkCall(CallExpr* c) {
                     return c;
                 }
                 c->builtinMethod = chosen;
+                if (chosen->owner == b_.param() && chosen->name == "at" && c->args.size() == 2 &&
+                    out_.plugin.kind != PluginKind::Module)
+                    error(c->loc, "script.plugin.param_channel",
+                          "at(i, c) is a module's polyphonic value",
+                          "use at(i) for a plugin parameter");
+                if (chosen->owner == b_.cls("Panel") && out_.plugin.kind != PluginKind::Module)
+                    error(c->loc, "script.plugin.panel", "Panel belongs to modules",
+                          "use editor(Editor& e) for a plugin's controls");
                 c->object = m->object;
                 if (!chosen->isConst && m->object->qt.isConst)
                     error(c->loc, "script.call.const",
@@ -1168,7 +1188,9 @@ Expr* Sema::checkCall(CallExpr* c) {
                 if (fn_) fn_->calls.push_back(f);
                 if (f->name == "prepare" || f->name == "process" || f->name == "startVoice" ||
                     f->name == "releaseVoice" || f->name == "stopVoice" || f->name == "draw" ||
-                    f->name == "editor" || f->name == "pointer") {
+                    f->name == "editor" ||
+                    (f->name == "panel" && self_ && self_->base == PluginKind::Module) ||
+                    f->name == "pointer") {
                     if (self_ && self_->base != PluginKind::None && f->owner == self_)
                         error(c->loc, "script.call.hook",
                               f->name + "() is called by the runtime, not by the script",
@@ -1193,7 +1215,20 @@ Expr* Sema::checkCall(CallExpr* c) {
                     const BuiltinMethod& bm = *named;
                     c->builtinMethod = &bm;
                     c->implicitThis = true;
-                    if (bm.instrument && self_ && self_->base != PluginKind::Instrument)
+                    if (bm.module && self_ && self_->base != PluginKind::Module)
+                        error(
+                            c->loc, "script.plugin.module", calleeName + "() belongs to modules",
+                            "a plugin reads transport from io.transport and seeds its own Random");
+                    if (self_ && self_->base == PluginKind::Module &&
+                        (bm.instrument || calleeName == "setLatency" || calleeName == "setTail"))
+                        error(c->loc,
+                              bm.instrument                ? "script.module.voice"
+                              : calleeName == "setLatency" ? "script.module.latency"
+                                                           : "script.module.tail",
+                              calleeName + "() is not a module method",
+                              "modules use polyphonic pitch/gate cables and a fixed grid without "
+                              "latency or tail reporting");
+                    else if (bm.instrument && self_ && self_->base != PluginKind::Instrument)
                         error(c->loc, "script.plugin.instrument",
                               calleeName + "() is an instrument's, and " + self_->name +
                                   " has no voices",
@@ -2004,9 +2039,14 @@ std::optional<Constant> Sema::evaluate(Expr* e, StructDecl* scope) {
             auto it = factories.find(name);
             const bool fileFactory = name == "audioFile" || name == "impulseResponse";
             const bool sourceFactory = name == "source" || name == "voiceSource";
+            static const std::vector<std::string> portFactories = {
+                "audioIn",  "pitchIn",  "gateIn",  "cvIn",  "unipolarIn",  "phaseIn",
+                "audioOut", "pitchOut", "gateOut", "cvOut", "unipolarOut", "phaseOut"};
+            auto portFactory = std::find(portFactories.begin(), portFactories.end(), name);
+            const bool isPortFactory = name == "portSpec" || portFactory != portFactories.end();
             // As in C++, a member of that name hides the factory (in a member
             // initializer, every member is in scope).
-            if (it != factories.end() || fileFactory || sourceFactory)
+            if (it != factories.end() || fileFactory || sourceFactory || isPortFactory)
                 for (StructDecl* s = self_; s; s = s->outer)
                     if (findField(s, name) || findMethod(s, name)) {
                         error(call->callee->loc, "script.name.hidden",
@@ -2020,6 +2060,41 @@ std::optional<Constant> Sema::evaluate(Expr* e, StructDecl* scope) {
                                   name + "Member = " + name + "(...).withKey(\"" + name + "\")");
                         return std::nullopt;
                     }
+            if (isPortFactory) {
+                const bool generic = name == "portSpec";
+                std::optional<Constant> label;
+                if (call->args.size() == (generic ? 3u : 1u))
+                    label = evaluate(call->args[0], scope);
+                if (!label || label->kind != Constant::Kind::String) {
+                    error(call->loc, "script.module.port_declaration",
+                          "a port factory takes a name in quotes",
+                          "audioIn(\"In\"), audioOut(\"Out\") or portSpec(\"In\", "
+                          "SignalKind::Audio, false)");
+                    return std::nullopt;
+                }
+                Constant c;
+                c.kind = Constant::Kind::Port;
+                c.port.name = label->stringValue;
+                if (generic) {
+                    auto signal = evaluate(call->args[1], scope),
+                         output = evaluate(call->args[2], scope);
+                    if (!signal || signal->kind != Constant::Kind::Enum ||
+                        signal->enumType != b_.enumNamed("SignalKind") || signal->intValue < 0 ||
+                        signal->intValue > 5 || !output || !output->numeric()) {
+                        error(call->loc, "script.module.port_declaration",
+                              "portSpec takes a SignalKind and bool direction",
+                              "portSpec(\"In\", SignalKind::Audio, false)");
+                        return std::nullopt;
+                    }
+                    c.port.signal = static_cast<PortModel::Signal>(signal->intValue);
+                    c.port.output = output->asDouble() != 0.0;
+                } else {
+                    const auto n = portFactory - portFactories.begin();
+                    c.port.signal = static_cast<PortModel::Signal>(n % 6);
+                    c.port.output = n >= 6;
+                }
+                return c;
+            }
             // A source member's: source("Macro 1"), voiceSource("LFO 1").
             if (sourceFactory) {
                 std::optional<Constant> label;
@@ -2173,6 +2248,29 @@ std::optional<Constant> Sema::evaluate(Expr* e, StructDecl* scope) {
             auto* m = static_cast<MemberExpr*>(call->callee);
             auto base = evaluate(m->object, scope);
             if (!base) return std::nullopt;
+            if (base->kind == Constant::Kind::Port) {
+                Constant c = *base;
+                std::optional<Constant> arg;
+                if (call->args.size() == 1) arg = evaluate(call->args[0], scope);
+                const std::string& mod = m->member;
+                if (!arg ||
+                    (mod == "normal" ? !arg->numeric() : arg->kind != Constant::Kind::String) ||
+                    (mod != "normal" && mod != "help" && mod != "in" && mod != "withKey")) {
+                    error(call->loc, "script.module.port_modifier",
+                          "a port takes help(text), in(group), withKey(key) or normal(value)",
+                          "audioIn(\"In\").help(\"Audio to process.\").normal(0)");
+                    return std::nullopt;
+                }
+                if (mod == "normal")
+                    c.port.normal = arg->asDouble();
+                else if (mod == "help")
+                    c.port.description = arg->stringValue;
+                else if (mod == "in")
+                    c.port.group = arg->stringValue;
+                else
+                    c.port.key = arg->stringValue;
+                return c;
+            }
             if (base->kind == Constant::Kind::File) {
                 Constant c = *base;
                 std::optional<Constant> arg;
