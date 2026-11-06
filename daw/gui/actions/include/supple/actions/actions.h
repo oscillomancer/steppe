@@ -36,11 +36,15 @@ struct ControlValue {
     double value = 0;
     int steps = 0;
     bool relative = false;
-    // Absolute, learned with soft takeover: a knob far from the value waits
-    // until it reaches it (offered where `Action::takeover` is set).
+    // A knob with soft takeover (Action::takeover): one far from the value
+    // waits until it reaches it.
     bool softTakeover = false;
     std::string gesture;  // one undo step per movement: the origin's gesture
 };
+
+// Whether a followed action's knob takes over softly: never (a press, an
+// encoder), when its binding asks (MIDI learn offers it), or always.
+enum class SoftTakeover : std::uint8_t { None, Offered, Always };
 
 struct Action {
     std::string id;    // "history.undo", "track.add:buss", "macro:…", "ui.actions"
@@ -57,9 +61,7 @@ struct Action {
     // Set: the action follows a controller's value ("(MIDI CC)" actions:
     // a volume, a pan, a scroll) instead of running once per press.
     std::function<Result<json::Value>(const ControlValue&, const Context&)> control;
-    // A followed action that sets a value from a knob's position (a volume, a
-    // pan): its MIDI learn offers soft takeover.
-    bool takeover = false;
+    SoftTakeover takeover = SoftTakeover::None;
     // Set: whether the action applies now (menus grey it when false). Unset: always.
     std::function<bool(const Context&)> enabled;
     bool fromRegistry = false;

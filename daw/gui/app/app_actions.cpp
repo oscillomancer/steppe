@@ -102,6 +102,11 @@ struct Selection {
     std::vector<std::string> tracks, items;
 };
 
+// An encoder's move of a value now at `current` (0..1): its steps of `step`.
+std::optional<double> stepped(const actions::ControlValue& v, double current, double step) {
+    if (v.steps == 0) return std::nullopt;
+    return current + v.steps * step;
+}
 }  // namespace
 
 void registerGuiCommands(cmd::Registry& registry, const UiState& ui) {
@@ -323,7 +328,7 @@ AppActions::AppActions(const cmd::Registry& registry, cmd::Dispatcher& dispatche
             SUPPLE_TRY(controlTracks(v, false, false));
             return {};
         },
-        true);
+        actions::SoftTakeover::Offered);
     addControl(
         "control.track.pan", "Track: pan of selected tracks (MIDI CC)",
         "A knob sets the selected tracks' pan, left to right; an encoder moves it.",
@@ -331,7 +336,7 @@ AppActions::AppActions(const cmd::Registry& registry, cmd::Dispatcher& dispatche
             SUPPLE_TRY(controlTracks(v, true, false));
             return {};
         },
-        true);
+        actions::SoftTakeover::Offered);
     addControl(
         "control.master.volume", "Master: volume (MIDI CC)",
         "A knob or fader sets the main master's volume along the fader's travel.",
@@ -339,7 +344,7 @@ AppActions::AppActions(const cmd::Registry& registry, cmd::Dispatcher& dispatche
             SUPPLE_TRY(controlTracks(v, false, true));
             return {};
         },
-        true);
+        actions::SoftTakeover::Offered);
     addControl("control.transport.jog", "Transport: move the play cursor by beats (MIDI CC)",
                "An encoder (a relative mode) moves the play cursor a beat per step.",
                [this](const actions::ControlValue& v) -> Status {
@@ -357,6 +362,7 @@ AppActions::AppActions(const cmd::Registry& registry, cmd::Dispatcher& dispatche
         "(1.0 at the middle, its chosen range at the ends); an encoder moves it ten cents "
         "a step.",
         [this](const actions::ControlValue& v) -> Status {
+            static constexpr const char* kRate = "control.transport.playrate";
             const double now = app_.head().project->playrate.rate;
             double rate;
             if (v.relative) {
@@ -367,8 +373,7 @@ AppActions::AppActions(const cmd::Registry& registry, cmd::Dispatcher& dispatche
                 const double p = std::abs(v.value - 0.5) <= 0.5 / 127 ? 0.5 : v.value;
                 actions::ControlValue at = v;
                 at.value = p;
-                const auto to =
-                    takeOver(at, "control.transport.playrate", ratePosition(now, playrateRange));
+                const auto to = knob(at, kRate, ratePosition(now, playrateRange));
                 if (!to) return {};
                 rate = positionRate(*to, playrateRange);
             }
@@ -377,12 +382,10 @@ AppActions::AppActions(const cmd::Registry& registry, cmd::Dispatcher& dispatche
             SUPPLE_TRY(
                 dispatcher_.execute({"transport.playrate.set", obj({{"rate", rate}}),
                                      cmd::Origin{cmd::Origin::Type::Ui, "midi", {}, v.gesture}}));
-            if (v.softTakeover && !v.relative)  // the knob holds it now
-                touchedTakeover_["control.transport.playrate"].set =
-                    ratePosition(app_.head().project->playrate.rate, playrateRange);
+            held(v, kRate, ratePosition(app_.head().project->playrate.rate, playrateRange));
             return {};
         },
-        true);
+        actions::SoftTakeover::Offered);
 
     addControl(
         "control.fx.last", "FX: last touched parameter (MIDI CC)",
@@ -395,20 +398,14 @@ AppActions::AppActions(const cmd::Registry& registry, cmd::Dispatcher& dispatche
                 return Error("fx.untouched", "no plug-in parameter was touched yet", {},
                              "move a parameter in the FX window or a plug-in's editor");
             // Soft takeover per parameter: a knob does not jump the new one.
-            engine::Takeover& takeover = touchedTakeover_[t->fx.str() + ":" + t->param];
+            const std::string key = t->fx.str() + ":" + t->param;
             const auto set = app_.moveParam(t->fx, t->param, [&](double current, double step) {
-                if (v.relative)
-                    return v.steps == 0 ? std::optional<double>()
-                                        : std::optional<double>(current + v.steps * step);
-                engine::ControlReading r;
-                r.value = v.value;
-                r.press = v.value > 0;
-                return engine::nextValue(current, r, model::ControlMode::Absolute, true, step,
-                                         takeover);
+                return v.relative ? stepped(v, current, step) : knob(v, key, current, step);
             });
-            if (set && !v.relative) takeover.set = *set;  // the knob holds it now
+            if (set) held(v, key, *set);
             return {};
-        });
+        },
+        actions::SoftTakeover::Always);
 
     addControl(
         "control.route.last", "Routing: last touched send (MIDI CC)",
@@ -419,20 +416,14 @@ AppActions::AppActions(const cmd::Registry& registry, cmd::Dispatcher& dispatche
             if (!t)
                 return Error("route.untouched", "no send's level or pan was moved yet", {},
                              "move a send's level or pan in the routing matrix");
-            engine::Takeover& takeover = touchedTakeover_[t->route.str() + ":" + t->param];
+            const std::string key = t->route.str() + ":" + t->param;
             const auto set = app_.moveControl(t->route, t->param, [&](double current, double step) {
-                if (v.relative)
-                    return v.steps == 0 ? std::optional<double>()
-                                        : std::optional<double>(current + v.steps * step);
-                engine::ControlReading r;
-                r.value = v.value;
-                r.press = v.value > 0;
-                return engine::nextValue(current, r, model::ControlMode::Absolute, true, step,
-                                         takeover);
+                return v.relative ? stepped(v, current, step) : knob(v, key, current, step);
             });
-            if (set && !v.relative) takeover.set = *set;
+            if (set) held(v, key, *set);
             return {};
-        });
+        },
+        actions::SoftTakeover::Always);
 
     if (auto loadedControls = ControlMap::load(controlsFile_); loadedControls)
         controls_ = std::move(*loadedControls);
@@ -583,7 +574,7 @@ Status AppActions::resetKeymap() {
 
 void AppActions::addControl(std::string id, std::string name, std::string description,
                             std::function<Status(const actions::ControlValue&)> run,
-                            bool takeover) {
+                            actions::SoftTakeover takeover) {
     actions::Action a;
     a.id = std::move(id);
     a.name = std::move(name);
@@ -610,14 +601,18 @@ std::optional<AppActions::TouchedSend> AppActions::lastTouchedSend() const {
     return std::nullopt;
 }
 
-std::optional<double> AppActions::takeOver(const actions::ControlValue& v, const std::string& key,
-                                           double current) {
+std::optional<double> AppActions::knob(const actions::ControlValue& v, const std::string& key,
+                                       double current, double step) {
     if (!v.softTakeover) return v.value;
     engine::ControlReading r;
     r.value = v.value;
     r.press = v.value > 0;
-    return engine::nextValue(current, r, model::ControlMode::Absolute, true, 0,
-                             touchedTakeover_[key]);
+    return engine::nextValue(current, r, model::ControlMode::Absolute, true, step, takeover_[key]);
+}
+
+void AppActions::held(const actions::ControlValue& v, const std::string& key, double value) {
+    // An encoder's move does not count: a knob still has to reach the value.
+    if (!v.relative) takeover_[key].set = value;
 }
 
 Result<json::Value> AppActions::controlTracks(const actions::ControlValue& v, bool pan,
@@ -638,26 +633,25 @@ Result<json::Value> AppActions::controlTracks(const actions::ControlValue& v, bo
     auto position = [pan](const model::Track& t) {
         return pan ? (t.pan + 100.0) / 200.0 : ui::faderPosition(t.volumeDb);
     };
-    const bool soft = v.softTakeover && !v.relative;
     std::vector<model::Id> moved;
     auto r = dispatcher_.transact(
         pan ? "Track pan" : "Track volume", origin, [&]() -> Result<json::Value> {
             for (const model::Id& id : tracks) {
                 const model::Track& t = *s.tracks.find(id);
-                std::optional<double> knob = v.value;
+                std::optional<double> to = v.value;
                 if (!v.relative) {
-                    knob = takeOver(v, action + ":" + id.str(), position(t));
-                    if (!knob) continue;  // soft takeover: not reached yet
+                    to = knob(v, action + ":" + id.str(), position(t));
+                    if (!to) continue;  // soft takeover: not reached yet
                 }
                 json::Value args = json::Value::object();
                 args["track"] = id.str();
                 if (pan) {  // an encoder step is 1 %; a knob spans hard left to hard right
-                    const double to =
-                        v.relative ? t.pan + v.steps : std::round(*knob * 200.0 - 100.0);
-                    args["pan"] = std::clamp(to, -100.0, 100.0);
+                    const double percent =
+                        v.relative ? t.pan + v.steps : std::round(*to * 200.0 - 100.0);
+                    args["pan"] = std::clamp(percent, -100.0, 100.0);
                 } else {
                     double p = ui::faderPosition(t.volumeDb);
-                    p = std::clamp(v.relative ? p + v.steps / 128.0 : *knob, 0.0, 1.0);
+                    p = std::clamp(v.relative ? p + v.steps / 128.0 : *to, 0.0, 1.0);
                     args["volume_db"] = std::clamp(ui::faderDb(p), model::kSilenceDb, 12.0);
                 }
                 SUPPLE_TRY(dispatcher_.execute({"track.set", std::move(args), origin}));
@@ -665,11 +659,11 @@ Result<json::Value> AppActions::controlTracks(const actions::ControlValue& v, bo
             }
             return json::Value::object();
         });
-    if (r && soft) {  // the knob holds what it set
+    if (r) {
         const model::Session now = app_.head();
         for (const model::Id& id : moved)
             if (const model::Track* t = now.tracks.find(id))
-                touchedTakeover_[action + ":" + id.str()].set = position(*t);
+                held(v, action + ":" + id.str(), position(*t));
     }
     return r;
 }
@@ -726,8 +720,10 @@ void AppActions::control(const std::vector<engine::EngineApp::ControlEvent>& eve
             if (now > st.lastMs + 1000) ++st.serial;
             st.lastMs = now;
             value.gesture = "midi:" + b.action + ":" + std::to_string(st.serial);
-            value.softTakeover = a->takeover && b.softTakeover &&
-                                 b.mode == model::ControlMode::Absolute && !value.relative;
+            value.softTakeover =
+                !value.relative && (a->takeover == actions::SoftTakeover::Always ||
+                                    (a->takeover == actions::SoftTakeover::Offered &&
+                                     b.softTakeover && b.mode == model::ControlMode::Absolute));
             const actions::Action copy = *a;
             if (auto r = copy.control(value, context()); !r && onError)
                 onError(copy.name + ": " + r.error().message);

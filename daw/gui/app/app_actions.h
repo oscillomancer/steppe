@@ -134,10 +134,9 @@ class AppActions {
     void touchSend(model::Id route, std::string param);
     std::optional<TouchedSend> lastTouchedSend() const;
     // A built-in that follows a controller (listed as "… (MIDI CC)").
-    // `takeover`: it sets a value from a knob's position, and its MIDI learn
-    // offers soft takeover.
     void addControl(std::string id, std::string name, std::string description,
-                    std::function<Status(const actions::ControlValue&)> run, bool takeover = false);
+                    std::function<Status(const actions::ControlValue&)> run,
+                    actions::SoftTakeover takeover = actions::SoftTakeover::None);
 
   private:
     std::uint64_t learnSerial_ = 0, learnOwner_ = 0;
@@ -151,13 +150,16 @@ class AppActions {
         std::uint64_t lastMs = 0, serial = 0;
     };
     std::map<std::string, ControlState, std::less<>> controlState_;
-    // Soft takeover's memory: per fx:param and sd:param (the last touched),
-    // and per action:target for a binding learned with it.
-    std::map<std::string, engine::Takeover> touchedTakeover_;
-    // A knob's position for a value now at `current` (0..1), or none while
-    // soft takeover waits for the knob to reach it (`v` absolute).
-    std::optional<double> takeOver(const actions::ControlValue& v, const std::string& key,
-                                   double current);
+    // Soft takeover's memory, per value a followed action moves ("fx_2:gain",
+    // "control.track.volume:tr_1").
+    std::map<std::string, engine::Takeover> takeover_;
+    // An absolute `v`'s knob position (0..1) for the value `key` now at
+    // `current`; with soft takeover, none until the knob reaches it. `step`:
+    // one step of a stepped value.
+    std::optional<double> knob(const actions::ControlValue& v, const std::string& key,
+                               double current, double step = 0);
+    // What `v` left the value at (0..1): a knob holds it from there.
+    void held(const actions::ControlValue& v, const std::string& key, double value);
     std::optional<TouchedSend> touchedSend_;
     // Track volume / pan of the selection (or the master) by a controller.
     Result<json::Value> controlTracks(const actions::ControlValue& v, bool pan, bool master);

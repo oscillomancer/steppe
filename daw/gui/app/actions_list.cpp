@@ -160,7 +160,7 @@ class ActionsPanel : public ui::Node {
         LearnRequest request;
         request.title = a->name;
         request.pressOnly = !a->control;
-        request.takeover = a->takeover;
+        request.takeover = a->takeover == actions::SoftTakeover::Offered;
         if (const std::string follow = actions_.followingControl(id); !follow.empty())
             if (const actions::Action* f = actions_.registry().find(follow))
                 request.alternative = f->name;
