@@ -48,6 +48,8 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `drum` | An analog-style drum voice, eight models on a knob (kick, snare, tom, closed and open hat, clap, cowbell, rimshot): tune, tone, decay, snap, accent, poly |
 | `morph` | A morphing oscillator: one Shape from sine through triangle, saw, square and narrow pulse to formant bursts, a phase Warp, a sub; anti-aliased, poly |
 | `operator` | A phase-modulation operator for FM stacks: ratio, fine, Hz offset, PM index, self-feedback, level; outputs its sine and its phase, poly |
+| `phasor` | A phase generator: a 0..1 ramp at the pitch with skew, offset, sync and a wrap trigger, poly |
+| `shaper` | Phase in, wave out by a curve (sine, triangle, saw, pulse, smooth step, window) with skew and fold: phase distortion by cables, poly |
 
 ### Modulation, sequencing, generative and utilities
 
