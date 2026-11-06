@@ -317,8 +317,10 @@ project types (`Origin::Project`), which win over the library's for the
 same id, so the project sounds as it was saved on any machine. A
 `module.write` or `module.edit` of the same id in the library replaces the
 project's copy in the catalog (the edit plays, and the next save copies
-it); `module.edit {type}` of a project-only type writes it into the
-library.
+it). `module.edit {type}` of a project type edits its source into the
+library's entry with the same type id. If that id is absent, it uses the
+project copy's name or a free suffixed name (`<name>-2`, …), leaving other
+library types' files untouched.
 
 ## 4. The rack runtime (`modules/rack`)
 

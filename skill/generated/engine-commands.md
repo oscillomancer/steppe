@@ -8448,7 +8448,7 @@ Result:
 
 Edit a library module in place: replace text, then save and compile it.
 
-name (or type, a library module's id). Each edit replaces old, which must be in the source exactly once, with new (empty deletes it), in order and all or none. Then as module.write: saved, compiled, and racks playing it rebuilt.
+name (or type, a library or project module's id). A project type is edited into the library's entry of the same id, or a free name when the id is absent. Each edit replaces old, which must be in the source exactly once, with new (empty deletes it), in order and all or none. Then as module.write: saved, compiled, and racks playing it rebuilt.
 
 Kind: `action`. Exposure: `mcp-tool`.
 

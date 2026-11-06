@@ -69,6 +69,21 @@ Status validModuleName(std::string_view name, const std::string& path) {
     return {};
 }
 
+Result<std::string> availableModuleName(const fs::path& dir, std::string_view stem) {
+    SUPPLE_TRY(validModuleName(stem, "/name"));
+    for (std::uint64_t n = 1;; ++n) {
+        const std::string suffix = n == 1 ? "" : "-" + std::to_string(n);
+        const std::string name = std::string(stem.substr(0, 64 - suffix.size())) + suffix;
+        const fs::path file = modulePath(dir, name);
+        std::error_code ec;
+        const fs::file_status status = fs::symlink_status(file, ec);
+        if (ec && ec != std::errc::no_such_file_or_directory)
+            return Error("module.path", "cannot inspect " + file.string() + ": " + ec.message(),
+                         file.string(), "check the module folder's permissions and path");
+        if (!fs::exists(status)) return name;
+    }
+}
+
 namespace {
 
 // `base` with `dir`'s modules as `origin` in place of its types of that origin.

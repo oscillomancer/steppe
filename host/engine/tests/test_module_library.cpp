@@ -520,3 +520,61 @@ TEST_CASE("rack presets: a malformed file is skipped with a warning") {
     REQUIRE(list.find("warnings") != nullptr);
     CHECK(list["warnings"].at(0).find("code")->asString() == "rack.preset_invalid");
 }
+
+namespace {
+std::string otherId(std::string text, const std::string& id) {
+    auto at = text.find("com.example.level");
+    text.replace(at, std::string("com.example.level").size(), id);
+    return text;
+}
+std::filesystem::path portableProject(Fixture& f, const char* library = "level") {
+    f.write(library, kLevel);
+    f.run("track.add", R"({"name":"Synth"})");
+    f.run("rack.add", R"({"track":"tr_1"})");
+    f.run("module.add", R"({"rack":"rk_1","type":"com.example.level"})");
+    const auto song = f.dir / "song" / "song.json";
+    json::Value a = json::Value::object();
+    a["path"] = song.string();
+    REQUIRE(f.call("project.save", a));
+    return song;
+}
+void openPortable(Fixture& f, const std::filesystem::path& song) {
+    json::Value a = json::Value::object();
+    a["path"] = song.string();
+    REQUIRE(f.call("project.open", a));
+}
+}  // namespace
+
+TEST_CASE("module library: project edits preserve another library type with the same name") {
+    Fixture here;
+    const auto song = portableProject(here);
+    Fixture there;
+    const auto original = otherId(kLevel, "com.example.other");
+    there.write("level", original);
+    openPortable(there, song);
+    auto result = there.call(
+        "module.edit",
+        *json::parse(R"({"type":"com.example.level","edits":[{"old":"0.25","new":"0.5"}]})"));
+    REQUIRE(result);
+    CHECK((*result)["name"].asString() == "level-2");
+    const auto saved = readTextFile(there.app->moduleDir() / "level" / "level.cpp", 1 << 20);
+    REQUIRE(saved);
+    CHECK(*saved == original);
+    CHECK(there.app->modules()->find("com.example.other") != nullptr);
+}
+
+TEST_CASE("module library: project edits resolve an existing library type by id") {
+    Fixture here;
+    const auto song = portableProject(here, "portable");
+    Fixture there;
+    there.write("global", kLevel);
+    openPortable(there, song);
+    auto result = there.call(
+        "module.edit",
+        *json::parse(R"({"type":"com.example.level","edits":[{"old":"0.25","new":"0.5"}]})"));
+    REQUIRE(result);
+    CHECK((*result)["name"].asString() == "global");
+    const auto saved = readTextFile(there.app->moduleDir() / "global" / "global.cpp", 1 << 20);
+    REQUIRE(saved);
+    CHECK(saved->find("0.5") != std::string::npos);
+}
