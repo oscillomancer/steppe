@@ -193,7 +193,7 @@ struct Rhythm : Module {
         .vendor = "Supple Audio",
         .description =
             "Drum patterns from a map of grooves: X and Y morph them, density and chaos.",
-        .tags = {"drums", "sequencer", "generative", "rhythm"}};
+        .tags = {"drum", "sequencer", "generative", "rhythm"}};
 
     Param x = percent("X", 0).in("Map").help(
         "Across the map: straight at 0 %, a backbeat at 50 %, broken rhythms at 100 %.");
