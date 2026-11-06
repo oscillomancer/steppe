@@ -24,7 +24,8 @@ endif()
 
 # --- the stock modules ------------------------------------------------------------------
 # Every stock/<name>.cpp is a module: its struct (the one deriving from
-# Module) is found in the file, so adding a module is adding its file.
+# Module) is found in the file, so adding a module is adding its file. Each
+# is wrapped as C++ at build time (cmake/stock_module.cmake).
 file(GLOB _stock_scripts CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/stock/*.cpp)
 list(SORT _stock_scripts)
 set(_stock_generated)
@@ -35,18 +36,15 @@ foreach(_script IN LISTS _stock_scripts)
     message(FATAL_ERROR "modules/stock/${NAME}.cpp: a stock module's file name is lower case "
                         "letters, digits and _")
   endif()
-  file(STRINGS ${_script} _decl REGEX "^struct [A-Za-z_][A-Za-z0-9_]* : Module")
-  list(LENGTH _decl _count)
-  if(NOT _count EQUAL 1)
-    message(FATAL_ERROR "modules/stock/${NAME}.cpp: expected one line 'struct <Name> : Module "
-                        "{' at the start of a line, found ${_count}")
-  endif()
-  string(REGEX REPLACE "^struct ([A-Za-z_][A-Za-z0-9_]*) : Module.*$" "\\1" STRUCT "${_decl}")
-  file(READ ${_script} _hex HEX)
-  string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," HEX "${_hex}")
-  set(SOURCE ${_script})
   set(_out ${CMAKE_CURRENT_BINARY_DIR}/stock/${NAME}.cpp)
-  configure_file(cmake/stock_module.cpp.in ${_out} @ONLY)
+  add_custom_command(
+    OUTPUT ${_out}
+    COMMAND ${CMAKE_COMMAND} -DNAME=${NAME} -DSCRIPT=${_script}
+            -DTEMPLATE=${CMAKE_CURRENT_SOURCE_DIR}/cmake/stock_module.cpp.in -DOUT=${_out}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/stock_module.cmake
+    DEPENDS ${_script} cmake/stock_module.cpp.in cmake/stock_module.cmake
+    COMMENT "Stock module ${NAME}"
+    VERBATIM)
   list(APPEND _stock_generated ${_out})
   list(APPEND _stock_names ${NAME})
 endforeach()

@@ -28,9 +28,10 @@ specific to `modules/`: the modular racks' modules (ADR-0062,
 - **Identity.** File `stock/<name>.cpp`, id `com.suppleaudio.rack.<name>`,
   vendor `Supple Audio`, version `1.0.0`. The id and every parameter and
   port key are permanent once shipped: add new keys, never rename. A key is
-  its member's name in snake_case; the C++ build derives it from the
-  parameter's or port's *name* in snake_case, so name members to match
-  (`pulseWidth` named "Pulse Width") or give `.withKey()`.
+  its member's name in snake_case (`pulseWidth` → `pulse_width`) unless
+  `.withKey()` gives one, in the JIT and in the C++ build alike (which reads
+  the member names from the declarations, `cmake/stock_module.cmake`:
+  declare one `Param`, `Input` or `Output` member per line).
 - **Conventions.** Signals as ADR-0062 §2: audio ±1, pitch in octaves from
   C4, gates 0/1 (high at 0.5; triggers 1 ms), CV −1..1, unipolar 0..1,
   phase 0..1. Physical units on parameters, sensible ranges, musical
