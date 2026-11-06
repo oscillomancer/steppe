@@ -20,12 +20,14 @@
 #include "floating_panel.h"
 #include "plugin_scales.h"
 #include "rack_engine.h"
+#include "rack_labels.h"
 #include "rack_window.h"
 #include "supple/engine/realtime.h"
 #include "supple/gui/png.h"
 #include "supple/gui/window.h"
 #include "supple/script_compiler.hpp"
 #include "supple/script_module.h"
+#include "supple/ui/canvas.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/root.h"
 #include "supple/ui/text_area.h"
@@ -1182,4 +1184,263 @@ TEST_CASE("rack window: modules saved as a rack preset load into another rack fr
     REQUIRE(f.pick("rack.browser.menu", "Delete preset"));
     shows = f.racks->browserShows();
     CHECK(std::find(shows.begin(), shows.end(), "preset:Voice") == shows.end());
+}
+
+TEST_CASE("rack window: a cable glows with its source's signal, even from out of view") {
+    Fixture f;
+    if (!f.ok) return;
+    const std::string rack = f.exec("rack.add", R"({"name":"Glow"})")["rack"].asString();
+    const std::string lfo = f.add(rack, "lfo", 0, 0), vca = f.add(rack, "vca", 1600, 0);
+    const std::string far = f.add(rack, "drift", -2000, 0);
+    f.cable(lfo + ".out", vca + ".in");
+    f.racks->open();
+    f.frame();
+    const model::Id lfoId = *model::Id::parse(lfo), vcaId = *model::Id::parse(vca);
+    const model::Id farId = *model::Id::parse(far);
+    auto watched = [&](model::Id id) {
+        const rack::Instance* in = gui::racks::instance(*f.app, id);
+        REQUIRE(in);
+        return in->watched();
+    };
+
+    SUBCASE("the source of a cable across the view is watched") {
+        engine::DummyBackend backend(
+            engine::DummyBackend::Options{.mode = engine::DummyBackend::Mode::Manual});
+        REQUIRE(f.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 256},
+                                   {.anticipative = false}));
+        backend.run(1);
+        // Neither end in view, the cable's middle is.
+        f.racks->space()->setView({600, -40, 1.0});
+        f.frame();
+        const auto sources = f.racks->space()->cableSources(f.racks->space()->visibleSpace());
+        CHECK(sources == std::vector<model::Id>{lfoId});
+        auto now = std::chrono::steady_clock::now();
+        f.racks->tick(now += std::chrono::seconds(1));
+        CHECK(watched(lfoId));
+        CHECK_FALSE(watched(vcaId));  // takes it, feeds nothing
+        CHECK_FALSE(watched(farId));
+        // Its telemetry arrives, so the cable can show its level.
+        backend.run(4);
+        f.racks->tick(now += std::chrono::seconds(1));
+        CHECK(f.racks->space()->scene().module(lfoId)->live);
+        // Out of view altogether, it is not watched.
+        f.racks->space()->setView({-6000, -40, 1.0});
+        f.frame();
+        f.racks->tick(now += std::chrono::seconds(1));
+        CHECK_FALSE(watched(lfoId));
+        CHECK_FALSE(f.racks->space()->scene().module(lfoId)->live);
+        f.app->stopEngine();
+    }
+
+    SUBCASE("the glow follows the level") {
+        f.racks->space()->setView({-20, -40, 1.0});
+        f.frame();
+        auto* m = f.racks->space()->scene().module(lfoId);
+        REQUIRE(m);
+        REQUIRE(m->type);
+        const auto from =
+            f.racks->space()->scene().endPoint(f.racks->space()->scene().cables.at(0).from, true);
+        REQUIRE(from);
+        const std::size_t n = m->type->outputs().size();
+        const int out = m->type->output("out");
+        REQUIRE(out >= 0);
+        // The light around the cable, away from its jack (whose own glow
+        // follows the same level).
+        auto light = [&](double level) {
+            m->live = true;
+            m->telemetry.outputs.assign(n, 0.0);
+            m->telemetry.peaks.assign(n, 0.0f);
+            m->telemetry.channels.assign(n, 1);
+            m->telemetry.outputs[static_cast<std::size_t>(out)] = level;
+            m->telemetry.peaks[static_cast<std::size_t>(out)] = static_cast<float>(level);
+            f.racks->space()->telemetryChanged();
+            f.r().damageAll();
+            f.r().frame(false);
+            const gui::Image image = f.r().readBack();
+            const ui::Point a = f.racks->space()->toWindow(*from);
+            const ui::Rect seen = f.racks->space()->bounds();
+            long sum = 0;
+            for (int y = static_cast<int>(seen.y); y < static_cast<int>(seen.bottom()); ++y)
+                for (int x = static_cast<int>(a.x) + 120; x < static_cast<int>(a.x) + 320; ++x) {
+                    if (x < 0 || y < 0 || x >= image.width || y >= image.height) continue;
+                    const std::size_t i = (static_cast<std::size_t>(y) * image.width + x) * 4;
+                    sum += image.rgba[i] + image.rgba[i + 1] + image.rgba[i + 2];
+                }
+            return sum;
+        };
+        const long dark = light(0), lit = light(1);
+        f.snapshot("rack-cable-glow.png");
+        CHECK(lit > dark + dark / 50);
+        CHECK(light(0) == dark);
+        f.snapshot("rack-cable-quiet.png");
+    }
+}
+
+TEST_CASE("rack window: Tidy up lays out the rack, or the selection, in one undo step") {
+    Fixture f;
+    if (!f.ok) return;
+    auto made = f.exec("rack.add", R"({"name":"Heap"})");
+    const std::string rack = made["rack"].asString(), out = made["out"].asString();
+    // A heap: every module on the same spot.
+    const std::string lfo = f.add(rack, "lfo", 300, 200), vco = f.add(rack, "vco", 300, 200);
+    const std::string vca = f.add(rack, "vca", 300, 200), adsr = f.add(rack, "adsr", 300, 200);
+    f.exec("module.set", R"({"module":")" + out + R"(","x":300,"y":200})");
+    f.cable(lfo + ".out", vco + ".exp_fm");
+    f.cable(vco + ".sine", vca + ".in");
+    f.cable(adsr + ".envelope", vca + ".cv");
+    f.cable(vca + ".out", out + ".l");
+    f.racks->open();
+    f.frame();
+    const std::vector<std::string> all{lfo, vco, vca, adsr, out};
+    auto place = [&](const std::string& id) {
+        const auto* m = f.app->head().modules.find(*model::Id::parse(id));
+        REQUIRE(m);
+        return std::pair{m->x, m->y};
+    };
+    auto rectOf = [&](const std::string& id) {
+        const auto* m = f.racks->space()->scene().module(*model::Id::parse(id));
+        REQUIRE(m);
+        return m->rect();
+    };
+    auto menu = [&](const std::string& label) {
+        const ui::Rect b = f.racks->space()->bounds();
+        const ui::Point empty{b.x + 20, b.y + 20};
+        f.pointer(ui::PointerEvent::Type::Down, empty, 3);
+        f.pointer(ui::PointerEvent::Type::Up, empty, 3);
+        return f.pick("rack.space.menu", label);
+    };
+    SUBCASE("the whole rack") {
+        REQUIRE(menu("Tidy up"));
+        f.snapshot("rack-tidy.png");
+        for (std::size_t i = 0; i < all.size(); ++i)
+            for (std::size_t j = i + 1; j < all.size(); ++j) {
+                CAPTURE(all[i]);
+                CAPTURE(all[j]);
+                CHECK(rectOf(all[i]).intersect(rectOf(all[j])).empty());
+            }
+        // From the heap's top-left, all in view.
+        double left = 1e9, top = 1e9;
+        for (const auto& id : all) {
+            left = std::min(left, place(id).first);
+            top = std::min(top, place(id).second);
+        }
+        CHECK(left == doctest::Approx(300));
+        CHECK(top == doctest::Approx(200));
+        const ui::Rect seen = f.racks->space()->visibleSpace();
+        for (const auto& id : all) CHECK(!rectOf(id).intersect(seen).empty());
+        // One undo step puts the heap back.
+        f.exec("history.undo", "{}");
+        f.frame();
+        for (const auto& id : all) CHECK(place(id) == std::pair{300.0, 200.0});
+    }
+
+    SUBCASE("the selection") {
+        f.racks->space()->select({*model::Id::parse(vco), *model::Id::parse(vca)});
+        f.frame();
+        REQUIRE(menu("Tidy up selection"));
+        CHECK(rectOf(vco).intersect(rectOf(vca)).empty());
+        for (const auto& id : {lfo, adsr, out}) CHECK(place(id) == std::pair{300.0, 200.0});
+    }
+}
+
+TEST_CASE("face labels keep to their own room on every stock and host module") {
+    Fixture f;
+    if (!f.ok) return;
+    const ui::Theme theme = ui::Theme::dark();
+    ui::Canvas c(f.window->vg(), f.fonts, theme);
+    const auto measure = [&](std::string_view s, float size) {
+        return c.textWidth(s, ui::Font::Ui, size);
+    };
+    // Boxes may touch: a hair is not a collision.
+    const auto meets = [](const ui::Rect& a, const ui::Rect& b) {
+        const ui::Rect i = a.intersect(b);
+        return i.w > 0.25f && i.h > 0.25f;
+    };
+    int types = 0, labels = 0;
+    for (const auto* e : gui::racks::catalog(*f.app)->list()) {
+        const rack::ModuleType& type = *e->type;
+        if (type.origin() != rack::Origin::Stock && type.origin() != rack::Origin::Host) continue;
+        ++types;
+        const rack::PanelLayout& face = type.layout();
+        const auto out = gui::racks::faceLabels(type, face, measure);
+        for (std::size_t i = 0; i < out.size(); ++i) {
+            const auto& l = out[i];
+            CAPTURE(type.id());
+            CAPTURE(l.text);
+            ++labels;
+            REQUIRE(!l.lines.empty());
+            // Every label is shown whole, at a size that can be read.
+            CHECK(l.lines[0].find("…") == std::string::npos);
+            CHECK(l.size >= gui::racks::kLabelMin);
+            float widest = 0;
+            for (const auto& line : l.lines) widest = std::max(widest, measure(line, l.size));
+            CHECK(widest <= l.box.w + 0.01f);
+            CHECK(l.box.x >= 0);
+            CHECK(l.box.right() <= static_cast<float>(face.width));
+            for (std::size_t k = 0; k < face.items.size(); ++k)
+                if (k != l.item && meets(l.box, gui::racks::footprint(face.items[k]))) {
+                    CAPTURE(k);
+                    CHECK_MESSAGE(false, "under another control");
+                }
+            for (std::size_t j = i + 1; j < out.size(); ++j)
+                if (meets(l.box, out[j].box)) {
+                    CAPTURE(out[j].text);
+                    CHECK_MESSAGE(false, "into another label");
+                }
+        }
+    }
+    CHECK(types > 40);
+    CHECK(labels > 400);
+}
+
+TEST_CASE("rack window: every stock module's face, at 100 %") {
+    Fixture f(ui::Theme::dark(), {}, 1400, 900);
+    if (!f.ok) return;
+    auto made = f.exec("rack.add", R"({"name":"Faces"})");
+    const std::string rack = made["rack"].asString();
+    // In rows as wide as the space in the window, as many whole rows to a
+    // page as fit its height.
+    struct Row {
+        std::vector<const rack::ModuleType*> types;
+        double height = 0;
+    };
+    std::vector<Row> rows(1);
+    double x = 0;
+    for (const auto* e : gui::racks::catalog(*f.app)->list()) {
+        if (e->type->origin() != rack::Origin::Stock) continue;
+        const auto& l = e->type->layout();
+        if (x > 0 && x + l.width > 1120) {
+            rows.emplace_back();
+            x = 0;
+        }
+        rows.back().types.push_back(e->type.get());
+        rows.back().height = std::max(rows.back().height, static_cast<double>(l.height));
+        x += l.width + 20;
+    }
+    std::vector<double> pages{0};
+    double y = 0;
+    int count = 0;
+    for (const Row& r : rows) {
+        if (y > pages.back() && y + r.height - pages.back() > 760) pages.push_back(y);
+        x = 0;
+        for (const rack::ModuleType* t : r.types) {
+            f.add(rack, t->id(), static_cast<int>(x), static_cast<int>(y));
+            x += t->layout().width + 20;
+            ++count;
+        }
+        y += r.height + 30;
+    }
+    // The rack's own Out is a stock face too: after the rest.
+    f.exec("module.set", R"({"module":")" + made["out"].asString() + R"(","x":0,"y":)" +
+                             std::to_string(static_cast<int>(y)) + "}");
+    if (y > pages.back() && y + 200 - pages.back() > 760) pages.push_back(y);
+    CHECK(count > 40);
+    f.racks->open();
+    f.frame();
+    for (std::size_t i = 0; i < pages.size(); ++i) {
+        f.racks->space()->setView({-20, pages[i] - 20, 1.0});
+        f.frame();
+        const std::string name = "rack-faces-" + std::to_string(i + 1) + ".png";
+        f.snapshot(name.c_str());
+    }
 }

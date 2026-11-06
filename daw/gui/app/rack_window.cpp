@@ -981,10 +981,13 @@ bool RackWindow::tick(std::chrono::steady_clock::time_point now) {
     nextTelemetry_ = now + kTelemetryInterval;
     bool changed = false;
     const ui::Rect seen = space_->visibleSpace();
+    // Modules in view, and those whose cables cross it (for their glow).
+    const std::vector<model::Id> sources = space_->cableSources(seen);
     std::vector<model::Id> watching;
     for (auto& m : space_->scene().modules) {
         rack::Instance* in = racks::instance(app_, m.id);
-        const bool visible = !seen.intersect(m.rect()).empty();
+        const bool visible = !seen.intersect(m.rect()).empty() ||
+                             std::find(sources.begin(), sources.end(), m.id) != sources.end();
         if (!in || !visible || !m.type) {
             if (m.live) {
                 m.live = false;
@@ -1640,6 +1643,25 @@ void RackWindow::deleteSelected() {
     if (!r) report(r.error());
 }
 
+void RackWindow::tidyUp() {
+    if (!rack_ || !space_) return;
+    const std::set<model::Id> selected = space_->selection();
+    const bool some = selected.size() > 1;
+    json::Value args = json::Value::object();
+    args["rack"] = rack_->str();
+    if (some) {
+        json::Value list = json::Value::array();
+        for (model::Id id : selected) list.push_back(id.str());
+        args["modules"] = std::move(list);
+    }
+    if (!exec("rack.arrange", std::move(args))) return;
+    sync();
+    if (some)
+        space_->reveal(selected);
+    else
+        space_->frameAll();
+}
+
 void RackWindow::moduleMenu(model::Id module, ui::Point at) {
     const model::RackModule* m = app_.head().modules.find(module);
     if (!m || !space_) return;
@@ -1756,6 +1778,10 @@ void RackWindow::spaceMenu(ui::Point at, ui::Point sp) {
                          },
                          clip_.has_value()});
         items.push_back({"", "", {}, true, true});
+        // With several modules selected, only they are tidied.
+        const bool several = space_ && space_->selection().size() > 1;
+        items.push_back({several ? "Tidy up selection" : "Tidy up", "", [this] { tidyUp(); },
+                         several || (space_ && space_->scene().modules.size() > 1)});
         items.push_back({"Show everything", "Home", [this] {
                              if (space_) space_->frameAll();
                          }});

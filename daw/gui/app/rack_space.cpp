@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <numbers>
 
+#include "rack_labels.h"
 #include "supple/ui/root.h"
 
 namespace supple::gui {
@@ -45,8 +46,34 @@ ui::Color mix(ui::Color a, ui::Color b, float t) {
 void fitText(ui::Canvas& c, const ui::Rect& box, std::string_view s, ui::Font font, float size,
              ui::Color col, int align) {
     const float w = c.textWidth(s, font, size);
-    if (w > box.w && w > 0) size = std::max(size * 0.75f, size * box.w / w);
+    if (w > box.w && w > 0) {
+        // Widths are measured in whole pixels: step down until it does fit.
+        const float floor = size * 0.75f;
+        size = std::max(floor, size * box.w / w);
+        while (size > floor && c.textWidth(s, font, size) > box.w)
+            size = std::max(floor, size - 0.25f);
+    }
     c.text(box, s, font, size, col, align);
+}
+
+// A name inside its control's box (a toggle's): as fitText, then on two
+// lines when the box is tall enough, else cut with an ellipsis.
+void fitLines(ui::Canvas& c, const ui::Rect& box, const std::string& s, ui::Font font, float size,
+              ui::Color col) {
+    if (c.textWidth(s, font, size) <= box.w || c.textWidth(s, font, racks::kLabelMin) <= box.w)
+        return fitText(c, box, s, font, size, col, ui::kCenter | ui::kMiddle);
+    for (float z = size; z >= racks::kLabelMin - 0.01f; z -= 0.25f) {
+        const float line = z * 1.15f;
+        if (2 * line > box.h + 2) continue;
+        const auto lines = c.wrap(s, font, z, box.w);
+        if (lines.size() != 2) continue;
+        const float y = box.y + box.h / 2 - line;
+        for (std::size_t k = 0; k < 2; ++k)
+            c.text({box.x - 1, y + line * static_cast<float>(k), box.w + 2, line}, lines[k], font,
+                   z, col, ui::kCenter | ui::kMiddle);
+        return;
+    }
+    c.text(box, s, font, racks::kLabelMin, col, ui::kCenter | ui::kMiddle);
 }
 
 float dist(ui::Point a, ui::Point b) { return std::hypot(a.x - b.x, a.y - b.y); }
@@ -307,34 +334,55 @@ bool RackSpace::connected(const RackScene::Module& m, const PanelItem& item) con
     return false;
 }
 
+double RackSpace::outputLevel(const RackScene::Module& src, int out) const {
+    if (!src.live || !src.type || out < 0 ||
+        static_cast<std::size_t>(out) >= src.telemetry.peaks.size())
+        return 0;
+    const auto& port = src.type->output(out);
+    const double peak = D(src.telemetry.peaks[static_cast<std::size_t>(out)]);
+    const double value = src.telemetry.outputs[static_cast<std::size_t>(out)];
+    switch (port.signal) {
+        case Signal::Gate:
+            return value >= 0.5 ? 1.0 : 0.15 * std::min(1.0, peak);
+        case Signal::Pitch:
+            return 0.55;  // a pitch is there or not, never loud
+        case Signal::Audio:
+            return std::min(1.0, std::sqrt(peak));
+        default:
+            return std::min(1.0, std::fabs(value) * 0.8 + 0.2 * peak);
+    }
+}
+
 // How lit a jack is, 0..1: an output's own level; an input's, its cables'.
 double RackSpace::jackLevel(const RackScene::Module& m, const PanelItem& item) const {
     if (!m.type) return 0;
-    auto levelOf = [&](const RackScene::Module& src, int out) -> double {
-        if (!src.live || out < 0 || static_cast<std::size_t>(out) >= src.telemetry.peaks.size())
-            return 0;
-        const auto& port = src.type->output(out);
-        const double peak = D(src.telemetry.peaks[static_cast<std::size_t>(out)]);
-        const double value = src.telemetry.outputs[static_cast<std::size_t>(out)];
-        switch (port.signal) {
-            case Signal::Gate:
-                return value >= 0.5 ? 1.0 : 0.15 * std::min(1.0, peak);
-            case Signal::Pitch:
-                return 0.55;  // a pitch is there or not, never loud
-            case Signal::Audio:
-                return std::min(1.0, std::sqrt(peak));
-            default:
-                return std::min(1.0, std::fabs(value) * 0.8 + 0.2 * peak);
-        }
-    };
-    if (item.kind == Kind::Output) return levelOf(m, item.index);
+    if (item.kind == Kind::Output) return outputLevel(m, item.index);
     double level = 0;
     const model::CableEnd end = endOf(m, item);
     for (const auto& c : scene_.cables)
         if (c.to == end)
             if (const auto* src = scene_.module(c.from.object); src && src->type)
-                level = std::max(level, levelOf(*src, src->type->output(c.from.key)));
+                level = std::max(level, outputLevel(*src, src->type->output(c.from.key)));
     return level;
+}
+
+std::vector<model::Id> RackSpace::cableSources(const ui::Rect& seen) const {
+    std::vector<model::Id> out;
+    for (const auto& k : scene_.cables) {
+        const auto* src = scene_.module(k.from.object);
+        if (!src || std::find(out.begin(), out.end(), src->id) != out.end()) continue;
+        const auto a = scene_.endPoint(k.from, true), b = scene_.endPoint(k.to, false);
+        if (!a || !b) continue;
+        // The curve lies inside its points' hull.
+        const Curve c = curveOf(*a, *b);
+        const float x0 = std::min({c.p0.x, c.c0.x, c.c1.x, c.p1.x});
+        const float y0 = std::min({c.p0.y, c.c0.y, c.c1.y, c.p1.y});
+        const float x1 = std::max({c.p0.x, c.c0.x, c.c1.x, c.p1.x});
+        const float y1 = std::max({c.p0.y, c.c0.y, c.c1.y, c.p1.y});
+        if (!seen.intersect({x0 - 4, y0 - 4, x1 - x0 + 8, y1 - y0 + 8}).empty())
+            out.push_back(src->id);
+    }
+    return out;
 }
 
 RackSpace::Hit RackSpace::hitAt(ui::Point p) const {
@@ -517,9 +565,6 @@ void RackSpace::paintItem(ui::Canvas& c, const RackScene::Module& m, const Panel
         const bool output = item.kind == Kind::Output;
         const auto& port = output ? m.type->output(item.index) : m.type->input(item.index);
         const ui::Color sig = t.color(signalToken(port.signal));
-        if (output)  // outputs sit on a plate, as on hardware
-            c.fillRound({centre.x - 17, centre.y - kJackR - 4, 34, 2 * kJackR + 18}, 3,
-                        t.color("module-title"));
         const double level = jackLevel(m, item);
         if (level > 0.02)
             c.fillCircle(centre, kJackR + 3.5f, sig.withAlpha(static_cast<float>(0.32 * level)));
@@ -539,10 +584,7 @@ void RackSpace::paintItem(ui::Canvas& c, const RackScene::Module& m, const Panel
                 c.text({centre.x + kJackR - 2, centre.y - kJackR - 3, 10, 8},
                        std::to_string(m.telemetry.channels[static_cast<std::size_t>(item.index)]),
                        ui::Font::MonoBold, 7.5f, quiet, ui::kLeft | ui::kMiddle);
-        if (words())
-            fitText(c, {centre.x - 18, centre.y + kJackR + 1, 36, 11}, port.name, ui::Font::Ui,
-                    kLabel, output ? ink : quiet, ui::kCenter | ui::kMiddle);
-        return;
+        return;  // its label comes with the others, over every control
     }
     if (item.kind == Kind::Display) {
         // A module that draws paints its own display (under the controls).
@@ -613,12 +655,7 @@ void RackSpace::paintItem(ui::Canvas& c, const RackScene::Module& m, const Panel
                                  2.2f, mod);
                 }
             }
-            const ui::Rect label{centre.x - 26, centre.y + r + 1.5f, 52, 11};
-            if (words())
-                fitText(c, label, showValue ? paramText(p, v) : p.name,
-                        showValue ? ui::Font::Mono : ui::Font::Ui, kLabel, showValue ? ink : quiet,
-                        ui::kCenter | ui::kMiddle);
-            break;
+            break;  // its label comes with the others
         }
         case Kind::Toggle: {
             const ui::Rect r = rectOf(m, item);
@@ -626,8 +663,7 @@ void RackSpace::paintItem(ui::Canvas& c, const RackScene::Module& m, const Panel
             c.fillRound(r, 3, on ? accent : t.color("module-title"));
             if (!on) c.strokeRound(r, 3, t.color("rule"));
             if (words())
-                fitText(c, r.inset(2), p.name, ui::Font::UiBold, kLabel, on ? face : quiet,
-                        ui::kCenter | ui::kMiddle);
+                fitLines(c, r.inset(2), p.name, ui::Font::UiBold, kLabel, on ? face : quiet);
             break;
         }
         case Kind::Choice: {
@@ -683,6 +719,46 @@ void RackSpace::paintItem(ui::Canvas& c, const RackScene::Module& m, const Panel
                 : ui::Point{rectOf(m, item).right() - 1, rectOf(m, item).y + 1};
         c.fillCircle(at, 2.4f, face);
         c.fillCircle(at, 1.6f, accent);
+    }
+}
+
+// The knobs' and jacks' labels, each in its own room (rack_labels.h); a
+// knob under the pointer or in the hand shows its value there instead.
+void RackSpace::paintLabels(ui::Canvas& c, const RackScene::Module& m,
+                            std::optional<std::size_t> hotItem) const {
+    const ui::Theme& t = c.theme();
+    const ui::Color ink = t.color("ink"), quiet = t.color("ink-quiet");
+    const auto labels = racks::faceLabels(*m.type, m.face, [&](std::string_view s, float size) {
+        return c.textWidth(s, ui::Font::Ui, size);
+    });
+    const auto x0 = static_cast<float>(m.x), y0 = static_cast<float>(m.y);
+    for (const auto& l : labels) {
+        const PanelItem& item = m.face.items[l.item];
+        const bool dragging = drag_.kind == Drag::Kind::Control &&
+                              &scene_.modules[drag_.module] == &m && drag_.item == l.item;
+        if (item.kind == Kind::Knob && (hotItem == l.item || dragging) && item.index >= 0 &&
+            static_cast<std::size_t>(item.index) < m.type->params().size()) {
+            const auto i = static_cast<std::size_t>(item.index);
+            const sd::ParamModel& p = m.type->params()[i];
+            const double v = i < m.values.size() ? m.values[i] : p.def;
+            const std::string text = paramText(p, v);
+            // Over the neighbours' labels when it needs the room, on the face's colour.
+            const float w =
+                std::max(l.cell.w, std::min(64.0f, c.textWidth(text, ui::Font::Mono, kLabel) + 6));
+            const float cx = x0 + static_cast<float>(item.x);
+            const ui::Rect box{cx - w / 2, y0 + l.cell.y, w, l.cell.h};
+            if (w > l.cell.w) c.fillRound(box, 2, t.color("module"));
+            fitText(c, box, text, ui::Font::Mono, kLabel, ink, ui::kCenter | ui::kMiddle);
+            continue;
+        }
+        const ui::Color col = item.kind == Kind::Output ? ink : quiet;
+        float y = y0 + l.box.y;
+        for (std::size_t k = 0; k < l.lines.size(); ++k) {
+            const float h = k == 0 ? l.cell.h : racks::kLabelLine2;
+            c.text({x0 + l.box.x - 1, y, l.box.w + 2, h}, l.lines[k], ui::Font::Ui, l.size, col,
+                   ui::kCenter | ui::kMiddle);
+            y += h;
+        }
     }
 }
 
@@ -763,8 +839,16 @@ void RackSpace::paintModule(ui::Canvas& c, const RackScene::Module& m, bool sele
                 h.kind == Hit::Kind::Ring)
                 hotItem = h.item;
         }
+        // Plates first, so a stack of outputs keeps every label; then the
+        // controls; then the labels over them all.
+        for (const auto& item : m.face.items)
+            if (item.kind == Kind::Output) {
+                const ui::Point centre = centreOf(m, item);
+                c.fillRound({centre.x - 17, centre.y - kJackR - 4, 34, 2 * kJackR + 18}, 3, plate);
+            }
         for (std::size_t k = 0; k < m.face.items.size(); ++k)
             paintItem(c, m, m.face.items[k], k, hotItem == k);
+        if (words()) paintLabels(c, m, hotItem);
     }
     if (m.bypass) {
         c.save();
@@ -930,6 +1014,29 @@ void RackSpace::paintCables(ui::Canvas& c) const {
         c.fillCircle(p, r, col.withAlpha(alpha));
         c.fillCircle(p, r * 0.45f, mix(col, {0, 0, 0, 1}, 0.35f).withAlpha(alpha));
     };
+    // A cable carrying signal glows around its cord, as strong as its
+    // source's output (a pitch, always there, only faintly).
+    auto glow = [&](const Curve& k, ui::Color col, float width, float amount) {
+        nvgBeginPath(vg);
+        nvgMoveTo(vg, k.p0.x, k.p0.y);
+        nvgBezierTo(vg, k.c0.x, k.c0.y, k.c1.x, k.c1.y, k.p1.x, k.p1.y);
+        nvgLineCap(vg, NVG_ROUND);
+        nvgStrokeWidth(vg, width + 3 + 6 * amount);
+        nvgStrokeColor(vg, nvg(col.withAlpha(0.16f * amount)));
+        nvgStroke(vg);
+        nvgStrokeWidth(vg, width + 1.6f + 2.4f * amount);
+        nvgStrokeColor(vg, nvg(col.withAlpha(0.3f * amount)));
+        nvgStroke(vg);
+    };
+    auto glowOf = [&](const RackScene::Cable& k) -> float {
+        const auto* src = scene_.module(k.from.object);
+        if (!src || !src->type) return 0;
+        const int out = src->type->output(k.from.key);
+        if (out < 0) return 0;
+        const double level = outputLevel(*src, out);
+        if (src->type->output(out).signal == Signal::Pitch) return level > 0 ? 0.35f : 0.0f;
+        return static_cast<float>(level);
+    };
     auto colorOf = [&](const RackScene::Cable& k) { return cableColor(t, k); };
     // What the pointer or the selection is on keeps its cables bright and
     // on top; the rest step back, far when many cross.
@@ -962,7 +1069,7 @@ void RackSpace::paintCables(ui::Canvas& c) const {
                             : anyFocus                      ? (many ? 0.12f : 0.45f)
                             : many                          ? 0.7f
                                                             : 1.0f;
-        const ui::Color col = colorOf(k);
+        ui::Color col = colorOf(k);
         const auto* src = scene_.module(k.from.object);
         bool poly = false;
         if (src && src->live && src->type) {
@@ -970,11 +1077,17 @@ void RackSpace::paintCables(ui::Canvas& c) const {
             poly = out >= 0 && static_cast<std::size_t>(out) < src->telemetry.channels.size() &&
                    src->telemetry.channels[static_cast<std::size_t>(out)] > 1;
         }
+        const float width = poly ? 4.6f : 3.0f;
+        const Curve curve = curveOf(*a, *b);
+        if (const float g = glowOf(k); g > 0.02f) {
+            glow(curve, col, width, g * alpha);
+            col = mix(col, {1, 1, 1, 1}, 0.3f * g);
+        }
         if (k.feedback) {
-            stroke(curveOf(*a, *b), col, poly ? 4.6f : 3.0f, alpha * 0.35f);
-            dashes(curveOf(*a, *b), col, poly ? 4.6f : 3.0f, alpha);
+            stroke(curve, col, width, alpha * 0.35f);
+            dashes(curve, col, width, alpha);
         } else {
-            stroke(curveOf(*a, *b), col, poly ? 4.6f : 3.0f, alpha);
+            stroke(curve, col, width, alpha);
         }
         plug(*a, col, alpha, false);
         if (k.to.object.kind != model::Kind::Fx) plug(*b, col, alpha, k.param);  // else a socket
