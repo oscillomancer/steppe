@@ -53,6 +53,7 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `harmonic` | An additive oscillator, up to 32 partials: brightness, odd/even, stretch, a spectral comb that sweeps; odd and even outputs, never aliases, poly |
 | `drive` | A distortion with seven curves (soft, tube, hard clip, fold, rectify, bitcrush, downsample): drive, bias, tone, mix, 4x oversampled, poly |
 | `chorus` | A stereo chorus ensemble of up to six voices, and a flanger: rate, depth, spread, feedback either way, mix, poly |
+| `shift` | A frequency shifter through zero, up and down at once, 50 dB+ sideband rejection: shift, fine, CV depth, spiralling feedback; a ring modulator with its own carrier or a patched one, poly |
 
 ### Modulation, sequencing, generative and utilities
 
