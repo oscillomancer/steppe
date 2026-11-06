@@ -42,3 +42,4 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 |---|---|
 | `adsr` | An envelope with curved stages, gated, triggered or looping, with an end trigger |
 | `lfo` | Seven shapes, free or locked to the song position, morphable, with poly spread |
+| `sequencer` | Sixteen steps of notes, gates, lengths (ties) and chances; five walks; clock or song sixteenths |
