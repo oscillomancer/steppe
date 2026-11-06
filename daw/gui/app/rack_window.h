@@ -103,8 +103,10 @@ class RackWindow {
     // first port of the same signal (else its first): one undo step.
     Status addWired(const std::string& type, ui::Point space, std::optional<model::CableEnd> from,
                     bool fromOutput);
-    // The selection's copy: its modules and the cables among them.
-    void copySelected();
+    // Copies the selection to the engine's module clipboard (module.copy):
+    // its modules as they are now, plug-in state and learn included, and
+    // the cables among them. False when nothing was copied.
+    bool copySelected();
     void duplicateSelected();
     void moduleMenu(model::Id module, ui::Point at);
     void spaceMenu(ui::Point at, ui::Point space);
@@ -117,9 +119,8 @@ class RackWindow {
     void presetsSaved();
 
   public:
-    // Pastes the copied modules with `space` their top-left: a duplicate in
-    // the rack they came from while they are there (plug-in state and all),
-    // else rack.patch from the copy.
+    // Pastes the module clipboard into this rack with `space` its top-left
+    // (rack.paste: one undo step), in any rack, after a cut or a copy.
     Status paste(ui::Point space);
     // A right-click on a browser row (a type, or "preset:<name>").
     void browserMenu(const std::string& type, ui::Point at);
@@ -170,13 +171,6 @@ class RackWindow {
     std::string error_;
     json::Value presets_ = json::Value::object();  // rack.preset.list's
     bool presetsRead_ = false;
-    // Copied modules (Ctrl+C or Ctrl+X): as they were, and the cables among them.
-    struct Clip {
-        model::Id rack;
-        std::vector<std::pair<model::Id, model::RackModule>> modules;
-        std::vector<model::Cable> cables;
-    };
-    std::optional<Clip> clip_;
     // paramsOf's answers by fx, with the plug-in they were asked of.
     std::map<model::Id, std::pair<std::string, racks::PluginParams>> pluginParams_;
 };

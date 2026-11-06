@@ -761,8 +761,7 @@ void RackWindow::open(std::optional<model::Id> rack) {
                          bool fromOutput) { quickAdd(at, sp, text, from, fromOutput); };
     sh.copy = [this] { copySelected(); };
     sh.cut = [this] {
-        copySelected();
-        deleteSelected();
+        if (copySelected()) deleteSelected();
     };
     sh.duplicate = [this] { duplicateSelected(); };
     sh.paste = [this](ui::Point sp) {
@@ -1511,28 +1510,19 @@ Status RackWindow::addWired(const std::string& type, ui::Point sp,
     return {};
 }
 
-void RackWindow::copySelected() {
-    if (!space_ || !rack_ || space_->selection().empty()) return;
-    const model::Session& s = app_.head();
-    Clip clip;
-    clip.rack = *rack_;
-    std::set<model::Id> fxs;
-    for (model::Id id : space_->selection())
-        if (const model::RackModule* m = s.modules.find(id)) {
-            clip.modules.emplace_back(id, *m);
-            if (m->fx) fxs.insert(*m->fx);
-        }
-    auto inside = [&](const model::CableEnd& end) {
-        if (end.object.kind == model::Kind::Fx) return fxs.contains(end.object);
-        return space_->selection().contains(end.object);
-    };
-    for (const auto& c : s.cables)
-        if (inside(c.value->from) && inside(c.value->to)) clip.cables.push_back(*c.value);
-    if (clip.modules.empty()) return;
-    const std::size_t n = clip.modules.size();
-    clip_ = std::move(clip);
+bool RackWindow::copySelected() {
+    if (!space_ || space_->selection().empty()) return false;
+    json::Value list = json::Value::array();
+    for (model::Id id : space_->selection()) list.push_back(id.str());
+    json::Value args = json::Value::object();
+    args["modules"] = std::move(list);
+    auto r = exec("module.copy", std::move(args));
+    if (!r) return false;
+    const auto* count = r->find("modules");
+    const int n = count && count->isNumber() ? static_cast<int>(count->asDouble()) : 0;
     if (status_)
         status_->setText("Copied " + std::to_string(n) + (n == 1 ? " module" : " modules"));
+    return true;
 }
 
 void RackWindow::duplicateSelected() {
@@ -1554,89 +1544,19 @@ void RackWindow::duplicateSelected() {
 }
 
 Status RackWindow::paste(ui::Point sp) {
-    if (!clip_ || clip_->modules.empty()) return {};
+    if (!app_.rackClipboard()) return {};  // module.copy copies one or more
     if (!rack_) SUPPLE_TRY(addRack());
-    const model::Session& s = app_.head();
-    double left = 1e300, top = 1e300;
-    for (const auto& [id, m] : clip_->modules) {
-        left = std::min(left, m.x);
-        top = std::min(top, m.y);
-    }
-    const double dx = std::round(static_cast<double>(sp.x) - left),
-                 dy = std::round(static_cast<double>(sp.y) - top);
+    json::Value args = json::Value::object();
+    args["rack"] = rack_->str();
+    args["x"] = std::round(static_cast<double>(sp.x));
+    args["y"] = std::round(static_cast<double>(sp.y));
+    auto r = dispatcher_.execute({"rack.paste", std::move(args), kOrigin});
+    if (!r) return std::move(r).error();
     std::set<model::Id> made;
-    const bool here = clip_->rack == *rack_ &&
-                      std::all_of(clip_->modules.begin(), clip_->modules.end(),
-                                  [&](const auto& e) { return s.modules.find(e.first); });
-    if (here) {  // a duplicate: plug-ins keep their state
-        json::Value args = json::Value::object();
-        json::Value list = json::Value::array();
-        for (const auto& e : clip_->modules) list.push_back(e.first.str());
-        args["modules"] = std::move(list);
-        args["dx"] = dx;
-        args["dy"] = dy;
-        auto r = dispatcher_.execute({"module.duplicate", std::move(args), kOrigin});
-        if (!r) return std::move(r).error();
-        if (const auto* ids = r->find("modules"); ids && ids->isArray())
-            for (const auto& x : ids->asArray())
-                if (auto id = x.isString() ? model::Id::parse(x.asString()) : std::nullopt)
-                    made.insert(*id);
-    } else {  // another rack, or cut: rack.patch from the copy
-        auto nameOf = [](model::Id id) { return "m" + std::to_string(id.n); };
-        json::Value modules = json::Value::object();
-        std::map<model::Id, model::Id> ownerOfFx;
-        for (const auto& [id, m] : clip_->modules) {
-            json::Value e = json::Value::object();
-            if (m.type == model::kPluginModule) {
-                const model::FxInstance* fx = m.fx ? s.fx.find(*m.fx) : nullptr;
-                if (!fx) continue;  // its plug-in is gone with it
-                e["plugin"] = fx->plugin.id;
-                ownerOfFx[*m.fx] = id;
-            } else {
-                e["type"] = m.type;
-            }
-            if (m.params.isObject() && !m.params.asObject().empty()) e["params"] = m.params;
-            if (!m.label.empty()) e["label"] = m.label;
-            e["x"] = m.x + dx;
-            e["y"] = m.y + dy;
-            if (m.source) e["source"] = m.source->str();
-            if (m.device) e["device"] = *m.device;
-            modules[nameOf(id)] = std::move(e);
-        }
-        auto endOf = [&](const model::CableEnd& end) -> std::optional<std::string> {
-            model::Id owner = end.object;
-            if (end.object.kind == model::Kind::Fx) {
-                const auto it = ownerOfFx.find(end.object);
-                if (it == ownerOfFx.end()) return std::nullopt;
-                owner = it->second;
-            }
-            if (!modules.find(nameOf(owner))) return std::nullopt;
-            return nameOf(owner) + "." + end.key;
-        };
-        json::Value cables = json::Value::array();
-        for (const auto& c : clip_->cables) {
-            const auto from = endOf(c.from), to = endOf(c.to);
-            if (!from || !to) continue;
-            json::Value e = json::Value::object();
-            e["from"] = *from;
-            e["to"] = *to;
-            if (c.amount) e["amount"] = *c.amount;
-            if (!c.color.empty()) e["color"] = c.color;
-            cables.push_back(std::move(e));
-        }
-        if (modules.asObject().empty()) return {};
-        json::Value args = json::Value::object();
-        args["rack"] = rack_->str();
-        args["modules"] = std::move(modules);
-        args["cables"] = std::move(cables);
-        auto r = dispatcher_.execute({"rack.patch", std::move(args), kOrigin});
-        if (!r) return std::move(r).error();
-        if (const auto* ids = r->find("modules"); ids && ids->isObject())
-            for (const auto& x : ids->asObject())
-                if (auto id =
-                        x.value.isString() ? model::Id::parse(x.value.asString()) : std::nullopt)
-                    made.insert(*id);
-    }
+    if (const auto* ids = r->find("modules"); ids && ids->isArray())
+        for (const auto& x : ids->asArray())
+            if (auto id = x.isString() ? model::Id::parse(x.asString()) : std::nullopt)
+                made.insert(*id);
     sync();
     if (space_) {
         space_->select(made);
@@ -1716,8 +1636,7 @@ void RackWindow::moduleMenu(model::Id module, ui::Point at) {
          true, false, m->bypass});
     items.push_back({"Copy", "Ctrl+C", [this] { copySelected(); }});
     items.push_back({"Cut", "Ctrl+X", [this] {
-                         copySelected();
-                         deleteSelected();
+                         if (copySelected()) deleteSelected();
                      }});
     items.push_back({"Duplicate", "Ctrl+D", [this] { duplicateSelected(); }});
     const auto* type = catalog_ ? catalog_->find(m->type) : nullptr;
@@ -1794,7 +1713,7 @@ void RackWindow::spaceMenu(ui::Point at, ui::Point sp) {
                          [this, sp] {
                              if (auto r = paste(sp); !r) report(r.error());
                          },
-                         clip_.has_value()});
+                         app_.rackClipboard() != nullptr});
         items.push_back({"", "", {}, true, true});
         // With several modules selected, only they are tidied.
         const bool several = space_ && space_->selection().size() > 1;

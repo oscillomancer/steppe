@@ -1198,12 +1198,13 @@ a new channel). It follows rack.md §8.
   selects every module. Ctrl+C copies the selection with the cables among
   its modules, Ctrl+X cuts it, Ctrl+V pastes with the copy's top-left at
   the pointer (else the middle of the view), selected and in view, and
-  Ctrl+D duplicates the selection, cables too. A paste into the rack it
-  came from, while its modules are there, is `module.duplicate {dx, dy}`
-  (plug-ins keep their state); into another rack, or after a cut, it is
-  `rack.patch` from the copy (types or plug-in ids, knobs, labels, places,
-  Notes sources, and the cables, amounts and colours; a plug-in starts
-  from its defaults). A right-click offers Open editor (plugins), Rename…,
+  Ctrl+D duplicates the selection, cables too. Copy and cut are
+  `module.copy` (the engine's module clipboard, shared with agents: the
+  modules as they are at the copy, plug-in state and learn bindings
+  included, and the cables among them; a cut deletes only after the copy
+  succeeds). Paste is `rack.paste {rack, x, y}`, one undo step, the same in
+  the rack the copy came from, in another rack and after a cut; Paste is
+  enabled while the clipboard holds modules. A right-click offers Open editor (plugins), Rename…,
   Bypass, Copy, Cut, Duplicate, Randomize, Presets… (the type's factory
   patches, `module.set preset`), Show source, Save as rack preset… (the
   selection) and Delete. On the space: Add module…, Add plugin… there,

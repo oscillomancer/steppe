@@ -381,9 +381,9 @@ instructions are in `docs/guides/installing.md`.
   Knob and jack names keep to cells of their own (smaller, wrapped or cut
   rather than running into a neighbour or under a control), and cables glow
   with their source's level (`moduleOutputLevel` for sources out of view,
-  while the transport plays).
-  Pasting into another rack or after a cut rebuilds through `rack.patch`, so
-  a plugin module's plug-in starts from its defaults there.
+  while the transport plays). Copy and paste go through the engine's module
+  clipboard, so a pasted plug-in keeps its settings in any rack and after a
+  cut.
 - **MIDI learn** (ADR-0027): any plug-in parameter (the FX window's MIDI
   button, or `fx.learn.set` for agents) and any action (Ctrl+L in the
   actions list) learns a controller by moving it: CC, note, pitch bend or

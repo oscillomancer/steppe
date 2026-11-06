@@ -1087,7 +1087,7 @@ TEST_CASE("rack window: copy, paste, cut and duplicate keep the cables among the
     f.r().key(SDLK_D, ui::kCtrl);
     f.frame();
     CHECK(count(rack) == std::pair{modules + 4, cables + 2});
-    // Into another rack: rebuilt from the copy (rack.patch).
+    // Into another rack, from the engine's clipboard (rack.paste).
     REQUIRE(f.racks->addRack());
     f.frame();
     const model::Id second = *f.racks->rack();
@@ -1121,6 +1121,75 @@ TEST_CASE("rack window: copy, paste, cut and duplicate keep the cables among the
     CHECK(seen.contains({float(m->x), float(m->y)}));
     CHECK(space.view().zoom > 1.0);  // filled (at most 150 %)
     CHECK(space.view().zoom <= 1.5);
+}
+
+TEST_CASE("rack window: a cut plugin module pastes into another rack with its settings") {
+    Fixture f(ui::Theme::dark(), {FIXTURE_CLAP_PATH});
+    if (!f.ok) return;
+    Patch p(f);
+    const std::string gain =
+        f.exec("module.add",
+               R"({"rack":")" + p.rack +
+                   R"(","plugin":"com.suppleaudio.test.gain","x":840,"y":300})")["module"]
+            .asString();
+    const model::Id id = *model::Id::parse(gain), osc = *model::Id::parse(p.osc);
+    f.cable(p.osc + ".out", gain + ".in_l");
+    const std::string fx = f.app->head().modules.find(id)->fx->str();
+    f.exec("fx.param.set", R"({"fx":")" + fx + R"(","values":{"gain":-17}})");
+    f.racks->open();
+    f.frame();
+    gui::RackSpace& space = *f.racks->space();
+    // Nothing copied yet: the space's Paste is off.
+    auto pasteEnabled = [&] {
+        const ui::Rect b = space.bounds();
+        const ui::Point empty{b.x + 20, b.y + 20};
+        f.pointer(ui::PointerEvent::Type::Down, empty, 3);
+        f.pointer(ui::PointerEvent::Type::Up, empty, 3);
+        const ui::Node* menu = f.r().find("rack.space.menu");
+        REQUIRE(menu);
+        bool on = false;
+        for (const auto& item : ui::menuItems(*menu))
+            if (item.label == "Paste") on = item.enabled;
+        f.r().closePopups();
+        f.frame();
+        return on;
+    };
+    CHECK_FALSE(pasteEnabled());
+    space.select({id, osc});
+    f.r().key(SDLK_X, ui::kCtrl);
+    f.frame();
+    CHECK_FALSE(f.app->head().modules.find(id));
+    CHECK(pasteEnabled());
+    REQUIRE(f.racks->addRack());
+    f.frame();
+    const model::Id second = *f.racks->rack();
+    f.r().key(SDLK_V, ui::kCtrl);
+    f.frame();
+    REQUIRE(space.selection().size() == 2);
+    std::optional<model::Id> pasted;
+    for (model::Id m : space.selection()) {
+        const auto* rm = f.app->head().modules.find(m);
+        REQUIRE(rm);
+        CHECK(rm->rack == second);
+        if (rm->fx) pasted = rm->fx;
+    }
+    REQUIRE(pasted);
+    // The plug-in keeps its gain, and the cable between them comes too.
+    const auto value =
+        f.exec("fx.param.get", R"({"fx":")" + pasted->str() + R"(","param":"gain"})")["value"];
+    CHECK(value.asDouble() == doctest::Approx(-17));
+    std::size_t cables = 0;
+    for (const auto& c : f.app->head().cables)
+        cables += space.selection().contains(c.value->from.object) &&
+                  space.selection().contains(c.value->to.object);
+    CHECK(cables == 1);
+    // One undo step takes the paste away.
+    const std::set<model::Id> made = space.selection();
+    f.exec("history.undo", "{}");
+    f.frame();
+    for (model::Id m : made) CHECK_FALSE(f.app->head().modules.find(m));
+    CHECK_FALSE(f.app->head().fx.find(*pasted));
+    CHECK_FALSE(f.app->head().modules.find(id));  // the cut stays cut
 }
 
 TEST_CASE("rack window: modules saved as a rack preset load into another rack from the browser") {
