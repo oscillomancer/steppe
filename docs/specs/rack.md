@@ -435,7 +435,7 @@ examples run as tests. Ends are strings: `"mo_3.out"`.
 | `rack.set` | edit | `{rack, name?, track?}` |
 | `rack.list` | query | `{}` → racks with their home tracks, module counts and Out modules |
 | `rack.get` | query | `{rack, detail?: brief\|full}` → modules (id, type, label, changed params, position, size), cables (with `feedback`), Out modules and the channels they feed, problems |
-| `rack.probe` | action | `{rack, ports: [...], seconds?, notes?, from_beat?}` → per port: peak, rms, dc, range, pitch (Hz and note) when periodic, gate rate and duty when gated, a one-line description |
+| `rack.probe` | query | `{rack, ports: ["mo_N.<output>", …≤8], seconds? (≤10, 2), from_beat?, notes? (notation the rack's Notes modules play)}` → per port: peak, rms, dc, min, max; audio (the first 4 voices summed): dB and pitch (Hz, note, cents) when periodic; gates over the voices: count, per second, per beat, duty; pitch: the notes visited; CV: rate; a one-line description. An offline render of a copy with a listener (`ProbeModule`) on each port; nothing changes |
 | `rack.preset.save` | action | `{rack, name, modules?}` → `{path}` |
 | `rack.preset.load` | edit | `{rack, name\|path, x?, y?}` → `{modules, cables}` |
 | `rack.preset.list` | query | `{}` |

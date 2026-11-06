@@ -1005,6 +1005,13 @@ q = nil
 ---@field rack string
 ---@field detail? string
 
+---@class Steppe.rack_probe_args
+---@field rack string Rack id
+---@field ports string[]
+---@field seconds? number
+---@field from_beat? number
+---@field notes? string
+
 ---@class Steppe.rack_remove_args
 ---@field rack string
 
@@ -1929,6 +1936,7 @@ q = nil
 ---@field add fun(args?: Steppe.rack_add_args): table Add a modular rack on a channel, its Out the input.
 ---@field get fun(args: Steppe.rack_get_args): table A rack's modules, cables, Out modules and problems.
 ---@field list fun(): table List racks: home channels, module counts, Outs.
+---@field probe fun(args: Steppe.rack_probe_args): table Listen to a rack's ports: level, pitch, gate rate, notes, a CV's range.
 ---@field remove fun(args: Steppe.rack_remove_args): table Remove a rack with its modules and cables.
 ---@field set fun(args: Steppe.rack_set_args): table Rename a rack or move it to another channel.
 

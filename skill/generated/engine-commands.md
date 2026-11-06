@@ -10390,6 +10390,61 @@ Result:
 
 ```
 
+## `rack.probe@1`
+
+Listen to a rack's ports: level, pitch, gate rate, notes, a CV's range.
+
+Renders the project offline from from_beat (default 0) for seconds (default 2, at most 10) with a listener on each port ("mo_N.<output key>", at most 8) and describes what each carried: audio's peak and rms (dB) and its pitch when periodic (a poly cable's first 4 voices summed); gates counted over the voices, per beat, and how long any is high; the notes the voices' pitches visit; a CV's range and speed (voice 1). notes: notation (as midi.write takes it) the rack's Notes modules play from from_beat, besides what their tracks hold. Nothing is changed; playback is not disturbed.
+
+Kind: `query`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `rack` | string |  |  |  | Rack id |
+| `ports` | array |  |  |  |  |
+| `seconds` | number |  | 0.05..10.0 |  |  |
+| `from_beat` | number |  | 0.0.. |  |  |
+| `notes` | string |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Errors
+
+- `rack.unknown`: no such rack Hint: rack.list
+- `rack.port`: not an output of a module in the rack Hint: rack.get lists them
+
+### Examples
+
+**Listen to Notes' gate and the VCA while a chord plays** (`song_with_rack`)
+
+```json
+{
+  "rack": "rk_1",
+  "ports": ["mo_2.gate", "mo_3.out"],
+  "seconds": 1,
+  "notes": "voice v; 1: [C4 E4 G4]:h r:h"
+}
+
+```
+
+Result:
+
+```json
+{
+  "seconds": 1.0,
+  "from_beat": 0.0,
+  "ports": "<any>"
+}
+
+```
+
 ## `rack.remove@1`
 
 Remove a rack with its modules and cables.

@@ -7850,6 +7850,51 @@
     }
   },
   {
+    "name": "rack_probe",
+    "title": "Listen to a rack's ports: level, pitch, gate rate, notes, a CV's range.",
+    "description": "Listen to a rack's ports: level, pitch, gate rate, notes, a CV's range. Renders the project offline from from_beat (default 0) for seconds (default 2, at most 10) with a listener on each port (\"mo_N.<output key>\", at most 8) and describes what each carried: audio's peak and rms (dB) and its pitch when periodic (a poly cable's first 4 voices summed); gates counted over the voices, per beat, and how long any is high; the notes the voices' pitches visit; a CV's range and speed (voice 1). notes: notation (as midi.write takes it) the rack's Notes modules play from from_beat, besides what their tracks hold. Nothing is changed; playback is not disturbed. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "rack_probe_args",
+      "properties": {
+        "rack": {
+          "type": "string",
+          "pattern": "^rk_[0-9]+$",
+          "description": "Rack id"
+        },
+        "ports": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^mo_[0-9]+\\.[a-z][a-z0-9_]*$"
+          },
+          "minItems": 1,
+          "maxItems": 8
+        },
+        "seconds": {
+          "type": "number",
+          "minimum": 0.05,
+          "maximum": 10.0
+        },
+        "from_beat": {
+          "type": "number",
+          "minimum": 0.0
+        },
+        "notes": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["rack", "ports"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
     "name": "rack_remove",
     "title": "Remove a rack with its modules and cables.",
     "description": "Remove a rack with its modules and cables. Channels that took one of its Out modules as input lose it; sends into its In modules go; plugin modules' plug-ins go with them. See describe for errors and examples.",

@@ -45,6 +45,7 @@ void registerControlLearnCommands(cmd::Registry& registry);
 void registerDspCommands(cmd::Registry& registry);
 void registerRackCommands(cmd::Registry& registry);
 void registerModuleCommands(cmd::Registry& registry);
+void registerRackProbe(cmd::Registry& registry);
 void removeRacksOn(model::EditTxn& t, const model::Session& s, model::Id track);
 
 using cmd::Command;
@@ -926,6 +927,13 @@ Result<std::pair<model::MidiSource, double>> compileNotation(const model::Sessio
 
 }  // namespace
 
+// Exposed to rack.probe (rack_probe.cpp).
+Result<std::pair<model::MidiSource, double>> notationSource(const model::Session& s,
+                                                            const std::string& text,
+                                                            double atBeat) {
+    return compileNotation(s, text, atBeat);
+}
+
 void registerEngineCommands(cmd::Registry& registry) {
     // Each command is built in its own immediately-invoked lambda, so an
     // unoptimized build reuses one frame instead of stacking every command's
@@ -946,6 +954,7 @@ void registerEngineCommands(cmd::Registry& registry) {
     registerDspCommands(registry);
     registerRackCommands(registry);
     registerModuleCommands(registry);
+    registerRackProbe(registry);
     lua::registerScriptCommands(registry);
     // ---------------------------------------------------------------- project.get
     [&] {

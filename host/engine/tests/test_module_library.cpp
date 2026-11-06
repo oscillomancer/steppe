@@ -209,3 +209,52 @@ struct Tone : Module {
     CHECK(missing.error().code == "rack.preset");
     (void)got;
 }
+
+TEST_CASE("rack.probe: pitch, gates, notes and a CV's speed") {
+    Fixture f;
+    f.write("sine", R"(#include <supple/script.h>
+
+struct Sine : Module {
+    static constexpr ModuleInfo info = {.name = "Sine", .id = "com.example.sine",
+                                        .vendor = "Example", .description = "A test sine."};
+    Param freq = frequency("Frequency", 20, 2000, 220);
+    Output out = audioOut("Out");
+    double phase = 0;
+
+    void process(int frames) {
+        for (int i = 0; i < frames; ++i) {
+            out[0][i] = 0.5 * sin(2 * pi * phase);
+            phase += freq.at(i) / sampleRate();
+            phase -= floor(phase);
+        }
+    }
+};
+)");
+    f.run("track.add", R"({"name": "Synth"})");
+    f.run("rack.add", R"({"track": "tr_1"})");                                         // mo_1 Out
+    f.run("module.add", R"({"rack": "rk_1", "type": "com.example.sine"})");            // mo_2
+    f.run("module.add", R"({"rack": "rk_1", "type": "notes"})");                       // mo_3
+    f.run("module.add", R"({"rack": "rk_1", "type": "lfo", "params": {"rate": 2}})");  // mo_4
+    json::Value r = f.run("rack.probe", R"({"rack": "rk_1", "seconds": 2,
+        "ports": ["mo_2.out", "mo_3.gate", "mo_3.pitch", "mo_4.out"],
+        "notes": "voice v; 1: C4:q r:q E4:q r:q"})");
+    auto& ports = r["ports"].asArray();
+    REQUIRE(ports.size() == 4);
+    CHECK(ports[0]["pitch"]["hz"].asDouble() == doctest::Approx(220).epsilon(0.002));
+    CHECK(ports[0]["pitch"]["note"].asString() == "A3");
+    CHECK(ports[0]["peak"].asDouble() == doctest::Approx(0.5).epsilon(0.01));
+    CHECK(ports[1]["gates"]["per_beat"].asDouble() == doctest::Approx(0.5));  // 2 in 4 beats
+    CHECK(ports[1]["gates"]["duty"].asDouble() == doctest::Approx(0.5).epsilon(0.02));
+    auto& notes = ports[2]["notes"].asArray();
+    REQUIRE(notes.size() >= 2);
+    bool c4 = false, e4 = false;
+    for (auto& n : notes) {
+        c4 = c4 || n.asString() == "C4";
+        e4 = e4 || n.asString() == "E4";
+    }
+    CHECK(c4);
+    CHECK(e4);
+    CHECK(ports[3]["rate_hz"].asDouble() == doctest::Approx(2).epsilon(0.05));
+    // Nothing changed.
+    CHECK(f.app->head().modules.size() == 4);
+}
