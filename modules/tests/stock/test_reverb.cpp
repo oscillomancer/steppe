@@ -72,10 +72,25 @@ TEST_CASE("reverb: pre-delay keeps the start clear, stereo is wide") {
         rr += r[n] * r[n];
     }
     CHECK(std::abs(lr / std::sqrt(ll * rr)) < 0.3);
-    // About as loud as what goes in.
+    // White noise is mostly highs, which Damping takes: it comes back some
+    // 8 dB under what goes in.
     const double level = dbOf(rms(l)) - dbOf(0.3 / std::sqrt(3.0));
-    CHECK(level > -6);
-    CHECK(level < 6);
+    CHECK(level > -12);
+    CHECK(level < -4);
+    // A held tone with a saw's harmonics, more like music, about as loud.
+    ModuleHarness t(stock("reverb"));
+    t.set("mix", 100);
+    const auto held = [](int, std::int64_t n) {
+        double sum = 0.0;
+        for (int k = 1; k <= 40; ++k)
+            sum += std::sin(2 * kPi * k * 110.0 * static_cast<double>(n) / 48000.0 + k * k) / k;
+        return 0.3 * sum;
+    };
+    t.input("in_l", 1, held);
+    t.run(96000);
+    std::vector<double> x(48000);
+    for (std::size_t n = 0; n < x.size(); ++n) x[n] = held(0, static_cast<std::int64_t>(n));
+    CHECK(std::abs(dbOf(rms(slice(t.output("out_l"), 48000))) - dbOf(rms(x))) < 3);
 }
 
 TEST_CASE("reverb: freeze holds the tail and lets nothing in") {
