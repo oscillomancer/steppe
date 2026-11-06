@@ -63,6 +63,7 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `orbit` | A circular panner: the sound turns round four or eight speakers at a rate either way, angle, width from a point to everywhere, poly voices spread round the ring, Doppler in a room to 10 m across, a stereo fold-down, reset |
 | `glitch` | A clocked glitch: at each step (clock or the song's grid) a chance of a stutter, a reverse, a pitch drop or a tape stop, by weights; slices in note values that Vary halves for rolls; seeded, with a reset; an active gate, poly |
 | `compressor` | A compressor: threshold, ratio, soft knee, attack, release, makeup, mix; a key input to duck by with a high-pass on what it hears; linked or per channel; its gain as a CV; a curve and gain-reduction display, poly |
+| `eq` | An equaliser: low and high shelves, two bells with width, 12 dB low and high cuts, level; flat at its defaults; a response display, poly |
 
 ### Modulation, sequencing, generative and utilities
 
