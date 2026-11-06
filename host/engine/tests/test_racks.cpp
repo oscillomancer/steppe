@@ -69,6 +69,19 @@ model::Session commit(model::EditTxn& t) {
     return std::move(*s);
 }
 
+Id addPlugin(model::EditTxn& t, Id rack, std::string id, std::optional<json::Value> patch = {}) {
+    model::FxInstance fx;
+    fx.plugin.id = std::move(id);
+    fx.patch = std::move(patch);
+    const Id fxId = t.create(fx);
+    model::RackModule m;
+    m.rack = rack;
+    m.type = std::string(model::kPluginModule);
+    m.version = "1.0.0";
+    m.fx = fxId;
+    return t.create(m);
+}
+
 // A linear console, so levels are exact: Transport's beat phase through a
 // VCA into an Out module, the Out as a channel's input.
 struct Ramp {
@@ -234,7 +247,7 @@ TEST_CASE("racks: a cycle through a rack is refused") {
 }
 
 TEST_CASE("racks: real-time output equals the offline render" * doctest::description("rt")) {
-    // Notes and a knob envelope on the timeline, Console 9 on.
+    // Notes, a knob envelope and a plug-in, Console 9 on.
     model::Project project;
     project.seed = 9182736;
     model::EditTxn t(model::Session::create(project), 1);
@@ -244,9 +257,14 @@ TEST_CASE("racks: real-time output equals the offline render" * doctest::descrip
     const Id transport = addModule(t, rack, "com.suppleaudio.rack.transport");
     const Id vca = addModule(t, rack, "com.suppleaudio.rack.vca");
     const Id out = addModule(t, rack, "com.suppleaudio.rack.out");
+    // A plug-in in the patch: the gain fixture at -6 dB after the VCA.
+    const Id gain = addPlugin(
+        t, rack, "com.suppleaudio.test.gain",
+        json::parse(R"({"schema":"supple.test-gain-patch/1.0","params":{"gain":-6}})").value());
     cable(t, transport, "beat_phase", vca, "in");
     cable(t, notes, "gate", vca, "cv");
-    cable(t, vca, "out", out, "l");
+    cable(t, vca, "out", gain, "in_l");
+    cable(t, gain, "out_l", out, "l");
     listen(t, out, channel);
     model::MidiSource src;
     src.sequence.ppq = 960;
@@ -326,4 +344,76 @@ TEST_CASE("racks: a knob edit reaches the running rack without a compile") {
         after = std::max(after, double(std::fabs(cap.channels[0][i])));
     CHECK(before > 0.01);
     CHECK(after < before * 0.01);  // gliding to off over the knob's 10 ms smoothing
+}
+
+TEST_CASE("racks: a plugin module runs its effect in the patch") {
+    // Transport's `playing` (1 while playing) through the gain fixture at -6 dB.
+    model::Project project;
+    project.console9 = false;
+    model::EditTxn t(model::Session::create(project), 1);
+    const Id channel = addChannel(t);
+    const Id rack = t.create(model::Rack{channel, ""});
+    const Id transport = addModule(t, rack, "com.suppleaudio.rack.transport");
+    const Id gain = addPlugin(
+        t, rack, "com.suppleaudio.test.gain",
+        json::parse(R"({"schema":"supple.test-gain-patch/1.0","params":{"gain":-6}})").value());
+    const Id out = addModule(t, rack, "com.suppleaudio.rack.out");
+    cable(t, transport, "playing", gain, "in_l");
+    cable(t, gain, "out_l", out, "l");
+    listen(t, out, channel);
+    const auto s = commit(t);
+    const auto l = renderLeft(s, 0.5);
+    CHECK(double(l[12000]) ==
+          doctest::Approx(0.472135955 * std::pow(10.0, -6.0 / 20.0)).epsilon(1e-3));
+    CHECK(l == renderLeft(s, 0.5, 37));
+}
+
+TEST_CASE("racks: Notes' pitch and gate play a plugin module's instrument") {
+    // A4 (key 69) on beats 1..2 into the sine fixture: 440 Hz at velocity * 0.25.
+    model::Project project;
+    project.console9 = false;
+    model::EditTxn t(model::Session::create(project), 1);
+    const Id channel = addChannel(t);
+    const Id rack = t.create(model::Rack{channel, ""});
+    const Id notes = addModule(t, rack, "com.suppleaudio.rack.notes");
+    const Id sine = addPlugin(t, rack, "com.suppleaudio.test.sine");
+    const Id out = addModule(t, rack, "com.suppleaudio.rack.out");
+    cable(t, notes, "pitch", sine, "pitch");
+    cable(t, notes, "gate", sine, "gate");
+    cable(t, notes, "velocity", sine, "velocity");
+    cable(t, sine, "out_l", out, "l");
+    listen(t, out, channel);
+    model::MidiSource src;
+    src.sequence.ppq = 960;
+    src.sequence.length = 960;
+    src.sequence.notes = {{0, 960, 0, 69, 127, 0}};
+    const Id mi = t.create(src);
+    model::Take take;
+    take.source = mi;
+    const Id tk = t.create(take);
+    model::Item item;
+    item.track = channel;
+    item.position = 1;
+    item.length = 1;
+    item.takes = {tk};
+    item.activeTake = tk;
+    t.create(item);
+    const auto s = commit(t);
+    const auto l = renderLeft(s, 1.5);
+    double before = 0, during = 0, after = 0;
+    int crossings = 0;
+    for (std::size_t i = 0; i < l.size(); ++i) {
+        const double x = std::fabs(double(l[i]));
+        if (i < 24000) before = std::max(before, x);
+        if (i >= 28800 && i < 43200) {
+            during = std::max(during, x);
+            if (l[i - 1] < 0 && l[i] >= 0) ++crossings;
+        }
+        if (i >= 50000) after = std::max(after, x);
+    }
+    CHECK(before == 0.0);
+    CHECK(during == doctest::Approx(0.25 * 0.472135955).epsilon(0.02));
+    CHECK(crossings == doctest::Approx(440 * 0.3).epsilon(0.02));  // 0.3 s of A4
+    CHECK(after == 0.0);
+    CHECK(l == renderLeft(s, 1.5, 37));
 }

@@ -302,7 +302,7 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         Node& n = p.nodes[i];
         n.id = (*order)[i];
         if (n.id.kind == Kind::Rack) {
-            SUPPLE_TRY(compileRack(p, n, s, n.id, pool.racks()));
+            SUPPLE_TRY(compileRack(p, n, s, n.id, pool));
             continue;
         }
         const model::Track& t = *s.tracks.find(n.id);
@@ -935,6 +935,7 @@ Status prepare(Plan& p, const Session& s) {
     };
     p.processedInputs.clear();
     for (Node& n : p.nodes) {
+        for (Stage& st : n.rackStages) SUPPLE_TRY(prepareStage(st));
         for (Stage& st : n.inputChain) SUPPLE_TRY(prepareStage(st));
         n.inputLatency = layoutChain(n.inputChain, true, block);
         n.inputBuf.init(n.inputChain.empty() ? 0 : block);
@@ -1605,6 +1606,9 @@ const Stereo& edgeSignal(const Plan& p, const Edge& e) SUPPLE_RT {
 }
 
 namespace {
+bool runStage(Plan& p, Stage& st, Stereo& sum, std::uint32_t n, const host::Transport& transport,
+              std::int64_t pos, const void* self) SUPPLE_RT;
+void automateStage(Stage& st, std::int64_t pos, std::uint32_t n, std::int64_t origin) SUPPLE_RT;
 // Audio edges carry only the encoded signal and PDC; key controls are conventional.
 void addEdge(Plan& p, Edge& e, double panLawDb, Stereo& into, std::int64_t pos,
              std::uint32_t n) SUPPLE_RT {
@@ -1637,6 +1641,21 @@ void addEdge(Plan& p, Edge& e, double panLawDb, Stereo& into, std::int64_t pos,
 
 void addEdgeInto(Plan& p, Edge& e, Stereo& into, std::int64_t pos, std::uint32_t n) SUPPLE_RT {
     addEdge(p, e, -3.0, into, pos, n);
+}
+
+bool runModuleStage(Plan& p, Stage& st, Stereo& io, std::uint32_t n,
+                    const host::Transport& transport, std::int64_t pos,
+                    const void* self) SUPPLE_RT {
+    automateStage(st, pos, n, time::samplesAt(p.startSeconds, p.rate));
+    // Events in time order (notes from the patch, then automation at each frame).
+    for (std::size_t i = 1; i < st.blockEvents.size(); ++i)
+        for (std::size_t k = i; k > 0 && st.blockEvents[k - 1].time > st.blockEvents[k].time; --k)
+            std::swap(st.blockEvents[k - 1], st.blockEvents[k]);
+    st.outEvents.clear();
+    st.sourceIds.clear();
+    st.releases = 0;
+    st.processed = false;
+    return runStage(p, st, io, n, transport, pos, self);
 }
 
 namespace {
@@ -2359,7 +2378,7 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
     // thread's own MXCSR is back when the node returns.
     dsp::DenormalGuard denormals;
     Node& node = p.nodes[index];
-    if (node.rack) return processRack(p, node, pos, n, transport);
+    if (node.rack) return processRack(p, node, pos, n, transport, self);
     forEachStage(node, [](Stage& st) {
         st.outEvents.clear();
         st.sourceIds.clear();

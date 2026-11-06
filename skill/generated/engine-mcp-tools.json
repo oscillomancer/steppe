@@ -6091,7 +6091,7 @@
   {
     "name": "module_add",
     "title": "Add a module to a rack: a type with knob values.",
-    "description": "Add a module to a rack: a type with knob values. type: an id or a short name (\"vca\", \"notes\"; module.list). x, y: its top-left corner in the rack (default: right of the others). params: knob values by key in the knob's units (a choice by its key, a switch as a bool). Notes: source (the track whose MIDI it plays; default the rack's channel) and device (a live MIDI input it always plays; \"\" any). plugin: a plug-in id (fx.scan) for a plugin module, which shows the plug-in's name and opens its editor; its ports are in_l, in_r, out_l, out_r. Returns its size and keys. See describe for errors and examples.",
+    "description": "Add a module to a rack: a type with knob values. type: an id or a short name (\"vca\", \"notes\"; module.list). x, y: its top-left corner in the rack (default: right of the others). params: knob values by key in the knob's units (a choice by its key, a switch as a bool). Notes: source (the track whose MIDI it plays; default the rack's channel) and device (a live MIDI input it always plays; \"\" any). plugin (instead of type): a plug-in id (fx.scan) for a plugin module, which shows the plug-in's name and opens its editor; its ports are in_l, in_r, out_l, out_r and, for instruments, pitch, gate and velocity. Returns its size and keys. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "module_add_args",
@@ -6128,7 +6128,7 @@
           "type": "string"
         }
       },
-      "required": ["rack", "type"],
+      "required": ["rack"],
       "additionalProperties": false
     },
     "annotations": {

@@ -11,11 +11,49 @@ namespace supple::engine::detail {
 
 namespace sd = script::detail;
 
+std::shared_ptr<const rack::ModuleType> pluginModuleType() {
+    using Signal = sd::PortModel::Signal;
+    static const auto t = [] {
+        sd::ModuleInfoModel info;
+        info.name = "Plugin";
+        info.id = std::string(model::kPluginModule);
+        info.vendor = "Supple Audio";
+        info.description =
+            "A plug-in in the patch: audio through it, notes from pitch and gate cables.";
+        info.tags = {"io", "plugin"};
+        std::vector<sd::PortModel> ports;
+        auto port = [&](const char* key, const char* name, Signal signal, bool output,
+                        const char* help, double normal = 0) {
+            sd::PortModel p;
+            p.key = key;
+            p.member = key;
+            p.name = name;
+            p.signal = signal;
+            p.output = output;
+            p.description = help;
+            p.normal = normal;
+            ports.push_back(std::move(p));
+        };
+        port("in_l", "In L", Signal::Audio, false, "The plug-in's left input.");
+        port("in_r", "In R", Signal::Audio, false,
+             "Its right input; the left one while nothing is connected.");
+        port("pitch", "Pitch", Signal::Pitch, false,
+             "Each voice's note, in octaves from C4: a gate's rise plays it.");
+        port("gate", "Gate", Signal::Gate, false, "A note per voice while high.");
+        port("velocity", "Velocity", Signal::Unipolar, false,
+             "Each voice's velocity at its gate's rise, 0 to 1.", 0.8);
+        port("out_l", "Out L", Signal::Audio, true, "The plug-in's left output.");
+        port("out_r", "Out R", Signal::Audio, true, "Its right output.");
+        return rack::ModuleType::host(std::move(info), {}, std::move(ports));
+    }();
+    return t;
+}
+
 std::shared_ptr<const rack::Catalog> builtinModuleCatalog() {
     static const std::shared_ptr<const rack::Catalog> catalog = [] {
         auto c = std::make_shared<rack::Catalog>();
         for (auto type : {rack::host::outType(), rack::host::inType(), rack::host::notesType(),
-                          rack::host::transportType()})
+                          rack::host::transportType(), pluginModuleType()})
             c->add(std::move(type));
         for (const rack::StockModule* m : rack::stockModules())
             c->add(
@@ -102,9 +140,11 @@ rack::Instance* RackPool::get(Id id, const model::RackModule& module,
         it = modules_.end();
     }
     if (it == modules_.end()) {
-        std::unique_ptr<rack::Instance> made = type->type->code()
-                                                   ? rack::Instance::make(type->type, setup)
-                                                   : rack::host::make(type->type, setup);
+        std::unique_ptr<rack::Instance> made =
+            type->type->code() ? rack::Instance::make(type->type, setup)
+            : module.type == model::kPluginModule
+                ? rack::Instance::make(type->type, std::make_unique<PluginModule>(), setup)
+                : rack::host::make(type->type, setup);
         if (!made) return nullptr;  // a host type this engine does not make here
         it = modules_
                  .emplace(id, Entry{std::move(made), module.type, type->generation,
@@ -153,7 +193,8 @@ script::Transport RackClock::transport(std::int64_t position) SUPPLE_RT {
 
 // --- compile -----------------------------------------------------------------------------
 
-Status compileRack(Plan& p, Node& n, const Session& s, Id rackId, RackPool& pool) {
+Status compileRack(Plan& p, Node& n, const Session& s, Id rackId, InstancePool& plugins) {
+    RackPool& pool = plugins.racks();
     auto r = std::make_shared<RackNode>();
     r->rack = rackId;
     r->origin = time::samplesAt(p.startSeconds, p.rate);
@@ -172,9 +213,7 @@ Status compileRack(Plan& p, Node& n, const Session& s, Id rackId, RackPool& pool
         rack::Instance* in = pool.get(e.id, m, setup);
         if (!in)
             p.warnings.push_back(e.id.str() + ": module type " + m.type +
-                                 (m.type == model::kPluginModule
-                                      ? " is not playable in racks yet; it is silent"
-                                      : " is not installed; it is silent"));
+                                 " is not installed; it is silent");
         index[e.id] = static_cast<int>(patch.modules.size());
         patch.modules.push_back({e.id.n, in, m.bypass, {}});
         r->modules.push_back(e.id);
@@ -190,6 +229,27 @@ Status compileRack(Plan& p, Node& n, const Session& s, Id rackId, RackPool& pool
             feed.notes = notes;
             feed.device = m.device;
             r->notes.push_back(std::move(feed));
+        } else if (auto* plugin = dynamic_cast<PluginModule*>(in->host())) {
+            // Its plug-in: a stage of the rack node, from the instance pool.
+            plugin->stage = -1;
+            const model::FxInstance* fx = m.fx ? s.fx.find(*m.fx) : nullptr;
+            if (fx) {
+                Stage st;
+                st.fx = *m.fx;
+                st.bypass = fx->bypass || fx->offline;
+                st.wet = fx->wet / 100.0;
+                if (!fx->offline) {
+                    auto instance = plugins.get(*m.fx, *fx, s);
+                    if (!instance)
+                        p.warnings.push_back(m.fx->str() + " (" + fx->plugin.id +
+                                             "): " + instance.error().message + "; it is silent");
+                    else
+                        st.instance = *instance;
+                }
+                plugin->stage = static_cast<int>(n.rackStages.size());
+                n.rackStages.push_back(std::move(st));
+            }
+            r->plugins.push_back(plugin);
         }
     }
     for (const auto& e : s.cables) {
@@ -275,6 +335,18 @@ Status compileRack(Plan& p, Node& n, const Session& s, Id rackId, RackPool& pool
 
 void prepareRack(Plan& p, Node& n, const Session& s) {
     RackNode& r = *n.rack;
+    // Plugin modules' stages: their input is the rack's, their automation
+    // lines up with it; every grid block's notes and parameter events fit.
+    for (Stage& st : n.rackStages) {
+        st.inputLatency = n.timelineShift;
+        std::size_t need = 4 * static_cast<std::size_t>(rack::kChannels) * rack::kGrid + 1;
+        for (ParamLane& ln : st.lanes) {
+            ln.curve.shift(n.timelineShift);
+            need += rack::kGrid / kAutomationStep + 2 + ln.curve.points.size();
+        }
+        st.blockEvents.reserve(need);
+    }
+    for (PluginModule* plugin : r.plugins) plugin->io.init(p.block);
     for (Stereo& out : n.rackOuts) out.init(p.block);
     for (Stereo& in : n.rackIns) in.init(p.block);
     for (std::size_t k = 0; k < r.ins.size(); ++k)
@@ -345,9 +417,17 @@ bool toMidi(const host::Event& e, std::uint32_t frame, rack::host::MidiEvent& ou
 }  // namespace
 
 bool processRack(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames,
-                 const host::Transport& transport) SUPPLE_RT {
+                 const host::Transport& transport, const void* self) SUPPLE_RT {
     RackNode& r = *n.rack;
     r.clock.plan = &p;
+    for (PluginModule* plugin : r.plugins) {
+        plugin->plan = &p;
+        plugin->node = &n;
+        plugin->transport = &transport;
+        plugin->self = self;
+        plugin->pos = pos;
+        plugin->failed = false;
+    }
     // Sends into the In modules, each through its compensation delay.
     for (std::size_t k = 0; k < n.rackIns.size(); ++k) n.rackIns[k].clear(frames);
     for (std::size_t ei : n.in) {
@@ -400,7 +480,88 @@ bool processRack(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames,
     r.playing = playing;
     r.schedule->process(r.own, static_cast<int>(frames), r.clock);
     r.own += frames;
+    for (const PluginModule* plugin : r.plugins)
+        if (plugin->failed) return false;
     return true;
+}
+
+void PluginModule::process(const rack::HostContext& ctx) SUPPLE_RT {
+    rack::Instance& in = *ctx.instance;
+    script::Output& outL = in.outputMember(0);
+    script::Output& outR = in.outputMember(1);
+    outL.setChannels(1);
+    outR.setChannels(1);
+    if (stage < 0 || !plan || !node || failed) return;
+    Stage& st = node->rackStages[static_cast<std::size_t>(stage)];
+    const script::Input& l = in.inputMember(0);
+    const script::Input& r = in.inputMember(1);
+    const script::Input& pitch = in.inputMember(2);
+    const script::Input& gate = in.inputMember(3);
+    const script::Input& velocity = in.inputMember(4);
+    // Audio: each input's channels summed; R is L while nothing is connected.
+    for (int i = 0; i < ctx.frames; ++i) {
+        double a = 0, b = 0;
+        for (int c = 0; c < l.channels(); ++c) a += l[c][i];
+        if (r.connected())
+            for (int c = 0; c < r.channels(); ++c) b += r[c][i];
+        else
+            b = a;
+        io.l[static_cast<std::size_t>(i)] = static_cast<float>(a);
+        io.r[static_cast<std::size_t>(i)] = static_cast<float>(b);
+    }
+    // Notes: a voice's gate rising plays its pitch; falling (below 0.25) ends it.
+    st.blockEvents.clear();
+    const int voices = std::min(gate.channels(), rack::kChannels);
+    for (int c = 0; c < voices; ++c) {
+        Voice& v = voices_[static_cast<std::size_t>(c)];
+        for (int i = 0; i < ctx.frames; ++i) {
+            const double g = gate[c][i];
+            const bool rise = !v.high && g >= 0.5, fall = v.high && g < 0.25;
+            if (!rise && !fall) continue;
+            if (st.blockEvents.size() + 2 > st.blockEvents.capacity()) break;
+            v.high = rise;
+            if (v.key >= 0) {
+                host::Event off;
+                off.kind = host::Event::Kind::NoteOff;
+                off.time = static_cast<std::uint32_t>(i);
+                off.key = static_cast<std::int16_t>(v.key);
+                off.velocity = 0;
+                st.blockEvents.push_back(off);
+                v.key = -1;
+            }
+            if (rise) {
+                host::Event on;
+                on.kind = host::Event::Kind::NoteOn;
+                on.time = static_cast<std::uint32_t>(i);
+                on.key = static_cast<std::int16_t>(
+                    std::clamp(static_cast<int>(std::lround(60.0 + 12.0 * pitch[c][i])), 0, 127));
+                on.velocity = std::clamp(velocity[c][i], 0.0, 1.0);
+                st.blockEvents.push_back(on);
+                v.key = on.key;
+            }
+        }
+    }
+    // A gate cable gone: its notes end.
+    for (int c = voices; c < rack::kChannels; ++c) {
+        Voice& v = voices_[static_cast<std::size_t>(c)];
+        v.high = false;
+        if (v.key < 0 || st.blockEvents.size() + 1 > st.blockEvents.capacity()) continue;
+        host::Event off;
+        off.kind = host::Event::Kind::NoteOff;
+        off.key = static_cast<std::int16_t>(v.key);
+        off.velocity = 0;
+        st.blockEvents.push_back(off);
+        v.key = -1;
+    }
+    const auto frames = static_cast<std::uint32_t>(ctx.frames);
+    if (!runModuleStage(*plan, st, io, frames, *transport, pos + ctx.offset, self)) {
+        failed = true;
+        return;
+    }
+    for (int i = 0; i < ctx.frames; ++i) {
+        outL[0][i] = static_cast<double>(io.l[static_cast<std::size_t>(i)]);
+        outR[0][i] = static_cast<double>(io.r[static_cast<std::size_t>(i)]);
+    }
 }
 
 }  // namespace supple::engine::detail

@@ -8155,7 +8155,7 @@ Result:
 
 Add a module to a rack: a type with knob values.
 
-type: an id or a short name ("vca", "notes"; module.list). x, y: its top-left corner in the rack (default: right of the others). params: knob values by key in the knob's units (a choice by its key, a switch as a bool). Notes: source (the track whose MIDI it plays; default the rack's channel) and device (a live MIDI input it always plays; "" any). plugin: a plug-in id (fx.scan) for a plugin module, which shows the plug-in's name and opens its editor; its ports are in_l, in_r, out_l, out_r. Returns its size and keys.
+type: an id or a short name ("vca", "notes"; module.list). x, y: its top-left corner in the rack (default: right of the others). params: knob values by key in the knob's units (a choice by its key, a switch as a bool). Notes: source (the track whose MIDI it plays; default the rack's channel) and device (a live MIDI input it always plays; "" any). plugin (instead of type): a plug-in id (fx.scan) for a plugin module, which shows the plug-in's name and opens its editor; its ports are in_l, in_r, out_l, out_r and, for instruments, pitch, gate and velocity. Returns its size and keys.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -8214,6 +8214,35 @@ Result:
   "inputs": ["in", "cv"],
   "outputs": ["out"],
   "knobs": ["level", "response"]
+}
+
+```
+
+**An instrument plug-in, played by cables from Notes** (`song_with_rack`)
+
+```json
+{
+  "rack": "rk_1",
+  "plugin": "com.suppleaudio.test.sine"
+}
+
+```
+
+Result:
+
+```json
+{
+  "module": "mo_4",
+  "type": "com.suppleaudio.rack.plugin",
+  "x": "<any>",
+  "y": "<any>",
+  "width": "<any>",
+  "height": "<any>",
+  "inputs": ["in_l", "in_r", "pitch", "gate", "velocity"],
+  "outputs": ["out_l", "out_r"],
+  "knobs": [],
+  "fx": "fx_1",
+  "plugin": "Test Sine"
 }
 
 ```

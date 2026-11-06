@@ -320,7 +320,7 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
 | `in` | out `l`, `r` (audio) | `level` dB −60..12 (0) | Fed by sends (`route.add {to: {module}}`) |
 | `notes` | out `pitch`, `gate`, `velocity` (unipolar), `pressure` (unipolar), `retrigger` (gate), poly; `bend` (cv), `modwheel` (unipolar) mono | `voices` 1..16 (8), `mode` (`rotate`, `reuse`, `reset`, `mono_last`, `mono_low`, `mono_high`), `bend_range` semitones 0..24 (2) | MIDI from `source` (default: the home track): its MIDI items and its live MIDI input when it monitors |
 | `transport` | out `playing` (gate), `reset` (trigger at play and locate), `bar` and `beat` (triggers), `clock` (trigger at `division`), `bar_phase`, `beat_phase` (phase), `tempo` (cv: bpm / 300) | `division` (1/1 … 1/64, dotted, triplets; 1/16) , `swing` % 0..75 (0) | From the timeline: positions are exact at every frame |
-| `plugin` | in `in_l`, `in_r` (audio), `pitch`, `gate`, `velocity` (poly, instruments); out `out_l`, `out_r` (audio) | the plug-in's, as cable targets `fx_N.<key>` | Its `fx` is an ordinary FX instance; clicking the module opens its editor |
+| `plugin` | in `in_l`, `in_r` (audio, `in_r` normalled to `in_l`; poly cables summed), `pitch`, `gate`, `velocity` (poly, normal 0.8); out `out_l`, `out_r` (audio) | the plug-in's, as cable targets `fx_N.<key>` | Its `fx` is an ordinary FX instance in no chain; clicking the module opens its editor. Each gate channel is a voice: rising to 0.5 or above plays key round(60 + 12 × pitch) at its velocity, falling below 0.25 (or its cable going) ends it |
 
 ## 6. Engine integration (`host/engine`)
 
@@ -343,10 +343,12 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   compile). Envelopes on module parameters compile to curves the schedule
   samples on the grid. MIDI learn drives the same slots.
 - **Plugin modules.** Their instances come from the instance pool by fx id
-  and run as stages inside the rack node, in sub-blocks on the grid, with
-  notes made from their pitch and gate cables and parameter modulation from
-  cables as CLAP `param_mod` events. A bridged plugin module in a live rack
-  passes through, as on a live strip.
+  and run as stages of the rack node (`Node::rackStages`, prepared and
+  automated as chain stages), in sub-blocks on the grid, with notes made
+  from their pitch and gate cables and parameter modulation from cables as
+  CLAP `param_mod` events (not yet: such cables are reported and ignored).
+  Their latency is not compensated inside the rack. A bridged plugin module
+  in a live rack passes through, as on a live strip.
 - **State.** Module instances are kept per rack across plans (keyed by
   module id and code generation) as plugin instances are; offline renders
   build their own from the session.

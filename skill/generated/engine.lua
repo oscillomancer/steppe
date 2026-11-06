@@ -818,7 +818,7 @@ q = nil
 
 ---@class Steppe.module_add_args
 ---@field rack string
----@field type string
+---@field type? string
 ---@field label? string
 ---@field x? number
 ---@field y? number

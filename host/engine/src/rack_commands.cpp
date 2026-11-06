@@ -442,8 +442,8 @@ struct ModuleDescribe {
     std::optional<std::string> type, module;
 };
 struct ModuleAdd {
-    std::string rack, type;
-    std::optional<std::string> label;
+    std::string rack;
+    std::optional<std::string> type, label;
     std::optional<double> x, y;
     std::optional<json::Value> params;
     std::optional<std::string> source, device, plugin;
@@ -901,9 +901,10 @@ void registerRackCommands(cmd::Registry& registry) {
             "corner in the rack (default: right of the others). params: knob values by key in "
             "the knob's units (a choice by its key, a switch as a bool). Notes: source (the "
             "track whose MIDI it plays; default the rack's channel) and device (a live MIDI "
-            "input it always plays; \"\" any). plugin: a plug-in id (fx.scan) for a plugin "
-            "module, which shows the plug-in's name and opens its editor; its ports are in_l, "
-            "in_r, out_l, out_r. Returns its size and keys.";
+            "input it always plays; \"\" any). plugin (instead of type): a plug-in id "
+            "(fx.scan) for a plugin module, which shows the plug-in's name and opens its "
+            "editor; its ports are in_l, in_r, out_l, out_r and, for instruments, pitch, gate "
+            "and velocity. Returns its size and keys.";
         c.args = schema::object<ModuleAdd>("module_add_args")
                      .field("rack", &ModuleAdd::rack, idOf("rk", "Rack"))
                      .field("type", &ModuleAdd::type, schema::string())
@@ -915,13 +916,21 @@ void registerRackCommands(cmd::Registry& registry) {
                      .field("device", &ModuleAdd::device, schema::string())
                      .field("plugin", &ModuleAdd::plugin, schema::string())
                      .build();
-        c.examples = {{"A VCA, half open",
-                       j(R"({"rack": "rk_1", "type": "vca", "params": {"level": -6}})"),
-                       j(R"({"module": "mo_4", "type": "com.suppleaudio.rack.vca", "x": "<any>",
+        c.examples = {
+            {"A VCA, half open", j(R"({"rack": "rk_1", "type": "vca", "params": {"level": -6}})"),
+             j(R"({"module": "mo_4", "type": "com.suppleaudio.rack.vca", "x": "<any>",
                              "y": 40.0, "width": "<any>", "height": "<any>",
                              "inputs": ["in", "cv"], "outputs": ["out"],
                              "knobs": ["level", "response"]})"),
-                       "song_with_rack"}};
+             "song_with_rack"},
+            {"An instrument plug-in, played by cables from Notes",
+             j(R"({"rack": "rk_1", "plugin": "com.suppleaudio.test.sine"})"),
+             j(R"({"module": "mo_4", "type": "com.suppleaudio.rack.plugin",
+                             "x": "<any>", "y": "<any>", "width": "<any>", "height": "<any>",
+                             "inputs": ["in_l", "in_r", "pitch", "gate", "velocity"],
+                             "outputs": ["out_l", "out_r"], "knobs": [], "fx": "fx_1",
+                             "plugin": "Test Sine"})"),
+             "song_with_rack"}};
         c.errors = {{"rack.unknown_type", "no such module type", "module.list"},
                     {"rack.param", "a knob or value the type does not have", "module.describe"},
                     {"rack.limit", "too many modules", "remove modules first"}};
@@ -943,10 +952,20 @@ void registerRackCommands(cmd::Registry& registry) {
             model::RackModule m;
             m.rack = *rack;
             std::shared_ptr<const rack::ModuleType> type;
+            // A plugin module: plugin, with no type or the plugin type.
+            const bool pluginType =
+                a.type && (*a.type == "plugin" || *a.type == model::kPluginModule);
+            if (a.plugin ? a.type && !pluginType : !a.type || pluginType)
+                return Error("command.invalid_args",
+                             a.plugin ? "give a type or a plugin, not both"
+                                      : "a module needs a type, or a plug-in to host",
+                             a.plugin || !a.type ? "/type" : "/plugin",
+                             "give type (module.list) for a module, or plugin (an fx.scan id) "
+                             "for a plug-in");
             if (a.plugin) {
                 m.type = std::string(model::kPluginModule);
             } else {
-                auto t = typeOf(e, a.type, "/type");
+                auto t = typeOf(e, *a.type, "/type");
                 if (!t) return std::move(t).error();
                 type = *t;
                 m.type = type->id();
