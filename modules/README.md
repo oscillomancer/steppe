@@ -54,6 +54,7 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `drive` | A distortion with seven curves (soft, tube, hard clip, fold, rectify, bitcrush, downsample): drive, bias, tone, mix, 4x oversampled, poly |
 | `chorus` | A stereo chorus ensemble of up to six voices, and a flanger: rate, depth, spread, feedback either way, mix, poly |
 | `shift` | A frequency shifter through zero, up and down at once, 50 dB+ sideband rejection: shift, fine, CV depth, spiralling feedback; a ring modulator with its own carrier or a patched one, poly |
+| `granular` | A granular processor on a live four-second buffer, 32 grains: size, density, position, spray, pitch and scatter, reverse chance, stereo spread, freeze by toggle or gate |
 
 ### Modulation, sequencing, generative and utilities
 
