@@ -46,6 +46,7 @@ struct RackScene {
         rack::PanelLayout face;      // the type's layout (a plugin module's own)
         std::vector<double> values;  // each parameter's knob, physical
         bool bypass = false, plugin = false, out = false;
+        bool instrument = false;      // a plugin module's plug-in plays notes
         std::optional<model::Id> fx;  // a plugin module's
         // Telemetry, when the module runs and is watched.
         rack::Telemetry telemetry;
@@ -61,6 +62,7 @@ struct RackScene {
         Signal signal = Signal::Audio;  // the output's
         std::string color;              // the cable's own ("" by signal)
         bool param = false;             // into a parameter
+        bool feedback = false;          // closes a loop: carries the previous frame
         double amount = 0;
     };
     model::Id rack;
@@ -68,7 +70,8 @@ struct RackScene {
     std::vector<Cable> cables;
 
     // Rack `rack` of `s` (an empty scene when it is not there).
-    // `instrument` says whether a plugin module's plug-in plays notes.
+    // `instrument` says whether a plugin module's plug-in plays notes (its
+    // face then shows the note inputs).
     static RackScene build(const model::Session& s, model::Id rack, const rack::Catalog& catalog,
                            const std::function<bool(const model::PluginRef&)>& instrument = {});
 

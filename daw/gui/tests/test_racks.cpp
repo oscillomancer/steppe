@@ -15,13 +15,18 @@
 
 #include "app_actions.h"
 #include "floating_panel.h"
+#include "plugin_scales.h"
 #include "rack_engine.h"
 #include "rack_window.h"
 #include "supple/gui/png.h"
 #include "supple/gui/window.h"
 #include "supple/script_compiler.hpp"
 #include "supple/script_module.h"
+#include "supple/ui/popup.h"
 #include "supple/ui/root.h"
+#include "supple/ui/text_area.h"
+#include "supple/ui/widgets.h"
+#include "supple/views/track_layout.h"
 
 #include <stb_image.h>
 
@@ -66,8 +71,32 @@ struct Scope : Module {
     Param time = milliseconds("Time", 1, 1000, 20).help("The window.");
     Param hold = toggle("Hold", false).help("Freezes it.");
     Output out = audioOut("Thru").help("The input.");
+    SharedArray<float, 64> wave;
+    int at = 0;
     void process(int frames) {
-        for (int i = 0; i < frames; ++i) out[0][i] = in[0][i];
+        for (int i = 0; i < frames; ++i) {
+            out[0][i] = in[0][i];
+            wave[at] = float(in[0][i]);
+            at = (at + 1) % 64;
+        }
+    }
+    void draw(Canvas& g) {
+        g.well(10, 32, 130, 64);
+        g.levelGrid(10, 32, 130, 64, -1, 1, 0.5);
+        g.strokeStyle(Theme::accent2);
+        g.lineWidth(1.5);
+        g.beginPath();
+        for (int k = 0; k < 64; ++k) {
+            const double v = wave[k] != 0 ? wave[k] : 0.8 * sin(twoPi * 3 * k / 63.0);
+            const double x = 12 + 126 * k / 63.0;
+            const double y = 64 - 28 * v;
+            if (k == 0) g.moveTo(x, y);
+            else g.lineTo(x, y);
+        }
+        g.stroke();
+        g.fillStyle(Theme::textMuted);
+        g.font(8);
+        g.fillText(format("%.0f ms", time.value()), 14, 92);
     }
     void panel(Panel& p) {
         p.size(150, 196);
@@ -104,7 +133,8 @@ struct Fixture {
     std::unique_ptr<gui::RackWindow> racks;
     bool ok = false;
 
-    explicit Fixture(ui::Theme theme = ui::Theme::dark()) {
+    explicit Fixture(ui::Theme theme = ui::Theme::dark(),
+                     std::vector<std::filesystem::path> plugins = {}) {
         dir = std::filesystem::temp_directory_path() /
               ("supple-rack-test-" + std::to_string(testProcessId()));
         std::filesystem::remove_all(dir);
@@ -124,6 +154,7 @@ struct Fixture {
         fonts = *f;
         engine::AppOptions options;
         options.workdir = dir;
+        if (!plugins.empty()) options.pluginPath = std::move(plugins);
         auto a = engine::EngineApp::create(options);
         REQUIRE(a);
         app = std::move(*a);
@@ -192,6 +223,20 @@ struct Fixture {
                      a.y + (b.y - a.y) * static_cast<float>(k) / 4},
                     0, mods);
         pointer(ui::PointerEvent::Type::Up, b, button, mods);
+    }
+    // Runs the row of the open menu `menu` whose label starts with `label`.
+    bool pick(const std::string& menu, const std::string& label) {
+        const ui::Node* m = r().find(menu);
+        if (!m) return false;
+        for (const auto& item : ui::menuItems(*m))
+            if (item.label.rfind(label, 0) == 0 && item.run && item.enabled) {
+                auto run = item.run;
+                r().closePopups();
+                run();
+                frame();
+                return true;
+            }
+        return false;
     }
     void snapshot(const char* name) {
         const char* out = std::getenv("SUPPLE_TEST_SNAPSHOTS");
@@ -299,6 +344,8 @@ TEST_CASE("rack window: a patch draws its faces, cables and modulation") {
     f.golden("rack-patch.png");
     f.racks->space()->setView({200, 20, 1.6});
     f.snapshot("rack-patch-zoom.png");
+    f.racks->space()->setView({560, 260, 1.8});
+    f.snapshot("rack-scope-zoom.png");
 }
 
 TEST_CASE("rack window: the light theme") {
@@ -307,7 +354,7 @@ TEST_CASE("rack window: the light theme") {
     Patch p(f);
     f.racks->open();
     f.frame();
-    f.snapshot("rack-patch-light.png");
+    f.golden("rack-patch-light.png");
     // Close up: the faces at 160 %.
     f.racks->space()->setView({200, 20, 1.6});
     f.snapshot("rack-patch-light-zoom.png");
@@ -410,4 +457,131 @@ TEST_CASE("rack window: each rack keeps its view in the UI sidecar") {
     f.racks->open();
     f.frame();
     CHECK(f.racks->space()->view() == gui::RackSpace::View{100, 50, 1.5});
+}
+
+TEST_CASE("rack window: a cable that closes a loop is drawn as feedback") {
+    Fixture f;
+    if (!f.ok) return;
+    Patch p(f);
+    f.cable(p.vca + ".out", p.osc + ".fm");  // osc -> vca -> osc
+    f.racks->open();
+    f.frame();
+    int feedback = 0;
+    for (const auto& c : f.racks->space()->scene().cables) feedback += c.feedback ? 1 : 0;
+    CHECK(feedback == 1);
+    f.snapshot("rack-feedback.png");
+}
+
+TEST_CASE("rack window: Automate on a knob makes an envelope, a lane on the home channel") {
+    Fixture f;
+    if (!f.ok) return;
+    Patch p(f);
+    f.racks->open();
+    f.frame();
+    gui::RackSpace& space = *f.racks->space();
+    const model::Id vca = *model::Id::parse(p.vca);
+    const ui::Point level = *space.controlAt(vca, "level");
+    f.pointer(ui::PointerEvent::Type::Down, level, 3);
+    f.pointer(ui::PointerEvent::Type::Up, level, 3);
+    REQUIRE(f.r().find("rack.param.menu"));
+    REQUIRE(f.pick("rack.param.menu", "Automate"));
+    const model::Envelope* env = nullptr;
+    model::Id envId;
+    for (const auto& e : f.app->head().envelopes)
+        if (e.value->target.object == vca && e.value->target.param == "level") {
+            env = e.value.get();
+            envId = e.id;
+        }
+    REQUIRE(env);
+    CHECK(env->visible);
+    // It holds the knob's value (-6 dB) from the start.
+    REQUIRE(env->points.size() == 1);
+    // The arrange shows it as a lane under the rack's home channel, with
+    // the knob's own scale.
+    views::TrackLayout layout;
+    layout.pluginScales = [scales =
+                               std::make_shared<gui::PluginScales>(*f.dispatcher, f.app.get())](
+                              const model::Envelope& e) { return (*scales)(e); };
+    layout.show(f.app->head());
+    const auto lane = layout.indexOfEnv(envId);
+    REQUIRE(lane);
+    const auto home = layout.indexOf(*model::Id::parse(p.track));
+    REQUIRE(home);
+    CHECK(*lane > *home);
+    // The menu now hides (and shows) the lane instead.
+    f.pointer(ui::PointerEvent::Type::Down, level, 3);
+    f.pointer(ui::PointerEvent::Type::Up, level, 3);
+    REQUIRE(f.pick("rack.param.menu", "Hide automation lane"));
+    CHECK_FALSE(f.app->head().envelopes.find(envId)->visible);
+}
+
+TEST_CASE("rack window: a stock module's source forks into the library, which compiles on save") {
+    Fixture f;
+    if (!f.ok) return;
+    f.racks->open();
+    f.frame();
+    f.racks->showSource("vca");
+    f.frame();
+    auto* text = dynamic_cast<ui::TextArea*>(f.r().find("rack.source.text"));
+    REQUIRE(text);
+    CHECK(text->text().find("struct") != std::string::npos);
+    CHECK_FALSE(f.r().find("rack.source.save"));
+    f.snapshot("rack-source.png");
+    // Make editable copy: com.library.vca, shown with Save.
+    REQUIRE(f.r().click("rack.source.fork"));
+    f.frame();
+    REQUIRE(gui::racks::catalog(*f.app)->find("com.library.vca"));
+    REQUIRE(f.r().find("rack.source.save"));
+    text = dynamic_cast<ui::TextArea*>(f.r().find("rack.source.text"));
+    REQUIRE(text);
+    const std::string good = text->text();
+    CHECK(good.find("com.library.vca") != std::string::npos);
+    // A mistake is marked on its line and said under the code.
+    text->setText(good + "\nint broken = ;\n");
+    REQUIRE(f.r().click("rack.source.save"));
+    f.frame();
+    CHECK_FALSE(text->marks().empty());
+    auto* note = dynamic_cast<ui::Label*>(f.r().find("rack.source.status"));
+    REQUIRE(note);
+    CHECK(note->text().rfind("Line ", 0) == 0);
+    f.snapshot("rack-source-error.png");
+    // Fixed, it compiles.
+    text->setText(good);
+    REQUIRE(f.r().click("rack.source.save"));
+    f.frame();
+    CHECK(text->marks().empty());
+    CHECK(note->text().rfind("Compiled", 0) == 0);
+}
+
+TEST_CASE("rack window: a plugin module shows the plug-in's name and a click opens its editor") {
+    Fixture f(ui::Theme::dark(), {FIXTURE_CLAP_PATH});
+    if (!f.ok) return;
+    Patch p(f);
+    const std::string sine =
+        f.exec("module.add",
+               R"({"rack":")" + p.rack +
+                   R"(","plugin":"com.suppleaudio.test.sine","x":440,"y":300})")["module"]
+            .asString();
+    std::vector<model::Id> opened;
+    f.racks->openEditor = [&](model::Id fx) -> Status {
+        opened.push_back(fx);
+        return {};
+    };
+    f.racks->open();
+    f.frame();
+    const model::Id id = *model::Id::parse(sine);
+    const auto* m = f.racks->space()->scene().module(id);
+    REQUIRE(m);
+    CHECK(m->plugin);
+    CHECK(m->title == "Test Sine");
+    const model::RackModule* rm = f.app->head().modules.find(id);
+    REQUIRE(rm);
+    REQUIRE(rm->fx);
+    // A click (not a drag) on it opens the plug-in's own window.
+    const ui::Point at = *f.racks->space()->bodyAt(id);
+    f.pointer(ui::PointerEvent::Type::Move, at, 0);
+    f.pointer(ui::PointerEvent::Type::Down, at);
+    f.pointer(ui::PointerEvent::Type::Up, at);
+    CHECK(opened == std::vector<model::Id>{*rm->fx});
+    f.snapshot("rack-plugin.png");
 }

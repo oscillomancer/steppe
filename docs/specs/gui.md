@@ -1168,8 +1168,9 @@ a new channel). It follows rack.md §8.
 - **Modules** are drawn from their type's face (rack.md §4.5, or the
   module's `panel()`): a title strip with the label (the type's name; an
   Out or In module's `moduleLabel`), knobs, toggles, choices, sliders,
-  readouts, display wells, and jacks. An Out module carries a tag under it
-  naming the channel it feeds. A plugin module shows the plug-in's name and
+  readouts, displays, and jacks. A label too long for its place is drawn
+  smaller, down to three quarters of its size, before it is cut short. An
+  Out module carries a tag under it naming the channel it feeds. A plugin module shows the plug-in's name and
   vendor on its plate and a window mark; a click (not a drag) opens the
   plug-in's editor, as the mixer's slot does. A module of an unknown type is
   kept, outlined in the clip colour, saying "Missing module" and its id.
@@ -1179,8 +1180,9 @@ a new channel). It follows rack.md §8.
   the selection moves together as one undo step (`module.set x, y` in one
   transaction). Delete removes the selection; Ctrl+A selects every module.
   A right-click offers Open editor (plugins), Rename…, Bypass, Duplicate,
-  Randomize, Presets… (the type's factory patches), Show source *(planned)*
-  and Delete; on the space, Add <module> at that point and Show everything.
+  Randomize, Presets… (the type's factory patches, `module.set preset`),
+  Show source and Delete; on the space, Add <module> and Add plugin… at
+  that point, and Show everything.
 - **Jacks** are circles ringed in their signal kind's colour (§7); outputs
   sit on a plate, as on hardware. A jack glows by its level from the
   module's telemetry (an input by its cables' sources'); a poly output shows
@@ -1195,7 +1197,8 @@ a new channel). It follows rack.md §8.
   colour), with a dark edge and a highlight, plugs at both ends; a
   modulation cable plugs into its knob's rim. Poly cables are thicker. With
   eight or more cables, those not on the hovered or selected modules (or
-  hovered themselves) fade.
+  hovered themselves) fade. A cable that closes a loop (`rack.get`'s
+  `feedback`: it reads the previous frame) is dashed over a dim cord.
 - **Knobs** drag vertically, 160 points end to end at any zoom (Shift:
   ten times finer), double-click resets, and show their value while hovered
   or dragged; a drag is one undo step (`module.set params` coalesced by
@@ -1203,19 +1206,41 @@ a new channel). It follows rack.md §8.
   a choice drawn as a box steps on a click. Modulated knobs carry a ring
   outside the travel: faint for the range the cables' amounts span, bright
   to the value they make now (telemetry); dragging that ring sets the last
-  cable's amount (`cable.set`). A right-click offers the default value and
-  a choice's options; MIDI learn and automation *(planned)*.
+  cable's amount (`cable.set`). A right-click offers the default value, a
+  choice's options, and Automate: an envelope on the knob holding its value
+  (`env.add {module, param, points}`), shown as a lane under the rack's home
+  channel ("Rack › Module · knob", on the knob's own scale); once there, the
+  item shows or hides that lane. MIDI learn for module knobs *(planned)*.
 - **Browser.** A column on the left (the header's Modules button shows or
   hides it): a search field (words match name, id, description and tags),
   the catalog's tags as chips that filter, and the types by origin (host,
-  stock, library, project) with their one-line description. A double click
-  or Enter adds the type in the middle of the view; dragging a row into the
-  space adds it where it is dropped.
+  stock, library, project) with their one-line description, Plugin… first.
+  A double click or Enter adds the type in the middle of the view; dragging
+  a row into the space adds it where it is dropped. Plugin… (and Add
+  plugin…) opens the plug-in browser; the plug-in chosen becomes a plugin
+  module (`module.add {plugin}`), with note jacks when it is an instrument.
+- **Source.** Show source opens the type's code (`module.get {type}`) in a
+  code view over the window, titled with its name, origin and id. A library
+  module's is editable: Save or Ctrl+Enter writes and compiles it
+  (`module.write`), racks using it reload, and a mistake is marked on its
+  line, the caret moved there and the message said under the code. A stock
+  or project module's is read-only and offers Make editable copy
+  (`module.fork` to `com.library.<name>`), which opens the copy.
 - **Telemetry.** While the window is open the visible modules are watched
   (`Instance::watch`) and read about 30 times a second; hidden or scrolled-
   off modules are not.
-- **Displays** of modules with `draw()` are wells *(planned: the hook drawn
-  with the module's Shared state)*.
+- **Displays.** A module with `draw()` draws itself under its controls,
+  in its own coordinates, through the window's copy of the module: its knob
+  values and the `Shared` state the telemetry carries. Its palette is the
+  app's theme. A hook that spends its budget stops and says "draw() ran too
+  long"; the rest of the window draws on. Pointer input on displays
+  *(planned)*.
+- **Elsewhere.** A channel's input menu lists every rack's Out modules
+  ("<rack> › <Out>", with the home channel's colour) after the device's
+  inputs, and New rack on this channel; picking one is `track.set
+  {record_rack}`, and the strip's input button names it the same way. A
+  channel's right-click menu offers Show rack (when it has one) and Add rack
+  (Add another rack).
 
 ## 5. Agent panel (removed)
 

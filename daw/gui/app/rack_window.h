@@ -9,8 +9,10 @@
 #pragma once
 
 #include <chrono>
+#include <filesystem>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -30,6 +32,7 @@ namespace supple::gui {
 
 class RackTabs;
 class RackBrowser;
+class PluginBrowser;
 
 class RackWindow {
   public:
@@ -52,6 +55,8 @@ class RackWindow {
     std::function<Status(model::Id fx)> openEditor;
     // Space pressed and released in the space: the transport, as elsewhere.
     std::function<void()> spaceTap;
+    // The plug-in browser's favourites (empty: none saved; tests).
+    std::filesystem::path favouritesFile;
 
     // The UI sidecar's part: each rack's view, the rack shown, the browser.
     json::Value saveLayout() const;
@@ -81,6 +86,13 @@ class RackWindow {
     void paramMenu(model::Id module, int index, ui::Point at);
     void tabMenu(model::Id rack, ui::Point at);
     void rename(model::Id module);
+
+  public:
+    // A type's source in a code view: a library module's saves and compiles
+    // (module.write); a stock one offers an editable copy (module.fork).
+    void showSource(const std::string& type);
+
+  private:
     void renameRack(model::Id rack);
     void deleteSelected();
     ui::Root& root() const { return panel_.root(); }
@@ -104,6 +116,7 @@ class RackWindow {
     RackBrowser* browser_ = nullptr;
     ui::Node* browserColumn_ = nullptr;
     ui::Label* status_ = nullptr;
+    std::unique_ptr<PluginBrowser> plugins_;  // picks a plugin module's plug-in
     ui::Button* zoom_ = nullptr;
     ui::Button* browserToggle_ = nullptr;
     std::string error_;

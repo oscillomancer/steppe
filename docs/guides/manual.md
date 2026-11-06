@@ -146,7 +146,7 @@ projects (see *Rendering*).
 
 ### Where Steppe keeps its files
 
-| | Settings (preferences, menus, controls, appearance) | Data (unsaved projects, DSP scripts, render presets) |
+| | Settings (preferences, menus, controls, appearance) | Data (unsaved projects, DSP scripts, rack modules, render presets) |
 | --- | --- | --- |
 | Linux | `~/.config/steppe` (`$XDG_CONFIG_HOME`) | `~/.local/share/steppe` (`$XDG_DATA_HOME`) |
 | macOS | `~/Library/Application Support/steppe` | `~/Library/Application Support/steppe` |
@@ -295,6 +295,42 @@ A mixer strip lists its sends under its plugins, two at a time; scroll the
 list (or drag its bar) to see more. Clicking a send opens the routing matrix,
 like **out**. Right-click a send and choose **Delete**, or Alt-click
 (Option-click on macOS) it, to remove it.
+
+## Racks
+
+A rack is a modular patching space that plays into a channel. **View >
+Racks**, the toolbar's **Racks** button, or **Add rack** in a channel's
+right-click menu opens the rack window: a tab per rack along the top (**+**
+adds one on the selected channel) and the modules on a plain space below.
+Each new rack starts with an **Out** module, which becomes its channel's
+input. Every rack's Out is also listed in each channel's input menu, so
+any channel can take any rack's sound.
+
+Middle-drag or hold Space and drag to pan; Ctrl+wheel zooms at the pointer
+(25 to 400 %), Home shows everything and Ctrl+0 is 100 %. Each rack
+remembers where you left it.
+
+The **Modules** column lists what you can add: search it, or click a tag
+to filter. Double-click a module or drag it into the space. **Plugin…**
+puts any CLAP or VST3 plugin in the rack as a module; click it to open
+its editor. Drag a module by its body to move it, Ctrl+click or drag a
+box on the space to select several, and Delete removes them.
+
+Drag from a jack to another to connect them. Jack colours show what a jack
+carries: audio, pitch, gates, control voltages and phase each have their
+own colour, and a jack glows with its level. Drop a cable on a knob to
+modulate it; the ring around the knob shows how far, and dragging the ring
+changes the amount. Drag a cable off an input to move it, or drop it on
+nothing to remove it. A cable that loops back is dashed: it carries the
+signal one sample late.
+
+Drag a knob up or down to turn it (Shift for fine), double-click to reset
+it, and right-click it for **Automate**, which adds an automation lane for
+it under the rack's channel. Right-click a module to rename, bypass,
+duplicate, randomize or delete it, to load one of its presets, or to **Show
+source**. Modules from your library (in the data folder's `modules`) can be
+edited and saved there and then; a stock module offers **Make editable
+copy**.
 
 ## MIDI controllers
 

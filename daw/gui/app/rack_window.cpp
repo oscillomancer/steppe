@@ -9,7 +9,9 @@
 #include <cmath>
 #include <set>
 
+#include "plugin_browser.h"
 #include "supple/ui/popup.h"
+#include "supple/ui/text_area.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
 
@@ -655,6 +657,7 @@ void RackWindow::open(std::optional<model::Id> rack) {
         zoom_ = nullptr;
         browserToggle_ = nullptr;
         nextTelemetry_.reset();
+        plugins_.reset();
     });
     version_ = projectGeneration_ = ~std::uint64_t{0};
     if (auto r = reload(); !r) report(r.error());
@@ -671,15 +674,50 @@ Status RackWindow::reload() {
     refreshTabs();
     if (browser_) {
         std::vector<RackBrowser::Entry> entries;
+        // Plug-ins are modules too: picked from the plug-in browser.
+        const auto& plugin = racks::pluginType()->info();
+        entries.push_back({plugin.id, "Plugin\u2026",
+                           "A CLAP or VST3 plug-in; a click opens its editor.", plugin.tags,
+                           rack::Origin::Host});
         for (const rack::Catalog::Entry* e : catalog_->list()) {
             const auto& info = e->type->info();
+            if (info.id == plugin.id) continue;
             entries.push_back({info.id, info.name, info.description, info.tags, e->type->origin()});
         }
         browser_->setEntries(std::move(entries));
     }
     if (!space_) return {};
     const bool other = !(rack_ ? space_->scene().rack == *rack_ : false);
-    RackScene scene = rack_ ? RackScene::build(s, *rack_, *catalog_) : RackScene{};
+    // Whether a plug-in plays notes: from the scan, which adding a plugin
+    // module (or loading one) has made.
+    auto instrument = [this](const model::PluginRef& ref) {
+        auto list = app_.plugins();
+        if (!list) return false;
+        for (const auto& p : *list)
+            if (p.id == ref.id) return p.instrument;
+        return false;
+    };
+    bool plugins = false;
+    if (rack_)
+        for (const auto& e : s.modules)
+            plugins = plugins || (e.value->rack == *rack_ && e.value->fx);
+    RackScene scene = rack_ ? RackScene::build(s, *rack_, *catalog_,
+                                               plugins ? std::function(instrument) : nullptr)
+                            : RackScene{};
+    // Cables that close a loop carry the previous frame; they are drawn so.
+    if (rack_ && !scene.cables.empty()) {
+        json::Value args = json::Value::object();
+        args["rack"] = rack_->str();
+        if (auto got = dispatcher_.execute({"rack.get", std::move(args), kOrigin}))
+            if (const json::Value* cables = got->find("cables"); cables && cables->isArray())
+                for (const auto& c : cables->asArray()) {
+                    const json::Value* fb = c.find("feedback");
+                    if (!fb || !fb->isBool() || !fb->asBool()) continue;
+                    const auto id = model::Id::parse(str(c, "cable"));
+                    for (auto& k : scene.cables)
+                        if (id && k.id == *id) k.feedback = true;
+                }
+    }
     space_->setScene(std::move(scene));
     space_->setEmptyText(s.racks.empty() ? "No racks yet. + adds one on the selected channel."
                                          : "");
@@ -736,6 +774,7 @@ void RackWindow::watch(bool on) {
 }
 
 bool RackWindow::tick(std::chrono::steady_clock::time_point now) {
+    if (plugins_ && plugins_->isOpen()) plugins_->tick();
     if (!isOpen() || !nextTelemetry_ || now < *nextTelemetry_) return false;
     nextTelemetry_ = now + kTelemetryInterval;
     bool changed = false;
@@ -839,6 +878,32 @@ Status RackWindow::addRack(std::optional<model::Id> track) {
 Status RackWindow::addModule(const std::string& type, std::optional<ui::Point> at) {
     if (!rack_) {
         if (auto r = addRack(); !r) return r;
+    }
+    if (type == model::kPluginModule && isOpen()) {  // which plug-in: the browser says
+        if (!plugins_)
+            plugins_ = std::make_unique<PluginBrowser>(app_, dispatcher_, root(), favouritesFile);
+        plugins_->open(
+            [this, at](const std::string& id) {
+                if (plugins_) plugins_->close();
+                json::Value args = json::Value::object();
+                args["rack"] = rack_->str();
+                args["plugin"] = id;
+                std::optional<ui::Point> place = at;
+                if (!place && space_) {
+                    const ui::Rect v = space_->visibleSpace();
+                    place = ui::Point{v.x + v.w / 2 - 80, v.y + v.h / 2 - 60};
+                }
+                if (place) {
+                    args["x"] = std::round(static_cast<double>(place->x));
+                    args["y"] = std::round(static_cast<double>(place->y));
+                }
+                if (auto r = exec("module.add", std::move(args)); r && space_) {
+                    sync();
+                    if (auto made = model::Id::parse(str(*r, "module"))) space_->select({*made});
+                }
+            },
+            "Add a plug-in to the rack");
+        return {};
     }
     json::Value args = json::Value::object();
     args["rack"] = rack_->str();
@@ -1020,16 +1085,8 @@ void RackWindow::moduleMenu(model::Id module, ui::Point at) {
                                               {at.x, at.y, 1, 1});
                          },
                          !several});
-    if (type && !type->type->source().empty())
-        items.push_back({"Show source", "",
-                         [this, source = type->type->source(), at] {
-                             auto text = std::make_unique<ui::Node>("rack.source");
-                             (void)source;
-                             (void)at;
-                             (void)text;
-                             report(Error("gui.rack", "the source view is not built yet"));
-                         },
-                         !several});
+    if (type && type->type->code())
+        items.push_back({"Show source", "", [this, id = m->type] { showSource(id); }, !several});
     items.push_back({"", "", {}, true, true});
     items.push_back({several ? "Delete modules" : "Delete", "Del", [this] { deleteSelected(); }});
     root().openPopup(
@@ -1048,6 +1105,8 @@ void RackWindow::spaceMenu(ui::Point at, ui::Point sp) {
             items.push_back(
                 {"Add " + info.name, "", [this, id = info.id, sp] { (void)addModule(id, sp); }});
         }
+        items.push_back({"Add plugin\u2026", "",
+                         [this, sp] { (void)addModule(std::string(model::kPluginModule), sp); }});
         items.push_back({"", "", {}, true, true});
         items.push_back({"Show everything", "Home", [this] {
                              if (space_) space_->frameAll();
@@ -1067,6 +1126,42 @@ void RackWindow::paramMenu(model::Id module, int index, ui::Point at) {
     items.push_back(
         {"Default (" + paramText(p, p.def) + ")", "Double-click",
          [this, module, index, def = p.def] { param(module, index, def, ui::Gesture::Set); }});
+    // Automation: on the rack's home channel, as a lane of its own.
+    std::optional<model::Id> env;
+    bool shown = false;
+    for (const auto& e : app_.head().envelopes)
+        if (e.value->target.object == module && e.value->target.param == p.key) {
+            env = e.id;
+            shown = e.value->visible;
+        }
+    if (p.automatable && p.kind != script::detail::ParamModel::Kind::Toggle) {
+        if (!env) {
+            const double v = static_cast<std::size_t>(index) < m->values.size()
+                                 ? m->values[static_cast<std::size_t>(index)]
+                                 : p.def;
+            items.push_back(
+                {"Automate", "", [this, module, key = p.key, value = racks::paramJson(p, v)] {
+                     json::Value point = json::Value::object();
+                     point["beat"] = 0.0;
+                     point["value"] = value;
+                     json::Value points = json::Value::array();
+                     points.push_back(std::move(point));
+                     json::Value args = json::Value::object();
+                     args["module"] = module.str();
+                     args["param"] = key;
+                     args["points"] = std::move(points);
+                     (void)exec("env.add", std::move(args));
+                 }});
+        } else {
+            items.push_back({shown ? "Hide automation lane" : "Show automation lane", "",
+                             [this, id = *env, shown] {
+                                 json::Value args = json::Value::object();
+                                 args["env"] = id.str();
+                                 args["visible"] = !shown;
+                                 (void)exec("env.set", std::move(args));
+                             }});
+        }
+    }
     if (p.kind == script::detail::ParamModel::Kind::Choice) {
         items.push_back({"", "", {}, true, true});
         const double v = static_cast<std::size_t>(index) < m->values.size()
@@ -1162,6 +1257,128 @@ void RackWindow::renameRack(model::Id rack) {
                       args["name"] = text;
                       (void)exec("rack.set", std::move(args));
                   });
+}
+
+void RackWindow::showSource(const std::string& type) {
+    json::Value args = json::Value::object();
+    args["type"] = type;
+    auto got = exec("module.get", std::move(args));
+    if (!got) return;
+    const std::string origin = str(*got, "origin");
+    const rack::Catalog::Entry* entry = catalog_ ? catalog_->find(type) : nullptr;
+    const std::string title = entry ? entry->type->info().name : type;
+    const bool library = origin == "library";
+    // A library module's name: its file's.
+    std::string name;
+    if (library && entry) {
+        const std::string path = entry->type->path();
+        const auto slash = path.find_last_of("/\\");
+        name = path.substr(slash == std::string::npos ? 0 : slash + 1);
+        if (const auto dot = name.rfind('.'); dot != std::string::npos) name.resize(dot);
+    }
+    const ui::Rect win = root().content() ? root().content()->bounds() : ui::Rect{0, 0, 900, 600};
+    auto form = std::make_unique<ui::Node>("rack.source");
+    form->layout.dir = ui::Layout::Dir::Column;
+    form->layout.width = ui::SizeRule::fixed(std::min(860.0f, win.w - 60));
+    form->layout.height = ui::SizeRule::fixed(std::max(240.0f, win.h - 80));
+    form->layout.padding = ui::Insets::all(12);
+    form->layout.gap = 8;
+    auto& head = form->emplace<ui::Node>("rack.source.head");
+    head.layout.dir = ui::Layout::Dir::Row;
+    head.layout.height = ui::SizeRule::fixed(26);
+    head.layout.align = ui::Layout::Align::Center;
+    head.layout.gap = 6;
+    auto& label = head.emplace<ui::Label>(
+        "rack.source.title", title + "  ·  " + origin + "  ·  " + type, ui::Font::UiBold, "body");
+    label.layout.width = ui::SizeRule::fraction();
+    ui::TextArea* code = nullptr;
+    ui::Label* note = nullptr;
+    if (library)
+        head.emplace<ui::Button>("rack.source.save", "Save");
+    else
+        head.emplace<ui::Button>("rack.source.fork", "Make editable copy", [this, type, title] {
+            std::string base;
+            for (char ch : title)
+                if (std::isalnum(static_cast<unsigned char>(ch)))
+                    base += static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            if (base.empty()) base = "module";
+            // A free library name and id: "vco", then "vco_2"...
+            std::string copy = base;
+            for (int n = 2; catalog_ && catalog_->find("com.library." + copy); ++n)
+                copy = base + "_" + std::to_string(n);
+            json::Value a = json::Value::object();
+            a["type"] = type;
+            a["id"] = "com.library." + copy;
+            a["name"] = copy;
+            root().closePopup();
+            auto r = exec("module.fork", std::move(a));
+            if (!r) return;
+            version_ = ~std::uint64_t{0};
+            sync();
+            showSource("com.library." + copy);
+        });
+    head.emplace<ui::Button>("rack.source.close", "Close", [this] { root().closePopup(); });
+    code = &form->emplace<ui::TextArea>("rack.source.text", str(*got, "source"));
+    code->layout.height = ui::SizeRule::fraction();
+    note = &form->emplace<ui::Label>(
+        "rack.source.status",
+        library ? "Ctrl+Enter or Save compiles it; racks using it reload."
+                : "A " + origin + " module: make an editable copy to change it.",
+        ui::Font::Ui, "small", "ink-quiet");
+    note->layout.height = ui::SizeRule::fixed(18);
+    code->onCancel = [this] { root().closePopup(); };
+    if (library) {
+        auto compile = [this, name, code, note] {
+            json::Value a = json::Value::object();
+            a["name"] = name;
+            a["source"] = code->text();
+            auto r = dispatcher_.execute({"module.write", std::move(a), kOrigin});
+            if (!r) {
+                note->setText(r.error().message);
+                return;
+            }
+            std::vector<ui::TextArea::Mark> marks;
+            if (const json::Value* d = r->find("diagnostics"); d && d->isArray())
+                for (const auto& x : d->asArray()) {
+                    ui::TextArea::Mark mk;
+                    if (const auto* l = x.find("line"); l && l->isNumber())
+                        mk.line = static_cast<int>(l->asInt());
+                    if (const auto* c = x.find("column"); c && c->isNumber())
+                        mk.column = static_cast<int>(c->asInt());
+                    mk.message = str(x, "message");
+                    if (const std::string hint = str(x, "hint"); !hint.empty())
+                        mk.message += " (" + hint + ")";
+                    mk.error = str(x, "severity") != "warning";
+                    marks.push_back(std::move(mk));
+                }
+            const json::Value* ok = r->find("ok");
+            const json::Value* reloaded = r->find("reloaded");
+            if (ok && ok->isBool() && ok->asBool())
+                note->setText(
+                    "Compiled; " +
+                    std::to_string(reloaded && reloaded->isNumber() ? reloaded->asInt() : 0) +
+                    " playing modules reloaded.");
+            else
+                note->setText(marks.empty() ? std::string("It does not compile.")
+                                            : "Line " + std::to_string(marks.front().line) + ": " +
+                                                  marks.front().message);
+            // The caret to the first mistake, which scrolls it into view.
+            if (!marks.empty() && marks.front().line > 0) {
+                const std::string& t = code->text();
+                std::size_t at = 0;
+                for (int line = 1; line < marks.front().line && at != std::string::npos; ++line)
+                    if ((at = t.find('\n', at)) != std::string::npos) ++at;
+                if (at != std::string::npos) code->setCaret(at);
+            }
+            code->setMarks(std::move(marks));
+            version_ = ~std::uint64_t{0};
+            sync();
+        };
+        code->onSubmit = [compile](const std::string&) { compile(); };
+        if (auto* b = static_cast<ui::Button*>(head.find("rack.source.save"))) b->onClick = compile;
+    }
+    root().openPopup(std::move(form), {}, ui::Placement::Center);
+    root().focus(code);
 }
 
 }  // namespace supple::gui

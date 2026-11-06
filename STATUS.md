@@ -331,10 +331,11 @@ instructions are in `docs/guides/installing.md`.
   marquee and group moves, knob drags, cables drawn jack to jack or onto a
   knob, modulation rings, telemetry glow, a searchable module browser
   (double-click or drag in) and context menus; View → Racks and the toolbar.
-  Not yet: module displays (`draw()`), MIDI learn and automation from a
-  knob, the source view, the input menu's Out modules, a channel menu's
-  Show/Add rack. A saved `menus.json` keeps its own toolbar and menus, so
-  existing users add Racks themselves (Edit the toolbar).
+  Module displays (`draw()`), dashed feedback cables, plugin modules (a
+  click opens the editor), Automate on a knob (a lane under the home
+  channel), the source view with Make editable copy, rack Outs in a
+  channel's input menu, and Show/Add rack in its right-click menu. Not yet:
+  MIDI learn for module knobs, pointer input on displays.
 - **MIDI learn** (ADR-0027): any plug-in parameter (the FX window's MIDI
   button, or `fx.learn.set` for agents) and any action (Ctrl+L in the
   actions list) learns a controller by moving it: CC, note, pitch bend or

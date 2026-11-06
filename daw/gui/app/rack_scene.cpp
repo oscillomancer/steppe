@@ -125,10 +125,10 @@ namespace {
 
 // A plugin module's face: its name over its jacks, inputs then outputs on
 // one row (audio), notes above them for an instrument.
-rack::PanelLayout pluginFace(const rack::ModuleType& t) {
+rack::PanelLayout pluginFace(const rack::ModuleType& t, bool instrument) {
     using rack::kJackPitch, rack::kJackRow, rack::kMargin, rack::kJackSize;
     rack::PanelLayout l;
-    const bool notes = t.inputs().size() > 2;
+    const bool notes = instrument && t.inputs().size() > 2;
     const double w = 4 * kJackPitch + 2 * kMargin;
     l.width = w;
     double y = 64;  // the name's area
@@ -175,7 +175,8 @@ RackScene RackScene::build(const model::Session& s, model::Id rackId, const rack
         v.out = m.type == model::kOutModule;
         if (v.plugin) {
             const model::FxInstance* fx = m.fx ? s.fx.find(*m.fx) : nullptr;
-            v.type = racks::pluginType(fx && instrument && instrument(fx->plugin));
+            v.type = racks::pluginType();
+            v.instrument = fx && instrument && instrument(fx->plugin);
             v.title = !m.label.empty()                 ? m.label
                       : fx && !fx->label.empty()       ? fx->label
                       : fx && !fx->plugin.name.empty() ? fx->plugin.name
@@ -202,7 +203,7 @@ RackScene RackScene::build(const model::Session& s, model::Id rackId, const rack
             v.values.reserve(params.size());
             for (const auto& p : params)
                 v.values.push_back(racks::paramValue(p, m.params.find(p.key)));
-            v.face = v.plugin ? pluginFace(*v.type) : v.type->layout();
+            v.face = v.plugin ? pluginFace(*v.type, v.instrument) : v.type->layout();
             v.w = v.face.width;
             v.h = v.face.height;
         } else {

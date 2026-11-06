@@ -37,6 +37,15 @@ ui::Color mix(ui::Color a, ui::Color b, float t) {
             a.a + (b.a - a.a) * t};
 }
 
+// A label in its box: shrunk to fit, down to three quarters of its size,
+// before the canvas cuts it with an ellipsis.
+void fitText(ui::Canvas& c, const ui::Rect& box, std::string_view s, ui::Font font, float size,
+             ui::Color col, int align) {
+    const float w = c.textWidth(s, font, size);
+    if (w > box.w && w > 0) size = std::max(size * 0.75f, size * box.w / w);
+    c.text(box, s, font, size, col, align);
+}
+
 float dist(ui::Point a, ui::Point b) { return std::hypot(a.x - b.x, a.y - b.y); }
 
 bool isJack(Kind k) { return k == Kind::Input || k == Kind::Output; }
@@ -140,6 +149,7 @@ void RackSpace::setScene(RackScene scene) {
     }
     if (hot_ && !scene_.module(*hot_)) hot_.reset();
     hotCable_.reset();
+    std::erase_if(faces_, [&](const auto& f) { return !scene_.module(f.first); });
     invalidate();
 }
 
@@ -409,12 +419,14 @@ void RackSpace::paintItem(ui::Canvas& c, const RackScene::Module& m, const Panel
             c.text({centre.x + kJackR - 2, centre.y - kJackR - 3, 10, 8},
                    std::to_string(m.telemetry.channels[static_cast<std::size_t>(item.index)]),
                    ui::Font::MonoBold, 7.5f, quiet, ui::kLeft | ui::kMiddle);
-        c.text({centre.x - 18, centre.y + kJackR + 1, 36, 11}, port.name, ui::Font::Ui, kLabel,
-               output ? ink : quiet, ui::kCenter | ui::kMiddle);
+        fitText(c, {centre.x - 18, centre.y + kJackR + 1, 36, 11}, port.name, ui::Font::Ui, kLabel,
+                output ? ink : quiet, ui::kCenter | ui::kMiddle);
         return;
     }
     if (item.kind == Kind::Display) {
-        c.fillRound(rectOf(m, item), 2, well);
+        // A module that draws paints its own display (under the controls).
+        if (!(m.type && m.type->code() && m.type->code()->draw()))
+            c.fillRound(rectOf(m, item), 2, well);
         return;
     }
     if (item.index < 0 || static_cast<std::size_t>(item.index) >= m.type->params().size()) return;
@@ -480,10 +492,10 @@ void RackSpace::paintItem(ui::Canvas& c, const RackScene::Module& m, const Panel
             }
             const ui::Rect label{centre.x - 26, centre.y + r + 1.5f, 52, 11};
             if (showValue)
-                c.text(label, paramText(p, v), ui::Font::Mono, kLabel, ink,
-                       ui::kCenter | ui::kMiddle);
+                fitText(c, label, paramText(p, v), ui::Font::Mono, kLabel, ink,
+                        ui::kCenter | ui::kMiddle);
             else
-                c.text(label, p.name, ui::Font::Ui, kLabel, quiet, ui::kCenter | ui::kMiddle);
+                fitText(c, label, p.name, ui::Font::Ui, kLabel, quiet, ui::kCenter | ui::kMiddle);
             break;
         }
         case Kind::Toggle: {
@@ -491,15 +503,15 @@ void RackSpace::paintItem(ui::Canvas& c, const RackScene::Module& m, const Panel
             const bool on = v >= 0.5;
             c.fillRound(r, 3, on ? accent : t.color("module-title"));
             if (!on) c.strokeRound(r, 3, t.color("rule"));
-            c.text(r.inset(2), p.name, ui::Font::UiBold, kLabel, on ? face : quiet,
-                   ui::kCenter | ui::kMiddle);
+            fitText(c, r.inset(2), p.name, ui::Font::UiBold, kLabel, on ? face : quiet,
+                    ui::kCenter | ui::kMiddle);
             break;
         }
         case Kind::Choice: {
             const ui::Rect r = rectOf(m, item);
             c.fillRound(r, 3, well);
-            c.text({r.x + 4, r.y, r.w - 14, r.h}, paramText(p, v), ui::Font::Ui, 9.5f, ink,
-                   ui::kLeft | ui::kMiddle);
+            fitText(c, {r.x + 4, r.y, r.w - 14, r.h}, paramText(p, v), ui::Font::Ui, 9.5f, ink,
+                    ui::kLeft | ui::kMiddle);
             const float cx = r.right() - 7, cy = r.y + r.h / 2;
             c.fillPath({{cx - 3, cy - 1.5f}, {cx + 3, cy - 1.5f}, {cx, cy + 2}}, quiet);
             break;
@@ -527,8 +539,8 @@ void RackSpace::paintItem(ui::Canvas& c, const RackScene::Module& m, const Panel
                 m.live && static_cast<std::size_t>(item.index) < m.telemetry.params.size()
                     ? m.telemetry.params[static_cast<std::size_t>(item.index)]
                     : v;
-            c.text({r.x + 4, r.y, r.w / 2, r.h}, p.name, ui::Font::Ui, kLabel, quiet,
-                   ui::kLeft | ui::kMiddle);
+            fitText(c, {r.x + 4, r.y, r.w / 2, r.h}, p.name, ui::Font::Ui, kLabel, quiet,
+                    ui::kLeft | ui::kMiddle);
             c.text({r.x + r.w / 2, r.y, r.w / 2 - 4, r.h}, paramText(p, shown), ui::Font::Mono,
                    kLabel, ink, ui::kRight | ui::kMiddle);
             break;
@@ -562,8 +574,8 @@ void RackSpace::paintModule(ui::Canvas& c, const RackScene::Module& m, bool sele
     const ui::Color ink = m.bypass ? t.color("ink-faint") : t.color("ink");
     if (m.plugin) {
         // A plug-in shows its name, and opens on a click.
-        c.text({r.x + 10, r.y + 10, r.w - 20, 22}, m.title, ui::Font::UiBold, 13.5f, ink,
-               ui::kCenter | ui::kMiddle);
+        fitText(c, {r.x + 10, r.y + 10, r.w - 20, 22}, m.title, ui::Font::UiBold, 13.5f, ink,
+                ui::kCenter | ui::kMiddle);
         c.text({r.x + 10, r.y + 32, r.w - 20, 14}, m.subtitle.empty() ? "Plug-in" : m.subtitle,
                ui::Font::Ui, 9.5f, t.color("ink-quiet"), ui::kCenter | ui::kMiddle);
         // The editor's mark: a small window, top right.
@@ -573,8 +585,24 @@ void RackSpace::paintModule(ui::Canvas& c, const RackScene::Module& m, bool sele
         c.fillRect({w.x, w.y, w.w, 2.2f}, mark);
     } else {
         std::string title = m.title;
-        c.text({r.x + 7, r.y, r.w - 14, head}, title, ui::Font::UiBold, kTitleFont, ink,
-               ui::kCenter | ui::kMiddle);
+        fitText(c, {r.x + 7, r.y, r.w - 14, head}, title, ui::Font::UiBold, kTitleFont, ink,
+                ui::kCenter | ui::kMiddle);
+    }
+    // The module's own drawing, under its controls.
+    if (m.type && m.type->code() && m.type->code()->draw()) {
+        auto& drawn = faces_[m.id];
+        if (!drawn || drawn->type() != m.type.get()) drawn = ModuleFace::make(m.type);
+        if (drawn) {
+            drawn->update(m);
+            nvgSave(vg);
+            nvgTranslate(vg, r.x, r.y);
+            nvgIntersectScissor(vg, 0, 0, r.w, r.h);
+            drawn->draw(vg, t, c.fonts(), m.w, m.h);
+            nvgRestore(vg);
+            if (drawn->stopped())
+                c.text({r.x + 6, r.bottom() - 16, r.w - 12, 12}, "draw() ran too long",
+                       ui::Font::Ui, 8.5f, t.color("clip"), ui::kCenter | ui::kMiddle);
+        }
     }
     if (!m.type) {  // an unknown type: kept, silent, said
         c.text({r.x + 8, r.y + head + 8, r.w - 16, 14}, m.subtitle, ui::Font::UiBold, 9.5f,
@@ -621,6 +649,24 @@ void RackSpace::paintCables(ui::Canvas& c) const {
     NVGcontext* vg = c.vg();
     const bool many =
         static_cast<int>(scene_.cables.size()) >= kManyCables || drag_.kind == Drag::Kind::Cable;
+    // A feedback cable: dashes over a dim cord.
+    auto dashes = [&](const Curve& k, ui::Color col, float width, float alpha) {
+        constexpr int n = 40;
+        ui::Point prev = k.p0;
+        for (int i = 1; i <= n; ++i) {
+            const ui::Point q = at(k, static_cast<float>(i) / n);
+            if (i % 2 == 1) {
+                nvgBeginPath(vg);
+                nvgMoveTo(vg, prev.x, prev.y);
+                nvgLineTo(vg, q.x, q.y);
+                nvgLineCap(vg, NVG_ROUND);
+                nvgStrokeWidth(vg, width);
+                nvgStrokeColor(vg, nvg(col.withAlpha(alpha)));
+                nvgStroke(vg);
+            }
+            prev = q;
+        }
+    };
     auto stroke = [&](const Curve& k, ui::Color col, float width, float alpha) {
         nvgBeginPath(vg);
         nvgMoveTo(vg, k.p0.x, k.p0.y);
@@ -665,7 +711,12 @@ void RackSpace::paintCables(ui::Canvas& c) const {
             poly = out >= 0 && static_cast<std::size_t>(out) < src->telemetry.channels.size() &&
                    src->telemetry.channels[static_cast<std::size_t>(out)] > 1;
         }
-        stroke(curveOf(*a, *b), col, poly ? 4.6f : 3.0f, alpha);
+        if (k.feedback) {
+            stroke(curveOf(*a, *b), col, poly ? 4.6f : 3.0f, alpha * 0.35f);
+            dashes(curveOf(*a, *b), col, poly ? 4.6f : 3.0f, alpha);
+        } else {
+            stroke(curveOf(*a, *b), col, poly ? 4.6f : 3.0f, alpha);
+        }
         plug(*a, col, alpha, false);
         plug(*b, col, alpha, k.param);
     }

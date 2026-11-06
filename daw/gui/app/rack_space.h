@@ -14,11 +14,13 @@
 #pragma once
 
 #include <functional>
+#include <map>
 #include <optional>
 #include <set>
 #include <string>
 #include <vector>
 
+#include "rack_face.h"
 #include "rack_scene.h"
 #include "supple/ui/controls.h"
 #include "supple/ui/node.h"
@@ -157,6 +159,8 @@ class RackSpace : public ui::Node {
 
     Hooks hooks_;
     RackScene scene_;
+    // Displays: each drawing module's copy, made when first painted.
+    mutable std::map<model::Id, std::unique_ptr<ModuleFace>> faces_;
     View view_;
     std::set<model::Id> selection_;
     std::optional<model::Id> hot_;  // the module under the pointer

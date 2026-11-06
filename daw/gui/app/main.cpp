@@ -455,6 +455,7 @@ int main(int argc, char** argv) {
     };
     racks.openEditor = [&](model::Id fx) { return pluginWindows.toggle(fx); };
     racks.spaceTap = [&] { (void)appActions.run("transport.toggle"); };
+    racks.favouritesFile = gui::Favourites::defaultFile(product::kSlug);
     gui::Mixer mixer(root, appActions, dispatcher, **app, meterFeed);
     mixer.onAddStrip = [&shell](const std::string& type) { shell.addStrip(type); };
     mixer.inputText = [&shell](const model::Id& track) { return shell.inputLabel(track); };

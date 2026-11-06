@@ -21,9 +21,9 @@ std::shared_ptr<const rack::Catalog> catalog(engine::EngineApp& app);
 void setCatalog(engine::EngineApp& app, std::shared_ptr<const rack::Catalog> catalog);
 // The running instance of a module (null: not in a running plan).
 rack::Instance* instance(engine::EngineApp& app, model::Id module);
-// A plugin module's description (rack.md §5): audio in and out, and for an
-// instrument the note inputs. Its parameters are the plug-in's.
-std::shared_ptr<const rack::ModuleType> pluginType(bool instrument);
+// A plugin module's description (rack.md §5): audio in and out, and the
+// note inputs an instrument plays. Its parameters are the plug-in's.
+std::shared_ptr<const rack::ModuleType> pluginType();
 // A knob's value from the module's params (a number, a choice's key, a
 // bool), physical; the default when absent or not one of its values.
 double paramValue(const sd::ParamModel& param, const json::Value* value);
