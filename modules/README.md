@@ -68,3 +68,4 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `pitch` | A constant pitch or a transposer: octave, semitone and fine on a poly pitch, with a tuner display |
 | `drift` | Slow, smooth random motion across poly voices, apart or following one shared path |
 | `ratchet` | Gates into bursts of quick pulses, by chance or every Nth gate, curved and fading; poly |
+| `markov` | A melody by the odds of which note follows which: four styles, or learned from a melody played in |
