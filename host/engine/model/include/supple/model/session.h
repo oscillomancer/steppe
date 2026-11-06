@@ -238,8 +238,9 @@ std::optional<Id> moduleOfFx(const Session& s, Id fx);
 // The rack a cable end is in: its module's, or for a plug-in's parameter its
 // plugin module's.
 std::optional<Id> rackOfEnd(const Session& s, const CableEnd& end);
-// What the input menu calls an Out module (rack.md §8): its label, else
-// "<rack name> Out N" numbered among its rack's Out modules in id order.
+// What an Out or In module is called (rack.md §8): its label, else "Out N"
+// or "In N", numbered among its rack's Out (In) modules in id order. The
+// input menu shows it after its rack (rackLabel).
 std::string moduleLabel(const Session& s, Id module);
 // What a rack's tab says: its name, else its home track's label.
 std::string rackLabel(const Session& s, Id rack);

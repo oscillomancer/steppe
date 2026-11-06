@@ -318,6 +318,10 @@ class EngineApp : public cmd::Host {
     // Makes `catalog` the one racks use: racks playing a type whose code
     // changed get new instances of it. Main thread.
     void setModules(std::shared_ptr<const rack::Catalog> catalog);
+    // A module's running instance, for its telemetry (Instance::watch,
+    // readTelemetry); null until a plan builds it (supple/engine/racks.h has
+    // the rest a rack window needs). Main thread.
+    rack::Instance* moduleInstance(model::Id module) const;
     std::string rememberRender(const std::filesystem::path& path);
     std::string reserveRenderId();
     void publishRender(std::string id, const std::filesystem::path& path);

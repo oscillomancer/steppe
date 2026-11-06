@@ -2671,6 +2671,10 @@ void EngineApp::endMasterRecording() {
     headChanged();
 }
 
+rack::Instance* EngineApp::moduleInstance(model::Id module) const {
+    return pool_->racks().find(module);
+}
+
 void EngineApp::setModules(std::shared_ptr<const rack::Catalog> catalog) {
     modules_ = std::move(catalog);
     pool_->racks().setCatalog(modules_);

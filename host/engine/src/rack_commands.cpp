@@ -239,6 +239,27 @@ Result<json::Value> mergeParams(const rack::ModuleType& t, const json::Value& ba
 }
 
 // What a module's face measures (its type's layout), or a small default.
+// A factory preset's knobs (rack.md §7), as params: its values, the others
+// at their defaults.
+Result<json::Value> presetParams(const rack::ModuleType& t, const std::string& name,
+                                 const char* path) {
+    std::string names;
+    if (t.code())
+        for (const auto& patch : t.code()->factoryPatches()) {
+            if (patch.name == name) {
+                json::Value out = json::Value::object();
+                for (const auto& [id, value] : patch.values)
+                    for (const auto& p : t.params())
+                        if (p.id == id && !p.output && value != p.def)
+                            out[p.key] = detail::moduleParamJson(p, value);
+                return out;
+            }
+            names += (names.empty() ? "" : ", ") + patch.name;
+        }
+    return Error("rack.preset", t.id() + " has no preset \"" + name + "\"", path,
+                 names.empty() ? "it has no presets" : "presets: " + names);
+}
+
 std::pair<double, double> sizeOf(const rack::ModuleType* t) {
     if (!t) return {120, 120};
     return {t->layout().width, t->layout().height};
@@ -296,6 +317,11 @@ json::Value describeModuleType(const rack::ModuleType& t) {
     out["version"] = t.info().version;
     out["description"] = t.info().description;
     if (!t.path().empty()) out["path"] = t.path();
+    if (t.code() && !t.code()->factoryPatches().empty()) {
+        json::Value presets = json::Value::array();
+        for (const auto& patch : t.code()->factoryPatches()) presets.push_back(patch.name);
+        out["presets"] = std::move(presets);
+    }
     json::Value tags = json::Value::array();
     for (const auto& tag : t.info().tags)
         if (!tag.empty()) tags.push_back(tag);
@@ -506,7 +532,7 @@ struct ModuleDescribe {
 };
 struct ModuleAdd {
     std::string rack;
-    std::optional<std::string> type, label;
+    std::optional<std::string> type, label, preset;
     std::optional<double> x, y;
     std::optional<json::Value> params;
     std::optional<std::string> source, device, plugin;
@@ -517,7 +543,7 @@ struct ModuleRef {
 struct ModuleSet {
     std::string module;
     std::optional<json::Value> params;
-    std::optional<std::string> label;
+    std::optional<std::string> label, preset;
     std::optional<double> x, y;
     std::optional<bool> bypass;
     std::optional<std::string> source, device;
@@ -913,11 +939,13 @@ void registerRackCommands(cmd::Registry& registry) {
             "input it always plays; \"\" any). plugin (instead of type): a plug-in id "
             "(fx.scan) for a plugin module, which shows the plug-in's name and opens its "
             "editor; its ports are in_l, in_r, out_l, out_r and, for instruments, pitch, gate "
-            "and velocity. Returns its size and keys.";
+            "and velocity. preset: a factory preset (module.describe), params on top. Returns "
+            "its size and keys.";
         c.args = schema::object<ModuleAdd>("module_add_args")
                      .field("rack", &ModuleAdd::rack, idOf("rk", "Rack"))
                      .field("type", &ModuleAdd::type, schema::string())
                      .field("label", &ModuleAdd::label, schema::string())
+                     .field("preset", &ModuleAdd::preset, schema::string().minLength(1))
                      .field("x", &ModuleAdd::x, coordinate())
                      .field("y", &ModuleAdd::y, coordinate())
                      .field("params", &ModuleAdd::params, schema::any())
@@ -998,11 +1026,19 @@ void registerRackCommands(cmd::Registry& registry) {
             }
             m.device = a.device;
             if (a.label) m.label = *a.label;
-            if (a.params) {
+            if (a.params || a.preset) {
                 if (!type)
                     return Error("rack.param", "a plugin module's knobs are its plug-in's",
-                                 "/params", "set them with fx.set on its fx");
-                auto params = mergeParams(*type, json::Value::object(), *a.params, "/params");
+                                 a.params ? "/params" : "/preset",
+                                 "set them with fx.set, or fx.preset.load, on its fx");
+                json::Value base = json::Value::object();
+                if (a.preset) {
+                    auto preset = presetParams(*type, *a.preset, "/preset");
+                    if (!preset) return std::move(preset).error();
+                    base = std::move(*preset);
+                }
+                auto params = a.params ? mergeParams(*type, base, *a.params, "/params")
+                                       : Result<json::Value>(std::move(base));
                 if (!params) return std::move(params).error();
                 m.params = std::move(*params);
             }
@@ -1061,11 +1097,13 @@ void registerRackCommands(cmd::Registry& registry) {
             "params merge into its knobs (values in the knob's units; a choice by key; a "
             "default value is dropped from the file). A knob edit is heard at once, without a "
             "recompile. bypass passes each input to the output of its kind. label names it "
-            "(an Out module's label is what channels' input menus list).";
+            "(an Out module's label is what channels' input menus list). preset: a factory "
+            "preset by name (module.describe lists them): every knob to it, then params on top.";
         c.args = schema::object<ModuleSet>("module_set_args")
                      .field("module", &ModuleSet::module, idOf("mo", "Module"))
                      .field("params", &ModuleSet::params, schema::any())
                      .field("label", &ModuleSet::label, schema::string())
+                     .field("preset", &ModuleSet::preset, schema::string().minLength(1))
                      .field("x", &ModuleSet::x, coordinate())
                      .field("y", &ModuleSet::y, coordinate())
                      .field("bypass", &ModuleSet::bypass, schema::boolean())
@@ -1082,14 +1120,24 @@ void registerRackCommands(cmd::Registry& registry) {
             auto id = moduleId(s, a.module);
             if (!id) return std::move(id).error();
             model::RackModule m = *s.modules.find(*id);
-            if (a.params) {
-                const auto type = typeOfModule(e, m);
+            if (a.params || a.preset) {
+                const char* path = a.params ? "/params" : "/preset";
+                const auto type = m.fx ? nullptr : typeOfModule(e, m);
                 if (!type)
-                    return Error("rack.param",
-                                 m.fx ? "a plugin module's knobs are its plug-in's"
-                                      : "its type " + m.type + " is not installed",
-                                 "/params", m.fx ? "use fx.set on " + m.fx->str() : "module.list");
-                auto params = mergeParams(*type, m.params, *a.params, "/params");
+                    return Error(
+                        "rack.param",
+                        m.fx ? "a plugin module's knobs are its plug-in's"
+                             : "its type " + m.type + " is not installed",
+                        path,
+                        m.fx ? "use fx.set or fx.preset.load on " + m.fx->str() : "module.list");
+                json::Value base = m.params;
+                if (a.preset) {  // every knob: the preset's, else its default
+                    auto preset = presetParams(*type, *a.preset, "/preset");
+                    if (!preset) return std::move(preset).error();
+                    base = std::move(*preset);
+                }
+                auto params = a.params ? mergeParams(*type, base, *a.params, "/params")
+                                       : Result<json::Value>(std::move(base));
                 if (!params) return std::move(params).error();
                 m.params = std::move(*params);
             }

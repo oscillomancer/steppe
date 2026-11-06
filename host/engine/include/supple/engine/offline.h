@@ -34,8 +34,9 @@
 #include "supple/model/session.h"
 
 namespace supple::rack {
-class Catalog;  // module types (ADR-0062)
-}
+class Catalog;   // module types (ADR-0062)
+class Instance;  // a module's state
+}  // namespace supple::rack
 
 namespace supple::engine {
 

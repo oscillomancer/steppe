@@ -7,7 +7,7 @@
 
 #include "supple/rack/stock.h"
 
-namespace supple::engine::detail {
+namespace supple::engine {
 
 namespace sd = script::detail;
 
@@ -49,20 +49,6 @@ std::shared_ptr<const rack::ModuleType> pluginModuleType() {
     return t;
 }
 
-std::shared_ptr<const rack::Catalog> builtinModuleCatalog() {
-    static const std::shared_ptr<const rack::Catalog> catalog = [] {
-        auto c = std::make_shared<rack::Catalog>();
-        for (auto type : {rack::host::outType(), rack::host::inType(), rack::host::notesType(),
-                          rack::host::transportType(), pluginModuleType()})
-            c->add(std::move(type));
-        for (const rack::StockModule* m : rack::stockModules())
-            c->add(
-                rack::ModuleType::fromCode(m->code, rack::Origin::Stock, std::string(m->source)));
-        return std::shared_ptr<const rack::Catalog>(std::move(c));
-    }();
-    return catalog;
-}
-
 double moduleParamValue(const sd::ParamModel& param, const json::Value* value) {
     using K = sd::ParamModel::Kind;
     if (!value) return param.def;
@@ -99,6 +85,24 @@ json::Value moduleParamJson(const sd::ParamModel& param, double physical) {
     if (param.kind == K::Integer)
         return json::Value(static_cast<std::int64_t>(std::lround(physical)));
     return json::Value(physical);
+}
+
+}  // namespace supple::engine
+
+namespace supple::engine::detail {
+
+std::shared_ptr<const rack::Catalog> builtinModuleCatalog() {
+    static const std::shared_ptr<const rack::Catalog> catalog = [] {
+        auto c = std::make_shared<rack::Catalog>();
+        for (auto type : {rack::host::outType(), rack::host::inType(), rack::host::notesType(),
+                          rack::host::transportType(), pluginModuleType()})
+            c->add(std::move(type));
+        for (const rack::StockModule* m : rack::stockModules())
+            c->add(
+                rack::ModuleType::fromCode(m->code, rack::Origin::Stock, std::string(m->source)));
+        return std::shared_ptr<const rack::Catalog>(std::move(c));
+    }();
+    return catalog;
 }
 
 // --- the pool ----------------------------------------------------------------------------

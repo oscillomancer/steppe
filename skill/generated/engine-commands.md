@@ -3711,7 +3711,7 @@ Result:
 
 Automate a parameter: a track's or route's mixer control, or a plugin's.
 
-Target one of track (param volume|pan|mute; playrate only on tr_0), route (volume|pan|mute), group (VCA volume|mute), or fx (a semantic key such as "gain" or "filter1.cutoff", or for other plugins a CLAP id or parameter name). points: [{beat|bar|seconds, value, shape?, tension?}]; values in the parameter's unit (dB, %, Hz… — text like "800 Hz" works for plugins); shapes linear, square, slow, fast_start, fast_end, bezier. Plugin values move along the parameter's curve (a log cutoff sweeps evenly in pitch). take (param volume|pan|mute): a take envelope, its points in beats from the item's start (it moves with the item); it shapes the take after its take FX (a MIDI take needs an instrument in its take FX). Master playrate points are finite numeric ratios 0.25..4.0; an active nonempty master curve replaces the saved scalar during playback and rendering. Audio sources convert before take FX/live mixing; MIDI and automation follow the same timeline clock.
+Target one of track (param volume|pan|mute; playrate only on tr_0), route (volume|pan|mute), group (VCA volume|mute), or fx (a semantic key such as "gain" or "filter1.cutoff", or for other plugins a CLAP id or parameter name), or module (a rack module's knob by key, values in its unit, a choice by its key; module.describe). points: [{beat|bar|seconds, value, shape?, tension?}]; values in the parameter's unit (dB, %, Hz… — text like "800 Hz" works for plugins); shapes linear, square, slow, fast_start, fast_end, bezier. Plugin values move along the parameter's curve (a log cutoff sweeps evenly in pitch). take (param volume|pan|mute): a take envelope, its points in beats from the item's start (it moves with the item); it shapes the take after its take FX (a MIDI take needs an instrument in its take FX). Master playrate points are finite numeric ratios 0.25..4.0; an active nonempty master curve replaces the saved scalar during playback and rendering. Audio sources convert before take FX/live mixing; MIDI and automation follow the same timeline clock.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -3720,6 +3720,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `track` | string |  |  |  | Track id, e.g. "tr_1". |
+| `module` | string |  |  |  | Rack module id, e.g. "mo_1". |
 | `take` | string |  |  |  | Take id, e.g. "tk_1". |
 | `group` | string |  |  |  | VCA group id, e.g. "gr_1". |
 | `fx` | string |  |  |  | Plugin instance id, e.g. "fx_1". |
@@ -3824,6 +3825,36 @@ Result:
     {
       "beat": 2,
       "value": "-12 dB"
+    }
+  ]
+}
+
+```
+
+Result:
+
+```json
+{
+  "env": "en_1",
+  "points": 2
+}
+
+```
+
+**A rack module's knob: a VCA opening over a bar** (`song_with_rack`)
+
+```json
+{
+  "module": "mo_3",
+  "param": "level",
+  "points": [
+    {
+      "beat": 0,
+      "value": -40
+    },
+    {
+      "beat": 4,
+      "value": 0
     }
   ]
 }
@@ -8155,7 +8186,7 @@ Result:
 
 Add a module to a rack: a type with knob values.
 
-type: an id or a short name ("vca", "notes"; module.list). x, y: its top-left corner in the rack (default: right of the others). params: knob values by key in the knob's units (a choice by its key, a switch as a bool). Notes: source (the track whose MIDI it plays; default the rack's channel) and device (a live MIDI input it always plays; "" any). plugin (instead of type): a plug-in id (fx.scan) for a plugin module, which shows the plug-in's name and opens its editor; its ports are in_l, in_r, out_l, out_r and, for instruments, pitch, gate and velocity. Returns its size and keys.
+type: an id or a short name ("vca", "notes"; module.list). x, y: its top-left corner in the rack (default: right of the others). params: knob values by key in the knob's units (a choice by its key, a switch as a bool). Notes: source (the track whose MIDI it plays; default the rack's channel) and device (a live MIDI input it always plays; "" any). plugin (instead of type): a plug-in id (fx.scan) for a plugin module, which shows the plug-in's name and opens its editor; its ports are in_l, in_r, out_l, out_r and, for instruments, pitch, gate and velocity. preset: a factory preset (module.describe), params on top. Returns its size and keys.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -8166,6 +8197,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | `rack` | string |  |  |  |  |
 | `type` | string |  |  |  |  |
 | `label` | string |  |  |  |  |
+| `preset` | string |  |  |  |  |
 | `x` | number |  | -1e+06..1e+06 |  |  |
 | `y` | number |  | -1e+06..1e+06 |  |  |
 | `params` | value |  |  |  |  |
@@ -8714,7 +8746,7 @@ Result:
 
 Set a module's knobs, label, place or bypass.
 
-params merge into its knobs (values in the knob's units; a choice by key; a default value is dropped from the file). A knob edit is heard at once, without a recompile. bypass passes each input to the output of its kind. label names it (an Out module's label is what channels' input menus list).
+params merge into its knobs (values in the knob's units; a choice by key; a default value is dropped from the file). A knob edit is heard at once, without a recompile. bypass passes each input to the output of its kind. label names it (an Out module's label is what channels' input menus list). preset: a factory preset by name (module.describe lists them): every knob to it, then params on top.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -8725,6 +8757,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | `module` | string |  |  |  |  |
 | `params` | value |  |  |  |  |
 | `label` | string |  |  |  |  |
+| `preset` | string |  |  |  |  |
 | `x` | number |  | -1e+06..1e+06 |  |  |
 | `y` | number |  | -1e+06..1e+06 |  |  |
 | `bypass` | boolean |  |  |  |  |

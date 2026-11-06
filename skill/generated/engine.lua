@@ -341,6 +341,7 @@ q = nil
 
 ---@class Steppe.env_add_args
 ---@field track? string Track id, e.g. "tr_1".
+---@field module? string Rack module id, e.g. "mo_1".
 ---@field take? string Take id, e.g. "tk_1".
 ---@field group? string VCA group id, e.g. "gr_1".
 ---@field fx? string Plugin instance id, e.g. "fx_1".
@@ -820,6 +821,7 @@ q = nil
 ---@field rack string
 ---@field type? string
 ---@field label? string
+---@field preset? string
 ---@field x? number
 ---@field y? number
 ---@field params? any
@@ -871,6 +873,7 @@ q = nil
 ---@field module string
 ---@field params? any
 ---@field label? string
+---@field preset? string
 ---@field x? number
 ---@field y? number
 ---@field bypass? boolean

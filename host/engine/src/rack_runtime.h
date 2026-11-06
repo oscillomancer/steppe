@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "plan.h"
+#include "supple/engine/racks.h"
 #include "supple/model/session.h"
 #include "supple/rack/host_modules.h"
 #include "supple/rack/schedule.h"
@@ -25,7 +26,9 @@ namespace supple::engine::detail {
 // The module types every engine knows: the host modules (the rack runtime's
 // and the plugin module) and the stock ones.
 std::shared_ptr<const rack::Catalog> builtinModuleCatalog();
-std::shared_ptr<const rack::ModuleType> pluginModuleType();
+using engine::moduleParamJson;
+using engine::moduleParamValue;
+using engine::pluginModuleType;
 
 // A plugin module (rack.md §5): its plug-in, a stage of the rack node, runs
 // on the rack's grid. Audio in_l/in_r (R normalled to L) to out_l/out_r;
@@ -50,13 +53,6 @@ class PluginModule final : public rack::HostModule {
     };
     std::array<Voice, rack::kChannels> voices_{};
 };
-
-// A module's knob from its JSON value (a number, a choice's key, a bool), in
-// the physical units Instance::setParam takes; the default when absent or
-// not one of its values.
-double moduleParamValue(const script::detail::ParamModel& param, const json::Value* value);
-// The JSON value a physical value is written as (rack.md §2.2).
-json::Value moduleParamJson(const script::detail::ParamModel& param, double physical);
 
 // Module instances by module id, kept while the module's type, its code and
 // the rate stay; replaced ones live until every plan that may use them is

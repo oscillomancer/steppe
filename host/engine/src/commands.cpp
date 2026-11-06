@@ -20,6 +20,7 @@
 #include "supple/base/files.h"
 #include "supple/base/sha256.h"
 #include "supple/engine/app.h"
+#include "supple/engine/racks.h"
 #include "supple/midi/midi.h"
 #include "supple/model/groups.h"
 #include "supple/model/render_settings.h"
@@ -424,7 +425,7 @@ struct EnvPointArg {
     std::optional<double> tension;
 };
 struct EnvAddArgs {
-    std::optional<std::string> track, fx, route, take, group;
+    std::optional<std::string> track, fx, route, take, group, module;
     std::string param;
     std::optional<std::vector<EnvPointArg>> points;
 };
@@ -503,6 +504,7 @@ struct EnvDomain {
     std::optional<units::Unit> mixer;
     std::unique_ptr<params::DescribedParam> semantic;
     std::optional<std::pair<double, double>> clapRange;
+    std::optional<script::detail::ParamModel> knob;  // a rack module's (physical units)
 };
 
 Result<EnvDomain> envDomain(EngineApp& app, const model::Session& s, const model::EnvTarget& t,
@@ -514,6 +516,29 @@ Result<EnvDomain> envDomain(EngineApp& app, const model::Session& s, const model
                          "use env.add {track: tr_0, param: playrate}");
         d.playrate = true;
         return d;
+    }
+    if (t.object.kind == model::Kind::Module) {
+        const model::RackModule* m = s.modules.find(t.object);
+        if (!m)
+            return Error("rack.unknown_module", "no module " + t.object.str(), path, "rack.get");
+        if (m->fx)
+            return Error("env.param", "a plugin module's knobs are its plug-in's", path,
+                         "env.add {fx: \"" + m->fx->str() + "\", param}");
+        const auto* type = app.modules()->find(m->type);
+        if (!type)
+            return Error("rack.unknown_type", "the type of " + t.object.str() + " is not installed",
+                         path, "module.list shows what is");
+        std::string keys;
+        for (const auto& p : type->type->params()) {
+            if (p.output) continue;
+            if (p.key == t.param) {
+                d.knob = p;
+                return d;
+            }
+            keys += (keys.empty() ? "" : ", ") + p.key;
+        }
+        return Error("env.param", type->type->id() + " has no knob \"" + t.param + "\"", path,
+                     keys.empty() ? "it has no knobs" : "knobs: " + keys);
     }
     if (t.object.kind != model::Kind::Fx) {
         d.mixer = mixerUnit(t.object.kind, t.param);
@@ -570,6 +595,25 @@ Result<double> envValue(const EnvDomain& d, const json::Value& v, const std::str
         return e;
     };
     if (d.semantic) return located(params::fromJson(d.semantic->spec, v, true));
+    if (d.knob) {
+        using K = script::detail::ParamModel::Kind;
+        const script::detail::ParamModel& p = *d.knob;
+        if (p.kind == K::Choice && v.isString()) {
+            for (std::size_t k = 0; k < p.choices.size(); ++k)
+                if (script::detail::choiceKey(p, k) == v.asString() || p.choices[k] == v.asString())
+                    return static_cast<double>(k);
+        } else if (p.kind == K::Toggle && v.isBool()) {
+            return v.asBool() ? 1.0 : 0.0;
+        } else if (v.isNumber() && std::isfinite(v.asDouble())) {
+            const double x = std::clamp(v.asDouble(), p.min, p.max);
+            return p.kind == K::Continuous ? x : std::round(x);
+        }
+        return Error("env.value",
+                     p.kind == K::Choice   ? "one of the knob's choices (its key) or an index"
+                     : p.kind == K::Toggle ? "true, false, 0 or 1"
+                                           : "a number in the knob's unit",
+                     path, "module.describe lists the knob's range, unit and choices");
+    }
     if (d.mixer) {
         if (v.isBool()) return v.asBool() ? 1.0 : 0.0;
         if (v.isNumber()) return v.asDouble();
@@ -3199,7 +3243,9 @@ void registerEngineCommands(cmd::Registry& registry) {
             "Target one of track (param volume|pan|mute; playrate only on tr_0), route "
             "(volume|pan|mute), group (VCA volume|mute), or "
             "fx (a semantic key such as \"gain\" or \"filter1.cutoff\", or for other plugins a "
-            "CLAP id or parameter name). points: [{beat|bar|seconds, value, shape?, tension?}]; "
+            "CLAP id or parameter name), or module (a rack module's knob by key, values in its "
+            "unit, a choice by its key; module.describe). points: [{beat|bar|seconds, value, "
+            "shape?, tension?}]; "
             "values in the parameter's unit (dB, %, Hz… — text like \"800 Hz\" works for "
             "plugins); shapes linear, square, slow, fast_start, fast_end, bezier. Plugin values "
             "move along the parameter's curve (a log cutoff sweeps evenly in pitch). take (param "
@@ -3212,6 +3258,7 @@ void registerEngineCommands(cmd::Registry& registry) {
         c.tags = {"automation"};
         c.args = schema::object<EnvAddArgs>("env_add_args")
                      .field("track", &EnvAddArgs::track, idArg("tr", "Track"))
+                     .field("module", &EnvAddArgs::module, idArg("mo", "Rack module"))
                      .field("take", &EnvAddArgs::take, idArg("tk", "Take"))
                      .field("group", &EnvAddArgs::group, idArg("gr", "VCA group"))
                      .field("fx", &EnvAddArgs::fx, idArg("fx", "Plugin instance"))
@@ -3233,6 +3280,9 @@ void registerEngineCommands(cmd::Registry& registry) {
             {"Duck a take halfway through its item",
              obj(R"({"take": "tk_1", "param": "volume", "points": [{"beat": 0, "value": 0}, {"beat": 2, "value": "-12 dB"}]})"),
              obj(R"({"env": "en_1", "points": 2})"), "song_with_audio"},
+            {"A rack module's knob: a VCA opening over a bar",
+             obj(R"({"module": "mo_3", "param": "level", "points": [{"beat": 0, "value": -40}, {"beat": 4, "value": 0}]})"),
+             obj(R"({"env": "en_1", "points": 2})"), "song_with_rack"},
             {"Master rate envelope",
              obj(R"({"track":"tr_0","param":"playrate","points":[{"beat":0,"value":1},{"beat":4,"value":2}]})"),
              obj(R"({"env":"en_1","points":2})"), "empty"}};
@@ -3240,10 +3290,10 @@ void registerEngineCommands(cmd::Registry& registry) {
             EngineApp& app = A(ctx);
             const model::Session s = app.view();
             if (a.track.has_value() + a.fx.has_value() + a.route.has_value() + a.take.has_value() +
-                    a.group.has_value() !=
+                    a.group.has_value() + a.module.has_value() !=
                 1)
-                return Error("env.target", "give one of track, fx, route, take or group", "",
-                             "e.g. {\"fx\": \"fx_1\", \"param\": \"filter1.cutoff\"}");
+                return Error("env.target", "give one of track, fx, route, take, group or module",
+                             "", "e.g. {\"fx\": \"fx_1\", \"param\": \"filter1.cutoff\"}");
             model::Envelope env;
             if (a.take) {
                 auto id = existing<model::Take>(s, *a.take, "/take");
@@ -3275,6 +3325,10 @@ void registerEngineCommands(cmd::Registry& registry) {
                 env.target.object = *id;
             } else if (a.fx) {
                 auto id = existing<model::FxInstance>(s, *a.fx, "/fx");
+                if (!id) return std::move(id).error();
+                env.target.object = *id;
+            } else if (a.module) {
+                auto id = existing<model::RackModule>(s, *a.module, "/module");
                 if (!id) return std::move(id).error();
                 env.target.object = *id;
             } else {

@@ -11,6 +11,7 @@
 #include "rack_runtime.h"
 #include "supple/base/files.h"
 #include "supple/engine/app.h"
+#include "supple/json/write.h"
 
 using namespace supple;
 using namespace supple::engine;
@@ -168,4 +169,43 @@ TEST_CASE("module library: ids stay unique") {
         "edits": [{"old": "VCA", "new": "Amp"}]})"));
     REQUIRE_FALSE(builtIn);
     CHECK(builtIn.error().code == "module.built_in");
+}
+
+TEST_CASE("module library: factory presets set a module's knobs") {
+    Fixture f;
+    f.write("tone", R"(#include <supple/script.h>
+
+struct Tone : Module {
+    static constexpr ModuleInfo info = {.name = "Tone", .id = "com.example.tone",
+                                        .vendor = "Example", .description = "A test."};
+    Param level = decibels("Level", -60, 0, -6);
+    Param shape = choice("Shape", {"Sine", "Saw"}, 0).keys({"sine", "saw"});
+    Output out = audioOut("Out");
+
+    void factoryPatches(Patches& p) {
+        p.add("Loud Saw").set(level, 0.0).set(shape, "saw");
+    }
+    void process(int frames) {
+        for (int i = 0; i < frames; ++i) out[0][i] = 0;
+    }
+};
+)");
+    json::Value described = f.run("module.describe", R"({"type": "com.example.tone"})");
+    REQUIRE(described.find("presets") != nullptr);
+    CHECK(described["presets"].asArray().size() == 1);
+    f.run("track.add", R"({"name": "Synth"})");
+    f.run("rack.add", R"({"track": "tr_1"})");
+    f.run("module.add", R"({"rack": "rk_1", "type": "com.example.tone", "preset": "Loud Saw"})");
+    json::Value got = f.run("rack.get", R"({"rack": "rk_1"})");
+    const model::RackModule* m = f.app->head().modules.find({model::Kind::Module, 2});
+    REQUIRE(m != nullptr);
+    CHECK(json::writeCompact(m->params) == R"({"level":0.0,"shape":"saw"})");
+    // module.set's preset resets the others: params on top.
+    f.run("module.set", R"({"module": "mo_2", "preset": "Loud Saw", "params": {"level": -12}})");
+    m = f.app->head().modules.find({model::Kind::Module, 2});
+    CHECK(json::writeCompact(m->params) == R"({"level":-12.0,"shape":"saw"})");
+    auto missing = f.call("module.set", *json::parse(R"({"module": "mo_2", "preset": "Nope"})"));
+    REQUIRE_FALSE(missing);
+    CHECK(missing.error().code == "rack.preset");
+    (void)got;
 }

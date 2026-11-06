@@ -408,6 +408,15 @@ examples run as tests. Ends are strings: `"mo_3.out"`.
 Errors carry `code`, `message`, `path` and a `hint` naming what exists
 (`"mo_2 has inputs pitch, fm, sync"`).
 
+A module's knob is automated with `env.add {module, param, points}`
+(values in the knob's unit, a choice by its key); a plugin module's knobs
+are its plug-in's (`env.add {fx}`). `preset` on `module.add` and
+`module.set` is one of the type's factory presets (`module.describe`
+lists them): every knob goes to it, then `params` apply on top. The app
+reaches racks through `EngineApp::modules()` (the catalog),
+`EngineApp::moduleInstance()` (a running module's telemetry) and
+`supple/engine/racks.h`.
+
 ## 8. The rack window (`daw/gui`)
 
 A separate, resizable utility window (`FloatingPanel`), like the routing
