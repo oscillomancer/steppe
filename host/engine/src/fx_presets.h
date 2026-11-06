@@ -41,6 +41,10 @@ Result<std::vector<PreparedFx>> prepareEffects(EngineApp& app,
                                                const std::vector<json::Value>& entries,
                                                const std::string& base);
 
+// Captures the current live settings without changing the session or its history.
+Status captureLiveState(EngineApp& app, model::Id id, model::FxInstance& fx,
+                        std::shared_ptr<const model::Blob>& blob);
+
 // Creates a prepared effect, in no chain, in the open transaction; its id.
 model::Id installEffect(EngineApp& app, PreparedFx& prepared);
 

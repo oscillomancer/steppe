@@ -92,8 +92,13 @@ class Instance {
 
     // The newest telemetry, if newer than `out` (by serial). Main thread.
     bool readTelemetry(Telemetry& out) const;
-    // Whether anyone reads telemetry: off, the audio side publishes nothing.
+    // Whether anyone reads detailed telemetry: off skips its triple-buffer
+    // publications. Output levels are independent of this subscription.
     void watch(bool on) { watched_.store(on, std::memory_order_relaxed); }
+
+    // Latest processed block's peak |sample| across all channels, published
+    // even when watch() is off. Main thread, no consumption; invalid index: 0.
+    float outputLevel(int output) const;
 
     // What the module's code found wrong while it ran (budget, indices).
     const sd::Status& status() const { return record_.status; }
@@ -144,6 +149,8 @@ class Instance {
     std::vector<std::array<double, kGrid>> glide_;
     std::vector<std::array<double, kPortFrames>> mod_;
     bool first_ = true;
+
+    std::unique_ptr<std::atomic<float>[]> outputLevels_;  // sized in bindMembers()
 
     // Telemetry: a triple buffer, the audio side writing `back`.
     std::atomic<bool> watched_{false};

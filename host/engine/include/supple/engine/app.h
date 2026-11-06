@@ -24,6 +24,7 @@
 #include <set>
 #include <span>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 #include "supple/base/stop.h"
@@ -38,6 +39,7 @@
 #include "supple/model/versions.h"
 
 namespace supple::engine {
+struct RackClip;
 class SourcePreparation;
 
 namespace detail {
@@ -333,6 +335,14 @@ class EngineApp : public cmd::Host {
     // readTelemetry); null until a plan builds it (supple/engine/racks.h has
     // the rest a rack window needs). Main thread.
     rack::Instance* moduleInstance(model::Id module) const;
+    // Latest rack-block peak |sample| over all channels, independent of watch().
+    // Main thread; zero while stopped or for unknown modules/outputs.
+    float moduleOutputLevel(model::Id module, std::string_view port) const;
+    // Main-thread clipboard: independent of the session and undo history.
+    const std::shared_ptr<const RackClip>& rackClipboard() const { return rackClipboard_; }
+    void setRackClipboard(std::shared_ptr<const RackClip> clip) {
+        rackClipboard_ = std::move(clip);
+    }
     std::string rememberRender(const std::filesystem::path& path);
     std::string reserveRenderId();
     void publishRender(std::string id, const std::filesystem::path& path);
@@ -578,6 +588,7 @@ class EngineApp : public cmd::Host {
     void setFixedClock(std::uint64_t ms) { fixedClock_ = ms; }
 
   private:
+    std::shared_ptr<const RackClip> rackClipboard_;
     model::Monitor defaultMonitor_ = model::Monitor::On;
     unsigned audioThreadLimit_ = 0;
     std::unique_ptr<detail::RuntimeProtection> protections_;

@@ -8346,6 +8346,53 @@ Result:
 
 ```
 
+## `module.copy@1`
+
+Copy modules, their current plug-in settings and internal cables.
+
+Replace this engine's clipboard, independent of the project and undo. Module order is retained; cables to unselected modules are omitted.
+
+Kind: `action`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `modules` | array |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Errors
+
+- `module.unknown`: a selected module no longer exists Hint: use rack.get ids
+- `module.copy`: a module occurs twice Hint: select each module once
+
+### Examples
+
+**Copy a VCA and its Out, with their cable** (`song_with_rack`)
+
+```json
+{
+  "modules": ["mo_3", "mo_1"]
+}
+
+```
+
+Result:
+
+```json
+{
+  "modules": 2,
+  "cables": 1
+}
+
+```
+
 ## `module.describe@1`
 
 A module type's knobs, inputs and outputs, with units and help.
@@ -10609,6 +10656,65 @@ Result:
 
 ```
 
+## `rack.levels@1`
+
+Read every module output's linear peak, without subscribing to telemetry.
+
+Returns {modules: {mo_N: {port: level}}}. Each level is the maximum absolute sample across all channels in the latest processed rack block (at most 32 frames), including unconnected outputs. Levels may exceed 1. Stopped, silent or uninstantiated modules read zero; unavailable types have no known ports. Anticipative levels can lead the heard audio.
+
+Kind: `query`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `rack` | string |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Errors
+
+- `rack.unknown`: no such rack Hint: use a rack.list id
+
+### Examples
+
+**Read output peaks while stopped** (`song_with_rack`)
+
+```json
+{
+  "rack": "rk_1"
+}
+
+```
+
+Result:
+
+```json
+{
+  "modules": {
+    "mo_1": {},
+    "mo_2": {
+      "pitch": 0.0,
+      "gate": 0.0,
+      "velocity": 0.0,
+      "pressure": 0.0,
+      "retrigger": 0.0,
+      "modwheel": 0.0,
+      "bend": 0.0
+    },
+    "mo_3": {
+      "out": 0.0
+    }
+  }
+}
+
+```
+
 ## `rack.list@1`
 
 List racks: home channels, module counts, Outs.
@@ -10658,6 +10764,62 @@ Result:
       ]
     }
   ]
+}
+
+```
+
+## `rack.paste@1`
+
+Paste the module clipboard with its plug-in settings as one undo step.
+
+Place the clip's top-left at x/y; omitted coordinates use free space right of existing modules. No routes or automation are copied.
+
+Kind: `edit`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `rack` | string |  |  |  |  |
+| `x` | number |  | -1e+06..1e+06 |  |  |
+| `y` | number |  | -1e+06..1e+06 |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Errors
+
+- `rack.unknown`: no such destination rack Hint: use rack.list
+- `rack.clip_empty`: no modules have been copied Hint: call module.copy first
+- `rack.unknown_type`: a copied module type is unavailable Hint: restore the module type
+- `chain.plugin_missing`: a copied plug-in is unavailable Hint: install the copied plug-in
+- `track.unknown`: a copied Notes source was removed Hint: restore the source track or copy again
+- `rack.limit`: the destination would exceed its limits Hint: remove modules or paste into another rack
+- `rack.position`: the clip extends beyond the coordinate range Hint: choose a position closer to the origin
+
+### Examples
+
+**Paste the copied VCA and Out** (`song_with_rack_clip`)
+
+```json
+{
+  "rack": "rk_1",
+  "x": 500,
+  "y": 40
+}
+
+```
+
+Result:
+
+```json
+{
+  "modules": ["mo_4", "mo_5"],
+  "cables": ["cb_2"]
 }
 
 ```

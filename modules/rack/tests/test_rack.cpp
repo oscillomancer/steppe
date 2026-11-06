@@ -212,3 +212,59 @@ TEST_CASE("rack: Transport's clock counts the divisions") {
     }
     CHECK(rises == 8);  // one second: eight sixteenths, the first at 0
 }
+
+namespace {
+class PolyLevel final : public HostModule {
+  public:
+    double level = -0.75;
+    void process(const HostContext& ctx) SUPPLE_RT override {
+        auto& out = ctx.instance->outputMember(0);
+        out.setChannels(2);
+        for (int f = 0; f < ctx.frames; ++f) {
+            out[0][f] = 0.0;
+            out[1][f] = level;
+        }
+    }
+};
+}  // namespace
+
+TEST_CASE("rack: output levels cover every poly channel without a telemetry watch" *
+          doctest::description("rt")) {
+    sd::ModuleInfoModel info;
+    info.id = "com.example.poly-level";
+    info.name = "Poly level";
+    sd::PortModel out;
+    out.key = out.name = "out";
+    out.output = true;
+    auto host = std::make_unique<PolyLevel>();
+    auto* source = host.get();
+    auto instance = Instance::make(ModuleType::host(info, {}, {out}), std::move(host), {});
+    REQUIRE(instance);
+    CHECK_FALSE(instance->watched());
+    CHECK(instance->outputLevel(0) == 0.0f);
+    CHECK(instance->outputLevel(-1) == 0.0f);
+    CHECK(instance->outputLevel(1) == 0.0f);
+    Patch patch;
+    patch.modules = {{1, instance.get(), false, {}}};
+    auto schedule = Schedule::build(patch);
+    REQUIRE(schedule);
+    FixedClock clock;
+    schedule->process(0, 37, clock);
+    CHECK(instance->outputLevel(0) == 0.75f);
+    CHECK(instance->outputLevel(0) == 0.75f);  // reading never consumes it
+    CHECK(schedule->output(0, 0)[0] == 0.0);
+    CHECK(schedule->output(0, 0)[kGrid] == -0.75);
+    source->level = 2.0;
+    instance->watch(true);
+    schedule->process(37, 37, clock);
+    CHECK(instance->outputLevel(0) == 2.0f);
+    source->level = 0.0;
+    instance->watch(false);
+    schedule->process(74, 37, clock);
+    CHECK(instance->outputLevel(0) == 0.0f);
+    source->level = -0.25;
+    schedule->process(111, 37, clock);
+    CHECK(instance->outputLevel(0) == 0.25f);
+    instance->reset();
+    CHECK(instance->outputLevel(0) == 0.0f);
+}

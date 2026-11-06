@@ -402,6 +402,21 @@ audio: each output port's last value and peak (channel 0) and channel
 count, each parameter's last modulated value (channel 0), and the `Shared`
 bytes. The GUI reads the newest; nothing waits.
 
+Independently of `watch()`, every processed instance publishes each output's
+peak absolute sample across all its poly channels for the latest processed
+rack block (at most 32 frames; a host block may split it).
+`float Instance::outputLevel(int output) const` reads a non-consuming, lock-free
+atomic float, initially zero and cleared by reset. Slots are allocated once
+when the instance is built; observation never allocates, locks, logs or
+changes the audio buffers. An unconnected output is measured too. Readings are
+linear, nonnegative and may exceed 1; infinite peaks saturate at the largest
+finite float. NaN samples contribute no peak. These readings may precede heard
+audio in the anticipative executor. `EngineApp::moduleOutputLevel(model::Id,
+std::string_view) const` returns the reading by output key, or zero for a
+stopped transport/engine or unknown or uninstantiated module/output. The main
+thread may poll it without JSON or a telemetry subscription. Each output is
+read independently, not as a coherent snapshot of an entire rack.
+
 ## 5. Host modules
 
 All `com.suppleaudio.rack.<name>`, version 1.0.0.
@@ -478,6 +493,7 @@ examples run as tests. Ends are strings: `"mo_3.out"`.
 | `rack.get` | query | `{rack, detail?: brief\|full}` → modules (id, type, label, changed params, position, size), cables (with `feedback`), Out modules and the channels they feed, problems |
 | `rack.probe` | query | `{rack, ports: ["mo_N.<output>", …≤8], seconds? (≤10, 2), from_beat?, notes? (notation the rack's Notes modules play)}` → per port: peak, rms, dc, min, max; audio (the first 4 voices summed): dB and pitch (Hz, note, cents) when periodic; gates over the voices: count, per second, per beat, duty; pitch: the notes visited; CV: rate; a one-line description. An offline render of a copy with a listener (`ProbeModule`) on each port; nothing changes |
 | `rack.capture` | edit | `{rack, pitch, gate, velocity?, track, beats? (≤1024, 16), from_beat?, at?, quantize?, notes?, name?}` → `{item, take, source, position, length, notes, voices, warnings?}`: an offline render of a copy as `rack.probe`'s, with a listener (`CaptureModule`) on the ports, written as a MIDI item (§7.3); one undo step |
+| `rack.levels` | query | `{rack}` → `{modules: {mo_N: {port: level}}}`: every module and known output port, latest block's linear peak across all channels; stopped or silent reads zero, missing types have an empty port object |
 | `rack.patch` | edit | `{rack, modules: {name: {type\|plugin, params?, preset?, label?, x?, y?, source?, device?}}, cables?: [[from, to, amount?, color?] \| {from, to, amount?, color?}], x?, y?}` → `{modules: {name: id}, cables}`: ends `"name.port"`, `"name.knob"` (a plugin module's: its plug-in's) or `"mo_N.port"`; modules without a place laid out as §7.2; a name labels its module (§7.2); checked as `module.add` and `cable.add` check, all or nothing |
 | `rack.arrange` | edit | `{rack, modules?, x?, y?}` → `{modules: {mo_N: {x, y}}}`: lays out the modules (default all the rack's) as §7.2 from x, y (default their top-left corner), along the cables among them; one undo step |
 | `rack.preset.save` | action | `{rack, name, modules?, description?, replace?}` → `{path, modules, cables}`: the modules (default the whole rack) and the cables among them |
@@ -489,6 +505,8 @@ examples run as tests. Ends are strings: `"mo_3.out"`.
 | `module.add` | edit | `{rack, type\|plugin, label?, x?, y?, params?, preset?, source?, device?}` → `{module, type, x, y, width, height, inputs, outputs, knobs, fx?, plugin?}` |
 | `module.remove` | edit | `{module}` (its cables; a plugin module's fx; an Out module's routes) |
 | `module.set` | edit | `{module, params?, label?, x?, y?, bypass?, source?, preset?}` |
+| `module.copy` | action | `{modules: [mo_*...]}` → `{modules: n, cables: n}`: replace this EngineApp's clipboard with modules in the requested order and the cables entirely among them (including `fx_N.key` targets); no project or undo edit |
+| `rack.paste` | edit | `{rack, x?, y?}` → `{modules: [ids in clip order], cables: [ids]}`: recreate the clipboard with fresh module, plug-in and cable ids in one undo step |
 | `module.duplicate` | edit | `{modules, dx?, dy?, cables?}` → new ids |
 | `module.randomize` | edit | `{module, amount?, seed?}` |
 | `module.write` | action | `{name, source}` → `{name, path, ok, diagnostics, type?, reloaded?, playing?}`: `type` as `module.describe`; `reloaded` counts the modules rebuilt; `playing` when a broken version leaves the last good one in use |
@@ -512,10 +530,26 @@ are its plug-in's (`env.add {fx}`). `preset` on `module.add` and
 `module.set` is one of the type's factory presets (`module.describe`
 lists them): every knob goes to it, then `params` apply on top. The app
 reaches racks through `EngineApp::modules()` (the catalog),
-`EngineApp::moduleInstance()` (a running module's telemetry) and
+`EngineApp::moduleInstance()` (a running module's telemetry),
+`EngineApp::moduleOutputLevel()` (an always-published per-output peak) and
 `supple/engine/racks.h`. `<slug>-engine modules --markdown` prints every
 built-in type's ports and knobs (`moduleReference()`), committed as
 `skill/generated/rack-modules.md` and checked by `engine.registry-drift`.
+
+The module clipboard retains type/version, label, parameters, bypass, Notes
+source/device, learn bindings and relative positions. Plug-in settings are
+captured on the main thread at copy time, from the live instance when present:
+a semantic patch for semantic plug-ins, otherwise inline CLAP state bytes.
+Deleting originals or undoing project edits does not change the clipboard.
+Only internal cables are copied, with their amounts and colours; external
+routes and automation are omitted. Paste translates the clip's top-left to
+`x, y`; omitted coordinates default to 16 units right of existing modules
+(or x=40 in an empty rack), y=40. A position outside the coordinate range is
+refused without distorting relative placement. Missing clipboard, types,
+plug-ins or Notes source tracks and exceeded rack limits produce structured
+errors before any model change. Plug-in state is validated before installation
+and loaded by the plan before processing. Clipboard commands are main-thread
+operations and the clipboard is neither serialized nor part of undo history.
 
 ### 7.1 Rack presets
 

@@ -6172,6 +6172,33 @@
     }
   },
   {
+    "name": "module_copy",
+    "title": "Copy modules, their current plug-in settings and internal cables.",
+    "description": "Copy modules, their current plug-in settings and internal cables. Replace this engine's clipboard, independent of the project and undo. Module order is retained; cables to unselected modules are omitted. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "module_copy_args",
+      "properties": {
+        "modules": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^mo_[0-9]+$"
+          },
+          "minItems": 1,
+          "maxItems": 512
+        }
+      },
+      "required": ["modules"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false
+    }
+  },
+  {
     "name": "module_describe",
     "title": "A module type's knobs, inputs and outputs, with units and help.",
     "description": "A module type's knobs, inputs and outputs, with units and help. type (an id or a short name, \"vca\") or module (a module's type). Knobs: key, name, kind (number, integer, choice, toggle), unit, min, max, default, choices (keys), group, help. Ports: key, name, signal (audio, pitch in octaves from C4, gate, cv -1..1, unipolar 0..1, phase 0..1), help, and an input's normal (its value with nothing connected). A cable into a knob moves it by amount per unit of signal: octaves for a frequency, the knob's own unit otherwise. See describe for errors and examples.",
@@ -8045,6 +8072,28 @@
     }
   },
   {
+    "name": "rack_levels",
+    "title": "Read every module output's linear peak, without subscribing to telemetry.",
+    "description": "Read every module output's linear peak, without subscribing to telemetry. Returns {modules: {mo_N: {port: level}}}. Each level is the maximum absolute sample across all channels in the latest processed rack block (at most 32 frames), including unconnected outputs. Levels may exceed 1. Stopped, silent or uninstantiated modules read zero; unavailable types have no known ports. Anticipative levels can lead the heard audio. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "rack_levels_args",
+      "properties": {
+        "rack": {
+          "type": "string",
+          "pattern": "^rk_[0-9]+$"
+        }
+      },
+      "required": ["rack"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
     "name": "rack_list",
     "title": "List racks: home channels, module counts, Outs.",
     "description": "List racks: home channels, module counts, Outs.  See describe for errors and examples.",
@@ -8056,6 +8105,38 @@
     },
     "annotations": {
       "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "rack_paste",
+    "title": "Paste the module clipboard with its plug-in settings as one undo step.",
+    "description": "Paste the module clipboard with its plug-in settings as one undo step. Place the clip's top-left at x/y; omitted coordinates use free space right of existing modules. No routes or automation are copied. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "rack_paste_args",
+      "properties": {
+        "rack": {
+          "type": "string",
+          "pattern": "^rk_[0-9]+$"
+        },
+        "x": {
+          "type": "number",
+          "minimum": -1e+06,
+          "maximum": 1e+06
+        },
+        "y": {
+          "type": "number",
+          "minimum": -1e+06,
+          "maximum": 1e+06
+        }
+      },
+      "required": ["rack"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
       "destructiveHint": false,
       "idempotentHint": false
     }

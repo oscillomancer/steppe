@@ -263,7 +263,15 @@ instructions are in `docs/guides/installing.md`.
   as scripts and as C++ alike. Each rack is a node of the render plan on a
   32-frame grid; module automation holds across host block fragments.
   Real-time output equals offline renders, and the audio path passes
-  RealtimeSanitizer. Agents patch with `rack.patch` (named
+  RealtimeSanitizer. Engine-owned `module.copy` / `rack.paste` retain modules,
+  internal cables (including plug-in parameter modulation), learn bindings
+  and copy-time live plug-in state across cuts and racks, as one paste undo
+  step; unavailable types or plug-ins refuse the paste without changing the
+  project. Every running module publishes a lock-free per-output peak across
+  all poly channels without a telemetry watch; `rack.levels` and the main-thread
+  `EngineApp::moduleOutputLevel` accessor expose it independently of visibility.
+  Stopped readings are zero and both executors preserve RT/offline equivalence.
+  Agents patch with `rack.patch` (named
   modules and cables in one step, laid out by signal flow and labelled by
   name; `rack.arrange` tidies a rack) or `module.add`/`cable.add`, hear a patch
   with `rack.probe` (pitch, levels, gates, notes, CV rates from an offline

@@ -77,6 +77,28 @@ reference must be the whole string, so a cable end or a probe port cannot
 be built from one: use `rack.patch` for cables, and run `rack.probe` after
 the batch with the ids it returned.
 
+## Copy and paste
+
+`module.copy {modules: ["mo_3", "mo_4"]}` stores modules in that order and
+all internal cables, including plug-in parameter cables. It captures the
+plug-ins' current settings, labels, knobs, bypass, Notes source/device and
+learn bindings. The clipboard belongs to this engine and survives deleting
+the originals and undo; it is not saved in a project.
+
+`rack.paste {rack: "rk_2", x: 400, y: 40}` recreates the clip with fresh ids,
+returning `{modules: [...], cables: [...]}`. One undo removes the entire
+paste. The clip's top-left is placed at x/y; omitted coordinates use free
+space to the right, y=40. External routes and automation are not copied.
+If a type, plug-in or Notes source is missing, paste returns an actionable
+error and changes nothing. Restore it or copy a different selection.
+
+`rack.levels {rack: "rk_1"}` returns `{modules: {mo_N: {port: level}}}` for
+every module's known outputs, including outputs with no cable. Each level
+is the latest rack block's peak absolute sample across all poly channels,
+linear (1 is full scale; larger is allowed). A stopped or silent output reads
+0. No telemetry subscription or visible rack window is needed. Anticipative
+levels may lead the audio you hear; use them for activity, not timing.
+
 ## Signals
 
 | Kind | Range | Meaning |

@@ -833,6 +833,9 @@ q = nil
 ---@field name? string
 ---@field source? string
 
+---@class Steppe.module_copy_args
+---@field modules string[]
+
 ---@class Steppe.module_describe_args
 ---@field type? string
 ---@field module? string
@@ -1037,6 +1040,14 @@ q = nil
 ---@class Steppe.rack_get_args
 ---@field rack string
 ---@field detail? string
+
+---@class Steppe.rack_levels_args
+---@field rack string
+
+---@class Steppe.rack_paste_args
+---@field rack string
+---@field x? number
+---@field y? number
 
 ---@class Steppe.rack_patch_args
 ---@field rack string
@@ -1963,6 +1974,7 @@ q = nil
 ---@class Steppe.module
 ---@field add fun(args: Steppe.module_add_args): table Add a module to a rack: a type with knob values.
 ---@field check fun(args?: Steppe.module_check_args): table Compile a module without saving it; return its diagnostics and description.
+---@field copy fun(args: Steppe.module_copy_args): table Copy modules, their current plug-in settings and internal cables.
 ---@field describe fun(args?: Steppe.module_describe_args): table A module type's knobs, inputs and outputs, with units and help.
 ---@field duplicate fun(args: Steppe.module_duplicate_args): table Duplicate modules, with the cables between them.
 ---@field edit fun(args: Steppe.module_edit_args): table Edit a library module in place: replace text, then save and compile it.
@@ -2003,7 +2015,9 @@ q = nil
 ---@field arrange fun(args: Steppe.rack_arrange_args): table Lay out a rack's modules by signal flow.
 ---@field capture fun(args: Steppe.rack_capture_args): table Record a rack's pitch and gate as notes in a MIDI item on a track.
 ---@field get fun(args: Steppe.rack_get_args): table A rack's modules, cables, Out modules and problems.
+---@field levels fun(args: Steppe.rack_levels_args): table Read every module output's linear peak, without subscribing to telemetry.
 ---@field list fun(): table List racks: home channels, module counts, Outs.
+---@field paste fun(args: Steppe.rack_paste_args): table Paste the module clipboard with its plug-in settings as one undo step.
 ---@field patch fun(args: Steppe.rack_patch_args): table Add named modules and the cables among them in one step.
 ---@field probe fun(args: Steppe.rack_probe_args): table Listen to a rack's ports: level, pitch, gate rate, notes, a CV's range.
 ---@field remove fun(args: Steppe.rack_remove_args): table Remove a rack with its modules and cables.
