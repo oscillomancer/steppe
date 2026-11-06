@@ -14,6 +14,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -30,6 +31,12 @@ struct ChromeLayout {
     };
     std::vector<Menu> menus;
     std::vector<std::string> toolbar;
+    // The default actions this layout has seen (saved as "known"): a default
+    // added since appears in its default place when the layout loads; one
+    // the user removed is not brought back.
+    std::set<std::string, std::less<>> known;
+    // Every action id the defaults hold (menus and toolbar).
+    static std::set<std::string, std::less<>> defaultIds();
     static ChromeLayout defaults();
     static Result<ChromeLayout> load(const std::filesystem::path& file);  // defaults when absent
     static std::filesystem::path defaultFile(std::string_view slug);

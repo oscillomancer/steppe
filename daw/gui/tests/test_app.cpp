@@ -39,6 +39,7 @@
 #include "supple/gui/png.h"
 #include "supple/host/clap_host.h"
 #include "supple/json/parse.h"
+#include "supple/json/write.h"
 #include "supple/peaks/peaks.h"
 #include "supple/ui/controls.h"
 #include "supple/ui/list.h"
@@ -372,6 +373,39 @@ TEST_CASE("the Item menu is built by its source; an older file's item entries ar
     CHECK(rows[0].label == "Built");
     CHECK(rows[1].separator);
     CHECK_FALSE(rows[2].separator);
+}
+
+TEST_CASE("a saved layout gains defaults added since, in their place, but not ones removed") {
+    App a;
+    if (!a.ok) return;
+    // Saved before the rack window: no "known"; Racks appears where the
+    // defaults put it.
+    const auto old = a.dir / "old.json";
+    REQUIRE(writeFileAtomic(old, R"({"schema":"supple.menus/1.0","menus":[{"title":"View",
+        "items":["ui.mixer","ui.routing","ui.history"]}],
+        "toolbar":["history.undo","track.add:channel","ui.actions"]})"));
+    auto layout = gui::ChromeLayout::load(old);
+    REQUIRE(layout);
+    CHECK(layout->menus.front().items ==
+          std::vector<std::string>{"ui.mixer", "ui.routing", "ui.rack", "ui.history"});
+    CHECK(layout->toolbar ==
+          std::vector<std::string>{"history.undo", "track.add:channel", "ui.rack", "ui.actions"});
+    // Saving records every default as known.
+    const json::Value saved = layout->toJson();
+    REQUIRE(saved.find("known"));
+    // The user then removes it: it stays removed.
+    const auto later = a.dir / "later.json";
+    REQUIRE(writeFileAtomic(later, R"({"schema":"supple.menus/1.0","menus":[{"title":"View",
+        "items":["ui.mixer","ui.routing","ui.history"]}],
+        "toolbar":["history.undo","track.add:channel","ui.actions"],
+        "known":)" + json::writeCompact(*saved.find("known")) +
+                                       "}"));
+    layout = gui::ChromeLayout::load(later);
+    REQUIRE(layout);
+    CHECK(layout->menus.front().items ==
+          std::vector<std::string>{"ui.mixer", "ui.routing", "ui.history"});
+    CHECK(layout->toolbar ==
+          std::vector<std::string>{"history.undo", "track.add:channel", "ui.actions"});
 }
 
 TEST_CASE("the toolbar and menus are edited in the app and saved (gap log #37)") {

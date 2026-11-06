@@ -1308,6 +1308,12 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   moves or removes it, or resets menus and toolbar. The default top-level
   menus end with Project, then Help. Loading an older `menus.json` appends
   Help if absent; existing custom menus, toolbar and explicit Help edits remain.
+  A saved file lists the default actions it has seen (`known`); on loading,
+  a default action added since takes its default place in its menu and the
+  toolbar (after the nearest default before it that the list holds), and one
+  the user removed stays removed. A file from before `known` is taken to
+  know every default but those added since (View → Racks and the toolbar's
+  Racks, `ui.rack`).
   An action may carry an `enabled` predicate over the selection context; its
   menu entry is greyed while that is false (the predicate is checked when the
   menu opens). The Item menu's entries are built when it opens

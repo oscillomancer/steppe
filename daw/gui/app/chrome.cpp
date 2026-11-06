@@ -114,8 +114,42 @@ ChromeLayout ChromeLayout::defaults() {
     };
     // Transport actions live in the transport bar's own row; not duplicated here.
     l.toolbar = {"history.undo", "history.redo", "track.add:channel", "ui.rack", "ui.actions"};
+    for (const Menu& m : l.menus)
+        for (const std::string& id : m.items)
+            if (id != "-") l.known.insert(id);
+    l.known.insert(l.toolbar.begin(), l.toolbar.end());
     return l;
 }
+
+std::set<std::string, std::less<>> ChromeLayout::defaultIds() { return defaults().known; }
+
+namespace {
+
+// Defaults that came after layouts began saving what they knew: a file
+// without "known" is taken to know every default but these.
+const std::set<std::string, std::less<>>& addedSinceKnown() {
+    static const std::set<std::string, std::less<>> ids = {"ui.rack"};
+    return ids;
+}
+
+// `id` into `items` where the defaults have it: after the nearest default
+// before it that the list holds, else first.
+void placeLikeDefault(std::vector<std::string>& items, const std::vector<std::string>& defaults,
+                      const std::string& id) {
+    if (std::find(items.begin(), items.end(), id) != items.end()) return;
+    const auto at = std::find(defaults.begin(), defaults.end(), id);
+    for (auto before = at; before != defaults.begin();) {
+        --before;
+        if (*before == "-") continue;
+        if (auto found = std::find(items.begin(), items.end(), *before); found != items.end()) {
+            items.insert(found + 1, id);
+            return;
+        }
+    }
+    items.insert(items.begin(), id);
+}
+
+}  // namespace
 
 std::filesystem::path ChromeLayout::defaultFile(std::string_view slug) {
     if (const auto root = paths::config(); !root.empty()) return root / slug / "menus.json";
@@ -166,6 +200,27 @@ Result<ChromeLayout> ChromeLayout::load(const std::filesystem::path& file) {
         if (!ids) return std::move(ids).error();
         l.toolbar = std::move(*ids);
     }
+    // Defaults added since the file was saved take their default places.
+    std::set<std::string, std::less<>> known;
+    if (const json::Value* k = doc->find("known"); k && k->isArray()) {
+        for (const json::Value& id : k->asArray())
+            if (id.isString()) known.insert(id.asString());
+    } else {
+        known = defaultIds();
+        for (const auto& id : addedSinceKnown()) known.erase(id);
+    }
+    const ChromeLayout fresh = defaults();
+    for (const std::string& id : fresh.known) {
+        if (known.contains(id)) continue;
+        for (const Menu& d : fresh.menus)
+            if (std::find(d.items.begin(), d.items.end(), id) != d.items.end())
+                for (Menu& m : l.menus)
+                    if (m.title == d.title) placeLikeDefault(m.items, d.items, id);
+        if (std::find(fresh.toolbar.begin(), fresh.toolbar.end(), id) != fresh.toolbar.end())
+            placeLikeDefault(l.toolbar, fresh.toolbar, id);
+    }
+    l.known = std::move(known);
+    l.known.insert(fresh.known.begin(), fresh.known.end());
     // Older saved layouts must retain a route to onboarding. Preserve an
     // explicitly customized Help menu, but append it when the file predates Help.
     if (std::none_of(l.menus.begin(), l.menus.end(),
@@ -209,6 +264,12 @@ json::Value ChromeLayout::toJson() const {
     for (const std::string& id : toolbar) tools.push_back(id);
     doc["menus"] = std::move(menuList);
     doc["toolbar"] = std::move(tools);
+    json::Value seen = json::Value::array();
+    auto all = known;
+    const auto ids = defaultIds();
+    all.insert(ids.begin(), ids.end());
+    for (const std::string& id : all) seen.push_back(id);
+    doc["known"] = std::move(seen);
     return doc;
 }
 
