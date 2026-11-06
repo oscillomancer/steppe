@@ -1202,7 +1202,8 @@ a new channel). It follows rack.md §8.
   hovered themselves) fade. A cable that closes a loop (`rack.get`'s
   `feedback`: it reads the previous frame) is dashed over a dim cord.
 - **Knobs** drag vertically, 160 points end to end at any zoom (Shift:
-  ten times finer), double-click resets, and show their value while hovered
+  ten times finer), along the travel MIDI learn turns them on
+  (`rack::knobPosition`/`knobValue`: a frequency's logarithmic), double-click resets, and show their value while hovered
   or dragged; a drag is one undo step (`module.set params` coalesced by
   gesture). Choices and short integer ranges show their steps as dots;
   a choice drawn as a box steps on a click. Modulated knobs carry a ring

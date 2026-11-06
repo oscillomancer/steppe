@@ -465,7 +465,7 @@ void RackSpace::paintItem(ui::Canvas& c, const RackScene::Module& m, const Panel
     const double v = static_cast<std::size_t>(item.index) < m.values.size()
                          ? m.values[static_cast<std::size_t>(item.index)]
                          : p.def;
-    const float pos = static_cast<float>(paramPosition(p, v));
+    const float pos = static_cast<float>(rack::knobPosition(p, v));
     const ui::Color accent = t.color("accent");
     const bool showValue = hot || dragging;
     switch (item.kind) {
@@ -507,14 +507,16 @@ void RackSpace::paintItem(ui::Canvas& c, const RackScene::Module& m, const Panel
                 for (const auto* k : cables) span += k->amount;
                 double reach = v + span;
                 if (p.unit == sd::ParamModel::Unit::Hertz) reach = v * std::pow(2.0, span);
-                const float ar = kArc0 + static_cast<float>(paramPosition(p, reach)) * kArcSpan;
+                const float ar =
+                    kArc0 + static_cast<float>(rack::knobPosition(p, reach)) * kArcSpan;
                 const float ring = r + 4.5f;
                 if (std::fabs(ar - a) > 0.01f)
                     c.strokeArc(centre, ring, std::min(a, ar), std::max(a, ar),
                                 mod.withAlpha(0.35f), 2);
                 if (m.live && static_cast<std::size_t>(item.index) < m.telemetry.params.size()) {
                     const double now = m.telemetry.params[static_cast<std::size_t>(item.index)];
-                    const float an = kArc0 + static_cast<float>(paramPosition(p, now)) * kArcSpan;
+                    const float an =
+                        kArc0 + static_cast<float>(rack::knobPosition(p, now)) * kArcSpan;
                     if (std::fabs(an - a) > 0.01f)
                         c.strokeArc(centre, ring, std::min(a, an), std::max(a, an), mod, 2);
                     c.fillCircle({centre.x + std::cos(an) * ring, centre.y + std::sin(an) * ring},
@@ -987,7 +989,7 @@ bool RackSpace::onPointer(const ui::PointerEvent& e) {
                 const float travel = across ? d.x : -d.y;
                 const double pos =
                     std::clamp(drag_.value + D(travel) / (fine ? 1600.0 : 160.0), 0.0, 1.0);
-                const double value = paramFromPosition(p, pos);
+                const double value = rack::knobValue(p, pos);
                 if (static_cast<std::size_t>(item.index) < m.values.size() &&
                     m.values[static_cast<std::size_t>(item.index)] != value) {
                     m.values[static_cast<std::size_t>(item.index)] = value;
@@ -1097,7 +1099,7 @@ bool RackSpace::onPointer(const ui::PointerEvent& e) {
                 drag_.kind = Drag::Kind::Control;
                 drag_.module = h.module;
                 drag_.item = h.item;
-                drag_.value = paramPosition(p, v);
+                drag_.value = rack::knobPosition(p, v);
                 ++gesture_;
                 if (hooks_.param) hooks_.param(m.id, item.index, v, ui::Gesture::Begin);
                 break;

@@ -26,10 +26,7 @@ using Signal = script::detail::PortModel::Signal;
 
 // The theme token of a signal kind's colour ("signal-audio", …).
 const char* signalToken(Signal s);
-// Where a parameter's value sits on its knob, 0..1 (its curve applied), and
-// back.
-double paramPosition(const script::detail::ParamModel& p, double physical);
-double paramFromPosition(const script::detail::ParamModel& p, double position);
+// A knob's travel is rack::knobPosition / knobValue, shared with MIDI learn.
 // Where a knob's value arc starts: its zero when the range crosses it, else
 // its minimum (a position).
 double paramOrigin(const script::detail::ParamModel& p);

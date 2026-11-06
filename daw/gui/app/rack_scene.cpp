@@ -28,35 +28,9 @@ const char* signalToken(Signal s) {
     }
 }
 
-double paramPosition(const sd::ParamModel& p, double v) {
-    if (!(p.max > p.min)) return 0;
-    v = std::clamp(v, p.min, p.max);
-    if (p.kind == sd::ParamModel::Kind::Continuous) {
-        if (p.curve == sd::ParamModel::Curve::Log && p.min > 0)
-            return std::log(v / p.min) / std::log(p.max / p.min);
-        if (p.curve == sd::ParamModel::Curve::Pow && p.curveK > 0)
-            return std::pow((v - p.min) / (p.max - p.min), 1.0 / p.curveK);
-    }
-    return (v - p.min) / (p.max - p.min);
-}
-
-double paramFromPosition(const sd::ParamModel& p, double t) {
-    t = std::clamp(t, 0.0, 1.0);
-    double v = p.min + (p.max - p.min) * t;
-    if (p.kind == sd::ParamModel::Kind::Continuous) {
-        if (p.curve == sd::ParamModel::Curve::Log && p.min > 0)
-            v = p.min * std::pow(p.max / p.min, t);
-        else if (p.curve == sd::ParamModel::Curve::Pow && p.curveK > 0)
-            v = p.min + (p.max - p.min) * std::pow(t, p.curveK);
-    } else {
-        v = std::round(v);
-    }
-    return std::clamp(v, p.min, p.max);
-}
-
 double paramOrigin(const sd::ParamModel& p) {
     if (p.kind == sd::ParamModel::Kind::Continuous && p.min < 0 && p.max > 0)
-        return paramPosition(p, 0.0);
+        return rack::knobPosition(p, 0.0);
     return 0;
 }
 

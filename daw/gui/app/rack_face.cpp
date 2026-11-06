@@ -320,7 +320,7 @@ class ModuleFace::Services final : public sd::EditorServices {
     double paramNormalized(int slot, double value) override {
         if (slot < 0 || static_cast<std::size_t>(slot) >= type_.params().size()) return 0;
         const auto& p = type_.params()[static_cast<std::size_t>(slot)];
-        return paramPosition(p, p.unit == sd::ParamModel::Unit::Percent ? value * 100 : value);
+        return rack::knobPosition(p, p.unit == sd::ParamModel::Unit::Percent ? value * 100 : value);
     }
     // pointer()'s edits, as the plugin editor takes them: each knob's last,
     // in physical units, and set in the copy at once.
@@ -330,10 +330,9 @@ class ModuleFace::Services final : public sd::EditorServices {
         if (kind != Edit::Default && !std::isfinite(value)) return;
         const auto& p = type_.params()[static_cast<std::size_t>(slot)];
         const bool percent = p.unit == sd::ParamModel::Unit::Percent;
-        double physical = kind == Edit::Value ? (percent ? value * 100 : value)
-                          : kind == Edit::Position
-                              ? paramFromPosition(p, std::clamp(value, 0.0, 1.0))
-                              : p.def;
+        double physical = kind == Edit::Value      ? (percent ? value * 100 : value)
+                          : kind == Edit::Position ? rack::knobValue(p, std::clamp(value, 0.0, 1.0))
+                                                   : p.def;
         physical = std::clamp(physical, p.min, p.max);
         if (p.kind != sd::ParamModel::Kind::Continuous) physical = std::round(physical);
         const auto& code = *type_.code();
