@@ -1213,7 +1213,9 @@ a new channel). It follows rack.md §8.
   item shows or hides that lane. MIDI learn for module knobs *(planned)*.
 - **Browser.** A column on the left (the header's Modules button shows or
   hides it): a search field (words match name, id, description and tags),
-  the catalog's tags as chips that filter, and the types by origin (host,
+  the catalog's tags as chips that filter (one row: the chosen tag, then
+  the most used, and "+N", which shows every tag alphabetically with Less;
+  picking a tag folds them again), and the types by origin (host,
   stock, library, project) with their one-line description, Plugin… first.
   A double click or Enter adds the type in the middle of the view; dragging
   a row into the space adds it where it is dropped. Plugin… (and Add

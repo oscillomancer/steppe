@@ -66,6 +66,10 @@ class RackWindow {
     RackSpace* space() const { return space_; }
     RackBrowser* browser() const { return browser_; }
     std::string status() const;
+    // The browser's tag chips as shown, where one is, and the types it lists.
+    std::vector<std::string> tagChips() const;
+    std::optional<ui::Point> tagChipAt(const std::string& label) const;
+    std::vector<std::string> browserShows() const;
     Status addModule(const std::string& type, std::optional<ui::Point> at = std::nullopt);
 
   private:

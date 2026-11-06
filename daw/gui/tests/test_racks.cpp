@@ -650,3 +650,42 @@ TEST_CASE("rack window: a display hears the pointer; its edits are one undo step
     f.drag(at(75, 10), at(95, 10));
     CHECK(f.app->head().modules.find(scope)->x > 620);
 }
+
+TEST_CASE("rack window: the browser's tags fold into one row, opened by +N") {
+    Fixture f;
+    if (!f.ok) return;
+    f.racks->open();
+    f.frame();
+    auto click = [&](const std::string& label) {
+        const auto at = f.racks->tagChipAt(label);
+        REQUIRE(at);
+        f.pointer(ui::PointerEvent::Type::Down, *at);
+        f.pointer(ui::PointerEvent::Type::Up, *at);
+    };
+    // Folded: a row of the most used tags, then "+N" for the rest.
+    auto folded = f.racks->tagChips();
+    REQUIRE(folded.size() >= 2);
+    const std::string more = folded.back();
+    REQUIRE(more.front() == '+');
+    const std::size_t hidden = std::stoul(more.substr(1));
+    CHECK(f.racks->tagChipAt(folded.front())->y == f.racks->tagChipAt(more)->y);  // one row
+    // Open: every tag, alphabetically, and "Less".
+    click(more);
+    auto open = f.racks->tagChips();
+    CHECK(open.size() == folded.size() - 1 + hidden + 1);
+    CHECK(open.back() == "Less");
+    CHECK(std::is_sorted(open.begin(), open.end() - 1));
+    f.snapshot("rack-tags-open.png");
+    // Picking one filters the list and folds the tags, the pick first.
+    click("visual");
+    folded = f.racks->tagChips();
+    CHECK(folded.front() == "visual");
+    CHECK(folded.back().front() == '+');
+    const auto shows = f.racks->browserShows();
+    CHECK(std::find(shows.begin(), shows.end(), "com.example.test.scope") != shows.end());
+    CHECK(std::find(shows.begin(), shows.end(), "com.example.test.osc") == shows.end());
+    // Again: the filter off.
+    click("visual");
+    CHECK(f.racks->browserShows().size() > shows.size());
+    f.snapshot("rack-tags-folded.png");
+}

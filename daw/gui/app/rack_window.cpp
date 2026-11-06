@@ -173,9 +173,16 @@ class RackBrowser : public ui::Node {
     }
     void setEntries(std::vector<Entry> entries) {
         entries_ = std::move(entries);
-        std::set<std::string> tags;
-        for (const auto& e : entries_) tags.insert(e.tags.begin(), e.tags.end());
-        allTags_.assign(tags.begin(), tags.end());
+        std::map<std::string, int> tags;
+        for (const auto& e : entries_)
+            for (const auto& t : e.tags) ++tags[t];
+        allTags_.clear();
+        for (const auto& [t, n] : tags) allTags_.push_back(t);
+        // The folded row's order: the most used first.
+        commonTags_ = allTags_;
+        std::stable_sort(
+            commonTags_.begin(), commonTags_.end(),
+            [&](const std::string& a, const std::string& b) { return tags[a] > tags[b]; });
         if (tag_ && !tags.contains(*tag_)) tag_.reset();
         filter();
         tags_->relayout();
@@ -193,8 +200,19 @@ class RackBrowser : public ui::Node {
     void setTag(std::optional<std::string> tag) {
         tag_ = std::move(tag);
         filter();
-        tags_->invalidate();
+        tags_->relayout();
     }
+    std::optional<std::string> tag() const { return tag_; }
+    // The tags: one row (the chosen tag, then the most used) and "+N" for
+    // the rest, or all of them, alphabetically, with "Less".
+    void setTagsOpen(bool open) {
+        tagsOpen_ = open;
+        tags_->relayout();
+    }
+    bool tagsOpen() const { return tagsOpen_; }
+    // Tests: the chips shown, in order ("+N" and "Less" included), and where.
+    std::vector<std::string> tagChips() const { return tags_->chips(); }
+    std::optional<ui::Point> tagChipAt(const std::string& label) const { return tags_->at(label); }
 
   private:
     struct Row {
@@ -250,41 +268,105 @@ class RackBrowser : public ui::Node {
         bool onPointer(const ui::PointerEvent& e) override {
             if (e.type != ui::PointerEvent::Type::Down || e.button != 1)
                 return e.type != ui::PointerEvent::Type::Move;
-            for (const auto& [r, tag] : boxes_)
+            for (const auto& [r, chip] : boxes_)
                 if (r.contains(e.pos)) {
-                    b_.setTag(b_.tag_ == tag ? std::nullopt : std::optional(tag));
+                    if (chip.kind == Chip::Kind::More)
+                        b_.setTagsOpen(true);
+                    else if (chip.kind == Chip::Kind::Less)
+                        b_.setTagsOpen(false);
+                    else {  // a tag picked from the whole set folds it again
+                        b_.tagsOpen_ = false;
+                        b_.setTag(b_.tag_ == chip.label ? std::nullopt : std::optional(chip.label));
+                    }
                     return true;
                 }
             return true;
         }
+        std::vector<std::string> chips() const {
+            std::vector<std::string> out;
+            for (const auto& [r, chip] : boxes_) out.push_back(chip.label);
+            return out;
+        }
+        std::optional<ui::Point> at(const std::string& label) const {
+            for (const auto& [r, chip] : boxes_)
+                if (chip.label == label) return ui::Point{r.x + r.w / 2, r.y + r.h / 2};
+            return std::nullopt;
+        }
+        std::string valueText() const override {
+            std::string out;
+            for (const auto& c : chips()) out += (out.empty() ? "" : ", ") + c;
+            return out;
+        }
 
       private:
-        // Lays out (and with `c` paints) the chips; returns their height.
+        struct Chip {
+            enum class Kind { Tag, More, Less } kind = Kind::Tag;
+            std::string label;
+        };
+        static constexpr float kH = 18, kGap = 4, kFont = 10.5f;
+        static float widthOf(const ui::Canvas& c, const std::string& label) {
+            return c.textWidth(label, ui::Font::Ui, kFont) + 14;
+        }
+        // The chips shown: folded, one row's worth; open, every tag.
+        std::vector<Chip> chipsFor(const ui::Canvas& c, float width) const {
+            std::vector<Chip> out;
+            const auto& all = b_.allTags_;
+            if (all.empty()) return out;
+            if (b_.tagsOpen_) {
+                for (const auto& t : all) out.push_back({Chip::Kind::Tag, t});
+                out.push_back({Chip::Kind::Less, "Less"});
+                return out;
+            }
+            std::vector<std::string> order;
+            if (b_.tag_) order.push_back(*b_.tag_);
+            for (const auto& t : b_.commonTags_)
+                if (t != b_.tag_) order.push_back(t);
+            const float more = widthOf(c, "+" + std::to_string(all.size())) + kGap;
+            float x = 0;
+            std::size_t shown = 0;
+            for (const auto& t : order) {
+                const float w = widthOf(c, t);
+                const bool last = shown + 1 == order.size();
+                if (x + w > width - (last ? 0 : more)) break;
+                out.push_back({Chip::Kind::Tag, t});
+                x += w + kGap;
+                ++shown;
+            }
+            if (shown < order.size())
+                out.push_back({Chip::Kind::More, "+" + std::to_string(order.size() - shown)});
+            return out;
+        }
+        // Lays out (and with `paint` paints) the chips; returns their height.
         float flow(const ui::Canvas& c, float width, ui::Canvas* paint) {
+            const std::vector<Chip> chips = chipsFor(c, width);
             float x = 0, y = 0;
-            constexpr float h = 18, gap = 4;
-            for (const auto& tag : b_.allTags_) {
-                const float w = c.textWidth(tag, ui::Font::Ui, 10.5f) + 14;
+            for (const Chip& chip : chips) {
+                const float w = widthOf(c, chip.label);
                 if (x > 0 && x + w > width) {
                     x = 0;
-                    y += h + gap;
+                    y += kH + kGap;
                 }
                 if (paint) {
                     const ui::Theme& t = paint->theme();
-                    const ui::Rect r{bounds().x + x, bounds().y + y, w, h};
-                    const bool on = b_.tag_ == tag;
-                    paint->fillRound(r, h / 2, on ? t.color("accent") : t.color("raised"));
-                    paint->text(r, tag, ui::Font::Ui, 10.5f,
-                                on ? t.color("ground") : t.color("ink-quiet"),
+                    const ui::Rect r{bounds().x + x, bounds().y + y, w, kH};
+                    const bool on = chip.kind == Chip::Kind::Tag && b_.tag_ == chip.label;
+                    if (chip.kind == Chip::Kind::Tag)
+                        paint->fillRound(r, kH / 2, on ? t.color("accent") : t.color("raised"));
+                    else  // "+N" and "Less": outlined, not filled
+                        paint->strokeRound(r, kH / 2, t.color("rule"), 1);
+                    paint->text(r, chip.label, ui::Font::Ui, kFont,
+                                on                             ? t.color("ground")
+                                : chip.kind == Chip::Kind::Tag ? t.color("ink-quiet")
+                                                               : t.color("ink"),
                                 ui::kCenter | ui::kMiddle);
-                    boxes_.emplace_back(r, tag);
+                    boxes_.emplace_back(r, chip);
                 }
-                x += w + gap;
+                x += w + kGap;
             }
-            return b_.allTags_.empty() ? 0 : y + h;
+            return chips.empty() ? 0 : y + kH;
         }
         RackBrowser& b_;
-        std::vector<std::pair<ui::Rect, std::string>> boxes_;
+        std::vector<std::pair<ui::Rect, Chip>> boxes_;
     };
 
     class List : public ui::Node {
@@ -439,7 +521,9 @@ class RackBrowser : public ui::Node {
     Hooks hooks_;
     std::vector<Entry> entries_;
     std::vector<Row> rows_;
-    std::vector<std::string> allTags_;
+    std::vector<std::string> allTags_;     // alphabetical
+    std::vector<std::string> commonTags_;  // the most used first
+    bool tagsOpen_ = false;
     std::optional<std::string> tag_;
     ui::TextField* search_ = nullptr;
     Tags* tags_ = nullptr;
@@ -531,6 +615,18 @@ void RackWindow::report(const Error& e) {
     error_ = e.message + (e.hint.empty() ? "" : " (" + e.hint + ")");
     if (status_) status_->setText(status());
     if (!isOpen() && actions_.onError) actions_.onError("rack: " + error_);
+}
+
+std::vector<std::string> RackWindow::tagChips() const {
+    return browser_ ? browser_->tagChips() : std::vector<std::string>{};
+}
+
+std::optional<ui::Point> RackWindow::tagChipAt(const std::string& label) const {
+    return browser_ ? browser_->tagChipAt(label) : std::nullopt;
+}
+
+std::vector<std::string> RackWindow::browserShows() const {
+    return browser_ ? browser_->shown() : std::vector<std::string>{};
 }
 
 std::string RackWindow::status() const {
