@@ -1817,9 +1817,9 @@ void releaseVoices(Stage& st, bool includeLive, bool onlyPending = false,
     st.releases = st.blockEvents.size();
 }
 
-// The half-band resamplers of an oversampled stage (dsp::Oversampler: one
+// The half-band resamplers of an oversampled stage (dsp::HalfbandOversampler: one
 // sample in, `os` out, and back).
-void upsample(dsp::Oversampler& f, const float* x, float* y, std::uint32_t n,
+void upsample(dsp::HalfbandOversampler& f, const float* x, float* y, std::uint32_t n,
               std::uint32_t os) SUPPLE_RT {
     std::array<double, 8> tmp{};
     for (std::uint32_t i = 0; i < n; ++i) {
@@ -1827,7 +1827,7 @@ void upsample(dsp::Oversampler& f, const float* x, float* y, std::uint32_t n,
         for (std::uint32_t j = 0; j < os; ++j) y[i * os + j] = static_cast<float>(tmp[j]);
     }
 }
-void downsample(dsp::Oversampler& f, const float* x, float* y, std::uint32_t n,
+void downsample(dsp::HalfbandOversampler& f, const float* x, float* y, std::uint32_t n,
                 std::uint32_t os) SUPPLE_RT {
     std::array<double, 8> tmp{};
     for (std::uint32_t i = 0; i < n; ++i) {

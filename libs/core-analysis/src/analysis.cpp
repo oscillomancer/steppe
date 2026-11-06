@@ -99,7 +99,7 @@ struct Stft {
             w2 += w[i] * w[i];
         }
         norm = 2.0 / (static_cast<double>(n) * w2);
-        dsp::Fft fft;
+        dsp::RealFft fft;
         fft.prepare(n);
         std::vector<double> frame(n);
         std::vector<std::complex<double>> spec(n / 2 + 1);
@@ -301,7 +301,7 @@ HarmonicReport harmonicOf(const std::vector<double>& x, double fs, std::pair<dou
     // FFT cross-correlation of [0, integ) with [0, w).
     const std::size_t nfft = static_cast<std::size_t>(1)
                              << static_cast<int>(std::ceil(std::log2(static_cast<double>(2 * w))));
-    dsp::Fft fft;
+    dsp::RealFft fft;
     fft.prepare(nfft);
     std::vector<double> a(nfft), b(nfft);
     std::vector<std::complex<double>> A(nfft / 2 + 1), Bs(nfft / 2 + 1), prod(nfft / 2 + 1);
@@ -420,7 +420,7 @@ HarmonicReport harmonicOf(const std::vector<double>& x, double fs, std::pair<dou
         if (start + len > x.size()) continue;
         std::size_t n = 1;
         while (n < len * 2) n <<= 1;
-        dsp::Fft hf;
+        dsp::RealFft hf;
         hf.prepare(n);
         std::vector<double> frame(n, 0.0);
         for (std::size_t i = 0; i < len; ++i) frame[i] = x[start + i] * dsp::hann(i, len);

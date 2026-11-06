@@ -468,7 +468,7 @@ struct Stage {
     // rate behind half-band resamplers (L/R in and out, then key L/R up); its
     // latency is padded at the high rate to a whole number of plan samples.
     int os = 1;
-    std::vector<dsp::Oversampler> osFilters;
+    std::vector<dsp::HalfbandOversampler> osFilters;
     std::vector<float> osIn[2], osOut[2], osKey[2];
     Delay osPad;
 };

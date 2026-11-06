@@ -11,7 +11,7 @@
 using namespace supple::dsp;
 namespace {
 std::vector<double> impulse(int factor) {
-    Oversampler os;
+    HalfbandOversampler os;
     os.prepare(factor, 4096);
     std::vector<double> out(512);
     std::array<double, 8> hi{};
@@ -24,7 +24,7 @@ std::vector<double> impulse(int factor) {
 }  // namespace
 TEST_CASE("oversampler exact integer latency and passband") {
     for (int f : {1, 2, 4, 8}) {
-        Oversampler os;
+        HalfbandOversampler os;
         os.prepare(f);
         auto h = impulse(f);
         auto peak = static_cast<uint32_t>(std::max_element(h.begin(), h.end()) - h.begin());
@@ -47,7 +47,7 @@ TEST_CASE("oversampler rejects interpolation images and downsampling aliases") {
     for (int f : {2, 4, 8})
         for (double hz : {.125, .45})
             for (int imageRate = 1; imageRate <= f / 2; imageRate *= 2) {
-                Oversampler up, down;
+                HalfbandOversampler up, down;
                 up.prepare(f);
                 down.prepare(f);
                 std::array<double, 8> hi{};
@@ -79,7 +79,7 @@ TEST_CASE("oversampler state is independent of block boundaries and reset") {
     for (int f : {1, 2, 4, 8}) {
         const auto reference = impulse(f);
         for (int block : {1, 7, 64, 4096}) {
-            Oversampler os;
+            HalfbandOversampler os;
             os.prepare(f, 4096);
             std::array<double, 8> hi{};
             bool same = true;
