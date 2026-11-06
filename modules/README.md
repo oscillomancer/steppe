@@ -102,3 +102,4 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `lsystem` | L-System: a self-similar melody grown by rewriting A, B and C, each moving the tune by scale degrees |
 | `bounce` | A bouncing ball: hits that come quicker and softer until it settles, its height and each hit's strength; poly |
 | `swarm` | Two to eight coupled LFOs that pull into step, or push apart, like fireflies; how in step they are as Sync; poly |
+| `canon` | A round from any line: up to three followers replay the lead's notes and gates some steps later, transposed; poly out for one voice |
