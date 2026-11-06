@@ -66,6 +66,7 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `eq` | An equaliser: low and high shelves, two bells with width, 12 dB low and high cuts, level; flat at its defaults; a response display, poly |
 | `phaser` | A stereo phaser: 4 to 12 all-pass stages swept round a centre by an LFO, depth, spread between the sides, feedback either way, mix, poly |
 | `transient` | A transient shaper: each hit's attack and sustain turned up or down apart, at any level and with no threshold; the length that counts as the attack, level, poly |
+| `vocoder` | A vocoder: 4 to 32 bands from Low to High, the voice's level in each on the carrier's; width, attack and release, a shift of the carrier's bands for a smaller or larger throat, noise in the upper bands for sibilance; a poly carrier is summed |
 
 ### Modulation, sequencing, generative and utilities
 
