@@ -46,3 +46,4 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `random` | Clocked random notes and three gates with a looping memory that mutates by Change; scales; poly |
 | `function` | Rise and fall with a curve: an envelope, a cycling LFO, a slew limiter or a follower |
 | `quantizer` | Pitch to the nearest note of 22 scales or a custom one, transposed in degrees; keyboard face |
+| `clock` | Six ratios (/16 to x8) of the song, a free tempo or an incoming clock, with swing and a reset out |
