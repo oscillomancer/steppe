@@ -53,3 +53,4 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `chord` | A note to a poly chord: 22 types or a key's own thirds, inversions, voicings and a strum |
 | `arp` | An arpeggiator over held poly notes: six orders, octaves, gate length, latch |
 | `slew` | A slew limiter and portamento, linear to exponential, that can leave leaps alone; poly |
+| `hold` | Sample and hold or track and hold, noise when nothing is in, a value per voice; poly |
