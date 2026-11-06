@@ -99,22 +99,33 @@ std::shared_ptr<const rack::Catalog> loadFolder(const std::shared_ptr<const rack
                                                 std::vector<std::string>* skipped) {
     auto catalog = std::make_shared<rack::Catalog>(*base);
     catalog->clear(origin);
+    if (dir.empty()) return catalog;
+    auto skip = [&](const fs::path& file, const std::string& why) {
+        if (skipped) skipped->push_back(file.string() + ": " + why);
+    };
     std::vector<std::string> names;
     std::error_code ec;
-    for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
-        const std::string name = it->path().filename().string();
-        if (validModuleName(name, {}) && fs::is_regular_file(modulePath(dir, name), ec))
-            names.push_back(name);
+    fs::directory_iterator it(dir, ec), end;
+    if (ec) {
+        if (ec != std::errc::no_such_file_or_directory) skip(dir, ec.message());
+        return catalog;
     }
+    for (; !ec && it != end; it.increment(ec)) {
+        const std::string name = it->path().filename().string();
+        if (validModuleName(name, {})) names.push_back(name);
+    }
+    if (ec) skip(dir, ec.message());
     std::sort(names.begin(), names.end());
-    auto skip = [&](const std::string& name, const std::string& why) {
-        if (skipped) skipped->push_back(name + ": " + why);
-    };
     for (const std::string& name : names) {
         const fs::path file = modulePath(dir, name);
+        ec.clear();
+        if (!fs::is_regular_file(file, ec)) {
+            skip(file, ec ? ec.message() : "not a regular source file");
+            continue;
+        }
         auto text = readTextFile(file, kMaxModuleBytes);
         if (!text) {
-            skip(name, text.error().message);
+            skip(file, text.error().message);
             continue;
         }
         CompiledModule compiled = compileModule(*text, origin, file);
@@ -125,21 +136,21 @@ std::shared_ptr<const rack::Catalog> loadFolder(const std::shared_ptr<const rack
                     why += ": " + d.message;
                     break;
                 }
-            skip(name, why);
+            skip(file, why);
             continue;
         }
         const auto* taken = catalog->find(compiled.type->id());
         if (taken &&
             (taken->type->origin() == origin || taken->type->origin() == rack::Origin::Host ||
              taken->type->origin() == rack::Origin::Stock)) {
-            skip(name,
+            skip(file,
                  "its id " + compiled.type->id() + " is taken by " +
                      (taken->type->origin() == origin ? "the folder's " + moduleName(*taken->type)
                                                       : std::string("a built-in module")));
             continue;
         }
         if (std::string problems = catalog->add(compiled.type); !problems.empty())
-            skip(name, problems);
+            skip(file, problems);
     }
     return catalog;
 }

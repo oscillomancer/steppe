@@ -358,6 +358,8 @@ keeps a copy of each one it uses beside it (in `modules`), as it keeps its
 media, so the project sounds the same on another computer. Rack presets
 (saved in the data folder's `rack-presets`) hold a group of modules with
 their cables and settings, and the source of your own modules too.
+If a project copy cannot be loaded, opening the project reports the source
+problem and whether a library version is used instead or a type is unavailable.
 
 Agents can do all of this through the MCP tools: build a patch in one
 step (`rack_patch`), listen to it as numbers (`rack_probe` reports pitch,

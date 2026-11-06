@@ -668,3 +668,43 @@ TEST_CASE("rack presets: embedded source ids are checked before installation") {
     CHECK_FALSE(std::filesystem::exists(f.app->moduleDir() / "first" / "first.cpp"));
     CHECK_FALSE(std::filesystem::exists(f.app->moduleDir() / "unrelated" / "unrelated.cpp"));
 }
+
+TEST_CASE("module library: project open warns when a broken copy falls back to the library") {
+    Fixture here;
+    const auto song = portableProject(here);
+    REQUIRE(
+        writeFileAtomic(song.parent_path() / "modules" / "level" / "level.cpp", "broken module"));
+    Fixture there;
+    std::string changed = kLevel;
+    changed.replace(changed.find("0.25"), 4, "0.5");
+    there.write("level", changed);
+    json::Value a = json::Value::object();
+    a["path"] = song.string();
+    auto opened = there.call("project.open", a);
+    REQUIRE(opened);
+    const auto* selected = there.app->modules()->find("com.example.level");
+    REQUIRE(selected);
+    REQUIRE(opened->find("warnings"));
+    const auto warning = json::writeCompact((*opened)["warnings"]);
+    CHECK(warning.find("com.example.level") != std::string::npos);
+    CHECK(warning.find("level.cpp") != std::string::npos);
+    CHECK(warning.find("library version") != std::string::npos);
+}
+
+TEST_CASE("module library: project open reports unreadable copies with affected type ids") {
+    Fixture here;
+    const auto song = portableProject(here);
+    // A source exceeding the read limit fails deterministically, including as root and on Windows.
+    REQUIRE(writeFileAtomic(song.parent_path() / "modules" / "level" / "level.cpp",
+                            std::string((1 << 20) + 1, ' ')));
+    Fixture there;
+    json::Value args = json::Value::object();
+    args["path"] = song.string();
+    auto opened = there.call("project.open", args);
+    REQUIRE(opened);
+    REQUIRE(opened->find("warnings"));
+    const std::string warning = json::writeCompact((*opened)["warnings"]);
+    CHECK(warning.find("com.example.level") != std::string::npos);
+    CHECK(warning.find("level.cpp") != std::string::npos);
+    CHECK(warning.find("unavailable") != std::string::npos);
+}

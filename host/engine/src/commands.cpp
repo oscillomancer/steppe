@@ -1168,7 +1168,9 @@ void registerEngineCommands(cmd::Registry& registry) {
         c.description =
             "recoverable > 0: recordings a crash left out of the project; project.recoverable "
             "lists them and project.recover puts them back. autosave_available: a newer autosave "
-            "exists next to the file (it is not loaded silently).";
+            "exists next to the file (it is not loaded silently). warnings also report project "
+            "module copies that could not be read or compiled, and name types using a library "
+            "version instead or left unavailable.";
         c.result = projectInfoSchema();
         c.errors = {{"file.open", "the file cannot be read", "check the path"},
                     {"schema.invalid", "the file has problems", "details list each with its path"}};

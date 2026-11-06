@@ -20,6 +20,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <numbers>
+#include <set>
 #include <string_view>
 #include <thread>
 
@@ -468,7 +469,8 @@ Result<model::Id> copyTake(const model::Session& source, model::EditTxn& txn, mo
 // --- project files ----------------------------------------------------------------------
 
 Status EngineApp::replaceProject(model::Session session, fs::path path,
-                                 const std::function<Status()>& prepare) {
+                                 const std::function<Status()>& prepare,
+                                 std::vector<schema::Warning>* warnings) {
     Backend* running = engine_ ? backend_ : nullptr;
     const auto config = engine_ ? engine_->config() : BackendConfig{};
     // Preserve the caller's Automatic/explicit choice, not the resolved count:
@@ -510,7 +512,29 @@ Status EngineApp::replaceProject(model::Session session, fs::path path,
         renders_.clear();
     }
     // The project's copies of the user's modules (ADR-0062), or none.
-    modules_ = detail::loadProjectModules(modules_, projectModuleDir(path));
+    const fs::path moduleFolder = projectModuleDir(path);
+    std::vector<std::string> skipped;
+    modules_ = detail::loadProjectModules(modules_, moduleFolder, &skipped);
+    if (warnings && !skipped.empty()) {
+        std::string message = "project module copies could not be loaded: ";
+        for (std::size_t i = 0; i < skipped.size(); ++i) {
+            if (i) message += "; ";
+            message += skipped[i];
+        }
+        // An unreadable or broken source may not reveal its id. Name every
+        // used type left without a project copy, and the version that will play.
+        std::set<std::string> seen;
+        for (const auto& m : session.modules) {
+            const std::string& id = m.value->type;
+            if (!seen.insert(id).second) continue;
+            const auto* entry = modules_->find(id);
+            if (!entry)
+                message += "; " + id + ": unavailable";
+            else if (entry->type->origin() == rack::Origin::Library)
+                message += "; " + id + ": using the library version instead of a project copy";
+        }
+        warnings->push_back({"project.modules", std::move(message), moduleFolder.string()});
+    }
     pool_ = std::make_unique<InstancePool>(
         [this](const model::PluginRef& ref) { return findPlugin(ref.id); }, options_.identity);
     pool_->setMainThreadWake(mainWake_);
@@ -593,7 +617,7 @@ Status EngineApp::open(const fs::path& where, std::vector<schema::Warning>* warn
     if (!text) return std::move(text).error();
     auto s = model::parseProject(*text, warnings);
     if (!s) return std::move(s).error();
-    return replaceProject(std::move(*s), path);
+    return replaceProject(std::move(*s), path, {}, warnings);
 }
 
 Status EngineApp::writeTemplate(const fs::path& folder, std::vector<schema::Warning>* warnings) {

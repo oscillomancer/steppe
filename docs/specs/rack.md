@@ -324,6 +324,10 @@ it). `module.edit {type}` of a project type edits its source into the
 library's entry with the same type id. If that id is absent, it uses the
 project copy's name or a free suffixed name (`<name>-2`, …), leaving other
 library types' files untouched.
+Copies that cannot be read or compiled are reported in `project.open`'s
+`warnings` as `project.modules`, with the source paths and diagnostics.
+The warning also names used types left without a project copy, explicitly
+saying when the library version is used instead or the type is unavailable.
 
 ## 4. The rack runtime (`modules/rack`)
 

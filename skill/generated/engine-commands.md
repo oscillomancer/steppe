@@ -9589,7 +9589,7 @@ Result:
 
 Open a project file (replaces the current project and its history).
 
-recoverable > 0: recordings a crash left out of the project; project.recoverable lists them and project.recover puts them back. autosave_available: a newer autosave exists next to the file (it is not loaded silently).
+recoverable > 0: recordings a crash left out of the project; project.recoverable lists them and project.recover puts them back. autosave_available: a newer autosave exists next to the file (it is not loaded silently). warnings also report project module copies that could not be read or compiled, and name types using a library version instead or left unavailable.
 
 Kind: `action`. Exposure: `mcp-tool`.
 
