@@ -149,6 +149,8 @@ feedback FM, Karplus-like loops and self-patched chaos.
 
 ## Recipes
 
+<!-- host/engine/tests/test_rack_recipes.cpp patches every JSON block here as printed. -->
+
 These were run and probed as written. Each starts from `rack.add {track}`;
 the Out is then `mo_1`.
 
@@ -272,6 +274,34 @@ Probed for 10 s: `web.out_2` ±0.3 at the gesture's 0.5 Hz, `web.out_3`
 0.6 to 1, `filt.low` C2, `room.out_l` peak −8 dB. Turn `a_to_1`…`d_to_4`
 to reroute; below 0 inverts.
 
+**A song that writes itself**: Changes plays chords in D dorian under a
+pad; Phrase writes calls and answers, fitted to each chord by Fit; Counter
+plays a bass line against them; Form's sections open the pad's filter
+with their energy and ask Phrase for a new call at each change.
+
+```json
+{"modules": {"song": {"type": "form", "params": {"bars": "bars_4"}},
+             "prog": {"type": "changes", "params": {"key": "d", "mode": "dorian", "octave": -1}},
+             "tune": {"type": "phrase", "params": {"key": "d", "mode": "dorian", "renew": 0}},
+             "snap": {"type": "fit"}, "low": {"type": "counter", "params": {"key": "d", "mode": "dorian"}},
+             "lead": {"type": "vco"}, "pluck": {"type": "lpg"},
+             "bass": {"type": "vco", "params": {"coarse": -12}}, "thump": {"type": "lpg"},
+             "pad": {"type": "vco"}, "dark": {"type": "filter", "params": {"cutoff": 300}},
+             "mix": {"type": "mixer", "params": {"level_3": -12, "master": -9}}},
+ "cables": [["prog.chord", "snap.chord"], ["tune.pitch", "snap.pitch"], ["song.change", "tune.write"],
+            ["snap.out", "lead.pitch"], ["lead.triangle", "pluck.in"], ["tune.gate", "pluck.ping"],
+            ["snap.out", "low.lead"], ["tune.gate", "low.lead_gate"],
+            ["low.pitch", "bass.pitch"], ["bass.triangle", "thump.in"], ["low.gate", "thump.ping"],
+            ["prog.chord", "pad.pitch"], ["pad.saw", "dark.in"], ["song.energy", "dark.cutoff", 4],
+            ["pluck.out", "mix.in_1"], ["thump.out", "mix.in_2"], ["dark.low", "mix.in_3"],
+            ["mix.left", "mo_1.l"], ["mix.right", "mo_1.r"]]}
+```
+
+Probed for 10 s: `snap.out` only the chords' tones, `low.interval` 3 to
+16 semitones below the lead, `song.edge` then `song.a` (intro, verse),
+`mix.left` peak −4 dB. Form's position is the song's bar, so a probe
+`from_beat` lands in the right section; `plan` and `bars` reshape it.
+
 ## Generative building blocks
 
 Tags in the reference group the modules. Some starting points:
@@ -286,8 +316,12 @@ Tags in the reference group the modules. Some starting points:
   automaton), `lsystem` (a melody grown by rewriting rules), `sequencer`
   (sixteen steps, five walks), `looper` (records a CV and a gate in time
   and loops them), `canon` (delayed, transposed copies of a line),
-  `changes` (a chord progression in a key), `arp`, `chord`, always through
-  `quantizer` for a key.
+  `changes` (a chord progression in a key), `phrase` (calls and answers
+  that come home), `counter` (a second line against a lead), `arp`,
+  `chord`, always through `quantizer` for a key or `fit` for the chord
+  playing.
+- **Structure**: `form` (a song's sections over minutes: gates for verse,
+  chorus and bridge, an energy arc, fills).
 - **Motion**: `lfo`, `function`, `stages` (a multi-stage envelope, LFO or
   gesture), `adsr`, `drift` (slow random per voice), `chaos` (Lorenz and
   Thomas attractors), `swarm` (coupled LFOs that fall into step),
