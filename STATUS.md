@@ -362,7 +362,14 @@ instructions are in `docs/guides/installing.md`.
   selection, listed and loaded from the browser), and cables into a plugin
   module's plug-in parameters (dropped on its body, picked from a searchable
   list; sockets on its edge with the parameter's name on hover, amounts
-  dragged there; a cable's right-click sets the amount or removes it).
+  dragged there; a cable's right-click sets the amount or removes it), and
+  for big patches: type or double-click to add a module at the pointer (a
+  cable let go on nothing picks a module that takes it), copy, cut, paste
+  and duplicate with the cables among the modules, arrow-key nudges, fit to
+  the selection, zoom out to 10 % with module names drawn readable, and the
+  hovered or selected modules' cables brought forward while the rest fade.
+  Pasting into another rack or after a cut rebuilds through `rack.patch`, so
+  a plugin module's plug-in starts from its defaults there.
 - **MIDI learn** (ADR-0027): any plug-in parameter (the FX window's MIDI
   button, or `fx.learn.set` for agents) and any action (Ctrl+L in the
   actions list) learns a controller by moving it: CC, note, pitch bend or

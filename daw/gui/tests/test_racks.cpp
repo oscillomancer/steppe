@@ -14,6 +14,7 @@
 #include <deque>
 #include <filesystem>
 #include <mutex>
+#include <tuple>
 
 #include "app_actions.h"
 #include "floating_panel.h"
@@ -156,7 +157,8 @@ struct Fixture {
     bool ok = false;
 
     explicit Fixture(ui::Theme theme = ui::Theme::dark(),
-                     std::vector<std::filesystem::path> plugins = {}) {
+                     std::vector<std::filesystem::path> plugins = {}, int width = 1100,
+                     int height = 560) {
         dir = std::filesystem::temp_directory_path() /
               ("supple-rack-test-" + std::to_string(testProcessId()));
         std::filesystem::remove_all(dir);
@@ -168,7 +170,7 @@ struct Fixture {
 #endif
         if (!p) return;
         platform = std::move(*p);
-        auto w = gui::Window::open(*platform, {"rack-test", 1100, 560, true});
+        auto w = gui::Window::open(*platform, {"rack-test", width, height, true});
         if (!w) return;
         window = std::move(*w);
         auto f = gui::loadFonts(window->vg(), SUPPLE_GUI_FONTS_DIR);
@@ -191,7 +193,8 @@ struct Fixture {
         REQUIRE(c->add(compiled(kScope)).empty());
         gui::racks::setCatalog(*app, c);
         panel = std::make_unique<gui::FloatingPanel>(
-            *platform, *window, *root, SUPPLE_GUI_FONTS_DIR, "Racks", 1180, 720, 640, 400);
+            *platform, *window, *root, SUPPLE_GUI_FONTS_DIR, "Racks", std::max(1180, width),
+            std::max(720, height), 640, 400);
         racks = std::make_unique<gui::RackWindow>(*panel, *actions, *dispatcher, *app, ui);
         ok = true;
     }
@@ -323,6 +326,42 @@ struct Patch {
         f.cable(transport + ".beat_phase", osc + ".fine", R"(,"amount":40)");
     }
 };
+
+// A realistic big patch (28 modules, 36 cables) as an agent makes it with
+// rack.patch: two voices, drums, effects and modulation, laid out by the engine.
+std::string bigPatch(Fixture& f, const std::string& rack, const std::string& out) {
+    const std::string patch = R"({"rack":")" + rack + R"(","modules":{
+        "clock":{"type":"clock"}, "seq":{"type":"sequencer"}, "quant":{"type":"quantizer"},
+        "osc1":{"type":"vco"}, "osc2":{"type":"vco"}, "lfo1":{"type":"lfo"},
+        "lfo2":{"type":"lfo"}, "env1":{"type":"adsr"}, "env2":{"type":"adsr"},
+        "filt1":{"type":"filter"}, "filt2":{"type":"ladder"}, "amp1":{"type":"vca"},
+        "amp2":{"type":"vca"}, "euc1":{"type":"euclid"}, "euc2":{"type":"euclid"},
+        "kick":{"type":"drum"}, "snare":{"type":"drum"}, "hat":{"type":"drum"},
+        "noise":{"type":"noise"}, "rnd":{"type":"random"}, "slew":{"type":"slew"},
+        "shift":{"type":"turing"}, "mix":{"type":"mixer"}, "drive":{"type":"drive"},
+        "chorus":{"type":"chorus"}, "delay":{"type":"delay"}, "verb":{"type":"reverb"},
+        "atten":{"type":"scale"}},
+      "cables":[
+        ["clock.out_1","seq.clock"], ["clock.out_2","euc1.clock"], ["clock.out_1","euc2.clock"],
+        ["clock.out_3","kick.trigger"], ["euc1.gate","snare.trigger"], ["euc2.gate","hat.trigger"],
+        ["clock.out_4","rnd.clock"], ["clock.out_1","shift.clock"],
+        ["seq.pitch","quant.pitch"], ["quant.out","osc1.pitch"], ["quant.out","filt1.pitch"],
+        ["seq.gate","env1.gate"], ["shift.out","osc2.pitch"], ["shift.bit_1","env2.gate"],
+        ["osc1.saw","filt1.in"], ["osc1.pulse","filt1.in"], ["osc2.saw","filt2.in"],
+        ["lfo1.out","osc1.pulse_width",20], ["lfo2.out","filt2.cutoff",1],
+        ["env1.envelope","amp1.cv"], ["env1.envelope","filt1.cutoff",2],
+        ["env2.envelope","amp2.cv"], ["filt1.low","amp1.in"], ["filt2.out","amp2.in"],
+        ["rnd.smooth","slew.in"], ["slew.out","filt1.fm"], ["rnd.gate_a","env2.retrigger"],
+        ["amp1.out","mix.in_1"], ["amp2.out","mix.in_2"], ["kick.out","mix.in_3"],
+        ["snare.out","mix.in_4"], ["hat.out","drive.in"], ["drive.out","chorus.in_l"],
+        ["mix.left","delay.in_l"], ["mix.right","delay.in_r"], ["delay.out_l","verb.in_l"],
+        ["delay.out_r","verb.in_r"], ["chorus.out_l","verb.in_l"], ["lfo1.out","atten.in_1"],
+        ["atten.out_1","chorus.rate",0.5], ["noise.pink","snare.accent"],
+        {"from":"verb.out_l","to":")" +
+                              out + R"(.l"}, {"from":"verb.out_r","to":")" + out + R"(.r"}]})";
+    f.exec("rack.patch", patch);
+    return rack;
+}
 
 }  // namespace
 
@@ -906,6 +945,182 @@ TEST_CASE("rack window: a knob learned in the window turns on screen when its co
     f.app->stopEngine();
 }
 
+TEST_CASE("rack window: a big patch at 1400x900 and at a small size") {
+    for (const auto& [w, h, name] :
+         {std::tuple{1400, 900, "rack-big.png"}, std::tuple{800, 500, "rack-big-small.png"}}) {
+        Fixture f(ui::Theme::dark(), {}, w, h);
+        if (!f.ok) return;
+        auto r = f.exec("rack.add", R"({"name":"Big"})");
+        bigPatch(f, r["rack"].asString(), r["out"].asString());
+        f.racks->open();
+        f.frame();
+        f.racks->space()->frameAll();
+        f.frame();
+        gui::RackSpace& space = *f.racks->space();
+        CHECK(space.scene().modules.size() >= 29);
+        CHECK(space.scene().cables.size() >= 40);
+        // Everything fits, however small the window: names stand in for faces.
+        const ui::Rect all = space.scene().bounds();
+        const ui::Rect seen = space.visibleSpace();
+        CHECK(seen.contains({all.x, all.y}));
+        CHECK(seen.contains({all.right(), all.bottom()}));
+        f.snapshot(name);
+        // Over a module, its cables stand out and the rest step back.
+        for (const auto& m : space.scene().modules)
+            if (m.title == "Mixer") {
+                f.pointer(ui::PointerEvent::Type::Move, *space.bodyAt(m.id), 0);
+                break;
+            }
+        f.snapshot(w > 1000 ? "rack-big-hover.png" : "rack-big-small-hover.png");
+        if (w > 1000) {  // at 100 %, on the voices
+            for (const auto& m : space.scene().modules)
+                if (m.title == "Filter") space.select({m.id});
+            space.frame(space.selection());
+            space.setView({space.view().x - 300, space.view().y - 100, 1.0});
+            f.frame();
+            f.snapshot("rack-big-100.png");
+        }
+    }
+}
+
+TEST_CASE("rack window: typing adds a module at the pointer; a cable let go on nothing picks one") {
+    Fixture f;
+    if (!f.ok) return;
+    Patch p(f);
+    f.racks->open();
+    f.frame();
+    gui::RackSpace& space = *f.racks->space();
+    const ui::Rect b = space.bounds();
+    const ui::Point empty{b.x + b.w - 90, b.y + 60};
+    f.pointer(ui::PointerEvent::Type::Move, empty, 0);
+    const std::size_t modules = f.app->head().modules.size();
+    // A letter typed over the space opens the list there, that letter in it.
+    f.r().text("v");
+    f.frame();
+    auto* search = dynamic_cast<ui::TextField*>(f.r().find("rack.add.search"));
+    REQUIRE(search);
+    CHECK(search->text() == "v");
+    f.r().text("co");
+    f.frame();
+    CHECK(f.r().find("rack.add")->valueText().rfind("VCO", 0) == 0);
+    f.snapshot("rack-quick-add.png");
+    f.r().key(SDLK_RETURN);
+    f.frame();
+    CHECK_FALSE(f.r().find("rack.add"));
+    REQUIRE(f.app->head().modules.size() == modules + 1);
+    REQUIRE(space.selection().size() == 1);
+    const auto* made = space.scene().module(*space.selection().begin());
+    REQUIRE(made);
+    CHECK(made->typeId == "com.suppleaudio.rack.vco");
+    const ui::Point at = space.toSpace(empty);
+    CHECK(std::abs(made->x + made->w / 2 - double(at.x)) < 1);
+    // A double-click on nothing opens it too; Escape closes it.
+    const ui::Point other{b.x + b.w - 90, b.y + b.h - 40};
+    f.pointer(ui::PointerEvent::Type::Move, other, 0);
+    f.pointer(ui::PointerEvent::Type::Down, other, 1, 0, 2);
+    f.pointer(ui::PointerEvent::Type::Up, other, 1, 0, 2);
+    REQUIRE(f.r().find("rack.add"));
+    f.r().key(SDLK_ESCAPE);
+    f.frame();
+    CHECK_FALSE(f.r().find("rack.add"));
+    // A new cable let go on nothing: the module chosen takes it, in one step.
+    const model::Id osc = *model::Id::parse(p.osc);
+    const std::size_t cables = f.app->head().cables.size();
+    f.drag(*space.jackAt(osc, "out", true), other);
+    REQUIRE(f.r().find("rack.add"));
+    f.r().text("filter");
+    f.r().key(SDLK_RETURN);
+    f.frame();
+    REQUIRE(f.app->head().cables.size() == cables + 1);
+    REQUIRE(space.selection().size() == 1);
+    const model::Id filter = *space.selection().begin();
+    bool wired = false;
+    for (const auto& c : f.app->head().cables)
+        wired = wired || (c.value->from == model::CableEnd{osc, "out"} &&
+                          c.value->to == model::CableEnd{filter, "in"});
+    CHECK(wired);
+    REQUIRE(f.exec("history.undo", "{}").isObject());
+    f.frame();
+    CHECK(f.app->head().cables.size() == cables);
+    CHECK_FALSE(f.app->head().modules.find(filter));
+}
+
+TEST_CASE("rack window: copy, paste, cut and duplicate keep the cables among the modules") {
+    Fixture f;
+    if (!f.ok) return;
+    Patch p(f);
+    f.racks->open();
+    f.frame();
+    gui::RackSpace& space = *f.racks->space();
+    const model::Id osc = *model::Id::parse(p.osc), vca = *model::Id::parse(p.vca);
+    auto count = [&](model::Id rack) {
+        std::size_t modules = 0, cables = 0;
+        for (const auto& m : f.app->head().modules) modules += m.value->rack == rack;
+        for (const auto& c : f.app->head().cables)
+            if (const auto* m = f.app->head().modules.find(c.value->from.object))
+                cables += m->rack == rack;
+        return std::pair{modules, cables};
+    };
+    const model::Id rack = *model::Id::parse(p.rack);
+    const auto [modules, cables] = count(rack);
+    // Osc and VCA, with the cable between them (not the ones from outside).
+    space.select({osc, vca});
+    f.r().key(SDLK_C, ui::kCtrl);
+    const ui::Rect b = space.bounds();
+    const ui::Point to{b.x + b.w - 260, b.y + b.h - 220};
+    f.pointer(ui::PointerEvent::Type::Move, to, 0);
+    f.r().key(SDLK_V, ui::kCtrl);
+    f.frame();
+    CHECK(count(rack) == std::pair{modules + 2, cables + 1});
+    REQUIRE(space.selection().size() == 2);
+    double left = 1e9, top = 1e9;
+    for (model::Id id : space.selection()) {
+        left = std::min(left, space.scene().module(id)->x);
+        top = std::min(top, space.scene().module(id)->y);
+    }
+    const ui::Point at = space.toSpace(to);
+    CHECK(std::abs(left - double(at.x)) < 1);
+    CHECK(std::abs(top - double(at.y)) < 1);
+    // Ctrl+D duplicates what is selected, cables too.
+    f.r().key(SDLK_D, ui::kCtrl);
+    f.frame();
+    CHECK(count(rack) == std::pair{modules + 4, cables + 2});
+    // Into another rack: rebuilt from the copy (rack.patch).
+    REQUIRE(f.racks->addRack());
+    f.frame();
+    const model::Id second = *f.racks->rack();
+    const auto [modules2, cables2] = count(second);
+    f.r().key(SDLK_V, ui::kCtrl);
+    f.frame();
+    CHECK(count(second) == std::pair{modules2 + 2, cables2 + 1});
+    // Cut takes them away; paste brings them back.
+    f.r().key(SDLK_X, ui::kCtrl);
+    f.frame();
+    CHECK(count(second) == std::pair{modules2, cables2});
+    f.r().key(SDLK_V, ui::kCtrl);
+    f.frame();
+    CHECK(count(second) == std::pair{modules2 + 2, cables2 + 1});
+    // Arrows nudge the selection (Shift: finely), one undo step a press.
+    const model::Id one = *space.selection().begin();
+    space.select({one});
+    const double x = space.scene().module(one)->x;
+    f.r().key(SDLK_RIGHT);
+    f.frame();
+    CHECK(f.app->head().modules.find(one)->x == doctest::Approx(x + 10));
+    f.r().key(SDLK_LEFT, ui::kShift);
+    f.frame();
+    CHECK(f.app->head().modules.find(one)->x == doctest::Approx(x + 9));
+    // Shift+Home fills the view with the selection.
+    space.setView({-2000, -2000, 0.5});
+    f.r().key(SDLK_HOME, ui::kShift);
+    f.frame();
+    const ui::Rect seen = space.visibleSpace();
+    const auto* m = space.scene().module(one);
+    CHECK(seen.contains({float(m->x), float(m->y)}));
+    CHECK(space.view().zoom > 1.0);  // filled (at most 150 %)
+    CHECK(space.view().zoom <= 1.5);
+}
+
 TEST_CASE("rack window: modules saved as a rack preset load into another rack from the browser") {
     Fixture f;
     if (!f.ok) return;
@@ -945,18 +1160,22 @@ TEST_CASE("rack window: modules saved as a rack preset load into another rack fr
     f.frame();
     CHECK(f.racks->space()->scene().modules.size() == before + 1);
     CHECK(f.racks->space()->selection().size() == 1);
-    // The space's menu: Add module… puts the next one where it was asked.
+    // The space's menu: Add module… asks which at the pointer, and puts it there.
     const ui::Rect b = f.racks->space()->bounds();
     const ui::Point empty{b.x + b.w - 60, b.y + b.h - 60};
     f.pointer(ui::PointerEvent::Type::Down, empty, 3);
     f.pointer(ui::PointerEvent::Type::Up, empty, 3);
     REQUIRE(f.pick("rack.space.menu", "Add module"));
+    REQUIRE(f.r().find("rack.add"));
     const ui::Point at = f.racks->space()->toSpace(empty);
-    REQUIRE(f.racks->addModule("vca"));
+    f.r().text("vca");
+    f.r().key(SDLK_RETURN);
     f.frame();
     bool placed = false;
     for (const auto& m : f.racks->space()->scene().modules)
-        placed = placed || (std::abs(m.x - double(at.x)) < 1 && std::abs(m.y - double(at.y)) < 1);
+        placed = placed || (m.typeId == "com.suppleaudio.rack.vca" &&
+                            std::abs(m.x + m.w / 2 - double(at.x)) < 1 &&
+                            std::abs(m.y - double(at.y) + 12) < 1);
     CHECK(placed);
     // Deleted from the browser's menu.
     f.racks->browserMenu("preset:Voice", {b.x + 40, b.y + 40});

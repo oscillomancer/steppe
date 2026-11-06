@@ -756,6 +756,18 @@ void RackWindow::open(std::optional<model::Id> rack) {
                           std::optional<model::Id> replace,
                           ui::Point at) { pickParam(from, module, replace, at); };
     sh.cableMenu = [this](model::Id cable, ui::Point at) { cableMenu(cable, at); };
+    sh.quickAdd = [this](ui::Point at, ui::Point sp, const std::string& text,
+                         std::optional<model::CableEnd> from,
+                         bool fromOutput) { quickAdd(at, sp, text, from, fromOutput); };
+    sh.copy = [this] { copySelected(); };
+    sh.cut = [this] {
+        copySelected();
+        deleteSelected();
+    };
+    sh.duplicate = [this] { duplicateSelected(); };
+    sh.paste = [this](ui::Point sp) {
+        if (auto r = paste(sp); !r) report(r.error());
+    };
     sh.disconnect = [this](model::Id cable) {
         json::Value args = json::Value::object();
         args["cable"] = cable.str();
@@ -805,6 +817,59 @@ void RackWindow::open(std::optional<model::Id> rack) {
     root().focus(space_);
 }
 
+namespace {
+
+// What can be added: Plugin… first, the rack presets after the host's
+// modules, then the types by origin, as the browser lists them.
+std::vector<RackBrowser::Entry> entriesOf(const rack::Catalog& catalog,
+                                          const json::Value& presets) {
+    std::vector<RackBrowser::Entry> entries;
+    // Plug-ins are modules too: picked from the plug-in browser.
+    const auto& plugin = racks::pluginType()->info();
+    entries.push_back({plugin.id, "Plugin\u2026",
+                       "A CLAP or VST3 plug-in; a click opens its editor.", plugin.tags,
+                       rack::Origin::Host});
+    for (const rack::Catalog::Entry* e : catalog.list()) {
+        const auto& info = e->type->info();
+        if (info.id == plugin.id) continue;
+        entries.push_back({info.id, info.name, info.description, info.tags, e->type->origin()});
+    }
+    // Saved rack presets, after the host's modules: the user's own whole
+    // patches, loaded as a module type is added.
+    std::vector<RackBrowser::Entry> saved;
+    if (const json::Value* list = presets.find("presets"); list && list->isArray())
+        for (const auto& p : list->asArray()) {
+            RackBrowser::Entry e;
+            e.name = str(p, "name");
+            e.id = std::string(kPresetPrefix) + e.name;
+            e.description = str(p, "description");
+            if (e.description.empty()) {  // "3 modules: Notes, VCA, Out"
+                const json::Value* n = p.find("modules");
+                const long count = n && n->isNumber() ? static_cast<long>(n->asInt()) : 0;
+                e.description = std::to_string(count) + (count == 1 ? " module" : " modules");
+                if (const json::Value* types = p.find("types"); types && types->isArray()) {
+                    std::string names;
+                    for (const auto& t : types->asArray()) {
+                        const rack::Catalog::Entry* ce = catalog.find(t.asString());
+                        names += (names.empty() ? ": " : ", ") +
+                                 (ce ? ce->type->info().name : t.asString());
+                    }
+                    e.description += names;
+                }
+            }
+            e.preset = true;
+            saved.push_back(std::move(e));
+        }
+    const auto firstOther = std::find_if(entries.begin(), entries.end(), [](const auto& e) {
+        return e.origin != rack::Origin::Host;
+    });
+    entries.insert(firstOther, std::make_move_iterator(saved.begin()),
+                   std::make_move_iterator(saved.end()));
+    return entries;
+}
+
+}  // namespace
+
 Status RackWindow::reload() {
     const model::Session& s = app_.head();
     catalog_ = racks::catalog(app_);
@@ -814,50 +879,8 @@ Status RackWindow::reload() {
     if (!rack_ && !s.racks.empty()) rack_ = s.racks.begin()->id;
     refreshTabs();
     if (browser_) {
-        std::vector<RackBrowser::Entry> entries;
-        // Plug-ins are modules too: picked from the plug-in browser.
-        const auto& plugin = racks::pluginType()->info();
-        entries.push_back({plugin.id, "Plugin\u2026",
-                           "A CLAP or VST3 plug-in; a click opens its editor.", plugin.tags,
-                           rack::Origin::Host});
-        for (const rack::Catalog::Entry* e : catalog_->list()) {
-            const auto& info = e->type->info();
-            if (info.id == plugin.id) continue;
-            entries.push_back({info.id, info.name, info.description, info.tags, e->type->origin()});
-        }
-        // Saved rack presets, after the host's modules: the user's own whole
-        // patches, loaded as a module type is added.
         if (!presetsRead_) readPresets();
-        std::vector<RackBrowser::Entry> saved;
-        if (const json::Value* list = presets_.find("presets"); list && list->isArray())
-            for (const auto& p : list->asArray()) {
-                RackBrowser::Entry e;
-                e.name = str(p, "name");
-                e.id = std::string(kPresetPrefix) + e.name;
-                e.description = str(p, "description");
-                if (e.description.empty()) {  // "3 modules: Notes, VCA, Out"
-                    const json::Value* n = p.find("modules");
-                    const long count = n && n->isNumber() ? static_cast<long>(n->asInt()) : 0;
-                    e.description = std::to_string(count) + (count == 1 ? " module" : " modules");
-                    if (const json::Value* types = p.find("types"); types && types->isArray()) {
-                        std::string names;
-                        for (const auto& t : types->asArray()) {
-                            const rack::Catalog::Entry* ce = catalog_->find(t.asString());
-                            names += (names.empty() ? ": " : ", ") +
-                                     (ce ? ce->type->info().name : t.asString());
-                        }
-                        e.description += names;
-                    }
-                }
-                e.preset = true;
-                saved.push_back(std::move(e));
-            }
-        const auto firstOther = std::find_if(entries.begin(), entries.end(), [](const auto& e) {
-            return e.origin != rack::Origin::Host;
-        });
-        entries.insert(firstOther, std::make_move_iterator(saved.begin()),
-                       std::make_move_iterator(saved.end()));
-        browser_->setEntries(std::move(entries));
+        browser_->setEntries(entriesOf(*catalog_, presets_));
     }
     if (!space_) return {};
     const bool other = !(rack_ ? space_->scene().rack == *rack_ : false);
@@ -1058,8 +1081,6 @@ Status RackWindow::addModule(const std::string& type, std::optional<ui::Point> a
     if (!rack_) {
         if (auto r = addRack(); !r) return r;
     }
-    // Where the space's "Add module…" was asked for, once.
-    if (!at) at = std::exchange(addAt_, std::nullopt);
     if (type.starts_with(kPresetPrefix)) return loadPreset(type.substr(kPresetPrefix.size()), at);
     if (type == model::kPluginModule && isOpen()) {  // which plug-in: the browser says
         if (!plugins_)
@@ -1174,37 +1195,40 @@ void RackWindow::connect(const model::CableEnd& from, const model::CableEnd& to,
 
 namespace {
 
-// The plug-in parameters a cable can modulate: a search field over a list;
-// Enter or a double-click chooses. Without any, it says why.
-class ParamPicker : public ui::Node {
+// A search field over a list, in a popup: the plug-in parameters a cable can
+// modulate, or the modules to add at the pointer. Enter or a double click
+// chooses; Escape closes. Without rows it says why (`note`).
+struct PickRow {
+    std::string label, detail, key;
+    std::string search;  // more words that match (an id, tags, a description)
+};
+
+class PickList : public ui::Node {
   public:
-    ParamPicker(ui::Root& root, const std::string& title, const racks::PluginParams& params,
-                std::function<void(const racks::PluginParam&)> chosen)
-        : Node("rack.params"), root_(root), chosen_(std::move(chosen)) {
-        for (const auto& p : params.params)
-            if (p.modulatable) params_.push_back(p);
+    PickList(ui::Root& root, std::string id, const std::string& title, std::vector<PickRow> rows,
+             const std::string& note, const std::string& text, const std::string& placeholder,
+             float width, std::function<void(const PickRow&)> chosen)
+        : Node(id), root_(root), rows_(std::move(rows)), chosen_(std::move(chosen)) {
         layout.dir = ui::Layout::Dir::Column;
-        layout.width = ui::SizeRule::fixed(300);
+        layout.width = ui::SizeRule::fixed(width);
         layout.padding = ui::Insets::all(10);
         layout.gap = 6;
-        auto& heading =
-            emplace<ui::Label>("rack.params.title", "Modulate " + title, ui::Font::UiBold, "small");
+        auto& heading = emplace<ui::Label>(id + ".title", title, ui::Font::UiBold, "small");
         heading.layout.height = ui::SizeRule::fixed(18);
-        if (params_.empty()) {
+        if (rows_.empty()) {
             layout.height = ui::SizeRule::content();
-            auto& note = emplace<ui::Label>("rack.params.note", params.note, ui::Font::Ui, "small",
-                                            "ink-quiet");
-            note.layout.height = ui::SizeRule::fixed(20);
+            auto& line = emplace<ui::Label>(id + ".note", note, ui::Font::Ui, "small", "ink-quiet");
+            line.layout.height = ui::SizeRule::fixed(20);
             return;
         }
         layout.height = ui::SizeRule::fixed(
-            std::min(360.0f, 116.0f + 26.0f * static_cast<float>(params_.size())));
-        search_ = &emplace<ui::TextField>("rack.params.search", "", "Search parameters…");
-        list_ = &emplace<ui::List>("rack.params.list");
+            std::min(380.0f, 116.0f + 26.0f * static_cast<float>(rows_.size())));
+        search_ = &emplace<ui::TextField>(id + ".search", text, placeholder);
+        list_ = &emplace<ui::List>(id + ".list");
         list_->layout.height = ui::SizeRule::fraction();
         list_->rowHeight = 26;
-        auto& hint = emplace<ui::Label>("rack.params.hint", "Enter connects · Esc closes",
-                                        ui::Font::Ui, "caption", "ink-faint");
+        auto& hint = emplace<ui::Label>(id + ".hint", "Enter chooses · Esc closes", ui::Font::Ui,
+                                        "caption", "ink-faint");
         hint.layout.height = ui::SizeRule::fixed(16);
         search_->onChange = [this](const std::string& q) { filter(q); };
         search_->onSubmit = [this](const std::string&) { choose(); };
@@ -1213,38 +1237,56 @@ class ParamPicker : public ui::Node {
         list_->onActivate = [this](std::size_t) { choose(); };
         list_->paintRow = [this](ui::Canvas& c, std::size_t i, const ui::Rect& r, bool) {
             const ui::Theme& t = c.theme();
-            const racks::PluginParam& p = params_[matches_[i]];
-            const float groupW =
-                p.group.empty() ? 0 : c.textWidth(p.group, ui::Font::Ui, t.type("caption")) + 12;
-            c.text({r.x + 8, r.y, r.w - 16 - groupW, r.h}, p.name, ui::Font::Ui, t.type("small"),
+            const PickRow& row = rows_[matches_[i]];
+            const float labelW = c.textWidth(row.label, ui::Font::Ui, t.type("small"));
+            c.text({r.x + 8, r.y, r.w - 16, r.h}, row.label, ui::Font::Ui, t.type("small"),
                    t.color("ink"));
-            if (!p.group.empty())
-                c.text({r.x, r.y, r.w - 8, r.h}, p.group, ui::Font::Ui, t.type("caption"),
-                       t.color("ink-quiet"), ui::kRight | ui::kMiddle);
+            if (!row.detail.empty() && labelW + 30 < r.w) {
+                c.save();
+                c.clip({r.x + 18 + labelW, r.y, r.w - 26 - labelW, r.h});
+                c.text({r.x + 18 + labelW, r.y, r.w - 26 - labelW, r.h}, row.detail, ui::Font::Ui,
+                       t.type("caption"), t.color("ink-quiet"));
+                c.restore();
+            }
         };
-        filter("");
+        filter(text);
     }
     ui::TextField* search() const { return search_; }
     void paint(ui::Canvas&) override {}
-    bool onText(std::string_view text) override {
+    bool onText(std::string_view typed) override {
         if (!search_) return false;
         root_.focus(search_);
-        return search_->onText(text);
+        return search_->onText(typed);
     }
     std::string valueText() const override {
         std::string out;
-        for (std::size_t i : matches_) out += (out.empty() ? "" : " | ") + params_[i].name;
+        for (std::size_t i : matches_) out += (out.empty() ? "" : " | ") + rows_[i].label;
         return out;
     }
 
   private:
+    // Names that start with the text first, then a word of the name, then
+    // the name containing it, then the other words.
     void filter(const std::string& q) {
         const std::string want = lower(q);
+        std::vector<std::pair<int, std::size_t>> ranked;
+        for (std::size_t i = 0; i < rows_.size(); ++i) {
+            const std::string name = lower(rows_[i].label);
+            int rank = -1;
+            if (want.empty() || name.starts_with(want))
+                rank = 0;
+            else if (name.find(" " + want) != std::string::npos)
+                rank = 1;
+            else if (name.find(want) != std::string::npos)
+                rank = 2;
+            else if (lower(rows_[i].detail + " " + rows_[i].search).find(want) != std::string::npos)
+                rank = 3;
+            if (rank >= 0) ranked.emplace_back(rank, i);
+        }
+        std::stable_sort(ranked.begin(), ranked.end(),
+                         [](const auto& x, const auto& y) { return x.first < y.first; });
         matches_.clear();
-        for (std::size_t i = 0; i < params_.size(); ++i)
-            if (want.empty() || lower(params_[i].name).find(want) != std::string::npos ||
-                lower(params_[i].group).find(want) != std::string::npos)
-                matches_.push_back(i);
+        for (const auto& r : ranked) matches_.push_back(r.second);
         list_->setCount(matches_.size());
         list_->select(matches_.empty() ? std::nullopt : std::optional<std::size_t>(0));
         if (!matches_.empty()) list_->scrollTo(0);
@@ -1252,14 +1294,14 @@ class ParamPicker : public ui::Node {
     void choose() {
         const auto row = list_->selected();
         if (!row || *row >= matches_.size()) return;
-        const racks::PluginParam p = params_[matches_[*row]];  // closing destroys the picker
-        auto chosen = chosen_;
+        const PickRow chosen = rows_[matches_[*row]];  // closing destroys the list
+        auto run = chosen_;
         root_.closePopup();
-        chosen(p);
+        run(chosen);
     }
     ui::Root& root_;
-    std::function<void(const racks::PluginParam&)> chosen_;
-    std::vector<racks::PluginParam> params_;
+    std::vector<PickRow> rows_;
+    std::function<void(const PickRow&)> chosen_;
     std::vector<std::size_t> matches_;
     ui::TextField* search_ = nullptr;
     ui::List* list_ = nullptr;
@@ -1290,10 +1332,14 @@ void RackWindow::pickParam(const model::CableEnd& from, model::Id module,
             old && old->to.object.kind == model::Kind::Fx)
             amount = old->amount;
     const model::Id fx = *m->fx;
-    auto picker = std::make_unique<ParamPicker>(
-        root(), m->title, paramsOf(fx),
-        [this, from, fx, replace, amount](const racks::PluginParam& p) {
-            connect(from, model::CableEnd{fx, p.key}, replace, amount);
+    const racks::PluginParams& params = paramsOf(fx);
+    std::vector<PickRow> rows;
+    for (const auto& q : params.params)
+        if (q.modulatable) rows.push_back({q.name, q.group, q.key, {}});
+    auto picker = std::make_unique<PickList>(
+        root(), "rack.params", "Modulate " + m->title, std::move(rows), params.note, "",
+        "Search parameters…", 300.0f, [this, from, fx, replace, amount](const PickRow& row) {
+            connect(from, model::CableEnd{fx, row.key}, replace, amount);
         });
     ui::TextField* search = picker->search();
     root().openPopup(std::move(picker), {at.x, at.y, 0, 0});
@@ -1365,6 +1411,219 @@ void RackWindow::cableMenu(model::Id id, ui::Point at) {
         {at.x, at.y, 0, 0});
 }
 
+void RackWindow::quickAdd(ui::Point at, ui::Point sp, const std::string& text,
+                          std::optional<model::CableEnd> from, bool fromOutput) {
+    if (!catalog_ || !space_) return;
+    if (!rack_) {
+        if (auto r = addRack(); !r) return report(r.error());
+    }
+    if (!presetsRead_) readPresets();
+    std::vector<PickRow> rows;
+    for (const auto& e : entriesOf(*catalog_, presets_)) {
+        // A cable needs a module it can plug into now: no plug-in browser, no preset.
+        if (from && (e.preset || e.id == model::kPluginModule)) continue;
+        std::string tags;
+        for (const auto& t : e.tags) tags += t + " ";
+        rows.push_back({e.name, e.description, e.id, e.id + " " + tags});
+    }
+    const std::string title = !from        ? "Add a module"
+                              : fromOutput ? "Add a module for this cable"
+                                           : "Add a module to feed this input";
+    auto list = std::make_unique<PickList>(
+        root(), "rack.add", title, std::move(rows), "Nothing to add.", text,
+        "Type a module’s name…", 380.0f, [this, sp, from, fromOutput](const PickRow& row) {
+            if (auto r = addWired(row.key, sp, from, fromOutput); !r) report(r.error());
+        });
+    ui::TextField* search = list->search();
+    root().openPopup(std::move(list), {at.x, at.y, 0, 0});
+    if (search) {
+        root().focus(search);
+        if (!text.empty()) search->setText(text);  // the letter typed, the cursor after it
+    }
+}
+
+Status RackWindow::addWired(const std::string& type, ui::Point sp,
+                            std::optional<model::CableEnd> from, bool fromOutput) {
+    const rack::Catalog::Entry* entry = catalog_ ? catalog_->find(type) : nullptr;
+    if (!entry || !from) {
+        // Its top centred at the point, the title under the pointer.
+        const double w = entry ? entry->type->layout().width : 0;
+        return addModule(
+            type, ui::Point{static_cast<float>(static_cast<double>(sp.x) - w / 2), sp.y - 12});
+    }
+    const rack::ModuleType& t = *entry->type;
+    // The port the cable takes: the first of its signal, else the first.
+    const Signal want = space_ ? space_->scene().signalOf(*from, fromOutput) : Signal::Audio;
+    std::string key;
+    const int count = static_cast<int>(fromOutput ? t.inputs().size() : t.outputs().size());
+    for (int k = 0; k < count && key.empty(); ++k) {
+        const auto& port = fromOutput ? t.input(k) : t.output(k);
+        if (port.signal == want) key = port.key;
+    }
+    if (key.empty() && count > 0) key = (fromOutput ? t.input(0) : t.output(0)).key;
+    // The module sits beside the pointer, on the side the cable comes from.
+    const double w = t.layout().width;
+    const double px = static_cast<double>(sp.x), py = static_cast<double>(sp.y);
+    const double x = fromOutput ? px - 12 : px - w + 12;
+    json::Value made;
+    auto r = dispatcher_.transact("Add module", kOrigin, [&]() -> Result<json::Value> {
+        json::Value args = json::Value::object();
+        args["rack"] = rack_->str();
+        args["type"] = type;
+        args["x"] = std::round(x);
+        args["y"] = std::round(py - 20);
+        auto added = dispatcher_.execute({"module.add", std::move(args), kOrigin});
+        if (!added) return added;
+        made = *added;
+        if (key.empty()) return made;
+        model::CableEnd end{*model::Id::parse(str(made, "module")), key};
+        json::Value cable = json::Value::object();
+        cable["from"] = (fromOutput ? *from : end).str();
+        cable["to"] = (fromOutput ? end : *from).str();
+        SUPPLE_TRY(dispatcher_.execute({"cable.add", std::move(cable), kOrigin}));
+        return made;
+    });
+    if (!r) return std::move(r).error();
+    sync();
+    if (space_)
+        if (auto id = model::Id::parse(str(made, "module"))) space_->select({*id});
+    return {};
+}
+
+void RackWindow::copySelected() {
+    if (!space_ || !rack_ || space_->selection().empty()) return;
+    const model::Session& s = app_.head();
+    Clip clip;
+    clip.rack = *rack_;
+    std::set<model::Id> fxs;
+    for (model::Id id : space_->selection())
+        if (const model::RackModule* m = s.modules.find(id)) {
+            clip.modules.emplace_back(id, *m);
+            if (m->fx) fxs.insert(*m->fx);
+        }
+    auto inside = [&](const model::CableEnd& end) {
+        if (end.object.kind == model::Kind::Fx) return fxs.contains(end.object);
+        return space_->selection().contains(end.object);
+    };
+    for (const auto& c : s.cables)
+        if (inside(c.value->from) && inside(c.value->to)) clip.cables.push_back(*c.value);
+    if (clip.modules.empty()) return;
+    const std::size_t n = clip.modules.size();
+    clip_ = std::move(clip);
+    if (status_)
+        status_->setText("Copied " + std::to_string(n) + (n == 1 ? " module" : " modules"));
+}
+
+void RackWindow::duplicateSelected() {
+    if (!space_ || space_->selection().empty()) return;
+    json::Value args = json::Value::object();
+    json::Value list = json::Value::array();
+    for (model::Id id : space_->selection()) list.push_back(id.str());
+    args["modules"] = std::move(list);
+    auto r = exec("module.duplicate", std::move(args));
+    if (!r || !space_) return;
+    std::set<model::Id> made;
+    if (const auto* ids = r->find("modules"); ids && ids->isArray())
+        for (const auto& x : ids->asArray())
+            if (auto id = x.isString() ? model::Id::parse(x.asString()) : std::nullopt)
+                made.insert(*id);
+    sync();
+    space_->select(made);
+    space_->reveal(made);
+}
+
+Status RackWindow::paste(ui::Point sp) {
+    if (!clip_ || clip_->modules.empty()) return {};
+    if (!rack_) SUPPLE_TRY(addRack());
+    const model::Session& s = app_.head();
+    double left = 1e300, top = 1e300;
+    for (const auto& [id, m] : clip_->modules) {
+        left = std::min(left, m.x);
+        top = std::min(top, m.y);
+    }
+    const double dx = std::round(static_cast<double>(sp.x) - left),
+                 dy = std::round(static_cast<double>(sp.y) - top);
+    std::set<model::Id> made;
+    const bool here = clip_->rack == *rack_ &&
+                      std::all_of(clip_->modules.begin(), clip_->modules.end(),
+                                  [&](const auto& e) { return s.modules.find(e.first); });
+    if (here) {  // a duplicate: plug-ins keep their state
+        json::Value args = json::Value::object();
+        json::Value list = json::Value::array();
+        for (const auto& e : clip_->modules) list.push_back(e.first.str());
+        args["modules"] = std::move(list);
+        args["dx"] = dx;
+        args["dy"] = dy;
+        auto r = dispatcher_.execute({"module.duplicate", std::move(args), kOrigin});
+        if (!r) return std::move(r).error();
+        if (const auto* ids = r->find("modules"); ids && ids->isArray())
+            for (const auto& x : ids->asArray())
+                if (auto id = x.isString() ? model::Id::parse(x.asString()) : std::nullopt)
+                    made.insert(*id);
+    } else {  // another rack, or cut: rack.patch from the copy
+        auto nameOf = [](model::Id id) { return "m" + std::to_string(id.n); };
+        json::Value modules = json::Value::object();
+        std::map<model::Id, model::Id> ownerOfFx;
+        for (const auto& [id, m] : clip_->modules) {
+            json::Value e = json::Value::object();
+            if (m.type == model::kPluginModule) {
+                const model::FxInstance* fx = m.fx ? s.fx.find(*m.fx) : nullptr;
+                if (!fx) continue;  // its plug-in is gone with it
+                e["plugin"] = fx->plugin.id;
+                ownerOfFx[*m.fx] = id;
+            } else {
+                e["type"] = m.type;
+            }
+            if (m.params.isObject() && !m.params.asObject().empty()) e["params"] = m.params;
+            if (!m.label.empty()) e["label"] = m.label;
+            e["x"] = m.x + dx;
+            e["y"] = m.y + dy;
+            if (m.source) e["source"] = m.source->str();
+            if (m.device) e["device"] = *m.device;
+            modules[nameOf(id)] = std::move(e);
+        }
+        auto endOf = [&](const model::CableEnd& end) -> std::optional<std::string> {
+            model::Id owner = end.object;
+            if (end.object.kind == model::Kind::Fx) {
+                const auto it = ownerOfFx.find(end.object);
+                if (it == ownerOfFx.end()) return std::nullopt;
+                owner = it->second;
+            }
+            if (!modules.find(nameOf(owner))) return std::nullopt;
+            return nameOf(owner) + "." + end.key;
+        };
+        json::Value cables = json::Value::array();
+        for (const auto& c : clip_->cables) {
+            const auto from = endOf(c.from), to = endOf(c.to);
+            if (!from || !to) continue;
+            json::Value e = json::Value::object();
+            e["from"] = *from;
+            e["to"] = *to;
+            if (c.amount) e["amount"] = *c.amount;
+            if (!c.color.empty()) e["color"] = c.color;
+            cables.push_back(std::move(e));
+        }
+        if (modules.asObject().empty()) return {};
+        json::Value args = json::Value::object();
+        args["rack"] = rack_->str();
+        args["modules"] = std::move(modules);
+        args["cables"] = std::move(cables);
+        auto r = dispatcher_.execute({"rack.patch", std::move(args), kOrigin});
+        if (!r) return std::move(r).error();
+        if (const auto* ids = r->find("modules"); ids && ids->isObject())
+            for (const auto& x : ids->asObject())
+                if (auto id =
+                        x.value.isString() ? model::Id::parse(x.value.asString()) : std::nullopt)
+                    made.insert(*id);
+    }
+    sync();
+    if (space_) {
+        space_->select(made);
+        space_->reveal(made);
+    }
+    return {};
+}
+
 void RackWindow::deleteSelected() {
     if (!space_ || space_->selection().empty()) return;
     const auto ids = space_->selection();
@@ -1415,22 +1674,12 @@ void RackWindow::moduleMenu(model::Id module, ui::Point at) {
              (void)setOn;
          },
          true, false, m->bypass});
-    items.push_back({"Duplicate", "", [this, selected] {
-                         json::Value args = json::Value::object();
-                         json::Value list = json::Value::array();
-                         for (model::Id id : selected) list.push_back(id.str());
-                         args["modules"] = std::move(list);
-                         if (auto r = exec("module.duplicate", std::move(args)); r && space_) {
-                             std::set<model::Id> made;
-                             if (const auto* ids = r->find("modules"); ids && ids->isArray())
-                                 for (const auto& x : ids->asArray())
-                                     if (auto id = x.isString() ? model::Id::parse(x.asString())
-                                                                : std::nullopt)
-                                         made.insert(*id);
-                             sync();
-                             space_->select(std::move(made));
-                         }
+    items.push_back({"Copy", "Ctrl+C", [this] { copySelected(); }});
+    items.push_back({"Cut", "Ctrl+X", [this] {
+                         copySelected();
+                         deleteSelected();
                      }});
+    items.push_back({"Duplicate", "Ctrl+D", [this] { duplicateSelected(); }});
     const auto* type = catalog_ ? catalog_->find(m->type) : nullptr;
     const bool hasKnobs = type && !type->type->params().empty();
     items.push_back({"Randomize", "",
@@ -1479,13 +1728,9 @@ void RackWindow::spaceMenu(ui::Point at, ui::Point sp) {
     if (!rack_) {
         items.push_back({"Add rack", "", [this] { (void)addRack(); }});
     } else {
-        // The browser picks the module (its search focused); it lands here.
-        items.push_back({"Add module\u2026", "", [this, sp] {
-                             addAt_ = sp;
-                             if (!browserVisible_ && browserToggle_ && browserToggle_->onClick)
-                                 browserToggle_->onClick();
-                             if (browser_) browser_->focusSearch();
-                         }});
+        // A search list at the pointer picks the module; it lands here.
+        items.push_back({"Add module\u2026", "Type or double-click",
+                         [this, at, sp] { quickAdd(at, sp, {}, std::nullopt, true); }});
         items.push_back({"Add plugin\u2026", "",
                          [this, sp] { (void)addModule(std::string(model::kPluginModule), sp); }});
         std::vector<std::string> names;
@@ -1505,9 +1750,21 @@ void RackWindow::spaceMenu(ui::Point at, ui::Point sp) {
         const bool hasModules = space_ && !space_->scene().modules.empty();
         items.push_back({"Save rack as preset\u2026", "", [this] { savePreset({}); }, hasModules});
         items.push_back({"", "", {}, true, true});
+        items.push_back({"Paste", "Ctrl+V",
+                         [this, sp] {
+                             if (auto r = paste(sp); !r) report(r.error());
+                         },
+                         clip_.has_value()});
+        items.push_back({"", "", {}, true, true});
         items.push_back({"Show everything", "Home", [this] {
                              if (space_) space_->frameAll();
                          }});
+        const bool selected = space_ && !space_->selection().empty();
+        items.push_back({"Show selection", "Shift+Home",
+                         [this] {
+                             if (space_) space_->frame(space_->selection());
+                         },
+                         selected});
     }
     root().openPopup(
         ui::makeMenu("rack.space.menu", std::move(items), [this] { root().closePopup(); }),
