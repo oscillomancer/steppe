@@ -217,7 +217,8 @@ struct RandomModule : Module {
             // Every step draws the same numbers, whatever the knobs, so a
             // sequence depends only on its seed and its clocks.
             const double anew = v.rng.next();
-            const double t = v.rng.next() + v.rng.next() - 1.0;
+            const double t1 = v.rng.next();
+            const double t = t1 + v.rng.next() - 1.0;
             const double fire = v.rng.next();
             const double which = v.rng.next();
             Slot& s = v.memory[v.pos];

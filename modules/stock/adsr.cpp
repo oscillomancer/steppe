@@ -32,7 +32,7 @@ double span(double ms) { return 0.4 + log(1.0 + ms / 4.0); }
 
 enum class Stage { Idle, Attack, Decay, Sustain, Release };
 
-struct Adsr : Module {
+struct Envelope : Module {
     static constexpr ModuleInfo info = {
         .name = "ADSR",
         .id = "com.suppleaudio.rack.adsr",
