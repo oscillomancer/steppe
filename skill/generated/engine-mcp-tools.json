@@ -8038,7 +8038,7 @@
   {
     "name": "rack_preset_load",
     "title": "Add a saved preset's modules and cables to a rack.",
-    "description": "Add a saved preset's modules and cables to a rack. name (rack.preset.list) or path (a preset file). x, y: the group's top-left (default right of the rack's modules). io: join (default) gives the preset's Out and In modules' cables to the rack's own Outs and Ins in order, so a whole patch sounds at once (extra ones are added); add makes new ones. Notes modules play the rack's channel. Your own modules the preset carries are written into the library when it lacks them (installed lists them). Knobs and cables the module types no longer have are left out with a warning (warnings); a module type or plug-in that is not installed is an error, and the rack does not change. See describe for errors and examples.",
+    "description": "Add a saved preset's modules and cables to a rack. name (rack.preset.list) or path (a preset file). x, y: the group's top-left (default right of the rack's modules). io: join (default) gives the preset's Out and In modules' cables to the rack's own Outs and Ins in order, so a whole patch sounds at once (extra ones are added); add makes new ones. Notes modules play the rack's channel. Your own modules the preset carries are written into the library when it lacks them (installed lists them). Every embedded source must compile and declare its sources key as ModuleInfo.id before any module is installed. Knobs and cables the module types no longer have are left out with a warning (warnings); a module type or plug-in that is not installed is an error, and the rack does not change. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "rack_preset_load_args",

@@ -532,7 +532,11 @@ Out feeds.
 
 `sources` holds the source of every library or project module the preset
 uses, by type id, with its library name, so one file carries a patch and
-its custom modules (ADR-0062). A load first writes each one the catalog
+its custom modules (ADR-0062). A load first compiles every embedded source
+and checks its `ModuleInfo.id` against its `sources` key, including types
+already installed. A compilation failure or id mismatch is
+`rack.preset_module` at that source entry and installs nothing.
+It then writes each one the catalog
 lacks into the library (under its name, or `<name>-2`… when that name is
 taken), as `module.write` does, and lists them in `installed`; one the
 catalog has plays as installed, with a warning (`rack.preset_module`) when

@@ -625,3 +625,46 @@ TEST_CASE("module library: project snapshots preserve occupied destination files
     REQUIRE(reopened.app->modules()->find("com.example.level"));
     CHECK(reopened.app->modules()->find("com.example.other") != nullptr);
 }
+
+TEST_CASE("rack presets: embedded source ids are checked before installation") {
+    Fixture f;
+    f.run("track.add", R"({"name":"Synth"})");
+    f.run("rack.add", R"({"track":"tr_1"})");
+    json::Value doc = json::Value::object();
+    doc["schema"] = "supple.rack-preset/1.0";
+    doc["name"] = "Wrong id";
+    json::Value m = json::Value::object();
+    m["type"] = "com.example.requested";
+    doc["modules"] = json::Value::array();
+    doc["modules"].push_back(m);
+    json::Value src = json::Value::object();
+    src["name"] = "unrelated";
+    src["source"] = kLevel;
+    doc["sources"] = json::Value::object();
+    doc["sources"]["com.example.first"] = src;
+    doc["sources"]["com.example.first"]["source"] = otherId(kLevel, "com.example.first");
+    doc["sources"]["com.example.first"]["name"] = "first";
+    doc["sources"]["com.example.requested"] = src;
+    SUBCASE("mismatched id") {}
+    SUBCASE("mismatched id for an installed type") {
+        f.write("requested", otherId(kLevel, "com.example.requested"));
+    }
+    SUBCASE("source fails to compile") {
+        doc["sources"]["com.example.requested"]["source"] = "broken module";
+    }
+    const auto path = f.dir / "bad-source.json";
+    REQUIRE(writeFileAtomic(path, json::writeCanonical(doc)));
+    json::Value a = json::Value::object();
+    a["rack"] = "rk_1";
+    a["path"] = path.string();
+    auto loaded = f.call("rack.preset.load", a);
+    REQUIRE_FALSE(loaded);
+    CHECK(f.app->modules()->find("com.example.level") == nullptr);
+    CHECK(loaded.error().code == "rack.preset_module");
+    CHECK(loaded.error().path == "/args/sources/com.example.requested");
+    CHECK_FALSE(loaded.error().message.empty());
+    CHECK_FALSE(loaded.error().hint.empty());
+    CHECK(f.app->modules()->find("com.example.first") == nullptr);
+    CHECK_FALSE(std::filesystem::exists(f.app->moduleDir() / "first" / "first.cpp"));
+    CHECK_FALSE(std::filesystem::exists(f.app->moduleDir() / "unrelated" / "unrelated.cpp"));
+}

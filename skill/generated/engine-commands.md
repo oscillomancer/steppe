@@ -10705,7 +10705,7 @@ Result:
 
 Add a saved preset's modules and cables to a rack.
 
-name (rack.preset.list) or path (a preset file). x, y: the group's top-left (default right of the rack's modules). io: join (default) gives the preset's Out and In modules' cables to the rack's own Outs and Ins in order, so a whole patch sounds at once (extra ones are added); add makes new ones. Notes modules play the rack's channel. Your own modules the preset carries are written into the library when it lacks them (installed lists them). Knobs and cables the module types no longer have are left out with a warning (warnings); a module type or plug-in that is not installed is an error, and the rack does not change.
+name (rack.preset.list) or path (a preset file). x, y: the group's top-left (default right of the rack's modules). io: join (default) gives the preset's Out and In modules' cables to the rack's own Outs and Ins in order, so a whole patch sounds at once (extra ones are added); add makes new ones. Notes modules play the rack's channel. Your own modules the preset carries are written into the library when it lacks them (installed lists them). Every embedded source must compile and declare its sources key as ModuleInfo.id before any module is installed. Knobs and cables the module types no longer have are left out with a warning (warnings); a module type or plug-in that is not installed is an error, and the rack does not change.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -10732,6 +10732,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 - `rack.preset_source`: name and path both or neither Hint: give one
 - `rack.unknown_type`: the preset needs a module type that is not installed Hint: module.write it, or load another preset
 - `chain.plugin_missing`: the preset needs a plug-in that is not installed Hint: install it
+- `rack.preset_module`: an embedded source does not compile or has another id Hint: fix its source and ModuleInfo.id to match the sources entry
 - `rack.preset_invalid`: not a rack preset Hint: save it again
 
 ### Examples
