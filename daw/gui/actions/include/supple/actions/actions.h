@@ -36,6 +36,9 @@ struct ControlValue {
     double value = 0;
     int steps = 0;
     bool relative = false;
+    // Absolute, learned with soft takeover: a knob far from the value waits
+    // until it reaches it (offered where `Action::takeover` is set).
+    bool softTakeover = false;
     std::string gesture;  // one undo step per movement: the origin's gesture
 };
 
@@ -54,6 +57,9 @@ struct Action {
     // Set: the action follows a controller's value ("(MIDI CC)" actions:
     // a volume, a pan, a scroll) instead of running once per press.
     std::function<Result<json::Value>(const ControlValue&, const Context&)> control;
+    // A followed action that sets a value from a knob's position (a volume, a
+    // pan): its MIDI learn offers soft takeover.
+    bool takeover = false;
     // Set: whether the action applies now (menus grey it when false). Unset: always.
     std::function<bool(const Context&)> enabled;
     bool fromRegistry = false;

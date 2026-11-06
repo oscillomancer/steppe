@@ -160,13 +160,16 @@ class ActionsPanel : public ui::Node {
         LearnRequest request;
         request.title = a->name;
         request.pressOnly = !a->control;
+        request.takeover = a->takeover;
         if (const std::string follow = actions_.followingControl(id); !follow.empty())
             if (const actions::Action* f = actions_.registry().find(follow))
                 request.alternative = f->name;
         if (const auto bound = actions_.controls().bindingsFor(id); !bound.empty())
-            request.current = LearnChoice{bound.front().control, bound.front().mode};
-        request.onOk = [this, id](const LearnChoice& choice) {
-            const std::string had = actions_.controls().bind({id, choice.control, choice.mode});
+            request.current =
+                LearnChoice{bound.front().control, bound.front().mode, bound.front().softTakeover};
+        request.onOk = [this, id, takeover = a->takeover](const LearnChoice& choice) {
+            const std::string had = actions_.controls().bind(
+                {id, choice.control, choice.mode, takeover && choice.softTakeover});
             std::string note = engine::describe(choice.control) + " → " + id;
             if (!had.empty()) note += " (was " + had + ")";
             if (auto saved = actions_.saveControls(); !saved)

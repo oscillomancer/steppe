@@ -1352,6 +1352,119 @@ TEST_CASE("MIDI learn: knobs drive the selected tracks' volume and pan, a step p
     CHECK(error.find("follows a MIDI controller") != std::string::npos);
 }
 
+TEST_CASE("MIDI learn: the actions list offers soft takeover for a knob's action, saved") {
+    App a;
+    if (!a.ok) return;
+    const auto controlsFile = a.dir / "config" / "controls.json";
+    a.actions = std::make_unique<gui::AppActions>(a.registry, *a.dispatcher, *a.app, a.ui,
+                                                  actions::Keymap::defaultFile(gui::test::slug()),
+                                                  controlsFile);
+    // A press-only action has nothing to take over.
+    gui::openActionsList(*a.root, *a.actions);
+    a.type("add master");
+    a.key("Ctrl+L");
+    a.root->frame(false);
+    REQUIRE(a.root->find("learn"));
+    CHECK_FALSE(a.root->find("learn.soft"));
+    REQUIRE(a.root->click("learn.cancel"));
+    a.root->closePopups();
+
+    gui::openActionsList(*a.root, *a.actions);
+    a.type("control.track.volume");
+    a.key("Ctrl+L");
+    a.root->frame(false);
+    REQUIRE(a.root->find("learn"));
+    CHECK(a.root->find("learn.title")->valueText() ==
+          "MIDI learn: Track: volume of selected tracks (MIDI CC)");
+    REQUIRE(a.root->find("learn.soft.set"));
+    CHECK(a.root->find("learn.soft.set")->valueText() == "Off");
+    a.actions->control({controlEvent(0xb0, 7, 20)});
+    a.root->frame(false);
+    REQUIRE(a.root->click("learn.soft.set"));
+    CHECK(a.root->find("learn.soft.set")->valueText() == "On");
+    a.snapshot("actions-midi-learn-takeover.png");
+    REQUIRE(a.root->click("learn.ok"));
+    auto saved = gui::ControlMap::load(controlsFile);
+    REQUIRE(saved);
+    REQUIRE(saved->bindings().size() == 1);
+    CHECK(saved->bindings()[0].action == "control.track.volume");
+    CHECK(saved->bindings()[0].softTakeover);
+    // Opened again, the dialog shows it on; turned off, the file leaves it out.
+    a.key("Ctrl+L");
+    a.root->frame(false);
+    CHECK(a.root->find("learn.soft.set")->valueText() == "On");
+    REQUIRE(a.root->click("learn.soft.set"));
+    REQUIRE(a.root->click("learn.ok"));
+    saved = gui::ControlMap::load(controlsFile);
+    REQUIRE(saved);
+    REQUIRE(saved->bindings().size() == 1);
+    CHECK_FALSE(saved->bindings()[0].softTakeover);
+    CHECK(readTextFile(controlsFile)->find("soft_takeover") == std::string::npos);
+
+    // A file with soft_takeover of the wrong type is an error naming the field.
+    REQUIRE(writeFileAtomic(controlsFile,
+                            R"({"schema":"supple.controls/1.0","bindings":[{"action":"x",)"
+                            R"("midi":{"kind":"cc","channel":1,"number":7},)"
+                            R"("soft_takeover":1}]})"));
+    const auto bad = gui::ControlMap::load(controlsFile);
+    REQUIRE_FALSE(bad);
+    CHECK(bad.error().path == "/bindings/0/soft_takeover");
+}
+
+TEST_CASE(
+    "MIDI learn: with soft takeover, a knob takes the tracks' volume and pan on reaching it") {
+    App a;
+    if (!a.ok) return;
+    a.app->setFixedClock(1'000'000);
+    for (const char* name : {"A", "B"})
+        REQUIRE(a.dispatcher->execute({"track.add",
+                                       *json::parse(std::string(R"({"name":")") + name + R"("})"),
+                                       cmd::Origin{cmd::Origin::Type::Test, "t", {}}}));
+    a.ui.selectedTracks = {"tr_1", "tr_2"};
+    gui::ActionControl volume{"control.track.volume", {model::ControlKind::Cc, 1, 7, ""}};
+    volume.softTakeover = true;
+    a.actions->controls().bind(volume);
+    gui::ActionControl pan{"control.track.pan", {model::ControlKind::Cc, 1, 10, ""}};
+    pan.softTakeover = true;
+    a.actions->controls().bind(pan);
+    auto track = [&](const char* id) { return *a.app->head().tracks.find(*model::Id::parse(id)); };
+    REQUIRE(a.dispatcher->execute({"track.set", *json::parse(R"({"track":"tr_2","volume_db":-12})"),
+                                   cmd::Origin{cmd::Origin::Type::Test, "t", {}}}));
+    const double db1 = track("tr_1").volumeDb, db2 = track("tr_2").volumeDb;
+    const auto cc = [](double position) {
+        return static_cast<std::uint8_t>(std::lround(position * 127));
+    };
+    const std::uint8_t at1 = cc(ui::faderPosition(db1)), at2 = cc(ui::faderPosition(db2));
+    REQUIRE(at2 + 10 < at1);
+    // Far below both: nothing moves.
+    a.actions->control({controlEvent(0xb0, 7, 0)});
+    a.actions->control({controlEvent(0xb0, 7, 3)});
+    CHECK(track("tr_1").volumeDb == db1);
+    CHECK(track("tr_2").volumeDb == db2);
+    // Reaching the lower track takes it alone; it follows from there.
+    a.actions->control({controlEvent(0xb0, 7, at2)});
+    CHECK(track("tr_1").volumeDb == db1);
+    CHECK(track("tr_2").volumeDb == doctest::Approx(ui::faderDb(at2 / 127.0)).epsilon(0.001));
+    a.actions->control({controlEvent(0xb0, 7, static_cast<std::uint8_t>(at2 + 5))});
+    CHECK(track("tr_1").volumeDb == db1);
+    CHECK(track("tr_2").volumeDb == doctest::Approx(ui::faderDb((at2 + 5) / 127.0)).epsilon(0.001));
+    // Passing the higher one takes it too.
+    a.actions->control({controlEvent(0xb0, 7, static_cast<std::uint8_t>(at1 + 3))});
+    CHECK(track("tr_1").volumeDb == doctest::Approx(ui::faderDb((at1 + 3) / 127.0)).epsilon(0.001));
+    CHECK(track("tr_2").volumeDb == track("tr_1").volumeDb);
+    // Pan waits for the knob to reach the centre.
+    a.actions->control({controlEvent(0xb0, 10, 127)});
+    CHECK(track("tr_1").pan == 0.0);
+    a.actions->control({controlEvent(0xb0, 10, 64)});
+    a.actions->control({controlEvent(0xb0, 10, 127)});
+    CHECK(track("tr_1").pan == doctest::Approx(100.0));
+    // Without it, the knob jumps the value at once.
+    volume.softTakeover = false;
+    a.actions->controls().bind(volume);
+    a.actions->control({controlEvent(0xb0, 7, 0)});
+    CHECK(track("tr_1").volumeDb <= model::kSilenceDb);
+}
+
 TEST_CASE("MIDI learn: a knob drives the master playrate along the transport knob's travel") {
     App a;
     if (!a.ok) return;
@@ -1378,6 +1491,18 @@ TEST_CASE("MIDI learn: a knob drives the master playrate along the transport kno
     // An encoder moves it ten cents a step.
     a.actions->control({controlEvent(0xb0, 21, 63)});
     CHECK(rate() == doctest::Approx(1.5 * std::exp2(-10 / 1200.0)));
+    // With soft takeover the knob waits until it reaches the rate, then follows.
+    gui::ActionControl soft{"control.transport.playrate", {model::ControlKind::Cc, 1, 20, ""}};
+    soft.softTakeover = true;
+    a.actions->controls().bind(soft);
+    const double held = rate();
+    a.actions->control({controlEvent(0xb0, 20, 0)});
+    a.actions->control({controlEvent(0xb0, 20, 10)});
+    CHECK(rate() == held);
+    a.actions->control({controlEvent(0xb0, 20, 127)});  // crossing it takes over
+    CHECK(rate() == doctest::Approx(1.5));
+    a.actions->control({controlEvent(0xb0, 20, 64)});
+    CHECK(rate() == 1.0);
 }
 
 TEST_CASE("MIDI learn: a knob learned for a press-only action gets a warning") {

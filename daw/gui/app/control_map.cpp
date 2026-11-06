@@ -46,7 +46,7 @@ Result<ControlMap> ControlMap::load(const std::filesystem::path& file) {
     if (!list) return out;
     if (!list->isArray())
         return Error("controls.bindings", "bindings must be an array", "/bindings",
-                     "use [{action, midi, mode}, …]");
+                     "use [{action, midi, mode, soft_takeover}, …]");
     for (std::size_t i = 0; i < list->asArray().size(); ++i) {
         const json::Value& b = list->asArray()[i];
         const std::string path = "/bindings/" + std::to_string(i);
@@ -63,6 +63,12 @@ Result<ControlMap> ControlMap::load(const std::filesystem::path& file) {
             auto m = model::controlModeSchema().decode(*mode);
             if (!m) return std::move(m).error().at(path + "/mode");
             a.mode = *m;
+        }
+        if (const json::Value* soft = b.find("soft_takeover")) {
+            if (!soft->isBool())
+                return Error("controls.soft_takeover", "soft_takeover must be true or false",
+                             path + "/soft_takeover", "use true, false, or leave it out");
+            a.softTakeover = soft->asBool();
         }
         out.bind(std::move(a));
     }
@@ -82,6 +88,7 @@ Status ControlMap::save(const std::filesystem::path& file) const {
         v["midi"] = model::midiControlSchema().encode(b.control);
         if (b.mode != model::ControlMode::Absolute)
             v["mode"] = model::controlModeSchema().encode(b.mode);
+        if (b.softTakeover) v["soft_takeover"] = true;
         list.push_back(std::move(v));
     }
     doc["bindings"] = std::move(list);

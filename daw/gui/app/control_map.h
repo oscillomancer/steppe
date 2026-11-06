@@ -20,6 +20,7 @@ struct ActionControl {
     std::string action;
     model::MidiControl control;
     model::ControlMode mode = model::ControlMode::Absolute;
+    bool softTakeover = false;  // absolute: a knob takes over once it reaches the value
     bool operator==(const ActionControl&) const = default;
 };
 

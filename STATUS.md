@@ -335,8 +335,9 @@ instructions are in `docs/guides/installing.md`.
   (`track.learn.*`, `route.learn.*`, `vca.learn.*` for agents). "(MIDI CC)" actions
   drive the selected tracks' volume and pan, the master's volume, the master
   playrate, a beat jog, the last touched send and the last touched plug-in
-  parameter; the learn dialog warns when a knob is learned for an action that
-  only runs per press.
+  parameter (the volume, pan and playrate ones with optional soft takeover);
+  the learn dialog warns when a knob is learned for an action that only runs
+  per press.
 - **Agents**: the MCP server for the running app or a headless engine, for
   any MCP client (Claude Code, Codex, Hermes, …); the bundled skill
   (`skill/`). The proxy transport deadline exceeds the maximum `job.wait`

@@ -1151,7 +1151,11 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   commands; shows every key bound to an action (menus show only the
   first); runs, binds (Ctrl+B, then the chord), adds to
   toolbar/menu (Ctrl+T, Ctrl+M), and learns a MIDI control for it (Ctrl+L:
-  the learn dialog of §4.5 with the CC mode and input choice). The list shows
+  the learn dialog of §4.5 with the CC mode and input choice, and soft
+  takeover for a "(MIDI CC)" action that sets a value from a knob's
+  position: the selected tracks' volume and pan, the master's volume and the
+  playrate; with it, an absolute knob moves each value only once it reaches
+  it, per track). The list shows
   a bound control after the keys. A press (note on, CC above 0, program
   change, an encoder step) runs the action once; the "(MIDI CC)" actions
   follow the value instead — the selected tracks' volume (the fader's
@@ -1169,7 +1173,8 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   (`transport.playrate.set` → Transport: playrate (MIDI CC)). A control drives one
   action (learning it for another moves it); the bindings are user settings
   in `controls.json` (`supple.controls/1.0`: `{bindings: [{action, midi,
-  mode}]}`, beside the keymap). Its keys work with the focus on the search
+  mode, soft_takeover}]}`, beside the keymap; `soft_takeover` is written only
+  when true). Its keys work with the focus on the search
   field or on the list (after a click on a row), where typing goes on
   searching. A new binding goes to `global`; an `arrange` binding on the same
   keys gives way (the arrange view looks there first), and the hint names

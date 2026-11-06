@@ -316,8 +316,10 @@ action from the actions list (`?`, then Ctrl+L). Some actions follow a knob
 instead of running once per press: the selected tracks' volume and pan, the
 master volume, the playrate, the last touched plug-in parameter, and
 **Routing: last touched send (MIDI CC)**, which moves the level or pan of the
-send you moved last in the routing matrix. Action bindings are your own
-settings, shared by every project.
+send you moved last in the routing matrix. For the volume, pan and playrate
+actions the dialog offers **Soft takeover** too, as it does for a fader (the
+last touched parameter and send always take over softly). Action bindings
+are your own settings, shared by every project.
 
 ## Plugins
 
