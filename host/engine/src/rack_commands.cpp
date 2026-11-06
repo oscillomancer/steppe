@@ -2608,9 +2608,9 @@ std::vector<std::pair<double, double>> layoutBoxes(const std::vector<LayoutBox>&
             row += (bands.back().empty() ? 0 : kLayoutGapX) + s.width;
             bands.back().push_back(&s);
         }
-        Shape out;
-        out.at.assign(boxes.size(), {x0, y0});
-        out.bands = static_cast<int>(bands.size());
+        Shape made;
+        made.at.assign(boxes.size(), {x0, y0});
+        made.bands = static_cast<int>(bands.size());
         double top = y0;
         for (const auto& band : bands) {
             double bandHeight = 0;
@@ -2619,16 +2619,16 @@ std::vector<std::pair<double, double>> layoutBoxes(const std::vector<LayoutBox>&
             for (const Stack* s : band) {
                 double y = top + std::round((bandHeight - s->height) / 2);
                 for (int u : s->members) {
-                    out.at[u] = {left + std::round((s->width - boxes[u].width) / 2), y};
+                    made.at[u] = {left + std::round((s->width - boxes[u].width) / 2), y};
                     y += boxes[u].height + kLayoutGapY;
                 }
                 left += s->width + kLayoutGapX;
             }
-            out.width = std::max(out.width, left - kLayoutGapX - x0);
-            out.height = top + bandHeight - y0;
+            made.width = std::max(made.width, left - kLayoutGapX - x0);
+            made.height = top + bandHeight - y0;
             top += bandHeight + kLayoutBandGap;
         }
-        return out;
+        return made;
     };
     // Try the heights at which a column could split and a few band widths;
     // keep the shape nearest a window's, compact, with the fewest breaks in
