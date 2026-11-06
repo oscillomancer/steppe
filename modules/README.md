@@ -58,6 +58,7 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `vowel` | A formant filter of four bands morphing through a, e, i, o, u at audio rate: size (formant shift), resonance, mix, poly |
 | `comb` | A tuned comb filter that rings at the pitch: feedback positive (every harmonic) or negative (odd only), damping in the loop kept in tune, mix, poly |
 | `wavetable` | A wavetable oscillator with seven tables of its own (classic, sync, fold, formant, vowel, organ, digital): position to sweep, unison with detune, a display of the wave, never aliases, poly |
+| `pitchshift` | A pitch shifter, two octaves either way: two delay taps cross-fading in step with the input (a held note keeps its pitch), fine, window size, feedback for shimmer, mix, poly |
 
 ### Modulation, sequencing, generative and utilities
 
