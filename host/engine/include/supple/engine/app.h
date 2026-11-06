@@ -317,6 +317,10 @@ class EngineApp : public cmd::Host {
     std::filesystem::path moduleDir() const {
         return options_.moduleDir.empty() ? options_.workdir / "modules" : options_.moduleDir;
     }
+    // Where a project saved at `project` keeps its copies of the user's
+    // modules (<folder>/modules); empty when unsaved or when that folder is
+    // the library.
+    std::filesystem::path projectModuleDir(const std::filesystem::path& project) const;
     std::filesystem::path rackPresetDir() const {
         return options_.rackPresetDir.empty() ? options_.workdir / "rack-presets"
                                               : options_.rackPresetDir;

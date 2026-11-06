@@ -13,6 +13,7 @@
 #include "command_validation.h"
 #include "fx_presets.h"
 #include "learn_binding.h"
+#include "module_library.h"
 #include "rack_runtime.h"
 #include "supple/base/files.h"
 #include "supple/engine/app.h"
@@ -22,6 +23,10 @@
 namespace supple::engine {
 
 void registerRackPresetCommands(cmd::Registry& registry);
+// The module library's (module_commands.cpp).
+Result<json::Value> saveLibraryModule(EngineApp& e, const std::string& name,
+                                      const std::string& source, const char* path);
+std::string libraryNameFor(const std::string& id);
 void registerModuleLearnCommands(cmd::Registry& registry);
 void registerRackPatchCommand(cmd::Registry& registry);
 
@@ -138,7 +143,7 @@ std::string keysOf(const rack::ModuleType& t, bool inputs, bool outputs, bool pa
         for (int k : t.outputs()) add(t.ports()[static_cast<std::size_t>(k)].key);
     if (params)
         for (const auto& p : t.params())
-            if (!p.output) add(p.key);
+            if (!p.output && !p.hidden) add(p.key);
     return out.empty() ? "none" : out;
 }
 
@@ -215,7 +220,8 @@ Result<json::Value> mergeParams(const rack::ModuleType& t, const json::Value& ba
     for (const auto& m : given.asObject()) {
         const int index = t.param(m.key);
         const std::string at = json::pointerJoin(path, m.key);
-        if (index < 0 || t.params()[static_cast<std::size_t>(index)].output)
+        if (index < 0 || t.params()[static_cast<std::size_t>(index)].output ||
+            t.params()[static_cast<std::size_t>(index)].hidden)
             return Error("rack.param", t.info().name + " has no knob " + m.key, at,
                          t.info().name + " has " + keysOf(t, false, false, true));
         const sd::ParamModel& p = t.params()[static_cast<std::size_t>(index)];
@@ -341,7 +347,7 @@ json::Value describeModuleType(const rack::ModuleType& t) {
     out["height"] = t.layout().height;
     json::Value knobs = json::Value::array();
     for (const auto& p : t.params()) {
-        if (p.output) continue;
+        if (p.output || p.hidden) continue;
         json::Value k = json::Value::object();
         k["key"] = p.key;
         k["name"] = p.name;
@@ -576,7 +582,7 @@ json::Value moduleEntry(EngineApp& a, const model::Session& s, Id id, bool full)
         for (int k : type->outputs())
             outs.push_back(type->ports()[static_cast<std::size_t>(k)].key);
         for (const auto& p : type->params())
-            if (!p.output) knobs.push_back(p.key);
+            if (!p.output && !p.hidden) knobs.push_back(p.key);
         e["inputs"] = std::move(ins);
         e["outputs"] = std::move(outs);
         e["knobs"] = std::move(knobs);
@@ -1364,7 +1370,7 @@ void registerRackCommands(cmd::Registry& registry) {
             std::uniform_real_distribution<double> unit(0.0, 1.0);
             json::Value given = json::Value::object();
             for (const auto& p : type->params()) {
-                if (p.output || p.kind == sd::ParamModel::Kind::Toggle) continue;
+                if (p.output || p.hidden || p.kind == sd::ParamModel::Kind::Toggle) continue;
                 const double now = detail::moduleParamValue(p, m.params.find(p.key));
                 if (p.kind == sd::ParamModel::Kind::Choice) {
                     if (unit(rng) < amount && p.choices.size() > 1) {
@@ -1396,7 +1402,9 @@ void registerRackCommands(cmd::Registry& registry) {
         c.description =
             "from: \"mo_N.<output>\"; to: \"mo_N.<input>\" or \"mo_N.<knob>\" (a modulation "
             "cable: amount is the knob's movement at a signal of 1, in octaves for a frequency, "
-            "the knob's unit otherwise; default an octave or half the range). Several cables "
+            "the knob's unit otherwise; default an octave or half the range), or a plugin "
+            "module's plug-in parameter \"fx_N.<key>\" (CLAP modulation, amount a fraction "
+            "of its range, default 0.5; it must be modulatable). Several cables "
             "into one input sum; a mono cable reaches every voice of a poly module. feedback: "
             "it closes a loop, so it carries the previous frame (a one-sample delay).";
         c.args = schema::object<CableAdd>("cable_add_args")
@@ -1453,9 +1461,10 @@ void registerRackCommands(cmd::Registry& registry) {
                             return Error(
                                 "rack.port", "amount is a modulation cable's", "/amount",
                                 to->key + " is an input; leave out amount, or reach a knob");
-                    } else if (const int p = dstType->param(to->key); p >= 0) {
+                    } else if (const int p = dstType->param(to->key);
+                               p >= 0 && !dstType->params()[static_cast<std::size_t>(p)].hidden) {
                         const sd::ParamModel& pm = dstType->params()[static_cast<std::size_t>(p)];
-                        if (pm.kind == sd::ParamModel::Kind::Toggle || pm.output)
+                        if (pm.kind == sd::ParamModel::Kind::Toggle || pm.output || pm.hidden)
                             return Error(
                                 "rack.port", to->key + " is a switch or a meter", "/to",
                                 "cables move knobs: " + keysOf(*dstType, false, false, true));
@@ -1624,7 +1633,7 @@ Result<json::Value> encodePreset(EngineApp& a, const model::Session& s, const st
         top = std::min(top, s.modules.find(id)->y);
     }
     std::map<Id, std::size_t> index, plugin;  // a module's index, by its id or its plug-in's
-    json::Value modules = json::Value::array();
+    json::Value modules = json::Value::array(), sources = json::Value::object();
     for (std::size_t k = 0; k < ids.size(); ++k) {
         const model::RackModule& m = *s.modules.find(ids[k]);
         json::Value o = json::Value::object();
@@ -1644,6 +1653,18 @@ Result<json::Value> encodePreset(EngineApp& a, const model::Session& s, const st
         }
         index[ids[k]] = k;
         modules.push_back(std::move(o));
+        // A module of the user's (library or project): its source travels too.
+        if (const auto* entry = catalog(a).find(m.type);
+            entry &&
+            (entry->type->origin() == rack::Origin::Library ||
+             entry->type->origin() == rack::Origin::Project) &&
+            !entry->type->source().empty() && !sources.find(m.type)) {
+            json::Value src = json::Value::object();
+            const std::string library = detail::moduleName(*entry->type);
+            src["name"] = library.empty() ? libraryNameFor(m.type) : library;
+            src["source"] = entry->type->source();
+            sources[m.type] = std::move(src);
+        }
     }
     json::Value cables = json::Value::array();
     for (const auto& e : s.cables) {
@@ -1670,6 +1691,7 @@ Result<json::Value> encodePreset(EngineApp& a, const model::Session& s, const st
     if (!description.empty()) doc["description"] = description;
     doc["modules"] = std::move(modules);
     doc["cables"] = std::move(cables);
+    if (!sources.asObject().empty()) doc["sources"] = std::move(sources);
     return doc;
 }
 
@@ -1696,6 +1718,8 @@ Result<json::Value> readPreset(const fs::path& file) {
     const auto* name = doc.find("name");
     if (!name || !name->isString() || name->asString().empty())
         return bad("/name", "it has no name");
+    if (const auto* description = doc.find("description"); description && !description->isString())
+        return bad("/description", "description is not a string");
     const auto* modules = doc.find("modules");
     if (!modules || !modules->isArray() || modules->asArray().empty())
         return bad("/modules", "it has no modules");
@@ -1725,6 +1749,19 @@ Result<json::Value> readPreset(const fs::path& file) {
         if (plugin != (fx != nullptr) || (fx && !fx->isObject()))
             return bad(at + "/fx", plugin ? "a plugin module has no plug-in"
                                           : "only a plugin module has a plug-in");
+    }
+    if (const auto* sources = doc.find("sources")) {
+        if (!sources->isObject()) return bad("/sources", "sources is not an object");
+        for (const auto& m : sources->asObject()) {
+            const std::string at = json::pointerJoin("/sources", m.key);
+            const json::Value* library = m.value.isObject() ? m.value.find("name") : nullptr;
+            const json::Value* source = m.value.isObject() ? m.value.find("source") : nullptr;
+            if (!library || !library->isString() ||
+                !detail::validModuleName(library->asString(), {}) || !source ||
+                !source->isString() || source->asString().empty() ||
+                source->asString().size() > detail::kMaxModuleBytes)
+                return bad(at, "a module's source is not {name, source}");
+        }
     }
     const auto* cables = doc.find("cables");
     if (cables && !cables->isArray()) return bad("/cables", "cables is not an array");
@@ -1771,8 +1808,9 @@ void registerRackPresetCommands(cmd::Registry& registry) {
                "Save a rack's modules and cables as a preset.");
         c.description =
             "modules: which (default the whole rack); the cables among them come too. Plugin "
-            "modules keep their plug-in's settings. A Notes module's source track, MIDI learn, "
-            "envelopes, sends and the channels an Out feeds stay with the project. Saved by "
+            "modules keep their plug-in's settings, and the source of your own (library) "
+            "modules goes with them. A Notes module's source track, MIDI learn, envelopes, "
+            "sends and the channels an Out feeds stay with the project. Saved by "
             "name in the user's rack presets; replace: true overwrites one.";
         c.args = schema::object<PresetSave>("rack_preset_save_args")
                      .field("rack", &PresetSave::rack, idOf("rk", "Rack"))
@@ -1846,10 +1884,10 @@ void registerRackPresetCommands(cmd::Registry& registry) {
             "(default right of the rack's modules). io: join (default) gives the preset's Out "
             "and In modules' cables to the rack's own Outs and Ins in order, so a whole patch "
             "sounds at once (extra ones are added); add makes new ones. Notes modules play the "
-            "rack's channel. Knobs and cables the module types no longer have are left out with "
-            "a warning (warnings); a module type or plug-in that is not installed is an error, and "
-            "nothing "
-            "changes.";
+            "rack's channel. Your own modules the preset carries are written into the library "
+            "when it lacks them (installed lists them). Knobs and cables the module types no "
+            "longer have are left out with a warning (warnings); a module type or plug-in that "
+            "is not installed is an error, and the rack does not change.";
         c.args = schema::object<PresetLoad>("rack_preset_load_args")
                      .field("rack", &PresetLoad::rack, idOf("rk", "Rack"))
                      .field("name", &PresetLoad::name, schema::string().minLength(1))
@@ -1892,7 +1930,7 @@ void registerRackPresetCommands(cmd::Registry& registry) {
             auto rack = rackId(s, a.rack);
             if (!rack) return std::move(rack).error();
             const bool join = a.io.value_or("join") == "join";
-            json::Value warnings = json::Value::array();
+            json::Value warnings = json::Value::array(), installed = json::Value::array();
             auto warn = [&](const char* code, const std::string& message, const std::string& at) {
                 json::Value w = json::Value::object();
                 w["code"] = code;
@@ -1900,6 +1938,33 @@ void registerRackPresetCommands(cmd::Registry& registry) {
                 w["path"] = at;
                 warnings.push_back(std::move(w));
             };
+            // The user's modules it brings: into the library when it lacks them.
+            if (const json::Value* sources = doc.find("sources"))
+                for (const auto& m : sources->asObject()) {
+                    const std::string at = json::pointerJoin("/sources", m.key);
+                    const std::string& source = m.value.find("source")->asString();
+                    if (const auto* entry = catalog(e).find(m.key)) {
+                        if (entry->type->source() != source)
+                            warn("rack.preset_module",
+                                 "the installed " + m.key +
+                                     " differs from the preset's copy; the installed one plays",
+                                 at);
+                        continue;
+                    }
+                    std::string name = m.value.find("name")->asString();
+                    std::error_code ec;
+                    for (int n = 2; fs::exists(detail::modulePath(e.moduleDir(), name), ec); ++n)
+                        name = m.value.find("name")->asString().substr(0, 60) + "-" +
+                               std::to_string(n);
+                    auto saved = saveLibraryModule(e, name, source, at.c_str());
+                    if (!saved) return std::move(saved).error();
+                    if (!(*saved)["ok"].asBool())
+                        return Error("rack.preset_module",
+                                     "the preset's " + m.key + " does not compile here", at,
+                                     "it was saved to the library as " + name +
+                                         "; module.check {name: \"" + name + "\"} shows why");
+                    installed.push_back(name);
+                }
 
             // The rack's own Outs and Ins, in order, for io: join; and its counts.
             std::vector<Id> ownOuts, ownIns;
@@ -2048,9 +2113,10 @@ void registerRackPresetCommands(cmd::Registry& registry) {
                     p.amount = amount ? amount->asDouble() : 0.5;
                 } else if (dst && dst->input(p.toKey) >= 0) {
                     // an input: no amount
-                } else if (const int q = dst ? dst->param(p.toKey) : -1; q >= 0) {
+                } else if (const int q = dst ? dst->param(p.toKey) : -1;
+                           q >= 0 && !dst->params()[static_cast<std::size_t>(q)].hidden) {
                     const sd::ParamModel& pm = dst->params()[static_cast<std::size_t>(q)];
-                    if (pm.kind == sd::ParamModel::Kind::Toggle || pm.output) {
+                    if (pm.kind == sd::ParamModel::Kind::Toggle || pm.output || pm.hidden) {
                         skip(p.toKey + " is a switch or a meter");
                         continue;
                     }
@@ -2097,6 +2163,7 @@ void registerRackPresetCommands(cmd::Registry& registry) {
             json::Value out = json::Value::object();
             out["modules"] = std::move(modules);
             out["cables"] = std::move(madeCables);
+            if (!installed.asArray().empty()) out["installed"] = std::move(installed);
             if (!warnings.asArray().empty()) out["warnings"] = std::move(warnings);
             return out;
         };
@@ -2231,7 +2298,8 @@ Result<std::pair<Id, std::string>> learnTarget(EngineApp& e, const model::Sessio
         return Error("rack.unknown_type", "its type " + m.type + " is not installed", "/module",
                      "module.list");
     const int index = type->param(param);
-    if (index < 0 || type->params()[static_cast<std::size_t>(index)].output)
+    if (index < 0 || type->params()[static_cast<std::size_t>(index)].output ||
+        type->params()[static_cast<std::size_t>(index)].hidden)
         return Error("rack.param", type->info().name + " has no knob " + param, "/param",
                      type->info().name + " has " + keysOf(*type, false, false, true));
     return std::pair<Id, std::string>{*id, param};

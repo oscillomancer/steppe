@@ -267,7 +267,8 @@ instructions are in `docs/guides/installing.md`.
   with `rack.probe` (pitch, levels, gates, notes, CV rates from an offline
   render of a copy), write and edit library modules (`module.write`, hot
   reload in the running engine, `module.fork`), keep patches as rack
-  presets (`rack.preset.*`), automate knobs (`env.add {module}`) and learn
+  presets (`rack.preset.*`, carrying the user's modules' source; projects
+  keep copies of theirs too), automate knobs (`env.add {module}`) and learn
   MIDI controllers on them (`module.learn.*`). The agent guide is
   `skill/guides/rack.md`; `skill/generated/rack-modules.md` lists every
   built-in module. Linux only so far: native macOS/Windows CI has not run
@@ -751,11 +752,10 @@ Library boundaries:
 
 Engine and hosting:
 - Modular racks (ADR-0062): racks do not follow a track's playrate map;
-  cables into a plugin module's parameters are saved but not heard (CLAP
-  `param_mod` is not sent yet); a plug-in's latency inside a rack is not
-  compensated; recording an armed channel whose input is a rack's Out is
+  cables into a plugin module's parameters modulate CLAP plug-ins only
+  (VST3 has no modulation), by their first voice, at most 16 per plug-in;
+  a plug-in's latency inside a rack is not compensated; recording an armed channel whose input is a rack's Out is
   not supported; post-fader sends into an In module take the linear path.
-  Project-folder module types (`Origin::Project`) are not loaded yet.
 - The headless platform layer (ADR-0035) has natively tested macOS/Windows
   address waits, wake sources, control socket/MCP paths and user directory roots.
   Both native engines run with dummy/offline audio and native RT/offline

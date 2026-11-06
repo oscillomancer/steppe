@@ -50,7 +50,9 @@ fs::path modulePath(const fs::path& dir, std::string_view name) {
 }
 
 std::string moduleName(const rack::ModuleType& type) {
-    if (type.origin() != rack::Origin::Library || type.path().empty()) return {};
+    if ((type.origin() != rack::Origin::Library && type.origin() != rack::Origin::Project) ||
+        type.path().empty())
+        return {};
     return fs::path(type.path()).stem().string();
 }
 
@@ -67,11 +69,14 @@ Status validModuleName(std::string_view name, const std::string& path) {
     return {};
 }
 
-std::shared_ptr<const rack::Catalog> loadModuleLibrary(
-    const std::shared_ptr<const rack::Catalog>& base, const fs::path& dir,
-    std::vector<std::string>* skipped) {
+namespace {
+
+// `base` with `dir`'s modules as `origin` in place of its types of that origin.
+std::shared_ptr<const rack::Catalog> loadFolder(const std::shared_ptr<const rack::Catalog>& base,
+                                                const fs::path& dir, rack::Origin origin,
+                                                std::vector<std::string>* skipped) {
     auto catalog = std::make_shared<rack::Catalog>(*base);
-    catalog->clear(rack::Origin::Library);
+    catalog->clear(origin);
     std::vector<std::string> names;
     std::error_code ec;
     for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
@@ -90,7 +95,7 @@ std::shared_ptr<const rack::Catalog> loadModuleLibrary(
             skip(name, text.error().message);
             continue;
         }
-        CompiledModule compiled = compileModule(*text, rack::Origin::Library, file);
+        CompiledModule compiled = compileModule(*text, origin, file);
         if (!compiled.type) {
             std::string why = "it does not compile";
             for (const auto& d : compiled.diagnostics)
@@ -101,17 +106,51 @@ std::shared_ptr<const rack::Catalog> loadModuleLibrary(
             skip(name, why);
             continue;
         }
-        if (const auto* taken = catalog->find(compiled.type->id())) {
+        const auto* taken = catalog->find(compiled.type->id());
+        if (taken && (taken->type->origin() == origin ||
+                      taken->type->origin() == rack::Origin::Host ||
+                      taken->type->origin() == rack::Origin::Stock)) {
             skip(name, "its id " + compiled.type->id() + " is taken by " +
-                           (taken->type->origin() == rack::Origin::Library
-                                ? "the library's " + moduleName(*taken->type)
-                                : "a built-in module"));
+                           (taken->type->origin() == origin ? "the folder's " +
+                                                                  moduleName(*taken->type)
+                                                            : std::string("a built-in module")));
             continue;
         }
         if (std::string problems = catalog->add(compiled.type); !problems.empty())
             skip(name, problems);
     }
     return catalog;
+}
+
+}  // namespace
+
+std::shared_ptr<const rack::Catalog> loadModuleLibrary(
+    const std::shared_ptr<const rack::Catalog>& base, const fs::path& dir,
+    std::vector<std::string>* skipped) {
+    return loadFolder(base, dir, rack::Origin::Library, skipped);
+}
+
+std::shared_ptr<const rack::Catalog> loadProjectModules(
+    const std::shared_ptr<const rack::Catalog>& base, const fs::path& dir,
+    std::vector<std::string>* skipped) {
+    return loadFolder(base, dir, rack::Origin::Project, skipped);
+}
+
+Status saveProjectModules(const rack::Catalog& catalog, const std::vector<std::string>& types,
+                          const fs::path& dir) {
+    std::set<std::string> written;
+    for (const std::string& id : types) {
+        const auto* entry = catalog.find(id);
+        if (!entry) continue;
+        const rack::ModuleType& t = *entry->type;
+        if (t.origin() != rack::Origin::Library && t.origin() != rack::Origin::Project) continue;
+        const std::string name = moduleName(t);
+        if (name.empty() || t.source().empty() || !written.insert(name).second) continue;
+        const fs::path file = modulePath(dir, name);
+        if (auto old = readTextFile(file, kMaxModuleBytes); old && *old == t.source()) continue;
+        SUPPLE_TRY(writeFileAtomic(file, t.source()));
+    }
+    return {};
 }
 
 json::Value diagnosticsJson(const std::vector<ModuleDiagnostic>& diagnostics) {

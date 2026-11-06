@@ -4,9 +4,9 @@
 // host tests are hermetic.
 //
 //   com.suppleaudio.test.gain  — stereo effect; params "gain" (dB, ADR-0010
-//     normalized CLAP value) and "latency" (0/64 samples, stepped; changing it
-//     while active requests a restart); versioned state; the semantic-params
-//     extension implemented with core-params + core-patch.
+//     normalized CLAP value, modulatable by param_mod) and "latency" (0/64 samples, stepped;
+//     changing it while active requests a restart); versioned state; the semantic-params extension
+//     implemented with core-params + core-patch.
 //   com.suppleaudio.test.sine  — instrument; 0 inputs, stereo output, CLAP and
 //     MIDI note dialects; one sine voice per key at velocity * 0.25, stops at
 //     note off and reports NOTE_END.
@@ -204,6 +204,7 @@ struct Gain {
     std::atomic<std::uint32_t> editorFlags{0}, hostDeliveries{0};
     int activeLatency = 0;  // latency in samples at activation
     double gain = 1.0;      // audio thread
+    double gainMod = 0.0;   // audio thread: CLAP param_mod on gain, in CLAP units
     float delay[2][64] = {};
     int delayPos = 0;
     bool enforceThread = false;
@@ -492,6 +493,7 @@ bool CLAP_ABI gainActivate(const clap_plugin_t* pl, double, uint32_t, uint32_t) 
     std::memset(g->delay, 0, sizeof(g->delay));
     g->delayPos = 0;
     g->gain = Gain::dbToGain(g->gainDb);
+    g->gainMod = 0.0;
     return true;
 }
 
@@ -508,10 +510,15 @@ clap_process_status CLAP_ABI gainProcess(const clap_plugin_t* pl, const clap_pro
             if (h->type == CLAP_EVENT_PARAM_VALUE) {
                 const auto* pv = reinterpret_cast<const clap_event_param_value_t*>(h);
                 g->applyParam(pv->param_id, pv->value);
+            } else if (h->type == CLAP_EVENT_PARAM_MOD) {
+                const auto* pm = reinterpret_cast<const clap_event_param_mod_t*>(h);
+                if (pm->param_id == 0) g->gainMod = pm->amount;
             }
             ++ev;
         }
-        g->gain = Gain::dbToGain(g->gainDb);  // no smoothing: tests check sample-exact changes
+        // No smoothing: tests check sample-exact changes. Modulation adds in CLAP units.
+        const double clap = params::toClap(kGainTable[0], g->gainDb) + g->gainMod;
+        g->gain = Gain::dbToGain(params::fromClap(kGainTable[0], std::clamp(clap, 0.0, 1.0)));
         for (int c = 0; c < 2; ++c) {
             float x = p->audio_inputs_count > 0 ? p->audio_inputs[0].data32[c][i] : 0.0f;
             if (g->activeLatency) {

@@ -437,3 +437,86 @@ TEST_CASE("rack.patch: named modules and cables in one step, all or nothing") {
     CHECK(unknown.error().code == "rack.unknown_type");
     CHECK(unknown.error().path == "/args/modules/osc2/type");
 }
+
+TEST_CASE("rack presets: a patch brings its own modules to another library") {
+    Fixture here;
+    here.write("level", kLevel);
+    here.run("track.add", R"({"name": "Synth"})");
+    here.run("rack.add", R"({"track": "tr_1"})");  // mo_1 Out
+    here.run("rack.patch", R"({"rack": "rk_1", "modules": {"lvl": {"type": "com.example.level"}},
+                               "cables": [["lvl.out", "mo_1.l"]]})");
+    json::Value saved = here.run("rack.preset.save", R"({"rack": "rk_1", "name": "Constant"})");
+    auto text = readTextFile(saved["path"].asString(), 1 << 20);
+    REQUIRE(text);
+    CHECK(text->find("\"sources\"") != std::string::npos);
+
+    // Another machine: an empty library. The preset installs the module and plays it.
+    Fixture there;
+    there.run("project.set", R"({"console9": false})");
+    there.run("track.add", R"({"name": "Synth"})");
+    there.run("rack.add", R"({"track": "tr_1"})");
+    json::Value args = json::Value::object();
+    args["rack"] = "rk_1";
+    args["path"] = saved["path"].asString();
+    auto loaded = there.call("rack.preset.load", args);
+    REQUIRE_MESSAGE(loaded, (loaded ? "" : loaded.error().toString()));
+    REQUIRE((*loaded).find("installed") != nullptr);
+    CHECK((*loaded)["installed"].at(0).asString() == "level");
+    CHECK(there.level() == doctest::Approx(0.25 * 0.472135955).epsilon(1e-3));
+    // Loaded again, the library has it: nothing to install, no warning.
+    auto again = there.call("rack.preset.load", args);
+    REQUIRE(again);
+    CHECK((*again).find("installed") == nullptr);
+    CHECK((*again).find("warnings") == nullptr);
+    // A different module under the same id: the installed one plays, with a warning.
+    there.run("module.edit", R"({"name": "level", "edits": [{"old": "0.25", "new": "0.5"}]})");
+    auto differs = there.call("rack.preset.load", args);
+    REQUIRE(differs);
+    REQUIRE((*differs).find("warnings") != nullptr);
+    CHECK((*differs)["warnings"].at(0).find("code")->asString() == "rack.preset_module");
+}
+
+TEST_CASE("module library: a project keeps copies of the modules it plays") {
+    Fixture here;
+    here.write("level", kLevel);
+    here.run("project.set", R"({"console9": false})");
+    here.run("track.add", R"({"name": "Synth"})");
+    here.run("rack.add", R"({"track": "tr_1"})");
+    here.run("rack.patch", R"({"rack": "rk_1", "modules": {"lvl": {"type": "com.example.level"}},
+                               "cables": [["lvl.out", "mo_1.l"]]})");
+    const auto song = here.dir / "song" / "song.json";
+    json::Value args = json::Value::object();
+    args["path"] = song.string();
+    REQUIRE(here.call("project.save", args));
+    const auto copy = song.parent_path() / "modules" / "level" / "level.cpp";
+    REQUIRE(std::filesystem::exists(copy));
+
+    // Opened where the library lacks it: the project's copy plays.
+    Fixture there;
+    REQUIRE(there.call("project.open", args));
+    CHECK(there.level() == doctest::Approx(0.25 * 0.472135955).epsilon(1e-3));
+    json::Value got = there.run("module.get", R"({"type": "com.example.level"})");
+    CHECK(got["origin"].asString() == "project");
+    // Edited there, it goes into that library and plays; the next save copies it.
+    json::Value edited =
+        there.run("module.edit",
+                  R"({"type": "com.example.level", "edits": [{"old": "0.25", "new": "0.5"}]})");
+    CHECK(edited["ok"].asBool());
+    CHECK(there.level() == doctest::Approx(0.5 * 0.472135955).epsilon(1e-3));
+    REQUIRE(there.call("project.save", args));
+    auto saved = readTextFile(copy, 1 << 20);
+    REQUIRE(saved);
+    CHECK(saved->find("0.5") != std::string::npos);
+}
+
+TEST_CASE("rack presets: a malformed file is skipped with a warning") {
+    Fixture f;
+    REQUIRE(
+        writeFileAtomic(f.app->rackPresetDir() / "bad.json",
+                        R"({"schema": "supple.rack-preset/1.0", "name": "Bad", "description": 42,
+                                "modules": [{"type": "com.suppleaudio.rack.out"}], "cables": []})"));
+    json::Value list = f.run("rack.preset.list");
+    CHECK(list["presets"].asArray().empty());
+    REQUIRE(list.find("warnings") != nullptr);
+    CHECK(list["warnings"].at(0).find("code")->asString() == "rack.preset_invalid");
+}

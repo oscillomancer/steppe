@@ -27,7 +27,9 @@ with their ranges and defaults; read it before patching. `module.describe
 5. Render or listen as for any track. Ask the human to listen when it
    matters.
 6. Keep what works: `rack.preset.save {rack, name}`; later
-   `rack.preset.load {rack, name}` puts it in any rack.
+   `rack.preset.load {rack, name}` puts it in any rack. A preset carries
+   the source of your own modules it uses, and loading it on another
+   machine installs them into that library.
 
 ## rack.patch
 
@@ -104,7 +106,7 @@ feedback FM, Karplus-like loops and self-patched chaos.
 | `in` | Audio from the DAW: send tracks to it with `route.add {from: "tr_2", to: "mo_7"}` (the In's id). A rack with an In and an Out is an effect. |
 | `notes` | The rack channel's MIDI (its items and, when it monitors, live input) as `pitch`, `gate`, `velocity`, `pressure` per voice, plus `bend` and `modwheel`. `source` plays another track's MIDI; `device` a MIDI input always. |
 | `transport` | The song's clock: `clock` at `division` (1/16), `bar` and `beat` triggers, their phases, `playing`, `reset`. Sequencers stay in time with the song through it (or follow the song themselves when nothing drives their clock). |
-| `plugin` | A plug-in: `module.add {rack, plugin}`. Instruments play from `pitch` and `gate` (a voice per gate channel: key round(60 + 12 × pitch)). Audio in on `in_l`, `in_r`; out on `out_l`, `out_r`. Its knobs are its plug-in's: `fx.set`, `fx.patch.merge` on its `fx`. |
+| `plugin` | A plug-in: `module.add {rack, plugin}`. Instruments play from `pitch` and `gate` (a voice per gate channel: key round(60 + 12 × pitch)). Audio in on `in_l`, `in_r`; out on `out_l`, `out_r`. Its knobs are its plug-in's: `fx.set`, `fx.patch.merge` on its `fx`; a cable into `"synth.cutoff"` (in `rack.patch`) or `fx_N.cutoff` modulates one. |
 
 ## Recipes
 
@@ -215,7 +217,9 @@ module with `rack.probe` before using it.
 ## Limits
 
 - Cables into a plug-in's parameters (`synth.cutoff` on a plugin module)
-  are accepted and saved but not heard yet.
+  are CLAP modulation: the parameter must be modulatable, at most 16 cables
+  per plug-in, mono (a poly cable's first voice), and VST3 plug-ins take
+  none. `amount` is a fraction of the parameter's range (default 0.5).
 - A plug-in's latency inside a rack is not compensated.
 - Racks do not follow a track's playrate changes.
 - Recording an armed channel whose input is a rack's Out is not supported.

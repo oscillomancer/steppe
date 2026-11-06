@@ -204,7 +204,7 @@ std::optional<double> EngineApp::moveKnob(
     const int index = type.param(key);
     if (index < 0) return std::nullopt;
     const script::detail::ParamModel& p = type.params()[static_cast<std::size_t>(index)];
-    if (p.output) return std::nullopt;
+    if (p.output || p.hidden) return std::nullopt;
     const double value = moduleParamValue(p, m->params.isObject() ? m->params.find(key) : nullptr);
     const double current = rack::knobPosition(p, value);
     const bool stepped = p.kind != script::detail::ParamModel::Kind::Continuous;

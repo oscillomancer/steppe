@@ -91,8 +91,10 @@ Result<std::string> readModule(EngineApp& e, const std::string& name, const char
     return readTextFile(file, detail::kMaxModuleBytes);
 }
 
+}  // namespace
+
 // A library name for a type id: its last part, in library characters.
-std::string nameFor(const std::string& id) {
+std::string libraryNameFor(const std::string& id) {
     const auto dot = id.rfind('.');
     std::string out;
     for (char ch : id.substr(dot == std::string::npos ? 0 : dot + 1)) {
@@ -103,6 +105,8 @@ std::string nameFor(const std::string& id) {
     return out.substr(0, 64);
 }
 
+namespace {
+
 std::size_t modulesPlaying(const model::Session& s, const std::string& id) {
     std::size_t n = 0;
     for (const auto& m : s.modules) n += m.value->type == id;
@@ -111,8 +115,10 @@ std::size_t modulesPlaying(const model::Session& s, const std::string& id) {
 
 // Saves `source` as the library's `name` and, when it compiles, puts its type
 // in the catalog racks use (a broken version leaves the last good one there).
-Result<json::Value> save(EngineApp& e, const std::string& name, const std::string& source,
-                         const char* path) {
+}  // namespace
+
+Result<json::Value> saveLibraryModule(EngineApp& e, const std::string& name,
+                                      const std::string& source, const char* path) {
     SUPPLE_TRY(detail::validModuleName(name, "/name"));
     if (source.size() > detail::kMaxModuleBytes)
         return Error("module.size",
@@ -152,6 +158,9 @@ Result<json::Value> save(EngineApp& e, const std::string& name, const std::strin
             next->remove(before->id(), rack::Origin::Library);
         if (std::string problems = next->add(compiled.type); !problems.empty())
             return Error("module.description", problems, path, "fix what it names");
+        // A project's copy of it gives way: the edit is what plays, and the
+        // project's next save copies it.
+        next->remove(compiled.type->id(), rack::Origin::Project);
         const std::string id = compiled.type->id();
         out["type"] = describeModuleType(*compiled.type);
         e.setModules(std::move(next));
@@ -161,6 +170,13 @@ Result<json::Value> save(EngineApp& e, const std::string& name, const std::strin
     }
     return out;
 }
+
+namespace {
+
+using SaveFn = Result<json::Value> (*)(EngineApp&, const std::string&, const std::string&,
+                                       const char*);
+constexpr SaveFn save = saveLibraryModule;
+std::string nameFor(const std::string& id) { return libraryNameFor(id); }
 
 constexpr const char* kWriteResult =
     R"({"name": "wobble", "path": "<any>", "ok": true, "diagnostics": [], "type": "<any>",
@@ -231,6 +247,7 @@ void registerModuleCommands(cmd::Registry& registry) {
         c.run = [](const EditArgs& a, Context& ctx) -> Result<json::Value> {
             EngineApp& e = app(ctx);
             std::string name;
+            std::optional<std::string> project;  // a project's copy: edited into the library
             if (a.name.has_value() == a.type.has_value())
                 return Error("command.invalid_args", "give name or type", "/name",
                              "e.g. {\"name\": \"wobble\", \"edits\": [...]}");
@@ -244,8 +261,9 @@ void registerModuleCommands(cmd::Registry& registry) {
                     return Error("module.built_in", (*t)->id() + " is built in and is not edited",
                                  "/type",
                                  "module.fork copies it into the library under your own id");
+                if ((*t)->origin() == rack::Origin::Project) project = (*t)->source();
             }
-            auto text = readModule(e, name, "/name");
+            auto text = project ? Result<std::string>(*project) : readModule(e, name, "/name");
             if (!text) return std::move(text).error();
             auto edited = dsp_commands::detail::applyEdits(std::move(*text), a.edits, "module.edit",
                                                            "module.get");

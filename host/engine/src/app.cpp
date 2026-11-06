@@ -509,6 +509,8 @@ Status EngineApp::replaceProject(model::Session session, fs::path path,
         std::lock_guard lock(rendersMutex_);
         renders_.clear();
     }
+    // The project's copies of the user's modules (ADR-0062), or none.
+    modules_ = detail::loadProjectModules(modules_, projectModuleDir(path));
     pool_ = std::make_unique<InstancePool>(
         [this](const model::PluginRef& ref) { return findPlugin(ref.id); }, options_.identity);
     pool_->setMainThreadWake(mainWake_);
@@ -531,6 +533,14 @@ Status EngineApp::replaceProject(model::Session session, fs::path path,
 
 Status EngineApp::newProject(model::Project project) {
     return replaceProject(model::Session::create(std::move(project)), {});
+}
+
+fs::path EngineApp::projectModuleDir(const fs::path& project) const {
+    if (project.empty()) return {};
+    fs::path dir = project.parent_path() / "modules";
+    std::error_code ec;
+    if (fs::equivalent(dir, moduleDir(), ec)) return {};  // the library itself
+    return dir;
 }
 
 fs::path EngineApp::resolve(const fs::path& path) const {
@@ -559,6 +569,16 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
         // media (the old project keeps its files).
         if (!projectPath_.empty()) SUPPLE_TRY(detail::copyFolder(mediaDir(), media));
         SUPPLE_TRY(publish());
+    }
+    // The user's modules it plays go with it, as its media do (ADR-0062).
+    if (const fs::path dir = projectModuleDir(path); !dir.empty()) {
+        std::vector<std::string> types;
+        for (const auto& e : head().modules) types.push_back(e.value->type);
+        if (Status copied = detail::saveProjectModules(*modules_, types, dir); !copied && warnings)
+            warnings->push_back({"project.modules",
+                                 "the project's module copies were not written: " +
+                                     copied.error().message,
+                                 dir.string()});
     }
     projectPath_ = path;
     autosaveMarked_ = true;  // the file itself is the newest copy

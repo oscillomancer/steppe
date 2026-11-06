@@ -345,6 +345,27 @@ a module's menu. Saved presets are listed in the **Modules** column under
 to the rack you are looking at. Right-click the space and choose **Add
 module…** to pick a module from the column and put it where you clicked.
 
+A rack sends audio both ways. Its Out modules are channel inputs, and an
+**In** module takes sends: route any track to it as you would to a buss,
+and the rack becomes an effect. A **Notes** module plays its channel's
+MIDI (or another track's, or a MIDI input's) as pitch, gate and velocity
+cables, a voice per note; **Transport** gives the song's clock. A plugin
+module's own parameters take cables too: a cable into one modulates it
+around where its knob stands (CLAP plug-ins; VST3 has no modulation).
+
+Your own modules live in the library folder, and the project you save
+keeps a copy of each one it uses beside it (in `modules`), as it keeps its
+media, so the project sounds the same on another computer. Rack presets
+(saved in the data folder's `rack-presets`) hold a group of modules with
+their cables and settings, and the source of your own modules too.
+
+Agents can do all of this through the MCP tools: build a patch in one
+step (`rack_patch`), listen to it as numbers (`rack_probe` reports pitch,
+levels, gate rates and the notes a sequencer plays), write and edit
+modules (`module_write`, `module_edit`; the modules playing one are
+rebuilt at once), save and load rack presets, automate knobs and bind
+them to MIDI controllers (`module_learn_set`).
+
 ## MIDI controllers
 
 Right-click a track's fader, pan, mute, solo, polarity, mono, arm or
