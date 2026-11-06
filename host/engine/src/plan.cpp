@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 #include "plan.h"
 #include "live_workers.h"
+#include "rack_runtime.h"
 #include "supple/model/fade_shape.h"
 #include "supple/model/freeze.h"
 #include "supple/model/groups.h"
@@ -157,6 +158,7 @@ Result<std::vector<Id>> topoOrder(const Session& s) {
     std::map<Id, std::set<Id>> feeds;  // source -> targets
     std::map<Id, int> indeg;
     for (const auto& e : s.tracks) indeg[e.id];
+    for (const auto& e : s.racks) indeg[e.id];  // racks are nodes too (ADR-0062)
     auto link = [&](Id a, Id b) {
         if (feeds[a].insert(b).second) ++indeg[b];
     };
@@ -164,8 +166,13 @@ Result<std::vector<Id>> topoOrder(const Session& s) {
         if (e.value->parent && e.value->parentSend.enabled) link(e.id, *e.value->parent);
     for (const auto& e : s.routes) {
         const model::Route& r = *e.value;
-        const std::optional<Id> to = r.to.fx ? model::trackOfFx(s, *r.to.fx) : r.to.track;
-        if (r.from.track && to) link(*r.from.track, *to);
+        std::optional<Id> from = r.from.track;
+        std::optional<Id> to = r.to.fx ? model::trackOfFx(s, *r.to.fx) : r.to.track;
+        if (r.from.module)
+            if (const model::RackModule* m = s.modules.find(*r.from.module)) from = m->rack;
+        if (r.to.module)
+            if (const model::RackModule* m = s.modules.find(*r.to.module)) to = m->rack;
+        if (from && to) link(*from, *to);
     }
     std::set<Id> ready;
     for (const auto& [id, d] : indeg)
@@ -178,7 +185,7 @@ Result<std::vector<Id>> topoOrder(const Session& s) {
         for (Id t : feeds[id])
             if (--indeg[t] == 0) ready.insert(t);
     }
-    if (order.size() != s.tracks.size())
+    if (order.size() != s.tracks.size() + s.racks.size())
         return Error("engine.cycle", "routing cycle", {},
                      "remove a route that feeds back to its source, or change its destination to "
                      "break the cycle");
@@ -186,6 +193,11 @@ Result<std::vector<Id>> topoOrder(const Session& s) {
 }
 
 }  // namespace
+
+std::vector<TimedEvent> compileTrackEvents(const Session& s, Id track, double startSeconds,
+                                           double rate) {
+    return trackEvents(s, track, startSeconds, rate);
+}
 
 // Resolves an envelope's plugin parameter: a semantic key (physical values)
 // or, for any plugin, a CLAP id ("12") or parameter name (CLAP values).
@@ -289,6 +301,10 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
     for (std::size_t i = 0; i < order->size(); ++i) {
         Node& n = p.nodes[i];
         n.id = (*order)[i];
+        if (n.id.kind == Kind::Rack) {
+            SUPPLE_TRY(compileRack(p, n, s, n.id, pool.racks()));
+            continue;
+        }
         const model::Track& t = *s.tracks.find(n.id);
         n.volumeDb = t.volumeDb;
         n.pan = t.pan;
@@ -452,9 +468,37 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
     }
     for (const auto& e : s.routes) {
         const model::Route& r = *e.value;
-        const std::optional<Id> toTrack = r.to.fx ? model::trackOfFx(s, *r.to.fx) : r.to.track;
+        // Racks (ADR-0062): an Out module into its channel, unity; a send
+        // into an In module, at the route's tap, level and pan.
+        if (r.from.module && r.to.track) {
+            const model::RackModule* m = s.modules.find(*r.from.module);
+            if (!m || !index.count(m->rack) || !index.count(*r.to.track)) continue;
+            const Node& rack = p.nodes[index.at(m->rack)];
+            if (!rack.rack) continue;
+            const auto& outs = rack.rack->outIds;
+            const auto at = std::find(outs.begin(), outs.end(), *r.from.module);
+            if (at == outs.end()) continue;  // a missing Out (its type is not known)
+            Edge ed;
+            ed.from = index.at(m->rack);
+            ed.route = e.id;
+            ed.rackOut = static_cast<int>(at - outs.begin());
+            pending.push_back({ed.from, index.at(*r.to.track), std::move(ed), 1 + e.id.n});
+            continue;
+        }
+        int rackIn = -1;
+        std::optional<Id> toTrack = r.to.fx ? model::trackOfFx(s, *r.to.fx) : r.to.track;
+        if (r.to.module) {
+            const model::RackModule* m = s.modules.find(*r.to.module);
+            if (!m || !index.count(m->rack) || !p.nodes[index.at(m->rack)].rack) continue;
+            const auto& ins = p.nodes[index.at(m->rack)].rack->inIds;
+            const auto at = std::find(ins.begin(), ins.end(), *r.to.module);
+            if (at == ins.end()) continue;
+            rackIn = static_cast<int>(at - ins.begin());
+            toTrack = m->rack;
+        }
         if (!r.from.track || !toTrack) continue;
         Edge ed;
+        ed.rackIn = rackIn;
         ed.from = index.at(*r.from.track);
         ed.route = e.id;
         if (r.to.fx) {  // a key route: into that stage's sidechain input (ADR-0018)
@@ -484,7 +528,8 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
             // Main pairs make the matrix; pairs that touch auxiliary channels
             // become links (ADR-0020).
             const int fromChannels = 2 + p.nodes[ed.from].auxCount;
-            const int toChannels = r.to.fx ? 2 : 2 + p.nodes[index.at(*toTrack)].auxCount;
+            const int toChannels =
+                r.to.fx || r.to.module ? 2 : 2 + p.nodes[index.at(*toTrack)].auxCount;
             float m[2][2] = {{0.0f, 0.0f}, {0.0f, 0.0f}};
             bool anyMain = false;
             for (std::size_t k = 0; k < r.channels.from.size() && k < r.channels.to.size(); ++k) {
@@ -561,6 +606,7 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
             flood(down);
             flood(up);
             for (Node& n : p.nodes) {
+                if (n.rack) continue;  // a rack is heard through its channels
                 const model::Track& t = *s.tracks.find(n.id);
                 n.soloSilenced = !audible.count(n.id) && t.solo != model::Solo::Defeat && !n.master;
             }
@@ -624,6 +670,8 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
             continue;  // compiled below as per-consumer VCA controls
         } else if (o.kind == Kind::Fx) {
             continue;  // resolved after servicing/activation in prepare()
+        } else if (o.kind == Kind::Module) {
+            continue;  // compiled with its rack (compileRack)
         }
         if (slot)
             *slot = std::move(a);
@@ -636,6 +684,16 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
     // stopped or recording: processNode decides per block); whatever it feeds
     // is live too (nodes are in topological order, so one pass propagates).
     for (Node& n : p.nodes) {
+        if (n.rack) {
+            // A rack playing a device's MIDI is live, as a monitored track.
+            n.live = std::any_of(n.rack->notes.begin(), n.rack->notes.end(),
+                                 [](const NotesFeed& f) { return f.device.has_value(); });
+            for (std::size_t e : n.in) n.live = n.live || p.nodes[p.edges[e].from].live;
+            if (!n.live && keepLive && std::binary_search(keepLive->begin(), keepLive->end(), n.id))
+                n.live = p.heldLive = true;
+            p.anyLive = p.anyLive || n.live;
+            continue;
+        }
         const model::Track& t = *s.tracks.find(n.id);
         const bool monitoring = t.record.armed && t.record.monitor != model::Monitor::Off;
         n.tapeAuto = t.record.monitor == model::Monitor::Auto;
@@ -734,10 +792,11 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
             e.stripPan = p.nodes[e.from].autoPan;
             continue;
         }
-        if (e.auxOnly) continue;  // nothing reaches the main pair
-        e.encode = e.tap != model::Tap::PostFader || e.volumeDb != 0 || !e.followPan || e.mono ||
-                   e.invert || e.mapped || e.muted || e.autoVolume.active() || e.autoPan.active() ||
-                   e.autoMute.active();
+        if (e.auxOnly) continue;       // nothing reaches the main pair
+        if (e.rackOut >= 0) continue;  // a rack's Out: its audio as is
+        e.encode = e.rackIn >= 0 || e.tap != model::Tap::PostFader || e.volumeDb != 0 ||
+                   !e.followPan || e.mono || e.invert || e.mapped || e.muted ||
+                   e.autoVolume.active() || e.autoPan.active() || e.autoMute.active();
         if (!e.encode) continue;
         Node& source = p.nodes[e.from];
         source.out.push_back(static_cast<std::size_t>(&e - p.edges.data()));
@@ -755,7 +814,8 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         e.staticGain = sendGain(e.volumeDb, e.tap, source.volumeDb);
         e.staticPan = console9::nativePan(e.pan);
         const auto salt = std::rotl(source.id.n, 32) ^ ((e.route->n << 3) | 3);
-        e.encoder.init(console9::seedsFor(s.project->seed, salt), p.linearConsole);
+        // A send into a rack is never Console 9 encoded (rack.md §2.4).
+        e.encoder.init(console9::seedsFor(s.project->seed, salt), p.linearConsole || e.rackIn >= 0);
     }
     for (const Edge& edge : p.edges)
         if (edge.stage >= 0 && edge.tap == model::Tap::PostFader)
@@ -1217,6 +1277,10 @@ Status prepare(Plan& p, const Session& s) {
     // Events, shifted by each track's solved timeline shift so its own notes stay
     // aligned with what arrives from upstream.
     for (Node& n : p.nodes) {
+        if (n.rack) {
+            prepareRack(p, n, s);
+            continue;
+        }
         // A MIDI take whose chain holds an instrument plays it there, not on the track's.
         std::vector<Id> ownInstrument;
         for (TakeChain& tc : n.takeChains) {
@@ -1487,6 +1551,17 @@ Status checkStrips(const Plan& p) {
                 return Error("engine.strip_edge", "input is not topologically ordered", {},
                              "report this routing compiler inconsistency with the project and "
                              "session.describe, including the affected routes from route.list");
+            // Racks (ADR-0062): an Out module's audio enters its channel as is;
+            // a send into an In module is linear, through its own encoder.
+            if (e.rackOut >= 0 || e.rackIn >= 0) {
+                if ((e.rackOut >= 0) == e.encode || (e.rackIn >= 0) != bool(n.rack) ||
+                    (e.rackOut >= 0 && !p.nodes[e.from].rack))
+                    return Error("engine.strip_edge", "a rack's edges are its In and Out modules'",
+                                 {},
+                                 "report this routing compiler inconsistency with the project and "
+                                 "session.describe, including the affected routes from route.list");
+                continue;
+            }
             if (e.stage >= 0) {
                 if (static_cast<std::size_t>(e.stage) >= n.chain.size() || e.encode)
                     return Error("engine.strip_edge", "key routes must bypass send encoders", {},
@@ -1520,6 +1595,7 @@ Status checkStrips(const Plan& p) {
 }
 
 const Stereo& edgeSignal(const Plan& p, const Edge& e) SUPPLE_RT {
+    if (e.rackOut >= 0) return p.nodes[e.from].rackOuts[static_cast<std::size_t>(e.rackOut)];
     if (e.encode) return e.encoded;
     const Node& src = p.nodes[e.from];
     if (e.stage >= 0 && e.tap == model::Tap::PostFader) return src.postKey;
@@ -1558,6 +1634,10 @@ void addEdge(Plan& p, Edge& e, double panLawDb, Stereo& into, std::int64_t pos,
     }
 }
 }  // namespace
+
+void addEdgeInto(Plan& p, Edge& e, Stereo& into, std::int64_t pos, std::uint32_t n) SUPPLE_RT {
+    addEdge(p, e, -3.0, into, pos, n);
+}
 
 namespace {
 // An audio item's samples for [pos, pos + n), added into `into`.
@@ -2279,6 +2359,7 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
     // thread's own MXCSR is back when the node returns.
     dsp::DenormalGuard denormals;
     Node& node = p.nodes[index];
+    if (node.rack) return processRack(p, node, pos, n, transport);
     forEachStage(node, [](Stage& st) {
         st.outEvents.clear();
         st.sourceIds.clear();
@@ -2748,6 +2829,7 @@ void locateTakes(Node& n, std::int64_t pos, bool wrap, bool keepPlaying = false)
 void locateClass(Plan& p, std::int64_t pos, bool live, bool restartConsole) SUPPLE_RT {
     for (Node& n : p.nodes) {
         if (n.live != live) continue;
+        if (n.rack) locateRack(n, pos, restartConsole);
         locateTakes(n, pos, false, !restartConsole);
         auto it =
             std::lower_bound(n.events.begin(), n.events.end(), pos,
@@ -2809,6 +2891,7 @@ bool processBlockOn(Workers& workers, Plan& p, std::int64_t pos, std::uint32_t n
 
 void locate(Plan& p, std::int64_t pos, bool restartConsole) SUPPLE_RT {
     for (Node& n : p.nodes) {
+        if (n.rack) locateRack(n, pos, restartConsole);
         locateTakes(n, pos, false, !restartConsole);  // adoption keeps takes playing
         auto it =
             std::lower_bound(n.events.begin(), n.events.end(), pos,
@@ -2859,6 +2942,7 @@ void locate(Plan& p, std::int64_t pos, bool restartConsole) SUPPLE_RT {
 void wrapTo(Plan& p, std::int64_t pos, int liveClass) SUPPLE_RT {
     for (Node& n : p.nodes) {
         if (liveClass >= 0 && n.live != (liveClass == 1)) continue;
+        if (n.rack) locateRack(n, pos, true);  // notes held at the wrap end there
         if (!p.rateEnabled) locateTakes(n, pos, true);
         auto it =
             std::lower_bound(n.events.begin(), n.events.end(), pos,

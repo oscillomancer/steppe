@@ -2,6 +2,8 @@
 // Copyright (c) 2026 Supple Audio
 #include "supple/engine/offline.h"
 
+#include "rack_runtime.h"
+
 #include "plan.h"
 #include "stretch.h"
 #include "supple/model/freeze.h"
@@ -30,7 +32,23 @@ using model::Kind;
 using model::Session;
 
 namespace {
-// Keep the target and precisely the tracks whose enabled sends feed it.
+// The node a route leaves and the one it reaches: a track's, or for a
+// module end its rack's (ADR-0062).
+std::pair<std::optional<Id>, std::optional<Id>> routeNodes(const Session& s,
+                                                           const model::Route& r) {
+    auto rackOf = [&](Id module) -> std::optional<Id> {
+        const model::RackModule* m = s.modules.find(module);
+        return m ? std::optional<Id>(m->rack) : std::nullopt;
+    };
+    std::optional<Id> from = r.from.module ? rackOf(*r.from.module) : r.from.track;
+    std::optional<Id> to = r.to.module ? rackOf(*r.to.module)
+                           : r.to.fx   ? model::trackOfFx(s, *r.to.fx)
+                                       : r.to.track;
+    return {from, to};
+}
+
+// Keep the target and precisely the tracks (and racks) whose enabled sends
+// feed it.
 Session upstreamSession(const Session& source, Id target) {
     if (target == model::kMaster) return source;
     Session s = source;
@@ -44,11 +62,19 @@ Session upstreamSession(const Session& source, Id target) {
                 changed |= keep.insert(entry.id).second;
         }
         for (const auto& entry : source.routes) {
-            const auto& route = *entry.value;
-            const auto to = route.to.fx ? model::trackOfFx(source, *route.to.fx) : route.to.track;
-            if (route.from.track && to && keep.count(*to))
-                changed |= keep.insert(*route.from.track).second;
+            const auto [from, to] = routeNodes(source, *entry.value);
+            if (from && to && keep.count(*to)) changed |= keep.insert(*from).second;
         }
+    }
+    // A kept rack's Notes modules still play their tracks' MIDI items.
+    std::set<Id> midiSources;
+    for (const auto& entry : source.modules) {
+        const model::RackModule& m = *entry.value;
+        if (m.type != model::kNotesModule || !keep.count(m.rack)) continue;
+        if (m.source)
+            midiSources.insert(*m.source);
+        else if (const model::Rack* rack = source.racks.find(m.rack))
+            midiSources.insert(rack->track);
     }
     const bool masterFeedsTarget = keep.count(model::kMaster) != 0;
     keep.insert(model::kMaster);
@@ -75,18 +101,20 @@ Session upstreamSession(const Session& source, Id target) {
     s.tracks = tracks.build();
     model::IdMap<model::Item>::Builder items(source.items);
     for (const auto& entry : source.items)
-        if (!keep.count(entry.value->track) || entry.value->track == model::kMaster)
+        if ((!keep.count(entry.value->track) && !midiSources.count(entry.value->track)) ||
+            entry.value->track == model::kMaster)
             items.erase(entry.id);
     s.items = items.build();
     model::IdMap<model::Route>::Builder routes(source.routes);
     for (const auto& entry : source.routes) {
-        const auto to = entry.value->to.fx ? model::trackOfFx(source, *entry.value->to.fx)
-                                           : entry.value->to.track;
-        if (!entry.value->from.track || !to || !keep.count(*entry.value->from.track) ||
-            !keep.count(*to))
-            routes.erase(entry.id);
+        const auto [from, to] = routeNodes(source, *entry.value);
+        if (!from || !to || !keep.count(*from) || !keep.count(*to)) routes.erase(entry.id);
     }
     s.routes = routes.build();
+    model::IdMap<model::Rack>::Builder racks(source.racks);
+    for (const auto& entry : source.racks)
+        if (!keep.count(entry.id)) racks.erase(entry.id);
+    s.racks = racks.build();
     return s;
 }
 }  // namespace
@@ -94,7 +122,14 @@ Session upstreamSession(const Session& source, Id target) {
 // --- instance pool ------------------------------------------------------------------
 
 InstancePool::InstancePool(Resolver resolve, host::HostIdentity identity)
-    : resolve_(std::move(resolve)), identity_(std::move(identity)) {}
+    : racks_(std::make_unique<detail::RackPool>()),
+      resolve_(std::move(resolve)),
+      identity_(std::move(identity)) {}
+
+void InstancePool::setGeneration(std::uint64_t generation) {
+    generation_ = generation;
+    racks_->setGeneration(generation);
+}
 
 InstancePool::~InstancePool() = default;
 
@@ -190,6 +225,7 @@ void InstancePool::prune(const Session& session, std::uint64_t liveGeneration) {
                  ? std::next(it)
                  : instances_.erase(it);
     std::erase_if(retired_, [&](const auto& r) { return r.first <= liveGeneration; });
+    racks_->prune(session, liveGeneration);
 }
 
 void InstancePool::retire(std::unique_ptr<host::Instance> instance) {

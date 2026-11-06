@@ -1078,6 +1078,7 @@ const Schema<RackModule>& schemaOf<RackModule>() {
         b.field("bypass", &RackModule::bypass, boolean());
         dflt(b, d.bypass);
         b.field("source", &RackModule::source, idSchema());
+        b.field("device", &RackModule::device, str());
         b.field("fx", &RackModule::fx, idSchema());
         b.field("learn", &RackModule::learn, schema::arrayOf(paramLearnSchema()));
         dflt(b, d.learn);

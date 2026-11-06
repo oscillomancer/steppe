@@ -497,6 +497,8 @@ struct Checker {
                 fail(at("modules", e.id, "fx"), "a plugin module holds a plug-in (fx)");
             if (m.source && m.type != kNotesModule)
                 fail(at("modules", e.id, "source"), "only a Notes module plays a track's MIDI");
+            if (m.device && m.type != kNotesModule)
+                fail(at("modules", e.id, "device"), "only a Notes module plays a MIDI input");
             if (m.source && !s.tracks.contains(*m.source))
                 fail(at("modules", e.id, "source"), "track " + m.source->str() + " does not exist");
             Count& c = counts[m.rack];

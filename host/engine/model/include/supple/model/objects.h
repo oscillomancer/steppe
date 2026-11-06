@@ -444,7 +444,10 @@ struct RackModule {
     json::Value params = json::Value::object();
     bool bypass = false;
     std::optional<Id> source;  // Notes: the track whose MIDI it plays (unset: the home track)
-    std::optional<Id> fx;      // Plugin: its plug-in instance, in no chain
+    // Notes: a live MIDI input it always plays, matched as a MIDI route's
+    // device (a case-insensitive substring; "": any device).
+    std::optional<std::string> device;
+    std::optional<Id> fx;  // Plugin: its plug-in instance, in no chain
     std::vector<ParamLearn> learn;
     bool operator==(const RackModule&) const = default;
 };

@@ -35,6 +35,10 @@
 
 namespace supple::engine {
 
+namespace detail {
+class RackPool;  // the module instances of racks (ADR-0062)
+}
+
 // Owns the plugin instances for a session's fx objects (main thread). An
 // instance is created on first use and reused while its plugin stays the
 // same; its patch or state is (re)applied when the model's changes.
@@ -58,7 +62,10 @@ class InstancePool {
     void prune(const model::Session& session, std::uint64_t liveGeneration = UINT64_MAX);
     // Instances replaced from now on may still be used by plans before
     // `generation` (the real-time engine sets the next plan's generation).
-    void setGeneration(std::uint64_t generation) { generation_ = generation; }
+    void setGeneration(std::uint64_t generation);
+    // The racks' module instances, which follow the same generations and
+    // pruning (ADR-0062).
+    detail::RackPool& racks() { return *racks_; }
     // The next get() for `id` creates a new instance (fx.restart); the old
     // one lives until prune().
     void restart(model::Id id);
@@ -90,6 +97,7 @@ class InstancePool {
     std::size_t size() const { return instances_.size(); }
 
   private:
+    std::unique_ptr<detail::RackPool> racks_;
     struct Entry {
         std::unique_ptr<host::Instance> instance;
         std::string pluginId;

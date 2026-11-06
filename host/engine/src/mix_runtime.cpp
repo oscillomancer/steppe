@@ -5,6 +5,7 @@
 #include <algorithm>
 
 #include "plan.h"
+#include "rack_runtime.h"
 #include "supple/engine/realtime.h"
 
 namespace supple::engine {
@@ -47,9 +48,21 @@ bool mixOnly(const model::Session& a, const model::Session& b,
         !a.items.sameStorage(b.items) || !a.takes.sameStorage(b.takes) ||
         !a.media.sameStorage(b.media) || !a.midi.sameStorage(b.midi) || !a.fx.sameStorage(b.fx) ||
         !a.autoItems.sameStorage(b.autoItems) || !a.markers.sameStorage(b.markers) ||
-        !a.regions.sameStorage(b.regions) || a.blobs != b.blobs ||
-        a.extraSections != b.extraSections)
+        !a.regions.sameStorage(b.regions) || !a.racks.sameStorage(b.racks) ||
+        !a.cables.sameStorage(b.cables) || a.blobs != b.blobs || a.extraSections != b.extraSections)
         return false;
+    // A module's knobs reach its instance without a compile (RackPool::
+    // applyParams); where it sits and what it is called are the window's.
+    const bool modules =
+        entriesMatch(a.modules, b.modules, [&](model::RackModule x, const model::RackModule& y) {
+            changed |= x.params != y.params || x.x != y.x || x.y != y.y || x.label != y.label;
+            x.params = y.params;
+            x.x = y.x;
+            x.y = y.y;
+            x.label = y.label;
+            return x == y;
+        });
+    if (!modules) return false;
     const bool tracks =
         entriesMatch(a.tracks, b.tracks, [&](model::Track x, const model::Track& y) {
             changed |= x.volumeDb != y.volumeDb || x.pan != y.pan;
@@ -110,6 +123,7 @@ bool Engine::loadMixValues(const model::Session& session, const std::filesystem:
     std::vector<model::EnvTarget> stale = staleCurves_;
     if (!mixOnly(*latest_, session, writeHolds_, changed, stale) || !changed) return false;
     detail::publishMix(*p, session, writeHolds_);
+    plugins_.racks().applyParams(session);
     holdsPending_ = false;
     staleCurves_ = std::move(stale);
     latest_ = std::make_shared<const model::Session>(session);
