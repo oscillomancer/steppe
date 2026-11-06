@@ -110,3 +110,4 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `dust` | Random triggers with no clock, evenly scattered or in bursts, optionally held to the song's grid; a velocity and a random value each; poly |
 | `fit` | A quantizer that follows the harmony: each pitch to the nearest tone of the chord on a poly cable (Changes', Chord's), Degree and Walk along its tones; poly |
 | `phrase` | Melodies in phrases: a call on a metrical rhythm ending open, an answer on the same rhythm that comes home; three forms, renewed by chance |
+| `form` | A song's sections over minutes in four plans: gates for verse, chorus, bridge and the ends, an energy arc, fills before each change |
