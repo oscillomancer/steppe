@@ -4,6 +4,24 @@
 # in stock/ compiled into the DAW as C++, and their tests. MIT, like
 # plugins/.
 
+# --- the rack runtime ---------------------------------------------------------------------
+add_library(rack STATIC rack/src/module_type.cpp rack/src/instance.cpp rack/src/schedule.cpp
+                        rack/src/host_modules.cpp)
+target_include_directories(rack PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/rack/include)
+target_link_libraries(rack PUBLIC supple::script-runtime supple::core-base)
+supple_target_defaults(rack)
+set_target_properties(rack PROPERTIES POSITION_INDEPENDENT_CODE ON)
+add_library(supple::rack ALIAS rack)
+
+if(SUPPLE_BUILD_TESTS)
+  add_executable(rack.tests rack/tests/test_rack.cpp)
+  target_include_directories(rack.tests PRIVATE tests)
+  target_link_libraries(rack.tests PRIVATE supple::rack supple::rack-stock supple::doctest-main)
+  supple_target_defaults(rack.tests)
+  add_test(NAME rack.tests COMMAND rack.tests)
+  set_tests_properties(rack.tests PROPERTIES LABELS "rack;rt")
+endif()
+
 # --- the stock modules ------------------------------------------------------------------
 # Every stock/<name>.cpp is a module: its struct (the one deriving from
 # Module) is found in the file, so adding a module is adding its file.
