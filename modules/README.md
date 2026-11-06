@@ -38,6 +38,7 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `vco` | The analog-style workhorse: sine, triangle, saw, pulse and sub at once, exp and through-zero FM, hard sync, poly |
 | `filter` | A multimode state-variable filter: low, band, high, notch and 24 dB low pass at once, pitch tracking, steady self-oscillation, drive |
 | `noise` | White, pink, brown and blue noise, crackle and clocked digital noise (hiss, metallic buzz, steps), poly |
+| `delay` | A stereo tape-style delay up to 10 s: free or synced, ping-pong, feedback past 100 %, tone, wow and flutter, a send and return to patch into the loop |
 
 ### Modulation, sequencing, generative and utilities
 
