@@ -67,3 +67,4 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `scope` | An oscilloscope: two traces with afterglow, triggered, free or locked to the song, and X-Y |
 | `pitch` | A constant pitch or a transposer: octave, semitone and fine on a poly pitch, with a tuner display |
 | `drift` | Slow, smooth random motion across poly voices, apart or following one shared path |
+| `ratchet` | Gates into bursts of quick pulses, by chance or every Nth gate, curved and fading; poly |
