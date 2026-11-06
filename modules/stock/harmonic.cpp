@@ -122,7 +122,7 @@ struct Harmonic : Module {
             v.step[n] = a;
             total += a * a;
         }
-        const double norm = 0.7 / sqrt(max(total, 1e-12));
+        const double norm = 0.5 / sqrt(max(total, 1e-12));
         for (int n = 0; n < kPartials; ++n) v.step[n] = (v.step[n] * norm - v.amp[n]) / frames;
     }
 
