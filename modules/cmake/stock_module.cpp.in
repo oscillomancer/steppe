@@ -15,7 +15,7 @@ namespace {
 const unsigned char kSource[] = {@HEX@};
 }  // namespace
 
-const StockModule& @NAME@() {
+const StockModule& module_@NAME@() {
     using S = script::stock_@NAME@::@STRUCT@;
     using Code = script::detail::NativeModuleCode<S>;
     static const StockModule module{
