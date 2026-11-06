@@ -629,9 +629,9 @@ TEST_CASE("TCP: the wheel over the tracks scrolls them and the lanes together, n
         }
     CHECK(volumes() == before);  // no fader or pan moved
 
-    // Over the lanes the wheel keeps the time under the pointer in place (the
-    // "mouse_pointer" wheel.zoom setting; the default holds the cursor instead).
-    REQUIRE(f.view().gestures().mouse.set("wheel.zoom", 0, "mouse_pointer"));
+    // Over the lanes the wheel keeps the time under the pointer in place (with
+    // following off; following holds the cursor instead).
+    f.view().setFollow(views::Follow::Off);
     f.view().setPlayhead(4.0);
     f.sync();
     const ui::Rect lanes = f.view().lanesRect();

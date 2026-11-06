@@ -25,8 +25,6 @@ std::string behaviourLabel(std::string_view b) {
     if (b == "scroll_pitch") return "scroll the pitches";
     if (b == "zoom") return "zoom in time";
     if (b == "zoom_rows") return "zoom the keys and rows";
-    if (b == "project_cursor") return "the project cursor (the transport position)";
-    if (b == "mouse_pointer") return "the mouse pointer";
     std::string s(b);
     for (char& c : s)
         if (c == '_') c = ' ';
@@ -46,8 +44,7 @@ void MouseDialog::open(std::string context) {
     auto form = std::make_unique<ui::Node>("mouse");
     form->layout.dir = ui::Layout::Dir::Column;
     form->layout.width = ui::SizeRule::fixed(420);
-    const auto combos = ctx.modifiers ? views::MouseMap::combos()
-                                      : views::MouseMap::combos().first(1);  // the plain press
+    const auto combos = views::MouseMap::combos();
     form->layout.height =
         ui::SizeRule::fixed(96.0f + 30.0f * static_cast<float>(combos.size()) + 36.0f);
     form->layout.padding = ui::Insets::all(12);

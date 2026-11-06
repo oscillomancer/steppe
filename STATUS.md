@@ -270,7 +270,8 @@ instructions are in `docs/guides/installing.md`.
   master playrate knob, context menu, key-bindable pitch steps and
   per-project display range (ADR-0045). Its follow button cycles how the
   view follows the playhead: by page, off, or smooth scrolling while playing,
-  saved per project. Projects and renders default to
+  saved per project; the wheel zooms at the playhead while following, at the
+  pointer when off. Projects and renders default to
   `~/Documents/<slug>-media` (the render folder is choosable), each project
   in a folder of its own with its own media; imports are copied into the
   project by default, and Save as into another folder copies the media. FX

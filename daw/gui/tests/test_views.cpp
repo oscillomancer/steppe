@@ -300,8 +300,8 @@ TEST_CASE("the ruler shows the tempo and meter changes the session carries") {
 }
 
 TEST_CASE(
-    "wheel zoom anchors at the project cursor by default, or under the pointer; keys at the "
-    "playhead") {
+    "wheel zoom anchors at the project cursor while the view follows it, else under the "
+    "pointer; keys at the playhead") {
     Gl& g = gl();
     if (!g.ok) return;
     ui::Root root(*g.window, g.fonts, ui::Theme::dark());
@@ -309,7 +309,7 @@ TEST_CASE(
     views::Viewport v;
     v.startSeconds = 40;
     v.pixelsPerSecond = 40;
-    arrange->setFollow(views::Follow::Off);  // moving the cursor must not move the view
+    arrange->setFollow(views::Follow::Page);  // the default
     arrange->setViewport(v);
     arrange->setPlayhead(50);
     root.damageAll();
@@ -318,8 +318,8 @@ TEST_CASE(
     const double time = arrange->timeAt(600);
     ui::PointerEvent wheel{ui::PointerEvent::Type::Wheel, {600, 300}};  // anywhere on the lanes
     wheel.wheelY = 1;
-    // The default: the cursor stays where it is on screen, wherever the pointer is.
-    CHECK(arrange->gestures().mouse.behaviour("wheel.zoom", 0) == "project_cursor");
+    // Following (by page, the default): the cursor stays where it is on
+    // screen, wherever the pointer is.
     const float cursorX = arrange->playheadX();
     root.pointer(wheel);
     CHECK(arrange->viewport().pixelsPerSecond == doctest::Approx(before * 1.25));
@@ -329,8 +329,15 @@ TEST_CASE(
     root.pointer(wheel);
     CHECK(arrange->viewport().pixelsPerSecond == doctest::Approx(before));
     CHECK(arrange->playheadX() == doctest::Approx(static_cast<double>(cursorX)).epsilon(0.001));
-    // The other setting: the time under the mouse pointer stays put.
-    REQUIRE(arrange->gestures().mouse.set("wheel.zoom", 0, "mouse_pointer"));
+    // Smooth following holds the cursor too.
+    arrange->setFollow(views::Follow::Continuous);
+    root.pointer(wheel);
+    CHECK(arrange->viewport().pixelsPerSecond == doctest::Approx(before * 0.8));
+    CHECK(arrange->playheadX() == doctest::Approx(static_cast<double>(cursorX)).epsilon(0.001));
+    wheel.wheelY = 1;
+    root.pointer(wheel);
+    // Following off: the time under the mouse pointer stays put.
+    arrange->setFollow(views::Follow::Off);
     wheel.wheelY = 1;
     root.pointer(wheel);
     CHECK(arrange->viewport().pixelsPerSecond == doctest::Approx(before * 1.25));
@@ -339,9 +346,10 @@ TEST_CASE(
     root.pointer(wheel);
     CHECK(arrange->viewport().pixelsPerSecond == doctest::Approx(before));
     // A cursor off screen cannot be held in place: the pointer anchors, as it
-    // would with the other setting.
-    REQUIRE(arrange->gestures().mouse.set("wheel.zoom", 0, "project_cursor"));
-    arrange->setPlayhead(5);  // far left of the view (it starts at 40 s)
+    // does with following off.
+    arrange->setFollow(views::Follow::Page);
+    arrange->setPlayhead(5);  // the view pages to it; scroll it away again
+    arrange->setViewport(v);  // far left of the view (it starts at 40 s)
     root.frame(false);
     REQUIRE(arrange->playheadX() < arrange->lanesRect().x);
     wheel.wheelY = 1;
@@ -361,7 +369,7 @@ TEST_CASE("zooming back in returns the anchor to where the timeline's start pull
     views::Viewport v;
     v.startSeconds = 40;
     v.pixelsPerSecond = 40;
-    arrange->setFollow(views::Follow::Off);
+    arrange->setFollow(views::Follow::Page);  // the cursor anchors
     arrange->setViewport(v);
     arrange->setPlayhead(50);
     root.damageAll();
@@ -408,7 +416,7 @@ TEST_CASE("zooming back in returns the anchor to where the timeline's start pull
     root.pointer(wheel);
     CHECK(arrange->playheadX() == doctest::Approx(static_cast<double>(pulled)).epsilon(0.001));
     // The pointer anchor too: the time under a still pointer comes back to it.
-    REQUIRE(arrange->gestures().mouse.set("wheel.zoom", 0, "mouse_pointer"));
+    arrange->setFollow(views::Follow::Off);
     arrange->setViewport(v);
     const double underPointer = arrange->timeAt(600);
     wheel.wheelY = -1;
@@ -419,18 +427,17 @@ TEST_CASE("zooming back in returns the anchor to where the timeline's start pull
     CHECK(arrange->timeAt(600) == doctest::Approx(underPointer).epsilon(0.001));
 }
 
-TEST_CASE("the wheel zoom anchor is a single setting that the mouse file keeps") {
-    views::MouseMap m;
-    const views::MouseMap::Context* c = views::MouseMap::context("wheel.zoom");
-    REQUIRE(c);
-    CHECK_FALSE(c->modifiers);
-    CHECK(m.behaviour("wheel.zoom", 0) == "project_cursor");
-    CHECK(m.toJson()["contexts"].asObject().empty());  // the default is not written
-    REQUIRE(m.set("wheel.zoom", 0, "mouse_pointer"));
-    CHECK_FALSE(m.set("wheel.zoom", 0, "the_moon"));
-    auto back = views::MouseMap::fromJson(m.toJson());
-    REQUIRE(back);
-    CHECK(back->behaviour("wheel.zoom", 0) == "mouse_pointer");
+TEST_CASE("a mouse file with the retired wheel zoom anchor still loads, without it") {
+    // The anchor goes with the follow mode now; the mouse map has no such context.
+    CHECK_FALSE(views::MouseMap::context("wheel.zoom"));
+    CHECK_FALSE(views::MouseMap{}.set("wheel.zoom", 0, "mouse_pointer"));
+    auto doc = json::parse(R"({"schema": "supple.mouse/1.0", "contexts": {
+        "wheel.zoom": {"": "mouse_pointer"}, "item.drag": {"alt": "copy"}}})");
+    REQUIRE(doc);
+    auto loaded = views::MouseMap::fromJson(*doc);
+    REQUIRE(loaded);
+    CHECK(loaded->behaviour("item.drag", ui::kAlt) == "copy");
+    CHECK_FALSE(loaded->toJson()["contexts"].find("wheel.zoom"));
 }
 
 TEST_CASE("the TCP column and the lanes stay aligned through scroll and height changes") {

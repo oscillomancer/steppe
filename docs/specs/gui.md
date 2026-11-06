@@ -443,7 +443,9 @@ to the middle of the view and the view then scrolls under it, a playhead out
 of view is centred at once, and while stopped the view pages. The
 transport bar's follow button cycles page, off and smooth
 (`ui.follow.cycle`); `ui.follow.page`, `ui.follow.off` and
-`ui.follow.continuous` set one, for keys. The mode is UI state, saved per project (§1.2). The ruler's bars row draws the loop range (the time selection)
+`ui.follow.continuous` set one, for keys. The mode also sets where the wheel
+zooms (below): at the playhead while the view follows it, at the pointer when
+off. The mode is UI state, saved per project (§1.2). The ruler's bars row draws the loop range (the time selection)
 and its time row the punch range; a new punch range turns punch on, and an
 edge dragged onto the other edge removes the range (punch or loop off). A
 right-click in those rows offers Loop on/off, Punch on/off, Punch range =
@@ -468,9 +470,9 @@ continuous controls (faders) send coalesced `*.set` edits during the drag
 and one final value (the bus's gesture coalescing). A pooled TCP row pins
 the original track for fader, pan, resize and rename gestures; rebinding
 cancels the gesture. Wheel zoom holds the **project cursor** (the playhead,
-the transport position the position display shows) still by default, or the
-mouse pointer when the mouse setting `wheel.zoom` is `mouse_pointer` (Edit >
-Mouse modifiers); a cursor outside the visible
+the transport position the position display shows) still while the view
+follows the playhead (by page or smooth), or the mouse pointer when following
+is off; a cursor outside the visible
 lanes falls back to the pointer. Keyboard zoom (`ui.arrange.zoom_in/out`:
 = or Shift+= or Keypad +, - or Keypad -) anchors at the playhead. The
 timeline's start stops the view, so zooming out near it pulls the anchor left
@@ -1311,9 +1313,9 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   zoom in time, zoom the keys and rows) —
   from each modifier combination to a behaviour. The defaults are the built-in gestures;
   `mouse.json` (supple.mouse/1.0, only what differs) overrides them, and
-  Edit > Mouse modifiers edits the live map. One context, `wheel.zoom`, is a
-  single setting rather than a modifier map: the wheel's zoom anchor
-  (`project_cursor`, the default, or `mouse_pointer`).
+  Edit > Mouse modifiers edits the live map. The wheel's zoom anchor is not
+  here but goes with the follow mode (§4.3); a saved `wheel.zoom` context
+  (its former single setting) is ignored on load.
   TCP wheel defaults are plain scroll, and Ctrl and Alt resize all; over the
   lanes Alt resizes too, so Alt+wheel resizes every track wherever the pointer
   is over the arrange view. Each modifier combination can be rebound.
@@ -1323,7 +1325,7 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   state. The default monitoring of new channels (off, on — the default — or
   auto; `preferences.json`, supple.preferences/1.6, sets
   `EngineApp::defaultMonitor`, so the agents' track.add follows it too), and
-  a way into the mouse modifiers (where the wheel zoom anchor is set).
+  a way into the mouse modifiers.
   **Audio processing threads** is an advanced live/background
   override: Automatic (default) or a limit per pool including its submitting
   thread; Limit 1 is serial. The menu

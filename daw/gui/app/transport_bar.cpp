@@ -304,7 +304,8 @@ std::unique_ptr<ui::Node> TransportBar::build() {
             sync();
         },
         40);
-    // How the view follows the playhead: by page, not at all, or smoothly.
+    // How the view follows the playhead (by page, not at all, or smoothly),
+    // and with it where the wheel zooms (the playhead, or the pointer when off).
     if (follow_)
         followButton_ = symbolButton(
             "transport.follow", Symbol::FollowPage, "follow page",

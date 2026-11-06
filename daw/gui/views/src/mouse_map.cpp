@@ -32,7 +32,6 @@ const std::vector<MouseMap::Context>& table() {
         {"envelope", "Press an automation lane", {"edit", "edit_free", "toggle", "delete"}},
         {"ruler.marker", "Press a marker or region", {"move", "move_free", "remove"}},
         {"ruler.tempo", "Click a tempo point", {"none", "toggle_ramp"}},
-        {"wheel.zoom", "Zoom with the wheel (anchor)", {"project_cursor", "mouse_pointer"}, false},
         {"tcp.wheel",
          "Wheel over the track control panel",
          {"scroll", "resize_all", "scroll_time", "zoom"}},
@@ -197,6 +196,9 @@ Result<MouseMap> MouseMap::fromJson(const json::Value& doc) {
     if (!ctxs->isObject())
         return Error("mouse.contexts", "contexts maps a context to its combinations", "/contexts");
     for (const auto& [id, entry] : ctxs->asObject()) {
+        // Retired: the wheel zoom's anchor now goes with the follow mode
+        // (gui.md §4.3); an old file's setting is dropped.
+        if (id == "wheel.zoom") continue;
         if (!entry.isObject())
             return Error("mouse.context", "a context maps combinations to behaviours",
                          "/contexts/" + id);

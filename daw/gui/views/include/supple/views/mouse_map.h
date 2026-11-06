@@ -29,7 +29,6 @@ class MouseMap {
     struct Context {
         std::string_view id, label;
         std::vector<std::string_view> behaviours;  // the first is the unmodified default
-        bool modifiers = true;  // false: a single setting, only the plain combination applies
     };
     static std::span<const Context> contexts();
     static const Context* context(std::string_view id);

@@ -27,9 +27,10 @@ The last of the transport buttons sets how the view follows the playhead.
 Click it to go round the three modes: by page (the default: when the playhead
 leaves the view, the view jumps ahead), off (the view stays where you put it),
 and smooth (while playing, the view scrolls with the playhead held in the
-middle). The button is lit while it is off or smooth. The actions list has the same
-choices under "View: … playhead", for binding keys. Each project remembers its
-mode.
+middle). The button is lit while it is off or smooth. The mode also sets where
+the mouse wheel zooms: on the playhead while the view follows it, under the
+mouse pointer when following is off. The actions list has the same choices
+under "View: … playhead", for binding keys. Each project remembers its mode.
 
 ## Audio
 

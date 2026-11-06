@@ -467,15 +467,11 @@ TEST_CASE("the mouse modifiers dialog edits the live map and saves it (gap log #
     dialog.open("envelope");
     a.root->frame(false);
     CHECK(a.root->find("mouse.set.alt")->valueText() == "delete");
-    // The wheel's zoom anchor is one setting: only the plain row, default the project cursor.
+    // The wheel's zoom anchor goes with the follow button, not here: asked
+    // for, the dialog opens on its first context.
     dialog.open("wheel.zoom");
     a.root->frame(false);
-    CHECK_FALSE(a.root->find("mouse.set.alt"));
-    REQUIRE(a.root->find("mouse.set."));
-    CHECK(a.root->find("mouse.set.")->valueText().find("project cursor") != std::string::npos);
-    dialog.set("wheel.zoom", 0, "mouse_pointer");
-    CHECK(map.behaviour("wheel.zoom", 0) == "mouse_pointer");
-    CHECK(a.root->find("mouse.set.")->valueText() == "the mouse pointer");
+    CHECK(a.root->find("mouse.context")->valueText().find("Drag an item") == 0);
     dialog.open("tcp.wheel");
     a.root->frame(false);
     CHECK(a.root->find("mouse.set.ctrl")->valueText() == "resize all track heights");

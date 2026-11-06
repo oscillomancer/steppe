@@ -1369,13 +1369,14 @@ bool ArrangeView::onPointer(const ui::PointerEvent& e) {
         v.startSeconds =
             std::max(0.0, v.startSeconds - static_cast<double>(dx) * 60.0 / v.pixelsPerSecond);
     } else {  // horizontal zoom, held still at the anchor
-        // The anchor is the project cursor (the playhead, the transport position)
-        // by default, or the mouse pointer (the "wheel.zoom" mouse setting). A
-        // cursor outside the lanes' view has nothing to hold still: zoom at the
-        // pointer then, as the cursor would otherwise slide out of reach.
+        // The anchor goes with the follow mode (gui.md §4.3): the project
+        // cursor (the playhead, the transport position) while the view follows
+        // it, the mouse pointer when following is off. A cursor outside the
+        // lanes' view has nothing to hold still: zoom at the pointer then, as
+        // the cursor would otherwise slide out of reach.
         const ui::Rect lanes = lanesRect();
         const double factor = std::pow(1.25, static_cast<double>(e.wheelY));
-        if (gestures_->mouse.behaviour("wheel.zoom", e.mods) == "project_cursor") {
+        if (follow_ != Follow::Off) {
             const float cursorX = playheadX();
             if (cursorX >= lanes.x && cursorX <= lanes.right()) {
                 zoomBy(factor, playhead_, cursorX - lanes.x, true);
