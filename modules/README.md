@@ -61,6 +61,7 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `pitchshift` | A pitch shifter, two octaves either way: two delay taps cross-fading in step with the input (a held note keeps its pitch), fine, window size, feedback for shimmer, mix, poly |
 | `freeze` | A spectral freeze: a gate or switch holds the spectrum and plays it on, partials at their exact pitches; blur to smear in time, shift by semitones keeping each partial whole, tilt, poly |
 | `orbit` | A circular panner: the sound turns round four or eight speakers at a rate either way, angle, width from a point to everywhere, poly voices spread round the ring, Doppler in a room to 10 m across, a stereo fold-down, reset |
+| `glitch` | A clocked glitch: at each step (clock or the song's grid) a chance of a stutter, a reverse, a pitch drop or a tape stop, by weights; slices in note values that Vary halves for rolls; seeded, with a reset; an active gate, poly |
 
 ### Modulation, sequencing, generative and utilities
 
