@@ -3,7 +3,8 @@
 // Automation lanes for plugin parameters (P5.14): a parameter's range, curve
 // and units come from the effect's description (fx.describe). Cached per
 // effect and parameter; a parameter the plugin does not describe is
-// remembered as having no lane.
+// remembered as having no lane. A rack module's knobs (ADR-0062) take theirs
+// from the module type.
 #pragma once
 
 #include <map>
@@ -29,6 +30,10 @@ class PluginScales {
     engine::EngineApp* app_;
     std::map<std::pair<model::Id, std::string>, std::shared_ptr<const params::DescribedParam>>
         cache_;
+    // A module knob's, with the catalog generation it was made from.
+    std::map<std::pair<model::Id, std::string>,
+             std::pair<std::uint64_t, std::shared_ptr<const params::DescribedParam>>>
+        moduleCache_;
 };
 
 }  // namespace supple::gui
