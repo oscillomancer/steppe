@@ -1276,6 +1276,73 @@ TEST_CASE("rack window: a cable glows with its source's signal, even from out of
     }
 }
 
+TEST_CASE("rack window: Tidy up lays out the rack, or the selection, in one undo step") {
+    Fixture f;
+    if (!f.ok) return;
+    auto made = f.exec("rack.add", R"({"name":"Heap"})");
+    const std::string rack = made["rack"].asString(), out = made["out"].asString();
+    // A heap: every module on the same spot.
+    const std::string lfo = f.add(rack, "lfo", 300, 200), vco = f.add(rack, "vco", 300, 200);
+    const std::string vca = f.add(rack, "vca", 300, 200), adsr = f.add(rack, "adsr", 300, 200);
+    f.exec("module.set", R"({"module":")" + out + R"(","x":300,"y":200})");
+    f.cable(lfo + ".out", vco + ".exp_fm");
+    f.cable(vco + ".sine", vca + ".in");
+    f.cable(adsr + ".envelope", vca + ".cv");
+    f.cable(vca + ".out", out + ".l");
+    f.racks->open();
+    f.frame();
+    const std::vector<std::string> all{lfo, vco, vca, adsr, out};
+    auto place = [&](const std::string& id) {
+        const auto* m = f.app->head().modules.find(*model::Id::parse(id));
+        REQUIRE(m);
+        return std::pair{m->x, m->y};
+    };
+    auto rectOf = [&](const std::string& id) {
+        const auto* m = f.racks->space()->scene().module(*model::Id::parse(id));
+        REQUIRE(m);
+        return m->rect();
+    };
+    auto menu = [&](const std::string& label) {
+        const ui::Rect b = f.racks->space()->bounds();
+        const ui::Point empty{b.x + 20, b.y + 20};
+        f.pointer(ui::PointerEvent::Type::Down, empty, 3);
+        f.pointer(ui::PointerEvent::Type::Up, empty, 3);
+        return f.pick("rack.space.menu", label);
+    };
+    SUBCASE("the whole rack") {
+        REQUIRE(menu("Tidy up"));
+        f.snapshot("rack-tidy.png");
+        for (std::size_t i = 0; i < all.size(); ++i)
+            for (std::size_t j = i + 1; j < all.size(); ++j) {
+                CAPTURE(all[i]);
+                CAPTURE(all[j]);
+                CHECK(rectOf(all[i]).intersect(rectOf(all[j])).empty());
+            }
+        // From the heap's top-left, all in view.
+        double left = 1e9, top = 1e9;
+        for (const auto& id : all) {
+            left = std::min(left, place(id).first);
+            top = std::min(top, place(id).second);
+        }
+        CHECK(left == doctest::Approx(300));
+        CHECK(top == doctest::Approx(200));
+        const ui::Rect seen = f.racks->space()->visibleSpace();
+        for (const auto& id : all) CHECK(!rectOf(id).intersect(seen).empty());
+        // One undo step puts the heap back.
+        f.exec("history.undo", "{}");
+        f.frame();
+        for (const auto& id : all) CHECK(place(id) == std::pair{300.0, 200.0});
+    }
+
+    SUBCASE("the selection") {
+        f.racks->space()->select({*model::Id::parse(vco), *model::Id::parse(vca)});
+        f.frame();
+        REQUIRE(menu("Tidy up selection"));
+        CHECK(rectOf(vco).intersect(rectOf(vca)).empty());
+        for (const auto& id : {lfo, adsr, out}) CHECK(place(id) == std::pair{300.0, 200.0});
+    }
+}
+
 TEST_CASE("face labels keep to their own room on every stock and host module") {
     Fixture f;
     if (!f.ok) return;

@@ -327,6 +327,9 @@ box on the space to select several, nudge them with the arrow keys
 (Shift: finely), and Delete removes them. Ctrl+C and Ctrl+V copy and paste
 the selected modules with the cables between them (paste lands at the
 pointer, in this rack or another), Ctrl+X cuts and Ctrl+D duplicates.
+**Tidy up** in the space's right-click menu lays the rack out by signal
+flow, left to right; with several modules selected, only they move. Undo
+puts them back.
 Hover a module, or select some, and their cables stand out while the rest
 fade back.
 

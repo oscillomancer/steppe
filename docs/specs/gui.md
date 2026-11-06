@@ -1207,8 +1207,11 @@ a new channel). It follows rack.md §8.
   Bypass, Copy, Cut, Duplicate, Randomize, Presets… (the type's factory
   patches, `module.set preset`), Show source, Save as rack preset… (the
   selection) and Delete. On the space: Add module…, Add plugin… there,
-  Load rack preset… (there), Save rack as preset…, Paste, Show everything
-  and Show selection.
+  Load rack preset… (there), Save rack as preset…, Paste, Tidy up, Show
+  everything and Show selection. Tidy up is `rack.arrange` (one undo
+  step): with two or more modules selected it reads "Tidy up selection"
+  and moves only them, from their top-left, then brings them into view;
+  otherwise it lays out the whole rack and shows everything.
 - **Adding at the pointer.** Typing a letter or digit over the space, a
   double click on it, or its menu's Add module… opens a search list there
   ("rack.add": the browser's entries, Plugin… and the rack presets

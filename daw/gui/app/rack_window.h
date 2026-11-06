@@ -140,6 +140,9 @@ class RackWindow {
   private:
     void renameRack(model::Id rack);
     void deleteSelected();
+    // rack.arrange: the selection when it holds several modules, else the
+    // whole rack; then shows what moved.
+    void tidyUp();
     ui::Root& root() const { return panel_.root(); }
 
     FloatingPanel& panel_;

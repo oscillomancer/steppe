@@ -367,7 +367,8 @@ instructions are in `docs/guides/installing.md`.
   for big patches: type or double-click to add a module at the pointer (a
   cable let go on nothing picks a module that takes it), copy, cut, paste
   and duplicate with the cables among the modules, arrow-key nudges, fit to
-  the selection, zoom out to 10 % with module names drawn readable, and the
+  the selection, Tidy up (`rack.arrange`, the rack or the selection), zoom
+  out to 10 % with module names drawn readable, and the
   hovered or selected modules' cables brought forward while the rest fade.
   Knob and jack names keep to cells of their own (smaller, wrapped or cut
   rather than running into a neighbour or under a control), and cables glow
