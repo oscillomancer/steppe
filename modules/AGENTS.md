@@ -25,6 +25,9 @@ specific to `modules/`: the modular racks' modules (ADR-0062,
   constructors or C arrays; locals initialised; `idiv`/`imod` for division
   by a variable; float to int only through `toInt` and friends. The JIT
   differential test compiles every stock module and requires the same bits.
+  Helpers may take `const Input&`, `Output&` and `Param&`/`const Param&`.
+  Use `shl`/`shr`/`bit`/`popcount` for defined variable-count bit operations;
+  `Trigger` supplies gate hysteresis and `Pulse` supplies 1 ms triggers.
 - **Identity.** File `stock/<name>.cpp`, id `com.suppleaudio.rack.<name>`,
   vendor `Supple Audio`, version `1.0.0`. The id and every parameter and
   port key are permanent once shipped: add new keys, never rename. A key is

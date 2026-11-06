@@ -270,6 +270,23 @@ int saturate(double x) {
 }
 }  // namespace
 
+int shl(int x, int n) {
+    return static_cast<unsigned>(n) < 32 ? std::bit_cast<int>(std::bit_cast<std::uint32_t>(x) << n)
+                                         : 0;
+}
+int shr(int x, int n) {
+    return static_cast<unsigned>(n) < 32 ? std::bit_cast<int>(std::bit_cast<std::uint32_t>(x) >> n)
+                                         : 0;
+}
+int bit(int x, int n) { return shr(x, n) & 1; }
+int popcount(int x) { return std::popcount(std::bit_cast<std::uint32_t>(x)); }
+
+void Pulse::fire() {
+    const auto* in = detail::current();
+    const double rate = in ? in->sampleRate : 48000.0;
+    fire(max(1, ceilToInt(rate * 0.001)));
+}
+
 int toInt(double x) { return saturate(x); }
 int floorToInt(double x) {
     // A normal positive value truncates to its floor without a libm call.

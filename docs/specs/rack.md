@@ -201,6 +201,25 @@ A cable moves a parameter by `amount × value`: for a frequency the amount is
 in octaves (`value · 2^(amount·x)`), otherwise in the parameter's unit (a
 percent in percent, dB, semitones, ms), clamped to the parameter's range.
 
+**Helpers.** Member/free functions may take `const Input&`, `Output&`,
+`Param&` and `const Param&`. They preserve the
+host bindings and obey the ordinary audio/UI, read-only-parameter and
+evaluation-order rules.
+
+**Defined bits.** `shl(x, n)`, `shr(x, n)`, `bit(x, n)` and `popcount(x)`
+operate on the 32-bit representation of ints. Left shifts discard overflow;
+right shifts zero-fill; `bit` returns 0/1. Counts outside 0..31 return zero
+for shifts and bit reads. `popcount` counts ones, including the sign bit.
+Ordinary shift operators retain their constant-count restrictions.
+
+**Gates.** `Trigger::rose(x)` updates a hysteresis gate (rise at >=0.5,
+fall below 0.25) and reports only a rising edge; `high()` reads it and
+`clear()` resets it. `Pulse::fire()` restarts a 1 ms pulse, rounded up to a
+whole frame at the instance's sample rate; `fire(frames)` sets an explicit
+length (nonpositive clears). `next()` consumes one frame, returning 1 while
+active and 0 afterwards; `clear()` resets it. Both are small copyable value
+types, usually held in `Array<Trigger, 16>` / `Array<Pulse, 16>` for polyphony.
+
 ### 3.5 The face
 
 Without `panel()`, the automatic layout (§4.5). With it:

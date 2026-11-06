@@ -98,6 +98,12 @@ int idiv(int a, int b);
 int imod(int a, int b);
 // i wrapped into 0..n-1 (for n > 0; 0 otherwise), negative i included.
 int wrap(int i, int n);
+// Defined 32-bit operations. Shift counts outside 0..31 give 0. shr is a
+// logical (zero-filling) right shift; bit gives 0 or 1. popcount counts ones.
+int shl(int x, int n);
+int shr(int x, int n);
+int bit(int x, int n);
+int popcount(int x);
 
 // --- containers ----------------------------------------------------------------
 
@@ -1109,6 +1115,42 @@ class Module : public Plugin {
     // A seed from the project's seed and the module's id: the same in every
     // render, different for each module (Random::seed(seed())).
     int seed() const;
+};
+
+// A gate with hysteresis: rises at >= 0.5 and falls below 0.25. rose(x)
+// updates its state and returns true only on a low-to-high transition.
+class Trigger {
+  public:
+    bool rose(double x) {
+        const bool before = high_;
+        if (x >= 0.5)
+            high_ = true;
+        else if (x < 0.25)
+            high_ = false;
+        return high_ && !before;
+    }
+    bool high() const { return high_; }
+    void clear() { high_ = false; }
+
+  private:
+    bool high_ = false;
+};
+
+// A 1 ms gate at the current instance's sample rate, or an explicit number
+// of frames. fire() restarts it; next() returns 1 while active, then 0.
+class Pulse {
+  public:
+    void fire();
+    void fire(int frames) { remaining_ = frames > 0 ? frames : 0; }
+    double next() {
+        if (remaining_ <= 0) return 0.0;
+        --remaining_;
+        return 1.0;
+    }
+    void clear() { remaining_ = 0; }
+
+  private:
+    int remaining_ = 0;
 };
 
 // --- DSP -------------------------------------------------------------------------

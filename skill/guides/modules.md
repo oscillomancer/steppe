@@ -120,6 +120,30 @@ the moved value stays in the parameter's range. Toggles take no cables.
 Read `at(i, c)` where a cable should move DSP per frame: a level, cutoff
 or rate. `update()` follows knob changes; it is not called per cable sample.
 
+## Bit operations and gates
+
+Use `shl(x, n)`, `shr(x, n)`, `bit(x, n)` and `popcount(x)` on `int`s.
+They operate on the 32-bit representation, including the sign bit.
+`shl` shifts left and discards overflow bits; `shr` shifts right with zero
+fill. `bit` gives bit `n` as 0 or 1; `popcount` counts set bits (32 for -1).
+Shifts and bit reads give 0 for `n < 0` or `n >= 32`. The ordinary shift
+operators keep their existing constant-count checks.
+
+`Trigger t` starts low. `t.rose(x)` updates its hysteresis state, returning
+true on a rising edge: high at `x >= 0.5`, low at `x < 0.25`, unchanged
+between. `t.high()` reads its state; `t.clear()` returns it low.
+
+`Pulse p` starts silent. `p.fire()` restarts a 1 ms pulse at the current
+sample rate, rounded up to a whole frame (45 frames at 44.1 kHz).
+`p.fire(frames)` chooses an explicit length; zero or negative clears it.
+Each `p.next()` returns 1 while consuming a frame, then 0; `p.clear()`
+clears it. Both are small, copyable value types. Keep one per channel in
+`Array<Trigger, 16>` and `Array<Pulse, 16>`.
+
+Member and free helper functions may take `const Input&`, `Output&`,
+`Param&` or `const Param&`, preserving the member's host binding and the
+ordinary audio/UI and evaluation-order checks.
+
 ## Hooks and the rack's grid
 
 | Hook | Use |

@@ -1519,3 +1519,88 @@ TEST_CASE("module identity and context checks preserve the script subset") {
         firstError(moduleScript("Param p = frequency(\"P\", 20, 20000, 1000).polyModulated();")) ==
         "script.module.modulation");
 }
+
+TEST_CASE("defined 32-bit helpers cover every shift count without UB") {
+    CHECK(ss::shl(1, 31) == std::numeric_limits<int>::min());
+    CHECK(ss::shr(-1, 1) == std::numeric_limits<int>::max());
+    CHECK(ss::popcount(-1) == 32);
+    CHECK(ss::popcount(std::numeric_limits<int>::min()) == 1);
+    for (int n :
+         {std::numeric_limits<int>::min(), -32, -1, 32, 33, std::numeric_limits<int>::max()}) {
+        CHECK(ss::shl(-1, n) == 0);
+        CHECK(ss::shr(-1, n) == 0);
+        CHECK(ss::bit(-1, n) == 0);
+    }
+    const auto source = moduleScript("Output out = audioOut(\"Out\");", R"(
+        void process(int frames) {
+            for (int n = -2; n < 34; ++n) {
+                int x = n - 2;
+                int y = shl(x, n);
+                int z = shr(x, n);
+                out[0][0] += y * 0.000001 + z * 0.0000001 + bit(x, n) + popcount(x);
+            }
+        })");
+    for (bool interpret : {false, true}) {
+        auto r = compileOk(source, {.interpret = interpret});
+        auto code = scriptc::moduleCode(r.program);
+        void* self = code->create();
+        sd::Instance record;
+        sd::Instance::bind(*static_cast<ss::Plugin*>(self), &record);
+        double sample = 0, spare = 0;
+        auto& port = *reinterpret_cast<ss::Output*>(static_cast<unsigned char*>(self) +
+                                                    code->ports()[0].offset);
+        sd::PortBinding::bindOutput(port, &sample, &spare, 1, 1, 1);
+        sd::CurrentScope scope(&record);
+        if (interpret)
+            code->process()(&record, self, 1);
+        else
+            callRealtimeModule(code->process(), &record, self, 1);
+        double expected = 0;
+        for (int n = -2; n < 34; ++n) {
+            int x = n - 2;
+            int y = ss::shl(x, n), z = ss::shr(x, n);
+            expected += y * 0.000001 + z * 0.0000001 + ss::bit(x, n) + ss::popcount(x);
+        }
+        CHECK(std::bit_cast<std::uint64_t>(sample) == std::bit_cast<std::uint64_t>(expected));
+        code->destroy(self);
+    }
+}
+
+TEST_CASE("gate helpers follow hysteresis and frame-count pulse lengths") {
+    ss::Trigger t;
+    CHECK_FALSE(t.high());
+    CHECK_FALSE(t.rose(0.49));
+    CHECK(t.rose(0.5));
+    CHECK(t.high());
+    CHECK_FALSE(t.rose(0.25));
+    CHECK(t.high());
+    CHECK_FALSE(t.rose(0.249));
+    CHECK_FALSE(t.high());
+    CHECK(t.rose(1));
+    ss::Trigger copy = t;
+    t.clear();
+    CHECK_FALSE(t.high());
+    CHECK(copy.high());
+    ss::Pulse p;
+    CHECK(p.next() == 0);
+    for (double rate : {1000.0, 44100.0, 48000.0, 96000.0}) {
+        sd::Instance record;
+        record.sampleRate = rate;
+        sd::CurrentScope scope(&record);
+        p.fire();
+        const int frames = ss::ceilToInt(rate * 0.001);
+        for (int i = 0; i < frames; ++i) CHECK(p.next() == 1);
+        CHECK(p.next() == 0);
+    }
+    p.fire(2);
+    ss::Pulse copyPulse = p;
+    CHECK(p.next() == 1);
+    p.fire(1);
+    CHECK(p.next() == 1);
+    CHECK(p.next() == 0);
+    CHECK(copyPulse.next() == 1);
+    p.fire(-1);
+    CHECK(p.next() == 0);
+    copyPulse.clear();
+    CHECK(copyPulse.next() == 0);
+}

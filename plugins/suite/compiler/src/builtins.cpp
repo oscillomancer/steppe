@@ -754,6 +754,19 @@ void Builtins::addClasses() {
         +[](S::Stft* s, int k, double g) { s->scale(k, g); });
     r.method(stft, "void clear()", +[](S::Stft* s) { s->clear(); });
 
+    auto* trigger = addClass("Trigger", sizeof(S::Trigger), alignof(S::Trigger));
+    r.lifetime<S::Trigger>(trigger);
+    r.method(
+        trigger, "bool rose(double x)", +[](S::Trigger* p, double x) -> int { return p->rose(x); });
+    r.method(trigger, "bool high() const", +[](const S::Trigger* p) -> int { return p->high(); });
+    r.method(trigger, "void clear()", +[](S::Trigger* p) { p->clear(); });
+    auto* pulse = addClass("Pulse", sizeof(S::Pulse), alignof(S::Pulse));
+    r.lifetime<S::Pulse>(pulse);
+    r.method(pulse, "void fire()", +[](S::Pulse* p) { p->fire(); });
+    r.method(pulse, "void fire(int frames)", +[](S::Pulse* p, int n) { p->fire(n); });
+    r.method(pulse, "double next()", +[](S::Pulse* p) { return p->next(); });
+    r.method(pulse, "void clear()", +[](S::Pulse* p) { p->clear(); });
+
     auto* random = addClass("Random", sizeof(S::Random), alignof(S::Random));
     r.lifetime<S::Random>(random);
     r.method(random, "void seed(int seed)", +[](S::Random* g, int s) { g->seed(s); });
@@ -1252,6 +1265,10 @@ void Builtins::addFunctions() {
     r.fn("int floorToInt(double x)", +[](double x) { return S::floorToInt(x); });
     r.fn("int ceilToInt(double x)", +[](double x) { return S::ceilToInt(x); });
     r.fn("int roundToInt(double x)", +[](double x) { return S::roundToInt(x); });
+    r.fn("int shl(int x, int n)", +[](int x, int n) { return S::shl(x, n); });
+    r.fn("int shr(int x, int n)", +[](int x, int n) { return S::shr(x, n); });
+    r.fn("int bit(int x, int n)", +[](int x, int n) { return S::bit(x, n); });
+    r.fn("int popcount(int x)", +[](int x) { return S::popcount(x); });
     r.fn("int idiv(int a, int b)", +[](int a, int b) { return S::idiv(a, b); });
     r.fn("int imod(int a, int b)", +[](int a, int b) { return S::imod(a, b); });
     r.fn("int wrap(int i, int n)", +[](int i, int n) { return S::wrap(i, n); });
