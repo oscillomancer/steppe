@@ -65,6 +65,20 @@ Theme Theme::dark(Palette palette) {
                         {"track-violet", 0x9a84c9u},
                         {"track-grey", 0x8f8a82u}})
         t.colors_[k] = Color::hex(v);
+    // Modular racks (ADR-0062): a jack's and cable's colour by signal kind,
+    // the hole of a jack, and a module's face. Distinct in hue and close in
+    // weight, so no kind shouts; none is a state colour.
+    for (auto [k, v] : {std::pair{"signal-audio", 0xd9a75au},
+                        {"signal-pitch", 0x6f9fd6u},
+                        {"signal-gate", 0xd56f5fu},
+                        {"signal-cv", 0xa68bd9u},
+                        {"signal-unipolar", 0x86b56fu},
+                        {"signal-phase", 0x5db2aau},
+                        {"jack-hole", 0x0d0c0au},
+                        {"module", 0x2b2823u},
+                        {"module-title", 0x35312bu},
+                        {"module-well", 0x181613u}})
+        t.colors_[k] = Color::hex(v);
     // Warm: an orange ink for the accent, focus and selection; strip types keep
     // their colours (channel blue, buss amber, master red).
     if (palette == Palette::Warm)
@@ -115,6 +129,17 @@ Theme Theme::light(Palette palette) {
                         {"track-blue", 0x456fa3u},
                         {"track-violet", 0x7461a8u},
                         {"track-grey", 0x77716au}})
+        t.colors_[k] = Color::hex(v);
+    for (auto [k, v] : {std::pair{"signal-audio", 0xa8741eu},
+                        {"signal-pitch", 0x3a69a5u},
+                        {"signal-gate", 0xb2483au},
+                        {"signal-cv", 0x7458a9u},
+                        {"signal-unipolar", 0x4c8a3bu},
+                        {"signal-phase", 0x2a7f78u},
+                        {"jack-hole", 0x26221du},
+                        {"module", 0xfffdf9u},
+                        {"module-title", 0xebe5d9u},
+                        {"module-well", 0xe2dccfu}})
         t.colors_[k] = Color::hex(v);
     if (palette == Palette::Warm)
         for (auto [k, v] :

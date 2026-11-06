@@ -3,6 +3,7 @@
 #include "supple/views/envelope_lane.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 
@@ -223,6 +224,19 @@ int envOrder(const model::Envelope& env) {
 }
 
 std::string envTitle(const model::Envelope& env, const model::Session& session) {
+    // A rack module's knob: "Bells › Osc · fine".
+    if (env.target.object.kind == model::Kind::Module)
+        if (const model::RackModule* m = session.modules.find(env.target.object)) {
+            std::string name = model::moduleLabel(session, env.target.object);
+            if (name.empty()) {
+                const auto dot = m->type.rfind('.');
+                name = m->type.substr(dot == std::string::npos ? 0 : dot + 1);
+                if (!name.empty())
+                    name[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(name[0])));
+            }
+            return model::rackLabel(session, m->rack) + " \u203a " + name + " \u00b7 " +
+                   envTitle(env);
+        }
     const model::Route* r = env.target.object.kind == model::Kind::Route
                                 ? session.routes.find(env.target.object)
                                 : nullptr;

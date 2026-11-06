@@ -435,9 +435,16 @@ bool Root::click(std::string_view id, int button) {
     return true;
 }
 
-void Root::key(int keycode, unsigned mods) {
+void Root::keyUp(int keycode, unsigned mods) {
     Dispatch dispatch(*this);
     const KeyEvent e{keycode, mods, false};
+    for (Node* n = focused_; attached(n); n = attached(n) ? n->parent() : nullptr)
+        if (n->enabled && n->onKeyUp(e)) return;
+}
+
+void Root::key(int keycode, unsigned mods, bool repeat) {
+    Dispatch dispatch(*this);
+    const KeyEvent e{keycode, mods, repeat};
     for (Node* n = focused_; attached(n); n = attached(n) ? n->parent() : nullptr)
         if (n->enabled && n->onKey(e)) return;
     if (keycode == SDLK_ESCAPE && !popups_.empty()) {
@@ -538,7 +545,10 @@ void Root::handle(const SDL_Event& e) {
             break;
         }
         case SDL_EVENT_KEY_DOWN:
-            key(static_cast<int>(e.key.key), modsFrom(e.key.mod));
+            key(static_cast<int>(e.key.key), modsFrom(e.key.mod), e.key.repeat);
+            break;
+        case SDL_EVENT_KEY_UP:
+            keyUp(static_cast<int>(e.key.key), modsFrom(e.key.mod));
             break;
         case SDL_EVENT_TEXT_INPUT:
             text(e.text.text);

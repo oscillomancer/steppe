@@ -54,6 +54,7 @@
 #include "mouse_dialog.h"
 #include "plugin_windows.h"
 #include "preferences.h"
+#include "rack_window.h"
 #include "render_dialog.h"
 #include "routing_matrix.h"
 #include "screensets.h"
@@ -399,6 +400,8 @@ int main(int argc, char** argv) {
                                800, 360);
     gui::FloatingPanel routingPanel(**platform, **window, root, SUPPLE_GUI_FONTS_DIR, "Routing",
                                     860, 560, 800, 360);
+    gui::FloatingPanel rackPanel(**platform, **window, root, SUPPLE_GUI_FONTS_DIR, "Racks", 1180,
+                                 720, 640, 400);
     bool quit = false;
     std::vector<std::filesystem::path> dropped;  // files of a drop in progress
     ui::Point dropAt{};
@@ -408,6 +411,8 @@ int main(int argc, char** argv) {
     appActions.onError = [](const std::string& message) {
         std::fprintf(stderr, "%s\n", message.c_str());
     };
+    // Before the chrome: the toolbar and menus list the actions it adds.
+    gui::RackWindow racks(rackPanel, appActions, dispatcher, **app, uiState);
     auto chromeLayout = gui::ChromeLayout::load(gui::ChromeLayout::defaultFile(product::kSlug));
     if (!chromeLayout)
         std::fprintf(stderr, "menus: %s (using the defaults)\n",
@@ -426,6 +431,7 @@ int main(int argc, char** argv) {
         root.setTheme(look.theme());
         fxPanel.setTheme(root.theme());
         routingPanel.setTheme(root.theme());
+        rackPanel.setTheme(root.theme());
         if (o.offscreen) return;
         if (auto saved = look.save(appearanceFile); !saved)
             std::fprintf(stderr, "appearance: %s\n", saved.error().toString().c_str());
@@ -449,6 +455,9 @@ int main(int argc, char** argv) {
     shell.onRouting = [&routing](const model::Id&, const ui::Rect& anchor) {
         routing.open(anchor);
     };
+    racks.openEditor = [&](model::Id fx) { return pluginWindows.toggle(fx); };
+    racks.spaceTap = [&] { (void)appActions.run("transport.toggle"); };
+    racks.favouritesFile = gui::Favourites::defaultFile(product::kSlug);
     gui::Mixer mixer(root, appActions, dispatcher, **app, meterFeed);
     mixer.onAddStrip = [&shell](const std::string& type) { shell.addStrip(type); };
     mixer.inputText = [&shell](const model::Id& track) { return shell.inputLabel(track); };
@@ -548,7 +557,7 @@ int main(int argc, char** argv) {
         return appActions.key(e.key, e.mods, typing, gui::keySections(source));
     };
     root.onUnhandledKey = [&](const ui::KeyEvent& e) { return unhandledKey(e, root); };
-    fxPanel.onUnhandledKey = routingPanel.onUnhandledKey = unhandledKey;
+    fxPanel.onUnhandledKey = routingPanel.onUnhandledKey = rackPanel.onUnhandledKey = unhandledKey;
     {
         auto frame = std::make_unique<ui::Node>("window");
         frame->layout.dir = ui::Layout::Dir::Column;
@@ -959,12 +968,17 @@ int main(int argc, char** argv) {
             auto v = json::Value::object();
             v["fx"] = fxPanel.saveLayout();
             v["routing"] = routingPanel.saveLayout();
+            v["rack"] = rackPanel.saveLayout();
             return v;
         },
         [&](const json::Value& v) {
             fxPanel.loadLayout(v.find("fx") ? *v.find("fx") : json::Value());
             routingPanel.loadLayout(v.find("routing") ? *v.find("routing") : json::Value());
+            rackPanel.loadLayout(v.find("rack") ? *v.find("rack") : json::Value());
         });
+    uiFile.add(
+        "racks", [&] { return racks.saveLayout(); },
+        [&](const json::Value& v) { racks.loadLayout(v); });
     uiFile.add(
         "window",
         [&] {
@@ -1093,6 +1107,8 @@ int main(int argc, char** argv) {
             shell.sync(event);
             midiEditor.sync();
             routing.sync();
+            racks.sync();
+            racks.tick();
             mixer.sync();
             history.sync();
             const auto now = Clock::now();
@@ -1135,6 +1151,8 @@ int main(int argc, char** argv) {
         include(root.frameDeadline());  // a frame held back by the frame cap
         include(fxPanel.frameDeadline());
         include(routingPanel.frameDeadline());
+        include(rackPanel.frameDeadline());
+        include(racks.nextDeadline());
         // The playhead has a frame deadline only during playback/recording.
         if (shell.arrange()->playing()) include(now + std::chrono::milliseconds(16));
         if (auto error = pluginWindows.fdError()) {
@@ -1170,7 +1188,8 @@ int main(int argc, char** argv) {
         // A control's drag reaches the model once per frame (Root::handle):
         // its latest position goes now, as input, when a frame is due.
         for (ui::Root* r : {&root, fxPanel.isOpen() ? &fxPanel.root() : nullptr,
-                            routingPanel.isOpen() ? &routingPanel.root() : nullptr})
+                            routingPanel.isOpen() ? &routingPanel.root() : nullptr,
+                            rackPanel.isOpen() ? &rackPanel.root() : nullptr})
             if (r && r->motionPending() && r->frameReady(Clock::now()))
                 timed([&] { preserveUi([&] { r->flushMotion(); }); });
         if (inputChanged) next = service();
@@ -1187,6 +1206,7 @@ int main(int argc, char** argv) {
         }
         fxPanel.frame();
         routingPanel.frame();
+        rackPanel.frame();
         if (o.frames > 0) root.requestAnimationFrame();  // benchmark runs draw every pass
         if (o.frames > 0 ? root.wantsFrame() : root.frameReady(Clock::now())) {
             const double cpu0 = gui::threadCpuMs();
@@ -1219,7 +1239,7 @@ int main(int argc, char** argv) {
             timed([&] {
                 preserveUi([&] {
                     fxWindow.syncProject();
-                    panelEvent = fxPanel.handle(e) || routingPanel.handle(e);
+                    panelEvent = fxPanel.handle(e) || routingPanel.handle(e) || rackPanel.handle(e);
                 });
             });
             if (panelEvent) continue;
@@ -1251,6 +1271,7 @@ int main(int argc, char** argv) {
             const int next = service();
             fxPanel.frame();
             routingPanel.frame();
+            rackPanel.frame();
             if (root.frameReady(Clock::now())) root.frame();
             SDL_Event e;
             const double left = o.idleSeconds * 1000 - (gui::wallMs() - w0);
@@ -1270,12 +1291,15 @@ int main(int argc, char** argv) {
         shell.sync();
         midiEditor.sync();
         routing.sync();
+        racks.sync();
+        racks.tick();
         mixer.sync();
         history.sync();
         meterFeed.poll();
         root.damageAll();
         root.frame(false);
-        for (const auto& [name, panel] : {std::pair{"fx", &fxPanel}, {"routing", &routingPanel}}) {
+        for (const auto& [name, panel] :
+             {std::pair{"fx", &fxPanel}, {"routing", &routingPanel}, {"rack", &rackPanel}}) {
             const fs::path path =
                 o.snapshot.parent_path() /
                 (o.snapshot.stem().string() + "." + name + o.snapshot.extension().string());

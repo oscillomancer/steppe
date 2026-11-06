@@ -95,6 +95,7 @@ Shell::~Shell() = default;
 
 std::unique_ptr<ui::Node> Shell::build(ui::Root& root, AppActions& actions) {
     root_ = &root;
+    actions_ = &actions;
     auto shell = std::make_unique<ui::Node>("shell");
     shell->layout.dir = ui::Layout::Dir::Column;
     transport_ = std::make_unique<TransportBar>(app_, actions, dispatcher_, root);
@@ -180,7 +181,14 @@ std::unique_ptr<ui::Node> Shell::build(ui::Root& root, AppActions& actions) {
             if (onError) onError(e);
         },
         [this] { return ui_.selectedTracks; },
-        [this](std::vector<std::string> tracks) { ui_.selectedTracks = std::move(tracks); }});
+        [this](std::vector<std::string> tracks) { ui_.selectedTracks = std::move(tracks); },
+        [this](const char* id, const model::Id& track) {
+            const actions::Action* a = actions_ ? actions_->registry().find(id) : nullptr;
+            if (!a) return;
+            json::Value args = json::Value::object();
+            args["track"] = track.str();
+            if (auto r = actions_->run(*a, args); !r && onError) onError(r.error().message);
+        }});
     tcp.mixer = [&actions] { (void)actions.run("ui.mixer"); };
     tcp.menu = [this](const model::Id& track, const ui::Rect& anchor,
                       std::function<void()> rename) {
@@ -314,6 +322,12 @@ const json::Value& Shell::inputs(bool force) {
 
 std::string Shell::inputText(const model::Id& track, const std::string& channels) const {
     const model::Session& s = app_.head();
+    // A rack's Out module (ADR-0062): "Bells › Out 1".
+    if (const model::Track* tr = s.tracks.find(track); tr && tr->record.input)
+        if (const model::Route* r = s.routes.find(*tr->record.input); r && r->from.module)
+            if (const model::RackModule* m = s.modules.find(*r->from.module))
+                return model::rackLabel(s, m->rack) + " \u203a " +
+                       model::moduleLabel(s, *r->from.module);
     if (channels.empty()) {
         // Nothing on the audio channels: a MIDI input names its device.
         if (const model::Track* tr = s.tracks.find(track); tr && tr->record.input)
@@ -636,6 +650,44 @@ void Shell::openInputMenu(const model::Id& track, const ui::Rect& anchor) {
         }
         if (items.empty())
             items.push_back({"the device reports no inputs", "", {}, false, false, false});
+    }
+    // Racks' Out modules feed channels as an input does (ADR-0062), listed
+    // whatever the device; and a new rack on this channel.
+    if (tr && tr->type == model::StripType::Channel) {
+        std::optional<model::Id> currentOut;
+        if (tr->record.input)
+            if (const model::Route* r = s.routes.find(*tr->record.input); r && r->from.module)
+                currentOut = r->from.module;
+        std::vector<ui::MenuItem> racks;
+        for (const auto& e : s.modules) {
+            if (e.value->type != model::kOutModule) continue;
+            ui::MenuItem m;
+            m.label = model::rackLabel(s, e.value->rack) + " \u203a " + model::moduleLabel(s, e.id);
+            m.shortcut = "rack";
+            m.checked = currentOut == e.id;
+            if (const model::Rack* rk = s.racks.find(e.value->rack))
+                if (const model::Track* home = s.tracks.find(rk->track))
+                    m.swatch = root_->theme().trackColor(home->color);
+            m.run = [pick, id = e.id] {
+                json::Value args = json::Value::object();
+                args["record_rack"] = id.str();
+                pick(std::move(args));
+            };
+            racks.push_back(std::move(m));
+        }
+        std::sort(racks.begin(), racks.end(),
+                  [](const ui::MenuItem& a, const ui::MenuItem& b) { return a.label < b.label; });
+        if (!items.empty()) items.push_back({"", "", {}, true, true});
+        for (auto& m : racks) items.push_back(std::move(m));
+        const actions::Action* add = actions_ ? actions_->registry().find("ui.rack.add") : nullptr;
+        items.push_back({"New rack on this channel", "",
+                         [this, add, track] {
+                             json::Value args = json::Value::object();
+                             args["track"] = track.str();
+                             if (auto r = actions_->run(*add, args); !r && onError)
+                                 onError(r.error().message);
+                         },
+                         add != nullptr});
     }
     root_->openPopup(
         ui::makeMenu("tcp.input." + track.str(), std::move(items), [this] { root_->closePopup(); }),
