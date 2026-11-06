@@ -23,6 +23,7 @@
 
 #include <cctype>
 #include <cstddef>
+#include <deque>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -123,6 +124,22 @@ inline ParamModel model(const ParamSpec& s) {
     return m;
 }
 
+template <class T>
+struct MemberKey {
+    template <class M>
+    MemberKey(M T::* m, const char* stem)
+        : keyFor([m, key = std::string(stem ? stem : "")](const T& t, const void* member) {
+              if (key.empty()) return std::string();
+              if constexpr (requires { (t.*m).size(); }) {
+                  for (int i = 0; i < (t.*m).size(); ++i)
+                      if (&(t.*m)[i] == member) return key + "_" + std::to_string(i + 1);
+              } else if (&(t.*m) == member)
+                  return key;
+              return std::string();
+          }) {}
+    std::function<std::string(const T&, const void*)> keyFor;
+};
+
 struct Collector final : ParamRegistrar {
     std::vector<const Param*> params;
     std::vector<ParamModel> models;
@@ -133,9 +150,19 @@ struct Collector final : ParamRegistrar {
     // A module's ports (ADR-0062), in declaration order.
     std::vector<const void*> ports;
     std::vector<PortSpec> portSpecs;
+    std::deque<std::string> portText;
     void declarePort(void* member, const PortSpec& spec) override {
         ports.push_back(member);
-        portSpecs.push_back(spec);
+        PortSpec copy = spec;
+        auto own = [&](const char* text) {
+            portText.emplace_back(text ? text : "");
+            return portText.back().c_str();
+        };
+        copy.name = own(spec.name);
+        copy.description = own(spec.description);
+        copy.key = own(spec.key);
+        copy.group = own(spec.group);
+        portSpecs.push_back(copy);
     }
     void declare(Param& param, const ParamSpec& spec) override {
         ParamModel m = model(spec);

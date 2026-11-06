@@ -169,6 +169,26 @@ At most 32 inputs, 32 outputs and 256 parameters.
 
 Outputs arrive zeroed for each block.
 
+**Declaration arrays.** `Params<N>`, `Inputs<N>` and `Outputs<N>` are direct
+module members initialized from one parameter/port factory spec. Declare
+one bank per line. `N` is a positive literal or constexpr int. Indexing is
+zero-based, accepts a runtime int and yields an ordinary `Param`, `Input`
+or `Output` reference; `.size()` is the fixed count. Element names append
+`" 1"` .. `" N"` to the spec's name, and keys append `_1` .. `_N` to the
+member's snake_case key (or the `.withKey()` stem). Display names do not
+choose keys in either backend. A bank derives each parameter ID from the
+complete element key; `.withId()` is refused. All other spec modifiers are
+replicated; declaration-time element references in presets and activity
+conditions require constant indices. Do not assign or copy banks in scripts;
+helper parameters may be references.
+
+Each module has at most **256 parameters total**, array elements included,
+and **32 inputs and 32 outputs total**. An out-of-range bank index reports
+a fault and returns a reset spare: parameters and input samples read zero,
+output writes are discarded; additional channel/frame faults are reported
+normally. Indexing never allocates. The flat metadata and automatic layout
+see each element as an ordinary declaration.
+
 ### 3.3 The module base
 
 | Method | |
@@ -202,6 +222,25 @@ A cable moves a parameter by `amount × value`: for a frequency the amount is
 in octaves (`value · 2^(amount·x)`), otherwise in the parameter's unit (a
 percent in percent, dB, semitones, ms), clamped to the parameter's range.
 
+**Helpers.** Member/free functions may take `const Input&`, `Output&`,
+`Param&` and `const Param&`, including indexed elements. They preserve the
+host bindings and obey the ordinary audio/UI, read-only-parameter and
+evaluation-order rules.
+
+**Defined bits.** `shl(x, n)`, `shr(x, n)`, `bit(x, n)` and `popcount(x)`
+operate on the 32-bit representation of ints. Left shifts discard overflow;
+right shifts zero-fill; `bit` returns 0/1. Counts outside 0..31 return zero
+for shifts and bit reads. `popcount` counts ones, including the sign bit.
+Ordinary shift operators retain their constant-count restrictions.
+
+**Gates.** `Trigger::rose(x)` updates a hysteresis gate (rise at >=0.5,
+fall below 0.25) and reports only a rising edge; `high()` reads it and
+`clear()` resets it. `Pulse::fire()` restarts a 1 ms pulse, rounded up to a
+whole frame at the instance's sample rate; `fire(frames)` sets an explicit
+length (nonpositive clears). `next()` consumes one frame, returning 1 while
+active and 0 afterwards; `clear()` resets it. Both are small copyable value
+types, usually held in `Array<Trigger, 16>` / `Array<Pulse, 16>` for polyphony.
+
 ### 3.5 The face
 
 Without `panel()`, the automatic layout (§4.5). With it:
@@ -233,14 +272,25 @@ but discouraged. Each refusal names the module way (`script.module.*`).
 
 ### 3.7 Code interface
 
-The compiler's `Program` and `NativeModuleCode<T>` (a module compiled as
-C++) implement `supple::script::detail::ModuleCode`
-(`supple/script_module.h`): the module's `ModuleInfoModel`, parameters
-(`ParamModel`), ports (`PortModel`), shared state, factory patches, the
-struct's create/destroy/copy, and the hooks `prepare`, `update`,
-`process(ctx, self, frames)`, `panel`, `draw`, `pointer`. The runtime
-record is `supple::script::detail::Instance` with a `ModuleBinding` for
-ports and channels.
+`scriptc::moduleCode(std::shared_ptr<const Program>)` returns a retaining
+adapter implementing `supple::script::detail::ModuleCode`; null for a plugin
+or null Program. `NativeModuleCode<T>` implements the same interface for
+C++ modules. It exposes `valid()` and `error()` for native description
+validation: above 256 parameters or 32 ports per direction it retains the
+inspectable description but refuses `create()` (null) and all hooks (null),
+without throwing a validation exception.
+
+`ModuleCode` (`supple/script_module.h`) describes the `ModuleInfoModel`,
+parameters (`ParamModel`), ports (`PortModel`), shared state and factory
+patches, and exposes create/destroy/copy and hooks `prepare`, `update`,
+`process(ctx, self, frames)`, `panel`, `draw`, `pointer`. Array elements are
+flat models with independent keys and offsets. `Program::kind()` reports
+`PluginKind::Module`; its plugin `process()` hook is null for a module.
+The runtime record is `supple::script::detail::Instance`: `PortBinding`
+binds ports, `ParamBinding` binds parameters and cable modulation, and
+`Instance::channels`, `transport`, `seed` carry the module's context. The
+caller installs `CurrentScope` around hooks and sets the process budget to
+`65536 * frames`.
 
 ### 3.8 The library
 

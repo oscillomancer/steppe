@@ -101,15 +101,8 @@ class ModuleCode {
 template <class T>
 class NativeModuleCode final : public ModuleCode {
   public:
-    using Key = std::pair<Param T::*, const char*>;
-    // A port's key: {&Fold::in, "in"} (an Input or an Output member).
-    struct PortKey {
-        template <class M>
-        PortKey(M T::* m, const char* k)
-            : of([m](const T& t) -> const void* { return &(t.*m); }), key(k) {}
-        std::function<const void*(const T&)> of;
-        const char* key;
-    };
+    using Key = native::MemberKey<T>;
+    using PortKey = native::MemberKey<T>;
 
     explicit NativeModuleCode(std::vector<Key> keys = {}, std::vector<PortKey> portKeys = {}) {
         static_assert(std::is_base_of_v<Module, T>, "a module struct derives from Module");
@@ -118,13 +111,15 @@ class NativeModuleCode final : public ModuleCode {
         setRegistrar(&collector);
         auto probe = std::make_unique<T>();
         setRegistrar(nullptr);
+        if (collector.params.size() > 256)
+            error_ = "script.module.param_limit: a module has at most 256 parameters";
         const auto* base = reinterpret_cast<const unsigned char*>(probe.get());
         for (size_t i = 0; i < collector.params.size(); ++i) {
             ParamModel& m = collector.models[i];
             const Param* param = collector.params[i];
             m.offset = static_cast<int>(reinterpret_cast<const unsigned char*>(param) - base);
             for (const Key& k : keys)
-                if (&((*probe).*(k.first)) == param && m.key.empty()) m.key = k.second;
+                if (m.key.empty()) m.key = k.keyFor(*probe, param);
             if (m.key.empty()) m.key = native::snakeCase(m.name);
             if (m.id == 0) m.id = keyId(m.key);
             params_.push_back(std::move(m));
@@ -144,10 +139,12 @@ class NativeModuleCode final : public ModuleCode {
             m.index = spec.output ? outputs++ : inputs++;
             m.offset = static_cast<int>(static_cast<const unsigned char*>(member) - base);
             for (const PortKey& k : portKeys)
-                if (k.of(*probe) == member && m.key.empty()) m.key = k.key;
+                if (m.key.empty()) m.key = k.keyFor(*probe, member);
             if (m.key.empty()) m.key = native::snakeCase(m.name);
             ports_.push_back(std::move(m));
         }
+        if ((inputs > 32 || outputs > 32) && error_.empty())
+            error_ = "script.module.port_limit: a module has at most 32 inputs and 32 outputs";
         for (const auto& [member, bytes] : collector.shared)
             shared_.push_back(SharedModel{
                 {}, static_cast<int>(static_cast<const unsigned char*>(member) - base), bytes});
@@ -158,6 +155,11 @@ class NativeModuleCode final : public ModuleCode {
         }
     }
 
+    // A native description exceeding the module limits is inspectable
+    // but cannot create or run instances. No exception is used for validation.
+    bool valid() const { return error_.empty(); }
+    const std::string& error() const { return error_; }
+
     const ModuleInfoModel& info() const override { return info_; }
     const std::vector<ParamModel>& params() const override { return params_; }
     const std::vector<PortModel>& ports() const override { return ports_; }
@@ -166,23 +168,26 @@ class NativeModuleCode final : public ModuleCode {
         return factoryPatches_;
     }
 
-    void* create() const override { return new T(); }
+    void* create() const override { return valid() ? new T() : nullptr; }
     void destroy(void* self) const override { delete static_cast<T*>(self); }
     void copy(void* dst, const void* src) const override {
-        *static_cast<T*>(dst) = *static_cast<const T*>(src);
+        if (valid()) *static_cast<T*>(dst) = *static_cast<const T*>(src);
     }
 
     Hook prepare() const override {
+        if (!valid()) return nullptr;
         if constexpr (requires(T& t) { t.prepare(); })
             return [](void*, void* self) { static_cast<T*>(self)->prepare(); };
         return nullptr;
     }
     Hook update() const override {
+        if (!valid()) return nullptr;
         if constexpr (requires(T& t) { t.update(); })
             return [](void*, void* self) { static_cast<T*>(self)->update(); };
         return nullptr;
     }
     ProcessHook process() const override {
+        if (!valid()) return nullptr;
         if constexpr (requires(T& t) { t.process(0); })
             return [](void*, void* self, std::int64_t frames) {
                 static_cast<T*>(self)->process(static_cast<int>(frames));
@@ -190,6 +195,7 @@ class NativeModuleCode final : public ModuleCode {
         return nullptr;
     }
     UiHook panel() const override {
+        if (!valid()) return nullptr;
         if constexpr (requires(T& t, Panel& p) { t.panel(p); })
             return [](void*, void* self, void* p) {
                 static_cast<T*>(self)->panel(*static_cast<Panel*>(p));
@@ -197,6 +203,7 @@ class NativeModuleCode final : public ModuleCode {
         return nullptr;
     }
     UiHook draw() const override {
+        if (!valid()) return nullptr;
         if constexpr (requires(T& t, Canvas& g) { t.draw(g); })
             return [](void*, void* self, void* g) {
                 static_cast<T*>(self)->draw(*static_cast<Canvas*>(g));
@@ -204,6 +211,7 @@ class NativeModuleCode final : public ModuleCode {
         return nullptr;
     }
     UiHook pointer() const override {
+        if (!valid()) return nullptr;
         if constexpr (requires(T& t, Pointer& p) { t.pointer(p); })
             return [](void*, void* self, void* p) {
                 static_cast<T*>(self)->pointer(*static_cast<Pointer*>(p));
@@ -225,6 +233,7 @@ class NativeModuleCode final : public ModuleCode {
         info_.height = i.height;
     }
 
+    std::string error_;
     ModuleInfoModel info_;
     std::vector<ParamModel> params_;
     std::vector<PortModel> ports_;

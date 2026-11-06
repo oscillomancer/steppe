@@ -21,17 +21,25 @@ specific to `modules/`: the modular racks' modules (ADR-0062,
 - **The language is the script subset.** A stock module is a script first:
   it must compile in the JIT exactly as it compiles as C++
   (`skill/guides/dsp-language.md`, `skill/guides/modules.md`): no
-  pointers, templates, lambdas, standard library, `new`, recursion,
+  pointers, user templates, lambdas, standard library, `new`, recursion,
   constructors or C arrays; locals initialised; `idiv`/`imod` for division
   by a variable; float to int only through `toInt` and friends. The JIT
   differential test compiles every stock module and requires the same bits.
+  Repeated declarations use `Params<N>`, `Inputs<N>` or `Outputs<N>` from one
+  factory spec, one bank per line; index from 0, display/key suffixes from 1.
+  A module has at most 256 parameters including array elements, and 32 ports
+  per direction. Keys always come from member names, never display labels.
+  Helpers may take `const Input&`, `Output&` and `Param&`/`const Param&`.
+  Use `shl`/`shr`/`bit`/`popcount` for defined variable-count bit operations;
+  `Trigger` supplies gate hysteresis and `Pulse` supplies 1 ms triggers.
 - **Identity.** File `stock/<name>.cpp`, id `com.suppleaudio.rack.<name>`,
   vendor `Supple Audio`, version `1.0.0`. The id and every parameter and
   port key are permanent once shipped: add new keys, never rename. A key is
   its member's name in snake_case (`pulseWidth` → `pulse_width`) unless
   `.withKey()` gives one, in the JIT and in the C++ build alike (which reads
   the member names from the declarations, `cmake/stock_module.cmake`:
-  declare one `Param`, `Input` or `Output` member per line).
+  declare one scalar or declaration-array member per line). Array element
+  keys append `_1` .. `_N` to the member key (or its `.withKey()` stem).
 - **Conventions.** Signals as ADR-0062 §2: audio ±1, pitch in octaves from
   C4, gates 0/1 (high at 0.5; triggers 1 ms), CV −1..1, unipolar 0..1,
   phase 0..1. Physical units on parameters, sensible ranges, musical
