@@ -258,7 +258,7 @@ instructions are in `docs/guides/installing.md`.
   Out modules are channel inputs, In modules take sends, Notes modules play
   a track's MIDI or a live input, Transport gives the song's clock, plugin
   modules host CLAP/VST3 plug-ins (instruments played from pitch and gate
-  cables). 53 stock modules (`modules/stock`: oscillators, filters,
+  cables). 61 stock modules (`modules/stock`: oscillators, filters,
   envelopes, sequencers, generative and utility modules, effects) compile
   as scripts and as C++ alike. Each rack is a node of the render plan on a
   32-frame grid; real-time output equals offline renders, and the audio
