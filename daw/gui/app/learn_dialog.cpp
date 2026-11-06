@@ -58,17 +58,16 @@ class LearnPanel : public ui::Node {
             anyDevice_ = !anyDevice_;
             refresh();
         };
-        if (request_.param) {
+        if (request_.conditions) {
             option("learn.selected", "Enable only when its track is selected",
                    &LearnChoice::whenSelected);
             option("learn.focused", "Enable only when its FX window or editor has the focus",
                    &LearnChoice::whenFocused);
             option("learn.visible", "Enable only when its FX window or editor shows",
                    &LearnChoice::whenVisible);
-            option("learn.soft", "Soft takeover (absolute mode only)", &LearnChoice::softTakeover);
-        } else if (request_.takeover) {
-            option("learn.soft", "Soft takeover (absolute mode only)", &LearnChoice::softTakeover);
         }
+        if (request_.takeover)
+            option("learn.soft", "Soft takeover (absolute mode only)", &LearnChoice::softTakeover);
         auto& buttons = emplace<ui::Node>("learn.buttons");
         buttons.layout.dir = ui::Layout::Dir::Row;
         buttons.layout.height = ui::SizeRule::fixed(28);

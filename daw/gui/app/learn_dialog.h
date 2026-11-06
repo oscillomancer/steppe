@@ -32,8 +32,9 @@ json::Value learnArgs(const LearnChoice& choice, bool conditions = false);
 struct LearnRequest {
     std::string title;                   // what is bound: an action's or a parameter's name
     std::optional<LearnChoice> current;  // its binding now: Remove is offered
-    bool param = false;                  // a plug-in parameter: soft takeover, enable only when …
-    bool takeover = false;  // a strip's or send's level or pan, or a knob's action: soft takeover
+    // The options offered: soft takeover (a parameter, a level or pan, an
+    // action that follows a knob), and "enable only when …" (a parameter).
+    bool takeover = false, conditions = false;
     // A CC's mode when nothing is bound yet (a button's: toggle).
     model::ControlMode mode = model::ControlMode::Absolute;
     // An action that runs once per press: a knob heard here gets a warning

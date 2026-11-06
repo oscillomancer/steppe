@@ -290,7 +290,7 @@ void ParamPanel::learnButton(ui::Node& row, const std::string& id, const std::st
 void ParamPanel::learn(const std::string& param, const std::string& title) {
     LearnRequest request;
     request.title = title;
-    request.param = true;
+    request.takeover = request.conditions = true;
     if (auto it = learned_.find(param); it != learned_.end()) request.current = it->second;
     const std::string fx = idText(fx_);
     request.onOk = [this, fx, param](const LearnChoice& choice) {
