@@ -35,6 +35,28 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | Module | What it is |
 |---|---|
 | `vca` | An amplifier a CV opens, exponential or linear |
+| `vco` | The analog-style workhorse: sine, triangle, saw, pulse and sub at once, exp and through-zero FM, hard sync, poly |
+| `filter` | A multimode state-variable filter: low, band, high, notch and 24 dB low pass at once, pitch tracking, steady self-oscillation, drive |
+| `noise` | White, pink, brown and blue noise, crackle and clocked digital noise (hiss, metallic buzz, steps), poly |
+| `delay` | A stereo tape-style delay up to 10 s: free or synced, ping-pong, feedback past 100 %, tone, wow and flutter, a send and return to patch into the loop |
+| `reverb` | A lush stereo reverb, an eight-line feedback delay network: size, decay to freeze, damping, diffusion, modulation, shimmer, pre-delay |
+| `ladder` | A four-pole ladder low pass with saturating feedback and bass compensation; 12 dB and resonant high-pass taps, poly |
+| `fold` | A west-coast wavefolder, 4x oversampled: fold, symmetry, stages; and a soft-clip output |
+| `lpg` | A vactrol-style low-pass gate: a ping makes plucks and bongos of any source; CV mode, resonance, its envelope as an output, poly |
+| `string` | A plucked string, a waveguide per channel: decay, damping, brightness, pluck position, stiffness, velocity and an exciter input |
+| `resonator` | A 24-mode modal resonator: structure morphs string, beam, bar, bell and plate; brightness, decay, damping, position, stereo spread, poly |
+| `drum` | An analog-style drum voice, eight models on a knob (kick, snare, tom, closed and open hat, clap, cowbell, rimshot): tune, tone, decay, snap, accent, poly |
+| `morph` | A morphing oscillator: one Shape from sine through triangle, saw, square and narrow pulse to formant bursts, a phase Warp, a sub; anti-aliased, poly |
+| `operator` | A phase-modulation operator for FM stacks: ratio, fine, Hz offset, PM index, self-feedback, level; outputs its sine and its phase, poly |
+| `phasor` | A phase generator: a 0..1 ramp at the pitch with skew, offset, sync and a wrap trigger, poly |
+| `shaper` | Phase in, wave out by a curve (sine, triangle, saw, pulse, smooth step, window) with skew and fold: phase distortion by cables, poly |
+| `harmonic` | An additive oscillator, up to 32 partials: brightness, odd/even, stretch, a spectral comb that sweeps; odd and even outputs, never aliases, poly |
+| `drive` | A distortion with seven curves (soft, tube, hard clip, fold, rectify, bitcrush, downsample): drive, bias, tone, mix, 4x oversampled, poly |
+| `chorus` | A stereo chorus ensemble of up to six voices, and a flanger: rate, depth, spread, feedback either way, mix, poly |
+| `shift` | A frequency shifter through zero, up and down at once, 50 dB+ sideband rejection: shift, fine, CV depth, spiralling feedback; a ring modulator with its own carrier or a patched one, poly |
+| `granular` | A granular processor on a live four-second buffer, 32 grains: size, density, position, spray, pitch and scatter, reverse chance, stereo spread, freeze by toggle or gate |
+| `vowel` | A formant filter of four bands morphing through a, e, i, o, u at audio rate: size (formant shift), resonance, mix, poly |
+| `comb` | A tuned comb filter that rings at the pitch: feedback positive (every harmonic) or negative (odd only), damping in the loop kept in tune, mix, poly |
 
 ### Modulation, sequencing, generative and utilities
 

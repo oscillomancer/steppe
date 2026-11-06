@@ -52,8 +52,8 @@ endforeach()
 set(_decls "")
 set(_entries "")
 foreach(_name IN LISTS _stock_names)
-  string(APPEND _decls "const StockModule& ${_name}();\n")
-  string(APPEND _entries "        &stock::${_name}(),\n")
+  string(APPEND _decls "const StockModule& module_${_name}();\n")
+  string(APPEND _entries "        &stock::module_${_name}(),\n")
 endforeach()
 file(CONFIGURE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/stock/stock_list.cpp CONTENT
 "// SPDX-License-Identifier: MIT
