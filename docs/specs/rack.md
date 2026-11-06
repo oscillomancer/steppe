@@ -471,7 +471,9 @@ are its plug-in's (`env.add {fx}`). `preset` on `module.add` and
 lists them): every knob goes to it, then `params` apply on top. The app
 reaches racks through `EngineApp::modules()` (the catalog),
 `EngineApp::moduleInstance()` (a running module's telemetry) and
-`supple/engine/racks.h`.
+`supple/engine/racks.h`. `<slug>-engine modules --markdown` prints every
+built-in type's ports and knobs (`moduleReference()`), committed as
+`skill/generated/rack-modules.md` and checked by `engine.registry-drift`.
 
 ### 7.1 Rack presets
 
