@@ -100,6 +100,10 @@ class PluginModule final : public rack::HostModule {
     };
     std::array<Sent, kPluginMods> sent_{};
     int sentCount_ = 0;
+    // The plug-in that heard the notes and modulation above, and its reset()
+    // count: a replaced or reset plug-in has forgotten them.
+    const host::Instance* heard_ = nullptr;
+    std::uint32_t heardResets_ = 0;
 };
 
 // Module instances by module id, kept while the module's type, its code and

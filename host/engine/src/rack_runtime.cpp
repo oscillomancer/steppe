@@ -356,6 +356,10 @@ Status compileRack(Plan& p, Node& n, const Session& s, Id rackId, InstancePool& 
                 st.fx = *m.fx;
                 st.bypass = fx->bypass || fx->offline;
                 st.wet = fx->wet / 100.0;
+                st.autoBypassOnSilence = fx->autoBypassOnSilence;
+                st.os = fx->oversampling == 2 || fx->oversampling == 4 || fx->oversampling == 8
+                            ? fx->oversampling
+                            : 1;
                 if (!fx->offline) {
                     auto instance = plugins.get(*m.fx, *fx, s);
                     if (!instance)
@@ -658,6 +662,16 @@ void PluginModule::process(const rack::HostContext& ctx) SUPPLE_RT {
     if (!binding || binding->stage < 0 || !plan || !node || failed) return;
     Stage& st = node->rackStages[static_cast<std::size_t>(binding->stage)];
     Stereo& io = binding->io;
+    // A plug-in replaced or reset (a seek) has forgotten our notes and
+    // modulation: held gates play again, modulation is sent again. (A
+    // bypassed stage still takes its events.)
+    const std::uint32_t resets = st.instance ? st.instance->resets() : 0;
+    if (st.instance != heard_ || resets != heardResets_) {
+        voices_ = {};
+        sentCount_ = 0;
+        heard_ = st.instance;
+        heardResets_ = resets;
+    }
     const script::Input& l = in.inputMember(0);
     const script::Input& r = in.inputMember(1);
     const script::Input& pitch = in.inputMember(2);
@@ -718,11 +732,14 @@ void PluginModule::process(const rack::HostContext& ctx) SUPPLE_RT {
         st.blockEvents.push_back(off);
         v.key = -1;
     }
-    // Modulation: each parameter's cables summed, once a grid block, as CLAP
-    // param_mod; a parameter whose cables went goes back to 0.
+    // Modulation: each parameter's cables summed at each point of the rack's
+    // grid (where a call starts on one: the same frames whatever the host's
+    // block size), as CLAP param_mod; a parameter whose cables went goes back
+    // to 0.
+    const bool onGrid = ((ctx.position % rack::kGrid) + rack::kGrid) % rack::kGrid == 0;
     std::array<Sent, kPluginMods> now{};
     int count = 0;
-    for (int k = 0; k < binding->modCount; ++k) {
+    for (int k = 0; onGrid && k < binding->modCount; ++k) {
         const PluginMod& m = binding->mods[static_cast<std::size_t>(k)];
         const double amount = in.paramMember(m.slot).at(0, 0) * m.scale;
         int j = 0;
@@ -740,7 +757,7 @@ void PluginModule::process(const rack::HostContext& ctx) SUPPLE_RT {
         st.blockEvents.push_back(e);
         return true;
     };
-    for (int k = 0; k < sentCount_;) {
+    for (int k = 0; onGrid && k < sentCount_;) {
         const Sent& old = sent_[static_cast<std::size_t>(k)];
         bool kept = false;
         for (int j = 0; j < count; ++j) kept |= now[static_cast<std::size_t>(j)].param == old.param;
@@ -765,6 +782,7 @@ void PluginModule::process(const rack::HostContext& ctx) SUPPLE_RT {
     const auto frames = static_cast<std::uint32_t>(ctx.frames);
     if (!runModuleStage(*plan, st, io, frames, *transport, pos + ctx.offset, self)) {
         failed = true;
+        sentCount_ = 0;  // not delivered
         return;
     }
     for (int i = 0; i < ctx.frames; ++i) {

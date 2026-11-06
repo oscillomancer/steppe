@@ -1216,6 +1216,7 @@ void Instance::stopProcessing() SUPPLE_RT {
 }
 
 void Instance::reset() SUPPLE_RT {
+    resets_.fetch_add(1, std::memory_order_relaxed);
     if (vst3_) {
         vst3_->reset();
         return;

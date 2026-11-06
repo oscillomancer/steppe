@@ -426,10 +426,14 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   automated as chain stages), in sub-blocks on the grid, with notes made
   from their pitch and gate cables. A cable into `fx_N.<key>` (a semantic
   key, a parameter id or its name) rides one of the plugin module's 16
-  hidden knobs `mod_1`..`mod_16` (−1..1, never listed); once per grid
-  block the module sends each parameter its cables' sum (first voice) times
-  the parameter's CLAP range as a CLAP `param_mod` event, and 0 once when
-  its last cable goes. The parameter must be modulatable; VST3 plug-ins take
+  hidden knobs `mod_1`..`mod_16` (−1..1, never listed); at each point of
+  the rack's grid (never where a host block splits it, so renders do not
+  depend on the block size) the module sends each parameter its cables'
+  sum (first voice) times the parameter's CLAP range as a CLAP `param_mod`
+  event, and 0 once when its last cable goes. A plug-in that was replaced
+  or reset (a seek; `host::Instance::resets()` counts) is sent its
+  modulation again and plays the gates still held. The plug-in's FX
+  settings apply as on a strip (oversampling, bypass on silence). The parameter must be modulatable; VST3 plug-ins take
   no modulation (a plan warning says so, as for a seventeenth cable).
   Their latency is not compensated inside the rack. A bridged plugin module
   in a live rack passes through, as on a live strip.
