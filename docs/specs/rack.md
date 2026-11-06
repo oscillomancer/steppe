@@ -487,6 +487,8 @@ examples run as tests. Ends are strings: `"mo_3.out"`.
 | `module.add` | edit | `{rack, type\|plugin, label?, x?, y?, params?, preset?, source?, device?}` → `{module, type, x, y, width, height, inputs, outputs, knobs, fx?, plugin?}` |
 | `module.remove` | edit | `{module}` (its cables; a plugin module's fx; an Out module's routes) |
 | `module.set` | edit | `{module, params?, label?, x?, y?, bypass?, source?, preset?}` |
+| `module.copy` | action | `{modules: [mo_*...]}` → `{modules: n, cables: n}`: replace this EngineApp's clipboard with modules in the requested order and the cables entirely among them (including `fx_N.key` targets); no project or undo edit |
+| `rack.paste` | edit | `{rack, x?, y?}` → `{modules: [ids in clip order], cables: [ids]}`: recreate the clipboard with fresh module, plug-in and cable ids in one undo step |
 | `module.duplicate` | edit | `{modules, dx?, dy?, cables?}` → new ids |
 | `module.randomize` | edit | `{module, amount?, seed?}` |
 | `module.write` | action | `{name, source}` → `{name, path, ok, diagnostics, type?, reloaded?, playing?}`: `type` as `module.describe`; `reloaded` counts the modules rebuilt; `playing` when a broken version leaves the last good one in use |
@@ -514,6 +516,21 @@ reaches racks through `EngineApp::modules()` (the catalog),
 `supple/engine/racks.h`. `<slug>-engine modules --markdown` prints every
 built-in type's ports and knobs (`moduleReference()`), committed as
 `skill/generated/rack-modules.md` and checked by `engine.registry-drift`.
+
+The module clipboard retains type/version, label, parameters, bypass, Notes
+source/device, learn bindings and relative positions. Plug-in settings are
+captured on the main thread at copy time, from the live instance when present:
+a semantic patch for semantic plug-ins, otherwise inline CLAP state bytes.
+Deleting originals or undoing project edits does not change the clipboard.
+Only internal cables are copied, with their amounts and colours; external
+routes and automation are omitted. Paste translates the clip's top-left to
+`x, y`; omitted coordinates default to 16 units right of existing modules
+(or x=40 in an empty rack), y=40. A position outside the coordinate range is
+refused without distorting relative placement. Missing clipboard, types,
+plug-ins or Notes source tracks and exceeded rack limits produce structured
+errors before any model change. Plug-in state is validated before installation
+and loaded by the plan before processing. Clipboard commands are main-thread
+operations and the clipboard is neither serialized nor part of undo history.
 
 ### 7.1 Rack presets
 

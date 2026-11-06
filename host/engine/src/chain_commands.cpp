@@ -264,32 +264,6 @@ Result<std::vector<PreparedFx>> prepareEffects(EngineApp& app,
     return prepared;
 }
 
-Id installEffect(EngineApp& app, PreparedFx& prepared) {
-    if (prepared.blob) app.txn().putBlob(*prepared.fx.state, prepared.blob);
-    return app.txn().create(std::move(prepared.fx));
-}
-
-}  // namespace detail
-
-namespace {
-
-using detail::encodeEffects;
-using detail::prepareEffects;
-using detail::writePreset;
-using Prepared = detail::PreparedFx;
-
-// Adds prepared effects to the open transaction, appended to `chain`; their ids.
-std::vector<std::string> installEffects(EngineApp& app, std::vector<Prepared>& prepared,
-                                        std::vector<Id>& chain) {
-    std::vector<std::string> ids;
-    for (auto& p : prepared) {
-        const Id id = detail::installEffect(app, p);
-        chain.push_back(id);
-        ids.push_back(id.str());
-    }
-    return ids;
-}
-
 // A plugin's settings as the running instance has them right now (what the
 // user hears: an editor edit the app has not consumed yet is not in the model),
 // else as the model has them: `fx` gets the state, `blob` its bytes when it is
@@ -314,6 +288,33 @@ Status captureLiveState(EngineApp& app, Id id, model::FxInstance& fx,
     fx.patch.reset();
     blob = std::make_shared<const model::Blob>(model::Blob{std::move(*state)});
     return {};
+}
+
+Id installEffect(EngineApp& app, PreparedFx& prepared) {
+    if (prepared.blob) app.txn().putBlob(*prepared.fx.state, prepared.blob);
+    return app.txn().create(std::move(prepared.fx));
+}
+
+}  // namespace detail
+
+namespace {
+
+using detail::captureLiveState;
+using detail::encodeEffects;
+using detail::prepareEffects;
+using detail::writePreset;
+using Prepared = detail::PreparedFx;
+
+// Adds prepared effects to the open transaction, appended to `chain`; their ids.
+std::vector<std::string> installEffects(EngineApp& app, std::vector<Prepared>& prepared,
+                                        std::vector<Id>& chain) {
+    std::vector<std::string> ids;
+    for (auto& p : prepared) {
+        const Id id = detail::installEffect(app, p);
+        chain.push_back(id);
+        ids.push_back(id.str());
+    }
+    return ids;
 }
 
 Result<json::Value> invoke(const char* name, json::Value args, cmd::Context& ctx) {
