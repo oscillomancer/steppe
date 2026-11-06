@@ -452,7 +452,11 @@ schema::Schema<T> routeArgsSchema(const char* name) {
     auto b = schema::object<T>(name);
     if constexpr (std::is_same_v<T, RouteSetArgs>) b.field("route", &T::route, idSchema("sd"));
     b.field("from", &T::from, idSchema("tr"));
-    b.field("to", &T::to, idSchema("tr"));
+    b.field("to", &T::to,
+            schema::string()
+                .pattern("^(tr|mo)_[0-9]+$", "a track or an In module")
+                .doc("A track, or a rack's In module (mo_*): the send then plays into the "
+                     "rack, linear (no Console 9 stage)"));
     b.field("fx", &T::fx,
             idSchema("fx").doc("Feed this plug-in's sidechain (key) input instead of a track's "
                                "input; `to` may be left out"));
@@ -477,11 +481,20 @@ std::optional<std::vector<Id>> routeCycle(const model::Session& s, Id from, Id t
     std::map<Id, std::vector<Id>> edges;
     for (const auto& e : s.tracks)
         if (e.value->parent && e.value->parentSend.enabled) edges[e.id].push_back(*e.value->parent);
+    // Racks are nodes too (ADR-0062): a send reaches an In module's rack, an
+    // Out module's rack feeds its channel.
+    auto rackOf = [&](Id module) -> std::optional<Id> {
+        const model::RackModule* m = s.modules.find(module);
+        return m ? std::optional<Id>(m->rack) : std::nullopt;
+    };
     for (const auto& e : s.routes) {
-        if (e.id == ignored || !e.value->from.track) continue;
-        const auto target =
-            e.value->to.fx ? model::trackOfFx(s, *e.value->to.fx) : e.value->to.track;
-        if (target) edges[*e.value->from.track].push_back(*target);
+        if (e.id == ignored) continue;
+        const auto source =
+            e.value->from.module ? rackOf(*e.value->from.module) : e.value->from.track;
+        const auto target = e.value->to.module ? rackOf(*e.value->to.module)
+                            : e.value->to.fx   ? model::trackOfFx(s, *e.value->to.fx)
+                                               : e.value->to.track;
+        if (source && target) edges[*source].push_back(*target);
     }
     std::set<Id> seen;
     std::vector<Id> path{to};
@@ -543,13 +556,24 @@ Result<model::Route> buildRoute(const RouteArgs& a, const model::Session& s, Eng
                          "choose a plug-in with a key input (fx.describe shows `sidechain`)");
         r.to = model::RouteEnd{};
         r.to.fx = *fx;
+    } else if (a.to && a.to->starts_with("mo_")) {  // a rack's In module (ADR-0062)
+        auto to = require<model::RackModule>(s, *a.to, "/to");
+        if (!to) return std::move(to).error();
+        if (s.modules.find(*to)->type != model::kInModule)
+            return Error("route.endpoint", *a.to + " is not an In module", "/to",
+                         "sends reach a rack through its In modules (rack.get)");
+        r.to = model::RouteEnd{};
+        r.to.module = *to;
     } else if (a.to) {
         auto to = require<model::Track>(s, *a.to, "/to");
         if (!to) return std::move(to).error();
         r.to = model::RouteEnd{};
         r.to.track = *to;
     }
-    const std::optional<Id> target = r.to.fx ? model::trackOfFx(s, *r.to.fx) : r.to.track;
+    const std::optional<Id> target = r.to.module
+                                         ? std::optional<Id>(s.modules.find(*r.to.module)->rack)
+                                     : r.to.fx ? model::trackOfFx(s, *r.to.fx)
+                                               : r.to.track;
     if (!r.from.track || !target)
         return Error("route.endpoint", "a source track and a destination are required", "",
                      "give from and to (a track) or fx (a plug-in's key)");
@@ -562,7 +586,7 @@ Result<model::Route> buildRoute(const RouteArgs& a, const model::Session& s, Eng
         return Error("route.cycle", "route creates a cycle: " + names, "/to",
                      "choose a destination that does not feed the source");
     }
-    if (!r.to.fx && !r.midi) {
+    if (!r.to.fx && !r.midi && !r.to.module) {
         if (s.tracks.find(*target)->type == model::StripType::Channel)
             return Error("route.strip_type", "a channel accepts only hardware audio", "/to",
                          "add a buss and route the channels into it; use fx for a key");
@@ -580,7 +604,8 @@ Result<model::Route> buildRoute(const RouteArgs& a, const model::Session& s, Eng
                          "/channels", "pair them: {from: [1, 2], to: [2, 1]}");
         // The main pair, plus a strip's auxiliary channels (ADR-0020).
         const int sourceChannels = std::max(2, s.tracks.find(*r.from.track)->channels);
-        const int targetChannels = r.to.fx ? 2 : std::max(2, s.tracks.find(*target)->channels);
+        const int targetChannels =
+            r.to.fx || r.to.module ? 2 : std::max(2, s.tracks.find(*target)->channels);
         const std::string more = "track.set channels adds channels 3-128";
         for (std::size_t k = 0; k < m.from.size(); ++k) {
             if (m.from[k] > sourceChannels)
@@ -766,8 +791,11 @@ void registerExtraCommands(cmd::Registry& registry) {
             const auto view = app(ctx).view();
             for (const auto& e : view.routes) {
                 const auto& r = *e.value;
-                const auto target = r.to.fx ? model::trackOfFx(view, *r.to.fx) : r.to.track;
-                out.routes.push_back({e.id.str(), r.from.track ? r.from.track->str() : "",
+                const auto target = r.to.module ? r.to.module
+                                    : r.to.fx   ? model::trackOfFx(view, *r.to.fx)
+                                                : r.to.track;
+                const auto source = r.from.module ? r.from.module : r.from.track;
+                out.routes.push_back({e.id.str(), source ? source->str() : "",
                                       target ? target->str() : "", r.to.fx ? r.to.fx->str() : "",
                                       r.tap == model::Tap::PostFader  ? "post_fader"
                                       : r.tap == model::Tap::PreFader ? "pre_fader"

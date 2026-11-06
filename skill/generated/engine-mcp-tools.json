@@ -722,6 +722,95 @@
     }
   },
   {
+    "name": "cable_add",
+    "title": "Connect an output to an input or a knob.",
+    "description": "Connect an output to an input or a knob. from: \"mo_N.<output>\"; to: \"mo_N.<input>\" or \"mo_N.<knob>\" (a modulation cable: amount is the knob's movement at a signal of 1, in octaves for a frequency, the knob's unit otherwise; default an octave or half the range). Several cables into one input sum; a mono cable reaches every voice of a poly module. feedback: it closes a loop, so it carries the previous frame (a one-sample delay). See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "cable_add_args",
+      "properties": {
+        "from": {
+          "type": "string",
+          "pattern": "^(mo|fx)_[0-9]+\\.[a-z][a-z0-9_]*$"
+        },
+        "to": {
+          "type": "string",
+          "pattern": "^(mo|fx)_[0-9]+\\.[a-z][a-z0-9_]*$"
+        },
+        "amount": {
+          "type": "number"
+        },
+        "color": {
+          "type": "string"
+        }
+      },
+      "required": ["from", "to"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "cable_remove",
+    "title": "Remove a cable, by id or by its two ends.",
+    "description": "Remove a cable, by id or by its two ends.  See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "cable_remove_args",
+      "properties": {
+        "cable": {
+          "type": "string",
+          "pattern": "^cb_[0-9]+$"
+        },
+        "from": {
+          "type": "string",
+          "pattern": "^(mo|fx)_[0-9]+\\.[a-z][a-z0-9_]*$"
+        },
+        "to": {
+          "type": "string",
+          "pattern": "^(mo|fx)_[0-9]+\\.[a-z][a-z0-9_]*$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "cable_set",
+    "title": "Set a modulation cable's amount or a cable's colour.",
+    "description": "Set a modulation cable's amount or a cable's colour.  See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "cable_set_args",
+      "properties": {
+        "cable": {
+          "type": "string",
+          "pattern": "^cb_[0-9]+$"
+        },
+        "amount": {
+          "type": "number"
+        },
+        "color": {
+          "type": "string"
+        }
+      },
+      "required": ["cable"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true
+    }
+  },
+  {
     "name": "dsp_check",
     "title": "Compile a DSP script without saving it; return its diagnostics.",
     "description": "Compile a DSP script without saving it; return its diagnostics. Give source (a whole script) or name (one in the library). ok is true when it compiles; plugin then lists its id, name and parameters as the patch shows them. See describe for errors and examples.",
@@ -6000,6 +6089,238 @@
     }
   },
   {
+    "name": "module_add",
+    "title": "Add a module to a rack: a type with knob values.",
+    "description": "Add a module to a rack: a type with knob values. type: an id or a short name (\"vca\", \"notes\"; module.list). x, y: its top-left corner in the rack (default: right of the others). params: knob values by key in the knob's units (a choice by its key, a switch as a bool). Notes: source (the track whose MIDI it plays; default the rack's channel) and device (a live MIDI input it always plays; \"\" any). plugin: a plug-in id (fx.scan) for a plugin module, which shows the plug-in's name and opens its editor; its ports are in_l, in_r, out_l, out_r. Returns its size and keys. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "module_add_args",
+      "properties": {
+        "rack": {
+          "type": "string",
+          "pattern": "^rk_[0-9]+$"
+        },
+        "type": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "x": {
+          "type": "number",
+          "minimum": -1e+06,
+          "maximum": 1e+06
+        },
+        "y": {
+          "type": "number",
+          "minimum": -1e+06,
+          "maximum": 1e+06
+        },
+        "params": {},
+        "source": {
+          "type": "string",
+          "pattern": "^tr_[0-9]+$"
+        },
+        "device": {
+          "type": "string"
+        },
+        "plugin": {
+          "type": "string"
+        }
+      },
+      "required": ["rack", "type"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "module_describe",
+    "title": "A module type's knobs, inputs and outputs, with units and help.",
+    "description": "A module type's knobs, inputs and outputs, with units and help. type (an id or a short name, \"vca\") or module (a module's type). Knobs: key, name, kind (number, integer, choice, toggle), unit, min, max, default, choices (keys), group, help. Ports: key, name, signal (audio, pitch in octaves from C4, gate, cv -1..1, unipolar 0..1, phase 0..1), help, and an input's normal (its value with nothing connected). A cable into a knob moves it by amount per unit of signal: octaves for a frequency, the knob's own unit otherwise. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "module_describe_args",
+      "properties": {
+        "type": {
+          "type": "string"
+        },
+        "module": {
+          "type": "string",
+          "pattern": "^mo_[0-9]+$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "module_duplicate",
+    "title": "Duplicate modules, with the cables between them.",
+    "description": "Duplicate modules, with the cables between them. The copies sit dx, dy from the originals (default 0, 40 below the lowest). cables (default true): cables among the given modules are copied too. Plugin modules copy their plug-in with its state. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "module_duplicate_args",
+      "properties": {
+        "modules": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^mo_[0-9]+$"
+          }
+        },
+        "dx": {
+          "type": "number",
+          "minimum": -1e+06,
+          "maximum": 1e+06
+        },
+        "dy": {
+          "type": "number",
+          "minimum": -1e+06,
+          "maximum": 1e+06
+        },
+        "cables": {
+          "type": "boolean"
+        }
+      },
+      "required": ["modules"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "module_list",
+    "title": "List module types: id, name, tags, what they do.",
+    "description": "List module types: id, name, tags, what they do. Host modules (Out, In, Notes, Transport) first, then stock, the user's library and the project's. query matches names, ids, tags and descriptions; tag one tag. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "module_list_args",
+      "properties": {
+        "query": {
+          "type": "string"
+        },
+        "tag": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "module_randomize",
+    "title": "Move a module's knobs at random, by an amount.",
+    "description": "Move a module's knobs at random, by an amount. amount 0..1 (default 0.25): how far each knob may move, as a share of its range (choices change with that probability); switches stay. seed makes it repeatable. Returns the knobs it set. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "module_randomize_args",
+      "properties": {
+        "module": {
+          "type": "string",
+          "pattern": "^mo_[0-9]+$"
+        },
+        "amount": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0
+        },
+        "seed": {
+          "type": "integer"
+        }
+      },
+      "required": ["module"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "module_remove",
+    "title": "Remove a module with its cables.",
+    "description": "Remove a module with its cables. Also its knob envelopes; an Out module's channels lose it as input; an In module's sends go; a plugin module's plug-in goes. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "module_ref",
+      "properties": {
+        "module": {
+          "type": "string",
+          "pattern": "^mo_[0-9]+$"
+        }
+      },
+      "required": ["module"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "module_set",
+    "title": "Set a module's knobs, label, place or bypass.",
+    "description": "Set a module's knobs, label, place or bypass. params merge into its knobs (values in the knob's units; a choice by key; a default value is dropped from the file). A knob edit is heard at once, without a recompile. bypass passes each input to the output of its kind. label names it (an Out module's label is what channels' input menus list). See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "module_set_args",
+      "properties": {
+        "module": {
+          "type": "string",
+          "pattern": "^mo_[0-9]+$"
+        },
+        "params": {},
+        "label": {
+          "type": "string"
+        },
+        "x": {
+          "type": "number",
+          "minimum": -1e+06,
+          "maximum": 1e+06
+        },
+        "y": {
+          "type": "number",
+          "minimum": -1e+06,
+          "maximum": 1e+06
+        },
+        "bypass": {
+          "type": "boolean"
+        },
+        "source": {
+          "type": "string",
+          "pattern": "^tr_[0-9]+$"
+        },
+        "device": {
+          "type": "string"
+        }
+      },
+      "required": ["module"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true
+    }
+  },
+  {
     "name": "plugin_list",
     "title": "List scanned plugins; filter matches id, name, or vendor.",
     "description": "List scanned plugins; filter matches id, name, or vendor.  See describe for errors and examples.",
@@ -7290,6 +7611,123 @@
       "readOnlyHint": false,
       "destructiveHint": true,
       "idempotentHint": false
+    }
+  },
+  {
+    "name": "rack_add",
+    "title": "Add a modular rack on a channel, its Out the input.",
+    "description": "Add a modular rack on a channel, its Out the input. A rack is a patching space homed on a channel (track, or a new channel named after name). It starts with an Out module, made the channel's input: what the patch sends to Out plays on the channel, before its inserts and Console 9 stage. The channel's MIDI items play into Notes modules. Add modules with module.add and connect them with cable.add. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "rack_add_args",
+      "properties": {
+        "track": {
+          "type": "string",
+          "pattern": "^tr_[0-9]+$"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "rack_get",
+    "title": "A rack's modules, cables, Out modules and problems.",
+    "description": "A rack's modules, cables, Out modules and problems. Modules with their type, label, place and size and the knobs that differ from their defaults (detail full: also their input, output and knob keys); cables with feedback (true: it closes a loop and carries the previous frame); Out modules and the channels they feed; problems (missing types, cables that do not fit). See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "rack_get_args",
+      "properties": {
+        "rack": {
+          "type": "string",
+          "pattern": "^rk_[0-9]+$"
+        },
+        "detail": {
+          "type": "string",
+          "pattern": "^(brief|full)$"
+        }
+      },
+      "required": ["rack"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "rack_list",
+    "title": "List racks: home channels, module counts, Outs.",
+    "description": "List racks: home channels, module counts, Outs.  See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "no_args",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "rack_remove",
+    "title": "Remove a rack with its modules and cables.",
+    "description": "Remove a rack with its modules and cables. Channels that took one of its Out modules as input lose it; sends into its In modules go; plugin modules' plug-ins go with them. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "rack_ref",
+      "properties": {
+        "rack": {
+          "type": "string",
+          "pattern": "^rk_[0-9]+$"
+        }
+      },
+      "required": ["rack"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "rack_set",
+    "title": "Rename a rack or move it to another channel.",
+    "description": "Rename a rack or move it to another channel. name \"\" shows the home channel's name. track moves its home (its Out modules keep feeding the channels they feed; Notes modules without a source follow the new home's MIDI). See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "rack_set_args",
+      "properties": {
+        "rack": {
+          "type": "string",
+          "pattern": "^rk_[0-9]+$"
+        },
+        "name": {
+          "type": "string"
+        },
+        "track": {
+          "type": "string",
+          "pattern": "^tr_[0-9]+$"
+        }
+      },
+      "required": ["rack"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true
     }
   },
   {
@@ -10028,7 +10466,8 @@
         },
         "to": {
           "type": "string",
-          "pattern": "^tr_[0-9]+$"
+          "pattern": "^(tr|mo)_[0-9]+$",
+          "description": "A track, or a rack's In module (mo_*): the send then plays into the rack, linear (no Console 9 stage)"
         },
         "fx": {
           "type": "string",
@@ -10454,7 +10893,8 @@
         },
         "to": {
           "type": "string",
-          "pattern": "^tr_[0-9]+$"
+          "pattern": "^(tr|mo)_[0-9]+$",
+          "description": "A track, or a rack's In module (mo_*): the send then plays into the rack, linear (no Console 9 stage)"
         },
         "fx": {
           "type": "string",
@@ -11820,6 +12260,11 @@
         },
         "record_midi": {
           "type": "string"
+        },
+        "record_rack": {
+          "type": "string",
+          "pattern": "^mo_[0-9]+$",
+          "description": "A rack's Out module as the channel's input: the rack plays on the channel, before its inserts (rack.list lists them)"
         },
         "midi_channel": {
           "type": "integer",

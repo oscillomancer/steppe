@@ -1089,6 +1089,179 @@ Result:
 
 ```
 
+## `cable.add@1`
+
+Connect an output to an input or a knob.
+
+from: "mo_N.<output>"; to: "mo_N.<input>" or "mo_N.<knob>" (a modulation cable: amount is the knob's movement at a signal of 1, in octaves for a frequency, the knob's unit otherwise; default an octave or half the range). Several cables into one input sum; a mono cable reaches every voice of a poly module. feedback: it closes a loop, so it carries the previous frame (a one-sample delay).
+
+Kind: `edit`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `from` | string |  |  |  |  |
+| `to` | string |  |  |  |  |
+| `amount` | number |  |  |  |  |
+| `color` | string |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Errors
+
+- `rack.port`: no such output, input or knob Hint: rack.get detail full
+- `cable.exists`: the two ends are joined already Hint: cable.set
+- `cable.rack`: the ends are in different racks Hint: use In and Out modules
+
+### Examples
+
+**Notes' gate opens the VCA** (`song_with_rack`)
+
+```json
+{
+  "from": "mo_2.gate",
+  "to": "mo_3.cv"
+}
+
+```
+
+Result:
+
+```json
+{
+  "cable": "cb_2",
+  "feedback": false
+}
+
+```
+
+**Modulate a knob** (`song_with_rack`)
+
+```json
+{
+  "from": "mo_2.modwheel",
+  "to": "mo_3.level",
+  "amount": 12
+}
+
+```
+
+Result:
+
+```json
+{
+  "cable": "cb_2",
+  "feedback": false
+}
+
+```
+
+## `cable.remove@1`
+
+Remove a cable, by id or by its two ends.
+
+
+
+Kind: `edit`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `cable` | string |  |  |  |  |
+| `from` | string |  |  |  |  |
+| `to` | string |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
+
+**Unplug** (`song_with_rack`)
+
+```json
+{
+  "cable": "cb_1"
+}
+
+```
+
+Result:
+
+```json
+{}
+
+```
+
+**Unplug by ends** (`song_with_rack`)
+
+```json
+{
+  "from": "mo_3.out",
+  "to": "mo_1.l"
+}
+
+```
+
+Result:
+
+```json
+{}
+
+```
+
+## `cable.set@1`
+
+Set a modulation cable's amount or a cable's colour.
+
+
+
+Kind: `edit`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `cable` | string |  |  |  |  |
+| `amount` | number |  |  |  |  |
+| `color` | string |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
+
+**Colour it** (`song_with_rack`)
+
+```json
+{
+  "cable": "cb_1",
+  "color": "violet"
+}
+
+```
+
+Result:
+
+```json
+{}
+
+```
+
 ## `dsp.check@1`
 
 Compile a DSP script without saving it; return its diagnostics.
@@ -7978,6 +8151,370 @@ Result:
 
 ```
 
+## `module.add@1`
+
+Add a module to a rack: a type with knob values.
+
+type: an id or a short name ("vca", "notes"; module.list). x, y: its top-left corner in the rack (default: right of the others). params: knob values by key in the knob's units (a choice by its key, a switch as a bool). Notes: source (the track whose MIDI it plays; default the rack's channel) and device (a live MIDI input it always plays; "" any). plugin: a plug-in id (fx.scan) for a plugin module, which shows the plug-in's name and opens its editor; its ports are in_l, in_r, out_l, out_r. Returns its size and keys.
+
+Kind: `edit`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `rack` | string |  |  |  |  |
+| `type` | string |  |  |  |  |
+| `label` | string |  |  |  |  |
+| `x` | number |  | -1e+06..1e+06 |  |  |
+| `y` | number |  | -1e+06..1e+06 |  |  |
+| `params` | value |  |  |  |  |
+| `source` | string |  |  |  |  |
+| `device` | string |  |  |  |  |
+| `plugin` | string |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Errors
+
+- `rack.unknown_type`: no such module type Hint: module.list
+- `rack.param`: a knob or value the type does not have Hint: module.describe
+- `rack.limit`: too many modules Hint: remove modules first
+
+### Examples
+
+**A VCA, half open** (`song_with_rack`)
+
+```json
+{
+  "rack": "rk_1",
+  "type": "vca",
+  "params": {
+    "level": -6
+  }
+}
+
+```
+
+Result:
+
+```json
+{
+  "module": "mo_4",
+  "type": "com.suppleaudio.rack.vca",
+  "x": "<any>",
+  "y": 40.0,
+  "width": "<any>",
+  "height": "<any>",
+  "inputs": ["in", "cv"],
+  "outputs": ["out"],
+  "knobs": ["level", "response"]
+}
+
+```
+
+## `module.describe@1`
+
+A module type's knobs, inputs and outputs, with units and help.
+
+type (an id or a short name, "vca") or module (a module's type). Knobs: key, name, kind (number, integer, choice, toggle), unit, min, max, default, choices (keys), group, help. Ports: key, name, signal (audio, pitch in octaves from C4, gate, cv -1..1, unipolar 0..1, phase 0..1), help, and an input's normal (its value with nothing connected). A cable into a knob moves it by amount per unit of signal: octaves for a frequency, the knob's own unit otherwise.
+
+Kind: `query`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `type` | string |  |  |  |  |
+| `module` | string |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
+
+**The VCA** (`empty`)
+
+```json
+{
+  "type": "vca"
+}
+
+```
+
+Result:
+
+```json
+{
+  "type": "com.suppleaudio.rack.vca",
+  "name": "VCA",
+  "origin": "stock",
+  "vendor": "Supple Audio",
+  "version": "1.0.0",
+  "description": "<any>",
+  "tags": ["amplifier", "utility"],
+  "width": "<any>",
+  "height": "<any>",
+  "knobs": "<any>",
+  "inputs": "<any>",
+  "outputs": "<any>"
+}
+
+```
+
+## `module.duplicate@1`
+
+Duplicate modules, with the cables between them.
+
+The copies sit dx, dy from the originals (default 0, 40 below the lowest). cables (default true): cables among the given modules are copied too. Plugin modules copy their plug-in with its state.
+
+Kind: `edit`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `modules` | array |  |  |  |  |
+| `dx` | number |  | -1e+06..1e+06 |  |  |
+| `dy` | number |  | -1e+06..1e+06 |  |  |
+| `cables` | boolean |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
+
+**Copy the VCA** (`song_with_rack`)
+
+```json
+{
+  "modules": ["mo_3"]
+}
+
+```
+
+Result:
+
+```json
+{
+  "modules": ["mo_4"],
+  "cables": []
+}
+
+```
+
+## `module.list@1`
+
+List module types: id, name, tags, what they do.
+
+Host modules (Out, In, Notes, Transport) first, then stock, the user's library and the project's. query matches names, ids, tags and descriptions; tag one tag.
+
+Kind: `query`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `query` | string |  |  |  |  |
+| `tag` | string |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
+
+**Amplifiers** (`empty`)
+
+```json
+{
+  "tag": "amplifier"
+}
+
+```
+
+Result:
+
+```json
+{
+  "types": [
+    {
+      "type": "com.suppleaudio.rack.vca",
+      "name": "VCA",
+      "tags": ["amplifier", "utility"],
+      "origin": "stock",
+      "description": "<any>"
+    }
+  ]
+}
+
+```
+
+## `module.randomize@1`
+
+Move a module's knobs at random, by an amount.
+
+amount 0..1 (default 0.25): how far each knob may move, as a share of its range (choices change with that probability); switches stay. seed makes it repeatable. Returns the knobs it set.
+
+Kind: `edit`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `module` | string |  |  |  |  |
+| `amount` | number |  | 0.0..1.0 |  |  |
+| `seed` | integer |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
+
+**Nudge the VCA** (`song_with_rack`)
+
+```json
+{
+  "module": "mo_3",
+  "seed": 7
+}
+
+```
+
+Result:
+
+```json
+{
+  "params": "<any>"
+}
+
+```
+
+## `module.remove@1`
+
+Remove a module with its cables.
+
+Also its knob envelopes; an Out module's channels lose it as input; an In module's sends go; a plugin module's plug-in goes.
+
+Kind: `edit`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `module` | string |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
+
+**Remove the VCA** (`song_with_rack`)
+
+```json
+{
+  "module": "mo_3"
+}
+
+```
+
+Result:
+
+```json
+{}
+
+```
+
+## `module.set@1`
+
+Set a module's knobs, label, place or bypass.
+
+params merge into its knobs (values in the knob's units; a choice by key; a default value is dropped from the file). A knob edit is heard at once, without a recompile. bypass passes each input to the output of its kind. label names it (an Out module's label is what channels' input menus list).
+
+Kind: `edit`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `module` | string |  |  |  |  |
+| `params` | value |  |  |  |  |
+| `label` | string |  |  |  |  |
+| `x` | number |  | -1e+06..1e+06 |  |  |
+| `y` | number |  | -1e+06..1e+06 |  |  |
+| `bypass` | boolean |  |  |  |  |
+| `source` | string |  |  |  |  |
+| `device` | string |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
+
+**Turn the VCA down** (`song_with_rack`)
+
+```json
+{
+  "module": "mo_3",
+  "params": {
+    "level": -12
+  }
+}
+
+```
+
+Result:
+
+```json
+{}
+
+```
+
+**Name the Out** (`song_with_rack`)
+
+```json
+{
+  "module": "mo_1",
+  "label": "Bells"
+}
+
+```
+
+Result:
+
+```json
+{}
+
+```
+
 ## `plugin.list@1`
 
 List scanned plugins; filter matches id, name, or vendor.
@@ -9328,6 +9865,264 @@ Result:
 
 ```
 
+## `rack.add@1`
+
+Add a modular rack on a channel, its Out the input.
+
+A rack is a patching space homed on a channel (track, or a new channel named after name). It starts with an Out module, made the channel's input: what the patch sends to Out plays on the channel, before its inserts and Console 9 stage. The channel's MIDI items play into Notes modules. Add modules with module.add and connect them with cable.add.
+
+Kind: `edit`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `track` | string |  |  |  |  |
+| `name` | string |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Errors
+
+- `rack.home`: a rack lives on a channel Hint: give a channel's id
+- `rack.limit`: too many racks Hint: remove a rack first
+
+### Examples
+
+**A rack on the bass channel** (`song`)
+
+```json
+{
+  "track": "tr_1"
+}
+
+```
+
+Result:
+
+```json
+{
+  "rack": "rk_1",
+  "track": "tr_1",
+  "out": "mo_1"
+}
+
+```
+
+**A rack on a new channel** (`song`)
+
+```json
+{
+  "name": "Drones"
+}
+
+```
+
+Result:
+
+```json
+{
+  "rack": "rk_1",
+  "track": "tr_2",
+  "out": "mo_1"
+}
+
+```
+
+## `rack.get@1`
+
+A rack's modules, cables, Out modules and problems.
+
+Modules with their type, label, place and size and the knobs that differ from their defaults (detail full: also their input, output and knob keys); cables with feedback (true: it closes a loop and carries the previous frame); Out modules and the channels they feed; problems (missing types, cables that do not fit).
+
+Kind: `query`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `rack` | string |  |  |  |  |
+| `detail` | string |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
+
+**What the rack holds** (`song_with_rack`)
+
+```json
+{
+  "rack": "rk_1"
+}
+
+```
+
+Result:
+
+```json
+{
+  "rack": "rk_1",
+  "name": "Bass",
+  "track": "tr_1",
+  "modules": "<any>",
+  "cables": [
+    {
+      "cable": "cb_1",
+      "from": "mo_3.out",
+      "to": "mo_1.l",
+      "feedback": false
+    }
+  ],
+  "outs": "<any>",
+  "problems": []
+}
+
+```
+
+## `rack.list@1`
+
+List racks: home channels, module counts, Outs.
+
+
+
+Kind: `query`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
+
+**One rack** (`song_with_rack`)
+
+```json
+{}
+
+```
+
+Result:
+
+```json
+{
+  "racks": [
+    {
+      "rack": "rk_1",
+      "name": "Bass",
+      "track": "tr_1",
+      "modules": 3,
+      "cables": 1,
+      "outs": [
+        {
+          "module": "mo_1",
+          "label": "Out 1",
+          "channels": ["tr_1"]
+        }
+      ]
+    }
+  ]
+}
+
+```
+
+## `rack.remove@1`
+
+Remove a rack with its modules and cables.
+
+Channels that took one of its Out modules as input lose it; sends into its In modules go; plugin modules' plug-ins go with them.
+
+Kind: `edit`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `rack` | string |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
+
+**Remove the rack** (`song_with_rack`)
+
+```json
+{
+  "rack": "rk_1"
+}
+
+```
+
+Result:
+
+```json
+{}
+
+```
+
+## `rack.set@1`
+
+Rename a rack or move it to another channel.
+
+name "" shows the home channel's name. track moves its home (its Out modules keep feeding the channels they feed; Notes modules without a source follow the new home's MIDI).
+
+Kind: `edit`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `rack` | string |  |  |  |  |
+| `name` | string |  |  |  |  |
+| `track` | string |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
+
+**Name it** (`song_with_rack`)
+
+```json
+{
+  "rack": "rk_1",
+  "name": "Bells"
+}
+
+```
+
+Result:
+
+```json
+{}
+
+```
+
 ## `region.add@1`
 
 Add a named region in beats.
@@ -10468,7 +11263,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `from` | string |  |  |  |  |
-| `to` | string |  |  |  |  |
+| `to` | string |  |  |  | A track, or a rack's In module (mo_*): the send then plays into the rack, linear (no Console 9 stage) |
 | `fx` | string |  |  |  | Feed this plug-in's sidechain (key) input instead of a track's input; `to` may be left out |
 | `tap` | string |  |  |  |  |
 | `volume_db` | value | dB | -150.0..12.0 |  | Quantity strings are range-checked by the server. |
@@ -10957,7 +11752,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | --- | --- | --- | --- | --- | --- |
 | `route` | string |  |  |  |  |
 | `from` | string |  |  |  |  |
-| `to` | string |  |  |  |  |
+| `to` | string |  |  |  | A track, or a rack's In module (mo_*): the send then plays into the rack, linear (no Console 9 stage) |
 | `fx` | string |  |  |  | Feed this plug-in's sidechain (key) input instead of a track's input; `to` may be left out |
 | `tap` | string |  |  |  |  |
 | `volume_db` | value | dB | -150.0..12.0 |  | Quantity strings are range-checked by the server. |
@@ -12915,6 +13710,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | `armed` | boolean |  |  |  |  |
 | `record_input` | array |  |  |  |  |
 | `record_midi` | string |  |  |  |  |
+| `record_rack` | string |  |  |  | A rack's Out module as the channel's input: the rack plays on the channel, before its inserts (rack.list lists them) |
 | `midi_channel` | integer |  | 0.0..16.0 |  |  |
 | `record_mode` | string |  |  |  |  |
 | `monitor` | string |  |  |  |  |

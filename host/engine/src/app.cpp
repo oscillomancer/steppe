@@ -2971,6 +2971,14 @@ struct Gain : Effect {
     }
     run("track.add", R"({"name": "Bass"})");
     if (fixture == "song") return;
+    if (fixture == "song_with_rack") {
+        // + rk_1 on tr_1: mo_1 Out (tr_1's input), mo_2 Notes, mo_3 VCA; cb_1 mo_3.out -> mo_1.l
+        run("rack.add", R"({"track": "tr_1"})");
+        run("module.add", R"({"rack": "rk_1", "type": "notes", "x": 40, "y": 40})");
+        run("module.add", R"({"rack": "rk_1", "type": "vca", "x": 300, "y": 40})");
+        run("cable.add", R"({"from": "mo_3.out", "to": "mo_1.l"})");
+        return;
+    }
     if (fixture == "song_with_group" || fixture == "song_with_vca") {
         run("group.add", R"({"name":"Drums","members":["tr_1"]})");
         if (fixture == "song_with_vca") run("vca.add", R"({"group":"gr_1"})");

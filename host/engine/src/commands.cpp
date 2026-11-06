@@ -42,6 +42,8 @@ void registerHealCommands(cmd::Registry& registry);
 void registerLearnCommands(cmd::Registry& registry);
 void registerControlLearnCommands(cmd::Registry& registry);
 void registerDspCommands(cmd::Registry& registry);
+void registerRackCommands(cmd::Registry& registry);
+void removeRacksOn(model::EditTxn& t, const model::Session& s, model::Id track);
 
 using cmd::Command;
 using cmd::Context;
@@ -54,6 +56,37 @@ namespace {
 
 json::Value obj(std::string_view text) { return json::parse(text).value(); }
 EngineApp& A(Context& ctx) { return ctx.service<EngineApp>(); }
+
+// Whether `track`'s signal reaches `rack` (through parent sends, routes and
+// other racks): it may not then take that rack's Out as input (rack.cycle).
+bool trackFeedsRack(const model::Session& s, Id track, Id rack) {
+    std::set<Id> seen{track};
+    std::vector<Id> todo{track};
+    auto rackOf = [&](Id module) -> std::optional<Id> {
+        const model::RackModule* m = s.modules.find(module);
+        return m ? std::optional<Id>(m->rack) : std::nullopt;
+    };
+    while (!todo.empty()) {
+        const Id at = todo.back();
+        todo.pop_back();
+        if (at == rack) return true;
+        std::vector<Id> next;
+        if (const model::Track* t = s.tracks.find(at); t && t->parent && t->parentSend.enabled)
+            next.push_back(*t->parent);
+        for (const auto& e : s.routes) {
+            const model::Route& r = *e.value;
+            const std::optional<Id> from = r.from.module ? rackOf(*r.from.module) : r.from.track;
+            if (from != at) continue;
+            const std::optional<Id> to = r.to.module ? rackOf(*r.to.module)
+                                         : r.to.fx   ? model::trackOfFx(s, *r.to.fx)
+                                                     : r.to.track;
+            if (to) next.push_back(*to);
+        }
+        for (Id n : next)
+            if (seen.insert(n).second) todo.push_back(n);
+    }
+    return false;
+}
 
 auto idArg(const char* kindPrefix, const char* what) {
     return schema::string()
@@ -634,6 +667,7 @@ struct TrackSetArgs {
     std::optional<bool> armed;
     std::optional<std::vector<std::int64_t>> recordInput;
     std::optional<std::string> recordMidi;
+    std::optional<std::string> recordRack;  // an Out module (ADR-0062)
     std::optional<std::int64_t> midiChannel;
     std::optional<model::RecordMode> recordMode;
     std::optional<model::Monitor> monitor;
@@ -865,6 +899,7 @@ void registerEngineCommands(cmd::Registry& registry) {
     registerLearnCommands(registry);
     registerControlLearnCommands(registry);
     registerDspCommands(registry);
+    registerRackCommands(registry);
     lua::registerScriptCommands(registry);
     // ---------------------------------------------------------------- project.get
     [&] {
@@ -1487,6 +1522,12 @@ void registerEngineCommands(cmd::Registry& registry) {
                 }
             for (const auto& e : s.envelopes)
                 if (gone.count(e.value->target.object)) t.remove<model::Envelope>(e.id);
+            // Its racks (ADR-0062), and Notes modules elsewhere stop playing it.
+            removeRacksOn(t, s, id);
+            for (const auto& e : s.modules)
+                if (e.value->source == id)
+                    t.modify<model::RackModule>(e.id,
+                                                [](model::RackModule& m) { m.source.reset(); });
             if (!tr.parent) {
                 auto p = t.project();
                 std::erase(p.masters, id);
@@ -1555,6 +1596,10 @@ void registerEngineCommands(cmd::Registry& registry) {
                 .field("record_input", &TrackSetArgs::recordInput,
                        schema::arrayOf(schema::integer().range(1, 64)))
                 .field("record_midi", &TrackSetArgs::recordMidi, schema::string())
+                .field("record_rack", &TrackSetArgs::recordRack,
+                       idArg("mo", "Out module")
+                           .doc("A rack's Out module as the channel's input: the rack plays "
+                                "on the channel, before its inserts (rack.list lists them)"))
                 .field("midi_channel", &TrackSetArgs::midiChannel, schema::integer().range(0, 16))
                 .field("record_mode", &TrackSetArgs::recordMode,
                        schema::enumeration<model::RecordMode>(
@@ -1619,7 +1664,8 @@ void registerEngineCommands(cmd::Registry& registry) {
                              "red, orange, yellow, green, teal, blue, violet, grey or \"#rrggbb\"; "
                              "\"\" clears it");
             const model::StripType newType = a.type.value_or(s.tracks.find(*id)->type);
-            if ((a.recordInput || a.recordMidi || a.midiChannel || a.recordMode || a.monitor) &&
+            if ((a.recordInput || a.recordMidi || a.recordRack || a.midiChannel || a.recordMode ||
+                 a.monitor) &&
                 newType != model::StripType::Channel)
                 return Error("track.strip_type", "only channels have record inputs or monitor",
                              "/track",
@@ -1632,6 +1678,9 @@ void registerEngineCommands(cmd::Registry& registry) {
             if (a.laneMute && newType != model::StripType::Master)
                 return Error("track.strip_type", "only masters have a lane mute", "/lane_mute",
                              "mute the items themselves (item.set {mute}) or the strip");
+            if (a.recordRack && (a.recordInput || a.recordMidi))
+                return Error("track.record_input", "one input: a rack's Out, audio or MIDI",
+                             "/record_rack", "give record_rack alone");
             if (a.recordInput && a.recordMidi)
                 return Error("track.record_input", "record audio or MIDI, not both", "/record_midi",
                              "provide either record_input for audio or record_midi for MIDI, and "
@@ -1693,6 +1742,7 @@ void registerEngineCommands(cmd::Registry& registry) {
                     app.txn().modify<model::Route>(*input, [&](model::Route& r) {
                         r.from.hwChannels = channels;
                         r.from.midiDevice.reset();  // audio replaces MIDI
+                        r.from.module.reset();      // and a rack's Out
                         r.midi.reset();
                     });
                 } else {
@@ -1711,6 +1761,7 @@ void registerEngineCommands(cmd::Registry& registry) {
                                  "midi_channel");
                 auto setMidi = [&](model::Route& r) {
                     r.from.hwChannels.reset();
+                    r.from.module.reset();
                     if (a.recordMidi) r.from.midiDevice = *a.recordMidi;
                     model::MidiRouting m = r.midi.value_or(model::MidiRouting{});
                     if (a.midiChannel) m.fromChannel = static_cast<int>(*a.midiChannel);
@@ -1725,10 +1776,36 @@ void registerEngineCommands(cmd::Registry& registry) {
                     input = app.txn().create(r);
                 }
             }
+            if (a.recordRack) {  // a rack's Out module (ADR-0062)
+                auto out = Id::parse(*a.recordRack);
+                const model::RackModule* m = out ? s.modules.find(*out) : nullptr;
+                if (!m || m->type != model::kOutModule)
+                    return Error("rack.port", *a.recordRack + " is not an Out module",
+                                 "/record_rack", "rack.list lists every rack's Out modules");
+                if (trackFeedsRack(s, *id, m->rack))
+                    return Error(
+                        "rack.cycle",
+                        a.track + " sends into " + m->rack.str() + ", so it cannot hear that rack",
+                        "/record_rack",
+                        "remove the send into the rack's In module, or pick another Out");
+                if (input && s.routes.find(*input)) {
+                    app.txn().modify<model::Route>(*input, [&](model::Route& r) {
+                        r.from = model::RouteEnd{};
+                        r.from.module = *out;
+                        r.midi.reset();
+                    });
+                } else {
+                    model::Route r;
+                    r.from.module = *out;
+                    r.to.track = *id;
+                    input = app.txn().create(r);
+                }
+            }
             app.txn().modify<model::Track>(*id, [&](model::Track& t) {
                 if (a.armed) t.record.armed = *a.armed;
                 if (a.recordMode) t.record.mode = *a.recordMode;
-                if (a.recordInput || a.recordMidi || a.midiChannel) t.record.input = input;
+                if (a.recordInput || a.recordMidi || a.recordRack || a.midiChannel)
+                    t.record.input = input;
                 if (a.monitor) t.record.monitor = *a.monitor;
                 if (a.name) t.name = *a.name;
                 if (a.color) t.color = *a.color;
