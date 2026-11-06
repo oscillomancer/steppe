@@ -41,6 +41,7 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `delay` | A stereo tape-style delay up to 10 s: free or synced, ping-pong, feedback past 100 %, tone, wow and flutter, a send and return to patch into the loop |
 | `reverb` | A lush stereo reverb, an eight-line feedback delay network: size, decay to freeze, damping, diffusion, modulation, shimmer, pre-delay |
 | `ladder` | A four-pole ladder low pass with saturating feedback and bass compensation; 12 dB and resonant high-pass taps, poly |
+| `fold` | A west-coast wavefolder, 4x oversampled: fold, symmetry, stages; and a soft-clip output |
 
 ### Modulation, sequencing, generative and utilities
 
