@@ -122,16 +122,24 @@ struct MidiControl {
     bool operator==(const MidiControl&) const = default;
 };
 
+// What every MIDI learn binding has, whatever it moves (a plug-in parameter,
+// a strip's or a send's control, an action in the GUI): the controller, how
+// a CC moves the target, and soft takeover.
+struct ControlBinding {
+    MidiControl control;
+    ControlMode mode = ControlMode::Absolute;
+    bool softTakeover = false;  // absolute: follow only once the knob reaches the value
+    bool operator==(const ControlBinding&) const = default;
+};
+
 // MIDI learn on a track's, a send's or a VCA's own controls (ADR-0058): the
 // fader, pan and buttons. `param` names the control: volume, pan, mute, solo,
 // phase_invert, mono, armed, monitor or lane_mute on a track; volume, pan,
 // mute, phase_invert, mono or tap:post_fader|pre_fader|pre_fx on a send;
 // volume, mute or solo on a VCA.
-struct ControlLearn {
+// Soft takeover applies to a level or pan.
+struct ControlLearn : ControlBinding {
     std::string param;
-    MidiControl control;
-    ControlMode mode = ControlMode::Absolute;
-    bool softTakeover = false;  // absolute (a level or pan): follow once the knob reaches it
     bool operator==(const ControlLearn&) const = default;
 };
 
@@ -287,11 +295,8 @@ struct PinMap {
     bool empty() const { return in.empty() && out.empty() && key.empty(); }
 };
 
-struct ParamLearn {
+struct ParamLearn : ControlBinding {
     std::string param;  // a semantic key, or a plain parameter's id
-    MidiControl control;
-    ControlMode mode = ControlMode::Absolute;
-    bool softTakeover = false;  // absolute: follow only once the knob reaches the value
     // Enable only while the effect's track is selected, while its window or
     // editor has the focus, or while one of them shows (a window app; a
     // headless engine has neither, so such a binding waits).

@@ -16,10 +16,22 @@ namespace supple::model {
 schema::Schema<TrackFreeze> trackFreezeSchema();
 schema::Schema<StripType> stripTypeSchema();
 schema::Schema<RoutePan> routePanSchema();
-schema::Schema<Timebase> timebaseSchema();            // time | beats | beats_position
-schema::Schema<PinMap> pinMapSchema();                // {in, out, key}: 1-based track channels
-schema::Schema<MidiControl> midiControlSchema();      // {kind, channel, number, device}
-schema::Schema<ControlMode> controlModeSchema();      // absolute | relative1..3 | toggle
+schema::Schema<Timebase> timebaseSchema();        // time | beats | beats_position
+schema::Schema<PinMap> pinMapSchema();            // {in, out, key}: 1-based track channels
+schema::Schema<MidiControl> midiControlSchema();  // {kind, channel, number, device}
+schema::Schema<ControlMode> controlModeSchema();  // absolute | relative1..3 | toggle
+// A ControlBinding's members on the schema of a type that extends it: midi,
+// then mode and soft_takeover, omitted at their defaults.
+template <class T>
+schema::ObjectBuilder<T>& controlBindingFields(schema::ObjectBuilder<T>& b) {
+    MidiControl T::* control = &T::control;
+    ControlMode T::* mode = &T::mode;
+    bool T::* softTakeover = &T::softTakeover;
+    b.field("midi", control, midiControlSchema());
+    b.field("mode", mode, controlModeSchema()).defaultValue(ControlMode::Absolute).omitIfDefault();
+    b.field("soft_takeover", softTakeover, schema::boolean()).defaultValue(false).omitIfDefault();
+    return b;
+}
 schema::Schema<ParamLearn> paramLearnSchema();        // {param, midi, mode, …} (ADR-0027)
 schema::Schema<ControlLearn> controlLearnSchema();    // {param, midi, mode, …} (ADR-0058)
 schema::Schema<TrackTimebase> trackTimebaseSchema();  // project | time | beats | beats_position

@@ -9,6 +9,7 @@
 #include <cstdint>
 
 #include "command_validation.h"
+#include "learn_binding.h"
 #include "supple/engine/app.h"
 #include "supple/engine/midi_control.h"
 #include "supple/model/schemas.h"
@@ -71,14 +72,9 @@ double semanticStep(const params::ParamSpec& spec) {
     return kFineStep;
 }
 
-struct LearnArgs {
+struct LearnArgs : LearnBindingArgs {
     std::string fx, param;
-    model::MidiControl midi;
-    std::optional<model::ControlMode> mode;
-    std::optional<bool> softTakeover, whenSelected, whenFocused, whenVisible;
-};
-struct LearnResult {
-    std::string param, control;
+    std::optional<bool> whenSelected, whenFocused, whenVisible;
 };
 struct LearnRef {
     std::string fx, param;
@@ -166,31 +162,17 @@ void EngineApp::applyLearn(const std::vector<ControlEvent>& events) {
     const model::Session s = head();
     for (const auto& entry : s.fx) {
         for (const model::ParamLearn& learn : entry.value->learn) {
-            const bool heard = std::any_of(events.begin(), events.end(), [&](const auto& e) {
-                return matches(learn.control, e.midi, e.device);
-            });
-            if (!heard) continue;
+            if (!heardControl(events, learn.control)) continue;
             if ((learn.whenSelected || learn.whenFocused || learn.whenVisible) &&
                 !(learnGate && learnGate(entry.id, learn)))
                 continue;
-            // Every message for it, in order: relative steps add up, the last
-            // absolute position wins.
             Takeover& takeover = learnState_[{entry.id, learn.param}].takeover;
-            const auto set = moveParam(entry.id, learn.param, [&](double current, double step) {
-                std::optional<double> next;
-                for (const ControlEvent& e : events) {
-                    if (!matches(learn.control, e.midi, e.device)) continue;
-                    const ControlReading r = read(e.midi, learn.mode);
-                    if (auto v =
-                            nextValue(current, r, learn.mode, learn.softTakeover, step, takeover)) {
-                        current = *v;
-                        takeover.set = current;
-                        next = current;
-                    }
-                }
-                return next;
-            });
-            if (set) takeover.set = *set;
+            driveLearned(
+                events, learn, takeover,
+                [&](const auto& next) { return moveParam(entry.id, learn.param, next); },
+                [&](double current, const ControlReading& r, double step) {
+                    return nextValue(current, r, learn.mode, learn.softTakeover, step, takeover);
+                });
         }
     }
     applyControlLearn(events);  // tracks', sends' and VCAs' own controls (ADR-0058)
@@ -362,7 +344,7 @@ void EngineApp::commitLearned(bool all) {
 void registerLearnCommands(cmd::Registry& registry) {
     auto fxId = schema::string().pattern("^fx_[0-9]+$", "plugin instance id");
     {
-        Command<LearnArgs, LearnResult> c;
+        Command<LearnArgs, LearnSetResult> c;
         c.name = "fx.learn.set";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpTool;
@@ -375,27 +357,25 @@ void registerLearnCommands(cmd::Registry& registry) {
             "when_selected / when_focused / when_visible: only while the effect's track is "
             "selected, or its window or editor has the focus or shows (the GUI).";
         c.tags = {"fx", "midi"};
-        c.args = schema::object<LearnArgs>("fx_learn_set_args")
-                     .field("fx", &LearnArgs::fx, fxId)
-                     .field("param", &LearnArgs::param,
-                            schema::string().minLength(1).doc(
-                                "A semantic key, or a plain parameter's id or name (fx.describe)"))
-                     .field("midi", &LearnArgs::midi, model::midiControlSchema())
-                     .field("mode", &LearnArgs::mode, model::controlModeSchema())
-                     .field("soft_takeover", &LearnArgs::softTakeover, schema::boolean())
-                     .field("when_selected", &LearnArgs::whenSelected, schema::boolean())
-                     .field("when_focused", &LearnArgs::whenFocused, schema::boolean())
-                     .field("when_visible", &LearnArgs::whenVisible, schema::boolean())
-                     .build();
-        c.result = schema::object<LearnResult>("fx_learn_set_result")
-                       .field("param", &LearnResult::param, schema::string())
-                       .field("control", &LearnResult::control, schema::string())
+        auto args = schema::object<LearnArgs>("fx_learn_set_args");
+        args.field("fx", &LearnArgs::fx, fxId)
+            .field("param", &LearnArgs::param,
+                   schema::string().minLength(1).doc(
+                       "A semantic key, or a plain parameter's id or name (fx.describe)"));
+        learnBindingArgFields(args)
+            .field("when_selected", &LearnArgs::whenSelected, schema::boolean())
+            .field("when_focused", &LearnArgs::whenFocused, schema::boolean())
+            .field("when_visible", &LearnArgs::whenVisible, schema::boolean());
+        c.args = args.build();
+        c.result = schema::object<LearnSetResult>("fx_learn_set_result")
+                       .field("param", &LearnSetResult::param, schema::string())
+                       .field("control", &LearnSetResult::control, schema::string())
                        .build();
         c.examples = {
             {"Gain on CC 21",
              j(R"({"fx":"fx_2","param":"gain","midi":{"kind":"cc","channel":1,"number":21}})"),
              j(R"({"param":"gain","control":"CC 21 · ch 1"})"), "song_with_fx"}};
-        c.run = [](const LearnArgs& a, Context& ctx) -> Result<LearnResult> {
+        c.run = [](const LearnArgs& a, Context& ctx) -> Result<LearnSetResult> {
             EngineApp& engine = app(ctx);
             const model::Session s = engine.view();
             const auto id = Id::parse(a.fx);
@@ -405,22 +385,16 @@ void registerLearnCommands(cmd::Registry& registry) {
                              "use an fx id from track.list or fx.add");
             auto param = resolveParam(engine, *fx, a.param);
             if (!param) return std::move(param).error();
-            model::ParamLearn learn;
-            learn.param = *param;
-            learn.control = a.midi;
-            if (learn.control.kind == model::ControlKind::PitchBend) learn.control.number = 0;
-            learn.mode = a.mode.value_or(model::ControlMode::Absolute);
-            learn.softTakeover = a.softTakeover.value_or(false);
-            learn.whenSelected = a.whenSelected.value_or(false);
-            learn.whenFocused = a.whenFocused.value_or(false);
-            learn.whenVisible = a.whenVisible.value_or(false);
+            const model::ParamLearn learn{a.binding(), *param, a.whenSelected.value_or(false),
+                                          a.whenFocused.value_or(false),
+                                          a.whenVisible.value_or(false)};
             engine.txn().modify<model::FxInstance>(*id, [&](model::FxInstance& f) {
                 std::erase_if(f.learn, [&](const auto& l) { return l.param == learn.param; });
                 f.learn.push_back(learn);
                 std::sort(f.learn.begin(), f.learn.end(),
                           [](const auto& x, const auto& y) { return x.param < y.param; });
             });
-            return LearnResult{*param, describe(learn.control)};
+            return LearnSetResult{*param, describe(learn.control)};
         };
         addChecked(registry, std::move(c));
     }

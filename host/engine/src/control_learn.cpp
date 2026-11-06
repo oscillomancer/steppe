@@ -11,6 +11,7 @@
 #include <cstdint>
 
 #include "command_validation.h"
+#include "learn_binding.h"
 #include "supple/base/fader.h"
 #include "supple/engine/app.h"
 #include "supple/engine/midi_control.h"
@@ -204,14 +205,8 @@ bool frozenAllows(std::string_view param) {
     return param == "volume" || param == "pan" || param == "mute" || param == "solo";
 }
 
-struct LearnArgs {
+struct LearnArgs : LearnBindingArgs {
     std::string target, param;
-    model::MidiControl midi;
-    std::optional<model::ControlMode> mode;
-    std::optional<bool> softTakeover;
-};
-struct LearnResult {
-    std::string param, control;
 };
 struct LearnRef {
     std::string target, param;
@@ -298,7 +293,7 @@ void registerFor(cmd::Registry& registry, model::Kind kind) {
     const std::string fixture = route ? "song_with_route" : vca ? "song_with_vca" : "song";
     const std::string example = route ? "sd_1" : vca ? "gr_1" : "tr_1";
     {
-        Command<LearnArgs, LearnResult> c;
+        Command<LearnArgs, LearnSetResult> c;
         c.name = prefix + ".learn.set";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpTool;
@@ -317,17 +312,14 @@ void registerFor(cmd::Registry& registry, model::Kind kind) {
              : vca ? " The bindings go with the VCA."
                    : " monitor goes off, on, auto in turn on each press.");
         c.tags = {prefix, "midi"};
-        c.args = schema::object<LearnArgs>(prefix + "_learn_set_args")
-                     .field(key, &LearnArgs::target, idS)
-                     .field("param", &LearnArgs::param,
-                            schema::string().minLength(1).doc("The control: " + controlNames(kind)))
-                     .field("midi", &LearnArgs::midi, model::midiControlSchema())
-                     .field("mode", &LearnArgs::mode, model::controlModeSchema())
-                     .field("soft_takeover", &LearnArgs::softTakeover, schema::boolean())
-                     .build();
-        c.result = schema::object<LearnResult>(prefix + "_learn_set_result")
-                       .field("param", &LearnResult::param, schema::string())
-                       .field("control", &LearnResult::control, schema::string())
+        auto args = schema::object<LearnArgs>(prefix + "_learn_set_args");
+        args.field(key, &LearnArgs::target, idS)
+            .field("param", &LearnArgs::param,
+                   schema::string().minLength(1).doc("The control: " + controlNames(kind)));
+        c.args = learnBindingArgFields(args).build();
+        c.result = schema::object<LearnSetResult>(prefix + "_learn_set_result")
+                       .field("param", &LearnSetResult::param, schema::string())
+                       .field("control", &LearnSetResult::control, schema::string())
                        .build();
         if (route)
             c.examples = {
@@ -347,7 +339,7 @@ void registerFor(cmd::Registry& registry, model::Kind kind) {
         c.errors = {
             {prefix + ".learn_param", "no such control", "use one of: " + controlNames(kind)},
             {"learn.mode", "toggle on a level or pan", "use absolute or a relative mode"}};
-        c.run = [kind, prefix](const LearnArgs& a, Context& ctx) -> Result<LearnResult> {
+        c.run = [kind, prefix](const LearnArgs& a, Context& ctx) -> Result<LearnSetResult> {
             EngineApp& engine = app(ctx);
             const model::Session s = engine.view();
             auto id = target(s, kind, a.target);
@@ -357,25 +349,20 @@ void registerFor(cmd::Registry& registry, model::Kind kind) {
                 return Error(prefix + ".learn_param", "no control " + a.param, "/param",
                              "use one of: " + controlNames(kind));
             SUPPLE_TRY(checkStrip(s, *id, a.param));
-            const model::ControlMode mode = a.mode.value_or(model::ControlMode::Absolute);
-            if (mode == model::ControlMode::Toggle &&
+            model::ControlLearn learn{a.binding(), a.param};
+            if (learn.mode == model::ControlMode::Toggle &&
                 (spec->shape == Shape::Level || spec->shape == Shape::Pan))
                 return Error("learn.mode", "toggle flips buttons; a level or pan follows a knob",
                              "/mode", "use absolute, or relative1..3 for an encoder");
-            model::ControlLearn learn;
-            learn.param = a.param;
-            learn.control = a.midi;
-            if (learn.control.kind == model::ControlKind::PitchBend) learn.control.number = 0;
-            learn.mode =
-                learn.control.kind == model::ControlKind::Cc ? mode : model::ControlMode::Absolute;
-            learn.softTakeover = a.softTakeover.value_or(false);
+            if (learn.control.kind != model::ControlKind::Cc)
+                learn.mode = model::ControlMode::Absolute;
             editLearn(engine, *id, [&](std::vector<model::ControlLearn>& list) {
                 std::erase_if(list, [&](const auto& l) { return l.param == learn.param; });
                 list.push_back(learn);
                 std::sort(list.begin(), list.end(),
                           [](const auto& x, const auto& y) { return x.param < y.param; });
             });
-            return LearnResult{learn.param, describe(learn.control)};
+            return LearnSetResult{learn.param, describe(learn.control)};
         };
         addChecked(registry, std::move(c));
     }
@@ -470,41 +457,28 @@ void EngineApp::applyControlLearn(const std::vector<ControlEvent>& events) {
     const auto apply = [&](Id id, const model::ControlLearn& learn) {
         const ControlSpec* spec = findSpec(id.kind, learn.param);
         if (!spec) return;
-        const bool heard = std::any_of(events.begin(), events.end(), [&](const auto& e) {
-            return matches(learn.control, e.midi, e.device);
-        });
-        if (!heard) return;
+        if (!heardControl(events, learn.control)) return;
         Takeover& takeover = learnState_[{id, learn.param}].takeover;
-        const auto set = moveControl(id, learn.param, [&](double current, double step) {
-            std::optional<double> next;
-            for (const ControlEvent& e : events) {
-                if (!matches(learn.control, e.midi, e.device)) continue;
-                const ControlReading r = read(e.midi, learn.mode);
-                std::optional<double> v;
+        driveLearned(
+            events, learn, takeover,
+            [&](const auto& next) { return moveControl(id, learn.param, next); },
+            [&](double current, const ControlReading& r, double step) -> std::optional<double> {
                 switch (spec->shape) {
                     case Shape::Level:
                     case Shape::Pan:
-                        v = nextValue(current, r, learn.mode, learn.softTakeover, step, takeover);
-                        break;
+                        return nextValue(current, r, learn.mode, learn.softTakeover, step,
+                                         takeover);
                     case Shape::Switch:
-                        v = switchValue(current, r, learn);
-                        break;
+                        return switchValue(current, r, learn);
                     case Shape::Cycle:
-                        if (r.press) v = current < 0.25 ? 0.5 : current < 0.75 ? 1.0 : 0.0;
+                        if (r.press) return current < 0.25 ? 0.5 : current < 0.75 ? 1.0 : 0.0;
                         break;
                     case Shape::Choice:
-                        if (r.press) v = 1.0;
+                        if (r.press) return 1.0;
                         break;
                 }
-                if (v) {
-                    current = *v;
-                    takeover.set = current;
-                    next = current;
-                }
-            }
-            return next;
-        });
-        if (set) takeover.set = *set;
+                return std::nullopt;
+            });
     };
     for (const auto& e : s.tracks)
         for (const model::ControlLearn& learn : e.value->learn) apply(e.id, learn);

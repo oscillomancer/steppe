@@ -794,11 +794,7 @@ Schema<ParamLearn> paramLearnSchema() {
     const ParamLearn d;
     auto b = schema::object<ParamLearn>("param_learn");
     b.field("param", &ParamLearn::param, str());
-    b.field("midi", &ParamLearn::control, midiControlSchema());
-    b.field("mode", &ParamLearn::mode, controlModeSchema());
-    dflt(b, d.mode);
-    b.field("soft_takeover", &ParamLearn::softTakeover, boolean());
-    dflt(b, d.softTakeover);
+    controlBindingFields(b);
     b.field("when_selected", &ParamLearn::whenSelected, boolean());
     dflt(b, d.whenSelected);
     b.field("when_focused", &ParamLearn::whenFocused, boolean());
@@ -809,14 +805,9 @@ Schema<ParamLearn> paramLearnSchema() {
 }
 
 Schema<ControlLearn> controlLearnSchema() {
-    const ControlLearn d;
     auto b = schema::object<ControlLearn>("control_learn");
     b.field("param", &ControlLearn::param, str());
-    b.field("midi", &ControlLearn::control, midiControlSchema());
-    b.field("mode", &ControlLearn::mode, controlModeSchema());
-    dflt(b, d.mode);
-    b.field("soft_takeover", &ControlLearn::softTakeover, boolean());
-    dflt(b, d.softTakeover);
+    controlBindingFields(b);
     return b.build();
 }
 
