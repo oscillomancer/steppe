@@ -199,6 +199,30 @@ void RackSpace::frameAll() {
     setView(v);
 }
 
+void RackSpace::reveal(const std::set<model::Id>& ids) {
+    ui::Rect r;
+    bool any = false;
+    for (const auto& m : scene_.modules)
+        if (ids.contains(m.id)) {
+            r = any ? r.unite(m.rect()) : m.rect();
+            any = true;
+        }
+    const ui::Rect b = bounds();
+    if (!any || b.empty()) return;
+    const ui::Rect seen = visibleSpace();
+    if (seen.contains({r.x, r.y}) && seen.contains({r.right(), r.bottom()})) return;
+    // Centred, zoomed out only as far as they need.
+    constexpr double kPad = 48;
+    const double zoom = std::clamp(
+        std::min({view_.zoom, (D(b.w) - 2 * kPad) / D(r.w), (D(b.h) - 2 * kPad) / D(r.h)}),
+        kMinZoom, kMaxZoom);
+    View v;
+    v.zoom = zoom;
+    v.x = D(r.x) + D(r.w) / 2 - D(b.w) / 2 / zoom;
+    v.y = D(r.y) + D(r.h) / 2 - D(b.h) / 2 / zoom;
+    setView(v);
+}
+
 ui::Point RackSpace::toSpace(ui::Point w) const {
     return {static_cast<float>(view_.x + D(w.x - bounds().x) / view_.zoom),
             static_cast<float>(view_.y + D(w.y - bounds().y) / view_.zoom)};

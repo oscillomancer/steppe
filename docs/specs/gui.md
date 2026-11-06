@@ -1181,8 +1181,10 @@ a new channel). It follows rack.md §8.
   transaction). Delete removes the selection; Ctrl+A selects every module.
   A right-click offers Open editor (plugins), Rename…, Bypass, Duplicate,
   Randomize, Presets… (the type's factory patches, `module.set preset`),
-  Show source and Delete; on the space, Add <module> and Add plugin… at
-  that point, and Show everything.
+  Show source, Save as rack preset… (the selection) and Delete. On the
+  space: Add module… (the browser opens with its search focused, and the
+  next module added lands at that point), Add plugin… there, Load rack
+  preset… (there), Save rack as preset…, and Show everything.
 - **Jacks** are circles ringed in their signal kind's colour (§7); outputs
   sit on a plate, as on hardware. A jack glows by its level from the
   module's telemetry (an input by its cables' sources'); a poly output shows
@@ -1227,6 +1229,17 @@ a new channel). It follows rack.md §8.
   a row into the space adds it where it is dropped. Plugin… (and Add
   plugin…) opens the plug-in browser; the plug-in chosen becomes a plugin
   module (`module.add {plugin}`), with note jacks when it is an instrument.
+  A right-click on a row offers Add to rack and Show source.
+- **Rack presets** (`rack.preset.*`) are listed in the browser under
+  "presets", after the host's modules: each with its description, or its
+  module count and types. A double click or a drag loads one into the rack
+  shown (`rack.preset.load`; a drag at the drop point, else beside the
+  rack's modules), its modules selected and brought into view; a
+  right-click offers Load into rack and Delete preset. Saving asks a name
+  in a field over the space (the rack's label, or the one module's) and
+  calls `rack.preset.save` with the selection's ids or none; a name in use
+  asks Replace "<name>" before saving with `replace`. The list is read when
+  the window opens and after each save or delete.
 - **Source.** Show source opens the type's code (`module.get {type}`) in a
   code view over the window, titled with its name, origin and id. A library
   module's is editable: Save or Ctrl+Enter writes and compiles it

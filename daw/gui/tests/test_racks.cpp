@@ -25,6 +25,7 @@
 #include "supple/ui/popup.h"
 #include "supple/ui/root.h"
 #include "supple/ui/text_area.h"
+#include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
 #include "supple/views/track_layout.h"
 
@@ -729,4 +730,63 @@ TEST_CASE("rack window: a knob learns a MIDI controller from its menu, shows it 
     REQUIRE(f.pick("rack.param.menu", "Remove MIDI learn"));
     CHECK(f.app->head().modules.find(vca)->learn.empty());
     CHECK_FALSE(f.racks->space()->scene().module(vca)->learned.contains("level"));
+}
+
+TEST_CASE("rack window: modules saved as a rack preset load into another rack from the browser") {
+    Fixture f;
+    if (!f.ok) return;
+    Patch p(f);
+    f.racks->open();
+    f.frame();
+    const model::Id osc = *model::Id::parse(p.osc), vca = *model::Id::parse(p.vca);
+    // Two modules, saved under a name asked for.
+    f.racks->space()->select({osc, vca});
+    f.racks->savePreset(std::vector<model::Id>{osc, vca});
+    f.frame();
+    auto* name = dynamic_cast<ui::TextField*>(f.r().find("rack.preset.name"));
+    REQUIRE(name);
+    name->setText("Voice");
+    f.r().key(SDLK_RETURN);
+    f.frame();
+    auto shows = f.racks->browserShows();
+    CHECK(std::find(shows.begin(), shows.end(), "preset:Voice") != shows.end());
+    f.snapshot("rack-presets-browser.png");
+    // The same name again: replaced only when the user says so.
+    f.racks->savePreset(std::vector<model::Id>{osc});
+    f.frame();
+    name = dynamic_cast<ui::TextField*>(f.r().find("rack.preset.name"));
+    REQUIRE(name);
+    name->setText("Voice");
+    f.r().key(SDLK_RETURN);
+    f.frame();
+    REQUIRE(f.pick("rack.preset.replace", "Replace"));
+    json::Value list = f.exec("rack.preset.list", "{}");
+    REQUIRE(list["presets"].size() == 1);
+    CHECK(list["presets"].asArray()[0].find("modules")->asInt() == 1);
+    // A new rack: the preset loads into it, selected and in view.
+    REQUIRE(f.racks->addRack());
+    f.frame();
+    const std::size_t before = f.racks->space()->scene().modules.size();
+    REQUIRE(f.racks->addModule("preset:Voice"));
+    f.frame();
+    CHECK(f.racks->space()->scene().modules.size() == before + 1);
+    CHECK(f.racks->space()->selection().size() == 1);
+    // The space's menu: Add module… puts the next one where it was asked.
+    const ui::Rect b = f.racks->space()->bounds();
+    const ui::Point empty{b.x + b.w - 60, b.y + b.h - 60};
+    f.pointer(ui::PointerEvent::Type::Down, empty, 3);
+    f.pointer(ui::PointerEvent::Type::Up, empty, 3);
+    REQUIRE(f.pick("rack.space.menu", "Add module"));
+    const ui::Point at = f.racks->space()->toSpace(empty);
+    REQUIRE(f.racks->addModule("vca"));
+    f.frame();
+    bool placed = false;
+    for (const auto& m : f.racks->space()->scene().modules)
+        placed = placed || (std::abs(m.x - double(at.x)) < 1 && std::abs(m.y - double(at.y)) < 1);
+    CHECK(placed);
+    // Deleted from the browser's menu.
+    f.racks->browserMenu("preset:Voice", {b.x + 40, b.y + 40});
+    REQUIRE(f.pick("rack.browser.menu", "Delete preset"));
+    shows = f.racks->browserShows();
+    CHECK(std::find(shows.begin(), shows.end(), "preset:Voice") == shows.end());
 }

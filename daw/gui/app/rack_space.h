@@ -90,6 +90,8 @@ class RackSpace : public ui::Node {
     void zoomAt(ui::Point at, double factor);
     // Everything in view, at most 100 % (an empty rack: the origin at 100 %).
     void frameAll();
+    // `ids` in view: centred (zoomed out as far as they need) unless they are.
+    void reveal(const std::set<model::Id>& ids);
     // frameAll() once the space has its size (before its first layout).
     void frameAllWhenLaidOut() {
         if (bounds().empty())

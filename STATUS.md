@@ -356,7 +356,8 @@ instructions are in `docs/guides/installing.md`.
   channel), the source view with Make editable copy, rack Outs in a
   channel's input menu, Show/Add rack in its right-click menu, and pointer
   input on module displays (`pointer()`), MIDI learn from a knob's menu (a
-  dot marks a bound knob). Not yet in the window: rack presets.
+  dot marks a bound knob), rack presets (saved from the space or a
+  selection, listed and loaded from the browser).
 - **MIDI learn** (ADR-0027): any plug-in parameter (the FX window's MIDI
   button, or `fx.learn.set` for agents) and any action (Ctrl+L in the
   actions list) learns a controller by moving it: CC, note, pitch bend or
