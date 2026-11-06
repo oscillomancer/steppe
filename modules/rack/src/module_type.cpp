@@ -130,6 +130,7 @@ std::string ModuleType::problems() const {
     }
     if (inputs_.size() > 32) add("more than 32 inputs");
     if (outputs_.size() > 32) add("more than 32 outputs");
+    if (params_.size() > 256) add("more than 256 parameters");
     if (info_.tags.size() > 4) add("more than four tags");
     return out;
 }

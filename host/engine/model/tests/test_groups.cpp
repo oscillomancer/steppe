@@ -69,7 +69,7 @@ TEST_CASE("legacy opaque groups retain their value and never become active") {
     auto saved = projectToJson(*s);
     CHECK(saved["extensions"]["legacy_track_groups"] == "already present");
     CHECK(saved["extensions"]["legacy_track_groups_1"] == doc["groups"]);
-    CHECK(saved["schema"] == "supple.project/2.6");
+    CHECK(saved["schema"] == "supple.project/2.7");
     auto again = parseProject(serializeProject(*s));
     REQUIRE(again);
     CHECK(serializeProject(*again) == serializeProject(*s));

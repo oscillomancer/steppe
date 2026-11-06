@@ -134,10 +134,12 @@ Status validateStripRules(const Session& s) {
         }
         if (t.record.input) {
             const Route* r = s.routes.find(*t.record.input);
-            if (!r || (!r->from.hwChannels && !r->from.midiDevice) || r->to.track != e.id)
-                return trackError("a record input must enter this channel from hardware/MIDI",
-                                  path + "/record/input",
-                                  "choose a hardware or MIDI input route into this channel");
+            if (!r || (!r->from.hwChannels && !r->from.midiDevice && !r->from.module) ||
+                r->to.track != e.id)
+                return trackError(
+                    "a record input must enter this channel from hardware, MIDI or a rack",
+                    path + "/record/input",
+                    "choose a hardware, MIDI or rack Out input route into this channel");
         }
     }
     for (const auto& e : s.items) {
@@ -187,7 +189,7 @@ Status validateStripRules(const Session& s) {
                          "/routes/" + e.id.str() + "/to",
                          "route the strip into a master and set that master's hw_output "
                          "(track.set {track, hw_output: [1, 2]})");
-        if (r.to.track && r.from.track) {
+        if ((r.to.track || r.to.module) && r.from.track) {
             const Track* from = s.tracks.find(*r.from.track);
             if (from && from->type == StripType::Master)
                 return routeError(e.id, "masters are terminal", "from",
@@ -196,9 +198,12 @@ Status validateStripRules(const Session& s) {
         if (r.to.track) {
             const Track* to = s.tracks.find(*r.to.track);
             if (!to) continue;  // reference errors belong to the invariant checker
-            if (to->type == StripType::Channel && !r.from.hwChannels)
-                return routeError(e.id, "a channel accepts only hardware audio inputs", "to",
+            if (to->type == StripType::Channel && !r.from.hwChannels && !r.from.module)
+                return routeError(e.id, "a channel accepts only hardware and rack inputs", "to",
                                   "add a buss and route the channels into it; use fx for a key");
+            if (to->type != StripType::Channel && r.from.module)
+                return routeError(e.id, "an Out module feeds a channel", "to",
+                                  "choose the rack's Out as a channel's input");
             if (to->type != StripType::Channel && !r.from.track)
                 return routeError(
                     e.id, "a buss/master accepts audio only from strips", "from",

@@ -32,6 +32,8 @@ Session
 ├── routes         sd_*  edges: track→track, track→hw out, hw in→track
 ├── envelopes      en_*  automation (targets any param), automation items ai_*
 ├── groups         gr_*  track edit groups and optional VCA controls (ADR-0052)
+├── racks          rk_*  modular racks on channels, with modules mo_* and
+│                        cables cb_* (ADR-0062, rack.md §2)
 └── blobs          content-addressed opaque data (plugin states, large arrays)
 ```
 
@@ -46,7 +48,9 @@ conflict detection (§6.4).
 reused within a lineage: `tr` track, `it` item, `tk` take, `md` media
 source, `mi` MIDI source, `fx` plugin instance, `sd` route, `en` envelope,
 `ai` automation item, `mk` marker, `rg` region, `tp` tempo point, `ts` meter
-change, `gr` group, `ln` lane, `rj` render job. `tr_0` is the main master.
+change, `gr` group, `ln` lane, `rj` render job, `rk` rack, `mo` module, `cb`
+cable. `tr_0` is the main master. The rack kinds' counters are written once
+they pass 1 (a project without racks keeps its 2.6 `next_ids`).
 Events inside containers (MIDI notes, envelope points, stretch markers) are
 not objects (ADR-0008).
 
@@ -247,8 +251,8 @@ rendered).
 
 | field | notes |
 |---|---|
-| `from` | `{track: id}` or `{hw_input: {channels: [..]}}` or `{midi_input: device}` |
-| `to` | `{track: id}` or `{fx: id}` (a plug-in's key, ADR-0018); hardware outputs are a master's `hw_output` (§1.4, ADR-0056), and a route to `hw_channels` is refused with `route.hw_output` |
+| `from` | `{track: id}` or `{hw_input: {channels: [..]}}` or `{midi_input: device}` or `{module: id}` (a rack's Out module: a channel's record input, rack.md §2.4) |
+| `to` | `{track: id}` or `{fx: id}` (a plug-in's key, ADR-0018) or `{module: id}` (a send into a rack's In module); hardware outputs are a master's `hw_output` (§1.4, ADR-0056), and a route to `hw_channels` is refused with `route.hw_output` |
 | `tap` | `post_fader` (default), `pre_fader` (post-FX), `pre_fx` |
 | `volume` dB, `pan` % or `follow` (default: the strip's pan), `mute`, `phase_invert`, `mono` | into a buss/master: realized by the send's own C9 Channel (ADR-0019 §3) |
 | `channels` | `{from: [..], to: [..]}` channel mapping, 1-based in 1..128 and up to each strip's channels (e.g. [1,2] → [3,4] for a detector on 3/4). Main pairs map the encoded send; pairs touching auxiliary channels are linear links at the route's level, mute and polarity (ADR-0020) |
@@ -256,7 +260,8 @@ rendered).
 | `learn` | MIDI learn on the send's controls (ADR-0058), as a track's (§1.4): `param` `volume`, `pan`, `mute`, `phase_invert`, `mono` or `tap:post_fader`, `tap:pre_fader`, `tap:pre_fx` (a press selects that tap); omitted when empty |
 
 Folder/master sends are the tracks' `parent_send`, not routes. Record inputs
-are routes from `hw_input`/`midi_input` referenced by `track.record.input`.
+are routes from `hw_input`/`midi_input`, or from a rack's Out module,
+referenced by `track.record.input`.
 Cycles are rejected at edit time (`route.cycle`, naming the cycle).
 ADR-0019 §4 rules, rejected at edit time with `route.strip_type` (and a hint
 naming the allowed alternative): audio into a channel only from `hw_input`;
@@ -433,8 +438,11 @@ masters (a master's takes are audio or empty, ADR-0057); record settings and
 only on masters; routes obey ADR-0019 §4; every referenced ID exists; items'
 tracks/lanes exist; `active_take` ∈ `takes`; sources referenced by takes
 exist (or are marked missing); no route cycles (including parent sends);
-envelope targets exist; points sorted; chains reference fx that belong to
-exactly one chain; counters exceed every used ID; tempo map has a point at
+envelope targets exist (a module's knob among them); points sorted; every fx
+belongs to exactly one chain or one plugin module; racks obey rack.md §2.5
+(homes are channels, cables within one rack, Out modules feed channels as
+their record inputs, no cycle through a rack, the limits); counters exceed
+every used ID; tempo map has a point at
 beat 0 and meters at bar starts. A violation is a bug (`model.invariant`),
 never a user error — user errors are caught by command validation first.
 
@@ -458,7 +466,7 @@ routes: sd_1 tr_2 → tr_6 ch 1/2→3/4 pre-fader −6 dB (sidechain)
 markers: mk_1 "Verse" bar 1 · regions: rg_1 "Chorus" bars 9–17
 ```
 
-## 5. Project file (`supple.project/2.6`)
+## 5. Project file (`supple.project/2.7`)
 
 ### 5.1 Shape
 
@@ -488,7 +496,7 @@ Masters are ordered by `project.masters`, independently of processing order;
 Canonical JSON (ADR-0009) with members in this order: `schema`, `project`,
 `tempo` (`points`, `meters`), `rulers` (`markers`, `regions`), `tracks`,
 `items`, `takes`, `fx`, `sources` (`media`, `midi`), `routes`, `envelopes`,
-`automation_items` and `groups` (when present), `blobs`, then preserved unknown top-level
+`automation_items`, `groups`, `racks`, `modules` and `cables` (when present), `blobs`, then preserved unknown top-level
 sections and `extensions`. `groups` / `gr_*` are typed track groups since 2.2 (ADR-0052);
 older opaque groups are preserved in extensions with a warning. `ui` belongs to the sidecar. *(Amended 2026-09-26: `fx` — plugin instances are
 ID-keyed objects like the rest; chains reference them by id.)* Members equal
@@ -1030,3 +1038,10 @@ Writers now emit `supple.project/2.6`. The 2.6 change is `learn` on tracks (§1.
 routes (§1.8) and VCAs. A 2.5 file loads unchanged; an older application opening a 2.6
 file ignores `learn` with a warning, and its controllers move nothing on strips, sends or
 VCAs.
+
+### Modular racks (schema 2.7, ADR-0062)
+
+Writers now emit `supple.project/2.7`. The 2.7 change is the `racks`, `modules` and
+`cables` collections, written only when present, and a route end `module` (rack.md §2).
+A 2.6 file loads unchanged; an older application opening a 2.7 file keeps the
+collections as unknown sections and refuses routes with a module end.

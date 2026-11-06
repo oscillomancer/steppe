@@ -155,7 +155,7 @@ Modifiers: `.help("...")`, `.normal(v)` (an input's value while nothing is
 connected; 0 by default), `.in("Group")` (its section in the automatic
 layout), `.withKey("key")`. A port's key is its member's name in
 snake_case; keys of ports and parameters share one namespace per module.
-At most 32 inputs and 32 outputs.
+At most 32 inputs, 32 outputs and 256 parameters.
 
 | Method | |
 |---|---|

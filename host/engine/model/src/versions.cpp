@@ -78,6 +78,12 @@ EntryInfo entryInfo(const Session& s, Id id) {
             return info(s.tempo, id);
         case Kind::Meter:
             return info(s.meters, id);
+        case Kind::Rack:
+            return info(s.racks, id);
+        case Kind::Module:
+            return info(s.modules, id);
+        case Kind::Cable:
+            return info(s.cables, id);
         default:
             return {};
     }
@@ -120,6 +126,12 @@ json::Value objectJson(const Session& s, Id id) {
             return enc(s.tempo);
         case Kind::Meter:
             return enc(s.meters);
+        case Kind::Rack:
+            return enc(s.racks);
+        case Kind::Module:
+            return enc(s.modules);
+        case Kind::Cable:
+            return enc(s.cables);
         default:
             return {};
     }
@@ -165,6 +177,12 @@ const json::Value* objectSchema(const Session& s, Id id) {
             return &schemaFor(s.tempo);
         case Kind::Meter:
             return &schemaFor(s.meters);
+        case Kind::Rack:
+            return &schemaFor(s.racks);
+        case Kind::Module:
+            return &schemaFor(s.modules);
+        case Kind::Cable:
+            return &schemaFor(s.cables);
         default:
             return nullptr;
     }
@@ -275,8 +293,16 @@ json::Value remapWalk(const json::Value& v, const json::Value* schema, Defs defs
                 if (alternativeMatches(v, alt)) return remapWalk(v, &alt, defs, remap, depth + 1);
             return v;
         }
-    if (v.isString())
+    if (v.isString()) {
+        if (const json::Value* p = schema->find("pattern");
+            p && p->isString() && p->asString() == kCableEndPattern) {
+            const std::string& text = v.asString();
+            const auto dot = text.find('.');
+            if (dot == std::string::npos) return v;
+            return json::Value(remapped(text.substr(0, dot), remap) + text.substr(dot));
+        }
         return idPattern(schema, "pattern") ? json::Value(remapped(v.asString(), remap)) : v;
+    }
     if (v.isArray()) {
         const json::Value* items = schema->find("items");
         json::Value out = json::Value::array();
@@ -532,6 +558,9 @@ struct RetainedSize {
         map(v.id, s.markers);
         map(v.id, s.regions);
         map(v.id, s.groups);
+        map(v.id, s.racks);
+        map(v.id, s.modules);
+        map(v.id, s.cables);
         for (const auto& [hash, blob] : s.blobs)
             add(v.id, blob.get(), sizeof(Blob) + blob->data.size());
     }
