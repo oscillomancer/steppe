@@ -6236,7 +6236,7 @@
   {
     "name": "module_edit",
     "title": "Edit a library module in place: replace text, then save and compile it.",
-    "description": "Edit a library module in place: replace text, then save and compile it. name (or type, a library module's id). Each edit replaces old, which must be in the source exactly once, with new (empty deletes it), in order and all or none. Then as module.write: saved, compiled, and racks playing it rebuilt. See describe for errors and examples.",
+    "description": "Edit a library module in place: replace text, then save and compile it. name (or type, a library or project module's id). A project type is edited into the library's entry of the same id, or a free name when the id is absent. Each edit replaces old, which must be in the source exactly once, with new (empty deletes it), in order and all or none. Then as module.write: saved, compiled, and racks playing it rebuilt. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "module_edit_args",
@@ -7009,7 +7009,7 @@
   {
     "name": "project_open",
     "title": "Open a project file (replaces the current project and its history).",
-    "description": "Open a project file (replaces the current project and its history). recoverable > 0: recordings a crash left out of the project; project.recoverable lists them and project.recover puts them back. autosave_available: a newer autosave exists next to the file (it is not loaded silently). See describe for errors and examples.",
+    "description": "Open a project file (replaces the current project and its history). recoverable > 0: recordings a crash left out of the project; project.recoverable lists them and project.recover puts them back. autosave_available: a newer autosave exists next to the file (it is not loaded silently). warnings also report project module copies that could not be read or compiled, and name types using a library version instead or left unavailable. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "path_args",
@@ -8038,7 +8038,7 @@
   {
     "name": "rack_preset_load",
     "title": "Add a saved preset's modules and cables to a rack.",
-    "description": "Add a saved preset's modules and cables to a rack. name (rack.preset.list) or path (a preset file). x, y: the group's top-left (default right of the rack's modules). io: join (default) gives the preset's Out and In modules' cables to the rack's own Outs and Ins in order, so a whole patch sounds at once (extra ones are added); add makes new ones. Notes modules play the rack's channel. Your own modules the preset carries are written into the library when it lacks them (installed lists them). Knobs and cables the module types no longer have are left out with a warning (warnings); a module type or plug-in that is not installed is an error, and the rack does not change. See describe for errors and examples.",
+    "description": "Add a saved preset's modules and cables to a rack. name (rack.preset.list) or path (a preset file). x, y: the group's top-left (default right of the rack's modules). io: join (default) gives the preset's Out and In modules' cables to the rack's own Outs and Ins in order, so a whole patch sounds at once (extra ones are added); add makes new ones. Notes modules play the rack's channel. Your own modules the preset carries are written into the library when it lacks them (installed lists them). Every embedded source must compile and declare its sources key as ModuleInfo.id before any module is installed. Knobs and cables the module types no longer have are left out with a warning (warnings); a module type or plug-in that is not installed is an error, and the rack does not change. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "rack_preset_load_args",

@@ -8448,7 +8448,7 @@ Result:
 
 Edit a library module in place: replace text, then save and compile it.
 
-name (or type, a library module's id). Each edit replaces old, which must be in the source exactly once, with new (empty deletes it), in order and all or none. Then as module.write: saved, compiled, and racks playing it rebuilt.
+name (or type, a library or project module's id). A project type is edited into the library's entry of the same id, or a free name when the id is absent. Each edit replaces old, which must be in the source exactly once, with new (empty deletes it), in order and all or none. Then as module.write: saved, compiled, and racks playing it rebuilt.
 
 Kind: `action`. Exposure: `mcp-tool`.
 
@@ -9589,7 +9589,7 @@ Result:
 
 Open a project file (replaces the current project and its history).
 
-recoverable > 0: recordings a crash left out of the project; project.recoverable lists them and project.recover puts them back. autosave_available: a newer autosave exists next to the file (it is not loaded silently).
+recoverable > 0: recordings a crash left out of the project; project.recoverable lists them and project.recover puts them back. autosave_available: a newer autosave exists next to the file (it is not loaded silently). warnings also report project module copies that could not be read or compiled, and name types using a library version instead or left unavailable.
 
 Kind: `action`. Exposure: `mcp-tool`.
 
@@ -10705,7 +10705,7 @@ Result:
 
 Add a saved preset's modules and cables to a rack.
 
-name (rack.preset.list) or path (a preset file). x, y: the group's top-left (default right of the rack's modules). io: join (default) gives the preset's Out and In modules' cables to the rack's own Outs and Ins in order, so a whole patch sounds at once (extra ones are added); add makes new ones. Notes modules play the rack's channel. Your own modules the preset carries are written into the library when it lacks them (installed lists them). Knobs and cables the module types no longer have are left out with a warning (warnings); a module type or plug-in that is not installed is an error, and the rack does not change.
+name (rack.preset.list) or path (a preset file). x, y: the group's top-left (default right of the rack's modules). io: join (default) gives the preset's Out and In modules' cables to the rack's own Outs and Ins in order, so a whole patch sounds at once (extra ones are added); add makes new ones. Notes modules play the rack's channel. Your own modules the preset carries are written into the library when it lacks them (installed lists them). Every embedded source must compile and declare its sources key as ModuleInfo.id before any module is installed. Knobs and cables the module types no longer have are left out with a warning (warnings); a module type or plug-in that is not installed is an error, and the rack does not change.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -10732,6 +10732,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 - `rack.preset_source`: name and path both or neither Hint: give one
 - `rack.unknown_type`: the preset needs a module type that is not installed Hint: module.write it, or load another preset
 - `chain.plugin_missing`: the preset needs a plug-in that is not installed Hint: install it
+- `rack.preset_module`: an embedded source does not compile or has another id Hint: fix its source and ModuleInfo.id to match the sources entry
 - `rack.preset_invalid`: not a rack preset Hint: save it again
 
 ### Examples

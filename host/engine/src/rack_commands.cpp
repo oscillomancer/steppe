@@ -1885,7 +1885,9 @@ void registerRackPresetCommands(cmd::Registry& registry) {
             "and In modules' cables to the rack's own Outs and Ins in order, so a whole patch "
             "sounds at once (extra ones are added); add makes new ones. Notes modules play the "
             "rack's channel. Your own modules the preset carries are written into the library "
-            "when it lacks them (installed lists them). Knobs and cables the module types no "
+            "when it lacks them (installed lists them). Every embedded source must compile "
+            "and declare its sources key as ModuleInfo.id before any module is installed. "
+            "Knobs and cables the module types no "
             "longer have are left out with a warning (warnings); a module type or plug-in that "
             "is not installed is an error, and the rack does not change.";
         c.args = schema::object<PresetLoad>("rack_preset_load_args")
@@ -1905,6 +1907,8 @@ void registerRackPresetCommands(cmd::Registry& registry) {
                      "module.write it, or load another preset"},
                     {"chain.plugin_missing", "the preset needs a plug-in that is not installed",
                      "install it"},
+                    {"rack.preset_module", "an embedded source does not compile or has another id",
+                     "fix its source and ModuleInfo.id to match the sources entry"},
                     {"rack.preset_invalid", "not a rack preset", "save it again"}};
         c.run = [](const PresetLoad& a, Context& ctx) -> Result<json::Value> {
             EngineApp& e = app(ctx);
@@ -1938,6 +1942,32 @@ void registerRackPresetCommands(cmd::Registry& registry) {
                 w["path"] = at;
                 warnings.push_back(std::move(w));
             };
+            // Validate every source before installing any, including copies of
+            // already installed types: each source must declare its map key.
+            if (const json::Value* sources = doc.find("sources"))
+                for (const auto& m : sources->asObject()) {
+                    const std::string at = json::pointerJoin("/sources", m.key);
+                    const auto compiled = detail::compileModule(m.value.find("source")->asString(),
+                                                                rack::Origin::Library);
+                    if (!compiled.type) {
+                        std::string why;
+                        for (const auto& d : compiled.diagnostics)
+                            if (d.severity == "error") {
+                                why = ": " + d.message;
+                                break;
+                            }
+                        return Error("rack.preset_module",
+                                     "the preset's " + m.key + " does not compile here" + why, at,
+                                     "fix the embedded source; module.check {source: ...} "
+                                     "shows its diagnostics");
+                    }
+                    if (compiled.type->id() != m.key)
+                        return Error("rack.preset_module",
+                                     "the source for " + m.key + " declares " + compiled.type->id(),
+                                     at,
+                                     "set ModuleInfo.id to " + m.key +
+                                         ", or correct the preset's sources key and module types");
+                }
             // The user's modules it brings: into the library when it lacks them.
             if (const json::Value* sources = doc.find("sources"))
                 for (const auto& m : sources->asObject()) {
@@ -1951,11 +1981,10 @@ void registerRackPresetCommands(cmd::Registry& registry) {
                                  at);
                         continue;
                     }
-                    std::string name = m.value.find("name")->asString();
-                    std::error_code ec;
-                    for (int n = 2; fs::exists(detail::modulePath(e.moduleDir(), name), ec); ++n)
-                        name = m.value.find("name")->asString().substr(0, 60) + "-" +
-                               std::to_string(n);
+                    auto destination = detail::availableModuleName(
+                        e.moduleDir(), m.value.find("name")->asString());
+                    if (!destination) return std::move(destination).error();
+                    const std::string& name = *destination;
                     auto saved = saveLibraryModule(e, name, source, at.c_str());
                     if (!saved) return std::move(saved).error();
                     if (!(*saved)["ok"].asBool())

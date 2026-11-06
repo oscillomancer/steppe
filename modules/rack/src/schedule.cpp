@@ -215,12 +215,14 @@ double Schedule::value(const Source& s, int c, int f) const SUPPLE_RT {
         .outputs[static_cast<std::size_t>(s.output)][static_cast<std::size_t>(k * kGrid + at)];
 }
 
-void Schedule::beginBlock(ModulePlan& m, std::int64_t position, int frames) SUPPLE_RT {
+void Schedule::beginBlock(ModulePlan& m, std::int64_t grid, int frames,
+                          bool sampleAutomation) SUPPLE_RT {
     if (!m.instance) return;
     Instance& in = *m.instance;
-    for (auto& a : m.automated) a = std::numeric_limits<double>::quiet_NaN();
-    for (const auto& [index, curve] : m.automation)
-        m.automated[static_cast<std::size_t>(index)] = curve->at(position);
+    if (sampleAutomation) {
+        for (const auto& [index, curve] : m.automation)
+            m.automated[static_cast<std::size_t>(index)] = curve->at(grid);
+    }
     bool changed = false;
     for (std::size_t i = 0; i < m.params.size(); ++i)
         changed = in.beginParam(static_cast<int>(i), m.automated[i], frames) || changed;
@@ -352,6 +354,7 @@ void Schedule::run(ModulePlan& m, int f0, int n, const HostContext& ctx) SUPPLE_
 }
 
 void Schedule::process(std::int64_t position, int frames, Clock& clock) SUPPLE_RT {
+    if (frames <= 0) return;
     int done = 0;
     while (done < frames) {
         const std::int64_t pos = position + done;
@@ -362,7 +365,12 @@ void Schedule::process(std::int64_t position, int frames, Clock& clock) SUPPLE_R
         ctx.offset = done;
         ctx.position = pos;
         ctx.transport = clock.transport(pos);
-        for (ModulePlan& m : modules_) beginBlock(m, pos, n);
+        // Host blocks may split one grid interval into several calls. Keep
+        // its sampled automation target while smoothing still advances every
+        // frame. A first call or locate samples the grid containing its start.
+        const bool sampleAutomation =
+            phase == 0 || lastFrames_ == 0 || (done == 0 && position != expected_);
+        for (ModulePlan& m : modules_) beginBlock(m, pos - phase, n, sampleAutomation);
         for (const Step& step : steps_) {
             if (!step.group) {
                 run(modules_[static_cast<std::size_t>(step.modules.front())], 0, n, ctx);

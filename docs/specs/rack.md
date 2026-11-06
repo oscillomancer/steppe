@@ -311,14 +311,23 @@ catalog of the moment they start (`OfflineSettings::modules`).
 
 A saved project keeps a copy of each library or project module it plays
 in `<project folder>/modules/<name>/<name>.cpp` (`saveProjectModules`;
-not when that folder is the library), as it keeps its media; a file that
-already holds the source is left alone. Opening it compiles the copies as
+not when that folder is the library), as it keeps its media. Copies are
+deduplicated by type id; different types with the same name get distinct
+filenames (`<name>-2`, …). An existing file is updated only if it compiles
+to the same type id; other files, including broken sources, are preserved.
+A file that already holds the source is left alone. Opening it compiles the copies as
 project types (`Origin::Project`), which win over the library's for the
 same id, so the project sounds as it was saved on any machine. A
 `module.write` or `module.edit` of the same id in the library replaces the
 project's copy in the catalog (the edit plays, and the next save copies
-it); `module.edit {type}` of a project-only type writes it into the
-library.
+it). `module.edit {type}` of a project type edits its source into the
+library's entry with the same type id. If that id is absent, it uses the
+project copy's name or a free suffixed name (`<name>-2`, …), leaving other
+library types' files untouched.
+Copies that cannot be read or compiled are reported in `project.open`'s
+`warnings` as `project.modules`, with the source paths and diagnostics.
+The warning also names used types left without a project copy, explicitly
+saying when the library version is used instead or the type is unavailable.
 
 ## 4. The rack runtime (`modules/rack`)
 
@@ -337,7 +346,7 @@ library.
 
 ### 4.2 Processing
 
-`Schedule::process(const Block&)` (`SUPPLE_RT`): the host passes the
+`Schedule::process(position, frames, clock)` (`SUPPLE_RT`): the host passes the
 node's frames, its timeline position and a callback for per-grid-block
 context (transport, MIDI). The schedule splits the frames on the 32-frame
 grid of that position, and for each grid block:
@@ -348,6 +357,11 @@ grid of that position, and for each grid block:
 3. runs modules in order: an acyclic module once for the block, a
    feedback group frame by frame;
 4. publishes telemetry when due.
+
+Automation targets are sampled at absolute grid starts and held when host
+blocks split a grid interval; smoothing still advances every frame. A first
+call or a discontinuity samples the grid interval containing its start,
+including for negative positions. A zero-frame call leaves that state alone.
 
 A module stopped by its budget, or failing, outputs silence until reset or
 reloaded and is reported; the rest of the rack plays on.
@@ -419,7 +433,10 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   to it; liveness propagates to what it feeds.
 - **Parameters.** Knob edits on a running rack go to atomic slots (no
   compile). Envelopes on module parameters compile to curves the schedule
-  samples on the grid. MIDI learn (`module.learn.*`) moves a knob through
+  samples at each grid interval's start and holds across host block fragments;
+  smoothing still advances every frame. A locate samples the containing
+  interval again, including a start between grid points. MIDI learn
+  (`module.learn.*`) moves a knob through
   `module.set`, so it reaches the same slots.
 - **Plugin modules.** Their instances come from the instance pool by fx id
   and run as stages of the rack node (`Node::rackStages`, prepared and
@@ -527,7 +544,11 @@ Out feeds.
 
 `sources` holds the source of every library or project module the preset
 uses, by type id, with its library name, so one file carries a patch and
-its custom modules (ADR-0062). A load first writes each one the catalog
+its custom modules (ADR-0062). A load first compiles every embedded source
+and checks its `ModuleInfo.id` against its `sources` key, including types
+already installed. A compilation failure or id mismatch is
+`rack.preset_module` at that source entry and installs nothing.
+It then writes each one the catalog
 lacks into the library (under its name, or `<name>-2`… when that name is
 taken), as `module.write` does, and lists them in `installed`; one the
 catalog has plays as installed, with a warning (`rack.preset_module`) when

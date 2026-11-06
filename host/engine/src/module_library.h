@@ -45,9 +45,15 @@ std::string moduleName(const rack::ModuleType& type);
 // A library name: 1-64 lower-case letters, digits, '_' or '-', from a letter.
 Status validModuleName(std::string_view name, const std::string& path);
 
+// A free library name: stem, stem-2, ...; occupied files, including broken
+// sources and symlinks, are left alone. With replaceId, a regular file that
+// compiles to that id may be reused. Reports filesystem inspection errors.
+Result<std::string> availableModuleName(const std::filesystem::path& dir, std::string_view stem,
+                                        std::string_view replaceId = {});
+
 // `base` with the library's modules in place of its library types: each
 // that compiles, by name; ids a host or stock type has, or an earlier name
-// took, are left out. Problems are appended to `skipped` ("name: why").
+// took, are left out. Problems are appended to `skipped` ("source path: why").
 std::shared_ptr<const rack::Catalog> loadModuleLibrary(
     const std::shared_ptr<const rack::Catalog>& base, const std::filesystem::path& dir,
     std::vector<std::string>* skipped = nullptr);

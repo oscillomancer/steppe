@@ -114,11 +114,11 @@ class Schedule {
         std::vector<int> channels;                 // per output
         std::vector<int> lastChannels;             // zeroed last block
         std::vector<std::pair<int, ParamCurve*>> automation;
-        std::vector<double> automated;  // per parameter: this block's, NaN for the slot's
+        std::vector<double> automated;  // per parameter: this grid interval's, NaN for the slot's
         std::vector<char> passed;       // bypass: inputs already passed through
         int width = 1;
     };
-    void beginBlock(ModulePlan& m, std::int64_t position, int frames) SUPPLE_RT;
+    void beginBlock(ModulePlan& m, std::int64_t grid, int frames, bool sampleAutomation) SUPPLE_RT;
     void run(ModulePlan& m, int f0, int n, const HostContext& ctx) SUPPLE_RT;
     double value(const Source& s, int c, int f) const SUPPLE_RT;
     int sourceChannels(const Source& s) const SUPPLE_RT;

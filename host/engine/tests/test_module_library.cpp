@@ -520,3 +520,191 @@ TEST_CASE("rack presets: a malformed file is skipped with a warning") {
     REQUIRE(list.find("warnings") != nullptr);
     CHECK(list["warnings"].at(0).find("code")->asString() == "rack.preset_invalid");
 }
+
+namespace {
+std::string otherId(std::string text, const std::string& id) {
+    auto at = text.find("com.example.level");
+    text.replace(at, std::string("com.example.level").size(), id);
+    return text;
+}
+std::filesystem::path portableProject(Fixture& f, const char* library = "level") {
+    f.write(library, kLevel);
+    f.run("track.add", R"({"name":"Synth"})");
+    f.run("rack.add", R"({"track":"tr_1"})");
+    f.run("module.add", R"({"rack":"rk_1","type":"com.example.level"})");
+    const auto song = f.dir / "song" / "song.json";
+    json::Value a = json::Value::object();
+    a["path"] = song.string();
+    REQUIRE(f.call("project.save", a));
+    return song;
+}
+void openPortable(Fixture& f, const std::filesystem::path& song) {
+    json::Value a = json::Value::object();
+    a["path"] = song.string();
+    REQUIRE(f.call("project.open", a));
+}
+}  // namespace
+
+TEST_CASE("module library: project edits preserve another library type with the same name") {
+    Fixture here;
+    const auto song = portableProject(here);
+    Fixture there;
+    const auto original = otherId(kLevel, "com.example.other");
+    there.write("level", original);
+    openPortable(there, song);
+    auto result = there.call(
+        "module.edit",
+        *json::parse(R"({"type":"com.example.level","edits":[{"old":"0.25","new":"0.5"}]})"));
+    REQUIRE(result);
+    CHECK((*result)["name"].asString() == "level-2");
+    const auto saved = readTextFile(there.app->moduleDir() / "level" / "level.cpp", 1 << 20);
+    REQUIRE(saved);
+    CHECK(*saved == original);
+    CHECK(there.app->modules()->find("com.example.other") != nullptr);
+}
+
+TEST_CASE("module library: project edits resolve an existing library type by id") {
+    Fixture here;
+    const auto song = portableProject(here, "portable");
+    Fixture there;
+    there.write("global", kLevel);
+    openPortable(there, song);
+    auto result = there.call(
+        "module.edit",
+        *json::parse(R"({"type":"com.example.level","edits":[{"old":"0.25","new":"0.5"}]})"));
+    REQUIRE(result);
+    CHECK((*result)["name"].asString() == "global");
+    const auto saved = readTextFile(there.app->moduleDir() / "global" / "global.cpp", 1 << 20);
+    REQUIRE(saved);
+    CHECK(saved->find("0.5") != std::string::npos);
+}
+
+TEST_CASE("module library: project snapshots keep different types with the same name") {
+    Fixture here;
+    const auto song = portableProject(here);
+    Fixture there;
+    there.write("level", otherId(kLevel, "com.example.other"));
+    openPortable(there, song);
+    REQUIRE(there.app->modules()->find("com.example.level"));
+    REQUIRE(there.app->modules()->find("com.example.other"));
+    there.run("module.add", R"({"rack":"rk_1","type":"com.example.other"})");
+    const auto exported = there.dir / "export" / "song.json";
+    json::Value a = json::Value::object();
+    a["path"] = exported.string();
+    REQUIRE(there.call("project.save", a));
+    Fixture reopened;
+    openPortable(reopened, exported);
+    CHECK(reopened.app->modules()->find("com.example.level") != nullptr);
+    CHECK(reopened.app->modules()->find("com.example.other") != nullptr);
+}
+
+TEST_CASE("module library: project snapshots preserve occupied destination files") {
+    Fixture f;
+    const auto song = portableProject(f);
+    const auto destination = f.dir / "export" / "song.json";
+    const auto occupied = destination.parent_path() / "modules" / "level" / "level.cpp";
+    const auto unrelated = otherId(kLevel, "com.example.other");
+    REQUIRE(writeFileAtomic(occupied, unrelated));
+    json::Value args = json::Value::object();
+    args["path"] = destination.string();
+    REQUIRE(f.call("project.save", args));
+    const auto kept = readTextFile(occupied, 1 << 20);
+    REQUIRE(kept);
+    CHECK(*kept == unrelated);
+    const auto copy = occupied.parent_path().parent_path() / "level-2" / "level-2.cpp";
+    REQUIRE(std::filesystem::exists(copy));
+    // Saving an edited implementation updates the same id's suffix, without making another copy.
+    f.run("module.edit", R"({"name":"level","edits":[{"old":"0.25","new":"0.5"}]})");
+    REQUIRE(f.call("project.save", args));
+    const auto updated = readTextFile(copy, 1 << 20);
+    REQUIRE(updated);
+    CHECK(updated->find("0.5") != std::string::npos);
+    CHECK_FALSE(std::filesystem::exists(copy.parent_path().parent_path() / "level-3"));
+    Fixture reopened;
+    openPortable(reopened, destination);
+    REQUIRE(reopened.app->modules()->find("com.example.level"));
+    CHECK(reopened.app->modules()->find("com.example.other") != nullptr);
+}
+
+TEST_CASE("rack presets: embedded source ids are checked before installation") {
+    Fixture f;
+    f.run("track.add", R"({"name":"Synth"})");
+    f.run("rack.add", R"({"track":"tr_1"})");
+    json::Value doc = json::Value::object();
+    doc["schema"] = "supple.rack-preset/1.0";
+    doc["name"] = "Wrong id";
+    json::Value m = json::Value::object();
+    m["type"] = "com.example.requested";
+    doc["modules"] = json::Value::array();
+    doc["modules"].push_back(m);
+    json::Value src = json::Value::object();
+    src["name"] = "unrelated";
+    src["source"] = kLevel;
+    doc["sources"] = json::Value::object();
+    doc["sources"]["com.example.first"] = src;
+    doc["sources"]["com.example.first"]["source"] = otherId(kLevel, "com.example.first");
+    doc["sources"]["com.example.first"]["name"] = "first";
+    doc["sources"]["com.example.requested"] = src;
+    SUBCASE("mismatched id") {}
+    SUBCASE("mismatched id for an installed type") {
+        f.write("requested", otherId(kLevel, "com.example.requested"));
+    }
+    SUBCASE("source fails to compile") {
+        doc["sources"]["com.example.requested"]["source"] = "broken module";
+    }
+    const auto path = f.dir / "bad-source.json";
+    REQUIRE(writeFileAtomic(path, json::writeCanonical(doc)));
+    json::Value a = json::Value::object();
+    a["rack"] = "rk_1";
+    a["path"] = path.string();
+    auto loaded = f.call("rack.preset.load", a);
+    REQUIRE_FALSE(loaded);
+    CHECK(f.app->modules()->find("com.example.level") == nullptr);
+    CHECK(loaded.error().code == "rack.preset_module");
+    CHECK(loaded.error().path == "/args/sources/com.example.requested");
+    CHECK_FALSE(loaded.error().message.empty());
+    CHECK_FALSE(loaded.error().hint.empty());
+    CHECK(f.app->modules()->find("com.example.first") == nullptr);
+    CHECK_FALSE(std::filesystem::exists(f.app->moduleDir() / "first" / "first.cpp"));
+    CHECK_FALSE(std::filesystem::exists(f.app->moduleDir() / "unrelated" / "unrelated.cpp"));
+}
+
+TEST_CASE("module library: project open warns when a broken copy falls back to the library") {
+    Fixture here;
+    const auto song = portableProject(here);
+    REQUIRE(
+        writeFileAtomic(song.parent_path() / "modules" / "level" / "level.cpp", "broken module"));
+    Fixture there;
+    std::string changed = kLevel;
+    changed.replace(changed.find("0.25"), 4, "0.5");
+    there.write("level", changed);
+    json::Value a = json::Value::object();
+    a["path"] = song.string();
+    auto opened = there.call("project.open", a);
+    REQUIRE(opened);
+    const auto* selected = there.app->modules()->find("com.example.level");
+    REQUIRE(selected);
+    REQUIRE(opened->find("warnings"));
+    const auto warning = json::writeCompact((*opened)["warnings"]);
+    CHECK(warning.find("com.example.level") != std::string::npos);
+    CHECK(warning.find("level.cpp") != std::string::npos);
+    CHECK(warning.find("library version") != std::string::npos);
+}
+
+TEST_CASE("module library: project open reports unreadable copies with affected type ids") {
+    Fixture here;
+    const auto song = portableProject(here);
+    // A source exceeding the read limit fails deterministically, including as root and on Windows.
+    REQUIRE(writeFileAtomic(song.parent_path() / "modules" / "level" / "level.cpp",
+                            std::string((1 << 20) + 1, ' ')));
+    Fixture there;
+    json::Value args = json::Value::object();
+    args["path"] = song.string();
+    auto opened = there.call("project.open", args);
+    REQUIRE(opened);
+    REQUIRE(opened->find("warnings"));
+    const std::string warning = json::writeCompact((*opened)["warnings"]);
+    CHECK(warning.find("com.example.level") != std::string::npos);
+    CHECK(warning.find("level.cpp") != std::string::npos);
+    CHECK(warning.find("unavailable") != std::string::npos);
+}
