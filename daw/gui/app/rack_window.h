@@ -144,6 +144,12 @@ class RackWindow {
     // rack.arrange: the selection when it holds several modules, else the
     // whole rack; then shows what moved.
     void tidyUp();
+    // rack.capture: the notes `module`'s first pitch and gate outputs play
+    // (its velocity output too, when it has one) for `bars` from the
+    // playhead's bar, as a MIDI item on `track` there. One undo step.
+    void captureNotes(model::Id module, model::Id track, int bars);
+    // Its menus: a channel, then a length.
+    void captureMenu(model::Id module, ui::Point at);
     ui::Root& root() const { return panel_.root(); }
 
     FloatingPanel& panel_;
@@ -169,6 +175,10 @@ class RackWindow {
     ui::Button* zoom_ = nullptr;
     ui::Button* browserToggle_ = nullptr;
     std::string error_;
+    // A result to show in the status bar (a capture's) while the project
+    // stays at the version it was set at.
+    std::string notice_;
+    std::uint64_t noticeVersion_ = 0;
     json::Value presets_ = json::Value::object();  // rack.preset.list's
     bool presetsRead_ = false;
     // paramsOf's answers by fx, with the plug-in they were asked of.

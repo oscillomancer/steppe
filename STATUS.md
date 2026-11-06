@@ -383,7 +383,9 @@ instructions are in `docs/guides/installing.md`.
   with their source's level (`moduleOutputLevel` for sources out of view,
   while the transport plays). Copy and paste go through the engine's module
   clipboard, so a pasted plug-in keeps its settings in any rack and after a
-  cut.
+  cut. A module with pitch and gate outputs captures its notes to a
+  channel's MIDI item from its right-click (`rack.capture`, 1 to 16 bars;
+  the render runs on the UI thread, so the window waits for it).
 - **MIDI learn** (ADR-0027): any plug-in parameter (the FX window's MIDI
   button, or `fx.learn.set` for agents) and any action (Ctrl+L in the
   actions list) learns a controller by moving it: CC, note, pitch bend or

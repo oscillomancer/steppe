@@ -663,6 +663,7 @@ std::string RackWindow::status() const {
         std::to_string(s.cables.size()) + (s.cables.size() == 1 ? " cable" : " cables");
     if (!space_->selection().empty())
         out += "  ·  " + std::to_string(space_->selection().size()) + " selected";
+    if (!notice_.empty() && app_.head().version == noticeVersion_) out += "  ·  " + notice_;
     return out;
 }
 
@@ -1600,6 +1601,84 @@ void RackWindow::tidyUp() {
         space_->frameAll();
 }
 
+namespace {
+// The outputs rack.capture reads: the first pitch and gate, and a velocity.
+struct NoteOutputs {
+    std::string pitch, gate, velocity;
+};
+std::optional<NoteOutputs> noteOutputs(const rack::ModuleType& type) {
+    NoteOutputs o;
+    for (int k = 0; k < static_cast<int>(type.outputs().size()); ++k) {
+        const auto& port = type.output(k);
+        if (port.signal == Signal::Pitch && o.pitch.empty()) o.pitch = port.key;
+        if (port.signal == Signal::Gate && o.gate.empty()) o.gate = port.key;
+        if (port.key == "velocity") o.velocity = port.key;
+    }
+    if (o.pitch.empty() || o.gate.empty()) return std::nullopt;
+    return o;
+}
+// The bar the playhead is in (1: the song's start).
+int playheadBar(engine::EngineApp& app) {
+    const auto t = app.transport("get");
+    return app.head().timeMap->barBeat(t ? t->beat : 0.0).bar;
+}
+}  // namespace
+
+void RackWindow::captureNotes(model::Id module, model::Id track, int bars) {
+    const model::Session& s = app_.head();
+    const model::RackModule* m = s.modules.find(module);
+    const auto* type = m && catalog_ ? catalog_->find(m->type) : nullptr;
+    const auto outputs = type ? noteOutputs(*type->type) : std::nullopt;
+    if (!outputs) return;
+    const int bar = std::max(1, playheadBar(app_));
+    const double from = s.timeMap->beatOfBar(bar);
+    const double beats = s.timeMap->beatOfBar(bar + bars) - from;
+    json::Value args = json::Value::object();
+    args["rack"] = m->rack.str();
+    args["pitch"] = module.str() + "." + outputs->pitch;
+    args["gate"] = module.str() + "." + outputs->gate;
+    if (!outputs->velocity.empty()) args["velocity"] = module.str() + "." + outputs->velocity;
+    args["track"] = track.str();
+    args["beats"] = beats;
+    args["from_beat"] = from;
+    auto r = exec("rack.capture", std::move(args));
+    if (!r) return;
+    const auto* count = r->find("notes");
+    const int n = count && count->isNumber() ? static_cast<int>(count->asDouble()) : 0;
+    notice_ = n == 0 ? "No notes: the gate did not rise in those bars"
+                     : "Captured " + std::to_string(n) + (n == 1 ? " note" : " notes") + " to " +
+                           model::trackLabel(app_.head(), track);
+    noticeVersion_ = app_.head().version;
+    if (status_) status_->setText(status());
+}
+
+void RackWindow::captureMenu(model::Id module, ui::Point at) {
+    const model::Session& s = app_.head();
+    std::vector<ui::MenuItem> items;
+    for (const auto& e : s.tracks) {
+        if (e.value->type != model::StripType::Channel) continue;
+        items.push_back(
+            {model::trackLabel(s, e.id), "",
+             [this, module, at, track = e.id] {
+                 const int bar = playheadBar(app_);
+                 std::vector<ui::MenuItem> lengths;
+                 lengths.push_back({"From bar " + std::to_string(bar), "", {}, false});
+                 for (int bars : {1, 2, 4, 8, 16})
+                     lengths.push_back(
+                         {std::to_string(bars) + (bars == 1 ? " bar" : " bars"), "",
+                          [this, module, track, bars] { captureNotes(module, track, bars); }});
+                 root().openPopup(ui::makeMenu("rack.capture.length", std::move(lengths),
+                                               [this] { root().closePopup(); }),
+                                  {at.x, at.y, 1, 1});
+             },
+             true, false, false, root().theme().trackColor(e.value->color)});
+    }
+    if (items.empty()) items.push_back({"No channels to capture to", "", {}, false});
+    root().openPopup(
+        ui::makeMenu("rack.capture.track", std::move(items), [this] { root().closePopup(); }),
+        {at.x, at.y, 1, 1});
+}
+
 void RackWindow::moduleMenu(model::Id module, ui::Point at) {
     const model::RackModule* m = app_.head().modules.find(module);
     if (!m || !space_) return;
@@ -1671,6 +1750,9 @@ void RackWindow::moduleMenu(model::Id module, ui::Point at) {
                          !several});
     if (type && type->type->code())
         items.push_back({"Show source", "", [this, id = m->type] { showSource(id); }, !several});
+    if (type && noteOutputs(*type->type))
+        items.push_back({"Capture notes to track\u2026", "",
+                         [this, module, at] { captureMenu(module, at); }, !several});
     items.push_back({"Save as rack preset\u2026", "", [this, selected] {
                          savePreset(std::vector<model::Id>(selected.begin(), selected.end()));
                      }});

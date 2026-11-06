@@ -1206,8 +1206,13 @@ a new channel). It follows rack.md §8.
   the rack the copy came from, in another rack and after a cut; Paste is
   enabled while the clipboard holds modules. A right-click offers Open editor (plugins), Rename…,
   Bypass, Copy, Cut, Duplicate, Randomize, Presets… (the type's factory
-  patches, `module.set preset`), Show source, Save as rack preset… (the
-  selection) and Delete. On the space: Add module…, Add plugin… there,
+  patches, `module.set preset`), Show source, Capture notes to track…
+  (modules with pitch and gate outputs), Save as rack preset… (the
+  selection) and Delete. Capture notes to track… picks a channel, then a
+  length (1, 2, 4, 8 or 16 bars, from the bar the playhead is in) and runs
+  `rack.capture` with the module's first pitch and gate outputs (and its
+  `velocity` output, if any): one undo step, a MIDI item on that channel
+  at that bar; the status bar says how many notes it caught. On the space: Add module…, Add plugin… there,
   Load rack preset… (there), Save rack as preset…, Paste, Tidy up, Show
   everything and Show selection. Tidy up is `rack.arrange` (one undo
   step): with two or more modules selected it reads "Tidy up selection"

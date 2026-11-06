@@ -1367,6 +1367,65 @@ TEST_CASE("rack window: a cable glows with its source's signal, even from out of
     }
 }
 
+TEST_CASE("rack window: a sequencer's notes are captured to a track from its menu") {
+    Fixture f;
+    if (!f.ok) return;
+    const std::string rack = f.exec("rack.add", R"({"name":"Seq"})")["rack"].asString();
+    const std::string seq = f.add(rack, "sequencer", 40, 40), vca = f.add(rack, "vca", 400, 40);
+    const model::Id track = f.app->head().racks.find(*model::Id::parse(rack))->track;
+    f.racks->open();
+    f.frame();
+    gui::RackSpace& space = *f.racks->space();
+    auto menuOf = [&](const std::string& module) {
+        const auto at = space.bodyAt(*model::Id::parse(module));
+        REQUIRE(at);
+        f.pointer(ui::PointerEvent::Type::Down, *at, 3);
+        f.pointer(ui::PointerEvent::Type::Up, *at, 3);
+        const ui::Node* menu = f.r().find("rack.module.menu");
+        REQUIRE(menu);
+        std::vector<std::string> labels;
+        for (const auto& item : ui::menuItems(*menu)) labels.push_back(item.label);
+        return labels;
+    };
+    auto has = [](const std::vector<std::string>& labels, const std::string& label) {
+        return std::find(labels.begin(), labels.end(), label) != labels.end();
+    };
+    // A VCA plays no notes; a sequencer has pitch and gate outputs.
+    CHECK_FALSE(has(menuOf(vca), "Capture notes to track\u2026"));
+    f.r().closePopups();
+    f.frame();
+    REQUIRE(has(menuOf(seq), "Capture notes to track\u2026"));
+    REQUIRE(f.pick("rack.module.menu", "Capture notes to track"));
+    REQUIRE(f.pick("rack.capture.track", model::trackLabel(f.app->head(), track)));
+    const ui::Node* lengths = f.r().find("rack.capture.length");
+    REQUIRE(lengths);
+    CHECK(ui::menuItems(*lengths).front().label == "From bar 1");
+    f.snapshot("rack-capture-menu.png");
+    REQUIRE(f.pick("rack.capture.length", "1 bar"));
+    // A MIDI item of a bar (4/4) on the channel, from the song's start:
+    // the sequencer's sixteenths, each step a note.
+    const model::Session& s = f.app->head();
+    const model::Item* item = nullptr;
+    for (const auto& e : s.items)
+        if (e.value->track == track) item = e.value.get();
+    REQUIRE(item);
+    REQUIRE(item->activeTake);
+    const model::Take* take = s.takes.find(*item->activeTake);
+    REQUIRE(take);
+    const model::MidiSource* midi = take->source ? s.midi.find(*take->source) : nullptr;
+    REQUIRE(midi);
+    CHECK(midi->sequence.notes.size() == 16);
+    CHECK(midi->sequence.length == 4 * midi->sequence.ppq);
+    const ui::Node* status = f.r().find("rack.status");
+    REQUIRE(status);
+    CHECK(static_cast<const ui::Label*>(status)->text().find("Captured 16 notes to ") !=
+          std::string::npos);
+    f.snapshot("rack-capture.png");
+    // One undo step takes it away.
+    f.exec("history.undo", "{}");
+    for (const auto& e : f.app->head().items) CHECK(e.value->track != track);
+}
+
 TEST_CASE("rack window: Tidy up lays out the rack, or the selection, in one undo step") {
     Fixture f;
     if (!f.ok) return;
