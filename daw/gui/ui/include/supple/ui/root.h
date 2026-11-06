@@ -62,6 +62,8 @@ class Root {
     OverlayHandle addOverlay(std::unique_ptr<Node> node);
     Node* find(std::string_view id) const;
     const Theme& theme() const { return theme_; }
+    // Device pixels per design unit, as of the last frame (1 before the first).
+    float pixelRatio() const { return ratio_; }
     void setTheme(Theme theme);
 
     // --- window integration

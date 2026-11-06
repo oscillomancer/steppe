@@ -8,10 +8,14 @@
 #include <doctest/doctest.h>
 #include <stb_image.h>
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -228,6 +232,99 @@ TEST_CASE("the arrange view draws every strip's items where the engine plays the
     CHECK(arrange->lanes().stats().fades == 12);  // fade-in and fade-out per audio item
     CHECK(s.peaks->stats().built == 6);
     CHECK(arrange->trackLayout().rowCount() == 6);
+}
+
+TEST_CASE("which bars the ruler labels does not change as the view scrolls") {
+    Gl& g = gl();
+    if (!g.ok) return;
+    ui::Root root(*g.window, g.fonts, ui::Theme::dark());
+    views::ArrangeView* arrange = mount(root);
+    // Zoomed out until a label cannot go on every bar, the labelled bars
+    // were picked by what fitted after the first one on screen: a scroll of
+    // a few pixels moved that start and the picks flickered. (The choice may
+    // change when bars of another tempo or meter come into view: the session
+    // has both from bar 33. These scrolls stay short of that.)
+    for (double pps : {3.0, 6.0, 9.0, 14.0}) {
+        std::map<int, bool> labelled;  // each bar seen: labelled or not
+        int stride = 0;
+        for (double start : {0.0, 0.13, 0.37, 0.81, 1.3, 1.77, 2.9}) {
+            views::Viewport v;
+            v.startSeconds = start;
+            v.pixelsPerSecond = pps;
+            arrange->setViewport(v);
+            root.damageAll();
+            root.frame(false);
+            const std::vector<int>& bars = arrange->rulerStats().labelledBars;
+            INFO("pps " << pps << " start " << start);
+            REQUIRE(bars.size() > 2);
+            CHECK(arrange->rulerStats().minBarSlack >= 0.0f);
+            if (stride == 0) stride = bars[1] - bars[0];
+            for (std::size_t i = 1; i < bars.size(); ++i) CHECK(bars[i] - bars[i - 1] == stride);
+            for (int bar = bars.front() + 1; bar < bars.back(); ++bar) {
+                const bool now = std::find(bars.begin(), bars.end(), bar) != bars.end();
+                const auto [it, added] = labelled.emplace(bar, now);
+                if (!added) CHECK(it->second == now);
+            }
+        }
+        CHECK(stride > (pps < 10 ? 1 : 0));
+    }
+}
+
+TEST_CASE("smooth following moves the picture in whole pixels, so nothing in it shimmers") {
+    Gl& g = gl();
+    if (!g.ok) return;
+    ui::Root root(*g.window, g.fonts, ui::Theme::dark());
+    Session& s = session6();
+    views::Transport transport;
+    auto owned = std::make_unique<views::ArrangeView>(*s.peaks, s.resolve(),
+                                                      [&transport] { return transport; });
+    views::ArrangeView* arrange = owned.get();
+    arrange->show(s.app->head());
+    root.setContent(std::move(owned));
+    arrange->setFollow(views::Follow::Continuous);
+    views::Viewport v;
+    v.pixelsPerSecond = 37;  // waveforms in view, a label on every bar
+    arrange->setViewport(v);
+    root.frame(false);
+    const double ratio = static_cast<double>(root.pixelRatio());
+    const double half = static_cast<double>(arrange->lanesRect().w) / 2 / v.pixelsPerSecond;
+    auto shot = [&](double seconds) {
+        transport.playing = true;
+        transport.seconds = seconds;
+        arrange->poll(true);
+        root.damageAll();
+        root.frame(false);
+        return root.readBack();
+    };
+    // Frames at 60 per second of playback: the view moves 37/60 of a unit at a time.
+    const double from = half + 3.0;
+    const gui::Image first = shot(from);
+    const double firstStart = arrange->viewport().startSeconds;
+    REQUIRE(firstStart > 0);
+    // The ruler and the lanes, less a margin at each side for what scrolls in.
+    const ui::Rect ruler = arrange->ruler().bounds(), lanes = arrange->lanesRect();
+    const int x0 = static_cast<int>((lanes.x + 60) * root.pixelRatio());
+    const int x1 = static_cast<int>((lanes.right() - 60) * root.pixelRatio());
+    const int y0 = static_cast<int>(ruler.y * root.pixelRatio());
+    const int y1 = static_cast<int>(lanes.bottom() * root.pixelRatio());
+    for (int k = 1; k <= 12; ++k) {
+        const gui::Image next = shot(from + k / 60.0);
+        const double moved = (arrange->viewport().startSeconds - firstStart) * v.pixelsPerSecond *
+                             ratio;  // device pixels
+        INFO("frame " << k << " moved " << moved);
+        CHECK(moved == doctest::Approx(std::round(moved)));
+        const int dx = static_cast<int>(std::lround(moved));
+        std::size_t differ = 0, compared = 0;
+        for (int y = y0; y < y1; ++y)
+            for (int x = x0; x < x1 - dx; ++x) {
+                const std::size_t a = 4 * (static_cast<std::size_t>(y) * first.width + x + dx);
+                const std::size_t b = 4 * (static_cast<std::size_t>(y) * next.width + x);
+                ++compared;
+                if (std::memcmp(&first.rgba[a], &next.rgba[b], 3) != 0) ++differ;
+            }
+        CHECK(compared > 0);
+        CHECK(differ == 0);
+    }
 }
 
 TEST_CASE("rows and items outside the viewport are not drawn") {

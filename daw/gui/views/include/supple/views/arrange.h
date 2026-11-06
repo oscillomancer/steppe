@@ -14,6 +14,7 @@
 #include <memory>
 #include <optional>
 #include <string_view>
+#include <vector>
 #include "supple/ui/root.h"
 
 #include "supple/model/session.h"
@@ -73,6 +74,7 @@ struct RulerStats {
     int barLabels = 0, beatLabels = 0, subTicks = 0, timeLabels = 0;
     float minBarLabelGap = 1e9f, minTimeLabelGap = 1e9f;  // design units
     float minBarSlack = 1e9f, minTimeSlack = 1e9f;
+    std::vector<int> labelledBars;  // the bars that carry a label, left to right
 };
 
 class ArrangeView : public ui::Node {

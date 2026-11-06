@@ -439,8 +439,12 @@ on strips; plugin parameters), time selection, snapping grid, playhead with
 follow modes. By page (the default), the view jumps when the playhead leaves
 it, putting the playhead a quarter of the way in; off, the view stays where
 it is; smooth (`continuous` in the UI file), while playing the playhead walks
-to the middle of the view and the view then scrolls under it, a playhead out
-of view is centred at once, and while stopped the view pages. The
+to the middle of the view and the view then scrolls under it in whole device
+pixels (so waveforms, ticks and text move without shimmering), a playhead out
+of view is centred at once, and while stopped the view pages. Zoomed out
+until bars cannot all carry a label, the ruler labels every 2nd, 4th, 8th…
+bar counted from bar 1, the stride set by the zoom and the narrowest bar in
+view, never by where the view starts. The
 transport bar's follow button cycles page, off and smooth
 (`ui.follow.cycle`); `ui.follow.page`, `ui.follow.off` and
 `ui.follow.continuous` set one, for keys. The mode also sets where the wheel

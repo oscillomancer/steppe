@@ -184,6 +184,35 @@ class Ruler : public ui::Node {
         const int subdivisions = pxPerBeat >= 110 ? 4 : pxPerBeat >= 52 ? 2 : 1;
         const bool beatLabels = pxPerBeat >= static_cast<double>(kMinBeatLabelPx);
         float lastLabelX = -1e9f, lastLabelW = 0;
+        // Which bars carry a label depends on the zoom alone: every bar, or
+        // every 2nd, 4th, 8th… counted from bar 1, the first stride whose
+        // spacing fits the widest label in view, sized for at least three
+        // digits so bars 9 and 10 coming into view leave it. Choosing them by what fits
+        // after the last label shown depended on the first bar on screen, so
+        // the labels flickered as the view scrolled. The tracker below stays
+        // as the guarantee that no two labels touch.
+        const int firstBar = tm.barBeat(tm.beatAt(std::max(0.0, t0))).bar;
+        int stride = 1;
+        {
+            float narrowest = 1e9f;
+            int lastBar = std::max(1, firstBar);
+            float prevX = view_.xAt(tm.secondsAt(tm.beatOfBar(lastBar)));
+            for (int b = lastBar + 1; b < lastBar + 20000; ++b) {
+                const float x = view_.xAt(tm.secondsAt(tm.beatOfBar(b)));
+                if (prevX > x1 + 80) break;
+                narrowest = std::min(narrowest, x - prevX);
+                prevX = x;
+                lastBar = b;
+            }
+            // Mono digits: the last bar's label is the widest.
+            const std::string digits = std::to_string(std::max(lastBar, 100));
+            const float widest =
+                c.textWidth(std::string(digits.size(), '8') + ".1", ui::Font::Mono, captionSize);
+            while (stride < (1 << 20) &&
+                   static_cast<float>(stride) * narrowest < widest + kLabelGap)
+                stride *= 2;
+        }
+        int bar = std::max(1, firstBar);  // the bar being drawn
         auto placeLabel = [&](float x, const std::string& text, ui::Color colour, bool isBar) {
             const float w = c.textWidth(text, ui::Font::Mono, captionSize);
             if (lastLabelX > -1e8f && x - lastLabelX < lastLabelW + kLabelGap) return;
@@ -195,18 +224,17 @@ class Ruler : public ui::Node {
                 stats.minBarSlack = std::min(stats.minBarSlack, gap - lastLabelW - kLabelGap);
             }
             ++(isBar ? stats.barLabels : stats.beatLabels);
+            if (isBar) stats.labelledBars.push_back(bar);
             lastLabelX = x;
             lastLabelW = w;
         };
-        const int firstBar = tm.barBeat(tm.beatAt(std::max(0.0, t0))).bar;
-        int bar = std::max(1, firstBar);
         for (int guard = 0; guard < 20000; ++guard, ++bar) {
             const time::MeterChange meter = tm.meterAt(bar);
             const double barBeat = tm.beatOfBar(bar);
             const double beatQuarters = 4.0 / static_cast<double>(meter.denominator);
             const float barX = view_.xAt(tm.secondsAt(barBeat));
             if (barX > x1 + 80) break;
-            if (barX >= x0 - 80) {
+            if (barX >= x0 - 80 && (bar - 1) % stride == 0) {
                 const time::BarBeat bb = tm.barBeat(barBeat);
                 placeLabel(barX, std::to_string(bb.bar) + "." + std::to_string(bb.beat), ink, true);
             }
@@ -217,7 +245,7 @@ class Ruler : public ui::Node {
                 if (x > x1) break;
                 const float th = b == 0 ? 10.0f : 6.0f;
                 c.fillRect({x, beatRow.bottom() - th, 1, th}, b == 0 ? ink : quiet);
-                if (beatLabels && b > 0) {
+                if (beatLabels && stride == 1 && b > 0) {
                     const time::BarBeat bb = tm.barBeat(beat);
                     placeLabel(x, std::to_string(bb.bar) + "." + std::to_string(bb.beat), quiet,
                                false);
@@ -1251,7 +1279,14 @@ void ArrangeView::applyFollow() {
         const double half = static_cast<double>(a.w) / 2.0 / v.pixelsPerSecond;
         const double centred = std::max(0.0, playhead_ - half);
         if (inView && centred <= v.startSeconds) return;
-        v.startSeconds = centred;
+        // On whole device pixels, so the view moves in whole-pixel steps:
+        // ticks and text land on the same pixels from frame to frame, and each
+        // waveform column keeps summarising the same stretch of audio rather
+        // than a slightly shifted one (which made the waveforms wobble).
+        const ui::Root* r = root();
+        const double perSecond =
+            v.pixelsPerSecond * static_cast<double>(r ? r->pixelRatio() : 1.0f);
+        v.startSeconds = std::round(centred * perSecond) / perSecond;
     } else {  // page, and continuous while stopped: jump when the playhead leaves the view
         if (inView) return;
         v.startSeconds =

@@ -556,7 +556,12 @@ void Lanes::drawAudio(const ui::GlFrame& frame, const ui::Rect& r, const model::
     for (int c = 0; c < channels; ++c) {
         const float mid = r.y + laneH * (static_cast<float>(c) + 0.5f), half = laneH * 0.5f - 1;
         strips_->beginRun();
-        for (float x = std::floor(vis.x * frame.ratio) / frame.ratio; x < vis.right(); x += px) {
+        // Columns by index: an accumulated fractional step would drift off
+        // the device pixels.
+        const auto first = static_cast<long>(std::floor(vis.x * frame.ratio));
+        for (long i = first;; ++i) {
+            const float x = static_cast<float>(i) / frame.ratio;
+            if (x >= vis.right()) break;
             // The waveform and playback share original-source coordinates.
             double s0 = item.loop ? take.startOffset + (timeAt(x) - itemStart) * speed
                                   : timeMap.sourceAt(timeAt(x) - itemStart);
