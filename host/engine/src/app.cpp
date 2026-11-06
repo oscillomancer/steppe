@@ -2,6 +2,8 @@
 // Copyright (c) 2026 Supple Audio
 #include "supple/engine/app.h"
 #include "media_files.h"
+#include "module_library.h"
+#include "rack_runtime.h"
 #include "runtime_protection.h"
 #include "source_preparation.h"
 #include "supple/model/freeze.h"
@@ -91,6 +93,8 @@ Result<std::unique_ptr<EngineApp>> EngineApp::create(AppOptions options, model::
         [self](const model::PluginRef& ref) { return self->findPlugin(ref.id); },
         app->options_.identity);
     app->pool_->setMainThreadWake(app->mainWake_);
+    app->modules_ = detail::loadModuleLibrary(detail::builtinModuleCatalog(), app->moduleDir());
+    app->pool_->racks().setCatalog(app->modules_);
     SUPPLE_TRY(app->newProject(std::move(project)));
     return app;
 }
@@ -508,6 +512,7 @@ Status EngineApp::replaceProject(model::Session session, fs::path path,
     pool_ = std::make_unique<InstancePool>(
         [this](const model::PluginRef& ref) { return findPlugin(ref.id); }, options_.identity);
     pool_->setMainThreadWake(mainWake_);
+    pool_->racks().setCatalog(modules_);
     pendingDirtyStates_.clear();
     if (scripts_) {
         clearScripts_ = scripts_->active();
@@ -792,6 +797,7 @@ Result<OfflineResult> EngineApp::renderSession(const model::Session& session,
     // is never disturbed and state is deterministic.
     InstancePool offlinePool([this](const model::PluginRef& ref) { return findPlugin(ref.id); },
                              options_.identity);
+    if (!s.modules) s.modules = modules_;
     return renderOffline(session, offlinePool, s);
 }
 
@@ -2665,6 +2671,12 @@ void EngineApp::endMasterRecording() {
     headChanged();
 }
 
+void EngineApp::setModules(std::shared_ptr<const rack::Catalog> catalog) {
+    modules_ = std::move(catalog);
+    pool_->racks().setCatalog(modules_);
+    headChanged();  // the running engine compiles its racks against it
+}
+
 void EngineApp::headChanged() {
     for (const auto& e : head().fx)
         if (model::frozenOwner(head(), e.id)) scratch_.erase(e.value->plugin.id);
@@ -2977,6 +2989,17 @@ struct Gain : Effect {
         run("module.add", R"({"rack": "rk_1", "type": "notes", "x": 40, "y": 40})");
         run("module.add", R"({"rack": "rk_1", "type": "vca", "x": 300, "y": 40})");
         run("cable.add", R"({"from": "mo_3.out", "to": "mo_1.l"})");
+        return;
+    }
+    if (fixture == "song_with_module") {  // + wobble in the module library
+        run("rack.add", R"({"track": "tr_1"})");
+        json::Value args = json::Value::object();
+        args["name"] = "wobble";
+        args["source"] = std::string(detail::kExampleModule);
+        auto r =
+            d.execute({"module.write", std::move(args), {cmd::Origin::Type::Test, "fixture", ""}});
+        assert(r && "fixture command failed");
+        (void)r;
         return;
     }
     if (fixture == "song_with_group" || fixture == "song_with_vca") {

@@ -6138,6 +6138,31 @@
     }
   },
   {
+    "name": "module_check",
+    "title": "Compile a module without saving it; return its diagnostics and description.",
+    "description": "Compile a module without saving it; return its diagnostics and description. source (a whole module) or name (one in the library). ok is true when it compiles; type then describes it as module.describe would. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "module_check_args",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
     "name": "module_describe",
     "title": "A module type's knobs, inputs and outputs, with units and help.",
     "description": "A module type's knobs, inputs and outputs, with units and help. type (an id or a short name, \"vca\") or module (a module's type). Knobs: key, name, kind (number, integer, choice, toggle), unit, min, max, default, choices (keys), group, help. Ports: key, name, signal (audio, pitch in octaves from C4, gate, cv -1..1, unipolar 0..1, phase 0..1), help, and an input's normal (its value with nothing connected). A cable into a knob moves it by amount per unit of signal: octaves for a frequency, the knob's own unit otherwise. See describe for errors and examples.",
@@ -6195,6 +6220,111 @@
     },
     "annotations": {
       "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "module_edit",
+    "title": "Edit a library module in place: replace text, then save and compile it.",
+    "description": "Edit a library module in place: replace text, then save and compile it. name (or type, a library module's id). Each edit replaces old, which must be in the source exactly once, with new (empty deletes it), in order and all or none. Then as module.write: saved, compiled, and racks playing it rebuilt. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "module_edit_args",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "edits": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "title": "module_edit",
+            "properties": {
+              "old": {
+                "type": "string",
+                "minLength": 1,
+                "description": "text the source has in one place"
+              },
+              "new": {
+                "type": "string",
+                "description": "what replaces it"
+              }
+            },
+            "required": ["old", "new"],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 256
+        }
+      },
+      "required": ["edits"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "module_fork",
+    "title": "Copy a module type's source into the library under a new id.",
+    "description": "Copy a module type's source into the library under a new id. type: the one to copy (stock or library). id: the copy's (\"com.<you>.<name>\"). name: its library name (default: the id's last part). The copy is saved and compiled as module.write does; then module.edit changes it. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "module_fork_args",
+      "properties": {
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "id": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 128
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": ["type", "id"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "module_get",
+    "title": "A module type's source: stock or library.",
+    "description": "A module type's source: stock or library. type (an id or short name: every stock module's source is readable, a good start for your own) or name (a library module's file, also when it does not compile). See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "module_get_args",
+      "properties": {
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
       "destructiveHint": false,
       "idempotentHint": false
     }
@@ -6318,6 +6448,33 @@
       "readOnlyHint": false,
       "destructiveHint": false,
       "idempotentHint": true
+    }
+  },
+  {
+    "name": "module_write",
+    "title": "Write a module to the library and compile it; racks use it at once.",
+    "description": "Write a module to the library and compile it; racks use it at once. name: its library name (lower case, digits, '_' or '-'). source: the whole module, a struct deriving from Module (the module guide; module.get shows any type's source). The file is saved even when it does not compile, so module.edit can fix it; ok and diagnostics (line, column, hint) say how it went. Once it compiles, type describes it as module.describe does and module.add takes its id; modules already playing it are rebuilt with the new code (reloaded counts them), their knobs kept. A version that does not compile leaves racks on the last that did. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "module_write_args",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["name", "source"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false
     }
   },
   {

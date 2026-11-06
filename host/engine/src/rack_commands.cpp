@@ -286,6 +286,69 @@ void removeModule(model::EditTxn& t, const model::Session& s, Id module) {
 
 }  // namespace
 
+// Exposed to the module library's commands (module_commands.cpp).
+json::Value describeModuleType(const rack::ModuleType& t) {
+    json::Value out = json::Value::object();
+    out["type"] = t.id();
+    out["name"] = t.info().name;
+    out["origin"] = std::string(rack::originName(t.origin()));
+    out["vendor"] = t.info().vendor;
+    out["version"] = t.info().version;
+    out["description"] = t.info().description;
+    if (!t.path().empty()) out["path"] = t.path();
+    json::Value tags = json::Value::array();
+    for (const auto& tag : t.info().tags)
+        if (!tag.empty()) tags.push_back(tag);
+    out["tags"] = std::move(tags);
+    out["width"] = t.layout().width;
+    out["height"] = t.layout().height;
+    json::Value knobs = json::Value::array();
+    for (const auto& p : t.params()) {
+        if (p.output) continue;
+        json::Value k = json::Value::object();
+        k["key"] = p.key;
+        k["name"] = p.name;
+        k["kind"] = std::string(kindName(p.kind));
+        if (!unitName(p.unit).empty()) k["unit"] = std::string(unitName(p.unit));
+        if (p.kind != sd::ParamModel::Kind::Choice && p.kind != sd::ParamModel::Kind::Toggle) {
+            k["min"] = p.min;
+            k["max"] = p.max;
+        }
+        k["default"] = detail::moduleParamJson(p, p.def);
+        if (p.kind == sd::ParamModel::Kind::Choice) {
+            json::Value choices = json::Value::array();
+            for (std::size_t i = 0; i < p.choices.size(); ++i)
+                choices.push_back(sd::choiceKey(p, i));
+            k["choices"] = std::move(choices);
+        }
+        if (!p.group.empty()) k["group"] = p.group;
+        if (!p.description.empty()) k["help"] = p.description;
+        knobs.push_back(std::move(k));
+    }
+    out["knobs"] = std::move(knobs);
+    for (const bool output : {false, true}) {
+        json::Value ports = json::Value::array();
+        for (int k : output ? t.outputs() : t.inputs()) {
+            const sd::PortModel& p = t.ports()[static_cast<std::size_t>(k)];
+            json::Value x = json::Value::object();
+            x["key"] = p.key;
+            x["name"] = p.name;
+            x["signal"] = std::string(signalName(p.signal));
+            if (!p.description.empty()) x["help"] = p.description;
+            if (!output && p.normal != 0) x["normal"] = p.normal;
+            if (!p.group.empty()) x["group"] = p.group;
+            ports.push_back(std::move(x));
+        }
+        out[output ? "outputs" : "inputs"] = std::move(ports);
+    }
+    return out;
+}
+
+Result<std::shared_ptr<const rack::ModuleType>> moduleTypeOf(EngineApp& a, std::string_view name,
+                                                             const char* path) {
+    return typeOf(a, name, path);
+}
+
 // Exposed to track.remove (commands.cpp): a track's racks go with it.
 void removeRacksOn(model::EditTxn& t, const model::Session& s, Id track) {
     for (const auto& r : s.racks) {
@@ -834,61 +897,7 @@ void registerRackCommands(cmd::Registry& registry) {
                 return Error("module.describe", "give type or module", "",
                              "e.g. {\"type\": \"vca\"}");
             }
-            const rack::ModuleType& t = *type;
-            json::Value out = json::Value::object();
-            out["type"] = t.id();
-            out["name"] = t.info().name;
-            out["origin"] = std::string(rack::originName(t.origin()));
-            out["vendor"] = t.info().vendor;
-            out["version"] = t.info().version;
-            out["description"] = t.info().description;
-            json::Value tags = json::Value::array();
-            for (const auto& tag : t.info().tags)
-                if (!tag.empty()) tags.push_back(tag);
-            out["tags"] = std::move(tags);
-            out["width"] = t.layout().width;
-            out["height"] = t.layout().height;
-            json::Value knobs = json::Value::array();
-            for (const auto& p : t.params()) {
-                if (p.output) continue;
-                json::Value k = json::Value::object();
-                k["key"] = p.key;
-                k["name"] = p.name;
-                k["kind"] = std::string(kindName(p.kind));
-                if (!unitName(p.unit).empty()) k["unit"] = std::string(unitName(p.unit));
-                if (p.kind != sd::ParamModel::Kind::Choice &&
-                    p.kind != sd::ParamModel::Kind::Toggle) {
-                    k["min"] = p.min;
-                    k["max"] = p.max;
-                }
-                k["default"] = detail::moduleParamJson(p, p.def);
-                if (p.kind == sd::ParamModel::Kind::Choice) {
-                    json::Value choices = json::Value::array();
-                    for (std::size_t i = 0; i < p.choices.size(); ++i)
-                        choices.push_back(sd::choiceKey(p, i));
-                    k["choices"] = std::move(choices);
-                }
-                if (!p.group.empty()) k["group"] = p.group;
-                if (!p.description.empty()) k["help"] = p.description;
-                knobs.push_back(std::move(k));
-            }
-            out["knobs"] = std::move(knobs);
-            for (const bool output : {false, true}) {
-                json::Value ports = json::Value::array();
-                for (int k : output ? t.outputs() : t.inputs()) {
-                    const sd::PortModel& p = t.ports()[static_cast<std::size_t>(k)];
-                    json::Value x = json::Value::object();
-                    x["key"] = p.key;
-                    x["name"] = p.name;
-                    x["signal"] = std::string(signalName(p.signal));
-                    if (!p.description.empty()) x["help"] = p.description;
-                    if (!output && p.normal != 0) x["normal"] = p.normal;
-                    if (!p.group.empty()) x["group"] = p.group;
-                    ports.push_back(std::move(x));
-                }
-                out[output ? "outputs" : "inputs"] = std::move(ports);
-            }
-            return out;
+            return describeModuleType(*type);
         };
         addChecked(registry, std::move(c));
     }();

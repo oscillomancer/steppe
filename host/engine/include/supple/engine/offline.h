@@ -33,6 +33,10 @@
 #include "supple/host/clap_host.h"
 #include "supple/model/session.h"
 
+namespace supple::rack {
+class Catalog;  // module types (ADR-0062)
+}
+
 namespace supple::engine {
 
 namespace detail {
@@ -200,6 +204,9 @@ struct OfflineSettings {
     // (or <projectDir> itself when the file is found there).
     std::filesystem::path projectDir;
     MediaCache* media = nullptr;  // null: a cache for this render only
+    // The module types racks use (ADR-0062); null: the pool's (the built-in
+    // ones unless it was given others).
+    std::shared_ptr<const rack::Catalog> modules;
     // Threads rendering the graph; 0: every allowed CPU but two. The output is
     // identical for any count.
     unsigned threads = 0;

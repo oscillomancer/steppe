@@ -827,6 +827,10 @@ q = nil
 ---@field device? string
 ---@field plugin? string
 
+---@class Steppe.module_check_args
+---@field name? string
+---@field source? string
+
 ---@class Steppe.module_describe_args
 ---@field type? string
 ---@field module? string
@@ -836,6 +840,20 @@ q = nil
 ---@field dx? number
 ---@field dy? number
 ---@field cables? boolean
+
+---@class Steppe.module_edit_args
+---@field name? string
+---@field type? string
+---@field edits table[]
+
+---@class Steppe.module_fork_args
+---@field type string
+---@field id string
+---@field name? string
+
+---@class Steppe.module_get_args
+---@field type? string
+---@field name? string
 
 ---@class Steppe.module_list_args
 ---@field query? string
@@ -858,6 +876,10 @@ q = nil
 ---@field bypass? boolean
 ---@field source? string
 ---@field device? string
+
+---@class Steppe.module_write_args
+---@field name string
+---@field source string
 
 ---@class Steppe.plugin_list_args
 ---@field filter? string
@@ -1869,12 +1891,17 @@ q = nil
 
 ---@class Steppe.module
 ---@field add fun(args: Steppe.module_add_args): table Add a module to a rack: a type with knob values.
+---@field check fun(args?: Steppe.module_check_args): table Compile a module without saving it; return its diagnostics and description.
 ---@field describe fun(args?: Steppe.module_describe_args): table A module type's knobs, inputs and outputs, with units and help.
 ---@field duplicate fun(args: Steppe.module_duplicate_args): table Duplicate modules, with the cables between them.
+---@field edit fun(args: Steppe.module_edit_args): table Edit a library module in place: replace text, then save and compile it.
+---@field fork fun(args: Steppe.module_fork_args): table Copy a module type's source into the library under a new id.
+---@field get fun(args?: Steppe.module_get_args): table A module type's source: stock or library.
 ---@field list fun(args?: Steppe.module_list_args): table List module types: id, name, tags, what they do.
 ---@field randomize fun(args: Steppe.module_randomize_args): table Move a module's knobs at random, by an amount.
 ---@field remove fun(args: Steppe.module_remove_args): table Remove a module with its cables.
 ---@field set fun(args: Steppe.module_set_args): table Set a module's knobs, label, place or bypass.
+---@field write fun(args: Steppe.module_write_args): table Write a module to the library and compile it; racks use it at once.
 
 ---@class Steppe.plugin
 ---@field list fun(args?: Steppe.plugin_list_args): Steppe.plugin_list_result List scanned plugins; filter matches id, name, or vendor.

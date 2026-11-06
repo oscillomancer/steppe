@@ -59,6 +59,9 @@ struct AppOptions {
     // DSP scripts (ADR-0032): <scriptDir>/<name>/<name>.cpp, each a plugin of
     // the script player. Empty = <workdir>/scripts.
     std::filesystem::path scriptDir;
+    // Modular racks' module library (ADR-0062): <moduleDir>/<name>/<name>.cpp,
+    // each a module type. Empty = <workdir>/modules.
+    std::filesystem::path moduleDir;
     // An unsaved project's own folder (the GUI's, one per run): its media (the
     // recordings) live in <scratchDir>/<media_dir> until the first save moves
     // them beside the project file; clearScratch() deletes it when the
@@ -306,6 +309,15 @@ class EngineApp : public cmd::Host {
     std::filesystem::path scriptDir() const {
         return options_.scriptDir.empty() ? options_.workdir / "scripts" : options_.scriptDir;
     }
+    // The module library (module.* commands) and the module types racks use:
+    // the built-in ones and the library's, compiled when the app starts.
+    std::filesystem::path moduleDir() const {
+        return options_.moduleDir.empty() ? options_.workdir / "modules" : options_.moduleDir;
+    }
+    const std::shared_ptr<const rack::Catalog>& modules() const { return modules_; }
+    // Makes `catalog` the one racks use: racks playing a type whose code
+    // changed get new instances of it. Main thread.
+    void setModules(std::shared_ptr<const rack::Catalog> catalog);
     std::string rememberRender(const std::filesystem::path& path);
     std::string reserveRenderId();
     void publishRender(std::string id, const std::filesystem::path& path);
@@ -586,6 +598,7 @@ class EngineApp : public cmd::Host {
     host::ScanReport scanReport_;
     std::string pluginScanJob_;
     std::unique_ptr<InstancePool> pool_;
+    std::shared_ptr<const rack::Catalog> modules_;
     MediaCache media_;
     std::map<std::string, std::filesystem::path> renders_;
     std::map<std::string, json::Value> renderMeters_;

@@ -145,6 +145,7 @@ struct Work {
     Commit commit;
     RenderTarget target;
     fs::path projectDir, mediaDir;
+    std::shared_ptr<const rack::Catalog> modules;  // racks' module types
     std::shared_ptr<Artifact> artifact;
     bool named = false;
 };
@@ -155,6 +156,7 @@ Status render(Work& work, const std::vector<host::PluginInfo>& catalogue,
     OfflineSettings settings;
     settings.applyMasterPlayrate = false;  // the result plays under the master rate itself
     settings.projectDir = work.projectDir;
+    settings.modules = work.modules;
     settings.track = work.buss;
     settings.tap = model::Tap::PreFx;
     settings.startSeconds = work.commit.start;
@@ -348,6 +350,7 @@ void registerMixCommands(cmd::Registry& registry) {
         work.commit.end = plan->end;
         work.target = renderTarget(app);
         work.projectDir = app.projectDir();
+        work.modules = app.modules();
         work.mediaDir = app.mediaDir();
         work.named = !app.projectPath().empty();
         static std::atomic<std::uint64_t> serial{0};

@@ -43,6 +43,7 @@ void registerLearnCommands(cmd::Registry& registry);
 void registerControlLearnCommands(cmd::Registry& registry);
 void registerDspCommands(cmd::Registry& registry);
 void registerRackCommands(cmd::Registry& registry);
+void registerModuleCommands(cmd::Registry& registry);
 void removeRacksOn(model::EditTxn& t, const model::Session& s, model::Id track);
 
 using cmd::Command;
@@ -900,6 +901,7 @@ void registerEngineCommands(cmd::Registry& registry) {
     registerControlLearnCommands(registry);
     registerDspCommands(registry);
     registerRackCommands(registry);
+    registerModuleCommands(registry);
     lua::registerScriptCommands(registry);
     // ---------------------------------------------------------------- project.get
     [&] {

@@ -62,6 +62,7 @@ struct Work {
     Commit commit;
     RenderTarget target;
     fs::path projectDir, mediaDir;
+    std::shared_ptr<const rack::Catalog> modules;  // racks' module types
     std::shared_ptr<Artifact> artifact;
     std::map<fs::path, std::pair<std::uintmax_t, fs::file_time_type>> stamps;
     bool named = false;
@@ -168,6 +169,7 @@ Status render(Work& work, const std::vector<host::PluginInfo>& catalogue,
         OfflineSettings settings;
         settings.applyMasterPlayrate = false;
         settings.projectDir = work.projectDir;
+        settings.modules = work.modules;
         settings.track = group.track;
         settings.tap = model::Tap::PreFader;
         settings.startSeconds = group.start;
@@ -351,6 +353,7 @@ void registerConsolidateCommands(cmd::Registry& registry) {
         work.commit.expected = model::itemEditFingerprint(work.snapshot, a.items);
         work.target = renderTarget(app);
         work.projectDir = app.projectDir();
+        work.modules = app.modules();
         work.mediaDir = app.mediaDir();
         work.named = !app.projectPath().empty();
         static std::atomic<std::uint64_t> serial{0};

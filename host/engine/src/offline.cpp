@@ -467,6 +467,7 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
         return Error("engine.tail", "tail out of range", {}, "0 .. 600 s");
     SUPPLE_TRY(model::checkedSeconds(s, opt.startSeconds, "/start_seconds"));
     SUPPLE_TRY(model::checkedSeconds(s, opt.endSeconds, "/end_seconds"));
+    if (opt.modules) pool.racks().setCatalog(opt.modules);
     // Reject obvious expanded-output excess before constructing media/DSP state
     // or iterating the inverse clock. Envelopes get an optimistic 4x bound;
     // their exact duration is checked by the bounded inverse-clock prepass.

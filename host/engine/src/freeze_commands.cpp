@@ -118,6 +118,7 @@ Result<Work> prepare(EngineApp& app, Id track) {
     work.directory = app.mediaDir();
     work.named = !app.projectPath().empty();
     work.settings.projectDir = app.projectDir();
+    work.settings.modules = app.modules();
     work.settings.freezeTrack = track;
     work.settings.tap = model::Tap::PreFader;
     work.settings.freezeTail = true;
