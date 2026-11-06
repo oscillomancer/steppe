@@ -7850,6 +7850,131 @@
     }
   },
   {
+    "name": "rack_preset_delete",
+    "title": "Delete a saved rack preset.",
+    "description": "Delete a saved rack preset.  See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "rack_preset_delete_args",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["name"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "rack_preset_list",
+    "title": "List saved rack presets: names and contents.",
+    "description": "List saved rack presets: names and contents. query: a part of the name or description. Each preset: name, path, description, its module and cable counts and its module types. Files that are not rack presets are skipped with a warning (warnings). See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "rack_preset_list_args",
+      "properties": {
+        "query": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "rack_preset_load",
+    "title": "Add a saved preset's modules and cables to a rack.",
+    "description": "Add a saved preset's modules and cables to a rack. name (rack.preset.list) or path (a preset file). x, y: the group's top-left (default right of the rack's modules). io: join (default) gives the preset's Out and In modules' cables to the rack's own Outs and Ins in order, so a whole patch sounds at once (extra ones are added); add makes new ones. Notes modules play the rack's channel. Knobs and cables the module types no longer have are left out with a warning (warnings); a module type or plug-in that is not installed is an error, and nothing changes. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "rack_preset_load_args",
+      "properties": {
+        "rack": {
+          "type": "string",
+          "pattern": "^rk_[0-9]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "x": {
+          "type": "number",
+          "minimum": -1e+06,
+          "maximum": 1e+06
+        },
+        "y": {
+          "type": "number",
+          "minimum": -1e+06,
+          "maximum": 1e+06
+        },
+        "io": {
+          "type": "string",
+          "pattern": "^(join|add)$"
+        }
+      },
+      "required": ["rack"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "rack_preset_save",
+    "title": "Save a rack's modules and cables as a preset.",
+    "description": "Save a rack's modules and cables as a preset. modules: which (default the whole rack); the cables among them come too. Plugin modules keep their plug-in's settings. A Notes module's source track, MIDI learn, envelopes, sends and the channels an Out feeds stay with the project. Saved by name in the user's rack presets; replace: true overwrites one. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "rack_preset_save_args",
+      "properties": {
+        "rack": {
+          "type": "string",
+          "pattern": "^rk_[0-9]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "modules": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^mo_[0-9]+$"
+          }
+        },
+        "description": {
+          "type": "string"
+        },
+        "replace": {
+          "type": "boolean"
+        }
+      },
+      "required": ["rack", "name"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false
+    }
+  },
+  {
     "name": "rack_probe",
     "title": "Listen to a rack's ports: level, pitch, gate rate, notes, a CV's range.",
     "description": "Listen to a rack's ports: level, pitch, gate rate, notes, a CV's range. Renders the project offline from from_beat (default 0) for seconds (default 2, at most 10) with a listener on each port (\"mo_N.<output key>\", at most 8) and describes what each carried: audio's peak and rms (dB) and its pitch when periodic (a poly cable's first 4 voices summed); gates counted over the voices, per beat, and how long any is high; the notes the voices' pitches visit; a CV's range and speed (voice 1). notes: notation (as midi.write takes it) the rack's Notes modules play from from_beat, besides what their tracks hold. Nothing is changed; playback is not disturbed. See describe for errors and examples.",

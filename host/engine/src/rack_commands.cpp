@@ -3,17 +3,24 @@
 // Modular racks' commands (ADR-0062, rack.md §7): racks, modules and cables.
 #include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <filesystem>
 #include <functional>
 #include <map>
 #include <random>
 #include <set>
 
 #include "command_validation.h"
+#include "fx_presets.h"
 #include "rack_runtime.h"
+#include "supple/base/files.h"
 #include "supple/engine/app.h"
 #include "supple/model/schemas.h"
 
 namespace supple::engine {
+
+void registerRackPresetCommands(cmd::Registry& registry);
+
 namespace {
 
 using cmd::Command;
@@ -1462,6 +1469,645 @@ void registerRackCommands(cmd::Registry& registry) {
             if (a.color) cable.color = *a.color;
             app(ctx).txn().put<model::Cable>(*id, std::move(cable));
             return json::Value::object();
+        };
+        addChecked(registry, std::move(c));
+    }();
+    registerRackPresetCommands(registry);
+}
+
+// --- rack presets (rack.md §7) --------------------------------------------------------
+//
+// A preset is a group of modules and the cables among them, saved apart from
+// any project: supple.rack-preset/1.0, canonical JSON. Modules are by index
+// with places relative to the group's top-left; a cable's ends name a module
+// by index and a port, or (plugin: true) a parameter of its plug-in. A plugin
+// module's plug-in is an FX chain entry (fx_presets.h). What belongs to a
+// project stays out: a Notes module's source track, MIDI learn, envelopes,
+// sends and the channels an Out feeds.
+
+namespace {
+
+namespace fs = std::filesystem;
+constexpr std::string_view kRackPresetSchema = "supple.rack-preset/1.0";
+constexpr std::size_t kMaxRackPreset = 64 * 1024 * 1024;
+
+struct PresetSave {
+    std::string rack, name;
+    std::optional<std::vector<std::string>> modules;
+    std::optional<std::string> description;
+    std::optional<bool> replace;
+};
+struct PresetLoad {
+    std::string rack;
+    std::optional<std::string> name, path, io;
+    std::optional<double> x, y;
+};
+struct PresetList {
+    std::optional<std::string> query;
+};
+struct PresetName {
+    std::string name;
+};
+
+Status validPresetName(const std::string& name) {
+    const bool bad = name.empty() || name.size() > 200 || name == "." || name == ".." ||
+                     name.front() == ' ' || name.back() == ' ' || name.back() == '.' ||
+                     std::any_of(name.begin(), name.end(), [](unsigned char c) {
+                         return c < 32 || std::strchr("/\\:*?\"<>|", c) != nullptr;
+                     });
+    if (bad)
+        return Error("rack.preset_name", "\"" + name + "\" is not a preset name", "/name",
+                     "use 1-200 characters without / \\ : * ? \" < > | or control characters, "
+                     "not ending in a space or a dot: \"Wobble Bass\"");
+    return {};
+}
+
+Result<fs::path> presetPath(const EngineApp& a, const std::string& name) {
+    SUPPLE_TRY(validPresetName(name));
+    return a.rackPresetDir() / (name + ".json");
+}
+
+// The modules `ids` (one rack's) and the cables among them, as a document.
+Result<json::Value> encodePreset(EngineApp& a, const model::Session& s, const std::vector<Id>& ids,
+                                 const std::string& name, const std::string& description) {
+    double left = model::kMaxRackCoordinate, top = model::kMaxRackCoordinate;
+    for (Id id : ids) {
+        left = std::min(left, s.modules.find(id)->x);
+        top = std::min(top, s.modules.find(id)->y);
+    }
+    std::map<Id, std::size_t> index, plugin;  // a module's index, by its id or its plug-in's
+    json::Value modules = json::Value::array();
+    for (std::size_t k = 0; k < ids.size(); ++k) {
+        const model::RackModule& m = *s.modules.find(ids[k]);
+        json::Value o = json::Value::object();
+        o["type"] = m.type;
+        if (!m.version.empty()) o["version"] = m.version;
+        if (!m.label.empty()) o["label"] = m.label;
+        o["x"] = m.x - left;
+        o["y"] = m.y - top;
+        if (m.params.isObject() && !m.params.asObject().empty()) o["params"] = m.params;
+        if (m.bypass) o["bypass"] = true;
+        if (m.device) o["device"] = *m.device;
+        if (m.fx) {
+            auto fx = detail::encodeEffects(a, s, {*m.fx});
+            if (!fx) return std::move(fx).error().at("/modules/" + std::to_string(k));
+            o["fx"] = std::move(fx->front());
+            plugin[*m.fx] = k;
+        }
+        index[ids[k]] = k;
+        modules.push_back(std::move(o));
+    }
+    json::Value cables = json::Value::array();
+    for (const auto& e : s.cables) {
+        const model::Cable& cb = *e.value;
+        const auto from = index.find(cb.from.object);
+        const bool toPlugin = cb.to.object.kind == model::Kind::Fx;
+        const auto to = toPlugin ? plugin.find(cb.to.object) : index.find(cb.to.object);
+        if (from == index.end() || to == (toPlugin ? plugin.end() : index.end())) continue;
+        json::Value c = json::Value::object(), f = json::Value::object(), t = json::Value::object();
+        f["module"] = static_cast<std::int64_t>(from->second);
+        f["port"] = cb.from.key;
+        t["module"] = static_cast<std::int64_t>(to->second);
+        t["port"] = cb.to.key;
+        if (toPlugin) t["plugin"] = true;
+        c["from"] = std::move(f);
+        c["to"] = std::move(t);
+        if (cb.amount) c["amount"] = *cb.amount;
+        if (!cb.color.empty()) c["color"] = cb.color;
+        cables.push_back(std::move(c));
+    }
+    json::Value doc = json::Value::object();
+    doc["schema"] = std::string(kRackPresetSchema);
+    doc["name"] = name;
+    if (!description.empty()) doc["description"] = description;
+    doc["modules"] = std::move(modules);
+    doc["cables"] = std::move(cables);
+    return doc;
+}
+
+// Reads a preset and checks its shape (not its types or plug-ins).
+Result<json::Value> readPreset(const fs::path& file) {
+    auto text = readTextFile(file, kMaxRackPreset);
+    if (!text) return std::move(text).error();
+    auto parsed = json::parse(*text);
+    if (!parsed) return std::move(parsed).error();
+    json::Value& doc = *parsed;
+    const std::string where = file.filename().string() + ": ";
+    auto bad = [&](const std::string& at, const std::string& what) {
+        return Error("rack.preset_invalid", where + what, at,
+                     "the file is not a rack preset this version reads; save the patch again "
+                     "with rack.preset.save");
+    };
+    auto isIndex = [](const json::Value* v, std::size_t n) {
+        return v && v->isInt() && v->asInt() >= 0 && static_cast<std::size_t>(v->asInt()) < n;
+    };
+    if (!doc.isObject()) return bad("", "not a JSON object");
+    const auto* schemaField = doc.find("schema");
+    if (!schemaField || !schemaField->isString() || schemaField->asString() != kRackPresetSchema)
+        return bad("/schema", "schema is not " + std::string(kRackPresetSchema));
+    const auto* name = doc.find("name");
+    if (!name || !name->isString() || name->asString().empty())
+        return bad("/name", "it has no name");
+    const auto* modules = doc.find("modules");
+    if (!modules || !modules->isArray() || modules->asArray().empty())
+        return bad("/modules", "it has no modules");
+    const std::size_t n = modules->asArray().size();
+    if (n > model::kMaxRackModules) return bad("/modules", "it has more modules than a rack holds");
+    for (std::size_t k = 0; k < n; ++k) {
+        const json::Value& m = modules->asArray()[k];
+        const std::string at = "/modules/" + std::to_string(k);
+        if (!m.isObject()) return bad(at, "a module is not an object");
+        const auto* type = m.find("type");
+        if (!type || !type->isString() || type->asString().empty())
+            return bad(at + "/type", "a module has no type");
+        for (const char* key : {"x", "y"})
+            if (const auto* v = m.find(key);
+                v && (!v->isNumber() || !std::isfinite(v->asDouble()) ||
+                      std::abs(v->asDouble()) > model::kMaxRackCoordinate))
+                return bad(at + "/" + key, std::string(key) + " is not a place in a rack");
+        for (const char* key : {"label", "version", "device"})
+            if (const auto* v = m.find(key); v && !v->isString())
+                return bad(at + "/" + key, std::string(key) + " is not a string");
+        if (const auto* v = m.find("params"); v && !v->isObject())
+            return bad(at + "/params", "params is not an object");
+        if (const auto* v = m.find("bypass"); v && !v->isBool())
+            return bad(at + "/bypass", "bypass is not true or false");
+        const bool plugin = type->asString() == model::kPluginModule;
+        const auto* fx = m.find("fx");
+        if (plugin != (fx != nullptr) || (fx && !fx->isObject()))
+            return bad(at + "/fx", plugin ? "a plugin module has no plug-in"
+                                          : "only a plugin module has a plug-in");
+    }
+    const auto* cables = doc.find("cables");
+    if (cables && !cables->isArray()) return bad("/cables", "cables is not an array");
+    if (cables && cables->asArray().size() > model::kMaxRackCables)
+        return bad("/cables", "it has more cables than a rack holds");
+    for (std::size_t k = 0; cables && k < cables->asArray().size(); ++k) {
+        const json::Value& c = cables->asArray()[k];
+        const std::string at = "/cables/" + std::to_string(k);
+        if (!c.isObject()) return bad(at, "a cable is not an object");
+        for (const char* end : {"from", "to"}) {
+            const auto* e = c.find(end);
+            if (!e || !e->isObject() || !isIndex(e->find("module"), n) || !e->find("port") ||
+                !e->find("port")->isString())
+                return bad(at + "/" + end,
+                           std::string("a cable's ") + end + " is not {module: an index, port}");
+            if (const auto* p = e->find("plugin"); p && !p->isBool())
+                return bad(at + "/" + end + "/plugin", "plugin is not true or false");
+        }
+        if (const auto* v = c.find("amount");
+            v && (!v->isNumber() || !std::isfinite(v->asDouble())))
+            return bad(at + "/amount", "amount is not a number");
+        if (const auto* v = c.find("color"); v && !v->isString())
+            return bad(at + "/color", "color is not a string");
+    }
+    return std::move(doc);
+}
+
+std::string stringOr(const json::Value& o, const char* key, std::string fallback = {}) {
+    const auto* v = o.find(key);
+    return v ? v->asString() : fallback;
+}
+double numberOr(const json::Value& o, const char* key, double fallback = 0) {
+    const auto* v = o.find(key);
+    return v ? v->asDouble() : fallback;
+}
+
+}  // namespace
+
+void registerRackPresetCommands(cmd::Registry& registry) {
+    // ---------------------------------------------------------------- rack.preset.save
+    [&] {
+        Command<PresetSave, json::Value> c;
+        common(c, "rack.preset.save", Kind::Action,
+               "Save a rack's modules and cables as a preset.");
+        c.description =
+            "modules: which (default the whole rack); the cables among them come too. Plugin "
+            "modules keep their plug-in's settings. A Notes module's source track, MIDI learn, "
+            "envelopes, sends and the channels an Out feeds stay with the project. Saved by "
+            "name in the user's rack presets; replace: true overwrites one.";
+        c.args = schema::object<PresetSave>("rack_preset_save_args")
+                     .field("rack", &PresetSave::rack, idOf("rk", "Rack"))
+                     .field("name", &PresetSave::name, schema::string().minLength(1))
+                     .field("modules", &PresetSave::modules, schema::arrayOf(idOf("mo", "Module")))
+                     .field("description", &PresetSave::description, schema::string())
+                     .field("replace", &PresetSave::replace, schema::boolean())
+                     .build();
+        c.examples = {{"Save the whole rack", j(R"({"rack": "rk_1", "name": "Gated VCA"})"),
+                       j(R"({"path": "<any>", "modules": 3, "cables": 1})"), "song_with_rack"}};
+        c.errors = {{"rack.preset_name", "not a usable name", "a name without path characters"},
+                    {"rack.preset_exists", "a preset has the name", "replace: true or a new name"}};
+        c.run = [](const PresetSave& a, Context& ctx) -> Result<json::Value> {
+            EngineApp& e = app(ctx);
+            auto path = presetPath(e, a.name);
+            if (!path) return std::move(path).error();
+            const model::Session s = e.view();
+            auto rack = rackId(s, a.rack);
+            if (!rack) return std::move(rack).error();
+            std::vector<Id> ids;
+            if (a.modules) {
+                for (std::size_t k = 0; k < a.modules->size(); ++k) {
+                    const std::string at = "/modules/" + std::to_string(k);
+                    auto id = moduleId(s, (*a.modules)[k], at.c_str());
+                    if (!id) return std::move(id).error();
+                    if (s.modules.find(*id)->rack != *rack)
+                        return Error("rack.preset", (*a.modules)[k] + " is not in " + a.rack, at,
+                                     "rack.get " + a.rack + " lists its modules");
+                    if (std::find(ids.begin(), ids.end(), *id) == ids.end()) ids.push_back(*id);
+                }
+            } else {
+                for (const auto& m : s.modules)
+                    if (m.value->rack == *rack) ids.push_back(m.id);
+            }
+            if (ids.empty())
+                return Error("rack.preset", "nothing to save", a.modules ? "/modules" : "/rack",
+                             "add modules first (module.add)");
+            std::sort(ids.begin(), ids.end());
+            auto doc = encodePreset(e, s, ids, a.name, a.description.value_or(""));
+            if (!doc) return std::move(doc).error();
+            const std::string text = json::writeCanonical(*doc) + "\n";
+            if (text.size() > kMaxRackPreset)
+                return Error("rack.preset", "the preset exceeds 64 MiB", "/modules",
+                             "save fewer plugin modules");
+            std::error_code ec;
+            fs::create_directories(path->parent_path(), ec);
+            if (auto written = detail::writePreset(*path, text, a.replace.value_or(false));
+                !written) {
+                Error error = written.error();
+                if (error.code == "chain.exists") {
+                    error.code = "rack.preset_exists";
+                    error.message = "a rack preset named \"" + a.name + "\" exists";
+                }
+                return error;
+            }
+            json::Value out = json::Value::object();
+            out["path"] = path->string();
+            out["modules"] = static_cast<std::int64_t>(ids.size());
+            out["cables"] = static_cast<std::int64_t>((*doc)["cables"].asArray().size());
+            return out;
+        };
+        addChecked(registry, std::move(c));
+    }();
+    // ---------------------------------------------------------------- rack.preset.load
+    [&] {
+        Command<PresetLoad, json::Value> c;
+        common(c, "rack.preset.load", Kind::Edit,
+               "Add a saved preset's modules and cables to a rack.");
+        c.description =
+            "name (rack.preset.list) or path (a preset file). x, y: the group's top-left "
+            "(default right of the rack's modules). io: join (default) gives the preset's Out "
+            "and In modules' cables to the rack's own Outs and Ins in order, so a whole patch "
+            "sounds at once (extra ones are added); add makes new ones. Notes modules play the "
+            "rack's channel. Knobs and cables the module types no longer have are left out with "
+            "a warning (warnings); a module type or plug-in that is not installed is an error, and "
+            "nothing "
+            "changes.";
+        c.args = schema::object<PresetLoad>("rack_preset_load_args")
+                     .field("rack", &PresetLoad::rack, idOf("rk", "Rack"))
+                     .field("name", &PresetLoad::name, schema::string().minLength(1))
+                     .field("path", &PresetLoad::path, schema::string().minLength(1))
+                     .field("x", &PresetLoad::x, coordinate())
+                     .field("y", &PresetLoad::y, coordinate())
+                     .field("io", &PresetLoad::io,
+                            schema::string().pattern("^(join|add)$", "join or add"))
+                     .build();
+        c.examples = {
+            {"Load a saved patch into a new rack", j(R"({"rack": "rk_2", "name": "Gated VCA"})"),
+             j(R"({"modules": ["mo_5", "mo_6"], "cables": ["cb_2"]})"), "song_with_rack_preset"}};
+        c.errors = {{"rack.preset_source", "name and path both or neither", "give one"},
+                    {"rack.unknown_type", "the preset needs a module type that is not installed",
+                     "module.write it, or load another preset"},
+                    {"chain.plugin_missing", "the preset needs a plug-in that is not installed",
+                     "install it"},
+                    {"rack.preset_invalid", "not a rack preset", "save it again"}};
+        c.run = [](const PresetLoad& a, Context& ctx) -> Result<json::Value> {
+            EngineApp& e = app(ctx);
+            if (a.name.has_value() == a.path.has_value())
+                return Error("rack.preset_source", "give name or path, one of them", "/name",
+                             "rack.preset.list shows the saved names");
+            fs::path file;
+            if (a.name) {
+                auto p = presetPath(e, *a.name);
+                if (!p) return std::move(p).error();
+                file = *p;
+                std::error_code ec;
+                if (!fs::is_regular_file(file, ec))
+                    return Error("rack.preset", "no rack preset named \"" + *a.name + "\"", "/name",
+                                 "rack.preset.list shows the saved names");
+            } else {
+                file = e.resolve(*a.path);
+            }
+            auto read = readPreset(file);
+            if (!read) return std::move(read).error();
+            const json::Value& doc = *read;
+            const model::Session s = e.view();
+            auto rack = rackId(s, a.rack);
+            if (!rack) return std::move(rack).error();
+            const bool join = a.io.value_or("join") == "join";
+            json::Value warnings = json::Value::array();
+            auto warn = [&](const char* code, const std::string& message, const std::string& at) {
+                json::Value w = json::Value::object();
+                w["code"] = code;
+                w["message"] = message;
+                w["path"] = at;
+                warnings.push_back(std::move(w));
+            };
+
+            // The rack's own Outs and Ins, in order, for io: join; and its counts.
+            std::vector<Id> ownOuts, ownIns;
+            std::size_t count = 0, cableCount = 0;
+            for (const auto& m : s.modules) {
+                if (m.value->rack != *rack) continue;
+                ++count;
+                if (m.value->type == model::kOutModule) ownOuts.push_back(m.id);
+                if (m.value->type == model::kInModule) ownIns.push_back(m.id);
+            }
+            for (const auto& cb : s.cables)
+                cableCount += model::rackOfEnd(s, cb.value->from) == *rack;
+
+            // Everything is checked before the model changes.
+            const auto& entries = doc.find("modules")->asArray();
+            const std::size_t n = entries.size();
+            std::vector<model::RackModule> made(n);
+            std::vector<std::shared_ptr<const rack::ModuleType>> types(n);
+            std::vector<std::optional<detail::PreparedFx>> plugins(n);
+            std::vector<std::optional<Id>> joined(n);  // io: join: the rack's own module
+            std::size_t outs = 0, ins = 0, added = 0;
+            for (std::size_t k = 0; k < n; ++k) {
+                const json::Value& o = entries[k];
+                const std::string at = "/modules/" + std::to_string(k);
+                const std::string type = o.find("type")->asString();
+                const bool isOut = type == model::kOutModule, isIn = type == model::kInModule;
+                if (join && isOut && outs < ownOuts.size()) {
+                    joined[k] = ownOuts[outs++];
+                    continue;
+                }
+                if (join && isIn && ins < ownIns.size()) {
+                    joined[k] = ownIns[ins++];
+                    continue;
+                }
+                outs += isOut;
+                ins += isIn;
+                const auto* entry = catalog(e).find(type);
+                if (!entry)
+                    return Error("rack.unknown_type",
+                                 "the preset needs module type " + type +
+                                     (o.find("version") ? " " + o.find("version")->asString()
+                                                        : std::string()) +
+                                     ", which is not installed",
+                                 at + "/type",
+                                 "write it into the module library (module.write), or load "
+                                 "another preset; module.list shows what is installed");
+                types[k] = entry->type;
+                model::RackModule& m = made[k];
+                m.rack = *rack;
+                m.type = type;
+                m.version = entry->type->info().version;
+                m.label = stringOr(o, "label");
+                m.bypass = o.find("bypass") && o.find("bypass")->asBool();
+                if (const auto* d = o.find("device")) m.device = d->asString();
+                if (type == model::kPluginModule) {
+                    auto ready = detail::prepareEffects(e, {*o.find("fx")}, at + "/fx");
+                    if (!ready) return std::move(ready).error();
+                    plugins[k] = std::move(ready->front());
+                    m.version = "1.0.0";
+                } else if (const auto* params = o.find("params")) {
+                    // Knob by knob: one the type no longer has is left out.
+                    json::Value merged = json::Value::object();
+                    for (const auto& p : params->asObject()) {
+                        json::Value one = json::Value::object();
+                        one[p.key] = p.value;
+                        auto next = mergeParams(*entry->type, merged, one, at + "/params");
+                        if (!next) {
+                            warn("rack.preset_knob",
+                                 "module " + std::to_string(k) + " (" + entry->type->info().name +
+                                     "): " + next.error().message + "; left at its default",
+                                 at + "/params/" + p.key);
+                            continue;
+                        }
+                        merged = std::move(*next);
+                    }
+                    m.params = std::move(merged);
+                }
+                ++added;
+            }
+            if (count + added > model::kMaxRackModules)
+                return Error("rack.limit", "a rack holds at most 512 modules", "/rack",
+                             "the preset adds " + std::to_string(added) + " to " +
+                                 std::to_string(count) + "; remove modules or use another rack");
+            if ((join ? std::max(outs, ownOuts.size()) : outs + ownOuts.size()) >
+                model::kMaxRackOuts)
+                return Error("rack.limit", "a rack holds at most 32 Out modules", "/io",
+                             "use io: join, or another rack");
+            if ((join ? std::max(ins, ownIns.size()) : ins + ownIns.size()) > model::kMaxRackIns)
+                return Error("rack.limit", "a rack holds at most 32 In modules", "/io",
+                             "use io: join, or another rack");
+
+            // The group's top-left: given, else right of the rack's modules.
+            const auto place = freePlace(e, s, *rack);
+            const double x0 = a.x.value_or(place.first), y0 = a.y.value_or(place.second);
+            for (std::size_t k = 0; k < n; ++k) {
+                if (joined[k]) continue;
+                made[k].x = std::clamp(x0 + numberOr(entries[k], "x"), -model::kMaxRackCoordinate,
+                                       model::kMaxRackCoordinate);
+                made[k].y = std::clamp(y0 + numberOr(entries[k], "y"), -model::kMaxRackCoordinate,
+                                       model::kMaxRackCoordinate);
+            }
+
+            // Cables whose ends the types still have.
+            struct Planned {
+                std::size_t from, to;
+                std::string fromKey, toKey;
+                bool plugin;
+                std::optional<double> amount;
+                std::string color;
+            };
+            std::vector<Planned> planned;
+            const json::Value* cables = doc.find("cables");
+            for (std::size_t k = 0; cables && k < cables->asArray().size(); ++k) {
+                const json::Value& c = cables->asArray()[k];
+                const std::string at = "/cables/" + std::to_string(k);
+                const json::Value& f = *c.find("from");
+                const json::Value& t = *c.find("to");
+                Planned p{static_cast<std::size_t>(f.find("module")->asInt()),
+                          static_cast<std::size_t>(t.find("module")->asInt()),
+                          f.find("port")->asString(),
+                          t.find("port")->asString(),
+                          t.find("plugin") && t.find("plugin")->asBool(),
+                          std::nullopt,
+                          stringOr(c, "color")};
+                auto skip = [&](const std::string& why) {
+                    warn("rack.preset_cable",
+                         "cable " + std::to_string(k) + ": " + why + "; left out", at);
+                };
+                if (!p.color.empty() && !model::validTrackColor(p.color)) p.color.clear();
+                // A joined module is the rack's own: its type is the catalog's.
+                auto typeAt = [&](std::size_t i) -> std::shared_ptr<const rack::ModuleType> {
+                    if (joined[i]) return typeOfModule(e, *s.modules.find(*joined[i]));
+                    return types[i];
+                };
+                const auto src = typeAt(p.from), dst = typeAt(p.to);
+                if (src && src->output(p.fromKey) < 0) {
+                    skip(src->info().name + " has no output " + p.fromKey);
+                    continue;
+                }
+                const auto* amount = c.find("amount");
+                if (p.plugin) {
+                    if (!plugins[p.to]) {
+                        skip("module " + std::to_string(p.to) + " is not a plugin module");
+                        continue;
+                    }
+                    p.amount = amount ? amount->asDouble() : 0.5;
+                } else if (dst && dst->input(p.toKey) >= 0) {
+                    // an input: no amount
+                } else if (const int q = dst ? dst->param(p.toKey) : -1; q >= 0) {
+                    const sd::ParamModel& pm = dst->params()[static_cast<std::size_t>(q)];
+                    if (pm.kind == sd::ParamModel::Kind::Toggle || pm.output) {
+                        skip(p.toKey + " is a switch or a meter");
+                        continue;
+                    }
+                    p.amount = amount ? amount->asDouble() : defaultAmount(pm);
+                } else if (dst) {
+                    skip(dst->info().name + " has no input or knob " + p.toKey);
+                    continue;
+                }
+                bool twice = false;
+                for (const Planned& q : planned)
+                    twice |= q.from == p.from && q.to == p.to && q.fromKey == p.fromKey &&
+                             q.toKey == p.toKey && q.plugin == p.plugin;
+                // Between two of the rack's own (joined) modules, it may be there already.
+                if (joined[p.from] && joined[p.to])
+                    for (const auto& cb : s.cables)
+                        twice |= cb.value->from == model::CableEnd{*joined[p.from], p.fromKey} &&
+                                 cb.value->to == model::CableEnd{*joined[p.to], p.toKey};
+                if (!twice) planned.push_back(std::move(p));
+            }
+            if (cableCount + planned.size() > model::kMaxRackCables)
+                return Error("rack.limit", "a rack holds at most 4096 cables", "/rack",
+                             "remove cables first, or use another rack");
+
+            model::EditTxn& t = e.txn();
+            std::vector<Id> ids(n);
+            json::Value modules = json::Value::array(), madeCables = json::Value::array();
+            for (std::size_t k = 0; k < n; ++k) {
+                if (joined[k]) {
+                    ids[k] = *joined[k];
+                    continue;
+                }
+                if (plugins[k]) made[k].fx = detail::installEffect(e, *plugins[k]);
+                ids[k] = t.create(made[k]);
+                modules.push_back(ids[k].str());
+            }
+            for (const Planned& p : planned) {
+                model::Cable cable;
+                cable.from = {ids[p.from], p.fromKey};
+                cable.to = {p.plugin ? *made[p.to].fx : ids[p.to], p.toKey};
+                cable.amount = p.amount;
+                cable.color = p.color;
+                madeCables.push_back(t.create(cable).str());
+            }
+            json::Value out = json::Value::object();
+            out["modules"] = std::move(modules);
+            out["cables"] = std::move(madeCables);
+            if (!warnings.asArray().empty()) out["warnings"] = std::move(warnings);
+            return out;
+        };
+        addChecked(registry, std::move(c));
+    }();
+    // ---------------------------------------------------------------- rack.preset.list
+    [&] {
+        Command<PresetList, json::Value> c;
+        common(c, "rack.preset.list", Kind::Query, "List saved rack presets: names and contents.");
+        c.description =
+            "query: a part of the name or description. Each preset: name, path, description, "
+            "its module and cable counts and its module types. Files that are not rack presets "
+            "are skipped with a warning (warnings).";
+        c.args = schema::object<PresetList>("rack_preset_list_args")
+                     .field("query", &PresetList::query, schema::string())
+                     .build();
+        c.examples = {{"The saved presets", j("{}"),
+                       j(R"({"presets": [{"name": "Gated VCA", "path": "<any>",
+                             "modules": 3, "cables": 1,
+                             "types": ["com.suppleaudio.rack.notes", "com.suppleaudio.rack.out",
+                                       "com.suppleaudio.rack.vca"]}]})"),
+                       "song_with_rack_preset"}};
+        c.run = [](const PresetList& a, Context& ctx) -> Result<json::Value> {
+            const fs::path dir = app(ctx).rackPresetDir();
+            auto lower = [](std::string text) {
+                std::transform(text.begin(), text.end(), text.begin(), [](unsigned char ch) {
+                    return static_cast<char>(std::tolower(ch));
+                });
+                return text;
+            };
+            const std::string query = lower(a.query.value_or(""));
+            std::vector<std::pair<std::string, json::Value>> rows;
+            json::Value warnings = json::Value::array();
+            std::error_code ec;
+            for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+                std::error_code kind;
+                if (!it->is_regular_file(kind) || it->path().extension() != ".json") continue;
+                auto doc = readPreset(it->path());
+                if (!doc) {
+                    json::Value w = json::Value::object();
+                    w["code"] = doc.error().code;
+                    w["message"] = doc.error().message;
+                    w["path"] = it->path().string();
+                    warnings.push_back(std::move(w));
+                    continue;
+                }
+                const std::string name = (*doc)["name"].asString();
+                const std::string description = stringOr(*doc, "description");
+                if (!query.empty() && lower(name).find(query) == std::string::npos &&
+                    lower(description).find(query) == std::string::npos)
+                    continue;
+                json::Value row = json::Value::object();
+                row["name"] = name;
+                row["path"] = it->path().string();
+                if (!description.empty()) row["description"] = description;
+                row["modules"] = static_cast<std::int64_t>((*doc)["modules"].asArray().size());
+                const auto* cables = doc->find("cables");
+                row["cables"] = static_cast<std::int64_t>(cables ? cables->asArray().size() : 0);
+                std::set<std::string> kinds;
+                for (const auto& m : (*doc)["modules"].asArray())
+                    kinds.insert(m.find("type")->asString());
+                json::Value types = json::Value::array();
+                for (const auto& k : kinds) types.push_back(k);
+                row["types"] = std::move(types);
+                rows.emplace_back(name + '\0' + it->path().string(), std::move(row));
+            }
+            std::sort(rows.begin(), rows.end(),
+                      [](const auto& x, const auto& y) { return x.first < y.first; });
+            json::Value presets = json::Value::array();
+            for (auto& r : rows) presets.push_back(std::move(r.second));
+            json::Value out = json::Value::object();
+            out["presets"] = std::move(presets);
+            if (!warnings.asArray().empty()) out["warnings"] = std::move(warnings);
+            return out;
+        };
+        addChecked(registry, std::move(c));
+    }();
+    // ---------------------------------------------------------------- rack.preset.delete
+    [&] {
+        Command<PresetName, json::Value> c;
+        common(c, "rack.preset.delete", Kind::Action, "Delete a saved rack preset.");
+        c.args = schema::object<PresetName>("rack_preset_delete_args")
+                     .field("name", &PresetName::name, schema::string().minLength(1))
+                     .build();
+        c.examples = {{"Delete a preset", j(R"({"name": "Gated VCA"})"), j(R"({"path": "<any>"})"),
+                       "song_with_rack_preset"}};
+        c.run = [](const PresetName& a, Context& ctx) -> Result<json::Value> {
+            auto path = presetPath(app(ctx), a.name);
+            if (!path) return std::move(path).error();
+            std::error_code ec;
+            if (!fs::is_regular_file(fs::symlink_status(*path, ec)))
+                return Error("rack.preset", "no rack preset named \"" + a.name + "\"", "/name",
+                             "rack.preset.list shows the saved names");
+            if (!fs::remove(*path, ec) || ec)
+                return Error("rack.preset", "cannot delete " + path->string() + ": " + ec.message(),
+                             "/name", "check the folder's permissions");
+            json::Value out = json::Value::object();
+            out["path"] = path->string();
+            return out;
         };
         addChecked(registry, std::move(c));
     }();

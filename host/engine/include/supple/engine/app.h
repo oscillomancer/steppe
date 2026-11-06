@@ -62,6 +62,9 @@ struct AppOptions {
     // Modular racks' module library (ADR-0062): <moduleDir>/<name>/<name>.cpp,
     // each a module type. Empty = <workdir>/modules.
     std::filesystem::path moduleDir;
+    // Rack presets (rack.preset.*): <rackPresetDir>/<name>.json. Empty =
+    // <workdir>/rack-presets; the app passes <data>/<slug>/rack-presets.
+    std::filesystem::path rackPresetDir;
     // An unsaved project's own folder (the GUI's, one per run): its media (the
     // recordings) live in <scratchDir>/<media_dir> until the first save moves
     // them beside the project file; clearScratch() deletes it when the
@@ -313,6 +316,10 @@ class EngineApp : public cmd::Host {
     // the built-in ones and the library's, compiled when the app starts.
     std::filesystem::path moduleDir() const {
         return options_.moduleDir.empty() ? options_.workdir / "modules" : options_.moduleDir;
+    }
+    std::filesystem::path rackPresetDir() const {
+        return options_.rackPresetDir.empty() ? options_.workdir / "rack-presets"
+                                              : options_.rackPresetDir;
     }
     const std::shared_ptr<const rack::Catalog>& modules() const { return modules_; }
     // Makes `catalog` the one racks use: racks playing a type whose code

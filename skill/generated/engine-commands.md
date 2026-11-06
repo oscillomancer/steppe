@@ -10390,6 +10390,206 @@ Result:
 
 ```
 
+## `rack.preset.delete@1`
+
+Delete a saved rack preset.
+
+
+
+Kind: `action`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `name` | string |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
+
+**Delete a preset** (`song_with_rack_preset`)
+
+```json
+{
+  "name": "Gated VCA"
+}
+
+```
+
+Result:
+
+```json
+{
+  "path": "<any>"
+}
+
+```
+
+## `rack.preset.list@1`
+
+List saved rack presets: names and contents.
+
+query: a part of the name or description. Each preset: name, path, description, its module and cable counts and its module types. Files that are not rack presets are skipped with a warning (warnings).
+
+Kind: `query`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `query` | string |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
+
+**The saved presets** (`song_with_rack_preset`)
+
+```json
+{}
+
+```
+
+Result:
+
+```json
+{
+  "presets": [
+    {
+      "name": "Gated VCA",
+      "path": "<any>",
+      "modules": 3,
+      "cables": 1,
+      "types": [
+        "com.suppleaudio.rack.notes",
+        "com.suppleaudio.rack.out",
+        "com.suppleaudio.rack.vca"
+      ]
+    }
+  ]
+}
+
+```
+
+## `rack.preset.load@1`
+
+Add a saved preset's modules and cables to a rack.
+
+name (rack.preset.list) or path (a preset file). x, y: the group's top-left (default right of the rack's modules). io: join (default) gives the preset's Out and In modules' cables to the rack's own Outs and Ins in order, so a whole patch sounds at once (extra ones are added); add makes new ones. Notes modules play the rack's channel. Knobs and cables the module types no longer have are left out with a warning (warnings); a module type or plug-in that is not installed is an error, and nothing changes.
+
+Kind: `edit`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `rack` | string |  |  |  |  |
+| `name` | string |  |  |  |  |
+| `path` | string |  |  |  |  |
+| `x` | number |  | -1e+06..1e+06 |  |  |
+| `y` | number |  | -1e+06..1e+06 |  |  |
+| `io` | string |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Errors
+
+- `rack.preset_source`: name and path both or neither Hint: give one
+- `rack.unknown_type`: the preset needs a module type that is not installed Hint: module.write it, or load another preset
+- `chain.plugin_missing`: the preset needs a plug-in that is not installed Hint: install it
+- `rack.preset_invalid`: not a rack preset Hint: save it again
+
+### Examples
+
+**Load a saved patch into a new rack** (`song_with_rack_preset`)
+
+```json
+{
+  "rack": "rk_2",
+  "name": "Gated VCA"
+}
+
+```
+
+Result:
+
+```json
+{
+  "modules": ["mo_5", "mo_6"],
+  "cables": ["cb_2"]
+}
+
+```
+
+## `rack.preset.save@1`
+
+Save a rack's modules and cables as a preset.
+
+modules: which (default the whole rack); the cables among them come too. Plugin modules keep their plug-in's settings. A Notes module's source track, MIDI learn, envelopes, sends and the channels an Out feeds stay with the project. Saved by name in the user's rack presets; replace: true overwrites one.
+
+Kind: `action`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `rack` | string |  |  |  |  |
+| `name` | string |  |  |  |  |
+| `modules` | array |  |  |  |  |
+| `description` | string |  |  |  |  |
+| `replace` | boolean |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Errors
+
+- `rack.preset_name`: not a usable name Hint: a name without path characters
+- `rack.preset_exists`: a preset has the name Hint: replace: true or a new name
+
+### Examples
+
+**Save the whole rack** (`song_with_rack`)
+
+```json
+{
+  "rack": "rk_1",
+  "name": "Gated VCA"
+}
+
+```
+
+Result:
+
+```json
+{
+  "path": "<any>",
+  "modules": 3,
+  "cables": 1
+}
+
+```
+
 ## `rack.probe@1`
 
 Listen to a rack's ports: level, pitch, gate rate, notes, a CV's range.

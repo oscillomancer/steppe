@@ -1005,6 +1005,27 @@ q = nil
 ---@field rack string
 ---@field detail? string
 
+---@class Steppe.rack_preset_delete_args
+---@field name string
+
+---@class Steppe.rack_preset_list_args
+---@field query? string
+
+---@class Steppe.rack_preset_load_args
+---@field rack string
+---@field name? string
+---@field path? string
+---@field x? number
+---@field y? number
+---@field io? string
+
+---@class Steppe.rack_preset_save_args
+---@field rack string
+---@field name string
+---@field modules? string[]
+---@field description? string
+---@field replace? boolean
+
 ---@class Steppe.rack_probe_args
 ---@field rack string Rack id
 ---@field ports string[]
@@ -1939,6 +1960,12 @@ q = nil
 ---@field probe fun(args: Steppe.rack_probe_args): table Listen to a rack's ports: level, pitch, gate rate, notes, a CV's range.
 ---@field remove fun(args: Steppe.rack_remove_args): table Remove a rack with its modules and cables.
 ---@field set fun(args: Steppe.rack_set_args): table Rename a rack or move it to another channel.
+
+---@class Steppe.rack.preset
+---@field delete fun(args: Steppe.rack_preset_delete_args): table Delete a saved rack preset.
+---@field list fun(args?: Steppe.rack_preset_list_args): table List saved rack presets: names and contents.
+---@field load fun(args: Steppe.rack_preset_load_args): table Add a saved preset's modules and cables to a rack.
+---@field save fun(args: Steppe.rack_preset_save_args): table Save a rack's modules and cables as a preset.
 
 ---@class Steppe.region
 ---@field add fun(args?: Steppe.region_add_args): Steppe.region_add_result Add a named region in beats.

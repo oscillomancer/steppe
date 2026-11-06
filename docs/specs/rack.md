@@ -436,9 +436,10 @@ examples run as tests. Ends are strings: `"mo_3.out"`.
 | `rack.list` | query | `{}` → racks with their home tracks, module counts and Out modules |
 | `rack.get` | query | `{rack, detail?: brief\|full}` → modules (id, type, label, changed params, position, size), cables (with `feedback`), Out modules and the channels they feed, problems |
 | `rack.probe` | query | `{rack, ports: ["mo_N.<output>", …≤8], seconds? (≤10, 2), from_beat?, notes? (notation the rack's Notes modules play)}` → per port: peak, rms, dc, min, max; audio (the first 4 voices summed): dB and pitch (Hz, note, cents) when periodic; gates over the voices: count, per second, per beat, duty; pitch: the notes visited; CV: rate; a one-line description. An offline render of a copy with a listener (`ProbeModule`) on each port; nothing changes |
-| `rack.preset.save` | action | `{rack, name, modules?}` → `{path}` |
-| `rack.preset.load` | edit | `{rack, name\|path, x?, y?}` → `{modules, cables}` |
-| `rack.preset.list` | query | `{}` |
+| `rack.preset.save` | action | `{rack, name, modules?, description?, replace?}` → `{path, modules, cables}`: the modules (default the whole rack) and the cables among them |
+| `rack.preset.load` | edit | `{rack, name\|path, x?, y?, io?: join\|add}` → `{modules, cables, warnings?}`: one undo step |
+| `rack.preset.list` | query | `{query?}` → presets: name, path, description, module and cable counts, module types |
+| `rack.preset.delete` | action | `{name}` → `{path}` |
 | `module.list` | query | `{query?, tag?}` → types: id, name, tags, one line, origin |
 | `module.describe` | query | `{type\|module}` → parameters (key, unit, range, default, help, group, choices), ports (key, signal, help, normal), size, presets |
 | `module.add` | edit | `{rack, type\|plugin, label?, x?, y?, params?, preset?, source?, device?}` → `{module, type, x, y, width, height, inputs, outputs, knobs, fx?, plugin?}` |
@@ -466,6 +467,41 @@ lists them): every knob goes to it, then `params` apply on top. The app
 reaches racks through `EngineApp::modules()` (the catalog),
 `EngineApp::moduleInstance()` (a running module's telemetry) and
 `supple/engine/racks.h`.
+
+### 7.1 Rack presets
+
+A rack preset is a group of modules and the cables among them, kept
+apart from any project in `<rackPresetDir>/<name>.json`
+(`AppOptions::rackPresetDir`; the app's is `<data>/<slug>/rack-presets`,
+default `<workdir>/rack-presets`). A name is 1–200 characters without
+`/ \ : * ? " < > |` or control characters, not ending in a space or a
+dot. The file is canonical JSON:
+
+```json
+{"schema": "supple.rack-preset/1.0", "name": "Tremolo", "description": "…",
+ "modules": [{"type": "com.suppleaudio.rack.vca", "version": "1.0.0", "label": "Amp",
+              "x": 0, "y": 0, "params": {"level": -6}, "bypass": false},
+             {"type": "com.suppleaudio.rack.plugin", "x": 220, "y": 0, "fx": {…}}],
+ "cables": [{"from": {"module": 2, "port": "out"},
+             "to": {"module": 1, "port": "gain", "plugin": true}, "amount": 0.3}]}
+```
+
+Modules are by index, placed relative to the group's top-left. A cable's
+end names a module by index and a port, or with `plugin: true` a
+parameter of that plugin module's plug-in. A plugin module's `fx` is an
+FX chain entry (the plug-in, its semantic patch or base64 state). What
+belongs to a project stays out: a Notes module's source track (it plays
+the rack's channel), MIDI learn, envelopes, sends and the channels an
+Out feeds.
+
+A load checks everything before the model changes. A module type or
+plug-in that is not installed refuses the preset (`rack.unknown_type`,
+`chain.plugin_missing`); a knob or port its type no longer has is left
+out with a warning (`rack.preset_knob`, `rack.preset_cable`). With
+`io: join` (the default) the preset's Out and In modules are the rack's
+own, in order: their cables reach the rack's Outs and Ins, so a whole
+patch saved from one rack sounds in a new one at once; extra ones are
+added. `io: add` adds them all.
 
 ## 8. The rack window (`daw/gui`)
 
