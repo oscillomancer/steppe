@@ -49,3 +49,4 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `clock` | Six ratios (/16 to x8) of the song, a free tempo or an incoming clock, with swing and a reset out |
 | `euclid` | A Euclidean rhythm with its own accent spread, gate, accent and off-beat outputs, circle face |
 | `turing` | Shift Register: a looping random register, locked to chaotic by Flip, with a CV and four bit gates |
+| `chance` | A coin toss per gate to A or B, latched as a random switch, or a burst of ratchets; poly |
