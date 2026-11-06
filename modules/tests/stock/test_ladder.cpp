@@ -43,6 +43,11 @@ TEST_CASE("ladder: resonance thins the bass, compensation restores it") {
     CHECK(response(50, "out", 80, 0) == doctest::Approx(1 / (1 + k)).epsilon(0.03));
     CHECK(response(50, "out", 80, 100) == doctest::Approx(1).epsilon(0.03));
     CHECK(db(response(1000, "out", 80)) > db(response(1000, "out", 0)) + 10);
+    // The high pass loses nothing to the feedback, so compensation leaves
+    // its highs where they are.
+    CHECK(db(response(15000, "high", 80, 100)) ==
+          doctest::Approx(db(response(15000, "high", 80, 0))).epsilon(0.05));
+    CHECK(std::abs(db(response(15000, "high", 80, 100))) < 1.0);
 }
 
 TEST_CASE("ladder: full resonance sings at the cutoff") {
