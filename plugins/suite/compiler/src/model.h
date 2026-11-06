@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "ast.h"
+#include "supple/script_module.h"
 #include "supple/script_program.hpp"
 
 namespace supple::scriptc {
@@ -49,6 +50,8 @@ struct PluginModel {
     StructDecl* decl = nullptr;
     PluginKind kind = PluginKind::None;
     InfoModel info;
+    ModuleInfoModel moduleInfo;
+    std::vector<PortModel> ports;
     std::vector<ParamModel> params;
     std::vector<FieldDecl*> paramFields;  // params[i]'s member
     std::vector<FileModel> files;
@@ -64,7 +67,7 @@ struct PluginModel {
     FunctionDecl* startVoiceRetrigger = nullptr;
     FunctionDecl* releaseVoice = nullptr;
     FunctionDecl* stopVoice = nullptr;
-    // The editor's: editor(Editor&), draw(Canvas&) and pointer(const Pointer&).
+    // The face: editor(Editor&) or panel(Panel&) for modules, then draw/pointer.
     FunctionDecl* editor = nullptr;
     FunctionDecl* draw = nullptr;
     FunctionDecl* pointer = nullptr;

@@ -4,9 +4,28 @@
 # in stock/ compiled into the DAW as C++, and their tests. MIT, like
 # plugins/.
 
+# --- the rack runtime ---------------------------------------------------------------------
+add_library(rack STATIC rack/src/module_type.cpp rack/src/instance.cpp rack/src/schedule.cpp
+                        rack/src/host_modules.cpp)
+target_include_directories(rack PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/rack/include)
+target_link_libraries(rack PUBLIC supple::script-runtime supple::core-base)
+supple_target_defaults(rack)
+set_target_properties(rack PROPERTIES POSITION_INDEPENDENT_CODE ON)
+add_library(supple::rack ALIAS rack)
+
+if(SUPPLE_BUILD_TESTS)
+  add_executable(rack.tests rack/tests/test_rack.cpp)
+  target_include_directories(rack.tests PRIVATE tests)
+  target_link_libraries(rack.tests PRIVATE supple::rack supple::rack-stock supple::doctest-main)
+  supple_target_defaults(rack.tests)
+  add_test(NAME rack.tests COMMAND rack.tests)
+  set_tests_properties(rack.tests PROPERTIES LABELS "rack;rt")
+endif()
+
 # --- the stock modules ------------------------------------------------------------------
 # Every stock/<name>.cpp is a module: its struct (the one deriving from
-# Module) is found in the file, so adding a module is adding its file.
+# Module) is found in the file, so adding a module is adding its file. Each
+# is wrapped as C++ at build time (cmake/stock_module.cmake).
 file(GLOB _stock_scripts CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/stock/*.cpp)
 list(SORT _stock_scripts)
 set(_stock_generated)
@@ -17,18 +36,15 @@ foreach(_script IN LISTS _stock_scripts)
     message(FATAL_ERROR "modules/stock/${NAME}.cpp: a stock module's file name is lower case "
                         "letters, digits and _")
   endif()
-  file(STRINGS ${_script} _decl REGEX "^struct [A-Za-z_][A-Za-z0-9_]* : Module")
-  list(LENGTH _decl _count)
-  if(NOT _count EQUAL 1)
-    message(FATAL_ERROR "modules/stock/${NAME}.cpp: expected one line 'struct <Name> : Module "
-                        "{' at the start of a line, found ${_count}")
-  endif()
-  string(REGEX REPLACE "^struct ([A-Za-z_][A-Za-z0-9_]*) : Module.*$" "\\1" STRUCT "${_decl}")
-  file(READ ${_script} _hex HEX)
-  string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," HEX "${_hex}")
-  set(SOURCE ${_script})
   set(_out ${CMAKE_CURRENT_BINARY_DIR}/stock/${NAME}.cpp)
-  configure_file(cmake/stock_module.cpp.in ${_out} @ONLY)
+  add_custom_command(
+    OUTPUT ${_out}
+    COMMAND ${CMAKE_COMMAND} -DNAME=${NAME} -DSCRIPT=${_script}
+            -DTEMPLATE=${CMAKE_CURRENT_SOURCE_DIR}/cmake/stock_module.cpp.in -DOUT=${_out}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/stock_module.cmake
+    DEPENDS ${_script} cmake/stock_module.cpp.in cmake/stock_module.cmake
+    COMMENT "Stock module ${NAME}"
+    VERBATIM)
   list(APPEND _stock_generated ${_out})
   list(APPEND _stock_names ${NAME})
 endforeach()
@@ -69,9 +85,9 @@ add_library(supple::rack-stock ALIAS rack-stock)
 
 if(SUPPLE_BUILD_TESTS)
   file(GLOB _stock_tests CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/stock/*.cpp)
-  add_executable(rack-stock.tests tests/test_stock.cpp ${_stock_tests})
+  add_executable(rack-stock.tests tests/test_stock.cpp tests/test_jit.cpp ${_stock_tests})
   target_include_directories(rack-stock.tests PRIVATE tests)
-  target_link_libraries(rack-stock.tests PRIVATE supple::rack-stock supple::doctest-main)
+  target_link_libraries(rack-stock.tests PRIVATE supple::rack-stock supple::script-compiler supple::doctest-main)
   supple_target_defaults(rack-stock.tests)
   add_test(NAME rack-stock.tests COMMAND rack-stock.tests)
   set_tests_properties(rack-stock.tests PROPERTIES LABELS "rack")

@@ -520,12 +520,13 @@ class Parser {
                 s->base = PluginKind::Effect;
             else if (s->baseName == "Instrument")
                 s->base = PluginKind::Instrument;
+            else if (s->baseName == "Module")
+                s->base = PluginKind::Module;
             else if (s->baseName == "NoteEffect")
                 s->base = PluginKind::NoteEffect;
             else
                 error(s->baseLoc, "script.unsupported.inheritance",
-                      "a struct can only derive from Effect, Instrument or NoteEffect (the plugin "
-                      "itself)",
+                      "a struct can only derive from Effect, Instrument, NoteEffect or Module",
                       "keep shared parts as a member instead: struct Voice { ... }; Array<Voice, "
                       "8> voices;");
             if (accept(",")) {
@@ -687,6 +688,7 @@ class Parser {
                 f->owner = owner;
                 f->isStatic = type->isStatic;
                 owner->fields.push_back(f);
+                f->oneDeclarator = made.empty();
                 made.push_back(f);
             } else {
                 auto* v = unit_.decl<VarDecl>(nameLoc);
@@ -698,6 +700,8 @@ class Parser {
                 unit_.decls.push_back(v);
             }
             if (!accept(",")) break;
+            if (owner)
+                for (Decl* d : made) static_cast<FieldDecl*>(d)->oneDeclarator = false;
             if (!at(Tok::Ident)) {
                 error(cur().loc, "script.parse.name", "expected a name after ','",
                       "name each one: double a = 0.0, b = 0.0;");
