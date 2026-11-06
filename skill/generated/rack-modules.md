@@ -510,7 +510,7 @@ A distortion: soft, tube, hard clip, fold, rectify, bitcrush and downsample, ove
   - `rate` 100.0..48000.0 Hz = 6000.0: Downsample: the lower sample rate it holds the input at.
   - `tone` -100.0..100.0 % = 0.0: Tilts the result, 9 dB each way: darker below 0, brighter above.
   - `mix` 0.0..100.0 % = 100.0: The distorted share, the rest the dry input.
-  - `level` -24.0..12.0 dB = 0.0: The output level.
+  - `level` -24.0..12.0 dB = -6.0: The output level: -6 at first, as driving makes it louder.
 
 ## drum: Drum
 

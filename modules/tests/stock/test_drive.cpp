@@ -20,6 +20,7 @@ enum { kSoft, kTube, kHard, kFold, kRectify, kBitcrush, kDownsample };
 std::vector<double> driven(std::initializer_list<std::pair<const char*, double>> settings,
                            double hz = 1000.0, double amp = 0.5) {
     ModuleHarness h(stock("drive"));
+    h.set("level", 0);  // the curves' own levels
     for (const auto& [key, value] : settings) h.set(key, value);
     h.input("in", 1, [hz, amp](int, std::int64_t n) {
         return amp * std::sin(2 * kPi * hz * static_cast<double>(n) / 48000.0);
@@ -107,6 +108,7 @@ TEST_CASE("drive: the dry part waits for the oversampled one") {
     CHECK(amplitudeAt(blend, 12000, 48000) == doctest::Approx(0.01).epsilon(0.01));
     ModuleHarness h(stock("drive"));
     h.set("mix", 0);
+    h.set("level", 0);
     h.input("in", 1, [](int, std::int64_t n) { return n == 0 ? 1.0 : 0.0; });
     h.run(480);
     const auto& y = h.output("out");
