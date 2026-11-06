@@ -178,3 +178,14 @@ TEST_CASE("rack recipes: the modulation web moves the drone") {
     CHECK(p.ports["web.out_3"]["max"].asDouble() > p.ports["web.out_3"]["min"].asDouble() + 0.2);
     CHECK(p.out["peak_db"].asDouble() > -20);
 }
+
+TEST_CASE("rack recipes: the song keeps its counter-melody below the lead") {
+    const auto all = recipes();
+    Played p =
+        play(find(all, "A song that writes itself"), 10, {"low.interval", "song.edge", "song.a"});
+    CHECK(p.ports["low.interval"]["min"].asDouble() >= -16.0 / 12 - 1e-3);
+    CHECK(p.ports["low.interval"]["max"].asDouble() <= -3.0 / 12 + 1e-3);
+    CHECK(p.ports["song.edge"]["gates"]["duty"].asDouble() == doctest::Approx(0.4).epsilon(0.05));
+    CHECK(p.ports["song.a"]["gates"]["duty"].asDouble() == doctest::Approx(0.6).epsilon(0.05));
+    CHECK(p.out["peak_db"].asDouble() > -12);
+}
