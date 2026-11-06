@@ -11,9 +11,10 @@
 // follow. Shift moves the carrier's bands up or down against the voice's:
 // a smaller or larger throat. Noise adds hiss to the upper bands' carrier,
 // so S and T come through even over a carrier without highs. A poly
-// carrier (a chord) is summed first. With a full, bright carrier (a saw at
-// full scale) the output is at about the voice's level, whatever Bands and
-// Width; a dull carrier comes out quieter, as it has less in the bands.
+// carrier (a chord) is mixed to one first, over the square root of its
+// voices. With a full, bright carrier (a saw at full scale, or a chord of
+// them) the output is at about the voice's level, whatever Bands and Width;
+// a dull carrier comes out quieter, as it has less in the bands.
 
 constexpr int kMostBands = 32;
 constexpr double kNoiseFromHz = 2500.0;  // Noise feeds the bands above
@@ -62,9 +63,9 @@ struct Vocoder : Module {
     Param level = decibels("Level", -24, 24, 0).smoothed(20).in("Tone").help("The gain after.");
 
     Input voice =
-        audioIn("Voice").help("What speaks: a voice, drums, a loop. Poly cables are summed.");
+        audioIn("Voice").help("What speaks: a voice, drums, a loop. Poly cables are mixed to one.");
     Input carrier = audioIn("Carrier").help(
-        "What it speaks through: a rich synth (saws, a chord). Poly cables are summed.");
+        "What it speaks through: a rich synth (saws, a chord). Poly cables are mixed to one.");
     Output out = audioOut("Out").help("The vocoded sound.");
 
     Array<Band, kMostBands> band;
@@ -103,10 +104,16 @@ struct Vocoder : Module {
         // made up for, so Bands and Width leave the level about where it is.
         const double wide = clamp(width.value(), 0.0, 1.0);
         const double gain = kScale * pow(n / 16.0, 0.75) * pow(10.0, -0.525 * (wide - 0.5));
+        // Poly cables summed, scaled by the square root of their channels: a
+        // chord of four saws as loud as one, about.
+        const double voiceShare = 1.0 / sqrt(static_cast<double>(max(voice.channels(), 1)));
+        const double carrierShare = 1.0 / sqrt(static_cast<double>(max(carrier.channels(), 1)));
         for (int i = 0; i < frames; ++i) {
             double v = 0.0, c = 0.0;
             for (int ch = 0; ch < max(voice.channels(), 1); ++ch) v += voice[ch][i];
             for (int ch = 0; ch < max(carrier.channels(), 1); ++ch) c += carrier[ch][i];
+            v *= voiceShare;
+            c *= carrierShare;
             const double h = hiss.white();
             double y = 0.0;
             for (int k = 0; k < n; ++k) {

@@ -148,7 +148,7 @@ TEST_CASE("vocoder: levels at its defaults; Level after") {
           doctest::Approx(-12).epsilon(0.01));
 }
 
-TEST_CASE("vocoder: a poly carrier is summed into one output") {
+TEST_CASE("vocoder: a poly carrier is mixed to one output, about as loud as one voice") {
     ModuleHarness h(stock("vocoder"));
     h.set("noise", 0);
     h.input("voice", 1, [](int, std::int64_t n) { return hash(n); });
@@ -158,5 +158,16 @@ TEST_CASE("vocoder: a poly carrier is summed into one output") {
     const auto mono =
         vocode({{"noise", 0}}, hash, [](std::int64_t n) { return saw(n, 220); }, 24000);
     for (std::size_t n = 0; n < 24000; n += 37)
-        CHECK(h.output("out")[n] == doctest::Approx(mono[n]));
+        CHECK(h.output("out")[n] == doctest::Approx(mono[n] / std::sqrt(3.0)));
+    // A chord of four saws comes out within a few dB of one.
+    ModuleHarness chord(stock("vocoder"));
+    chord.input("voice", 1, [](int, std::int64_t n) { return speech(n); });
+    chord.input("carrier", 4, [](int c, std::int64_t n) {
+        const double hz[] = {110.0, 138.6, 164.8, 207.7};
+        return saw(n, hz[c]);
+    });
+    chord.run(48000);
+    const auto one = vocode({}, speech, [](std::int64_t n) { return saw(n, 110); });
+    CHECK(std::abs(20 * std::log10(rms(slice(chord.output("out"), 4800)) / rms(slice(one, 4800)))) <
+          3);
 }
