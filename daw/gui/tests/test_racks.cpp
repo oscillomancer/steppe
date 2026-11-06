@@ -25,6 +25,7 @@
 #include "supple/ui/popup.h"
 #include "supple/ui/root.h"
 #include "supple/ui/text_area.h"
+#include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
 #include "supple/views/track_layout.h"
 
@@ -97,6 +98,24 @@ struct Scope : Module {
         g.fillStyle(Theme::textMuted);
         g.font(8);
         g.fillText(format("%.0f ms", time.value()), 14, 92);
+        if (over) {
+            g.strokeStyle(Theme::accent);
+            g.lineWidth(1);
+            g.strokeRect(10, 32, 130, 64);
+        }
+    }
+    // The display sets the window: across it, or by the wheel. A hover may
+    // not edit (that edit is ignored).
+    bool over = false;
+    void pointer(const Pointer& p) {
+        if (p.action() == PointerAction::Press || p.action() == PointerAction::Drag)
+            time.editNormalized((p.x() - 10) / 130);
+        if (p.action() == PointerAction::Wheel) time.edit(time.value() + 10 * p.wheel());
+        if (p.action() == PointerAction::Move) {
+            over = true;
+            time.edit(999);
+        }
+        if (p.action() == PointerAction::Leave) over = false;
     }
     void panel(Panel& p) {
         p.size(150, 196);
@@ -584,4 +603,190 @@ TEST_CASE("rack window: a plugin module shows the plug-in's name and a click ope
     f.pointer(ui::PointerEvent::Type::Up, at);
     CHECK(opened == std::vector<model::Id>{*rm->fx});
     f.snapshot("rack-plugin.png");
+}
+
+TEST_CASE("rack window: a display hears the pointer; its edits are one undo step a press") {
+    Fixture f;
+    if (!f.ok) return;
+    Patch p(f);
+    f.racks->open();
+    f.frame();
+    gui::RackSpace& space = *f.racks->space();
+    const model::Id scope = *model::Id::parse(p.scope);
+    auto time = [&]() -> double {
+        const json::Value* t = f.app->head().modules.find(scope)->params.find("time");
+        return t ? t->asDouble() : 20.0;
+    };
+    // The display is at (10, 32) 130 x 64 on the module at (620, 300).
+    auto at = [&](double x, double y) {
+        return space.toWindow({620.0f + float(x), 300.0f + float(y)});
+    };
+    const std::size_t steps = f.exec("history.list", "{}")["versions"].size();
+    // A hover is heard (the display outlines itself) but edits nothing.
+    f.pointer(ui::PointerEvent::Type::Move, at(70, 60), 0);
+    CHECK(time() == doctest::Approx(20));
+    f.snapshot("rack-display-hover.png");
+    // A drag across it sets Time, and the module stays where it is.
+    f.drag(at(12, 60), at(138, 60));
+    CHECK(time() > 800);  // 98 % across, on its log scale
+    CHECK(f.app->head().modules.find(scope)->x == doctest::Approx(620));
+    CHECK(f.exec("history.list", "{}")["versions"].size() == steps + 1);
+    f.exec("history.undo", "{}");
+    f.frame();
+    CHECK(time() == doctest::Approx(20));
+    // The wheel over it, one step; Ctrl+wheel still zooms the space.
+    ui::PointerEvent wheel;
+    wheel.type = ui::PointerEvent::Type::Wheel;
+    wheel.pos = at(70, 60);
+    wheel.wheelY = 1;
+    f.r().pointer(wheel);
+    f.frame();
+    CHECK(time() == doctest::Approx(30));
+    const double zoom = space.view().zoom;
+    wheel.mods = ui::kCtrl;
+    f.r().pointer(wheel);
+    CHECK(space.view().zoom > zoom);
+    CHECK(time() == doctest::Approx(30));
+    // Elsewhere on the module, a drag still moves it.
+    f.drag(at(75, 10), at(95, 10));
+    CHECK(f.app->head().modules.find(scope)->x > 620);
+}
+
+TEST_CASE("rack window: the browser's tags fold into one row, opened by +N") {
+    Fixture f;
+    if (!f.ok) return;
+    f.racks->open();
+    f.frame();
+    auto click = [&](const std::string& label) {
+        const auto at = f.racks->tagChipAt(label);
+        REQUIRE(at);
+        f.pointer(ui::PointerEvent::Type::Down, *at);
+        f.pointer(ui::PointerEvent::Type::Up, *at);
+    };
+    // Folded: a row of the most used tags, then "+N" for the rest.
+    auto folded = f.racks->tagChips();
+    REQUIRE(folded.size() >= 2);
+    const std::string more = folded.back();
+    REQUIRE(more.front() == '+');
+    const std::size_t hidden = std::stoul(more.substr(1));
+    CHECK(f.racks->tagChipAt(folded.front())->y == f.racks->tagChipAt(more)->y);  // one row
+    // Open: every tag, alphabetically, and "Less".
+    click(more);
+    auto open = f.racks->tagChips();
+    CHECK(open.size() == folded.size() - 1 + hidden + 1);
+    CHECK(open.back() == "Less");
+    CHECK(std::is_sorted(open.begin(), open.end() - 1));
+    f.snapshot("rack-tags-open.png");
+    // Picking one filters the list and folds the tags, the pick first.
+    click("visual");
+    folded = f.racks->tagChips();
+    CHECK(folded.front() == "visual");
+    CHECK(folded.back().front() == '+');
+    const auto shows = f.racks->browserShows();
+    CHECK(std::find(shows.begin(), shows.end(), "com.example.test.scope") != shows.end());
+    CHECK(std::find(shows.begin(), shows.end(), "com.example.test.osc") == shows.end());
+    // Again: the filter off.
+    click("visual");
+    CHECK(f.racks->browserShows().size() > shows.size());
+    f.snapshot("rack-tags-folded.png");
+}
+
+TEST_CASE("rack window: a knob learns a MIDI controller from its menu, shows it and forgets it") {
+    Fixture f;
+    if (!f.ok) return;
+    Patch p(f);
+    f.racks->open();
+    f.frame();
+    const model::Id vca = *model::Id::parse(p.vca);
+    auto menu = [&] {
+        const ui::Point level = *f.racks->space()->controlAt(vca, "level");
+        f.pointer(ui::PointerEvent::Type::Down, level, 3);
+        f.pointer(ui::PointerEvent::Type::Up, level, 3);
+        REQUIRE(f.r().find("rack.param.menu"));
+    };
+    menu();
+    REQUIRE(f.pick("rack.param.menu", "MIDI learn"));
+    REQUIRE(f.r().find("learn"));
+    engine::EngineApp::ControlEvent e;
+    e.midi.bytes[0] = 0xb0;
+    e.midi.bytes[1] = 9;
+    e.midi.bytes[2] = 127;
+    f.actions->control({e});
+    f.frame();
+    REQUIRE(f.r().click("learn.ok"));
+    f.frame();
+    const auto& learn = f.app->head().modules.find(vca)->learn;
+    REQUIRE(learn.size() == 1);
+    CHECK(learn[0].param == "level");
+    CHECK(learn[0].control.number == 9);
+    CHECK(f.racks->space()->scene().module(vca)->learned.contains("level"));
+    f.racks->space()->setView({420, 40, 2.0});
+    f.snapshot("rack-learned.png");
+    // The menu names the controller, and removes it.
+    menu();
+    const auto items = ui::menuItems(*f.r().find("rack.param.menu"));
+    CHECK(std::any_of(items.begin(), items.end(),
+                      [](const ui::MenuItem& m) { return m.label.rfind("MIDI: CC 9", 0) == 0; }));
+    REQUIRE(f.pick("rack.param.menu", "Remove MIDI learn"));
+    CHECK(f.app->head().modules.find(vca)->learn.empty());
+    CHECK_FALSE(f.racks->space()->scene().module(vca)->learned.contains("level"));
+}
+
+TEST_CASE("rack window: modules saved as a rack preset load into another rack from the browser") {
+    Fixture f;
+    if (!f.ok) return;
+    Patch p(f);
+    f.racks->open();
+    f.frame();
+    const model::Id osc = *model::Id::parse(p.osc), vca = *model::Id::parse(p.vca);
+    // Two modules, saved under a name asked for.
+    f.racks->space()->select({osc, vca});
+    f.racks->savePreset(std::vector<model::Id>{osc, vca});
+    f.frame();
+    auto* name = dynamic_cast<ui::TextField*>(f.r().find("rack.preset.name"));
+    REQUIRE(name);
+    name->setText("Voice");
+    f.r().key(SDLK_RETURN);
+    f.frame();
+    auto shows = f.racks->browserShows();
+    CHECK(std::find(shows.begin(), shows.end(), "preset:Voice") != shows.end());
+    f.snapshot("rack-presets-browser.png");
+    // The same name again: replaced only when the user says so.
+    f.racks->savePreset(std::vector<model::Id>{osc});
+    f.frame();
+    name = dynamic_cast<ui::TextField*>(f.r().find("rack.preset.name"));
+    REQUIRE(name);
+    name->setText("Voice");
+    f.r().key(SDLK_RETURN);
+    f.frame();
+    REQUIRE(f.pick("rack.preset.replace", "Replace"));
+    json::Value list = f.exec("rack.preset.list", "{}");
+    REQUIRE(list["presets"].size() == 1);
+    CHECK(list["presets"].asArray()[0].find("modules")->asInt() == 1);
+    // A new rack: the preset loads into it, selected and in view.
+    REQUIRE(f.racks->addRack());
+    f.frame();
+    const std::size_t before = f.racks->space()->scene().modules.size();
+    REQUIRE(f.racks->addModule("preset:Voice"));
+    f.frame();
+    CHECK(f.racks->space()->scene().modules.size() == before + 1);
+    CHECK(f.racks->space()->selection().size() == 1);
+    // The space's menu: Add module… puts the next one where it was asked.
+    const ui::Rect b = f.racks->space()->bounds();
+    const ui::Point empty{b.x + b.w - 60, b.y + b.h - 60};
+    f.pointer(ui::PointerEvent::Type::Down, empty, 3);
+    f.pointer(ui::PointerEvent::Type::Up, empty, 3);
+    REQUIRE(f.pick("rack.space.menu", "Add module"));
+    const ui::Point at = f.racks->space()->toSpace(empty);
+    REQUIRE(f.racks->addModule("vca"));
+    f.frame();
+    bool placed = false;
+    for (const auto& m : f.racks->space()->scene().modules)
+        placed = placed || (std::abs(m.x - double(at.x)) < 1 && std::abs(m.y - double(at.y)) < 1);
+    CHECK(placed);
+    // Deleted from the browser's menu.
+    f.racks->browserMenu("preset:Voice", {b.x + 40, b.y + 40});
+    REQUIRE(f.pick("rack.browser.menu", "Delete preset"));
+    shows = f.racks->browserShows();
+    CHECK(std::find(shows.begin(), shows.end(), "preset:Voice") == shows.end());
 }

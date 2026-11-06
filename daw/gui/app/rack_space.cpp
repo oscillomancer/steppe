@@ -199,6 +199,30 @@ void RackSpace::frameAll() {
     setView(v);
 }
 
+void RackSpace::reveal(const std::set<model::Id>& ids) {
+    ui::Rect r;
+    bool any = false;
+    for (const auto& m : scene_.modules)
+        if (ids.contains(m.id)) {
+            r = any ? r.unite(m.rect()) : m.rect();
+            any = true;
+        }
+    const ui::Rect b = bounds();
+    if (!any || b.empty()) return;
+    const ui::Rect seen = visibleSpace();
+    if (seen.contains({r.x, r.y}) && seen.contains({r.right(), r.bottom()})) return;
+    // Centred, zoomed out only as far as they need.
+    constexpr double kPad = 48;
+    const double zoom = std::clamp(
+        std::min({view_.zoom, (D(b.w) - 2 * kPad) / D(r.w), (D(b.h) - 2 * kPad) / D(r.h)}),
+        kMinZoom, kMaxZoom);
+    View v;
+    v.zoom = zoom;
+    v.x = D(r.x) + D(r.w) / 2 - D(b.w) / 2 / zoom;
+    v.y = D(r.y) + D(r.h) / 2 - D(b.h) / 2 / zoom;
+    setView(v);
+}
+
 ui::Point RackSpace::toSpace(ui::Point w) const {
     return {static_cast<float>(view_.x + D(w.x - bounds().x) / view_.zoom),
             static_cast<float>(view_.y + D(w.y - bounds().y) / view_.zoom)};
@@ -298,10 +322,16 @@ RackSpace::Hit RackSpace::hitAt(ui::Point p) const {
         const RackScene::Module& m = scene_.modules[*it];
         const ui::Rect r = m.rect();
         if (!ui::Rect{r.x - 8, r.y - 8, r.w + 16, r.h + 16}.contains(p)) continue;
+        // A display hears the pointer where no control is, when the module
+        // has pointer(); otherwise it is the module's body.
+        const bool hears = m.type && m.type->code() && m.type->code()->pointer();
+        std::optional<std::size_t> display;
         for (std::size_t k = 0; k < m.face.items.size(); ++k) {
             const PanelItem& item = m.face.items[k];
             const ui::Point c = centreOf(m, item);
-            if (item.kind == Kind::Knob) {
+            if (item.kind == Kind::Display) {
+                if (hears && !display && rectOf(m, item).contains(p)) display = k;
+            } else if (item.kind == Kind::Knob) {
                 const float rad = static_cast<float>(item.w) / 2;
                 const float d = dist(p, c);
                 if (d <= rad + 1) return {Hit::Kind::Control, *it, k, {}};
@@ -312,10 +342,11 @@ RackSpace::Hit RackSpace::hitAt(ui::Point p) const {
                 }
             } else if (isJack(item.kind)) {
                 if (dist(p, c) <= kJackR + 2) return {Hit::Kind::Jack, *it, k, {}};
-            } else if (item.kind != Kind::Display && rectOf(m, item).contains(p)) {
+            } else if (rectOf(m, item).contains(p)) {
                 return {Hit::Kind::Control, *it, k, {}};
             }
         }
+        if (display) return {Hit::Kind::Display, *it, *display, {}};
         if (r.contains(p)) return {Hit::Kind::Body, *it, 0, {}};
     }
     return {};
@@ -434,7 +465,7 @@ void RackSpace::paintItem(ui::Canvas& c, const RackScene::Module& m, const Panel
     const double v = static_cast<std::size_t>(item.index) < m.values.size()
                          ? m.values[static_cast<std::size_t>(item.index)]
                          : p.def;
-    const float pos = static_cast<float>(paramPosition(p, v));
+    const float pos = static_cast<float>(rack::knobPosition(p, v));
     const ui::Color accent = t.color("accent");
     const bool showValue = hot || dragging;
     switch (item.kind) {
@@ -476,14 +507,16 @@ void RackSpace::paintItem(ui::Canvas& c, const RackScene::Module& m, const Panel
                 for (const auto* k : cables) span += k->amount;
                 double reach = v + span;
                 if (p.unit == sd::ParamModel::Unit::Hertz) reach = v * std::pow(2.0, span);
-                const float ar = kArc0 + static_cast<float>(paramPosition(p, reach)) * kArcSpan;
+                const float ar =
+                    kArc0 + static_cast<float>(rack::knobPosition(p, reach)) * kArcSpan;
                 const float ring = r + 4.5f;
                 if (std::fabs(ar - a) > 0.01f)
                     c.strokeArc(centre, ring, std::min(a, ar), std::max(a, ar),
                                 mod.withAlpha(0.35f), 2);
                 if (m.live && static_cast<std::size_t>(item.index) < m.telemetry.params.size()) {
                     const double now = m.telemetry.params[static_cast<std::size_t>(item.index)];
-                    const float an = kArc0 + static_cast<float>(paramPosition(p, now)) * kArcSpan;
+                    const float an =
+                        kArc0 + static_cast<float>(rack::knobPosition(p, now)) * kArcSpan;
                     if (std::fabs(an - a) > 0.01f)
                         c.strokeArc(centre, ring, std::min(a, an), std::max(a, an), mod, 2);
                     c.fillCircle({centre.x + std::cos(an) * ring, centre.y + std::sin(an) * ring},
@@ -548,6 +581,16 @@ void RackSpace::paintItem(ui::Canvas& c, const RackScene::Module& m, const Panel
         default:
             break;
     }
+    // A knob a MIDI controller turns: a small mark, in the knob's gap or at
+    // the control's corner.
+    if (m.learned.contains(p.key)) {
+        const ui::Point at =
+            item.kind == Kind::Knob
+                ? ui::Point{centre.x, centre.y + static_cast<float>(item.w) / 2 - 1}
+                : ui::Point{rectOf(m, item).right() - 1, rectOf(m, item).y + 1};
+        c.fillCircle(at, 2.4f, face);
+        c.fillCircle(at, 1.6f, accent);
+    }
 }
 
 void RackSpace::paintModule(ui::Canvas& c, const RackScene::Module& m, bool selected,
@@ -590,9 +633,7 @@ void RackSpace::paintModule(ui::Canvas& c, const RackScene::Module& m, bool sele
     }
     // The module's own drawing, under its controls.
     if (m.type && m.type->code() && m.type->code()->draw()) {
-        auto& drawn = faces_[m.id];
-        if (!drawn || drawn->type() != m.type.get()) drawn = ModuleFace::make(m.type);
-        if (drawn) {
+        if (ModuleFace* drawn = faceOf(m)) {
             drawn->update(m);
             nvgSave(vg);
             nvgTranslate(vg, r.x, r.y);
@@ -788,10 +829,53 @@ void RackSpace::hover(std::optional<model::Id> module) {
     invalidate();
 }
 
+ModuleFace* RackSpace::faceOf(const RackScene::Module& m) const {
+    if (!m.type) return nullptr;
+    auto& face = faces_[m.id];
+    if (!face || face->type() != m.type.get()) face = ModuleFace::make(m.type);
+    return face.get();
+}
+
+std::string RackSpace::nextDisplayGesture(model::Id module) {
+    return "rack.display:" + module.str() + ":" + std::to_string(++displayGesture_);
+}
+
+void RackSpace::sendPointer(model::Id id, script::PointerAction action, ui::Point window,
+                            ui::Point moved, double wheel, bool doubleClick, unsigned mods,
+                            const std::string& gesture) {
+    RackScene::Module* m = nullptr;
+    for (auto& x : scene_.modules)
+        if (x.id == id) m = &x;
+    if (!m) return;
+    ModuleFace* face = faceOf(*m);
+    if (!face || !face->hearsPointer()) return;
+    face->update(*m);  // the knobs as they are now
+    const ui::Point sp = toSpace(window);
+    ModuleFace::Pointer p;
+    p.action = action;
+    p.x = D(sp.x) - m->x;
+    p.y = D(sp.y) - m->y;
+    p.dx = D(moved.x) / view_.zoom;
+    p.dy = D(moved.y) / view_.zoom;
+    p.wheel = wheel;
+    p.doubleClick = doubleClick;
+    p.shift = mods & ui::kShift;
+    p.ctrl = mods & ui::kCtrl;
+    p.alt = mods & ui::kAlt;
+    const std::vector<ModuleFace::Edit> edits = face->pointer(p);
+    for (const auto& e : edits)
+        if (e.param >= 0 && static_cast<std::size_t>(e.param) < m->values.size())
+            m->values[static_cast<std::size_t>(e.param)] = e.value;
+    invalidate();  // the display redraws after every call
+    if (!edits.empty() && hooks_.displayEdit) hooks_.displayEdit(id, edits, gesture);
+}
+
 bool RackSpace::onPointer(const ui::PointerEvent& e) {
     using T = ui::PointerEvent::Type;
     const ui::Point sp = toSpace(e.pos);
     if (e.type == T::Leave) {
+        if (const auto left = std::exchange(displayHot_, std::nullopt))
+            sendPointer(*left, script::PointerAction::Leave, displayLast_, {}, 0, false, 0, {});
         pointer_.reset();
         hover(std::nullopt);
         hotCable_.reset();
@@ -799,6 +883,21 @@ bool RackSpace::onPointer(const ui::PointerEvent& e) {
         return true;
     }
     if (e.type == T::Wheel) {
+        // Over a display that hears the pointer, the wheel is the module's
+        // (one undo step a burst); Ctrl+wheel still zooms.
+        if (!(e.mods & ui::kCtrl) && drag_.kind == Drag::Kind::None)
+            if (const Hit h = hitAt(sp); h.kind == Hit::Kind::Display) {
+                const model::Id id = scene_.modules[h.module].id;
+                const auto now = std::chrono::steady_clock::now();
+                if (wheelModule_ != id || now - wheelAt_ > std::chrono::milliseconds(400)) {
+                    wheelModule_ = id;
+                    wheelGesture_ = nextDisplayGesture(id);
+                }
+                wheelAt_ = now;
+                sendPointer(id, script::PointerAction::Wheel, e.pos, {}, D(e.wheelY), false, e.mods,
+                            wheelGesture_);
+                return true;
+            }
         if (e.mods & ui::kCtrl) {
             zoomAt(e.pos, std::pow(1.15, static_cast<double>(e.wheelY)));
         } else {
@@ -820,6 +919,21 @@ bool RackSpace::onPointer(const ui::PointerEvent& e) {
             const Hit h = hitAt(sp);
             hover(h.kind == Hit::Kind::None ? std::nullopt
                                             : std::optional(scene_.modules[h.module].id));
+            // A display that hears the pointer hears it move over it, and leave.
+            const std::optional<model::Id> over = h.kind == Hit::Kind::Display
+                                                      ? std::optional(scene_.modules[h.module].id)
+                                                      : std::nullopt;
+            if (displayHot_ && displayHot_ != over)
+                sendPointer(*std::exchange(displayHot_, std::nullopt), script::PointerAction::Leave,
+                            displayLast_, {}, 0, false, 0, {});
+            if (over) {
+                const ui::Point moved =
+                    displayHot_ ? ui::Point{e.pos.x - displayLast_.x, e.pos.y - displayLast_.y}
+                                : ui::Point{};
+                displayHot_ = over;
+                displayLast_ = e.pos;
+                sendPointer(*over, script::PointerAction::Move, e.pos, moved, 0, false, e.mods, {});
+            }
             const auto cable = h.kind == Hit::Kind::None ? cableNear(sp) : std::nullopt;
             if (cable != hotCable_) hotCable_ = cable;
             invalidate();
@@ -827,6 +941,14 @@ bool RackSpace::onPointer(const ui::PointerEvent& e) {
         }
         const ui::Point d{e.pos.x - drag_.start.x, e.pos.y - drag_.start.y};
         if (!drag_.moved && std::hypot(d.x, d.y) >= 3) drag_.moved = true;
+        if (drag_.kind == Drag::Kind::Display) {  // each move a Drag, wherever it goes
+            const ui::Point moved{e.pos.x - drag_.last.x, e.pos.y - drag_.last.y};
+            drag_.last = e.pos;
+            displayLast_ = e.pos;
+            sendPointer(drag_.display, script::PointerAction::Drag, e.pos, moved, 0, false, e.mods,
+                        drag_.gesture);
+            return true;
+        }
         drag_.last = e.pos;
         switch (drag_.kind) {
             case Drag::Kind::Pan: {
@@ -867,7 +989,7 @@ bool RackSpace::onPointer(const ui::PointerEvent& e) {
                 const float travel = across ? d.x : -d.y;
                 const double pos =
                     std::clamp(drag_.value + D(travel) / (fine ? 1600.0 : 160.0), 0.0, 1.0);
-                const double value = paramFromPosition(p, pos);
+                const double value = rack::knobValue(p, pos);
                 if (static_cast<std::size_t>(item.index) < m.values.size() &&
                     m.values[static_cast<std::size_t>(item.index)] != value) {
                     m.values[static_cast<std::size_t>(item.index)] = value;
@@ -977,9 +1099,20 @@ bool RackSpace::onPointer(const ui::PointerEvent& e) {
                 drag_.kind = Drag::Kind::Control;
                 drag_.module = h.module;
                 drag_.item = h.item;
-                drag_.value = paramPosition(p, v);
+                drag_.value = rack::knobPosition(p, v);
                 ++gesture_;
                 if (hooks_.param) hooks_.param(m.id, item.index, v, ui::Gesture::Begin);
+                break;
+            }
+            case Hit::Kind::Display: {
+                drag_.kind = Drag::Kind::Display;
+                drag_.module = h.module;
+                drag_.display = scene_.modules[h.module].id;
+                drag_.gesture = nextDisplayGesture(drag_.display);
+                displayHot_ = drag_.display;
+                displayLast_ = e.pos;
+                sendPointer(drag_.display, script::PointerAction::Press, e.pos, {}, 0,
+                            e.clicks >= 2, e.mods, drag_.gesture);
                 break;
             }
             case Hit::Kind::Ring: {
@@ -1064,6 +1197,10 @@ void RackSpace::endDrag(bool commit) {
                              ui::Gesture::End);
             break;
         }
+        case Drag::Kind::Display:
+            sendPointer(d.display, script::PointerAction::Release, d.last, {}, 0, false, d.mods,
+                        d.gesture);
+            break;
         case Drag::Kind::Amount:
             if (hooks_.amount && d.cable)
                 for (const auto& k : scene_.cables)

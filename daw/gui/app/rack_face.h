@@ -3,8 +3,10 @@
 // A module's display (rack.md §3.5): its draw() hook, run on the window's
 // own copy of the module struct, which takes the module's knob values and
 // the Shared bytes its telemetry carries, and draws through NanoVG in the
-// module's coordinates, under its controls. A hook that spends its budget is
-// stopped and says so; the rest of the window draws on.
+// module's coordinates, under its controls; and its pointer() hook, which
+// hears the mouse on its displays and changes knobs as a user would. A hook
+// that spends its budget is stopped and says so; the rest of the window
+// draws on.
 #pragma once
 
 #include <memory>
@@ -20,7 +22,7 @@ namespace supple::gui {
 
 class ModuleFace {
   public:
-    // Null when the type has no draw() (or is a host module).
+    // Null when the type has neither draw() nor pointer() (or is a host module).
     static std::unique_ptr<ModuleFace> make(std::shared_ptr<const rack::ModuleType> type);
     ~ModuleFace();
     ModuleFace(const ModuleFace&) = delete;
@@ -33,6 +35,22 @@ class ModuleFace {
     void draw(NVGcontext* vg, const ui::Theme& theme, const gui::Fonts& fonts, double width,
               double height);
     bool stopped() const { return stopped_; }
+
+    // pointer(): whether the type has one, and running it with the pointer
+    // in the module's coordinates. Returns the knobs it edited (on a Press,
+    // Drag, Release or Wheel; each knob's last), as parameter index and
+    // physical value; the copy has them at once.
+    struct Pointer {
+        script::PointerAction action = script::PointerAction::Move;
+        double x = 0, y = 0, dx = 0, dy = 0, wheel = 0;
+        bool doubleClick = false, shift = false, ctrl = false, alt = false;
+    };
+    struct Edit {
+        int param = 0;
+        double value = 0;
+    };
+    bool hearsPointer() const;
+    std::vector<Edit> pointer(const Pointer& p);
 
   private:
     class Services;

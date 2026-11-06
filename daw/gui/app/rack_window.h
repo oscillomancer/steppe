@@ -66,6 +66,10 @@ class RackWindow {
     RackSpace* space() const { return space_; }
     RackBrowser* browser() const { return browser_; }
     std::string status() const;
+    // The browser's tag chips as shown, where one is, and the types it lists.
+    std::vector<std::string> tagChips() const;
+    std::optional<ui::Point> tagChipAt(const std::string& label) const;
+    std::vector<std::string> browserShows() const;
     Status addModule(const std::string& type, std::optional<ui::Point> at = std::nullopt);
 
   private:
@@ -85,6 +89,22 @@ class RackWindow {
     void spaceMenu(ui::Point at, ui::Point space);
     void paramMenu(model::Id module, int index, ui::Point at);
     void tabMenu(model::Id rack, ui::Point at);
+    // MIDI learn for a knob: the learn dialog listens, then module.learn.set.
+    void learn(model::Id module, int index);
+    // Rack presets (rack.preset.*): listed in the browser after the types.
+    void readPresets();
+    void presetsSaved();
+
+  public:
+    // A right-click on a browser row (a type, or "preset:<name>").
+    void browserMenu(const std::string& type, ui::Point at);
+    // Loads a saved preset into the rack shown (at a space point, else
+    // beside its modules), selected and in view.
+    Status loadPreset(const std::string& name, std::optional<ui::Point> at = std::nullopt);
+    // Asks a name and saves the rack, or `modules` of it, as a preset.
+    void savePreset(std::optional<std::vector<model::Id>> modules);
+
+  private:
     void rename(model::Id module);
 
   public:
@@ -120,6 +140,9 @@ class RackWindow {
     ui::Button* zoom_ = nullptr;
     ui::Button* browserToggle_ = nullptr;
     std::string error_;
+    json::Value presets_ = json::Value::object();  // rack.preset.list's
+    bool presetsRead_ = false;
+    std::optional<ui::Point> addAt_;  // the space's "Add module…": where the next one goes
 };
 
 }  // namespace supple::gui

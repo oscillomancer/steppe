@@ -324,13 +324,26 @@ changes the amount. Drag a cable off an input to move it, or drop it on
 nothing to remove it. A cable that loops back is dashed: it carries the
 signal one sample late.
 
+Some modules' displays answer the mouse as well: drag or scroll on them to
+change what they show (each drag or scroll is one undo step), and move the
+module by its title instead.
+
 Drag a knob up or down to turn it (Shift for fine), double-click to reset
 it, and right-click it for **Automate**, which adds an automation lane for
-it under the rack's channel. Right-click a module to rename, bypass,
+it under the rack's channel, or **MIDI learn…**: move a control on your
+MIDI controller and click OK, and that control turns the knob (a small
+dot marks it). Right-click a module to rename, bypass,
 duplicate, randomize or delete it, to load one of its presets, or to **Show
 source**. Modules from your library (in the data folder's `modules`) can be
 edited and saved there and then; a stock module offers **Make editable
 copy**.
+
+To keep a patch, right-click the space and choose **Save rack as
+preset…**, or select some modules and choose **Save as rack preset…** from
+a module's menu. Saved presets are listed in the **Modules** column under
+*Presets*: double-click one, or drag it into the space, to add its modules
+to the rack you are looking at. Right-click the space and choose **Add
+module…** to pick a module from the column and put it where you clicked.
 
 A rack sends audio both ways. Its Out modules are channel inputs, and an
 **In** module takes sends: route any track to it as you would to a buss,

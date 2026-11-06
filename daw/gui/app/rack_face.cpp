@@ -294,7 +294,7 @@ class NvgPainter final : public sd::Painter {
 // knobs' names and values as the window says them.
 class ModuleFace::Services final : public sd::EditorServices {
   public:
-    explicit Services(const rack::ModuleType& t) : type_(t), text_(kTextRoom) {}
+    Services(const rack::ModuleType& t, void* self) : type_(t), self_(self), text_(kTextRoom) {}
     void reset() { used_ = 0; }
     char* text(int bytes) override {
         if (bytes <= 0 || used_ + bytes > kTextRoom) return nullptr;
@@ -320,25 +320,55 @@ class ModuleFace::Services final : public sd::EditorServices {
     double paramNormalized(int slot, double value) override {
         if (slot < 0 || static_cast<std::size_t>(slot) >= type_.params().size()) return 0;
         const auto& p = type_.params()[static_cast<std::size_t>(slot)];
-        return paramPosition(p, p.unit == sd::ParamModel::Unit::Percent ? value * 100 : value);
+        return rack::knobPosition(p, p.unit == sd::ParamModel::Unit::Percent ? value * 100 : value);
     }
-    void editParam(int, Edit, double) override {}  // pointer() on displays: not yet
-    void playNote(int, double, bool) override {}
+    // pointer()'s edits, as the plugin editor takes them: each knob's last,
+    // in physical units, and set in the copy at once.
+    void editParam(int slot, Edit kind, double value) override {
+        if (!editing_ || slot < 0 || static_cast<std::size_t>(slot) >= type_.params().size())
+            return;
+        if (kind != Edit::Default && !std::isfinite(value)) return;
+        const auto& p = type_.params()[static_cast<std::size_t>(slot)];
+        const bool percent = p.unit == sd::ParamModel::Unit::Percent;
+        double physical = kind == Edit::Value      ? (percent ? value * 100 : value)
+                          : kind == Edit::Position ? rack::knobValue(p, std::clamp(value, 0.0, 1.0))
+                                                   : p.def;
+        physical = std::clamp(physical, p.min, p.max);
+        if (p.kind != sd::ParamModel::Kind::Continuous) physical = std::round(physical);
+        const auto& code = *type_.code();
+        sd::ParamBinding::setValue(
+            *reinterpret_cast<S::Param*>(static_cast<unsigned char*>(self_) +
+                                         code.params()[static_cast<std::size_t>(slot)].offset),
+            percent ? physical / 100 : physical, false);
+        for (ModuleFace::Edit& e : edits_)
+            if (e.param == slot) {
+                e.value = physical;
+                return;
+            }
+        edits_.push_back({slot, physical});
+    }
+    void playNote(int, double, bool) override {}  // a module has no keyboard
+    void allowEdits(bool on) { editing_ = on; }
+    std::vector<ModuleFace::Edit> takeEdits() { return std::exchange(edits_, {}); }
 
   private:
     const rack::ModuleType& type_;
+    void* self_;
     std::vector<char> text_;
     int used_ = 0;
+    bool editing_ = false;
+    std::vector<ModuleFace::Edit> edits_;
 };
 
 std::unique_ptr<ModuleFace> ModuleFace::make(std::shared_ptr<const rack::ModuleType> type) {
-    if (!type || !type->code() || !type->code()->draw()) return nullptr;
+    if (!type || !type->code() || (!type->code()->draw() && !type->code()->pointer()))
+        return nullptr;
     std::unique_ptr<ModuleFace> f(new ModuleFace());
     const sd::ModuleCode& code = *type->code();
     f->type_ = std::move(type);
     f->self_ = code.create();
     f->record_ = std::make_unique<sd::Instance>();
-    f->services_ = std::make_unique<Services>(*f->type_);
+    f->services_ = std::make_unique<Services>(*f->type_, f->self_);
     f->record_->editor = f->services_.get();
     auto* base = static_cast<unsigned char*>(f->self_);
     for (std::size_t i = 0; i < code.params().size(); ++i)
@@ -378,7 +408,7 @@ void ModuleFace::update(const RackScene::Module& m) {
 
 void ModuleFace::draw(NVGcontext* vg, const ui::Theme& theme, const gui::Fonts& fonts, double width,
                       double height) {
-    if (stopped_) return;
+    if (stopped_ || !type_->code()->draw()) return;
     NvgPainter painter(vg, theme, fonts, width, height);
     S::Canvas canvas;
     sd::Layout::bind(canvas, &painter);
@@ -392,6 +422,28 @@ void ModuleFace::draw(NVGcontext* vg, const ui::Theme& theme, const gui::Fonts& 
         stopped_ = record_->status.budgetExceeded.load(std::memory_order_relaxed) != before;
     }
     nvgRestore(vg);
+}
+
+bool ModuleFace::hearsPointer() const { return type_->code()->pointer() != nullptr; }
+
+std::vector<ModuleFace::Edit> ModuleFace::pointer(const Pointer& p) {
+    const auto hook = type_->code()->pointer();
+    if (!hook || stopped_) return {};
+    S::Pointer event;
+    sd::Layout::set(event, p.action, p.x, p.y, p.dx, p.dy, p.wheel, p.doubleClick, p.shift, p.ctrl,
+                    p.alt);
+    services_->reset();
+    services_->allowEdits(p.action != S::PointerAction::Move &&
+                          p.action != S::PointerAction::Leave);
+    {
+        sd::CurrentScope scope(record_.get());
+        record_->budget = kBudget;
+        const std::uint32_t before = record_->status.budgetExceeded.load(std::memory_order_relaxed);
+        hook(record_.get(), self_, &event);
+        stopped_ = record_->status.budgetExceeded.load(std::memory_order_relaxed) != before;
+    }
+    services_->allowEdits(false);
+    return services_->takeEdits();
 }
 
 }  // namespace supple::gui

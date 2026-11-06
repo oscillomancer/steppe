@@ -1181,8 +1181,10 @@ a new channel). It follows rack.md §8.
   transaction). Delete removes the selection; Ctrl+A selects every module.
   A right-click offers Open editor (plugins), Rename…, Bypass, Duplicate,
   Randomize, Presets… (the type's factory patches, `module.set preset`),
-  Show source and Delete; on the space, Add <module> and Add plugin… at
-  that point, and Show everything.
+  Show source, Save as rack preset… (the selection) and Delete. On the
+  space: Add module… (the browser opens with its search focused, and the
+  next module added lands at that point), Add plugin… there, Load rack
+  preset… (there), Save rack as preset…, and Show everything.
 - **Jacks** are circles ringed in their signal kind's colour (§7); outputs
   sit on a plate, as on hardware. A jack glows by its level from the
   module's telemetry (an input by its cables' sources'); a poly output shows
@@ -1200,7 +1202,8 @@ a new channel). It follows rack.md §8.
   hovered themselves) fade. A cable that closes a loop (`rack.get`'s
   `feedback`: it reads the previous frame) is dashed over a dim cord.
 - **Knobs** drag vertically, 160 points end to end at any zoom (Shift:
-  ten times finer), double-click resets, and show their value while hovered
+  ten times finer), along the travel MIDI learn turns them on
+  (`rack::knobPosition`/`knobValue`: a frequency's logarithmic), double-click resets, and show their value while hovered
   or dragged; a drag is one undo step (`module.set params` coalesced by
   gesture). Choices and short integer ranges show their steps as dots;
   a choice drawn as a box steps on a click. Modulated knobs carry a ring
@@ -1210,15 +1213,34 @@ a new channel). It follows rack.md §8.
   choice's options, and Automate: an envelope on the knob holding its value
   (`env.add {module, param, points}`), shown as a lane under the rack's home
   channel ("Rack › Module · knob", on the knob's own scale); once there, the
-  item shows or hides that lane. MIDI learn for module knobs *(planned)*.
+  item shows or hides that lane. MIDI learn… opens the learn dialog (§6)
+  for the knob: it listens, and OK binds what it heard (`module.learn.set`;
+  a toggle's CC defaults to toggle mode, others offer soft takeover). A
+  bound knob carries a small accent dot in its gap (a control, at its
+  corner), and its menu names the controller ("MIDI: CC 21 · ch 1…") and
+  offers Remove MIDI learn (`module.learn.remove`). A plugin module's
+  knobs are its plug-in's (the FX window's learn).
 - **Browser.** A column on the left (the header's Modules button shows or
   hides it): a search field (words match name, id, description and tags),
-  the catalog's tags as chips that filter, and the types by origin (host,
+  the catalog's tags as chips that filter (one row: the chosen tag, then
+  the most used, and "+N", which shows every tag alphabetically with Less;
+  picking a tag folds them again), and the types by origin (host,
   stock, library, project) with their one-line description, Plugin… first.
   A double click or Enter adds the type in the middle of the view; dragging
   a row into the space adds it where it is dropped. Plugin… (and Add
   plugin…) opens the plug-in browser; the plug-in chosen becomes a plugin
   module (`module.add {plugin}`), with note jacks when it is an instrument.
+  A right-click on a row offers Add to rack and Show source.
+- **Rack presets** (`rack.preset.*`) are listed in the browser under
+  "presets", after the host's modules: each with its description, or its
+  module count and types. A double click or a drag loads one into the rack
+  shown (`rack.preset.load`; a drag at the drop point, else beside the
+  rack's modules), its modules selected and brought into view; a
+  right-click offers Load into rack and Delete preset. Saving asks a name
+  in a field over the space (the rack's label, or the one module's) and
+  calls `rack.preset.save` with the selection's ids or none; a name in use
+  asks Replace "<name>" before saving with `replace`. The list is read when
+  the window opens and after each save or delete.
 - **Source.** Show source opens the type's code (`module.get {type}`) in a
   code view over the window, titled with its name, origin and id. A library
   module's is editable: Save or Ctrl+Enter writes and compiles it
@@ -1233,8 +1255,16 @@ a new channel). It follows rack.md §8.
   in its own coordinates, through the window's copy of the module: its knob
   values and the `Shared` state the telemetry carries. Its palette is the
   app's theme. A hook that spends its budget stops and says "draw() ran too
-  long"; the rest of the window draws on. Pointer input on displays
-  *(planned)*.
+  long"; the rest of the window draws on. A module with `pointer()` hears
+  the mouse on its displays (`panel()`'s `display` rectangles) where no
+  control is, in its own coordinates, as a plugin editor's does: a press,
+  each move while held (a drag, wherever it goes) and the release; a hover
+  and its leaving; the wheel. Its knob edits (`Param::edit`) are
+  `module.set`, one undo step a press or a burst of the wheel; on a hover
+  they do nothing. There a press does not move the module, and the wheel is
+  the module's; Ctrl+wheel still zooms, the right button still opens the
+  module's menu and the middle one still pans. A module without `pointer()`
+  is dragged by its displays as by the rest of its body.
 - **Elsewhere.** A channel's input menu lists every rack's Out modules
   ("<rack> › <Out>", with the home channel's colour) after the device's
   inputs, and New rack on this channel; picking one is `track.set

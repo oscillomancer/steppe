@@ -9,7 +9,9 @@
 #include <cmath>
 #include <set>
 
+#include "learn_dialog.h"
 #include "plugin_browser.h"
+#include "supple/engine/midi_control.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/text_area.h"
 #include "supple/ui/text_field.h"
@@ -19,6 +21,10 @@ namespace supple::gui {
 namespace {
 
 const cmd::Origin kOrigin{cmd::Origin::Type::Ui, "gui", {}};
+void openNameField(ui::Root& root, std::string id, std::string text, ui::Rect where,
+                   std::function<void(const std::string&)> submit);
+// A browser entry for a saved rack preset: "preset:<name>".
+constexpr std::string_view kPresetPrefix = "preset:";
 constexpr float kBrowserW = 220, kHeaderH = 34, kStatusH = 22;
 constexpr auto kTelemetryInterval = std::chrono::milliseconds(33);
 
@@ -151,9 +157,12 @@ class RackBrowser : public ui::Node {
         std::string id, name, description;
         std::vector<std::string> tags;
         rack::Origin origin = rack::Origin::Stock;
+        bool preset = false;  // a saved rack preset ("preset:<name>"), listed last
     };
     struct Hooks {
         std::function<void(const std::string& type)> add;
+        // A right-click on a row.
+        std::function<void(const std::string& type, ui::Point at)> menu;
         // A row dragged out over the window (none: back over the list or done).
         std::function<void(const std::string& name, std::optional<ui::Point> at)> dragOver;
         std::function<void(const std::string& type, ui::Point at)> drop;
@@ -173,9 +182,16 @@ class RackBrowser : public ui::Node {
     }
     void setEntries(std::vector<Entry> entries) {
         entries_ = std::move(entries);
-        std::set<std::string> tags;
-        for (const auto& e : entries_) tags.insert(e.tags.begin(), e.tags.end());
-        allTags_.assign(tags.begin(), tags.end());
+        std::map<std::string, int> tags;
+        for (const auto& e : entries_)
+            for (const auto& t : e.tags) ++tags[t];
+        allTags_.clear();
+        for (const auto& [t, n] : tags) allTags_.push_back(t);
+        // The folded row's order: the most used first.
+        commonTags_ = allTags_;
+        std::stable_sort(
+            commonTags_.begin(), commonTags_.end(),
+            [&](const std::string& a, const std::string& b) { return tags[a] > tags[b]; });
         if (tag_ && !tags.contains(*tag_)) tag_.reset();
         filter();
         tags_->relayout();
@@ -193,8 +209,23 @@ class RackBrowser : public ui::Node {
     void setTag(std::optional<std::string> tag) {
         tag_ = std::move(tag);
         filter();
-        tags_->invalidate();
+        tags_->relayout();
     }
+    std::optional<std::string> tag() const { return tag_; }
+    void focusSearch() {
+        if (root()) root()->focus(search_);
+        search_->selectAll();
+    }
+    // The tags: one row (the chosen tag, then the most used) and "+N" for
+    // the rest, or all of them, alphabetically, with "Less".
+    void setTagsOpen(bool open) {
+        tagsOpen_ = open;
+        tags_->relayout();
+    }
+    bool tagsOpen() const { return tagsOpen_; }
+    // Tests: the chips shown, in order ("+N" and "Less" included), and where.
+    std::vector<std::string> tagChips() const { return tags_->chips(); }
+    std::optional<ui::Point> tagChipAt(const std::string& label) const { return tags_->at(label); }
 
   private:
     struct Row {
@@ -214,7 +245,7 @@ class RackBrowser : public ui::Node {
                     w += ch;
                 }
         }
-        std::optional<rack::Origin> origin;
+        std::optional<std::pair<bool, rack::Origin>> group;
         for (std::size_t i = 0; i < entries_.size(); ++i) {
             const Entry& e = entries_[i];
             if (tag_ && std::find(e.tags.begin(), e.tags.end(), *tag_) == e.tags.end()) continue;
@@ -224,10 +255,10 @@ class RackBrowser : public ui::Node {
                     return hay.find(w) != std::string::npos;
                 }))
                 continue;
-            if (origin != e.origin) {
-                origin = e.origin;
-                const auto name = rack::originName(e.origin);
-                rows_.push_back({std::nullopt, std::string(name)});
+            if (group != std::pair(e.preset, e.origin)) {
+                group = std::pair(e.preset, e.origin);
+                rows_.push_back({std::nullopt, e.preset ? std::string("presets")
+                                                        : std::string(rack::originName(e.origin))});
             }
             rows_.push_back({i, {}});
         }
@@ -250,41 +281,105 @@ class RackBrowser : public ui::Node {
         bool onPointer(const ui::PointerEvent& e) override {
             if (e.type != ui::PointerEvent::Type::Down || e.button != 1)
                 return e.type != ui::PointerEvent::Type::Move;
-            for (const auto& [r, tag] : boxes_)
+            for (const auto& [r, chip] : boxes_)
                 if (r.contains(e.pos)) {
-                    b_.setTag(b_.tag_ == tag ? std::nullopt : std::optional(tag));
+                    if (chip.kind == Chip::Kind::More)
+                        b_.setTagsOpen(true);
+                    else if (chip.kind == Chip::Kind::Less)
+                        b_.setTagsOpen(false);
+                    else {  // a tag picked from the whole set folds it again
+                        b_.tagsOpen_ = false;
+                        b_.setTag(b_.tag_ == chip.label ? std::nullopt : std::optional(chip.label));
+                    }
                     return true;
                 }
             return true;
         }
+        std::vector<std::string> chips() const {
+            std::vector<std::string> out;
+            for (const auto& [r, chip] : boxes_) out.push_back(chip.label);
+            return out;
+        }
+        std::optional<ui::Point> at(const std::string& label) const {
+            for (const auto& [r, chip] : boxes_)
+                if (chip.label == label) return ui::Point{r.x + r.w / 2, r.y + r.h / 2};
+            return std::nullopt;
+        }
+        std::string valueText() const override {
+            std::string out;
+            for (const auto& c : chips()) out += (out.empty() ? "" : ", ") + c;
+            return out;
+        }
 
       private:
-        // Lays out (and with `c` paints) the chips; returns their height.
+        struct Chip {
+            enum class Kind { Tag, More, Less } kind = Kind::Tag;
+            std::string label;
+        };
+        static constexpr float kH = 18, kGap = 4, kFont = 10.5f;
+        static float widthOf(const ui::Canvas& c, const std::string& label) {
+            return c.textWidth(label, ui::Font::Ui, kFont) + 14;
+        }
+        // The chips shown: folded, one row's worth; open, every tag.
+        std::vector<Chip> chipsFor(const ui::Canvas& c, float width) const {
+            std::vector<Chip> out;
+            const auto& all = b_.allTags_;
+            if (all.empty()) return out;
+            if (b_.tagsOpen_) {
+                for (const auto& t : all) out.push_back({Chip::Kind::Tag, t});
+                out.push_back({Chip::Kind::Less, "Less"});
+                return out;
+            }
+            std::vector<std::string> order;
+            if (b_.tag_) order.push_back(*b_.tag_);
+            for (const auto& t : b_.commonTags_)
+                if (t != b_.tag_) order.push_back(t);
+            const float more = widthOf(c, "+" + std::to_string(all.size())) + kGap;
+            float x = 0;
+            std::size_t shown = 0;
+            for (const auto& t : order) {
+                const float w = widthOf(c, t);
+                const bool last = shown + 1 == order.size();
+                if (x + w > width - (last ? 0 : more)) break;
+                out.push_back({Chip::Kind::Tag, t});
+                x += w + kGap;
+                ++shown;
+            }
+            if (shown < order.size())
+                out.push_back({Chip::Kind::More, "+" + std::to_string(order.size() - shown)});
+            return out;
+        }
+        // Lays out (and with `paint` paints) the chips; returns their height.
         float flow(const ui::Canvas& c, float width, ui::Canvas* paint) {
+            const std::vector<Chip> chips = chipsFor(c, width);
             float x = 0, y = 0;
-            constexpr float h = 18, gap = 4;
-            for (const auto& tag : b_.allTags_) {
-                const float w = c.textWidth(tag, ui::Font::Ui, 10.5f) + 14;
+            for (const Chip& chip : chips) {
+                const float w = widthOf(c, chip.label);
                 if (x > 0 && x + w > width) {
                     x = 0;
-                    y += h + gap;
+                    y += kH + kGap;
                 }
                 if (paint) {
                     const ui::Theme& t = paint->theme();
-                    const ui::Rect r{bounds().x + x, bounds().y + y, w, h};
-                    const bool on = b_.tag_ == tag;
-                    paint->fillRound(r, h / 2, on ? t.color("accent") : t.color("raised"));
-                    paint->text(r, tag, ui::Font::Ui, 10.5f,
-                                on ? t.color("ground") : t.color("ink-quiet"),
+                    const ui::Rect r{bounds().x + x, bounds().y + y, w, kH};
+                    const bool on = chip.kind == Chip::Kind::Tag && b_.tag_ == chip.label;
+                    if (chip.kind == Chip::Kind::Tag)
+                        paint->fillRound(r, kH / 2, on ? t.color("accent") : t.color("raised"));
+                    else  // "+N" and "Less": outlined, not filled
+                        paint->strokeRound(r, kH / 2, t.color("rule"), 1);
+                    paint->text(r, chip.label, ui::Font::Ui, kFont,
+                                on                             ? t.color("ground")
+                                : chip.kind == Chip::Kind::Tag ? t.color("ink-quiet")
+                                                               : t.color("ink"),
                                 ui::kCenter | ui::kMiddle);
-                    boxes_.emplace_back(r, tag);
+                    boxes_.emplace_back(r, chip);
                 }
-                x += w + gap;
+                x += w + kGap;
             }
-            return b_.allTags_.empty() ? 0 : y + h;
+            return chips.empty() ? 0 : y + kH;
         }
         RackBrowser& b_;
-        std::vector<std::pair<ui::Rect, std::string>> boxes_;
+        std::vector<std::pair<ui::Rect, Chip>> boxes_;
     };
 
     class List : public ui::Node {
@@ -392,6 +487,14 @@ class RackBrowser : public ui::Node {
                 }
                 return true;
             }
+            if (e.type == T::Down && e.button == 3) {
+                const auto row = rowAt(e.pos);
+                if (!row || !b_.rows_[*row].entry) return true;
+                selected_ = row;
+                invalidate();
+                if (b_.hooks_.menu) b_.hooks_.menu(b_.entries_[*b_.rows_[*row].entry].id, e.pos);
+                return true;
+            }
             if (e.type == T::Down && e.button == 1) {
                 const auto row = rowAt(e.pos);
                 if (!row || !b_.rows_[*row].entry) return true;
@@ -439,7 +542,9 @@ class RackBrowser : public ui::Node {
     Hooks hooks_;
     std::vector<Entry> entries_;
     std::vector<Row> rows_;
-    std::vector<std::string> allTags_;
+    std::vector<std::string> allTags_;     // alphabetical
+    std::vector<std::string> commonTags_;  // the most used first
+    bool tagsOpen_ = false;
     std::optional<std::string> tag_;
     ui::TextField* search_ = nullptr;
     Tags* tags_ = nullptr;
@@ -533,6 +638,18 @@ void RackWindow::report(const Error& e) {
     if (!isOpen() && actions_.onError) actions_.onError("rack: " + error_);
 }
 
+std::vector<std::string> RackWindow::tagChips() const {
+    return browser_ ? browser_->tagChips() : std::vector<std::string>{};
+}
+
+std::optional<ui::Point> RackWindow::tagChipAt(const std::string& label) const {
+    return browser_ ? browser_->tagChipAt(label) : std::nullopt;
+}
+
+std::vector<std::string> RackWindow::browserShows() const {
+    return browser_ ? browser_->shown() : std::vector<std::string>{};
+}
+
 std::string RackWindow::status() const {
     if (!error_.empty()) return error_;
     if (!rack_ || !space_) return "No racks";
@@ -558,6 +675,7 @@ void RackWindow::open(std::optional<model::Id> rack) {
         return;
     }
     panel_.setTitle("Racks");
+    presetsRead_ = false;  // saved elsewhere meanwhile (an agent's rack.preset.save)
     auto content = std::make_unique<ui::Node>("rack");
     content->layout.dir = ui::Layout::Dir::Column;
     auto& header = content->emplace<Header>();
@@ -587,6 +705,7 @@ void RackWindow::open(std::optional<model::Id> rack) {
     body.layout.dir = ui::Layout::Dir::Row;
     RackBrowser::Hooks bh;
     bh.add = [this](const std::string& type) { (void)addModule(type); };
+    bh.menu = [this](const std::string& type, ui::Point at) { browserMenu(type, at); };
     bh.dragOver = [this](const std::string& name, std::optional<ui::Point> at) {
         if (space_)
             space_->dragTypeOver(name, at && space_->bounds().contains(*at) ? at : std::nullopt);
@@ -604,6 +723,21 @@ void RackWindow::open(std::optional<model::Id> rack) {
         if (!m || !m->fx) return;
         if (!openEditor) return;
         if (auto r = openEditor(*m->fx); !r) report(r.error());
+    };
+    sh.displayEdit = [this](model::Id module, const std::vector<ModuleFace::Edit>& edits,
+                            const std::string& gesture) {
+        const auto* m = space_ ? space_->scene().module(module) : nullptr;
+        if (!m || !m->type) return;
+        json::Value params = json::Value::object();
+        for (const auto& e : edits)
+            if (e.param >= 0 && static_cast<std::size_t>(e.param) < m->type->params().size()) {
+                const auto& p = m->type->params()[static_cast<std::size_t>(e.param)];
+                params[p.key] = racks::paramJson(p, e.value);
+            }
+        json::Value args = json::Value::object();
+        args["module"] = module.str();
+        args["params"] = std::move(params);
+        (void)exec("module.set", std::move(args), gesture);
     };
     sh.moduleMenu = [this](model::Id module, ui::Point at) { moduleMenu(module, at); };
     sh.spaceMenu = [this](ui::Point at, ui::Point sp) { spaceMenu(at, sp); };
@@ -684,6 +818,38 @@ Status RackWindow::reload() {
             if (info.id == plugin.id) continue;
             entries.push_back({info.id, info.name, info.description, info.tags, e->type->origin()});
         }
+        // Saved rack presets, after the host's modules: the user's own whole
+        // patches, loaded as a module type is added.
+        if (!presetsRead_) readPresets();
+        std::vector<RackBrowser::Entry> saved;
+        if (const json::Value* list = presets_.find("presets"); list && list->isArray())
+            for (const auto& p : list->asArray()) {
+                RackBrowser::Entry e;
+                e.name = str(p, "name");
+                e.id = std::string(kPresetPrefix) + e.name;
+                e.description = str(p, "description");
+                if (e.description.empty()) {  // "3 modules: Notes, VCA, Out"
+                    const json::Value* n = p.find("modules");
+                    const long count = n && n->isNumber() ? static_cast<long>(n->asInt()) : 0;
+                    e.description = std::to_string(count) + (count == 1 ? " module" : " modules");
+                    if (const json::Value* types = p.find("types"); types && types->isArray()) {
+                        std::string names;
+                        for (const auto& t : types->asArray()) {
+                            const rack::Catalog::Entry* ce = catalog_->find(t.asString());
+                            names += (names.empty() ? ": " : ", ") +
+                                     (ce ? ce->type->info().name : t.asString());
+                        }
+                        e.description += names;
+                    }
+                }
+                e.preset = true;
+                saved.push_back(std::move(e));
+            }
+        const auto firstOther = std::find_if(entries.begin(), entries.end(), [](const auto& e) {
+            return e.origin != rack::Origin::Host;
+        });
+        entries.insert(firstOther, std::make_move_iterator(saved.begin()),
+                       std::make_move_iterator(saved.end()));
         browser_->setEntries(std::move(entries));
     }
     if (!space_) return {};
@@ -879,6 +1045,9 @@ Status RackWindow::addModule(const std::string& type, std::optional<ui::Point> a
     if (!rack_) {
         if (auto r = addRack(); !r) return r;
     }
+    // Where the space's "Add module…" was asked for, once.
+    if (!at) at = std::exchange(addAt_, std::nullopt);
+    if (type.starts_with(kPresetPrefix)) return loadPreset(type.substr(kPresetPrefix.size()), at);
     if (type == model::kPluginModule && isOpen()) {  // which plug-in: the browser says
         if (!plugins_)
             plugins_ = std::make_unique<PluginBrowser>(app_, dispatcher_, root(), favouritesFile);
@@ -1087,6 +1256,9 @@ void RackWindow::moduleMenu(model::Id module, ui::Point at) {
                          !several});
     if (type && type->type->code())
         items.push_back({"Show source", "", [this, id = m->type] { showSource(id); }, !several});
+    items.push_back({"Save as rack preset\u2026", "", [this, selected] {
+                         savePreset(std::vector<model::Id>(selected.begin(), selected.end()));
+                     }});
     items.push_back({"", "", {}, true, true});
     items.push_back({several ? "Delete modules" : "Delete", "Del", [this] { deleteSelected(); }});
     root().openPopup(
@@ -1100,13 +1272,31 @@ void RackWindow::spaceMenu(ui::Point at, ui::Point sp) {
     if (!rack_) {
         items.push_back({"Add rack", "", [this] { (void)addRack(); }});
     } else {
-        for (const rack::Catalog::Entry* e : catalog_->list()) {
-            const auto& info = e->type->info();
-            items.push_back(
-                {"Add " + info.name, "", [this, id = info.id, sp] { (void)addModule(id, sp); }});
-        }
+        // The browser picks the module (its search focused); it lands here.
+        items.push_back({"Add module\u2026", "", [this, sp] {
+                             addAt_ = sp;
+                             if (!browserVisible_ && browserToggle_ && browserToggle_->onClick)
+                                 browserToggle_->onClick();
+                             if (browser_) browser_->focusSearch();
+                         }});
         items.push_back({"Add plugin\u2026", "",
                          [this, sp] { (void)addModule(std::string(model::kPluginModule), sp); }});
+        std::vector<std::string> names;
+        if (const json::Value* list = presets_.find("presets"); list && list->isArray())
+            for (const auto& p : list->asArray()) names.push_back(str(p, "name"));
+        items.push_back({"Load rack preset\u2026", "",
+                         [this, names, sp, at] {
+                             std::vector<ui::MenuItem> list;
+                             for (const auto& name : names)
+                                 list.push_back(
+                                     {name, "", [this, name, sp] { (void)loadPreset(name, sp); }});
+                             root().openPopup(ui::makeMenu("rack.load.menu", std::move(list),
+                                                           [this] { root().closePopup(); }),
+                                              {at.x, at.y, 1, 1});
+                         },
+                         !names.empty()});
+        const bool hasModules = space_ && !space_->scene().modules.empty();
+        items.push_back({"Save rack as preset\u2026", "", [this] { savePreset({}); }, hasModules});
         items.push_back({"", "", {}, true, true});
         items.push_back({"Show everything", "Home", [this] {
                              if (space_) space_->frameAll();
@@ -1162,6 +1352,24 @@ void RackWindow::paramMenu(model::Id module, int index, ui::Point at) {
                              }});
         }
     }
+    // MIDI learn: the dialog listens; module.learn.set binds (one per knob).
+    const model::RackModule* rm = app_.head().modules.find(module);
+    const model::ParamLearn* bound = nullptr;
+    if (rm)
+        for (const auto& l : rm->learn)
+            if (l.param == p.key) bound = &l;
+    if (rm && !m->plugin) {
+        items.push_back(
+            {bound ? "MIDI: " + engine::describe(bound->control) + "\u2026" : "MIDI learn\u2026",
+             "", [this, module, index] { learn(module, index); }});
+        if (bound)
+            items.push_back({"Remove MIDI learn", "", [this, module, key = p.key] {
+                                 json::Value args = json::Value::object();
+                                 args["module"] = module.str();
+                                 args["param"] = key;
+                                 (void)exec("module.learn.remove", std::move(args));
+                             }});
+    }
     if (p.kind == script::detail::ParamModel::Kind::Choice) {
         items.push_back({"", "", {}, true, true});
         const double v = static_cast<std::size_t>(index) < m->values.size()
@@ -1177,6 +1385,140 @@ void RackWindow::paramMenu(model::Id module, int index, ui::Point at) {
     root().openPopup(
         ui::makeMenu("rack.param.menu", std::move(items), [this] { root().closePopup(); }),
         {at.x, at.y, 1, 1});
+}
+
+void RackWindow::readPresets() {
+    presetsRead_ = true;
+    auto r = dispatcher_.execute({"rack.preset.list", json::Value::object(), kOrigin});
+    presets_ = r ? std::move(*r) : json::Value::object();
+}
+
+Status RackWindow::loadPreset(const std::string& name, std::optional<ui::Point> at) {
+    if (!rack_) return {};
+    json::Value args = json::Value::object();
+    args["rack"] = rack_->str();
+    args["name"] = name;
+    if (at) {
+        args["x"] = std::round(static_cast<double>(at->x));
+        args["y"] = std::round(static_cast<double>(at->y));
+    }
+    auto r = exec("rack.preset.load", std::move(args));
+    if (!r) return r.error();
+    sync();
+    // The preset's modules, selected and in view.
+    std::set<model::Id> made;
+    if (const json::Value* list = r->find("modules"); list && list->isArray())
+        for (const auto& id : list->asArray())
+            if (auto parsed = model::Id::parse(id.asString())) made.insert(*parsed);
+    if (space_ && !made.empty()) {
+        space_->select(made);
+        space_->reveal(made);
+    }
+    return {};
+}
+
+// The rack (none: all of it) or its chosen modules, saved under a name asked
+// for; a name in use is replaced only when the user says so.
+void RackWindow::savePreset(std::optional<std::vector<model::Id>> modules) {
+    if (!rack_ || !space_) return;
+    std::string suggestion = model::rackLabel(app_.head(), *rack_);
+    if (modules && modules->size() == 1)
+        if (const auto* m = space_->scene().module(modules->front())) suggestion = m->title;
+    const ui::Rect b = space_->bounds();
+    const ui::Rect where{b.x + b.w / 2 - 120, b.y + 12, 240, 0};
+    auto save = [this, modules](const std::string& name, bool replace) -> Result<json::Value> {
+        json::Value args = json::Value::object();
+        args["rack"] = rack_->str();
+        args["name"] = name;
+        if (modules) {
+            json::Value ids = json::Value::array();
+            for (const auto& id : *modules) ids.push_back(id.str());
+            args["modules"] = std::move(ids);
+        }
+        if (replace) args["replace"] = true;
+        return dispatcher_.execute({"rack.preset.save", std::move(args), kOrigin});
+    };
+    openNameField(
+        root(), "rack.preset.name", suggestion, where,
+        [this, save, where](const std::string& name) {
+            auto r = save(name, false);
+            if (!r && r.error().code == "rack.preset_exists") {
+                std::vector<ui::MenuItem> confirm;
+                confirm.push_back({"Replace \u201c" + name + "\u201d", "", [this, save, name] {
+                                       if (auto again = save(name, true); !again)
+                                           report(again.error());
+                                       presetsSaved();
+                                   }});
+                confirm.push_back({"Cancel", "Esc", [] {}});
+                root().openPopup(ui::makeMenu("rack.preset.replace", std::move(confirm),
+                                              [this] { root().closePopup(); }),
+                                 where);
+                return;
+            }
+            if (!r) report(r.error());
+            presetsSaved();
+        });
+}
+
+void RackWindow::presetsSaved() {
+    readPresets();
+    version_ = ~std::uint64_t{0};
+    sync();
+}
+
+void RackWindow::browserMenu(const std::string& type, ui::Point at) {
+    std::vector<ui::MenuItem> items;
+    if (type.starts_with(kPresetPrefix)) {
+        const std::string name = type.substr(kPresetPrefix.size());
+        items.push_back({"Load into rack", "Double-click",
+                         [this, name] { (void)loadPreset(name, std::nullopt); },
+                         rack_.has_value()});
+        items.push_back({"Delete preset", "", [this, name] {
+                             json::Value args = json::Value::object();
+                             args["name"] = name;
+                             (void)exec("rack.preset.delete", std::move(args));
+                             presetsSaved();
+                         }});
+    } else {
+        items.push_back({"Add to rack", "Double-click", [this, type] { (void)addModule(type); }});
+        const rack::Catalog::Entry* e = catalog_ ? catalog_->find(type) : nullptr;
+        if (e && e->type->code())
+            items.push_back({"Show source", "", [this, type] { showSource(type); }});
+    }
+    root().openPopup(
+        ui::makeMenu("rack.browser.menu", std::move(items), [this] { root().closePopup(); }),
+        {at.x, at.y, 1, 1});
+}
+
+void RackWindow::learn(model::Id module, int index) {
+    const auto* m = space_ ? space_->scene().module(module) : nullptr;
+    if (!m || !m->type || index < 0 || static_cast<std::size_t>(index) >= m->type->params().size())
+        return;
+    const auto& p = m->type->params()[static_cast<std::size_t>(index)];
+    const model::Session s = app_.head();
+    const model::RackModule* rm = s.modules.find(module);
+    if (!rm) return;
+    LearnRequest request;
+    request.title = model::rackLabel(s, rm->rack) + " \u203a " + m->title + " \u00b7 " + p.name;
+    const bool toggle = p.kind == script::detail::ParamModel::Kind::Toggle;
+    request.takeover = !toggle;
+    request.mode = toggle ? model::ControlMode::Toggle : model::ControlMode::Absolute;
+    for (const auto& l : rm->learn)
+        if (l.param == p.key)
+            request.current = LearnChoice(static_cast<const model::ControlBinding&>(l));
+    request.onOk = [this, module, key = p.key](const LearnChoice& choice) {
+        json::Value args = learnArgs(choice);
+        args["module"] = module.str();
+        args["param"] = key;
+        (void)exec("module.learn.set", std::move(args));
+    };
+    request.onRemove = [this, module, key = p.key] {
+        json::Value args = json::Value::object();
+        args["module"] = module.str();
+        args["param"] = key;
+        (void)exec("module.learn.remove", std::move(args));
+    };
+    openLearnDialog(root(), actions_, app_, std::move(request));
 }
 
 void RackWindow::tabMenu(model::Id rack, ui::Point at) {

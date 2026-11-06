@@ -11,6 +11,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -25,10 +26,7 @@ using Signal = script::detail::PortModel::Signal;
 
 // The theme token of a signal kind's colour ("signal-audio", …).
 const char* signalToken(Signal s);
-// Where a parameter's value sits on its knob, 0..1 (its curve applied), and
-// back.
-double paramPosition(const script::detail::ParamModel& p, double physical);
-double paramFromPosition(const script::detail::ParamModel& p, double position);
+// A knob's travel is rack::knobPosition / knobValue, shared with MIDI learn.
 // Where a knob's value arc starts: its zero when the range crosses it, else
 // its minimum (a position).
 double paramOrigin(const script::detail::ParamModel& p);
@@ -43,8 +41,9 @@ struct RackScene {
         std::string title;     // the label, the type's name, a plug-in's name
         std::string subtitle;  // a plug-in's vendor; an Out module's channel
         double x = 0, y = 0, w = 0, h = 0;
-        rack::PanelLayout face;      // the type's layout (a plugin module's own)
-        std::vector<double> values;  // each parameter's knob, physical
+        rack::PanelLayout face;         // the type's layout (a plugin module's own)
+        std::vector<double> values;     // each parameter's knob, physical
+        std::set<std::string> learned;  // the knobs a MIDI controller turns (keys)
         bool bypass = false, plugin = false, out = false;
         bool instrument = false;      // a plugin module's plug-in plays notes
         std::optional<model::Id> fx;  // a plugin module's
