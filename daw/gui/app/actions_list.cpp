@@ -165,11 +165,9 @@ class ActionsPanel : public ui::Node {
             if (const actions::Action* f = actions_.registry().find(follow))
                 request.alternative = f->name;
         if (const auto bound = actions_.controls().bindingsFor(id); !bound.empty())
-            request.current =
-                LearnChoice{bound.front().control, bound.front().mode, bound.front().softTakeover};
-        request.onOk = [this, id, takeover = a->takeover](const LearnChoice& choice) {
-            const std::string had = actions_.controls().bind(
-                {id, choice.control, choice.mode, takeover && choice.softTakeover});
+            request.current = LearnChoice(bound.front());
+        request.onOk = [this, id](const LearnChoice& choice) {
+            const std::string had = actions_.controls().bind({choice, id});
             std::string note = engine::describe(choice.control) + " → " + id;
             if (!had.empty()) note += " (was " + had + ")";
             if (auto saved = actions_.saveControls(); !saved)

@@ -16,11 +16,10 @@
 
 namespace supple::gui {
 
-struct ActionControl {
+// Soft takeover applies to an action that sets a value from a knob's
+// position (Action::takeover).
+struct ActionControl : model::ControlBinding {
     std::string action;
-    model::MidiControl control;
-    model::ControlMode mode = model::ControlMode::Absolute;
-    bool softTakeover = false;  // absolute: a knob takes over once it reaches the value
     bool operator==(const ActionControl&) const = default;
 };
 

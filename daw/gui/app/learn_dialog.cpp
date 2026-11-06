@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "supple/engine/midi_control.h"
+#include "supple/model/schemas.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/scroll_view.h"
 #include "supple/ui/widgets.h"
@@ -209,6 +210,19 @@ class LearnPanel : public ui::Node {
 };
 
 }  // namespace
+
+json::Value learnArgs(const LearnChoice& choice, bool conditions) {
+    json::Value args = json::Value::object();
+    args["midi"] = model::midiControlSchema().encode(choice.control);
+    args["mode"] = model::controlModeSchema().encode(choice.mode);
+    args["soft_takeover"] = choice.softTakeover;
+    if (conditions) {
+        args["when_selected"] = choice.whenSelected;
+        args["when_focused"] = choice.whenFocused;
+        args["when_visible"] = choice.whenVisible;
+    }
+    return args;
+}
 
 void openLearnDialog(ui::Root& root, AppActions& actions, engine::EngineApp& app,
                      LearnRequest request) {

@@ -799,10 +799,14 @@ TEST_CASE("a knob bound to the last touched parameter follows the panel's last e
         f.run("fx.add", f.args({{"track", track.str()}, {"plugin", f.pluginId("Hickory")}}));
     REQUIRE(made);
     const model::Id fx = *model::Id::parse((*made)["fx"].asString());
-    f.actions->controls().bind(
-        {"control.fx.last", {model::ControlKind::Cc, 1, 16, ""}, model::ControlMode::Relative2});
-    f.actions->controls().bind(
-        {"control.fx.last", {model::ControlKind::Cc, 1, 17, ""}, model::ControlMode::Absolute});
+    for (const auto& [number, mode] : {std::pair{16, model::ControlMode::Relative2},
+                                       std::pair{17, model::ControlMode::Absolute}}) {
+        gui::ActionControl binding;
+        binding.action = "control.fx.last";
+        binding.control = {model::ControlKind::Cc, 1, number, ""};
+        binding.mode = mode;
+        f.actions->controls().bind(binding);
+    }
     auto cc = [&](std::uint8_t number, std::uint8_t value) {
         engine::EngineApp::ControlEvent e;
         e.midi.bytes[0] = 0xb0;

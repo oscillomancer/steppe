@@ -1238,6 +1238,18 @@ engine::EngineApp::ControlEvent controlEvent(std::uint8_t status, std::uint8_t a
     e.device = std::move(device);
     return e;
 }
+
+// An action bound to a CC on channel 1, from any input.
+gui::ActionControl actionControl(std::string action, int cc,
+                                 model::ControlMode mode = model::ControlMode::Absolute,
+                                 bool softTakeover = false) {
+    gui::ActionControl a;
+    a.action = std::move(action);
+    a.control = {model::ControlKind::Cc, 1, cc, ""};
+    a.mode = mode;
+    a.softTakeover = softTakeover;
+    return a;
+}
 }  // namespace
 
 TEST_CASE("MIDI learn: the actions list binds a controller to an action, saved; a press runs it") {
@@ -1322,10 +1334,9 @@ TEST_CASE("MIDI learn: knobs drive the selected tracks' volume and pan, a step p
                                        *json::parse(std::string(R"({"name":")") + name + R"("})"),
                                        cmd::Origin{cmd::Origin::Type::Test, "t", {}}}));
     a.ui.selectedTracks = {"tr_1", "tr_2"};
+    a.actions->controls().bind(actionControl("control.track.volume", 7));
     a.actions->controls().bind(
-        {"control.track.volume", {model::ControlKind::Cc, 1, 7, ""}, model::ControlMode::Absolute});
-    a.actions->controls().bind(
-        {"control.track.pan", {model::ControlKind::Cc, 1, 10, ""}, model::ControlMode::Relative2});
+        actionControl("control.track.pan", 10, model::ControlMode::Relative2));
     auto track = [&](const char* id) { return *a.app->head().tracks.find(*model::Id::parse(id)); };
     const std::size_t before = a.app->versions().history(1000).size();
     a.actions->control({controlEvent(0xb0, 7, 127)});
@@ -1409,6 +1420,15 @@ TEST_CASE("MIDI learn: the actions list offers soft takeover for a knob's action
     const auto bad = gui::ControlMap::load(controlsFile);
     REQUIRE_FALSE(bad);
     CHECK(bad.error().path == "/bindings/0/soft_takeover");
+    // A binding needs its action; members the app does not know are left alone.
+    REQUIRE(writeFileAtomic(controlsFile,
+                            R"({"schema":"supple.controls/1.0","bindings":[)"
+                            R"({"action":"x","midi":{"kind":"cc","channel":1,"number":7},"n":1},)"
+                            R"({"midi":{"kind":"cc","channel":1,"number":8}}]})"));
+    const auto unnamed = gui::ControlMap::load(controlsFile);
+    REQUIRE_FALSE(unnamed);
+    CHECK(unnamed.error().path == "/bindings/1/action");
+    CHECK(unnamed.error().code == "schema.required");
 }
 
 TEST_CASE(
@@ -1421,12 +1441,11 @@ TEST_CASE(
                                        *json::parse(std::string(R"({"name":")") + name + R"("})"),
                                        cmd::Origin{cmd::Origin::Type::Test, "t", {}}}));
     a.ui.selectedTracks = {"tr_1", "tr_2"};
-    gui::ActionControl volume{"control.track.volume", {model::ControlKind::Cc, 1, 7, ""}};
-    volume.softTakeover = true;
+    gui::ActionControl volume =
+        actionControl("control.track.volume", 7, model::ControlMode::Absolute, true);
     a.actions->controls().bind(volume);
-    gui::ActionControl pan{"control.track.pan", {model::ControlKind::Cc, 1, 10, ""}};
-    pan.softTakeover = true;
-    a.actions->controls().bind(pan);
+    a.actions->controls().bind(
+        actionControl("control.track.pan", 10, model::ControlMode::Absolute, true));
     auto track = [&](const char* id) { return *a.app->head().tracks.find(*model::Id::parse(id)); };
     REQUIRE(a.dispatcher->execute({"track.set", *json::parse(R"({"track":"tr_2","volume_db":-12})"),
                                    cmd::Origin{cmd::Origin::Type::Test, "t", {}}}));
@@ -1469,12 +1488,9 @@ TEST_CASE("MIDI learn: a knob drives the master playrate along the transport kno
     App a;
     if (!a.ok) return;
     a.app->setFixedClock(1'000'000);
-    a.actions->controls().bind({"control.transport.playrate",
-                                {model::ControlKind::Cc, 1, 20, ""},
-                                model::ControlMode::Absolute});
-    a.actions->controls().bind({"control.transport.playrate",
-                                {model::ControlKind::Cc, 1, 21, ""},
-                                model::ControlMode::Relative2});
+    a.actions->controls().bind(actionControl("control.transport.playrate", 20));
+    a.actions->controls().bind(
+        actionControl("control.transport.playrate", 21, model::ControlMode::Relative2));
     auto rate = [&] { return a.app->head().project->playrate.rate; };
     const std::size_t before = a.app->versions().history(1000).size();
     a.actions->control({controlEvent(0xb0, 20, 127)});
@@ -1492,9 +1508,8 @@ TEST_CASE("MIDI learn: a knob drives the master playrate along the transport kno
     a.actions->control({controlEvent(0xb0, 21, 63)});
     CHECK(rate() == doctest::Approx(1.5 * std::exp2(-10 / 1200.0)));
     // With soft takeover the knob waits until it reaches the rate, then follows.
-    gui::ActionControl soft{"control.transport.playrate", {model::ControlKind::Cc, 1, 20, ""}};
-    soft.softTakeover = true;
-    a.actions->controls().bind(soft);
+    a.actions->controls().bind(
+        actionControl("control.transport.playrate", 20, model::ControlMode::Absolute, true));
     const double held = rate();
     a.actions->control({controlEvent(0xb0, 20, 0)});
     a.actions->control({controlEvent(0xb0, 20, 10)});

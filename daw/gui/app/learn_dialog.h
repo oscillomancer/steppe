@@ -18,11 +18,16 @@
 
 namespace supple::gui {
 
-struct LearnChoice {
-    model::MidiControl control;
-    model::ControlMode mode = model::ControlMode::Absolute;
-    bool softTakeover = false, whenSelected = false, whenFocused = false, whenVisible = false;
+// The binding chosen, and for a plug-in parameter its conditions.
+struct LearnChoice : model::ControlBinding {
+    bool whenSelected = false, whenFocused = false, whenVisible = false;
+    LearnChoice() = default;
+    explicit LearnChoice(const model::ControlBinding& binding) : ControlBinding(binding) {}
 };
+
+// A *.learn.set command's midi, mode and soft_takeover for the choice, and
+// with `conditions` its when_selected, when_focused and when_visible.
+json::Value learnArgs(const LearnChoice& choice, bool conditions = false);
 
 struct LearnRequest {
     std::string title;                   // what is bound: an action's or a parameter's name

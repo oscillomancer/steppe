@@ -16,6 +16,18 @@ namespace {
 
 constexpr std::string_view kSchema = "supple.controls/1.0";
 
+// One binding: {action, midi, mode, soft_takeover}, the last two omitted at
+// their defaults. Members it does not know are left alone.
+const schema::Schema<ActionControl>& bindingSchema() {
+    static const schema::Schema<ActionControl> s = [] {
+        auto b = schema::object<ActionControl>("action_control");
+        b.unknownMembers(schema::UnknownMembers::Ignore);
+        b.field("action", &ActionControl::action, schema::string().minLength(1));
+        return model::controlBindingFields(b).build();
+    }();
+    return s;
+}
+
 // The same control, wherever it is heard from (the device is part of it).
 bool sameControl(const model::MidiControl& a, const model::MidiControl& b) {
     return a.kind == b.kind && a.channel == b.channel && a.number == b.number &&
@@ -48,29 +60,15 @@ Result<ControlMap> ControlMap::load(const std::filesystem::path& file) {
         return Error("controls.bindings", "bindings must be an array", "/bindings",
                      "use [{action, midi, mode, soft_takeover}, …]");
     for (std::size_t i = 0; i < list->asArray().size(); ++i) {
-        const json::Value& b = list->asArray()[i];
-        const std::string path = "/bindings/" + std::to_string(i);
-        const json::Value* action = b.isObject() ? b.find("action") : nullptr;
-        const json::Value* midi = b.isObject() ? b.find("midi") : nullptr;
-        if (!action || !action->isString() || action->asString().empty() || !midi)
-            return Error("controls.binding", "a binding needs an action and a midi control", path,
-                         "e.g. {\"action\": \"transport.toggle\", \"midi\": {\"kind\": \"cc\", "
-                         "\"channel\": 1, \"number\": 41}}");
-        auto control = model::midiControlSchema().decode(*midi);
-        if (!control) return std::move(control).error().at(path + "/midi");
-        ActionControl a{action->asString(), *control, model::ControlMode::Absolute};
-        if (const json::Value* mode = b.find("mode")) {
-            auto m = model::controlModeSchema().decode(*mode);
-            if (!m) return std::move(m).error().at(path + "/mode");
-            a.mode = *m;
+        auto binding = bindingSchema().decode(list->asArray()[i]);
+        if (!binding) {  // the member's path, within the file
+            Error e = std::move(binding).error();
+            const std::string at = "/bindings/" + std::to_string(i);
+            e.path = at + e.path;
+            for (Error& detail : e.details) detail.path = at + detail.path;
+            return e;
         }
-        if (const json::Value* soft = b.find("soft_takeover")) {
-            if (!soft->isBool())
-                return Error("controls.soft_takeover", "soft_takeover must be true or false",
-                             path + "/soft_takeover", "use true, false, or leave it out");
-            a.softTakeover = soft->asBool();
-        }
-        out.bind(std::move(a));
+        out.bind(std::move(*binding));
     }
     return out;
 }
@@ -82,15 +80,7 @@ Status ControlMap::save(const std::filesystem::path& file) const {
     std::vector<ActionControl> sorted = bindings_;
     std::stable_sort(sorted.begin(), sorted.end(),
                      [](const auto& a, const auto& b) { return a.action < b.action; });
-    for (const ActionControl& b : sorted) {
-        json::Value v = json::Value::object();
-        v["action"] = b.action;
-        v["midi"] = model::midiControlSchema().encode(b.control);
-        if (b.mode != model::ControlMode::Absolute)
-            v["mode"] = model::controlModeSchema().encode(b.mode);
-        if (b.softTakeover) v["soft_takeover"] = true;
-        list.push_back(std::move(v));
-    }
+    for (const ActionControl& b : sorted) list.push_back(bindingSchema().encode(b));
     doc["bindings"] = std::move(list);
     std::error_code ec;
     std::filesystem::create_directories(file.parent_path(), ec);

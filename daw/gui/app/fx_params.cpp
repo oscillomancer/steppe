@@ -55,24 +55,15 @@ Result<std::size_t> ParamPanel::build(ui::Node& parent, model::Id fx) {
     learnArgs["fx"] = idText(fx);
     if (auto listed = query("fx.learn.list", std::move(learnArgs)); listed)
         for (const json::Value& b : (*listed)["learn"].asArray()) {
-            const json::Value* param = b.find("param");
-            const json::Value* midi = b.find("midi");
-            if (!param || !param->isString() || !midi) continue;
-            auto control = model::midiControlSchema().decode(*midi);
-            if (!control) continue;
-            LearnChoice choice;
-            choice.control = *control;
-            if (const json::Value* mode = b.find("mode"))
-                if (auto m = model::controlModeSchema().decode(*mode)) choice.mode = *m;
-            auto flag = [&](const char* key) {
-                const json::Value* v = b.find(key);
-                return v && v->isBool() && v->asBool();
-            };
-            choice.softTakeover = flag("soft_takeover");
-            choice.whenSelected = flag("when_selected");
-            choice.whenFocused = flag("when_focused");
-            choice.whenVisible = flag("when_visible");
-            learned_[param->asString()] = choice;
+            schema::DecodeOptions options;  // the list adds fx and control
+            options.unknownMembers = schema::UnknownMembers::Ignore;
+            auto learn = model::paramLearnSchema().decode(b, options);
+            if (!learn) continue;
+            LearnChoice choice(*learn);
+            choice.whenSelected = learn->whenSelected;
+            choice.whenFocused = learn->whenFocused;
+            choice.whenVisible = learn->whenVisible;
+            learned_[learn->param] = choice;
         }
 
     if (!paramsJson || !paramsJson->isObject()) {
@@ -303,15 +294,9 @@ void ParamPanel::learn(const std::string& param, const std::string& title) {
     if (auto it = learned_.find(param); it != learned_.end()) request.current = it->second;
     const std::string fx = idText(fx_);
     request.onOk = [this, fx, param](const LearnChoice& choice) {
-        json::Value args = json::Value::object();
+        json::Value args = learnArgs(choice, true);
         args["fx"] = fx;
         args["param"] = param;
-        args["midi"] = model::midiControlSchema().encode(choice.control);
-        args["mode"] = model::controlModeSchema().encode(choice.mode);
-        args["soft_takeover"] = choice.softTakeover;
-        args["when_selected"] = choice.whenSelected;
-        args["when_focused"] = choice.whenFocused;
-        args["when_visible"] = choice.whenVisible;
         auto set = dispatcher_.execute({"fx.learn.set", std::move(args), kUiOrigin});
         if (!set && onError) onError(set.error().message);
     };

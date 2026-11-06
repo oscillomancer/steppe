@@ -100,11 +100,7 @@ void openStripLearn(ui::Root& root, AppActions& actions, StripControl control) {
         continuous(control.param) ? model::ControlMode::Absolute : model::ControlMode::Toggle;
     for (const model::Id& id : control.objects)
         if (const model::ControlLearn* bound = bindingOf(s, id, control.param)) {
-            LearnChoice choice;
-            choice.control = bound->control;
-            choice.mode = bound->mode;
-            choice.softTakeover = bound->softTakeover;
-            request.current = choice;
+            request.current = LearnChoice(*bound);
             break;
         }
     AppActions* a = &actions;
@@ -112,12 +108,9 @@ void openStripLearn(ui::Root& root, AppActions& actions, StripControl control) {
         const auto r =
             a->dispatcher().transact("MIDI learn", kOrigin, [&]() -> Result<json::Value> {
                 for (const model::Id& id : control.objects) {
-                    json::Value args = json::Value::object();
+                    json::Value args = learnArgs(choice);
                     args[keyOf(id)] = id.str();
                     args["param"] = control.param;
-                    args["midi"] = model::midiControlSchema().encode(choice.control);
-                    args["mode"] = std::string(engine::modeName(choice.mode));
-                    if (continuous(control.param)) args["soft_takeover"] = choice.softTakeover;
                     SUPPLE_TRY(a->dispatcher().execute(
                         {prefixOf(id) + ".learn.set", std::move(args), kOrigin}));
                 }
