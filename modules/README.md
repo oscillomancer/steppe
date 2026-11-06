@@ -92,3 +92,9 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `ratchet` | Gates into bursts of quick pulses, by chance or every Nth gate, curved and fading; poly |
 | `markov` | A melody by the odds of which note follows which: four styles, or learned from a melody played in |
 | `cellular` | A 1-D cellular automaton: up to sixteen cells grown by a rule, as poly gates, four taps and a CV |
+| `looper` | Records a CV and a gate over a beat to eight bars in time with the song and loops them; punch in by the loop |
+| `stages` | A function generator of two to six stages (level, time, curve): once, looping, or gated with a hold; poly |
+| `matrix` | Four inputs to four outputs through sixteen attenuverters; an unpatched input is an offset; poly |
+| `polyrhythm` | Four rhythms of 1 to 16 beats against a beat to four bars of the song: ramps, gates, Any and Hits |
+| `life` | An 8x8 Game of Life (five rules) played a column a clock: eight poly gates, a CV, counts and a generation trigger |
+| `lsystem` | L-System: a self-similar melody grown by rewriting A, B and C, each moving the tune by scale degrees |
