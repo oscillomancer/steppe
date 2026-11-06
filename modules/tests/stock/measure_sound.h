@@ -106,4 +106,24 @@ inline double gainAt(const std::vector<double>& y, double hz, double sampleRate,
     return amplitudeAt(slice(y, settle), hz, sampleRate);
 }
 
+// The power of y through a band-pass (RBJ, constant 0 dB peak) at hz with
+// quality q: a constant-Q band's share.
+inline double bandPower(const std::vector<double>& y, double hz, double sampleRate,
+                        double q = 2.0) {
+    const double w = 2 * kPi * hz / sampleRate, alpha = std::sin(w) / (2 * q);
+    const double a0 = 1 + alpha;
+    const double b0 = alpha / a0, b2 = -alpha / a0, a1 = -2 * std::cos(w) / a0,
+                 a2 = (1 - alpha) / a0;
+    double x1 = 0, x2 = 0, y1 = 0, y2 = 0, sum = 0;
+    for (double x : y) {
+        const double v = b0 * x + b2 * x2 - a1 * y1 - a2 * y2;
+        x2 = x1;
+        x1 = x;
+        y2 = y1;
+        y1 = v;
+        sum += v * v;
+    }
+    return y.empty() ? 0.0 : sum / static_cast<double>(y.size());
+}
+
 }  // namespace supple::rack::test
