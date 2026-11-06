@@ -59,3 +59,4 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `rhythm` | Drum patterns from a map of nine grooves morphed by X and Y, densities per voice, chaos, accents |
 | `mixer` | Four channels with level, pan and mute to stereo and mono, through a master; poly summed |
 | `scale` | Four attenuverters with offsets; a row with nothing in it is a constant |
+| `math` | Sum, difference, product, min, max, abs, a crossfade and a comparator of A and B; poly |
