@@ -10705,7 +10705,7 @@ Result:
 
 Add a saved preset's modules and cables to a rack.
 
-name (rack.preset.list) or path (a preset file). x, y: the group's top-left (default right of the rack's modules). io: join (default) gives the preset's Out and In modules' cables to the rack's own Outs and Ins in order, so a whole patch sounds at once (extra ones are added); add makes new ones. Notes modules play the rack's channel. Knobs and cables the module types no longer have are left out with a warning (warnings); a module type or plug-in that is not installed is an error, and nothing changes.
+name (rack.preset.list) or path (a preset file). x, y: the group's top-left (default right of the rack's modules). io: join (default) gives the preset's Out and In modules' cables to the rack's own Outs and Ins in order, so a whole patch sounds at once (extra ones are added); add makes new ones. Notes modules play the rack's channel. Your own modules the preset carries are written into the library when it lacks them (installed lists them). Knobs and cables the module types no longer have are left out with a warning (warnings); a module type or plug-in that is not installed is an error, and the rack does not change.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -10760,7 +10760,7 @@ Result:
 
 Save a rack's modules and cables as a preset.
 
-modules: which (default the whole rack); the cables among them come too. Plugin modules keep their plug-in's settings. A Notes module's source track, MIDI learn, envelopes, sends and the channels an Out feeds stay with the project. Saved by name in the user's rack presets; replace: true overwrites one.
+modules: which (default the whole rack); the cables among them come too. Plugin modules keep their plug-in's settings, and the source of your own (library) modules goes with them. A Notes module's source track, MIDI learn, envelopes, sends and the channels an Out feeds stay with the project. Saved by name in the user's rack presets; replace: true overwrites one.
 
 Kind: `action`. Exposure: `mcp-tool`.
 

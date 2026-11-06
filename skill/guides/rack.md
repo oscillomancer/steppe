@@ -27,7 +27,9 @@ with their ranges and defaults; read it before patching. `module.describe
 5. Render or listen as for any track. Ask the human to listen when it
    matters.
 6. Keep what works: `rack.preset.save {rack, name}`; later
-   `rack.preset.load {rack, name}` puts it in any rack.
+   `rack.preset.load {rack, name}` puts it in any rack. A preset carries
+   the source of your own modules it uses, and loading it on another
+   machine installs them into that library.
 
 ## rack.patch
 

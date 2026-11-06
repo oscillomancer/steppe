@@ -91,8 +91,10 @@ Result<std::string> readModule(EngineApp& e, const std::string& name, const char
     return readTextFile(file, detail::kMaxModuleBytes);
 }
 
+}  // namespace
+
 // A library name for a type id: its last part, in library characters.
-std::string nameFor(const std::string& id) {
+std::string libraryNameFor(const std::string& id) {
     const auto dot = id.rfind('.');
     std::string out;
     for (char ch : id.substr(dot == std::string::npos ? 0 : dot + 1)) {
@@ -103,6 +105,8 @@ std::string nameFor(const std::string& id) {
     return out.substr(0, 64);
 }
 
+namespace {
+
 std::size_t modulesPlaying(const model::Session& s, const std::string& id) {
     std::size_t n = 0;
     for (const auto& m : s.modules) n += m.value->type == id;
@@ -111,8 +115,10 @@ std::size_t modulesPlaying(const model::Session& s, const std::string& id) {
 
 // Saves `source` as the library's `name` and, when it compiles, puts its type
 // in the catalog racks use (a broken version leaves the last good one there).
-Result<json::Value> save(EngineApp& e, const std::string& name, const std::string& source,
-                         const char* path) {
+}  // namespace
+
+Result<json::Value> saveLibraryModule(EngineApp& e, const std::string& name,
+                                      const std::string& source, const char* path) {
     SUPPLE_TRY(detail::validModuleName(name, "/name"));
     if (source.size() > detail::kMaxModuleBytes)
         return Error("module.size",
@@ -161,6 +167,13 @@ Result<json::Value> save(EngineApp& e, const std::string& name, const std::strin
     }
     return out;
 }
+
+namespace {
+
+using SaveFn = Result<json::Value> (*)(EngineApp&, const std::string&, const std::string&,
+                                       const char*);
+constexpr SaveFn save = saveLibraryModule;
+std::string nameFor(const std::string& id) { return libraryNameFor(id); }
 
 constexpr const char* kWriteResult =
     R"({"name": "wobble", "path": "<any>", "ok": true, "diagnostics": [], "type": "<any>",
