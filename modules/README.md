@@ -61,3 +61,4 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `scale` | Four attenuverters with offsets; a row with nothing in it is a constant |
 | `math` | Sum, difference, product, min, max, abs, a crossfade and a comparator of A and B; poly |
 | `logic` | AND, OR, XOR, NOT, a flip-flop and a trigger on every change; poly |
+| `switcher` | A sequential switch both ways (four to one, one to four), stepped or selected, with a crossfade; poly |
