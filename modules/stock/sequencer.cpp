@@ -269,6 +269,7 @@ struct Sequencer : Module {
     bool playing = false;   // whether the current step plays a note
     int gateLeft = 0;       // frames of gate left; -1 until the next step
     bool lowFrame = false;  // one frame low, so a new note retriggers
+    bool gateWasHigh = false;
     int sinceClock = 0;
     int period = 6000;
     bool clocked = false;
@@ -830,7 +831,6 @@ struct Sequencer : Module {
         const int next = stepFor(count, len, mode);
         const bool tied = playing && stepLength[current] >= 0.999;
         const bool plays = stepGate[next] && stepRandom(count, salt + 101) < stepChance[next];
-        const bool wasHigh = gateLeft != 0;
         current = next;
         playing = plays;
         stepPulse = pulseFrames;
@@ -841,7 +841,7 @@ struct Sequencer : Module {
             return;
         }
         sounding = next;
-        lowFrame = wasHigh && !tied;
+        lowFrame = gateWasHigh && !tied;
         gateLeft = stepLength[next] >= 0.999 ? -1 : max(1, roundToInt(stepLength[next] * period));
     }
 
@@ -890,6 +890,7 @@ struct Sequencer : Module {
                 if (gateLeft > 0) --gateLeft;
             }
             gate[0][i] = high ? 1.0 : 0.0;
+            gateWasHigh = high;
             step[0][i] = stepPulse > 0 ? 1.0 : 0.0;
             end[0][i] = endPulse > 0 ? 1.0 : 0.0;
             if (stepPulse > 0) --stepPulse;
