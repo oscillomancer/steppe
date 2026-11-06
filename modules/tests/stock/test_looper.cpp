@@ -77,6 +77,23 @@ TEST_CASE("looper: at Punch Loop a trigger at Rec records the whole next loop") 
     CHECK(l[48] == 0.0);
 }
 
+TEST_CASE("looper: playing from the middle of a loop waits for its top") {
+    ModuleHarness h(supple::rack::test::stock("looper"));
+    ModuleHarness::Transport t = playing();
+    t.beats = 1.0;  // a beat into the bar: the top is three beats on
+    h.transport(t);
+    constexpr int kTop = 72000;
+    h.input("in", 1, [](int, std::int64_t n) { return n < kTop ? 0.9 : 0.3; });
+    h.input("rec", 1, [](int, std::int64_t n) { return n < 48 ? 1.0 : 0.0; });
+    h.run(kTop + 2 * kBar);
+    // No loop starts where playback did; Rec takes the first whole bar.
+    CHECK(rises(h.output("loop")) == std::vector<std::int64_t>{kTop, kTop + kBar});
+    const auto& y = h.output("out");
+    CHECK(y[kTop + 2000] == 0.3);                          // recording: In through
+    CHECK(y[kTop + kBar + 2000] == doctest::Approx(0.3));  // and the whole bar plays back
+    CHECK(y[kTop + kBar + 90000] == doctest::Approx(0.3));
+}
+
 TEST_CASE("looper: Depth and Offset; Clear goes back to In; the song stopped") {
     SUBCASE("depth, offset and clear") {
         ModuleHarness h(supple::rack::test::stock("looper"));
