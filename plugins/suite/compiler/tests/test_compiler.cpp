@@ -718,7 +718,7 @@ TEST_CASE("every whole script in the guides compiles") {
     // A guide's ```cpp blocks that are scripts (they include the runtime):
     // what an agent copies first must be right.
     int scripts = 0;
-    for (const char* guide : {"dsp-language.md", "dsp-workflow.md"}) {
+    for (const char* guide : {"dsp-language.md", "dsp-workflow.md", "modules.md"}) {
         std::ifstream in(std::string(SUPPLE_SKILL_GUIDES) + "/" + guide);
         REQUIRE_MESSAGE(in, guide);
         std::stringstream all;
