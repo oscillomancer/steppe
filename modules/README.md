@@ -111,3 +111,4 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `fit` | A quantizer that follows the harmony: each pitch to the nearest tone of the chord on a poly cable (Changes', Chord's), Degree and Walk along its tones; poly |
 | `phrase` | Melodies in phrases: a call on a metrical rhythm ending open, an answer on the same rhythm that comes home; three forms, renewed by chance |
 | `form` | A song's sections over minutes in four plans: gates for verse, chorus, bridge and the ends, an energy arc, fills before each change |
+| `counter` | A counter-melody against a lead, note against note: consonances of the key, contrary motion, no parallel fifths or octaves, held notes tied |
