@@ -82,3 +82,19 @@ TEST_CASE("polyrhythm: stopped, it runs at the tempo; Reset starts the span over
     h.run(60000);
     CHECK(near(rises(h.output("gate_1"), 60000), {0, 12000, 24000, 30000, 42000, 54000}));
 }
+
+TEST_CASE("polyrhythm: playing from the middle of a bar is not a start") {
+    ModuleHarness h(supple::rack::test::stock("polyrhythm"));
+    for (int k = 1; k <= 4; ++k) h.set("count_" + std::to_string(k), 1);
+    ModuleHarness::Transport t;
+    t.playing = true;
+    t.tempo = 120;
+    t.beats = 1.0;  // the second beat: the next start is the next bar's, three beats on
+    h.transport(t);
+    h.run(kBar);
+    CHECK(near(rises(h.output("any"), kBar), {72000}));
+    CHECK(h.output("hits")[100] == 0.0);
+    CHECK(h.output("hits")[72100] == 1.0);
+    CHECK(h.output("gate_1")[100] == 0.0);  // the lanes keep the song's phase
+    CHECK(h.output("ramp_1")[0] == doctest::Approx(0.25));
+}
