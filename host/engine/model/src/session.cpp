@@ -388,15 +388,18 @@ struct Checker {
                          "exactly one of track, fx, hw_channels, midi_device, module");
                 if (x.module) {
                     const RackModule* m = s.modules.find(*x.module);
-                    const std::string_view want = from ? kOutModule : kInModule;
+                    const std::string_view want =
+                        from ? (r.midi ? kNotesOutModule : kOutModule) : kInModule;
                     if (!m)
                         fail(at("routes", e.id, field),
                              "module " + x.module->str() + " does not exist");
                     else if (m->type != want)
                         fail(
                             at("routes", e.id, field),
-                            x.module->str() + (from ? " is not an Out module (routes come from Out "
-                                                      "modules)"
+                            x.module->str() + (from ? (r.midi ? " is not a Note Out module (MIDI "
+                                                                "routes come from Note Out modules)"
+                                                              : " is not an Out module (routes "
+                                                                "come from Out modules)")
                                                     : " is not an In module (routes go to In "
                                                       "modules)"));
                 }
@@ -412,7 +415,13 @@ struct Checker {
             };
             endOk(r.from, "from", true);
             endOk(r.to, "to", false);
-            if (r.from.module && r.to.track) {
+            const auto* sourceModule = r.from.module ? s.modules.find(*r.from.module) : nullptr;
+            const bool notesOut = sourceModule && sourceModule->type == kNotesOutModule;
+            if (notesOut) {
+                const Track* t = r.to.track ? s.tracks.find(*r.to.track) : nullptr;
+                if (!r.midi || !t || t->type != StripType::Channel)
+                    fail(at("routes", e.id, "to"), "a Note Out sends MIDI to a channel");
+            } else if (r.from.module && r.to.track) {
                 const Track* t = s.tracks.find(*r.to.track);
                 if (t && t->type != StripType::Channel)
                     fail(at("routes", e.id, "to"), "an Out module feeds channels only");

@@ -3041,13 +3041,19 @@ struct Gain : Effect {
     run("track.add", R"({"name": "Bass"})");
     if (fixture == "song") return;
     if (fixture == "song_with_rack" || fixture == "song_with_rack_preset" ||
-        fixture == "song_with_rack_learn" || fixture == "song_with_rack_clip") {
+        fixture == "song_with_rack_learn" || fixture == "song_with_rack_clip" ||
+        fixture == "song_with_note_out") {
         // + rk_1 on tr_1: mo_1 Out (tr_1's input), mo_2 Notes, mo_3 VCA; cb_1 mo_3.out -> mo_1.l
         run("rack.add", R"({"track": "tr_1"})");
         run("module.add", R"({"rack": "rk_1", "type": "notes", "x": 40, "y": 40})");
         run("module.add", R"({"rack": "rk_1", "type": "vca", "x": 300, "y": 40})");
         run("cable.add", R"({"from": "mo_3.out", "to": "mo_1.l"})");
         if (fixture == "song_with_rack") return;
+        if (fixture == "song_with_note_out") {
+            run("module.add", R"({"rack":"rk_1","type":"notes_out"})");
+            run("track.add", R"({"name":"Note destination"})");
+            return;
+        }
         if (fixture == "song_with_rack_clip") {
             run("module.copy", R"({"modules": ["mo_3", "mo_1"]})");
             return;

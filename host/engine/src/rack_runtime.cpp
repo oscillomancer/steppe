@@ -182,12 +182,10 @@ void CaptureModule::process(const rack::HostContext& ctx) SUPPLE_RT {
     const int pitches = std::max(pitch.channels(), 1),
               velocities = std::max(velocity.channels(), 1);
     for (int i = 0; i < ctx.frames; ++i)
-        for (int c = 0; c < voices; ++c) {
-            const double g = gate[c][i];
-            const bool rise = !on_[static_cast<std::size_t>(c)] && g >= 0.5;
-            const bool fall = on_[static_cast<std::size_t>(c)] && g < 0.25;
-            if (!rise && !fall) continue;
-            on_[static_cast<std::size_t>(c)] = rise;
+        for (int c = 0; c < kCaptureVoices; ++c) {
+            auto& state = gates_[static_cast<std::size_t>(c)];
+            if (!state.step(c < voices ? gate[c][i] : 0.0)) continue;
+            const bool rise = state.high;
             if (events.size() == events.capacity()) {
                 full = true;
                 continue;
@@ -196,9 +194,9 @@ void CaptureModule::process(const rack::HostContext& ctx) SUPPLE_RT {
             e.frame = frames + i;
             e.voice = c;
             e.on = rise;
-            e.pitch = static_cast<float>(pitch[std::min(c, pitches - 1)][i]);
-            e.velocity =
-                useVelocity ? static_cast<float>(velocity[std::min(c, velocities - 1)][i]) : -1.0f;
+            e.pitch = pitch[std::min(c, pitches - 1)][i];
+            e.velocity = velocity[std::min(c, velocities - 1)][i];
+            e.hasVelocity = useVelocity;
             events.push_back(e);
         }
     frames += ctx.frames;
@@ -207,8 +205,9 @@ void CaptureModule::process(const rack::HostContext& ctx) SUPPLE_RT {
 std::shared_ptr<const rack::Catalog> builtinModuleCatalog() {
     static const std::shared_ptr<const rack::Catalog> catalog = [] {
         auto c = std::make_shared<rack::Catalog>();
-        for (auto type : {rack::host::outType(), rack::host::inType(), rack::host::notesType(),
-                          rack::host::transportType(), pluginModuleType()})
+        for (auto type :
+             {rack::host::outType(), rack::host::inType(), rack::host::notesType(),
+              rack::host::transportType(), rack::host::notesOutType(), pluginModuleType()})
             c->add(std::move(type));
         for (const rack::StockModule* m : rack::stockModules())
             c->add(
@@ -411,6 +410,12 @@ Status compileRack(Plan& p, Node& n, const Session& s, Id rackId, InstancePool& 
             feed.notes = notes;
             feed.device = m.device;
             r->notes.push_back(std::move(feed));
+        } else if (auto* notesOut = dynamic_cast<rack::host::NotesOut*>(in->host())) {
+            NotesOutBinding output;
+            output.module = notesOut;
+            output.id = e.id;
+            output.events.resize(static_cast<std::size_t>(rack::kChannels) * (p.block + 1));
+            r->notesOut.push_back(std::move(output));
         } else if (auto* plugin = dynamic_cast<PluginModule*>(in->host())) {
             // Its plug-in: a stage of the rack node, from the instance pool.
             PluginBinding binding;
@@ -605,6 +610,7 @@ void prepareRack(Plan& p, Node& n, const Session& s) {
 
 void locateRack(Node& n, std::int64_t pos, bool restart) SUPPLE_RT {
     RackNode& r = *n.rack;
+    if (restart) ++r.midiEpoch;
     for (NotesFeed& feed : r.notes) {
         auto it =
             std::lower_bound(feed.events.begin(), feed.events.end(), pos,
@@ -612,6 +618,8 @@ void locateRack(Node& n, std::int64_t pos, bool restart) SUPPLE_RT {
         feed.next = static_cast<std::size_t>(it - feed.events.begin());
         if (restart) feed.notes->endAll();
     }
+    for (auto& output : r.notesOut)
+        if (restart) output.module->endAll();
     for (auto& curve : r.curves) curve->curve.cursor = 0;
 }
 
@@ -658,6 +666,10 @@ bool processRack(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames,
         plugin->self = self;
         plugin->pos = pos;
         plugin->failed = false;
+    }
+    for (auto& output : r.notesOut) {
+        output.before = output.module->held();
+        output.module->bind(output.events, output.count);
     }
     // Sends into the In modules, each through its compensation delay.
     for (std::size_t k = 0; k < n.rackIns.size(); ++k) n.rackIns[k].clear(frames);

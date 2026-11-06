@@ -11123,20 +11123,91 @@
   },
   {
     "name": "route_add",
-    "title": "Send one track to another track, bus, the master, or a plug-in's key.",
-    "description": "Send one track to another track, bus, the master, or a plug-in's key. The destination must not feed the source. Master accepts routes. With fx instead of to, the send feeds that plug-in's sidechain (key) input — e.g. a kick keying a compressor on the bass; it is delay-compensated, and soloing the keyed track does not stop the key. Hardware routing is not supported yet. See describe for errors and examples.",
+    "title": "Send audio between strips, or a Note Out to a track's instrument.",
+    "description": "Send audio between strips, or a Note Out to a track's instrument. The destination must not feed the source. Master accepts routes. With fx instead of to, the send feeds that plug-in's sidechain (key) input — e.g. a kick keying a compressor on the bass; it is delay-compensated, and soloing the keyed track does not stop the key. A Note Out uses from: {module: mo_N}, to: {track: tr_N}, midi: {} (all channels unchanged); from_channel filters and to_channel remaps, 0..16 with 0 meaning all/original. Hardware routing is not supported yet. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "route_add_args",
       "properties": {
         "from": {
-          "type": "string",
-          "pattern": "^tr_[0-9]+$"
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^(tr|mo)_[0-9]+$"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "module": {
+                  "type": "string",
+                  "pattern": "^mo_[0-9]+$"
+                }
+              },
+              "required": ["module"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "track": {
+                  "type": "string",
+                  "pattern": "^tr_[0-9]+$"
+                }
+              },
+              "required": ["track"],
+              "additionalProperties": false
+            }
+          ]
         },
         "to": {
-          "type": "string",
-          "pattern": "^(tr|mo)_[0-9]+$",
-          "description": "A track, or a rack's In module (mo_*): the send then plays into the rack, linear (no Console 9 stage)"
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^(tr|mo)_[0-9]+$"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "module": {
+                  "type": "string",
+                  "pattern": "^mo_[0-9]+$"
+                }
+              },
+              "required": ["module"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "track": {
+                  "type": "string",
+                  "pattern": "^tr_[0-9]+$"
+                }
+              },
+              "required": ["track"],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "midi": {
+          "type": "object",
+          "title": "midi_routing",
+          "properties": {
+            "from_channel": {
+              "type": "integer",
+              "minimum": 0.0,
+              "maximum": 16.0,
+              "default": 0
+            },
+            "to_channel": {
+              "type": "integer",
+              "minimum": 0.0,
+              "maximum": 16.0,
+              "default": 0
+            }
+          },
+          "additionalProperties": false,
+          "description": "Note Out MIDI routing; {} means every channel unchanged. Channel values 0..16: from 0 = all, to 0 = original."
         },
         "fx": {
           "type": "string",
@@ -11472,6 +11543,25 @@
                 },
                 "required": ["from", "to"],
                 "additionalProperties": false
+              },
+              "midi": {
+                "type": "object",
+                "title": "midi_routing",
+                "properties": {
+                  "from_channel": {
+                    "type": "integer",
+                    "minimum": 0.0,
+                    "maximum": 16.0,
+                    "default": 0
+                  },
+                  "to_channel": {
+                    "type": "integer",
+                    "minimum": 0.0,
+                    "maximum": 16.0,
+                    "default": 0
+                  }
+                },
+                "additionalProperties": false
               }
             },
             "required": [
@@ -11557,13 +11647,84 @@
           "pattern": "^sd_[0-9]+$"
         },
         "from": {
-          "type": "string",
-          "pattern": "^tr_[0-9]+$"
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^(tr|mo)_[0-9]+$"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "module": {
+                  "type": "string",
+                  "pattern": "^mo_[0-9]+$"
+                }
+              },
+              "required": ["module"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "track": {
+                  "type": "string",
+                  "pattern": "^tr_[0-9]+$"
+                }
+              },
+              "required": ["track"],
+              "additionalProperties": false
+            }
+          ]
         },
         "to": {
-          "type": "string",
-          "pattern": "^(tr|mo)_[0-9]+$",
-          "description": "A track, or a rack's In module (mo_*): the send then plays into the rack, linear (no Console 9 stage)"
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^(tr|mo)_[0-9]+$"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "module": {
+                  "type": "string",
+                  "pattern": "^mo_[0-9]+$"
+                }
+              },
+              "required": ["module"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "track": {
+                  "type": "string",
+                  "pattern": "^tr_[0-9]+$"
+                }
+              },
+              "required": ["track"],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "midi": {
+          "type": "object",
+          "title": "midi_routing",
+          "properties": {
+            "from_channel": {
+              "type": "integer",
+              "minimum": 0.0,
+              "maximum": 16.0,
+              "default": 0
+            },
+            "to_channel": {
+              "type": "integer",
+              "minimum": 0.0,
+              "maximum": 16.0,
+              "default": 0
+            }
+          },
+          "additionalProperties": false,
+          "description": "Note Out MIDI routing; {} means every channel unchanged. Channel values 0..16: from 0 = all, to 0 = original."
         },
         "fx": {
           "type": "string",

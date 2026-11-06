@@ -12366,9 +12366,9 @@ Result:
 
 ## `route.add@1`
 
-Send one track to another track, bus, the master, or a plug-in's key.
+Send audio between strips, or a Note Out to a track's instrument.
 
-The destination must not feed the source. Master accepts routes. With fx instead of to, the send feeds that plug-in's sidechain (key) input — e.g. a kick keying a compressor on the bass; it is delay-compensated, and soloing the keyed track does not stop the key. Hardware routing is not supported yet.
+The destination must not feed the source. Master accepts routes. With fx instead of to, the send feeds that plug-in's sidechain (key) input — e.g. a kick keying a compressor on the bass; it is delay-compensated, and soloing the keyed track does not stop the key. A Note Out uses from: {module: mo_N}, to: {track: tr_N}, midi: {} (all channels unchanged); from_channel filters and to_channel remaps, 0..16 with 0 meaning all/original. Hardware routing is not supported yet.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -12376,8 +12376,9 @@ Kind: `edit`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `from` | string |  |  |  |  |
-| `to` | string |  |  |  | A track, or a rack's In module (mo_*): the send then plays into the rack, linear (no Console 9 stage) |
+| `from` | value |  |  |  |  |
+| `to` | value |  |  |  |  |
+| `midi` | object |  |  |  | Note Out MIDI routing; {} means every channel unchanged. Channel values 0..16: from 0 = all, to 0 = original. |
 | `fx` | string |  |  |  | Feed this plug-in's sidechain (key) input instead of a track's input; `to` may be left out |
 | `tap` | string |  |  |  |  |
 | `volume_db` | value | dB | -150.0..12.0 |  | Quantity strings are range-checked by the server. |
@@ -12408,6 +12409,8 @@ Kind: `edit`. Exposure: `mcp-tool`.
 
 - `route.cycle`: the send would feed back Hint: choose another destination
 - `route.no_sidechain`: the plug-in has no key input Hint: pick another plug-in
+- `route.endpoint`: a Note Out needs a channel destination and MIDI routing Hint: use from: {module: mo_N}, to: {track: tr_N}, midi: {}
+- `route.midi`: MIDI routing or audio controls do not apply to these endpoints Hint: use a Note Out source for MIDI and omit audio send controls
 
 ### Examples
 
@@ -12447,6 +12450,30 @@ Result:
 ```json
 {
   "id": "sd_1"
+}
+
+```
+
+**Play a channel's instrument from Note Out** (`song_with_note_out`)
+
+```json
+{
+  "from": {
+    "module": "mo_4"
+  },
+  "to": {
+    "track": "tr_2"
+  },
+  "midi": {}
+}
+
+```
+
+Result:
+
+```json
+{
+  "id": "sd_2"
 }
 
 ```
@@ -12724,6 +12751,25 @@ Kind: `query`. Exposure: `mcp-tool`.
             },
             "required": ["from", "to"],
             "additionalProperties": false
+          },
+          "midi": {
+            "type": "object",
+            "title": "midi_routing",
+            "properties": {
+              "from_channel": {
+                "type": "integer",
+                "minimum": 0.0,
+                "maximum": 16.0,
+                "default": 0
+              },
+              "to_channel": {
+                "type": "integer",
+                "minimum": 0.0,
+                "maximum": 16.0,
+                "default": 0
+              }
+            },
+            "additionalProperties": false
           }
         },
         "required": [
@@ -12865,8 +12911,9 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `route` | string |  |  |  |  |
-| `from` | string |  |  |  |  |
-| `to` | string |  |  |  | A track, or a rack's In module (mo_*): the send then plays into the rack, linear (no Console 9 stage) |
+| `from` | value |  |  |  |  |
+| `to` | value |  |  |  |  |
+| `midi` | object |  |  |  | Note Out MIDI routing; {} means every channel unchanged. Channel values 0..16: from 0 = all, to 0 = original. |
 | `fx` | string |  |  |  | Feed this plug-in's sidechain (key) input instead of a track's input; `to` may be left out |
 | `tap` | string |  |  |  |  |
 | `volume_db` | value | dB | -150.0..12.0 |  | Quantity strings are range-checked by the server. |
@@ -12891,6 +12938,8 @@ Kind: `edit`. Exposure: `mcp-tool`.
 ### Errors
 
 - `route.channels`: the map pairs channels the strips do not have Hint: pair 1 and 2: {from: [1, 2], to: [2, 1]}
+- `route.endpoint`: a Note Out needs a channel destination and MIDI routing Hint: route Note Out MIDI to a channel
+- `route.midi`: audio controls do not apply to MIDI routes Hint: use mute and MIDI channel routing
 
 ### Examples
 

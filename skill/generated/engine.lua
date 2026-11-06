@@ -1338,8 +1338,9 @@ q = nil
 ---@field job? boolean (default: false)
 
 ---@class Steppe.route_add_args
----@field from string
----@field to? string A track, or a rack's In module (mo_*): the send then plays into the rack, linear (no Console 9 stage)
+---@field from string|table
+---@field to? string|table
+---@field midi? table Note Out MIDI routing; {} means every channel unchanged. Channel values 0..16: from 0 = all, to 0 = original.
 ---@field fx? string Feed this plug-in's sidechain (key) input instead of a track's input; `to` may be left out
 ---@field tap? "post_fader"|"pre_fader"|"pre_fx"
 ---@field volume_db? number|string Quantity strings are range-checked by the server.
@@ -1381,8 +1382,9 @@ q = nil
 
 ---@class Steppe.route_set_args
 ---@field route string
----@field from? string
----@field to? string A track, or a rack's In module (mo_*): the send then plays into the rack, linear (no Console 9 stage)
+---@field from? string|table
+---@field to? string|table
+---@field midi? table Note Out MIDI routing; {} means every channel unchanged. Channel values 0..16: from 0 = all, to 0 = original.
 ---@field fx? string Feed this plug-in's sidechain (key) input instead of a track's input; `to` may be left out
 ---@field tap? "post_fader"|"pre_fader"|"pre_fx"
 ---@field volume_db? number|string Quantity strings are range-checked by the server.
@@ -2059,7 +2061,7 @@ q = nil
 ---@field run fun(args?: Steppe.render_queue_run_args): table Run every queued render in order; each one leaves the queue when it is done.
 
 ---@class Steppe.route
----@field add fun(args: Steppe.route_add_args): Steppe.route_add_result Send one track to another track, bus, the master, or a plug-in's key.
+---@field add fun(args: Steppe.route_add_args): Steppe.route_add_result Send audio between strips, or a Note Out to a track's instrument.
 ---@field list fun(): Steppe.route_list_result List sends with endpoints and mixer settings.
 ---@field matrix fun(): table What can be routed where: strips, plug-in keys, sends and blocked pairs.
 ---@field remove fun(args: Steppe.route_remove_args): table Remove a send.

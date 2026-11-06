@@ -91,6 +91,7 @@ const rack::Catalog& catalog(EngineApp& a) { return *a.instances().racks().catal
 // A type by id, or by its short name ("vco", "out", "VCO").
 const rack::Catalog::Entry* findType(const rack::Catalog& c, std::string_view name) {
     if (const auto* e = c.find(name)) return e;
+    if (name == "notes_out") return c.find(model::kNotesOutModule);
     const std::string stock = "com.suppleaudio.rack." + std::string(name);
     if (const auto* e = c.find(stock)) return e;
     std::string lower(name);

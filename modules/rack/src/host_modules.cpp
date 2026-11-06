@@ -142,6 +142,84 @@ std::shared_ptr<const ModuleType> notesType() {
     return t;
 }
 
+std::shared_ptr<const ModuleType> notesOutType() {
+    static const auto t = ModuleType::host(
+        info(kNotesOut, "Note Out", "Poly pitch and gates play another track's instrument.",
+             {"io", "midi", "poly"}),
+        {param("channel", "Channel", Kind::Integer, 1, 16, 1, Unit::None,
+               "The MIDI channel of new notes, 1 to 16.")},
+        {port("pitch", "Pitch", Signal::Pitch, false,
+              "Each voice's pitch: 0 is C4, 1 per octave. A mono pitch serves every voice."),
+         port("gate", "Gate", Signal::Gate, false,
+              "Rising to 0.5 starts a note; falling below 0.25 ends it."),
+         port("velocity", "Velocity", Signal::Unipolar, false,
+              "Velocity at a gate's rise, 0 to 1; unconnected: MIDI velocity 96.")});
+    return t;
+}
+
+int noteKey(double pitch) SUPPLE_RT {
+    if (std::isnan(pitch)) pitch = 0.0;
+    return static_cast<int>(std::lround(std::clamp(60.0 + 12.0 * pitch, 0.0, 127.0)));
+}
+int noteVelocity(double value, bool connected) SUPPLE_RT {
+    if (!connected) return 96;
+    if (std::isnan(value)) value = 0.0;
+    return static_cast<int>(std::lround(std::clamp(127.0 * value, 1.0, 127.0)));
+}
+void NotesOut::prepare(Instance&) {
+    voices_ = {};
+    endAll_ = false;
+}
+void NotesOut::send(std::uint32_t frame, int channel, int key, int velocity, bool on,
+                    int voice) SUPPLE_RT {
+    if (!count_ || *count_ >= events_.size()) return;
+    events_[(*count_)++] = {{frame, static_cast<std::uint8_t>((on ? 0x90 : 0x80) | channel),
+                             static_cast<std::uint8_t>(key), static_cast<std::uint8_t>(velocity)},
+                            voice};
+}
+std::array<NotesOut::State, kChannels> NotesOut::held() const SUPPLE_RT {
+    std::array<State, kChannels> result{};
+    for (int c = 0; c < kChannels; ++c) {
+        const auto& v = voices_[static_cast<std::size_t>(c)];
+        result[static_cast<std::size_t>(c)] = {v.gate.high, v.key, v.channel, v.velocity};
+    }
+    return result;
+}
+void NotesOut::process(const HostContext& ctx) SUPPLE_RT {
+    const auto& pitch = ctx.instance->inputMember(0);
+    const auto& gate = ctx.instance->inputMember(1);
+    const auto& velocity = ctx.instance->inputMember(2);
+    if (endAll_ || !ctx.transport.playing) {
+        for (int c = 0; c < kChannels; ++c) {
+            auto& v = voices_[static_cast<std::size_t>(c)];
+            if (v.gate.high)
+                send(static_cast<std::uint32_t>(ctx.offset), v.channel, v.key, 0, false, c);
+            v.gate.high = false;
+        }
+        endAll_ = false;
+    }
+    if (!ctx.transport.playing) return;
+    const int pitches = std::max(1, pitch.channels()),
+              velocities = std::max(1, velocity.channels());
+    for (int i = 0; i < ctx.frames; ++i)
+        for (int c = 0; c < kChannels; ++c) {
+            auto& v = voices_[static_cast<std::size_t>(c)];
+            if (!v.gate.step(c < gate.channels() ? gate[c][i] : 0.0)) continue;
+            const bool on = v.gate.high;
+            if (on) {
+                v.key = noteKey(pitch[std::min(c, pitches - 1)][i]);
+                double channel = ctx.instance->paramMember(0).at(i, c);
+                if (!std::isfinite(channel)) channel = 1.0;
+                v.channel = static_cast<int>(std::lround(std::clamp(channel, 1.0, 16.0))) - 1;
+            }
+            const int vel =
+                on ? noteVelocity(velocity[std::min(c, velocities - 1)][i], velocity.connected())
+                   : 0;
+            if (on) v.velocity = vel;
+            send(static_cast<std::uint32_t>(ctx.offset + i), v.channel, v.key, vel, on, c);
+        }
+}
+
 std::shared_ptr<const ModuleType> transportType() {
     static const auto t = [] {
         std::vector<std::string> labels, keys;
@@ -180,6 +258,8 @@ std::unique_ptr<Instance> make(std::shared_ptr<const ModuleType> type,
         host = std::make_unique<In>();
     else if (type->id() == kNotes)
         host = std::make_unique<Notes>();
+    else if (type->id() == kNotesOut)
+        host = std::make_unique<NotesOut>();
     else if (type->id() == kTransport)
         host = std::make_unique<Transport>();
     else
