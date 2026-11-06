@@ -1252,8 +1252,11 @@ a new channel). It follows rack.md §8.
 - **Cables** hang between their ends, deeper the longer they are, drawn
   above the modules in their output's signal colour (or the cable's own
   colour), with a dark edge and a highlight, plugs at both ends; a
-  modulation cable plugs into its knob's rim. Poly cables are thicker.
-  While a module or a cable is hovered, or modules are selected, their
+  modulation cable plugs into its knob's rim. Poly cables are thicker. A
+  cable glows around its cord, and its core brightens, as strongly as its
+  source output's level (the jacks' measure; a pitch cable only faintly);
+  a cable that crosses the view has its source's telemetry read even when
+  the source module is out of view. While a module or a cable is hovered, or modules are selected, their
   cables are drawn at full strength and on top and the rest step back (to
   12 % with eight or more cables, else 45 %); with nothing in focus, eight
   or more cables are drawn at 70 %. While a cable is drawn, the others dim. A cable that closes a loop (`rack.get`'s

@@ -332,7 +332,7 @@ fade back.
 
 Drag from a jack to another to connect them. Jack colours show what a jack
 carries: audio, pitch, gates, control voltages and phase each have their
-own colour, and a jack glows with its level. Drop a cable on a knob to
+own colour, and a jack and its cables glow with its level. Drop a cable on a knob to
 modulate it; the ring around the knob shows how far, and dragging the ring
 changes the amount. Drag a cable off an input to move it, or drop it on
 nothing to remove it. A cable that loops back is dashed: it carries the

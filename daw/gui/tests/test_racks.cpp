@@ -1186,6 +1186,96 @@ TEST_CASE("rack window: modules saved as a rack preset load into another rack fr
     CHECK(std::find(shows.begin(), shows.end(), "preset:Voice") == shows.end());
 }
 
+TEST_CASE("rack window: a cable glows with its source's signal, even from out of view") {
+    Fixture f;
+    if (!f.ok) return;
+    const std::string rack = f.exec("rack.add", R"({"name":"Glow"})")["rack"].asString();
+    const std::string lfo = f.add(rack, "lfo", 0, 0), vca = f.add(rack, "vca", 1600, 0);
+    const std::string far = f.add(rack, "drift", -2000, 0);
+    f.cable(lfo + ".out", vca + ".in");
+    f.racks->open();
+    f.frame();
+    const model::Id lfoId = *model::Id::parse(lfo), vcaId = *model::Id::parse(vca);
+    const model::Id farId = *model::Id::parse(far);
+    auto watched = [&](model::Id id) {
+        const rack::Instance* in = gui::racks::instance(*f.app, id);
+        REQUIRE(in);
+        return in->watched();
+    };
+
+    SUBCASE("the source of a cable across the view is watched") {
+        engine::DummyBackend backend(
+            engine::DummyBackend::Options{.mode = engine::DummyBackend::Mode::Manual});
+        REQUIRE(f.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 256},
+                                   {.anticipative = false}));
+        backend.run(1);
+        // Neither end in view, the cable's middle is.
+        f.racks->space()->setView({600, -40, 1.0});
+        f.frame();
+        const auto sources = f.racks->space()->cableSources(f.racks->space()->visibleSpace());
+        CHECK(sources == std::vector<model::Id>{lfoId});
+        auto now = std::chrono::steady_clock::now();
+        f.racks->tick(now += std::chrono::seconds(1));
+        CHECK(watched(lfoId));
+        CHECK_FALSE(watched(vcaId));  // takes it, feeds nothing
+        CHECK_FALSE(watched(farId));
+        // Its telemetry arrives, so the cable can show its level.
+        backend.run(4);
+        f.racks->tick(now += std::chrono::seconds(1));
+        CHECK(f.racks->space()->scene().module(lfoId)->live);
+        // Out of view altogether, it is not watched.
+        f.racks->space()->setView({-6000, -40, 1.0});
+        f.frame();
+        f.racks->tick(now += std::chrono::seconds(1));
+        CHECK_FALSE(watched(lfoId));
+        CHECK_FALSE(f.racks->space()->scene().module(lfoId)->live);
+        f.app->stopEngine();
+    }
+
+    SUBCASE("the glow follows the level") {
+        f.racks->space()->setView({-20, -40, 1.0});
+        f.frame();
+        auto* m = f.racks->space()->scene().module(lfoId);
+        REQUIRE(m);
+        REQUIRE(m->type);
+        const auto from =
+            f.racks->space()->scene().endPoint(f.racks->space()->scene().cables.at(0).from, true);
+        REQUIRE(from);
+        const std::size_t n = m->type->outputs().size();
+        const int out = m->type->output("out");
+        REQUIRE(out >= 0);
+        // The light around the cable, away from its jack (whose own glow
+        // follows the same level).
+        auto light = [&](double level) {
+            m->live = true;
+            m->telemetry.outputs.assign(n, 0.0);
+            m->telemetry.peaks.assign(n, 0.0f);
+            m->telemetry.channels.assign(n, 1);
+            m->telemetry.outputs[static_cast<std::size_t>(out)] = level;
+            m->telemetry.peaks[static_cast<std::size_t>(out)] = static_cast<float>(level);
+            f.racks->space()->telemetryChanged();
+            f.r().damageAll();
+            f.r().frame(false);
+            const gui::Image image = f.r().readBack();
+            const ui::Point a = f.racks->space()->toWindow(*from);
+            const ui::Rect seen = f.racks->space()->bounds();
+            long sum = 0;
+            for (int y = static_cast<int>(seen.y); y < static_cast<int>(seen.bottom()); ++y)
+                for (int x = static_cast<int>(a.x) + 120; x < static_cast<int>(a.x) + 320; ++x) {
+                    if (x < 0 || y < 0 || x >= image.width || y >= image.height) continue;
+                    const std::size_t i = (static_cast<std::size_t>(y) * image.width + x) * 4;
+                    sum += image.rgba[i] + image.rgba[i + 1] + image.rgba[i + 2];
+                }
+            return sum;
+        };
+        const long dark = light(0), lit = light(1);
+        f.snapshot("rack-cable-glow.png");
+        CHECK(lit > dark + dark / 50);
+        CHECK(light(0) == dark);
+        f.snapshot("rack-cable-quiet.png");
+    }
+}
+
 TEST_CASE("face labels keep to their own room on every stock and host module") {
     Fixture f;
     if (!f.ok) return;

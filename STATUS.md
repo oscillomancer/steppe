@@ -368,7 +368,8 @@ instructions are in `docs/guides/installing.md`.
   the selection, zoom out to 10 % with module names drawn readable, and the
   hovered or selected modules' cables brought forward while the rest fade.
   Knob and jack names keep to cells of their own (smaller, wrapped or cut
-  rather than running into a neighbour or under a control).
+  rather than running into a neighbour or under a control), and cables glow
+  with their source's level, read for sources out of view too.
   Pasting into another rack or after a cut rebuilds through `rack.patch`, so
   a plugin module's plug-in starts from its defaults there.
 - **MIDI learn** (ADR-0027): any plug-in parameter (the FX window's MIDI

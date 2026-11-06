@@ -104,6 +104,9 @@ class RackSpace : public ui::Node {
     RackScene& scene() { return scene_; }
     // New telemetry was read into the scene's modules: repaint.
     void telemetryChanged() { invalidate(); }
+    // The modules whose outputs feed cables that cross `seen` (space units),
+    // wherever the modules are: their telemetry makes those cables glow.
+    std::vector<model::Id> cableSources(const ui::Rect& seen) const;
 
     const View& view() const { return view_; }
     void setView(View v);
@@ -183,6 +186,8 @@ class RackSpace : public ui::Node {
     // The parameter cable a hover label is about, and where (space).
     std::optional<std::pair<const RackScene::Cable*, ui::Point>> hovered() const;
     double jackLevel(const RackScene::Module& m, const rack::PanelItem& item) const;
+    // How strong `src`'s output `out` is, 0..1, from its telemetry.
+    double outputLevel(const RackScene::Module& src, int out) const;
     bool connected(const RackScene::Module& m, const rack::PanelItem& item) const;
     model::CableEnd endOf(const RackScene::Module& m, const rack::PanelItem& item) const;
     void endDrag(bool commit);

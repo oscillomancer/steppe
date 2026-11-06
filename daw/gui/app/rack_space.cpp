@@ -334,34 +334,55 @@ bool RackSpace::connected(const RackScene::Module& m, const PanelItem& item) con
     return false;
 }
 
+double RackSpace::outputLevel(const RackScene::Module& src, int out) const {
+    if (!src.live || !src.type || out < 0 ||
+        static_cast<std::size_t>(out) >= src.telemetry.peaks.size())
+        return 0;
+    const auto& port = src.type->output(out);
+    const double peak = D(src.telemetry.peaks[static_cast<std::size_t>(out)]);
+    const double value = src.telemetry.outputs[static_cast<std::size_t>(out)];
+    switch (port.signal) {
+        case Signal::Gate:
+            return value >= 0.5 ? 1.0 : 0.15 * std::min(1.0, peak);
+        case Signal::Pitch:
+            return 0.55;  // a pitch is there or not, never loud
+        case Signal::Audio:
+            return std::min(1.0, std::sqrt(peak));
+        default:
+            return std::min(1.0, std::fabs(value) * 0.8 + 0.2 * peak);
+    }
+}
+
 // How lit a jack is, 0..1: an output's own level; an input's, its cables'.
 double RackSpace::jackLevel(const RackScene::Module& m, const PanelItem& item) const {
     if (!m.type) return 0;
-    auto levelOf = [&](const RackScene::Module& src, int out) -> double {
-        if (!src.live || out < 0 || static_cast<std::size_t>(out) >= src.telemetry.peaks.size())
-            return 0;
-        const auto& port = src.type->output(out);
-        const double peak = D(src.telemetry.peaks[static_cast<std::size_t>(out)]);
-        const double value = src.telemetry.outputs[static_cast<std::size_t>(out)];
-        switch (port.signal) {
-            case Signal::Gate:
-                return value >= 0.5 ? 1.0 : 0.15 * std::min(1.0, peak);
-            case Signal::Pitch:
-                return 0.55;  // a pitch is there or not, never loud
-            case Signal::Audio:
-                return std::min(1.0, std::sqrt(peak));
-            default:
-                return std::min(1.0, std::fabs(value) * 0.8 + 0.2 * peak);
-        }
-    };
-    if (item.kind == Kind::Output) return levelOf(m, item.index);
+    if (item.kind == Kind::Output) return outputLevel(m, item.index);
     double level = 0;
     const model::CableEnd end = endOf(m, item);
     for (const auto& c : scene_.cables)
         if (c.to == end)
             if (const auto* src = scene_.module(c.from.object); src && src->type)
-                level = std::max(level, levelOf(*src, src->type->output(c.from.key)));
+                level = std::max(level, outputLevel(*src, src->type->output(c.from.key)));
     return level;
+}
+
+std::vector<model::Id> RackSpace::cableSources(const ui::Rect& seen) const {
+    std::vector<model::Id> out;
+    for (const auto& k : scene_.cables) {
+        const auto* src = scene_.module(k.from.object);
+        if (!src || std::find(out.begin(), out.end(), src->id) != out.end()) continue;
+        const auto a = scene_.endPoint(k.from, true), b = scene_.endPoint(k.to, false);
+        if (!a || !b) continue;
+        // The curve lies inside its points' hull.
+        const Curve c = curveOf(*a, *b);
+        const float x0 = std::min({c.p0.x, c.c0.x, c.c1.x, c.p1.x});
+        const float y0 = std::min({c.p0.y, c.c0.y, c.c1.y, c.p1.y});
+        const float x1 = std::max({c.p0.x, c.c0.x, c.c1.x, c.p1.x});
+        const float y1 = std::max({c.p0.y, c.c0.y, c.c1.y, c.p1.y});
+        if (!seen.intersect({x0 - 4, y0 - 4, x1 - x0 + 8, y1 - y0 + 8}).empty())
+            out.push_back(src->id);
+    }
+    return out;
 }
 
 RackSpace::Hit RackSpace::hitAt(ui::Point p) const {
@@ -993,6 +1014,29 @@ void RackSpace::paintCables(ui::Canvas& c) const {
         c.fillCircle(p, r, col.withAlpha(alpha));
         c.fillCircle(p, r * 0.45f, mix(col, {0, 0, 0, 1}, 0.35f).withAlpha(alpha));
     };
+    // A cable carrying signal glows around its cord, as strong as its
+    // source's output (a pitch, always there, only faintly).
+    auto glow = [&](const Curve& k, ui::Color col, float width, float amount) {
+        nvgBeginPath(vg);
+        nvgMoveTo(vg, k.p0.x, k.p0.y);
+        nvgBezierTo(vg, k.c0.x, k.c0.y, k.c1.x, k.c1.y, k.p1.x, k.p1.y);
+        nvgLineCap(vg, NVG_ROUND);
+        nvgStrokeWidth(vg, width + 3 + 6 * amount);
+        nvgStrokeColor(vg, nvg(col.withAlpha(0.16f * amount)));
+        nvgStroke(vg);
+        nvgStrokeWidth(vg, width + 1.6f + 2.4f * amount);
+        nvgStrokeColor(vg, nvg(col.withAlpha(0.3f * amount)));
+        nvgStroke(vg);
+    };
+    auto glowOf = [&](const RackScene::Cable& k) -> float {
+        const auto* src = scene_.module(k.from.object);
+        if (!src || !src->type) return 0;
+        const int out = src->type->output(k.from.key);
+        if (out < 0) return 0;
+        const double level = outputLevel(*src, out);
+        if (src->type->output(out).signal == Signal::Pitch) return level > 0 ? 0.35f : 0.0f;
+        return static_cast<float>(level);
+    };
     auto colorOf = [&](const RackScene::Cable& k) { return cableColor(t, k); };
     // What the pointer or the selection is on keeps its cables bright and
     // on top; the rest step back, far when many cross.
@@ -1025,7 +1069,7 @@ void RackSpace::paintCables(ui::Canvas& c) const {
                             : anyFocus                      ? (many ? 0.12f : 0.45f)
                             : many                          ? 0.7f
                                                             : 1.0f;
-        const ui::Color col = colorOf(k);
+        ui::Color col = colorOf(k);
         const auto* src = scene_.module(k.from.object);
         bool poly = false;
         if (src && src->live && src->type) {
@@ -1033,11 +1077,17 @@ void RackSpace::paintCables(ui::Canvas& c) const {
             poly = out >= 0 && static_cast<std::size_t>(out) < src->telemetry.channels.size() &&
                    src->telemetry.channels[static_cast<std::size_t>(out)] > 1;
         }
+        const float width = poly ? 4.6f : 3.0f;
+        const Curve curve = curveOf(*a, *b);
+        if (const float g = glowOf(k); g > 0.02f) {
+            glow(curve, col, width, g * alpha);
+            col = mix(col, {1, 1, 1, 1}, 0.3f * g);
+        }
         if (k.feedback) {
-            stroke(curveOf(*a, *b), col, poly ? 4.6f : 3.0f, alpha * 0.35f);
-            dashes(curveOf(*a, *b), col, poly ? 4.6f : 3.0f, alpha);
+            stroke(curve, col, width, alpha * 0.35f);
+            dashes(curve, col, width, alpha);
         } else {
-            stroke(curveOf(*a, *b), col, poly ? 4.6f : 3.0f, alpha);
+            stroke(curve, col, width, alpha);
         }
         plug(*a, col, alpha, false);
         if (k.to.object.kind != model::Kind::Fx) plug(*b, col, alpha, k.param);  // else a socket

@@ -981,10 +981,13 @@ bool RackWindow::tick(std::chrono::steady_clock::time_point now) {
     nextTelemetry_ = now + kTelemetryInterval;
     bool changed = false;
     const ui::Rect seen = space_->visibleSpace();
+    // Modules in view, and those whose cables cross it (for their glow).
+    const std::vector<model::Id> sources = space_->cableSources(seen);
     std::vector<model::Id> watching;
     for (auto& m : space_->scene().modules) {
         rack::Instance* in = racks::instance(app_, m.id);
-        const bool visible = !seen.intersect(m.rect()).empty();
+        const bool visible = !seen.intersect(m.rect()).empty() ||
+                             std::find(sources.begin(), sources.end(), m.id) != sources.end();
         if (!in || !visible || !m.type) {
             if (m.live) {
                 m.live = false;
