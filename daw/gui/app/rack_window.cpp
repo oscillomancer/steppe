@@ -981,13 +981,31 @@ bool RackWindow::tick(std::chrono::steady_clock::time_point now) {
     nextTelemetry_ = now + kTelemetryInterval;
     bool changed = false;
     const ui::Rect seen = space_->visibleSpace();
-    // Modules in view, and those whose cables cross it (for their glow).
+    // Modules in view are watched. Out of view, the sources of cables that
+    // cross it are measured, for their cables' glow (no telemetry; the
+    // engine measures while the transport plays).
     const std::vector<model::Id> sources = space_->cableSources(seen);
+    const engine::Engine* engine = app_.engine();
+    const bool playing = engine && engine->running() && engine->transport().playing;
     std::vector<model::Id> watching;
+    bool measuring = false;
     for (auto& m : space_->scene().modules) {
         rack::Instance* in = racks::instance(app_, m.id);
-        const bool visible = !seen.intersect(m.rect()).empty() ||
-                             std::find(sources.begin(), sources.end(), m.id) != sources.end();
+        const bool visible = !seen.intersect(m.rect()).empty();
+        const bool source = !visible && playing && in && m.type &&
+                            std::find(sources.begin(), sources.end(), m.id) != sources.end();
+        if (source) {
+            std::vector<float> levels;
+            for (int k = 0; k < static_cast<int>(m.type->outputs().size()); ++k)
+                levels.push_back(app_.moduleOutputLevel(m.id, m.type->output(k).key));
+            if (!m.measured || levels != m.levels) changed = true;
+            m.levels = std::move(levels);
+            m.measured = measuring = true;
+        } else if (m.measured) {
+            m.measured = false;
+            m.levels.clear();
+            changed = true;
+        }
         if (!in || !visible || !m.type) {
             if (m.live) {
                 m.live = false;
@@ -1006,7 +1024,7 @@ bool RackWindow::tick(std::chrono::steady_clock::time_point now) {
         if (std::find(watching.begin(), watching.end(), id) == watching.end())
             if (rack::Instance* in = racks::instance(app_, id)) in->watch(false);
     watched_ = std::move(watching);
-    if (watched_.empty()) nextTelemetry_ = now + std::chrono::milliseconds(250);
+    if (watched_.empty() && !measuring) nextTelemetry_ = now + std::chrono::milliseconds(250);
     if (changed) space_->telemetryChanged();
     return changed;
 }

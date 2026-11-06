@@ -1258,8 +1258,10 @@ a new channel). It follows rack.md §8.
   modulation cable plugs into its knob's rim. Poly cables are thicker. A
   cable glows around its cord, and its core brightens, as strongly as its
   source output's level (the jacks' measure; a pitch cable only faintly);
-  a cable that crosses the view has its source's telemetry read even when
-  the source module is out of view. While a module or a cable is hovered, or modules are selected, their
+  a cable that crosses the view glows from an out-of-view source too: such
+  a source is not watched, its outputs' block peaks are read
+  (`EngineApp::moduleOutputLevel`, a gate on when its peak is) while the
+  transport plays, and are zero when stopped. While a module or a cable is hovered, or modules are selected, their
   cables are drawn at full strength and on top and the rest step back (to
   12 % with eight or more cables, else 45 %); with nothing in focus, eight
   or more cables are drawn at 70 %. While a cable is drawn, the others dim. A cable that closes a loop (`rack.get`'s

@@ -1203,7 +1203,7 @@ TEST_CASE("rack window: a cable glows with its source's signal, even from out of
         return in->watched();
     };
 
-    SUBCASE("the source of a cable across the view is watched") {
+    SUBCASE("the source of a cable across the view is measured, not watched") {
         engine::DummyBackend backend(
             engine::DummyBackend::Options{.mode = engine::DummyBackend::Mode::Manual});
         REQUIRE(f.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 256},
@@ -1215,20 +1215,36 @@ TEST_CASE("rack window: a cable glows with its source's signal, even from out of
         const auto sources = f.racks->space()->cableSources(f.racks->space()->visibleSpace());
         CHECK(sources == std::vector<model::Id>{lfoId});
         auto now = std::chrono::steady_clock::now();
+        auto lfoModule = [&] { return f.racks->space()->scene().module(lfoId); };
+        // Stopped, there is no level to read.
         f.racks->tick(now += std::chrono::seconds(1));
-        CHECK(watched(lfoId));
+        CHECK_FALSE(lfoModule()->measured);
+        f.app->engine()->play();
+        backend.run(8);
+        f.racks->tick(now += std::chrono::seconds(1));
+        CHECK_FALSE(watched(lfoId));  // no telemetry for it
         CHECK_FALSE(watched(vcaId));  // takes it, feeds nothing
         CHECK_FALSE(watched(farId));
-        // Its telemetry arrives, so the cable can show its level.
-        backend.run(4);
-        f.racks->tick(now += std::chrono::seconds(1));
-        CHECK(f.racks->space()->scene().module(lfoId)->live);
-        // Out of view altogether, it is not watched.
+        CHECK_FALSE(lfoModule()->live);
+        REQUIRE(lfoModule()->measured);
+        const int out = lfoModule()->type->output("out");
+        REQUIRE(out >= 0);
+        REQUIRE(static_cast<std::size_t>(out) < lfoModule()->levels.size());
+        CHECK(lfoModule()->levels[static_cast<std::size_t>(out)] ==
+              doctest::Approx(static_cast<double>(f.app->moduleOutputLevel(lfoId, "out"))));
+        CHECK(lfoModule()->levels[static_cast<std::size_t>(out)] > 0.0f);
+        CHECK_FALSE(f.racks->space()->scene().module(farId)->measured);
+        // Out of view altogether, it is not measured.
         f.racks->space()->setView({-6000, -40, 1.0});
         f.frame();
         f.racks->tick(now += std::chrono::seconds(1));
-        CHECK_FALSE(watched(lfoId));
-        CHECK_FALSE(f.racks->space()->scene().module(lfoId)->live);
+        CHECK_FALSE(lfoModule()->measured);
+        // In view, it is watched again.
+        f.racks->space()->setView({-20, -40, 1.0});
+        f.frame();
+        f.racks->tick(now += std::chrono::seconds(1));
+        CHECK(watched(lfoId));
+        CHECK_FALSE(lfoModule()->measured);
         f.app->stopEngine();
     }
 
@@ -1246,8 +1262,12 @@ TEST_CASE("rack window: a cable glows with its source's signal, even from out of
         REQUIRE(out >= 0);
         // The light around the cable, away from its jack (whose own glow
         // follows the same level).
-        auto light = [&](double level) {
-            m->live = true;
+        auto light = [&](double level, bool measured = false) {
+            // From its telemetry, or measured (out of view): the same glow.
+            m->live = !measured;
+            m->measured = measured;
+            m->levels.assign(n, 0.0f);
+            m->levels[static_cast<std::size_t>(out)] = static_cast<float>(level);
             m->telemetry.outputs.assign(n, 0.0);
             m->telemetry.peaks.assign(n, 0.0f);
             m->telemetry.channels.assign(n, 1);
@@ -1273,6 +1293,8 @@ TEST_CASE("rack window: a cable glows with its source's signal, even from out of
         CHECK(lit > dark + dark / 50);
         CHECK(light(0) == dark);
         f.snapshot("rack-cable-quiet.png");
+        CHECK(light(1, true) == lit);
+        CHECK(light(0, true) == dark);
     }
 }
 

@@ -186,7 +186,8 @@ class RackSpace : public ui::Node {
     // The parameter cable a hover label is about, and where (space).
     std::optional<std::pair<const RackScene::Cable*, ui::Point>> hovered() const;
     double jackLevel(const RackScene::Module& m, const rack::PanelItem& item) const;
-    // How strong `src`'s output `out` is, 0..1, from its telemetry.
+    // How strong `src`'s output `out` is, 0..1, from its telemetry or, out of
+    // view, its measured level.
     double outputLevel(const RackScene::Module& src, int out) const;
     bool connected(const RackScene::Module& m, const rack::PanelItem& item) const;
     model::CableEnd endOf(const RackScene::Module& m, const rack::PanelItem& item) const;

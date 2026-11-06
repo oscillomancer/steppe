@@ -59,6 +59,11 @@ struct RackScene {
         // Telemetry, when the module runs and is watched.
         rack::Telemetry telemetry;
         bool live = false;
+        // Out of view, a source whose cables cross the view: its outputs'
+        // latest block peaks (EngineApp::moduleOutputLevel), by index, while
+        // the transport plays (`measured`), for its cables' glow.
+        std::vector<float> levels;
+        bool measured = false;
         ui::Rect rect() const {
             return {static_cast<float>(x), static_cast<float>(y), static_cast<float>(w),
                     static_cast<float>(h)};
