@@ -45,6 +45,7 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `lpg` | A vactrol-style low-pass gate: a ping makes plucks and bongos of any source; CV mode, resonance, its envelope as an output, poly |
 | `string` | A plucked string, a waveguide per channel: decay, damping, brightness, pluck position, stiffness, velocity and an exciter input |
 | `resonator` | A 24-mode modal resonator: structure morphs string, beam, bar, bell and plate; brightness, decay, damping, position, stereo spread, poly |
+| `drum` | An analog-style drum voice, eight models on a knob (kick, snare, tom, closed and open hat, clap, cowbell, rimshot): tune, tone, decay, snap, accent, poly |
 
 ### Modulation, sequencing, generative and utilities
 
