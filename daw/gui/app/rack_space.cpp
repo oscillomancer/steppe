@@ -7,6 +7,7 @@
 #include <nanovg.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <numbers>
@@ -186,14 +187,37 @@ void RackSpace::zoomAt(ui::Point p, double factor) {
 
 void RackSpace::frameAll() {
     const ui::Rect r = scene_.bounds();
-    const ui::Rect b = bounds();
-    if (r.empty() || b.empty()) {
+    if (r.empty() || bounds().empty()) {
         setView({-40, -40, 1});
         return;
     }
+    frameRect(r, 1.0);
+}
+
+void RackSpace::frame(const std::set<model::Id>& ids) {
+    ui::Rect r;
+    bool any = false;
+    for (const auto& m : scene_.modules)
+        if (ids.contains(m.id)) {
+            r = any ? r.unite(m.rect()) : m.rect();
+            any = true;
+        }
+    if (any) frameRect(r, 1.5);
+}
+
+ui::Point RackSpace::pastePoint() const {
+    if (pointer_ && bounds().contains(*pointer_)) return toSpace(*pointer_);
+    const ui::Rect v = visibleSpace();
+    return {v.x + v.w / 2 - 60, v.y + v.h / 2 - 60};
+}
+
+void RackSpace::frameRect(const ui::Rect& r, double maxZoom) {
+    const ui::Rect b = bounds();
+    if (b.empty()) return;
     constexpr double kPad = 48;
-    const double zoom = std::clamp(
-        std::min((D(b.w) - 2 * kPad) / D(r.w), (D(b.h) - 2 * kPad) / D(r.h)), kMinZoom, 1.0);
+    const double zoom = std::clamp(std::min((D(b.w) - 2 * kPad) / std::max(1.0, D(r.w)),
+                                            (D(b.h) - 2 * kPad) / std::max(1.0, D(r.h))),
+                                   kMinZoom, maxZoom);
     View v;
     v.zoom = zoom;
     v.x = D(r.x) + D(r.w) / 2 - D(b.w) / 2 / zoom;
@@ -511,11 +535,13 @@ void RackSpace::paintItem(ui::Canvas& c, const RackScene::Module& m, const Panel
         if (m.live && output &&
             static_cast<std::size_t>(item.index) < m.telemetry.channels.size() &&
             m.telemetry.channels[static_cast<std::size_t>(item.index)] > 1)
-            c.text({centre.x + kJackR - 2, centre.y - kJackR - 3, 10, 8},
-                   std::to_string(m.telemetry.channels[static_cast<std::size_t>(item.index)]),
-                   ui::Font::MonoBold, 7.5f, quiet, ui::kLeft | ui::kMiddle);
-        fitText(c, {centre.x - 18, centre.y + kJackR + 1, 36, 11}, port.name, ui::Font::Ui, kLabel,
-                output ? ink : quiet, ui::kCenter | ui::kMiddle);
+            if (words())
+                c.text({centre.x + kJackR - 2, centre.y - kJackR - 3, 10, 8},
+                       std::to_string(m.telemetry.channels[static_cast<std::size_t>(item.index)]),
+                       ui::Font::MonoBold, 7.5f, quiet, ui::kLeft | ui::kMiddle);
+        if (words())
+            fitText(c, {centre.x - 18, centre.y + kJackR + 1, 36, 11}, port.name, ui::Font::Ui,
+                    kLabel, output ? ink : quiet, ui::kCenter | ui::kMiddle);
         return;
     }
     if (item.kind == Kind::Display) {
@@ -588,11 +614,10 @@ void RackSpace::paintItem(ui::Canvas& c, const RackScene::Module& m, const Panel
                 }
             }
             const ui::Rect label{centre.x - 26, centre.y + r + 1.5f, 52, 11};
-            if (showValue)
-                fitText(c, label, paramText(p, v), ui::Font::Mono, kLabel, ink,
+            if (words())
+                fitText(c, label, showValue ? paramText(p, v) : p.name,
+                        showValue ? ui::Font::Mono : ui::Font::Ui, kLabel, showValue ? ink : quiet,
                         ui::kCenter | ui::kMiddle);
-            else
-                fitText(c, label, p.name, ui::Font::Ui, kLabel, quiet, ui::kCenter | ui::kMiddle);
             break;
         }
         case Kind::Toggle: {
@@ -600,15 +625,17 @@ void RackSpace::paintItem(ui::Canvas& c, const RackScene::Module& m, const Panel
             const bool on = v >= 0.5;
             c.fillRound(r, 3, on ? accent : t.color("module-title"));
             if (!on) c.strokeRound(r, 3, t.color("rule"));
-            fitText(c, r.inset(2), p.name, ui::Font::UiBold, kLabel, on ? face : quiet,
-                    ui::kCenter | ui::kMiddle);
+            if (words())
+                fitText(c, r.inset(2), p.name, ui::Font::UiBold, kLabel, on ? face : quiet,
+                        ui::kCenter | ui::kMiddle);
             break;
         }
         case Kind::Choice: {
             const ui::Rect r = rectOf(m, item);
             c.fillRound(r, 3, well);
-            fitText(c, {r.x + 4, r.y, r.w - 14, r.h}, paramText(p, v), ui::Font::Ui, 9.5f, ink,
-                    ui::kLeft | ui::kMiddle);
+            if (words())
+                fitText(c, {r.x + 4, r.y, r.w - 14, r.h}, paramText(p, v), ui::Font::Ui, 9.5f, ink,
+                        ui::kLeft | ui::kMiddle);
             const float cx = r.right() - 7, cy = r.y + r.h / 2;
             c.fillPath({{cx - 3, cy - 1.5f}, {cx + 3, cy - 1.5f}, {cx, cy + 2}}, quiet);
             break;
@@ -625,7 +652,7 @@ void RackSpace::paintItem(ui::Canvas& c, const RackScene::Module& m, const Panel
                             accent.withAlpha(0.8f));
                 c.fillRect({r.x - 1, r.bottom() - r.h * pos - 1, r.w + 2, 2}, ink);
             }
-            if (showValue)
+            if (showValue && words())
                 c.text(r, paramText(p, v), ui::Font::Mono, kLabel, ink, ui::kCenter | ui::kMiddle);
             break;
         }
@@ -636,10 +663,12 @@ void RackSpace::paintItem(ui::Canvas& c, const RackScene::Module& m, const Panel
                 m.live && static_cast<std::size_t>(item.index) < m.telemetry.params.size()
                     ? m.telemetry.params[static_cast<std::size_t>(item.index)]
                     : v;
-            fitText(c, {r.x + 4, r.y, r.w / 2, r.h}, p.name, ui::Font::Ui, kLabel, quiet,
-                    ui::kLeft | ui::kMiddle);
-            c.text({r.x + r.w / 2, r.y, r.w / 2 - 4, r.h}, paramText(p, shown), ui::Font::Mono,
-                   kLabel, ink, ui::kRight | ui::kMiddle);
+            if (words())
+                fitText(c, {r.x + 4, r.y, r.w / 2, r.h}, p.name, ui::Font::Ui, kLabel, quiet,
+                        ui::kLeft | ui::kMiddle);
+            if (words())
+                c.text({r.x + r.w / 2, r.y, r.w / 2 - 4, r.h}, paramText(p, shown), ui::Font::Mono,
+                       kLabel, ink, ui::kRight | ui::kMiddle);
             break;
         }
         default:
@@ -681,10 +710,12 @@ void RackSpace::paintModule(ui::Canvas& c, const RackScene::Module& m, bool sele
     const ui::Color ink = m.bypass ? t.color("ink-faint") : t.color("ink");
     if (m.plugin) {
         // A plug-in shows its name, and opens on a click.
-        fitText(c, {r.x + 10, r.y + 10, r.w - 20, 22}, m.title, ui::Font::UiBold, 13.5f, ink,
-                ui::kCenter | ui::kMiddle);
-        c.text({r.x + 10, r.y + 32, r.w - 20, 14}, m.subtitle.empty() ? "Plug-in" : m.subtitle,
-               ui::Font::Ui, 9.5f, t.color("ink-quiet"), ui::kCenter | ui::kMiddle);
+        if (words())
+            fitText(c, {r.x + 10, r.y + 10, r.w - 20, 22}, m.title, ui::Font::UiBold, 13.5f, ink,
+                    ui::kCenter | ui::kMiddle);
+        if (words())
+            c.text({r.x + 10, r.y + 32, r.w - 20, 14}, m.subtitle.empty() ? "Plug-in" : m.subtitle,
+                   ui::Font::Ui, 9.5f, t.color("ink-quiet"), ui::kCenter | ui::kMiddle);
         // A cable over it: a drop picks one of its plug-in's parameters.
         if (drag_.kind == Drag::Kind::Cable && drag_.fromOutput && pointer_ &&
             r.contains(toSpace(*pointer_))) {
@@ -701,8 +732,9 @@ void RackSpace::paintModule(ui::Canvas& c, const RackScene::Module& m, bool sele
         c.fillRect({w.x, w.y, w.w, 2.2f}, mark);
     } else {
         std::string title = m.title;
-        fitText(c, {r.x + 7, r.y, r.w - 14, head}, title, ui::Font::UiBold, kTitleFont, ink,
-                ui::kCenter | ui::kMiddle);
+        if (words())
+            fitText(c, {r.x + 7, r.y, r.w - 14, head}, title, ui::Font::UiBold, kTitleFont, ink,
+                    ui::kCenter | ui::kMiddle);
     }
     // The module's own drawing, under its controls.
     if (m.type && m.type->code() && m.type->code()->draw()) {
@@ -753,8 +785,9 @@ void RackSpace::paintModule(ui::Canvas& c, const RackScene::Module& m, bool sele
     if (m.out) {
         const bool fed = !m.subtitle.empty();
         const std::string tag = fed ? "→ " + m.subtitle : "→ no channel";
-        c.text({r.x - 20, r.bottom() + 4, r.w + 40, 12}, tag, ui::Font::Ui, 9.5f,
-               fed ? t.color("ink-quiet") : t.color("ink-faint"), ui::kCenter | ui::kMiddle);
+        if (words())
+            c.text({r.x - 20, r.bottom() + 4, r.w + 40, 12}, tag, ui::Font::Ui, 9.5f,
+                   fed ? t.color("ink-quiet") : t.color("ink-faint"), ui::kCenter | ui::kMiddle);
     }
 }
 
@@ -799,6 +832,45 @@ void RackSpace::paintSockets(ui::Canvas& c, const RackScene::Module& m) const {
     }
 }
 
+// Zoomed out: each module's name at a readable size, across its top when it
+// fits, else down its length, on a plate.
+void RackSpace::paintNames(ui::Canvas& c) const {
+    const ui::Theme& t = c.theme();
+    NVGcontext* vg = c.vg();
+    const ui::Rect b = bounds();
+    constexpr float kSize = 10.5f;
+    for (const auto& m : scene_.modules) {
+        const ui::Point a = toWindow({static_cast<float>(m.x), static_cast<float>(m.y)});
+        const ui::Rect r{a.x, a.y, static_cast<float>(m.w * view_.zoom),
+                         static_cast<float>(m.h * view_.zoom)};
+        if (r.intersect(b).empty() || r.w < 10) continue;
+        const bool selected = selection_.contains(m.id), hot = hot_ == m.id;
+        const ui::Color ink = m.bypass ? t.color("ink-faint") : t.color("ink");
+        const ui::Color plate = t.color("module-title").withAlpha(0.92f);
+        const float w = c.textWidth(m.title, ui::Font::UiBold, kSize) + 8;
+        if (w <= r.w + 6 || r.h < w + 8) {
+            const float bw = std::min(w, r.w + 6);
+            const ui::Rect box{r.x + r.w / 2 - bw / 2, r.y + 2, bw, 15};
+            c.fillRound(box, 3, plate);
+            if (selected || hot) c.strokeRound(box, 3, t.color("focus"));
+            c.save();
+            c.clip(box);
+            fitText(c, box, m.title, ui::Font::UiBold, kSize, ink, ui::kCenter | ui::kMiddle);
+            c.restore();
+            continue;
+        }
+        // Narrow and tall: the name reads down the module, as on hardware.
+        nvgSave(vg);
+        nvgTranslate(vg, r.x + r.w / 2 + 7.5f, r.y + 3);
+        nvgRotate(vg, kPi / 2);
+        const ui::Rect box{0, 0, w, 15};
+        c.fillRound(box, 3, plate);
+        if (selected || hot) c.strokeRound(box, 3, t.color("focus"));
+        c.text(box, m.title, ui::Font::UiBold, kSize, ink, ui::kCenter | ui::kMiddle);
+        nvgRestore(vg);
+    }
+}
+
 // The hovered plug-in parameter's name and amount, over its socket.
 void RackSpace::paintHover(ui::Canvas& c) const {
     const auto h = hovered();
@@ -817,8 +889,7 @@ void RackSpace::paintHover(ui::Canvas& c) const {
 void RackSpace::paintCables(ui::Canvas& c) const {
     const ui::Theme& t = c.theme();
     NVGcontext* vg = c.vg();
-    const bool many =
-        static_cast<int>(scene_.cables.size()) >= kManyCables || drag_.kind == Drag::Kind::Cable;
+    const bool many = static_cast<int>(scene_.cables.size()) >= kManyCables;
     // A feedback cable: dashes over a dim cord.
     auto dashes = [&](const Curve& k, ui::Color col, float width, float alpha) {
         constexpr int n = 40;
@@ -860,15 +931,37 @@ void RackSpace::paintCables(ui::Canvas& c) const {
         c.fillCircle(p, r * 0.45f, mix(col, {0, 0, 0, 1}, 0.35f).withAlpha(alpha));
     };
     auto colorOf = [&](const RackScene::Cable& k) { return cableColor(t, k); };
-    for (std::size_t i = 0; i < scene_.cables.size(); ++i) {
+    // What the pointer or the selection is on keeps its cables bright and
+    // on top; the rest step back, far when many cross.
+    auto owner = [&](const model::CableEnd& end) {
+        if (end.object.kind != model::Kind::Fx) return end.object;
+        const auto* m = scene_.moduleOfFx(end.object);
+        return m ? m->id : end.object;
+    };
+    auto focused = [&](std::size_t i) {
+        const auto& k = scene_.cables[i];
+        const model::Id from = owner(k.from), to = owner(k.to);
+        return hotCable_ == i || (hot_ && (from == *hot_ || to == *hot_)) ||
+               selection_.contains(from) || selection_.contains(to);
+    };
+    const bool anyFocus = hotCable_ || hot_ || !selection_.empty();
+    std::vector<std::size_t> order;
+    for (std::size_t i = 0; i < scene_.cables.size(); ++i)
+        if (!anyFocus || !focused(i)) order.push_back(i);
+    if (anyFocus)
+        for (std::size_t i = 0; i < scene_.cables.size(); ++i)
+            if (focused(i)) order.push_back(i);
+    for (const std::size_t i : order) {
         const auto& k = scene_.cables[i];
         if (drag_.kind == Drag::Kind::Cable && drag_.replace == k.id) continue;  // in the hand
         const auto a = scene_.endPoint(k.from, true), b = scene_.endPoint(k.to, false);
         if (!a || !b) continue;
-        const bool focus = hotCable_ == i ||
-                           (hot_ && (k.from.object == *hot_ || k.to.object == *hot_)) ||
-                           selection_.contains(k.from.object) || selection_.contains(k.to.object);
-        const float alpha = !many || focus ? 1.0f : 0.38f;
+        const bool focus = anyFocus && focused(i);
+        const float alpha = drag_.kind == Drag::Kind::Cable ? (many ? 0.3f : 0.6f)
+                            : focus                         ? 1.0f
+                            : anyFocus                      ? (many ? 0.12f : 0.45f)
+                            : many                          ? 0.7f
+                                                            : 1.0f;
         const ui::Color col = colorOf(k);
         const auto* src = scene_.module(k.from.object);
         bool poly = false;
@@ -927,6 +1020,7 @@ void RackSpace::paint(ui::Canvas& c) {
     for (const auto& m : scene_.modules)
         if (!m.mods.empty() && !reach.intersect(m.rect()).empty()) paintSockets(c, m);
     nvgRestore(vg);
+    if (!words()) paintNames(c);
     paintHover(c);
     if (drag_.kind == Drag::Kind::Marquee && drag_.moved) {
         const ui::Rect r{
@@ -1184,6 +1278,10 @@ bool RackSpace::onPointer(const ui::PointerEvent& e) {
         if (e.button != 1) return true;
         switch (h.kind) {
             case Hit::Kind::None: {
+                if (e.clicks >= 2 && !(e.mods & (ui::kCtrl | ui::kShift)) && hooks_.quickAdd) {
+                    hooks_.quickAdd(e.pos, sp, {}, std::nullopt, true);
+                    return true;
+                }
                 drag_.kind = Drag::Kind::Marquee;
                 if (e.mods & (ui::kCtrl | ui::kShift))
                     drag_.before = selection_;
@@ -1193,7 +1291,7 @@ bool RackSpace::onPointer(const ui::PointerEvent& e) {
             }
             case Hit::Kind::Body: {
                 const model::Id id = scene_.modules[h.module].id;
-                if (e.mods & ui::kCtrl) {
+                if (e.mods & (ui::kCtrl | ui::kShift)) {
                     auto next = selection_;
                     if (!next.erase(id)) next.insert(id);
                     select(std::move(next));
@@ -1379,6 +1477,9 @@ void RackSpace::endDrag(bool commit) {
                 }
             } else if (d.replace && hooks_.disconnect) {
                 hooks_.disconnect(*d.replace);  // pulled out and let go
+            } else if (!d.replace && h.kind == Hit::Kind::None && hooks_.quickAdd) {
+                // A new cable let go on nothing: a module for it to plug into.
+                hooks_.quickAdd(d.last, toSpace(d.last), {}, d.from, d.fromOutput);
             }
             break;
         }
@@ -1401,6 +1502,33 @@ bool RackSpace::onKey(const ui::KeyEvent& e) {
     }
     if ((e.key == SDLK_DELETE || e.key == SDLK_BACKSPACE) && !e.mods && !selection_.empty()) {
         if (hooks_.deleteSelected) hooks_.deleteSelected();
+        return true;
+    }
+    if (e.mods & ui::kCtrl) {
+        const auto run = [](const std::function<void()>& f) {
+            if (f) f();
+            return true;
+        };
+        if (e.key == SDLK_C && !selection_.empty()) return run(hooks_.copy);
+        if (e.key == SDLK_X && !selection_.empty()) return run(hooks_.cut);
+        if (e.key == SDLK_D && !selection_.empty()) return run(hooks_.duplicate);
+        if (e.key == SDLK_V && hooks_.paste) {
+            hooks_.paste(pastePoint());
+            return true;
+        }
+    }
+    // Arrows nudge the selection: 10 units, Shift 1.
+    if (!selection_.empty() && !(e.mods & ui::kCtrl)) {
+        const double step = e.mods & ui::kShift ? 1 : 10;
+        const double dx = e.key == SDLK_LEFT ? -step : e.key == SDLK_RIGHT ? step : 0;
+        const double dy = e.key == SDLK_UP ? -step : e.key == SDLK_DOWN ? step : 0;
+        if (dx != 0 || dy != 0) {
+            nudge(dx, dy);
+            return true;
+        }
+    }
+    if (e.key == SDLK_HOME && (e.mods & ui::kShift) && !selection_.empty()) {
+        frame(selection_);
         return true;
     }
     if (e.key == SDLK_A && (e.mods & ui::kCtrl)) {
@@ -1430,6 +1558,30 @@ bool RackSpace::onKey(const ui::KeyEvent& e) {
         return true;
     }
     return false;
+}
+
+void RackSpace::nudge(double dx, double dy) {
+    std::vector<Move> moves;
+    for (auto& m : scene_.modules)
+        if (selection_.contains(m.id)) {
+            m.x += dx;
+            m.y += dy;
+            moves.push_back({m.id, m.x, m.y});
+        }
+    invalidate();
+    if (!moves.empty() && hooks_.move) hooks_.move(moves);
+}
+
+// Typing a letter or digit into the space adds a module there by name.
+bool RackSpace::onText(std::string_view text) {
+    if (text.empty() || drag_.kind != Drag::Kind::None || !hooks_.quickAdd) return false;
+    const auto ch = static_cast<unsigned char>(text.front());
+    if (!std::isalnum(ch)) return false;
+    const ui::Point at = pointer_ && bounds().contains(*pointer_)
+                             ? *pointer_
+                             : ui::Point{bounds().x + bounds().w / 2, bounds().y + bounds().h / 2};
+    hooks_.quickAdd(at, toSpace(at), std::string(text), std::nullopt, true);
+    return true;
 }
 
 bool RackSpace::coalescesDrag() const { return drag_.kind != Drag::Kind::None; }

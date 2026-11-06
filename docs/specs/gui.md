@@ -1160,9 +1160,13 @@ a new channel). It follows rack.md §8.
 - **The space** is the theme's ground and nothing else; an empty project
   says only "No racks yet. + adds one on the selected channel." Middle-drag
   or Space-drag pans (Space alone, released without a drag, still plays and
-  stops), Ctrl+wheel zooms at the pointer from 25 to 400 %, the wheel
+  stops), Ctrl+wheel zooms at the pointer from 10 to 400 %, the wheel
   scrolls (Shift: across), Ctrl+= and Ctrl+- zoom, Ctrl+0 is 100 %, Home
-  shows everything. The zoom readout in the header toggles 100 % and
+  shows everything (at most 100 %, as far out as it takes) and Shift+Home
+  fills the view with the selection (at most 150 %). Below 55 % the faces'
+  small words go and each module's name is drawn over it at 10.5 points on
+  its title colour, across its top when it fits and down its length when
+  the module is narrow; the hovered and selected names are outlined. The zoom readout in the header toggles 100 % and
   everything. Each rack's view (offset, zoom) and the rack shown are in the
   UI sidecar (`racks`); a rack without one opens showing everything.
 - **Modules** are drawn from their type's face (rack.md §4.5, or the
@@ -1176,15 +1180,35 @@ a new channel). It follows rack.md §8.
   kept, outlined in the clip colour, saying "Missing module" and its id.
   Bypassed modules are veiled and say so. Modules have a soft shadow and
   are dragged by any part that is not a control: a click selects, Ctrl+click
-  toggles, a drag on the space draws a marquee (Ctrl or Shift adds), and
-  the selection moves together as one undo step (`module.set x, y` in one
-  transaction). Delete removes the selection; Ctrl+A selects every module.
-  A right-click offers Open editor (plugins), Rename…, Bypass, Duplicate,
-  Randomize, Presets… (the type's factory patches, `module.set preset`),
-  Show source, Save as rack preset… (the selection) and Delete. On the
-  space: Add module… (the browser opens with its search focused, and the
-  next module added lands at that point), Add plugin… there, Load rack
-  preset… (there), Save rack as preset…, and Show everything.
+  or Shift+click toggles, a drag on the space draws a marquee (Ctrl or
+  Shift adds), and the selection moves together as one undo step
+  (`module.set x, y` in one transaction); the arrow keys nudge it 10 units
+  (Shift: 1), one undo step a press. Delete removes the selection; Ctrl+A
+  selects every module. Ctrl+C copies the selection with the cables among
+  its modules, Ctrl+X cuts it, Ctrl+V pastes with the copy's top-left at
+  the pointer (else the middle of the view), selected and in view, and
+  Ctrl+D duplicates the selection, cables too. A paste into the rack it
+  came from, while its modules are there, is `module.duplicate {dx, dy}`
+  (plug-ins keep their state); into another rack, or after a cut, it is
+  `rack.patch` from the copy (types or plug-in ids, knobs, labels, places,
+  Notes sources, and the cables, amounts and colours; a plug-in starts
+  from its defaults). A right-click offers Open editor (plugins), Rename…,
+  Bypass, Copy, Cut, Duplicate, Randomize, Presets… (the type's factory
+  patches, `module.set preset`), Show source, Save as rack preset… (the
+  selection) and Delete. On the space: Add module…, Add plugin… there,
+  Load rack preset… (there), Save rack as preset…, Paste, Show everything
+  and Show selection.
+- **Adding at the pointer.** Typing a letter or digit over the space, a
+  double click on it, or its menu's Add module… opens a search list there
+  ("rack.add": the browser's entries, Plugin… and the rack presets
+  included, a name starting with the text first, then a word of the name
+  starting with it, then a name containing it, then its id, tags and
+  description). Enter or a double click adds the choice with its top
+  centred at the point, selected. A new cable dropped on nothing opens the
+  same list (without Plugin… and presets), and the module chosen takes the
+  cable: on its first input of the cable's signal, else its first input
+  (from an input: its first output of that signal), the module beside the
+  point on the cable's side, the module and its cable one undo step.
 - **Jacks** are circles ringed in their signal kind's colour (§7); outputs
   sit on a plate, as on hardware. A jack glows by its level from the
   module's telemetry (an input by its cables' sources'); a poly output shows
@@ -1217,9 +1241,11 @@ a new channel). It follows rack.md §8.
 - **Cables** hang between their ends, deeper the longer they are, drawn
   above the modules in their output's signal colour (or the cable's own
   colour), with a dark edge and a highlight, plugs at both ends; a
-  modulation cable plugs into its knob's rim. Poly cables are thicker. With
-  eight or more cables, those not on the hovered or selected modules (or
-  hovered themselves) fade. A cable that closes a loop (`rack.get`'s
+  modulation cable plugs into its knob's rim. Poly cables are thicker.
+  While a module or a cable is hovered, or modules are selected, their
+  cables are drawn at full strength and on top and the rest step back (to
+  12 % with eight or more cables, else 45 %); with nothing in focus, eight
+  or more cables are drawn at 70 %. While a cable is drawn, the others dim. A cable that closes a loop (`rack.get`'s
   `feedback`: it reads the previous frame) is dashed over a dim cord.
 - **Knobs** drag vertically, 160 points end to end at any zoom (Shift:
   ten times finer), along the travel MIDI learn turns them on

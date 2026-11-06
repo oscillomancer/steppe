@@ -551,7 +551,7 @@ selected channel, or a new one).
 
 - **The space.** A plain background, nothing else, until modules are
   added. Middle-drag or Space-drag pans, Ctrl+wheel zooms at the pointer
-  (25 %–400 %), the wheel scrolls. Per-rack view (offset, zoom) in the UI
+  (10 %–400 %), the wheel scrolls. Per-rack view (offset, zoom) in the UI
   sidecar.
 - **Modules** are panels placed anywhere, dragged freely by their body
   (not their controls); several are selected with a marquee or Ctrl+click

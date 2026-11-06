@@ -307,14 +307,28 @@ input. Every rack's Out is also listed in each channel's input menu, so
 any channel can take any rack's sound.
 
 Middle-drag or hold Space and drag to pan; Ctrl+wheel zooms at the pointer
-(25 to 400 %), Home shows everything and Ctrl+0 is 100 %. Each rack
-remembers where you left it.
+(10 to 400 %), Home shows everything, Shift+Home zooms to the selected
+modules and Ctrl+0 is 100 %. Zoomed far out, each module shows just its
+name, so a big patch stays readable. Each rack remembers where you left it.
 
 The **Modules** column lists what you can add: search it, or click a tag
 to filter. Double-click a module or drag it into the space. **Plugin…**
 puts any CLAP or VST3 plugin in the rack as a module; click it to open
-its editor. Drag a module by its body to move it, Ctrl+click or drag a
-box on the space to select several, and Delete removes them.
+its editor.
+
+The quickest way to add a module is to start typing its name over the
+space, or double-click an empty spot: a list opens where the pointer is,
+and Enter puts the module there. Drag a cable from a jack and let go on
+empty space, and the module you pick from the same list arrives plugged
+into it.
+
+Drag a module by its body to move it, Ctrl+click, Shift+click or drag a
+box on the space to select several, nudge them with the arrow keys
+(Shift: finely), and Delete removes them. Ctrl+C and Ctrl+V copy and paste
+the selected modules with the cables between them (paste lands at the
+pointer, in this rack or another), Ctrl+X cuts and Ctrl+D duplicates.
+Hover a module, or select some, and their cables stand out while the rest
+fade back.
 
 Drag from a jack to another to connect them. Jack colours show what a jack
 carries: audio, pitch, gates, control voltages and phase each have their

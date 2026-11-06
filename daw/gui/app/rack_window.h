@@ -95,6 +95,17 @@ class RackWindow {
     void cableMenu(model::Id cable, ui::Point at);
     // A plug-in's parameters (asked once per plug-in and version).
     const racks::PluginParams& paramsOf(model::Id fx);
+    // A search list of what can be added, at the pointer (`text` typed so
+    // far); the choice lands at `space`, and takes `from`'s cable if given.
+    void quickAdd(ui::Point at, ui::Point space, const std::string& text,
+                  std::optional<model::CableEnd> from, bool fromOutput);
+    // Adds `type` at `space` (its top centred there) and plugs `from` into its
+    // first port of the same signal (else its first): one undo step.
+    Status addWired(const std::string& type, ui::Point space, std::optional<model::CableEnd> from,
+                    bool fromOutput);
+    // The selection's copy: its modules and the cables among them.
+    void copySelected();
+    void duplicateSelected();
     void moduleMenu(model::Id module, ui::Point at);
     void spaceMenu(ui::Point at, ui::Point space);
     void paramMenu(model::Id module, int index, ui::Point at);
@@ -106,6 +117,10 @@ class RackWindow {
     void presetsSaved();
 
   public:
+    // Pastes the copied modules with `space` their top-left: a duplicate in
+    // the rack they came from while they are there (plug-in state and all),
+    // else rack.patch from the copy.
+    Status paste(ui::Point space);
     // A right-click on a browser row (a type, or "preset:<name>").
     void browserMenu(const std::string& type, ui::Point at);
     // Loads a saved preset into the rack shown (at a space point, else
@@ -152,7 +167,13 @@ class RackWindow {
     std::string error_;
     json::Value presets_ = json::Value::object();  // rack.preset.list's
     bool presetsRead_ = false;
-    std::optional<ui::Point> addAt_;  // the space's "Add module…": where the next one goes
+    // Copied modules (Ctrl+C or Ctrl+X): as they were, and the cables among them.
+    struct Clip {
+        model::Id rack;
+        std::vector<std::pair<model::Id, model::RackModule>> modules;
+        std::vector<model::Cable> cables;
+    };
+    std::optional<Clip> clip_;
     // paramsOf's answers by fx, with the plug-in they were asked of.
     std::map<model::Id, std::pair<std::string, racks::PluginParams>> pluginParams_;
 };

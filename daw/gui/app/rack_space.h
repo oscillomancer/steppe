@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 // The rack window's space (docs/specs/rack.md §8): a plain background where
 // modules sit anywhere, drawn from a RackScene. Middle-drag or Space-drag
-// pans, Ctrl+wheel zooms at the pointer (25-400 %), the wheel scrolls.
+// pans, Ctrl+wheel zooms at the pointer (10-400 %), the wheel scrolls.
 // Modules are dragged by their body, selected by a click, Ctrl+click or a
 // marquee, and move together. Jacks are circles in their signal's colour,
 // lit by level; a drag from one draws a cable to a jack of the other
@@ -35,7 +35,10 @@ class RackSpace : public ui::Node {
         double x = 0, y = 0, zoom = 1;
         bool operator==(const View&) const = default;
     };
-    static constexpr double kMinZoom = 0.25, kMaxZoom = 4.0;
+    static constexpr double kMinZoom = 0.1, kMaxZoom = 4.0;
+    // Below this zoom the faces' small words go, and each module's name is
+    // drawn at a readable size over it instead.
+    static constexpr double kWordsZoom = 0.55;
 
     struct Move {
         model::Id module;
@@ -81,6 +84,16 @@ class RackSpace : public ui::Node {
         std::function<void()> spaceTap;  // Space pressed and released without a drag
         // Something dropped on the space from the browser (a type id).
         std::function<void(const std::string& type, ui::Point space)> dropType;
+        // Add a module where the pointer is (window and space points): typed
+        // into the space (`text`, the first letters), a double-click on it,
+        // or a new cable let go on nothing (`from`: its end, an output when
+        // `fromOutput`), which the module added then takes.
+        std::function<void(ui::Point at, ui::Point space, const std::string& text,
+                           std::optional<model::CableEnd> from, bool fromOutput)>
+            quickAdd;
+        // Ctrl+C, Ctrl+X, Ctrl+D: the selection; Ctrl+V at a space point.
+        std::function<void()> copy, cut, duplicate;
+        std::function<void(ui::Point space)> paste;
     };
 
     explicit RackSpace(Hooks hooks);
@@ -98,6 +111,11 @@ class RackSpace : public ui::Node {
     void zoomAt(ui::Point at, double factor);
     // Everything in view, at most 100 % (an empty rack: the origin at 100 %).
     void frameAll();
+    // `ids` filling the view, at most 150 % (F: the selection).
+    void frame(const std::set<model::Id>& ids);
+    // Where a paste goes: the pointer's space point when it is over the
+    // space, else the middle of the view.
+    ui::Point pastePoint() const;
     // `ids` in view: centred (zoomed out as far as they need) unless they are.
     void reveal(const std::set<model::Id>& ids);
     // frameAll() once the space has its size (before its first layout).
@@ -137,6 +155,7 @@ class RackSpace : public ui::Node {
     bool onPointer(const ui::PointerEvent& e) override;
     bool onKey(const ui::KeyEvent& e) override;
     bool onKeyUp(const ui::KeyEvent& e) override;
+    bool onText(std::string_view text) override;
     bool coalescesDrag() const override;
 
   private:
@@ -147,6 +166,10 @@ class RackSpace : public ui::Node {
         std::optional<model::Id> cable;  // Ring, Socket: the modulation cable
     };
     Hit hitAt(ui::Point space) const;
+    bool words() const { return view_.zoom >= kWordsZoom; }
+    void frameRect(const ui::Rect& r, double maxZoom);
+    void paintNames(ui::Canvas& c) const;  // below kWordsZoom
+    void nudge(double dx, double dy);
     std::optional<std::size_t> cableNear(ui::Point space) const;
     void paintModule(ui::Canvas& c, const RackScene::Module& m, bool selected, bool hot) const;
     void paintItem(ui::Canvas& c, const RackScene::Module& m, const rack::PanelItem& item,
