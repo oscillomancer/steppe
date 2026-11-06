@@ -789,6 +789,7 @@ Result<RenderPlan> plan(EngineApp& app, rs::Source operation, const Args& a, boo
             task.settings.endSeconds += *e.handlesS;
         }
         task.settings.projectDir = app.projectDir();
+        task.settings.modules = app.modules();
         task.settings.tailSeconds = *e.tailS;
         SUPPLE_TRY(checkRenderRange(s, task.settings, *e.sampleRate));
         if (!track && a.sel.master) {

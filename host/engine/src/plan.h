@@ -558,6 +558,7 @@ struct Node {
     // the sends its In modules take. No chain, fader or Console 9 stage.
     std::shared_ptr<RackNode> rack;
     std::vector<Stereo> rackOuts, rackIns;
+    std::vector<Stage> rackStages;  // its plugin modules' plug-ins
     std::optional<model::TrackFreeze> freeze;
     std::shared_ptr<const audio::AudioData> frozenAudio;
     // Auxiliary channels 3.. (ADR-0020): summed from routes, read and written
@@ -656,6 +657,7 @@ struct Node {
 // Every stage of a node: its chain's, then its take chains'.
 template <class N, class F>
 void forEachStage(N& node, F&& f) {
+    for (auto& st : node.rackStages) f(st);
     for (auto& st : node.inputChain) f(st);
     for (auto& st : node.chain) f(st);
     for (auto& tc : node.takeChains)
@@ -834,6 +836,10 @@ inline const Stereo& recordSignal(const Node& n) SUPPLE_RT {
 // unshifted), as its instrument hears them.
 std::vector<TimedEvent> compileTrackEvents(const Session& s, Id track, double startSeconds,
                                            double rate);
+// A plugin module's stage (rack_runtime.cpp): its automation for `n` frames
+// at `pos`, then the plug-in in place on `io`.
+bool runModuleStage(Plan& p, Stage& st, Stereo& io, std::uint32_t n,
+                    const host::Transport& transport, std::int64_t pos, const void* self) SUPPLE_RT;
 // An edge's signal summed into `into` through its compensation delay.
 void addEdgeInto(Plan& p, Edge& e, Stereo& into, std::int64_t pos, std::uint32_t n) SUPPLE_RT;
 

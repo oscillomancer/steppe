@@ -7,6 +7,7 @@
 // RackPool across plans, as plug-ins live in the InstancePool.
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -15,21 +16,43 @@
 #include <vector>
 
 #include "plan.h"
+#include "supple/engine/racks.h"
 #include "supple/model/session.h"
 #include "supple/rack/host_modules.h"
 #include "supple/rack/schedule.h"
 
 namespace supple::engine::detail {
 
-// The module types every engine knows: the host modules and the stock ones.
+// The module types every engine knows: the host modules (the rack runtime's
+// and the plugin module) and the stock ones.
 std::shared_ptr<const rack::Catalog> builtinModuleCatalog();
+using engine::moduleParamJson;
+using engine::moduleParamValue;
+using engine::pluginModuleType;
 
-// A module's knob from its JSON value (a number, a choice's key, a bool), in
-// the physical units Instance::setParam takes; the default when absent or
-// not one of its values.
-double moduleParamValue(const script::detail::ParamModel& param, const json::Value* value);
-// The JSON value a physical value is written as (rack.md §2.2).
-json::Value moduleParamJson(const script::detail::ParamModel& param, double physical);
+// A plugin module (rack.md §5): its plug-in, a stage of the rack node, runs
+// on the rack's grid. Audio in_l/in_r (R normalled to L) to out_l/out_r;
+// poly pitch and gate cables play notes to an instrument (velocity 0..1).
+class PluginModule final : public rack::HostModule {
+  public:
+    void process(const rack::HostContext& ctx) SUPPLE_RT override;
+    // Set by processRack for each block.
+    Plan* plan = nullptr;
+    Node* node = nullptr;
+    const host::Transport* transport = nullptr;
+    const void* self = nullptr;
+    std::int64_t pos = 0;  // the host block's plan sample
+    bool failed = false;
+    int stage = -1;  // in Node::rackStages; -1: no plug-in (silent)
+    Stereo io;
+
+  private:
+    struct Voice {
+        bool high = false;
+        int key = -1;
+    };
+    std::array<Voice, rack::kChannels> voices_{};
+};
 
 // Module instances by module id, kept while the module's type, its code and
 // the rate stay; replaced ones live until every plan that may use them is
@@ -98,6 +121,7 @@ struct RackNode {
     std::vector<rack::host::In*> ins;  // Node::rackIns
     std::vector<Id> inIds;
     std::vector<NotesFeed> notes;
+    std::vector<PluginModule*> plugins;
     std::vector<std::unique_ptr<RackCurve>> curves;
     RackClock clock;
     std::int64_t origin = 0;  // the absolute timeline sample of plan sample 0
@@ -111,12 +135,12 @@ struct RackNode {
 // Compiles rack `rack` into node `n` (main thread): instances from the pool,
 // the schedule, its Out/In bindings and Notes feeds. Warnings for what it
 // leaves out.
-Status compileRack(Plan& p, Node& n, const Session& s, Id rack, RackPool& pool);
+Status compileRack(Plan& p, Node& n, const Session& s, Id rack, InstancePool& pool);
 // After the plan's timeline shifts are solved (prepare): events and curves.
 void prepareRack(Plan& p, Node& n, const Session& s);
 // One block of a rack node (processNode's for racks).
 bool processRack(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames,
-                 const host::Transport& transport) SUPPLE_RT;
+                 const host::Transport& transport, const void* self) SUPPLE_RT;
 // Cursors to `pos`; a seek (`restart`) or a loop wrap also ends held notes.
 void locateRack(Node& n, std::int64_t pos, bool restart) SUPPLE_RT;
 

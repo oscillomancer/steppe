@@ -2929,7 +2929,7 @@
   {
     "name": "env_add",
     "title": "Automate a parameter: a track's or route's mixer control, or a plugin's.",
-    "description": "Automate a parameter: a track's or route's mixer control, or a plugin's. Target one of track (param volume|pan|mute; playrate only on tr_0), route (volume|pan|mute), group (VCA volume|mute), or fx (a semantic key such as \"gain\" or \"filter1.cutoff\", or for other plugins a CLAP id or parameter name). points: [{beat|bar|seconds, value, shape?, tension?}]; values in the parameter's unit (dB, %, Hz… — text like \"800 Hz\" works for plugins); shapes linear, square, slow, fast_start, fast_end, bezier. Plugin values move along the parameter's curve (a log cutoff sweeps evenly in pitch). take (param volume|pan|mute): a take envelope, its points in beats from the item's start (it moves with the item); it shapes the take after its take FX (a MIDI take needs an instrument in its take FX). Master playrate points are finite numeric ratios 0.25..4.0; an active nonempty master curve replaces the saved scalar during playback and rendering. Audio sources convert before take FX/live mixing; MIDI and automation follow the same timeline clock. See describe for errors and examples.",
+    "description": "Automate a parameter: a track's or route's mixer control, or a plugin's. Target one of track (param volume|pan|mute; playrate only on tr_0), route (volume|pan|mute), group (VCA volume|mute), or fx (a semantic key such as \"gain\" or \"filter1.cutoff\", or for other plugins a CLAP id or parameter name), or module (a rack module's knob by key, values in its unit, a choice by its key; module.describe). points: [{beat|bar|seconds, value, shape?, tension?}]; values in the parameter's unit (dB, %, Hz… — text like \"800 Hz\" works for plugins); shapes linear, square, slow, fast_start, fast_end, bezier. Plugin values move along the parameter's curve (a log cutoff sweeps evenly in pitch). take (param volume|pan|mute): a take envelope, its points in beats from the item's start (it moves with the item); it shapes the take after its take FX (a MIDI take needs an instrument in its take FX). Master playrate points are finite numeric ratios 0.25..4.0; an active nonempty master curve replaces the saved scalar during playback and rendering. Audio sources convert before take FX/live mixing; MIDI and automation follow the same timeline clock. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "env_add_args",
@@ -2938,6 +2938,11 @@
           "type": "string",
           "pattern": "^tr_[0-9]+$",
           "description": "Track id, e.g. \"tr_1\"."
+        },
+        "module": {
+          "type": "string",
+          "pattern": "^mo_[0-9]+$",
+          "description": "Rack module id, e.g. \"mo_1\"."
         },
         "take": {
           "type": "string",
@@ -6091,7 +6096,7 @@
   {
     "name": "module_add",
     "title": "Add a module to a rack: a type with knob values.",
-    "description": "Add a module to a rack: a type with knob values. type: an id or a short name (\"vca\", \"notes\"; module.list). x, y: its top-left corner in the rack (default: right of the others). params: knob values by key in the knob's units (a choice by its key, a switch as a bool). Notes: source (the track whose MIDI it plays; default the rack's channel) and device (a live MIDI input it always plays; \"\" any). plugin: a plug-in id (fx.scan) for a plugin module, which shows the plug-in's name and opens its editor; its ports are in_l, in_r, out_l, out_r. Returns its size and keys. See describe for errors and examples.",
+    "description": "Add a module to a rack: a type with knob values. type: an id or a short name (\"vca\", \"notes\"; module.list). x, y: its top-left corner in the rack (default: right of the others). params: knob values by key in the knob's units (a choice by its key, a switch as a bool). Notes: source (the track whose MIDI it plays; default the rack's channel) and device (a live MIDI input it always plays; \"\" any). plugin (instead of type): a plug-in id (fx.scan) for a plugin module, which shows the plug-in's name and opens its editor; its ports are in_l, in_r, out_l, out_r and, for instruments, pitch, gate and velocity. preset: a factory preset (module.describe), params on top. Returns its size and keys. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "module_add_args",
@@ -6105,6 +6110,10 @@
         },
         "label": {
           "type": "string"
+        },
+        "preset": {
+          "type": "string",
+          "minLength": 1
         },
         "x": {
           "type": "number",
@@ -6128,11 +6137,36 @@
           "type": "string"
         }
       },
-      "required": ["rack", "type"],
+      "required": ["rack"],
       "additionalProperties": false
     },
     "annotations": {
       "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "module_check",
+    "title": "Compile a module without saving it; return its diagnostics and description.",
+    "description": "Compile a module without saving it; return its diagnostics and description. source (a whole module) or name (one in the library). ok is true when it compiles; type then describes it as module.describe would. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "module_check_args",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
       "destructiveHint": false,
       "idempotentHint": false
     }
@@ -6195,6 +6229,111 @@
     },
     "annotations": {
       "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "module_edit",
+    "title": "Edit a library module in place: replace text, then save and compile it.",
+    "description": "Edit a library module in place: replace text, then save and compile it. name (or type, a library module's id). Each edit replaces old, which must be in the source exactly once, with new (empty deletes it), in order and all or none. Then as module.write: saved, compiled, and racks playing it rebuilt. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "module_edit_args",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "edits": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "title": "module_edit",
+            "properties": {
+              "old": {
+                "type": "string",
+                "minLength": 1,
+                "description": "text the source has in one place"
+              },
+              "new": {
+                "type": "string",
+                "description": "what replaces it"
+              }
+            },
+            "required": ["old", "new"],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 256
+        }
+      },
+      "required": ["edits"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "module_fork",
+    "title": "Copy a module type's source into the library under a new id.",
+    "description": "Copy a module type's source into the library under a new id. type: the one to copy (stock or library). id: the copy's (\"com.<you>.<name>\"). name: its library name (default: the id's last part). The copy is saved and compiled as module.write does; then module.edit changes it. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "module_fork_args",
+      "properties": {
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "id": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 128
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": ["type", "id"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "module_get",
+    "title": "A module type's source: stock or library.",
+    "description": "A module type's source: stock or library. type (an id or short name: every stock module's source is readable, a good start for your own) or name (a library module's file, also when it does not compile). See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "module_get_args",
+      "properties": {
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
       "destructiveHint": false,
       "idempotentHint": false
     }
@@ -6277,7 +6416,7 @@
   {
     "name": "module_set",
     "title": "Set a module's knobs, label, place or bypass.",
-    "description": "Set a module's knobs, label, place or bypass. params merge into its knobs (values in the knob's units; a choice by key; a default value is dropped from the file). A knob edit is heard at once, without a recompile. bypass passes each input to the output of its kind. label names it (an Out module's label is what channels' input menus list). See describe for errors and examples.",
+    "description": "Set a module's knobs, label, place or bypass. params merge into its knobs (values in the knob's units; a choice by key; a default value is dropped from the file). A knob edit is heard at once, without a recompile. bypass passes each input to the output of its kind. label names it (an Out module's label is what channels' input menus list). preset: a factory preset by name (module.describe lists them): every knob to it, then params on top. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "module_set_args",
@@ -6289,6 +6428,10 @@
         "params": {},
         "label": {
           "type": "string"
+        },
+        "preset": {
+          "type": "string",
+          "minLength": 1
         },
         "x": {
           "type": "number",
@@ -6318,6 +6461,33 @@
       "readOnlyHint": false,
       "destructiveHint": false,
       "idempotentHint": true
+    }
+  },
+  {
+    "name": "module_write",
+    "title": "Write a module to the library and compile it; racks use it at once.",
+    "description": "Write a module to the library and compile it; racks use it at once. name: its library name (lower case, digits, '_' or '-'). source: the whole module, a struct deriving from Module (the module guide; module.get shows any type's source). The file is saved even when it does not compile, so module.edit can fix it; ok and diagnostics (line, column, hint) say how it went. Once it compiles, type describes it as module.describe does and module.add takes its id; modules already playing it are rebuilt with the new code (reloaded counts them), their knobs kept. A version that does not compile leaves racks on the last that did. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "module_write_args",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["name", "source"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false
     }
   },
   {

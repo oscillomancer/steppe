@@ -242,6 +242,23 @@ struct's create/destroy/copy, and the hooks `prepare`, `update`,
 record is `supple::script::detail::Instance` with a `ModuleBinding` for
 ports and channels.
 
+### 3.8 The library
+
+The user's modules live in the library, `<data>/<slug>/modules` (the app's
+data folder; `AppOptions::moduleDir`, `<workdir>/modules` under
+`--workdir`): `<name>/<name>.cpp`, one module each, the name 1–64
+lower-case letters, digits, `_` or `-`. The engine compiles every one when
+it starts (`loadModuleLibrary`); one that does not compile, or whose id a
+built-in type or an earlier name has, is left out. `module.write`,
+`module.edit` and `module.fork` save a file, compile it and, when it
+compiles, put its type in the catalog in place of the old one
+(`EngineApp::setModules`): the next plan builds new instances of every
+module playing it, with their knobs (§4.1: catalog generations). A version
+that does not compile is saved but leaves racks on the last that did. A
+library module may not take a host or stock type's id (`module.fork`
+copies one under a new id). Offline renders and background jobs use the
+catalog of the moment they start (`OfflineSettings::modules`).
+
 ## 4. The rack runtime (`modules/rack`)
 
 ### 4.1 Types
@@ -320,7 +337,7 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
 | `in` | out `l`, `r` (audio) | `level` dB −60..12 (0) | Fed by sends (`route.add {to: {module}}`) |
 | `notes` | out `pitch`, `gate`, `velocity` (unipolar), `pressure` (unipolar), `retrigger` (gate), poly; `bend` (cv), `modwheel` (unipolar) mono | `voices` 1..16 (8), `mode` (`rotate`, `reuse`, `reset`, `mono_last`, `mono_low`, `mono_high`), `bend_range` semitones 0..24 (2) | MIDI from `source` (default: the home track): its MIDI items and its live MIDI input when it monitors |
 | `transport` | out `playing` (gate), `reset` (trigger at play and locate), `bar` and `beat` (triggers), `clock` (trigger at `division`), `bar_phase`, `beat_phase` (phase), `tempo` (cv: bpm / 300) | `division` (1/1 … 1/64, dotted, triplets; 1/16) , `swing` % 0..75 (0) | From the timeline: positions are exact at every frame |
-| `plugin` | in `in_l`, `in_r` (audio), `pitch`, `gate`, `velocity` (poly, instruments); out `out_l`, `out_r` (audio) | the plug-in's, as cable targets `fx_N.<key>` | Its `fx` is an ordinary FX instance; clicking the module opens its editor |
+| `plugin` | in `in_l`, `in_r` (audio, `in_r` normalled to `in_l`; poly cables summed), `pitch`, `gate`, `velocity` (poly, normal 0.8); out `out_l`, `out_r` (audio) | the plug-in's, as cable targets `fx_N.<key>` | Its `fx` is an ordinary FX instance in no chain; clicking the module opens its editor. Each gate channel is a voice: rising to 0.5 or above plays key round(60 + 12 × pitch) at its velocity, falling below 0.25 (or its cable going) ends it |
 
 ## 6. Engine integration (`host/engine`)
 
@@ -343,10 +360,12 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   compile). Envelopes on module parameters compile to curves the schedule
   samples on the grid. MIDI learn drives the same slots.
 - **Plugin modules.** Their instances come from the instance pool by fx id
-  and run as stages inside the rack node, in sub-blocks on the grid, with
-  notes made from their pitch and gate cables and parameter modulation from
-  cables as CLAP `param_mod` events. A bridged plugin module in a live rack
-  passes through, as on a live strip.
+  and run as stages of the rack node (`Node::rackStages`, prepared and
+  automated as chain stages), in sub-blocks on the grid, with notes made
+  from their pitch and gate cables and parameter modulation from cables as
+  CLAP `param_mod` events (not yet: such cables are reported and ignored).
+  Their latency is not compensated inside the rack. A bridged plugin module
+  in a live rack passes through, as on a live strip.
 - **State.** Module instances are kept per rack across plans (keyed by
   module id and code generation) as plugin instances are; offline renders
   build their own from the session.
@@ -372,22 +391,31 @@ examples run as tests. Ends are strings: `"mo_3.out"`.
 | `rack.preset.list` | query | `{}` |
 | `module.list` | query | `{query?, tag?}` → types: id, name, tags, one line, origin |
 | `module.describe` | query | `{type\|module}` → parameters (key, unit, range, default, help, group, choices), ports (key, signal, help, normal), size, presets |
-| `module.add` | edit | `{rack, type, label?, x?, y?, params?, preset?, source?, plugin?}` → `{module, x, y, width, height, inputs, outputs, params}` |
+| `module.add` | edit | `{rack, type\|plugin, label?, x?, y?, params?, preset?, source?, device?}` → `{module, type, x, y, width, height, inputs, outputs, knobs, fx?, plugin?}` |
 | `module.remove` | edit | `{module}` (its cables; a plugin module's fx; an Out module's routes) |
 | `module.set` | edit | `{module, params?, label?, x?, y?, bypass?, source?, preset?}` |
 | `module.duplicate` | edit | `{modules, dx?, dy?, cables?}` → new ids |
 | `module.randomize` | edit | `{module, amount?, seed?}` |
-| `module.write` | action | `{name, source}` → diagnostics, `{type}`; racks using it reload |
-| `module.edit` | action | `{type\|name, edits: [{old, new}]}` |
-| `module.check` | query | `{source}` → diagnostics, description |
-| `module.get` | query | `{type}` → its source |
-| `module.fork` | action | `{type, id, name?}` → copies a module's source into the library under a new id |
+| `module.write` | action | `{name, source}` → `{name, path, ok, diagnostics, type?, reloaded?, playing?}`: `type` as `module.describe`; `reloaded` counts the modules rebuilt; `playing` when a broken version leaves the last good one in use |
+| `module.edit` | action | `{type\|name, edits: [{old, new}]}` → as `module.write` (library modules only) |
+| `module.check` | query | `{source\|name}` → `{ok, diagnostics, type?}` |
+| `module.get` | query | `{type\|name}` → `{type, origin, source, name?, path?}` (host modules have none) |
+| `module.fork` | action | `{type, id, name?}` → as `module.write`: the type's source under a new id, in the library |
 | `cable.add` | edit | `{from, to, amount?, color?}` → `{cable, feedback, warnings}` |
 | `cable.remove` | edit | `{cable}` or `{from, to}` |
 | `cable.set` | edit | `{cable, amount?, color?}` |
 
 Errors carry `code`, `message`, `path` and a `hint` naming what exists
 (`"mo_2 has inputs pitch, fm, sync"`).
+
+A module's knob is automated with `env.add {module, param, points}`
+(values in the knob's unit, a choice by its key); a plugin module's knobs
+are its plug-in's (`env.add {fx}`). `preset` on `module.add` and
+`module.set` is one of the type's factory presets (`module.describe`
+lists them): every knob goes to it, then `params` apply on top. The app
+reaches racks through `EngineApp::modules()` (the catalog),
+`EngineApp::moduleInstance()` (a running module's telemetry) and
+`supple/engine/racks.h`.
 
 ## 8. The rack window (`daw/gui`)
 

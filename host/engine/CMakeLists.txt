@@ -8,7 +8,7 @@ find_package(ZLIB REQUIRED)
 supple_add_library(engine
   SOURCES src/transients.cpp src/audio_commands.cpp src/prepared_sources.cpp src/offline.cpp src/plan.cpp src/workers.cpp src/live_workers.cpp src/realtime.cpp src/recording.cpp
           src/stretch.cpp src/playrate_dsp.cpp src/playrate_timeline.cpp src/rate_sources.cpp src/rate_runtime.cpp src/mix_runtime.cpp src/meters.cpp src/runtime_protection.cpp src/media_files.cpp
-          src/rack_runtime.cpp src/rack_commands.cpp src/app.cpp src/plugin_outputs.cpp src/commands.cpp src/extra_commands.cpp src/group_commands.cpp src/midi_commands.cpp src/analysis_commands.cpp
+          src/rack_runtime.cpp src/rack_commands.cpp src/module_library.cpp src/module_commands.cpp src/app.cpp src/plugin_outputs.cpp src/commands.cpp src/extra_commands.cpp src/group_commands.cpp src/midi_commands.cpp src/analysis_commands.cpp
           src/freeze_commands.cpp src/consolidate_commands.cpp src/export_commands.cpp src/mix_commands.cpp src/heal_commands.cpp src/render_commands.cpp src/render_settings.cpp src/render_chain.cpp src/chain_commands.cpp src/take_commands.cpp src/learn.cpp src/control_learn.cpp src/dsp_commands.cpp
           src/midi_control.cpp src/midi_input.cpp src/portaudio_backend.cpp src/portaudio_native.cpp
   DEPS supple::model supple::clap-host supple::audio-file supple::timeline supple::semantic-params-abi
@@ -54,7 +54,7 @@ if(SUPPLE_BUILD_TESTS AND SUPPLE_PLATFORM_LINUX)
   supple_add_tests(engine SOURCES tests/test_item_edits.cpp tests/test_audio_warp.cpp tests/test_offline.cpp tests/test_freeze.cpp tests/test_instance_pool.cpp tests/test_autosave.cpp tests/test_take_copy.cpp tests/test_groups.cpp tests/test_media_files.cpp tests/test_recording_shutdown.cpp tests/test_realtime.cpp tests/test_app.cpp
                    tests/test_commands.cpp tests/test_scripts.cpp tests/test_strips.cpp tests/test_playrate.cpp tests/test_mix_edits.cpp tests/test_pdc.cpp
                    tests/test_runtime_protection.cpp tests/test_jack.cpp tests/test_workers.cpp tests/test_live_workers.cpp tests/test_meters.cpp
-                   tests/test_learn.cpp tests/test_dsp.cpp tests/test_bridge_engine.cpp tests/test_render.cpp tests/test_racks.cpp LABELS rt SPLIT)
+                   tests/test_learn.cpp tests/test_dsp.cpp tests/test_bridge_engine.cpp tests/test_render.cpp tests/test_racks.cpp tests/test_module_library.cpp LABELS rt SPLIT)
   target_include_directories(engine.tests PRIVATE src)
   target_include_directories(engine.tests PRIVATE ${PROJECT_SOURCE_DIR}/tests/fuzz)
   add_dependencies(engine.tests clap-host-fixtures clap-host-vst3-fixtures engine-fake-jack ${PRODUCT_SLUG}-bridge)
@@ -68,7 +68,7 @@ if(SUPPLE_BUILD_TESTS AND SUPPLE_PLATFORM_LINUX)
 endif()
 
 if(SUPPLE_BUILD_TESTS AND NOT SUPPLE_PLATFORM_LINUX)
-  supple_add_tests(engine SOURCES tests/test_item_edits.cpp tests/test_audio_warp.cpp tests/test_native_engine.cpp tests/test_freeze.cpp tests/test_instance_pool.cpp tests/test_autosave.cpp tests/test_take_copy.cpp tests/test_groups.cpp tests/test_media_files.cpp tests/test_recording_shutdown.cpp tests/test_bridge_engine.cpp tests/test_playrate.cpp tests/test_mix_edits.cpp tests/test_pdc.cpp tests/test_render.cpp tests/test_racks.cpp LABELS rt)
+  supple_add_tests(engine SOURCES tests/test_item_edits.cpp tests/test_audio_warp.cpp tests/test_native_engine.cpp tests/test_freeze.cpp tests/test_instance_pool.cpp tests/test_autosave.cpp tests/test_take_copy.cpp tests/test_groups.cpp tests/test_media_files.cpp tests/test_recording_shutdown.cpp tests/test_bridge_engine.cpp tests/test_playrate.cpp tests/test_mix_edits.cpp tests/test_pdc.cpp tests/test_render.cpp tests/test_racks.cpp tests/test_module_library.cpp LABELS rt)
   target_include_directories(engine.tests PRIVATE src)
   add_dependencies(engine.tests clap-host-fixtures ${PRODUCT_SLUG}-scanner ${PRODUCT_SLUG}-bridge)
   target_compile_definitions(engine.tests PRIVATE FIXTURE_CLAP_PATH="$<TARGET_FILE:clap-host-fixtures>" BRIDGE_PATH="$<TARGET_FILE:${PRODUCT_SLUG}-bridge>")

@@ -239,6 +239,27 @@ Result<json::Value> mergeParams(const rack::ModuleType& t, const json::Value& ba
 }
 
 // What a module's face measures (its type's layout), or a small default.
+// A factory preset's knobs (rack.md §7), as params: its values, the others
+// at their defaults.
+Result<json::Value> presetParams(const rack::ModuleType& t, const std::string& name,
+                                 const char* path) {
+    std::string names;
+    if (t.code())
+        for (const auto& patch : t.code()->factoryPatches()) {
+            if (patch.name == name) {
+                json::Value out = json::Value::object();
+                for (const auto& [id, value] : patch.values)
+                    for (const auto& p : t.params())
+                        if (p.id == id && !p.output && value != p.def)
+                            out[p.key] = detail::moduleParamJson(p, value);
+                return out;
+            }
+            names += (names.empty() ? "" : ", ") + patch.name;
+        }
+    return Error("rack.preset", t.id() + " has no preset \"" + name + "\"", path,
+                 names.empty() ? "it has no presets" : "presets: " + names);
+}
+
 std::pair<double, double> sizeOf(const rack::ModuleType* t) {
     if (!t) return {120, 120};
     return {t->layout().width, t->layout().height};
@@ -285,6 +306,74 @@ void removeModule(model::EditTxn& t, const model::Session& s, Id module) {
 }
 
 }  // namespace
+
+// Exposed to the module library's commands (module_commands.cpp).
+json::Value describeModuleType(const rack::ModuleType& t) {
+    json::Value out = json::Value::object();
+    out["type"] = t.id();
+    out["name"] = t.info().name;
+    out["origin"] = std::string(rack::originName(t.origin()));
+    out["vendor"] = t.info().vendor;
+    out["version"] = t.info().version;
+    out["description"] = t.info().description;
+    if (!t.path().empty()) out["path"] = t.path();
+    if (t.code() && !t.code()->factoryPatches().empty()) {
+        json::Value presets = json::Value::array();
+        for (const auto& patch : t.code()->factoryPatches()) presets.push_back(patch.name);
+        out["presets"] = std::move(presets);
+    }
+    json::Value tags = json::Value::array();
+    for (const auto& tag : t.info().tags)
+        if (!tag.empty()) tags.push_back(tag);
+    out["tags"] = std::move(tags);
+    out["width"] = t.layout().width;
+    out["height"] = t.layout().height;
+    json::Value knobs = json::Value::array();
+    for (const auto& p : t.params()) {
+        if (p.output) continue;
+        json::Value k = json::Value::object();
+        k["key"] = p.key;
+        k["name"] = p.name;
+        k["kind"] = std::string(kindName(p.kind));
+        if (!unitName(p.unit).empty()) k["unit"] = std::string(unitName(p.unit));
+        if (p.kind != sd::ParamModel::Kind::Choice && p.kind != sd::ParamModel::Kind::Toggle) {
+            k["min"] = p.min;
+            k["max"] = p.max;
+        }
+        k["default"] = detail::moduleParamJson(p, p.def);
+        if (p.kind == sd::ParamModel::Kind::Choice) {
+            json::Value choices = json::Value::array();
+            for (std::size_t i = 0; i < p.choices.size(); ++i)
+                choices.push_back(sd::choiceKey(p, i));
+            k["choices"] = std::move(choices);
+        }
+        if (!p.group.empty()) k["group"] = p.group;
+        if (!p.description.empty()) k["help"] = p.description;
+        knobs.push_back(std::move(k));
+    }
+    out["knobs"] = std::move(knobs);
+    for (const bool output : {false, true}) {
+        json::Value ports = json::Value::array();
+        for (int k : output ? t.outputs() : t.inputs()) {
+            const sd::PortModel& p = t.ports()[static_cast<std::size_t>(k)];
+            json::Value x = json::Value::object();
+            x["key"] = p.key;
+            x["name"] = p.name;
+            x["signal"] = std::string(signalName(p.signal));
+            if (!p.description.empty()) x["help"] = p.description;
+            if (!output && p.normal != 0) x["normal"] = p.normal;
+            if (!p.group.empty()) x["group"] = p.group;
+            ports.push_back(std::move(x));
+        }
+        out[output ? "outputs" : "inputs"] = std::move(ports);
+    }
+    return out;
+}
+
+Result<std::shared_ptr<const rack::ModuleType>> moduleTypeOf(EngineApp& a, std::string_view name,
+                                                             const char* path) {
+    return typeOf(a, name, path);
+}
 
 // Exposed to track.remove (commands.cpp): a track's racks go with it.
 void removeRacksOn(model::EditTxn& t, const model::Session& s, Id track) {
@@ -442,8 +531,8 @@ struct ModuleDescribe {
     std::optional<std::string> type, module;
 };
 struct ModuleAdd {
-    std::string rack, type;
-    std::optional<std::string> label;
+    std::string rack;
+    std::optional<std::string> type, label, preset;
     std::optional<double> x, y;
     std::optional<json::Value> params;
     std::optional<std::string> source, device, plugin;
@@ -454,7 +543,7 @@ struct ModuleRef {
 struct ModuleSet {
     std::string module;
     std::optional<json::Value> params;
-    std::optional<std::string> label;
+    std::optional<std::string> label, preset;
     std::optional<double> x, y;
     std::optional<bool> bypass;
     std::optional<std::string> source, device;
@@ -834,61 +923,7 @@ void registerRackCommands(cmd::Registry& registry) {
                 return Error("module.describe", "give type or module", "",
                              "e.g. {\"type\": \"vca\"}");
             }
-            const rack::ModuleType& t = *type;
-            json::Value out = json::Value::object();
-            out["type"] = t.id();
-            out["name"] = t.info().name;
-            out["origin"] = std::string(rack::originName(t.origin()));
-            out["vendor"] = t.info().vendor;
-            out["version"] = t.info().version;
-            out["description"] = t.info().description;
-            json::Value tags = json::Value::array();
-            for (const auto& tag : t.info().tags)
-                if (!tag.empty()) tags.push_back(tag);
-            out["tags"] = std::move(tags);
-            out["width"] = t.layout().width;
-            out["height"] = t.layout().height;
-            json::Value knobs = json::Value::array();
-            for (const auto& p : t.params()) {
-                if (p.output) continue;
-                json::Value k = json::Value::object();
-                k["key"] = p.key;
-                k["name"] = p.name;
-                k["kind"] = std::string(kindName(p.kind));
-                if (!unitName(p.unit).empty()) k["unit"] = std::string(unitName(p.unit));
-                if (p.kind != sd::ParamModel::Kind::Choice &&
-                    p.kind != sd::ParamModel::Kind::Toggle) {
-                    k["min"] = p.min;
-                    k["max"] = p.max;
-                }
-                k["default"] = detail::moduleParamJson(p, p.def);
-                if (p.kind == sd::ParamModel::Kind::Choice) {
-                    json::Value choices = json::Value::array();
-                    for (std::size_t i = 0; i < p.choices.size(); ++i)
-                        choices.push_back(sd::choiceKey(p, i));
-                    k["choices"] = std::move(choices);
-                }
-                if (!p.group.empty()) k["group"] = p.group;
-                if (!p.description.empty()) k["help"] = p.description;
-                knobs.push_back(std::move(k));
-            }
-            out["knobs"] = std::move(knobs);
-            for (const bool output : {false, true}) {
-                json::Value ports = json::Value::array();
-                for (int k : output ? t.outputs() : t.inputs()) {
-                    const sd::PortModel& p = t.ports()[static_cast<std::size_t>(k)];
-                    json::Value x = json::Value::object();
-                    x["key"] = p.key;
-                    x["name"] = p.name;
-                    x["signal"] = std::string(signalName(p.signal));
-                    if (!p.description.empty()) x["help"] = p.description;
-                    if (!output && p.normal != 0) x["normal"] = p.normal;
-                    if (!p.group.empty()) x["group"] = p.group;
-                    ports.push_back(std::move(x));
-                }
-                out[output ? "outputs" : "inputs"] = std::move(ports);
-            }
-            return out;
+            return describeModuleType(*type);
         };
         addChecked(registry, std::move(c));
     }();
@@ -901,13 +936,16 @@ void registerRackCommands(cmd::Registry& registry) {
             "corner in the rack (default: right of the others). params: knob values by key in "
             "the knob's units (a choice by its key, a switch as a bool). Notes: source (the "
             "track whose MIDI it plays; default the rack's channel) and device (a live MIDI "
-            "input it always plays; \"\" any). plugin: a plug-in id (fx.scan) for a plugin "
-            "module, which shows the plug-in's name and opens its editor; its ports are in_l, "
-            "in_r, out_l, out_r. Returns its size and keys.";
+            "input it always plays; \"\" any). plugin (instead of type): a plug-in id "
+            "(fx.scan) for a plugin module, which shows the plug-in's name and opens its "
+            "editor; its ports are in_l, in_r, out_l, out_r and, for instruments, pitch, gate "
+            "and velocity. preset: a factory preset (module.describe), params on top. Returns "
+            "its size and keys.";
         c.args = schema::object<ModuleAdd>("module_add_args")
                      .field("rack", &ModuleAdd::rack, idOf("rk", "Rack"))
                      .field("type", &ModuleAdd::type, schema::string())
                      .field("label", &ModuleAdd::label, schema::string())
+                     .field("preset", &ModuleAdd::preset, schema::string().minLength(1))
                      .field("x", &ModuleAdd::x, coordinate())
                      .field("y", &ModuleAdd::y, coordinate())
                      .field("params", &ModuleAdd::params, schema::any())
@@ -915,13 +953,21 @@ void registerRackCommands(cmd::Registry& registry) {
                      .field("device", &ModuleAdd::device, schema::string())
                      .field("plugin", &ModuleAdd::plugin, schema::string())
                      .build();
-        c.examples = {{"A VCA, half open",
-                       j(R"({"rack": "rk_1", "type": "vca", "params": {"level": -6}})"),
-                       j(R"({"module": "mo_4", "type": "com.suppleaudio.rack.vca", "x": "<any>",
+        c.examples = {
+            {"A VCA, half open", j(R"({"rack": "rk_1", "type": "vca", "params": {"level": -6}})"),
+             j(R"({"module": "mo_4", "type": "com.suppleaudio.rack.vca", "x": "<any>",
                              "y": 40.0, "width": "<any>", "height": "<any>",
                              "inputs": ["in", "cv"], "outputs": ["out"],
                              "knobs": ["level", "response"]})"),
-                       "song_with_rack"}};
+             "song_with_rack"},
+            {"An instrument plug-in, played by cables from Notes",
+             j(R"({"rack": "rk_1", "plugin": "com.suppleaudio.test.sine"})"),
+             j(R"({"module": "mo_4", "type": "com.suppleaudio.rack.plugin",
+                             "x": "<any>", "y": "<any>", "width": "<any>", "height": "<any>",
+                             "inputs": ["in_l", "in_r", "pitch", "gate", "velocity"],
+                             "outputs": ["out_l", "out_r"], "knobs": [], "fx": "fx_1",
+                             "plugin": "Test Sine"})"),
+             "song_with_rack"}};
         c.errors = {{"rack.unknown_type", "no such module type", "module.list"},
                     {"rack.param", "a knob or value the type does not have", "module.describe"},
                     {"rack.limit", "too many modules", "remove modules first"}};
@@ -943,10 +989,20 @@ void registerRackCommands(cmd::Registry& registry) {
             model::RackModule m;
             m.rack = *rack;
             std::shared_ptr<const rack::ModuleType> type;
+            // A plugin module: plugin, with no type or the plugin type.
+            const bool pluginType =
+                a.type && (*a.type == "plugin" || *a.type == model::kPluginModule);
+            if (a.plugin ? a.type && !pluginType : !a.type || pluginType)
+                return Error("command.invalid_args",
+                             a.plugin ? "give a type or a plugin, not both"
+                                      : "a module needs a type, or a plug-in to host",
+                             a.plugin || !a.type ? "/type" : "/plugin",
+                             "give type (module.list) for a module, or plugin (an fx.scan id) "
+                             "for a plug-in");
             if (a.plugin) {
                 m.type = std::string(model::kPluginModule);
             } else {
-                auto t = typeOf(e, a.type, "/type");
+                auto t = typeOf(e, *a.type, "/type");
                 if (!t) return std::move(t).error();
                 type = *t;
                 m.type = type->id();
@@ -970,11 +1026,19 @@ void registerRackCommands(cmd::Registry& registry) {
             }
             m.device = a.device;
             if (a.label) m.label = *a.label;
-            if (a.params) {
+            if (a.params || a.preset) {
                 if (!type)
                     return Error("rack.param", "a plugin module's knobs are its plug-in's",
-                                 "/params", "set them with fx.set on its fx");
-                auto params = mergeParams(*type, json::Value::object(), *a.params, "/params");
+                                 a.params ? "/params" : "/preset",
+                                 "set them with fx.set, or fx.preset.load, on its fx");
+                json::Value base = json::Value::object();
+                if (a.preset) {
+                    auto preset = presetParams(*type, *a.preset, "/preset");
+                    if (!preset) return std::move(preset).error();
+                    base = std::move(*preset);
+                }
+                auto params = a.params ? mergeParams(*type, base, *a.params, "/params")
+                                       : Result<json::Value>(std::move(base));
                 if (!params) return std::move(params).error();
                 m.params = std::move(*params);
             }
@@ -1033,11 +1097,13 @@ void registerRackCommands(cmd::Registry& registry) {
             "params merge into its knobs (values in the knob's units; a choice by key; a "
             "default value is dropped from the file). A knob edit is heard at once, without a "
             "recompile. bypass passes each input to the output of its kind. label names it "
-            "(an Out module's label is what channels' input menus list).";
+            "(an Out module's label is what channels' input menus list). preset: a factory "
+            "preset by name (module.describe lists them): every knob to it, then params on top.";
         c.args = schema::object<ModuleSet>("module_set_args")
                      .field("module", &ModuleSet::module, idOf("mo", "Module"))
                      .field("params", &ModuleSet::params, schema::any())
                      .field("label", &ModuleSet::label, schema::string())
+                     .field("preset", &ModuleSet::preset, schema::string().minLength(1))
                      .field("x", &ModuleSet::x, coordinate())
                      .field("y", &ModuleSet::y, coordinate())
                      .field("bypass", &ModuleSet::bypass, schema::boolean())
@@ -1054,14 +1120,24 @@ void registerRackCommands(cmd::Registry& registry) {
             auto id = moduleId(s, a.module);
             if (!id) return std::move(id).error();
             model::RackModule m = *s.modules.find(*id);
-            if (a.params) {
-                const auto type = typeOfModule(e, m);
+            if (a.params || a.preset) {
+                const char* path = a.params ? "/params" : "/preset";
+                const auto type = m.fx ? nullptr : typeOfModule(e, m);
                 if (!type)
-                    return Error("rack.param",
-                                 m.fx ? "a plugin module's knobs are its plug-in's"
-                                      : "its type " + m.type + " is not installed",
-                                 "/params", m.fx ? "use fx.set on " + m.fx->str() : "module.list");
-                auto params = mergeParams(*type, m.params, *a.params, "/params");
+                    return Error(
+                        "rack.param",
+                        m.fx ? "a plugin module's knobs are its plug-in's"
+                             : "its type " + m.type + " is not installed",
+                        path,
+                        m.fx ? "use fx.set or fx.preset.load on " + m.fx->str() : "module.list");
+                json::Value base = m.params;
+                if (a.preset) {  // every knob: the preset's, else its default
+                    auto preset = presetParams(*type, *a.preset, "/preset");
+                    if (!preset) return std::move(preset).error();
+                    base = std::move(*preset);
+                }
+                auto params = a.params ? mergeParams(*type, base, *a.params, "/params")
+                                       : Result<json::Value>(std::move(base));
                 if (!params) return std::move(params).error();
                 m.params = std::move(*params);
             }
