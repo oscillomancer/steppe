@@ -46,8 +46,10 @@ std::string moduleName(const rack::ModuleType& type);
 Status validModuleName(std::string_view name, const std::string& path);
 
 // A free library name: stem, stem-2, ...; occupied files, including broken
-// sources and symlinks, are left alone. Reports filesystem inspection errors.
-Result<std::string> availableModuleName(const std::filesystem::path& dir, std::string_view stem);
+// sources and symlinks, are left alone. With replaceId, a regular file that
+// compiles to that id may be reused. Reports filesystem inspection errors.
+Result<std::string> availableModuleName(const std::filesystem::path& dir, std::string_view stem,
+                                        std::string_view replaceId = {});
 
 // `base` with the library's modules in place of its library types: each
 // that compiles, by name; ids a host or stock type has, or an earlier name

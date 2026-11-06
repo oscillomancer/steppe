@@ -69,7 +69,8 @@ Status validModuleName(std::string_view name, const std::string& path) {
     return {};
 }
 
-Result<std::string> availableModuleName(const fs::path& dir, std::string_view stem) {
+Result<std::string> availableModuleName(const fs::path& dir, std::string_view stem,
+                                        std::string_view replaceId) {
     SUPPLE_TRY(validModuleName(stem, "/name"));
     for (std::uint64_t n = 1;; ++n) {
         const std::string suffix = n == 1 ? "" : "-" + std::to_string(n);
@@ -81,6 +82,12 @@ Result<std::string> availableModuleName(const fs::path& dir, std::string_view st
             return Error("module.path", "cannot inspect " + file.string() + ": " + ec.message(),
                          file.string(), "check the module folder's permissions and path");
         if (!fs::exists(status)) return name;
+        if (!replaceId.empty() && fs::is_regular_file(status)) {
+            if (auto source = readTextFile(file, kMaxModuleBytes)) {
+                const auto compiled = compileModule(*source, rack::Origin::Project, file);
+                if (compiled.type && compiled.type->id() == replaceId) return name;
+            }
+        }
     }
 }
 
@@ -160,8 +167,10 @@ Status saveProjectModules(const rack::Catalog& catalog, const std::vector<std::s
         const rack::ModuleType& t = *entry->type;
         if (t.origin() != rack::Origin::Library && t.origin() != rack::Origin::Project) continue;
         const std::string name = moduleName(t);
-        if (name.empty() || t.source().empty() || !written.insert(name).second) continue;
-        const fs::path file = modulePath(dir, name);
+        if (name.empty() || t.source().empty() || !written.insert(id).second) continue;
+        auto destination = availableModuleName(dir, name, id);
+        if (!destination) return std::move(destination).error();
+        const fs::path file = modulePath(dir, *destination);
         if (auto old = readTextFile(file, kMaxModuleBytes); old && *old == t.source()) continue;
         SUPPLE_TRY(writeFileAtomic(file, t.source()));
     }

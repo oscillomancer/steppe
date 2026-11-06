@@ -578,3 +578,50 @@ TEST_CASE("module library: project edits resolve an existing library type by id"
     REQUIRE(saved);
     CHECK(saved->find("0.5") != std::string::npos);
 }
+
+TEST_CASE("module library: project snapshots keep different types with the same name") {
+    Fixture here;
+    const auto song = portableProject(here);
+    Fixture there;
+    there.write("level", otherId(kLevel, "com.example.other"));
+    openPortable(there, song);
+    REQUIRE(there.app->modules()->find("com.example.level"));
+    REQUIRE(there.app->modules()->find("com.example.other"));
+    there.run("module.add", R"({"rack":"rk_1","type":"com.example.other"})");
+    const auto exported = there.dir / "export" / "song.json";
+    json::Value a = json::Value::object();
+    a["path"] = exported.string();
+    REQUIRE(there.call("project.save", a));
+    Fixture reopened;
+    openPortable(reopened, exported);
+    CHECK(reopened.app->modules()->find("com.example.level") != nullptr);
+    CHECK(reopened.app->modules()->find("com.example.other") != nullptr);
+}
+
+TEST_CASE("module library: project snapshots preserve occupied destination files") {
+    Fixture f;
+    const auto song = portableProject(f);
+    const auto destination = f.dir / "export" / "song.json";
+    const auto occupied = destination.parent_path() / "modules" / "level" / "level.cpp";
+    const auto unrelated = otherId(kLevel, "com.example.other");
+    REQUIRE(writeFileAtomic(occupied, unrelated));
+    json::Value args = json::Value::object();
+    args["path"] = destination.string();
+    REQUIRE(f.call("project.save", args));
+    const auto kept = readTextFile(occupied, 1 << 20);
+    REQUIRE(kept);
+    CHECK(*kept == unrelated);
+    const auto copy = occupied.parent_path().parent_path() / "level-2" / "level-2.cpp";
+    REQUIRE(std::filesystem::exists(copy));
+    // Saving an edited implementation updates the same id's suffix, without making another copy.
+    f.run("module.edit", R"({"name":"level","edits":[{"old":"0.25","new":"0.5"}]})");
+    REQUIRE(f.call("project.save", args));
+    const auto updated = readTextFile(copy, 1 << 20);
+    REQUIRE(updated);
+    CHECK(updated->find("0.5") != std::string::npos);
+    CHECK_FALSE(std::filesystem::exists(copy.parent_path().parent_path() / "level-3"));
+    Fixture reopened;
+    openPortable(reopened, destination);
+    REQUIRE(reopened.app->modules()->find("com.example.level"));
+    CHECK(reopened.app->modules()->find("com.example.other") != nullptr);
+}

@@ -311,8 +311,11 @@ catalog of the moment they start (`OfflineSettings::modules`).
 
 A saved project keeps a copy of each library or project module it plays
 in `<project folder>/modules/<name>/<name>.cpp` (`saveProjectModules`;
-not when that folder is the library), as it keeps its media; a file that
-already holds the source is left alone. Opening it compiles the copies as
+not when that folder is the library), as it keeps its media. Copies are
+deduplicated by type id; different types with the same name get distinct
+filenames (`<name>-2`, …). An existing file is updated only if it compiles
+to the same type id; other files, including broken sources, are preserved.
+A file that already holds the source is left alone. Opening it compiles the copies as
 project types (`Origin::Project`), which win over the library's for the
 same id, so the project sounds as it was saved on any machine. A
 `module.write` or `module.edit` of the same id in the library replaces the
