@@ -16,6 +16,8 @@ namespace supple::scriptc {
 
 struct ProgramData {
     InfoModel info;
+    ModuleInfoModel moduleInfo;
+    std::vector<PortModel> ports;
     std::string typeName;
     PluginKind kind = PluginKind::None;
     std::vector<ParamModel> params;
@@ -30,6 +32,7 @@ struct ProgramData {
     std::vector<SourceSlot> sourceSlots;
     Program::Hook prepare = nullptr, update = nullptr;
     Program::ProcessHook process = nullptr;
+    script::detail::ModuleCode::ProcessHook moduleProcess = nullptr;
     Program::VoiceHook startVoice = nullptr, releaseVoice = nullptr, stopVoice = nullptr;
     Program::StartHook startVoiceRetrigger = nullptr;
     Program::UiHook editor = nullptr, draw = nullptr, pointer = nullptr;

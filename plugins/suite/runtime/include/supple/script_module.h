@@ -17,7 +17,8 @@
 //
 // As with NativeCode, what C++ cannot see is a member's name, which a key is
 // made from: the keys come with the code, by member (what the script
-// compiler worked out; for the stock modules, the generated catalog). A
+// compiler worked out; for the stock modules, what modules/cmake/
+// stock_module.cmake reads from the declarations). A
 // member missing from the lists takes the key withKey() gives, or else its
 // name's in snake_case.
 #pragma once

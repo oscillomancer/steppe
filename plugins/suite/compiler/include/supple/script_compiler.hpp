@@ -14,6 +14,10 @@
 #include <string_view>
 #include <vector>
 
+namespace supple::script::detail {
+class ModuleCode;
+}
+
 namespace supple::scriptc {
 
 class Program;
@@ -38,6 +42,15 @@ struct Result {
 };
 
 Result compile(std::string_view source, const Options& options = {});
+
+// A module's runtime interface (include supple/script_module.h for its
+// definition); null for a plugin or a null Program.
+// The adapter retains the Program, including its generated code and strings,
+// for its entire lifetime. Program::process() is only for plugins; a module
+// uses ModuleCode::process(ctx, self, frames), with the host setting Instance's
+// budget to 65536 * frames and CurrentScope around every hook, as for native code.
+std::shared_ptr<const script::detail::ModuleCode> moduleCode(
+    std::shared_ptr<const Program> program);
 
 // Diagnostics as JSON: [{"severity", "code", "message", "hint", "line", "column"}].
 std::string toJson(const std::vector<Message>& diagnostics);

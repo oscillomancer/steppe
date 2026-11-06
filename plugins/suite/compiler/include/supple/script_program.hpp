@@ -12,6 +12,10 @@
 #include <string>
 
 #include "supple/script_code.h"
+namespace supple::script::detail {
+struct ModuleInfoModel;
+struct PortModel;
+}  // namespace supple::script::detail
 
 namespace supple::scriptc {
 
@@ -21,6 +25,8 @@ using ParamModel = script::detail::ParamModel;
 using FileModel = script::detail::FileModel;
 using SourceModel = script::detail::SourceModel;
 using SharedModel = script::detail::SharedModel;
+using PortModel = script::detail::PortModel;
+using ModuleInfoModel = script::detail::ModuleInfoModel;
 using InfoModel = script::detail::InfoModel;
 using FactoryPatchModel = script::detail::FactoryPatchModel;
 
@@ -42,6 +48,13 @@ class Program final : public script::detail::Code {
     // The plugin struct's name, as the script declares it.
     const std::string& typeName() const;
     bool interpreted() const;
+    // Module metadata and hooks. Include supple/script_module.h for the
+    // complete models; scriptc::moduleCode() adapts this Program for a rack.
+    using ModuleProcessHook = void (*)(void* ctx, void* self, std::int64_t frames);
+    const ModuleInfoModel& moduleInfo() const;
+    const std::vector<PortModel>& ports() const;
+    ModuleProcessHook moduleProcess() const;
+    UiHook panel() const;
     // The generated MIR, when Options::listing asked for it.
     const std::string& listing() const;
 

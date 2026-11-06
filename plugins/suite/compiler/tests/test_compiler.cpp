@@ -7,12 +7,19 @@
 #include <clocale>
 #include <cstdlib>
 
+#include <array>
+#include <bit>
 #include <cmath>
 #include <fstream>
 #include <limits>
 #include <sstream>
 
 #include "runner.h"
+#include "supple/script_module.h"
+
+namespace supple::script::module_test {
+#include "module_surface.h"
+}
 
 using namespace supple;
 using scripttest::Audio;
@@ -711,7 +718,7 @@ TEST_CASE("every whole script in the guides compiles") {
     // A guide's ```cpp blocks that are scripts (they include the runtime):
     // what an agent copies first must be right.
     int scripts = 0;
-    for (const char* guide : {"dsp-language.md", "dsp-workflow.md"}) {
+    for (const char* guide : {"dsp-language.md", "dsp-workflow.md", "modules.md"}) {
         std::ifstream in(std::string(SUPPLE_SKILL_GUIDES) + "/" + guide);
         REQUIRE_MESSAGE(in, guide);
         std::stringstream all;
@@ -1113,4 +1120,402 @@ struct T : Effect {
     CHECK(audio.data[0][0] == 3);   // a == b, e == g, j == l; NaN equals nothing
     CHECK(audio.data[0][1] == 12);  // c != d, m != n, and NaN differs from itself
     CHECK(audio.data[0][2] == 52);
+}
+
+namespace {
+std::string moduleScript(const std::string& members,
+                         const std::string& hooks = "void process(int frames) {}") {
+    return "#include <supple/script.h>\nstruct TestModule : Module {\n"
+           "static constexpr ModuleInfo info = {.name = \"Test\", .id = \"com.example.test\"};\n" +
+           members + "\n" + hooks + "\n};";
+}
+}  // namespace
+
+TEST_CASE("modules describe ports, identity, parameters, presets and face hooks") {
+    const auto r = compileOk(R"cpp(
+#include <supple/script.h>
+        struct TestModule : Module {
+            static constexpr ModuleInfo info = {.name = "Test",
+                                                .id = "com.example.test",
+                                                .vendor = "Example",
+                                                .version = "2.3.4",
+                                                .description = "A test.",
+                                                .url = "https://example.com",
+                                                .tags = {"utility", "poly"},
+                                                .width = 120,
+                                                .height = 300};
+            Input audioInlet = audioIn("In").help("Audio.").in("Inputs").normal(0.25);
+            Input pitch = pitchIn("Pitch");
+            Input gate = gateIn("Gate");
+            Input cv = cvIn("CV");
+            Input uni = unipolarIn("Uni");
+            Input phase = phaseIn("Phase");
+            Input generic = portSpec("Generic", SignalKind::Cv, false);
+            Output out = audioOut("Out").withKey("signal_out");
+            Output pitchOutJack = pitchOut("Pitch");
+            Output gateOutJack = gateOut("Gate");
+            Output cvOutJack = cvOut("CV");
+            Output uniOutJack = unipolarOut("Uni");
+            Output phaseOutJack = phaseOut("Phase");
+            Param level = percent("Level", 25).smoothed(10).help("Gain.");
+            Param mode = choice("Mode", {"A", "B"}, 0);
+            Param enabled = toggle("Enabled", true);
+            Param reading = continuous("Reading", 0, 1, 0).meter();
+            Shared<double> seen;
+            Random random;
+            void prepare() { random.seed(seed()); }
+            void update() { seen.set(level.value()); }
+            void process(int frames) {
+                auto t = transport();
+                out.setChannels(channels());
+                for (int c = 0; c < out.channels(); ++c)
+                    for (int i = 0; i < frames; ++i)
+                        out[c][i] = audioInlet[c][i] * level.at(i, c) + t.tempo * 0.0;
+            }
+            void panel(Panel& p) {
+                p.size(120, 300);
+                p.knob(level, 30, 50);
+                p.knob(level, 80, 50, 24);
+                p.slider(level, 10, 80, 100, 20);
+                p.choice(mode, 10, 110, 100, 20);
+                p.toggle(enabled, 10, 140, 100, 20);
+                p.readout(reading, 10, 170, 100, 20);
+                p.input(audioInlet, 30, 220);
+                p.output(out, 90, 220);
+                p.display(10, 240, 100, 30);
+            }
+            void draw(Canvas& g) { g.fillText(format("%.2f", seen.get()), 10, 260); }
+            void pointer(const Pointer& p) {
+                if (p.action() == PointerAction::Press) level.edit(0.5);
+            }
+            void factoryPatches(Patches& p) { p.add("Half").set(level, 50).set(mode, "b"); }
+        };
+    )cpp");
+    CHECK(r.program->kind() == scriptc::PluginKind::Module);
+    CHECK(r.program->process() == nullptr);
+    CHECK(r.program->editor() == nullptr);
+    auto module = scriptc::moduleCode(r.program);
+    REQUIRE(module);
+    CHECK(module->info().tags == std::vector<std::string>{"utility", "poly"});
+    CHECK(module->info().width == 120);
+    CHECK(module->info().height == 300);
+    REQUIRE(module->ports().size() == 13);
+    CHECK(module->ports()[0].member == "audioInlet");
+    CHECK(module->ports()[0].key == "audio_inlet");
+    CHECK(module->ports()[0].normal == 0.25);
+    CHECK(module->ports()[0].group == "Inputs");
+    CHECK(module->ports()[0].description == "Audio.");
+    CHECK(module->ports()[6].signal == script::detail::PortModel::Signal::Cv);
+    CHECK(module->ports()[7].key == "signal_out");
+    CHECK(module->ports()[7].index == 0);
+    CHECK(module->ports()[7].output);
+    CHECK(module->shared().size() == 1);
+    CHECK(module->factoryPatches().size() == 1);
+    CHECK(module->prepare());
+    CHECK(module->update());
+    CHECK(module->process());
+    CHECK(module->panel());
+    CHECK(module->draw());
+    CHECK(module->pointer());
+    CHECK_FALSE(scriptc::moduleCode(nullptr));
+    auto plugin = compileOk(kGain);
+    CHECK_FALSE(scriptc::moduleCode(plugin.program));
+}
+
+TEST_CASE("modules reject plugin-only declarations with module diagnostics") {
+    const std::vector<std::pair<std::string, std::string>> cases = {
+        {moduleScript("Source lfo = source(\"LFO\");"), "script.module.source"},
+        {moduleScript("AudioFile file = audioFile(\"File\");"), "script.module.file"},
+        {moduleScript("Convolver room = impulseResponse(\"Room\");"), "script.module.file"},
+        {moduleScript("", "void process(Block& io) {}"), "script.module.process"},
+        {moduleScript("", "void process(int frames) {} void editor(Editor& e) {}"),
+         "script.module.editor"},
+        {moduleScript("", "void process(int frames) {} void startVoice(int v) {}"),
+         "script.module.voice"},
+        {moduleScript("", "void process(int frames) {} void releaseVoice(int v) {}"),
+         "script.module.voice"},
+        {moduleScript("", "void process(int frames) {} void stopVoice(int v) {}"),
+         "script.module.voice"},
+        {moduleScript("", "void process(int frames) { int v = voiceCount(); }"),
+         "script.module.voice"},
+        {moduleScript("", "void process(int frames) {} void prepare() { setLatency(0); }"),
+         "script.module.latency"},
+        {moduleScript("", "void process(int frames) { setTail(0); }"), "script.module.tail"},
+        {moduleScript("Param gain = percent(\"Gain\", 50);",
+                      "void process(int frames) {} void factoryPatches(Patches& p) { "
+                      "p.add(\"P\").route(\"lfo>gain\", 1); }"),
+         "script.module.route"},
+        {moduleScript("Input a = audioIn(\"A\"), b = audioIn(\"B\");"),
+         "script.module.port_declaration"},
+        {moduleScript("Array<Input, 2> in;"), "script.module.port_location"},
+        {moduleScript("Input in = audioOut(\"In\");"), "script.module.port_direction"},
+        {moduleScript("Output out = audioIn(\"Out\");"), "script.module.port_direction"},
+        {moduleScript("Input in;"), "script.module.port_declaration"},
+        {moduleScript("Input in = audioIn(\"\");"), "script.module.port_name"},
+        {moduleScript("Input in = audioIn(\"In\").withKey(\"BAD\");"), "script.module.key"},
+        {moduleScript("Input in = audioIn(\"In\").smoothed(10);"), "script.module.port_modifier"},
+        {moduleScript("", "void process(int frames) { Input in = audioIn(\"In\"); }"),
+         "script.module.port_location"},
+    };
+    for (const auto& [source, code] : cases) {
+        CAPTURE(source);
+        CHECK(firstError(source) == code);
+    }
+}
+
+TEST_CASE("module ports and parameters share keys and each direction has a limit") {
+    CHECK(
+        firstError(moduleScript(
+            "Param level = percent(\"Level\", 50); Input in = cvIn(\"In\").withKey(\"level\");")) ==
+        "script.module.key");
+    CHECK(firstError(moduleScript(
+              "Input in = cvIn(\"In\"); Output out = cvOut(\"Out\").withKey(\"in\");")) ==
+          "script.module.key");
+    for (const char* direction : {"In", "Out"}) {
+        std::string members;
+        for (int i = 0; i < 32; ++i)
+            members += std::string(direction == std::string("In") ? "Input" : "Output") + " p" +
+                       std::to_string(i) + " = audio" + direction + "(\"Port\");\n";
+        compileOk(moduleScript(members));
+        members += std::string(direction == std::string("In") ? "Input" : "Output") +
+                   " extra = audio" + direction + "(\"Extra\");";
+        CHECK(firstError(moduleScript(members)) == "script.module.port_limit");
+    }
+}
+
+TEST_CASE("plugins refuse the module-only surface") {
+    const auto plugin = [](const std::string& members, const std::string& body) {
+        return "#include <supple/script.h>\nstruct P : Effect { static constexpr Info info = "
+               "{.name = \"P\", .id = \"com.example.p\"};" +
+               members + "void process(Block& io) {" + body + "}};";
+    };
+    CHECK(firstError(plugin("Input in = audioIn(\"In\");", "")) == "script.module.port_location");
+    CHECK(firstError(plugin("Output out = audioOut(\"Out\");", "")) ==
+          "script.module.port_location");
+    CHECK(firstError(plugin("Param p = percent(\"P\", 50);", "double x = p.at(0, 0);")) ==
+          "script.plugin.param_channel");
+    CHECK(firstError(plugin("", "int x = seed();")) == "script.plugin.module");
+    CHECK(firstError(plugin("", "auto t = transport();")) == "script.plugin.module");
+    CHECK(firstError(plugin("void panel(Panel& p) {}", "")) == "script.plugin.panel");
+    // Existing plugins (Marram) use panel as an ordinary drawing helper.
+    compileOk(
+        plugin("void panel(Canvas& g, double x) { g.fillRect(x, 0, 10, 10); } "
+               "void draw(Canvas& g) { panel(g, 20); }",
+               ""));
+}
+
+namespace {
+namespace sd = script::detail;
+namespace ss = script;
+
+void callRealtimeModule(sd::ModuleCode::ProcessHook hook, void* instance, void* self,
+                        std::int64_t frames)
+#if defined(__clang__) && __has_cpp_attribute(clang::nonblocking)
+    [[clang::nonblocking]]
+#endif
+{
+    hook(instance, self, frames);
+}
+
+struct ModuleRun {
+    const sd::ModuleCode& code;
+    sd::Instance record;
+    void* self;
+    std::array<double, 64> input{}, output{};
+    std::array<double, 16> modulation{};
+    std::array<double, 4> zero{}, glide{0.4, 0.3, 0.2, 0.1};
+    double spare = 0;
+
+    ModuleRun(const sd::ModuleCode& codeIn, int inputChannels, int modChannels)
+        : code(codeIn), self(code.create()) {
+        record.channels = 4;
+        record.maxBlockSize = 32;
+        record.seed = 1741;
+        record.transport.tempo = 137.5;
+        record.offline = true;
+        sd::Instance::bind(*static_cast<ss::Plugin*>(self), &record);
+        for (std::size_t i = 0; i < input.size(); ++i)
+            input[i] = inputChannels ? double(i) * 0.03125 : 0.25;
+        for (std::size_t i = 0; i < modulation.size(); ++i) modulation[i] = double(i) * 0.015625;
+        auto* base = static_cast<unsigned char*>(self);
+        auto& in = *reinterpret_cast<ss::Input*>(base + code.ports()[0].offset);
+        auto& out = *reinterpret_cast<ss::Output*>(base + code.ports()[1].offset);
+        sd::PortBinding::setSlot(in, 0);
+        sd::PortBinding::setSlot(out, 0);
+        sd::PortBinding::bindInput(in, input.data(), zero.data(), inputChannels <= 1 ? 0 : 4,
+                                   inputChannels, 4);
+        sd::PortBinding::bindOutput(out, output.data(), &spare, 4, 4, 4);
+        auto& p = *reinterpret_cast<ss::Param*>(base + code.params()[0].offset);
+        sd::ParamBinding::setSlot(p, 0);
+        sd::ParamBinding::setValue(p, 0.5, true);
+        sd::ParamBinding::setGlide(p, glide.data(), 4);
+        sd::ParamBinding::setModulation(p, modulation.data(), 4, modChannels);
+        sd::CurrentScope scope(&record);
+        if (code.prepare()) code.prepare()(&record, self);
+        if (code.update()) code.update()(&record, self);
+    }
+    ~ModuleRun() { code.destroy(self); }
+    void run(bool interpret = false) {
+        sd::CurrentScope scope(&record);
+        record.budget = 65536 * 4;
+        if (interpret)
+            code.process()(&record, self, 4);
+        else
+            callRealtimeModule(code.process(), &record, self, 4);
+    }
+};
+
+struct PanelCalls final : sd::PanelBuilder {
+    std::vector<double> calls;
+    void size(double w, double h) override { calls.insert(calls.end(), {1, w, h}); }
+    void control(Control kind, int slot, double x, double y, double w, double h) override {
+        calls.insert(calls.end(), {2, double(kind), double(slot), x, y, w, h});
+    }
+    void jack(bool output, int index, double x, double y) override {
+        calls.insert(calls.end(), {3, double(output), double(index), x, y});
+    }
+    void display(double x, double y, double w, double h) override {
+        calls.insert(calls.end(), {4, x, y, w, h});
+    }
+};
+}  // namespace
+
+TEST_CASE("module bounds, modulation fallbacks, transport and panel match native C++") {
+    const std::string file = __FILE__;
+    std::ifstream in(file.substr(0, file.find_last_of("/\\") + 1) + "module_surface.h");
+    REQUIRE(in);
+    std::stringstream text;
+    text << in.rdbuf();
+    const sd::NativeModuleCode<script::module_test::ModuleSurface> native;
+    for (bool interpret : {false, true}) {
+        auto r = compileOk(text.str(), {.interpret = interpret});
+        auto compiled = scriptc::moduleCode(std::move(r.program));
+        REQUIRE(compiled);
+        // Only the adapter retains this Program now, including string literals and thunks.
+        for (int inputChannels : {0, 1, 2, 4}) {
+            for (int modChannels : {0, 1, 2, 4}) {
+                CAPTURE(interpret);
+                CAPTURE(inputChannels);
+                CAPTURE(modChannels);
+                ModuleRun a(native, inputChannels, modChannels),
+                    b(*compiled, inputChannels, modChannels);
+                a.run();
+                b.run(interpret);
+                for (std::size_t i = 0; i < a.output.size(); ++i)
+                    CHECK(std::bit_cast<std::uint64_t>(a.output[i]) ==
+                          std::bit_cast<std::uint64_t>(b.output[i]));
+                CHECK(a.record.status.outOfRange.load() == b.record.status.outOfRange.load());
+                CHECK(a.record.status.outOfRange.load() == 12);
+                CHECK(b.record.status.budgetExceeded.load() == 0);
+                CHECK(a.output[14 * 4 + 1] == 0.5);
+                CHECK(a.output[14 * 4 + 2] == 0.5);
+                CHECK(a.output[14 * 4 + 3] == (modChannels == 1 ? 0.0 : 0.4));
+                CHECK(a.output[15 * 4 + 1] == 137.5);
+                ss::Panel pa, pb;
+                PanelCalls ca, cb;
+                sd::Layout::bind(pa, &ca);
+                sd::Layout::bind(pb, &cb);
+                native.panel()(&a.record, a.self, &pa);
+                compiled->panel()(&b.record, b.self, &pb);
+                CHECK(ca.calls == cb.calls);
+                CHECK_FALSE(ca.calls.empty());
+                // Copy all runtime objects and bindings as native assignment does.
+                void* copy = compiled->create();
+                compiled->copy(copy, b.self);
+                b.run(interpret);
+                const auto next = b.output;
+                {
+                    sd::CurrentScope scope(&b.record);
+                    b.record.budget = 65536 * 4;
+                    if (interpret)
+                        compiled->process()(&b.record, copy, 4);
+                    else
+                        callRealtimeModule(compiled->process(), &b.record, copy, 4);
+                }
+                for (std::size_t i = 0; i < next.size(); ++i)
+                    CHECK(std::bit_cast<std::uint64_t>(next[i]) ==
+                          std::bit_cast<std::uint64_t>(b.output[i]));
+                compiled->destroy(copy);
+            }
+        }
+    }
+}
+
+TEST_CASE("a module process hook receives its frame count and respects its budget") {
+    const auto source = moduleScript(
+        "Output out = audioOut(\"Out\");",
+        "void process(int frames) { for (int i = 0; i < frames * 70000; ++i) out[0][0] = i; }");
+    for (bool interpret : {false, true}) {
+        auto r = compileOk(source, {.interpret = interpret});
+        auto module = scriptc::moduleCode(r.program);
+        void* self = module->create();
+        sd::Instance instance;
+        sd::Instance::bind(*static_cast<ss::Plugin*>(self), &instance);
+        double data[4] = {}, spare = 0;
+        auto& out = *reinterpret_cast<ss::Output*>(static_cast<unsigned char*>(self) +
+                                                   module->ports()[0].offset);
+        sd::PortBinding::bindOutput(out, data, &spare, 4, 1, 4);
+        for (int frames : {1, 4}) {
+            instance.status.clear();
+            instance.budget = 65536 * frames;
+            sd::CurrentScope scope(&instance);
+            module->process()(&instance, self, frames);
+            CHECK(instance.status.budgetExceeded.load() == 1);
+            CHECK(instance.budget < 0);
+            CHECK(data[0] >= 65000 * frames);
+        }
+        module->destroy(self);
+    }
+}
+
+TEST_CASE("module identity and context checks preserve the script subset") {
+    auto identity = [](const std::string& body) {
+        return "#include <supple/script.h>\nstruct T : Module { static constexpr ModuleInfo info = "
+               "{" +
+               body + "}; void process(int frames) {} };";
+    };
+    CHECK(firstError(identity(".name = \"T\"")) == "script.module.id");
+    CHECK(firstError(identity(".id = \"com.example.t\"")) == "script.module.name");
+    CHECK(firstError(identity(".name = \"T\", .id = \"bad_id\"")) == "script.module.id");
+    CHECK(firstError(identity(".name = \"T\", .id = \"com.example.t\", .tags = {\"UPPER\"}")) ==
+          "script.module.info");
+    CHECK(firstError(identity(".name = \"T\", .id = \"com.example.t\", .tags = {\"a\", \"b\", "
+                              "\"c\", \"d\", \"e\"}")) == "script.module.info");
+    CHECK(firstError(identity(".name = \"T\", .id = \"com.example.t\", .width = -1")) ==
+          "script.module.info");
+    CHECK(firstError(identity(".name = \"T\", .id = \"com.example.t\", .name = \"U\"")) ==
+          "script.module.info");
+    CHECK(firstError(moduleScript(
+              "Param a = percent(\"A\", 50); Param b = percent(\"B\", 25).withKey(\"a\");")) ==
+          "script.module.key");
+    CHECK(firstError(moduleScript("Input in = audioIn(\"In\");",
+                                  "void process(int frames) { auto copy = in; }")) ==
+          "script.module.port_location");
+    CHECK(firstError(
+              moduleScript("", "void process(int frames) { panel(); } void panel(Panel& p) {}")) ==
+          "script.call.arguments");
+    CHECK(firstError(moduleScript(
+              "Input in = audioIn(\"In\");",
+              "void process(int frames) {} void draw(Canvas& g) { double x = in[0][0]; }")) ==
+          "script.editor.port");
+    CHECK(firstError(moduleScript(
+              "Output out = audioOut(\"Out\");",
+              "void process(int frames) {} void panel(Panel& p) { out.setChannels(2); }")) ==
+          "script.editor.call");
+    CHECK(firstError(moduleScript(
+              "Param p = percent(\"P\", 50);",
+              "void process(int frames) {} void panel(Panel& face) { p.edit(0.5); }")) ==
+          "script.editor.edit");
+    CHECK(firstError(moduleScript("Buffer<double> data;",
+                                  "void process(int frames) { data.resize(16); }")) ==
+          "script.rt.allocation");
+    CHECK(firstError(
+              moduleScript("Input in = portSpec(\"In\", static_cast<SignalKind>(99), false);")) ==
+          "script.module.port_declaration");
+    compileOk(moduleScript("Input in = portSpec(\"In\", SignalKind::Audio, 0);"));
+    CHECK(firstError(moduleScript("", "void process(int frames) { this->setTail(0); }")) ==
+          "script.module.tail");
+    CHECK(
+        firstError(moduleScript("Param p = frequency(\"P\", 20, 20000, 1000).polyModulated();")) ==
+        "script.module.modulation");
 }
