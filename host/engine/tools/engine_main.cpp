@@ -9,6 +9,8 @@
 //   <slug>-engine registry [--markdown | --mcp-tools | --lua]
 //       The engine's command registry, Markdown reference, MCP tool list or
 //       the LuaLS annotations of the scripting bindings.
+//   <slug>-engine modules --markdown
+//       The built-in rack module types as a Markdown reference.
 //   <slug>-engine --mcp [--project FILE] [--workdir DIR] [--plugin-path P]...
 //       Serve MCP over stdio against the in-process engine session.
 //   <slug>-engine serve [--project FILE] [--instance NAME] [--socket PATH]
@@ -41,6 +43,7 @@
 #include <supple/product.h>
 
 #include "supple/engine/app.h"
+#include "supple/engine/racks.h"
 #include "supple/host/clap_host.h"
 
 using namespace supple;
@@ -62,12 +65,13 @@ int usage() {
         "usage: %s-engine exec '<json>' [--project FILE] [--save] [--workdir DIR] "
         "[--plugin-path P]...\n"
         "       %s-engine registry [--markdown | --mcp-tools | --lua]\n"
+        "       %s-engine modules --markdown\n"
         "       %s-engine --mcp [--project FILE] [--workdir DIR] [--plugin-path P]...\n"
         "       %s-engine serve [--project FILE] [--instance NAME] [--socket PATH]\n"
         "       %s-engine play FILE [--bar N] [--seconds S] [--block N] "
         "[--backend jack|portaudio|dummy] [--host-api NAME] [--output-device NAME] "
         "[--input-device NAME] [--rate HZ] [--inputs N] [--outputs N] [--plugin-path P]...\n",
-        slug.c_str(), slug.c_str(), slug.c_str(), slug.c_str(), slug.c_str());
+        slug.c_str(), slug.c_str(), slug.c_str(), slug.c_str(), slug.c_str(), slug.c_str());
     return 2;
 }
 
@@ -375,6 +379,12 @@ int main(int argc, char** argv) {
             std::fwrite(stubs.data(), 1, stubs.size(), stdout);
         } else
             return usage();
+        return 0;
+    }
+    if (args[0] == "modules") {
+        if (args.size() != 2 || args[1] != "--markdown") return usage();
+        const std::string md = engine::moduleReference();
+        std::fwrite(md.data(), 1, md.size(), stdout);
         return 0;
     }
     if (args[0] == "play") return play(registry, args);

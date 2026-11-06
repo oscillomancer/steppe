@@ -131,6 +131,22 @@ q = nil
 ---@class Steppe.branch_switch_result
 ---@field name string
 
+---@class Steppe.cable_add_args
+---@field from string
+---@field to string
+---@field amount? number
+---@field color? string
+
+---@class Steppe.cable_remove_args
+---@field cable? string
+---@field from? string
+---@field to? string
+
+---@class Steppe.cable_set_args
+---@field cable string
+---@field amount? number
+---@field color? string
+
 ---@class Steppe.dsp_check_args
 ---@field name? string
 ---@field source? string
@@ -325,6 +341,7 @@ q = nil
 
 ---@class Steppe.env_add_args
 ---@field track? string Track id, e.g. "tr_1".
+---@field module? string Rack module id, e.g. "mo_1".
 ---@field take? string Take id, e.g. "tk_1".
 ---@field group? string VCA group id, e.g. "gr_1".
 ---@field fx? string Plugin instance id, e.g. "fx_1".
@@ -800,6 +817,87 @@ q = nil
 ---@field item string Item id, e.g. "it_1".
 ---@field notation string
 
+---@class Steppe.module_add_args
+---@field rack string
+---@field type? string
+---@field label? string
+---@field preset? string
+---@field x? number
+---@field y? number
+---@field params? any
+---@field source? string
+---@field device? string
+---@field plugin? string
+
+---@class Steppe.module_check_args
+---@field name? string
+---@field source? string
+
+---@class Steppe.module_describe_args
+---@field type? string
+---@field module? string
+
+---@class Steppe.module_duplicate_args
+---@field modules string[]
+---@field dx? number
+---@field dy? number
+---@field cables? boolean
+
+---@class Steppe.module_edit_args
+---@field name? string
+---@field type? string
+---@field edits table[]
+
+---@class Steppe.module_fork_args
+---@field type string
+---@field id string
+---@field name? string
+
+---@class Steppe.module_get_args
+---@field type? string
+---@field name? string
+
+---@class Steppe.module_learn_list_args
+---@field module? string
+
+---@class Steppe.module_learn_remove_args
+---@field module string
+---@field param string
+
+---@class Steppe.module_learn_set_args
+---@field module string
+---@field param string
+---@field midi table
+---@field mode? "absolute"|"relative1"|"relative2"|"relative3"|"toggle"
+---@field soft_takeover? boolean
+
+---@class Steppe.module_list_args
+---@field query? string
+---@field tag? string
+
+---@class Steppe.module_randomize_args
+---@field module string
+---@field amount? number
+---@field seed? integer
+
+---@class Steppe.module_remove_args
+---@field module string
+
+---@class Steppe.module_set_args
+---@field module string
+---@field params? any
+---@field label? string
+---@field preset? string
+---@field x? number
+---@field y? number
+---@field bypass? boolean
+---@field source? string
+---@field device? string
+
+---@class Steppe.module_write_args
+---@field name string
+---@field source string
+
 ---@class Steppe.plugin_list_args
 ---@field filter? string
 
@@ -912,6 +1010,57 @@ q = nil
 ---@class Steppe.project_template_save_result
 ---@field path string
 ---@field warnings? table[]
+
+---@class Steppe.rack_add_args
+---@field track? string
+---@field name? string
+
+---@class Steppe.rack_get_args
+---@field rack string
+---@field detail? string
+
+---@class Steppe.rack_patch_args
+---@field rack string
+---@field modules any
+---@field cables? any[]
+---@field x? number
+---@field y? number
+
+---@class Steppe.rack_preset_delete_args
+---@field name string
+
+---@class Steppe.rack_preset_list_args
+---@field query? string
+
+---@class Steppe.rack_preset_load_args
+---@field rack string
+---@field name? string
+---@field path? string
+---@field x? number
+---@field y? number
+---@field io? string
+
+---@class Steppe.rack_preset_save_args
+---@field rack string
+---@field name string
+---@field modules? string[]
+---@field description? string
+---@field replace? boolean
+
+---@class Steppe.rack_probe_args
+---@field rack string Rack id
+---@field ports string[]
+---@field seconds? number
+---@field from_beat? number
+---@field notes? string
+
+---@class Steppe.rack_remove_args
+---@field rack string
+
+---@class Steppe.rack_set_args
+---@field rack string
+---@field name? string
+---@field track? string
 
 ---@class Steppe.region_add_args
 ---@field start? number
@@ -1160,7 +1309,7 @@ q = nil
 
 ---@class Steppe.route_add_args
 ---@field from string
----@field to? string
+---@field to? string A track, or a rack's In module (mo_*): the send then plays into the rack, linear (no Console 9 stage)
 ---@field fx? string Feed this plug-in's sidechain (key) input instead of a track's input; `to` may be left out
 ---@field tap? "post_fader"|"pre_fader"|"pre_fx"
 ---@field volume_db? number|string Quantity strings are range-checked by the server.
@@ -1203,7 +1352,7 @@ q = nil
 ---@class Steppe.route_set_args
 ---@field route string
 ---@field from? string
----@field to? string
+---@field to? string A track, or a rack's In module (mo_*): the send then plays into the rack, linear (no Console 9 stage)
 ---@field fx? string Feed this plug-in's sidechain (key) input instead of a track's input; `to` may be left out
 ---@field tap? "post_fader"|"pre_fader"|"pre_fx"
 ---@field volume_db? number|string Quantity strings are range-checked by the server.
@@ -1423,6 +1572,7 @@ q = nil
 ---@field armed? boolean
 ---@field record_input? integer[]
 ---@field record_midi? string
+---@field record_rack? string A rack's Out module as the channel's input: the rack plays on the channel, before its inserts (rack.list lists them)
 ---@field midi_channel? integer
 ---@field record_mode? "input"|"midi_overdub"|"midi_replace"
 ---@field monitor? "off"|"on"|"auto"
@@ -1664,6 +1814,11 @@ q = nil
 ---@field ["render-ab"] fun(args: Steppe.branch_render_ab_args): table Render two branch heads over the same range and compare them.
 ---@field switch fun(args: Steppe.branch_switch_args): Steppe.branch_switch_result Make another branch current (edits, undo and playback follow it).
 
+---@class Steppe.cable
+---@field add fun(args: Steppe.cable_add_args): table Connect an output to an input or a knob.
+---@field remove fun(args?: Steppe.cable_remove_args): table Remove a cable, by id or by its two ends.
+---@field set fun(args: Steppe.cable_set_args): table Set a modulation cable's amount or a cable's colour.
+
 ---@class Steppe.dsp
 ---@field check fun(args?: Steppe.dsp_check_args): Steppe.dsp_check_result Compile a DSP script without saving it; return its diagnostics.
 ---@field edit fun(args: Steppe.dsp_edit_args): Steppe.dsp_edit_result Change part of a library script by replacing text; compile it, as dsp.write.
@@ -1786,6 +1941,25 @@ q = nil
 ---@field notes fun(args: Steppe.midi_notes_args): table List a MIDI item's notes and CC points (beats from the item's start).
 ---@field write fun(args: Steppe.midi_write_args): table Replace an item's MIDI with notation (the item keeps its position and length).
 
+---@class Steppe.module
+---@field add fun(args: Steppe.module_add_args): table Add a module to a rack: a type with knob values.
+---@field check fun(args?: Steppe.module_check_args): table Compile a module without saving it; return its diagnostics and description.
+---@field describe fun(args?: Steppe.module_describe_args): table A module type's knobs, inputs and outputs, with units and help.
+---@field duplicate fun(args: Steppe.module_duplicate_args): table Duplicate modules, with the cables between them.
+---@field edit fun(args: Steppe.module_edit_args): table Edit a library module in place: replace text, then save and compile it.
+---@field fork fun(args: Steppe.module_fork_args): table Copy a module type's source into the library under a new id.
+---@field get fun(args?: Steppe.module_get_args): table A module type's source: stock or library.
+---@field list fun(args?: Steppe.module_list_args): table List module types: id, name, tags, what they do.
+---@field randomize fun(args: Steppe.module_randomize_args): table Move a module's knobs at random, by an amount.
+---@field remove fun(args: Steppe.module_remove_args): table Remove a module with its cables.
+---@field set fun(args: Steppe.module_set_args): table Set a module's knobs, label, place or bypass.
+---@field write fun(args: Steppe.module_write_args): table Write a module to the library and compile it; racks use it at once.
+
+---@class Steppe.module.learn
+---@field list fun(args?: Steppe.module_learn_list_args): table List the MIDI controllers of module knobs.
+---@field remove fun(args: Steppe.module_learn_remove_args): table Remove a module knob's MIDI controller.
+---@field set fun(args: Steppe.module_learn_set_args): table Let a MIDI controller turn a module's knob.
+
 ---@class Steppe.plugin
 ---@field list fun(args?: Steppe.plugin_list_args): Steppe.plugin_list_result List scanned plugins; filter matches id, name, or vendor.
 ---@field scan fun(args?: Steppe.plugin_scan_args): Steppe.plugin_scan_result Rescan configured plugin paths and return the available plugins.
@@ -1804,6 +1978,21 @@ q = nil
 ---@field list fun(): Steppe.project_template_list_result List saved project templates by name and path.
 ---@field load fun(args: Steppe.project_template_load_args): Steppe.project_template_load_result Start a new, unsaved project from a project template.
 ---@field save fun(args: Steppe.project_template_save_args): Steppe.project_template_save_result Save the whole project as a named project template.
+
+---@class Steppe.rack
+---@field add fun(args?: Steppe.rack_add_args): table Add a modular rack on a channel, its Out the input.
+---@field get fun(args: Steppe.rack_get_args): table A rack's modules, cables, Out modules and problems.
+---@field list fun(): table List racks: home channels, module counts, Outs.
+---@field patch fun(args: Steppe.rack_patch_args): table Add named modules and the cables among them in one step.
+---@field probe fun(args: Steppe.rack_probe_args): table Listen to a rack's ports: level, pitch, gate rate, notes, a CV's range.
+---@field remove fun(args: Steppe.rack_remove_args): table Remove a rack with its modules and cables.
+---@field set fun(args: Steppe.rack_set_args): table Rename a rack or move it to another channel.
+
+---@class Steppe.rack.preset
+---@field delete fun(args: Steppe.rack_preset_delete_args): table Delete a saved rack preset.
+---@field list fun(args?: Steppe.rack_preset_list_args): table List saved rack presets: names and contents.
+---@field load fun(args: Steppe.rack_preset_load_args): table Add a saved preset's modules and cables to a rack.
+---@field save fun(args: Steppe.rack_preset_save_args): table Save a rack's modules and cables as a preset.
 
 ---@class Steppe.region
 ---@field add fun(args?: Steppe.region_add_args): Steppe.region_add_result Add a named region in beats.
@@ -1938,6 +2127,7 @@ q = nil
 ---@field audio Steppe.audio Commands named audio.*
 ---@field autoitem Steppe.autoitem Commands named autoitem.*
 ---@field branch Steppe.branch Commands named branch.*
+---@field cable Steppe.cable Commands named cable.*
 ---@field dsp Steppe.dsp Commands named dsp.*
 ---@field engine Steppe.engine Commands named engine.*
 ---@field env Steppe.env Commands named env.*
@@ -1949,8 +2139,10 @@ q = nil
 ---@field log Steppe.log Commands named log.*
 ---@field marker Steppe.marker Commands named marker.*
 ---@field midi Steppe.midi Commands named midi.*
+---@field module Steppe.module Commands named module.*
 ---@field plugin Steppe.plugin Commands named plugin.*
 ---@field project Steppe.project Commands named project.*
+---@field rack Steppe.rack Commands named rack.*
 ---@field region Steppe.region Commands named region.*
 ---@field registry Steppe.registry Commands named registry.*
 ---@field render Steppe.render Commands named render.*

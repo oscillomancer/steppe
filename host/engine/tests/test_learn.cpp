@@ -5,6 +5,7 @@
 #include <doctest/doctest.h>
 #include <unistd.h>
 
+#include <cmath>
 #include <deque>
 #include <filesystem>
 #include <mutex>
@@ -610,4 +611,44 @@ TEST_CASE("MIDI learn: a VCA's fader, mute and solo follow their own controllers
     rig.call("vca.remove", R"({"group":"gr_1"})");
     rig.call("vca.add", R"({"group":"gr_1"})");
     CHECK(rig.call("vca.learn.list", "{}")["learn"].size() == 0);
+}
+
+TEST_CASE("MIDI learn: a controller turns a rack module's knob along its travel") {
+    Rig rig;
+    rig.call("track.add", "{}");
+    rig.call("rack.add", R"({"track": "tr_1"})");                     // mo_1 Out
+    rig.call("module.add", R"({"rack": "rk_1", "type": "filter"})");  // mo_2
+    rig.call("module.add", R"({"rack": "rk_1", "plugin": "com.suppleaudio.test.gain"})");  // mo_3
+    rig.call(
+        "module.learn.set",
+        R"({"module": "mo_2", "param": "cutoff", "midi": {"kind": "cc", "channel": 1, "number": 21}})");
+    CHECK(rig.app->hasLearn());
+    auto refused = rig.bus->execute({"module.learn.set", j(R"({"module": "mo_3", "param": "gain",
+        "midi": {"kind": "cc", "channel": 1, "number": 22}})"),
+                                     kTest});
+    REQUIRE_FALSE(refused);
+    CHECK(refused.error().hint.find("fx.learn.set") != std::string::npos);
+    auto cutoff = [&] {
+        const model::RackModule* m = rig.app->head().modules.find({model::Kind::Module, 2});
+        REQUIRE(m);
+        const json::Value* v = m->params.find("cutoff");
+        return v ? v->asDouble() : 1000.0;  // its default
+    };
+    rig.start();
+    const std::size_t before = rig.app->versions().history(1000).size();
+    rig.send(0xb0, 21, 127);
+    CHECK(cutoff() == doctest::Approx(20000));
+    rig.send(0xb0, 21, 0);
+    CHECK(cutoff() == doctest::Approx(20));
+    // Halfway along a frequency's travel is its geometric middle, as the window's knob.
+    rig.send(0xb0, 21, 64);
+    CHECK(cutoff() == doctest::Approx(20 * std::pow(1000.0, 64.0 / 127)).epsilon(1e-6));
+    CHECK(rig.app->versions().history(1000).size() == before + 1);
+    // The binding lists; removing it frees the knob.
+    json::Value list = rig.call("module.learn.list", "{}");
+    REQUIRE(list["learn"].asArray().size() == 1);
+    CHECK(list["learn"].at(0).find("control")->asString() == "CC 21 · ch 1");
+    rig.call("module.learn.remove", R"({"module": "mo_2", "param": "cutoff"})");
+    rig.send(0xb0, 21, 127);
+    CHECK(cutoff() == doctest::Approx(20 * std::pow(1000.0, 64.0 / 127)).epsilon(1e-6));
 }

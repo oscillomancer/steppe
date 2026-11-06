@@ -33,7 +33,16 @@
 #include "supple/host/clap_host.h"
 #include "supple/model/session.h"
 
+namespace supple::rack {
+class Catalog;   // module types (ADR-0062)
+class Instance;  // a module's state
+}  // namespace supple::rack
+
 namespace supple::engine {
+
+namespace detail {
+class RackPool;  // the module instances of racks (ADR-0062)
+}
 
 // Owns the plugin instances for a session's fx objects (main thread). An
 // instance is created on first use and reused while its plugin stays the
@@ -58,7 +67,10 @@ class InstancePool {
     void prune(const model::Session& session, std::uint64_t liveGeneration = UINT64_MAX);
     // Instances replaced from now on may still be used by plans before
     // `generation` (the real-time engine sets the next plan's generation).
-    void setGeneration(std::uint64_t generation) { generation_ = generation; }
+    void setGeneration(std::uint64_t generation);
+    // The racks' module instances, which follow the same generations and
+    // pruning (ADR-0062).
+    detail::RackPool& racks() { return *racks_; }
     // The next get() for `id` creates a new instance (fx.restart); the old
     // one lives until prune().
     void restart(model::Id id);
@@ -90,6 +102,7 @@ class InstancePool {
     std::size_t size() const { return instances_.size(); }
 
   private:
+    std::unique_ptr<detail::RackPool> racks_;
     struct Entry {
         std::unique_ptr<host::Instance> instance;
         std::string pluginId;
@@ -192,6 +205,9 @@ struct OfflineSettings {
     // (or <projectDir> itself when the file is found there).
     std::filesystem::path projectDir;
     MediaCache* media = nullptr;  // null: a cache for this render only
+    // The module types racks use (ADR-0062); null: the pool's (the built-in
+    // ones unless it was given others).
+    std::shared_ptr<const rack::Catalog> modules;
     // Threads rendering the graph; 0: every allowed CPU but two. The output is
     // identical for any count.
     unsigned threads = 0;

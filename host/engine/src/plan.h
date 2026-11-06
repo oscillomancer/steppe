@@ -38,6 +38,8 @@ using model::Id;
 using model::Kind;
 using model::Session;
 
+struct RackNode;  // rack_runtime.h (ADR-0062)
+
 inline double dbToGain(double db) {
     return db <= model::kSilenceDb ? 0.0 : std::pow(10.0, db / 20.0);
 }
@@ -346,6 +348,10 @@ struct Edge {
     std::vector<AuxLink> auxLinks;
     bool auxOnly = false;
     std::vector<float> auxTmp;
+    // Racks (ADR-0062): a send into the target rack's In module `rackIn`
+    // (linear: its encoder runs without Console 9), or the source rack's Out
+    // module `rackOut` into a channel (its record input). -1: neither.
+    int rackIn = -1, rackOut = -1;
     // A frontier edge (anticipative source, live target): its source's tap
     // arrives through a ring, and the callback copies it here for the target.
     bool frontier = false;
@@ -547,7 +553,12 @@ struct TakeChain {
 };
 
 struct Node {
-    Id id;
+    Id id;  // a track's, or a rack's (rk_*)
+    // A rack (ADR-0062): its runtime, its Out modules' audio this block and
+    // the sends its In modules take. No chain, fader or Console 9 stage.
+    std::shared_ptr<RackNode> rack;
+    std::vector<Stereo> rackOuts, rackIns;
+    std::vector<Stage> rackStages;  // its plugin modules' plug-ins
     std::optional<model::TrackFreeze> freeze;
     std::shared_ptr<const audio::AudioData> frozenAudio;
     // Auxiliary channels 3.. (ADR-0020): summed from routes, read and written
@@ -646,6 +657,7 @@ struct Node {
 // Every stage of a node: its chain's, then its take chains'.
 template <class N, class F>
 void forEachStage(N& node, F&& f) {
+    for (auto& st : node.rackStages) f(st);
     for (auto& st : node.inputChain) f(st);
     for (auto& st : node.chain) f(st);
     for (auto& tc : node.takeChains)
@@ -819,6 +831,17 @@ RateAdoption rateAdoption(const Plan& p, const Plan* previous, std::int64_t stre
 inline const Stereo& recordSignal(const Node& n) SUPPLE_RT {
     return n.postItems && n.hasItems() ? n.mix : n.post;
 }
+
+// A track's MIDI items as timed events from `startSeconds` (plan samples,
+// unshifted), as its instrument hears them.
+std::vector<TimedEvent> compileTrackEvents(const Session& s, Id track, double startSeconds,
+                                           double rate);
+// A plugin module's stage (rack_runtime.cpp): its automation for `n` frames
+// at `pos`, then the plug-in in place on `io`.
+bool runModuleStage(Plan& p, Stage& st, Stereo& io, std::uint32_t n,
+                    const host::Transport& transport, std::int64_t pos, const void* self) SUPPLE_RT;
+// An edge's signal summed into `into` through its compensation delay.
+void addEdgeInto(Plan& p, Edge& e, Stereo& into, std::int64_t pos, std::uint32_t n) SUPPLE_RT;
 
 // Structural invariant checker, also exposed to the randomized plan tests.
 Status checkStrips(const Plan& p);

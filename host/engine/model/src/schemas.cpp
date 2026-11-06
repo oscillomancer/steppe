@@ -876,6 +876,7 @@ const Schema<Route>& schemaOf<Route>() {
                 .field("fx", &RouteEnd::fx, idSchema())
                 .field("hw_channels", &RouteEnd::hwChannels, schema::arrayOf(intS().range(1, 1024)))
                 .field("midi_device", &RouteEnd::midiDevice, str())
+                .field("module", &RouteEnd::module, idSchema())
                 .build();
         auto channels =
             schema::object<ChannelMap>("channel_map")
@@ -996,6 +997,111 @@ const Schema<AutomationItem>& schemaOf<AutomationItem>() {
     return s;
 }
 
+Schema<CableEnd> cableEndSchema() {
+    json::Value ex = json::Value::object();
+    ex["type"] = "string";
+    ex["pattern"] = std::string(kCableEndPattern);
+    return Schema<CableEnd>(
+        "cable end",
+        [](const json::Value& v, CableEnd& out, schema::DecodeCtx& c, const std::string& p) {
+            auto end = v.isString() ? CableEnd::parse(v.asString()) : std::nullopt;
+            if (!end) {
+                c.error("schema.cable_end", "expected \"<module>.<key>\"", p,
+                        "e.g. \"mo_3.out\", \"mo_4.cutoff\" or \"fx_9.cutoff\"");
+                return false;
+            }
+            out = std::move(*end);
+            return true;
+        },
+        [](const CableEnd& end) { return json::Value(end.str()); }, ex);
+}
+
+namespace {
+// A module's knobs by key: numbers, choices' keys and toggles' bools.
+Schema<json::Value> moduleParamsSchema() {
+    json::Value spec = json::Value::object();
+    spec["type"] = "object";
+    json::Value values = json::Value::object();
+    values["type"] =
+        json::Array{json::Value("number"), json::Value("string"), json::Value("boolean")};
+    spec["additionalProperties"] = std::move(values);
+    return {"module params",
+            [](const json::Value& v, json::Value& out, schema::DecodeCtx& c, const std::string& p) {
+                if (!v.isObject()) {
+                    c.error("schema.type", "expected an object of parameter values", p);
+                    return false;
+                }
+                for (const auto& m : v.asObject())
+                    if (!(m.value.isNumber() && std::isfinite(m.value.asDouble())) &&
+                        !m.value.isString() && !m.value.isBool()) {
+                        c.error("schema.type", "a parameter is a number, a choice's key or a bool",
+                                json::pointerJoin(p, m.key), "e.g. {\"cutoff\": 800}");
+                        return false;
+                    }
+                out = v;
+                return true;
+            },
+            [](const json::Value& v) { return v; }, spec};
+}
+}  // namespace
+
+template <>
+const Schema<Rack>& schemaOf<Rack>() {
+    static const Schema<Rack> s = [] {
+        const Rack d;
+        ObjectBuilder<Rack> b = schema::object<Rack>("rack");
+        b.field("track", &Rack::track, idSchema());
+        b.field("name", &Rack::name, str());
+        dflt(b, d.name);
+        return b.build();
+    }();
+    return s;
+}
+
+template <>
+const Schema<RackModule>& schemaOf<RackModule>() {
+    static const Schema<RackModule> s = [] {
+        const RackModule d;
+        ObjectBuilder<RackModule> b = schema::object<RackModule>("module");
+        b.field("rack", &RackModule::rack, idSchema());
+        b.field("type", &RackModule::type, str());
+        b.field("version", &RackModule::version, str());
+        dflt(b, d.version);
+        b.field("label", &RackModule::label, str());
+        dflt(b, d.label);
+        b.field("x", &RackModule::x, num().range(-kMaxRackCoordinate, kMaxRackCoordinate));
+        dflt(b, d.x);
+        b.field("y", &RackModule::y, num().range(-kMaxRackCoordinate, kMaxRackCoordinate));
+        dflt(b, d.y);
+        b.field("params", &RackModule::params, moduleParamsSchema());
+        dflt(b, d.params);
+        b.field("bypass", &RackModule::bypass, boolean());
+        dflt(b, d.bypass);
+        b.field("source", &RackModule::source, idSchema());
+        b.field("device", &RackModule::device, str());
+        b.field("fx", &RackModule::fx, idSchema());
+        b.field("learn", &RackModule::learn, schema::arrayOf(paramLearnSchema()));
+        dflt(b, d.learn);
+        return b.build();
+    }();
+    return s;
+}
+
+template <>
+const Schema<Cable>& schemaOf<Cable>() {
+    static const Schema<Cable> s = [] {
+        const Cable d;
+        ObjectBuilder<Cable> b = schema::object<Cable>("cable");
+        b.field("from", &Cable::from, cableEndSchema());
+        b.field("to", &Cable::to, cableEndSchema());
+        b.field("amount", &Cable::amount, num());
+        b.field("color", &Cable::color, str());
+        dflt(b, d.color);
+        return b.build();
+    }();
+    return s;
+}
+
 template <>
 const Schema<Marker>& schemaOf<Marker>() {
     static const Schema<Marker> s = [] {
@@ -1087,8 +1193,14 @@ json::Value projectToJson(const Session& s) {
     doc["schema"] = std::string(kProjectSchema);
     json::Value project = schemaOf<Project>().encode(*s.project);
     json::Value next = json::Value::object();
-    for (std::size_t k = 0; k < kKindCount; ++k)
-        next[std::string(prefix(static_cast<Kind>(k)))] = s.next.next[k];
+    for (std::size_t k = 0; k < kKindCount; ++k) {
+        const auto kind = static_cast<Kind>(k);
+        // The rack kinds (2.7) are written once used: older projects stay
+        // byte-identical but for the schema.
+        const bool rack = kind == Kind::Rack || kind == Kind::Module || kind == Kind::Cable;
+        if (rack && s.next.next[k] <= 1) continue;
+        next[std::string(prefix(kind))] = s.next.next[k];
+    }
     project["next_ids"] = std::move(next);
     doc["project"] = std::move(project);
     doc["tempo"]["points"] = mapToJson(s.tempo);
@@ -1112,6 +1224,9 @@ json::Value projectToJson(const Session& s) {
     // Written only when there are some: projects without them stay byte-identical.
     if (!s.autoItems.empty()) doc["automation_items"] = mapToJson(s.autoItems);
     if (!s.groups.empty()) doc["groups"] = mapToJson(s.groups);
+    if (!s.racks.empty()) doc["racks"] = mapToJson(s.racks);
+    if (!s.modules.empty()) doc["modules"] = mapToJson(s.modules);
+    if (!s.cables.empty()) doc["cables"] = mapToJson(s.cables);
     json::Value blobs = json::Value::object();
     for (const auto& [hash, blob] : s.blobs) {
         json::Value b = json::Value::object();
@@ -1161,7 +1276,7 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
         auto migrated = migrateProject1(std::move(doc), warnings);
         if (!migrated) return std::move(migrated).error();
         doc = std::move(*migrated);
-    } else if (version->minor > 6 && warnings)
+    } else if (version->minor > 7 && warnings)
         warnings->push_back(
             {"project.newer_minor", "loading a newer project minor version", "/schema"});
     // Before 2.4 a master's hardware output could be written as a route to
@@ -1234,8 +1349,9 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
         if (warnings) warnings->push_back({std::move(code), std::move(message), std::move(path)});
     };
     const std::set<std::string_view> known{
-        "schema", "project", "tempo",  "rulers",    "tracks",           "items", "takes",
-        "fx",     "sources", "routes", "envelopes", "automation_items", "blobs", "groups"};
+        "schema", "project", "tempo",   "rulers",  "tracks",    "items",
+        "takes",  "fx",      "sources", "routes",  "envelopes", "automation_items",
+        "blobs",  "groups",  "racks",   "modules", "cables"};
     for (const auto& section : doc.asObject()) {
         const auto path = json::pointerJoin("", section.key);
         if (section.key == "ui") {
@@ -1310,6 +1426,10 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
                 }
         }
     }
+    // The rack kinds' counters are written once used (2.7); before, they
+    // start where a new session's do.
+    for (Kind k : {Kind::Rack, Kind::Module, Kind::Cable})
+        if (s.next[k] == 0) s.next[k] = 1;
     auto sub = [&](const char* a, const char* b) -> const json::Value* {
         const json::Value* x = doc.find(a);
         return x && b ? x->find(b) : x;
@@ -1327,6 +1447,9 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
     IdMap<Route>::Builder routes(s.routes);
     IdMap<Envelope>::Builder envelopes(s.envelopes);
     IdMap<AutomationItem>::Builder autoItems(s.autoItems);
+    IdMap<Rack>::Builder racks(s.racks);
+    IdMap<RackModule>::Builder modules(s.modules);
+    IdMap<Cable>::Builder cables(s.cables);
     mapFromJson<TempoPointObj>(sub("tempo", "points"), "/tempo/points", Kind::TempoPoint, tempo,
                                errors, options, warnings);
     mapFromJson<MeterObj>(sub("tempo", "meters"), "/tempo/meters", Kind::Meter, meters, errors,
@@ -1353,6 +1476,12 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
                           errors, options, warnings);
     mapFromJson<AutomationItem>(sub("automation_items", nullptr), "/automation_items",
                                 Kind::AutoItem, autoItems, errors, options, warnings);
+    mapFromJson<Rack>(sub("racks", nullptr), "/racks", Kind::Rack, racks, errors, options,
+                      warnings);
+    mapFromJson<RackModule>(sub("modules", nullptr), "/modules", Kind::Module, modules, errors,
+                            options, warnings);
+    mapFromJson<Cable>(sub("cables", nullptr), "/cables", Kind::Cable, cables, errors, options,
+                       warnings);
     // fx live under "fx" (a top-level collection keyed by fx id).
     IdMap<FxInstance>::Builder fx(s.fx);
     mapFromJson<FxInstance>(sub("fx", nullptr), "/fx", Kind::Fx, fx, errors, options, warnings);
@@ -1414,6 +1543,9 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
     s.routes = routes.build();
     s.envelopes = envelopes.build();
     s.autoItems = autoItems.build();
+    s.racks = racks.build();
+    s.modules = modules.build();
+    s.cables = cables.build();
     if (warnings)
         for (const auto& [envelope, given] : derivedItems) {
             auto expected = json::Value::array();

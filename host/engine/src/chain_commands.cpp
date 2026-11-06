@@ -17,6 +17,7 @@
 #include <tuple>
 
 #include "command_validation.h"
+#include "fx_presets.h"
 #include "supple/base/files.h"
 #include "supple/base/sha256.h"
 #include "supple/engine/app.h"
@@ -142,6 +143,12 @@ Result<Document> readDocument(const fs::path& path) {
 // The model's blob references are content hashes ("sha256:<hex>").
 std::string stateHash(std::span<const std::uint8_t> bytes) { return "sha256:" + sha256Hex(bytes); }
 
+}  // namespace
+
+// --- shared with rack presets (fx_presets.h) ----------------------------------------
+
+namespace detail {
+
 Status writePreset(const fs::path& path, std::string_view text, bool replace) {
     if (replace) return writeFileAtomic(path, text);
     // Publishing with link is atomic and refuses an existing destination,
@@ -213,17 +220,10 @@ Result<std::vector<json::Value>> encodeEffects(EngineApp& app, const model::Sess
     return effects;
 }
 
-// A preset effect checked and ready to add: its plugin installed, its patch
-// merged or its state loaded once (nothing changes the model yet).
-struct Prepared {
-    model::FxInstance fx;
-    std::shared_ptr<const model::Blob> blob;
-};
-
-Result<std::vector<Prepared>> prepareEffects(EngineApp& app,
-                                             const std::vector<json::Value>& entries,
-                                             const std::string& base) {
-    std::vector<Prepared> prepared;
+Result<std::vector<PreparedFx>> prepareEffects(EngineApp& app,
+                                               const std::vector<json::Value>& entries,
+                                               const std::string& base) {
+    std::vector<PreparedFx> prepared;
     for (std::size_t i = 0; i < entries.size(); ++i) {
         const std::string at = base + "/" + std::to_string(i);
         auto fx = model::schemaOf<model::FxInstance>().decode(entries[i]);
@@ -237,7 +237,7 @@ Result<std::vector<Prepared>> prepareEffects(EngineApp& app,
                          "plugin " + fx->plugin.name + " (" + fx->plugin.format + ":" +
                              fx->plugin.id + ") is not installed",
                          at + "/plugin", "install this plugin or choose another preset");
-        Prepared p{*fx, {}};
+        PreparedFx p{*fx, {}};
         if (info->semantic) {
             if (!fx->patch || fx->state)
                 return Error("chain.invalid", "a semantic effect needs a patch", at + "/patch",
@@ -264,13 +264,26 @@ Result<std::vector<Prepared>> prepareEffects(EngineApp& app,
     return prepared;
 }
 
+Id installEffect(EngineApp& app, PreparedFx& prepared) {
+    if (prepared.blob) app.txn().putBlob(*prepared.fx.state, prepared.blob);
+    return app.txn().create(std::move(prepared.fx));
+}
+
+}  // namespace detail
+
+namespace {
+
+using detail::encodeEffects;
+using detail::prepareEffects;
+using detail::writePreset;
+using Prepared = detail::PreparedFx;
+
 // Adds prepared effects to the open transaction, appended to `chain`; their ids.
 std::vector<std::string> installEffects(EngineApp& app, std::vector<Prepared>& prepared,
                                         std::vector<Id>& chain) {
     std::vector<std::string> ids;
     for (auto& p : prepared) {
-        if (p.blob) app.txn().putBlob(*p.fx.state, p.blob);
-        const Id id = app.txn().create(std::move(p.fx));
+        const Id id = detail::installEffect(app, p);
         chain.push_back(id);
         ids.push_back(id.str());
     }

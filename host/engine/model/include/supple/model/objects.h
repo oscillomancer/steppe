@@ -330,6 +330,9 @@ struct RouteEnd {
     std::optional<Id> fx;  // to only: a plug-in's sidechain input (key), ADR-0018
     std::optional<std::vector<int>> hwChannels;  // hw_input (from) / hw_output (to), 1-based
     std::optional<std::string> midiDevice;       // midi_input (from only)
+    // A rack's module (ADR-0062): from an Out module (a channel's record
+    // input), to an In module (a send into the rack).
+    std::optional<Id> module;
     bool operator==(const RouteEnd&) const = default;
 };
 
@@ -406,6 +409,65 @@ struct AutomationItem {
     std::vector<EnvPoint> points;
     double baseline = 0.0, amplitude = 1.0;
     std::string name;
+};
+
+// --- modular racks (ADR-0062, rack.md §2) ------------------------------------------------
+
+inline constexpr std::size_t kMaxRacks = 64;
+inline constexpr std::size_t kMaxRackModules = 512, kMaxRackCables = 4096;
+inline constexpr std::size_t kMaxRackOuts = 32, kMaxRackIns = 32;
+inline constexpr double kMaxRackCoordinate = 1e6;
+
+// The host module types the model knows by id (rack.md §5): Out modules feed
+// channels, In modules take sends, Plugin modules hold a plug-in instance,
+// Notes modules play a track's MIDI.
+inline constexpr std::string_view kOutModule = "com.suppleaudio.rack.out";
+inline constexpr std::string_view kInModule = "com.suppleaudio.rack.in";
+inline constexpr std::string_view kPluginModule = "com.suppleaudio.rack.plugin";
+inline constexpr std::string_view kNotesModule = "com.suppleaudio.rack.notes";
+
+// A patching space, homed on a channel.
+struct Rack {
+    Id track = kMaster;
+    std::string name;  // "": its home track's label
+    bool operator==(const Rack&) const = default;
+};
+
+// A module in a rack: an instance of a module type, by id. Its knobs are
+// by key in physical units, as a semantic plug-in's patch: a number, a
+// choice's key or a toggle's bool. Only values that differ from the type's
+// defaults are kept (commands drop the rest; the model cannot see types).
+struct RackModule {
+    Id rack{Kind::Rack, 0};
+    std::string type, version, label;
+    double x = 0.0, y = 0.0;  // its top-left corner, design units
+    json::Value params = json::Value::object();
+    bool bypass = false;
+    std::optional<Id> source;  // Notes: the track whose MIDI it plays (unset: the home track)
+    // Notes: a live MIDI input it always plays, matched as a MIDI route's
+    // device (a case-insensitive substring; "": any device).
+    std::optional<std::string> device;
+    std::optional<Id> fx;  // Plugin: its plug-in instance, in no chain
+    std::vector<ParamLearn> learn;
+    bool operator==(const RackModule&) const = default;
+};
+
+// One end of a cable: "mo_3.out", "mo_4.cutoff", "fx_9.cutoff".
+struct CableEnd {
+    Id object{Kind::Module, 0};  // mo_* (a port or parameter) or fx_* (a plugin module's)
+    std::string key;
+    std::string str() const { return object.str() + "." + key; }
+    static std::optional<CableEnd> parse(std::string_view text);
+    bool operator==(const CableEnd&) const = default;
+};
+
+// From an output to an input, or to a parameter by `amount` (in the
+// parameter's modulation unit, rack.md §3.4).
+struct Cable {
+    CableEnd from, to;
+    std::optional<double> amount;  // exactly when `to` is a parameter
+    std::string color;             // a track colour or "#rrggbb"; "": by signal kind
+    bool operator==(const Cable&) const = default;
 };
 
 struct Marker {

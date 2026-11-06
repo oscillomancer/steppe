@@ -133,6 +133,12 @@ class Node {
         (void)e;
         return false;
     }
+    // A key released, to the focused node and its parents (a held key that
+    // is a modifier of a gesture, such as Space for panning).
+    virtual bool onKeyUp(const KeyEvent& e) {
+        (void)e;
+        return false;
+    }
     // IME composition (preedit): the text being composed and the cursor in it
     // (bytes); empty text ends composition.
     virtual bool onComposition(std::string_view text, int cursor) {

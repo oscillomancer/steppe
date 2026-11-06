@@ -20,6 +20,7 @@
 #include "supple/base/files.h"
 #include "supple/base/sha256.h"
 #include "supple/engine/app.h"
+#include "supple/engine/racks.h"
 #include "supple/midi/midi.h"
 #include "supple/model/groups.h"
 #include "supple/model/render_settings.h"
@@ -42,6 +43,10 @@ void registerHealCommands(cmd::Registry& registry);
 void registerLearnCommands(cmd::Registry& registry);
 void registerControlLearnCommands(cmd::Registry& registry);
 void registerDspCommands(cmd::Registry& registry);
+void registerRackCommands(cmd::Registry& registry);
+void registerModuleCommands(cmd::Registry& registry);
+void registerRackProbe(cmd::Registry& registry);
+void removeRacksOn(model::EditTxn& t, const model::Session& s, model::Id track);
 
 using cmd::Command;
 using cmd::Context;
@@ -54,6 +59,37 @@ namespace {
 
 json::Value obj(std::string_view text) { return json::parse(text).value(); }
 EngineApp& A(Context& ctx) { return ctx.service<EngineApp>(); }
+
+// Whether `track`'s signal reaches `rack` (through parent sends, routes and
+// other racks): it may not then take that rack's Out as input (rack.cycle).
+bool trackFeedsRack(const model::Session& s, Id track, Id rack) {
+    std::set<Id> seen{track};
+    std::vector<Id> todo{track};
+    auto rackOf = [&](Id module) -> std::optional<Id> {
+        const model::RackModule* m = s.modules.find(module);
+        return m ? std::optional<Id>(m->rack) : std::nullopt;
+    };
+    while (!todo.empty()) {
+        const Id at = todo.back();
+        todo.pop_back();
+        if (at == rack) return true;
+        std::vector<Id> next;
+        if (const model::Track* t = s.tracks.find(at); t && t->parent && t->parentSend.enabled)
+            next.push_back(*t->parent);
+        for (const auto& e : s.routes) {
+            const model::Route& r = *e.value;
+            const std::optional<Id> from = r.from.module ? rackOf(*r.from.module) : r.from.track;
+            if (from != at) continue;
+            const std::optional<Id> to = r.to.module ? rackOf(*r.to.module)
+                                         : r.to.fx   ? model::trackOfFx(s, *r.to.fx)
+                                                     : r.to.track;
+            if (to) next.push_back(*to);
+        }
+        for (Id n : next)
+            if (seen.insert(n).second) todo.push_back(n);
+    }
+    return false;
+}
 
 auto idArg(const char* kindPrefix, const char* what) {
     return schema::string()
@@ -390,7 +426,7 @@ struct EnvPointArg {
     std::optional<double> tension;
 };
 struct EnvAddArgs {
-    std::optional<std::string> track, fx, route, take, group;
+    std::optional<std::string> track, fx, route, take, group, module;
     std::string param;
     std::optional<std::vector<EnvPointArg>> points;
 };
@@ -469,6 +505,7 @@ struct EnvDomain {
     std::optional<units::Unit> mixer;
     std::unique_ptr<params::DescribedParam> semantic;
     std::optional<std::pair<double, double>> clapRange;
+    std::optional<script::detail::ParamModel> knob;  // a rack module's (physical units)
 };
 
 Result<EnvDomain> envDomain(EngineApp& app, const model::Session& s, const model::EnvTarget& t,
@@ -480,6 +517,29 @@ Result<EnvDomain> envDomain(EngineApp& app, const model::Session& s, const model
                          "use env.add {track: tr_0, param: playrate}");
         d.playrate = true;
         return d;
+    }
+    if (t.object.kind == model::Kind::Module) {
+        const model::RackModule* m = s.modules.find(t.object);
+        if (!m)
+            return Error("rack.unknown_module", "no module " + t.object.str(), path, "rack.get");
+        if (m->fx)
+            return Error("env.param", "a plugin module's knobs are its plug-in's", path,
+                         "env.add {fx: \"" + m->fx->str() + "\", param}");
+        const auto* type = app.modules()->find(m->type);
+        if (!type)
+            return Error("rack.unknown_type", "the type of " + t.object.str() + " is not installed",
+                         path, "module.list shows what is");
+        std::string keys;
+        for (const auto& p : type->type->params()) {
+            if (p.output || p.hidden) continue;
+            if (p.key == t.param) {
+                d.knob = p;
+                return d;
+            }
+            keys += (keys.empty() ? "" : ", ") + p.key;
+        }
+        return Error("env.param", type->type->id() + " has no knob \"" + t.param + "\"", path,
+                     keys.empty() ? "it has no knobs" : "knobs: " + keys);
     }
     if (t.object.kind != model::Kind::Fx) {
         d.mixer = mixerUnit(t.object.kind, t.param);
@@ -536,6 +596,25 @@ Result<double> envValue(const EnvDomain& d, const json::Value& v, const std::str
         return e;
     };
     if (d.semantic) return located(params::fromJson(d.semantic->spec, v, true));
+    if (d.knob) {
+        using K = script::detail::ParamModel::Kind;
+        const script::detail::ParamModel& p = *d.knob;
+        if (p.kind == K::Choice && v.isString()) {
+            for (std::size_t k = 0; k < p.choices.size(); ++k)
+                if (script::detail::choiceKey(p, k) == v.asString() || p.choices[k] == v.asString())
+                    return static_cast<double>(k);
+        } else if (p.kind == K::Toggle && v.isBool()) {
+            return v.asBool() ? 1.0 : 0.0;
+        } else if (v.isNumber() && std::isfinite(v.asDouble())) {
+            const double x = std::clamp(v.asDouble(), p.min, p.max);
+            return p.kind == K::Continuous ? x : std::round(x);
+        }
+        return Error("env.value",
+                     p.kind == K::Choice   ? "one of the knob's choices (its key) or an index"
+                     : p.kind == K::Toggle ? "true, false, 0 or 1"
+                                           : "a number in the knob's unit",
+                     path, "module.describe lists the knob's range, unit and choices");
+    }
     if (d.mixer) {
         if (v.isBool()) return v.asBool() ? 1.0 : 0.0;
         if (v.isNumber()) return v.asDouble();
@@ -634,6 +713,7 @@ struct TrackSetArgs {
     std::optional<bool> armed;
     std::optional<std::vector<std::int64_t>> recordInput;
     std::optional<std::string> recordMidi;
+    std::optional<std::string> recordRack;  // an Out module (ADR-0062)
     std::optional<std::int64_t> midiChannel;
     std::optional<model::RecordMode> recordMode;
     std::optional<model::Monitor> monitor;
@@ -847,6 +927,13 @@ Result<std::pair<model::MidiSource, double>> compileNotation(const model::Sessio
 
 }  // namespace
 
+// Exposed to rack.probe (rack_probe.cpp).
+Result<std::pair<model::MidiSource, double>> notationSource(const model::Session& s,
+                                                            const std::string& text,
+                                                            double atBeat) {
+    return compileNotation(s, text, atBeat);
+}
+
 void registerEngineCommands(cmd::Registry& registry) {
     // Each command is built in its own immediately-invoked lambda, so an
     // unoptimized build reuses one frame instead of stacking every command's
@@ -865,6 +952,9 @@ void registerEngineCommands(cmd::Registry& registry) {
     registerLearnCommands(registry);
     registerControlLearnCommands(registry);
     registerDspCommands(registry);
+    registerRackCommands(registry);
+    registerModuleCommands(registry);
+    registerRackProbe(registry);
     lua::registerScriptCommands(registry);
     // ---------------------------------------------------------------- project.get
     [&] {
@@ -1487,6 +1577,12 @@ void registerEngineCommands(cmd::Registry& registry) {
                 }
             for (const auto& e : s.envelopes)
                 if (gone.count(e.value->target.object)) t.remove<model::Envelope>(e.id);
+            // Its racks (ADR-0062), and Notes modules elsewhere stop playing it.
+            removeRacksOn(t, s, id);
+            for (const auto& e : s.modules)
+                if (e.value->source == id)
+                    t.modify<model::RackModule>(e.id,
+                                                [](model::RackModule& m) { m.source.reset(); });
             if (!tr.parent) {
                 auto p = t.project();
                 std::erase(p.masters, id);
@@ -1555,6 +1651,10 @@ void registerEngineCommands(cmd::Registry& registry) {
                 .field("record_input", &TrackSetArgs::recordInput,
                        schema::arrayOf(schema::integer().range(1, 64)))
                 .field("record_midi", &TrackSetArgs::recordMidi, schema::string())
+                .field("record_rack", &TrackSetArgs::recordRack,
+                       idArg("mo", "Out module")
+                           .doc("A rack's Out module as the channel's input: the rack plays "
+                                "on the channel, before its inserts (rack.list lists them)"))
                 .field("midi_channel", &TrackSetArgs::midiChannel, schema::integer().range(0, 16))
                 .field("record_mode", &TrackSetArgs::recordMode,
                        schema::enumeration<model::RecordMode>(
@@ -1619,7 +1719,8 @@ void registerEngineCommands(cmd::Registry& registry) {
                              "red, orange, yellow, green, teal, blue, violet, grey or \"#rrggbb\"; "
                              "\"\" clears it");
             const model::StripType newType = a.type.value_or(s.tracks.find(*id)->type);
-            if ((a.recordInput || a.recordMidi || a.midiChannel || a.recordMode || a.monitor) &&
+            if ((a.recordInput || a.recordMidi || a.recordRack || a.midiChannel || a.recordMode ||
+                 a.monitor) &&
                 newType != model::StripType::Channel)
                 return Error("track.strip_type", "only channels have record inputs or monitor",
                              "/track",
@@ -1632,6 +1733,9 @@ void registerEngineCommands(cmd::Registry& registry) {
             if (a.laneMute && newType != model::StripType::Master)
                 return Error("track.strip_type", "only masters have a lane mute", "/lane_mute",
                              "mute the items themselves (item.set {mute}) or the strip");
+            if (a.recordRack && (a.recordInput || a.recordMidi))
+                return Error("track.record_input", "one input: a rack's Out, audio or MIDI",
+                             "/record_rack", "give record_rack alone");
             if (a.recordInput && a.recordMidi)
                 return Error("track.record_input", "record audio or MIDI, not both", "/record_midi",
                              "provide either record_input for audio or record_midi for MIDI, and "
@@ -1693,6 +1797,7 @@ void registerEngineCommands(cmd::Registry& registry) {
                     app.txn().modify<model::Route>(*input, [&](model::Route& r) {
                         r.from.hwChannels = channels;
                         r.from.midiDevice.reset();  // audio replaces MIDI
+                        r.from.module.reset();      // and a rack's Out
                         r.midi.reset();
                     });
                 } else {
@@ -1711,6 +1816,7 @@ void registerEngineCommands(cmd::Registry& registry) {
                                  "midi_channel");
                 auto setMidi = [&](model::Route& r) {
                     r.from.hwChannels.reset();
+                    r.from.module.reset();
                     if (a.recordMidi) r.from.midiDevice = *a.recordMidi;
                     model::MidiRouting m = r.midi.value_or(model::MidiRouting{});
                     if (a.midiChannel) m.fromChannel = static_cast<int>(*a.midiChannel);
@@ -1725,10 +1831,36 @@ void registerEngineCommands(cmd::Registry& registry) {
                     input = app.txn().create(r);
                 }
             }
+            if (a.recordRack) {  // a rack's Out module (ADR-0062)
+                auto out = Id::parse(*a.recordRack);
+                const model::RackModule* m = out ? s.modules.find(*out) : nullptr;
+                if (!m || m->type != model::kOutModule)
+                    return Error("rack.port", *a.recordRack + " is not an Out module",
+                                 "/record_rack", "rack.list lists every rack's Out modules");
+                if (trackFeedsRack(s, *id, m->rack))
+                    return Error(
+                        "rack.cycle",
+                        a.track + " sends into " + m->rack.str() + ", so it cannot hear that rack",
+                        "/record_rack",
+                        "remove the send into the rack's In module, or pick another Out");
+                if (input && s.routes.find(*input)) {
+                    app.txn().modify<model::Route>(*input, [&](model::Route& r) {
+                        r.from = model::RouteEnd{};
+                        r.from.module = *out;
+                        r.midi.reset();
+                    });
+                } else {
+                    model::Route r;
+                    r.from.module = *out;
+                    r.to.track = *id;
+                    input = app.txn().create(r);
+                }
+            }
             app.txn().modify<model::Track>(*id, [&](model::Track& t) {
                 if (a.armed) t.record.armed = *a.armed;
                 if (a.recordMode) t.record.mode = *a.recordMode;
-                if (a.recordInput || a.recordMidi || a.midiChannel) t.record.input = input;
+                if (a.recordInput || a.recordMidi || a.recordRack || a.midiChannel)
+                    t.record.input = input;
                 if (a.monitor) t.record.monitor = *a.monitor;
                 if (a.name) t.name = *a.name;
                 if (a.color) t.color = *a.color;
@@ -3120,7 +3252,9 @@ void registerEngineCommands(cmd::Registry& registry) {
             "Target one of track (param volume|pan|mute; playrate only on tr_0), route "
             "(volume|pan|mute), group (VCA volume|mute), or "
             "fx (a semantic key such as \"gain\" or \"filter1.cutoff\", or for other plugins a "
-            "CLAP id or parameter name). points: [{beat|bar|seconds, value, shape?, tension?}]; "
+            "CLAP id or parameter name), or module (a rack module's knob by key, values in its "
+            "unit, a choice by its key; module.describe). points: [{beat|bar|seconds, value, "
+            "shape?, tension?}]; "
             "values in the parameter's unit (dB, %, Hz… — text like \"800 Hz\" works for "
             "plugins); shapes linear, square, slow, fast_start, fast_end, bezier. Plugin values "
             "move along the parameter's curve (a log cutoff sweeps evenly in pitch). take (param "
@@ -3133,6 +3267,7 @@ void registerEngineCommands(cmd::Registry& registry) {
         c.tags = {"automation"};
         c.args = schema::object<EnvAddArgs>("env_add_args")
                      .field("track", &EnvAddArgs::track, idArg("tr", "Track"))
+                     .field("module", &EnvAddArgs::module, idArg("mo", "Rack module"))
                      .field("take", &EnvAddArgs::take, idArg("tk", "Take"))
                      .field("group", &EnvAddArgs::group, idArg("gr", "VCA group"))
                      .field("fx", &EnvAddArgs::fx, idArg("fx", "Plugin instance"))
@@ -3154,6 +3289,9 @@ void registerEngineCommands(cmd::Registry& registry) {
             {"Duck a take halfway through its item",
              obj(R"({"take": "tk_1", "param": "volume", "points": [{"beat": 0, "value": 0}, {"beat": 2, "value": "-12 dB"}]})"),
              obj(R"({"env": "en_1", "points": 2})"), "song_with_audio"},
+            {"A rack module's knob: a VCA opening over a bar",
+             obj(R"({"module": "mo_3", "param": "level", "points": [{"beat": 0, "value": -40}, {"beat": 4, "value": 0}]})"),
+             obj(R"({"env": "en_1", "points": 2})"), "song_with_rack"},
             {"Master rate envelope",
              obj(R"({"track":"tr_0","param":"playrate","points":[{"beat":0,"value":1},{"beat":4,"value":2}]})"),
              obj(R"({"env":"en_1","points":2})"), "empty"}};
@@ -3161,10 +3299,10 @@ void registerEngineCommands(cmd::Registry& registry) {
             EngineApp& app = A(ctx);
             const model::Session s = app.view();
             if (a.track.has_value() + a.fx.has_value() + a.route.has_value() + a.take.has_value() +
-                    a.group.has_value() !=
+                    a.group.has_value() + a.module.has_value() !=
                 1)
-                return Error("env.target", "give one of track, fx, route, take or group", "",
-                             "e.g. {\"fx\": \"fx_1\", \"param\": \"filter1.cutoff\"}");
+                return Error("env.target", "give one of track, fx, route, take, group or module",
+                             "", "e.g. {\"fx\": \"fx_1\", \"param\": \"filter1.cutoff\"}");
             model::Envelope env;
             if (a.take) {
                 auto id = existing<model::Take>(s, *a.take, "/take");
@@ -3196,6 +3334,10 @@ void registerEngineCommands(cmd::Registry& registry) {
                 env.target.object = *id;
             } else if (a.fx) {
                 auto id = existing<model::FxInstance>(s, *a.fx, "/fx");
+                if (!id) return std::move(id).error();
+                env.target.object = *id;
+            } else if (a.module) {
+                auto id = existing<model::RackModule>(s, *a.module, "/module");
                 if (!id) return std::move(id).error();
                 env.target.object = *id;
             } else {

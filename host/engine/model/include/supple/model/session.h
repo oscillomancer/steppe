@@ -40,6 +40,9 @@ struct Session {
     IdMap<AutomationItem> autoItems;
     IdMap<Marker> markers;
     IdMap<Region> regions;
+    IdMap<Rack> racks;
+    IdMap<RackModule> modules;
+    IdMap<Cable> cables;
     std::map<std::string, std::shared_ptr<const Blob>> blobs;  // "sha256:<hex>"
     // Unknown top-level project sections (including extensions) survive
     // load/save; UI state belongs to the separate .ui.json sidecar.
@@ -67,6 +70,9 @@ struct TxnBuilders {
     std::optional<IdMap<AutomationItem>::Builder> autoItems;
     std::optional<IdMap<Marker>::Builder> markers;
     std::optional<IdMap<Region>::Builder> regions;
+    std::optional<IdMap<Rack>::Builder> racks;
+    std::optional<IdMap<RackModule>::Builder> modules;
+    std::optional<IdMap<Cable>::Builder> cables;
 };
 
 // Which map of the Session holds objects of type T, and their ID kind.
@@ -94,6 +100,9 @@ SUPPLE_MODEL_TRAITS(Envelope, Envelope, envelopes)
 SUPPLE_MODEL_TRAITS(AutomationItem, AutoItem, autoItems)
 SUPPLE_MODEL_TRAITS(Marker, Marker, markers)
 SUPPLE_MODEL_TRAITS(Region, Region, regions)
+SUPPLE_MODEL_TRAITS(Rack, Rack, racks)
+SUPPLE_MODEL_TRAITS(RackModule, Module, modules)
+SUPPLE_MODEL_TRAITS(Cable, Cable, cables)
 #undef SUPPLE_MODEL_TRAITS
 
 // One object-level change made by a transaction.
@@ -224,6 +233,17 @@ Status validateStripRules(const Session& s);
 
 // The track whose FX chain holds `fx` (not input chains or take FX), if any.
 std::optional<Id> trackOfFx(const Session& s, Id fx);
+// The plugin module that holds `fx` (ADR-0062), if any.
+std::optional<Id> moduleOfFx(const Session& s, Id fx);
+// The rack a cable end is in: its module's, or for a plug-in's parameter its
+// plugin module's.
+std::optional<Id> rackOfEnd(const Session& s, const CableEnd& end);
+// What an Out or In module is called (rack.md §8): its label, else "Out N"
+// or "In N", numbered among its rack's Out (In) modules in id order. The
+// input menu shows it after its rack (rackLabel).
+std::string moduleLabel(const Session& s, Id module);
+// What a rack's tab says: its name, else its home track's label.
+std::string rackLabel(const Session& s, Id rack);
 // Whether `from` already sends its main pair to the strip `to` (a route
 // between the two tracks from channels 1/2, not to a plug-in's key): the
 // GUI's send drags add at most one. Sends from auxiliary pairs do not count.

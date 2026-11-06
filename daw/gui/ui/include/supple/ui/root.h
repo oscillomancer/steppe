@@ -110,7 +110,8 @@ class Root {
     // --- driving the UI from tests and scripts (same paths as SDL input)
     void pointer(PointerEvent e);
     bool click(std::string_view id, int button = 1);
-    void key(int keycode, unsigned mods = 0);
+    void key(int keycode, unsigned mods = 0, bool repeat = false);
+    void keyUp(int keycode, unsigned mods = 0);
     // Keys no focused node used, while no popup is open (shortcuts, §6);
     // true when consumed.
     std::function<bool(const KeyEvent&)> onUnhandledKey;

@@ -125,8 +125,10 @@ struct ParamInfo {
 
 // --- events ----------------------------------------------------------------------
 
+// ParamMod: CLAP param_mod, `value` the modulation amount added to the
+// parameter in its CLAP value units (a VST3 plug-in ignores it).
 struct Event {
-    enum class Kind : std::uint8_t { NoteOn, NoteOff, NoteChoke, Param, Midi };
+    enum class Kind : std::uint8_t { NoteOn, NoteOff, NoteChoke, Param, Midi, ParamMod };
     Kind kind = Kind::NoteOn;
     std::uint32_t time = 0;  // sample offset within the block
     // notes
@@ -363,6 +365,9 @@ class Instance {
     void flushParams() SUPPLE_RT;
     bool needsAudioFlush() const;  // active, a flush was requested, nothing processed since
     void reset() SUPPLE_RT;        // clap_plugin.reset: [audio-thread & active]
+    // How many times reset() was called: a host that keeps per-instance state
+    // (a rack's plugin module: which notes it sent) sees the plug-in forgot it.
+    std::uint32_t resets() const { return resets_.load(std::memory_order_relaxed); }
 
     // --- main-thread servicing (call regularly: after renders, from the app loop) ---
     // Handles request_callback, request_restart (while active), pending flushes
@@ -497,6 +502,7 @@ class Instance {
     std::unique_ptr<RemoteInstance> remote_;
     std::unique_ptr<Vst3Instance> vst3_;
     std::atomic<const void*> owner_{nullptr};
+    std::atomic<std::uint32_t> resets_{0};
     std::atomic<bool> paramProcessRequested_{false};
     void notifyAudio() SUPPLE_RT;
     std::atomic<std::atomic<std::uint32_t>*> audioWake_{nullptr};

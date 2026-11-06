@@ -59,6 +59,12 @@ struct AppOptions {
     // DSP scripts (ADR-0032): <scriptDir>/<name>/<name>.cpp, each a plugin of
     // the script player. Empty = <workdir>/scripts.
     std::filesystem::path scriptDir;
+    // Modular racks' module library (ADR-0062): <moduleDir>/<name>/<name>.cpp,
+    // each a module type. Empty = <workdir>/modules.
+    std::filesystem::path moduleDir;
+    // Rack presets (rack.preset.*): <rackPresetDir>/<name>.json. Empty =
+    // <workdir>/rack-presets; the app passes <data>/<slug>/rack-presets.
+    std::filesystem::path rackPresetDir;
     // An unsaved project's own folder (the GUI's, one per run): its media (the
     // recordings) live in <scratchDir>/<media_dir> until the first save moves
     // them beside the project file; clearScratch() deletes it when the
@@ -306,6 +312,27 @@ class EngineApp : public cmd::Host {
     std::filesystem::path scriptDir() const {
         return options_.scriptDir.empty() ? options_.workdir / "scripts" : options_.scriptDir;
     }
+    // The module library (module.* commands) and the module types racks use:
+    // the built-in ones and the library's, compiled when the app starts.
+    std::filesystem::path moduleDir() const {
+        return options_.moduleDir.empty() ? options_.workdir / "modules" : options_.moduleDir;
+    }
+    // Where a project saved at `project` keeps its copies of the user's
+    // modules (<folder>/modules); empty when unsaved or when that folder is
+    // the library.
+    std::filesystem::path projectModuleDir(const std::filesystem::path& project) const;
+    std::filesystem::path rackPresetDir() const {
+        return options_.rackPresetDir.empty() ? options_.workdir / "rack-presets"
+                                              : options_.rackPresetDir;
+    }
+    const std::shared_ptr<const rack::Catalog>& modules() const { return modules_; }
+    // Makes `catalog` the one racks use: racks playing a type whose code
+    // changed get new instances of it. Main thread.
+    void setModules(std::shared_ptr<const rack::Catalog> catalog);
+    // A module's running instance, for its telemetry (Instance::watch,
+    // readTelemetry); null until a plan builds it (supple/engine/racks.h has
+    // the rest a rack window needs). Main thread.
+    rack::Instance* moduleInstance(model::Id module) const;
     std::string rememberRender(const std::filesystem::path& path);
     std::string reserveRenderId();
     void publishRender(std::string id, const std::filesystem::path& path);
@@ -464,7 +491,7 @@ class EngineApp : public cmd::Host {
     std::function<bool(model::Id fx, const model::ParamLearn& learn)> learnGate;
     void setLearning(bool on) { learning_ = on; }
     bool learning() const { return learning_; }
-    bool hasLearn() const;  // any effect, track, send or VCA of the head has a learned control
+    bool hasLearn() const;  // any effect, track, send, VCA or module has a learned control
     // Moves a parameter as a learned control does: `next` gets its current
     // normalized value and one encoder step, and returns the new value (none:
     // leave it). Returns the value set (rounded for a stepped parameter), or
@@ -479,6 +506,12 @@ class EngineApp : public cmd::Host {
     // vca.set, one undo step per movement.
     std::optional<double> moveControl(
         model::Id object, const std::string& param,
+        const std::function<std::optional<double>(double current, double step)>& next);
+    // The same for a rack module's knob (`key`): `current` is the knob's
+    // travel (rack::knobPosition); the move goes through module.set, one undo
+    // step per movement.
+    std::optional<double> moveKnob(
+        model::Id module, const std::string& key,
         const std::function<std::optional<double>(double current, double step)>& next);
 
     // The parameter edited last in the window (the FX window's panel, a
@@ -586,6 +619,7 @@ class EngineApp : public cmd::Host {
     host::ScanReport scanReport_;
     std::string pluginScanJob_;
     std::unique_ptr<InstancePool> pool_;
+    std::shared_ptr<const rack::Catalog> modules_;
     MediaCache media_;
     std::map<std::string, std::filesystem::path> renders_;
     std::map<std::string, json::Value> renderMeters_;

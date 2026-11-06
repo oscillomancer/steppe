@@ -266,7 +266,11 @@ inline std::string excerpt(const std::string& text, std::size_t at) {
 // `text` after `edits`, each replacing the one place its old text is in the
 // script as the edits before it left it; an error at the first edit whose old
 // text is nowhere, or in more than one place.
-inline Result<std::string> applyEdits(std::string text, const std::vector<Replacement>& edits) {
+// The edits in turn, each old text found exactly once; errors carry `code`
+// and name `getter`, the command that shows the text as it stands.
+inline Result<std::string> applyEdits(std::string text, const std::vector<Replacement>& edits,
+                                      const std::string& code = "dsp.edit",
+                                      const std::string& getter = "dsp.get") {
     // Plain line ends as Windows ones, where the script has those.
     auto crlf = [](const std::string& from) {
         std::string out;
@@ -308,9 +312,10 @@ inline Result<std::string> applyEdits(std::string text, const std::vector<Replac
                            excerpt(text, from + lo) + "\" and old with \"" + excerpt(old, lo) +
                            "\"";
             }
-            return Error("dsp.edit", message, path,
-                         "dsp.get gives the script as it stands; copy old from it exactly, "
-                         "spaces and line breaks included");
+            return Error(code, message, path,
+                         getter +
+                             " gives the script as it stands; copy old from it exactly, "
+                             "spaces and line breaks included");
         }
         if (text.find(old, at + 1) != std::string::npos) {
             std::string lines;
@@ -318,7 +323,7 @@ inline Result<std::string> applyEdits(std::string text, const std::vector<Replac
             for (std::size_t p = at; p != std::string::npos; p = text.find(old, p + 1))
                 if (++count <= 5)
                     lines += (lines.empty() ? "" : ", ") + std::to_string(lineAt(text, p));
-            return Error("dsp.edit",
+            return Error(code,
                          which + " is in the script " + std::to_string(count) +
                              " times (at lines " + lines + (count > 5 ? ", ..." : "") + ")",
                          path, "give old more of the text around the place, so it is in one place");

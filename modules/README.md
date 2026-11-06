@@ -65,3 +65,39 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 
 | Module | What it is |
 |---|---|
+| `adsr` | An envelope with curved stages, gated, triggered or looping, with an end trigger |
+| `lfo` | Seven shapes, free or locked to the song position, morphable, with poly spread |
+| `sequencer` | Sixteen steps of notes, gates, lengths (ties) and chances; five walks; clock or song sixteenths |
+| `random` | Clocked random notes and three gates with a looping memory that mutates by Change; scales; poly |
+| `function` | Rise and fall with a curve: an envelope, a cycling LFO, a slew limiter or a follower |
+| `quantizer` | Pitch to the nearest note of 22 scales or a custom one, transposed in degrees; keyboard face |
+| `clock` | Six ratios (/16 to x8) of the song, a free tempo or an incoming clock, with swing and a reset out |
+| `euclid` | A Euclidean rhythm with its own accent spread, gate, accent and off-beat outputs, circle face |
+| `turing` | Shift Register: a looping random register, locked to chaotic by Flip, with a CV and four bit gates |
+| `chance` | A coin toss per gate to A or B, latched as a random switch, or a burst of ratchets; poly |
+| `chord` | A note to a poly chord: 22 types or a key's own thirds, inversions, voicings and a strum |
+| `arp` | An arpeggiator over held poly notes: six orders, octaves, gate length, latch |
+| `slew` | A slew limiter and portamento, linear to exponential, that can leave leaps alone; poly |
+| `hold` | Sample and hold or track and hold, noise when nothing is in, a value per voice; poly |
+| `follower` | An envelope follower, peak or RMS, with a gate above a threshold and an onset trigger; poly |
+| `chaos` | A Lorenz or Thomas attractor: X, Y and Z as slow organic CVs, poly copies that drift apart |
+| `rhythm` | Drum patterns from a map of nine grooves morphed by X and Y, densities per voice, chaos, accents |
+| `mixer` | Four channels with level, pan and mute to stereo and mono, through a master; poly summed |
+| `scale` | Four attenuverters with offsets; a row with nothing in it is a constant |
+| `math` | Sum, difference, product, min, max, abs, a crossfade and a comparator of A and B; poly |
+| `logic` | AND, OR, XOR, NOT, a flip-flop and a trigger on every change; poly |
+| `switcher` | A sequential switch both ways (four to one, one to four), stepped or selected, with a crossfade; poly |
+| `macro` | Eight knobs out of eight jacks, unipolar or bipolar, glided: a patch's performance controls |
+| `poly` | Merge eight monos to a poly cable, split one to eight, sum it, or spread it across stereo |
+| `scope` | An oscilloscope: two traces with afterglow, triggered, free or locked to the song, and X-Y |
+| `pitch` | A constant pitch or a transposer: octave, semitone and fine on a poly pitch, with a tuner display |
+| `drift` | Slow, smooth random motion across poly voices, apart or following one shared path |
+| `ratchet` | Gates into bursts of quick pulses, by chance or every Nth gate, curved and fading; poly |
+| `markov` | A melody by the odds of which note follows which: four styles, or learned from a melody played in |
+| `cellular` | A 1-D cellular automaton: up to sixteen cells grown by a rule, as poly gates, four taps and a CV |
+| `looper` | Records a CV and a gate over a beat to eight bars in time with the song and loops them; punch in by the loop |
+| `stages` | A function generator of two to six stages (level, time, curve): once, looping, or gated with a hold; poly |
+| `matrix` | Four inputs to four outputs through sixteen attenuverters; an unpatched input is an offset; poly |
+| `polyrhythm` | Four rhythms of 1 to 16 beats against a beat to four bars of the song: ramps, gates, Any and Hits |
+| `life` | An 8x8 Game of Life (five rules) played a column a clock: eight poly gates, a CV, counts and a generation trigger |
+| `lsystem` | L-System: a self-similar melody grown by rewriting A, B and C, each moving the tune by scale degrees |

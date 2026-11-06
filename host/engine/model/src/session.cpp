@@ -21,8 +21,9 @@ namespace supple::model {
 // --- ids -------------------------------------------------------------------------------
 
 namespace {
-constexpr std::string_view kPrefixes[kKindCount] = {"tr", "it", "tk", "md", "mi", "fx", "sd", "en",
-                                                    "ai", "mk", "rg", "tp", "ts", "gr", "ln", "rj"};
+constexpr std::string_view kPrefixes[kKindCount] = {"tr", "it", "tk", "md", "mi", "fx", "sd",
+                                                    "en", "ai", "mk", "rg", "tp", "ts", "gr",
+                                                    "ln", "rj", "rk", "mo", "cb"};
 }
 
 std::string_view prefix(Kind kind) {
@@ -147,6 +148,9 @@ Session EditTxn::preview() const {
     apply<AutomationItem>(s, builders_);
     apply<Marker>(s, builders_);
     apply<Region>(s, builders_);
+    apply<Rack>(s, builders_);
+    apply<RackModule>(s, builders_);
+    apply<Cable>(s, builders_);
     s.project = project_;
     s.blobs = blobs_;
     s.next = next_;
@@ -188,6 +192,9 @@ Result<Session> EditTxn::commit() {
     apply<AutomationItem>(s, builders_);
     apply<Marker>(s, builders_);
     apply<Region>(s, builders_);
+    apply<Rack>(s, builders_);
+    apply<RackModule>(s, builders_);
+    apply<Cable>(s, builders_);
     s.project = project_;
     s.blobs = blobs_;
     s.next = next_;
@@ -255,6 +262,9 @@ struct Checker {
         check(s.autoItems, Kind::AutoItem);
         check(s.markers, Kind::Marker);
         check(s.regions, Kind::Region);
+        check(s.racks, Kind::Rack);
+        check(s.modules, Kind::Module);
+        check(s.cables, Kind::Cable);
     }
 
     void tracks() {
@@ -356,8 +366,11 @@ struct Checker {
             claim(e.value->inputChain, at("tracks", e.id, "input_chain"));
         }
         for (const auto& e : s.takes) claim(e.value->chain, at("takes", e.id, "chain"));
+        for (const auto& e : s.modules)
+            if (e.value->fx) claim({*e.value->fx}, at("modules", e.id, "fx"));
         for (const auto& e : s.fx)
-            if (!owner.count(e.id)) fail(at("fx", e.id), e.id.str() + " is in no chain");
+            if (!owner.count(e.id))
+                fail(at("fx", e.id), e.id.str() + " is in no chain and no plugin module");
     }
 
     void routes() {
@@ -369,10 +382,24 @@ struct Checker {
             const Route& r = *e.value;
             auto endOk = [&](const RouteEnd& x, const char* field, bool from) {
                 const int n = (x.track ? 1 : 0) + (x.hwChannels ? 1 : 0) + (x.midiDevice ? 1 : 0) +
-                              (x.fx ? 1 : 0);
+                              (x.fx ? 1 : 0) + (x.module ? 1 : 0);
                 if (n != 1)
                     fail(at("routes", e.id, field),
-                         "exactly one of track, fx, hw_channels, midi_device");
+                         "exactly one of track, fx, hw_channels, midi_device, module");
+                if (x.module) {
+                    const RackModule* m = s.modules.find(*x.module);
+                    const std::string_view want = from ? kOutModule : kInModule;
+                    if (!m)
+                        fail(at("routes", e.id, field),
+                             "module " + x.module->str() + " does not exist");
+                    else if (m->type != want)
+                        fail(
+                            at("routes", e.id, field),
+                            x.module->str() + (from ? " is not an Out module (routes come from Out "
+                                                      "modules)"
+                                                    : " is not an In module (routes go to In "
+                                                      "modules)"));
+                }
                 if (!from && x.midiDevice)
                     fail(at("routes", e.id, field), "a route cannot send to a MIDI input");
                 if (from && x.fx)
@@ -385,8 +412,29 @@ struct Checker {
             };
             endOk(r.from, "from", true);
             endOk(r.to, "to", false);
-            const std::optional<Id> target = r.to.fx ? trackOfFx(s, *r.to.fx) : r.to.track;
-            if (r.from.track && target) edges[*r.from.track].push_back(*target);
+            if (r.from.module && r.to.track) {
+                const Track* t = s.tracks.find(*r.to.track);
+                if (t && t->type != StripType::Channel)
+                    fail(at("routes", e.id, "to"), "an Out module feeds channels only");
+                else if (t && t->record.input != e.id)
+                    fail(at("routes", e.id, "to"),
+                         "a route from an Out module is its channel's record input");
+            } else if (r.from.module && !r.to.track) {
+                fail(at("routes", e.id, "to"), "an Out module feeds a channel");
+            }
+            if (r.to.module && !r.from.track)
+                fail(at("routes", e.id, "from"), "an In module takes a send from a track");
+            // Racks are nodes too: a track feeds the rack of an In module it
+            // sends to, and a rack its Out modules' channels.
+            auto rackOf = [&](Id module) -> std::optional<Id> {
+                const RackModule* m = s.modules.find(module);
+                return m ? std::optional<Id>(m->rack) : std::nullopt;
+            };
+            std::optional<Id> source = r.from.track;
+            if (r.from.module) source = rackOf(*r.from.module);
+            std::optional<Id> target = r.to.fx ? trackOfFx(s, *r.to.fx) : r.to.track;
+            if (r.to.module) target = rackOf(*r.to.module);
+            if (source && target) edges[*source].push_back(*target);
         }
         // Cycle detection (iterative DFS with colours).
         std::map<Id, int> colour;
@@ -405,7 +453,10 @@ struct Checker {
                 }
                 const Id next = it->second[i++];
                 if (colour[next] == 1) {
-                    fail("/routes", "routing cycle through " + next.str());
+                    fail("/routes", next.kind == Kind::Rack
+                                        ? "routing cycle through rack " + next.str() +
+                                              " (a track that feeds it hears it)"
+                                        : "routing cycle through " + next.str());
                     return;
                 }
                 if (!colour[next]) {
@@ -413,6 +464,80 @@ struct Checker {
                     stack.push_back({next, 0});
                 }
             }
+        }
+    }
+
+    void racks() {
+        if (s.racks.size() > kMaxRacks)
+            fail("/racks", "more than " + std::to_string(kMaxRacks) + " racks");
+        struct Count {
+            std::size_t modules = 0, cables = 0, outs = 0, ins = 0;
+        };
+        std::map<Id, Count> counts;
+        for (const auto& e : s.racks) {
+            const Track* t = s.tracks.find(e.value->track);
+            if (!t)
+                fail(at("racks", e.id, "track"),
+                     "track " + e.value->track.str() + " does not exist");
+            else if (t->type != StripType::Channel)
+                fail(at("racks", e.id, "track"), "a rack's home is a channel");
+        }
+        for (const auto& e : s.modules) {
+            const RackModule& m = *e.value;
+            if (!s.racks.contains(m.rack))
+                fail(at("modules", e.id, "rack"), "rack " + m.rack.str() + " does not exist");
+            if (m.type.empty()) fail(at("modules", e.id, "type"), "a module has a type");
+            if (!std::isfinite(m.x) || !std::isfinite(m.y) || std::abs(m.x) > kMaxRackCoordinate ||
+                std::abs(m.y) > kMaxRackCoordinate)
+                fail(at("modules", e.id, "x"), "a module's place is finite, within ±1e6");
+            if (!m.params.isObject()) fail(at("modules", e.id, "params"), "params is an object");
+            if (m.fx && m.type != kPluginModule)
+                fail(at("modules", e.id, "fx"), "only a plugin module holds a plug-in");
+            if (!m.fx && m.type == kPluginModule)
+                fail(at("modules", e.id, "fx"), "a plugin module holds a plug-in (fx)");
+            if (m.source && m.type != kNotesModule)
+                fail(at("modules", e.id, "source"), "only a Notes module plays a track's MIDI");
+            if (m.device && m.type != kNotesModule)
+                fail(at("modules", e.id, "device"), "only a Notes module plays a MIDI input");
+            if (m.source && !s.tracks.contains(*m.source))
+                fail(at("modules", e.id, "source"), "track " + m.source->str() + " does not exist");
+            Count& c = counts[m.rack];
+            ++c.modules;
+            if (m.type == kOutModule) ++c.outs;
+            if (m.type == kInModule) ++c.ins;
+        }
+        std::set<std::pair<std::string, std::string>> joined;
+        for (const auto& e : s.cables) {
+            const Cable& cable = *e.value;
+            const auto from = rackOfEnd(s, cable.from), to = rackOfEnd(s, cable.to);
+            if (cable.from.object.kind != Kind::Module || !from)
+                fail(at("cables", e.id, "from"), "from " + cable.from.str() + " is not a module's");
+            if (!to)
+                fail(at("cables", e.id, "to"),
+                     "to " + cable.to.str() + " is not a module's or a plugin module's plug-in");
+            if (from && to && *from != *to)
+                fail(at("cables", e.id, "to"), "a cable joins modules of one rack");
+            if (cable.from.key.empty() || cable.to.key.empty())
+                fail(at("cables", e.id), "a cable's ends name a port or parameter");
+            if (cable.to.object.kind == Kind::Fx && !cable.amount)
+                fail(at("cables", e.id, "amount"), "a cable to a parameter has an amount");
+            if (cable.amount && !std::isfinite(*cable.amount))
+                fail(at("cables", e.id, "amount"), "the amount is finite");
+            if (!joined.insert({cable.from.str(), cable.to.str()}).second)
+                fail(at("cables", e.id),
+                     "another cable joins " + cable.from.str() + " and " + cable.to.str());
+            if (from) ++counts[*from].cables;
+        }
+        for (const auto& [rack, c] : counts) {
+            const std::string p = "/racks/" + rack.str();
+            if (c.modules > kMaxRackModules)
+                fail(p, "more than " + std::to_string(kMaxRackModules) + " modules");
+            if (c.cables > kMaxRackCables)
+                fail(p, "more than " + std::to_string(kMaxRackCables) + " cables");
+            if (c.outs > kMaxRackOuts)
+                fail(p, "more than " + std::to_string(kMaxRackOuts) + " Out modules");
+            if (c.ins > kMaxRackIns)
+                fail(p, "more than " + std::to_string(kMaxRackIns) + " In modules");
         }
     }
 
@@ -425,7 +550,8 @@ struct Checker {
                 (o.kind == Kind::Group && s.groups.contains(o) && s.groups.find(o)->vca) ||
                 (o.kind == Kind::Route && s.routes.contains(o)) ||
                 (o.kind == Kind::Fx && s.fx.contains(o)) ||
-                (o.kind == Kind::Take && s.takes.contains(o));
+                (o.kind == Kind::Take && s.takes.contains(o)) ||
+                (o.kind == Kind::Module && s.modules.contains(o));
             if (!ok) fail(at("envelopes", e.id, "target"), "target " + o.str() + " does not exist");
             for (std::size_t i = 1; i < env.points.size(); ++i)
                 if (env.points[i].pos < env.points[i - 1].pos) {
@@ -705,6 +831,7 @@ Status checkInvariants(const Session& s) {
     c.itemsAndTakes();
     c.fx();
     c.routes();
+    c.racks();
     c.envelopes();
     if (c.errors.empty()) return validateFrozenState(s);
     if (c.errors.size() == 1) return c.errors.front();
@@ -778,6 +905,9 @@ std::vector<ObjectDiff> diff(const Session& a, const Session& b) {
     diffMap(a.routes, b.routes, out);
     diffMap(a.envelopes, b.envelopes, out);
     diffMap(a.autoItems, b.autoItems, out);
+    diffMap(a.racks, b.racks, out);
+    diffMap(a.modules, b.modules, out);
+    diffMap(a.cables, b.cables, out);
     return out;
 }
 
@@ -786,6 +916,55 @@ std::optional<Id> trackOfFx(const Session& s, Id fx) {
         if (std::find(e.value->chain.begin(), e.value->chain.end(), fx) != e.value->chain.end())
             return e.id;
     return std::nullopt;
+}
+
+std::optional<Id> moduleOfFx(const Session& s, Id fx) {
+    for (const auto& e : s.modules)
+        if (e.value->fx == fx) return e.id;
+    return std::nullopt;
+}
+
+std::optional<Id> rackOfEnd(const Session& s, const CableEnd& end) {
+    std::optional<Id> module = end.object;
+    if (end.object.kind == Kind::Fx)
+        module = moduleOfFx(s, end.object);
+    else if (end.object.kind != Kind::Module)
+        return std::nullopt;
+    const RackModule* m = module ? s.modules.find(*module) : nullptr;
+    return m ? std::optional<Id>(m->rack) : std::nullopt;
+}
+
+std::optional<CableEnd> CableEnd::parse(std::string_view text) {
+    const auto dot = text.find('.');
+    if (dot == std::string_view::npos || dot + 1 >= text.size()) return std::nullopt;
+    auto id = Id::parse(text.substr(0, dot));
+    if (!id || (id->kind != Kind::Module && id->kind != Kind::Fx)) return std::nullopt;
+    const std::string_view key = text.substr(dot + 1);
+    for (char c : key)
+        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_')) return std::nullopt;
+    if (key.front() < 'a' || key.front() > 'z') return std::nullopt;
+    return CableEnd{*id, std::string(key)};
+}
+
+std::string moduleLabel(const Session& s, Id module) {
+    const RackModule* m = s.modules.find(module);
+    if (!m) return module.str();
+    if (!m->label.empty()) return m->label;
+    const bool out = m->type == kOutModule, in = m->type == kInModule;
+    if (!out && !in) return {};
+    std::size_t place = 0;
+    for (const auto& e : s.modules) {
+        if (e.value->rack != m->rack || e.value->type != m->type) continue;
+        ++place;
+        if (e.id == module) break;
+    }
+    return std::string(out ? "Out " : "In ") + std::to_string(place);
+}
+
+std::string rackLabel(const Session& s, Id rack) {
+    const Rack* r = s.racks.find(rack);
+    if (!r) return rack.str();
+    return r->name.empty() ? trackLabel(s, r->track) : r->name;
 }
 
 bool sendsTo(const Session& s, Id from, Id to) {

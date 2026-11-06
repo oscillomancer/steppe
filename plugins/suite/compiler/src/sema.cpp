@@ -258,9 +258,12 @@ std::string Sema::typeName(const QualType& q) const {
     return (q.isConst ? "const " : "") + q.type->name + (q.isRef ? "&" : "");
 }
 
-const Type* Sema::arrayType(const Type* element, int count, bool shared) {
-    const std::string name =
-        (shared ? "SharedArray<" : "Array<") + element->name + ", " + std::to_string(count) + ">";
+const Type* Sema::arrayType(const Type* element, int count, bool shared,
+                            const std::string& members) {
+    const std::string name = members.empty()
+                                 ? (shared ? "SharedArray<" : "Array<") + element->name + ", " +
+                                       std::to_string(count) + ">"
+                                 : members + "<" + std::to_string(count) + ">";
     auto it = arrays_.find(name);
     if (it != arrays_.end()) return it->second;
     auto t = std::make_unique<Type>();
@@ -269,9 +272,10 @@ const Type* Sema::arrayType(const Type* element, int count, bool shared) {
     t->element = element;
     t->count = count;
     t->shared = shared;
-    t->align = element->align;
-    const long long bytes =
-        static_cast<long long>(element->size) * (count + 1);  // the spare element too
+    t->members = !members.empty();
+    t->align = t->members ? std::max(8, element->align) : element->align;
+    const long long bytes = static_cast<long long>(element->size) * (count + 1) +
+                            (t->members ? 8 : 0);  // spare element and sample
     t->size = bytes > kMaxStructBytes ? kMaxStructBytes + 1 : static_cast<int>(bytes);
     Type* raw = t.get();
     unit_.types.push_back(std::move(t));
@@ -307,7 +311,32 @@ const Type* Sema::resolve(TypeSpec* spec, StructDecl* scope, bool allowVoid) {
     if (path.size() == 1) {
         if (first == "const char*")
             t = b_.stringType();
-        else if (first == "Shared") {
+        else if (first == "Params" || first == "Inputs" || first == "Outputs") {
+            if (!spec->typeArgs.empty() || spec->valueArgs.size() != 1) {
+                error(spec->loc, "script.module.array_size",
+                      "a declaration array takes one constant size",
+                      "write " + first + "<16> or use a constexpr int");
+                return nullptr;
+            }
+            std::int64_t n = 0;
+            const int limit = first == "Params" ? 256 : 32;
+            StructDecl* savedSelf = self_;
+            self_ = scope;
+            const bool constant = constantInt(spec->valueArgs[0], n);
+            self_ = savedSelf;
+            if (!constant || n < 1 || n > limit) {
+                error(spec->loc, "script.module.array_size",
+                      "a declaration array size is 1.." + std::to_string(limit),
+                      "use a positive literal or constexpr int within the module's declaration "
+                      "limits");
+                return nullptr;
+            }
+            const auto* element = b_.cls(first == "Params"   ? "Param"
+                                         : first == "Inputs" ? "Input"
+                                                             : "Output")
+                                      ->type;
+            t = arrayType(element, static_cast<int>(n), false, first);
+        } else if (first == "Shared") {
             const Type* value = spec->typeArgs.size() == 1 && spec->valueArgs.empty()
                                     ? resolve(spec->typeArgs[0], scope)
                                     : nullptr;
@@ -345,6 +374,13 @@ const Type* Sema::resolve(TypeSpec* spec, StructDecl* scope, bool allowVoid) {
             }
             const Type* element = resolve(spec->typeArgs[0], scope);
             if (!element) return nullptr;
+            if (element->members) {
+                error(spec->loc, "script.module.array_location",
+                      "declaration arrays are direct module members",
+                      "declare Params<N>, Inputs<N> or Outputs<N> directly in the Module, one per "
+                      "line");
+                return nullptr;
+            }
             if (spec->typeArgs[0]->isRef || spec->typeArgs[0]->isConst) {
                 error(spec->loc, "script.type.template",
                       "an " + first + "'s elements are plain values, not const or references",
@@ -570,11 +606,15 @@ void Sema::layout(StructDecl* s) {
                   "hold the value itself, or an index into an Array");
             continue;
         }
+        if (ft->members && (s->base != PluginKind::Module || f->isStatic || !f->oneDeclarator))
+            error(f->loc, "script.module.array_location",
+                  "declaration arrays are direct Module members, declared separately",
+                  "declare one Params<N>, Inputs<N> or Outputs<N> member per line");
         const Type* held = ft;
         while (held->kind == TypeKind::Array || held->kind == TypeKind::Buffer)
             held = held->element;
         if (b_.isPort(held)) {
-            if (s->base != PluginKind::Module || held != ft || f->isStatic)
+            if (s->base != PluginKind::Module || (held != ft && !ft->members) || f->isStatic)
                 error(f->loc, "script.module.port_location", "ports are direct members of a module",
                       "declare Input or Output one by one in the struct deriving from Module");
             if (!f->oneDeclarator)
@@ -716,6 +756,13 @@ void Sema::checkStructs() {
                     error(f->init->loc, "script.constant.required",
                           "'" + f->name + "' must be a constant",
                           "use literals, constexpr constants and arithmetic on them");
+                continue;
+            }
+            if (t->members) {
+                if (!f->init)
+                    error(f->loc, "script.module.array_declaration",
+                          "a declaration array needs a factory spec",
+                          "Params<16> pitch = semitones(\"Pitch\", -24, 24, 0);");
                 continue;
             }
             if (t->kind == TypeKind::Object && t->builtin == b_.param()) {
@@ -871,6 +918,9 @@ void Sema::signature(FunctionDecl* f) {
         const bool hasModule =
             std::any_of(allStructs_.begin(), allStructs_.end(),
                         [](const StructDecl* s) { return s->base == PluginKind::Module; });
+        if (t->members && !hasModule)
+            error(p->loc, "script.module.array_location", "declaration arrays belong to a Module",
+                  "plugins declare scalar Param members and process a Block");
         if (b_.isPort(t) && !hasModule)
             error(p->loc, "script.module.port_location", "ports belong to a Module",
                   "plugins process a Block; modules use Input and Output members");
@@ -943,6 +993,11 @@ void Sema::checkLocalDecl(VarDecl* v) {
                   "write its type instead of auto, and give it a number");
             return;
         }
+        if (!spec->isRef && t->members) {
+            error(v->loc, "script.module.array_location", "declaration arrays are module members",
+                  "use a reference to the bank or an indexed element; do not copy it in a script");
+            return;
+        }
         if (!spec->isRef && b_.isPort(t)) {
             error(v->loc, "script.module.port_location", "auto would copy a module port",
                   "refer to the module's port with auto& or const auto&");
@@ -1010,6 +1065,11 @@ void Sema::checkLocalDecl(VarDecl* v) {
         error(v->loc, "script.local.static", "a static local would be shared by every instance",
               "make it a member");
     if (!spec->isRef) {
+        if (t->members) {
+            error(v->loc, "script.module.array_location", "declaration arrays are module members",
+                  "declare the bank in Module and pass it by reference");
+            return;
+        }
         if (b_.isPort(t)) {
             error(v->loc, "script.module.port_location", "ports are members of the module struct",
                   "declare an Input or Output member from a port factory; pass it by reference");
@@ -1482,8 +1542,9 @@ void Sema::extractPlugin() {
     std::set<std::string> keys;
     std::map<std::uint32_t, std::string> ids;
     for (FieldDecl* f : s->fields) {
-        if (!f->qt.type || f->isStatic || f->qt.type->kind != TypeKind::Object ||
-            f->qt.type->builtin != b_.param())
+        if (!f->qt.type || f->isStatic ||
+            (f->qt.type->builtin != b_.param() &&
+             !(f->qt.type->members && f->qt.type->element->builtin == b_.param())))
             continue;
         if (!f->init) continue;
         evaluateParam(f);
@@ -1513,21 +1574,25 @@ void Sema::extractPlugin() {
     resolveActivity();
     int inputs = 0, outputs = 0;
     for (FieldDecl* f : s->fields) {
-        if (!b_.isPort(f->qt.type) || f->isStatic || !f->init) continue;
+        const Type* t = f->qt.type;
+        if (!t || !(b_.isPort(t) || (t->members && b_.isPort(t->element))) || f->isStatic ||
+            !f->init)
+            continue;
         if (p.kind != PluginKind::Module) continue;
         const size_t before = p.ports.size();
         evaluatePort(f);
-        if (p.ports.size() == before) continue;
-        PortModel& port = p.ports.back();
-        port.index = port.output ? outputs++ : inputs++;
-        if (!keys.insert(port.key).second)
-            error(f->loc, "script.module.key",
-                  "a port or parameter already has key '" + port.key + "'",
-                  "rename this module member or give it .withKey(\"other_key\")");
-        if (port.index >= 32)
-            error(f->loc, "script.module.port_limit",
-                  "a module has at most 32 inputs and 32 outputs",
-                  "combine signals in polyphonic module ports or use another module");
+        for (size_t j = before; j < p.ports.size(); ++j) {
+            PortModel& port = p.ports[j];
+            port.index = port.output ? outputs++ : inputs++;
+            if (!keys.insert(port.key).second)
+                error(f->loc, "script.module.key",
+                      "a port or parameter already has key '" + port.key + "'",
+                      "rename this module member or give it .withKey(\"other_key\")");
+            if (port.index >= 32)
+                error(f->loc, "script.module.port_limit",
+                      "a module has at most 32 inputs and 32 outputs",
+                      "reduce the declaration arrays or split the module");
+        }
     }
     // Files.
     for (FieldDecl* f : s->fields)
@@ -1715,6 +1780,21 @@ void Sema::extractPlugin() {
                   : "write the output into io[channel][frame] (it arrives silent)");
 }
 
+std::string Sema::paramMember(Expr* e) {
+    if (e->kind == ExprKind::Name) {
+        const auto& path = static_cast<NameExpr*>(e)->path;
+        return path.size() == 1 ? path[0] : std::string();
+    }
+    if (e->kind == ExprKind::Index) {
+        const auto* index = static_cast<IndexExpr*>(e);
+        const std::string name = paramMember(index->object);
+        std::int64_t at = 0;
+        if (!name.empty() && constantInt(index->index, at))
+            return name + "[" + std::to_string(at) + "]";
+    }
+    return {};
+}
+
 void Sema::evaluatePatches(FunctionDecl* f) {
     const auto syntax = [&](Loc loc) {
         error(
@@ -1790,16 +1870,15 @@ void Sema::evaluatePatches(FunctionDecl* f) {
                 continue;
             }
             if (static_cast<MemberExpr*>(set->callee)->member != "set" || set->args.size() != 2 ||
-                set->args[0]->kind != ExprKind::Name) {
+                (set->args[0]->kind != ExprKind::Name && set->args[0]->kind != ExprKind::Index)) {
                 syntax(set->loc);
                 continue;
             }
-            const auto& path = static_cast<NameExpr*>(set->args[0])->path;
-            auto p = std::find_if(
-                out_.plugin.params.begin(), out_.plugin.params.end(),
-                [&](const ParamModel& m) { return path == std::vector<std::string>{m.member}; });
-            if (p == out_.plugin.params.end() || p->output ||
-                path == std::vector<std::string>{f->params[0]->name}) {
+            const std::string member = paramMember(set->args[0]);
+            auto p = std::find_if(out_.plugin.params.begin(), out_.plugin.params.end(),
+                                  [&](const ParamModel& m) { return member == m.member; });
+            if (p == out_.plugin.params.end() || p->output || member == f->params[0]->name ||
+                member.starts_with(f->params[0]->name + "[")) {
                 error(set->args[0]->loc, "script.patch.param",
                       "a factory patch sets a writable Param member",
                       "use a Param member of this plugin, not a meter or a text key");
@@ -2189,7 +2268,8 @@ void Sema::evaluatePort(FieldDecl* f) {
         return;
     }
     PortModel port = v->port;
-    if (port.output != (f->qt.type->builtin == b_.cls("Output"))) {
+    if (port.output !=
+        ((f->qt.type->members ? f->qt.type->element : f->qt.type)->builtin == b_.cls("Output"))) {
         error(f->loc, "script.module.port_direction", "the factory must match Input or Output",
               "use a ...In factory for Input and a ...Out factory for Output");
         return;
@@ -2206,7 +2286,21 @@ void Sema::evaluatePort(FieldDecl* f) {
     if (!std::isfinite(port.normal))
         error(f->loc, "script.module.port_normal", "a port's normal must be finite",
               "give .normal() a finite constant value");
-    out_.plugin.ports.push_back(std::move(port));
+    const Type* t = f->qt.type;
+    const int count = t->members ? t->count : 1;
+    for (int j = 0; j < count; ++j) {
+        PortModel element = port;
+        if (t->members) {
+            element.member += "[" + std::to_string(j) + "]";
+            element.name += " " + std::to_string(j + 1);
+            element.key += "_" + std::to_string(j + 1);
+            element.offset += j * t->element->size;
+            if (element.name.size() > 63)
+                error(f->loc, "script.module.port_name", "an indexed port name exceeds 63 bytes",
+                      "shorten the bank's display name");
+        }
+        out_.plugin.ports.push_back(std::move(element));
+    }
 }
 
 void Sema::evaluateSource(FieldDecl* f) {
@@ -2379,9 +2473,30 @@ void Sema::evaluateParam(FieldDecl* f) {
         }
     p.choices.shrink_to_fit();
     f->paramIndex = static_cast<int>(out_.plugin.params.size());
-    out_.plugin.params.push_back(std::move(p));
-    out_.plugin.paramFields.push_back(f);
-    conditions_.push_back(value->conditions);
+    const Type* t = f->qt.type;
+    const int count = t->members ? t->count : 1;
+    if (t->members && value->spec.id != 0)
+        error(f->loc, "script.module.array_id",
+              "a parameter array derives an ID for each element's key",
+              "omit .withId() on Params<N>; use .withKey() to set its key stem");
+    for (int j = 0; j < count; ++j) {
+        ParamModel element = p;
+        if (t->members) {
+            element.member += "[" + std::to_string(j) + "]";
+            element.name += " " + std::to_string(j + 1);
+            element.key += "_" + std::to_string(j + 1);
+            element.id = script::detail::keyId(element.key);
+            element.offset += j * t->element->size;
+            if (element.name.size() > 63)
+                bad("an indexed name exceeds 63 bytes", "shorten the array's display name");
+        }
+        out_.plugin.params.push_back(std::move(element));
+        out_.plugin.paramFields.push_back(f);
+        conditions_.push_back(value->conditions);
+    }
+    if (out_.plugin.kind == PluginKind::Module && out_.plugin.params.size() > 256)
+        error(f->loc, "script.module.param_limit", "a module has at most 256 parameters",
+              "reduce the parameter arrays or split the module");
 }
 
 void Sema::resolveActivity() {
@@ -2549,19 +2664,6 @@ void Sema::initialValues(const Type* type, int base, Expr* init, StructDecl* sco
                 continue;
             }
             if (f->qt.type->kind == TypeKind::Object && f->qt.type->builtin == b_.param()) {
-                if (f->paramIndex >= 0) {
-                    const ParamModel& pm = p.params[static_cast<size_t>(f->paramIndex)];
-                    ParamSlot slot;
-                    slot.offset = base + f->offset;
-                    slot.index = f->paramIndex;
-                    slot.def = pm.kind == ParamModel::Kind::Continuous &&
-                                       pm.unit == ParamModel::Unit::Percent
-                                   ? pm.def * 0.01
-                                   : pm.def;
-                    slot.min = pm.unit == ParamModel::Unit::Percent ? pm.min * 0.01 : pm.min;
-                    slot.offAtMinimum = pm.offAtMinimum;
-                    p.paramSlots.push_back(slot);
-                }
                 continue;
             }
             initialValues(f->qt.type, base + f->offset, value, s);
@@ -2580,6 +2682,18 @@ void Sema::buildConstruction() {
     p.paramSlots.clear();
     p.sourceSlots.clear();
     initialValues(p.decl->type, 0, nullptr, p.decl);
+    for (size_t i = 0; i < p.params.size(); ++i) {
+        const ParamModel& pm = p.params[i];
+        const bool percent = pm.unit == ParamModel::Unit::Percent;
+        p.paramSlots.push_back({pm.offset, static_cast<int>(i), percent ? pm.def * 0.01 : pm.def,
+                                percent ? pm.min * 0.01 : pm.min, pm.offAtMinimum});
+    }
+    for (FieldDecl* f : p.decl->fields)
+        if (!f->isStatic && f->qt.type && f->qt.type->members) {
+            const Type* t = f->qt.type;
+            p.memberSpares.push_back(
+                {f->offset + t->count * t->element->size, f->offset, t->element->builtin});
+        }
     collectObjects(p.decl->type, 0, p.objects);
 }
 
@@ -3411,8 +3525,9 @@ void Sema::editorRules() {
                           std::string(field->qt.type->kind == TypeKind::Array ? "it holds"
                                                                               : "get() returns") +
                           ", and keep the editor's own state in a member only editor code uses");
-            else if (field->qt.type->kind == TypeKind::Object &&
-                     field->qt.type->builtin == b_.param())
+            else if ((field->qt.type->kind == TypeKind::Object &&
+                      field->qt.type->builtin == b_.param()) ||
+                     (field->qt.type->members && field->qt.type->element->builtin == b_.param()))
                 error(loc, "script.editor.param_write",
                       "editor code cannot assign the parameter '" + field->name + "'",
                       "change it as a user would: " + field->name +
@@ -3446,6 +3561,10 @@ void Sema::editorRules() {
                 }
                 case ExprKind::Call: {
                     auto* c = static_cast<CallExpr*>(e);
+                    if (c->object && c->object->type() && c->object->type()->members &&
+                        c->callee->kind == ExprKind::Member &&
+                        static_cast<MemberExpr*>(c->callee)->member == "size")
+                        return false;  // declaration-array size is compile-time metadata
                     // Built-ins each side has.
                     const std::uint8_t has = c->builtinMethod ? c->builtinMethod->contexts
                                              : c->builtin     ? c->builtin->contexts
@@ -3506,7 +3625,10 @@ void Sema::editorRules() {
                             const Type* pt = i < c->builtinMethod->params.size()
                                                  ? c->builtinMethod->params[i].type
                                                  : nullptr;
-                            if (!(pt && pt->kind == TypeKind::Object)) walkExpr(c->args[i], visit);
+                            if (!(pt && pt->kind == TypeKind::Object))
+                                walkExpr(c->args[i], visit);
+                            else if (c->args[i]->kind == ExprKind::Index)
+                                walkExpr(static_cast<IndexExpr*>(c->args[i])->index, visit);
                         }
                         return false;
                     }
@@ -3564,7 +3686,8 @@ void Sema::editorRules() {
         const std::vector<Use>& list = found->second;
         const Type* t = field->qt.type;
         if (!t || Builtins::isShared(t) ||
-            (t->kind == TypeKind::Object && t->builtin == b_.param()))
+            (t->kind == TypeKind::Object && t->builtin == b_.param()) ||
+            (t->members && t->element->builtin == b_.param()))
             continue;
         const Use* firstUi = nullptr;
         const Use* firstOther = nullptr;

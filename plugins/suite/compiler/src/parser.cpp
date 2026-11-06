@@ -23,10 +23,12 @@ bool isRuntimeType(const std::string& name) {
                                                  "SharedArray", "Effect", "Instrument",
                                                  "NoteEffect",  "Unit",   "Curve"};
     const Builtins& b = Builtins::get();
-    return others.count(name) || b.cls(name) || b.enumNamed(name);
+    return others.count(name) || name == "Params" || name == "Inputs" || name == "Outputs" ||
+           b.cls(name) || b.enumNamed(name);
 }
 const std::set<std::string>& runtimeTemplates() {
-    static const std::set<std::string> names = {"Array", "Buffer", "Shared", "SharedArray"};
+    static const std::set<std::string> names = {"Array",  "Buffer", "Shared", "SharedArray",
+                                                "Params", "Inputs", "Outputs"};
     return names;
 }
 // Types the runtime declares inside its classes: Oscillator::Shape.

@@ -19,6 +19,7 @@
 #include "live_workers.h"
 #include "meters.h"
 #include "plan.h"
+#include "rack_runtime.h"
 #include "recording.h"
 #include "workers.h"
 
@@ -558,10 +559,14 @@ Status Engine::load(const model::Session& session, const std::filesystem::path& 
             return std::binary_search(blocked.begin(), blocked.end(), instance);
         });
     if (std::any_of(plan->nodes.begin(), plan->nodes.end(),
-                    [](const detail::Node& n) { return n.midiIn.has_value(); })) {
+                    [](const detail::Node& n) { return n.midiIn.has_value() || n.rack; })) {
         const std::vector<std::string> ports = backend_->midiPorts();  // ADR-0016
-        for (detail::Node& n : plan->nodes)
+        for (detail::Node& n : plan->nodes) {
             if (n.midiIn) n.midiIn->ports = midiPortMask(ports, n.midiIn->device);
+            if (n.rack)  // Notes modules playing a device (ADR-0062)
+                for (detail::NotesFeed& feed : n.rack->notes)
+                    if (feed.device) feed.ports = midiPortMask(ports, *feed.device);
+        }
     }
     if (plan->instances.size() > kMaxInstances)
         return Error(

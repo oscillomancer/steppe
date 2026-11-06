@@ -2,6 +2,8 @@
 // Copyright (c) 2026 Supple Audio
 #include "supple/engine/app.h"
 #include "media_files.h"
+#include "module_library.h"
+#include "rack_runtime.h"
 #include "runtime_protection.h"
 #include "source_preparation.h"
 #include "supple/model/freeze.h"
@@ -91,6 +93,8 @@ Result<std::unique_ptr<EngineApp>> EngineApp::create(AppOptions options, model::
         [self](const model::PluginRef& ref) { return self->findPlugin(ref.id); },
         app->options_.identity);
     app->pool_->setMainThreadWake(app->mainWake_);
+    app->modules_ = detail::loadModuleLibrary(detail::builtinModuleCatalog(), app->moduleDir());
+    app->pool_->racks().setCatalog(app->modules_);
     SUPPLE_TRY(app->newProject(std::move(project)));
     return app;
 }
@@ -505,9 +509,12 @@ Status EngineApp::replaceProject(model::Session session, fs::path path,
         std::lock_guard lock(rendersMutex_);
         renders_.clear();
     }
+    // The project's copies of the user's modules (ADR-0062), or none.
+    modules_ = detail::loadProjectModules(modules_, projectModuleDir(path));
     pool_ = std::make_unique<InstancePool>(
         [this](const model::PluginRef& ref) { return findPlugin(ref.id); }, options_.identity);
     pool_->setMainThreadWake(mainWake_);
+    pool_->racks().setCatalog(modules_);
     pendingDirtyStates_.clear();
     if (scripts_) {
         clearScripts_ = scripts_->active();
@@ -526,6 +533,14 @@ Status EngineApp::replaceProject(model::Session session, fs::path path,
 
 Status EngineApp::newProject(model::Project project) {
     return replaceProject(model::Session::create(std::move(project)), {});
+}
+
+fs::path EngineApp::projectModuleDir(const fs::path& project) const {
+    if (project.empty()) return {};
+    fs::path dir = project.parent_path() / "modules";
+    std::error_code ec;
+    if (fs::equivalent(dir, moduleDir(), ec)) return {};  // the library itself
+    return dir;
 }
 
 fs::path EngineApp::resolve(const fs::path& path) const {
@@ -554,6 +569,16 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
         // media (the old project keeps its files).
         if (!projectPath_.empty()) SUPPLE_TRY(detail::copyFolder(mediaDir(), media));
         SUPPLE_TRY(publish());
+    }
+    // The user's modules it plays go with it, as its media do (ADR-0062).
+    if (const fs::path dir = projectModuleDir(path); !dir.empty()) {
+        std::vector<std::string> types;
+        for (const auto& e : head().modules) types.push_back(e.value->type);
+        if (Status copied = detail::saveProjectModules(*modules_, types, dir); !copied && warnings)
+            warnings->push_back({"project.modules",
+                                 "the project's module copies were not written: " +
+                                     copied.error().message,
+                                 dir.string()});
     }
     projectPath_ = path;
     autosaveMarked_ = true;  // the file itself is the newest copy
@@ -792,6 +817,7 @@ Result<OfflineResult> EngineApp::renderSession(const model::Session& session,
     // is never disturbed and state is deterministic.
     InstancePool offlinePool([this](const model::PluginRef& ref) { return findPlugin(ref.id); },
                              options_.identity);
+    if (!s.modules) s.modules = modules_;
     return renderOffline(session, offlinePool, s);
 }
 
@@ -2665,6 +2691,16 @@ void EngineApp::endMasterRecording() {
     headChanged();
 }
 
+rack::Instance* EngineApp::moduleInstance(model::Id module) const {
+    return pool_->racks().find(module);
+}
+
+void EngineApp::setModules(std::shared_ptr<const rack::Catalog> catalog) {
+    modules_ = std::move(catalog);
+    pool_->racks().setCatalog(modules_);
+    headChanged();  // the running engine compiles its racks against it
+}
+
 void EngineApp::headChanged() {
     for (const auto& e : head().fx)
         if (model::frozenOwner(head(), e.id)) scratch_.erase(e.value->plugin.id);
@@ -2971,6 +3007,36 @@ struct Gain : Effect {
     }
     run("track.add", R"({"name": "Bass"})");
     if (fixture == "song") return;
+    if (fixture == "song_with_rack" || fixture == "song_with_rack_preset" ||
+        fixture == "song_with_rack_learn") {
+        // + rk_1 on tr_1: mo_1 Out (tr_1's input), mo_2 Notes, mo_3 VCA; cb_1 mo_3.out -> mo_1.l
+        run("rack.add", R"({"track": "tr_1"})");
+        run("module.add", R"({"rack": "rk_1", "type": "notes", "x": 40, "y": 40})");
+        run("module.add", R"({"rack": "rk_1", "type": "vca", "x": 300, "y": 40})");
+        run("cable.add", R"({"from": "mo_3.out", "to": "mo_1.l"})");
+        if (fixture == "song_with_rack") return;
+        if (fixture == "song_with_rack_learn") {  // + mo_3's level on CC 21, channel 1
+            run("module.learn.set",
+                R"({"module": "mo_3", "param": "level", "midi": {"kind": "cc", "channel": 1, "number": 21}})");
+            return;
+        }
+        // + the rack saved as the preset "Gated VCA"; tr_2 "Lead" with rk_2 (mo_4 its Out)
+        run("rack.preset.save", R"({"rack": "rk_1", "name": "Gated VCA"})");
+        run("track.add", R"({"name": "Lead"})");
+        run("rack.add", R"({"track": "tr_2"})");
+        return;
+    }
+    if (fixture == "song_with_module") {  // + wobble in the module library
+        run("rack.add", R"({"track": "tr_1"})");
+        json::Value args = json::Value::object();
+        args["name"] = "wobble";
+        args["source"] = std::string(detail::kExampleModule);
+        auto r =
+            d.execute({"module.write", std::move(args), {cmd::Origin::Type::Test, "fixture", ""}});
+        assert(r && "fixture command failed");
+        (void)r;
+        return;
+    }
     if (fixture == "song_with_group" || fixture == "song_with_vca") {
         run("group.add", R"({"name":"Drums","members":["tr_1"]})");
         if (fixture == "song_with_vca") run("vca.add", R"({"group":"gr_1"})");

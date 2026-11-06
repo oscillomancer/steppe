@@ -437,6 +437,12 @@ void Sema::markAddressTaken(Expr* e) {
 
 bool Sema::requireModifiable(Expr* e, Loc loc, const std::string& what) {
     if (!e->type()) return false;
+    if (e->type()->members) {
+        error(loc, "script.module.array_assignment",
+              "a declaration array's bindings belong to the host",
+              "read or edit an indexed element instead of assigning the bank");
+        return false;
+    }
     if (!e->lvalue) {
         error(loc, "script.type.not_assignable", what + " needs a variable or a member to change",
               "assign to a variable or a member, not to a value");
@@ -857,6 +863,12 @@ Expr* Sema::checkMember(MemberExpr* m) {
         return m;
     }
     if (t->kind == TypeKind::Array || t->kind == TypeKind::Buffer) {
+        if (t->members && m->member != "size") {
+            error(m->loc, "script.module.array_method",
+                  "declaration arrays have size() and indexed elements",
+                  "read or edit one Param/Input/Output element by index");
+            return m;
+        }
         if (m->member == "size" || m->member == "fill" ||
             (t->kind == TypeKind::Buffer && m->member == "resize")) {
             m->ref = RefKind::BuiltinMethod;
@@ -1932,9 +1944,10 @@ Expr* Sema::check(Expr* e) {
         case ExprKind::Call: {
             auto* c = static_cast<CallExpr*>(e);
             if (c->callee->kind == ExprKind::Name || c->callee->kind == ExprKind::Member) {
+                const bool savedCallee = inCallee_;
                 inCallee_ = true;
                 c->callee = check(c->callee);
-                inCallee_ = false;
+                inCallee_ = savedCallee;
             }
             Expr* r = checkCall(c);
             if (!r->qt.type) r->qt = QualType{b_.voidType(), false, false};
@@ -2347,8 +2360,7 @@ std::optional<Constant> Sema::evaluate(Expr* e, StructDecl* scope) {
                 const std::string example = "." + m->member + "(voices, 1)";
                 std::optional<Constant> bound;
                 if (call->args.size() == 2) bound = evaluate(call->args[1], scope);
-                if (call->args.size() != 2 || call->args[0]->kind != ExprKind::Name ||
-                    static_cast<NameExpr*>(call->args[0])->path.size() != 1) {
+                if (call->args.size() != 2 || paramMember(call->args[0]).empty()) {
                     error(call->loc, "script.param.active",
                           "." + m->member + "() names a number of this plugin and a value",
                           example);
@@ -2363,7 +2375,7 @@ std::optional<Constant> Sema::evaluate(Expr* e, StructDecl* scope) {
                     return std::nullopt;
                 }
                 Constant::Condition condition;
-                condition.member = static_cast<NameExpr*>(call->args[0])->path[0];
+                condition.member = paramMember(call->args[0]);
                 condition.numeric = true;
                 condition.below = m->member == "activeBelow";
                 condition.bound = bound->asDouble();
@@ -2376,15 +2388,14 @@ std::optional<Constant> Sema::evaluate(Expr* e, StructDecl* scope) {
                 const std::string example = "." + m->member + "(bandOn), or ." + m->member +
                                             "(shape, {\"Bell\", \"Shelf\"})";
                 if (call->args.empty() || call->args.size() > 2 ||
-                    call->args[0]->kind != ExprKind::Name ||
-                    static_cast<NameExpr*>(call->args[0])->path.size() != 1) {
+                    paramMember(call->args[0]).empty()) {
                     error(call->loc, "script.param.active",
                           "." + m->member + "() names a toggle or a choice of this plugin",
                           example);
                     return std::nullopt;
                 }
                 Constant::Condition condition;
-                condition.member = static_cast<NameExpr*>(call->args[0])->path[0];
+                condition.member = paramMember(call->args[0]);
                 condition.unless = m->member == "activeUnless";
                 condition.loc = call->args[0]->loc;
                 if (call->args.size() == 2) {
