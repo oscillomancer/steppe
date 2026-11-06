@@ -247,15 +247,19 @@ Tags in the reference group the modules. Some starting points:
 - **Time**: `transport` (the song), `clock` (ratios, swing), `euclid`,
   `rhythm` (drum patterns by density), `polyrhythm` (four counts against a
   bar), `ratchet` (bursts), `chance` (coin tosses per gate), `logic`,
-  `life` (an 8x8 Game of Life as gates).
+  `life` (an 8x8 Game of Life as gates), `bounce` (a bouncing ball's
+  quickening hits), `dust` (random triggers with no clock, in bursts).
 - **Melody**: `turing` (a looping shift register), `random` (notes with
   memory), `markov` (note-to-note odds, learnable), `cellular` (a 1-D
   automaton), `lsystem` (a melody grown by rewriting rules), `sequencer`
   (sixteen steps, five walks), `looper` (records a CV and a gate in time
-  and loops them), `arp`, `chord`, always through `quantizer` for a key.
+  and loops them), `canon` (delayed, transposed copies of a line),
+  `changes` (a chord progression in a key), `arp`, `chord`, always through
+  `quantizer` for a key.
 - **Motion**: `lfo`, `function`, `stages` (a multi-stage envelope, LFO or
   gesture), `adsr`, `drift` (slow random per voice), `chaos` (Lorenz and
-  Thomas attractors), `follower`, `slew`, `hold`.
+  Thomas attractors), `swarm` (coupled LFOs that fall into step),
+  `follower`, `slew`, `hold`.
 - **Sound**: `vco`, `wavetable`, `operator` (FM), `harmonic`, `morph`,
   `phasor`, `noise`, `string` and `resonator` (physical models), `drum`,
   `granular`.
