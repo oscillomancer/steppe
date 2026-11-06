@@ -74,10 +74,10 @@ struct Transient : Module {
     }
 
     void factoryPatches(Patches& p) {
-        p.add("Punch").set(attack, 60).set(sustain, -10).set(level, -3);
+        p.add("Punch").set(attack, 60).set(sustain, -10).set(level, -7.5);
         p.add("Tighten").set(attack, 10).set(sustain, -60).set(length, 15);
         p.add("Soften").set(attack, -60).set(length, 30);
         p.add("Room").set(attack, 0).set(sustain, 70).set(level, -3);
-        p.add("Snap").set(attack, 100).set(length, 6).set(level, -6);
+        p.add("Snap").set(attack, 100).set(length, 6).set(level, -11.5);
     }
 };

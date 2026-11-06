@@ -185,19 +185,19 @@ struct Compressor : Module {
             .set(slope, 2)
             .set(attack, 30)
             .set(release, 200)
-            .set(makeup, 3);
+            .set(makeup, 0.5);
         p.add("Vocal")
             .set(threshold, -24)
             .set(slope, 4)
             .set(attack, 5)
             .set(release, 120)
-            .set(makeup, 6);
+            .set(makeup, 1.5);
         p.add("Drum Smash")
             .set(threshold, -30)
             .set(slope, 10)
             .set(attack, 1)
             .set(release, 60)
-            .set(makeup, 10)
+            .set(makeup, 6)
             .set(mix, 50);
         p.add("Duck")
             .set(threshold, -36)
