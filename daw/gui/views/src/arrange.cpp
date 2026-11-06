@@ -1243,14 +1243,17 @@ void ArrangeView::applyFollow() {
     const ui::Rect a = lanes_->bounds();
     if (a.w <= 0) return;
     const float x = playheadX();
+    const bool inView = x >= a.x && x <= a.right() - 4;
     Viewport v = view_;
-    if (follow_ == Follow::Continuous) {
+    if (follow_ == Follow::Continuous && transport_.playing) {
+        // The playhead walks to the middle, then the view scrolls under it;
+        // one out of view (a seek, a loop back) is centred at once.
         const double half = static_cast<double>(a.w) / 2.0 / v.pixelsPerSecond;
-        const double target = std::max(0.0, playhead_ - half);
-        if (std::abs(target - v.startSeconds) < 1e-9) return;
-        v.startSeconds = target;
-    } else {  // page: jump a page when the playhead leaves the view
-        if (x <= a.right() - 4 && x >= a.x) return;
+        const double centred = std::max(0.0, playhead_ - half);
+        if (inView && centred <= v.startSeconds) return;
+        v.startSeconds = centred;
+    } else {  // page, and continuous while stopped: jump when the playhead leaves the view
+        if (inView) return;
         v.startSeconds =
             std::max(0.0, playhead_ - static_cast<double>(a.w) * 0.25 / v.pixelsPerSecond);
     }

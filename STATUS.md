@@ -268,7 +268,9 @@ instructions are in `docs/guides/installing.md`.
   and skill links; independent skill copies remain available.
   Saved menu layouts that predate Help retain access to it. The transport has a
   master playrate knob, context menu, key-bindable pitch steps and
-  per-project display range (ADR-0045). Projects and renders default to
+  per-project display range (ADR-0045). Its follow button cycles how the
+  view follows the playhead: by page, off, or smooth scrolling while playing,
+  saved per project. Projects and renders default to
   `~/Documents/<slug>-media` (the render folder is choosable), each project
   in a folder of its own with its own media; imports are copied into the
   project by default, and Save as into another folder copies the media. FX

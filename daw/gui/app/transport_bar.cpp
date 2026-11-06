@@ -110,7 +110,20 @@ void arcArrow(ui::Canvas& c, ui::Point o, float r, float a0, float a1, ui::Color
 // recording, loop on…) is tinted with its colour token.
 class TransportButton : public ui::Button {
   public:
-    enum class Symbol { Start, Play, Stop, Record, CountingIn, Loop, Punch, Click, CountIn };
+    enum class Symbol {
+        Start,
+        Play,
+        Stop,
+        Record,
+        CountingIn,
+        Loop,
+        Punch,
+        Click,
+        CountIn,
+        FollowPage,
+        FollowOff,
+        FollowSmooth
+    };
     TransportButton(std::string id, Symbol symbol, std::string text, std::function<void()> click)
         : ui::Button(std::move(id), std::move(text), std::move(click)), symbol_(symbol) {}
 
@@ -149,6 +162,24 @@ class TransportButton : public ui::Button {
         auto at = [&](float u, float v) { return ui::Point{x + s * u, y + s * v}; };
         const ui::Color red = t.color("armed");
         constexpr float pi = std::numbers::pi_v<float>;
+        // The follow symbols, half as wide again: the view as a frame and the
+        // playhead as a line standing out of it.
+        const float fw = std::round(s * 1.5f), fx = cx - fw / 2;
+        auto wide = [&](float u, float v) { return ui::Point{fx + fw * u, y + s * v}; };
+        // On whole pixels, so 1-unit rules stay sharp at scale 1.
+        auto px = [](float v) { return std::round(v); };
+        auto frame = [&](float u0, float u1) {
+            const float l = px(fx + fw * u0), top = px(y + s * 0.2f);
+            c.strokeRect({l, top, px(fx + fw * u1) - l, px(y + s * 0.8f) - top}, ink, 1.0f);
+        };
+        auto rule = [&](float u0, float u1, float v) {
+            const float ry = px(y + s * v) + 0.5f;
+            c.line({px(fx + fw * u0), ry}, {px(fx + fw * u1), ry}, ink, 1.0f);
+        };
+        auto playhead = [&](float u) {
+            const float lx = px(fx + fw * u);
+            c.line({lx, y}, {lx, y + s}, ink, 2.0f);
+        };
         switch (symbol_) {
             case Symbol::Start:  // |◀
                 c.fillRect({x + s * 0.1f, y + s * 0.1f, s * 0.16f, s * 0.8f}, ink);
@@ -187,6 +218,21 @@ class TransportButton : public ui::Button {
                 c.line(at(0.04f, 0.5f), at(0.56f, 0.5f), ink, 1.5f);
                 c.fillPath({at(0.46f, 0.24f), at(0.78f, 0.5f), at(0.46f, 0.76f)}, ink);
                 c.fillRect({x + s * 0.82f, y + s * 0.1f, s * 0.16f, s * 0.8f}, ink);
+                break;
+            case Symbol::FollowPage:  // [ |]▸ : at the view's edge, the view jumps on
+                frame(0.0f, 0.62f);
+                playhead(0.5f);
+                c.fillPath({wide(0.74f, 0.28f), wide(1.0f, 0.5f), wide(0.74f, 0.72f)}, ink);
+                break;
+            case Symbol::FollowOff:  // [  ] | : the playhead runs out of a view that stays
+                frame(0.0f, 0.58f);
+                playhead(0.9f);
+                break;
+            case Symbol::FollowSmooth:  // [=|] : the view moves along with the playhead
+                frame(0.0f, 1.0f);
+                playhead(0.62f);
+                rule(0.14f, 0.48f, 0.36f);
+                rule(0.26f, 0.48f, 0.57f);
                 break;
         }
         if (!badge_.empty())
@@ -258,6 +304,16 @@ std::unique_ptr<ui::Node> TransportBar::build() {
             sync();
         },
         40);
+    // How the view follows the playhead: by page, not at all, or smoothly.
+    if (follow_)
+        followButton_ = symbolButton(
+            "transport.follow", Symbol::FollowPage, "follow page",
+            [this] {
+                auto r = actions_.run("ui.follow.cycle");
+                if (!r && actions_.onError) actions_.onError(r.error().message);
+                sync();
+            },
+            40);
     bar->emplace<ui::Node>("transport.gap").layout.width = ui::SizeRule::fixed(10);
     position_ = &bar->emplace<ui::Label>("transport.position", "1.1.000", ui::Font::MonoBold,
                                          "title", "ink");
@@ -336,6 +392,19 @@ void TransportBar::sync(bool event, std::chrono::steady_clock::time_point now) {
     if (click_)
         click_->show(Symbol::Click, app_.metronome().enabled ? "click on" : "click",
                      app_.metronome().enabled ? "accent" : "");
+    if (followButton_ && follow_) {  // lit away from the default (page)
+        switch (follow_()) {
+            case views::Follow::Page:
+                followButton_->show(Symbol::FollowPage, "follow page");
+                break;
+            case views::Follow::Off:
+                followButton_->show(Symbol::FollowOff, "follow off", "accent");
+                break;
+            case views::Follow::Continuous:
+                followButton_->show(Symbol::FollowSmooth, "follow smooth", "accent");
+                break;
+        }
+    }
     if (rate_ && !rate_->dragging()) {
         // Automation follows consumption telemetry, not the latest authored
         // curve or renderer lookahead. The accessor executes no logged command.

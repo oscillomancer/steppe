@@ -1895,6 +1895,53 @@ void pressAt(ui::Root& root, const ui::Node& node) {
     root.pointer({ui::PointerEvent::Type::Up, at, 1});
 }
 
+TEST_CASE("the transport bar's follow button cycles how the view follows the playhead") {
+    App a;
+    REQUIRE(a.ok);
+    peaks::PeakService peaks(a.dir / "cache", [](std::function<void()> f) { f(); });
+    gui::MeterFeed meters;
+    gui::Shell shell(*a.app, *a.dispatcher, a.ui, "", peaks, meters);
+    struct Detach {
+        ui::Root& root;
+        ~Detach() { root.setContent(std::make_unique<ui::Node>("detached")); }
+    } detach{*a.root};
+    a.root->setContent(shell.build(*a.root, *a.actions));
+    shell.sync();
+    a.root->frame(false);
+    views::ArrangeView& arrange = *shell.arrange();
+    ui::Node* button = a.root->find("transport.follow");
+    REQUIRE(button);
+    // After count-in, the last of the transport's buttons.
+    CHECK(button->bounds().x > a.root->find("transport.count")->bounds().right());
+    CHECK(button->bounds().right() < a.root->find("transport.position")->bounds().x);
+    // Page (the default), off, smooth, and round again.
+    CHECK(arrange.follow() == views::Follow::Page);
+    CHECK(button->valueText() == "follow page");
+    for (auto [mode, text] : {std::pair{views::Follow::Off, "follow off"},
+                              {views::Follow::Continuous, "follow smooth"},
+                              {views::Follow::Page, "follow page"}}) {
+        a.root->click("transport.follow");
+        CHECK(arrange.follow() == mode);
+        CHECK(button->valueText() == text);
+    }
+    // The actions set a mode (a key can be bound to each); the button shows it
+    // on the next pass, and the per-project UI file keeps it.
+    REQUIRE(a.actions->run("ui.follow.continuous"));
+    shell.sync();
+    CHECK(button->valueText() == "follow smooth");
+    CHECK(arrange.saveLayout()["follow"].asString() == "continuous");
+    REQUIRE(a.actions->run("ui.follow.off"));
+    shell.sync();
+    CHECK(button->valueText() == "follow off");
+    json::Value layout = arrange.saveLayout();
+    layout["follow"] = "page";
+    arrange.loadLayout(layout);
+    shell.sync();
+    CHECK(button->valueText() == "follow page");
+    a.root->frame(false);
+    a.snapshot("transport-follow.png");
+}
+
 TEST_CASE("playrate envelope: main-master menu creates, edits and hides its ratio lane") {
     App a;
     REQUIRE(a.ok);

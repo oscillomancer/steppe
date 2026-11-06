@@ -23,6 +23,14 @@ steppe --help          # every command-line option
 Command names follow the product name. In a build tree, the app is
 `build/<preset>/daw/gui/steppe`.
 
+The last of the transport buttons sets how the view follows the playhead.
+Click it to go round the three modes: by page (the default: when the playhead
+leaves the view, the view jumps ahead), off (the view stays where you put it),
+and smooth (while playing, the view scrolls with the playhead held in the
+middle). The button is lit while it is off or smooth. The actions list has the same
+choices under "View: … playhead", for binding keys. Each project remembers its
+mode.
+
 ## Audio
 
 Steppe plays through JACK on Linux (PipeWire's JACK support works) and

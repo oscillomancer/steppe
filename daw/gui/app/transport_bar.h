@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
-// The transport bar (gui.md §4.1): play/stop, record, loop and punch buttons
-// drawn as symbols (the same actions the keymap runs), the position in
-// bars|beats and time, the
-// session tempo and meter (click to edit them), and the engine's readouts.
+// The transport bar (gui.md §4.1): play/stop, record, loop, punch, metronome,
+// count-in and follow buttons drawn as symbols (the same actions the keymap
+// runs), the position in bars|beats and time, the session tempo and meter
+// (click to edit them), and the engine's readouts.
 #pragma once
 
 #include <chrono>
@@ -11,10 +11,12 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <utility>
 
 #include "app_actions.h"
 #include "supple/engine/app.h"
 #include "supple/ui/node.h"
+#include "supple/views/arrange.h"
 
 namespace supple::ui {
 class Button;
@@ -42,6 +44,9 @@ class TransportBar {
     // Where the playrate's menu opens (under its readout); the master's
     // envelope menu, which that menu leads to, opens there too.
     ui::Rect rateAnchor() const;
+    // The arrange view's follow mode, which the follow button shows (it runs
+    // ui.follow.cycle). Unset: there is no follow button.
+    void setFollow(std::function<views::Follow()> follow) { follow_ = std::move(follow); }
 
   private:
     void openTempoForm();
@@ -58,6 +63,8 @@ class TransportBar {
     TransportButton* punch_ = nullptr;
     TransportButton* click_ = nullptr;  // the metronome
     TransportButton* count_ = nullptr;  // count-in bars before recording
+    TransportButton* followButton_ = nullptr;
+    std::function<views::Follow()> follow_;
     ui::Button* tempo_ = nullptr;
     ui::Button* meter_ = nullptr;
     ui::Label* position_ = nullptr;

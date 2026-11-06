@@ -15,6 +15,7 @@
 #include <functional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -97,6 +98,8 @@ std::unique_ptr<ui::Node> Shell::build(ui::Root& root, AppActions& actions) {
     auto shell = std::make_unique<ui::Node>("shell");
     shell->layout.dir = ui::Layout::Dir::Column;
     transport_ = std::make_unique<TransportBar>(app_, actions, dispatcher_, root);
+    transport_->setFollow(
+        [this] { return arrange_ ? arrange_->follow() : views::Follow::Page; });  // ui.follow.*
     shell->add(transport_->build());
     // The playrate's menu leads here: open in its place.
     actions.addUi("ui.master.envelopes", "Master: envelopes",
@@ -127,6 +130,20 @@ std::unique_ptr<ui::Node> Shell::build(ui::Root& root, AppActions& actions) {
             return t;
         });
     arrange_->layout.width = ui::SizeRule::fraction();
+    // How the view follows the playhead (gui.md §4.3); the transport bar's
+    // follow button cycles the modes.
+    using views::Follow;
+    for (auto [id, name, mode] :
+         {std::tuple{"ui.follow.page", "View: follow the playhead a page at a time", Follow::Page},
+          {"ui.follow.off", "View: do not follow the playhead", Follow::Off},
+          {"ui.follow.continuous", "View: scroll smoothly with the playhead", Follow::Continuous}})
+        actions.addUi(id, name, [this, mode] { arrange_->setFollow(mode); });
+    actions.addUi("ui.follow.cycle", "View: next playhead follow mode (page, off, smooth)", [this] {
+        const Follow f = arrange_->follow();
+        arrange_->setFollow(f == Follow::Page  ? Follow::Off
+                            : f == Follow::Off ? Follow::Continuous
+                                               : Follow::Page);
+    });
     arrange_->gestures().projectGeneration = [this] { return app_.projectGeneration(); };
     // The TCP talks to the app through these: selection state, commands (with
     // a drag's gesture) and the meters it pools with its rows.

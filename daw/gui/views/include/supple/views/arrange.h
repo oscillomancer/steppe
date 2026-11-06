@@ -56,8 +56,9 @@ struct RulerCallbacks {
     std::function<void(const Error&)> onError;
 };
 
-// gui.md §4.3: the playhead follows the transport off, by page (default) or
-// continuously (centred).
+// gui.md §4.3: the view follows the playhead off, by page (default: it jumps
+// when the playhead leaves it) or continuously (while playing it scrolls with
+// the playhead held in the middle; stopped, it pages).
 enum class Follow { Off, Page, Continuous };
 
 // The UI file stores the follow mode by name (gui.md §1.2).

@@ -520,6 +520,55 @@ TEST_CASE("the arrange view's saved UI state round-trips") {
     CHECK(restored.heights() == layout.heights());
 }
 
+TEST_CASE("the view follows the playhead by page, not at all, or smoothly while playing") {
+    Gl& g = gl();
+    if (!g.ok) return;
+    ui::Root root(*g.window, g.fonts, ui::Theme::dark());
+    Session& s = session6();
+    views::Transport transport;
+    auto owned = std::make_unique<views::ArrangeView>(*s.peaks, s.resolve(),
+                                                      [&transport] { return transport; });
+    views::ArrangeView* arrange = owned.get();
+    arrange->show(s.app->head());
+    root.setContent(std::move(owned));
+    root.frame(false);
+    const double width = static_cast<double>(arrange->lanesRect().w) / 40.0;  // seconds in view
+    REQUIRE(width > 4);
+    auto at = [&](double seconds, bool playing, double start) {
+        views::Viewport v = arrange->viewport();
+        v.startSeconds = start;
+        v.pixelsPerSecond = 40;
+        arrange->setViewport(v);
+        transport.playing = playing;
+        transport.seconds = seconds;
+        arrange->poll(true);
+        return arrange->viewport().startSeconds;
+    };
+    // Page (the default): nothing moves until the playhead leaves the view,
+    // then it is a quarter of the way in.
+    CHECK(arrange->follow() == views::Follow::Page);
+    CHECK(at(10 + width * 0.9, true, 10) == doctest::Approx(10));
+    CHECK(at(10 + width * 1.1, true, 10) ==
+          doctest::Approx(10 + width * 1.1 - width * 0.25).epsilon(0.01));
+    // Off: the view stays where it is.
+    arrange->setFollow(views::Follow::Off);
+    CHECK(at(10 + width * 3, true, 10) == doctest::Approx(10));
+    // Smooth: the playhead walks to the middle, then the view scrolls with it.
+    arrange->setFollow(views::Follow::Continuous);
+    CHECK(at(10 + width * 0.3, true, 10) == doctest::Approx(10));
+    for (double past : {0.6, 0.7, 0.8}) {
+        const double start = at(10 + width * past, true, at(10 + width * 0.5, true, 10));
+        CHECK(start == doctest::Approx(10 + width * past - width / 2).epsilon(0.01));
+    }
+    CHECK(at(500, true, 10) == doctest::Approx(500 - width / 2).epsilon(0.01));  // a seek
+    // Stopped, moving the cursor only pages: a click past the middle stays put.
+    transport.playing = false;
+    arrange->poll(true);
+    CHECK(at(10 + width * 0.8, false, 10) == doctest::Approx(10));
+    CHECK(at(10 + width * 1.5, false, 10) ==
+          doctest::Approx(10 + width * 1.5 - width * 0.25).epsilon(0.01));
+}
+
 TEST_CASE("track heights clamp to a complete TCP top line and resize all rows additively") {
     model::EditTxn txn(model::Session::create(), 1);
     std::vector<model::Id> tracks;

@@ -263,12 +263,16 @@ never works around the bus.
 
 ### 4.1 Main window
 
-Transport bar (go to start, play/stop, record, loop, punch, metronome and
-count-in as symbol buttons: |◀, ▶ or ■ while playing, a red ● (a ring while
-counting in), circling arrows, [●], a metronome and →| with the bar count;
-each is lit in its colour while on — green playing, red recording, accent for
-loop, punch, metronome and count-in — and keeps its state word as its value
-text; position in bars|beats and
+Transport bar (go to start, play/stop, record, loop, punch, metronome,
+count-in and follow as symbol buttons: |◀, ▶ or ■ while playing, a red ● (a
+ring while counting in), circling arrows, [●], a metronome, →| with the bar
+count, and the follow mode of §4.3 as a frame (the view) and a line (the
+playhead): the line inside with ▸ by page, outside the frame when off, inside
+with motion lines when smooth; each is lit in its colour while on — green
+playing, red recording, accent for loop, punch, metronome, count-in and a
+follow mode other than the default (off or smooth; by page it is unlit) — and
+keeps its state word as its value text ("follow page",
+"follow off", "follow smooth"); position in bars|beats and
 time, tempo/meter, CPU/xrun/anticipation readouts from engine telemetry; the
 rate and buffer readout shows the device's period, e.g. the JACK quantum);
 toolbar (actions, §6: only what the transport bar does not already have —
@@ -432,7 +436,14 @@ Ruler (bars/beats and time; tempo and meter lanes; markers and regions),
 virtualized track rows (only visible rows exist), items with waveforms or
 MIDI, take lanes, fades and crossfades, automation lanes (volume/pan/mute
 on strips; plugin parameters), time selection, snapping grid, playhead with
-follow modes. The ruler's bars row draws the loop range (the time selection)
+follow modes. By page (the default), the view jumps when the playhead leaves
+it, putting the playhead a quarter of the way in; off, the view stays where
+it is; smooth (`continuous` in the UI file), while playing the playhead walks
+to the middle of the view and the view then scrolls under it, a playhead out
+of view is centred at once, and while stopped the view pages. The
+transport bar's follow button cycles page, off and smooth
+(`ui.follow.cycle`); `ui.follow.page`, `ui.follow.off` and
+`ui.follow.continuous` set one, for keys. The mode is UI state, saved per project (§1.2). The ruler's bars row draws the loop range (the time selection)
 and its time row the punch range; a new punch range turns punch on, and an
 edge dragged onto the other edge removes the range (punch or loop off). A
 right-click in those rows offers Loop on/off, Punch on/off, Punch range =
