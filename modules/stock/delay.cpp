@@ -105,8 +105,9 @@ struct Delay : Module {
     Param wow = percent("Wow", 15).in("Tape").help("A slow wobble of the time, as a tape's.");
     Param flutter =
         percent("Flutter", 10).in("Tape").help("A fast, slightly random shimmer of the time.");
-    Param mix = percent("Mix", 35).smoothed(20).in("Output").help(
-        "Dry to wet: below 50 the dry stays full, above it the dry fades.");
+    Param mix = percent("Mix", 25).smoothed(20).in("Output").help(
+        "Dry to wet: below 50 the dry stays full, above it the dry fades. 25 puts the "
+        "echoes 6 dB under the dry.");
 
     Input inL = audioIn("In L").help("The left input (poly cables are summed).");
     Input inR = audioIn("In R").help("The right input; the left feeds both while it is empty.");
