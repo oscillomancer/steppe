@@ -21,7 +21,7 @@ Result<std::vector<double>> detectTransients(const audio::AudioData& audio, doub
     for (const auto& ch : audio.channels)
         for (std::size_t i = 0; i < ch.size(); ++i)
             envelope[i] = std::max(envelope[i], std::abs(static_cast<double>(ch[i])));
-    dsp::Fft fft;
+    dsp::RealFft fft;
     fft.prepare(n);
     std::vector<double> frame(n), window(n), previous(n / 2 + 1), power(n / 2 + 1);
     std::vector<std::complex<double>> spectrum(n / 2 + 1);

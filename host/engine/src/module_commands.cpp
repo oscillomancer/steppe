@@ -221,7 +221,9 @@ void registerModuleCommands(cmd::Registry& registry) {
         common(c, "module.edit", Kind::Action,
                "Edit a library module in place: replace text, then save and compile it.");
         c.description =
-            "name (or type, a library module's id). Each edit replaces old, which must be in "
+            "name (or type, a library or project module's id). A project type is edited into "
+            "the library's entry of the same id, or a free name when the id is absent. "
+            "Each edit replaces old, which must be in "
             "the source exactly once, with new (empty deletes it), in order and all or none. "
             "Then as module.write: saved, compiled, and racks playing it rebuilt.";
         auto replacement =
@@ -261,7 +263,16 @@ void registerModuleCommands(cmd::Registry& registry) {
                     return Error("module.built_in", (*t)->id() + " is built in and is not edited",
                                  "/type",
                                  "module.fork copies it into the library under your own id");
-                if ((*t)->origin() == rack::Origin::Project) project = (*t)->source();
+                if ((*t)->origin() == rack::Origin::Project) {
+                    project = (*t)->source();
+                    if (const auto* entry = e.modules()->find((*t)->id(), rack::Origin::Library)) {
+                        name = detail::moduleName(*entry->type);
+                    } else {
+                        auto free = detail::availableModuleName(e.moduleDir(), name);
+                        if (!free) return std::move(free).error();
+                        name = std::move(*free);
+                    }
+                }
             }
             auto text = project ? Result<std::string>(*project) : readModule(e, name, "/name");
             if (!text) return std::move(text).error();

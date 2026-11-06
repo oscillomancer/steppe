@@ -27,7 +27,7 @@ Coefficients highShelf(double sampleRate, double hz, double gainDb, double q);
 Coefficients kShelf(double sampleRate);
 Coefficients kHighpass(double sampleRate);
 
-class Biquad {
+class BiquadFilter {
   public:
     void set(Coefficients c) {
         c_ = c;
@@ -72,7 +72,7 @@ class PolyphaseUpsampler {
 // Kaiser beta 10.5, sinc cutoff 0.90 of the lower Nyquist.
 std::vector<float> resample(std::span<const float> input, double sourceRate, double targetRate);
 
-class Fft {
+class RealFft {
   public:
     void prepare(std::size_t size);
     std::size_t size() const { return size_; }
@@ -90,7 +90,7 @@ class Fft {
     std::vector<std::size_t> bitReverse_;
 };
 
-class OnePole {
+class OnePoleSmoother {
   public:
     void prepare(double sampleRate, double timeSeconds);
     void reset(double value = 0) SUPPLE_RT { value_ = value; }

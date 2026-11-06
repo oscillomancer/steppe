@@ -287,6 +287,15 @@ TEST_CASE("racks: real-time output equals the offline render" * doctest::descrip
     env.target = {vca, "level"};
     env.points = {{0.0, -20.0}, {4.0, 6.0}};
     t.create(env);
+    std::uint32_t block = 96;
+    SUBCASE("playback rack") {}
+    SUBCASE("live rack with host blocks coprime to the rack grid") {
+        // An explicitly configured MIDI device puts the rack on the live
+        // callback path when anticipation is enabled; the timeline still
+        // supplies the notes, so no real MIDI device is needed.
+        t.modify<model::RackModule>(notes, [](model::RackModule& m) { m.device = ""; });
+        block = 37;
+    }
     const auto s = commit(t);
     InstancePool offlinePool = makePool();
     auto offline = renderOffline(s, offlinePool, {.startSeconds = 0, .endSeconds = 2.0}).value();
@@ -298,12 +307,12 @@ TEST_CASE("racks: real-time output equals the offline render" * doctest::descrip
         MediaCache media;
         DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 96000 + 4096});
         Engine engine(pool, media, options);
-        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 96}));
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = block}));
         REQUIRE(engine.load(s));
         engine.play();
-        for (std::int64_t cycles = (96000 + 4096) / 96; cycles > 0;) {
+        for (std::int64_t cycles = (96000 + 4096) / block; cycles > 0;) {
             if (options.anticipative) REQUIRE(engine.awaitRendered(4096));
-            const std::int64_t n = std::min<std::int64_t>(cycles, 4096 / 96);
+            const std::int64_t n = std::min<std::int64_t>(cycles, 4096 / block);
             backend.run(n);
             cycles -= n;
         }

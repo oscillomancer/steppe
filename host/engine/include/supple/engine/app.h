@@ -603,7 +603,8 @@ class EngineApp : public cmd::Host {
     // `prepare` runs once the new project is in place, before the engine
     // starts on it (a template's media copied into its folder).
     Status replaceProject(model::Session session, std::filesystem::path path,
-                          const std::function<Status()>& prepare = {});
+                          const std::function<Status()>& prepare = {},
+                          std::vector<schema::Warning>* warnings = nullptr);
     bool copyImports_ = false;
     // Declared first: outlives instances, engine/backend, and worker joins.
     MainThreadWake mainWake_;

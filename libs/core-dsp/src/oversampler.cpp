@@ -6,7 +6,7 @@
 #include <numbers>
 #include "supple/dsp/dsp.h"
 namespace supple::dsp {
-void Oversampler::prepare(int factor, uint32_t) {
+void HalfbandOversampler::prepare(int factor, uint32_t) {
     factor_ = factor == 2 || factor == 4 || factor == 8 ? factor : 1;
     count_ = factor_ == 8 ? 3 : factor_ == 4 ? 2 : factor_ == 2 ? 1 : 0;
     latency_ = 0;
@@ -28,14 +28,14 @@ void Oversampler::prepare(int factor, uint32_t) {
     }
     reset();
 }
-void Oversampler::reset() SUPPLE_RT {
+void HalfbandOversampler::reset() SUPPLE_RT {
     for (auto& s : stages_) {
         s.up.fill(0);
         s.down.fill(0);
         s.upHead = s.downHead = 0;
     }
 }
-void Oversampler::Stage::interpolate(double x, double* out) SUPPLE_RT {
+void HalfbandOversampler::Stage::interpolate(double x, double* out) SUPPLE_RT {
     up[upHead] = x;
     out[0] = up[(upHead + 128 - center / 2) & 127];
     double y = 0;
@@ -43,7 +43,7 @@ void Oversampler::Stage::interpolate(double x, double* out) SUPPLE_RT {
     out[1] = y;
     upHead = (upHead + 1) & 127;
 }
-double Oversampler::Stage::decimate(const double* in) SUPPLE_RT {
+double HalfbandOversampler::Stage::decimate(const double* in) SUPPLE_RT {
     down[downHead] = in[0];
     double y = .5 * down[(downHead + 256 - center) & 255];
     for (size_t i = 1; i < 2 * center + 1; i += 2) y += h[i] * down[(downHead + 256 - i) & 255];
@@ -52,7 +52,7 @@ double Oversampler::Stage::decimate(const double* in) SUPPLE_RT {
     downHead = (downHead + 1) & 255;
     return y;
 }
-void Oversampler::upsample(double input, std::span<double> output) SUPPLE_RT {
+void HalfbandOversampler::upsample(double input, std::span<double> output) SUPPLE_RT {
     std::array<double, 8> a{}, b{};
     a[0] = input;
     int n = 1;
@@ -63,7 +63,7 @@ void Oversampler::upsample(double input, std::span<double> output) SUPPLE_RT {
     }
     std::copy_n(a.begin(), std::min(output.size(), static_cast<size_t>(n)), output.begin());
 }
-double Oversampler::downsample(std::span<const double> input) SUPPLE_RT {
+double HalfbandOversampler::downsample(std::span<const double> input) SUPPLE_RT {
     if (input.size() < static_cast<size_t>(factor_)) return 0;
     std::array<double, 8> a{}, b{};
     std::copy_n(input.begin(), factor_, a.begin());

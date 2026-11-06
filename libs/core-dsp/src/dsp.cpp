@@ -164,7 +164,7 @@ std::vector<float> resample(std::span<const float> input, double sourceRate, dou
     }
     return output;
 }
-void Fft::prepare(std::size_t size) {
+void RealFft::prepare(std::size_t size) {
     size_ = size;
     scratch_.resize(size);
     bitReverse_.clear();
@@ -181,7 +181,7 @@ void Fft::prepare(std::size_t size) {
     }
     for (std::size_t k = 0; k < size / 2; ++k) twiddles_[k] = std::polar(1.0, -2 * pi * k / size);
 }
-bool Fft::forward(std::span<const double> input, std::span<std::complex<double>> output) {
+bool RealFft::forward(std::span<const double> input, std::span<std::complex<double>> output) {
     if (input.size() != size_ || output.size() < size_ / 2 + 1 || !size_) return false;
     try {
         pocketfft::r2c<double>({size_}, {sizeof(double)}, {sizeof(std::complex<double>)}, 0, true,
@@ -191,7 +191,7 @@ bool Fft::forward(std::span<const double> input, std::span<std::complex<double>>
         return false;
     }
 }
-bool Fft::inverse(std::span<const std::complex<double>> input, std::span<double> output) {
+bool RealFft::inverse(std::span<const std::complex<double>> input, std::span<double> output) {
     if (input.size() < size_ / 2 + 1 || output.size() != size_ || !size_) return false;
     try {
         pocketfft::c2r<double>({size_}, {sizeof(std::complex<double>)}, {sizeof(double)}, 0, false,
@@ -202,8 +202,8 @@ bool Fft::inverse(std::span<const std::complex<double>> input, std::span<double>
     }
 }
 
-bool Fft::forwardRt(std::span<const double> input,
-                    std::span<std::complex<double>> output) SUPPLE_RT {
+bool RealFft::forwardRt(std::span<const double> input,
+                        std::span<std::complex<double>> output) SUPPLE_RT {
     if (bitReverse_.size() != size_ || input.size() != size_ || output.size() < size_ / 2 + 1 ||
         !size_)
         return false;
@@ -221,7 +221,7 @@ bool Fft::forwardRt(std::span<const double> input,
     for (std::size_t k = 0; k <= size_ / 2; ++k) output[k] = scratch_[k];
     return true;
 }
-void OnePole::prepare(double sampleRate, double timeSeconds) {
+void OnePoleSmoother::prepare(double sampleRate, double timeSeconds) {
     coefficient_ = timeSeconds <= 0 ? 1 : -std::expm1(-1.0 / (sampleRate * timeSeconds));
 }
 DenormalGuard::DenormalGuard() SUPPLE_RT {

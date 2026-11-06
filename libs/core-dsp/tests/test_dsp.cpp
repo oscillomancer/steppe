@@ -29,9 +29,9 @@ TEST_CASE("BS.1770 coefficients at 48 kHz") {
 }
 TEST_CASE("DSP processing can run on RT thread") {
     DenormalGuard denormals;
-    Biquad f;
+    BiquadFilter f;
     f.set(lowpass(48000, 1000, 0.707));
-    OnePole smoother;
+    OnePoleSmoother smoother;
     smoother.prepare(48000, 0.01);
     PolyphaseUpsampler up;
     up.prepare(4);
@@ -43,7 +43,7 @@ TEST_CASE("DSP processing can run on RT thread") {
     CHECK(std::isfinite(output[0]));
 }
 TEST_CASE("FFT bin and resampler sine") {
-    Fft fft;
+    RealFft fft;
     fft.prepare(1024);
     std::vector<double> input(1024);
     for (int i = 0; i < 1024; ++i) input[i] = std::sin(2 * std::numbers::pi * 32 * i / 1024);

@@ -526,7 +526,7 @@ inline SignalResult measure(Signal s, const audio::AudioData& out, std::size_t i
         std::vector<double> in(n, 0.0);
         for (std::size_t i = 0; i < std::min(n, x.size()); ++i) in[i] = static_cast<double>(x[i]);
         std::vector<std::complex<double>> spectrum(n / 2 + 1);
-        dsp::Fft fft;
+        dsp::RealFft fft;
         fft.prepare(n);
         if (fft.forward(in, spectrum)) {
             r.response.emplace();

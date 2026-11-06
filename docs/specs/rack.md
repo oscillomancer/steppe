@@ -311,14 +311,23 @@ catalog of the moment they start (`OfflineSettings::modules`).
 
 A saved project keeps a copy of each library or project module it plays
 in `<project folder>/modules/<name>/<name>.cpp` (`saveProjectModules`;
-not when that folder is the library), as it keeps its media; a file that
-already holds the source is left alone. Opening it compiles the copies as
+not when that folder is the library), as it keeps its media. Copies are
+deduplicated by type id; different types with the same name get distinct
+filenames (`<name>-2`, …). An existing file is updated only if it compiles
+to the same type id; other files, including broken sources, are preserved.
+A file that already holds the source is left alone. Opening it compiles the copies as
 project types (`Origin::Project`), which win over the library's for the
 same id, so the project sounds as it was saved on any machine. A
 `module.write` or `module.edit` of the same id in the library replaces the
 project's copy in the catalog (the edit plays, and the next save copies
-it); `module.edit {type}` of a project-only type writes it into the
-library.
+it). `module.edit {type}` of a project type edits its source into the
+library's entry with the same type id. If that id is absent, it uses the
+project copy's name or a free suffixed name (`<name>-2`, …), leaving other
+library types' files untouched.
+Copies that cannot be read or compiled are reported in `project.open`'s
+`warnings` as `project.modules`, with the source paths and diagnostics.
+The warning also names used types left without a project copy, explicitly
+saying when the library version is used instead or the type is unavailable.
 
 ## 4. The rack runtime (`modules/rack`)
 
@@ -337,7 +346,7 @@ library.
 
 ### 4.2 Processing
 
-`Schedule::process(const Block&)` (`SUPPLE_RT`): the host passes the
+`Schedule::process(position, frames, clock)` (`SUPPLE_RT`): the host passes the
 node's frames, its timeline position and a callback for per-grid-block
 context (transport, MIDI). The schedule splits the frames on the 32-frame
 grid of that position, and for each grid block:
@@ -348,6 +357,11 @@ grid of that position, and for each grid block:
 3. runs modules in order: an acyclic module once for the block, a
    feedback group frame by frame;
 4. publishes telemetry when due.
+
+Automation targets are sampled at absolute grid starts and held when host
+blocks split a grid interval; smoothing still advances every frame. A first
+call or a discontinuity samples the grid interval containing its start,
+including for negative positions. A zero-frame call leaves that state alone.
 
 A module stopped by its budget, or failing, outputs silence until reset or
 reloaded and is reported; the rest of the rack plays on.
@@ -419,7 +433,10 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   to it; liveness propagates to what it feeds.
 - **Parameters.** Knob edits on a running rack go to atomic slots (no
   compile). Envelopes on module parameters compile to curves the schedule
-  samples on the grid. MIDI learn (`module.learn.*`) moves a knob through
+  samples at each grid interval's start and holds across host block fragments;
+  smoothing still advances every frame. A locate samples the containing
+  interval again, including a start between grid points. MIDI learn
+  (`module.learn.*`) moves a knob through
   `module.set`, so it reaches the same slots.
 - **Plugin modules.** Their instances come from the instance pool by fx id
   and run as stages of the rack node (`Node::rackStages`, prepared and
@@ -460,7 +477,8 @@ examples run as tests. Ends are strings: `"mo_3.out"`.
 | `rack.list` | query | `{}` → racks with their home tracks, module counts and Out modules |
 | `rack.get` | query | `{rack, detail?: brief\|full}` → modules (id, type, label, changed params, position, size), cables (with `feedback`), Out modules and the channels they feed, problems |
 | `rack.probe` | query | `{rack, ports: ["mo_N.<output>", …≤8], seconds? (≤10, 2), from_beat?, notes? (notation the rack's Notes modules play)}` → per port: peak, rms, dc, min, max; audio (the first 4 voices summed): dB and pitch (Hz, note, cents) when periodic; gates over the voices: count, per second, per beat, duty; pitch: the notes visited; CV: rate; a one-line description. An offline render of a copy with a listener (`ProbeModule`) on each port; nothing changes |
-| `rack.patch` | edit | `{rack, modules: {name: {type\|plugin, params?, preset?, label?, x?, y?, source?, device?}}, cables?: [[from, to, amount?, color?] \| {from, to, amount?, color?}], x?, y?}` → `{modules: {name: id}, cables}`: ends `"name.port"`, `"name.knob"` (a plugin module's: its plug-in's) or `"mo_N.port"`; modules without a place laid out by signal flow; checked as `module.add` and `cable.add` check, all or nothing |
+| `rack.patch` | edit | `{rack, modules: {name: {type\|plugin, params?, preset?, label?, x?, y?, source?, device?}}, cables?: [[from, to, amount?, color?] \| {from, to, amount?, color?}], x?, y?}` → `{modules: {name: id}, cables}`: ends `"name.port"`, `"name.knob"` (a plugin module's: its plug-in's) or `"mo_N.port"`; modules without a place laid out as §7.2; a name labels its module (§7.2); checked as `module.add` and `cable.add` check, all or nothing |
+| `rack.arrange` | edit | `{rack, modules?, x?, y?}` → `{modules: {mo_N: {x, y}}}`: lays out the modules (default all the rack's) as §7.2 from x, y (default their top-left corner), along the cables among them; one undo step |
 | `rack.preset.save` | action | `{rack, name, modules?, description?, replace?}` → `{path, modules, cables}`: the modules (default the whole rack) and the cables among them |
 | `rack.preset.load` | edit | `{rack, name\|path, x?, y?, io?: join\|add}` → `{modules, cables, installed?, warnings?}`: one undo step; `installed` names the library modules it brought |
 | `rack.preset.list` | query | `{query?}` → presets: name, path, description, module and cable counts, module types |
@@ -527,7 +545,11 @@ Out feeds.
 
 `sources` holds the source of every library or project module the preset
 uses, by type id, with its library name, so one file carries a patch and
-its custom modules (ADR-0062). A load first writes each one the catalog
+its custom modules (ADR-0062). A load first compiles every embedded source
+and checks its `ModuleInfo.id` against its `sources` key, including types
+already installed. A compilation failure or id mismatch is
+`rack.preset_module` at that source entry and installs nothing.
+It then writes each one the catalog
 lacks into the library (under its name, or `<name>-2`… when that name is
 taken), as `module.write` does, and lists them in `installed`; one the
 catalog has plays as installed, with a warning (`rack.preset_module`) when
@@ -540,6 +562,41 @@ out with a warning (`rack.preset_knob`, `rack.preset_cable`). With
 own, in order: their cables reach the rack's Outs and Ins, so a whole
 patch saved from one rack sounds in a new one at once; extra ones are
 added. `io: add` adds them all.
+
+### 7.2 Patch layout and labels
+
+`rack.patch` places the modules it is given no `x`, `y` for, and
+`rack.arrange` re-places a rack's modules, the same way, along the cables
+among the modules placed (a cable into a plugin module's parameter counts
+as one into the module):
+
+1. Columns by signal flow: a module goes one column right of the longest
+   chain of cables feeding it (a feedback loop stops at as many columns as
+   modules). Then each moves right to one column left of its nearest
+   consumer, so a modulator sits beside what it modulates, and a last stage
+   (fed, feeding nothing placed: one into an Out) goes to the last column.
+   A module with no cables stays in the first.
+2. Within a column, modules are ordered by the mean place of their
+   neighbours, swept forward and back four times, so cables cross less.
+3. Shape: a column may split into side-by-side stacks at any height at
+   least the tallest module's, and the row of stacks may wrap into up to
+   six bands, one under the other (60 units apart). Of these, the one
+   kept scores best on |ln(aspect / 1.6)| + 0.5 ln(bounding area / the
+   modules' area with gaps) + 0.3 per band beyond the first: about a
+   window's shape, compact, with the flow rarely broken.
+4. Modules are 40 units apart across and 30 down, each centred in its
+   stack, each stack centred in its band, from the corner given
+   (`rack.patch`: right of the rack's modules; `rack.arrange`: their
+   top-left corner). Coordinates are whole units, and the same patch lays
+   out the same way.
+
+A name in `rack.patch` labels its module unless `label` is given: none
+when it is the type's key (`"vco"`); the type's name and the number when it
+is the key and a number (`"vco2"`, `"vco_2"`: "VCO 2"); else the name made
+readable: `_` to spaces, a trailing number apart, the first letter
+capitalised, and a word that is a type's key spelled as that type's
+one-word name (`"bass_env"`: "Bass env", `"osc1"`: "Osc 1", `"lfo"`:
+"LFO"). A plugin module keeps its plug-in's name.
 
 ## 8. The rack window (`daw/gui`)
 

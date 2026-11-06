@@ -44,7 +44,7 @@ class LoudnessMeter {
     int hop_ = 0, window400_ = 0, window3_ = 0;
     Mode mode_ = Mode::Histogram;
     std::array<double, 6> weights_{};
-    std::array<dsp::Biquad, 6> shelf_, highpass_;
+    std::array<dsp::BiquadFilter, 6> shelf_, highpass_;
     std::array<dsp::PolyphaseUpsampler, 6> oversamplers_;
     std::vector<double> ring_;
     std::vector<double> exactBlocks_, exactShort_;

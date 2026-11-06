@@ -61,7 +61,7 @@ pans arrive through its mix slots (ADR-0060, §1.6) without a new plan.
   what that plug-in would produce in series, so a bypassed branch adds its
   dry input); pinned stages and strips with auxiliary channels run in
   series, with a warning. `oversampling` 2/4/8 runs the plug-in at that
-  multiple of the plan rate behind `dsp::Oversampler` half-band resamplers
+  multiple of the plan rate behind `dsp::HalfbandOversampler` half-band resamplers
   on its main pair and key (not with auxiliary outputs: those run at the
   plan rate, with a warning); event times scale by the factor.
 - **RouteEdge**: copy from a source tap with gain/pan/channel map (and MIDI

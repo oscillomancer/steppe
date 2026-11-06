@@ -295,14 +295,25 @@ values.
 
 ## 9. Supporting libraries
 
-**core-dsp** (initial scope; it grew with the plugins): `Biquad` (TDF-II,
-double, with RBJ-cookbook designs and bilinear-from-analog helpers),
-`PolyphaseUpsampler` (for true peak and oversampling), windows (Hann,
-Blackman-Harris, Kaiser), `Fft`, denormal guard (FTZ/DAZ scope), `OnePole`
-smoother. Filter, upsampler and smoother processing and the denormal guard
-are RT-safe after setup. `Fft::forward` and `inverse` use pocketfft and
-allocate scratch; they and arbitrary-rate `resample` are offline APIs.
-`Fft::forwardRt` is allocation-free for power-of-two sizes after `prepare`.
+**core-dsp** (initial scope; it grew with the plugins): `BiquadFilter`
+(TDF-II, double, with RBJ-cookbook designs and bilinear-from-analog
+helpers), `PolyphaseUpsampler` (for true peak and oversampling),
+`HalfbandOversampler` (the engine's oversampled stages), windows (Hann,
+Blackman-Harris, Kaiser), `RealFft`, denormal guard (FTZ/DAZ scope) and
+`OnePoleSmoother`. Filter, upsampler and smoother processing and the
+denormal guard are RT-safe after setup. `RealFft::forward` and `inverse`
+use pocketfft and allocate scratch; they and arbitrary-rate `resample` are
+offline APIs. `RealFft::forwardRt` is allocation-free for power-of-two
+sizes after `prepare`.
+
+No core-dsp class shares a qualified name with one of the plugin template
+framework's (`plugins/template/framework`, also `supple::dsp`): the app,
+the sandbox and the bridge link core-dsp beside the script runtime, which
+compiles the framework's DSP, and two classes of one name break the
+one-definition rule. The linker keeps one copy of each inline member, so
+one class's code runs on the other's objects (a script `Stft`, destroyed
+by core-dsp's FFT destructor, freed memory it did not own).
+`engine-dsp-link.tests` builds the pairs side by side.
 
 **audio-file:** `Result<AudioData> readAudio(path)` (WAV all PCM/float
 formats via dr_wav, FLAC via dr_flac, MP3 via dr_mp3) → planar float +
@@ -344,9 +355,9 @@ simple synthesis code) committed to `docs/specs/examples/analysis/`.
   the measured peak ripple over 100 Hz–8 kHz is 0.0061 dB and the 18 kHz
   output is −123.3 dB. At 192 → 24 kHz, the 8 kHz amplitude error is
   +0.0001 dB and the 40 kHz output is −132.3 dB. Tests exclude 100 edge samples.
-- `Fft::forward` and `inverse` delegate to pocketfft for arbitrary sizes and
+- `RealFft::forward` and `inverse` delegate to pocketfft for arbitrary sizes and
   are offline APIs because pocketfft allocates transform scratch per call.
-  `Fft::forwardRt` uses a prepared radix-2 plan and preallocated scratch for
+  `RealFft::forwardRt` uses a prepared radix-2 plan and preallocated scratch for
   RT processing;
   spectral analysis uses power-of-two sizes.
 

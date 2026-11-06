@@ -15,7 +15,7 @@ namespace supple::dsp {
 // Integer up/down delays are 0/72/80/83 base samples: stage centres 72/16/12
 // divided by 1/2/4. Frequencies above 0.45*fs may lie in a transition band.
 // Fixed-capacity storage; no fractional phase or host-block-dependent state.
-class Oversampler {
+class HalfbandOversampler {
   public:
     void prepare(int factor, uint32_t maxFrames = 0);
     void reset() SUPPLE_RT;

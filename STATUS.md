@@ -258,12 +258,14 @@ instructions are in `docs/guides/installing.md`.
   Out modules are channel inputs, In modules take sends, Notes modules play
   a track's MIDI or a live input, Transport gives the song's clock, plugin
   modules host CLAP/VST3 plug-ins (instruments played from pitch and gate
-  cables). 61 stock modules (`modules/stock`: oscillators, filters,
+  cables). 69 stock modules (`modules/stock`: oscillators, filters,
   envelopes, sequencers, generative and utility modules, effects) compile
   as scripts and as C++ alike. Each rack is a node of the render plan on a
-  32-frame grid; real-time output equals offline renders, and the audio
-  path passes RealtimeSanitizer. Agents patch with `rack.patch` (named
-  modules and cables in one step) or `module.add`/`cable.add`, hear a patch
+  32-frame grid; module automation holds across host block fragments.
+  Real-time output equals offline renders, and the audio path passes
+  RealtimeSanitizer. Agents patch with `rack.patch` (named
+  modules and cables in one step, laid out by signal flow and labelled by
+  name; `rack.arrange` tidies a rack) or `module.add`/`cable.add`, hear a patch
   with `rack.probe` (pitch, levels, gates, notes, CV rates from an offline
   render of a copy), write and edit library modules (`module.write`, hot
   reload in the running engine, `module.fork`), keep patches as rack

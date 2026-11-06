@@ -180,7 +180,7 @@ std::vector<std::vector<double>> barkFrames(const Signal& s, std::int64_t frames
         w2 += w[i] * w[i];
     }
     const double norm = 2.0 / (static_cast<double>(n) * w2);
-    dsp::Fft fft;
+    dsp::RealFft fft;
     fft.prepare(n);
     std::vector<double> frame(n);
     std::vector<std::complex<double>> spec(n / 2 + 1);

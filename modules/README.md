@@ -59,6 +59,9 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `comb` | A tuned comb filter that rings at the pitch: feedback positive (every harmonic) or negative (odd only), damping in the loop kept in tune, mix, poly |
 | `wavetable` | A wavetable oscillator with seven tables of its own (classic, sync, fold, formant, vowel, organ, digital): position to sweep, unison with detune, a display of the wave, never aliases, poly |
 | `pitchshift` | A pitch shifter, two octaves either way: two delay taps cross-fading in step with the input (a held note keeps its pitch), fine, window size, feedback for shimmer, mix, poly |
+| `freeze` | A spectral freeze: a gate or switch holds the spectrum and plays it on, partials at their exact pitches; blur to smear in time, shift by semitones keeping each partial whole, tilt, poly |
+| `orbit` | A circular panner: the sound turns round four or eight speakers at a rate either way, angle, width from a point to everywhere, poly voices spread round the ring, Doppler in a room to 10 m across, a stereo fold-down, reset |
+| `glitch` | A clocked glitch: at each step (clock or the song's grid) a chance of a stutter, a reverse, a pitch drop or a tape stop, by weights; slices in note values that Vary halves for rolls; seeded, with a reset; an active gate, poly |
 
 ### Modulation, sequencing, generative and utilities
 
@@ -100,3 +103,8 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `polyrhythm` | Four rhythms of 1 to 16 beats against a beat to four bars of the song: ramps, gates, Any and Hits |
 | `life` | An 8x8 Game of Life (five rules) played a column a clock: eight poly gates, a CV, counts and a generation trigger |
 | `lsystem` | L-System: a self-similar melody grown by rewriting A, B and C, each moving the tune by scale degrees |
+| `bounce` | A bouncing ball: hits that come quicker and softer until it settles, its height and each hit's strength; poly |
+| `swarm` | Two to eight coupled LFOs that pull into step, or push apart, like fireflies; how in step they are as Sync; poly |
+| `canon` | A round from any line: up to three followers replay the lead's notes and gates some steps later, transposed; poly out for one voice |
+| `changes` | A chord progression that writes itself in a key and mode: functional moves, a loop that slowly changes, voice leading; poly chord, root and gate |
+| `dust` | Random triggers with no clock, evenly scattered or in bursts, optionally held to the song's grid; a velocity and a random value each; poly |
