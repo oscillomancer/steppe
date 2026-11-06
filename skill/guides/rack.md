@@ -22,6 +22,9 @@ with their ranges and defaults; read it before patching. `module.describe
    what flows out of each port: pitch and level for audio, gates per beat
    and duty, the notes a pitch visits, a CV's rate. Nothing changes. This
    is how you hear a patch; check every patch with it before rendering.
+   `from_beat` starts a fresh render at that beat, so what a patch builds
+   over time (a looper's recording, life's generations, a drift's path)
+   needs one render from the start, up to 10 seconds.
 4. Adjust: `module.set {module, params}`, `cable.set {cable, amount}`,
    `module.set {module, preset}` (a module's factory preset).
 5. Render or listen as for any track. Ask the human to listen when it
@@ -57,8 +60,12 @@ with their ranges and defaults; read it before patching. `module.describe
 - One bad name, port or value refuses the whole patch; the error's path
   names it (`/args/cables/3/to`). It returns the ids by name.
 
-In a `batch`, a `${step.field}` reference must be the whole string, so a
-cable end cannot be built from one: use `rack.patch`.
+In a `batch`, a step named with `"as": "p"` is read by later steps as
+`${p.field}`, down a path: `${p.modules.loop}` is the id `rack.patch` gave
+the module named `loop` (for `env.add {module}` or `module.set`). A
+reference must be the whole string, so a cable end or a probe port cannot
+be built from one: use `rack.patch` for cables, and run `rack.probe` after
+the batch with the ids it returned.
 
 ## Signals
 
@@ -165,6 +172,73 @@ long delay, fed by a send from another track.
 ```
 
 Then `route.add {from: "tr_2", to: "<space's id>"}`.
+
+**Polyrhythmic drums**: four drums on Polyrhythm's lanes, 4 against 3
+against 5 against 7 in a bar; Hits accents the kick and hat where lanes
+meet.
+
+```json
+{"modules": {"lanes": {"type": "polyrhythm", "params": {"width": 10}},
+             "kick": {"type": "drum", "params": {"model": "kick", "level": -6}},
+             "clap": {"type": "drum", "params": {"model": "clap", "level": -6}},
+             "rim": {"type": "drum", "params": {"model": "rimshot", "level": -9}},
+             "hat": {"type": "drum", "params": {"model": "closed_hat", "level": -10}},
+             "mix": {"type": "mixer", "params": {"pan_3": -45, "pan_4": 45, "master": -6}}},
+ "cables": [["lanes.gate_1", "kick.trigger"], ["lanes.gate_2", "clap.trigger"],
+            ["lanes.gate_3", "rim.trigger"], ["lanes.gate_4", "hat.trigger"],
+            ["lanes.hits", "kick.accent"], ["lanes.hits", "hat.accent"],
+            ["kick.out", "mix.in_1"], ["clap.out", "mix.in_2"], ["rim.out", "mix.in_3"],
+            ["hat.out", "mix.in_4"], ["mix.left", "mo_1.l"], ["mix.right", "mo_1.r"]]}
+```
+
+Probed for 4 s: `lanes.any` 32 starts (16 a bar), `mix.left` peak −7 dB.
+`count_1`…`count_4` set the lanes; `span` stretches them over 2 or 4 bars.
+
+**An evolving melody**: an L-system tune in D dorian, looped every two bars
+(`loop` 16 symbols), plucked through a low-pass gate into a dotted-eighth
+delay; a slow drift cabled into `move_b` makes each pass a variation.
+
+```json
+{"modules": {"tune": {"type": "lsystem", "params": {"depth": 6, "loop": 16, "rest": "c",
+                                                      "scale": "dorian", "root": "d", "octave": -1}},
+             "wander": {"type": "drift", "params": {"rate": 0.2, "voices": 1}},
+             "osc": {"type": "vco"}, "gate": {"type": "lpg", "params": {"decay": 180}},
+             "amp": {"type": "vca", "params": {"level": -12}},
+             "echo": {"type": "delay", "params": {"sync": "n8d"}},
+             "room": {"type": "reverb", "params": {"mix": 25}}},
+ "cables": [["tune.pitch", "osc.pitch"], ["osc.triangle", "gate.in"], ["tune.gate", "gate.ping"],
+            ["wander.out", "tune.move_b", 3], ["gate.out", "amp.in"], ["amp.out", "echo.in_l"],
+            ["echo.out_l", "room.in_l"], ["echo.out_r", "room.in_r"],
+            ["room.out_l", "mo_1.l"], ["room.out_r", "mo_1.r"]]}
+```
+
+Probed for 10 s: `tune.start` 3, ten notes from A2 to C4 that change from
+pass to pass (without the drift cable each pass repeats), `room.out_l`
+peak −3 dB. `depth` and the `rule_` knobs grow other strings.
+
+**A modulation web**: Matrix mixes a Lorenz attractor (A), a looping
+Stages gesture (B) and a four-bar ramp (C) into a low drone's filter,
+pulse width, level and reverb mix; D, unpatched, adds offsets.
+
+```json
+{"modules": {"storm": {"type": "chaos", "params": {"rate": 0.2}},
+             "gesture": {"type": "stages", "params": {"mode": "loop", "speed": 0.5}},
+             "sweep": {"type": "polyrhythm", "params": {"span": "bars_4", "count_1": 1}},
+             "web": {"type": "matrix", "params": {"a_to_1": 50, "c_to_1": 80, "b_to_2": 60, "d_to_2": -30,
+                                                  "b_to_3": 40, "d_to_3": 60, "a_to_4": 50}},
+             "osc": {"type": "vco", "params": {"coarse": -24}},
+             "filt": {"type": "filter", "params": {"cutoff": 250, "resonance": 55}},
+             "amp": {"type": "vca", "params": {"level": -12}}, "room": {"type": "reverb"}},
+ "cables": [["storm.x", "web.a"], ["gesture.out", "web.b"], ["sweep.ramp_1", "web.c"],
+            ["web.out_1", "filt.fm"], ["web.out_2", "osc.pulse_width", 40],
+            ["web.out_3", "amp.cv"], ["web.out_4", "room.mix", 30],
+            ["osc.pulse", "filt.in"], ["filt.low", "amp.in"], ["amp.out", "room.in_l"],
+            ["room.out_l", "mo_1.l"], ["room.out_r", "mo_1.r"]]}
+```
+
+Probed for 10 s: `web.out_2` ±0.3 at the gesture's 0.5 Hz, `web.out_3`
+0.6 to 1, `filt.low` C2, `room.out_l` peak −8 dB. Turn `a_to_1`…`d_to_4`
+to reroute; below 0 inverts.
 
 ## Generative building blocks
 
