@@ -19,6 +19,7 @@
 
 #include "app_actions.h"
 #include "floating_panel.h"
+#include "rack_plugin_params.h"
 #include "rack_space.h"
 #include "supple/ui/root.h"
 
@@ -83,8 +84,17 @@ class RackWindow {
     // The space's hooks.
     void move(const std::vector<RackSpace::Move>& moves);
     void param(model::Id module, int index, double value, ui::Gesture g);
+    // `amount`: a parameter cable's (else the command's default).
     void connect(const model::CableEnd& from, const model::CableEnd& to,
-                 std::optional<model::Id> replace);
+                 std::optional<model::Id> replace, std::optional<double> amount = std::nullopt);
+    // A cable dropped on a plugin module: its plug-in's modulatable
+    // parameters in a searchable list; choosing one makes the cable.
+    void pickParam(const model::CableEnd& from, model::Id module, std::optional<model::Id> replace,
+                   ui::Point at);
+    // A cable's right-click: what it reaches, its amount, remove.
+    void cableMenu(model::Id cable, ui::Point at);
+    // A plug-in's parameters (asked once per plug-in and version).
+    const racks::PluginParams& paramsOf(model::Id fx);
     void moduleMenu(model::Id module, ui::Point at);
     void spaceMenu(ui::Point at, ui::Point space);
     void paramMenu(model::Id module, int index, ui::Point at);
@@ -143,6 +153,8 @@ class RackWindow {
     json::Value presets_ = json::Value::object();  // rack.preset.list's
     bool presetsRead_ = false;
     std::optional<ui::Point> addAt_;  // the space's "Add module…": where the next one goes
+    // paramsOf's answers by fx, with the plug-in they were asked of.
+    std::map<model::Id, std::pair<std::string, racks::PluginParams>> pluginParams_;
 };
 
 }  // namespace supple::gui

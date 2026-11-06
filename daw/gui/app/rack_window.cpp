@@ -7,11 +7,14 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <set>
 
 #include "learn_dialog.h"
 #include "plugin_browser.h"
 #include "supple/engine/midi_control.h"
+#include "supple/ui/list.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/text_area.h"
 #include "supple/ui/text_field.h"
@@ -749,6 +752,10 @@ void RackWindow::open(std::optional<model::Id> rack) {
     };
     sh.connect = [this](const model::CableEnd& from, const model::CableEnd& to,
                         std::optional<model::Id> replace) { connect(from, to, replace); };
+    sh.pickParam = [this](const model::CableEnd& from, model::Id module,
+                          std::optional<model::Id> replace,
+                          ui::Point at) { pickParam(from, module, replace, at); };
+    sh.cableMenu = [this](model::Id cable, ui::Point at) { cableMenu(cable, at); };
     sh.disconnect = [this](model::Id cable) {
         json::Value args = json::Value::object();
         args["cable"] = cable.str();
@@ -884,6 +891,12 @@ Status RackWindow::reload() {
                         if (id && k.id == *id) k.feedback = true;
                 }
     }
+    // A plug-in parameter's socket shows the parameter's name.
+    for (auto& m : scene.modules)
+        if (m.fx && !m.mods.empty()) {
+            const racks::PluginParams& ps = paramsOf(*m.fx);
+            for (const std::string& key : m.mods) m.modNames[key] = ps.nameOf(key);
+        }
     space_->setScene(std::move(scene));
     space_->setEmptyText(s.racks.empty() ? "No racks yet. + adds one on the selected channel."
                                          : "");
@@ -1134,7 +1147,7 @@ void RackWindow::param(model::Id module, int index, double value, ui::Gesture g)
 }
 
 void RackWindow::connect(const model::CableEnd& from, const model::CableEnd& to,
-                         std::optional<model::Id> replace) {
+                         std::optional<model::Id> replace, std::optional<double> amount) {
     if (replace)
         if (const model::Cable* old = app_.head().cables.find(*replace);
             old && old->from == from && old->to == to)
@@ -1143,6 +1156,7 @@ void RackWindow::connect(const model::CableEnd& from, const model::CableEnd& to,
         json::Value args = json::Value::object();
         args["from"] = from.str();
         args["to"] = to.str();
+        if (amount) args["amount"] = *amount;
         return dispatcher_.execute({"cable.add", std::move(args), kOrigin});
     };
     Result<json::Value> r = json::Value();
@@ -1156,6 +1170,199 @@ void RackWindow::connect(const model::CableEnd& from, const model::CableEnd& to,
     else
         r = add();
     if (!r) report(r.error());
+}
+
+namespace {
+
+// The plug-in parameters a cable can modulate: a search field over a list;
+// Enter or a double-click chooses. Without any, it says why.
+class ParamPicker : public ui::Node {
+  public:
+    ParamPicker(ui::Root& root, const std::string& title, const racks::PluginParams& params,
+                std::function<void(const racks::PluginParam&)> chosen)
+        : Node("rack.params"), root_(root), chosen_(std::move(chosen)) {
+        for (const auto& p : params.params)
+            if (p.modulatable) params_.push_back(p);
+        layout.dir = ui::Layout::Dir::Column;
+        layout.width = ui::SizeRule::fixed(300);
+        layout.padding = ui::Insets::all(10);
+        layout.gap = 6;
+        auto& heading =
+            emplace<ui::Label>("rack.params.title", "Modulate " + title, ui::Font::UiBold, "small");
+        heading.layout.height = ui::SizeRule::fixed(18);
+        if (params_.empty()) {
+            layout.height = ui::SizeRule::content();
+            auto& note = emplace<ui::Label>("rack.params.note", params.note, ui::Font::Ui, "small",
+                                            "ink-quiet");
+            note.layout.height = ui::SizeRule::fixed(20);
+            return;
+        }
+        layout.height = ui::SizeRule::fixed(
+            std::min(360.0f, 116.0f + 26.0f * static_cast<float>(params_.size())));
+        search_ = &emplace<ui::TextField>("rack.params.search", "", "Search parameters…");
+        list_ = &emplace<ui::List>("rack.params.list");
+        list_->layout.height = ui::SizeRule::fraction();
+        list_->rowHeight = 26;
+        auto& hint = emplace<ui::Label>("rack.params.hint", "Enter connects · Esc closes",
+                                        ui::Font::Ui, "caption", "ink-faint");
+        hint.layout.height = ui::SizeRule::fixed(16);
+        search_->onChange = [this](const std::string& q) { filter(q); };
+        search_->onSubmit = [this](const std::string&) { choose(); };
+        search_->onCancel = [this] { root_.closePopup(); };
+        search_->onOtherKey = [this](const ui::KeyEvent& e) { return list_->onKey(e); };
+        list_->onActivate = [this](std::size_t) { choose(); };
+        list_->paintRow = [this](ui::Canvas& c, std::size_t i, const ui::Rect& r, bool) {
+            const ui::Theme& t = c.theme();
+            const racks::PluginParam& p = params_[matches_[i]];
+            const float groupW =
+                p.group.empty() ? 0 : c.textWidth(p.group, ui::Font::Ui, t.type("caption")) + 12;
+            c.text({r.x + 8, r.y, r.w - 16 - groupW, r.h}, p.name, ui::Font::Ui, t.type("small"),
+                   t.color("ink"));
+            if (!p.group.empty())
+                c.text({r.x, r.y, r.w - 8, r.h}, p.group, ui::Font::Ui, t.type("caption"),
+                       t.color("ink-quiet"), ui::kRight | ui::kMiddle);
+        };
+        filter("");
+    }
+    ui::TextField* search() const { return search_; }
+    void paint(ui::Canvas&) override {}
+    bool onText(std::string_view text) override {
+        if (!search_) return false;
+        root_.focus(search_);
+        return search_->onText(text);
+    }
+    std::string valueText() const override {
+        std::string out;
+        for (std::size_t i : matches_) out += (out.empty() ? "" : " | ") + params_[i].name;
+        return out;
+    }
+
+  private:
+    void filter(const std::string& q) {
+        const std::string want = lower(q);
+        matches_.clear();
+        for (std::size_t i = 0; i < params_.size(); ++i)
+            if (want.empty() || lower(params_[i].name).find(want) != std::string::npos ||
+                lower(params_[i].group).find(want) != std::string::npos)
+                matches_.push_back(i);
+        list_->setCount(matches_.size());
+        list_->select(matches_.empty() ? std::nullopt : std::optional<std::size_t>(0));
+        if (!matches_.empty()) list_->scrollTo(0);
+    }
+    void choose() {
+        const auto row = list_->selected();
+        if (!row || *row >= matches_.size()) return;
+        const racks::PluginParam p = params_[matches_[*row]];  // closing destroys the picker
+        auto chosen = chosen_;
+        root_.closePopup();
+        chosen(p);
+    }
+    ui::Root& root_;
+    std::function<void(const racks::PluginParam&)> chosen_;
+    std::vector<racks::PluginParam> params_;
+    std::vector<std::size_t> matches_;
+    ui::TextField* search_ = nullptr;
+    ui::List* list_ = nullptr;
+};
+
+}  // namespace
+
+const racks::PluginParams& RackWindow::paramsOf(model::Id fx) {
+    const model::FxInstance* f = app_.head().fx.find(fx);
+    const std::string plugin =
+        f ? f->plugin.format + ":" + f->plugin.id + "@" + f->plugin.version : std::string();
+    auto& [asked, params] = pluginParams_[fx];
+    if (asked != plugin || plugin.empty()) {
+        asked = plugin;
+        params = f ? racks::pluginParams(app_, *f) : racks::PluginParams{};
+    }
+    return params;
+}
+
+void RackWindow::pickParam(const model::CableEnd& from, model::Id module,
+                           std::optional<model::Id> replace, ui::Point at) {
+    const auto* m = space_ ? space_->scene().module(module) : nullptr;
+    if (!m || !m->fx) return;
+    // A parameter cable moved here keeps its amount.
+    std::optional<double> amount;
+    if (replace)
+        if (const model::Cable* old = app_.head().cables.find(*replace);
+            old && old->to.object.kind == model::Kind::Fx)
+            amount = old->amount;
+    const model::Id fx = *m->fx;
+    auto picker = std::make_unique<ParamPicker>(
+        root(), m->title, paramsOf(fx),
+        [this, from, fx, replace, amount](const racks::PluginParam& p) {
+            connect(from, model::CableEnd{fx, p.key}, replace, amount);
+        });
+    ui::TextField* search = picker->search();
+    root().openPopup(std::move(picker), {at.x, at.y, 0, 0});
+    if (search) root().focus(search);
+}
+
+void RackWindow::cableMenu(model::Id id, ui::Point at) {
+    const model::Session& s = app_.head();
+    const model::Cable* cable = s.cables.find(id);
+    if (!cable || !space_) return;
+    const RackScene& scene = space_->scene();
+    // What it reaches, as people say it: "Gain on Test Gain".
+    std::string what = cable->to.key, where;
+    double scale = 1;  // the amount as shown: a plug-in parameter's in percent
+    std::string unit;
+    if (cable->to.object.kind == model::Kind::Fx) {
+        if (const auto* m = scene.moduleOfFx(cable->to.object)) {
+            what = m->modName(cable->to.key);
+            where = m->title;
+        }
+        scale = 100;
+        unit = " %";
+    } else if (const auto* m = scene.module(cable->to.object)) {
+        where = m->title;
+        if (m->type) {
+            if (const int p = m->type->param(cable->to.key); p >= 0)
+                what = m->type->params()[static_cast<std::size_t>(p)].name;
+            else if (const int in = m->type->input(cable->to.key); in >= 0)
+                what = m->type->input(in).name;
+        }
+    }
+    std::vector<ui::MenuItem> items;
+    items.push_back({what + (where.empty() ? "" : " on " + where), "", {}, false});
+    if (cable->amount) {
+        char text[48];
+        std::snprintf(text, sizeof text, scale == 100 ? "%+.0f" : "%+.3g", *cable->amount * scale);
+        const std::string shown = text + unit;
+        items.push_back({"Amount: " + shown + "…", "", [this, id, at, scale, shown] {
+                             openNameField(root(), "rack.cable.amount", shown, {at.x, at.y, 120, 0},
+                                           [this, id, scale](const std::string& typed) {
+                                               char* end = nullptr;
+                                               const double v = std::strtod(typed.c_str(), &end);
+                                               if (end == typed.c_str() || !std::isfinite(v)) {
+                                                   report(Error("cable.amount",
+                                                                "“" + typed + "” is not a number"));
+                                                   return;
+                                               }
+                                               json::Value args = json::Value::object();
+                                               args["cable"] = id.str();
+                                               args["amount"] = v / scale;
+                                               (void)exec("cable.set", std::move(args));
+                                           });
+                         }});
+    }
+    if (cable->to.object.kind == model::Kind::Fx)
+        if (const auto* m = scene.moduleOfFx(cable->to.object))
+            items.push_back(
+                {"Change parameter…", "", [this, from = cable->from, module = m->id, id, at] {
+                     pickParam(from, module, id, at);
+                 }});
+    items.push_back({"", "", {}, true, true});
+    items.push_back({"Remove cable", "", [this, id] {
+                         json::Value args = json::Value::object();
+                         args["cable"] = id.str();
+                         (void)exec("cable.remove", std::move(args));
+                     }});
+    root().openPopup(
+        ui::makeMenu("rack.cable.menu", std::move(items), [this] { root().closePopup(); }),
+        {at.x, at.y, 0, 0});
 }
 
 void RackWindow::deleteSelected() {

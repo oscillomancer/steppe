@@ -47,6 +47,15 @@ struct RackScene {
         bool bypass = false, plugin = false, out = false;
         bool instrument = false;      // a plugin module's plug-in plays notes
         std::optional<model::Id> fx;  // a plugin module's
+        // A plugin module's plug-in parameters that cables reach (their keys,
+        // in the order of their first cable), each a socket on its top edge,
+        // and their names for people (filled by the window; else the key).
+        std::vector<std::string> mods;
+        std::map<std::string, std::string> modNames;
+        std::string modName(const std::string& key) const {
+            const auto it = modNames.find(key);
+            return it == modNames.end() ? key : it->second;
+        }
         // Telemetry, when the module runs and is watched.
         rack::Telemetry telemetry;
         bool live = false;
@@ -77,8 +86,11 @@ struct RackScene {
     const Module* module(model::Id id) const;
     Module* module(model::Id id);
     // Where a cable end sits in the space: a jack's centre, a knob's, or for
-    // a plug-in's parameter the plugin module's edge.
+    // a plug-in's parameter its socket on the plugin module's top edge.
     std::optional<ui::Point> endPoint(const model::CableEnd& end, bool output) const;
+    // The plugin module whose plug-in is `fx`, and its socket `i`'s centre.
+    const Module* moduleOfFx(model::Id fx) const;
+    static ui::Point modSocket(const Module& m, std::size_t i);
     // A port's signal by end (Audio when unknown).
     Signal signalOf(const model::CableEnd& end, bool output) const;
     // The cables into an input or parameter, or out of an output.

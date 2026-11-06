@@ -1194,6 +1194,26 @@ a new channel). It follows rack.md §8.
   from an empty input draws one backwards to an output. Dragging a
   connected input picks up its last cable by the plug: dropped elsewhere it
   moves (one undo step), dropped on nothing it is removed.
+- **Plug-in parameters.** A cable from an output dropped on a plugin
+  module's body (which outlines itself and says "Drop to modulate a
+  parameter" while a cable is over it) opens a searchable list of its
+  plug-in's modulatable parameters, by name with their group; Enter or a
+  double click makes the cable (`cable.add` to `fx_N.<key>`: the semantic
+  key, else the CLAP id; amount the command's default, half the range).
+  A VST3 plug-in's list says it takes no modulation, as does a plug-in with
+  no modulatable parameter. Each parameter the module's cables reach is a
+  socket on its top edge, left to right in the order of their first cable
+  (closer together when many); hovering one, or a cable into one, shows the
+  parameter's name and amount over it ("Cutoff · +50 %"). Its amount is an
+  arc around the socket (270 degrees at ±100 %) and drags like a knob's
+  ring: 160 points from −100 % to +100 % (Shift finer), one undo step.
+  Dropping another cable on a socket adds it to that parameter.
+- **A cable's right-click** (on its cord, or on a plug-in parameter's
+  socket) names what it reaches ("Cutoff on Synth"), offers Amount… for a
+  modulation cable (a field: a plug-in parameter's in percent, a knob's in
+  its modulation unit; `cable.set`), Change parameter… for a plug-in
+  parameter's (the list again; the cable keeps its amount), and Remove
+  cable.
 - **Cables** hang between their ends, deeper the longer they are, drawn
   above the modules in their output's signal colour (or the cable's own
   colour), with a dark edge and a highlight, plugs at both ends; a
@@ -1218,8 +1238,10 @@ a new channel). It follows rack.md §8.
   a toggle's CC defaults to toggle mode, others offer soft takeover). A
   bound knob carries a small accent dot in its gap (a control, at its
   corner), and its menu names the controller ("MIDI: CC 21 · ch 1…") and
-  offers Remove MIDI learn (`module.learn.remove`). A plugin module's
-  knobs are its plug-in's (the FX window's learn).
+  offers Remove MIDI learn (`module.learn.remove`). The controller moves
+  the knob through `module.set`, so the window's knob follows it along the
+  same travel (tested end to end with a dummy device's CCs). A plugin
+  module's knobs are its plug-in's (the FX window's learn).
 - **Browser.** A column on the left (the header's Modules button shows or
   hides it): a search field (words match name, id, description and tags),
   the catalog's tags as chips that filter (one row: the chosen tag, then

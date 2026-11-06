@@ -60,12 +60,20 @@ class RackSpace : public ui::Node {
             connect;
         // A cable dragged off its input and dropped on nothing.
         std::function<void(model::Id cable)> disconnect;
+        // A cable from `from` dropped on a plugin module's body (at a window
+        // point): which of its plug-in's parameters it modulates is asked.
+        std::function<void(const model::CableEnd& from, model::Id module,
+                           std::optional<model::Id> replace, ui::Point at)>
+            pickParam;
+        // A right-click on a cable, or on a plug-in parameter's socket.
+        std::function<void(model::Id cable, ui::Point at)> cableMenu;
         // A module's pointer() changed knobs on its display: one undo step
         // per `gesture` (a press to its release, or a burst of the wheel).
         std::function<void(model::Id module, const std::vector<ModuleFace::Edit>& edits,
                            const std::string& gesture)>
             displayEdit;
-        // A modulation cable's amount dragged on the ring around its knob.
+        // A modulation cable's amount dragged on the ring around its knob, or
+        // on a plug-in parameter's socket.
         std::function<void(model::Id cable, double amount, ui::Gesture g)> amount;
         std::function<void(const std::set<model::Id>&)> selectionChanged;
         std::function<void(const View&)> viewChanged;
@@ -117,6 +125,12 @@ class RackSpace : public ui::Node {
     std::optional<ui::Point> jackAt(model::Id module, const std::string& key, bool output) const;
     std::optional<ui::Point> controlAt(model::Id module, const std::string& key) const;
     std::optional<ui::Point> bodyAt(model::Id module) const;  // a point on its body
+    // A plugin module's socket for its plug-in's parameter `key`.
+    std::optional<ui::Point> socketAt(model::Id module, const std::string& key) const;
+    // A point in view on a cable, clear of the modules, as near halfway as it can.
+    std::optional<ui::Point> cableAt(model::Id cable) const;
+    // The label a hovered socket or parameter cable shows ("" for none).
+    std::string hoverText() const;
     std::string valueText() const override;
 
     void paint(ui::Canvas& c) override;
@@ -127,10 +141,10 @@ class RackSpace : public ui::Node {
 
   private:
     struct Hit {
-        enum class Kind { None, Body, Control, Jack, Ring, Display } kind = Kind::None;
+        enum class Kind { None, Body, Control, Jack, Ring, Display, Socket } kind = Kind::None;
         std::size_t module = 0;
-        std::size_t item = 0;            // in the module's face
-        std::optional<model::Id> cable;  // Ring: the modulation cable
+        std::size_t item = 0;            // in the module's face; Socket: in its mods
+        std::optional<model::Id> cable;  // Ring, Socket: the modulation cable
     };
     Hit hitAt(ui::Point space) const;
     std::optional<std::size_t> cableNear(ui::Point space) const;
@@ -138,6 +152,11 @@ class RackSpace : public ui::Node {
     void paintItem(ui::Canvas& c, const RackScene::Module& m, const rack::PanelItem& item,
                    std::size_t index, bool hot) const;
     void paintCables(ui::Canvas& c) const;
+    void paintSockets(ui::Canvas& c, const RackScene::Module& m) const;
+    void paintHover(ui::Canvas& c) const;
+    ui::Color cableColor(const ui::Theme& t, const RackScene::Cable& k) const;
+    // The parameter cable a hover label is about, and where (space).
+    std::optional<std::pair<const RackScene::Cable*, ui::Point>> hovered() const;
     double jackLevel(const RackScene::Module& m, const rack::PanelItem& item) const;
     bool connected(const RackScene::Module& m, const rack::PanelItem& item) const;
     model::CableEnd endOf(const RackScene::Module& m, const rack::PanelItem& item) const;
@@ -179,8 +198,9 @@ class RackSpace : public ui::Node {
         std::optional<model::Id> replace;
         std::optional<model::Id> cable;  // Amount
         double amount = 0;
-        model::Id display;    // Display: the module pressed
-        std::string gesture;  // Display: the press's undo step
+        bool fraction = false;  // Amount: a plug-in parameter's (a fraction of its range)
+        model::Id display;      // Display: the module pressed
+        std::string gesture;    // Display: the press's undo step
     };
 
     Hooks hooks_;

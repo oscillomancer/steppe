@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <numbers>
 
 #include "supple/ui/root.h"
@@ -24,7 +25,8 @@ constexpr float kRadius = 4;            // a module's corners
 constexpr float kArc0 = 0.75f * kPi;    // a knob's travel: from bottom left...
 constexpr float kArcSpan = 1.5f * kPi;  // ...270 degrees clockwise
 constexpr float kJackR = static_cast<float>(rack::kJackSize) / 2;
-constexpr float kLabel = 8.5f;  // labels under knobs and jacks
+constexpr float kLabel = 8.5f;    // labels under knobs and jacks
+constexpr float kSocketR = 5.5f;  // a plug-in parameter's socket on a plugin module's edge
 constexpr float kTitleFont = 11.0f;
 constexpr int kManyCables = 8;  // past this, cables not in focus fade
 
@@ -322,6 +324,13 @@ RackSpace::Hit RackSpace::hitAt(ui::Point p) const {
         const RackScene::Module& m = scene_.modules[*it];
         const ui::Rect r = m.rect();
         if (!ui::Rect{r.x - 8, r.y - 8, r.w + 16, r.h + 16}.contains(p)) continue;
+        // A plug-in parameter's socket sets its last cable's amount.
+        if (m.fx)
+            for (std::size_t i = 0; i < m.mods.size(); ++i)
+                if (dist(p, RackScene::modSocket(m, i)) <= kSocketR + 2.5f) {
+                    const auto cables = scene_.cablesAt({*m.fx, m.mods[i]}, false);
+                    if (!cables.empty()) return {Hit::Kind::Socket, *it, i, cables.back()->id};
+                }
         // A display hears the pointer where no control is, when the module
         // has pointer(); otherwise it is the module's body.
         const bool hears = m.type && m.type->code() && m.type->code()->pointer();
@@ -405,6 +414,61 @@ std::optional<ui::Point> RackSpace::bodyAt(model::Id module) const {
     if (!m) return std::nullopt;
     // The title strip (a plugin module's name plate): never a control.
     return toWindow({static_cast<float>(m->x + m->w / 2), static_cast<float>(m->y + 6)});
+}
+
+std::optional<ui::Point> RackSpace::socketAt(model::Id module, const std::string& key) const {
+    const auto* m = scene_.module(module);
+    if (!m) return std::nullopt;
+    const auto it = std::find(m->mods.begin(), m->mods.end(), key);
+    if (it == m->mods.end()) return std::nullopt;
+    return toWindow(RackScene::modSocket(*m, static_cast<std::size_t>(it - m->mods.begin())));
+}
+
+std::optional<ui::Point> RackSpace::cableAt(model::Id cable) const {
+    for (std::size_t i = 0; i < scene_.cables.size(); ++i) {
+        const auto& k = scene_.cables[i];
+        if (k.id != cable) continue;
+        const auto a = scene_.endPoint(k.from, true), b = scene_.endPoint(k.to, false);
+        if (!a || !b) return std::nullopt;
+        // From the middle outwards: the first point clear of every module.
+        for (int s = 0; s <= 40; ++s) {
+            const float t = 0.5f + (s % 2 ? 1.0f : -1.0f) * static_cast<float>((s + 1) / 2) / 90;
+            const ui::Point q = at(curveOf(*a, *b), t);
+            if (hitAt(q).kind == Hit::Kind::None && cableNear(q) == i &&
+                bounds().contains(toWindow(q)))
+                return toWindow(q);
+        }
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
+std::optional<std::pair<const RackScene::Cable*, ui::Point>> RackSpace::hovered() const {
+    std::optional<model::Id> id;
+    if (drag_.kind == Drag::Kind::Amount && drag_.fraction)
+        id = drag_.cable;
+    else if (drag_.kind == Drag::Kind::None && pointer_) {
+        if (const Hit h = hitAt(toSpace(*pointer_)); h.kind == Hit::Kind::Socket)
+            id = h.cable;
+        else if (hotCable_ && *hotCable_ < scene_.cables.size() &&
+                 scene_.cables[*hotCable_].to.object.kind == model::Kind::Fx)
+            id = scene_.cables[*hotCable_].id;
+    }
+    if (!id) return std::nullopt;
+    for (const auto& k : scene_.cables)
+        if (k.id == *id)
+            if (const auto b = scene_.endPoint(k.to, false)) return std::pair{&k, *b};
+    return std::nullopt;
+}
+
+std::string RackSpace::hoverText() const {
+    const auto h = hovered();
+    if (!h) return {};
+    const RackScene::Cable& k = *h->first;
+    const RackScene::Module* m = scene_.moduleOfFx(k.to.object);
+    char amount[32];
+    std::snprintf(amount, sizeof amount, "%+.0f %%", k.amount * 100);
+    return (m ? m->modName(k.to.key) : k.to.key) + " \u00b7 " + amount;
 }
 
 std::string RackSpace::valueText() const {
@@ -621,6 +685,15 @@ void RackSpace::paintModule(ui::Canvas& c, const RackScene::Module& m, bool sele
                 ui::kCenter | ui::kMiddle);
         c.text({r.x + 10, r.y + 32, r.w - 20, 14}, m.subtitle.empty() ? "Plug-in" : m.subtitle,
                ui::Font::Ui, 9.5f, t.color("ink-quiet"), ui::kCenter | ui::kMiddle);
+        // A cable over it: a drop picks one of its plug-in's parameters.
+        if (drag_.kind == Drag::Kind::Cable && drag_.fromOutput && pointer_ &&
+            r.contains(toSpace(*pointer_))) {
+            c.strokeRound({r.x - 1.5f, r.y - 1.5f, r.w + 3, r.h + 3}, kRadius + 1.5f,
+                          t.color("accent"), 1.5f);
+            c.fillRect({r.x + 1, r.y + 31, r.w - 2, 16}, plate);
+            c.text({r.x + 6, r.y + 32, r.w - 12, 14}, "Drop to modulate a parameter", ui::Font::Ui,
+                   9.0f, t.color("accent"), ui::kCenter | ui::kMiddle);
+        }
         // The editor's mark: a small window, top right.
         const ui::Rect w{r.right() - 19, r.y + 7, 11, 9};
         const ui::Color mark = hot ? t.color("accent") : t.color("ink-faint");
@@ -685,6 +758,62 @@ void RackSpace::paintModule(ui::Canvas& c, const RackScene::Module& m, bool sele
     }
 }
 
+ui::Color RackSpace::cableColor(const ui::Theme& t, const RackScene::Cable& k) const {
+    if (!k.color.empty())
+        if (auto col = t.trackColor(k.color)) return *col;
+    return t.color(signalToken(k.signal));
+}
+
+// A plugin module's plug-in parameter sockets, over the cables into them:
+// each shows its cables' amount as an arc around it (270 degrees at 100 %).
+void RackSpace::paintSockets(ui::Canvas& c, const RackScene::Module& m) const {
+    if (!m.fx) return;
+    const ui::Theme& t = c.theme();
+    std::optional<std::size_t> hot;
+    if (drag_.kind == Drag::Kind::Amount && drag_.fraction &&
+        drag_.module < scene_.modules.size() && &scene_.modules[drag_.module] == &m)
+        hot = drag_.item;
+    else if (drag_.kind == Drag::Kind::None && pointer_)
+        if (const Hit h = hitAt(toSpace(*pointer_));
+            h.kind == Hit::Kind::Socket && &scene_.modules[h.module] == &m)
+            hot = h.item;
+    for (std::size_t i = 0; i < m.mods.size(); ++i) {
+        const auto cables = scene_.cablesAt({*m.fx, m.mods[i]}, false);
+        if (cables.empty()) continue;
+        const ui::Point at = RackScene::modSocket(m, i);
+        const ui::Color col = cableColor(t, *cables.back());
+        double sum = 0;
+        for (const auto* k : cables) sum += k->amount;
+        c.fillCircle(at, kSocketR + 1.2f, t.color("rule"));
+        c.fillCircle(at, kSocketR, t.color("module-title"));
+        c.fillCircle(at, kSocketR - 2, t.color("jack-hole"));
+        c.fillCircle(at, 2.2f, col);
+        const float ring = kSocketR + 3.5f;
+        if (hot == i) c.strokeCircle(at, ring, t.color("ink-faint").withAlpha(0.5f), 1.5f);
+        const float a0 = -kPi / 2;
+        const float a1 = a0 + static_cast<float>(std::clamp(sum, -1.0, 1.0)) * kArcSpan;
+        if (std::fabs(a1 - a0) > 0.01f)
+            c.strokeArc(at, ring, std::min(a0, a1), std::max(a0, a1), col, 2);
+        c.fillCircle({at.x + std::cos(a1) * ring, at.y + std::sin(a1) * ring}, 2.0f, col);
+        if (hot == i) c.strokeCircle(at, kSocketR + 1.2f, t.color("focus"), 1.5f);
+    }
+}
+
+// The hovered plug-in parameter's name and amount, over its socket.
+void RackSpace::paintHover(ui::Canvas& c) const {
+    const auto h = hovered();
+    if (!h) return;
+    const std::string text = hoverText();
+    const ui::Theme& t = c.theme();
+    const float w = c.textWidth(text, ui::Font::Ui, 10.5f) + 14;
+    const ui::Point at = toWindow(h->second);
+    const float top = at.y - static_cast<float>(D(kSocketR + 6) * view_.zoom) - 20;
+    const ui::Rect box{at.x - w / 2, top, w, 18};
+    c.fillRound(box, 4, t.color("panel"));
+    c.strokeRound(box, 4, t.color("rule"));
+    c.text(box, text, ui::Font::Ui, 10.5f, t.color("ink"), ui::kCenter | ui::kMiddle);
+}
+
 void RackSpace::paintCables(ui::Canvas& c) const {
     const ui::Theme& t = c.theme();
     NVGcontext* vg = c.vg();
@@ -730,11 +859,7 @@ void RackSpace::paintCables(ui::Canvas& c) const {
         c.fillCircle(p, r, col.withAlpha(alpha));
         c.fillCircle(p, r * 0.45f, mix(col, {0, 0, 0, 1}, 0.35f).withAlpha(alpha));
     };
-    auto colorOf = [&](const RackScene::Cable& k) {
-        if (!k.color.empty())
-            if (auto col = t.trackColor(k.color)) return *col;
-        return t.color(signalToken(k.signal));
-    };
+    auto colorOf = [&](const RackScene::Cable& k) { return cableColor(t, k); };
     for (std::size_t i = 0; i < scene_.cables.size(); ++i) {
         const auto& k = scene_.cables[i];
         if (drag_.kind == Drag::Kind::Cable && drag_.replace == k.id) continue;  // in the hand
@@ -759,7 +884,7 @@ void RackSpace::paintCables(ui::Canvas& c) const {
             stroke(curveOf(*a, *b), col, poly ? 4.6f : 3.0f, alpha);
         }
         plug(*a, col, alpha, false);
-        plug(*b, col, alpha, k.param);
+        if (k.to.object.kind != model::Kind::Fx) plug(*b, col, alpha, k.param);  // else a socket
     }
     if (drag_.kind == Drag::Kind::Cable && pointer_) {
         const auto start = scene_.endPoint(drag_.from, drag_.fromOutput);
@@ -799,7 +924,10 @@ void RackSpace::paint(ui::Canvas& c) {
     paintSome(false);
     paintSome(true);
     paintCables(c);
+    for (const auto& m : scene_.modules)
+        if (!m.mods.empty() && !reach.intersect(m.rect()).empty()) paintSockets(c, m);
     nvgRestore(vg);
+    paintHover(c);
     if (drag_.kind == Drag::Kind::Marquee && drag_.moved) {
         const ui::Rect r{
             std::min(drag_.start.x, drag_.last.x), std::min(drag_.start.y, drag_.last.y),
@@ -1004,7 +1132,12 @@ bool RackSpace::onPointer(const ui::PointerEvent& e) {
                 break;
             }
             case Drag::Kind::Amount: {
-                const double next = drag_.amount - D(d.y) / (e.mods & ui::kShift ? 400.0 : 40.0);
+                // A knob's in its unit, 40 points a unit; a plug-in parameter's a
+                // fraction of its range, 160 points end to end. Shift: fine.
+                const double scale =
+                    (drag_.fraction ? 160.0 : 40.0) * (e.mods & ui::kShift ? 10 : 1);
+                double next = drag_.amount - D(d.y) / scale;
+                if (drag_.fraction) next = std::clamp(next, -1.0, 1.0);
                 for (auto& k : scene_.cables)
                     if (k.id == drag_.cable) k.amount = next;
                 if (hooks_.amount && drag_.cable)
@@ -1031,9 +1164,14 @@ bool RackSpace::onPointer(const ui::PointerEvent& e) {
         }
         const Hit h = hitAt(sp);
         if (e.button == 3) {
+            const auto cable = h.kind == Hit::Kind::None ? cableNear(sp) : std::nullopt;
             if (h.kind == Hit::Kind::Control && hooks_.paramMenu) {
                 const auto& m = scene_.modules[h.module];
                 hooks_.paramMenu(m.id, m.face.items[h.item].index, e.pos);
+            } else if (h.kind == Hit::Kind::Socket && h.cable && hooks_.cableMenu) {
+                hooks_.cableMenu(*h.cable, e.pos);
+            } else if (cable && hooks_.cableMenu) {
+                hooks_.cableMenu(scene_.cables[*cable].id, e.pos);
             } else if (h.kind != Hit::Kind::None) {
                 const model::Id id = scene_.modules[h.module].id;
                 if (!selection_.contains(id)) select({id});
@@ -1115,8 +1253,10 @@ bool RackSpace::onPointer(const ui::PointerEvent& e) {
                             e.clicks >= 2, e.mods, drag_.gesture);
                 break;
             }
+            case Hit::Kind::Socket:
             case Hit::Kind::Ring: {
                 drag_.kind = Drag::Kind::Amount;
+                drag_.fraction = h.kind == Hit::Kind::Socket;
                 drag_.module = h.module;
                 drag_.item = h.item;
                 drag_.cable = h.cable;
@@ -1210,8 +1350,18 @@ void RackSpace::endDrag(bool commit) {
             if (!commit || !d.moved) break;
             const Hit h = hitAt(toSpace(d.last));
             std::optional<model::CableEnd> target;
-            if (h.kind == Hit::Kind::Jack || h.kind == Hit::Kind::Control ||
-                h.kind == Hit::Kind::Ring) {
+            if (h.kind == Hit::Kind::Socket) {  // another cable to the same parameter
+                const auto& m = scene_.modules[h.module];
+                if (d.fromOutput && m.fx) target = model::CableEnd{*m.fx, m.mods[h.item]};
+            } else if (d.fromOutput &&
+                       (h.kind == Hit::Kind::Body || h.kind == Hit::Kind::Display) &&
+                       scene_.modules[h.module].plugin) {
+                // On a plugin module's body: which of its plug-in's parameters.
+                if (hooks_.pickParam)
+                    hooks_.pickParam(d.from, scene_.modules[h.module].id, d.replace, d.last);
+                break;
+            } else if (h.kind == Hit::Kind::Jack || h.kind == Hit::Kind::Control ||
+                       h.kind == Hit::Kind::Ring) {
                 const auto& m = scene_.modules[h.module];
                 const PanelItem& item = m.face.items[h.item];
                 const bool output = item.kind == Kind::Output;
