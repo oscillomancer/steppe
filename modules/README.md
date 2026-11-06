@@ -92,3 +92,4 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `ratchet` | Gates into bursts of quick pulses, by chance or every Nth gate, curved and fading; poly |
 | `markov` | A melody by the odds of which note follows which: four styles, or learned from a melody played in |
 | `cellular` | A 1-D cellular automaton: up to sixteen cells grown by a rule, as poly gates, four taps and a CV |
+| `looper` | Records a CV and a gate over a beat to eight bars in time with the song and loops them; punch in by the loop |
