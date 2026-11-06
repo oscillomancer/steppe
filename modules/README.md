@@ -40,3 +40,4 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 
 | Module | What it is |
 |---|---|
+| `adsr` | An envelope with curved stages, gated, triggered or looping, with an end trigger |
