@@ -96,3 +96,4 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `stages` | A function generator of two to six stages (level, time, curve): once, looping, or gated with a hold; poly |
 | `matrix` | Four inputs to four outputs through sixteen attenuverters; an unpatched input is an offset; poly |
 | `polyrhythm` | Four rhythms of 1 to 16 beats against a beat to four bars of the song: ramps, gates, Any and Hits |
+| `life` | An 8x8 Game of Life (five rules) played a column a clock: eight poly gates, a CV, counts and a generation trigger |
