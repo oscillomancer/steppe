@@ -45,3 +45,4 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `sequencer` | Sixteen steps of notes, gates, lengths (ties) and chances; five walks; clock or song sixteenths |
 | `random` | Clocked random notes and three gates with a looping memory that mutates by Change; scales; poly |
 | `function` | Rise and fall with a curve: an envelope, a cycling LFO, a slew limiter or a follower |
+| `quantizer` | Pitch to the nearest note of 22 scales or a custom one, transposed in degrees; keyboard face |
