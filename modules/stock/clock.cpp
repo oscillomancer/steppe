@@ -10,7 +10,7 @@
 // sixteenths, bars and triplets at once. Swing delays every second tick of
 // the faster outputs; Width sets how long each output's gate stays high.
 // Following the song, the divided outputs land on the song's beats: /4 ticks
-// on every bar of 4/4. Reset Out fires at play and at each reset, for
+// on every bar of 4/4. The Reset out fires at play and at each reset, for
 // sequencers' resets.
 
 constexpr int kRatios = 16;
@@ -146,9 +146,8 @@ struct Clock : Module {
         gateIn("Reset").help("A rising edge starts every output over from its first tick.");
 
     Outputs<6> out = gateOut("Out").help("Ticks at the Ratio beside it.");
-    Output resetOut =
-        gateOut("Reset Out")
-            .help("A 1 ms trigger as it starts (at play, following the song) and at each reset.");
+    Output resetOut = gateOut("Reset").help(
+        "A 1 ms trigger as it starts (at play, following the song) and at each reset.");
 
     Array<double, 6> lastCount;
     Array<int, 6> gateLeft;

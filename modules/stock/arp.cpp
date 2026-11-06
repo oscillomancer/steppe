@@ -5,7 +5,7 @@
 // An arpeggiator: the notes held on a poly pitch and gate cable (from Notes,
 // or from Chord) played one at a time, a note a clock. Up, down, up and
 // down, in the order they were played, at random, or converging from the
-// outside in; over one to four octaves. Gate Length sets each note's gate
+// outside in; over one to four octaves. Length sets each note's gate
 // as a share of the clock (100 % ties them, legato). Latch keeps the notes
 // playing after their keys are up, until a new chord is played. With
 // nothing in Clock it plays the song's sixteenths. Reset starts the pattern
@@ -27,7 +27,7 @@ struct Arp : Module {
     Param octaves = integer("Octaves", 1, 4, 1)
                         .help("How many octaves the pattern climbs before it starts again.");
     Param gateLength =
-        percent("Gate Length", 50, 5, 100)
+        percent("Length", 50, 5, 100)
             .help("Each note's gate as a share of the time between clocks; 100 % ties them.");
     Param latch =
         toggle("Latch", false)

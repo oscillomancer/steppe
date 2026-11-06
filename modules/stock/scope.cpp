@@ -58,8 +58,7 @@ struct Scope : Module {
     Param slope = choice("Slope", {"Rising", "Falling"}, 0)
                       .activeWhen(source, {"a", "b"})
                       .help("Whether the source crosses Level going up or going down.");
-    Param persistence =
-        percent("Persistence", 40).help("How long old sweeps glow behind the new one.");
+    Param persistence = percent("Glow", 40).help("How long old sweeps glow behind the new one.");
     Param rangeA = continuous("Range A", 0.01, 10, 1)
                        .curved(Curve::Log)
                        .help("The value at the top of A's trace: smaller zooms in.");

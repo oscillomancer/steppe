@@ -8,7 +8,7 @@
 // ping-pong, random or drunk (a step either way). Each clock plays the next
 // step; with nothing in Clock it steps on the song's sixteenth notes while
 // the transport plays, locked to the song position. Reset makes the next
-// clock play the first step. Pitch in Transpose is added to every note: a
+// clock play the first step. Pitch in Transp is added to every note: a
 // poly cable (a chord) sequences every voice of it. Random walks and chances
 // come from the step's count since the reset, so a pattern plays the same
 // every time it starts. On its face: click a step's gate to toggle it (drag
@@ -46,52 +46,52 @@ struct Sequencer : Module {
                 "random, or drunk (one step either way at random).");
     Param pitch_1 = semitones("Pitch 1", -24, 24, 0)
                         .in("Pitches")
-                        .help("Step 1's note in semitones, added to Transpose (0 is C4).");
+                        .help("Step 1's note in semitones, added to Transp (0 is C4).");
     Param pitch_2 = semitones("Pitch 2", -24, 24, 12)
                         .in("Pitches")
-                        .help("Step 2's note in semitones, added to Transpose (0 is C4).");
+                        .help("Step 2's note in semitones, added to Transp (0 is C4).");
     Param pitch_3 = semitones("Pitch 3", -24, 24, 7)
                         .in("Pitches")
-                        .help("Step 3's note in semitones, added to Transpose (0 is C4).");
+                        .help("Step 3's note in semitones, added to Transp (0 is C4).");
     Param pitch_4 = semitones("Pitch 4", -24, 24, 0)
                         .in("Pitches")
-                        .help("Step 4's note in semitones, added to Transpose (0 is C4).");
+                        .help("Step 4's note in semitones, added to Transp (0 is C4).");
     Param pitch_5 = semitones("Pitch 5", -24, 24, 3)
                         .in("Pitches")
-                        .help("Step 5's note in semitones, added to Transpose (0 is C4).");
+                        .help("Step 5's note in semitones, added to Transp (0 is C4).");
     Param pitch_6 = semitones("Pitch 6", -24, 24, 12)
                         .in("Pitches")
-                        .help("Step 6's note in semitones, added to Transpose (0 is C4).");
+                        .help("Step 6's note in semitones, added to Transp (0 is C4).");
     Param pitch_7 = semitones("Pitch 7", -24, 24, 10)
                         .in("Pitches")
-                        .help("Step 7's note in semitones, added to Transpose (0 is C4).");
+                        .help("Step 7's note in semitones, added to Transp (0 is C4).");
     Param pitch_8 = semitones("Pitch 8", -24, 24, 7)
                         .in("Pitches")
-                        .help("Step 8's note in semitones, added to Transpose (0 is C4).");
+                        .help("Step 8's note in semitones, added to Transp (0 is C4).");
     Param pitch_9 = semitones("Pitch 9", -24, 24, 0)
                         .in("Pitches")
-                        .help("Step 9's note in semitones, added to Transpose (0 is C4).");
+                        .help("Step 9's note in semitones, added to Transp (0 is C4).");
     Param pitch_10 = semitones("Pitch 10", -24, 24, 12)
                          .in("Pitches")
-                         .help("Step 10's note in semitones, added to Transpose (0 is C4).");
+                         .help("Step 10's note in semitones, added to Transp (0 is C4).");
     Param pitch_11 = semitones("Pitch 11", -24, 24, 7)
                          .in("Pitches")
-                         .help("Step 11's note in semitones, added to Transpose (0 is C4).");
+                         .help("Step 11's note in semitones, added to Transp (0 is C4).");
     Param pitch_12 = semitones("Pitch 12", -24, 24, 0)
                          .in("Pitches")
-                         .help("Step 12's note in semitones, added to Transpose (0 is C4).");
+                         .help("Step 12's note in semitones, added to Transp (0 is C4).");
     Param pitch_13 = semitones("Pitch 13", -24, 24, 5)
                          .in("Pitches")
-                         .help("Step 13's note in semitones, added to Transpose (0 is C4).");
+                         .help("Step 13's note in semitones, added to Transp (0 is C4).");
     Param pitch_14 = semitones("Pitch 14", -24, 24, 3)
                          .in("Pitches")
-                         .help("Step 14's note in semitones, added to Transpose (0 is C4).");
+                         .help("Step 14's note in semitones, added to Transp (0 is C4).");
     Param pitch_15 = semitones("Pitch 15", -24, 24, 10)
                          .in("Pitches")
-                         .help("Step 15's note in semitones, added to Transpose (0 is C4).");
+                         .help("Step 15's note in semitones, added to Transp (0 is C4).");
     Param pitch_16 = semitones("Pitch 16", -24, 24, 12)
                          .in("Pitches")
-                         .help("Step 16's note in semitones, added to Transpose (0 is C4).");
+                         .help("Step 16's note in semitones, added to Transp (0 is C4).");
     Params<16> gates =
         toggle("Gate", true).withKey("gate").in("Gates").help("Whether the step plays a note.");
     Params<16> lengths = percent("Length", 50, 5, 100)
@@ -108,10 +108,8 @@ struct Sequencer : Module {
     Input clock = gateIn("Clock").help(
         "Each rising edge plays the next step; with nothing here, the song's sixteenths.");
     Input reset = gateIn("Reset").help("A rising edge makes the next clock play the first step.");
-    Input transpose =
-        pitchIn("Transpose")
-            .help(
-                "Added to every note, in octaves; a poly cable plays the pattern in every voice.");
+    Input transpose = pitchIn("Transp").help(
+        "Added to every note, in octaves; a poly cable plays the pattern in every voice.");
 
     Output pitch = pitchOut("Pitch").help("The note of the step playing, in octaves from C4.");
     Output gate = gateOut("Gate").help("High for each played step's length.");

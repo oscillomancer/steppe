@@ -203,14 +203,12 @@ struct Rhythm : Module {
             .in("Map")
             .help("How far each step's weights are nudged at random: hits added and dropped.");
     Param kickDensity =
-        percent("Kick Density", 50)
+        percent("Kick", 50)
             .in("Density")
             .help("Which kick weights play: none at 0 %, the strong at 50 %, all at 100 %.");
-    Param snareDensity =
-        percent("Snare Density", 50).in("Density").help("Which snare weights play.");
-    Param hatDensity = percent("Hat Density", 50).in("Density").help("Which hat weights play.");
-    Param percDensity =
-        percent("Perc Density", 50).in("Density").help("Which percussion weights play.");
+    Param snareDensity = percent("Snare", 50).in("Density").help("Which snare weights play.");
+    Param hatDensity = percent("Hat", 50).in("Density").help("Which hat weights play.");
+    Param percDensity = percent("Perc", 50).in("Density").help("Which percussion weights play.");
 
     Input clock = gateIn("Clock").help(
         "Each rising edge plays the next sixteenth; with nothing here, the song's.");

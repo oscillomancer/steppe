@@ -27,7 +27,7 @@ struct Logic : Module {
         gateOut("Xor").withKey("xor").help("High while one of A and B is high, not both.");
     Output notA = gateOut("Not A").help("High while A is low.");
     Output flipFlop =
-        gateOut("Flip-Flop").help("Changes state at each toggle: half the rate of its clock.");
+        gateOut("Flipflop").help("Changes state at each toggle: half the rate of its clock.");
     Output change = gateOut("Change").help("A 1 ms trigger at every edge of A.");
 
     struct Voice {

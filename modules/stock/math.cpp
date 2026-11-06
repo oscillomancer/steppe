@@ -23,14 +23,14 @@ struct Math : Module {
             .smoothed(5)
             .help("Where Blend sits between A (0 %) and B (100 %); a cable makes it a crossfader.");
     Param hysteresis =
-        continuous("Hysteresis", 0, 0.5, 0.01)
+        continuous("Hyst", 0, 0.5, 0.01)
             .help("How far A must cross B for Greater to change: more ignores noise.");
 
     Input a = cvIn("A").help("The first signal, poly.");
     Input b = cvIn("B").help("The second signal, poly; 0 with nothing here.");
 
     Output sum = cvOut("Sum").help("A plus B.");
-    Output difference = cvOut("Difference").help("A minus B.");
+    Output difference = cvOut("Diff").help("A minus B.");
     Output product = cvOut("Product").help("A times B.");
     Output minimum = cvOut("Minimum").help("The lower of A and B.");
     Output maximum = cvOut("Maximum").help("The higher of A and B.");

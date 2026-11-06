@@ -4,7 +4,7 @@
 
 // A quantizer: pitch in, the nearest note of a scale out, poly. Twenty-two
 // scales and a custom one, any root, rounding to the nearest note or always
-// down or up. Transpose moves the input in semitones before it is
+// down or up. Transp moves the input in semitones before it is
 // quantized; Degrees moves the result along the scale (+2 is a third
 // higher in a major scale, wherever it lands), so a cable into Degrees
 // plays melodies that stay in key. With a clock connected it samples and
@@ -117,7 +117,7 @@ struct Quantizer : Module {
             .activeUnless(scale, {"custom"})
             .help("The scale's first note.");
     Param transpose =
-        semitones("Transpose", -24, 24, 0).help("Added to the input before it is quantized.");
+        semitones("Transp", -24, 24, 0).help("Added to the input before it is quantized.");
     Param degrees =
         integer("Degrees", -14, 14, 0)
             .help(

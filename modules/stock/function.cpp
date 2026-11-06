@@ -9,7 +9,7 @@
 // rise, fall and curve. With a signal in In it follows that instead,
 // rising no faster than Rise allows and falling no faster than Fall: a slew
 // limiter, a portamento, and with Rectify an envelope follower. Speed moves
-// both times at once (one cable for it all). End of Rise and End of Fall
+// both times at once (one cable for it all). End Rise and End Fall
 // fire at the turns, to chain functions or clock other modules.
 
 // Where a stage is after time t (0..1): a straight line at a curve of 0,
@@ -70,8 +70,8 @@ struct Function : Module {
     Output out = cvOut("Out").help(
         "The function: 0 to 1 as an envelope, the slewed input "
         "otherwise.");
-    Output endOfRise = gateOut("End of Rise").help("A 1 ms trigger as it reaches the top.");
-    Output endOfFall = gateOut("End of Fall").help("A 1 ms trigger as it reaches the bottom.");
+    Output endOfRise = gateOut("End Rise").help("A 1 ms trigger as it reaches the top.");
+    Output endOfFall = gateOut("End Fall").help("A 1 ms trigger as it reaches the bottom.");
 
     struct Voice {
         int stage = 0;  // 0 resting, 1 rising, 2 falling
