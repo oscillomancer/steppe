@@ -212,7 +212,8 @@ struct Vco : Module {
         const double spread = sqrt(2.0 * k);
         for (int c = 0; c < channels(); ++c) {
             Voice& v = voice[c];
-            v.drift += -v.drift * k + spread * v.random.gaussian();
+            const double kick = v.random.gaussian();
+            v.drift += -v.drift * k + spread * kick;
             const double wander =
                 clamp(v.drift, -3.0, 3.0) * drift.at(0, c) * (10.0 / 1200.0 / 3.0);
             for (int i = 0; i < frames; ++i) {

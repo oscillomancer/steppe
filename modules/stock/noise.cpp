@@ -87,7 +87,8 @@ struct NoiseModule : Module {
                 const double roll = g.random.next();
                 if (roll < chance) {
                     const double size = 0.2 + 0.8 * g.random.next();
-                    g.click = g.random.next() < 0.5 ? -size : size;
+                    const double side = g.random.next();
+                    g.click = side < 0.5 ? -size : size;
                 }
                 crackle[c][i] = g.click;
 
@@ -95,7 +96,8 @@ struct NoiseModule : Module {
                 if (g.clock >= 1.0) {
                     g.clock -= 1.0;
                     if (m == 2) {
-                        g.held = 0.52 * g.random.bipolar();
+                        const double step = g.random.bipolar();
+                        g.held = 0.52 * step;
                     } else {
                         // A 15-bit register; Metallic feeds back from bit 6,
                         // looping in a few dozen steps, a pitched buzz.

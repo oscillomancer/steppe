@@ -42,7 +42,7 @@ struct Svf {
     }
 };
 
-struct Channel {
+struct Stages {
     Svf main, steep;
 };
 
@@ -78,14 +78,14 @@ struct Filter : Module {
     Output low24 = audioOut("Low 24").withKey("low24").help(
         "The low pass, 24 dB per octave: darker and steeper.");
 
-    Array<Channel, 16> state;
+    Array<Stages, 16> state;
 
     void process(int frames) {
         const double sr = sampleRate();
         const double top = 0.45 * sr;
         const double follow = exp(-1.0 / (0.005 * sr));
         for (int c = 0; c < channels(); ++c) {
-            Channel& s = state[c];
+            Stages& s = state[c];
             for (int i = 0; i < frames; ++i) {
                 const double oct = pitch[c][i] + fmDepth.at(i, c) * fm[c][i];
                 const double hz = clamp(cutoff.at(i, c) * exp2(clamp(oct, -20.0, 20.0)), 8.0, top);
