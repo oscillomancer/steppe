@@ -118,3 +118,4 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `form` | A song's sections over minutes in four plans: gates for verse, chorus, bridge and the ends, an energy arc, fills before each change |
 | `counter` | A counter-melody against a lead, note against note: consonances of the key, contrary motion, no parallel fifths or octaves, held notes tied |
 | `groove` | Feel for gates: velocities by step (downbeats, backbeat, offbeats, pushed), swing on sixteenths or eighths, lay-back and a human hand; poly |
+| `layers` | An arrangement for four parts: each part's gates pass from a level (Form's energy) upward, parts entering and leaving on the bar, with seeded rests; poly |
