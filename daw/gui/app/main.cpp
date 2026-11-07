@@ -491,7 +491,8 @@ int main(int argc, char** argv) {
             [](const std::string& message) { std::fprintf(stderr, "%s\n", message.c_str()); },
             [&](gui::LearnRequest request) {
                 gui::openLearnDialog(fxPanel.root(), appActions, **app, std::move(request));
-            }},
+            },
+            [&](model::Id rack) { racks.open(rack); }},
         gui::Favourites::defaultFile(product::kSlug));
     // MIDI learn (ADR-0027): the devices' messages reach the actions bound to
     // them, or a learn dialog that listens. "Enable only when" asks the
@@ -1153,6 +1154,7 @@ int main(int argc, char** argv) {
         include(routingPanel.frameDeadline());
         include(rackPanel.frameDeadline());
         include(racks.nextDeadline());
+        include(fxWindow.nextDeadline());
         // The playhead has a frame deadline only during playback/recording.
         if (shell.arrange()->playing()) include(now + std::chrono::milliseconds(16));
         if (auto error = pluginWindows.fdError()) {

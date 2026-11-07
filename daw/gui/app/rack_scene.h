@@ -33,6 +33,10 @@ double paramOrigin(const script::detail::ParamModel& p);
 // A value as a knob says it: "-6.0 dB", "440 Hz", "Saw", "On".
 std::string paramText(const script::detail::ParamModel& p, double physical);
 
+// A module's name as its face's title shows it: its label (an Out's
+// numbered), else its type's name; a plugin module's plug-in's.
+std::string moduleTitle(const model::Session& s, const rack::Catalog& catalog, model::Id module);
+
 struct RackScene {
     struct Module {
         model::Id id;

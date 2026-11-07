@@ -130,6 +130,24 @@ rack::PanelLayout pluginFace(const rack::ModuleType& t, bool instrument) {
 
 }  // namespace
 
+std::string moduleTitle(const model::Session& s, const rack::Catalog& catalog, model::Id module) {
+    const model::RackModule* m = s.modules.find(module);
+    if (!m) return module.str();
+    if (m->type == model::kPluginModule) {
+        const model::FxInstance* fx = m->fx ? s.fx.find(*m->fx) : nullptr;
+        return !m->label.empty()                ? m->label
+               : fx && !fx->label.empty()       ? fx->label
+               : fx && !fx->plugin.name.empty() ? fx->plugin.name
+                                                : std::string("Plugin");
+    }
+    if (const rack::Catalog::Entry* t = catalog.find(m->type)) {
+        std::string title = model::moduleLabel(s, module);
+        return title.empty() ? t->type->info().name : title;
+    }
+    const auto dot = m->type.rfind('.');
+    return m->label.empty() ? m->type.substr(dot == std::string::npos ? 0 : dot + 1) : m->label;
+}
+
 RackScene RackScene::build(const model::Session& s, model::Id rackId, const rack::Catalog& catalog,
                            const std::function<bool(const model::PluginRef&)>& instrument) {
     RackScene scene;
@@ -152,19 +170,13 @@ RackScene RackScene::build(const model::Session& s, model::Id rackId, const rack
             const model::FxInstance* fx = m.fx ? s.fx.find(*m.fx) : nullptr;
             v.type = racks::pluginType();
             v.instrument = fx && instrument && instrument(fx->plugin);
-            v.title = !m.label.empty()                 ? m.label
-                      : fx && !fx->label.empty()       ? fx->label
-                      : fx && !fx->plugin.name.empty() ? fx->plugin.name
-                                                       : std::string("Plugin");
+            v.title = moduleTitle(s, catalog, e.id);
             if (fx) v.subtitle = fx->plugin.vendor;
         } else if (const rack::Catalog::Entry* t = catalog.find(m.type)) {
             v.type = t->type;
-            v.title = model::moduleLabel(s, e.id);
-            if (v.title.empty()) v.title = t->type->info().name;
+            v.title = moduleTitle(s, catalog, e.id);
         } else {
-            const auto dot = m.type.rfind('.');
-            v.title =
-                m.label.empty() ? m.type.substr(dot == std::string::npos ? 0 : dot + 1) : m.label;
+            v.title = moduleTitle(s, catalog, e.id);
             v.subtitle = "Missing module";
         }
         if (v.out)
