@@ -1,0 +1,219 @@
+{
+  "schema": "supple.rack-preset/1.0",
+  "name": "Acid Bass",
+  "description": "A squelchy mono bass line: a saw through a resonant ladder that a short envelope snaps open, with glide; play sixteenths and accent notes, turn the Filter's cutoff and resonance and the Squelch envelope's decay.",
+  "modules": [
+    {
+      "type": "com.suppleaudio.rack.out",
+      "version": "1.0.0",
+      "x": 1052.0,
+      "y": 322.0
+    },
+    {
+      "type": "com.suppleaudio.rack.notes",
+      "version": "1.0.0",
+      "label": "Keys",
+      "x": 0.0,
+      "y": 224.0,
+      "params": {
+        "voices": 1,
+        "mode": "mono_last"
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.slew",
+      "version": "1.0.0",
+      "label": "Glide",
+      "x": 144.0,
+      "y": 270.0,
+      "params": {
+        "rise": 35.0,
+        "fall": 35.0,
+        "shape": 100.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.vco",
+      "version": "1.0.0",
+      "label": "Osc",
+      "x": 324.0,
+      "y": 0.0
+    },
+    {
+      "type": "com.suppleaudio.rack.adsr",
+      "version": "1.0.0",
+      "label": "Squelch",
+      "x": 288.0,
+      "y": 474.0,
+      "params": {
+        "attack": 1.0,
+        "decay": 220.0,
+        "sustain": 0.0,
+        "release": 120.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.adsr",
+      "version": "1.0.0",
+      "label": "Amp env",
+      "x": 504.0,
+      "y": 23.0,
+      "params": {
+        "attack": 1.0,
+        "decay": 500.0,
+        "sustain": 75.0,
+        "release": 60.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.ladder",
+      "version": "1.0.0",
+      "label": "Filter",
+      "x": 540.0,
+      "y": 367.0,
+      "params": {
+        "cutoff": 260.0,
+        "resonance": 80.0,
+        "drive": 40.0,
+        "compensation": 70.0,
+        "fm_depth": 4.5
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.vca",
+      "version": "1.0.0",
+      "label": "Amp",
+      "x": 720.0,
+      "y": 299.0,
+      "params": {
+        "level": 4.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.drive",
+      "version": "1.0.0",
+      "label": "Bite",
+      "x": 864.0,
+      "y": 241.0,
+      "params": {
+        "mode": "tube",
+        "drive": 8.0,
+        "tone": 10.0,
+        "level": -2.0
+      }
+    }
+  ],
+  "cables": [
+    {
+      "from": {
+        "module": 1,
+        "port": "pitch"
+      },
+      "to": {
+        "module": 2,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "out"
+      },
+      "to": {
+        "module": 3,
+        "port": "pitch"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "gate"
+      },
+      "to": {
+        "module": 4,
+        "port": "gate"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "velocity"
+      },
+      "to": {
+        "module": 4,
+        "port": "velocity"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "gate"
+      },
+      "to": {
+        "module": 5,
+        "port": "gate"
+      }
+    },
+    {
+      "from": {
+        "module": 3,
+        "port": "saw"
+      },
+      "to": {
+        "module": 6,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 4,
+        "port": "envelope"
+      },
+      "to": {
+        "module": 6,
+        "port": "fm"
+      }
+    },
+    {
+      "from": {
+        "module": 6,
+        "port": "out"
+      },
+      "to": {
+        "module": 7,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 5,
+        "port": "envelope"
+      },
+      "to": {
+        "module": 7,
+        "port": "cv"
+      }
+    },
+    {
+      "from": {
+        "module": 7,
+        "port": "out"
+      },
+      "to": {
+        "module": 8,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 8,
+        "port": "out"
+      },
+      "to": {
+        "module": 0,
+        "port": "l"
+      }
+    }
+  ]
+}
+

@@ -1,0 +1,237 @@
+{
+  "schema": "supple.rack-preset/1.0",
+  "name": "Reese Bass",
+  "description": "A dark, moving drum-and-bass bass: two saws detuned against each other over a sub, through a ladder a slow LFO sweeps and a soft drive; hold long low notes, turn Detune's fine and the Filter's cutoff.",
+  "modules": [
+    {
+      "type": "com.suppleaudio.rack.out",
+      "version": "1.0.0",
+      "x": 1212.0,
+      "y": 299.0
+    },
+    {
+      "type": "com.suppleaudio.rack.notes",
+      "version": "1.0.0",
+      "label": "Keys",
+      "x": 0.0,
+      "y": 201.0,
+      "params": {
+        "voices": 1,
+        "mode": "mono_last"
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.vco",
+      "version": "1.0.0",
+      "label": "Saw",
+      "x": 144.0,
+      "y": 149.0,
+      "params": {
+        "fine": -12.0,
+        "drift": 30.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.vco",
+      "version": "1.0.0",
+      "label": "Detune",
+      "x": 288.0,
+      "y": 149.0,
+      "params": {
+        "fine": 12.0,
+        "drift": 30.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.mixer",
+      "version": "1.0.0",
+      "label": "Mix",
+      "x": 432.0,
+      "y": 11.0,
+      "params": {
+        "level_1": -8.0,
+        "level_2": -8.0,
+        "level_3": -6.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.lfo",
+      "version": "1.0.0",
+      "label": "Sweep",
+      "x": 440.0,
+      "y": 405.0,
+      "params": {
+        "shape": "triangle",
+        "rate": 0.12
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.ladder",
+      "version": "1.0.0",
+      "label": "Filter",
+      "x": 700.0,
+      "y": 0.0,
+      "params": {
+        "cutoff": 450.0,
+        "resonance": 25.0,
+        "drive": 45.0,
+        "compensation": 80.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.adsr",
+      "version": "1.0.0",
+      "label": "Env",
+      "x": 664.0,
+      "y": 428.0,
+      "params": {
+        "attack": 4.0,
+        "sustain": 100.0,
+        "release": 140.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.vca",
+      "version": "1.0.0",
+      "label": "Amp",
+      "x": 880.0,
+      "y": 276.0
+    },
+    {
+      "type": "com.suppleaudio.rack.drive",
+      "version": "1.0.0",
+      "label": "Grit",
+      "x": 1024.0,
+      "y": 218.0,
+      "params": {
+        "drive": 6.0,
+        "tone": -15.0,
+        "level": -8.0
+      }
+    }
+  ],
+  "cables": [
+    {
+      "from": {
+        "module": 1,
+        "port": "pitch"
+      },
+      "to": {
+        "module": 2,
+        "port": "pitch"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "pitch"
+      },
+      "to": {
+        "module": 3,
+        "port": "pitch"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "saw"
+      },
+      "to": {
+        "module": 4,
+        "port": "in_1"
+      }
+    },
+    {
+      "from": {
+        "module": 3,
+        "port": "saw"
+      },
+      "to": {
+        "module": 4,
+        "port": "in_2"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "sub"
+      },
+      "to": {
+        "module": 4,
+        "port": "in_3"
+      }
+    },
+    {
+      "from": {
+        "module": 4,
+        "port": "mono"
+      },
+      "to": {
+        "module": 6,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 5,
+        "port": "out"
+      },
+      "to": {
+        "module": 6,
+        "port": "cutoff"
+      },
+      "amount": 0.8
+    },
+    {
+      "from": {
+        "module": 6,
+        "port": "out"
+      },
+      "to": {
+        "module": 8,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "gate"
+      },
+      "to": {
+        "module": 7,
+        "port": "gate"
+      }
+    },
+    {
+      "from": {
+        "module": 7,
+        "port": "envelope"
+      },
+      "to": {
+        "module": 8,
+        "port": "cv"
+      }
+    },
+    {
+      "from": {
+        "module": 8,
+        "port": "out"
+      },
+      "to": {
+        "module": 9,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 9,
+        "port": "out"
+      },
+      "to": {
+        "module": 0,
+        "port": "l"
+      }
+    }
+  ]
+}
+
