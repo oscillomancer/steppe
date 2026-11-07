@@ -797,8 +797,12 @@ window on that rack). Below come the knobs of its Macro modules
 "Macro"). Only a knob whose output (`macro_N` out of `out_N`) is cabled
 is shown, named after what its first cable reaches: the far module's title
 and its knob's or input's name, the name's first letter lower-cased unless
-it is an initialism ("Filter cutoff", "Amp CV"), and "+N" for the output's
-other cables. A Macro with no cabled knob is left out. With none, the
+it is an initialism ("Filter cutoff", "Amp CV"); a plug-in parameter by
+its name as the plug-in writes it ("Bracken Mod Rate"); and "+N" for the
+output's other cables. Plug-in parameter names come from
+`racks::PluginParamCache`, shared with the rack window's sockets: a
+plug-in is asked once per fx (a scratch instance) and again only when that
+fx holds another plug-in or version. A Macro with no cabled knob is left out. With none, the
 device is only the name and Open: the GUI does not guess at other
 "performance" knobs. A knob's drag runs `module.set` as one undo step (its
 gesture); a double click resets it; its right-click offers a rack knob's

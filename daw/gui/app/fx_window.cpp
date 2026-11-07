@@ -458,7 +458,8 @@ FxWindow::FxWindow(engine::EngineApp& app, cmd::Dispatcher& dispatcher, ui::Root
       favouritesFile_(std::move(favouritesFile)),
       hooks_(std::move(hooks)),
       mainBrowser_(std::make_unique<PluginBrowser>(app, dispatcher, mainRoot, favouritesFile_)),
-      watchers_(app) {}
+      watchers_(app),
+      pluginParams_(app) {}
 
 bool FxWindow::shows(model::Id fx) const {
     if (!page_) return false;
@@ -1062,6 +1063,9 @@ void FxWindow::buildChain(ui::Node& body) {
         };
         rh.learn = [this](LearnRequest request) {
             if (hooks_.openLearn) hooks_.openLearn(std::move(request));
+        };
+        rh.paramName = [this](model::Id fx, const std::string& key) {
+            return pluginParams_.name(fx, key);
         };
         rh.menu = [this](std::vector<ui::MenuItem> items, ui::Point at) {
             root().openPopup(

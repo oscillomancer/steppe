@@ -8,6 +8,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -37,5 +38,29 @@ struct PluginParams {
 
 // Asks the plug-in (a scratch instance, as fx.describe does).
 PluginParams pluginParams(engine::EngineApp& app, const model::FxInstance& fx);
+
+// pluginParams' answers, shared by every view of one app (the rack window,
+// the FX window's Rack devices): a plug-in is asked once per fx, and again
+// when that fx's plug-in changes (its format, id or version); a name once
+// per fx and key. Main thread.
+class PluginParamCache {
+  public:
+    explicit PluginParamCache(engine::EngineApp& app);
+    ~PluginParamCache();
+    PluginParamCache(const PluginParamCache&) = delete;
+    PluginParamCache& operator=(const PluginParamCache&) = delete;
+    // The plug-in `fx` holds now (none when `fx` is not in the session).
+    const PluginParams& of(model::Id fx);
+    // A cable end's name for people (PluginParams::nameOf).
+    const std::string& name(model::Id fx, const std::string& key);
+    // Tests: how many times a plug-in was asked.
+    std::size_t asked() const;
+
+    struct Store;
+
+  private:
+    engine::EngineApp& app_;
+    std::shared_ptr<Store> store_;
+};
 
 }  // namespace supple::gui::racks

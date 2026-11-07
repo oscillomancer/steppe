@@ -19,8 +19,10 @@
 #include "app_actions.h"
 #include "floating_panel.h"
 #include "plugin_scales.h"
+#include "rack_device.h"
 #include "rack_engine.h"
 #include "rack_labels.h"
+#include "rack_plugin_params.h"
 #include "rack_window.h"
 #include "supple/engine/realtime.h"
 #include "supple/gui/png.h"
@@ -1121,6 +1123,58 @@ TEST_CASE("rack window: copy, paste, cut and duplicate keep the cables among the
     CHECK(seen.contains({float(m->x), float(m->y)}));
     CHECK(space.view().zoom > 1.0);  // filled (at most 150 %)
     CHECK(space.view().zoom <= 1.5);
+}
+
+TEST_CASE(
+    "a Rack device names a Macro's plug-in parameter target after the parameter, "
+    "asking the plug-in once") {
+    Fixture f(ui::Theme::dark(), {FIXTURE_CLAP_PATH});
+    if (!f.ok) return;
+    Patch p(f);
+    const std::string gain =
+        f.exec("module.add",
+               R"({"rack":")" + p.rack +
+                   R"(","plugin":"com.suppleaudio.test.gain","x":840,"y":300})")["module"]
+            .asString();
+    const std::string macro = f.add(p.rack, "macro", 40, 520, R"(,"label":"Hands")");
+    const model::Id fx = *f.app->head().modules.find(*model::Id::parse(gain))->fx;
+    // By its key: named as the plug-in writes it.
+    f.cable(macro + ".out_1", fx.str() + ".gain");
+    f.cable(macro + ".out_2", p.vca + ".level");
+    gui::racks::PluginParamCache cache(*f.app);
+    gui::RackDevice::Hooks hooks;
+    hooks.paramName = [&](model::Id id, const std::string& key) { return cache.name(id, key); };
+    const model::Id rack = *model::Id::parse(p.rack);
+    {
+        gui::RackDevice device(*f.app, rack, hooks);
+        const auto shown = device.shown();
+        REQUIRE(shown.size() == 2);
+        CHECK(shown[0].name == "Test Gain Gain");
+        CHECK(shown[1].name == "VCA level");
+    }
+    CHECK(cache.asked() == 1);
+    // Built again, and the rack window's sockets named: the plug-in is not
+    // asked again (the views share the answers).
+    gui::RackDevice again(*f.app, rack, hooks);
+    CHECK(again.shown()[0].name == "Test Gain Gain");
+    f.racks->open();
+    f.frame();
+    const auto* m = f.racks->space()->scene().module(*model::Id::parse(gain));
+    REQUIRE(m);
+    CHECK(m->modName("gain") == "Gain");
+    CHECK(cache.asked() == 1);
+    // Without the names: the key.
+    CHECK(gui::RackDevice(*f.app, rack, {}).shown()[0].name == "Test Gain gain");
+    // The same fx id holding another plug-in (a new project): asked again.
+    REQUIRE(f.exec("project.new", "{}").isObject());
+    const std::string rack2 = f.exec("rack.add", "{}")["rack"].asString();
+    const std::string edge =
+        f.exec("module.add",
+               R"({"rack":")" + rack2 + R"(","plugin":"com.suppleaudio.test.edge"})")["module"]
+            .asString();
+    REQUIRE(*f.app->head().modules.find(*model::Id::parse(edge))->fx == fx);
+    CHECK(cache.of(fx).find("gain") == nullptr);
+    CHECK(cache.asked() == 2);
 }
 
 TEST_CASE("rack window: a cut plugin module pastes into another rack with its settings") {

@@ -58,7 +58,7 @@ RackDevice::RackDevice(engine::EngineApp& app, model::Id rack, Hooks hooks)
     });
     if (!catalog_) return;
     if (const rack::Catalog::Entry* e = catalog_->find(racks::kMacroModule)) macroType_ = e->type;
-    for (const racks::MacroGroup& g : racks::macroGroups(s, *catalog_, rack_)) {
+    for (const racks::MacroGroup& g : racks::macroGroups(s, *catalog_, rack_, hooks_.paramName)) {
         groups_.push_back({g.title, knobs_.size(), g.knobs.size()});
         macros_.push_back(g.module);
         for (const racks::MacroKnob& mk : g.knobs) {

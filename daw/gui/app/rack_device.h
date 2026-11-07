@@ -33,6 +33,9 @@ class RackDevice : public ui::Node {
         std::function<void(LearnRequest)> learn;
         // A knob's right-click menu, opened at a window point.
         std::function<void(std::vector<ui::MenuItem> items, ui::Point at)> menu;
+        // A plug-in parameter's name (fx, key), for a knob cabled into one;
+        // else the cable's key.
+        std::function<std::string(model::Id fx, const std::string& key)> paramName;
     };
     RackDevice(engine::EngineApp& app, model::Id rack, Hooks hooks);
 

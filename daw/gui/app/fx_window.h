@@ -22,6 +22,7 @@
 #include "plugin_browser.h"
 #include "rack_controls.h"
 #include "rack_device.h"
+#include "rack_plugin_params.h"
 #include "supple/engine/app.h"
 #include "supple/model/ids.h"
 #include "supple/ui/node.h"
@@ -198,9 +199,10 @@ class FxWindow {
     ui::Node* tabsRow_ = nullptr;
     ui::Button* title_ = nullptr;
     ui::Label* status_ = nullptr;
-    ui::Label* touched_ = nullptr;      // the last touched parameter
-    std::vector<RackDevice*> devices_;  // in body_
-    racks::Watchers watchers_;          // their Macro modules
+    ui::Label* touched_ = nullptr;          // the last touched parameter
+    std::vector<RackDevice*> devices_;      // in body_
+    racks::Watchers watchers_;              // their Macro modules
+    racks::PluginParamCache pluginParams_;  // the names of plug-in parameters they drive
     std::optional<std::chrono::steady_clock::time_point> nextFollow_;
     std::uint64_t touchedSerial_ = 0;
     std::uint64_t shownVersion_ = ~std::uint64_t{0};
