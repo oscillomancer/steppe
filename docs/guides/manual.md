@@ -411,7 +411,8 @@ pick a parameter from the list (type to search). It modulates the
 parameter around where its knob stands, half the range each way at first.
 The cable ends in a small socket on the module's top edge: hover it to see
 the parameter, and drag it up or down to change the amount. Only CLAP
-plug-ins take modulation; a VST3 plug-in's list says so.
+plug-ins take modulation, third-party ones too, when their parameters accept
+it; a VST3 plug-in's list says so.
 
 Your own modules live in the library folder, and the project you save
 keeps a copy of each one it uses beside it (in `modules`), as it keeps its

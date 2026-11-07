@@ -413,7 +413,8 @@ instructions are in `docs/guides/installing.md`.
   double-click: the rack window). A module with pitch and gate outputs
   captures its notes to a channel's MIDI item from its right-click
   (`rack.capture`, 1 to 16 bars; the render runs on the UI thread, so the
-  window waits for it).
+  window waits for it). The window's plug-in parameter list cables a plug-in
+  without semantic keys by its CLAP id (`fx_3.12`).
 - **MIDI learn** (ADR-0027): any plug-in parameter (the FX window's MIDI
   button, or `fx.learn.set` for agents) and any action (Ctrl+L in the
   actions list) learns a controller by moving it: CC, note, pitch bend or

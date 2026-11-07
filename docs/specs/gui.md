@@ -1287,7 +1287,9 @@ a new channel). It follows rack.md §8.
   parameter" while a cable is over it) opens a searchable list of its
   plug-in's modulatable parameters, by name with their group; Enter or a
   double click makes the cable (`cable.add` to `fx_N.<key>`: the semantic
-  key, else the CLAP id; amount the command's default, half the range).
+  key, else the plain decimal CLAP id, `fx_N.12`, as for a third-party
+  plug-in without semantic keys; amount the command's default, half the
+  range).
   A VST3 plug-in's list says it takes no modulation, as does a plug-in with
   no modulatable parameter. Each parameter the module's cables reach is a
   socket on its top edge, left to right in the order of their first cable

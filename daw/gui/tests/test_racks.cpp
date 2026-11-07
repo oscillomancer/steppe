@@ -881,6 +881,67 @@ TEST_CASE(
                        [](const gui::racks::PluginParam& q) { return q.modulatable; }));
 }
 
+TEST_CASE("rack window: a plug-in without semantic keys is modulated by its parameter ids") {
+    Fixture f(ui::Theme::dark(), {FIXTURE_CLAP_PATH});
+    if (!f.ok) return;
+    Patch p(f);
+    // A third-party-style plug-in: CLAP parameters and no semantic keys.
+    const std::string raw =
+        f.exec("module.add",
+               R"({"rack":")" + p.rack +
+                   R"(","plugin":"com.suppleaudio.test.raw-gain","x":840,"y":300})")["module"]
+            .asString();
+    f.racks->open();
+    f.frame();
+    gui::RackSpace& space = *f.racks->space();
+    space.frameAll();
+    f.frame();
+    const model::Id id = *model::Id::parse(raw), osc = *model::Id::parse(p.osc);
+    const model::Id fx = *f.app->head().modules.find(id)->fx;
+    // The list names its parameters; the cable reaches one by its CLAP id.
+    f.drag(*space.jackAt(osc, "out", true), *space.bodyAt(id));
+    const ui::Node* picker = f.r().find("rack.params");
+    REQUIRE(picker);
+    CHECK(picker->valueText() == "Gain");
+    f.r().key(SDLK_RETURN);
+    f.frame();
+    CHECK_FALSE(f.r().find("rack.params"));
+    std::optional<model::Id> made;
+    for (const auto& c : f.app->head().cables)
+        if (c.value->to.object == fx) made = c.id;
+    REQUIRE(made);
+    CHECK(f.app->head().cables.find(*made)->to.key == "0");
+    CHECK(f.racks->status().rfind("Bells", 0) == 0);  // no error
+    // The engine takes it: no problems with the rack.
+    const json::Value got = f.exec("rack.get", R"({"rack":")" + p.rack + R"("})");
+    const json::Value* problems = got.find("problems");
+    CHECK((!problems || problems->size() == 0));
+    // Its socket and its menu name the parameter.
+    const auto* m = space.scene().module(id);
+    REQUIRE(m);
+    CHECK(m->mods == std::vector<std::string>{"0"});
+    f.pointer(ui::PointerEvent::Type::Move, *space.socketAt(id, "0"), 0);
+    CHECK(space.hoverText() == "Gain · +50 %");
+    // Saved and reopened: the same cable, still named.
+    const std::string path = (f.dir / "raw.json").string();
+    f.exec("project.save", R"({"path":")" + path + R"("})");
+    f.exec("project.open", R"({"path":")" + path + R"("})");
+    f.frame();
+    REQUIRE(f.app->head().cables.find(*made));
+    CHECK(f.app->head().cables.find(*made)->to.key == "0");
+    REQUIRE(f.racks->space()->scene().module(id));
+    CHECK(f.racks->space()->scene().module(id)->modName("0") == "Gain");
+    // A Macro driving it is named after the parameter too.
+    const std::string macro = f.add(p.rack, "macro", 40, 520);
+    f.cable(macro + ".out_1", fx.str() + ".0");
+    gui::racks::PluginParamCache cache(*f.app);
+    gui::RackDevice::Hooks hooks;
+    hooks.paramName = [&](model::Id at, const std::string& key) { return cache.name(at, key); };
+    const auto shown = gui::RackDevice(*f.app, *model::Id::parse(p.rack), hooks).shown();
+    REQUIRE(shown.size() == 1);
+    CHECK(shown[0].name == "Test Raw Gain Gain");
+}
+
 TEST_CASE("rack window: a knob learned in the window turns on screen when its controller moves") {
     // A device the test plays (engine/tests/test_learn.cpp's rig): a manual
     // dummy backend with a MIDI input whose messages the test queues.
