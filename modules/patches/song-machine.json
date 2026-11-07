@@ -1,0 +1,706 @@
+{
+  "schema": "supple.rack-preset/1.0",
+  "name": "Song Machine",
+  "description": "Self-playing: a whole song in D dorian. Form's sections arrange chords, drums, a counter-melody bass and a lead of calls and answers through Layers, the pad opening and the drums filling out as the energy rises. Turn Song's Plan and Bars for another shape, Parts' Enter knobs for another arrangement.",
+  "modules": [
+    {
+      "type": "com.suppleaudio.rack.out",
+      "version": "1.0.0",
+      "x": 2600.0,
+      "y": 767.0
+    },
+    {
+      "type": "com.suppleaudio.rack.form",
+      "version": "1.0.0",
+      "label": "Song",
+      "x": 0.0,
+      "y": 671.0
+    },
+    {
+      "type": "com.suppleaudio.rack.changes",
+      "version": "1.0.0",
+      "label": "Prog",
+      "x": 780.0,
+      "y": 227.0,
+      "params": {
+        "key": "d",
+        "mode": "dorian",
+        "octave": -1
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.phrase",
+      "version": "1.0.0",
+      "label": "Tune",
+      "x": 520.0,
+      "y": 273.0,
+      "params": {
+        "key": "d",
+        "mode": "dorian"
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.counter",
+      "version": "1.0.0",
+      "label": "Low",
+      "x": 780.0,
+      "y": 697.0,
+      "params": {
+        "key": "d",
+        "mode": "dorian"
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.rhythm",
+      "version": "1.0.0",
+      "label": "Beat",
+      "x": 260.0,
+      "y": 667.0,
+      "params": {
+        "y": 0.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.poly",
+      "version": "1.0.0",
+      "label": "Hits",
+      "x": 578.0,
+      "y": 743.0
+    },
+    {
+      "type": "com.suppleaudio.rack.groove",
+      "version": "1.0.0",
+      "label": "Feel",
+      "x": 802.0,
+      "y": 1079.0,
+      "params": {
+        "feel": "backbeat",
+        "human": 20.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.layers",
+      "version": "1.0.0",
+      "label": "Parts",
+      "x": 1040.0,
+      "y": 629.0,
+      "params": {
+        "enter_2": 0.0,
+        "enter_3": 40.0,
+        "enter_4": 50.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.poly",
+      "version": "1.0.0",
+      "label": "Drum gates",
+      "x": 1300.0,
+      "y": 745.0
+    },
+    {
+      "type": "com.suppleaudio.rack.poly",
+      "version": "1.0.0",
+      "label": "Drum levels",
+      "x": 1444.0,
+      "y": 508.0
+    },
+    {
+      "type": "com.suppleaudio.rack.drum",
+      "version": "1.0.0",
+      "label": "Kick",
+      "x": 1804.0,
+      "y": 281.0,
+      "params": {
+        "level": -4.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.drum",
+      "version": "1.0.0",
+      "label": "Snare",
+      "x": 1804.0,
+      "y": 663.0,
+      "params": {
+        "model": "snare",
+        "level": -8.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.drum",
+      "version": "1.0.0",
+      "label": "Hat",
+      "x": 1804.0,
+      "y": 1045.0,
+      "params": {
+        "model": "closed_hat",
+        "level": -12.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.mixer",
+      "version": "1.0.0",
+      "label": "Kit",
+      "x": 1948.0,
+      "y": 1091.0,
+      "params": {
+        "pan_3": 25.0,
+        "master": -6.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.vco",
+      "version": "1.0.0",
+      "label": "Pad",
+      "x": 1300.0,
+      "y": 271.0,
+      "params": {
+        "drift": 40.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.filter",
+      "version": "1.0.0",
+      "label": "Pad Filter",
+      "x": 1624.0,
+      "y": 0.0,
+      "params": {
+        "cutoff": 400.0,
+        "resonance": 10.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.adsr",
+      "version": "1.0.0",
+      "label": "Pad env",
+      "x": 1588.0,
+      "y": 416.0,
+      "params": {
+        "attack": 300.0,
+        "sustain": 80.0,
+        "release": 900.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.vca",
+      "version": "1.0.0",
+      "label": "Pad amp",
+      "x": 1992.0,
+      "y": 223.0,
+      "params": {
+        "level": -9.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.vco",
+      "version": "1.0.0",
+      "label": "Lead",
+      "x": 1624.0,
+      "y": 760.0
+    },
+    {
+      "type": "com.suppleaudio.rack.lpg",
+      "version": "1.0.0",
+      "label": "Pluck",
+      "x": 1992.0,
+      "y": 443.0,
+      "params": {
+        "decay": 320.0,
+        "resonance": 30.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.vco",
+      "version": "1.0.0",
+      "label": "Bass",
+      "x": 1624.0,
+      "y": 1234.0
+    },
+    {
+      "type": "com.suppleaudio.rack.lpg",
+      "version": "1.0.0",
+      "label": "Thump",
+      "x": 1992.0,
+      "y": 767.0,
+      "params": {
+        "decay": 450.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.mixer",
+      "version": "1.0.0",
+      "label": "Mix",
+      "x": 2180.0,
+      "y": 657.0,
+      "params": {
+        "level_1": -4.0,
+        "level_4": -2.0,
+        "master": -7.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.reverb",
+      "version": "1.0.0",
+      "label": "Room",
+      "x": 2412.0,
+      "y": 686.0,
+      "params": {
+        "mix": 18.0
+      }
+    }
+  ],
+  "cables": [
+    {
+      "from": {
+        "module": 1,
+        "port": "change"
+      },
+      "to": {
+        "module": 3,
+        "port": "write"
+      }
+    },
+    {
+      "from": {
+        "module": 3,
+        "port": "pitch"
+      },
+      "to": {
+        "module": 4,
+        "port": "lead"
+      }
+    },
+    {
+      "from": {
+        "module": 3,
+        "port": "gate"
+      },
+      "to": {
+        "module": 4,
+        "port": "lead_gate"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "energy"
+      },
+      "to": {
+        "module": 5,
+        "port": "y"
+      },
+      "amount": 100.0
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "energy"
+      },
+      "to": {
+        "module": 8,
+        "port": "level"
+      }
+    },
+    {
+      "from": {
+        "module": 5,
+        "port": "kick"
+      },
+      "to": {
+        "module": 6,
+        "port": "merge_1"
+      }
+    },
+    {
+      "from": {
+        "module": 5,
+        "port": "snare"
+      },
+      "to": {
+        "module": 6,
+        "port": "merge_2"
+      }
+    },
+    {
+      "from": {
+        "module": 5,
+        "port": "hat"
+      },
+      "to": {
+        "module": 6,
+        "port": "merge_3"
+      }
+    },
+    {
+      "from": {
+        "module": 6,
+        "port": "merged"
+      },
+      "to": {
+        "module": 7,
+        "port": "gate"
+      }
+    },
+    {
+      "from": {
+        "module": 5,
+        "port": "accent"
+      },
+      "to": {
+        "module": 7,
+        "port": "accent"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "gate"
+      },
+      "to": {
+        "module": 8,
+        "port": "gate_1"
+      }
+    },
+    {
+      "from": {
+        "module": 7,
+        "port": "out"
+      },
+      "to": {
+        "module": 8,
+        "port": "gate_2"
+      }
+    },
+    {
+      "from": {
+        "module": 4,
+        "port": "gate"
+      },
+      "to": {
+        "module": 8,
+        "port": "gate_3"
+      }
+    },
+    {
+      "from": {
+        "module": 3,
+        "port": "gate"
+      },
+      "to": {
+        "module": 8,
+        "port": "gate_4"
+      }
+    },
+    {
+      "from": {
+        "module": 8,
+        "port": "out_2"
+      },
+      "to": {
+        "module": 9,
+        "port": "poly_in"
+      }
+    },
+    {
+      "from": {
+        "module": 7,
+        "port": "velocity"
+      },
+      "to": {
+        "module": 10,
+        "port": "poly_in"
+      }
+    },
+    {
+      "from": {
+        "module": 9,
+        "port": "split_1"
+      },
+      "to": {
+        "module": 11,
+        "port": "trigger"
+      }
+    },
+    {
+      "from": {
+        "module": 9,
+        "port": "split_2"
+      },
+      "to": {
+        "module": 12,
+        "port": "trigger"
+      }
+    },
+    {
+      "from": {
+        "module": 9,
+        "port": "split_3"
+      },
+      "to": {
+        "module": 13,
+        "port": "trigger"
+      }
+    },
+    {
+      "from": {
+        "module": 10,
+        "port": "split_1"
+      },
+      "to": {
+        "module": 11,
+        "port": "accent"
+      }
+    },
+    {
+      "from": {
+        "module": 10,
+        "port": "split_2"
+      },
+      "to": {
+        "module": 12,
+        "port": "accent"
+      }
+    },
+    {
+      "from": {
+        "module": 10,
+        "port": "split_3"
+      },
+      "to": {
+        "module": 13,
+        "port": "accent"
+      }
+    },
+    {
+      "from": {
+        "module": 11,
+        "port": "out"
+      },
+      "to": {
+        "module": 14,
+        "port": "in_1"
+      }
+    },
+    {
+      "from": {
+        "module": 12,
+        "port": "out"
+      },
+      "to": {
+        "module": 14,
+        "port": "in_2"
+      }
+    },
+    {
+      "from": {
+        "module": 13,
+        "port": "out"
+      },
+      "to": {
+        "module": 14,
+        "port": "in_3"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "chord"
+      },
+      "to": {
+        "module": 15,
+        "port": "pitch"
+      }
+    },
+    {
+      "from": {
+        "module": 15,
+        "port": "saw"
+      },
+      "to": {
+        "module": 16,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "energy"
+      },
+      "to": {
+        "module": 16,
+        "port": "cutoff"
+      },
+      "amount": 2.0
+    },
+    {
+      "from": {
+        "module": 8,
+        "port": "out_1"
+      },
+      "to": {
+        "module": 17,
+        "port": "gate"
+      }
+    },
+    {
+      "from": {
+        "module": 16,
+        "port": "low"
+      },
+      "to": {
+        "module": 18,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 17,
+        "port": "envelope"
+      },
+      "to": {
+        "module": 18,
+        "port": "cv"
+      }
+    },
+    {
+      "from": {
+        "module": 3,
+        "port": "pitch"
+      },
+      "to": {
+        "module": 19,
+        "port": "pitch"
+      }
+    },
+    {
+      "from": {
+        "module": 19,
+        "port": "triangle"
+      },
+      "to": {
+        "module": 20,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 8,
+        "port": "out_4"
+      },
+      "to": {
+        "module": 20,
+        "port": "ping"
+      }
+    },
+    {
+      "from": {
+        "module": 4,
+        "port": "pitch"
+      },
+      "to": {
+        "module": 21,
+        "port": "pitch"
+      }
+    },
+    {
+      "from": {
+        "module": 21,
+        "port": "triangle"
+      },
+      "to": {
+        "module": 22,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 8,
+        "port": "out_3"
+      },
+      "to": {
+        "module": 22,
+        "port": "ping"
+      }
+    },
+    {
+      "from": {
+        "module": 20,
+        "port": "out"
+      },
+      "to": {
+        "module": 23,
+        "port": "in_1"
+      }
+    },
+    {
+      "from": {
+        "module": 22,
+        "port": "out"
+      },
+      "to": {
+        "module": 23,
+        "port": "in_2"
+      }
+    },
+    {
+      "from": {
+        "module": 18,
+        "port": "out"
+      },
+      "to": {
+        "module": 23,
+        "port": "in_3"
+      }
+    },
+    {
+      "from": {
+        "module": 14,
+        "port": "mono"
+      },
+      "to": {
+        "module": 23,
+        "port": "in_4"
+      }
+    },
+    {
+      "from": {
+        "module": 23,
+        "port": "left"
+      },
+      "to": {
+        "module": 24,
+        "port": "in_l"
+      }
+    },
+    {
+      "from": {
+        "module": 23,
+        "port": "right"
+      },
+      "to": {
+        "module": 24,
+        "port": "in_r"
+      }
+    },
+    {
+      "from": {
+        "module": 24,
+        "port": "out_l"
+      },
+      "to": {
+        "module": 0,
+        "port": "l"
+      }
+    },
+    {
+      "from": {
+        "module": 24,
+        "port": "out_r"
+      },
+      "to": {
+        "module": 0,
+        "port": "r"
+      }
+    }
+  ]
+}
+

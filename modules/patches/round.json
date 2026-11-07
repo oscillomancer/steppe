@@ -1,0 +1,169 @@
+{
+  "schema": "supple.rack-preset/1.0",
+  "name": "Round",
+  "description": "Self-playing: a two-bar phrase in D dorian chased by three plucked copies of itself, an octave up, in unison and an octave down, spread across the stereo field. Turn Round's Delay knobs to move the entries, Thin to let them breathe.",
+  "modules": [
+    {
+      "type": "com.suppleaudio.rack.out",
+      "version": "1.0.0",
+      "x": 1016.0,
+      "y": 259.0
+    },
+    {
+      "type": "com.suppleaudio.rack.phrase",
+      "version": "1.0.0",
+      "label": "Tune",
+      "x": 0.0,
+      "y": 111.0,
+      "params": {
+        "key": "d",
+        "mode": "dorian",
+        "density": 45.0,
+        "renew": 0.0,
+        "legato": 40.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.canon",
+      "version": "1.0.0",
+      "label": "Round",
+      "x": 260.0,
+      "y": 109.0,
+      "params": {
+        "delay_1": 8,
+        "shift_1": 12.0,
+        "delay_2": 16,
+        "shift_2": 0.0,
+        "delay_3": 24,
+        "shift_3": -12.0,
+        "thin": 15.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.string",
+      "version": "1.0.0",
+      "label": "Strings",
+      "x": 540.0,
+      "y": 155.0,
+      "params": {
+        "decay": 2500.0,
+        "damping": 45.0,
+        "brightness": 50.0,
+        "level": -4.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.poly",
+      "version": "1.0.0",
+      "label": "Spread",
+      "x": 684.0,
+      "y": 0.0,
+      "params": {
+        "spread": 80.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.reverb",
+      "version": "1.0.0",
+      "label": "Room",
+      "x": 828.0,
+      "y": 178.0,
+      "params": {
+        "size": 70.0
+      }
+    }
+  ],
+  "cables": [
+    {
+      "from": {
+        "module": 1,
+        "port": "pitch"
+      },
+      "to": {
+        "module": 2,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "gate"
+      },
+      "to": {
+        "module": 2,
+        "port": "in_gate"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "all"
+      },
+      "to": {
+        "module": 3,
+        "port": "pitch"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "all_gates"
+      },
+      "to": {
+        "module": 3,
+        "port": "pluck"
+      }
+    },
+    {
+      "from": {
+        "module": 3,
+        "port": "out"
+      },
+      "to": {
+        "module": 4,
+        "port": "poly_in"
+      }
+    },
+    {
+      "from": {
+        "module": 4,
+        "port": "left"
+      },
+      "to": {
+        "module": 5,
+        "port": "in_l"
+      }
+    },
+    {
+      "from": {
+        "module": 4,
+        "port": "right"
+      },
+      "to": {
+        "module": 5,
+        "port": "in_r"
+      }
+    },
+    {
+      "from": {
+        "module": 5,
+        "port": "out_l"
+      },
+      "to": {
+        "module": 0,
+        "port": "l"
+      }
+    },
+    {
+      "from": {
+        "module": 5,
+        "port": "out_r"
+      },
+      "to": {
+        "module": 0,
+        "port": "r"
+      }
+    }
+  ]
+}
+
