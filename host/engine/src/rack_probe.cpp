@@ -592,7 +592,7 @@ void registerRackCapture(cmd::Registry& registry) {
         settings.modules = std::move(catalog);
         auto render = [copy = std::move(*copy), catalogue = std::move(catalogue),
                        identity = e.options().identity, id, a, start, fromBeat,
-                       beats](const OfflineSettings& settings) -> Result<CaptureResult> {
+                       beats](const OfflineSettings& renderSettings) -> Result<CaptureResult> {
             InstancePool pool(
                 [&catalogue](const model::PluginRef& ref) -> Result<host::PluginInfo> {
                     for (const auto& plugin : catalogue)
@@ -601,7 +601,7 @@ void registerRackCapture(cmd::Registry& registry) {
                                  "/rack", "install the plug-in, then submit rack.capture again");
                 },
                 identity);
-            auto rendered = renderOffline(copy, pool, settings);
+            auto rendered = renderOffline(copy, pool, renderSettings);
             if (!rendered) return std::move(rendered).error();
             const rack::Instance* in = pool.racks().find(id);
             const auto* capture =
@@ -725,9 +725,9 @@ void registerRackCapture(cmd::Registry& registry) {
                     };
                     stale |= !same(s.tempo, now.tempo, [](const auto&) { return true; }) ||
                              !same(s.meters, now.meters, [](const auto&) { return true; });
-                    auto module = [&](Id id) {
-                        const auto* m = s.modules.find(id);
-                        if (!m) m = now.modules.find(id);
+                    auto module = [&](Id moduleId) {
+                        const auto* m = s.modules.find(moduleId);
+                        if (!m) m = now.modules.find(moduleId);
                         return m && m->rack == rack;
                     };
                     stale |= !same(s.modules, now.modules,
