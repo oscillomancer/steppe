@@ -365,6 +365,27 @@ without saving; `module.get {type}` shows any module's source;
 new id to change it. The language is in `guides/modules.md`. Verify a new
 module with `rack.probe` before using it.
 
+## Play another track's instrument
+
+Add `notes_out` (Note Out) and cable pitch, gate and optional velocity into it.
+Its `channel` knob is 1..16. Route it with one call:
+
+```json
+route.add {"from":{"module":"mo_3"},"to":{"track":"tr_2"},"midi":{}}
+```
+
+`midi: {}` keeps every MIDI channel; `from_channel` filters and `to_channel`
+remaps, using 0 for all/original or 1..16. Multiple destinations and multiple
+Note Outs into one instrument work. A gate rising to 0.5 plays
+round(60 + 12 × pitch), clamped to MIDI 0..127, and its fall below 0.25 ends
+that note; velocity is round(127 × v), clamped to 1..127, or 96 unpatched.
+Pitch, channel and velocity latch at the rise. Stop or locate ends held notes.
+The same rules drive `rack.capture`. Route mute ends notes and unmute plays
+held gates again. Audio volume/pan controls do not apply to these MIDI routes.
+Armed destinations do not record Note Out MIDI yet: use `rack.capture` to
+print the notes. The canonical type id is `com.suppleaudio.rack.notes-out`;
+`notes_out` is its short command alias.
+
 ## Control and automation
 
 - `env.add {module, param, points}` automates a module's knob over the

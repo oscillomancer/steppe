@@ -591,3 +591,303 @@ TEST_CASE("racks: a held gate plays again after a seek resets the instrument" *
     CHECK(before > 0.01);
     CHECK(after == doctest::Approx(before).epsilon(0.05));
 }
+
+namespace {
+struct NoteRouteScene {
+    model::Session session, itemReference;
+    Id source, target, rack, notes, noteOut;
+    NoteRouteScene(bool live, bool compensated = false) {
+        model::Project project;
+        project.seed = 456789;
+        model::EditTxn t(model::Session::create(project), 1);
+        source = addChannel(t);
+        target = addChannel(t);
+        model::FxInstance synth;
+        synth.plugin.id = "com.suppleaudio.test.sine";
+        const auto fx = t.create(synth);
+        t.modify<model::Track>(target, [&](auto& tr) { tr.chain = {fx}; });
+        std::optional<Id> delayed;
+        if (compensated) {
+            delayed = addChannel(t);
+            const auto instrument = t.create(synth);
+            model::FxInstance latency;
+            latency.plugin.id = "com.suppleaudio.test.gain";
+            latency.patch =
+                json::parse(
+                    R"({"schema":"supple.test-gain-patch/1.0","params":{"latency":"short"}})")
+                    .value();
+            const auto effect = t.create(latency);
+            t.modify<model::Track>(*delayed, [&](auto& tr) { tr.chain = {instrument, effect}; });
+        }
+        rack = t.create(model::Rack{source, "Generator"});
+        notes = addModule(t, rack, model::kNotesModule);
+        if (live) t.modify<model::RackModule>(notes, [](auto& m) { m.device = ""; });
+        noteOut = addModule(t, rack, model::kNotesOutModule);
+        cable(t, notes, "pitch", noteOut, "pitch");
+        cable(t, notes, "gate", noteOut, "gate");
+        cable(t, notes, "velocity", noteOut, "velocity");
+        model::MidiSource midi;
+        midi.sequence.ppq = 960;
+        midi.sequence.length = 3840;
+        midi.sequence.notes = {{17, 263, 0, 60, 96, 0},
+                               {341, 319, 0, 67, 64, 0},
+                               {813, 411, 0, 72, 127, 0},
+                               {1500, 217, 0, 48, 31, 0},
+                               {1901, 803, 0, 65, 110, 0}};
+        const auto mi = t.create(midi);
+        model::Take take;
+        take.source = mi;
+        const auto tk = t.create(take);
+        model::Item item;
+        item.track = source;
+        item.length = 4;
+        item.takes = {tk};
+        item.activeTake = tk;
+        t.create(item);
+        auto reference = t.preview();
+        model::EditTxn ref(reference, 2);
+        item.track = target;
+        take.source = ref.create(midi);
+        const auto refTake = ref.create(take);
+        item.takes = {refTake};
+        item.activeTake = refTake;
+        ref.create(item);
+        if (delayed) {
+            item.track = *delayed;
+            take.source = ref.create(midi);
+            const auto delayedTake = ref.create(take);
+            item.takes = {delayedTake};
+            item.activeTake = delayedTake;
+            ref.create(item);
+        }
+        itemReference = commit(ref);
+        model::Route route;
+        route.from.module = noteOut;
+        route.to.track = target;
+        route.midi = model::MidiRouting{};
+        t.create(route);
+        if (delayed) {
+            route.to.track = *delayed;
+            t.create(route);
+        }
+        session = commit(t);
+    }
+};
+}  // namespace
+
+TEST_CASE("racks: Note Out matches MIDI items offline and in both real-time executors" *
+          doctest::description("rt")) {
+    bool live = false, compensated = false;
+    SUBCASE("delay compensation and fan-out") { compensated = true; }
+    SUBCASE("anticipative rack") {}
+    SUBCASE("live rack") { live = true; }
+    NoteRouteScene scene(live, compensated);
+    const auto reference = renderLeft(scene.itemReference, 2.0, 512);
+    const auto stem = renderLeft(scene.itemReference, 0.2, 37, scene.target);
+    CHECK(bool(renderLeft(scene.session, 0.2, 37, scene.target) == stem));
+    CHECK(bool(renderLeft(scene.session, 2.0, 512) == reference));
+    CHECK(bool(renderLeft(scene.session, 2.0, 37) == reference));
+    for (const auto& options : {EngineOptions{.anticipative = false, .workers = 0},
+                                EngineOptions{.workers = 0}, EngineOptions{.workers = 2}}) {
+        INFO("live " << live << ", anticipative " << options.anticipative << ", workers "
+                     << options.workers);
+        auto pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 100096});
+        Engine engine(pool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 37}));
+        REQUIRE(engine.load(scene.session));
+        engine.play();
+        for (std::int64_t left = 100096 / 37; left > 0;) {
+            if (options.anticipative) REQUIRE(engine.awaitRendered(4096));
+            const auto cycles = std::min<std::int64_t>(left, 4096 / 37);
+            backend.run(cycles);
+            left -= cycles;
+        }
+        engine.stop();
+        CHECK(engine.processErrors() == 0);
+        const auto& cap = backend.capture().channels[0];
+        const auto delay = engine.outputLatency();
+        REQUIRE(cap.size() >= reference.size() + delay);
+        double worst = 0;
+        for (std::size_t i = 0; i < reference.size(); ++i)
+            worst = std::max(worst, std::abs(double(cap[delay + i]) - double(reference[i])));
+        CHECK(worst == 0);
+    }
+}
+
+TEST_CASE("racks: Note Out addresses do not overlap item notes after a nonzero render start" *
+          doctest::description("rt")) {
+    namespace d = supple::engine::detail;
+    model::EditTxn t(model::Session::create({.console9 = false}), 1);
+    const auto home = addChannel(t), target = addChannel(t);
+    model::FxInstance synth;
+    synth.plugin.id = "com.suppleaudio.test.sine";
+    const auto fx = t.create(synth);
+    t.modify<model::Track>(target, [&](auto& tr) { tr.chain = {fx}; });
+    const auto rack = t.create(model::Rack{home, ""});
+    const auto clock = addModule(t, rack, "com.suppleaudio.rack.transport");
+    const auto output = addModule(t, rack, model::kNotesOutModule);
+    cable(t, clock, "playing", output, "gate");
+    model::Route route;
+    route.from.module = output;
+    route.to.track = target;
+    route.midi = model::MidiRouting{};
+    t.create(route);
+    model::MidiSource midi;
+    midi.sequence.ppq = 960;
+    midi.sequence.length = 7680;
+    // The first three notes are omitted from events after the two-second
+    // start. The remaining note keeps its original compiled source ID (3).
+    midi.sequence.notes = {{0, 1, 0, 60, 96, 0},
+                           {120, 1, 0, 60, 96, 0},
+                           {240, 1, 0, 60, 96, 0},
+                           {3841, 1, 0, 61, 96, 0}};
+    model::Take take;
+    take.source = t.create(midi);
+    const auto tk = t.create(take);
+    model::Item item;
+    item.track = target;
+    item.length = 8;
+    item.takes = {tk};
+    item.activeTake = tk;
+    t.create(item);
+    const auto session = commit(t);
+    auto pool = makePool();
+    auto compiled = d::compile(session, pool, 2.0, 37);
+    REQUIRE(compiled);
+    auto plan = std::move(*compiled);
+    REQUIRE(d::prepare(plan, session));
+    for (auto* instance : plan.instances) REQUIRE(instance->startProcessing());
+    const auto node = std::find_if(plan.nodes.begin(), plan.nodes.end(),
+                                   [&](const auto& n) { return n.id == target; });
+    REQUIRE(node != plan.nodes.end());
+    REQUIRE(node->noteTarget >= 0);
+    auto& stage = node->chain[static_cast<std::size_t>(node->noteTarget)];
+    REQUIRE(d::processBlock(plan, 0, 37));
+    REQUIRE(stage.voices.size() == 2);
+    CHECK(std::count_if(stage.voices.begin(), stage.voices.end(),
+                        [](const auto& voice) { return voice.live; }) == 1);
+    CHECK(stage.voices[0].sourceId != stage.voices[1].sourceId);
+    REQUIRE(d::processBlock(plan, 37, 37));
+    REQUIRE(stage.voices.size() == 1);
+    CHECK(stage.voices.front().live);
+    for (auto* instance : plan.instances) instance->stopProcessing();
+}
+
+TEST_CASE("racks: Note Out fan-in has distinct note addresses and survives routing edits" *
+          doctest::description("rt")) {
+    namespace d = supple::engine::detail;
+    model::EditTxn t(model::Session::create({.console9 = false}), 1);
+    const auto home = addChannel(t), first = addChannel(t), second = addChannel(t);
+    model::FxInstance fx;
+    fx.plugin.id = "com.suppleaudio.test.sine";
+    const auto a = t.create(fx), b = t.create(fx);
+    t.modify<model::Track>(first, [&](auto& tr) { tr.chain = {a}; });
+    t.modify<model::Track>(second, [&](auto& tr) { tr.chain = {b}; });
+    const auto rack = t.create(model::Rack{home, ""});
+    const auto clock = addModule(t, rack, "com.suppleaudio.rack.transport");
+    const auto one =
+        addModule(t, rack, model::kNotesOutModule, json::parse(R"({"channel":3})").value());
+    const auto two =
+        addModule(t, rack, model::kNotesOutModule, json::parse(R"({"channel":4})").value());
+    cable(t, clock, "playing", one, "gate");
+    cable(t, clock, "playing", two, "gate");
+    model::Route route;
+    route.from.module = one;
+    route.to.track = first;
+    route.midi = model::MidiRouting{3, 5};
+    const auto r1 = t.create(route);
+    route.to.track = second;
+    route.midi = model::MidiRouting{};
+    t.create(route);
+    route.from.module = two;
+    route.to.track = first;
+    const auto r2 = t.create(route);
+    route.midi = model::MidiRouting{3, 0};
+    t.create(route);  // channel 4 is filtered out
+    auto session = commit(t);
+    auto pool = makePool();
+    auto compiled = d::compile(session, pool, 0, 37);
+    REQUIRE(compiled);
+    auto plan = std::move(*compiled);
+    REQUIRE(d::prepare(plan, session));
+    std::vector<host::Instance*> started;
+    auto start = [&](d::Plan& p) {
+        for (auto* in : p.instances)
+            if (!in->processing()) {
+                REQUIRE(in->startProcessing());
+                started.push_back(in);
+            }
+    };
+    start(plan);
+    auto stage = [&](d::Plan& p, Id id) -> d::Stage& {
+        auto n = std::find_if(p.nodes.begin(), p.nodes.end(),
+                              [&](const auto& node) { return node.id == id; });
+        REQUIRE(n != p.nodes.end());
+        REQUIRE(n->noteTarget >= 0);
+        return n->chain[static_cast<std::size_t>(n->noteTarget)];
+    };
+    REQUIRE(d::processBlock(plan, 0, 37));
+    REQUIRE(stage(plan, first).voices.size() == 2);
+    CHECK(stage(plan, second).voices.size() == 1);
+    CHECK(stage(plan, first).voices[0].noteId != stage(plan, first).voices[1].noteId);
+    CHECK(stage(plan, first).voices[0].channel == 4);
+    CHECK(stage(plan, first).voices[1].channel == 3);
+    const auto heldId = stage(plan, second).voices.front().noteId;
+    std::int64_t pos = 37;
+    auto adopt = [&](model::EditTxn& edit) {
+        session = commit(edit);
+        auto next = d::compile(session, pool, 0, 37);
+        REQUIRE(next);
+        REQUIRE(d::prepare(*next, session));
+        start(*next);
+        d::carryMix(plan, *next, -1);
+        d::locate(*next, pos, false);
+        plan = std::move(*next);
+        REQUIRE(d::processBlock(plan, pos, 37));
+        pos += 37;
+    };
+    model::EditTxn label(session, 2);
+    label.modify<model::RackModule>(clock, [](auto& m) { m.label = "Clock"; });
+    adopt(label);
+    CHECK(stage(plan, first).voices.size() == 2);
+    CHECK(stage(plan, second).voices.front().noteId == heldId);
+    model::EditTxn mute(session, 3);
+    mute.modify<model::Route>(r1, [](auto& r) { r.mute = true; });
+    adopt(mute);
+    REQUIRE(stage(plan, first).voices.size() == 1);
+    CHECK(stage(plan, first).voices.front().channel == 3);
+    CHECK(stage(plan, second).voices.front().noteId == heldId);
+    model::EditTxn unmute(session, 4);
+    unmute.modify<model::Route>(r1, [](auto& r) { r.mute = false; });
+    adopt(unmute);
+    CHECK(stage(plan, first).voices.size() == 2);
+    model::EditTxn remove(session, 5);
+    remove.remove<model::Route>(r2);
+    adopt(remove);
+    CHECK(stage(plan, first).voices.size() == 1);
+    model::EditTxn added(session, 6);
+    route.midi = model::MidiRouting{};
+    added.create(route);
+    adopt(added);
+    CHECK(stage(plan, first).voices.size() == 2);  // a new route receives a gate already held
+    model::EditTxn replace(session, 7);
+    const auto replacement = replace.create(fx);
+    replace.modify<model::Track>(first, [&](auto& tr) { tr.chain = {replacement}; });
+    replace.remove<model::FxInstance>(a);
+    adopt(replace);
+    CHECK(stage(plan, first).voices.size() == 2);  // a new instrument receives it too
+    REQUIRE(d::processBlock(plan, pos, 37, false));
+    CHECK(stage(plan, first).voices.empty());
+    CHECK(stage(plan, second).voices.empty());
+    d::locate(plan, 0);
+    REQUIRE(d::processBlock(plan, 0, 37));
+    CHECK(stage(plan, first).voices.size() == 2);
+    CHECK(stage(plan, second).voices.size() == 1);
+    d::locate(plan, 17);
+    REQUIRE(d::processBlock(plan, 17, 37));
+    CHECK(stage(plan, first).voices.size() == 2);
+    CHECK(stage(plan, second).voices.size() == 1);
+    for (auto* in : started) in->stopProcessing();
+}

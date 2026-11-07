@@ -352,6 +352,22 @@ struct Edge {
     // (linear: its encoder runs without Console 9), or the source rack's Out
     // module `rackOut` into a channel (its record input). -1: neither.
     int rackIn = -1, rackOut = -1;
+    // MIDI-only dependency from a Note Out. Queues and voices belong to the
+    // destination, and stay on its executor; delay matches the solved PDC.
+    int rackNotes = -1, midiFrom = 0, midiTo = 0, midiSourceBase = 0;
+    struct MidiPending {
+        std::int64_t sample = 0;
+        std::uint8_t status = 0, key = 0, velocity = 0, voice = 0;
+    };
+    struct MidiVoice {
+        bool high = false, delivered = false;
+        int channel = 0, key = 60, velocity = 96;
+    };
+    std::vector<MidiPending> midiQueue;
+    std::size_t midiHead = 0, midiCount = 0;
+    std::array<MidiVoice, 16> midiVoices{};
+    std::uint64_t midiEpoch = 0;
+    bool midiStarted = false, midiRelease = false, midiMuted = false;
     // A frontier edge (anticipative source, live target): its source's tap
     // arrives through a ring, and the callback copies it here for the target.
     bool frontier = false;
@@ -409,7 +425,19 @@ inline bool matchesVoice(const HeldVoice& voice, std::int16_t port, std::int16_t
            (key == -1 || voice.key == key) && (noteId == -1 || voice.noteId == noteId);
 }
 
+// Stable dynamic note origins survive plan edits without sharing a MIDI
+// address with item notes or another route/voice.
+inline constexpr std::uint64_t kRackNoteOrigin = UINT64_MAX;
+struct RackNoteSource {
+    model::Id module, route;
+    int voice = 0, from = 0, to = 0;
+    std::int64_t delay = 0;
+    bool operator==(const RackNoteSource&) const = default;
+};
+
 struct Stage {
+    int rackMidiBase = -1;
+    std::vector<RackNoteSource> rackNoteSources;
     host::Instance* instance = nullptr;  // null: placeholder (pass-through)
     Id fx;
     std::vector<ParamLane> lanes;

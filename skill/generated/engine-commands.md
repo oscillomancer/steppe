@@ -2,6 +2,8 @@
 
 Generated from the command registry.
 
+Successful replies may include `warnings`: command warnings followed by bus diagnostics `{code: string, message: string, path: string}`. Paths are retained as supplied by the decoder or handler. Batch steps carry their own warnings in `results[i].warnings`. A non-object result with bus warnings is `{result: <value>, warnings: [...]}`. Replies without bus warnings keep their original shape.
+
 ## `analyze.compare@1`
 
 Compare two renders or track outputs by perceptual descriptors.
@@ -30,6 +32,12 @@ Kind: `query`. Exposure: `mcp-tool`.
     },
     "summary": {
       "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["notable", "ltas_rms_db", "summary"],
@@ -532,7 +540,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -624,7 +639,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -667,7 +689,15 @@ Kind: `edit`. Exposure: `mcp-tool`.
 
 ```json
 {
-  "type": "object"
+  "type": "object",
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  }
 }
 
 ```
@@ -719,6 +749,12 @@ Kind: `action`. Exposure: `mcp-tool`.
   "properties": {
     "name": {
       "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["name"],
@@ -771,7 +807,14 @@ Kind: `action`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -839,6 +882,12 @@ Kind: `query`. Exposure: `mcp-tool`.
         "required": ["op", "id", "fields"],
         "additionalProperties": false
       }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["changes"],
@@ -896,6 +945,12 @@ Kind: `query`. Exposure: `mcp-tool`.
     },
     "current": {
       "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["branches", "current"],
@@ -954,7 +1009,13 @@ Kind: `action`. Exposure: `mcp-tool`.
     "version": {
       "type": "integer"
     },
-    "remapped": {}
+    "remapped": {},
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
   },
   "required": ["fast_forward", "up_to_date", "version", "remapped"],
   "additionalProperties": false
@@ -1061,6 +1122,12 @@ Kind: `action`. Exposure: `mcp-tool`.
   "properties": {
     "name": {
       "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["name"],
@@ -1407,6 +1474,12 @@ Kind: `query`. Exposure: `mcp-tool`.
       },
       "required": ["id", "name", "kind", "params"],
       "additionalProperties": false
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["ok", "diagnostics"],
@@ -1617,6 +1690,12 @@ Kind: `action`. Exposure: `mcp-tool`.
     "listed": {
       "type": "boolean",
       "description": "plugin.list shows it (the script player is on the plugin path)"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["name", "path", "ok", "diagnostics", "listed"],
@@ -1712,6 +1791,12 @@ Kind: `action`. Exposure: `mcp-tool`.
     "notices": {
       "type": "string",
       "description": "clap: the licenses to ship with the plugin"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["path", "id", "name", "format"],
@@ -1810,6 +1895,12 @@ Kind: `query`. Exposure: `mcp-tool`.
     },
     "source": {
       "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["name", "path", "source"],
@@ -1898,6 +1989,12 @@ Kind: `query`. Exposure: `mcp-tool`.
         "required": ["name", "path", "ok", "errors"],
         "additionalProperties": false
       }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["library", "scripts"],
@@ -1983,6 +2080,12 @@ Kind: `action`. Exposure: `mcp-tool`.
       "type": "array",
       "items": {
         "type": "string"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
       }
     }
   },
@@ -2270,6 +2373,12 @@ Kind: `action`. Exposure: `mcp-tool`.
       "type": "array",
       "items": {
         "type": "string"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
       }
     }
   },
@@ -2603,6 +2712,12 @@ Kind: `action`. Exposure: `mcp-tool`.
     "listed": {
       "type": "boolean",
       "description": "plugin.list shows it (the script player is on the plugin path)"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["name", "path", "ok", "diagnostics", "listed"],
@@ -2702,6 +2817,12 @@ Kind: `query`. Exposure: `mcp-tool`.
           "default_output"
         ],
         "additionalProperties": false
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
       }
     }
   },
@@ -2997,7 +3118,14 @@ Kind: `action`. Exposure: `mcp-tool`.
     "warnings": {
       "type": "array",
       "items": {
-        "type": "string"
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object"
+          }
+        ]
       }
     },
     "memory_lock": {
@@ -3440,7 +3568,14 @@ Kind: `query`. Exposure: `mcp-tool`.
     "warnings": {
       "type": "array",
       "items": {
-        "type": "string"
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object"
+          }
+        ]
       }
     },
     "memory_lock": {
@@ -3685,7 +3820,14 @@ Kind: `action`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -3740,6 +3882,12 @@ Kind: `edit`. Exposure: `mcp-tool`.
     },
     "points": {
       "type": "integer"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["env", "points"],
@@ -3953,6 +4101,12 @@ Kind: `query`. Exposure: `mcp-tool`.
         "required": ["env", "target", "param", "points", "active", "visible", "mode"],
         "additionalProperties": false
       }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["envelopes"],
@@ -4015,6 +4169,12 @@ Kind: `edit`. Exposure: `mcp-tool`.
   "properties": {
     "points": {
       "type": "integer"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["points"],
@@ -4078,7 +4238,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -4125,7 +4292,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -4189,6 +4363,12 @@ Kind: `edit`. Exposure: `mcp-tool`.
       "type": "array",
       "items": {
         "type": "string"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
       }
     }
   },
@@ -4294,6 +4474,12 @@ Kind: `action`. Exposure: `mcp-tool`.
   "properties": {
     "path": {
       "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["path"],
@@ -4366,6 +4552,12 @@ Kind: `query`. Exposure: `mcp-tool`.
         "required": ["name", "path", "effects"],
         "additionalProperties": false
       }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["chains"],
@@ -4421,6 +4613,12 @@ Kind: `edit`. Exposure: `mcp-tool`.
       "type": "array",
       "items": {
         "type": "string"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
       }
     }
   },
@@ -4487,6 +4685,12 @@ Kind: `action`. Exposure: `mcp-tool`.
     "effects": {
       "type": "integer",
       "minimum": 0.0
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["path", "effects"],
@@ -4554,6 +4758,12 @@ Kind: `edit`. Exposure: `mcp-tool`.
       "type": "array",
       "items": {
         "type": "string"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
       }
     }
   },
@@ -4642,6 +4852,12 @@ Kind: `query`. Exposure: `mcp-tool`.
     "params_total": {
       "type": "integer",
       "description": "Plain parameters matching; at most 512 are listed."
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["plugin", "name", "description", "status_available"],
@@ -4695,7 +4911,13 @@ Kind: `query`. Exposure: `mcp-tool`.
   "type": "object",
   "title": "fx_learn_list",
   "properties": {
-    "learn": {}
+    "learn": {},
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
   },
   "required": ["learn"],
   "additionalProperties": false
@@ -4753,7 +4975,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -4811,6 +5040,12 @@ Kind: `edit`. Exposure: `mcp-tool`.
     },
     "control": {
       "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["param", "control"],
@@ -4874,6 +5109,12 @@ Kind: `query`. Exposure: `mcp-tool`.
     },
     "meters": {
       "description": "Read-only values by patch key (physical) or name"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["source", "meters"],
@@ -4925,7 +5166,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -4972,7 +5220,13 @@ Kind: `query`. Exposure: `mcp-tool`.
   "type": "object",
   "title": "fx_param_result",
   "properties": {
-    "value": {}
+    "value": {},
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
   },
   "required": ["value"],
   "additionalProperties": false
@@ -5033,6 +5287,12 @@ Kind: `edit`. Exposure: `mcp-tool`.
         "type": "string"
       },
       "description": "Params set that do not apply with the new values: kept, and heard once what fx.describe full's active_when names allows it"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["changed", "description"],
@@ -5087,7 +5347,13 @@ Kind: `query`. Exposure: `mcp-tool`.
   "type": "object",
   "title": "fx_patch_result",
   "properties": {
-    "patch": {}
+    "patch": {},
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
   },
   "required": ["patch"],
   "additionalProperties": false
@@ -5136,7 +5402,13 @@ Kind: `query`. Exposure: `mcp-tool`.
   "type": "object",
   "title": "fx_patch_list_result",
   "properties": {
-    "patches": {}
+    "patches": {},
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
   },
   "required": ["patches"],
   "additionalProperties": false
@@ -5196,6 +5468,12 @@ Kind: `edit`. Exposure: `mcp-tool`.
         "type": "string"
       },
       "description": "Params set that do not apply with the new values: kept, and heard once what fx.describe full's active_when names allows it"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["changed", "description"],
@@ -5253,7 +5531,13 @@ Kind: `edit`. Exposure: `mcp-tool`.
   "type": "object",
   "title": "fx_patch_result",
   "properties": {
-    "patch": {}
+    "patch": {},
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
   },
   "required": ["patch"],
   "additionalProperties": false
@@ -5311,6 +5595,12 @@ Kind: `action`. Exposure: `mcp-tool`.
   "properties": {
     "path": {
       "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["path"],
@@ -5385,6 +5675,12 @@ Kind: `query`. Exposure: `mcp-tool`.
         "required": ["name", "source"],
         "additionalProperties": false
       }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["presets"],
@@ -5445,6 +5741,12 @@ Kind: `edit`. Exposure: `mcp-tool`.
     },
     "source": {
       "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["name", "source"],
@@ -5506,6 +5808,12 @@ Kind: `action`. Exposure: `mcp-tool`.
   "properties": {
     "path": {
       "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["path"],
@@ -5561,7 +5869,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -5605,7 +5920,14 @@ Kind: `action`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -5655,7 +5977,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -5727,6 +6056,12 @@ Kind: `edit`. Exposure: `mcp-tool`.
     "group": {
       "type": "string",
       "pattern": "^gr_[0-9]+$"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["group"],
@@ -5908,6 +6243,12 @@ Kind: `query`. Exposure: `mcp-tool`.
       "items": {
         "type": "string",
         "pattern": "^[a-z]{2}_[0-9]+$"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
       }
     }
   },
@@ -6102,6 +6443,12 @@ Kind: `query`. Exposure: `mcp-tool`.
         "required": ["group", "state", "controllers"],
         "additionalProperties": false
       }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["groups"],
@@ -6156,7 +6503,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -6208,7 +6562,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -6263,7 +6624,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -6330,6 +6698,12 @@ Kind: `query`. Exposure: `mcp-tool`.
       "items": {
         "type": "string",
         "pattern": "^[a-z]{2}_[0-9]+$"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
       }
     }
   },
@@ -6425,6 +6799,12 @@ Kind: `query`. Exposure: `mcp-tool`.
     },
     "budget_bytes": {
       "type": "integer"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["versions", "can_undo", "can_redo", "truncated", "retained_bytes", "budget_bytes"],
@@ -6481,6 +6861,12 @@ Kind: `action`. Exposure: `mcp-tool`.
     },
     "label": {
       "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["version", "label"],
@@ -6533,6 +6919,12 @@ Kind: `action`. Exposure: `mcp-tool`.
     },
     "label": {
       "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["version", "label"],
@@ -6606,7 +6998,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
     "warnings": {
       "type": "array",
       "items": {
-        "type": "string"
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object"
+          }
+        ]
       }
     }
   },
@@ -6677,6 +7076,12 @@ Kind: `edit`. Exposure: `mcp-tool`.
     },
     "path": {
       "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["take", "source", "path"],
@@ -6811,6 +7216,12 @@ Kind: `edit`. Exposure: `mcp-tool`.
         "type": "string"
       },
       "default": []
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["id"],
@@ -6871,6 +7282,12 @@ Kind: `edit`. Exposure: `mcp-tool`.
       "type": "array",
       "items": {
         "type": "string"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
       }
     }
   },
@@ -6963,6 +7380,12 @@ Kind: `action`. Exposure: `mcp-tool`.
     },
     "notes": {
       "type": "integer"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["path", "format"],
@@ -7172,7 +7595,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -7223,6 +7653,12 @@ Kind: `edit`. Exposure: `mcp-tool`.
       "type": "array",
       "items": {
         "type": "string"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
       }
     }
   },
@@ -7279,7 +7715,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -7338,7 +7781,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -7423,6 +7873,12 @@ Kind: `edit`. Exposure: `mcp-tool`.
         "type": "string"
       },
       "default": []
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["left", "right"],
@@ -7499,7 +7955,15 @@ Kind: `action`. Exposure: `mcp-exec`.
 
 ```json
 {
-  "type": "object"
+  "type": "object",
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  }
 }
 
 ```
@@ -7547,7 +8011,15 @@ Kind: `query`. Exposure: `mcp-exec`.
 
 ```json
 {
-  "type": "object"
+  "type": "object",
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  }
 }
 
 ```
@@ -7594,7 +8066,15 @@ Kind: `query`. Exposure: `mcp-exec`.
 
 ```json
 {
-  "type": "object"
+  "type": "object",
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  }
 }
 
 ```
@@ -7635,7 +8115,15 @@ Kind: `query`. Exposure: `mcp-exec`.
 
 ```json
 {
-  "type": "object"
+  "type": "object",
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  }
 }
 
 ```
@@ -7684,7 +8172,15 @@ Kind: `query`. Exposure: `mcp-exec`.
 
 ```json
 {
-  "type": "object"
+  "type": "object",
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  }
 }
 
 ```
@@ -7785,6 +8281,12 @@ Kind: `edit`. Exposure: `mcp-tool`.
   "properties": {
     "id": {
       "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["id"],
@@ -7866,6 +8368,12 @@ Kind: `query`. Exposure: `mcp-tool`.
         "required": ["id", "timebase", "name", "color"],
         "additionalProperties": false
       }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["markers"],
@@ -7912,7 +8420,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -7959,7 +8474,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -8062,6 +8584,12 @@ Kind: `query`. Exposure: `mcp-tool`.
   "properties": {
     "text": {
       "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["text"],
@@ -8157,7 +8685,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -9196,6 +9731,12 @@ Kind: `query`. Exposure: `mcp-tool`.
       },
       "required": ["failures", "warnings", "cached_modules"],
       "additionalProperties": false
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["plugins", "scan"],
@@ -9371,6 +9912,12 @@ Kind: `action`. Exposure: `mcp-tool`.
     "job": {
       "type": "string",
       "description": "the background scan (wait: false)"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["plugins", "scan"],
@@ -9451,21 +9998,7 @@ Kind: `query`. Exposure: `mcp-tool`.
     "warnings": {
       "type": "array",
       "items": {
-        "type": "object",
-        "title": "load_warning",
-        "properties": {
-          "code": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          },
-          "path": {
-            "type": "string"
-          }
-        },
-        "required": ["code", "message", "path"],
-        "additionalProperties": false
+        "type": "object"
       }
     }
   },
@@ -9568,21 +10101,7 @@ Kind: `action`. Exposure: `mcp-exec`.
     "warnings": {
       "type": "array",
       "items": {
-        "type": "object",
-        "title": "load_warning",
-        "properties": {
-          "code": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          },
-          "path": {
-            "type": "string"
-          }
-        },
-        "required": ["code", "message", "path"],
-        "additionalProperties": false
+        "type": "object"
       }
     }
   },
@@ -9686,21 +10205,7 @@ Kind: `action`. Exposure: `mcp-tool`.
     "warnings": {
       "type": "array",
       "items": {
-        "type": "object",
-        "title": "load_warning",
-        "properties": {
-          "code": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          },
-          "path": {
-            "type": "string"
-          }
-        },
-        "required": ["code", "message", "path"],
-        "additionalProperties": false
+        "type": "object"
       }
     }
   },
@@ -9844,30 +10349,7 @@ Kind: `action`. Exposure: `mcp-tool`.
     "warnings": {
       "type": "array",
       "items": {
-        "type": "object",
-        "title": "recording_warning",
-        "properties": {
-          "code": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          },
-          "path": {
-            "type": "string"
-          },
-          "hint": {
-            "type": "string"
-          },
-          "track": {
-            "type": "string"
-          },
-          "file": {
-            "type": "string"
-          }
-        },
-        "required": ["code", "message", "path", "hint", "track", "file"],
-        "additionalProperties": false
+        "type": "object"
       }
     }
   },
@@ -9935,30 +10417,7 @@ Kind: `query`. Exposure: `mcp-tool`.
     "warnings": {
       "type": "array",
       "items": {
-        "type": "object",
-        "title": "recording_warning",
-        "properties": {
-          "code": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          },
-          "path": {
-            "type": "string"
-          },
-          "hint": {
-            "type": "string"
-          },
-          "track": {
-            "type": "string"
-          },
-          "file": {
-            "type": "string"
-          }
-        },
-        "required": ["code", "message", "path", "hint", "track", "file"],
-        "additionalProperties": false
+        "type": "object"
       }
     },
     "recordings": {
@@ -10063,21 +10522,7 @@ Kind: `action`. Exposure: `mcp-tool`.
     "warnings": {
       "type": "array",
       "items": {
-        "type": "object",
-        "title": "save_warning",
-        "properties": {
-          "code": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          },
-          "path": {
-            "type": "string"
-          }
-        },
-        "required": ["code", "message", "path"],
-        "additionalProperties": false
+        "type": "object"
       }
     }
   },
@@ -10134,7 +10579,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -10181,6 +10633,12 @@ Kind: `action`. Exposure: `mcp-tool`.
   "properties": {
     "path": {
       "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["path"],
@@ -10249,6 +10707,12 @@ Kind: `query`. Exposure: `mcp-tool`.
         "required": ["name", "path"],
         "additionalProperties": false
       }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["templates"],
@@ -10298,6 +10762,12 @@ Kind: `action`. Exposure: `mcp-tool`.
   "properties": {
     "name": {
       "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["name"],
@@ -10354,21 +10824,7 @@ Kind: `action`. Exposure: `mcp-tool`.
     "warnings": {
       "type": "array",
       "items": {
-        "type": "object",
-        "title": "save_warning",
-        "properties": {
-          "code": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          },
-          "path": {
-            "type": "string"
-          }
-        },
-        "required": ["code", "message", "path"],
-        "additionalProperties": false
+        "type": "object"
       }
     }
   },
@@ -11306,6 +11762,12 @@ Kind: `edit`. Exposure: `mcp-tool`.
   "properties": {
     "id": {
       "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["id"],
@@ -11388,6 +11850,12 @@ Kind: `query`. Exposure: `mcp-tool`.
         "required": ["id", "timebase", "name", "color"],
         "additionalProperties": false
       }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["regions"],
@@ -11434,7 +11902,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -11482,7 +11957,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -11525,7 +12007,15 @@ Kind: `query`. Exposure: `mcp-exec`.
 
 ```json
 {
-  "type": "object"
+  "type": "object",
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  }
 }
 
 ```
@@ -11569,7 +12059,15 @@ Result:
     "additionalProperties": false
   },
   "result": {
-    "type": "object"
+    "type": "object",
+    "properties": {
+      "warnings": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        }
+      }
+    }
   },
   "errors": [],
   "examples": [
@@ -11615,7 +12113,15 @@ Kind: `query`. Exposure: `mcp-exec`.
 
 ```json
 {
-  "type": "object"
+  "type": "object",
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  }
 }
 
 ```
@@ -12409,9 +12915,9 @@ Result:
 
 ## `route.add@1`
 
-Send one track to another track, bus, the master, or a plug-in's key.
+Send audio between strips, or a Note Out to a track's instrument.
 
-The destination must not feed the source. Master accepts routes. With fx instead of to, the send feeds that plug-in's sidechain (key) input — e.g. a kick keying a compressor on the bass; it is delay-compensated, and soloing the keyed track does not stop the key. Hardware routing is not supported yet.
+The destination must not feed the source. Master accepts routes. With fx instead of to, the send feeds that plug-in's sidechain (key) input — e.g. a kick keying a compressor on the bass; it is delay-compensated, and soloing the keyed track does not stop the key. A Note Out uses from: {module: mo_N}, to: {track: tr_N}, midi: {} (all channels unchanged); from_channel filters and to_channel remaps, 0..16 with 0 meaning all/original. Hardware routing is not supported yet.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -12419,8 +12925,9 @@ Kind: `edit`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `from` | string |  |  |  |  |
-| `to` | string |  |  |  | A track, or a rack's In module (mo_*): the send then plays into the rack, linear (no Console 9 stage) |
+| `from` | value |  |  |  |  |
+| `to` | value |  |  |  |  |
+| `midi` | object |  |  |  | Note Out MIDI routing; {} means every channel unchanged. Channel values 0..16: from 0 = all, to 0 = original. |
 | `fx` | string |  |  |  | Feed this plug-in's sidechain (key) input instead of a track's input; `to` may be left out |
 | `tap` | string |  |  |  |  |
 | `volume_db` | value | dB | -150.0..12.0 |  | Quantity strings are range-checked by the server. |
@@ -12439,6 +12946,12 @@ Kind: `edit`. Exposure: `mcp-tool`.
   "properties": {
     "id": {
       "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["id"],
@@ -12451,6 +12964,8 @@ Kind: `edit`. Exposure: `mcp-tool`.
 
 - `route.cycle`: the send would feed back Hint: choose another destination
 - `route.no_sidechain`: the plug-in has no key input Hint: pick another plug-in
+- `route.endpoint`: a Note Out needs a channel destination and MIDI routing Hint: use from: {module: mo_N}, to: {track: tr_N}, midi: {}
+- `route.midi`: MIDI routing or audio controls do not apply to these endpoints Hint: use a Note Out source for MIDI and omit audio send controls
 
 ### Examples
 
@@ -12494,6 +13009,30 @@ Result:
 
 ```
 
+**Play a channel's instrument from Note Out** (`song_with_note_out`)
+
+```json
+{
+  "from": {
+    "module": "mo_4"
+  },
+  "to": {
+    "track": "tr_2"
+  },
+  "midi": {}
+}
+
+```
+
+Result:
+
+```json
+{
+  "id": "sd_2"
+}
+
+```
+
 ## `route.learn.list@1`
 
 List the MIDI controller bindings of send controls.
@@ -12515,7 +13054,13 @@ Kind: `query`. Exposure: `mcp-tool`.
   "type": "object",
   "title": "route_learn_list",
   "properties": {
-    "learn": {}
+    "learn": {},
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
   },
   "required": ["learn"],
   "additionalProperties": false
@@ -12573,7 +13118,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -12628,6 +13180,12 @@ Kind: `edit`. Exposure: `mcp-tool`.
     },
     "control": {
       "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["param", "control"],
@@ -12767,6 +13325,25 @@ Kind: `query`. Exposure: `mcp-tool`.
             },
             "required": ["from", "to"],
             "additionalProperties": false
+          },
+          "midi": {
+            "type": "object",
+            "title": "midi_routing",
+            "properties": {
+              "from_channel": {
+                "type": "integer",
+                "minimum": 0.0,
+                "maximum": 16.0,
+                "default": 0
+              },
+              "to_channel": {
+                "type": "integer",
+                "minimum": 0.0,
+                "maximum": 16.0,
+                "default": 0
+              }
+            },
+            "additionalProperties": false
           }
         },
         "required": [
@@ -12783,6 +13360,12 @@ Kind: `query`. Exposure: `mcp-tool`.
           "channels"
         ],
         "additionalProperties": false
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
       }
     }
   },
@@ -12871,7 +13454,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -12908,8 +13498,9 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `route` | string |  |  |  |  |
-| `from` | string |  |  |  |  |
-| `to` | string |  |  |  | A track, or a rack's In module (mo_*): the send then plays into the rack, linear (no Console 9 stage) |
+| `from` | value |  |  |  |  |
+| `to` | value |  |  |  |  |
+| `midi` | object |  |  |  | Note Out MIDI routing; {} means every channel unchanged. Channel values 0..16: from 0 = all, to 0 = original. |
 | `fx` | string |  |  |  | Feed this plug-in's sidechain (key) input instead of a track's input; `to` may be left out |
 | `tap` | string |  |  |  |  |
 | `volume_db` | value | dB | -150.0..12.0 |  | Quantity strings are range-checked by the server. |
@@ -12925,7 +13516,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -12934,6 +13532,8 @@ Kind: `edit`. Exposure: `mcp-tool`.
 ### Errors
 
 - `route.channels`: the map pairs channels the strips do not have Hint: pair 1 and 2: {from: [1, 2], to: [2, 1]}
+- `route.endpoint`: a Note Out needs a channel destination and MIDI routing Hint: route Note Out MIDI to a channel
+- `route.midi`: audio controls do not apply to MIDI routes Hint: use mute and MIDI channel routing
 
 ### Examples
 
@@ -13019,6 +13619,12 @@ Kind: `action`. Exposure: `mcp-exec`.
     "instructions": {
       "type": "integer",
       "description": "Lua instructions the run executed."
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["result", "log", "log_dropped", "script", "instructions"],
@@ -13085,6 +13691,12 @@ Kind: `query`. Exposure: `mcp-tool`.
   "properties": {
     "text": {
       "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["text"],
@@ -13133,7 +13745,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -13182,6 +13801,12 @@ Kind: `edit`. Exposure: `mcp-tool`.
   "properties": {
     "id": {
       "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["id"],
@@ -13236,6 +13861,12 @@ Kind: `edit`. Exposure: `mcp-tool`.
   "properties": {
     "item": {
       "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["item"],
@@ -13290,6 +13921,12 @@ Kind: `action`. Exposure: `mcp-exec`.
   "properties": {
     "job": {
       "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["job"],
@@ -13484,6 +14121,12 @@ Kind: `query`. Exposure: `mcp-tool`.
         ],
         "additionalProperties": false
       }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["takes"],
@@ -13538,6 +14181,12 @@ Kind: `edit`. Exposure: `mcp-tool`.
     },
     "item_removed": {
       "type": "boolean"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["item", "item_removed"],
@@ -13597,7 +14246,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -13862,6 +14518,12 @@ Kind: `edit`. Exposure: `mcp-tool`.
   "properties": {
     "count": {
       "type": "integer"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["count"],
@@ -13937,6 +14599,12 @@ Kind: `query`. Exposure: `mcp-tool`.
     },
     "fraction": {
       "type": "number"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["seconds", "beat", "bar", "beat_in_bar", "fraction"],
@@ -13989,7 +14657,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -14034,7 +14709,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -14086,6 +14768,12 @@ Kind: `edit`. Exposure: `mcp-tool`.
   "properties": {
     "track": {
       "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["track"],
@@ -14177,6 +14865,12 @@ Kind: `query`. Exposure: `mcp-tool`.
     },
     "solo_silenced": {
       "type": "boolean"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": [
@@ -14260,6 +14954,12 @@ Kind: `edit`. Exposure: `mcp-tool`.
       "type": "array",
       "items": {
         "type": "string"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
       }
     }
   },
@@ -14395,7 +15095,13 @@ Kind: `query`. Exposure: `mcp-tool`.
   "type": "object",
   "title": "track_learn_list",
   "properties": {
-    "learn": {}
+    "learn": {},
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
   },
   "required": ["learn"],
   "additionalProperties": false
@@ -14453,7 +15159,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -14508,6 +15221,12 @@ Kind: `edit`. Exposure: `mcp-tool`.
     },
     "control": {
       "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["param", "control"],
@@ -14719,6 +15438,12 @@ Kind: `query`. Exposure: `mcp-tool`.
         ],
         "additionalProperties": false
       }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["tracks"],
@@ -14767,7 +15492,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -14816,7 +15548,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -14883,7 +15622,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -15072,6 +15818,12 @@ Kind: `action`. Exposure: `mcp-tool`.
   "properties": {
     "path": {
       "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["path"],
@@ -15144,6 +15896,12 @@ Kind: `query`. Exposure: `mcp-tool`.
         "required": ["name", "path", "effects"],
         "additionalProperties": false
       }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["templates"],
@@ -15200,6 +15958,12 @@ Kind: `edit`. Exposure: `mcp-tool`.
       "type": "array",
       "items": {
         "type": "string"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
       }
     }
   },
@@ -15259,6 +16023,12 @@ Kind: `action`. Exposure: `mcp-tool`.
     "effects": {
       "type": "integer",
       "minimum": 0.0
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["path", "effects"],
@@ -15470,6 +16240,12 @@ Kind: `query`. Exposure: `mcp-tool`.
         "required": ["track", "item", "take", "file", "seconds", "lost_frames", "takes"],
         "additionalProperties": false
       }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["playing", "recording", "counting_in", "seconds", "beat", "sample", "loop", "punch"],
@@ -15551,6 +16327,12 @@ Kind: `action`. Exposure: `mcp-tool`.
     },
     "end_seconds": {
       "type": "number"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["enabled", "start_seconds", "end_seconds"],
@@ -15641,6 +16423,12 @@ Kind: `action`. Exposure: `mcp-tool`.
     },
     "count_in_playback": {
       "type": "boolean"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["enabled", "volume_db", "count_in_bars", "count_in_playback"],
@@ -15828,6 +16616,12 @@ Kind: `action`. Exposure: `mcp-tool`.
         "required": ["track", "item", "take", "file", "seconds", "lost_frames", "takes"],
         "additionalProperties": false
       }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["playing", "recording", "counting_in", "seconds", "beat", "sample", "loop", "punch"],
@@ -16002,6 +16796,12 @@ Kind: `action`. Exposure: `mcp-tool`.
         "required": ["track", "item", "take", "file", "seconds", "lost_frames", "takes"],
         "additionalProperties": false
       }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["playing", "recording", "counting_in", "seconds", "beat", "sample", "loop", "punch"],
@@ -16060,7 +16860,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -16120,6 +16927,12 @@ Kind: `query`. Exposure: `mcp-tool`.
     },
     "envelope": {
       "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["requested_rate", "effective_rate", "preserve_pitch"],
@@ -16181,6 +16994,12 @@ Kind: `edit`. Exposure: `mcp-tool`.
     },
     "envelope": {
       "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["requested_rate", "effective_rate", "preserve_pitch"],
@@ -16252,6 +17071,12 @@ Kind: `action`. Exposure: `mcp-tool`.
     },
     "end_seconds": {
       "type": "number"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["enabled", "start_seconds", "end_seconds"],
@@ -16442,6 +17267,12 @@ Kind: `action`. Exposure: `mcp-tool`.
         "required": ["track", "item", "take", "file", "seconds", "lost_frames", "takes"],
         "additionalProperties": false
       }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["playing", "recording", "counting_in", "seconds", "beat", "sample", "loop", "punch"],
@@ -16621,6 +17452,12 @@ Kind: `action`. Exposure: `mcp-tool`.
         "required": ["track", "item", "take", "file", "seconds", "lost_frames", "takes"],
         "additionalProperties": false
       }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["playing", "recording", "counting_in", "seconds", "beat", "sample", "loop", "punch"],
@@ -16796,6 +17633,12 @@ Kind: `action`. Exposure: `mcp-tool`.
         "required": ["track", "item", "take", "file", "seconds", "lost_frames", "takes"],
         "additionalProperties": false
       }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["playing", "recording", "counting_in", "seconds", "beat", "sample", "loop", "punch"],
@@ -16859,7 +17702,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -16912,7 +17762,13 @@ Kind: `query`. Exposure: `mcp-tool`.
   "type": "object",
   "title": "vca_learn_list",
   "properties": {
-    "learn": {}
+    "learn": {},
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
   },
   "required": ["learn"],
   "additionalProperties": false
@@ -16970,7 +17826,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -17025,6 +17888,12 @@ Kind: `edit`. Exposure: `mcp-tool`.
     },
     "control": {
       "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": ["param", "control"],
@@ -17087,7 +17956,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -17140,7 +18016,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 
@@ -17195,7 +18078,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
 {
   "type": "object",
   "title": "empty",
-  "properties": {},
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
   "additionalProperties": false
 }
 

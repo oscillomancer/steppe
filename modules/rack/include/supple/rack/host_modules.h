@@ -22,6 +22,7 @@ namespace supple::rack::host {
 inline constexpr std::string_view kOut = "com.suppleaudio.rack.out";
 inline constexpr std::string_view kIn = "com.suppleaudio.rack.in";
 inline constexpr std::string_view kNotes = "com.suppleaudio.rack.notes";
+inline constexpr std::string_view kNotesOut = "com.suppleaudio.rack.notes-out";
 inline constexpr std::string_view kTransport = "com.suppleaudio.rack.transport";
 inline constexpr std::string_view kPlugin = "com.suppleaudio.rack.plugin";
 
@@ -29,6 +30,7 @@ inline constexpr std::string_view kPlugin = "com.suppleaudio.rack.plugin";
 std::shared_ptr<const ModuleType> outType();
 std::shared_ptr<const ModuleType> inType();
 std::shared_ptr<const ModuleType> notesType();
+std::shared_ptr<const ModuleType> notesOutType();
 std::shared_ptr<const ModuleType> transportType();
 // Their instances (main thread).
 std::unique_ptr<Instance> make(std::shared_ptr<const ModuleType> type,
@@ -67,6 +69,55 @@ class In final : public HostModule {
 struct MidiEvent {
     std::uint32_t frame = 0;
     std::uint8_t status = 0, data1 = 0, data2 = 0;
+};
+
+// Shared with rack.capture: hysteretic gates and MIDI quantization.
+struct NoteGate {
+    bool high = false;
+    bool step(double value) SUPPLE_RT {
+        const bool next = high ? !(value < 0.25) : value >= 0.5;
+        const bool changed = next != high;
+        high = next;
+        return changed;
+    }
+};
+int noteKey(double pitch) SUPPLE_RT;
+int noteVelocity(double value, bool connected) SUPPLE_RT;
+
+// Poly pitch/gate to MIDI. The host binds a preallocated event span and count
+// for each block. No notes start while transport is stopped. endAll() ends
+// held notes at the next processed frame (a locate or loop wrap).
+class NotesOut final : public HostModule {
+  public:
+    struct Event {
+        MidiEvent midi;
+        int voice = 0;
+    };
+    struct State {
+        bool high = false;
+        int key = 60, channel = 0, velocity = 96;
+    };
+    std::array<State, kChannels> held() const SUPPLE_RT;
+    void bind(std::span<Event> events, std::size_t& count) SUPPLE_RT {
+        events_ = events;
+        count_ = &count;
+        count = 0;
+    }
+    void endAll() SUPPLE_RT { endAll_ = true; }
+    void prepare(Instance&) override;
+    void process(const HostContext& ctx) SUPPLE_RT override;
+
+  private:
+    struct Voice {
+        NoteGate gate;
+        int key = 60, channel = 0, velocity = 96;
+    };
+    void send(std::uint32_t frame, int channel, int key, int velocity, bool on,
+              int voice) SUPPLE_RT;
+    std::array<Voice, kChannels> voices_{};
+    std::span<Event> events_;
+    std::size_t* count_ = nullptr;
+    bool endAll_ = false;
 };
 
 // Notes: MIDI to poly pitch, gate, velocity and pressure. The host gives it

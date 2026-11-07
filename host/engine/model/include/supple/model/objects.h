@@ -424,6 +424,7 @@ inline constexpr double kMaxRackCoordinate = 1e6;
 inline constexpr std::string_view kOutModule = "com.suppleaudio.rack.out";
 inline constexpr std::string_view kInModule = "com.suppleaudio.rack.in";
 inline constexpr std::string_view kPluginModule = "com.suppleaudio.rack.plugin";
+inline constexpr std::string_view kNotesOutModule = "com.suppleaudio.rack.notes-out";
 inline constexpr std::string_view kNotesModule = "com.suppleaudio.rack.notes";
 
 // A patching space, homed on a channel.

@@ -426,6 +426,7 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
 | `out` | in `l` (audio), `r` (audio, normalled to `l`) | `level` dB −60..12 (0) | Its label names it in the input menu; poly cables are summed |
 | `in` | out `l`, `r` (audio) | `level` dB −60..12 (0) | Fed by sends (`route.add {to: {module}}`) |
 | `notes` | out `pitch`, `gate`, `velocity` (unipolar), `pressure` (unipolar), `retrigger` (gate), poly; `bend` (cv), `modwheel` (unipolar) mono | `voices` 1..16 (8), `mode` (`rotate`, `reuse`, `reset`, `mono_last`, `mono_low`, `mono_high`), `bend_range` semitones 0..24 (2) | MIDI from `source` (default: the home track): its MIDI items and its live MIDI input when it monitors |
+| `notes_out` (id suffix `notes-out`) | in `pitch`, `gate`, `velocity` (poly) | `channel` 1..16 (1) | Note Out plays a channel's instrument through `route.add {from: {module: mo_N}, to: {track: tr_X}, midi: {}}`; the short type alias `notes_out` is accepted by module commands |
 | `transport` | out `playing` (gate), `reset` (trigger at play and locate), `bar` and `beat` (triggers), `clock` (trigger at `division`), `bar_phase`, `beat_phase` (phase), `tempo` (cv: bpm / 300) | `division` (1/1 … 1/64, dotted, triplets; 1/16) , `swing` % 0..75 (0) | From the timeline: positions are exact at every frame |
 | `plugin` | in `in_l`, `in_r` (audio, `in_r` normalled to `in_l`; poly cables summed), `pitch`, `gate`, `velocity` (poly, normal 0.8); out `out_l`, `out_r` (audio) | the plug-in's, as cable targets `fx_N.<key>` | Its `fx` is an ordinary FX instance in no chain; clicking the module opens its editor. Each gate channel is a voice: rising to 0.5 or above plays key round(60 + 12 × pitch) at its velocity, falling below 0.25 (or its cable going) ends it |
 
@@ -441,6 +442,29 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
 - **Timing.** Read-ahead PDC treats the node as a strip with no chain
   latency. Its timeline shift is the node's; MIDI events and transport use
   it. The grid is aligned to the node's timeline position.
+- **Note Out.** Pitch/gate becomes MIDI with the same gate detector and MIDI
+  quantization functions as Capture: rise at ≥0.5, fall below 0.25, key
+  round(60 + 12 × pitch) clamped to 0..127, velocity round(127 × v) clamped
+  to 1..127 (96 unpatched). A mono pitch/velocity serves every gate voice,
+  up to 16. Key, channel and velocity latch at the rise; a disappearing voice
+  ends its note. Transport stop, locate and loop wrap end held notes; a high
+  gate at a locate starts a new note. No notes start while stopped.
+  A MIDI route from Note Out to a channel merges events into its instrument
+  alongside MIDI items and monitored MIDI, at their exact frames. Routes may
+  fan out and multiple Note Outs may feed one instrument: each route/voice
+  has distinct CLAP note addressing, including equal pitches. `midi: {}`
+  defaults to all channels unchanged; `from_channel` 0 (all) or 1..16 filters,
+  `to_channel` 0 (original) or 1..16 remaps. Mute ends delivered notes and
+  unmute restarts gates still held. Audio send controls are refused.
+  The graph orders source racks before their destinations and refuses cycles.
+  MIDI-only edges carry no Console 9 audio; their preallocated event queues
+  apply solved compensation delays. A MIDI source feeding a live destination
+  also runs live, so MIDI never crosses the audio-only frontier rings.
+  Routes and held notes survive unrelated plan edits; a new route or replaced
+  instrument receives gates already held. MIDI buffers are sized before
+  processing, with at most 1,048,576 queued events per route and additional
+  events per destination block; exceeding that plan budget refuses preparation
+  (`engine.midi_budget`). Armed tracks do not yet record Note Out MIDI.
 - **MIDI.** Notes modules receive the compiled MIDI events of their source
   tracks (items, loops, playrate), and live MIDI from the device when the
   source monitors it; the node is then live.
@@ -657,7 +681,7 @@ listener cabled to the `pitch`, `gate` and optional `velocity` outputs. The
 listener follows each gate voice (up to 16) as the probe counts gates: a rise
 past 0.5 starts a note at that voice's pitch (`round(60 + 12 × pitch)`,
 clamped to 0..127; a mono pitch serves every voice) and velocity
-(`round(127 × v)`, 1..127; 96 without `velocity`), and a fall below 0.25 ends
+(`round(127 × v)`, clamped to 1..127; 96 without `velocity`), and a fall below 0.25 ends
 it. A note still sounding at the end ends there. It keeps up to 65,536 gate
 changes and warns when there were more. With `quantize` (beats, 1/64..4)
 starts and ends go to the nearest grid line and a note lasts at least one

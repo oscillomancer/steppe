@@ -130,7 +130,11 @@ instructions are in `docs/guides/installing.md`.
   asset limits are documented in the engine spec and manual.
 - **Command bus** (`specs/command-bus.md`, ADR-0007): about 120 typed
   commands with JSON Schema, units, examples run as tests and structured
-  errors; `batch` transactions; events; the JSON-RPC socket; the MCP adapter
+  errors. Context and decoder warnings reach successful replies in `warnings`,
+  preserving command diagnostics consistently over sockets, MCP and Lua
+  with compact per-command schemas and one shared diagnostic contract
+  (ADR-0063); strict handler result validation is unchanged. `batch`
+  transactions; events; the JSON-RPC socket; the MCP adapter
   (in process or as a proxy to the running app); Lua scripts on the bus
   (ADR-0006). Lua structured-error expansion has the same value/text budget
   as returned values, including repeated references to shared details.
@@ -271,6 +275,9 @@ instructions are in `docs/guides/installing.md`.
   all poly channels without a telemetry watch; `rack.levels` and the main-thread
   `EngineApp::moduleOutputLevel` accessor expose it independently of visibility.
   Stopped readings are zero and both executors preserve RT/offline equivalence.
+  Note Out (`notes_out`) plays any channel's instrument through MIDI routes,
+  sharing Capture's gate and pitch/velocity rules, with poly voices, channel
+  filtering/remapping, fan-out, compensation and exact RT/offline timing.
   Agents patch with `rack.patch` (named
   modules and cables in one step, laid out by signal flow and labelled by
   name; `rack.arrange` tidies a rack) or `module.add`/`cable.add`, hear a patch
@@ -782,7 +789,9 @@ Library boundaries:
   on Linux, and native macOS/Windows CI has not run on it.
 
 Engine and hosting:
-- Modular racks (ADR-0062): racks do not follow a track's playrate map;
+- Modular racks (ADR-0062): Note Out MIDI is not yet recorded by armed
+  destination tracks; print it with `rack.capture`. Racks do not follow a
+  track's playrate map;
   cables into a plugin module's parameters modulate CLAP plug-ins only
   (VST3 has no modulation), by their first voice, at most 16 per plug-in;
   a plug-in's latency inside a rack is not compensated; recording an armed channel whose input is a rack's Out is

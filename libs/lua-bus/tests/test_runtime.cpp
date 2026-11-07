@@ -226,3 +226,37 @@ TEST_CASE("delivering a handler preserves the running script's instruction hook"
     CHECK(out->result["sum"] == 50005000);
     CHECK(out->instructions >= scene.runtime.find("budget")->options().hookCount);
 }
+
+TEST_CASE("Lua receives command warnings directly and inside a batch") {
+    auto registry = toyRegistry();
+    cmd::Command<cmd::NoArgs, json::Value> warning;
+    warning.name = "toy.warning";
+    warning.exposure = cmd::Exposure::Internal;
+    warning.summary = "Return a warning to a script.";
+    warning.args = schema::object<cmd::NoArgs>("no_args").build();
+    warning.result = schema::any();
+    warning.run = [](const cmd::NoArgs&, cmd::Context& ctx) -> Result<json::Value> {
+        ctx.warn("toy.warning", "a diagnostic", "/source");
+        return obj(R"({"ok":true})");
+    };
+    registry.add(std::move(warning));
+    ToyHost host;
+    cmd::Dispatcher bus(registry, host);
+    Runtime runtime(&registry);
+    runtime.setCommands(registry, bus);
+    host.useScripts(runtime);
+    auto result = bus.execute(
+        {"script.run",
+         obj(R"({"name":"warnings","code":"local a=q.toy.warning(); local b; q.batch('warnings',function() b=q.run('toy.warning',{}) end); assert(q.toy.get().warnings==nil); return {direct=a,batch=b}"})"),
+         visitor});
+    REQUIRE_MESSAGE(result, (result ? "" : result.error().toString()));
+    const auto& value = (*result)["result"];
+    const auto* direct = value.find("direct");
+    const auto* batch = value.find("batch");
+    REQUIRE(direct);
+    REQUIRE(batch);
+    REQUIRE(direct->find("warnings")->size() == 1);
+    REQUIRE(batch->find("warnings")->size() == 1);
+    CHECK(direct->find("warnings")->at(0).find("code")->asString() == "toy.warning");
+    CHECK(batch->find("warnings")->at(0).find("path")->asString() == "/source");
+}

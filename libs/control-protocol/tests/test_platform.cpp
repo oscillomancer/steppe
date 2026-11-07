@@ -46,6 +46,21 @@ TEST_CASE("model loop one-shot cancellation and posts use the portable wake sour
 }
 TEST_CASE("portable AF_UNIX transport dispatches and protects a live endpoint") {
     auto reg = registry();
+    cmd::Command<Amount, Count> warning;
+    warning.name = "counter.warn";
+    warning.exposure = cmd::Exposure::Internal;
+    warning.summary = "Return a diagnostic.";
+    warning.args = schema::object<Amount>("warning_args")
+                       .field("value", &Amount::value, schema::integerOf<int>())
+                       .build();
+    warning.result = schema::object<Count>("warning_result")
+                         .field("count", &Count::count, schema::integerOf<int>())
+                         .build();
+    warning.run = [](const Amount& a, cmd::Context& ctx) -> Result<Count> {
+        ctx.warn("counter.warning", "counter diagnostic", "/value");
+        return Count{a.value};
+    };
+    reg.add(std::move(warning));
     Host host;
     cmd::Dispatcher dispatcher(reg, host);
     ModelQueue queue;
@@ -63,6 +78,12 @@ TEST_CASE("portable AF_UNIX transport dispatches and protects a live endpoint") 
     auto result = client.call("counter.add", parse(R"({"value":7})"));
     REQUIRE(result);
     CHECK((*result)["count"].asInt() == 7);
+    auto warned = client.call("counter.warn", parse(R"({"value":9})"));
+    REQUIRE(warned);
+    CHECK((*warned)["count"] == 9);
+    REQUIRE((*warned)["warnings"].size() == 1);
+    CHECK((*warned)["warnings"].at(0).find("code")->asString() == "counter.warning");
+    CHECK((*warned)["warnings"].at(0).find("path")->asString() == "/value");
     auto failure = client.call("counter.fail", parse(R"({"value":0})"));
     REQUIRE_FALSE(failure);
     CHECK(failure.error().code == "test.located");

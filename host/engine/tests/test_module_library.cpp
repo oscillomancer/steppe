@@ -13,6 +13,7 @@
 #include "supple/base/files.h"
 #include "supple/engine/app.h"
 #include "supple/json/write.h"
+#include "supple/model/schemas.h"
 
 using namespace supple;
 using namespace supple::engine;
@@ -936,4 +937,86 @@ TEST_CASE("module library: project open reports unreadable copies with affected 
     CHECK(warning.find("com.example.level") != std::string::npos);
     CHECK(warning.find("level.cpp") != std::string::npos);
     CHECK(warning.find("unavailable") != std::string::npos);
+}
+
+TEST_CASE("Note Out routes: object endpoints, channel maps, round trip and cycles") {
+    Fixture f;
+    f.run("track.add", R"({"name":"Generator"})");
+    f.run("rack.add", R"({"track":"tr_1"})");
+    auto patch = f.run(
+        "rack.patch",
+        R"({"rack":"rk_1","modules":{"clock":{"type":"transport"},"notes":{"type":"notes_out","params":{"channel":3}}},"cables":[["clock.clock","notes.gate"],["clock.beat_phase","notes.pitch"]]})");
+    const auto noteOut = patch["modules"]["notes"].asString();
+    f.run("track.add", R"({"name":"Instrument"})");
+    json::Value args = json::Value::object();
+    args["from"] = json::Value::object();
+    args["from"]["module"] = noteOut;
+    args["to"] = json::Value::object();
+    args["to"]["track"] = "tr_2";
+    args["midi"] = json::Value::object();
+    auto result = f.call("route.add", args);
+    REQUIRE_MESSAGE(result, (result ? "" : result.error().toString()));
+    const auto route = result->find("id")->asString();
+    auto id = model::Id::parse(route);
+    REQUIRE(id);
+    const auto* made = f.app->head().routes.find(*id);
+    REQUIRE(made);
+    REQUIRE(made->midi);
+    CHECK(made->midi->fromChannel == 0);
+    CHECK(made->midi->toChannel == 0);
+    json::Value edits = json::Value::object();
+    edits["route"] = route;
+    edits["midi"] = json::parse(R"({"from_channel":3,"to_channel":5})").value();
+    auto edited = f.call("route.set", edits);
+    REQUIRE(edited);
+    auto reopened = model::parseProject(model::serializeProject(f.app->head()));
+    REQUIRE(reopened);
+    REQUIRE(reopened->routes.find(*id)->midi);
+    CHECK(reopened->routes.find(*id)->midi->fromChannel == 3);
+    CHECK(reopened->routes.find(*id)->midi->toChannel == 5);
+    auto input = f.run("module.add", R"({"rack":"rk_1","type":"in"})");
+    json::Value feedback = json::Value::object();
+    feedback["from"] = "tr_2";
+    feedback["to"] = input["module"];
+    const auto before = model::serializeProject(f.app->head());
+    auto cycle = f.call("route.add", feedback);
+    REQUIRE_FALSE(cycle);
+    CHECK(cycle.error().code == "route.cycle");
+    CHECK_FALSE(cycle.error().hint.empty());
+    CHECK(model::serializeProject(f.app->head()) == before);
+    args.asObject().erase("midi");
+    auto missing = f.call("route.add", args);
+    REQUIRE_FALSE(missing);
+    CHECK(missing.error().code == "route.endpoint");
+    args["midi"] = json::Value::object();
+    args["volume_db"] = -3;
+    auto audio = f.call("route.add", args);
+    REQUIRE_FALSE(audio);
+    CHECK(audio.error().code == "route.midi");
+    json::Value remove = json::Value::object();
+    remove["module"] = noteOut;
+    REQUIRE(f.call("module.remove", remove));
+    CHECK_FALSE(f.app->head().routes.contains(*id));
+}
+
+TEST_CASE("command warnings: a silent apply-FX render reaches the caller") {
+    Fixture f;
+    f.run("project.set", R"({"console9":false})");
+    f.run("track.add", R"({"name":"No instrument"})");
+    f.run("item.add", R"({"track":"tr_1","position":0,"length":1,"notation":"1: C4:w"})");
+    auto rendered = f.run("item.apply-fx", R"({"item":"it_1"})");
+    REQUIRE(rendered.find("warnings"));
+    bool silent = false;
+    for (const auto& warning : rendered["warnings"].asArray()) {
+        if (const auto* code = warning.find("code"); code && *code == "render.silent") {
+            silent = true;
+            CHECK_FALSE(warning.find("message")->asString().empty());
+            CHECK(warning.find("path")->asString().empty());
+        }
+    }
+    CHECK(silent);
+    CHECK_FALSE(rendered["take"].asString().empty());
+    CHECK(std::filesystem::exists(rendered["path"].asString()));
+    auto next = f.run("track.list");
+    CHECK(next.find("warnings") == nullptr);
 }

@@ -60,7 +60,8 @@ class CaptureModule final : public rack::HostModule {
         std::int64_t frame = 0;  // from the render's start
         int voice = 0;
         bool on = false;
-        float pitch = 0, velocity = 0;
+        double pitch = 0, velocity = 0;
+        bool hasVelocity = false;
     };
     void process(const rack::HostContext& ctx) SUPPLE_RT override;
     void reserve() { events.reserve(kCaptureEvents); }
@@ -68,7 +69,7 @@ class CaptureModule final : public rack::HostModule {
     std::int64_t frames = 0;  // processed so far
     bool full = false;        // events were dropped
   private:
-    std::array<bool, kCaptureVoices> on_{};
+    std::array<rack::host::NoteGate, kCaptureVoices> gates_{};
 };
 
 // A plugin module (rack.md §5): its plug-in, a stage of the rack node, runs
@@ -189,6 +190,14 @@ struct RackClock final : rack::Clock {
     script::Transport transport(std::int64_t position) SUPPLE_RT override;
 };
 
+struct NotesOutBinding {
+    rack::host::NotesOut* module = nullptr;
+    model::Id id;
+    std::vector<rack::host::NotesOut::Event> events;  // sized on main, written on audio
+    std::array<rack::host::NotesOut::State, rack::kChannels> before{};
+    std::size_t count = 0;
+};
+
 struct RackNode {
     Id rack;
     std::vector<Id> modules;  // the patch's, in id order
@@ -198,12 +207,14 @@ struct RackNode {
     std::vector<rack::host::In*> ins;  // Node::rackIns
     std::vector<Id> inIds;
     std::vector<NotesFeed> notes;
+    std::vector<NotesOutBinding> notesOut;
     std::vector<PluginBinding> plugins;
     std::vector<std::unique_ptr<RackCurve>> curves;
     RackClock clock;
     std::int64_t origin = 0;  // the absolute timeline sample of plan sample 0
     // While stopped the rack keeps running on its own clock, from where the
     // transport stood (`stoppedAt`, plan samples at its input).
+    std::uint64_t midiEpoch = 1;
     bool playing = false, started = false;
     std::int64_t own = 0, stoppedAt = 0;
     bool live = false;
@@ -215,6 +226,12 @@ struct RackNode {
 Status compileRack(Plan& p, Node& n, const Session& s, Id rack, InstancePool& pool);
 // After the plan's timeline shifts are solved (prepare): events and curves.
 void prepareRack(Plan& p, Node& n, const Session& s);
+// MIDI-only rack edges: preallocation on main, collection at the destination,
+// and carrying queues at adoption (audio thread, no cross-executor MIDI).
+Status prepareRackMidi(Plan& p);
+void addRackMidi(Plan& p, Node& target, std::int64_t pos, std::uint32_t frames,
+                 bool playing) SUPPLE_RT;
+void carryRackMidi(Plan& to, Plan& from, int liveClass) SUPPLE_RT;
 // One block of a rack node (processNode's for racks).
 bool processRack(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames,
                  const host::Transport& transport, const void* self) SUPPLE_RT;

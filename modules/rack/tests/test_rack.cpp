@@ -268,3 +268,92 @@ TEST_CASE("rack: output levels cover every poly channel without a telemetry watc
     instance->reset();
     CHECK(instance->outputLevel(0) == 0.0f);
 }
+
+namespace {
+class NoteSignal final : public HostModule {
+  public:
+    void process(const HostContext& ctx) SUPPLE_RT override {
+        auto& pitch = ctx.instance->outputMember(0);
+        auto& gate = ctx.instance->outputMember(1);
+        auto& velocity = ctx.instance->outputMember(2);
+        pitch.setChannels(1);
+        gate.setChannels(2);
+        velocity.setChannels(1);
+        for (int i = 0; i < ctx.frames; ++i) {
+            const auto at = ctx.position + i;
+            pitch[0][i] = at < 10 ? 0.5 : 4.0;  // note-offs retain their rise's pitch
+            gate[0][i] = at < 5 || at >= 12 ? 0.249 : at == 5 ? 0.5 : 0.3;
+            gate[1][i] = at >= 8 && at < 20 ? 1.0 : 0.0;
+            velocity[0][i] = 0.5;
+        }
+    }
+};
+}  // namespace
+
+TEST_CASE("rack: Note Out shares capture rules, latches its notes and ends them on locate" *
+          doctest::description("rt")) {
+    sd::ModuleInfoModel info;
+    info.id = "com.example.note-signal";
+    info.name = "Note signal";
+    std::vector<sd::PortModel> ports(3);
+    for (int k = 0; k < 3; ++k) {
+        ports[static_cast<std::size_t>(k)].key = k == 0 ? "pitch" : k == 1 ? "gate" : "velocity";
+        ports[static_cast<std::size_t>(k)].name = ports[static_cast<std::size_t>(k)].key;
+        ports[static_cast<std::size_t>(k)].output = true;
+    }
+    auto signal =
+        Instance::make(ModuleType::host(info, {}, ports), std::make_unique<NoteSignal>(), {});
+    CHECK(host::notesOutType()->problems().empty());
+    auto output = host::make(host::notesOutType(), {});
+    REQUIRE(output);
+    output->setParam(0, 3);
+    auto* notes = static_cast<host::NotesOut*>(output->host());
+    Patch patch;
+    patch.modules = {{1, signal.get(), false, {}}, {2, output.get(), false, {}}};
+    patch.cables = {{0, 0, 1, false, 0, 1}, {0, 1, 1, false, 1, 1}, {0, 2, 1, false, 2, 1}};
+    SUBCASE("connected mono velocity is shared by the voices") {}
+    SUBCASE("unconnected velocity defaults to 96") { patch.cables.pop_back(); }
+    auto schedule = Schedule::build(patch);
+    REQUIRE(schedule);
+    FixedClock clock;
+    clock.t.playing = true;
+    std::array<host::NotesOut::Event, 128> events{};
+    std::size_t count = 0;
+    notes->bind(events, count);
+    schedule->process(0, 37, clock);
+    REQUIRE(count == 4);
+    CHECK(events[0].midi.frame == 5);
+    CHECK(events[0].midi.status == 0x92);
+    CHECK(events[0].midi.data1 == 66);
+    CHECK(events[0].midi.data2 == (patch.cables.size() == 3 ? 64 : 96));
+    CHECK(events[1].midi.frame == 8);
+    CHECK(events[1].voice == 1);
+    CHECK(events[2].midi.frame == 12);
+    CHECK(events[2].midi.status == 0x82);
+    CHECK(events[2].midi.data1 == 66);
+    CHECK(events[3].midi.frame == 20);
+    CHECK(host::noteKey(-100) == 0);
+    CHECK(host::noteKey(100) == 127);
+    CHECK(host::noteVelocity(-1, true) == 1);
+    CHECK(host::noteVelocity(2, true) == 127);
+    // A locate while gates are high ends them, then starts the held gate anew.
+    notes->bind(events, count);
+    schedule->process(5, 4, clock);
+    REQUIRE(count == 2);
+    output->setParam(0, 7);  // held notes still end on channel 3
+    notes->endAll();
+    notes->bind(events, count);
+    schedule->process(9, 1, clock);
+    REQUIRE(count == 3);
+    CHECK(events[0].midi.status == 0x82);
+    CHECK(events[1].midi.status == 0x82);
+    CHECK(events[2].midi.status == 0x96);
+    clock.t.playing = false;
+    notes->bind(events, count);
+    schedule->process(10, 4, clock);
+    REQUIRE(count == 1);
+    CHECK(events[0].midi.status == 0x86);
+    notes->bind(events, count);
+    schedule->process(14, 4, clock);
+    CHECK(count == 0);
+}
