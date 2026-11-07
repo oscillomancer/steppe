@@ -72,6 +72,13 @@ class RackWindow {
     std::optional<ui::Point> tagChipAt(const std::string& label) const;
     std::vector<std::string> browserShows() const;
     Status addModule(const std::string& type, std::optional<ui::Point> at = std::nullopt);
+    // The browser (shown if hidden) on its Patches view, or its Modules
+    // view, with the search focused.
+    void showPatches(bool patches);
+    bool patchesShown() const;
+    // Tests: the browser's Modules or Patches switch, and a row it shows.
+    std::optional<ui::Point> browserViewAt(bool patches) const;
+    std::optional<ui::Point> browserRowAt(const std::string& id) const;
 
   private:
     Status reload();
@@ -140,6 +147,8 @@ class RackWindow {
 
   private:
     void renameRack(model::Id rack);
+    // The rack shown holds only its own Outs and Ins.
+    bool rackEmpty() const;
     void deleteSelected();
     // rack.arrange: the selection when it holds several modules, else the
     // whole rack; then shows what moved.

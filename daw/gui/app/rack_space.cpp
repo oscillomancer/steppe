@@ -308,6 +308,29 @@ void RackSpace::setEmptyText(std::string text) {
     invalidate();
 }
 
+void RackSpace::setStartHint(bool on) {
+    if (on == startHint_) return;
+    startHint_ = on;
+    if (!on) {
+        startLinks_[0] = startLinks_[1] = {};
+        startHot_.reset();
+    }
+    invalidate();
+}
+
+std::optional<int> RackSpace::startLinkAt(ui::Point window) const {
+    if (!startHint_) return std::nullopt;
+    for (int i = 0; i < 2; ++i)
+        if (startLinks_[i].w > 0 && startLinks_[i].inset(-3).contains(window)) return i;
+    return std::nullopt;
+}
+
+std::optional<ui::Point> RackSpace::startLinkAt(bool patch) const {
+    const ui::Rect& r = startLinks_[patch ? 1 : 0];
+    if (!startHint_ || r.w <= 0) return std::nullopt;
+    return ui::Point{r.x + r.w / 2, r.y + r.h / 2};
+}
+
 void RackSpace::dragTypeOver(const std::string& name, std::optional<ui::Point> window) {
     dropName_ = name;
     dropAt_ = window;
@@ -1162,6 +1185,41 @@ void RackSpace::paint(ui::Canvas& c) {
     if (scene_.modules.empty() && !emptyText_.empty())
         c.text({b.x, b.y + b.h / 2 - 10, b.w, 20}, emptyText_, ui::Font::Ui, t.type("small"),
                t.color("ink-faint"), ui::kCenter | ui::kMiddle);
+    startLinks_[0] = startLinks_[1] = {};
+    if (startHint_ && drag_.kind == Drag::Kind::None) {
+        // Under the rack's Outs and Ins in view, else in the middle.
+        float y = b.y + b.h / 2;
+        float under = -1;
+        for (const auto& m : scene_.modules) {
+            const ui::Rect r = m.rect();
+            if (seen.intersect(r).empty()) continue;
+            under = std::max(under, toWindow({r.x, r.bottom()}).y);
+        }
+        if (under >= 0) y = under + 40;
+        const float size = 12.5f;
+        const std::string a = "Add a module", mid = ", or ", z = "start from a patch";
+        const float wa = c.textWidth(a, ui::Font::Ui, size),
+                    wm = c.textWidth(mid, ui::Font::Ui, size),
+                    wz = c.textWidth(z, ui::Font::Ui, size);
+        float x = b.x + (b.w - wa - wm - wz) / 2;
+        if (y + 20 < b.bottom()) {
+            auto link = [&](int i, const std::string& text, float w) {
+                const ui::Rect r{x, y, w, 20};
+                const bool hot = startHot_ == i;
+                const ui::Color ink = hot ? t.color("ink") : t.color("ink-quiet");
+                c.text(r, text, ui::Font::Ui, size, ink, ui::kLeft | ui::kMiddle);
+                c.line({r.x, r.y + 16}, {r.right(), r.y + 16}, ink.withAlpha(hot ? 0.8f : 0.35f),
+                       1);
+                startLinks_[i] = r;
+                x += w;
+            };
+            link(0, a, wa);
+            c.text({x, y, wm, 20}, mid, ui::Font::Ui, size, t.color("ink-faint"),
+                   ui::kLeft | ui::kMiddle);
+            x += wm;
+            link(1, z, wz);
+        }
+    }
     c.restore();
 }
 
@@ -1218,6 +1276,7 @@ bool RackSpace::onPointer(const ui::PointerEvent& e) {
     using T = ui::PointerEvent::Type;
     const ui::Point sp = toSpace(e.pos);
     if (e.type == T::Leave) {
+        startHot_.reset();
         if (const auto left = std::exchange(displayHot_, std::nullopt))
             sendPointer(*left, script::PointerAction::Leave, displayLast_, {}, 0, false, 0, {});
         pointer_.reset();
@@ -1259,6 +1318,10 @@ bool RackSpace::onPointer(const ui::PointerEvent& e) {
     }
     if (e.type == T::Move || e.type == T::Enter) {
         pointer_ = e.pos;
+        if (const auto link = startLinkAt(e.pos); link != startHot_) {
+            startHot_ = link;
+            invalidate();
+        }
         if (drag_.kind == Drag::Kind::None) {
             const Hit h = hitAt(sp);
             hover(h.kind == Hit::Kind::None ? std::nullopt
@@ -1366,6 +1429,11 @@ bool RackSpace::onPointer(const ui::PointerEvent& e) {
         invalidate();
         return true;
     }
+    if (e.type == T::Down && e.button == 1 && !spaceHeld_)
+        if (const auto link = startLinkAt(e.pos); link && hooks_.start) {
+            hooks_.start(*link == 1);
+            return true;
+        }
     if (e.type == T::Down) {
         if (root()) root()->focus(this);
         pointer_ = e.pos;
