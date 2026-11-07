@@ -126,7 +126,7 @@ Fields:
 | `parent_send` | `{enabled}` | the encoded main pair into the parent (no level or channel map of its own) |
 | `hw_output` | [int] or absent | masters only (ADR-0056): the device output channels the main pair plays to, 1-based and at most 64: `[l, r]`, `[mono]` ((L+R)/2) or `[]` (none). Absent: tr_0 plays to `[1, 2]`, other masters to none. Masters sharing a channel add |
 | `lane_mute` | bool | masters only (ADR-0057): silences the master's own items and nothing else; default false |
-| `record` | `{armed, input: route id or null, monitor: off|on|auto, mode: input|output|midi_overdub|midi_replace}` | channels; on masters only `armed` (it records the master's output, ADR-0057). `output` still loads from project files, but an armed output-mode channel prevents recording with `record.output_unsupported` before any file is created; use input mode instead |
+| `record` | `{armed, input: audio route id or null, midi_input?: MIDI route id, monitor: off|on|auto, mode: input|output|midi_overdub|midi_replace}` | channels; on masters only `armed` (it records the master's output, ADR-0057). `output` still loads from project files, but an armed output-mode channel prevents recording with `record.output_unsupported` before any file is created; use input mode instead |
 | `timebase` | enum or `project` | default for its items (channels) |
 | `chain`, `input_chain` | [fx id] | §1.7; `input_chain` on channels only |
 | `lanes` | `{mode: none|fixed|comp, lanes: [ln id], comp: …}` | channels only |
@@ -261,7 +261,14 @@ rendered).
 
 Folder/master sends are the tracks' `parent_send`, not routes. Record inputs
 are routes from `hw_input`/`midi_input`, or from a rack's Out module,
-referenced by `track.record.input`. A Note Out module instead sends MIDI to
+referenced by `track.record.input` for audio and `track.record.midi_input`
+for MIDI. They are independent: choosing MIDI keeps an existing rack Out or
+hardware audio input, and choosing audio keeps MIDI. A MIDI-only channel
+may retain `record.input` as an alias for compatibility with existing views.
+Old projects with MIDI only in `record.input` still load and play it without
+migration. When both inputs exist, recording takes MIDI; clear
+`track.set {record_midi: null}` to print the audio input instead (ADR-0065).
+A Note Out module instead sends MIDI to
 any channel through an ordinary route with `midi` set; it is not a record
 input and several such routes may reach a channel. It cannot send audio or
 be selected as `record.input`; an armed `midi_overdub` or `midi_replace`
@@ -476,7 +483,7 @@ routes: sd_1 tr_2 → tr_6 ch 1/2→3/4 pre-fader −6 dB (sidechain)
 markers: mk_1 "Verse" bar 1 · regions: rg_1 "Chorus" bars 9–17
 ```
 
-## 5. Project file (`supple.project/2.7`)
+## 5. Project file (`supple.project/2.8`)
 
 ### 5.1 Shape
 
@@ -1049,9 +1056,16 @@ routes (§1.8) and VCAs. A 2.5 file loads unchanged; an older application openin
 file ignores `learn` with a warning, and its controllers move nothing on strips, sends or
 VCAs.
 
+### Independent audio and MIDI inputs (schema 2.8)
+
+Writers emit `supple.project/2.8`. The optional `record.midi_input` is a
+route from a MIDI device into the same channel. Existing 1.x and 2.x files
+remain readable: without this field the legacy MIDI `record.input` is used.
+Both references are validated, copied and remapped like other route IDs.
+
 ### Modular racks (schema 2.7, ADR-0062)
 
-Writers now emit `supple.project/2.7`. The 2.7 change is the `racks`, `modules` and
+The 2.7 change added the `racks`, `modules` and
 `cables` collections, written only when present, and a route end `module` (rack.md §2).
 A 2.6 file loads unchanged; an older application opening a 2.7 file keeps the
 collections as unknown sections and refuses routes with a module end.

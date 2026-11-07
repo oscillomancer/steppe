@@ -707,8 +707,10 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
     for (Node& n : p.nodes) {
         if (n.rack) {
             // A rack playing a device's MIDI is live, as a monitored track.
-            n.live = std::any_of(n.rack->notes.begin(), n.rack->notes.end(),
-                                 [](const NotesFeed& f) { return f.device.has_value(); });
+            n.live =
+                std::any_of(n.rack->notes.begin(), n.rack->notes.end(), [](const NotesFeed& f) {
+                    return f.device.has_value() || f.sourceDevice.has_value();
+                });
             for (std::size_t e : n.in) n.live = n.live || p.nodes[p.edges[e].from].live;
             if (!n.live && keepLive && std::binary_search(keepLive->begin(), keepLive->end(), n.id))
                 n.live = p.heldLive = true;
@@ -728,11 +730,11 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
             if (const model::Route* in = s.routes.find(*t.record.input)) {
                 if (in->from.hwChannels)
                     for (int ch : *in->from.hwChannels) n.monitorInputs.push_back(ch - 1);
-                if (in->from.midiDevice)
-                    n.midiIn =
-                        Node::MidiIn{*in->from.midiDevice, in->midi ? in->midi->fromChannel : 0,
-                                     in->midi ? in->midi->toChannel : 0, 0};
             }
+        if (monitoring)
+            if (const auto* in = model::midiInputRoute(s, n.id))
+                n.midiIn = Node::MidiIn{*in->from.midiDevice, in->midi ? in->midi->fromChannel : 0,
+                                        in->midi ? in->midi->toChannel : 0, 0};
         n.live = !n.monitorInputs.empty() || n.midiIn.has_value() || !n.recordInputs.empty() ||
                  n.recordRack;
         // Recording Note Out consumes its delivered events on the callback.

@@ -832,7 +832,7 @@ void registerExtraCommands(cmd::Registry& registry) {
             auto id = require<model::Route>(s, a.route, "/route");
             if (!id) return std::move(id).error();
             for (const auto& e : s.tracks)
-                if (e.value->record.input == *id)
+                if (e.value->record.input == *id || e.value->record.midiInput == *id)
                     return Error("route.in_use", a.route + " is a record input on " + e.id.str(),
                                  "/route", "change that track's record input first");
             auto& t = app(ctx).txn();

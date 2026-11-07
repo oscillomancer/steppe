@@ -1661,15 +1661,14 @@ Result<TransportInfo> EngineApp::transport(std::string_view action, std::optiona
                 });
             const model::Route* in =
                 output || !tr.record.input ? nullptr : s.routes.find(*tr.record.input);
-            if (routed || (in && in->from.midiDevice)) {  // MIDI (ADR-0016): events, no file
+            const auto* midi = output ? nullptr : model::midiInputRoute(s, e.id);
+            if (routed || midi) {  // MIDI (ADR-0016): events, no file
                 RecordTarget t;
                 t.track = e.id;
                 t.midi = RecordTarget::Midi{
-                    in && in->from.midiDevice
-                        ? midiPortMask(engine_->midiPorts(), *in->from.midiDevice)
-                        : 0,
-                    in && in->midi ? in->midi->fromChannel : 0,
-                    in && in->midi ? in->midi->toChannel : 0, routed};
+                    midi ? midiPortMask(engine_->midiPorts(), *midi->from.midiDevice) : 0,
+                    midi && midi->midi ? midi->midi->fromChannel : 0,
+                    midi && midi->midi ? midi->midi->toChannel : 0, routed};
                 targets.push_back(std::move(t));
                 continue;
             }

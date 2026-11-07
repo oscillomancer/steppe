@@ -66,8 +66,8 @@ Fields equal to their defaults are omitted, as everywhere (session-model §5).
 | `x`, `y` | Its top-left corner in the rack's space, design units (finite, ±1e6). |
 | `params` | Knob values by key in physical units (a percent as 30, a choice by key, a toggle as a bool), as a semantic plugin's patch params. Missing keys are defaults; canonical: only non-defaults are written. |
 | `bypass` | Bypassed: see §4.6. |
-| `source` | Notes modules: the track whose MIDI items it plays (unset: the rack's home track). |
-| `device` | Notes modules: a live MIDI input it always plays, armed or not, matched as a MIDI route's device (a case-insensitive substring; `""`: any input). Unset: none. |
+| `source` | Notes modules: the track whose MIDI it plays (unset: the rack's home track; `module.set {source: null}` restores that default). |
+| `device` | Notes modules: a live MIDI input it always plays, armed or not, matched as a MIDI route's device (a case-insensitive substring; `""`: any input). Unset: none (`module.set {device: null}` clears it). |
 | `fx` | Plugin modules (required there, refused elsewhere): its plug-in instance, an `fx_N` in no chain. |
 | `learn` | MIDI learn on its parameters, as an FX's (`ParamLearn`). |
 
@@ -87,10 +87,12 @@ Both ends are in the same rack. At most one cable joins the same two ends.
 `RouteEnd` gains `module`:
 
 - **From an Out module** to a channel: the channel's record input
-  (`track.record.input`). The channel always hears it, armed or not, before
-  its items and inserts (as timeline material, not as monitored input).
-  When armed it records stereo, through its input FX, using the ordinary
-  audio recorder's loop/punch, takes, recovery and undo rules.
+  (`track.record.input`), independent of the channel's MIDI input
+  (`track.record.midi_input`). Selecting a keyboard keeps this Out route, and
+  adding a rack keeps the channel's keyboard (ADR-0065). The channel always
+  hears it, armed or not, before its items and inserts (as timeline material, not as monitored input).
+  When armed without a MIDI input it records stereo, through its input FX,
+  using the ordinary audio recorder's loop/punch, takes, recovery and undo rules.
   `"from": {"module": "mo_3"}`.
 - **To an In module** from any track: a send, with the route's tap, level,
   pan, mute, channel map and envelopes. `"to": {"module": "mo_9"}`. Sends
@@ -449,7 +451,7 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
 |---|---|---|---|
 | `out` | in `l` (audio), `r` (audio, normalled to `l`) | `level` dB −60..12 (0) | Its label names it in the input menu; poly cables are summed |
 | `in` | out `l`, `r` (audio) | `level` dB −60..12 (0) | Fed by sends (`route.add {to: {module}}`) |
-| `notes` | out `pitch`, `gate`, `velocity` (unipolar), `pressure` (unipolar), `retrigger` (gate), poly; `bend` (cv), `modwheel` (unipolar) mono | `voices` 1..16 (8), `mode` (`rotate`, `reuse`, `reset`, `mono_last`, `mono_low`, `mono_high`), `bend_range` semitones 0..24 (2) | MIDI from `source` (default: the home track): its MIDI items and its live MIDI input when it monitors |
+| `notes` | out `pitch`, `gate`, `velocity` (unipolar), `pressure` (unipolar), `retrigger` (gate), poly; `bend` (cv), `modwheel` (unipolar) mono | `voices` 1..16 (8), `mode` (`rotate`, `reuse`, `reset`, `mono_last`, `mono_low`, `mono_high`), `bend_range` semitones 0..24 (2) | MIDI from `source` (default: the home track): its MIDI items and its live MIDI input when armed and monitoring; auto monitors while stopped or recording |
 | `notes_out` (id suffix `notes-out`) | in `pitch`, `gate`, `velocity` (poly) | `channel` 1..16 (1) | Note Out plays a channel's instrument through `route.add {from: {module: mo_N}, to: {track: tr_X}, midi: {}}`; the short type alias `notes_out` is accepted by module commands |
 | `transport` | out `playing` (gate), `reset` (trigger at play and locate), `bar` and `beat` (triggers), `clock` (trigger at `division`), `bar_phase`, `beat_phase` (phase), `tempo` (cv: bpm / 300) | `division` (1/1 … 1/64, dotted, triplets; 1/16) , `swing` % 0..75 (0) | From the timeline: positions are exact at every frame |
 | `plugin` | in `in_l`, `in_r` (audio, `in_r` normalled to `in_l`; poly cables summed), `pitch`, `gate`, `velocity` (poly, normal 0.8); out `out_l`, `out_r` (audio) | the plug-in's, as cable targets `fx_N.<key>` | Its `fx` is an ordinary FX instance in no chain; clicking the module opens its editor. Each gate channel is a voice: rising to 0.5 or above plays key round(60 + 12 × pitch) at its velocity, falling below 0.25 (or its cable going) ends it |
@@ -485,6 +487,15 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   null until their own plan is prepared.
   Parallel paths summed inside a patch stay unaligned: insert a Delay
   module explicitly when that patch needs alignment.
+- **Live Notes.** Notes follows its source channel's independent MIDI input,
+  with the same device/channel selection and armed monitoring as an instrument.
+  `monitor: on` listens while stopped or playing; `auto` while stopped or
+  recording. An explicit Notes `device` also listens regardless of the arm.
+  Each incoming event is delivered once if those device selections overlap.
+  Choosing an inactive input on an unarmed source leaves held timeline notes
+  playing. Changing an effective live input configuration retires the Notes
+  instance with the old plan, releasing held gates without changing
+  audio-thread state from the model thread.
 - **Note Out.** Pitch/gate becomes MIDI with the same gate detector and MIDI
   quantization functions as Capture: rise at ≥0.5, fall below 0.25, key
   round(60 + 12 × pitch) clamped to 0..127, velocity round(127 × v) clamped

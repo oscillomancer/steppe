@@ -644,3 +644,10 @@ an idle or playing engine rebuilds the plan only for an actual change.
 A send into an In carries the tap at the route's level and pan without
 Console 9 trim, with the console on or off. Bare In → Out paths are about
 2.34 dB louder than earlier builds; recheck effect-patch levels when updating.
+
+A rack channel can keep its audio Out and a keyboard input together:
+`track.set {track: "tr_1", record_midi: "*", armed: true, monitor: "on"}`.
+Its default Notes source follows that channel. MIDI and audio selections do
+not replace each other. Recording takes MIDI when a MIDI input is selected;
+`record_midi: null` clears it to print audio. To clear a Notes module's own
+settings use `module.set {module: "mo_2", device: null, source: null}`.

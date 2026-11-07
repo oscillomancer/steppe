@@ -1312,7 +1312,13 @@ harness. See the tooling README for schemas, limits and invocation details.
   implementation notes (recording; the live region with two executors;
   crash recovery).
 - **Loop and punch** (ADR-0015): see the ADR's implementation notes.
-- **MIDI input** (ADR-0016): see the ADR's implementation notes.
+- **MIDI input** (ADR-0016): device MIDI is independent of audio input.
+  `record.midi_input` names its route; old MIDI-only `record.input` remains
+  readable. `track.set {record_midi}` preserves hardware or rack audio inputs,
+  and audio selection preserves MIDI. `record_midi: null` clears MIDI alone.
+  With both inputs configured, recording takes MIDI (clear MIDI to print audio).
+  A rack's Notes module follows its source channel's armed monitoring and
+  channel map, in both executors. Explicit Notes devices still listen always.
 - **Smooth swaps:** a plan swap carries each strip's fader ramps and Console 9 state
   and each insert's applied wet level into the new plan
   (`carryMix`, by track and by instance, per executor); a changed volume,

@@ -75,9 +75,10 @@ struct ParentSend {
 
 struct RecordSettings {
     bool armed = false;
-    std::optional<Id> input;  // a route from hw_input/midi_input
+    std::optional<Id> input;  // audio input, or a legacy MIDI-only input
     Monitor monitor = Monitor::Off;
     RecordMode mode = RecordMode::Input;
+    std::optional<Id> midiInput;  // independent route from midi_input
     bool operator==(const RecordSettings&) const = default;
 };
 

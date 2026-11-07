@@ -249,6 +249,9 @@ std::string rackLabel(const Session& s, Id rack);
 // GUI's send drags add at most one. Sends from auxiliary pairs do not count.
 bool sendsTo(const Session& s, Id from, Id to);
 
+// The independent MIDI input, falling back to the legacy record.input route.
+const Route* midiInputRoute(const Session& s, Id track);
+
 // What every view calls a track: its name, or for an unnamed one a numbered
 // label by type ("ch_2", "buss_1", "mstr_1"; the first master, tr_0, is
 // "Master"), numbered by its place among that type's tracks in id order.

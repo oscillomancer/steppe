@@ -11,6 +11,29 @@
 #include "supple/model/numeric.h"
 
 namespace supple::engine {
+// Omission leaves a field unchanged; explicit null clears it. Preserve null
+// inside the optional rather than letting the normal optional decoder erase it.
+inline schema::Schema<std::optional<json::Value>> clearableString(
+    schema::Schema<std::string> inner) {
+    auto ex = json::Value::object();
+    ex["anyOf"] = json::Value::array();
+    ex["anyOf"].push_back(inner.jsonSchema());
+    auto null = json::Value::object();
+    null["type"] = "null";
+    ex["anyOf"].push_back(std::move(null));
+    return {"clearable_string",
+            [inner](const json::Value& v, std::optional<json::Value>& out, schema::DecodeCtx& ctx,
+                    const std::string& path) {
+                if (!v.isNull()) {
+                    std::string value;
+                    if (!inner.decodeInto(v, value, ctx, path)) return false;
+                }
+                out = v;
+                return true;
+            },
+            [](const std::optional<json::Value>& v) { return v.value_or(json::Value()); }, ex};
+}
+
 // A locked item refuses every change except being unlocked (item.set
 // {locked: false}); its takes and MIDI with it.
 inline Status checkUnlocked(const model::Session& s, model::Id item, std::string path = "/item") {

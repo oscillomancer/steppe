@@ -154,9 +154,17 @@ class RackPool {
     ~RackPool();
     void setCatalog(std::shared_ptr<const rack::Catalog> catalog);
     const std::shared_ptr<const rack::Catalog>& catalog() const { return catalog_; }
+    struct NotesInput {
+        Id source;
+        std::optional<std::string> device, sourceDevice;
+        int fromChannel = 0, toChannel = 0;
+        bool monitoring = false, tapeAuto = false;
+        bool operator==(const NotesInput&) const = default;
+    };
     // The instance for `id` of `type` (null: the catalog does not know the
     // type), its knobs set from the module's params.
-    rack::Instance* get(Id id, const model::RackModule& module, const rack::Instance::Setup& setup);
+    rack::Instance* get(Id id, const model::RackModule& module, const rack::Instance::Setup& setup,
+                        const std::optional<NotesInput>& notesInput = {});
     rack::Instance* find(Id id) const;
     void setGeneration(std::uint64_t generation) { generation_ = generation; }
     void prune(const Session& session, std::uint64_t liveGeneration = UINT64_MAX);
@@ -172,6 +180,7 @@ class RackPool {
         std::uint64_t code = 0;  // the catalog entry's generation
         double rate = 0;
         int seed = 0;
+        std::optional<NotesInput> notesInput;
     };
     std::shared_ptr<const rack::Catalog> catalog_;
     std::map<Id, Entry> modules_;
@@ -187,6 +196,10 @@ struct NotesFeed {
     std::vector<rack::host::MidiEvent> block;  // this block's, reserved
     std::optional<std::string> device;         // live input, matched as a MIDI route's
     std::uint64_t ports = 0;
+    std::optional<std::string> sourceDevice;
+    std::uint64_t sourcePorts = 0;
+    int fromChannel = 0, toChannel = 0;
+    bool sourceAuto = false;
 };
 
 // A module parameter's envelope, read by the schedule once per grid block.

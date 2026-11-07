@@ -654,7 +654,7 @@ struct ModuleSet {
     std::optional<std::string> label, preset;
     std::optional<double> x, y;
     std::optional<bool> bypass;
-    std::optional<std::string> source, device;
+    std::optional<json::Value> source, device;
 };
 struct ModuleDuplicate {
     std::vector<std::string> modules;
@@ -751,6 +751,7 @@ void registerRackCommands(cmd::Registry& registry) {
                 track = *id;
             } else {
                 model::Track tr;
+                tr.record.monitor = e.defaultMonitor();
                 tr.name = a.name.value_or(model::nextTrackName(s, model::StripType::Channel));
                 tr.parent = model::kMaster;
                 track = t.create(tr);
@@ -766,8 +767,16 @@ void registerRackCommands(cmd::Registry& registry) {
             out.y = 40;
             const Id outId = t.create(out);
             const model::Track& home = *t.get<model::Track>(track);
-            if (home.record.input && t.get<model::Route>(*home.record.input)) {
-                t.modify<model::Route>(*home.record.input, [&](model::Route& r) {
+            if (home.record.input)
+                if (const auto* previous = t.get<model::Route>(*home.record.input);
+                    previous && previous->from.midiDevice)
+                    t.modify<model::Track>(track, [&](auto& x) {
+                        if (!x.record.midiInput) x.record.midiInput = home.record.input;
+                        x.record.input.reset();
+                    });
+            const auto audioInput = t.get<model::Track>(track)->record.input;
+            if (audioInput && t.get<model::Route>(*audioInput)) {
+                t.modify<model::Route>(*audioInput, [&](model::Route& r) {
                     r.from = model::RouteEnd{};
                     r.from.module = outId;
                     r.midi.reset();
@@ -1257,7 +1266,9 @@ void registerRackCommands(cmd::Registry& registry) {
         c.description =
             "params merge into its knobs (values in the knob's units; a choice by key; a "
             "default value is dropped from the file). A knob edit is heard at once, without a "
-            "recompile. bypass passes each input to the output of its kind. label names it "
+            "recompile. Notes source/device accept null to clear them (source returns to the home "
+            "track; device to none). bypass passes each input to the output of its kind. label "
+            "names it "
             "(an Out module's label is what channels' input menus list). preset: a factory "
             "preset by name (module.describe lists them): every knob to it, then params on top.";
         c.args = schema::object<ModuleSet>("module_set_args")
@@ -1268,8 +1279,8 @@ void registerRackCommands(cmd::Registry& registry) {
                      .field("x", &ModuleSet::x, coordinate())
                      .field("y", &ModuleSet::y, coordinate())
                      .field("bypass", &ModuleSet::bypass, schema::boolean())
-                     .field("source", &ModuleSet::source, idOf("tr", "Track"))
-                     .field("device", &ModuleSet::device, schema::string())
+                     .field("source", &ModuleSet::source, clearableString(idOf("tr", "Track")))
+                     .field("device", &ModuleSet::device, clearableString(schema::string()))
                      .build();
         c.examples = {{"Turn the VCA down", j(R"({"module": "mo_3", "params": {"level": -12}})"),
                        j("{}"), "song_with_rack"},
@@ -1306,12 +1317,19 @@ void registerRackCommands(cmd::Registry& registry) {
                 return Error("rack.param", "source and device are a Notes module's", "/source",
                              "only Notes modules play a track's MIDI");
             if (a.source) {
-                auto src = Id::parse(*a.source);
-                if (!src || !s.tracks.contains(*src))
-                    return Error("track.unknown", "no track " + *a.source, "/source", "track.list");
-                m.source = *src;
+                m.source.reset();
+                if (!a.source->isNull()) {
+                    auto src = Id::parse(a.source->asString());
+                    if (!src || !s.tracks.contains(*src))
+                        return Error("track.unknown", "no track " + a.source->asString(), "/source",
+                                     "track.list");
+                    m.source = *src;
+                }
             }
-            if (a.device) m.device = *a.device;
+            if (a.device) {
+                m.device.reset();
+                if (!a.device->isNull()) m.device = a.device->asString();
+            }
             if (a.label) m.label = *a.label;
             if (a.x) m.x = *a.x;
             if (a.y) m.y = *a.y;

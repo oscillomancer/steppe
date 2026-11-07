@@ -133,7 +133,7 @@ Status validateFreezeInput(const Session& s, Id track) {
         const auto& r = *e.value;
         if (r.to.track != track && !(r.to.fx && ids.count(*r.to.fx))) continue;
         // An unarmed hardware record route is configuration, not a signal source.
-        if (t->record.input == e.id && !r.from.track) continue;
+        if ((t->record.input == e.id || t->record.midiInput == e.id) && !r.from.track) continue;
         return unsupported("external audio, MIDI or key input " + e.id.str() + " feeds this track");
     }
     return {};

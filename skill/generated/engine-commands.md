@@ -9471,7 +9471,7 @@ Result:
 
 Set a module's knobs, label, place or bypass.
 
-params merge into its knobs (values in the knob's units; a choice by key; a default value is dropped from the file). A knob edit is heard at once, without a recompile. bypass passes each input to the output of its kind. label names it (an Out module's label is what channels' input menus list). preset: a factory preset by name (module.describe lists them): every knob to it, then params on top.
+params merge into its knobs (values in the knob's units; a choice by key; a default value is dropped from the file). A knob edit is heard at once, without a recompile. Notes source/device accept null to clear them (source returns to the home track; device to none). bypass passes each input to the output of its kind. label names it (an Out module's label is what channels' input menus list). preset: a factory preset by name (module.describe lists them): every knob to it, then params on top.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -9486,8 +9486,8 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | `x` | number |  | -1e+06..1e+06 |  |  |
 | `y` | number |  | -1e+06..1e+06 |  |  |
 | `bypass` | boolean |  |  |  |  |
-| `source` | string |  |  |  |  |
-| `device` | string |  |  |  |  |
+| `source` | value |  |  |  |  |
+| `device` | value |  |  |  |  |
 
 ### Result
 
@@ -15616,7 +15616,7 @@ Result:
 
 Set track fields: name, type, volume, pan, mute, solo, polarity, mono, arming.
 
-Only the given fields change. solo: off | on | in_place | defeat. armed + record_input (device input channels, 1-based) prepare a track for transport.record; record_midi records MIDI instead: a device name (substring of the MIDI port, "*" = every device) with midi_channel 1-16 (0 = all). monitor: off | on | auto (auto: while armed) — a monitored track hears its input live (an instrument plays the keyboard), also while stopped. record_mode: input (new items), midi_overdub (merge into the MIDI item under the start, as a new take), midi_replace. color: red | orange | yellow | green | teal | blue | violet | grey | "#rrggbb" ("" clears it), shown as a stripe on the track. A master takes armed alone: transport.record then records its output (after its fader, before its own items) as an item on the master; lane_mute silences a master's items.
+Only the given fields change. solo: off | on | in_place | defeat. armed + record_input (device input channels, 1-based) prepare a track for transport.record. Audio and MIDI inputs are independent; record_midi selects a device (null clears it). When both are set, recording takes MIDI. A device name is a substring of the MIDI port ("*" = every device), with midi_channel 1-16 (0 = all). monitor: off | on | auto (auto: while armed) — a monitored track hears its input live (an instrument plays the keyboard), also while stopped. record_mode: input (new items), midi_overdub (merge into the MIDI item under the start, as a new take), midi_replace. color: red | orange | yellow | green | teal | blue | violet | grey | "#rrggbb" ("" clears it), shown as a stripe on the track. A master takes armed alone: transport.record then records its output (after its fader, before its own items) as an item on the master; lane_mute silences a master's items.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -15638,7 +15638,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | `solo` | string |  |  |  |  |
 | `armed` | boolean |  |  |  |  |
 | `record_input` | array |  |  |  |  |
-| `record_midi` | string |  |  |  |  |
+| `record_midi` | value |  |  |  |  |
 | `record_rack` | string |  |  |  | A rack's Out module as the channel's input: the rack plays on the channel, before its inserts (rack.list lists them) |
 | `midi_channel` | integer |  | 0.0..16.0 |  |  |
 | `record_mode` | string |  |  |  |  |
