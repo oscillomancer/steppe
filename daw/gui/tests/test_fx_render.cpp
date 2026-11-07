@@ -1924,3 +1924,149 @@ TEST_CASE("render dialog: Time selection renders the ruler's loop range, looping
     REQUIRE(dry);
     CHECK((*dry)["files"].asArray()[0].find("seconds")->asDouble() == doctest::Approx(2.0));
 }
+
+TEST_CASE(
+    "a channel fed by a rack shows a Rack device: its Macro knobs, named after what they drive") {
+    Fixture f;
+    if (!f.ok) return;
+    std::vector<model::Id> opened;
+    f.fx = std::make_unique<gui::FxWindow>(
+        *f.app, *f.dispatcher, *f.root, *f.panel,
+        gui::FxWindow::Hooks{.openRack = [&](model::Id rack) { opened.push_back(rack); }},
+        gui::Favourites::defaultFile(gui::test::slug()));
+    auto exec = [&](const char* command, const std::string& args) {
+        auto r = f.run(command, json::parse(args).value());
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    json::Value made = exec("rack.add", R"({"name":"Lead"})");
+    const std::string rack = made["rack"].asString(), track = made["track"].asString();
+    auto add = [&](const char* type, const char* label) {
+        return exec("module.add", R"({"rack":")" + rack + R"(","type":")" + type +
+                                      R"(","label":")" + label + R"("})")["module"]
+            .asString();
+    };
+    const std::string filter = add("filter", "Filter"), amp = add("vca", "Amp");
+    const std::string macro = add("macro", "Performance");
+    add("macro", "Spare");  // nothing cabled: not shown
+    exec("cable.add",
+         R"({"from":")" + macro + R"(.out_1","to":")" + filter + R"(.cutoff","amount":24})");
+    exec("cable.add", R"({"from":")" + macro + R"(.out_2","to":")" + amp + R"(.cv"})");
+    exec("cable.add",
+         R"({"from":")" + macro + R"(.out_2","to":")" + filter + R"(.resonance","amount":0.3})");
+    exec("module.set", R"({"module":")" + macro + R"(","params":{"macro_2":40}})");
+    REQUIRE(f.fx->open(*model::Id::parse(track)));
+    f.frame();
+    auto devices = f.fx->rackDevices();
+    REQUIRE(devices.size() == 1);
+    gui::RackDevice& device = *devices.front();
+    auto shown = device.shown();
+    REQUIRE(shown.size() == 2);
+    CHECK(shown[0].group == "Performance");
+    CHECK(shown[0].name == "Filter cutoff");
+    CHECK(shown[0].key == "macro_1");
+    CHECK(shown[0].value == "0 %");
+    CHECK(shown[1].name == "Amp CV +1");  // a name in capitals stays
+    CHECK(shown[1].value == "40 %");
+    f.snapshot("fx-rack-device.png");
+    // Open: the rack window on that rack.
+    REQUIRE(f.click("fx.rack.open." + rack));
+    CHECK(opened == std::vector<model::Id>{*model::Id::parse(rack)});
+    // A drag turns module.set, one undo step.
+    const auto at = device.knobAt("Filter cutoff");
+    REQUIRE(at);
+    const auto history = f.historyCount();
+    f.uiRoot().pointer({ui::PointerEvent::Type::Down, *at, 1});
+    for (int i = 1; i <= 5; ++i) {
+        f.uiRoot().pointer({ui::PointerEvent::Type::Move, {at->x, at->y - 12.0f * i}, 1});
+        f.fx->tick();
+        f.uiRoot().frame(false);
+    }
+    f.uiRoot().pointer({ui::PointerEvent::Type::Up, {at->x, at->y - 60}, 1});
+    f.fx->tick();
+    f.frame();
+    CHECK(f.historyCount() == history + 1);
+    const auto* m = f.app->head().modules.find(*model::Id::parse(macro));
+    REQUIRE(m);
+    const json::Value* v = m->params.find("macro_1");
+    REQUIRE(v);
+    CHECK(v->asDouble() > 20);
+    // Its right-click: what a rack knob offers.
+    devices = f.fx->rackDevices();
+    REQUIRE(devices.size() == 1);
+    const auto knob = devices.front()->knobAt("Filter cutoff");
+    REQUIRE(knob);
+    f.uiRoot().pointer({ui::PointerEvent::Type::Down, *knob, 3});
+    f.uiRoot().pointer({ui::PointerEvent::Type::Up, *knob, 3});
+    f.frame();
+    const ui::Node* menu =
+        f.root->popupOpen() ? f.root->find("fx.rack.menu") : f.panel->root().find("fx.rack.menu");
+    REQUIRE(menu);
+    std::vector<std::string> labels;
+    for (const auto& item : ui::menuItems(*menu)) labels.push_back(item.label);
+    CHECK(std::find(labels.begin(), labels.end(), "Automate") != labels.end());
+    CHECK(std::find(labels.begin(), labels.end(), "MIDI learn…") != labels.end());
+    for (const auto& item : ui::menuItems(*menu))
+        if (item.label == "Automate") {
+            auto run = item.run;
+            f.panel->root().closePopups();
+            run();
+        }
+    bool automated = false;
+    for (const auto& e : f.app->head().envelopes)
+        automated = automated || (e.value->target.object == *model::Id::parse(macro) &&
+                                  e.value->target.param == "macro_1");
+    CHECK(automated);
+}
+
+TEST_CASE("a Rack device without Macro modules shows its name and Open; knobs follow playback") {
+    Fixture f;
+    if (!f.ok) return;
+    auto exec = [&](const char* command, const std::string& args) {
+        auto r = f.run(command, json::parse(args).value());
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    json::Value made = exec("rack.add", R"({"name":"Plain"})");
+    const std::string rack = made["rack"].asString(), track = made["track"].asString();
+    const std::string vco =
+        exec("module.add", R"({"rack":")" + rack + R"(","type":"vco"})")["module"].asString();
+    REQUIRE(f.fx->open(*model::Id::parse(track)));
+    f.frame();
+    REQUIRE(f.fx->rackDevices().size() == 1);
+    CHECK(f.fx->rackDevices().front()->shown().empty());
+    CHECK(f.uiRoot().find("fx.rack.open." + rack));
+    CHECK_FALSE(f.fx->nextDeadline());  // nothing to follow
+    f.snapshot("fx-rack-plain.png");
+    // A Macro whose first knob is automated from 0 to 100 % over 4 beats.
+    const std::string macro =
+        exec("module.add", R"({"rack":")" + rack + R"(","type":"macro"})")["module"].asString();
+    exec("cable.add", R"({"from":")" + macro + R"(.out_1","to":")" + vco + R"(.exp_fm"})");
+    exec("env.add",
+         R"({"module":")" + macro +
+             R"(","param":"macro_1","points":[{"beat":0,"value":0},{"beat":4,"value":100}]})");
+    f.fx->tick();
+    f.frame();
+    REQUIRE(f.fx->rackDevices().size() == 1);
+    REQUIRE(f.fx->rackDevices().front()->shown().size() == 1);
+    CHECK(f.fx->nextDeadline());
+    engine::DummyBackend backend(
+        engine::DummyBackend::Options{.mode = engine::DummyBackend::Mode::Manual});
+    REQUIRE(f.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 512},
+                               {.anticipative = false}));
+    f.app->engine()->play();
+    backend.run(1);
+    std::this_thread::sleep_for(std::chrono::milliseconds(40));
+    f.fx->tick();  // the running Macro is watched from here
+    // Two beats at 120 bpm: a second.
+    for (int i = 0; i < 93; ++i) backend.run(1);
+    std::this_thread::sleep_for(std::chrono::milliseconds(40));
+    f.fx->tick();
+    const auto shown = f.fx->rackDevices().front()->shown();
+    REQUIRE(shown.size() == 1);
+    const double value = std::stod(shown[0].value);
+    CHECK(value > 30);
+    CHECK(value < 70);
+    f.snapshot("fx-rack-playing.png");
+    f.app->stopEngine();
+}

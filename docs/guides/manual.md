@@ -339,6 +339,12 @@ To keep what a sequencer or any module with pitch and gate outputs plays,
 right-click it, choose **Capture notes to track…**, then a channel and a
 length: the notes land there as a MIDI item, from the bar the playhead is
 in, and Undo takes them away.
+A rack's performance controls are its **Macro** modules: cable a Macro's
+outputs to what you want to play, and the channel the rack feeds shows those
+knobs at the top of its FX chain window (the **fx** button), named after
+what they drive ("Filter cutoff"), with **Open** to go to the rack. Turn
+them there, right-click one to automate it or to learn a MIDI controller,
+and watch them move with their automation as the song plays.
 **Tidy up** in the space's right-click menu lays the rack out by signal
 flow, left to right; with several modules selected, only they move. Undo
 puts them back.

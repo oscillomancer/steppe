@@ -6,6 +6,7 @@
 // browser and a semantic parameter tab. Every change is a command on the bus.
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -19,6 +20,8 @@
 #include "floating_panel.h"
 #include "fx_params.h"
 #include "plugin_browser.h"
+#include "rack_controls.h"
+#include "rack_device.h"
 #include "supple/engine/app.h"
 #include "supple/model/ids.h"
 #include "supple/ui/node.h"
@@ -44,6 +47,8 @@ class FxWindow {
         std::function<void(const std::string&)> onError = {};
         // The MIDI learn dialog, for the parameter panel's "MIDI" buttons.
         std::function<void(LearnRequest)> openLearn = {};
+        // The rack window on a rack (a channel's Rack device's Open).
+        std::function<void(model::Id rack)> openRack = {};
     };
 
     FxWindow(engine::EngineApp& app, cmd::Dispatcher& dispatcher, ui::Root& mainRoot,
@@ -65,6 +70,10 @@ class FxWindow {
 
     // Frame pass: refresh after changes made elsewhere (agents, undo).
     void tick(bool event = true);
+    // When the Rack devices' knobs next read their Macros' telemetry.
+    std::optional<std::chrono::steady_clock::time_point> nextDeadline() const;
+    // Tests: the chain's Rack devices (racks that feed the track).
+    std::vector<RackDevice*> rackDevices() const { return devices_; }
     // Before dispatching floating input: project commands may have run earlier
     // in the same SDL event batch, before the next frame's regular tick.
     void syncProject() {
@@ -189,7 +198,10 @@ class FxWindow {
     ui::Node* tabsRow_ = nullptr;
     ui::Button* title_ = nullptr;
     ui::Label* status_ = nullptr;
-    ui::Label* touched_ = nullptr;  // the last touched parameter
+    ui::Label* touched_ = nullptr;      // the last touched parameter
+    std::vector<RackDevice*> devices_;  // in body_
+    racks::Watchers watchers_;          // their Macro modules
+    std::optional<std::chrono::steady_clock::time_point> nextFollow_;
     std::uint64_t touchedSerial_ = 0;
     std::uint64_t shownVersion_ = ~std::uint64_t{0};
     std::uint64_t projectGeneration_ = ~std::uint64_t{0};

@@ -457,7 +457,8 @@ FxWindow::FxWindow(engine::EngineApp& app, cmd::Dispatcher& dispatcher, ui::Root
       panel_(panel),
       favouritesFile_(std::move(favouritesFile)),
       hooks_(std::move(hooks)),
-      mainBrowser_(std::make_unique<PluginBrowser>(app, dispatcher, mainRoot, favouritesFile_)) {}
+      mainBrowser_(std::make_unique<PluginBrowser>(app, dispatcher, mainRoot, favouritesFile_)),
+      watchers_(app) {}
 
 bool FxWindow::shows(model::Id fx) const {
     if (!page_) return false;
@@ -594,6 +595,9 @@ Status FxWindow::open(model::Id track) {
     panel_.open(std::move(page), [this] {
         page_ = nullptr;
         body_ = nullptr;
+        devices_.clear();
+        watchers_.set({});
+        nextFollow_.reset();
         tabsRow_ = nullptr;
         title_ = nullptr;
         status_ = nullptr;
@@ -696,6 +700,10 @@ void FxWindow::addFxTo(const std::vector<model::Id>& tracks, const std::string& 
 }
 
 void FxWindow::close() { panel_.close(); }
+
+std::optional<std::chrono::steady_clock::time_point> FxWindow::nextDeadline() const {
+    return page_ && !watchers_.modules().empty() ? nextFollow_ : std::nullopt;
+}
 
 void FxWindow::setStatus(std::string message) {
     if (status_) status_->setText(std::move(message));
@@ -826,6 +834,20 @@ void FxWindow::tick(bool event) {
         }
     }
     if (page_ && (replaced || app_.head().version != shownVersion_)) refresh();
+    // The Rack devices' knobs follow their Macros (automation as it plays).
+    std::vector<model::Id> macros;
+    if (page_)
+        for (const RackDevice* d : devices_)
+            macros.insert(macros.end(), d->macroModules().begin(), d->macroModules().end());
+    const auto now = std::chrono::steady_clock::now();
+    if (macros.empty()) {
+        if (!watchers_.modules().empty()) watchers_.set({});
+        nextFollow_.reset();
+    } else if (!nextFollow_ || now >= *nextFollow_) {
+        watchers_.set(std::move(macros));  // again: instances made since are watched too
+        for (RackDevice* d : devices_) d->follow();
+        nextFollow_ = now + std::chrono::milliseconds(33);
+    }
     if (page_ && body_)
         for (const auto& [id, cached] : latency_) {
             const auto fx = model::Id::parse(id);
@@ -969,6 +991,7 @@ void FxWindow::refresh() {
     const model::Track* track = app_.head().tracks.find(track_);
     if (!track) {
         body_->clear();
+        devices_.clear();
         selected_ = {};
         shownVersion_ = app_.head().version;
         projectGeneration_ = app_.projectGeneration();
@@ -983,6 +1006,7 @@ void FxWindow::refresh() {
         panel_.setTitle(title_->valueText());
     }
     body_->clear();
+    devices_.clear();
     const auto order = rowOrder();
     const auto inChain = [&](model::Id fx) {
         return std::find(order.begin(), order.end(), fx) != order.end();
@@ -1023,6 +1047,28 @@ void FxWindow::buildChain(ui::Node& body) {
                                     "small", "ink-quiet");
         for (std::size_t i = 0; i < takeChain.size(); ++i) buildRow(body, takeChain[i], i, false);
         return;
+    }
+    // The racks that feed the channel (its input), first: each a Rack device
+    // with its Macro modules' knobs.
+    for (model::Id rack : racks::racksFeeding(app_.head(), track_)) {
+        RackDevice::Hooks rh;
+        rh.open = [this](model::Id r) {
+            if (hooks_.openRack) hooks_.openRack(r);
+        };
+        rh.exec = [this](const std::string& command, json::Value args, const std::string& gesture) {
+            const cmd::Origin origin{cmd::Origin::Type::Ui, "gui", {}, gesture};
+            auto r = dispatcher_.execute({command, std::move(args), origin});
+            if (!r) setStatus(command + ": " + r.error().message);
+        };
+        rh.learn = [this](LearnRequest request) {
+            if (hooks_.openLearn) hooks_.openLearn(std::move(request));
+        };
+        rh.menu = [this](std::vector<ui::MenuItem> items, ui::Point at) {
+            root().openPopup(
+                ui::makeMenu("fx.rack.menu", std::move(items), [this] { root().closePopup(); }),
+                {at.x, at.y, 1, 1});
+        };
+        devices_.push_back(&body.emplace<RackDevice>(app_, rack, std::move(rh)));
     }
     // The input chain (fx.add {chain:"input"}): always shown, so it can be
     // started from here.

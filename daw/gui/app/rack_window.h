@@ -19,6 +19,7 @@
 
 #include "app_actions.h"
 #include "floating_panel.h"
+#include "rack_controls.h"
 #include "rack_plugin_params.h"
 #include "rack_space.h"
 #include "supple/ui/root.h"
@@ -174,7 +175,7 @@ class RackWindow {
     bool browserVisible_ = true;
     int gesture_ = 0;
     std::optional<std::chrono::steady_clock::time_point> nextTelemetry_;
-    std::vector<model::Id> watched_;
+    racks::Watchers watchers_;  // the modules in view (telemetry)
     RackSpace* space_ = nullptr;
     RackTabs* tabs_ = nullptr;
     RackBrowser* browser_ = nullptr;

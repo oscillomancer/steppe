@@ -788,6 +788,33 @@ Linux/macOS FD readiness uses the shared watcher; Windows advertises no CLAP
 POSIX FD support. Display tests remain opt-in, never enabled by normal CI.
 
 
+**Rack devices.** A channel that racks feed (a route from a rack's Out
+module to the channel, as its record input) shows each such rack first in
+its Chain tab, above the input chain, as a Rack device (`RackDevice`,
+`daw/gui/app/rack_device.h`): the rack's name, "rack", and Open (the rack
+window on that rack). Below come the knobs of its Macro modules
+(`com.suppleaudio.rack.macro`), grouped under each Macro's label (else
+"Macro"). Only a knob whose output (`macro_N` out of `out_N`) is cabled
+is shown, named after what its first cable reaches: the far module's title
+and its knob's or input's name, the name's first letter lower-cased unless
+it is an initialism ("Filter cutoff", "Amp CV"), and "+N" for the output's
+other cables. A Macro with no cabled knob is left out. With none, the
+device is only the name and Open: the GUI does not guess at other
+"performance" knobs. A knob's drag runs `module.set` as one undo step (its
+gesture); a double click resets it; its right-click offers a rack knob's
+menu (Default, Automate or Show/Hide automation lane, MIDI learn… and
+Remove MIDI learn, `racks::knobMenu`, shared with the rack window). The
+knobs follow their Macro's telemetry, so automation moves them as it
+plays: the window reads the shown Macros' telemetry every 33 ms
+(`FxWindow::nextDeadline`) and watches only those modules. Telemetry
+subscriptions are shared with the rack window (`racks::Watchers`: a module
+is watched while any view reads it). The devices are rebuilt with the
+chain when the project changes (a cable, a label), not while a knob is
+being dragged. The window is this home because it is where a channel's
+devices are shown whole, one channel at a time with room for eight knobs
+in a row, and it already switches channels and offers a parameter's
+learn and automation. The mixer strip's chain is one line per plug-in.
+
 Chain list with add (searchable browser over the plugin scan cache;
 favourites and stock plugins first; a stock plugin's row says what it is
 after its name, from its first CLAP feature after the main category
@@ -1297,6 +1324,9 @@ a new channel). It follows rack.md §8.
   the knob through `module.set`, so the window's knob follows it along the
   same travel (tested end to end with a dummy device's CCs). A plugin
   module's knobs are its plug-in's (the FX window's learn).
+- **Outside the rack.** A rack's Macro modules are its performance
+  controls: their cabled knobs show in the FX window of each channel the
+  rack feeds, as a Rack device with Open (§4.5).
 - **Browser.** A column on the left (the header's Browser button shows or
   hides it) with two views, Modules and Patches, side by side at its top.
   It opens on Modules, which lists module types only, so what it shows
