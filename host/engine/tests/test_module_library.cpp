@@ -347,7 +347,7 @@ TEST_CASE("rack presets: a patch saved from one rack plays in another") {
     auto edited = [&](const std::function<void(json::Value&)>& change) {
         json::Value doc = *json::parse(*first);
         for (auto& m : doc["modules"].asArray()) change(m);
-        return json::writeCompact(doc);
+        return json::writeCanonical(doc);
     };
     REQUIRE(writeFileAtomic(file.parent_path() / "Old.json", edited([](json::Value& m) {
                                 if (m["type"].asString() == "com.suppleaudio.rack.vca")
@@ -886,7 +886,7 @@ TEST_CASE("rack presets: embedded source ids are checked before installation") {
         doc["sources"]["com.example.requested"]["source"] = "broken module";
     }
     const auto path = f.dir / "bad-source.json";
-    REQUIRE(writeFileAtomic(path, json::writeCompact(doc)));
+    REQUIRE(writeFileAtomic(path, json::writeCanonical(doc)));
     json::Value a = json::Value::object();
     a["rack"] = "rk_1";
     a["path"] = path.string();
