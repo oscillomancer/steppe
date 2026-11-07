@@ -607,10 +607,11 @@ struct Node {
     std::vector<Stage> chain;
     // Input FX (a channel's input_chain): they process its record input, which
     // is then monitored and recorded, whenever the track is armed with an
-    // audio input. Live (the device input exists only in the callback) and
+    // audio input, including a rack Out. Live (recording reads it in the callback) and
     // outside compensation; `inputBuf` holds this block's processed input.
     std::vector<Stage> inputChain;
     std::vector<int> recordInputs;  // device channels, 0-based (one = mono to both)
+    bool recordRack = false;        // an armed channel's rack Out input
     std::int64_t inputLatency = 0;
     Stereo inputBuf;
     std::int64_t latIn = 0, latChain = 0;  // forward arrival (diagnostic), compensated chain

@@ -89,6 +89,8 @@ Both ends are in the same rack. At most one cable joins the same two ends.
 - **From an Out module** to a channel: the channel's record input
   (`track.record.input`). The channel always hears it, armed or not, before
   its items and inserts (as timeline material, not as monitored input).
+  When armed it records stereo, through its input FX, using the ordinary
+  audio recorder's loop/punch, takes, recovery and undo rules.
   `"from": {"module": "mo_3"}`.
 - **To an In module** from any track: a send, with the route's tap, level,
   pan, mute, channel map and envelopes. `"to": {"module": "mo_9"}`. Sends
@@ -474,6 +476,11 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
 - **MIDI.** Notes modules receive the compiled MIDI events of their source
   tracks (items, loops, playrate), and live MIDI from the device when the
   source monitors it; the node is then live.
+- **Recording Out.** An armed channel with an Out as its `record.input`
+  records that stereo signal after input FX, before items and track inserts.
+  The channel runs live; its source rack may render ahead through the audio
+  frontier. The recorder places the samples by the channel's input timeline
+  and input-FX latency, with its usual padding and take rules (engine.md §4).
 - **Live.** A rack is live when it consumes live MIDI or a live track sends
   to it; liveness propagates to what it feeds.
 - **Parameters.** Knob edits on a running rack go to atomic slots (no

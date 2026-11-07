@@ -1791,8 +1791,21 @@ Status Engine::startRecording(std::vector<RecordTarget> targets) {
         return Error("record.nothing_armed", "no track is armed with an input", {},
                      "use track.list for a channel id, then track.set {track, armed: true, "
                      "record_input: [1, 2]}, or arm a master to record its output");
-    // A master's output is placed by its own timeline shift (ADR-0057).
+    // Rendered inputs use their musical clock; device inputs use round trip.
     const detail::Plan* plan = latestPlan_.load(std::memory_order_acquire);
+    for (RecordTarget& target : targets) {
+        if (!target.rackInput) continue;
+        const auto node = plan ? std::find_if(plan->nodes.begin(), plan->nodes.end(),
+                                              [&](const auto& n) { return n.id == target.track; })
+                               : std::vector<detail::Node>::const_iterator{};
+        if (!plan || node == plan->nodes.end() || !node->recordRack)
+            return Error("record.rack_input",
+                         "the loaded plan has no armed rack input for " + target.track.str(),
+                         "/track",
+                         "assign a rack Out with track.set {record_rack, armed: true} and load it "
+                         "before recording");
+        target.outputShift = node->timelineShift + node->inputLatency;
+    }
     for (RecordTarget& target : targets) {
         if (!target.midi || !target.midi->routed) continue;
         const auto node = plan ? std::find_if(plan->nodes.begin(), plan->nodes.end(),

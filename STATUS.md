@@ -280,6 +280,8 @@ instructions are in `docs/guides/installing.md`.
   filtering/remapping, fan-out, compensation and exact RT/offline timing.
   Armed MIDI destinations record these routes, with or without an instrument,
   alongside device MIDI, using the recorder's loop, punch and overdub rules.
+  Armed channels also record their rack Out audio input as stereo WAV,
+  including input FX, loop/punch takes, recovery and undo.
   Agents patch with `rack.patch` (named
   modules and cables in one step, laid out by signal flow and labelled by
   name; `rack.arrange` tidies a rack) or `module.add`/`cable.add`, hear a patch
@@ -795,8 +797,9 @@ Engine and hosting:
   track's playrate map;
   cables into a plugin module's parameters modulate CLAP plug-ins only
   (VST3 has no modulation), by their first voice, at most 16 per plug-in;
-  a plug-in's latency inside a rack is not compensated; recording an armed channel whose input is a rack's Out is
-  not supported; post-fader sends into an In module take the linear path.
+  a plug-in's latency inside a rack is not compensated;
+  `rack.capture` renders synchronously; post-fader sends into an In module
+  take the linear path.
 - The headless platform layer (ADR-0035) has natively tested macOS/Windows
   address waits, wake sources, control socket/MCP paths and user directory roots.
   Both native engines run with dummy/offline audio and native RT/offline

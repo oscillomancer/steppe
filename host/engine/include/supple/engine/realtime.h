@@ -68,6 +68,9 @@ struct RecordTarget {
     // `outputShift`, the master's timeline shift where that mix is produced.
     bool output = false;
     std::int64_t outputShift = 0;
+    // A rack's Out instead of device channels: stereo input, before items
+    // and inserts, after input FX. outputShift is its input clock + input FX.
+    bool rackInput = false;
 };
 
 // A master recording its output (ADR-0057): its own items do not play

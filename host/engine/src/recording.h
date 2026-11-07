@@ -54,10 +54,11 @@ struct RecordingInfo {
     std::int64_t loopStart = 0, loopEnd = 0;
     std::string hash = {};  // optional; finalized by the background recording job
 };
-// A track's device input after its input FX (ADR-0014): what it records
+// A track's input after its input FX (ADR-0014): what it records
 // instead of the raw device channels, and the latency of those FX. For a
 // recorded master (ADR-0057), its output before its own items; the recorder
-// places it from the target's outputShift and ignores `latency`.
+// places it from the target's outputShift and ignores `latency`. A rack Out
+// uses its channel's pre-FX tap, with outputShift including its input FX.
 struct ProcessedInput {
     model::Id track;
     const float* channels[2] = {nullptr, nullptr};

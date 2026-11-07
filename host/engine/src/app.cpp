@@ -1587,11 +1587,12 @@ Result<TransportInfo> EngineApp::transport(std::string_view action, std::optiona
                 targets.push_back(std::move(t));
                 continue;
             }
-            if (!output && (!in || !in->from.hwChannels)) continue;
+            if (!output && (!in || (!in->from.hwChannels && !in->from.module))) continue;
             RecordTarget t;
             t.track = e.id;
             t.output = output;
-            if (in)
+            t.rackInput = in && in->from.module.has_value();
+            if (in && in->from.hwChannels)
                 for (int ch : *in->from.hwChannels) t.inputs.push_back(ch - 1);
             std::string base;
             for (char c : tr.name.empty() ? e.id.str() : tr.name)

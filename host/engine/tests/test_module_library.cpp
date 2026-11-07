@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <functional>
 
 #include "rack_runtime.h"
@@ -1185,5 +1186,78 @@ TEST_CASE("Note Out recording: loop takes, punch clipping and overdub reuse the 
         f.run("history.undo");
         CHECK((previous ? f.app->head().items.find(*previous)->takes.size() == 1
                         : !f.app->head().items.contains(item)));
+    }
+}
+
+TEST_CASE("rack Out recording: the file equals offline output in both executors" *
+          doctest::description("rt")) {
+    bool inputFx = false, loop = false;
+    SUBCASE("plain input") {}
+    SUBCASE("input FX latency") { inputFx = true; }
+    SUBCASE("loop passes") { loop = true; }
+    for (const auto options : {EngineOptions{.anticipative = false, .workers = 0},
+                               EngineOptions{.workers = 0}, EngineOptions{.workers = 2}}) {
+        INFO("anticipative " << options.anticipative << ", workers " << options.workers);
+        Fixture f;
+        f.run("project.set", R"({"console9":false})");
+        f.run("track.add", R"({"name":"Recorded rack"})");
+        f.run("rack.add", R"({"track":"tr_1"})");
+        f.run("module.add", R"({"rack":"rk_1","type":"transport"})");
+        f.run("cable.add", R"({"from":"mo_2.beat_phase","to":"mo_1.l"})");
+        const auto expected =
+            f.app->renderSession(f.app->head(), {.endSeconds = 2.0,
+                                                 .blockSize = 37,
+                                                 .threads = 1,
+                                                 .track = model::Id{model::Kind::Track, 1},
+                                                 .tap = model::Tap::PreFx});
+        REQUIRE(expected);
+        f.run("track.set", R"({"track":"tr_1","armed":true,"monitor":"off","volume_db":-12})");
+        if (inputFx) {
+            f.run("fx.add",
+                  R"({"track":"tr_1","plugin":"com.suppleaudio.test.gain","chain":"input"})");
+            auto transaction = f.app->beginTransaction(origin, "Input latency");
+            REQUIRE(transaction);
+            f.app->txn().modify<model::FxInstance>({model::Kind::Fx, 1}, [](auto& fx) {
+                fx.patch =
+                    json::parse(
+                        R"({"schema":"supple.test-gain-patch/1.0","params":{"latency":"short"}})")
+                        .value();
+            });
+            REQUIRE(f.app->commitTransaction(*transaction));
+        }
+        if (loop) f.run("transport.loop", R"({"start_beat":0,"end_beat":2})");
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+        REQUIRE(f.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 96, .inputs = 0},
+                                   options));
+        f.run("transport.record");
+        for (int left = 1000; left > 0;) {
+            if (options.anticipative) REQUIRE(f.app->engine()->awaitRendered(4096));
+            const int count = std::min(left, 4096 / 96);
+            backend.run(count);
+            left -= count;
+        }
+        auto stopped = f.run("transport.stop");
+        CHECK(f.app->engine()->processErrors() == 0);
+        f.app->stopEngine();
+        REQUIRE(stopped["recorded"].size() == 1);
+        auto& result = stopped["recorded"].asArray().front();
+        auto audio = audio::readAudio(result["file"].asString());
+        REQUIRE(audio);
+        REQUIRE(audio->channels.size() == 2);
+        const std::size_t frames = 96000;
+        const std::size_t content = inputFx ? frames - 64 : frames;
+        for (std::size_t channel = 0; channel < 2; ++channel) {
+            REQUIRE(audio->channels[channel].size() == frames);
+            CHECK(std::memcmp(audio->channels[channel].data(),
+                              expected->audio.channels[channel].data(),
+                              content * sizeof(float)) == 0);
+            CHECK(std::all_of(
+                audio->channels[channel].begin() + static_cast<std::ptrdiff_t>(content),
+                audio->channels[channel].end(), [](float sample) { return sample == 0; }));
+        }
+        CHECK(result["lost_frames"] == 0);
+        if (loop) CHECK(result["takes"].size() == 2);
+        f.run("history.undo");
+        CHECK(f.app->head().items.size() == 0);
     }
 }

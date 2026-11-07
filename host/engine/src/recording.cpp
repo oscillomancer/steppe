@@ -149,15 +149,16 @@ Recorder::Recorder(std::vector<RecordTarget> targets, double rate, std::int64_t 
         }
         auto track = std::make_unique<Track>();
         track->target = std::move(t);
-        track->ring.init(track->target.output ? 2u
-                                              : static_cast<std::uint32_t>(std::max<std::size_t>(
-                                                    1, track->target.inputs.size())),
-                         static_cast<std::size_t>(rate * 10.0));  // ten seconds
-        // A master's output (ADR-0057) at processing position P belongs to
+        track->ring.init(
+            track->target.output || track->target.rackInput
+                ? 2u
+                : static_cast<std::uint32_t>(std::max<std::size_t>(1, track->target.inputs.size())),
+            static_cast<std::size_t>(rate * 10.0));  // ten seconds
+        // A rendered signal (a master's output or a rack input) at P belongs to
         // the timeline at P - outputShift, device input at P - latency: its
         // frames go that much later in its file (earlier when negative, the
         // first ones dropped), so every file starts at the same position.
-        if (track->target.output) {
+        if (track->target.output || track->target.rackInput) {
             track->shift = track->target.outputShift - latency_;
             track->skip = std::max<std::int64_t>(0, track->shift);
         }
@@ -206,7 +207,8 @@ void Recorder::capture(const float* const* in, std::uint32_t inChannels, std::ui
                 own = &p;
                 break;
             }
-        if (t->target.output) {  // a master's output; none this part: the drain pads silence
+        if (t->target.output ||
+            t->target.rackInput) {  // rendered signal; none this part: pad silence
             const auto from = static_cast<std::uint32_t>(std::min<std::int64_t>(frames, t->skip));
             t->skip -= from;
             if (!own || from == frames) continue;
