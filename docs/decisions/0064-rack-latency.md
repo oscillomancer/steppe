@@ -17,7 +17,11 @@ ending there. Script modules contribute zero. Remove exactly the cables
 marked `feedback` by the schedule (backward edges in a feedback group's
 module-id order); the remaining graph is a DAG. A plug-in on a forward
 path counts even inside a loop, including a loop closed only by modulation.
-The removed cables keep the schedule's one-frame feedback delay.
+The removed cables keep the schedule's one-frame feedback delay. Depending
+on module-id order, the plug-in where a loop is entered can fall behind a
+removed cable and its latency may not count. Reorder the modules to keep
+that latency on a forward path, or use an explicit Delay module to align
+paths that need it.
 
 The rack node's latency is the maximum over audio Outs and Note Outs with
 an outgoing edge. Unrouted outputs do not add latency to the song. Read-ahead PDC
