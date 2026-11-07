@@ -338,7 +338,8 @@ Tags in the reference group the modules. Some starting points:
   `transient` (each hit's attack and sustain).
 - **Utility**: `vca`, `mixer`, `scale` (attenuverters), `matrix` (a 4x4
   modulation matrix), `math`, `poly`,
-  `pitch`, `switcher`, `macro` (eight performance knobs), `scope`.
+  `pitch`, `switcher`, `macro` (eight performance knobs), `keygates`
+  (notes to a gate per key: a drum kit played from notes), `scope`.
 
 Ideas that work: clock a melody source from a Euclidean rhythm so notes
 and rests interlock; feed a slow `chaos` or `drift` into a filter and a

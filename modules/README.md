@@ -95,6 +95,7 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `logic` | AND, OR, XOR, NOT, a flip-flop and a trigger on every change; poly |
 | `switcher` | A sequential switch both ways (four to one, one to four), stepped or selected, with a crossfade; poly |
 | `macro` | Eight knobs out of eight jacks, unipolar or bipolar, glided: a patch's performance controls |
+| `keygates` | Eight gates and velocities from poly notes, one per key (General MIDI drum keys at first): a drum kit played from notes; a note on a held key hits again |
 | `poly` | Merge eight monos to a poly cable, split one to eight, sum it, or spread it across stereo |
 | `scope` | An oscilloscope: two traces with afterglow, triggered, free or locked to the song, and X-Y |
 | `pitch` | A constant pitch or a transposer: octave, semitone and fine on a poly pitch, with a tuner display |
