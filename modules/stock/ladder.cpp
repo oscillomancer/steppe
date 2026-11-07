@@ -102,8 +102,11 @@ struct Ladder : Module {
                 const double G = g / (1.0 + g);
                 const double k = 4.4 * clamp(resonance.at(i, c), 0.0, 1.0);
                 const double d = clamp(drive.at(i, c), 0.0, 1.0);
-                const double pre =
-                    dbToGain(24.0 * d) * (1.0 + k * clamp(compensation.at(i, c), 0.0, 1.0));
+                // Compensation makes up the bass the feedback takes from the
+                // low passes; the high pass loses none, so it is taken back
+                // off that output.
+                const double lift = 1.0 + k * clamp(compensation.at(i, c), 0.0, 1.0);
+                const double pre = dbToGain(24.0 * d) * lift;
                 const double post = dbToGain(-12.0 * d);
                 s.low.up(pre * in[c][i]);
                 s.two.up(0.0);
@@ -117,7 +120,7 @@ struct Ladder : Module {
                 }
                 out[c][i] = post * s.low.down();
                 low12[c][i] = post * s.two.down();
-                high[c][i] = post * s.high.down();
+                high[c][i] = post * s.high.down() / lift;
             }
         }
     }

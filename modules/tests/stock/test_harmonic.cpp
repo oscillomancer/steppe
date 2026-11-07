@@ -33,7 +33,7 @@ TEST_CASE("harmonic: its pitch, and a sine from one partial") {
     CHECK(frequency(h.output("out"), 48000) == doctest::Approx(kC4).epsilon(1e-3));
     const auto sine = tone({{"partials", 1}});
     CHECK(partial(sine, 2) < 1e-6 * partial(sine, 1));
-    CHECK(peak(sine) == doctest::Approx(0.7).epsilon(1e-3));
+    CHECK(peak(sine) == doctest::Approx(0.5).epsilon(1e-3));
 }
 
 TEST_CASE("harmonic: Partials counts them, the last fading in") {
@@ -51,8 +51,8 @@ TEST_CASE("harmonic: Brightness tilts the levels, which keep their power") {
         const auto y = tone({{"brightness", bright}});
         CHECK(partial(y, 2) / partial(y, 1) == doctest::Approx(ratio).epsilon(0.01));
         CHECK(partial(y, 4) / partial(y, 1) == doctest::Approx(ratio * ratio).epsilon(0.01));
-        CHECK(rms(y) == doctest::Approx(0.7 / std::sqrt(2.0)).epsilon(0.01));
-        CHECK(peak(y) < 1.4);
+        CHECK(rms(y) == doctest::Approx(0.5 / std::sqrt(2.0)).epsilon(0.01));
+        CHECK(peak(y) < 1.0);
     }
 }
 
@@ -80,10 +80,10 @@ TEST_CASE("harmonic: Odd/Even, and the odd and even outputs") {
 TEST_CASE("harmonic: Stretch moves the partials off the harmonics") {
     const auto wide = tone({{"stretch", 100}});
     const double f2 = 500.0 * std::pow(2.0, 1.3);
-    CHECK(amplitudeAt(wide, f2, 48000) > 0.2);
+    CHECK(amplitudeAt(wide, f2, 48000) > 0.14);
     CHECK(amplitudeAt(wide, 1000.0, 48000) < 0.05);
     const auto narrow = tone({{"stretch", -100}});
-    CHECK(amplitudeAt(narrow, 500.0 * std::pow(2.0, 0.7), 48000) > 0.2);
+    CHECK(amplitudeAt(narrow, 500.0 * std::pow(2.0, 0.7), 48000) > 0.14);
 }
 
 TEST_CASE("harmonic: the comb's notches, and Shift slides them") {

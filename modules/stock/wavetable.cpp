@@ -306,8 +306,10 @@ struct Wavetable : Module {
             for (int f = 0; f < framesOf(t); ++f) build(t, f);
         for (int c = 0; c < 16; ++c)
             for (int v = 0; v < 7; ++v) {
-                // Unison copies start apart, so they do not sum to a spike.
-                const double u = 0.618034 * v;
+                // Unison copies start apart, so they do not sum to a spike;
+                // apart unevenly (by v squared), since their detunes are
+                // even: evenly spaced phases would all meet again.
+                const double u = 0.618034 * v * v;
                 voice[c].phase[v] = u - floor(u);
             }
     }
@@ -362,7 +364,10 @@ struct Wavetable : Module {
                     const double next = p + inc;
                     vc.phase[v] = next - floor(next);
                 }
-                out[c][i] = y / sqrt(n);
+                // Detuned copies drift in and out of step and sum like
+                // noise, peaking near three times their RMS: scaled by
+                // n^0.8 rather than its root, their peaks stay near 1.
+                out[c][i] = y * pow(static_cast<double>(n), -0.8);
             }
         }
         // The wave channel 1 plays, for the display.

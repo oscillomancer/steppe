@@ -329,17 +329,23 @@ Tags in the reference group the modules. Some starting points:
 - **Sound**: `vco`, `wavetable`, `operator` (FM), `harmonic`, `morph`,
   `phasor`, `noise`, `string` and `resonator` (physical models), `drum`,
   `granular`.
-- **Shape**: `filter`, `ladder`, `lpg`, `vowel`, `comb`, `fold`, `drive`,
-  `shaper`, `shift`, `pitchshift`, `chorus`, `delay`, `reverb`.
+- **Shape**: `filter`, `ladder`, `lpg`, `vowel`, `comb`, `eq`, `fold`,
+  `drive`, `shaper`, `shift`, `pitchshift`, `freeze` (a held spectrum),
+  `vocoder` (a voice's bands on a carrier), `chorus`, `phaser`, `delay`,
+  `reverb`, `glitch` (repeats, reverses, tape stops), `orbit` (a circling
+  panner, stereo to eight outputs).
+- **Dynamics**: `compressor` (its Key input ducks by another sound),
+  `transient` (each hit's attack and sustain).
 - **Utility**: `vca`, `mixer`, `scale` (attenuverters), `matrix` (a 4x4
   modulation matrix), `math`, `poly`,
   `pitch`, `switcher`, `macro` (eight performance knobs), `scope`.
 
 Ideas that work: clock a melody source from a Euclidean rhythm so notes
 and rests interlock; feed a slow `chaos` or `drift` into a filter and a
-`turing`'s `flip` so the patch evolves; send a `follower` on one track's
-audio (through an In) to another sound's VCA for ducking; patch a module's
-output back into its own modulation input for feedback.
+`turing`'s `flip` so the patch evolves; duck a sound by one track's audio
+(through an In) into a `compressor`'s Key, or a `follower` on it into the
+sound's VCA; patch a module's output back into its own modulation input
+for feedback.
 
 ## Your own modules
 

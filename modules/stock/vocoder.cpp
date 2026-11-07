@@ -181,7 +181,8 @@ struct Vocoder : Module {
             .set(width, 60)
             .set(attack, 2)
             .set(release, 30)
-            .set(noise, 40);
+            .set(noise, 40)
+            .set(level, -3.5);
         p.add("Small Throat").set(shift, 5);
         p.add("Choir Pad").set(bands, 24).set(release, 250).set(width, 70).set(noise, 5);
     }

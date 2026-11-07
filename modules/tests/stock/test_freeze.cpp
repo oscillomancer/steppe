@@ -120,14 +120,15 @@ TEST_CASE("freeze: Blur smears in time; Tilt sets the balance by octaves") {
     // And it comes in slowly too.
     CHECK(rms(slice(smeared, 4096, 8896)) < 0.5 * rms(slice(smeared, 40000, 44800)));
 
-    // +6 dB per octave about 1 kHz: 250 Hz 12 dB down, 4 kHz 12 dB up.
+    // +6 dB per octave: 4 kHz 24 dB over 250 Hz, the power kept.
     ModuleHarness h(stock("freeze"));
     h.set("tilt", 6);
     h.input("in", 1, [](int, std::int64_t n) { return tone(n, 250.0) + tone(n, 4000.0); });
     h.run(48000);
     const auto y = slice(h.output("out"), 24000);
-    CHECK(amplitudeAt(y, 250.0, 48000) == doctest::Approx(0.5 / 3.981).epsilon(0.05));
-    CHECK(amplitudeAt(y, 4000.0, 48000) == doctest::Approx(0.5 * 3.981).epsilon(0.05));
+    const double low = amplitudeAt(y, 250.0, 48000), high = amplitudeAt(y, 4000.0, 48000);
+    CHECK(high / low == doctest::Approx(3.981 * 3.981).epsilon(0.05));
+    CHECK(std::hypot(low, high) == doctest::Approx(std::hypot(0.5, 0.5)).epsilon(0.05));
 }
 
 TEST_CASE("freeze: Mix blends the dry undelayed; poly channels freeze on their own") {

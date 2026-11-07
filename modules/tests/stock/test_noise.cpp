@@ -26,7 +26,7 @@ TEST_CASE("noise: every colour at a usable level, with its slope") {
         CAPTURE(out);
         const double r = rms(h.output(out));
         CHECK(r == doctest::Approx(0.3).epsilon(0.08));
-        CHECK(peak(h.output(out)) <= 1.5);
+        CHECK(peak(h.output(out)) <= 1.0);
     }
     // Band powers of constant-Q bands two octaves apart: white rises 6 dB,
     // pink stays, brown falls 6, blue rises 12.

@@ -10,6 +10,13 @@
 // ticks. Each channel is a noise of its own; Channels sets how many, and a
 // poly cable into a knob widens it further.
 
+// Pink noise is near Gaussian: at its level a rare peak passes 1. Above 0.8
+// it is eased in, to at most 1, which on noise nobody hears.
+double eased(double x) {
+    const double a = abs(x);
+    return a <= 0.8 ? x : (x < 0.0 ? -1.0 : 1.0) * (0.8 + 0.2 * tanh((a - 0.8) / 0.2));
+}
+
 struct Gen {
     Noise white, pink, brown;
     Random random;
@@ -77,7 +84,7 @@ struct NoiseModule : Module {
                 // Each scaled to about 0.3 RMS (-10 dBFS).
                 white[c][i] = 0.52 * g.white.white();
                 const double p = g.pink.pink();
-                pink[c][i] = 1.53 * p;
+                pink[c][i] = eased(1.53 * p);
                 brown[c][i] = 0.51 * g.brown.brown();
                 blue[c][i] = (p - g.lastPink) * 2.6;
                 g.lastPink = p;

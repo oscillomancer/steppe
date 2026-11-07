@@ -20,6 +20,7 @@ constexpr int kLines = 8;
 constexpr double kMaxPreMs = 500.0;
 constexpr double kMaxScale = 1.5;
 constexpr double kShiftWindow = 0.06;  // seconds
+constexpr double kWet = 0.5;           // the tail's level out
 
 // The lines' lengths at a scale of 1 (ms, no common factor) and their sway
 // rates (Hz); the diffusers' lengths (ms), the left's then the right's.
@@ -240,8 +241,10 @@ struct Reverb : Module {
             shimmerBack = 0.35 * amount * tanh(shiftCut.highpass(up));
             const double m = mix.at(i, 0);
             const double dry = min(1.0, 2.0 - 2.0 * m), wet = min(1.0, 2.0 * m);
-            outL[0][i] = dry * l + wet * wetL;
-            outR[0][i] = dry * r + wet * wetR;
+            // The network's tail, halved, comes back about as loud as what
+            // goes in at the default decay; it builds up with longer ones.
+            outL[0][i] = dry * l + wet * kWet * wetL;
+            outR[0][i] = dry * r + wet * kWet * wetR;
         }
     }
 };

@@ -16,11 +16,14 @@
 // Bias shifts the input before the curve, so it bends one side more:
 // even harmonics, and with Drive low, a sputter. Tone tilts the result
 // darker or brighter; Mix blends it with the dry input, Level sets the
-// output. The first five curves run at four times the sample rate so their
-// harmonics do not fold back as aliases (the last two alias on purpose),
-// through linear-phase filters that keep a saturated wave's peaks at 1:
-// the output, dry part and all, is 72 samples late (1.5 ms at 48 kHz). The
-// DC a bias or a rectifier leaves is filtered out.
+// output: -6 dB at first, since a driven sound comes out much louder than
+// it went in (a full-scale one squared off, about 8 dB). The first five
+// curves run at four times the sample rate so their harmonics do not fold
+// back as aliases (the last two alias on purpose), through linear-phase
+// filters that keep a saturated wave's peaks near 1 (their ripple, and the
+// DC filter's shift of a lopsided one, add up to 1.5 dB): the output, dry
+// part and all, is 72 samples late (1.5 ms at 48 kHz). The DC a bias or a
+// rectifier leaves is filtered out.
 
 double tube(double x) { return x >= 0.0 ? 1.0 - exp(-x) : (exp(2.0 * x) - 1.0) / 2.0; }
 
@@ -64,7 +67,10 @@ struct Drive : Module {
                     .smoothed(20)
                     .in("Output")
                     .help("The distorted share, the rest the dry input.");
-    Param level = decibels("Level", -24, 12, 0).smoothed(20).in("Output").help("The output level.");
+    Param level = decibels("Level", -24, 12, -6)
+                      .smoothed(20)
+                      .in("Output")
+                      .help("The output level: -6 at first, as driving makes it louder.");
 
     Input in = audioIn("In").help("What to distort. Poly: each channel alone.");
     Output out = audioOut("Out").help("The distorted mix.");

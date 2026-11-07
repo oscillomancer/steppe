@@ -7,7 +7,8 @@
 // into an endless pad, a vowel into a drone, a cymbal into a wash. Blur
 // smears the spectrum in time, so the live sound turns to a haze and a
 // freeze fades in and out instead of cutting; Shift moves every partial up
-// or down by semitones; Tilt darkens or brightens by dB per octave.
+// or down by semitones; Tilt darkens or brightens by dB per octave, about
+// 1 kHz, keeping the level.
 //
 // The sound is cut into overlapping frames of about 85 ms, eight over each
 // sample, and each frame's partials are measured for their level and their
@@ -132,6 +133,7 @@ struct Freeze : Module {
         // its shape, and turns on by what Shift adds to its frequency, so
         // its bins stay in step and it comes out as loud as it went in.
         int next = -1;
+        double before = 0.0, after = 0.0;  // the power, untilted and tilted
         for (int k = top - 1; k >= 0; --k) {
             const int at = base + k;
             if (isPeak[at] == 1) next = k;
@@ -144,9 +146,16 @@ struct Freeze : Module {
             if (to >= 0 && to < top) {
                 const double hz = max(s.binHz(to), 20.0);
                 const double m = level[at] * pow(10.0, tiltDb * log2(hz / 1000.0) / 20.0);
+                before += level[at] * level[at];
+                after += m * m;
                 const double ph = source[at] + turned[base + peak] - pi * (to % 2);
                 s.set(to, s.real(to) + m * cos(ph), s.imag(to) + m * sin(ph));
             }
+        }
+        // Tilt changes the colour, not the level: the frame keeps its power.
+        if (tiltDb != 0.0 && after > 1e-30) {
+            const double g = sqrt(before / after);
+            for (int k = 0; k < top; ++k) s.set(k, g * s.real(k), g * s.imag(k));
         }
     }
 
