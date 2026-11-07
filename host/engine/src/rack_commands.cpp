@@ -2212,6 +2212,7 @@ void registerRackPresetCommands(cmd::Registry& registry) {
                 std::string color;
             };
             std::vector<Planned> planned;
+            EngineApp::PluginModValidation validation{s, {}};
             const json::Value* cables = doc.find("cables");
             for (std::size_t k = 0; cables && k < cables->asArray().size(); ++k) {
                 const json::Value& entry = cables->asArray()[k];
@@ -2246,8 +2247,9 @@ void registerRackPresetCommands(cmd::Registry& registry) {
                         skip("module " + std::to_string(p.to) + " is not a plugin module");
                         continue;
                     }
-                    auto checked = e.validatePluginMod({}, plugins[p.to]->fx, p.toKey,
-                                                       at + "/to/port", plugins[p.to]->blob);
+                    auto checked =
+                        e.validatePluginMod({}, plugins[p.to]->fx, p.toKey, at + "/to/port",
+                                            plugins[p.to]->blob, &validation);
                     if (!checked) {
                         skip(checked.error().message + ". " + checked.error().hint);
                         continue;

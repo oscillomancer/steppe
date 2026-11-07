@@ -298,7 +298,9 @@ instructions are in `docs/guides/installing.md`.
   CLAP parameter ids (`fx_3.12`) as well as semantic keys, including plug-ins
   without semantic metadata; both survive project and preset reopening.
   Stale saved targets warn instead of blocking project opening; new cables
-  validate the actual FX state and require canonical numeric ids.
+  validate the actual FX state and require canonical numeric ids. Loading
+  restores one validation probe per FX, and open skips it when warnings are
+  not requested.
   Agents patch with `rack.patch` (named
   modules and cables in one step, laid out by signal flow and labelled by
   name; `rack.arrange` tidies a rack) or `module.add`/`cable.add`, hear a patch

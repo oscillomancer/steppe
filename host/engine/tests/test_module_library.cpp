@@ -1678,6 +1678,14 @@ TEST_CASE("rack cables: validation uses restored state and live parameter rescan
     auto missing = f.call("cable.add", *json::parse(R"({"from":"mo_2.playing","to":"fx_1.7"})"));
     REQUIRE_FALSE(missing);
     CHECK(missing.error().code == "rack.port");
+    const auto path = f.dir / "dynamic.json";
+    REQUIRE(f.app->save(path));
+    Fixture reopened;
+    std::vector<schema::Warning> warnings;
+    REQUIRE(reopened.app->open(path, &warnings));
+    CHECK(warnings.empty());
+    REQUIRE(reopened.app->head().cables.size() == 1);
+    CHECK(reopened.app->head().cables.find({model::Kind::Cable, 1})->to.key == "105");
     f.run("cable.remove", R"({"from":"mo_2.playing","to":"fx_1.105"})");
     // The model is now in the default state, but a live instance changes its parameter list.
     tx = f.app->beginTransaction(origin, "Default parameter state");
@@ -1690,6 +1698,55 @@ TEST_CASE("rack cables: validation uses restored state and live parameter rescan
     REQUIRE(instance);
     REQUIRE((*instance)->loadState(std::vector<std::uint8_t>{53, 0, 0, 0}));
     f.run("cable.add", R"({"from":"mo_2.playing","to":"fx_1.105"})");
+}
+
+TEST_CASE("rack cables: loading probes each FX once and skips probes without warnings") {
+    Fixture f;
+    f.run("rack.add");
+    f.run("module.add", R"({"rack":"rk_1","plugin":"com.suppleaudio.test.gain"})");
+    for (int i = 0; i < 4; ++i) {
+        f.run("module.add", R"({"rack":"rk_1","type":"transport"})");
+        auto args = json::Value::object();
+        args["from"] = "mo_" + std::to_string(i + 3) + ".playing";
+        args["to"] = "fx_1.0";
+        REQUIRE(f.call("cable.add", args));
+    }
+    const auto info = f.app->findPlugin("com.suppleaudio.test.gain");
+    REQUIRE(info);
+    // Keep the library loaded while opening replaces the app's instance pool.
+    auto keeper = host::Instance::create(*info, f.app->options().identity);
+    REQUIRE(keeper);
+    struct Control {
+        void (*edit)(const clap_plugin_t*, double, std::uint32_t);
+        std::uint32_t (*deliveries)(const clap_plugin_t*);
+        void (*latency)(const clap_plugin_t*, bool);
+        std::uint32_t (*creates)();
+    };
+    const auto* raw = (*keeper)->raw();
+    const auto* control =
+        static_cast<const Control*>(raw->get_extension(raw, "supple.test.gain-control"));
+    REQUIRE(control);
+    const auto path = f.dir / "many-cables.json";
+    REQUIRE(f.app->save(path));
+    auto before = control->creates();
+    REQUIRE(f.app->open(path));
+    CHECK(control->creates() == before);
+    std::vector<schema::Warning> warnings;
+    before = control->creates();
+    REQUIRE(f.app->open(path, &warnings));
+    CHECK(warnings.empty());
+    CHECK(control->creates() == before + 1);
+    REQUIRE(f.app->head().cables.size() == 4);
+    auto saved = f.run("rack.preset.save", R"({"rack":"rk_1","name":"Many cables"})");
+    // The preset's normal patch preparation reuses a scratch instance; count
+    // only the additional restored probe used to check its four cables.
+    REQUIRE(f.app->fxSchema(*f.app->head().fx.find({model::Kind::Fx, 1})));
+    auto args = json::Value::object();
+    args["rack"] = "rk_1";
+    args["path"] = saved["path"];
+    before = control->creates();
+    REQUIRE(f.call("rack.preset.load", args));
+    CHECK(control->creates() == before + 1);
 }
 
 TEST_CASE("rack cables: numeric ids reject leading zeros with a canonical hint") {

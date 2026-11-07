@@ -233,7 +233,10 @@ keep their letter-first keys. `rack.patch` also accepts
 `effect.12` for a named plug-in module, resolving it to that module's FX.
 Unknown targets in cable.add/rack.patch return `rack.port`; the hint lists
 semantic keys and numeric ids. Checks use the live FX or a restored private
-probe, including state-dependent parameter lists. Project load retains
+probe, including state-dependent parameter lists. Load-scoped validation
+restores at most one probe per FX, using the incoming session. Project open
+skips validation probes when its caller does not request warnings; compile
+still reports unheard cables. Project load retains
 unresolvable cables with warnings; preset loading skips them with its usual
 `rack.preset_cable` warning, like other missing targets. Missing plug-ins
 remain reopenable. Serialized
