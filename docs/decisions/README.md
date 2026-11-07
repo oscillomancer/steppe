@@ -77,4 +77,6 @@ current state.
 | [0059](0059-renamed-to-steppe.md) | The DAW is renamed Steppe | Accepted |
 | [0060](0060-mix-value-edits.md) | Mix-value edits update the running plan | Accepted |
 | [0061](0061-automation-write-holds.md) | Automation writing holds the hand's level and pan | Accepted |
+| [0062](0062-modular-racks.md) | Modular racks | Accepted |
 | [0063](0063-command-warnings.md) | Context warnings reach successful command replies | Accepted |
+| [0064](0064-rack-latency.md) | Bounded rack latency reaches PDC | Accepted |
