@@ -78,7 +78,7 @@ only while the audio engine is running.
 Agents can print rack notes with `rack.capture {async:true, ...}` and follow
 `job.get`; `job.cancel` leaves the project unchanged. Completion adds one
 undo step. A stale destination or rack needs a new capture. The rack window
-currently uses synchronous capture and waits for it.
+captures the same way.
 
 Agents can cable modulation to a plug-in parameter by semantic key or its
 CLAP id (`fx_3.gain` or `fx_3.12`; `effect.12` in a named `rack.patch`).
@@ -353,7 +353,9 @@ when you copied), Ctrl+X cuts and Ctrl+D duplicates.
 To keep what a sequencer or any module with pitch and gate outputs plays,
 right-click it, choose **Capture notes to track…**, then a channel and a
 length: the notes land there as a MIDI item, from the bar the playhead is
-in, and Undo takes them away.
+in, and Undo takes them away. While it renders, the status bar shows how far
+it has got, with **Stop**; if you change the rack or that channel meanwhile,
+nothing is added and the status bar asks you to capture again.
 A rack's performance controls are its **Macro** modules: cable a Macro's
 outputs to what you want to play, and the channel the rack feeds shows those
 knobs at the top of its FX chain window (the **fx** button), named after

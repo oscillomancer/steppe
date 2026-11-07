@@ -412,9 +412,10 @@ instructions are in `docs/guides/installing.md`.
   strip shows the rack as a slot above its plug-ins (click: that device;
   double-click: the rack window). A module with pitch and gate outputs
   captures its notes to a channel's MIDI item from its right-click
-  (`rack.capture`, 1 to 16 bars; the render runs on the UI thread, so the
-  window waits for it). The window's plug-in parameter list cables a plug-in
-  without semantic keys by its CLAP id (`fx_3.12`).
+  (`rack.capture` as a job, 1 to 16 bars: the status bar shows its progress
+  and a Stop button; a rack or channel changed meanwhile adds nothing and
+  says so). The window's plug-in parameter list cables a plug-in without
+  semantic keys by its CLAP id (`fx_3.12`).
 - **MIDI learn** (ADR-0027): any plug-in parameter (the FX window's MIDI
   button, or `fx.learn.set` for agents) and any action (Ctrl+L in the
   actions list) learns a controller by moving it: CC, note, pitch bend or
@@ -812,8 +813,7 @@ Engine and hosting:
   cables into a plugin module's parameters modulate CLAP plug-ins only
   (VST3 has no modulation), by their first voice, at most 16 per plug-in;
   parallel paths summed inside a patch remain unaligned (ADR-0064);
-  the GUI still uses synchronous `rack.capture`; post-fader sends into an In module
-  take the linear path.
+  post-fader sends into an In module take the linear path.
 - The headless platform layer (ADR-0035) has natively tested macOS/Windows
   address waits, wake sources, control socket/MCP paths and user directory roots.
   Both native engines run with dummy/offline audio and native RT/offline

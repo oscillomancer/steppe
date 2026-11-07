@@ -80,6 +80,8 @@ class RackWindow {
     // Tests: the browser's Modules or Patches switch, and a row it shows.
     std::optional<ui::Point> browserViewAt(bool patches) const;
     std::optional<ui::Point> browserRowAt(const std::string& id) const;
+    // Tests: a capture job is under way.
+    bool capturing() const { return capture_.has_value(); }
 
   private:
     Status reload();
@@ -156,10 +158,16 @@ class RackWindow {
     void tidyUp();
     // rack.capture: the notes `module`'s first pitch and gate outputs play
     // (its velocity output too, when it has one) for `bars` from the
-    // playhead's bar, as a MIDI item on `track` there. One undo step.
+    // playhead's bar, as a MIDI item on `track` there. One undo step. It
+    // runs as a job (async): the status bar shows its progress and a Stop
+    // button, then what it caught, that it stopped or why it failed.
     void captureNotes(model::Id module, model::Id track, int bars);
     // Its menus: a channel, then a length.
     void captureMenu(model::Id module, ui::Point at);
+    // Follows the capture job (job.get); true when what is shown changed.
+    bool pollCapture();
+    void stopCapture();  // job.cancel
+    void showCapture();  // the Stop button and the status line
     ui::Root& root() const { return panel_.root(); }
 
     FloatingPanel& panel_;
@@ -189,6 +197,15 @@ class RackWindow {
     // stays at the version it was set at.
     std::string notice_;
     std::uint64_t noticeVersion_ = 0;
+    // The capture job under way (rack.capture async): polled from tick(),
+    // shown or not.
+    struct Capturing {
+        std::string job;
+        model::Id track;
+        std::string progress;  // "Capturing notes… 40 %"
+    };
+    std::optional<Capturing> capture_;
+    ui::Button* stop_ = nullptr;
     json::Value presets_ = json::Value::object();  // rack.preset.list's
     bool presetsRead_ = false;
     racks::PluginParamCache pluginParams_;  // paramsOf's, shared with other views

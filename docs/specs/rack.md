@@ -739,7 +739,8 @@ branch, rack definition, destination track/items, or timing map fails with
 track edits do not invalidate the snapshot. Async capture is refused inside
 a batch or script transaction (`batch.not_transactional`); synchronous capture
 continues to join that transaction. Without `async`, rendering and the
-returned item result remain synchronous. The GUI currently uses that mode.
+returned item result remain synchronous. The rack window uses `async` (gui.md
+§4.12).
 
 ## 8. The rack window (`daw/gui`)
 

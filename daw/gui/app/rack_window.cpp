@@ -869,6 +869,7 @@ std::string RackWindow::status() const {
         std::to_string(s.cables.size()) + (s.cables.size() == 1 ? " cable" : " cables");
     if (!space_->selection().empty())
         out += "  ·  " + std::to_string(space_->selection().size()) + " selected";
+    if (capture_) out += "  ·  " + capture_->progress;
     if (!notice_.empty() && app_.head().version == noticeVersion_) out += "  ·  " + notice_;
     return out;
 }
@@ -1008,6 +1009,8 @@ void RackWindow::open(std::optional<model::Id> rack) {
     auto& bar = content->emplace<StatusBar>();
     status_ = &bar.emplace<ui::Label>("rack.status", "", ui::Font::Ui, "small", "ink-quiet");
     status_->layout.width = ui::SizeRule::fraction();
+    stop_ = &bar.emplace<ui::Button>("rack.capture.stop", "Stop", [this] { stopCapture(); });
+    stop_->layout.height = ui::SizeRule::fixed(18);
     panel_.open(std::move(content), [this] {
         watch(false);
         space_ = nullptr;
@@ -1015,6 +1018,7 @@ void RackWindow::open(std::optional<model::Id> rack) {
         browser_ = nullptr;
         browserColumn_ = nullptr;
         status_ = nullptr;
+        stop_ = nullptr;
         zoom_ = nullptr;
         browserToggle_ = nullptr;
         nextTelemetry_.reset();
@@ -1023,6 +1027,7 @@ void RackWindow::open(std::optional<model::Id> rack) {
     version_ = projectGeneration_ = ~std::uint64_t{0};
     if (auto r = reload(); !r) report(r.error());
     root().focus(space_);
+    showCapture();
 }
 
 namespace {
@@ -1197,7 +1202,8 @@ void RackWindow::watch(bool on) {
 
 bool RackWindow::tick(std::chrono::steady_clock::time_point now) {
     if (plugins_ && plugins_->isOpen()) plugins_->tick();
-    if (!isOpen() || !nextTelemetry_ || now < *nextTelemetry_) return false;
+    const bool captured = pollCapture();  // with the window closed too
+    if (!isOpen() || !nextTelemetry_ || now < *nextTelemetry_) return captured;
     nextTelemetry_ = now + kTelemetryInterval;
     bool changed = false;
     const ui::Rect seen = space_->visibleSpace();
@@ -1244,11 +1250,16 @@ bool RackWindow::tick(std::chrono::steady_clock::time_point now) {
     watchers_.set(std::move(watching));  // and off for those no view reads
     if (none && !measuring) nextTelemetry_ = now + std::chrono::milliseconds(250);
     if (changed) space_->telemetryChanged();
-    return changed;
+    return changed || captured;
 }
 
 std::optional<std::chrono::steady_clock::time_point> RackWindow::nextDeadline() const {
-    return isOpen() ? nextTelemetry_ : std::nullopt;
+    auto next = isOpen() ? nextTelemetry_ : std::nullopt;
+    if (capture_) {  // the job is followed, with the window closed too
+        const auto poll = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+        if (!next || poll < *next) next = poll;
+    }
+    return next;
 }
 
 json::Value RackWindow::saveLayout() const {
@@ -1835,7 +1846,7 @@ void RackWindow::captureNotes(model::Id module, model::Id track, int bars) {
     const model::RackModule* m = s.modules.find(module);
     const auto* type = m && catalog_ ? catalog_->find(m->type) : nullptr;
     const auto outputs = type ? noteOutputs(*type->type) : std::nullopt;
-    if (!outputs) return;
+    if (!outputs || capture_) return;
     const int bar = std::max(1, playheadBar(app_));
     const double from = s.timeMap->beatOfBar(bar);
     const double beats = s.timeMap->beatOfBar(bar + bars) - from;
@@ -1847,14 +1858,78 @@ void RackWindow::captureNotes(model::Id module, model::Id track, int bars) {
     args["track"] = track.str();
     args["beats"] = beats;
     args["from_beat"] = from;
+    args["async"] = true;
     auto r = exec("rack.capture", std::move(args));
     if (!r) return;
-    const auto* count = r->find("notes");
-    const int n = count && count->isNumber() ? static_cast<int>(count->asDouble()) : 0;
-    notice_ = n == 0 ? "No notes: the gate did not rise in those bars"
-                     : "Captured " + std::to_string(n) + (n == 1 ? " note" : " notes") + " to " +
-                           model::trackLabel(app_.head(), track);
-    noticeVersion_ = app_.head().version;
+    const json::Value* job = r->find("job");
+    if (!job || !job->isString()) return;
+    capture_ = Capturing{job->asString(), track, "Capturing notes\u2026"};
+    notice_.clear();
+    showCapture();
+}
+
+bool RackWindow::pollCapture() {
+    if (!capture_) return false;
+    json::Value args = json::Value::object();
+    args["job"] = capture_->job;
+    auto got = dispatcher_.execute({"job.get", std::move(args), kOrigin});
+    const std::string state = got ? str(*got, "status") : std::string();
+    if (state == "running") {
+        const json::Value* progress = got->find("progress");
+        const json::Value* fraction = progress ? progress->find("fraction") : nullptr;
+        std::string text = "Capturing notes\u2026";
+        if (fraction && fraction->isNumber() && fraction->asDouble() > 0)
+            text += " " +
+                    std::to_string(static_cast<int>(std::lround(fraction->asDouble() * 100))) +
+                    " %";
+        if (text == capture_->progress) return false;
+        capture_->progress = std::move(text);
+        showCapture();
+        return true;
+    }
+    const model::Id track = capture_->track;
+    capture_.reset();
+    if (!got) {
+        report(got.error());
+    } else if (state == "done") {
+        const json::Value* result = got->find("result");
+        const json::Value* count = result ? result->find("notes") : nullptr;
+        const int n = count && count->isNumber() ? static_cast<int>(count->asDouble()) : 0;
+        notice_ = n == 0 ? "No notes: the gate did not rise in those bars"
+                         : "Captured " + std::to_string(n) + (n == 1 ? " note" : " notes") +
+                               " to " + model::trackLabel(app_.head(), track);
+        noticeVersion_ = app_.head().version;
+    } else if (state == "failed") {
+        const json::Value* e = got->find("error");
+        const std::string code = e ? str(*e, "code") : std::string();
+        // The rack, the channel's items or the tempo changed while it
+        // rendered: nothing was added.
+        if (code == "rack.capture_stale")
+            report(Error(code, "The rack or the channel changed while capturing; capture again"));
+        else
+            report(Error(code, e ? str(*e, "message") : "The capture failed", "",
+                         e ? str(*e, "hint") : std::string()));
+    } else {
+        notice_ = "Capture stopped";
+        noticeVersion_ = app_.head().version;
+    }
+    showCapture();
+    return true;
+}
+
+void RackWindow::stopCapture() {
+    if (!capture_) return;
+    json::Value args = json::Value::object();
+    args["job"] = capture_->job;
+    (void)exec("job.cancel", std::move(args));
+    (void)pollCapture();
+}
+
+void RackWindow::showCapture() {
+    if (stop_ && stop_->visible != capture_.has_value()) {
+        stop_->visible = capture_.has_value();
+        stop_->relayout();
+    }
     if (status_) status_->setText(status());
 }
 
@@ -1958,7 +2033,7 @@ void RackWindow::moduleMenu(model::Id module, ui::Point at) {
         items.push_back({"Show source", "", [this, id = m->type] { showSource(id); }, !several});
     if (type && noteOutputs(*type->type))
         items.push_back({"Capture notes to track\u2026", "",
-                         [this, module, at] { captureMenu(module, at); }, !several});
+                         [this, module, at] { captureMenu(module, at); }, !several && !capture_});
     items.push_back({"Save as patch\u2026", "", [this, selected] {
                          savePreset(std::vector<model::Id>(selected.begin(), selected.end()));
                      }});

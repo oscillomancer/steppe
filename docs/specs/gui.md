@@ -1255,8 +1255,15 @@ a new channel). It follows rack.md §8.
   selection) and Delete. Capture notes to track… picks a channel, then a
   length (1, 2, 4, 8 or 16 bars, from the bar the playhead is in) and runs
   `rack.capture` with the module's first pitch and gate outputs (and its
-  `velocity` output, if any): one undo step, a MIDI item on that channel
-  at that bar; the status bar says how many notes it caught. On the space: Add module…, Add plugin… there,
+  `velocity` output, if any) as a job (`async`): one undo step, a MIDI item
+  on that channel at that bar. While it renders, the status bar reads
+  "Capturing notes… 40 %" (`job.get`, polled with the window closed too)
+  with a **Stop** button (`job.cancel`: nothing is added), and the menu
+  entry is disabled. Then the status bar says how many notes it caught,
+  "Capture stopped", or, when the rack, the channel's items or the tempo
+  changed meanwhile (`rack.capture_stale`), "The rack or the channel
+  changed while capturing; capture again"; other errors as the engine
+  gives them. On the space: Add module…, Add plugin… there,
   Load patch… (the browser's Patches view), Save rack as patch…, Paste, Tidy up, Show
   everything and Show selection. Tidy up is `rack.arrange` (one undo
   step): with two or more modules selected it reads "Tidy up selection"

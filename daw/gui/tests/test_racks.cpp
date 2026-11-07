@@ -11,8 +11,10 @@
 #include <SDL3/SDL.h>
 
 #include <cmath>
+#include <condition_variable>
 #include <deque>
 #include <filesystem>
+#include <functional>
 #include <mutex>
 #include <tuple>
 
@@ -162,7 +164,8 @@ struct Fixture {
 
     explicit Fixture(ui::Theme theme = ui::Theme::dark(),
                      std::vector<std::filesystem::path> plugins = {}, int width = 1100,
-                     int height = 560) {
+                     int height = 560,
+                     const std::function<void(engine::AppOptions&)>& configure = {}) {
         dir = std::filesystem::temp_directory_path() /
               ("supple-rack-test-" + std::to_string(testProcessId()));
         std::filesystem::remove_all(dir);
@@ -183,6 +186,7 @@ struct Fixture {
         engine::AppOptions options;
         options.workdir = dir;
         if (!plugins.empty()) options.pluginPath = std::move(plugins);
+        if (configure) configure(options);
         auto a = engine::EngineApp::create(options);
         REQUIRE(a);
         app = std::move(*a);
@@ -1625,8 +1629,55 @@ TEST_CASE("rack window: a cable glows with its source's signal, even from out of
     }
 }
 
+// Job barriers for capture tests: a worker can be held at its start, and
+// the test waits for it to finish (the engine's job hooks).
+struct JobGate {
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool hold = false, entered = false, finished = false;
+    void configure(engine::AppOptions& o) {
+        o.jobStartedHook = [this] {
+            std::unique_lock lock(mutex);
+            entered = true;
+            cv.notify_all();
+            cv.wait(lock, [this] { return !hold; });
+        };
+        o.jobFinishedHook = [this] {
+            std::lock_guard lock(mutex);
+            finished = true;
+            cv.notify_all();
+        };
+    }
+    void holdNext() {
+        std::lock_guard lock(mutex);
+        hold = true;
+        entered = finished = false;
+    }
+    void release() {
+        std::lock_guard lock(mutex);
+        hold = false;
+        cv.notify_all();
+    }
+    bool waitEntered() {
+        std::unique_lock lock(mutex);
+        return cv.wait_for(lock, std::chrono::seconds(30), [this] { return entered; });
+    }
+    bool waitFinished() {
+        std::unique_lock lock(mutex);
+        return cv.wait_for(lock, std::chrono::seconds(30), [this] { return finished; });
+    }
+};
+
+// Releases a held worker when a test ends early (declared after the fixture).
+struct Unhold {
+    JobGate& gate;
+    ~Unhold() { gate.release(); }
+};
+
 TEST_CASE("rack window: a sequencer's notes are captured to a track from its menu") {
-    Fixture f;
+    JobGate gate;
+    Fixture f(ui::Theme::dark(), {}, 1100, 560, [&](engine::AppOptions& o) { gate.configure(o); });
+    Unhold unhold{gate};
     if (!f.ok) return;
     const std::string rack = f.exec("rack.add", R"({"name":"Seq"})")["rack"].asString();
     const std::string seq = f.add(rack, "sequencer", 40, 40), vca = f.add(rack, "vca", 400, 40);
@@ -1660,6 +1711,38 @@ TEST_CASE("rack window: a sequencer's notes are captured to a track from its men
     CHECK(ui::menuItems(*lengths).front().label == "From bar 1");
     f.snapshot("rack-capture-menu.png");
     REQUIRE(f.pick("rack.capture.length", "1 bar"));
+    // It renders as a job: the status bar says so, with Stop, and the loop
+    // is asked to follow it.
+    const auto statusText = [&] {
+        const ui::Node* status = f.r().find("rack.status");
+        REQUIRE(status);
+        return static_cast<const ui::Label*>(status)->text();
+    };
+    CHECK(f.racks->capturing());
+    CHECK(statusText().find("Capturing notes\u2026") != std::string::npos);
+    const ui::Node* stop = f.r().find("rack.capture.stop");
+    REQUIRE(stop);
+    CHECK(stop->visible);
+    CHECK(f.racks->nextDeadline());
+    // A second capture waits for it.
+    {
+        const auto at = space.bodyAt(*model::Id::parse(seq));
+        f.pointer(ui::PointerEvent::Type::Down, *at, 3);
+        f.pointer(ui::PointerEvent::Type::Up, *at, 3);
+        const ui::Node* menu = f.r().find("rack.module.menu");
+        REQUIRE(menu);
+        for (const auto& item : ui::menuItems(*menu))
+            if (item.label == "Capture notes to track\u2026") CHECK_FALSE(item.enabled);
+        f.r().closePopups();
+        f.frame();
+    }
+    f.snapshot("rack-capturing.png");
+    REQUIRE(gate.waitFinished());
+    f.dispatcher->flushJobEvents();  // its edit lands on the model thread
+    CHECK(f.racks->tick());
+    f.frame();
+    CHECK_FALSE(f.racks->capturing());
+    CHECK_FALSE(f.r().find("rack.capture.stop")->visible);
     // A MIDI item of a bar (4/4) on the channel, from the song's start:
     // the sequencer's sixteenths, each step a note.
     const model::Session& s = f.app->head();
@@ -1674,14 +1757,58 @@ TEST_CASE("rack window: a sequencer's notes are captured to a track from its men
     REQUIRE(midi);
     CHECK(midi->sequence.notes.size() == 16);
     CHECK(midi->sequence.length == 4 * midi->sequence.ppq);
-    const ui::Node* status = f.r().find("rack.status");
-    REQUIRE(status);
-    CHECK(static_cast<const ui::Label*>(status)->text().find("Captured 16 notes to ") !=
-          std::string::npos);
+    CHECK(statusText().find("Captured 16 notes to ") != std::string::npos);
     f.snapshot("rack-capture.png");
     // One undo step takes it away.
     f.exec("history.undo", "{}");
     for (const auto& e : f.app->head().items) CHECK(e.value->track != track);
+    f.frame();
+
+    // Stop: nothing is added, also when the render ends afterwards.
+    auto capture = [&] {
+        REQUIRE(has(menuOf(seq), "Capture notes to track\u2026"));
+        REQUIRE(f.pick("rack.module.menu", "Capture notes to track"));
+        REQUIRE(f.pick("rack.capture.track", model::trackLabel(f.app->head(), track)));
+        REQUIRE(f.pick("rack.capture.length", "1 bar"));
+        REQUIRE(f.racks->capturing());
+        REQUIRE(gate.waitEntered());
+    };
+    auto items = [&] {
+        std::size_t n = 0;
+        for (const auto& e : f.app->head().items) n += e.value->track == track;
+        return n;
+    };
+    gate.holdNext();
+    capture();
+    {
+        const ui::Rect b = f.r().find("rack.capture.stop")->bounds();
+        f.pointer(ui::PointerEvent::Type::Down, {b.x + b.w / 2, b.y + b.h / 2});
+        f.pointer(ui::PointerEvent::Type::Up, {b.x + b.w / 2, b.y + b.h / 2});
+    }
+    CHECK_FALSE(f.racks->capturing());
+    CHECK(statusText().find("Capture stopped") != std::string::npos);
+    f.snapshot("rack-capture-stopped.png");
+    gate.release();
+    REQUIRE(gate.waitFinished());
+    f.dispatcher->flushJobEvents();
+    f.racks->tick();
+    f.frame();
+    CHECK(items() == 0);
+
+    // The rack changes while it renders: nothing is added, and it says so.
+    gate.holdNext();
+    capture();
+    f.add(rack, "vca", 400, 300);
+    f.frame();
+    gate.release();
+    REQUIRE(gate.waitFinished());
+    f.dispatcher->flushJobEvents();
+    CHECK(f.racks->tick());
+    f.frame();
+    CHECK_FALSE(f.racks->capturing());
+    CHECK(items() == 0);
+    CHECK(statusText() == "The rack or the channel changed while capturing; capture again");
+    f.snapshot("rack-capture-stale.png");
 }
 
 TEST_CASE("rack window: Tidy up lays out the rack, or the selection, in one undo step") {
