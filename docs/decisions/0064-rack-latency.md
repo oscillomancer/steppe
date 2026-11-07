@@ -19,9 +19,10 @@ module-id order); the remaining graph is a DAG. A plug-in on a forward
 path counts even inside a loop, including a loop closed only by modulation.
 The removed cables keep the schedule's one-frame feedback delay. Depending
 on module-id order, the plug-in where a loop is entered can fall behind a
-removed cable and its latency may not count. Reorder the modules to keep
-that latency on a forward path, or use an explicit Delay module to align
-paths that need it.
+removed cable and its latency may not count. Module ids cannot be changed
+in place: to keep that latency on a forward path, recreate (or cut and
+paste) the module that should come later so it takes a higher id, or use
+an explicit Delay module to align paths that need it.
 
 The rack node's latency is the maximum over audio Outs and Note Outs with
 an outgoing edge. Unrouted outputs do not add latency to the song.
