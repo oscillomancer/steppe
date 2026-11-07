@@ -427,7 +427,10 @@ the parameter, and drag it up or down to change the amount. Only CLAP
 plug-ins take modulation, third-party ones too, when their parameters accept
 it; a VST3 plug-in's list says so.
 
-Selecting a MIDI input on the rack's channel keeps its audio Out connected.
+Selecting a MIDI input on the rack's channel keeps its audio Out connected:
+the channel's input menu checks its audio input (an input, a pair or a
+rack's Out) and its MIDI input (**no MIDI input**, any device or one)
+separately, and its input button shows both, such as **Bells + Keystation**.
 Arm the channel and turn monitoring On to play it from the keyboard (Auto
 listens while stopped or recording). The channel's audio and MIDI inputs
 are independent. With both selected, recording creates MIDI takes; clear

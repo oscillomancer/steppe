@@ -284,6 +284,7 @@ instructions are in `docs/guides/installing.md`.
   alongside device MIDI, using the recorder's loop, punch and overdub rules.
   A channel's audio and MIDI inputs are independent (project schema 2.8,
   legacy MIDI inputs still load). Selecting a keyboard keeps its rack Out;
+  the GUI's input menu checks both selections and its button names both.
   Notes on the home track follows its armed monitoring and MIDI channel map
   in both executors. With both inputs selected recording takes MIDI; clearing
   record_midi leaves the audio path. Notes device/source can be cleared with

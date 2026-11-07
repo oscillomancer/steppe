@@ -1418,7 +1418,16 @@ a new channel). It follows rack.md §8.
 - **Elsewhere.** A channel's input menu lists every rack's Out modules
   ("<rack> › <Out>", with the home channel's colour) after the device's
   inputs, and New rack on this channel; picking one is `track.set
-  {record_rack}`, and the strip's input button names it the same way. A
+  {record_rack}`, and the strip's input button names it the same way.
+  The menu holds two selections, each with its own check (ADR-0065): the
+  audio input (`record.input`: a channel, a stereo pair or a rack's Out)
+  and the MIDI input (`record.midi_input`, or a legacy MIDI-only
+  `record.input`: "no MIDI input", which is `track.set {record_midi:
+  null}`, "any MIDI device" or a device); picking one keeps the other, so
+  a rack's channel hears the rack and plays from the keyboard. The input
+  button (TCP and mixer) names both, "<audio> + <MIDI>": a rack with one
+  Out by its label alone ("Bells + Keystation"), any device as "midi"; MIDI
+  alone names the device ("midi *" for any). A
   channel's right-click menu offers Show rack (when it has one) and Add rack
   (Add another rack).
 
