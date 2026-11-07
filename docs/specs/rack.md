@@ -620,7 +620,9 @@ out with a warning (`rack.preset_knob`, `rack.preset_cable`). With
 `io: join` (the default) the preset's Out and In modules are the rack's
 own, in order: their cables reach the rack's Outs and Ins, so a whole
 patch saved from one rack sounds in a new one at once; extra ones are
-added. `io: add` adds them all.
+added. A rack that holds only its Outs and Ins takes the patch in its own
+layout: the group starts at those modules' top-left corner (or `x`, `y`),
+and the joined Outs and Ins move to their places in the patch. `io: add` adds them all.
 
 **Factory patches.** Rack presets that ship with the app are compiled
 into it from `modules/patches/<file>.json` (lower-case words joined by
