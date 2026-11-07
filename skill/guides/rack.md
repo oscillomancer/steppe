@@ -13,27 +13,28 @@ with their ranges and defaults; read it before patching. `module.describe
 
 ## The loop
 
+The fastest correct path: start from the recipe below closest to what you
+want (each is tested as printed), patch it in one call, probe, adjust,
+probe again.
+
 1. `rack.add {track}` makes a rack on a channel with an Out module (its
-   result's `out`) that is the channel's input. Without `track`, it makes a
-   new channel.
+   result's `out`, `mo_1` in a new rack) that is the channel's input.
+   Without `track`, it makes a new channel.
 2. `rack.patch` adds modules by name and the cables between them in one
-   step (below). `module.add` and `cable.add` do one at a time.
-3. `rack.probe {rack, ports, notes?}` renders a copy offline and describes
-   what flows out of each port: pitch and level for audio, gates per beat
-   and duty, the notes a pitch visits, a CV's rate. Nothing changes. This
-   is how you hear a patch; check every patch with it before rendering.
-   `from_beat` starts a fresh render at that beat, so what a patch builds
-   over time (a looper's recording, life's generations, a drift's path)
-   needs one render from the start, up to 10 seconds.
+   call (below). It returns each name's id (`mo_N`): every later call
+   (`rack.probe`, `module.set`, `rack.capture`) takes ids, not names.
+3. `rack.probe {rack, ports, notes?}` renders a copy offline, up to 10
+   seconds, and describes what flows out of each port: pitch and level for
+   audio, gates per beat and duty, the notes a pitch visits, a CV's range
+   and rate. Nothing changes. This is how you hear a patch: probe the
+   module feeding the Out and the note sources behind it before rendering.
 4. Adjust: `module.set {module, params}`, `cable.set {cable, amount}`,
-   `module.set {module, preset}` (a module's factory preset).
+   `module.set {module, preset}` (a module's factory preset). Probe again.
 5. Render or listen as for any track. Ask the human to listen when it
    matters.
-6. Print generative notes to MIDI: `rack.capture {rack, pitch, gate,
-   velocity?, track, beats, quantize?}` renders the patch offline and writes
-   what a pitch and gate pair plays (a note per voice) as a MIDI item on
-   any channel. Edit it with `midi.edit`, read it with `midi.get`, play it
-   through any instrument. The rack is not changed.
+6. To keep the notes rather than the patch, print them to MIDI with
+   `rack.capture` and play them through any instrument (Compose with a
+   rack, below).
 7. Keep what works: `rack.preset.save {rack, name}`; later
    `rack.preset.load {rack, name}` puts it in any rack. A preset carries
    the source of your own modules it uses, and loading it on another
@@ -45,6 +46,44 @@ To start from something that already sounds, `rack.preset.list
 what to play or turn); `rack.preset.load {rack, name}` loads one, its Out
 joined to the rack's. Change it, then save it under its own name or a new
 one: a saved preset of a factory patch's name takes its place.
+
+## Mistakes that cost time
+
+- **Too loud.** Modules work at full scale and a chord's voices add up at
+  the Out. Probe what feeds `mo_1.l` and keep its peak at or below 0 dB:
+  lower a VCA's or mixer's `level`, or the Out's own (`module.set
+  {module: "mo_1", params: {level: -9}}`). Delays and reverbs add their
+  tails on top.
+- **Silent.** Nothing reaches `mo_1.l`; an LPG with nothing in `ping`, an
+  ADSR or drum with no gate; a VCA whose `cv` an envelope holds at 0. Probe
+  each stage back from the Out until one is quiet. A VCO straight into the
+  Out is the opposite: a drone that never stops.
+- **Unpatched clocks.** A sequencer, rhythm or melody source with nothing
+  in `clock` follows the song's own grid (the reference says which: most
+  take sixteenths, `random`, `markov` and `lsystem` eighths), so it keeps
+  time with everything else and does nothing while the song is stopped.
+  Cable a `clock` only to change the rate or interlock two sources (a
+  Euclid's gate clocking a melody, as the bells do). Motion runs free of
+  the song unless told: an `lfo` locks to it with `sync` on, `dust` with
+  a `grid`; `drift` and `chaos` never do.
+- **Probing from the middle.** `from_beat` starts a fresh render at that
+  beat. Form, Transport and anything clocked by the song know where they
+  are, but whatever builds up as it runs does not: Phrase's and Changes'
+  renewed phrases and chords, a Turing register, a Looper's recording,
+  Life's generations, a Drift's path. For those, probe from the start, and
+  capture a whole song from 0 rather than a part from its middle.
+- **Out of key.** A Random, Drift, LFO or Chaos into a VCO's pitch plays
+  every pitch between: pass it through `quantizer` (a key) or `fit` (the
+  chord playing). Pitch is in octaves: a semitone is 1/12, so a cable of
+  amount 1 from an LFO swings two octaves.
+- **Too much modulation.** A cable into a knob without `amount` moves it
+  half the knob's range (an octave for a frequency). Give the amount you
+  mean, in the knob's unit.
+- **Names in later calls.** `"tune.pitch"` works only inside `rack.patch`;
+  after it use the ids it returned (`"mo_4.pitch"`).
+- **Live levels.** `rack.levels {rack}` reads every output's peak while
+  the song plays; stopped, everything reads 0. Use it to see what is
+  active, `rack.probe` to measure.
 
 ## rack.patch
 
@@ -120,12 +159,8 @@ levels may lead the audio you hear; use them for activity, not timing.
 An unpatched input reads its normal value (the reference says when it is
 not 0: a VCA's `cv` is 1, so it passes until something closes it).
 
-**Levels.** Modules work at full scale, and a chord sums its voices at the
-Out, so racks run hot: keep the Out's peak at or below 0 dB (`rack.probe`
-on the module feeding it). Lower a VCA's or a mixer's `level`, or the
-Out's own `level` (`module.set {module: "mo_1", params: {level: -9}}`).
-Delays and reverbs add their tails to the dry sound and can raise the peak
-by several dB.
+**Levels.** Racks run hot; keep the Out's peak at or below 0 dB (Mistakes
+that cost time, above).
 
 **Polyphony.** A cable carries up to 16 voices. Notes sends one voice per
 held note (`voices`, default 8); modules after it run once per voice. A mono
@@ -158,8 +193,9 @@ feedback FM, Karplus-like loops and self-patched chaos.
 
 <!-- host/engine/tests/test_rack_recipes.cpp patches every JSON block here as printed. -->
 
-These were run and probed as written. Each starts from `rack.add {track}`;
-the Out is then `mo_1`.
+Each is tested as printed (it is run and probed). Each starts from
+`rack.add {track}`; the Out is then `mo_1`. Pass the block to `rack.patch`
+with `"rack"` added.
 
 **A subtractive voice** (the `rack.patch` above): Notes plays a saw through
 a low-pass filter that tracks the keyboard and opens with the envelope.
@@ -309,6 +345,144 @@ Probed for 10 s: `snap.out` only the chords' tones, `low.interval` 3 to
 `mix.left` peak −4 dB. Form's position is the song's bar, so a probe
 `from_beat` lands in the right section; `plan` and `bars` reshape it.
 
+## Compose with a rack
+
+A rack can write the parts and leave the playing to instruments: it
+generates notes, you probe them, `rack.capture` prints them to MIDI items,
+you edit those like any MIDI, and plug-ins play them. The rack makes no
+sound of its own here; its outputs are notes.
+
+<!-- host/engine/tests/test_rack_recipes.cpp runs every json block below, named by the command
+     after its fence, in order on a fresh project (the fx step when the stock plug-ins are built)
+     and checks the notes it captures. -->
+
+The worked example writes a 28-bar song in D dorian: Form lays out the
+sections (an intro, verses, choruses, a bridge, an outro) and asks Phrase for
+a new call at each change; Phrase writes the lead; Counter a bass line
+against it; Changes the chords; Rhythm the drums, busier as Form's energy
+rises, with Groove's accents; Layers arranges them by the same energy. Each
+step is one call, as printed, on an empty project.
+
+**1. A rack and a channel for each part.** The rack's own channel (`tr_1`)
+stays silent.
+
+```json batch
+{"steps": [{"command": "rack.add", "args": {"name": "Writer"}},
+           {"command": "track.add", "args": {"name": "Lead"}},
+           {"command": "track.add", "args": {"name": "Bass"}},
+           {"command": "track.add", "args": {"name": "Chords"}},
+           {"command": "track.add", "args": {"name": "Drums"}}]}
+```
+
+**2. Generate.** A drum part is one poly pitch and one poly gate: Scale's
+three offsets are the drums' keys in octaves from C4 (−2 is C2, 36, a kick;
+−1.8333 D2, 38, a snare; −1.5 F♯2, 42, a closed hat: Drumlin's and General
+MIDI's), merged by one Poly beside Rhythm's three gates merged by another.
+Groove gives those gates a backbeat's velocities. Layers passes each
+part's gates from the energy its Enter names: the chords always, the drums
+from the intro's second bar, the bass from the verses and the lead in the
+verses and choruses, so the bridge is instrumental and the outro thins out.
+
+```json rack.patch
+{"rack": "rk_1",
+ "modules": {"song": {"type": "form", "params": {"bars": "bars_4", "loop": false}},
+             "prog": {"type": "changes", "params": {"key": "d", "mode": "dorian", "octave": -1}},
+             "tune": {"type": "phrase", "params": {"key": "d", "mode": "dorian"}},
+             "low": {"type": "counter", "params": {"key": "d", "mode": "dorian"}},
+             "beat": {"type": "rhythm", "params": {"y": 0}},
+             "feel": {"type": "groove", "params": {"feel": "backbeat", "human": 20}},
+             "parts": {"type": "layers", "params": {"enter_1": 0, "enter_2": 30, "enter_3": 40, "enter_4": 50}},
+             "drum_keys": {"type": "scale", "params": {"offset_1": -2, "offset_2": -1.8333, "offset_3": -1.5}},
+             "keys": {"type": "poly"}, "hits": {"type": "poly"}},
+ "cables": [["song.change", "tune.write"], ["tune.pitch", "low.lead"], ["tune.gate", "low.lead_gate"],
+            ["song.energy", "beat.y", 100], ["song.energy", "parts.level"],
+            ["drum_keys.out_1", "keys.merge_1"], ["drum_keys.out_2", "keys.merge_2"],
+            ["drum_keys.out_3", "keys.merge_3"],
+            ["beat.kick", "hits.merge_1"], ["beat.snare", "hits.merge_2"], ["beat.hat", "hits.merge_3"],
+            ["hits.merged", "feel.gate"], ["beat.accent", "feel.accent"],
+            ["prog.gate", "parts.gate_1"], ["feel.out", "parts.gate_2"],
+            ["low.gate", "parts.gate_3"], ["tune.gate", "parts.gate_4"]]}
+```
+
+It returns the ids by name: `song` `mo_2`, `prog` `mo_3`, `tune` `mo_4`,
+`low` `mo_5`, `beat` `mo_6`, `feel` `mo_7`, `parts` `mo_8`, `drum_keys`
+`mo_9`, `keys` `mo_10`, `hits` `mo_11`. Probe, capture and `module.set` take ids, so use the ones your
+call returned; in another project they differ.
+
+**3. Probe** the parts before printing them: the notes each visits, the
+interval between lead and bass, the drums' velocities, how many parts play.
+
+```json rack.probe
+{"rack": "rk_1", "seconds": 10, "ports": ["mo_4.pitch", "mo_5.interval", "mo_3.chord", "mo_7.velocity", "mo_8.count"]}
+```
+
+`mo_4.pitch` visits D dorian's notes from A3 to G4, `mo_5.interval` stays
+3 to 16 semitones below (−1.33 to −0.25 octaves), the chord has 3 voices,
+`mo_7.velocity` moves between the weak and strong steps, and `mo_8.count`
+rises from one part to four as the intro becomes the first verse.
+To change a part, `module.set` its module and probe again: `prog`'s
+`change` redraws chords, `tune`'s `density` and `contrast` reshape the
+phrases, `low`'s `motion` and `hold` the bass.
+
+**4. Capture** each part for the whole song (28 bars, 112 beats), on
+sixteenths, through Layers so each part plays only where it is arranged.
+Phrase's Accent gives the lead its velocities and Groove the drums'.
+Quantize snaps Groove's small timing moves to the grid and keeps its
+velocities; leave it off a part to keep its swing and lay-back.
+
+```json batch
+{"steps": [
+  {"command": "rack.capture", "args": {"rack": "rk_1", "pitch": "mo_4.pitch", "gate": "mo_8.out_4", "velocity": "mo_4.accent",
+                                       "track": "tr_2", "beats": 112, "quantize": 0.25, "name": "Lead"}},
+  {"command": "rack.capture", "args": {"rack": "rk_1", "pitch": "mo_5.pitch", "gate": "mo_8.out_3",
+                                       "track": "tr_3", "beats": 112, "quantize": 0.25, "name": "Bass"}},
+  {"command": "rack.capture", "args": {"rack": "rk_1", "pitch": "mo_3.chord", "gate": "mo_8.out_1",
+                                       "track": "tr_4", "beats": 112, "quantize": 0.25, "name": "Chords"}},
+  {"command": "rack.capture", "args": {"rack": "rk_1", "pitch": "mo_10.merged", "gate": "mo_8.out_2", "velocity": "mo_7.velocity",
+                                       "track": "tr_5", "beats": 112, "quantize": 0.25, "name": "Drums"}}]}
+```
+
+The items are `it_1` to `it_4`: the lead in the verses and choruses, the
+bass from the first verse, 28 chords of three, and the drums from the
+intro's second bar, going from kick and hat to a backbeat in the verses and
+sixteenth hats in the choruses. Each capture renders the project again, so
+a long song takes a few seconds a part. `midi.get {item}` reads a part as
+notation.
+
+**5. Edit.** The progression loops, so the song stops on its third chord;
+end it on the home chord instead. `midi.notes {item: "it_3"}` lists the
+chords' notes by start: the last three, 81 to 83, are the last bar's.
+
+```json midi.edit
+{"item": "it_3", "ops": [{"op": "remove", "notes": [81, 82, 83]},
+                         {"op": "add", "pitch": 50, "start": 108, "length": 4},
+                         {"op": "add", "pitch": 53, "start": 108, "length": 4},
+                         {"op": "add", "pitch": 57, "start": 108, "length": 4}]}
+```
+
+Edit freely from here: `move` a note, `velocity` an accent, `quantize`
+with `strength`, or `midi.write` a bar of notation over the item. The
+rack is unchanged; capture again to start over.
+
+**6. Play** the parts through instruments: Marram's factory sounds for
+the lead, bass and chords, Drumlin for the drums.
+
+```json batch
+{"steps": [
+  {"command": "fx.add", "args": {"track": "tr_2", "plugin": "com.suppleaudio.marram"}, "as": "lead"},
+  {"command": "fx.preset.load", "args": {"fx": "${lead.fx}", "name": "Vowel Lead"}},
+  {"command": "fx.add", "args": {"track": "tr_3", "plugin": "com.suppleaudio.marram"}, "as": "bass"},
+  {"command": "fx.preset.load", "args": {"fx": "${bass.fx}", "name": "Pluck Bass"}},
+  {"command": "fx.add", "args": {"track": "tr_4", "plugin": "com.suppleaudio.marram"}, "as": "pad"},
+  {"command": "fx.preset.load", "args": {"fx": "${pad.fx}", "name": "Dune Pad"}},
+  {"command": "fx.add", "args": {"track": "tr_5", "plugin": "com.suppleaudio.drumlin"}}]}
+```
+
+Then mix and render as for any song (`guides/mixing.md`). To hear the
+patch itself while you shape it, cable voices into the Out as in the
+recipes, then remove them before you capture, or keep the rack as one
+more part.
+
 ## Generative building blocks
 
 Tags in the reference group the modules. Some starting points:
@@ -317,7 +491,8 @@ Tags in the reference group the modules. Some starting points:
   `rhythm` (drum patterns by density), `polyrhythm` (four counts against a
   bar), `ratchet` (bursts), `chance` (coin tosses per gate), `logic`,
   `life` (an 8x8 Game of Life as gates), `bounce` (a bouncing ball's
-  quickening hits), `dust` (random triggers with no clock, in bursts).
+  quickening hits), `dust` (random triggers with no clock, in bursts),
+  `groove` (velocities by step, swing, lay-back: feel for any gates).
 - **Melody**: `turing` (a looping shift register), `random` (notes with
   memory), `markov` (note-to-note odds, learnable), `cellular` (a 1-D
   automaton), `lsystem` (a melody grown by rewriting rules), `sequencer`
@@ -328,7 +503,8 @@ Tags in the reference group the modules. Some starting points:
   `chord`, always through `quantizer` for a key or `fit` for the chord
   playing.
 - **Structure**: `form` (a song's sections over minutes: gates for verse,
-  chorus and bridge, an energy arc, fills).
+  chorus and bridge, an energy arc, fills), `layers` (parts entering and
+  leaving on the bar as Form's energy rises and falls).
 - **Motion**: `lfo`, `function`, `stages` (a multi-stage envelope, LFO or
   gesture), `adsr`, `drift` (slow random per voice), `chaos` (Lorenz and
   Thomas attractors), `swarm` (coupled LFOs that fall into step),
