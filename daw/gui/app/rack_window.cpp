@@ -663,6 +663,7 @@ std::string RackWindow::status() const {
         std::to_string(s.cables.size()) + (s.cables.size() == 1 ? " cable" : " cables");
     if (!space_->selection().empty())
         out += "  ·  " + std::to_string(space_->selection().size()) + " selected";
+    if (!notice_.empty() && app_.head().version == noticeVersion_) out += "  ·  " + notice_;
     return out;
 }
 
@@ -761,8 +762,7 @@ void RackWindow::open(std::optional<model::Id> rack) {
                          bool fromOutput) { quickAdd(at, sp, text, from, fromOutput); };
     sh.copy = [this] { copySelected(); };
     sh.cut = [this] {
-        copySelected();
-        deleteSelected();
+        if (copySelected()) deleteSelected();
     };
     sh.duplicate = [this] { duplicateSelected(); };
     sh.paste = [this](ui::Point sp) {
@@ -981,13 +981,31 @@ bool RackWindow::tick(std::chrono::steady_clock::time_point now) {
     nextTelemetry_ = now + kTelemetryInterval;
     bool changed = false;
     const ui::Rect seen = space_->visibleSpace();
-    // Modules in view, and those whose cables cross it (for their glow).
+    // Modules in view are watched. Out of view, the sources of cables that
+    // cross it are measured, for their cables' glow (no telemetry; the
+    // engine measures while the transport plays).
     const std::vector<model::Id> sources = space_->cableSources(seen);
+    const engine::Engine* engine = app_.engine();
+    const bool playing = engine && engine->running() && engine->transport().playing;
     std::vector<model::Id> watching;
+    bool measuring = false;
     for (auto& m : space_->scene().modules) {
         rack::Instance* in = racks::instance(app_, m.id);
-        const bool visible = !seen.intersect(m.rect()).empty() ||
-                             std::find(sources.begin(), sources.end(), m.id) != sources.end();
+        const bool visible = !seen.intersect(m.rect()).empty();
+        const bool source = !visible && playing && in && m.type &&
+                            std::find(sources.begin(), sources.end(), m.id) != sources.end();
+        if (source) {
+            std::vector<float> levels;
+            for (int k = 0; k < static_cast<int>(m.type->outputs().size()); ++k)
+                levels.push_back(app_.moduleOutputLevel(m.id, m.type->output(k).key));
+            if (!m.measured || levels != m.levels) changed = true;
+            m.levels = std::move(levels);
+            m.measured = measuring = true;
+        } else if (m.measured) {
+            m.measured = false;
+            m.levels.clear();
+            changed = true;
+        }
         if (!in || !visible || !m.type) {
             if (m.live) {
                 m.live = false;
@@ -1006,7 +1024,7 @@ bool RackWindow::tick(std::chrono::steady_clock::time_point now) {
         if (std::find(watching.begin(), watching.end(), id) == watching.end())
             if (rack::Instance* in = racks::instance(app_, id)) in->watch(false);
     watched_ = std::move(watching);
-    if (watched_.empty()) nextTelemetry_ = now + std::chrono::milliseconds(250);
+    if (watched_.empty() && !measuring) nextTelemetry_ = now + std::chrono::milliseconds(250);
     if (changed) space_->telemetryChanged();
     return changed;
 }
@@ -1493,28 +1511,19 @@ Status RackWindow::addWired(const std::string& type, ui::Point sp,
     return {};
 }
 
-void RackWindow::copySelected() {
-    if (!space_ || !rack_ || space_->selection().empty()) return;
-    const model::Session& s = app_.head();
-    Clip clip;
-    clip.rack = *rack_;
-    std::set<model::Id> fxs;
-    for (model::Id id : space_->selection())
-        if (const model::RackModule* m = s.modules.find(id)) {
-            clip.modules.emplace_back(id, *m);
-            if (m->fx) fxs.insert(*m->fx);
-        }
-    auto inside = [&](const model::CableEnd& end) {
-        if (end.object.kind == model::Kind::Fx) return fxs.contains(end.object);
-        return space_->selection().contains(end.object);
-    };
-    for (const auto& c : s.cables)
-        if (inside(c.value->from) && inside(c.value->to)) clip.cables.push_back(*c.value);
-    if (clip.modules.empty()) return;
-    const std::size_t n = clip.modules.size();
-    clip_ = std::move(clip);
+bool RackWindow::copySelected() {
+    if (!space_ || space_->selection().empty()) return false;
+    json::Value list = json::Value::array();
+    for (model::Id id : space_->selection()) list.push_back(id.str());
+    json::Value args = json::Value::object();
+    args["modules"] = std::move(list);
+    auto r = exec("module.copy", std::move(args));
+    if (!r) return false;
+    const auto* count = r->find("modules");
+    const int n = count && count->isNumber() ? static_cast<int>(count->asDouble()) : 0;
     if (status_)
         status_->setText("Copied " + std::to_string(n) + (n == 1 ? " module" : " modules"));
+    return true;
 }
 
 void RackWindow::duplicateSelected() {
@@ -1536,89 +1545,19 @@ void RackWindow::duplicateSelected() {
 }
 
 Status RackWindow::paste(ui::Point sp) {
-    if (!clip_ || clip_->modules.empty()) return {};
+    if (!app_.rackClipboard()) return {};  // module.copy copies one or more
     if (!rack_) SUPPLE_TRY(addRack());
-    const model::Session& s = app_.head();
-    double left = 1e300, top = 1e300;
-    for (const auto& [id, m] : clip_->modules) {
-        left = std::min(left, m.x);
-        top = std::min(top, m.y);
-    }
-    const double dx = std::round(static_cast<double>(sp.x) - left),
-                 dy = std::round(static_cast<double>(sp.y) - top);
+    json::Value args = json::Value::object();
+    args["rack"] = rack_->str();
+    args["x"] = std::round(static_cast<double>(sp.x));
+    args["y"] = std::round(static_cast<double>(sp.y));
+    auto r = dispatcher_.execute({"rack.paste", std::move(args), kOrigin});
+    if (!r) return std::move(r).error();
     std::set<model::Id> made;
-    const bool here = clip_->rack == *rack_ &&
-                      std::all_of(clip_->modules.begin(), clip_->modules.end(),
-                                  [&](const auto& e) { return s.modules.find(e.first); });
-    if (here) {  // a duplicate: plug-ins keep their state
-        json::Value args = json::Value::object();
-        json::Value list = json::Value::array();
-        for (const auto& e : clip_->modules) list.push_back(e.first.str());
-        args["modules"] = std::move(list);
-        args["dx"] = dx;
-        args["dy"] = dy;
-        auto r = dispatcher_.execute({"module.duplicate", std::move(args), kOrigin});
-        if (!r) return std::move(r).error();
-        if (const auto* ids = r->find("modules"); ids && ids->isArray())
-            for (const auto& x : ids->asArray())
-                if (auto id = x.isString() ? model::Id::parse(x.asString()) : std::nullopt)
-                    made.insert(*id);
-    } else {  // another rack, or cut: rack.patch from the copy
-        auto nameOf = [](model::Id id) { return "m" + std::to_string(id.n); };
-        json::Value modules = json::Value::object();
-        std::map<model::Id, model::Id> ownerOfFx;
-        for (const auto& [id, m] : clip_->modules) {
-            json::Value e = json::Value::object();
-            if (m.type == model::kPluginModule) {
-                const model::FxInstance* fx = m.fx ? s.fx.find(*m.fx) : nullptr;
-                if (!fx) continue;  // its plug-in is gone with it
-                e["plugin"] = fx->plugin.id;
-                ownerOfFx[*m.fx] = id;
-            } else {
-                e["type"] = m.type;
-            }
-            if (m.params.isObject() && !m.params.asObject().empty()) e["params"] = m.params;
-            if (!m.label.empty()) e["label"] = m.label;
-            e["x"] = m.x + dx;
-            e["y"] = m.y + dy;
-            if (m.source) e["source"] = m.source->str();
-            if (m.device) e["device"] = *m.device;
-            modules[nameOf(id)] = std::move(e);
-        }
-        auto endOf = [&](const model::CableEnd& end) -> std::optional<std::string> {
-            model::Id owner = end.object;
-            if (end.object.kind == model::Kind::Fx) {
-                const auto it = ownerOfFx.find(end.object);
-                if (it == ownerOfFx.end()) return std::nullopt;
-                owner = it->second;
-            }
-            if (!modules.find(nameOf(owner))) return std::nullopt;
-            return nameOf(owner) + "." + end.key;
-        };
-        json::Value cables = json::Value::array();
-        for (const auto& c : clip_->cables) {
-            const auto from = endOf(c.from), to = endOf(c.to);
-            if (!from || !to) continue;
-            json::Value e = json::Value::object();
-            e["from"] = *from;
-            e["to"] = *to;
-            if (c.amount) e["amount"] = *c.amount;
-            if (!c.color.empty()) e["color"] = c.color;
-            cables.push_back(std::move(e));
-        }
-        if (modules.asObject().empty()) return {};
-        json::Value args = json::Value::object();
-        args["rack"] = rack_->str();
-        args["modules"] = std::move(modules);
-        args["cables"] = std::move(cables);
-        auto r = dispatcher_.execute({"rack.patch", std::move(args), kOrigin});
-        if (!r) return std::move(r).error();
-        if (const auto* ids = r->find("modules"); ids && ids->isObject())
-            for (const auto& x : ids->asObject())
-                if (auto id =
-                        x.value.isString() ? model::Id::parse(x.value.asString()) : std::nullopt)
-                    made.insert(*id);
-    }
+    if (const auto* ids = r->find("modules"); ids && ids->isArray())
+        for (const auto& x : ids->asArray())
+            if (auto id = x.isString() ? model::Id::parse(x.asString()) : std::nullopt)
+                made.insert(*id);
     sync();
     if (space_) {
         space_->select(made);
@@ -1662,6 +1601,84 @@ void RackWindow::tidyUp() {
         space_->frameAll();
 }
 
+namespace {
+// The outputs rack.capture reads: the first pitch and gate, and a velocity.
+struct NoteOutputs {
+    std::string pitch, gate, velocity;
+};
+std::optional<NoteOutputs> noteOutputs(const rack::ModuleType& type) {
+    NoteOutputs o;
+    for (int k = 0; k < static_cast<int>(type.outputs().size()); ++k) {
+        const auto& port = type.output(k);
+        if (port.signal == Signal::Pitch && o.pitch.empty()) o.pitch = port.key;
+        if (port.signal == Signal::Gate && o.gate.empty()) o.gate = port.key;
+        if (port.key == "velocity") o.velocity = port.key;
+    }
+    if (o.pitch.empty() || o.gate.empty()) return std::nullopt;
+    return o;
+}
+// The bar the playhead is in (1: the song's start).
+int playheadBar(engine::EngineApp& app) {
+    const auto t = app.transport("get");
+    return app.head().timeMap->barBeat(t ? t->beat : 0.0).bar;
+}
+}  // namespace
+
+void RackWindow::captureNotes(model::Id module, model::Id track, int bars) {
+    const model::Session& s = app_.head();
+    const model::RackModule* m = s.modules.find(module);
+    const auto* type = m && catalog_ ? catalog_->find(m->type) : nullptr;
+    const auto outputs = type ? noteOutputs(*type->type) : std::nullopt;
+    if (!outputs) return;
+    const int bar = std::max(1, playheadBar(app_));
+    const double from = s.timeMap->beatOfBar(bar);
+    const double beats = s.timeMap->beatOfBar(bar + bars) - from;
+    json::Value args = json::Value::object();
+    args["rack"] = m->rack.str();
+    args["pitch"] = module.str() + "." + outputs->pitch;
+    args["gate"] = module.str() + "." + outputs->gate;
+    if (!outputs->velocity.empty()) args["velocity"] = module.str() + "." + outputs->velocity;
+    args["track"] = track.str();
+    args["beats"] = beats;
+    args["from_beat"] = from;
+    auto r = exec("rack.capture", std::move(args));
+    if (!r) return;
+    const auto* count = r->find("notes");
+    const int n = count && count->isNumber() ? static_cast<int>(count->asDouble()) : 0;
+    notice_ = n == 0 ? "No notes: the gate did not rise in those bars"
+                     : "Captured " + std::to_string(n) + (n == 1 ? " note" : " notes") + " to " +
+                           model::trackLabel(app_.head(), track);
+    noticeVersion_ = app_.head().version;
+    if (status_) status_->setText(status());
+}
+
+void RackWindow::captureMenu(model::Id module, ui::Point at) {
+    const model::Session& s = app_.head();
+    std::vector<ui::MenuItem> items;
+    for (const auto& e : s.tracks) {
+        if (e.value->type != model::StripType::Channel) continue;
+        items.push_back(
+            {model::trackLabel(s, e.id), "",
+             [this, module, at, track = e.id] {
+                 const int bar = playheadBar(app_);
+                 std::vector<ui::MenuItem> lengths;
+                 lengths.push_back({"From bar " + std::to_string(bar), "", {}, false});
+                 for (int bars : {1, 2, 4, 8, 16})
+                     lengths.push_back(
+                         {std::to_string(bars) + (bars == 1 ? " bar" : " bars"), "",
+                          [this, module, track, bars] { captureNotes(module, track, bars); }});
+                 root().openPopup(ui::makeMenu("rack.capture.length", std::move(lengths),
+                                               [this] { root().closePopup(); }),
+                                  {at.x, at.y, 1, 1});
+             },
+             true, false, false, root().theme().trackColor(e.value->color)});
+    }
+    if (items.empty()) items.push_back({"No channels to capture to", "", {}, false});
+    root().openPopup(
+        ui::makeMenu("rack.capture.track", std::move(items), [this] { root().closePopup(); }),
+        {at.x, at.y, 1, 1});
+}
+
 void RackWindow::moduleMenu(model::Id module, ui::Point at) {
     const model::RackModule* m = app_.head().modules.find(module);
     if (!m || !space_) return;
@@ -1698,8 +1715,7 @@ void RackWindow::moduleMenu(model::Id module, ui::Point at) {
          true, false, m->bypass});
     items.push_back({"Copy", "Ctrl+C", [this] { copySelected(); }});
     items.push_back({"Cut", "Ctrl+X", [this] {
-                         copySelected();
-                         deleteSelected();
+                         if (copySelected()) deleteSelected();
                      }});
     items.push_back({"Duplicate", "Ctrl+D", [this] { duplicateSelected(); }});
     const auto* type = catalog_ ? catalog_->find(m->type) : nullptr;
@@ -1734,6 +1750,9 @@ void RackWindow::moduleMenu(model::Id module, ui::Point at) {
                          !several});
     if (type && type->type->code())
         items.push_back({"Show source", "", [this, id = m->type] { showSource(id); }, !several});
+    if (type && noteOutputs(*type->type))
+        items.push_back({"Capture notes to track\u2026", "",
+                         [this, module, at] { captureMenu(module, at); }, !several});
     items.push_back({"Save as rack preset\u2026", "", [this, selected] {
                          savePreset(std::vector<model::Id>(selected.begin(), selected.end()));
                      }});
@@ -1776,7 +1795,7 @@ void RackWindow::spaceMenu(ui::Point at, ui::Point sp) {
                          [this, sp] {
                              if (auto r = paste(sp); !r) report(r.error());
                          },
-                         clip_.has_value()});
+                         app_.rackClipboard() != nullptr});
         items.push_back({"", "", {}, true, true});
         // With several modules selected, only they are tidied.
         const bool several = space_ && space_->selection().size() > 1;

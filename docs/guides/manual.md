@@ -326,7 +326,12 @@ Drag a module by its body to move it, Ctrl+click, Shift+click or drag a
 box on the space to select several, nudge them with the arrow keys
 (Shift: finely), and Delete removes them. Ctrl+C and Ctrl+V copy and paste
 the selected modules with the cables between them (paste lands at the
-pointer, in this rack or another), Ctrl+X cuts and Ctrl+D duplicates.
+pointer, in this rack or another, with plug-ins' settings as they were
+when you copied), Ctrl+X cuts and Ctrl+D duplicates.
+To keep what a sequencer or any module with pitch and gate outputs plays,
+right-click it, choose **Capture notes to track…**, then a channel and a
+length: the notes land there as a MIDI item, from the bar the playhead is
+in, and Undo takes them away.
 **Tidy up** in the space's right-click menu lays the rack out by signal
 flow, left to right; with several modules selected, only they move. Undo
 puts them back.

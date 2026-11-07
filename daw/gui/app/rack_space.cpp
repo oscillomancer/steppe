@@ -169,6 +169,8 @@ void RackSpace::setScene(RackScene scene) {
         if (const auto* before = scene_.module(m.id)) {
             m.telemetry = before->telemetry;
             m.live = before->live;
+            m.levels = before->levels;
+            m.measured = before->measured;
         }
     const bool otherRack = !(scene.rack == scene_.rack);
     scene_ = std::move(scene);
@@ -335,12 +337,19 @@ bool RackSpace::connected(const RackScene::Module& m, const PanelItem& item) con
 }
 
 double RackSpace::outputLevel(const RackScene::Module& src, int out) const {
-    if (!src.live || !src.type || out < 0 ||
-        static_cast<std::size_t>(out) >= src.telemetry.peaks.size())
+    if (!src.type || out < 0) return 0;
+    const auto i = static_cast<std::size_t>(out);
+    double peak = 0, value = 0;
+    if (src.live && i < src.telemetry.peaks.size()) {
+        peak = D(src.telemetry.peaks[i]);
+        value = src.telemetry.outputs[i];
+    } else if (src.measured && i < src.levels.size()) {
+        // Only a peak: a gate that rose in the block is on.
+        peak = value = D(src.levels[i]);
+    } else {
         return 0;
+    }
     const auto& port = src.type->output(out);
-    const double peak = D(src.telemetry.peaks[static_cast<std::size_t>(out)]);
-    const double value = src.telemetry.outputs[static_cast<std::size_t>(out)];
     switch (port.signal) {
         case Signal::Gate:
             return value >= 0.5 ? 1.0 : 0.15 * std::min(1.0, peak);

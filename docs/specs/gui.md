@@ -1198,15 +1198,21 @@ a new channel). It follows rack.md §8.
   selects every module. Ctrl+C copies the selection with the cables among
   its modules, Ctrl+X cuts it, Ctrl+V pastes with the copy's top-left at
   the pointer (else the middle of the view), selected and in view, and
-  Ctrl+D duplicates the selection, cables too. A paste into the rack it
-  came from, while its modules are there, is `module.duplicate {dx, dy}`
-  (plug-ins keep their state); into another rack, or after a cut, it is
-  `rack.patch` from the copy (types or plug-in ids, knobs, labels, places,
-  Notes sources, and the cables, amounts and colours; a plug-in starts
-  from its defaults). A right-click offers Open editor (plugins), Rename…,
+  Ctrl+D duplicates the selection, cables too. Copy and cut are
+  `module.copy` (the engine's module clipboard, shared with agents: the
+  modules as they are at the copy, plug-in state and learn bindings
+  included, and the cables among them; a cut deletes only after the copy
+  succeeds). Paste is `rack.paste {rack, x, y}`, one undo step, the same in
+  the rack the copy came from, in another rack and after a cut; Paste is
+  enabled while the clipboard holds modules. A right-click offers Open editor (plugins), Rename…,
   Bypass, Copy, Cut, Duplicate, Randomize, Presets… (the type's factory
-  patches, `module.set preset`), Show source, Save as rack preset… (the
-  selection) and Delete. On the space: Add module…, Add plugin… there,
+  patches, `module.set preset`), Show source, Capture notes to track…
+  (modules with pitch and gate outputs), Save as rack preset… (the
+  selection) and Delete. Capture notes to track… picks a channel, then a
+  length (1, 2, 4, 8 or 16 bars, from the bar the playhead is in) and runs
+  `rack.capture` with the module's first pitch and gate outputs (and its
+  `velocity` output, if any): one undo step, a MIDI item on that channel
+  at that bar; the status bar says how many notes it caught. On the space: Add module…, Add plugin… there,
   Load rack preset… (there), Save rack as preset…, Paste, Tidy up, Show
   everything and Show selection. Tidy up is `rack.arrange` (one undo
   step): with two or more modules selected it reads "Tidy up selection"
@@ -1258,8 +1264,10 @@ a new channel). It follows rack.md §8.
   modulation cable plugs into its knob's rim. Poly cables are thicker. A
   cable glows around its cord, and its core brightens, as strongly as its
   source output's level (the jacks' measure; a pitch cable only faintly);
-  a cable that crosses the view has its source's telemetry read even when
-  the source module is out of view. While a module or a cable is hovered, or modules are selected, their
+  a cable that crosses the view glows from an out-of-view source too: such
+  a source is not watched, its outputs' block peaks are read
+  (`EngineApp::moduleOutputLevel`, a gate on when its peak is) while the
+  transport plays, and are zero when stopped. While a module or a cable is hovered, or modules are selected, their
   cables are drawn at full strength and on top and the rest step back (to
   12 % with eight or more cables, else 45 %); with nothing in focus, eight
   or more cables are drawn at 70 %. While a cable is drawn, the others dim. A cable that closes a loop (`rack.get`'s
