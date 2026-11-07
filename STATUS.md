@@ -291,6 +291,8 @@ instructions are in `docs/guides/installing.md`.
   the node and each output latency. Plug-in modulation cables accept numeric
   CLAP parameter ids (`fx_3.12`) as well as semantic keys, including plug-ins
   without semantic metadata; both survive project and preset reopening.
+  Stale saved targets warn instead of blocking project opening; new cables
+  validate the actual FX state and require canonical numeric ids.
   Agents patch with `rack.patch` (named
   modules and cables in one step, laid out by signal flow and labelled by
   name; `rack.arrange` tidies a rack) or `module.add`/`cable.add`, hear a patch

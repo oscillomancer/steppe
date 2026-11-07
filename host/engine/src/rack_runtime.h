@@ -35,8 +35,6 @@ struct PluginModTarget {
 Result<PluginModTarget> resolvePluginMod(std::span<const host::ParamInfo> params,
                                          const json::Value* schema, const std::string& key,
                                          bool vst3 = false);
-Status validatePluginMod(EngineApp& app, const model::FxInstance& fx, const std::string& key,
-                         const std::string& path);
 
 // The module types every engine knows: the host modules (the rack runtime's
 // and the plugin module) and the stock ones.

@@ -82,6 +82,7 @@ captures the same way.
 
 Agents can cable modulation to a plug-in parameter by semantic key or its
 CLAP id (`fx_3.gain` or `fx_3.12`; `effect.12` in a named `rack.patch`).
+Numeric ids use canonical decimal spelling: `12`, not `012`.
 `fx.describe` lists the ids, including third-party plug-ins without semantic
 keys. The target must support modulation. Numeric semantic keys take precedence.
 

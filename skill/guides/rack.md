@@ -618,9 +618,13 @@ Plug-in modulation can target `fx_3.gain` or its numeric CLAP parameter id,
 for example `fx_3.12` (`cable.add {from:"mo_2.out", to:"fx_3.12", amount:0.1}`).
 In `rack.patch`, a named plug-in module accepts `effect.12`. Read the ids
 from `fx.describe`; the parameter must be modulatable. Digits alone denote
-a decimal id; a numeric semantic key takes precedence. Module port/knob
+a decimal id; leading zeros are refused (use `12`, not `012`). A numeric
+semantic key takes precedence. Module port/knob
 keys still begin with a letter. Unknown ids return `rack.port` with the
 available keys and ids in the hint. Project/preset saves retain the cable.
+
+Cable edits validate the live FX or its restored state. Projects keep
+stale targets with warnings; preset loading skips stale cables with warnings.
 
 A send into an In carries the tap at the route's level and pan without
 Console 9 trim, with the console on or off. Bare In → Out paths are about

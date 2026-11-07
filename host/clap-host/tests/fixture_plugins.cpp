@@ -731,9 +731,12 @@ bool CLAP_ABI edgeParamInfo(const clap_plugin_t* pl, uint32_t index, clap_param_
     if (index > 1) return false;
     std::memset(info, 0, sizeof(*info));
     info->id = index == 0 && !E(pl)->removed ? 7 : 8;
+    // Mode 53: a state-dependent macro parameter, absent in the default state.
+    if (E(pl)->config[0] == 53 && index == 0) info->id = 105;
     // Mode 33: an editor that emits outputs for a read-only (display) parameter.
     info->flags = E(pl)->config[0] >= 11 && E(pl)->config[0] != 33 ? CLAP_PARAM_IS_AUTOMATABLE
                                                                    : CLAP_PARAM_IS_READONLY;
+    if (E(pl)->config[0] == 53 && index == 0) info->flags |= CLAP_PARAM_IS_MODULATABLE;
     std::snprintf(info->name, sizeof(info->name), index == 0 ? "Flushes" : "Editor parent");
     if (E(pl)->config[0] == 51) {
         std::memset(info->name, 'N', sizeof(info->name));
@@ -766,7 +769,7 @@ bool CLAP_ABI edgeParamValue(const clap_plugin_t* pl, clap_id id, double* out) {
         *out = E(pl)->timerCalls;
         return true;
     }
-    if (id != 7) return false;
+    if (id != 7 && !(id == 105 && E(pl)->config[0] == 53)) return false;
     *out = E(pl)->config[0] >= 30 ? E(pl)->editorValue.load() : E(pl)->flushes.load();
     return true;
 }
@@ -863,6 +866,7 @@ bool CLAP_ABI edgeStateLoad(const clap_plugin_t* pl, const clap_istream_t* is) {
     if (E(pl)->config[0] == 8) return false;
     std::uint8_t buf[4];
     if (is->read(is, buf, 4) != 4) return false;
+    const auto oldMode = E(pl)->config[0].load();
     for (std::size_t i = 0; i < 4; ++i) E(pl)->config[i].store(buf[i]);
     if (buf[0] >= 30) E(pl)->editorValue = buf[1];
     if (buf[0] == 2 || buf[0] == 43 || buf[0] == 47) {
@@ -874,6 +878,7 @@ bool CLAP_ABI edgeStateLoad(const clap_plugin_t* pl, const clap_istream_t* is) {
     if (buf[0] == 5 || buf[0] == 49) E(pl)->host->request_restart(E(pl)->host);
     const auto* hp = static_cast<const clap_host_params_t*>(
         E(pl)->host->get_extension(E(pl)->host, CLAP_EXT_PARAMS));
+    if (hp && (oldMode == 53 || buf[0] == 53)) hp->rescan(E(pl)->host, CLAP_PARAM_RESCAN_ALL);
     if (buf[0] == 20) {
         E(pl)->host->request_process(E(pl)->host);
         hp->clear(E(pl)->host, 7, CLAP_PARAM_CLEAR_AUTOMATIONS);

@@ -250,6 +250,9 @@ class EngineApp : public cmd::Host {
     // The instance's reported latency in samples (the running one when there is
     // one, else a throwaway activation at the project rate).
     Result<json::Value> setPlainParams(model::Id id, const json::Value& values);
+    // Cable checks use the live FX or a private probe restored from its saved state.
+    Status validatePluginMod(model::Id id, const model::FxInstance& fx, const std::string& key,
+                             const std::string& path, std::shared_ptr<const model::Blob> blob = {});
     Result<std::uint32_t> fxLatencySamples(model::Id id, const model::FxInstance& fx,
                                            bool compensated = false);
     // fx's patch after applying `patch` (a merge patch, or a complete patch

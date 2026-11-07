@@ -203,13 +203,17 @@ void registerRackClipCommands(cmd::Registry& registry) {
                 ids[original.original] = id;
                 result["modules"].asArray().push_back(id.str());
             }
+            const auto preview = t.preview();
             for (auto cb : clip->cables) {
                 cb.from.object = ids.at(cb.from.object);
                 cb.to.object = ids.at(cb.to.object);
                 if (cb.to.object.kind == model::Kind::Fx) {
-                    const auto preview = t.preview();
-                    SUPPLE_TRY(detail::validatePluginMod(app, *preview.fx.find(cb.to.object),
-                                                         cb.to.key, "/cables/to"));
+                    const auto* pastedFx = preview.fx.find(cb.to.object);
+                    if (!pastedFx)
+                        return Error("rack.port", "pasted cable's plug-in is missing", "/cables/to",
+                                     "copy the plug-in module with its modulation cables");
+                    SUPPLE_TRY(
+                        app.validatePluginMod(cb.to.object, *pastedFx, cb.to.key, "/cables/to"));
                 }
                 result["cables"].asArray().push_back(t.create(std::move(cb)).str());
             }

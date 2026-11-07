@@ -350,6 +350,13 @@ Result<PluginModTarget> resolvePluginMod(std::span<const host::ParamInfo> list,
                 if (const auto* v = d->find("id"); v && v->isNumber())
                     id = static_cast<std::uint32_t>(v->asInt());
     if (!id) {
+        if (key.size() > 1 && key.front() == '0' &&
+            key.find_first_not_of("0123456789") == std::string::npos) {
+            const auto first = key.find_first_not_of('0');
+            const auto canonical = first == std::string::npos ? "0" : key.substr(first);
+            return Error("rack.port", "numeric parameter ids cannot have leading zeros", "",
+                         "use the canonical parameter id " + canonical);
+        }
         std::uint32_t number = 0;
         const auto [end, ec] = std::from_chars(key.data(), key.data() + key.size(), number);
         if (ec == std::errc{} && end == key.data() + key.size()) id = number;
@@ -380,20 +387,6 @@ Result<PluginModTarget> resolvePluginMod(std::span<const host::ParamInfo> list,
         return Error("rack.modulation", found->name + " is not modulatable", "",
                      "automate it instead (env.add {fx})");
     return PluginModTarget{found->id, found->max - found->min};
-}
-
-Status validatePluginMod(EngineApp& app, const model::FxInstance& fx, const std::string& key,
-                         const std::string& path) {
-    auto info = app.findPlugin(fx.plugin.id);
-    if (!info) return std::move(info).error().at(path);
-    auto schema = app.fxSchema(fx);
-    if (!schema) return std::move(schema).error().at(path);
-    auto params = app.fxParams(fx);
-    if (!params) return std::move(params).error().at(path);
-    auto target = resolvePluginMod(*params, schema->isNull() ? nullptr : &*schema, key,
-                                   info->format == "vst3");
-    if (!target) return std::move(target).error().at(path);
-    return {};
 }
 
 RackLatencies rackLatencies(const Session& session, Id rackId,

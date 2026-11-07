@@ -1436,7 +1436,8 @@ void registerRackCommands(cmd::Registry& registry) {
             "the knob's unit otherwise; default an octave or half the range), or a plugin "
             "module's plug-in parameter \"fx_N.<key>\" (CLAP modulation, amount a fraction "
             "of its range, default 0.5; it must be modulatable). A numeric CLAP id is also "
-            "accepted (fx_3.12); a semantic key takes precedence if it is numeric. Several cables "
+            "accepted (fx_3.12), with no leading zeros except 0; a numeric semantic key takes "
+            "precedence. Several cables "
             "into one input sum; a mono cable reaches every voice of a poly module. feedback: "
             "it closes a loop, so it carries the previous frame (a one-sample delay).";
         c.args = schema::object<CableAdd>("cable_add_args")
@@ -1482,7 +1483,7 @@ void registerRackCommands(cmd::Registry& registry) {
                 if (!owner)
                     return Error("rack.port", to->object.str() + " is not a plugin module's", "/to",
                                  "cables reach the plug-ins of plugin modules");
-                SUPPLE_TRY(detail::validatePluginMod(e, *s.fx.find(to->object), to->key, "/to"));
+                SUPPLE_TRY(e.validatePluginMod(to->object, *s.fx.find(to->object), to->key, "/to"));
                 cable.amount = a.amount.value_or(0.5);
             } else {
                 auto toId = moduleId(s, to->object.str(), "/to");
@@ -2214,8 +2215,12 @@ void registerRackPresetCommands(cmd::Registry& registry) {
                         skip("module " + std::to_string(p.to) + " is not a plugin module");
                         continue;
                     }
-                    SUPPLE_TRY(
-                        detail::validatePluginMod(e, plugins[p.to]->fx, p.toKey, at + "/to/port"));
+                    auto checked = e.validatePluginMod({}, plugins[p.to]->fx, p.toKey,
+                                                       at + "/to/port", plugins[p.to]->blob);
+                    if (!checked) {
+                        skip(checked.error().message + ". " + checked.error().hint);
+                        continue;
+                    }
                     p.amount = amount ? amount->asDouble() : 0.5;
                 } else if (dst && dst->input(p.toKey) >= 0) {
                     // an input: no amount

@@ -315,6 +315,37 @@ Result<json::Value> EngineApp::setPlainParams(model::Id id, const json::Value& v
     return changed;
 }
 
+Status EngineApp::validatePluginMod(model::Id id, const model::FxInstance& fx,
+                                    const std::string& key, const std::string& path,
+                                    std::shared_ptr<const model::Blob> blob) {
+    auto check = [&](host::Instance& instance) -> Status {
+        json::Value schema;
+        if (instance.info().semantic) {
+            auto described = instance.semanticSchema();
+            if (!described) return std::move(described).error().at(path);
+            schema = std::move(*described);
+        }
+        auto target = detail::resolvePluginMod(instance.params(), &schema, key,
+                                               instance.info().format == "vst3");
+        if (!target) return std::move(target).error().at(path);
+        return {};
+    };
+    if (auto* live = instanceOf(id)) return check(*live);
+    auto info = findPlugin(fx.plugin.id);
+    if (!info) return std::move(info).error().at(path);
+    auto probe = host::Instance::create(*info, options_.identity);
+    if (!probe) return std::move(probe).error().at(path);
+    auto state = view();
+    if (blob && fx.state) state.blobs[*fx.state] = std::move(blob);
+    auto restored = restoreFx(**probe, fx, state);
+    if (!restored) return std::move(restored).error().at(path);
+    if (!fx.params.empty()) {
+        SUPPLE_TRY((*probe)->activate(state.project->sampleRate, 1, 1));
+        (*probe)->flushParams();
+    }
+    return check(**probe);
+}
+
 Result<std::uint32_t> EngineApp::fxLatencySamples(model::Id id, const model::FxInstance& fx,
                                                   bool compensated) {
     if (auto owner = model::frozenOwner(view(), id))
@@ -641,8 +672,15 @@ Status EngineApp::open(const fs::path& where, std::vector<schema::Warning>* warn
         const auto* fx = s->fx.find(target.object);
         // Missing plug-ins remain reopenable, as with strip FX.
         if (!fx || !findPlugin(fx->plugin.id)) continue;
-        SUPPLE_TRY(
-            detail::validatePluginMod(*this, *fx, target.key, "/cables/" + cable.id.str() + "/to"));
+        // Loading remains recoverable when a plug-in drops a parameter.
+        auto checked = validatePluginMod(
+            {}, *fx, target.key, "/cables/" + cable.id.str() + "/to",
+            fx->state && s->blobs.contains(*fx->state) ? s->blobs.at(*fx->state) : nullptr);
+        if (!checked && warnings)
+            warnings->push_back({checked.error().code,
+                                 checked.error().message + "; cable retained but not heard. " +
+                                     checked.error().hint,
+                                 checked.error().path});
     }
     return replaceProject(std::move(*s), path, {}, warnings);
 }

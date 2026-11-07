@@ -227,12 +227,16 @@ A plug-in parameter target accepts a semantic key or an unsigned decimal
 CLAP parameter id: `fx_3.gain`, `fx_3.0`, `fx_3.12`. A numeric semantic key
 wins over the same numeric id. Decimal ids use digits only (no sign, hex,
 spaces or suffix); they must resolve to an actual modulatable CLAP parameter.
-Module ports and knobs keep their letter-first keys. `rack.patch` also accepts
+Leading zeros are refused by cable creation with `rack.port` and a hint
+showing the canonical form (`0` itself is valid). Module ports and knobs
+keep their letter-first keys. `rack.patch` also accepts
 `effect.12` for a named plug-in module, resolving it to that module's FX.
-Unknown targets return `rack.port`; the hint lists semantic keys and numeric
-ids. Validation is shared by cable commands, preset load/paste and project
-load. Projects with missing plug-ins still reopen with their cables retained;
-the available plug-in is checked when the cable can be resolved. Serialized
+Unknown targets in cable.add/rack.patch return `rack.port`; the hint lists
+semantic keys and numeric ids. Checks use the live FX or a restored private
+probe, including state-dependent parameter lists. Project load retains
+unresolvable cables with warnings; preset loading skips them with its usual
+`rack.preset_cable` warning, like other missing targets. Missing plug-ins
+remain reopenable. Serialized
 cable ends retain the supplied key/id string through save and reopen.
 
 A cable moves a parameter by `amount × value`: for a frequency the amount is

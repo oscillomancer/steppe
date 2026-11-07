@@ -1485,7 +1485,8 @@ TEST_CASE("rack cables: numeric CLAP ids modulate a raw plugin and survive save 
         REQUIRE_FALSE(bad);
         CHECK(bad.error().code == "rack.port");
         CHECK(bad.error().path == "/args/to");
-        CHECK(bad.error().hint.find("0") != std::string::npos);
+        CHECK(bad.error().hint ==
+              "available parameter keys and numeric ids: 0, 1; fx.describe lists their ranges");
     }
     auto nonmod = f.call("cable.add", *json::parse(R"({"from":"mo_2.playing","to":"fx_1.1"})"));
     REQUIRE_FALSE(nonmod);
@@ -1541,9 +1542,9 @@ TEST_CASE("rack cables: numeric keys work in rack.patch and unknown ids name ava
     const auto bad = f.call("cable.add", *json::parse(R"({"from":"mo_2.playing","to":"fx_1.12"})"));
     REQUIRE_FALSE(bad);
     CHECK(bad.error().code == "rack.port");
-    CHECK(bad.error().hint.find("gain") != std::string::npos);
-    CHECK(bad.error().hint.find("latency") != std::string::npos);
-    CHECK(bad.error().hint.find("0") != std::string::npos);
+    CHECK(bad.error().hint ==
+          "available parameter keys and numeric ids: gain, latency, 0, 1; fx.describe lists their "
+          "ranges");
     const auto version = f.app->head().version;
     const auto patch = f.call("rack.patch", *json::parse(R"({"rack":"rk_1",
         "modules":{"other":{"type":"transport"}},"cables":[["other.playing","fx_1.999"]]})"));
@@ -1554,10 +1555,11 @@ TEST_CASE("rack cables: numeric keys work in rack.patch and unknown ids name ava
     doc["cables"]["cb_1"]["to"] = "fx_1.12";
     const auto path = f.dir / "invalid.json";
     REQUIRE(writeFileAtomic(path, json::writeCanonical(doc)));
-    const auto opened = f.app->open(path);
-    REQUIRE_FALSE(opened);
-    CHECK(opened.error().code == "rack.port");
-    CHECK(f.app->head().version == version);
+    std::vector<schema::Warning> warnings;
+    REQUIRE(f.app->open(path, &warnings));
+    REQUIRE(warnings.size() == 1);
+    CHECK(warnings[0].code == "rack.port");
+    CHECK(f.app->head().cables.find({model::Kind::Cable, 1})->to.key == "12");
     // A preset's numeric target is validated too.
     auto saved = f.run("rack.preset.save", R"({"rack":"rk_1","name":"Bad numeric"})");
     auto text = readTextFile(saved["path"].asString(), 1 << 20);
@@ -1569,7 +1571,57 @@ TEST_CASE("rack cables: numeric keys work in rack.patch and unknown ids name ava
     auto args = json::Value::object();
     args["rack"] = "rk_1";
     args["path"] = saved["path"];
-    const auto loaded = f.call("rack.preset.load", args);
-    REQUIRE_FALSE(loaded);
-    CHECK(loaded.error().code == "rack.port");
+    auto loaded = f.call("rack.preset.load", args);
+    REQUIRE(loaded);
+    REQUIRE((*loaded)["warnings"].isArray());
+    CHECK((*loaded)["warnings"].asArray().size() == 1);
+    CHECK((*loaded)["warnings"].asArray()[0]["code"].asString() == "rack.preset_cable");
+}
+
+TEST_CASE("rack cables: validation uses restored state and live parameter rescans") {
+    Fixture f;
+    f.run("rack.add");
+    f.run("module.add", R"({"rack":"rk_1","type":"transport"})");
+    f.run("module.add", R"({"rack":"rk_1","plugin":"com.suppleaudio.test.edge"})");
+    auto tx = f.app->beginTransaction(origin, "Dynamic parameter state");
+    REQUIRE(tx);
+    const std::string hash = "sha256:dynamic-parameter";
+    f.app->txn().putBlob(hash, std::make_shared<const model::Blob>(model::Blob{{53, 0, 0, 0}}));
+    f.app->txn().modify<model::FxInstance>({model::Kind::Fx, 1},
+                                           [&](auto& fx) { fx.state = hash; });
+    REQUIRE(f.app->commitTransaction(*tx));
+    f.run("cable.add", R"({"from":"mo_2.playing","to":"fx_1.105"})");
+    auto missing = f.call("cable.add", *json::parse(R"({"from":"mo_2.playing","to":"fx_1.7"})"));
+    REQUIRE_FALSE(missing);
+    CHECK(missing.error().code == "rack.port");
+    f.run("cable.remove", R"({"from":"mo_2.playing","to":"fx_1.105"})");
+    // The model is now in the default state, but a live instance changes its parameter list.
+    tx = f.app->beginTransaction(origin, "Default parameter state");
+    REQUIRE(tx);
+    f.app->txn().modify<model::FxInstance>({model::Kind::Fx, 1},
+                                           [&](auto& fx) { fx.state.reset(); });
+    REQUIRE(f.app->commitTransaction(*tx));
+    const auto* fx = f.app->head().fx.find({model::Kind::Fx, 1});
+    auto instance = f.app->instances().get({model::Kind::Fx, 1}, *fx, f.app->head());
+    REQUIRE(instance);
+    REQUIRE((*instance)->loadState(std::vector<std::uint8_t>{53, 0, 0, 0}));
+    f.run("cable.add", R"({"from":"mo_2.playing","to":"fx_1.105"})");
+}
+
+TEST_CASE("rack cables: numeric ids reject leading zeros with a canonical hint") {
+    Fixture f;
+    f.run("rack.add");
+    f.run("module.add", R"({"rack":"rk_1","type":"transport"})");
+    f.run("module.add", R"({"rack":"rk_1","plugin":"com.suppleaudio.test.gain"})");
+    for (auto key : {"00", "012"}) {
+        auto args = json::Value::object();
+        args["from"] = "mo_2.playing";
+        args["to"] = std::string("fx_1.") + key;
+        const auto bad = f.call("cable.add", args);
+        REQUIRE_FALSE(bad);
+        CHECK(bad.error().code == "rack.port");
+        CHECK(bad.error().hint == std::string("use the canonical parameter id ") +
+                                      (key == std::string("00") ? "0" : "12"));
+    }
+    f.run("cable.add", R"({"from":"mo_2.playing","to":"fx_1.0"})");
 }
