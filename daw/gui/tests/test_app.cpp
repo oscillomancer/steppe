@@ -9,10 +9,14 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <thread>
 #include "test_support.h"
 
@@ -42,6 +46,7 @@
 #include "supple/json/write.h"
 #include "supple/peaks/peaks.h"
 #include "supple/ui/controls.h"
+#include "supple/ui/forms.h"
 #include "supple/ui/list.h"
 #include "supple/ui/root.h"
 #include "supple/ui/scroll_view.h"
@@ -498,9 +503,14 @@ TEST_CASE("the mouse modifiers dialog edits the live map and saves it (gap log #
     // Another context from the picker; then reset puts the defaults back.
     REQUIRE(a.root->click("mouse.reset"));
     CHECK(map.behaviour("item.drag", ui::kAlt) == "slip");
-    dialog.open("envelope");
+    // The context picker is a dropdown: picking rebuilds the dialog on it.
+    auto* contexts = dynamic_cast<ui::Dropdown*>(a.root->find("mouse.context"));
+    REQUIRE(contexts);
+    contexts->choose("envelope");
     a.root->frame(false);
     CHECK(a.root->find("mouse.set.alt")->valueText() == "delete");
+    CHECK(a.root->find("mouse.context")->valueText() ==
+          std::string(views::MouseMap::context("envelope")->label));
     // The wheel's zoom anchor goes with the follow button, not here: asked
     // for, the dialog opens on its first context.
     dialog.open("wheel.zoom");
@@ -2225,7 +2235,7 @@ TEST_CASE("the TCP's input menu lists the device's ports and picks one (P5.13)")
     a.root->frame(false);
     REQUIRE(inputButton());
     CHECK(inputButton()->valueText() == "AUX0+AUX1 + Keystation");  // unchanged
-    // A rack's Out module is listed whatever the device, "<rack> › <Out>",
+    // A rack's Out module is listed whatever the device, "<rack> » <Out>",
     // and picked as the channel's audio input (ADR-0062); the keyboard stays.
     json::Value rack = json::Value::object();
     rack["name"] = "Bells";
@@ -2256,7 +2266,7 @@ TEST_CASE("the TCP's input menu lists the device's ports and picks one (P5.13)")
     a.root->closePopups();
     menu = openMenu();
     REQUIRE(menu);
-    const std::string outLabel = "Bells \u203a " + model::moduleLabel(a.app->head(), out);
+    const std::string outLabel = "Bells \u00bb " + model::moduleLabel(a.app->head(), out);
     CHECK(checked(*menu) == std::vector<std::string>{"Keystation", outLabel});
     a.snapshot("tcp-input-rack-midi.png");
     // "no MIDI input" clears the device alone: the rack still plays here.
@@ -3020,4 +3030,99 @@ TEST_CASE("native floating shortcut activates the main popup owner") {
     dispatch(key);
     CHECK_FALSE(f.root->find("actions"));
     CHECK(panel.isOpen());
+}
+
+// The UI font (Inter, subset) lacks some symbols; a missing glyph draws as a
+// gap ("Bells   Out 1"). Every character of the GUI's string literals is in
+// both its weights: this scans the sources, the way the labels are written.
+TEST_CASE("every character in the GUI's strings is in the UI font") {
+    // The code points a TrueType font maps (its cmap, format 4).
+    auto coverage = [](const std::filesystem::path& path) {
+        std::set<std::uint32_t> cps;
+        std::ifstream in(path, std::ios::binary);
+        const std::string d((std::istreambuf_iterator<char>(in)), {});
+        auto u16 = [&](std::size_t at) {
+            return static_cast<std::uint32_t>(static_cast<unsigned char>(d.at(at)) << 8 |
+                                              static_cast<unsigned char>(d.at(at + 1)));
+        };
+        auto u32 = [&](std::size_t at) { return u16(at) << 16 | u16(at + 2); };
+        std::size_t cmap = 0;
+        for (std::size_t i = 0, n = u16(4); i < n; ++i)
+            if (d.compare(12 + 16 * i, 4, "cmap") == 0) cmap = u32(12 + 16 * i + 8);
+        REQUIRE(cmap);
+        for (std::size_t i = 0, n = u16(cmap + 2); i < n; ++i) {
+            const std::size_t st = cmap + u32(cmap + 4 + 8 * i + 4);
+            if (u16(st) != 4) continue;
+            const std::size_t segs = u16(st + 6) / 2;
+            for (std::size_t k = 0; k < segs; ++k) {
+                const std::uint32_t end = u16(st + 14 + 2 * k);
+                const std::uint32_t start = u16(st + 16 + 2 * segs + 2 * k);
+                for (std::uint32_t c = start; c <= end && c != 0xffff; ++c) cps.insert(c);
+            }
+        }
+        return cps;
+    };
+    const std::filesystem::path fonts = SUPPLE_GUI_FONTS_DIR;
+    const auto regular = coverage(fonts / "Inter-Regular.ttf");
+    const auto bold = coverage(fonts / "Inter-SemiBold.ttf");
+    REQUIRE(regular.count('A'));
+    // The code points in a string literal: UTF-8 bytes and \uXXXX escapes.
+    auto codePoints = [](std::string_view s) {
+        std::vector<std::uint32_t> out;
+        for (std::size_t i = 0; i < s.size();) {
+            const auto b = static_cast<unsigned char>(s[i]);
+            if (b == '\\' && i + 1 < s.size()) {
+                if (s[i + 1] == 'u' && i + 6 <= s.size())
+                    out.push_back(static_cast<std::uint32_t>(
+                        std::stoul(std::string(s.substr(i + 2, 4)), nullptr, 16)));
+                i += s[i + 1] == 'u' ? 6 : 2;
+            } else if (b >= 0x80) {
+                const int extra = b >= 0xf0 ? 3 : b >= 0xe0 ? 2 : 1;
+                std::uint32_t c = b & (0x3f >> extra);
+                for (int k = 1; k <= extra && i + k < s.size(); ++k)
+                    c = c << 6 | (static_cast<unsigned char>(s[i + k]) & 0x3f);
+                out.push_back(c);
+                i += 1 + extra;
+            } else {
+                ++i;
+            }
+        }
+        return out;
+    };
+    const std::filesystem::path gui =
+        std::filesystem::path(SUPPLE_GUI_GOLDEN_DIR).parent_path().parent_path();
+    std::size_t scanned = 0;
+    std::vector<std::string> missing;
+    for (const auto& e : std::filesystem::recursive_directory_iterator(gui)) {
+        const auto ext = e.path().extension();
+        if (!e.is_regular_file() || (ext != ".cpp" && ext != ".h")) continue;
+        if (e.path().generic_string().find("/tests/") != std::string::npos) continue;
+        std::ifstream in(e.path());
+        std::string line;
+        for (int n = 1; std::getline(in, line); ++n) {
+            line = line.substr(0, line.find("//"));  // comments are not shown
+            for (std::size_t q = line.find('"'); q != std::string::npos;) {
+                std::size_t end = q + 1;
+                while (end < line.size() && line[end] != '"') end += line[end] == '\\' ? 2 : 1;
+                if (end >= line.size()) break;
+                for (std::uint32_t c :
+                     codePoints(std::string_view(line).substr(q + 1, end - q - 1)))
+                    if (c >= 0x80 && (!regular.count(c) || !bold.count(c))) {
+                        char hex[16];
+                        std::snprintf(hex, sizeof hex, " U+%04X", static_cast<unsigned>(c));
+                        missing.push_back(e.path().filename().string() + ":" + std::to_string(n) +
+                                          hex);
+                    }
+                q = line.find('"', end + 1);
+            }
+            ++scanned;
+        }
+    }
+    CHECK(scanned > 10000);
+    INFO("missing from Inter: " << [&] {
+        std::string all;
+        for (const auto& m : missing) all += m + "; ";
+        return all;
+    }());
+    CHECK(missing.empty());
 }

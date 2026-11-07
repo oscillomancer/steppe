@@ -3,6 +3,7 @@
 #include "mouse_dialog.h"
 #include "supple/ui/shortcut.h"
 
+#include "supple/ui/forms.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/widgets.h"
 
@@ -40,7 +41,6 @@ void MouseDialog::open(std::string context) {
     context_ = context;
     if (root_.popupOpen()) root_.closePopups();
     buttons_.clear();
-    const views::MouseMap::Context& ctx = *views::MouseMap::context(context_);
     auto form = std::make_unique<ui::Node>("mouse");
     form->layout.dir = ui::Layout::Dir::Column;
     form->layout.width = ui::SizeRule::fixed(420);
@@ -50,22 +50,14 @@ void MouseDialog::open(std::string context) {
     form->layout.padding = ui::Insets::all(12);
     form->layout.gap = 4;
     form->emplace<ui::Label>("mouse.title", "Mouse modifiers", ui::Font::UiBold, "body");
-    // The context: a button that lists them all.
-    auto& pick = form->emplace<ui::Button>("mouse.context", std::string(ctx.label) + " ▾");
+    // The context: a dropdown that lists them all (it draws its chevron; the
+    // UI font has no arrow glyphs).
+    std::vector<ui::Choice> contexts;
+    for (const views::MouseMap::Context& c : views::MouseMap::contexts())
+        contexts.push_back({std::string(c.id), std::string(c.label)});
+    auto& pick = form->emplace<ui::Dropdown>("mouse.context", std::move(contexts), context_);
     pick.layout.height = ui::SizeRule::fixed(26);
-    pick.onClick = [this, at = &pick] {
-        std::vector<ui::MenuItem> items;
-        for (const views::MouseMap::Context& c : views::MouseMap::contexts()) {
-            ui::MenuItem m;
-            m.label = std::string(c.label);
-            m.checked = c.id == context_;
-            m.run = [this, id = std::string(c.id)] { open(id); };
-            items.push_back(std::move(m));
-        }
-        root_.openPopup(
-            ui::makeMenu("mouse.contexts", std::move(items), [this] { root_.closePopup(); }),
-            at->bounds());
-    };
+    pick.onChange = [this](const std::string& id) { open(std::string(id)); };
     for (unsigned combo : combos) {
         auto& row = form->emplace<ui::Node>("mouse.row." + views::MouseMap::comboName(combo));
         row.layout.dir = ui::Layout::Dir::Row;

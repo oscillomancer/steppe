@@ -224,7 +224,7 @@ int envOrder(const model::Envelope& env) {
 }
 
 std::string envTitle(const model::Envelope& env, const model::Session& session) {
-    // A rack module's knob: "Bells › Osc · fine".
+    // A rack module's knob: "Bells » Osc · fine".
     if (env.target.object.kind == model::Kind::Module)
         if (const model::RackModule* m = session.modules.find(env.target.object)) {
             std::string name = model::moduleLabel(session, env.target.object);
@@ -234,7 +234,7 @@ std::string envTitle(const model::Envelope& env, const model::Session& session) 
                 if (!name.empty())
                     name[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(name[0])));
             }
-            return model::rackLabel(session, m->rack) + " \u203a " + name + " \u00b7 " +
+            return model::rackLabel(session, m->rack) + " \u00bb " + name + " \u00b7 " +
                    envTitle(env);
         }
     const model::Route* r = env.target.object.kind == model::Kind::Route

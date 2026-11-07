@@ -159,7 +159,7 @@ LearnRequest knobLearn(const model::Session& s, model::Id module, const std::str
     LearnRequest request;
     const model::RackModule* rm = s.modules.find(module);
     request.title =
-        (rm ? model::rackLabel(s, rm->rack) + " › " : std::string()) + title + " · " + p.name;
+        (rm ? model::rackLabel(s, rm->rack) + " » " : std::string()) + title + " · " + p.name;
     const bool toggle = p.kind == sd::ParamModel::Kind::Toggle;
     request.takeover = !toggle;
     request.mode = toggle ? model::ControlMode::Toggle : model::ControlMode::Absolute;

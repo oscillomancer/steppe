@@ -201,7 +201,10 @@ only what the DAW needs, designed for virtualized, data-heavy views.
     chrome → overlays (drag ghosts, menus, tooltips).
 - **Text.** NanoVG fonts: Inter (UI) and IBM Plex Mono (numbers, notation,
   code), OFL-1.1, bundled (`assets/fonts/`, recorded in `THIRD_PARTY.md`).
-  Tabular figures for every numeric readout.
+  Tabular figures for every numeric readout. The bundled Inter is a subset,
+  and a character it lacks draws as a gap: UI strings use only what it has
+  (a test scans the GUI's string literals against both weights), so a rack
+  path reads "Bells » Out 1" and pickers draw their chevrons (`ui::Dropdown`).
 - **Theme.** A token set (colours, type scale, spacing, radii, stroke widths,
   motion durations, strip-type colours) loaded from JSON; light and dark
   variants; widgets read tokens only, never literals. Extends the plugin
@@ -1344,7 +1347,7 @@ a new channel). It follows rack.md §8.
   cable's amount (`cable.set`). A right-click offers the default value, a
   choice's options, and Automate: an envelope on the knob holding its value
   (`env.add {module, param, points}`), shown as a lane under the rack's home
-  channel ("Rack › Module · knob", on the knob's own scale); once there, the
+  channel ("Rack » Module · knob", on the knob's own scale); once there, the
   item shows or hides that lane. MIDI learn… opens the learn dialog (§6)
   for the knob: it listens, and OK binds what it heard (`module.learn.set`;
   a toggle's CC defaults to toggle mode, others offer soft takeover). A
@@ -1424,7 +1427,7 @@ a new channel). It follows rack.md §8.
   moved it. It is a hint from the module types: a sequencer clocked by a
   free-running module plays while stopped all the same.
 - **Elsewhere.** A channel's input menu lists every rack's Out modules
-  ("<rack> › <Out>", with the home channel's colour) after the device's
+  ("<rack> » <Out>", with the home channel's colour) after the device's
   inputs, and New rack on this channel; picking one is `track.set
   {record_rack}`, and the strip's input button names it the same way.
   The menu holds two selections, each with its own check (ADR-0065): the

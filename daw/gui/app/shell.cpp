@@ -324,12 +324,12 @@ std::string Shell::inputText(const model::Id& track, const std::string& channels
     const model::Session& s = app_.head();
     const model::Track* tr = s.tracks.find(track);
     // The audio input (record.input): a rack's Out module (ADR-0062),
-    // "Bells › Out 1", or the device's channels.
+    // "Bells » Out 1", or the device's channels.
     std::string audio;
     if (tr && tr->record.input)
         if (const model::Route* r = s.routes.find(*tr->record.input); r && r->from.module)
             if (s.modules.find(*r->from.module))
-                audio = model::rackLabel(s, s.modules.find(*r->from.module)->rack) + " \u203a " +
+                audio = model::rackLabel(s, s.modules.find(*r->from.module)->rack) + " \u00bb " +
                         model::moduleLabel(s, *r->from.module);
     if (audio.empty() && !channels.empty()) {
         for (const int ch : channelList(channels)) {
@@ -348,7 +348,7 @@ std::string Shell::inputText(const model::Id& track, const std::string& channels
     if (audio.empty()) return midi.empty() ? std::string("in \u2014") : midi;
     if (midi.empty()) return audio;
     // Both, in the room of one button: a rack with one Out by its name alone,
-    // so "Synth + midi" fits where "Synth › Out 1 + midi *" would not.
+    // so "Synth + midi" fits where "Synth » Out 1 + midi *" would not.
     if (const model::Route* r = s.routes.find(*tr->record.input); r && r->from.module) {
         const model::Id rack = s.modules.find(*r->from.module)->rack;
         int outs = 0;
@@ -687,7 +687,7 @@ void Shell::openInputMenu(const model::Id& track, const ui::Rect& anchor) {
         for (const auto& e : s.modules) {
             if (e.value->type != model::kOutModule) continue;
             ui::MenuItem m;
-            m.label = model::rackLabel(s, e.value->rack) + " \u203a " + model::moduleLabel(s, e.id);
+            m.label = model::rackLabel(s, e.value->rack) + " \u00bb " + model::moduleLabel(s, e.id);
             m.shortcut = "rack";
             m.checked = currentOut == e.id;
             if (const model::Rack* rk = s.racks.find(e.value->rack))
