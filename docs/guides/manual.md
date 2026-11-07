@@ -75,6 +75,11 @@ all masters reach the device at the same moment, whatever their effects'
 latency. The metronome plays on outputs 1 and 2. The menu lists the outputs
 only while the audio engine is running.
 
+Rack plug-in latency is compensated against the song, including oversampling.
+The rack's longest audio Out path sets its clock; shorter audio and Note Out
+routes receive padding. Parallel paths summed inside the rack keep their
+relative timing; add a Delay module when the patch needs alignment.
+
 ### Printing a mix onto its master
 
 A master has an arm button in the mixer, like a channel. Arm it and press

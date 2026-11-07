@@ -881,7 +881,9 @@ void registerRackCommands(cmd::Registry& registry) {
             "Modules with their type, label, place and size and the knobs that differ from "
             "their defaults (detail full: also their input, output and knob keys); cables with "
             "feedback (true: it closes a loop and carries the previous frame); Out modules and "
-            "the channels they feed; problems (missing types, cables that do not fit).";
+            "the channels they feed; latency_samples for each Out and the rack node, and "
+            "note_outs with their latencies (ADR-0064); problems (missing types, cables that do "
+            "not fit).";
         c.args = schema::object<RackGet>("rack_get_args")
                      .field("rack", &RackGet::rack, idOf("rk", "Rack"))
                      .field("detail", &RackGet::detail,
@@ -890,7 +892,8 @@ void registerRackCommands(cmd::Registry& registry) {
         c.examples = {{"What the rack holds", j(R"({"rack": "rk_1"})"), j(R"({"rack": "rk_1",
                          "name": "Bass", "track": "tr_1", "modules": "<any>",
                          "cables": [{"cable": "cb_1", "from": "mo_3.out", "to": "mo_1.l",
-                         "feedback": false}], "outs": "<any>", "problems": []})"),
+                         "feedback": false}], "outs": "<any>", "latency_samples": 0,
+                         "note_outs": [], "problems": []})"),
                        "song_with_rack"}};
         c.run = [](const RackGet& a, Context& ctx) -> Result<json::Value> {
             EngineApp& e = app(ctx);
@@ -927,6 +930,31 @@ void registerRackCommands(cmd::Registry& registry) {
             out["modules"] = std::move(modules);
             out["cables"] = std::move(cables);
             out["outs"] = outsOf(s, *id);
+            std::map<Id, std::int64_t> moduleLatencies;
+            for (const auto& module : s.modules) {
+                if (module.value->rack != *id || !module.value->fx || module.value->bypass)
+                    continue;
+                const auto* fx = s.fx.find(*module.value->fx);
+                if (!fx) continue;
+                auto latency = e.fxLatencySamples(*module.value->fx, *fx, true);
+                if (latency)
+                    moduleLatencies[module.id] = *latency;
+                else
+                    problems.push_back(module.id.str() + ": " + latency.error().toString());
+            }
+            const auto latencies = detail::rackLatencies(s, *id, moduleLatencies);
+            out["latency_samples"] = latencies.latency;
+            for (auto& output : out["outs"].asArray())
+                output["latency_samples"] =
+                    latencies.outputs.at(*Id::parse(output["module"].asString()));
+            out["note_outs"] = json::Value::array();
+            for (const auto& [module, latency] : latencies.outputs)
+                if (s.modules.find(module)->type == model::kNotesOutModule) {
+                    auto output = json::Value::object();
+                    output["module"] = module.str();
+                    output["latency_samples"] = latency;
+                    out["note_outs"].push_back(std::move(output));
+                }
             out["problems"] = std::move(problems);
             return out;
         };

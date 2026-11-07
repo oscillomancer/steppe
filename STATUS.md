@@ -282,6 +282,9 @@ instructions are in `docs/guides/installing.md`.
   alongside device MIDI, using the recorder's loop, punch and overdub rules.
   Armed channels also record their rack Out audio input as stereo WAV,
   including input FX, loop/punch takes, recovery and undo.
+  Rack audio and Note Out routes now participate in read-ahead PDC, including
+  oversampling and runtime latency changes (ADR-0064); `rack.get` reports
+  the node and each output latency.
   Agents patch with `rack.patch` (named
   modules and cables in one step, laid out by signal flow and labelled by
   name; `rack.arrange` tidies a rack) or `module.add`/`cable.add`, hear a patch
@@ -800,11 +803,11 @@ Library boundaries:
   on Linux, and native macOS/Windows CI has not run on it.
 
 Engine and hosting:
-- Modular racks (ADR-0062): Racks do not follow a
+- Modular racks (ADR-0062/0064): Racks do not follow a
   track's playrate map;
   cables into a plugin module's parameters modulate CLAP plug-ins only
   (VST3 has no modulation), by their first voice, at most 16 per plug-in;
-  a plug-in's latency inside a rack is not compensated;
+  parallel paths summed inside a patch remain unaligned (ADR-0064);
   `rack.capture` renders synchronously; post-fader sends into an In module
   take the linear path.
 - The headless platform layer (ADR-0035) has natively tested macOS/Windows

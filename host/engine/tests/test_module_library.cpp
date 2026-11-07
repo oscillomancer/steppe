@@ -1261,3 +1261,38 @@ TEST_CASE("rack Out recording: the file equals offline output in both executors"
         CHECK(f.app->head().items.size() == 0);
     }
 }
+
+TEST_CASE("rack.get: prepared latency includes oversampling and reports individual outputs") {
+    Fixture f;
+    f.run("rack.add");
+    f.run("module.add", R"({"rack":"rk_1","plugin":"com.suppleaudio.test.gain"})");
+    f.run("cable.add", R"({"from":"mo_2.out_l","to":"mo_1.l"})");
+    auto set = [&](int os, bool bypass = false) {
+        auto tx = f.app->beginTransaction(origin, "Latency mode");
+        REQUIRE(tx);
+        f.app->txn().modify<model::FxInstance>({model::Kind::Fx, 1}, [&](auto& fx) {
+            fx.patch = *json::parse(
+                R"({"schema":"supple.test-gain-patch/1.0","params":{"latency":"short"}})");
+            fx.oversampling = os;
+        });
+        f.app->txn().modify<model::RackModule>({model::Kind::Module, 2},
+                                               [&](auto& m) { m.bypass = bypass; });
+        REQUIRE(f.app->commitTransaction(*tx));
+    };
+    set(1);
+    auto rack = f.run("rack.get", R"({"rack":"rk_1"})");
+    CHECK(rack["latency_samples"].asInt() == 64);
+    CHECK(rack["outs"].asArray()[0]["latency_samples"].asInt() == 64);
+    set(2);
+    rack = f.run("rack.get", R"({"rack":"rk_1"})");
+    CHECK(rack["latency_samples"].asInt() > 32);  // plug-in latency / 2 plus resampler
+    MediaCache media;
+    auto plan = supple::engine::detail::compile(f.app->head(), f.app->instances(), 0, 128);
+    REQUIRE(plan);
+    plan->media = &media;
+    REQUIRE(supple::engine::detail::prepare(*plan, f.app->head()));
+    for (const auto& node : plan->nodes)
+        if (node.rack) CHECK(node.latChain == rack["latency_samples"].asInt());
+    set(1, true);
+    CHECK(f.run("rack.get", R"({"rack":"rk_1"})")["latency_samples"].asInt() == 0);
+}

@@ -441,9 +441,19 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
 - **Edges.** A send to an In module is an edge into the rack node at its
   tap; a channel's record input from an Out module is an edge from the rack
   node into the channel's input sum (linear, no Console 9 stage).
-- **Timing.** Read-ahead PDC treats the node as a strip with no chain
-  latency. Its timeline shift is the node's; MIDI events and transport use
-  it. The grid is aligned to the node's timeline position.
+- **Timing.** Read-ahead PDC treats the node as a strip whose latency is the
+  maximum of its audio Outs (ADR-0064). Each Out's latency is the maximum
+  sum of prepared plug-in stage latencies, including oversampling, along
+  feed-forward paths to it. Script modules and entire feedback groups
+  contribute zero. Notes, Transport and automation use the same shifted
+  node clock; the grid is aligned to that clock. An audio or Note Out edge
+  with less latency adds the difference through its existing edge delay.
+  Main-thread preparation computes these values; plug-in latency changes
+  rebuild the plan as for strips. `rack.get` reports `latency_samples` for
+  the node, each entry in `outs`, and each `{module, latency_samples}` in
+  `note_outs`, in engine frames (project frames without a running engine).
+  Parallel paths summed inside a patch stay unaligned: insert a Delay
+  module explicitly when that patch needs alignment.
 - **Note Out.** Pitch/gate becomes MIDI with the same gate detector and MIDI
   quantization functions as Capture: rise at ≥0.5, fall below 0.25, key
   round(60 + 12 × pitch) clamped to 0..127, velocity round(127 × v) clamped
@@ -513,8 +523,7 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   the plan and is attached on the audio thread each block, since the
   previous plan may still be running the same instance.
 - **Errors.** `rack.cycle`, `rack.unknown_type`, `rack.port`, `rack.param`,
-  `rack.limit` at edit time; plan warnings for missing types and plugin
-  latency inside a rack.
+  `rack.limit` at edit time; plan warnings for missing types.
 
 ## 7. Commands
 
@@ -527,7 +536,7 @@ examples run as tests. Ends are strings: `"mo_3.out"`.
 | `rack.remove` | edit | `{rack}` |
 | `rack.set` | edit | `{rack, name?, track?}` |
 | `rack.list` | query | `{}` → racks with their home tracks, module counts and Out modules |
-| `rack.get` | query | `{rack, detail?: brief\|full}` → modules (id, type, label, changed params, position, size), cables (with `feedback`), Out modules and the channels they feed, problems |
+| `rack.get` | query | `{rack, detail?: brief\|full}` → modules (id, type, label, changed params, position, size), cables (with `feedback`), Out modules and the channels they feed, node/per-Out `latency_samples`, `note_outs`, problems |
 | `rack.probe` | query | `{rack, ports: ["mo_N.<output>", …≤8], seconds? (≤10, 2), from_beat?, notes? (notation the rack's Notes modules play)}` → per port: peak, rms, dc, min, max; audio (the first 4 voices summed): dB and pitch (Hz, note, cents) when periodic; gates over the voices: count, per second, per beat, duty; pitch: the notes visited; CV: rate; a one-line description. An offline render of a copy with a listener (`ProbeModule`) on each port; nothing changes |
 | `rack.capture` | edit | `{rack, pitch, gate, velocity?, track, beats? (≤1024, 16), from_beat?, at?, quantize?, notes?, name?}` → `{item, take, source, position, length, notes, voices, warnings?}`: an offline render of a copy as `rack.probe`'s, with a listener (`CaptureModule`) on the ports, written as a MIDI item (§7.3); one undo step |
 | `rack.levels` | query | `{rack}` → `{modules: {mo_N: {port: level}}}`: every module and known output port, latest block's linear peak across all channels; stopped or silent reads zero, missing types have an empty port object |

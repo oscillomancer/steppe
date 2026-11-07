@@ -8476,7 +8476,7 @@
   {
     "name": "rack_get",
     "title": "A rack's modules, cables, Out modules and problems.",
-    "description": "A rack's modules, cables, Out modules and problems. Modules with their type, label, place and size and the knobs that differ from their defaults (detail full: also their input, output and knob keys); cables with feedback (true: it closes a loop and carries the previous frame); Out modules and the channels they feed; problems (missing types, cables that do not fit). See describe for errors and examples.",
+    "description": "A rack's modules, cables, Out modules and problems. Modules with their type, label, place and size and the knobs that differ from their defaults (detail full: also their input, output and knob keys); cables with feedback (true: it closes a loop and carries the previous frame); Out modules and the channels they feed; latency_samples for each Out and the rack node, and note_outs with their latencies (ADR-0064); problems (missing types, cables that do not fit). See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "rack_get_args",

@@ -594,3 +594,12 @@ to avoid doubling it.
   none. `amount` is a fraction of the parameter's range (default 0.5).
 - A plug-in's latency inside a rack is not compensated.
 - Racks do not follow a track's playrate changes.
+
+## Timing through plug-ins
+
+`rack.get` reports the node's `latency_samples` and each audio or Note Out's
+latency. Read-ahead PDC advances the whole rack clock by its longest audio
+Out path, including oversampling; shorter outputs receive edge padding.
+Notes, Transport and automation move together. Feedback groups contribute
+zero latency. Parallel paths summed inside the patch are left as patched:
+add a Delay module to align a dry path with a delayed plug-in path.

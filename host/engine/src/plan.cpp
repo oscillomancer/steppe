@@ -25,6 +25,10 @@ namespace {
 std::int64_t tapOffset(const Node& n, model::Tap tap) {
     return tap == model::Tap::PreFx ? 0 : n.latChain;
 }
+std::int64_t edgeTapOffset(const Node& source, const Edge& edge) {
+    return edge.rackOut >= 0 || edge.rackNotes >= 0 ? edge.rackLatency + edge.rackPadding
+                                                    : tapOffset(source, edge.tap);
+}
 
 double fadeCurve(model::FadeShape shape, double curve, double t) {
     return model::fadeGain(shape, curve, t);
@@ -1001,6 +1005,7 @@ Status prepare(Plan& p, const Session& s) {
         n.latChain = n.freeze ? time::samplesAt(
                                     double(n.freeze->latencyFrames) / s.project->sampleRate, p.rate)
                               : layoutChain(n.chain, n.auxCount == 0, block);
+        if (n.rack) prepareRackLatencies(n, s);
         n.aux.assign(static_cast<std::size_t>(n.auxCount), std::vector<float>(block, 0.0f));
         n.sum.init(block);
         n.preFx.init(block);
@@ -1062,13 +1067,24 @@ Status prepare(Plan& p, const Session& s) {
     std::erase_if(p.instances, [&](auto* in) { return !in->active() || p.pool->restarting(in); });
     // Each input constraint joins a source tap to a destination stage. Aux
     // channels leave after the chain even when the main pair uses a pre-FX tap.
+    for (auto& edge : p.edges) {
+        const auto& source = p.nodes[edge.from];
+        if (edge.rackOut >= 0)
+            edge.rackLatency = source.rack->outLatencies[static_cast<std::size_t>(edge.rackOut)];
+        else if (edge.rackNotes >= 0)
+            edge.rackLatency =
+                source.rack->notesOut[static_cast<std::size_t>(edge.rackNotes)].latency;
+        else
+            continue;
+        edge.rackPadding = std::max<std::int64_t>(0, source.latChain - edge.rackLatency);
+    }
     auto inputs = [&](std::size_t target, auto&& visit) {
         Node& n = p.nodes[target];
         for (std::size_t ei : n.in) {
             Edge& e = p.edges[ei];
             const Node& source = p.nodes[e.from];
             const auto before = e.stage < 0 ? 0 : n.chain[static_cast<std::size_t>(e.stage)].before;
-            if (!e.auxOnly) visit(e.from, tapOffset(source, e.tap), before, e.delay);
+            if (!e.auxOnly) visit(e.from, edgeTapOffset(source, e), before, e.delay);
             if (e.stage < 0)
                 for (auto& link : e.auxLinks)
                     visit(e.from, tapOffset(source, link.from >= 2 ? model::Tap::PostFader : e.tap),
@@ -1128,6 +1144,7 @@ Status prepare(Plan& p, const Session& s) {
         });
         for (std::size_t ei : n.in) {
             Edge& e = p.edges[ei];
+            if (e.rackPadding) e.delay.init(e.delay.length + e.rackPadding);
             e.tmp.init(block);
             if (e.encode) e.encoded.init(block);
             e.auxTmp.assign(e.auxLinks.empty() ? 0 : block, 0.0f);

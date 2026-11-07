@@ -11061,7 +11061,7 @@ Result:
 
 A rack's modules, cables, Out modules and problems.
 
-Modules with their type, label, place and size and the knobs that differ from their defaults (detail full: also their input, output and knob keys); cables with feedback (true: it closes a loop and carries the previous frame); Out modules and the channels they feed; problems (missing types, cables that do not fit).
+Modules with their type, label, place and size and the knobs that differ from their defaults (detail full: also their input, output and knob keys); cables with feedback (true: it closes a loop and carries the previous frame); Out modules and the channels they feed; latency_samples for each Out and the rack node, and note_outs with their latencies (ADR-0064); problems (missing types, cables that do not fit).
 
 Kind: `query`. Exposure: `mcp-tool`.
 
@@ -11107,6 +11107,8 @@ Result:
     }
   ],
   "outs": "<any>",
+  "latency_samples": 0,
+  "note_outs": [],
   "problems": []
 }
 
