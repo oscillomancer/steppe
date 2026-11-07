@@ -518,7 +518,8 @@ Tags in the reference group the modules. Some starting points:
   `reverb`, `glitch` (repeats, reverses, tape stops), `orbit` (a circling
   panner, stereo to eight outputs).
 - **Dynamics**: `compressor` (its Key input ducks by another sound),
-  `transient` (each hit's attack and sustain).
+  `noisegate` (opens over a threshold, or by its Key: a kick gating a
+  pad), `transient` (each hit's attack and sustain).
 - **Utility**: `vca`, `mixer`, `scale` (attenuverters), `matrix` (a 4x4
   modulation matrix), `math`, `poly`,
   `pitch`, `switcher`, `macro` (eight performance knobs), `keygates`
