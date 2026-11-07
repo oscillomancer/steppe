@@ -1,0 +1,274 @@
+{
+  "schema": "supple.rack-preset/1.0",
+  "name": "Rain Bells",
+  "description": "Self-playing: bells struck on two Euclidean rhythms play a slowly changing A minor pentatonic loop into a dotted echo and a shimmering hall. Turn Melody's Flip for more change, the rhythms' Pulses for more notes.",
+  "modules": [
+    {
+      "type": "com.suppleaudio.rack.out",
+      "version": "1.0.0",
+      "x": 1616.0,
+      "y": 295.0
+    },
+    {
+      "type": "com.suppleaudio.rack.transport",
+      "version": "1.0.0",
+      "label": "Clock",
+      "x": 0.0,
+      "y": 226.0
+    },
+    {
+      "type": "com.suppleaudio.rack.euclid",
+      "version": "1.0.0",
+      "label": "Rain",
+      "x": 144.0,
+      "y": 0.0
+    },
+    {
+      "type": "com.suppleaudio.rack.euclid",
+      "version": "1.0.0",
+      "label": "Drops",
+      "x": 144.0,
+      "y": 382.0,
+      "params": {
+        "steps": 12,
+        "pulses": 4,
+        "rotation": 1
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.logic",
+      "version": "1.0.0",
+      "label": "Both",
+      "x": 404.0,
+      "y": 49.0
+    },
+    {
+      "type": "com.suppleaudio.rack.turing",
+      "version": "1.0.0",
+      "label": "Melody",
+      "x": 576.0,
+      "y": 241.0,
+      "params": {
+        "flip": 8.0,
+        "length": 16,
+        "scale": 1.5,
+        "offset": -0.25
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.quantizer",
+      "version": "1.0.0",
+      "label": "Key",
+      "x": 836.0,
+      "y": 241.0,
+      "params": {
+        "scale": "minor_pentatonic",
+        "root": "a"
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.drift",
+      "version": "1.0.0",
+      "label": "Wander",
+      "x": 360.0,
+      "y": 349.0,
+      "params": {
+        "rate": 0.1,
+        "voices": 1
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.resonator",
+      "version": "1.0.0",
+      "label": "Bell",
+      "x": 1052.0,
+      "y": 214.0,
+      "params": {
+        "structure": 75.0,
+        "decay": 3500.0,
+        "spread": 70.0,
+        "level": -15.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.delay",
+      "version": "1.0.0",
+      "label": "Echo",
+      "x": 1240.0,
+      "y": 168.0,
+      "params": {
+        "sync": "n8d",
+        "feedback": 50.0,
+        "ping_pong": true,
+        "mix": 30.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.reverb",
+      "version": "1.0.0",
+      "label": "Room",
+      "x": 1428.0,
+      "y": 214.0,
+      "params": {
+        "size": 85.0,
+        "decay": 7000.0,
+        "shimmer": 20.0,
+        "mix": 40.0
+      }
+    }
+  ],
+  "cables": [
+    {
+      "from": {
+        "module": 1,
+        "port": "clock"
+      },
+      "to": {
+        "module": 2,
+        "port": "clock"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "clock"
+      },
+      "to": {
+        "module": 3,
+        "port": "clock"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "gate"
+      },
+      "to": {
+        "module": 4,
+        "port": "a"
+      }
+    },
+    {
+      "from": {
+        "module": 3,
+        "port": "gate"
+      },
+      "to": {
+        "module": 4,
+        "port": "b"
+      }
+    },
+    {
+      "from": {
+        "module": 4,
+        "port": "or"
+      },
+      "to": {
+        "module": 5,
+        "port": "clock"
+      }
+    },
+    {
+      "from": {
+        "module": 4,
+        "port": "or"
+      },
+      "to": {
+        "module": 8,
+        "port": "strike"
+      }
+    },
+    {
+      "from": {
+        "module": 5,
+        "port": "out"
+      },
+      "to": {
+        "module": 6,
+        "port": "pitch"
+      }
+    },
+    {
+      "from": {
+        "module": 6,
+        "port": "out"
+      },
+      "to": {
+        "module": 8,
+        "port": "pitch"
+      }
+    },
+    {
+      "from": {
+        "module": 7,
+        "port": "out"
+      },
+      "to": {
+        "module": 5,
+        "port": "flip"
+      },
+      "amount": 10.0
+    },
+    {
+      "from": {
+        "module": 8,
+        "port": "out_l"
+      },
+      "to": {
+        "module": 9,
+        "port": "in_l"
+      }
+    },
+    {
+      "from": {
+        "module": 8,
+        "port": "out_r"
+      },
+      "to": {
+        "module": 9,
+        "port": "in_r"
+      }
+    },
+    {
+      "from": {
+        "module": 9,
+        "port": "out_l"
+      },
+      "to": {
+        "module": 10,
+        "port": "in_l"
+      }
+    },
+    {
+      "from": {
+        "module": 9,
+        "port": "out_r"
+      },
+      "to": {
+        "module": 10,
+        "port": "in_r"
+      }
+    },
+    {
+      "from": {
+        "module": 10,
+        "port": "out_l"
+      },
+      "to": {
+        "module": 0,
+        "port": "l"
+      }
+    },
+    {
+      "from": {
+        "module": 10,
+        "port": "out_r"
+      },
+      "to": {
+        "module": 0,
+        "port": "r"
+      }
+    }
+  ]
+}
+

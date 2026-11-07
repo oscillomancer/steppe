@@ -1,0 +1,168 @@
+{
+  "schema": "supple.rack-preset/1.0",
+  "name": "Arp Pluck",
+  "description": "Hold a chord: Arp plays its notes up and down over two octaves in sixteenths on a plucked string, echoing in dotted eighths. Turn Arp's Mode and Octaves for other patterns, Latch to keep it going.",
+  "modules": [
+    {
+      "type": "com.suppleaudio.rack.out",
+      "version": "1.0.0",
+      "x": 808.0,
+      "y": 127.0
+    },
+    {
+      "type": "com.suppleaudio.rack.notes",
+      "version": "1.0.0",
+      "label": "Keys",
+      "x": 0.0,
+      "y": 29.0
+    },
+    {
+      "type": "com.suppleaudio.rack.arp",
+      "version": "1.0.0",
+      "x": 144.0,
+      "y": 52.0,
+      "params": {
+        "mode": "up_down",
+        "octaves": 2,
+        "gate_length": 60.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.string",
+      "version": "1.0.0",
+      "x": 288.0,
+      "y": 23.0,
+      "params": {
+        "decay": 1500.0,
+        "position": 15.0,
+        "level": -6.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.delay",
+      "version": "1.0.0",
+      "label": "Echo",
+      "x": 432.0,
+      "y": 0.0,
+      "params": {
+        "sync": "n8d",
+        "feedback": 40.0,
+        "ping_pong": true,
+        "mix": 28.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.reverb",
+      "version": "1.0.0",
+      "label": "Room",
+      "x": 620.0,
+      "y": 46.0,
+      "params": {
+        "mix": 22.0
+      }
+    }
+  ],
+  "cables": [
+    {
+      "from": {
+        "module": 1,
+        "port": "pitch"
+      },
+      "to": {
+        "module": 2,
+        "port": "pitch"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "gate"
+      },
+      "to": {
+        "module": 2,
+        "port": "gate"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "out"
+      },
+      "to": {
+        "module": 3,
+        "port": "pitch"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "out_gate"
+      },
+      "to": {
+        "module": 3,
+        "port": "pluck"
+      }
+    },
+    {
+      "from": {
+        "module": 3,
+        "port": "out"
+      },
+      "to": {
+        "module": 4,
+        "port": "in_l"
+      }
+    },
+    {
+      "from": {
+        "module": 3,
+        "port": "out"
+      },
+      "to": {
+        "module": 4,
+        "port": "in_r"
+      }
+    },
+    {
+      "from": {
+        "module": 4,
+        "port": "out_l"
+      },
+      "to": {
+        "module": 5,
+        "port": "in_l"
+      }
+    },
+    {
+      "from": {
+        "module": 4,
+        "port": "out_r"
+      },
+      "to": {
+        "module": 5,
+        "port": "in_r"
+      }
+    },
+    {
+      "from": {
+        "module": 5,
+        "port": "out_l"
+      },
+      "to": {
+        "module": 0,
+        "port": "l"
+      }
+    },
+    {
+      "from": {
+        "module": 5,
+        "port": "out_r"
+      },
+      "to": {
+        "module": 0,
+        "port": "r"
+      }
+    }
+  ]
+}
+

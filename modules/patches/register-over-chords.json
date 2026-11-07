@@ -1,0 +1,361 @@
+{
+  "schema": "supple.rack-preset/1.0",
+  "name": "Register Over Chords",
+  "description": "Self-playing: a shift register's melody, fitted by Fit to the chord Changes plays in A minor, plucked over a soft seventh-chord pad. Turn Melody's Flip to vary the line, Changes' Change to vary the chords.",
+  "modules": [
+    {
+      "type": "com.suppleaudio.rack.out",
+      "version": "1.0.0",
+      "x": 1804.0,
+      "y": 530.0
+    },
+    {
+      "type": "com.suppleaudio.rack.transport",
+      "version": "1.0.0",
+      "label": "Clock",
+      "x": 0.0,
+      "y": 461.0
+    },
+    {
+      "type": "com.suppleaudio.rack.euclid",
+      "version": "1.0.0",
+      "label": "Steps",
+      "x": 144.0,
+      "y": 426.0,
+      "params": {
+        "pulses": 7
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.changes",
+      "version": "1.0.0",
+      "label": "Prog",
+      "x": 360.0,
+      "y": 241.0,
+      "params": {
+        "key": "a",
+        "mode": "minor",
+        "notes": 4,
+        "octave": -1
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.turing",
+      "version": "1.0.0",
+      "label": "Melody",
+      "x": 360.0,
+      "y": 711.0,
+      "params": {
+        "flip": 12.0,
+        "scale": 1.5,
+        "offset": -0.25
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.fit",
+      "version": "1.0.0",
+      "label": "Snap",
+      "x": 620.0,
+      "y": 707.0
+    },
+    {
+      "type": "com.suppleaudio.rack.vco",
+      "version": "1.0.0",
+      "label": "Lead",
+      "x": 872.0,
+      "y": 760.0
+    },
+    {
+      "type": "com.suppleaudio.rack.lpg",
+      "version": "1.0.0",
+      "label": "Pluck",
+      "x": 1052.0,
+      "y": 565.0,
+      "params": {
+        "decay": 450.0,
+        "resonance": 35.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.vco",
+      "version": "1.0.0",
+      "label": "Pad",
+      "x": 656.0,
+      "y": 233.0,
+      "params": {
+        "drift": 40.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.filter",
+      "version": "1.0.0",
+      "label": "Pad Filter",
+      "x": 872.0,
+      "y": 0.0,
+      "params": {
+        "cutoff": 700.0,
+        "resonance": 15.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.adsr",
+      "version": "1.0.0",
+      "label": "Pad env",
+      "x": 836.0,
+      "y": 416.0,
+      "params": {
+        "attack": 600.0,
+        "decay": 800.0,
+        "sustain": 80.0,
+        "release": 1200.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.vca",
+      "version": "1.0.0",
+      "label": "Pad amp",
+      "x": 1052.0,
+      "y": 345.0,
+      "params": {
+        "level": -10.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.mixer",
+      "version": "1.0.0",
+      "label": "Mix",
+      "x": 1196.0,
+      "y": 420.0,
+      "params": {
+        "level_1": -6.0,
+        "master": 3.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.delay",
+      "version": "1.0.0",
+      "label": "Echo",
+      "x": 1428.0,
+      "y": 403.0,
+      "params": {
+        "sync": "n8",
+        "feedback": 35.0,
+        "ping_pong": true,
+        "mix": 22.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.reverb",
+      "version": "1.0.0",
+      "label": "Room",
+      "x": 1616.0,
+      "y": 449.0,
+      "params": {
+        "mix": 28.0
+      }
+    }
+  ],
+  "cables": [
+    {
+      "from": {
+        "module": 1,
+        "port": "clock"
+      },
+      "to": {
+        "module": 2,
+        "port": "clock"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "gate"
+      },
+      "to": {
+        "module": 4,
+        "port": "clock"
+      }
+    },
+    {
+      "from": {
+        "module": 4,
+        "port": "out"
+      },
+      "to": {
+        "module": 5,
+        "port": "pitch"
+      }
+    },
+    {
+      "from": {
+        "module": 3,
+        "port": "chord"
+      },
+      "to": {
+        "module": 5,
+        "port": "chord"
+      }
+    },
+    {
+      "from": {
+        "module": 5,
+        "port": "out"
+      },
+      "to": {
+        "module": 6,
+        "port": "pitch"
+      }
+    },
+    {
+      "from": {
+        "module": 6,
+        "port": "triangle"
+      },
+      "to": {
+        "module": 7,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "gate"
+      },
+      "to": {
+        "module": 7,
+        "port": "ping"
+      }
+    },
+    {
+      "from": {
+        "module": 3,
+        "port": "chord"
+      },
+      "to": {
+        "module": 8,
+        "port": "pitch"
+      }
+    },
+    {
+      "from": {
+        "module": 8,
+        "port": "saw"
+      },
+      "to": {
+        "module": 9,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 3,
+        "port": "gate"
+      },
+      "to": {
+        "module": 10,
+        "port": "gate"
+      }
+    },
+    {
+      "from": {
+        "module": 9,
+        "port": "low"
+      },
+      "to": {
+        "module": 11,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 10,
+        "port": "envelope"
+      },
+      "to": {
+        "module": 11,
+        "port": "cv"
+      }
+    },
+    {
+      "from": {
+        "module": 7,
+        "port": "out"
+      },
+      "to": {
+        "module": 12,
+        "port": "in_1"
+      }
+    },
+    {
+      "from": {
+        "module": 11,
+        "port": "out"
+      },
+      "to": {
+        "module": 12,
+        "port": "in_2"
+      }
+    },
+    {
+      "from": {
+        "module": 12,
+        "port": "left"
+      },
+      "to": {
+        "module": 13,
+        "port": "in_l"
+      }
+    },
+    {
+      "from": {
+        "module": 12,
+        "port": "right"
+      },
+      "to": {
+        "module": 13,
+        "port": "in_r"
+      }
+    },
+    {
+      "from": {
+        "module": 13,
+        "port": "out_l"
+      },
+      "to": {
+        "module": 14,
+        "port": "in_l"
+      }
+    },
+    {
+      "from": {
+        "module": 13,
+        "port": "out_r"
+      },
+      "to": {
+        "module": 14,
+        "port": "in_r"
+      }
+    },
+    {
+      "from": {
+        "module": 14,
+        "port": "out_l"
+      },
+      "to": {
+        "module": 0,
+        "port": "l"
+      }
+    },
+    {
+      "from": {
+        "module": 14,
+        "port": "out_r"
+      },
+      "to": {
+        "module": 0,
+        "port": "r"
+      }
+    }
+  ]
+}
+
