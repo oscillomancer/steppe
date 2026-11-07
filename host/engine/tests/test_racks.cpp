@@ -1315,6 +1315,7 @@ TEST_CASE("racks: In sends preserve tap level and pan without Console 9 trim" *
         const auto clock = addModule(t, sourceRack, "com.suppleaudio.rack.transport");
         const auto sourceOut = addModule(t, sourceRack, model::kOutModule);
         cable(t, clock, "playing", sourceOut, "l");
+        cable(t, clock, "tempo", sourceOut, "r");
         listen(t, sourceOut, source);
         const auto rack = t.create(model::Rack{target, "Through"});
         const auto in = addModule(t, rack, model::kInModule),
@@ -1326,7 +1327,13 @@ TEST_CASE("racks: In sends preserve tap level and pan without Console 9 trim" *
         route.from.track = source;
         route.to.module = in;
         route.tap = model::Tap::PreFader;
+        route.pan = -37;
         const auto send = t.create(route);
+        model::Envelope envelope;
+        envelope.target = {send, "volume"};
+        envelope.timebase = model::Timebase::Time;
+        envelope.points = {{0, -12}, {.01, -3}};
+        const auto volumeEnv = t.create(envelope);
         const auto state = commit(t);
         auto pool = makePool();
         MediaCache media;
@@ -1345,15 +1352,25 @@ TEST_CASE("racks: In sends preserve tap level and pan without Console 9 trim" *
         REQUIRE(rackNode);
         REQUIRE(rackNode->rackIns.size() == 1);
         double panLeft = 0, panRight = 0;
-        console9::panGains(console9::panAngle(console9::nativePan(0)), panLeft, panRight);
-        const float expected = static_cast<float>(double(sourceNode->preFader.l[64]) * panLeft);
-        CHECK(rackNode->rackIns[0].l[64] == expected);
-        CHECK(rackNode->rackIns[0].r[64] ==
-              static_cast<float>(double(sourceNode->preFader.r[64]) * panRight));
+        console9::panGains(console9::panAngle(console9::nativePan(-37)), panLeft, panRight);
+        REQUIRE(sourceNode->preFader.l[64] != 0);
+        REQUIRE(sourceNode->preFader.r[64] != 0);
+        CHECK(sourceNode->preFader.l[64] != sourceNode->preFader.r[64]);
+        auto gainAt = [](std::uint32_t frame) {
+            return console9::faderGain(-12 + 9 * double(frame) / 480.);
+        };
+        for (std::uint32_t i = 0; i < 128; ++i) {
+            CHECK(rackNode->rackIns[0].l[i] ==
+                  static_cast<float>(double(sourceNode->preFader.l[i]) * panLeft * gainAt(i)));
+            CHECK(rackNode->rackIns[0].r[i] ==
+                  static_cast<float>(double(sourceNode->preFader.r[i]) * panRight * gainAt(i)));
+        }
+        CHECK(rackNode->rackIns[0].l[127] > rackNode->rackIns[0].l[0]);
+        const float expected = rackNode->rackIns[0].l[64];
         constexpr double trim = .763932022500211;
         console9::Channel legacy;
         legacy.setLinear(true);
-        legacy.set(1, .5);
+        legacy.set(gainAt(64), console9::nativePan(-37));
         float legacyLeft = 0, legacyRight = 0;
         const float* inputs[]{&sourceNode->preFader.l[64], &sourceNode->preFader.r[64]};
         float* outputs[]{&legacyLeft, &legacyRight};
@@ -1364,6 +1381,9 @@ TEST_CASE("racks: In sends preserve tap level and pan without Console 9 trim" *
         model::EditTxn oldLevel(state, 2);
         oldLevel.modify<model::Route>(send,
                                       [](auto& value) { value.volumeDb = 20 * std::log10(trim); });
+        oldLevel.modify<model::Envelope>(volumeEnv, [](auto& value) {
+            for (auto& point : value.points) point.value += 20 * std::log10(trim);
+        });
         const auto old = renderLeft(commit(oldLevel), .1, 37);
         const auto offline = renderLeft(state, .1, 37);
         CHECK(20 * std::log10(double(offline[1200]) / double(old[1200])) ==

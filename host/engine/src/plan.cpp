@@ -283,6 +283,7 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
                      std::span<const RecordingMaster> recording) {
     SUPPLE_TRY(model::validateFrozenState(s));
     Plan p;
+    p.sessionVersion = s.version;
     p.pool = &pool;
     p.linearConsole = !s.project->console9;
     p.rate = rate > 0 ? rate : s.project->sampleRate;

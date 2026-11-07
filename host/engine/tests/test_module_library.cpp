@@ -1678,6 +1678,14 @@ TEST_CASE("rack cables: validation uses restored state and live parameter rescan
     auto missing = f.call("cable.add", *json::parse(R"({"from":"mo_2.playing","to":"fx_1.7"})"));
     REQUIRE_FALSE(missing);
     CHECK(missing.error().code == "rack.port");
+    const auto path = f.dir / "dynamic.json";
+    REQUIRE(f.app->save(path));
+    Fixture reopened;
+    std::vector<schema::Warning> warnings;
+    REQUIRE(reopened.app->open(path, &warnings));
+    CHECK(warnings.empty());
+    REQUIRE(reopened.app->head().cables.size() == 1);
+    CHECK(reopened.app->head().cables.find({model::Kind::Cable, 1})->to.key == "105");
     f.run("cable.remove", R"({"from":"mo_2.playing","to":"fx_1.105"})");
     // The model is now in the default state, but a live instance changes its parameter list.
     tx = f.app->beginTransaction(origin, "Default parameter state");
@@ -1690,6 +1698,55 @@ TEST_CASE("rack cables: validation uses restored state and live parameter rescan
     REQUIRE(instance);
     REQUIRE((*instance)->loadState(std::vector<std::uint8_t>{53, 0, 0, 0}));
     f.run("cable.add", R"({"from":"mo_2.playing","to":"fx_1.105"})");
+}
+
+TEST_CASE("rack cables: loading probes each FX once and skips probes without warnings") {
+    Fixture f;
+    f.run("rack.add");
+    f.run("module.add", R"({"rack":"rk_1","plugin":"com.suppleaudio.test.gain"})");
+    for (int i = 0; i < 4; ++i) {
+        f.run("module.add", R"({"rack":"rk_1","type":"transport"})");
+        auto args = json::Value::object();
+        args["from"] = "mo_" + std::to_string(i + 3) + ".playing";
+        args["to"] = "fx_1.0";
+        REQUIRE(f.call("cable.add", args));
+    }
+    const auto info = f.app->findPlugin("com.suppleaudio.test.gain");
+    REQUIRE(info);
+    // Keep the library loaded while opening replaces the app's instance pool.
+    auto keeper = host::Instance::create(*info, f.app->options().identity);
+    REQUIRE(keeper);
+    struct Control {
+        void (*edit)(const clap_plugin_t*, double, std::uint32_t);
+        std::uint32_t (*deliveries)(const clap_plugin_t*);
+        void (*latency)(const clap_plugin_t*, bool);
+        std::uint32_t (*creates)();
+    };
+    const auto* raw = (*keeper)->raw();
+    const auto* control =
+        static_cast<const Control*>(raw->get_extension(raw, "supple.test.gain-control"));
+    REQUIRE(control);
+    const auto path = f.dir / "many-cables.json";
+    REQUIRE(f.app->save(path));
+    auto before = control->creates();
+    REQUIRE(f.app->open(path));
+    CHECK(control->creates() == before);
+    std::vector<schema::Warning> warnings;
+    before = control->creates();
+    REQUIRE(f.app->open(path, &warnings));
+    CHECK(warnings.empty());
+    CHECK(control->creates() == before + 1);
+    REQUIRE(f.app->head().cables.size() == 4);
+    auto saved = f.run("rack.preset.save", R"({"rack":"rk_1","name":"Many cables"})");
+    // The preset's normal patch preparation reuses a scratch instance; count
+    // only the additional restored probe used to check its four cables.
+    REQUIRE(f.app->fxSchema(*f.app->head().fx.find({model::Kind::Fx, 1})));
+    auto args = json::Value::object();
+    args["rack"] = "rk_1";
+    args["path"] = saved["path"];
+    before = control->creates();
+    REQUIRE(f.call("rack.preset.load", args));
+    CHECK(control->creates() == before + 1);
 }
 
 TEST_CASE("rack cables: numeric ids reject leading zeros with a canonical hint") {
@@ -1771,6 +1828,55 @@ TEST_CASE("rack.get: brief uses prepared timing and full alone probes a cold plu
     CHECK(midiTiming["latency_samples"].asInt() == 64);
     CHECK(midiTiming["note_outs"].asArray()[0]["latency_samples"].asInt() == 64);
     f.app->stopEngine();
+}
+
+TEST_CASE("rack.get: a deferred structural edit cannot use the older prepared plan") {
+    for (bool anticipative : {false, true}) {
+        CAPTURE(anticipative);
+        Fixture f;
+        f.run("transport.playrate.set", R"({"rate":0.8})");
+        f.run("rack.add");
+        f.run("module.add", R"({"rack":"rk_1","plugin":"com.suppleaudio.test.gain"})");
+        f.run("cable.add", R"({"from":"mo_2.out_l","to":"mo_1.l"})");
+        auto tx = f.app->beginTransaction(origin, "Latency");
+        REQUIRE(tx);
+        f.app->txn().modify<model::FxInstance>({model::Kind::Fx, 1}, [](auto& fx) {
+            fx.patch = *json::parse(
+                R"({"schema":"supple.test-gain-patch/1.0","params":{"latency":"short"}})");
+        });
+        REQUIRE(f.app->commitTransaction(*tx));
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+        REQUIRE(f.app->startEngine(backend, {.sampleRate = 8000, .blockSize = 128},
+                                   {.anticipative = anticipative, .workers = 0}));
+        auto& engine = *f.app->engine();
+        engine.play();
+        for (int i = 0; i < 32; ++i) {
+            if (anticipative) REQUIRE(engine.awaitRendered(1024));
+            backend.run(1);
+            engine.service();
+        }
+        CHECK(f.run("rack.get", R"({"rack":"rk_1"})")["latency_samples"].asInt() == 64);
+        // Prepare a future non-unity plan, then edit inside its deferred span.
+        f.run("env.add", R"({"track":"tr_0","param":"playrate",
+                             "points":[{"seconds":0,"value":1.25}]})");
+        const auto generation = engine.planGeneration();
+        tx = f.app->beginTransaction(origin, "Deferred output and bypass");
+        REQUIRE(tx);
+        model::RackModule output;
+        output.rack = {model::Kind::Rack, 1};
+        output.type = std::string(model::kOutModule);
+        f.app->txn().create(output);
+        f.app->txn().modify<model::RackModule>({model::Kind::Module, 2},
+                                               [](auto& module) { module.bypass = true; });
+        REQUIRE(f.app->commitTransaction(*tx));
+        REQUIRE(engine.planGeneration() == generation);
+        CHECK_FALSE(engine.rackLatencies({model::Kind::Rack, 1}, f.app->head().version));
+        auto rack = f.run("rack.get", R"({"rack":"rk_1"})");
+        CHECK(rack["latency_samples"].asInt() == 0);
+        REQUIRE(rack["outs"].asArray().size() == 2);
+        for (auto& entry : rack["outs"].asArray()) CHECK(entry["latency_samples"].asInt() == 0);
+        f.app->stopEngine();
+    }
 }
 
 TEST_CASE(

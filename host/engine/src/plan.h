@@ -734,10 +734,11 @@ struct MixSlots {
 };
 
 struct Plan {
-    InstancePool* pool = nullptr;  // main-thread prepare/notifications only
-    std::uint64_t generation = 0;  // set by the real-time engine when it publishes the plan
-    std::vector<Node> nodes;       // topological order
-    std::size_t mainMaster = 0;    // tr_0 need not be last (multiple roots and key routes)
+    InstancePool* pool = nullptr;      // main-thread prepare/notifications only
+    std::uint64_t sessionVersion = 0;  // source session at compile time
+    std::uint64_t generation = 0;      // set by the real-time engine when it publishes the plan
+    std::vector<Node> nodes;           // topological order
+    std::size_t mainMaster = 0;        // tr_0 need not be last (multiple roots and key routes)
     // The masters that play to the device, in project.masters order. Each one
     // is live whenever anything is, and all of them share outputLatency.
     std::vector<OutputTap> outputs;

@@ -966,11 +966,17 @@ void registerRackCommands(cmd::Registry& registry) {
             const auto latencies =
                 prepared ? detail::RackLatencies{prepared->latency, prepared->outputs} : estimated;
             out["latency_samples"] = available ? json::Value(latencies.latency) : json::Value();
-            for (auto& output : out["outs"].asArray())
-                output["latency_samples"] =
-                    available
-                        ? json::Value(latencies.outputs.at(*Id::parse(output["module"].asString())))
-                        : json::Value();
+            for (auto& output : out["outs"].asArray()) {
+                const auto module = *Id::parse(output["module"].asString());
+                auto found = latencies.outputs.find(module);
+                if (found != latencies.outputs.end() && available)
+                    output["latency_samples"] = found->second;
+                else if (const auto fallback = estimated.outputs.find(module);
+                         fallback != estimated.outputs.end() && available)
+                    output["latency_samples"] = fallback->second;
+                else
+                    output["latency_samples"] = json::Value();
+            }
             out["note_outs"] = json::Value::array();
             for (const auto& [module, latency] : latencies.outputs)
                 if (s.modules.find(module) &&
@@ -2206,6 +2212,7 @@ void registerRackPresetCommands(cmd::Registry& registry) {
                 std::string color;
             };
             std::vector<Planned> planned;
+            EngineApp::PluginModValidation validation{s, {}};
             const json::Value* cables = doc.find("cables");
             for (std::size_t k = 0; cables && k < cables->asArray().size(); ++k) {
                 const json::Value& entry = cables->asArray()[k];
@@ -2240,8 +2247,9 @@ void registerRackPresetCommands(cmd::Registry& registry) {
                         skip("module " + std::to_string(p.to) + " is not a plugin module");
                         continue;
                     }
-                    auto checked = e.validatePluginMod({}, plugins[p.to]->fx, p.toKey,
-                                                       at + "/to/port", plugins[p.to]->blob);
+                    auto checked =
+                        e.validatePluginMod({}, plugins[p.to]->fx, p.toKey, at + "/to/port",
+                                            plugins[p.to]->blob, &validation);
                     if (!checked) {
                         skip(checked.error().message + ". " + checked.error().hint);
                         continue;

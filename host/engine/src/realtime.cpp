@@ -980,9 +980,8 @@ void Engine::wakeOutputConsumed() SUPPLE_RT {
 }
 
 std::optional<RackLatencyInfo> Engine::rackLatencies(model::Id id, std::uint64_t version) const {
-    if (!latest_ || latest_->version != version) return {};
     const auto* plan = latestPlan_.load(std::memory_order_acquire);
-    if (!plan) return {};
+    if (!plan || plan->sessionVersion != version) return {};
     for (const auto& node : plan->nodes)
         if (node.rack && node.rack->rack == id) {
             RackLatencyInfo result;

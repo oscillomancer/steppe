@@ -3,6 +3,7 @@
 #include "rack_runtime.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cctype>
 #include <charconv>
 #include <cmath>
@@ -442,6 +443,8 @@ RackLatencies rackLatencies(const Session& session, Id rackId,
     std::vector<std::vector<int>> forward(count);
     if (schedule) {
         const auto& patch = schedule->patch();
+        assert(patch.modules.size() == ids.size());
+        for (std::size_t i = 0; i < ids.size(); ++i) assert(patch.modules[i].id == ids[i].n);
         for (std::size_t i = 0; i < patch.cables.size(); ++i) {
             const auto& cable = patch.cables[i];
             if (!schedule->feedback(i)) forward[cable.from].push_back(cable.to);
