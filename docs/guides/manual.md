@@ -303,7 +303,9 @@ Racks**, the toolbar's **Racks** button, or **Add rack** in a channel's
 right-click menu opens the rack window: a tab per rack along the top (**+**
 adds one on the selected channel) and the modules on a plain space below.
 Each new rack starts with an **Out** module, which becomes its channel's
-input. Every rack's Out is also listed in each channel's input menu, so
+input. While that is all it holds, the space says **Add a module, or start
+from a patch**: click either to open the browser on its modules or its
+patches. Every rack's Out is also listed in each channel's input menu, so
 any channel can take any rack's sound.
 
 Middle-drag or hold Space and drag to pan; Ctrl+wheel zooms at the pointer
@@ -311,10 +313,15 @@ Middle-drag or hold Space and drag to pan; Ctrl+wheel zooms at the pointer
 modules and Ctrl+0 is 100 %. Zoomed far out, each module shows just its
 name, so a big patch stays readable. Each rack remembers where you left it.
 
-The **Modules** column lists what you can add: search it, or click a tag
+The browser on the left (the **Browser** button shows or hides it) has
+two views. **Modules** lists what you can add: search it, or click a tag
 to filter. Double-click a module or drag it into the space. **Plugin…**
 puts any CLAP or VST3 plugin in the rack as a module; click it to open
-its editor.
+its editor. **Patches** lists whole patches: your own under *Yours*, and
+the ones that come with Steppe under *Factory*. Hover one to read what it
+is, search them, and double-click one or drag it into the space. Into an
+empty rack a patch arrives whole, laid out and in view, using the rack's
+own Out; Undo takes it away in one step.
 
 The quickest way to add a module is to start typing its name over the
 space, or double-click an empty spot: a list opens where the pointer is,
@@ -363,10 +370,11 @@ edited and saved there and then; a stock module offers **Make editable
 copy**.
 
 To keep a patch, right-click the space and choose **Save rack as
-preset…**, or select some modules and choose **Save as rack preset…** from
-a module's menu. Saved presets are listed in the **Modules** column under
-*Presets*: double-click one, or drag it into the space, to add its modules
-to the rack you are looking at. Right-click the space and choose **Add
+patch…**, or select some modules and choose **Save as patch…** from
+a module's menu. It is listed under **Patches**, *Yours*: double-click it,
+or drag it into the space, to add its modules to the rack you are looking
+at, and right-click it to delete it. **Load patch…** in the space's
+right-click menu opens the Patches view. Right-click the space and choose **Add
 module…** to pick a module from the column and put it where you clicked.
 
 A rack sends audio both ways. Its Out modules are channel inputs, and an

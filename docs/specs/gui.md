@@ -1158,7 +1158,11 @@ a new channel). It follows rack.md §8.
   (`rack.set name`); a right-click offers Rename, the home channel and
   Remove rack. The window's title names the rack shown.
 - **The space** is the theme's ground and nothing else; an empty project
-  says only "No racks yet. + adds one on the selected channel." Middle-drag
+  says only "No racks yet. + adds one on the selected channel." A rack that
+  holds only its own Outs and Ins invites a start: under them, in quiet
+  ink, "Add a module, or start from a patch", two links that open the
+  browser (shown if hidden) on its Modules or its Patches view with the
+  search focused; the line goes with the first other module. Middle-drag
   or Space-drag pans (Space alone, released without a drag, still plays and
   stops), Ctrl+wheel zooms at the pointer from 10 to 400 %, the wheel
   scrolls (Shift: across), Ctrl+= and Ctrl+- zoom, Ctrl+0 is 100 %, Home
@@ -1207,20 +1211,20 @@ a new channel). It follows rack.md §8.
   enabled while the clipboard holds modules. A right-click offers Open editor (plugins), Rename…,
   Bypass, Copy, Cut, Duplicate, Randomize, Presets… (the type's factory
   patches, `module.set preset`), Show source, Capture notes to track…
-  (modules with pitch and gate outputs), Save as rack preset… (the
+  (modules with pitch and gate outputs), Save as patch… (the
   selection) and Delete. Capture notes to track… picks a channel, then a
   length (1, 2, 4, 8 or 16 bars, from the bar the playhead is in) and runs
   `rack.capture` with the module's first pitch and gate outputs (and its
   `velocity` output, if any): one undo step, a MIDI item on that channel
   at that bar; the status bar says how many notes it caught. On the space: Add module…, Add plugin… there,
-  Load rack preset… (there), Save rack as preset…, Paste, Tidy up, Show
+  Load patch… (the browser's Patches view), Save rack as patch…, Paste, Tidy up, Show
   everything and Show selection. Tidy up is `rack.arrange` (one undo
   step): with two or more modules selected it reads "Tidy up selection"
   and moves only them, from their top-left, then brings them into view;
   otherwise it lays out the whole rack and shows everything.
 - **Adding at the pointer.** Typing a letter or digit over the space, a
   double click on it, or its menu's Add module… opens a search list there
-  ("rack.add": the browser's entries, Plugin… and the rack presets
+  ("rack.add": the browser's entries, Plugin… and the rack patches
   included, a name starting with the text first, then a word of the name
   starting with it, then a name containing it, then its id, tags and
   description). Enter or a double click adds the choice with its top
@@ -1293,8 +1297,10 @@ a new channel). It follows rack.md §8.
   the knob through `module.set`, so the window's knob follows it along the
   same travel (tested end to end with a dummy device's CCs). A plugin
   module's knobs are its plug-in's (the FX window's learn).
-- **Browser.** A column on the left (the header's Modules button shows or
-  hides it): a search field (words match name, id, description and tags),
+- **Browser.** A column on the left (the header's Browser button shows or
+  hides it) with two views, Modules and Patches, side by side at its top.
+  It opens on Modules, which lists module types only, so what it shows
+  does not move as patches are added. Modules: a search field (words match name, id, description and tags),
   the catalog's tags as chips that filter (one row: the chosen tag, then
   the most used, and "+N", which shows every tag alphabetically with Less;
   picking a tag folds them again), and the types by origin (host,
@@ -1303,13 +1309,24 @@ a new channel). It follows rack.md §8.
   a row into the space adds it where it is dropped. Plugin… (and Add
   plugin…) opens the plug-in browser; the plug-in chosen becomes a plugin
   module (`module.add {plugin}`), with note jacks when it is an instrument.
-  A right-click on a row offers Add to rack and Show source.
-- **Rack presets** (`rack.preset.*`) are listed in the browser under
-  "presets", after the host's modules: each with its description, or its
-  module count and types. A double click or a drag loads one into the rack
-  shown (`rack.preset.load`; a drag at the drop point, else beside the
-  rack's modules), its modules selected and brought into view; a
-  right-click offers Load into rack and Delete preset. Saving asks a name
+  A right-click on a row offers Add to rack and Show source. While a row
+  of either view is hovered, a card beside the browser shows its whole
+  description (and a module's tags; a patch's kind, module and cable
+  counts and module types).
+- **Patches** are rack presets (`rack.preset.*`, rack.md §7.1), on the
+  browser's Patches view: its own search (name, description, module
+  types), no tag chips, the user's saved ones under "Yours", then the
+  factory patches under "Factory" (`rack.preset.list`'s `factory: true`),
+  each with its description, or its module count and types. A double click
+  or a drag loads one into the rack shown (`rack.preset.load`; a drag at the
+  drop point, else beside the rack's modules), its modules selected and
+  brought into view. Into an empty rack (only its own Outs and Ins) a
+  load replaces nothing: the patch's Out and In are the rack's own (`io:
+  join`), the rack is laid out by signal flow with them (`rack.arrange`),
+  the load and the layout one undo step ("Load patch <name>"), and
+  everything is shown. A right-click offers Load into rack and, for the
+  user's own, Delete patch (a factory patch of the same name comes back).
+  Saving (Save as patch…, Save rack as patch…) asks a name
   in a field over the space (the rack's label, or the one module's) and
   calls `rack.preset.save` with the selection's ids or none; a name in use
   asks Replace "<name>" before saving with `replace`. The list is read when

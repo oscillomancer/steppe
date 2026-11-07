@@ -26,7 +26,8 @@ namespace {
 const cmd::Origin kOrigin{cmd::Origin::Type::Ui, "gui", {}};
 void openNameField(ui::Root& root, std::string id, std::string text, ui::Rect where,
                    std::function<void(const std::string&)> submit);
-// A browser entry for a saved rack preset: "preset:<name>".
+// A browser entry for a rack patch (a saved preset or a factory patch):
+// "preset:<name>".
 constexpr std::string_view kPresetPrefix = "preset:";
 constexpr float kBrowserW = 220, kHeaderH = 34, kStatusH = 22;
 constexpr auto kTelemetryInterval = std::chrono::milliseconds(33);
@@ -160,7 +161,10 @@ class RackBrowser : public ui::Node {
         std::string id, name, description;
         std::vector<std::string> tags;
         rack::Origin origin = rack::Origin::Stock;
-        bool preset = false;  // a saved rack preset ("preset:<name>"), listed last
+        // A rack patch ("preset:<name>"), listed in the Patches view: the
+        // user's saved preset, or a factory patch that ships with the app.
+        bool preset = false, factory = false;
+        std::string detail;  // the hover card's last line (what it holds)
     };
     struct Hooks {
         std::function<void(const std::string& type)> add;
@@ -175,6 +179,7 @@ class RackBrowser : public ui::Node {
         layout.width = ui::SizeRule::fixed(kBrowserW);
         layout.padding = {10, 10, 10, 6};
         layout.gap = 8;
+        views_ = &emplace<Views>(*this);
         search_ = &emplace<ui::TextField>("rack.browser.search", "", "Search modules");
         search_->layout.height = ui::SizeRule::fixed(26);
         search_->onChange = [this](const std::string&) { filter(); };
@@ -205,6 +210,23 @@ class RackBrowser : public ui::Node {
             if (r.entry) out.push_back(entries_[*r.entry].id);
         return out;
     }
+    // The Patches view (the user's and the factory's rack patches) or the
+    // Modules view (the module types: the default, so what it shows does
+    // not move as patches come and go).
+    void setPatches(bool on) {
+        hideCard();
+        if (on == patches_) return;
+        patches_ = on;
+        search_->setText("");
+        search_->setPlaceholder(on ? "Search patches" : "Search modules");
+        tags_->visible = !on;
+        filter();
+        tags_->relayout();
+        views_->invalidate();
+    }
+    bool patches() const { return patches_; }
+    // The hover card away (the browser hidden).
+    void dismissCard() { hideCard(); }
     void paint(ui::Canvas& c) override {
         c.fillRect(bounds(), c.theme().color("panel"));
         c.fillRect({bounds().right() - 1, bounds().y, 1, bounds().h}, c.theme().color("rule"));
@@ -218,6 +240,17 @@ class RackBrowser : public ui::Node {
     void focusSearch() {
         if (root()) root()->focus(search_);
         search_->selectAll();
+    }
+    // Tests: the switch's halves, and a shown row (by id), as window points.
+    ui::Point viewAt(bool patches) const { return views_->at(patches); }
+    std::optional<ui::Point> rowAt(const std::string& id) const {
+        for (std::size_t i = 0; i < rows_.size(); ++i)
+            if (rows_[i].entry && entries_[*rows_[i].entry].id == id) {
+                const float y = list_->rowTop(i);
+                if (y < list_->bounds().y || y + 18 > list_->bounds().bottom()) return std::nullopt;
+                return ui::Point{list_->bounds().x + 40, y + 18};
+            }
+        return std::nullopt;
     }
     // The tags: one row (the chosen tag, then the most used) and "+N" for
     // the rest, or all of them, alphabetically, with "Less".
@@ -248,24 +281,137 @@ class RackBrowser : public ui::Node {
                     w += ch;
                 }
         }
-        std::optional<std::pair<bool, rack::Origin>> group;
+        std::optional<std::string> group;
         for (std::size_t i = 0; i < entries_.size(); ++i) {
             const Entry& e = entries_[i];
-            if (tag_ && std::find(e.tags.begin(), e.tags.end(), *tag_) == e.tags.end()) continue;
+            if (e.preset != patches_) continue;
+            if (!patches_ && tag_ && std::find(e.tags.begin(), e.tags.end(), *tag_) == e.tags.end())
+                continue;
             std::string hay = lower(e.name + " " + e.id + " " + e.description);
             for (const auto& t : e.tags) hay += " " + t;
             if (!std::all_of(words.begin(), words.end(), [&](const std::string& w) {
                     return hay.find(w) != std::string::npos;
                 }))
                 continue;
-            if (group != std::pair(e.preset, e.origin)) {
-                group = std::pair(e.preset, e.origin);
-                rows_.push_back({std::nullopt, e.preset ? std::string("presets")
-                                                        : std::string(rack::originName(e.origin))});
+            const std::string heading = !e.preset   ? std::string(rack::originName(e.origin))
+                                        : e.factory ? std::string("factory")
+                                                    : std::string("yours");
+            if (group != heading) {
+                group = heading;
+                rows_.push_back({std::nullopt, heading});
             }
             rows_.push_back({i, {}});
         }
+        hideCard();
         list_->reset();
+    }
+
+    // The two views, side by side above the search.
+    class Views : public ui::Node {
+      public:
+        explicit Views(RackBrowser& b) : Node("rack.browser.views", ui::Role::Tab), b_(b) {
+            interactive = true;
+            layout.height = ui::SizeRule::fixed(24);
+        }
+        std::string valueText() const override { return b_.patches_ ? "Patches" : "Modules"; }
+        void paint(ui::Canvas& c) override {
+            const ui::Theme& t = c.theme();
+            const ui::Rect b = bounds();
+            c.fillRound(b, 5, t.color("ground"));
+            for (bool patches : {false, true}) {
+                const ui::Rect r = half(patches);
+                const bool on = b_.patches_ == patches;
+                if (on) c.fillRound(r.inset(2), 4, t.color("raised"));
+                c.text(r, patches ? "Patches" : "Modules", on ? ui::Font::UiBold : ui::Font::Ui,
+                       11.5f, on ? t.color("ink") : t.color("ink-quiet"),
+                       ui::kCenter | ui::kMiddle);
+            }
+        }
+        bool onPointer(const ui::PointerEvent& e) override {
+            if (e.type != ui::PointerEvent::Type::Down || e.button != 1)
+                return e.type != ui::PointerEvent::Type::Move;
+            b_.setPatches(half(true).contains(e.pos));
+            return true;
+        }
+        ui::Point at(bool patches) const {
+            const ui::Rect r = half(patches);
+            return {r.x + r.w / 2, r.y + r.h / 2};
+        }
+
+      private:
+        ui::Rect half(bool patches) const {
+            const ui::Rect b = bounds();
+            return {b.x + (patches ? b.w / 2 : 0), b.y, b.w / 2, b.h};
+        }
+        RackBrowser& b_;
+    };
+
+    // A row's whole description, beside the browser while the row is hovered.
+    class Card : public ui::Node {
+      public:
+        static constexpr float kW = 260, kPad = 10;
+        Card() : Node("rack.browser.card") {}
+        std::string name, description, detail;
+        ui::Point anchor;  // its top-left, before it is kept in the window
+        std::string valueText() const override {
+            return name + ": " + description + (detail.empty() ? "" : " (" + detail + ")");
+        }
+        void arrange(const ui::Canvas& c, const ui::Rect&) override {
+            const ui::Rect bounds = parent() ? parent()->bounds() : ui::Rect{0, 0, 1e6f, 1e6f};
+            const float w = kW - 2 * kPad;
+            float h = kPad + 16;
+            h += static_cast<float>(c.wrap(description, ui::Font::Ui, 11, w).size()) * 15;
+            if (!detail.empty())
+                h += 4 + static_cast<float>(c.wrap(detail, ui::Font::Ui, 10, w).size()) * 13;
+            h += kPad;
+            const float y =
+                std::clamp(anchor.y, bounds.y + 4, std::max(bounds.y + 4, bounds.bottom() - h - 4));
+            setBounds({anchor.x, y, kW, h});
+        }
+        void paint(ui::Canvas& c) override {
+            const ui::Theme& t = c.theme();
+            const ui::Rect b = bounds();
+            c.fillRound({b.x + 1, b.y + 3, b.w, b.h}, 6, ui::Color{0, 0, 0, 0.3f});
+            c.fillRound(b, 6, t.color("raised"));
+            c.strokeRound(b.inset(0.5f), 6, t.color("rule"), 1);
+            const float w = b.w - 2 * kPad;
+            float y = b.y + kPad;
+            c.text({b.x + kPad, y, w, 16}, name, ui::Font::UiBold, 12, t.color("ink"),
+                   ui::kLeft | ui::kMiddle);
+            y += 16;
+            for (const auto& line : c.wrap(description, ui::Font::Ui, 11, w)) {
+                c.text({b.x + kPad, y, w, 15}, line, ui::Font::Ui, 11, t.color("ink-quiet"),
+                       ui::kLeft | ui::kMiddle);
+                y += 15;
+            }
+            if (detail.empty()) return;
+            y += 4;
+            for (const auto& line : c.wrap(detail, ui::Font::Ui, 10, w)) {
+                c.text({b.x + kPad, y, w, 13}, line, ui::Font::Ui, 10, t.color("ink-faint"),
+                       ui::kLeft | ui::kMiddle);
+                y += 13;
+            }
+        }
+    };
+    void showCard(std::size_t row, float y) {
+        if (row >= rows_.size() || !rows_[row].entry || !root()) return hideCard();
+        const Entry& e = entries_[*rows_[row].entry];
+        if (e.description.empty() && e.detail.empty()) return hideCard();
+        if (!card_) {
+            auto made = std::make_unique<Card>();
+            cardNode_ = made.get();
+            card_ = root()->addOverlay(std::move(made));
+        }
+        cardNode_->name = e.name;
+        cardNode_->description = e.description;
+        cardNode_->detail = e.detail;
+        cardNode_->anchor = {bounds().right() + 6, y};
+        cardNode_->relayout();
+        cardNode_->invalidate();
+    }
+    void hideCard() {
+        card_.reset();
+        cardNode_ = nullptr;
     }
 
     class Tags : public ui::Node {
@@ -300,6 +446,7 @@ class RackBrowser : public ui::Node {
         }
         std::vector<std::string> chips() const {
             std::vector<std::string> out;
+            if (!visible) return out;
             for (const auto& [r, chip] : boxes_) out.push_back(chip.label);
             return out;
         }
@@ -403,7 +550,13 @@ class RackBrowser : public ui::Node {
             invalidate();
         }
         std::string valueText() const override {
-            return std::to_string(b_.shown().size()) + " modules";
+            return std::to_string(b_.shown().size()) + (b_.patches_ ? " patches" : " modules");
+        }
+        void onHover(bool on) override {
+            if (on) return;
+            hover_.reset();
+            b_.hideCard();
+            invalidate();
         }
         bool key(const ui::KeyEvent& e) {
             if (e.key != SDLK_DOWN && e.key != SDLK_UP) return false;
@@ -454,8 +607,11 @@ class RackBrowser : public ui::Node {
                 y += h;
             }
             if (b_.rows_.empty())
-                c.text({b.x, b.y + 8, b.w, 16}, "No module matches", ui::Font::Ui, 11,
-                       t.color("ink-faint"), ui::kCenter | ui::kMiddle);
+                c.text({b.x, b.y + 8, b.w, 16},
+                       !b_.patches_                 ? "No module matches"
+                       : b_.search_->text().empty() ? "No patches"
+                                                    : "No patch matches",
+                       ui::Font::Ui, 11, t.color("ink-faint"), ui::kCenter | ui::kMiddle);
             c.restore();
         }
         bool onPointer(const ui::PointerEvent& e) override {
@@ -465,11 +621,14 @@ class RackBrowser : public ui::Node {
                 float total = 0;
                 for (const auto& r : b_.rows_) total += rowH(r);
                 scroll_ = std::clamp(scroll_ - e.wheelY * 36, 0.0f, std::max(0.0f, total - b.h));
+                hover_.reset();
+                b_.hideCard();
                 invalidate();
                 return true;
             }
             if (e.type == T::Leave) {
                 hover_.reset();
+                b_.hideCard();
                 invalidate();
                 return true;
             }
@@ -486,6 +645,10 @@ class RackBrowser : public ui::Node {
                 const auto row = rowAt(e.pos);
                 if (row != hover_) {
                     hover_ = row;
+                    if (row)
+                        b_.showCard(*row, rowTop(*row));
+                    else
+                        b_.hideCard();
                     invalidate();
                 }
                 return true;
@@ -510,6 +673,7 @@ class RackBrowser : public ui::Node {
                 press_ = row;
                 pressAt_ = e.pos;
                 dragging_ = false;
+                b_.hideCard();
                 return true;
             }
             if (e.type == T::Up || e.type == T::Cancel) {
@@ -526,6 +690,15 @@ class RackBrowser : public ui::Node {
 
       private:
         static float rowH(const Row& r) { return r.entry ? 36.0f : 26.0f; }
+
+      public:
+        float rowTop(std::size_t row) const {
+            float y = bounds().y - scroll_;
+            for (std::size_t i = 0; i < row && i < b_.rows_.size(); ++i) y += rowH(b_.rows_[i]);
+            return y;
+        }
+
+      private:
         std::optional<std::size_t> rowAt(ui::Point p) const {
             float y = bounds().y - scroll_;
             for (std::size_t i = 0; i < b_.rows_.size(); ++i) {
@@ -549,6 +722,10 @@ class RackBrowser : public ui::Node {
     std::vector<std::string> commonTags_;  // the most used first
     bool tagsOpen_ = false;
     std::optional<std::string> tag_;
+    bool patches_ = false;
+    ui::Root::OverlayHandle card_;
+    Card* cardNode_ = nullptr;
+    Views* views_ = nullptr;
     ui::TextField* search_ = nullptr;
     Tags* tags_ = nullptr;
     List* list_ = nullptr;
@@ -653,6 +830,29 @@ std::vector<std::string> RackWindow::browserShows() const {
     return browser_ ? browser_->shown() : std::vector<std::string>{};
 }
 
+void RackWindow::showPatches(bool patches) {
+    if (!browser_) return;
+    if (!browserVisible_) {
+        browserVisible_ = true;
+        if (browserColumn_) {
+            browserColumn_->visible = true;
+            browserColumn_->relayout();
+        }
+    }
+    browser_->setPatches(patches);
+    browser_->focusSearch();
+}
+
+bool RackWindow::patchesShown() const { return browser_ && browser_->patches(); }
+
+std::optional<ui::Point> RackWindow::browserViewAt(bool patches) const {
+    return browser_ ? std::optional(browser_->viewAt(patches)) : std::nullopt;
+}
+
+std::optional<ui::Point> RackWindow::browserRowAt(const std::string& id) const {
+    return browser_ ? browser_->rowAt(id) : std::nullopt;
+}
+
 std::string RackWindow::status() const {
     if (!error_.empty()) return error_;
     if (!rack_ || !space_) return "No racks";
@@ -683,8 +883,9 @@ void RackWindow::open(std::optional<model::Id> rack) {
     auto content = std::make_unique<ui::Node>("rack");
     content->layout.dir = ui::Layout::Dir::Column;
     auto& header = content->emplace<Header>();
-    browserToggle_ = &header.emplace<ui::Button>("rack.browser.toggle", "Modules", [this] {
+    browserToggle_ = &header.emplace<ui::Button>("rack.browser.toggle", "Browser", [this] {
         browserVisible_ = !browserVisible_;
+        if (browser_ && !browserVisible_) browser_->dismissCard();
         if (browserColumn_) {
             browserColumn_->visible = browserVisible_;
             browserColumn_->relayout();
@@ -793,6 +994,7 @@ void RackWindow::open(std::optional<model::Id> rack) {
         nextTelemetry_ = std::chrono::steady_clock::now();
     };
     sh.deleteSelected = [this] { deleteSelected(); };
+    sh.start = [this](bool patch) { showPatches(patch); };
     sh.spaceTap = [this] {
         if (spaceTap) spaceTap();
     };
@@ -819,52 +1021,66 @@ void RackWindow::open(std::optional<model::Id> rack) {
 
 namespace {
 
-// What can be added: Plugin… first, the rack presets after the host's
-// modules, then the types by origin, as the browser lists them.
+// What can be added: Plugin… first, then the types by origin, as the
+// Modules view lists them; then the rack patches, the user's before the
+// factory's, as the Patches view does.
 std::vector<RackBrowser::Entry> entriesOf(const rack::Catalog& catalog,
                                           const json::Value& presets) {
     std::vector<RackBrowser::Entry> entries;
+    auto tagsLine = [](const std::vector<std::string>& tags) {
+        std::string out;
+        for (const auto& t : tags) out += (out.empty() ? "" : " \u00b7 ") + t;
+        return out;
+    };
     // Plug-ins are modules too: picked from the plug-in browser.
     const auto& plugin = racks::pluginType()->info();
     entries.push_back({plugin.id, "Plugin\u2026",
                        "A CLAP or VST3 plug-in; a click opens its editor.", plugin.tags,
-                       rack::Origin::Host});
+                       rack::Origin::Host, false, false, tagsLine(plugin.tags)});
     for (const rack::Catalog::Entry* e : catalog.list()) {
         const auto& info = e->type->info();
         if (info.id == plugin.id) continue;
-        entries.push_back({info.id, info.name, info.description, info.tags, e->type->origin()});
+        entries.push_back({info.id, info.name, info.description, info.tags, e->type->origin(),
+                           false, false, tagsLine(info.tags)});
     }
-    // Saved rack presets, after the host's modules: the user's own whole
-    // patches, loaded as a module type is added.
-    std::vector<RackBrowser::Entry> saved;
+    // Rack patches: whole patches, loaded as a module type is added.
+    std::vector<RackBrowser::Entry> saved, factory;
     if (const json::Value* list = presets.find("presets"); list && list->isArray())
         for (const auto& p : list->asArray()) {
             RackBrowser::Entry e;
             e.name = str(p, "name");
             e.id = std::string(kPresetPrefix) + e.name;
-            e.description = str(p, "description");
-            if (e.description.empty()) {  // "3 modules: Notes, VCA, Out"
-                const json::Value* n = p.find("modules");
-                const long count = n && n->isNumber() ? static_cast<long>(n->asInt()) : 0;
-                e.description = std::to_string(count) + (count == 1 ? " module" : " modules");
-                if (const json::Value* types = p.find("types"); types && types->isArray()) {
-                    std::string names;
-                    for (const auto& t : types->asArray()) {
-                        const rack::Catalog::Entry* ce = catalog.find(t.asString());
-                        names += (names.empty() ? ": " : ", ") +
-                                 (ce ? ce->type->info().name : t.asString());
-                    }
-                    e.description += names;
-                }
-            }
             e.preset = true;
-            saved.push_back(std::move(e));
+            const json::Value* f = p.find("factory");
+            e.factory = f && f->isBool() && f->asBool();
+            // "Factory patch · 6 modules, 9 cables: ADSR, Filter, …"
+            auto count = [&](const char* key) {
+                const json::Value* n = p.find(key);
+                return n && n->isNumber() ? static_cast<long>(n->asInt()) : 0L;
+            };
+            const long modules = count("modules"), cables = count("cables");
+            std::string contents =
+                std::to_string(modules) + (modules == 1 ? " module" : " modules");
+            if (cables > 0)
+                contents += ", " + std::to_string(cables) + (cables == 1 ? " cable" : " cables");
+            if (const json::Value* types = p.find("types"); types && types->isArray()) {
+                std::string names;
+                for (const auto& t : types->asArray()) {
+                    const rack::Catalog::Entry* ce = catalog.find(t.asString());
+                    names +=
+                        (names.empty() ? ": " : ", ") + (ce ? ce->type->info().name : t.asString());
+                }
+                contents += names;
+            }
+            e.description = str(p, "description");
+            if (e.description.empty()) e.description = contents;
+            e.detail =
+                std::string(e.factory ? "Factory patch" : "Your patch") + " \u00b7 " + contents;
+            (e.factory ? factory : saved).push_back(std::move(e));
         }
-    const auto firstOther = std::find_if(entries.begin(), entries.end(), [](const auto& e) {
-        return e.origin != rack::Origin::Host;
-    });
-    entries.insert(firstOther, std::make_move_iterator(saved.begin()),
-                   std::make_move_iterator(saved.end()));
+    for (auto* group : {&saved, &factory})
+        entries.insert(entries.end(), std::make_move_iterator(group->begin()),
+                       std::make_move_iterator(group->end()));
     return entries;
 }
 
@@ -923,6 +1139,7 @@ Status RackWindow::reload() {
     space_->setScene(std::move(scene));
     space_->setEmptyText(s.racks.empty() ? "No racks yet. + adds one on the selected channel."
                                          : "");
+    space_->setStartHint(rackEmpty());
     if (other && rack_) {
         if (const auto v = views_.find(*rack_); v != views_.end())
             space_->setView(v->second);
@@ -1753,7 +1970,7 @@ void RackWindow::moduleMenu(model::Id module, ui::Point at) {
     if (type && noteOutputs(*type->type))
         items.push_back({"Capture notes to track\u2026", "",
                          [this, module, at] { captureMenu(module, at); }, !several});
-    items.push_back({"Save as rack preset\u2026", "", [this, selected] {
+    items.push_back({"Save as patch\u2026", "", [this, selected] {
                          savePreset(std::vector<model::Id>(selected.begin(), selected.end()));
                      }});
     items.push_back({"", "", {}, true, true});
@@ -1774,22 +1991,9 @@ void RackWindow::spaceMenu(ui::Point at, ui::Point sp) {
                          [this, at, sp] { quickAdd(at, sp, {}, std::nullopt, true); }});
         items.push_back({"Add plugin\u2026", "",
                          [this, sp] { (void)addModule(std::string(model::kPluginModule), sp); }});
-        std::vector<std::string> names;
-        if (const json::Value* list = presets_.find("presets"); list && list->isArray())
-            for (const auto& p : list->asArray()) names.push_back(str(p, "name"));
-        items.push_back({"Load rack preset\u2026", "",
-                         [this, names, sp, at] {
-                             std::vector<ui::MenuItem> list;
-                             for (const auto& name : names)
-                                 list.push_back(
-                                     {name, "", [this, name, sp] { (void)loadPreset(name, sp); }});
-                             root().openPopup(ui::makeMenu("rack.load.menu", std::move(list),
-                                                           [this] { root().closePopup(); }),
-                                              {at.x, at.y, 1, 1});
-                         },
-                         !names.empty()});
+        items.push_back({"Load patch\u2026", "", [this] { showPatches(true); }});
         const bool hasModules = space_ && !space_->scene().modules.empty();
-        items.push_back({"Save rack as preset\u2026", "", [this] { savePreset({}); }, hasModules});
+        items.push_back({"Save rack as patch\u2026", "", [this] { savePreset({}); }, hasModules});
         items.push_back({"", "", {}, true, true});
         items.push_back({"Paste", "Ctrl+V",
                          [this, sp] {
@@ -1902,6 +2106,15 @@ void RackWindow::readPresets() {
     presets_ = r ? std::move(*r) : json::Value::object();
 }
 
+bool RackWindow::rackEmpty() const {
+    if (!rack_) return false;
+    for (const auto& m : app_.head().modules)
+        if (m.value->rack == *rack_ && m.value->type != model::kOutModule &&
+            m.value->type != model::kInModule)
+            return false;
+    return true;
+}
+
 Status RackWindow::loadPreset(const std::string& name, std::optional<ui::Point> at) {
     if (!rack_) return {};
     json::Value args = json::Value::object();
@@ -1910,6 +2123,30 @@ Status RackWindow::loadPreset(const std::string& name, std::optional<ui::Point> 
     if (at) {
         args["x"] = std::round(static_cast<double>(at->x));
         args["y"] = std::round(static_cast<double>(at->y));
+    }
+    if (rackEmpty()) {
+        // A start: the patch's Out and In are the rack's own (nothing is
+        // replaced), laid out with them by signal flow, one undo step, and
+        // all of it shown.
+        const std::string rack = rack_->str();
+        auto r = dispatcher_.transact("Load patch " + name, kOrigin, [&]() -> Result<json::Value> {
+            auto loaded = dispatcher_.execute({"rack.preset.load", std::move(args), kOrigin});
+            if (!loaded) return loaded;
+            json::Value arrange = json::Value::object();
+            arrange["rack"] = rack;
+            SUPPLE_TRY(dispatcher_.execute({"rack.arrange", std::move(arrange), kOrigin}));
+            return loaded;
+        });
+        if (!r) {
+            report(r.error());
+            return r.error();
+        }
+        sync();
+        if (space_) {
+            space_->select({});
+            space_->frameAll();
+        }
+        return {};
     }
     auto r = exec("rack.preset.load", std::move(args));
     if (!r) return r.error();
@@ -1982,12 +2219,21 @@ void RackWindow::browserMenu(const std::string& type, ui::Point at) {
         items.push_back({"Load into rack", "Double-click",
                          [this, name] { (void)loadPreset(name, std::nullopt); },
                          rack_.has_value()});
-        items.push_back({"Delete preset", "", [this, name] {
-                             json::Value args = json::Value::object();
-                             args["name"] = name;
-                             (void)exec("rack.preset.delete", std::move(args));
-                             presetsSaved();
-                         }});
+        // Factory patches stay; deleting a saved one of the same name
+        // brings the factory one back.
+        bool factory = false;
+        if (const json::Value* list = presets_.find("presets"); list && list->isArray())
+            for (const auto& p : list->asArray())
+                if (str(p, "name") == name)
+                    if (const json::Value* f = p.find("factory"); f && f->isBool())
+                        factory = f->asBool();
+        if (!factory)
+            items.push_back({"Delete patch", "", [this, name] {
+                                 json::Value args = json::Value::object();
+                                 args["name"] = name;
+                                 (void)exec("rack.preset.delete", std::move(args));
+                                 presetsSaved();
+                             }});
     } else {
         items.push_back({"Add to rack", "Double-click", [this, type] { (void)addModule(type); }});
         const rack::Catalog::Entry* e = catalog_ ? catalog_->find(type) : nullptr;

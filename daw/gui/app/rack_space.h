@@ -94,6 +94,8 @@ class RackSpace : public ui::Node {
         // Ctrl+C, Ctrl+X, Ctrl+D: the selection; Ctrl+V at a space point.
         std::function<void()> copy, cut, duplicate;
         std::function<void(ui::Point space)> paste;
+        // The start hint's links: add a module (false) or start from a patch.
+        std::function<void(bool patch)> start;
     };
 
     explicit RackSpace(Hooks hooks);
@@ -138,6 +140,12 @@ class RackSpace : public ui::Node {
     void select(std::set<model::Id> ids);
     // An empty-state line shown in the middle ("" for none: a blank space).
     void setEmptyText(std::string text);
+    // An empty rack's invitation, under its own Outs and Ins: "Add a module,
+    // or start from a patch", both links (Hooks::start).
+    void setStartHint(bool on);
+    bool startHint() const { return startHint_; }
+    // Tests: where a link is (window), once painted.
+    std::optional<ui::Point> startLinkAt(bool patch) const;
 
     // A browser drag that is over the space (a type id), for the drop's ghost.
     void dragTypeOver(const std::string& name, std::optional<ui::Point> window);
@@ -244,6 +252,10 @@ class RackSpace : public ui::Node {
     std::optional<std::size_t> hotCable_;
     std::optional<ui::Point> pointer_;  // window
     std::string emptyText_;
+    bool startHint_ = false;
+    ui::Rect startLinks_[2];       // window, as last painted (empty: not shown)
+    std::optional<int> startHot_;  // the link under the pointer
+    std::optional<int> startLinkAt(ui::Point window) const;
     std::string dropName_;
     std::optional<ui::Point> dropAt_;
     Drag drag_;

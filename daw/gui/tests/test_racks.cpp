@@ -1192,7 +1192,7 @@ TEST_CASE("rack window: a cut plugin module pastes into another rack with its se
     CHECK_FALSE(f.app->head().modules.find(id));  // the cut stays cut
 }
 
-TEST_CASE("rack window: modules saved as a rack preset load into another rack from the browser") {
+TEST_CASE("rack window: modules saved as a patch load into another rack from the browser") {
     Fixture f;
     if (!f.ok) return;
     Patch p(f);
@@ -1208,8 +1208,15 @@ TEST_CASE("rack window: modules saved as a rack preset load into another rack fr
     name->setText("Voice");
     f.r().key(SDLK_RETURN);
     f.frame();
+    // Not among the modules: on the Patches view, the user's before the factory's.
     auto shows = f.racks->browserShows();
-    CHECK(std::find(shows.begin(), shows.end(), "preset:Voice") != shows.end());
+    CHECK(std::find(shows.begin(), shows.end(), "preset:Voice") == shows.end());
+    f.racks->showPatches(true);
+    f.frame();
+    shows = f.racks->browserShows();
+    REQUIRE_FALSE(shows.empty());
+    CHECK(shows.front() == "preset:Voice");
+    CHECK(std::find(shows.begin(), shows.end(), "preset:Init Voice") != shows.end());
     f.snapshot("rack-presets-browser.png");
     // The same name again: replaced only when the user says so.
     f.racks->savePreset(std::vector<model::Id>{osc});
@@ -1223,13 +1230,22 @@ TEST_CASE("rack window: modules saved as a rack preset load into another rack fr
     json::Value list = f.exec("rack.preset.list", R"({"factory": false})");
     REQUIRE(list["presets"].size() == 1);
     CHECK(list["presets"].asArray()[0].find("modules")->asInt() == 1);
-    // A new rack: the preset loads into it, selected and in view.
+    // A new rack: the patch loads into it, in view.
     REQUIRE(f.racks->addRack());
     f.frame();
     const std::size_t before = f.racks->space()->scene().modules.size();
     REQUIRE(f.racks->addModule("preset:Voice"));
     f.frame();
     CHECK(f.racks->space()->scene().modules.size() == before + 1);
+    for (const auto& m : f.racks->space()->scene().modules) {
+        const ui::Rect seen = f.racks->space()->visibleSpace(), r = m.rect();
+        CHECK(seen.contains({r.x, r.y}));
+        CHECK(seen.contains({r.right(), r.bottom()}));
+    }
+    // In a rack with more than its Out: added beside, selected and shown.
+    REQUIRE(f.racks->addModule("preset:Voice"));
+    f.frame();
+    CHECK(f.racks->space()->scene().modules.size() == before + 2);
     CHECK(f.racks->space()->selection().size() == 1);
     // The space's menu: Add module… asks which at the pointer, and puts it there.
     const ui::Rect b = f.racks->space()->bounds();
@@ -1248,11 +1264,129 @@ TEST_CASE("rack window: modules saved as a rack preset load into another rack fr
                             std::abs(m.x + m.w / 2 - double(at.x)) < 1 &&
                             std::abs(m.y - double(at.y) + 12) < 1);
     CHECK(placed);
-    // Deleted from the browser's menu.
+    // Deleted from the browser's menu; a factory patch cannot be.
+    f.racks->browserMenu("preset:Init Voice", {b.x + 40, b.y + 40});
+    CHECK_FALSE(f.pick("rack.browser.menu", "Delete patch"));
+    f.r().closePopups();
     f.racks->browserMenu("preset:Voice", {b.x + 40, b.y + 40});
-    REQUIRE(f.pick("rack.browser.menu", "Delete preset"));
+    REQUIRE(f.pick("rack.browser.menu", "Delete patch"));
     shows = f.racks->browserShows();
     CHECK(std::find(shows.begin(), shows.end(), "preset:Voice") == shows.end());
+}
+
+TEST_CASE("rack window: patches have a view of their own, searchable, with a card on hover") {
+    Fixture f;
+    if (!f.ok) return;
+    Patch p(f);
+    f.exec("rack.preset.save",
+           R"({"rack":")" + p.rack + R"(","name":"My Bass","modules":[")" + p.osc + R"("]})");
+    f.racks->open();
+    f.frame();
+    // The default view lists module types only, so patches never move it.
+    auto shows = f.racks->browserShows();
+    CHECK(std::none_of(shows.begin(), shows.end(),
+                       [](const std::string& id) { return id.starts_with("preset:"); }));
+    CHECK(std::find(shows.begin(), shows.end(), "com.suppleaudio.rack.vco") != shows.end());
+    CHECK_FALSE(f.racks->tagChips().empty());
+    // Patches: the user's, then the factory's; no module types, no tags.
+    const auto view = f.racks->browserViewAt(true);
+    REQUIRE(view);
+    f.pointer(ui::PointerEvent::Type::Down, *view, 1);
+    f.pointer(ui::PointerEvent::Type::Up, *view, 1);
+    f.frame();
+    CHECK(f.racks->patchesShown());
+    shows = f.racks->browserShows();
+    REQUIRE(shows.size() >= 2);
+    CHECK(shows.front() == "preset:My Bass");
+    CHECK(std::all_of(shows.begin(), shows.end(),
+                      [](const std::string& id) { return id.starts_with("preset:"); }));
+    CHECK(f.racks->tagChips().empty());
+    // Searchable, by name or description.
+    auto* search = dynamic_cast<ui::TextField*>(f.r().find("rack.browser.search"));
+    REQUIRE(search);
+    CHECK(search->placeholder() == "Search patches");
+    f.r().focus(search);
+    f.r().text("subtractive");
+    f.frame();
+    CHECK(f.racks->browserShows() == std::vector<std::string>{"preset:Init Voice"});
+    // A hovered row shows its whole description beside the browser.
+    const auto row = f.racks->browserRowAt("preset:Init Voice");
+    REQUIRE(row);
+    f.pointer(ui::PointerEvent::Type::Move, *row, 0);
+    f.frame();
+    const ui::Node* card = f.r().find("rack.browser.card");
+    REQUIRE(card);
+    CHECK(card->valueText().find("A plain subtractive voice") != std::string::npos);
+    CHECK(card->valueText().find("Factory patch") != std::string::npos);
+    CHECK(card->bounds().x >= f.racks->space()->bounds().x);
+    f.snapshot("rack-patches.png");
+    // Away from it, the card goes; back to Modules, the search is the modules'.
+    const ui::Rect sb = f.racks->space()->bounds();
+    f.pointer(ui::PointerEvent::Type::Move, {sb.x + sb.w / 2, sb.y + sb.h / 2}, 0);
+    f.frame();
+    CHECK_FALSE(f.r().find("rack.browser.card"));
+    f.racks->showPatches(false);
+    f.frame();
+    CHECK(search->placeholder() == "Search modules");
+    CHECK(search->text().empty());
+    CHECK(f.racks->browserShows().size() > 40);
+}
+
+TEST_CASE("rack window: an empty rack invites a start, and a patch lands in it whole") {
+    Fixture f;
+    if (!f.ok) return;
+    auto made = f.exec("rack.add", R"({"name":"Start"})");
+    const model::Id out = *model::Id::parse(made["out"].asString());
+    f.racks->open();
+    f.frame();
+    gui::RackSpace& space = *f.racks->space();
+    REQUIRE(space.startHint());
+    f.snapshot("rack-start.png");  // the golden is rack-empty.png
+    // "start from a patch" opens the Patches view.
+    const auto link = space.startLinkAt(true);
+    REQUIRE(link);
+    f.pointer(ui::PointerEvent::Type::Down, *link, 1);
+    f.pointer(ui::PointerEvent::Type::Up, *link, 1);
+    f.frame();
+    CHECK(f.racks->patchesShown());
+    // A double-click loads one: the rack's Out is its Out (nothing replaced),
+    // laid out by signal flow, all in view, one undo step.
+    const auto row = f.racks->browserRowAt("preset:Init Voice");
+    REQUIRE(row);
+    f.pointer(ui::PointerEvent::Type::Down, *row, 1);
+    f.pointer(ui::PointerEvent::Type::Up, *row, 1);
+    f.pointer(ui::PointerEvent::Type::Down, *row, 1, 0, 2);
+    f.pointer(ui::PointerEvent::Type::Up, *row, 1);
+    f.frame();
+    const auto& modules = space.scene().modules;
+    CHECK(modules.size() == 6);
+    std::size_t outs = 0;
+    for (const auto& m : modules) outs += m.out;
+    CHECK(outs == 1);
+    CHECK(space.scene().module(out));
+    CHECK(space.scene().cables.size() == 9);
+    const ui::Rect seen = space.visibleSpace();
+    for (std::size_t i = 0; i < modules.size(); ++i) {
+        const ui::Rect r = modules[i].rect();
+        CHECK(seen.contains({r.x, r.y}));
+        CHECK(seen.contains({r.right(), r.bottom()}));
+        for (std::size_t j = i + 1; j < modules.size(); ++j)
+            CHECK(r.intersect(modules[j].rect()).empty());
+    }
+    CHECK_FALSE(space.startHint());
+    f.snapshot("rack-start-loaded.png");
+    f.exec("history.undo", "{}");
+    f.frame();
+    CHECK(space.scene().modules.size() == 1);
+    CHECK(space.startHint());
+    // "Add a module" opens the Modules view, its search focused.
+    f.frame();
+    const auto add = space.startLinkAt(false);
+    REQUIRE(add);
+    f.pointer(ui::PointerEvent::Type::Down, *add, 1);
+    f.pointer(ui::PointerEvent::Type::Up, *add, 1);
+    f.frame();
+    CHECK_FALSE(f.racks->patchesShown());
 }
 
 TEST_CASE("rack window: a cable glows with its source's signal, even from out of view") {
