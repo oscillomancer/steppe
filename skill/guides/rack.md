@@ -13,31 +13,70 @@ with their ranges and defaults; read it before patching. `module.describe
 
 ## The loop
 
+The fastest correct path: start from the recipe below closest to what you
+want (each is tested as printed), patch it in one call, probe, adjust,
+probe again.
+
 1. `rack.add {track}` makes a rack on a channel with an Out module (its
-   result's `out`) that is the channel's input. Without `track`, it makes a
-   new channel.
+   result's `out`, `mo_1` in a new rack) that is the channel's input.
+   Without `track`, it makes a new channel.
 2. `rack.patch` adds modules by name and the cables between them in one
-   step (below). `module.add` and `cable.add` do one at a time.
-3. `rack.probe {rack, ports, notes?}` renders a copy offline and describes
-   what flows out of each port: pitch and level for audio, gates per beat
-   and duty, the notes a pitch visits, a CV's rate. Nothing changes. This
-   is how you hear a patch; check every patch with it before rendering.
-   `from_beat` starts a fresh render at that beat, so what a patch builds
-   over time (a looper's recording, life's generations, a drift's path)
-   needs one render from the start, up to 10 seconds.
+   call (below). It returns each name's id (`mo_N`): every later call
+   (`rack.probe`, `module.set`, `rack.capture`) takes ids, not names.
+3. `rack.probe {rack, ports, notes?}` renders a copy offline, up to 10
+   seconds, and describes what flows out of each port: pitch and level for
+   audio, gates per beat and duty, the notes a pitch visits, a CV's range
+   and rate. Nothing changes. This is how you hear a patch: probe the
+   module feeding the Out and the note sources behind it before rendering.
 4. Adjust: `module.set {module, params}`, `cable.set {cable, amount}`,
-   `module.set {module, preset}` (a module's factory preset).
+   `module.set {module, preset}` (a module's factory preset). Probe again.
 5. Render or listen as for any track. Ask the human to listen when it
    matters.
-6. Print generative notes to MIDI: `rack.capture {rack, pitch, gate,
-   velocity?, track, beats, quantize?}` renders the patch offline and writes
-   what a pitch and gate pair plays (a note per voice) as a MIDI item on
-   any channel. Edit it with `midi.edit`, read it with `midi.get`, play it
-   through any instrument. The rack is not changed.
+6. To keep the notes rather than the patch, print them to MIDI with
+   `rack.capture` and play them through any instrument (Compose with a
+   rack, below).
 7. Keep what works: `rack.preset.save {rack, name}`; later
    `rack.preset.load {rack, name}` puts it in any rack. A preset carries
    the source of your own modules it uses, and loading it on another
    machine installs them into that library.
+
+## Mistakes that cost time
+
+- **Too loud.** Modules work at full scale and a chord's voices add up at
+  the Out. Probe what feeds `mo_1.l` and keep its peak at or below 0 dB:
+  lower a VCA's or mixer's `level`, or the Out's own (`module.set
+  {module: "mo_1", params: {level: -9}}`). Delays and reverbs add their
+  tails on top.
+- **Silent.** Nothing reaches `mo_1.l`; an LPG with nothing in `ping`, an
+  ADSR or drum with no gate; a VCA whose `cv` an envelope holds at 0. Probe
+  each stage back from the Out until one is quiet. A VCO straight into the
+  Out is the opposite: a drone that never stops.
+- **Unpatched clocks.** A sequencer, rhythm or melody source with nothing
+  in `clock` follows the song's own grid (the reference says which: most
+  take sixteenths, `random`, `markov` and `lsystem` eighths), so it keeps
+  time with everything else and does nothing while the song is stopped.
+  Cable a `clock` only to change the rate or interlock two sources (a
+  Euclid's gate clocking a melody, as the bells do). Motion runs free of
+  the song unless told: an `lfo` locks to it with `sync` on, `dust` with
+  a `grid`; `drift` and `chaos` never do.
+- **Probing from the middle.** `from_beat` starts a fresh render at that
+  beat. Form, Transport and anything clocked by the song know where they
+  are, but whatever builds up as it runs does not: Phrase's and Changes'
+  renewed phrases and chords, a Turing register, a Looper's recording,
+  Life's generations, a Drift's path. For those, probe from the start, and
+  capture a whole song from 0 rather than a part from its middle.
+- **Out of key.** A Random, Drift, LFO or Chaos into a VCO's pitch plays
+  every pitch between: pass it through `quantizer` (a key) or `fit` (the
+  chord playing). Pitch is in octaves: a semitone is 1/12, so a cable of
+  amount 1 from an LFO swings two octaves.
+- **Too much modulation.** A cable into a knob without `amount` moves it
+  half the knob's range (an octave for a frequency). Give the amount you
+  mean, in the knob's unit.
+- **Names in later calls.** `"tune.pitch"` works only inside `rack.patch`;
+  after it use the ids it returned (`"mo_4.pitch"`).
+- **Live levels.** `rack.levels {rack}` reads every output's peak while
+  the song plays; stopped, everything reads 0. Use it to see what is
+  active, `rack.probe` to measure.
 
 ## rack.patch
 
@@ -113,12 +152,8 @@ levels may lead the audio you hear; use them for activity, not timing.
 An unpatched input reads its normal value (the reference says when it is
 not 0: a VCA's `cv` is 1, so it passes until something closes it).
 
-**Levels.** Modules work at full scale, and a chord sums its voices at the
-Out, so racks run hot: keep the Out's peak at or below 0 dB (`rack.probe`
-on the module feeding it). Lower a VCA's or a mixer's `level`, or the
-Out's own `level` (`module.set {module: "mo_1", params: {level: -9}}`).
-Delays and reverbs add their tails to the dry sound and can raise the peak
-by several dB.
+**Levels.** Racks run hot; keep the Out's peak at or below 0 dB (Mistakes
+that cost time, above).
 
 **Polyphony.** A cable carries up to 16 voices. Notes sends one voice per
 held note (`voices`, default 8); modules after it run once per voice. A mono
@@ -151,8 +186,9 @@ feedback FM, Karplus-like loops and self-patched chaos.
 
 <!-- host/engine/tests/test_rack_recipes.cpp patches every JSON block here as printed. -->
 
-These were run and probed as written. Each starts from `rack.add {track}`;
-the Out is then `mo_1`.
+Each is tested as printed (it is run and probed). Each starts from
+`rack.add {track}`; the Out is then `mo_1`. Pass the block to `rack.patch`
+with `"rack"` added.
 
 **A subtractive voice** (the `rack.patch` above): Notes plays a saw through
 a low-pass filter that tracks the keyboard and opens with the envelope.
