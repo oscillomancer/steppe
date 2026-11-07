@@ -1565,14 +1565,25 @@ Result<TransportInfo> EngineApp::transport(std::string_view action, std::optiona
                                  e.id.str() + "\", record_mode: \"input\"}");
             if (!tr.record.armed) continue;
             const bool output = tr.type == model::StripType::Master;  // ADR-0057
-            if (!output && !tr.record.input) continue;
-            const model::Route* in = output ? nullptr : s.routes.find(*tr.record.input);
-            if (in && in->from.midiDevice) {  // MIDI (ADR-0016): events, no file
+            const bool routed =
+                !output &&
+                (tr.record.mode == model::RecordMode::MidiOverdub ||
+                 tr.record.mode == model::RecordMode::MidiReplace) &&
+                std::any_of(s.routes.begin(), s.routes.end(), [&](const auto& route) {
+                    return route.value->to.track == e.id && route.value->midi &&
+                           route.value->from.module;
+                });
+            const model::Route* in =
+                output || !tr.record.input ? nullptr : s.routes.find(*tr.record.input);
+            if (routed || (in && in->from.midiDevice)) {  // MIDI (ADR-0016): events, no file
                 RecordTarget t;
                 t.track = e.id;
                 t.midi = RecordTarget::Midi{
-                    midiPortMask(engine_->midiPorts(), *in->from.midiDevice),
-                    in->midi ? in->midi->fromChannel : 0, in->midi ? in->midi->toChannel : 0};
+                    in && in->from.midiDevice
+                        ? midiPortMask(engine_->midiPorts(), *in->from.midiDevice)
+                        : 0,
+                    in && in->midi ? in->midi->fromChannel : 0,
+                    in && in->midi ? in->midi->toChannel : 0, routed};
                 targets.push_back(std::move(t));
                 continue;
             }
@@ -1894,8 +1905,9 @@ struct ItemPlan {
 template <class TickOf>
 void appendRecorded(midi::Sequence& seq, const RecordedTake& r, std::size_t run, std::int64_t from,
                     std::int64_t to, std::int64_t runEnd, TickOf tick) {
-    std::map<std::pair<int, int>, std::pair<std::int64_t, int>> open;
-    auto close = [&](std::pair<int, int> key, std::int64_t at, int offVelocity) {
+    using Address = std::tuple<Id, int, int, int>;  // route, voice, channel, key
+    std::map<Address, std::pair<std::int64_t, int>> open;
+    auto close = [&](Address key, std::int64_t at, int offVelocity) {
         auto it = open.find(key);
         if (it == open.end()) return;
         const auto [on, velocity] = it->second;
@@ -1906,8 +1918,8 @@ void appendRecorded(midi::Sequence& seq, const RecordedTake& r, std::size_t run,
         midi::Note n;
         n.start = tick(first);
         n.length = std::max<std::int64_t>(1, tick(last) - n.start);
-        n.channel = static_cast<std::uint8_t>(key.first);
-        n.pitch = static_cast<std::uint8_t>(key.second);
+        n.channel = static_cast<std::uint8_t>(std::get<2>(key));
+        n.pitch = static_cast<std::uint8_t>(std::get<3>(key));
         n.velocity = static_cast<std::uint8_t>(velocity);
         n.offVelocity = static_cast<std::uint8_t>(offVelocity);
         seq.notes.push_back(n);
@@ -1916,11 +1928,12 @@ void appendRecorded(midi::Sequence& seq, const RecordedTake& r, std::size_t run,
         if (ev.run != run) continue;
         const int status = ev.bytes[0] & 0xf0, ch = ev.bytes[0] & 0x0f;
         const int b1 = ev.bytes[1], b2 = ev.bytes[2];
+        const Address key{ev.route, ev.voice, ch, b1};
         if (status == 0x90 && b2 > 0) {
-            close({ch, b1}, ev.timeline, 0);
-            open[{ch, b1}] = {ev.timeline, b2};
+            close(key, ev.timeline, 0);
+            open[key] = {ev.timeline, b2};
         } else if (status == 0x80 || status == 0x90) {
-            close({ch, b1}, ev.timeline, status == 0x80 ? b2 : 0);
+            close(key, ev.timeline, status == 0x80 ? b2 : 0);
         } else if (ev.timeline >= from && ev.timeline < to) {
             midi::Control c;
             c.tick = tick(ev.timeline);

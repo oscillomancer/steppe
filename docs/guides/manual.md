@@ -567,6 +567,11 @@ an MCP connection or stopping the socket server. Shutdown finishes capture but
 does not save the project. Unsaved audio files can be recovered; unsaved MIDI
 recordings and other session edits are lost when the process exits.
 
+A rack's Note Out routes can be recorded by their destination channel. Arm
+it in MIDI replace or MIDI overdub mode, then record; loop and punch apply
+as for device MIDI. The channel needs no instrument or device input, and a
+selected MIDI device can record alongside the rack's notes.
+
 Output recording is not supported yet. If a loaded project has an armed track
 in output record mode, recording fails before creating any files. Switch that
 track to input mode with `track.set {track: "tr_1", record_mode: "input"}`.

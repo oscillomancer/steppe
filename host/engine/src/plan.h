@@ -581,6 +581,9 @@ struct TakeChain {
 };
 
 struct Node {
+    // Note Out events actually delivered this block, also without an instrument.
+    // Capacity is fixed in prepareRackMidi; only this node's executor writes it.
+    std::vector<RoutedMidiEvent> routedMidi;
     Id id;  // a track's, or a rack's (rk_*)
     // A rack (ADR-0062): its runtime, its Out modules' audio this block and
     // the sends its In modules take. No chain, fader or Console 9 stage.

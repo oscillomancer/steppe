@@ -775,6 +775,62 @@ TEST_CASE("racks: Note Out addresses do not overlap item notes after a nonzero r
     for (auto* instance : plan.instances) instance->stopProcessing();
 }
 
+TEST_CASE("racks: recording mixes routed and device MIDI on their own clocks across a loop" *
+          doctest::description("rt")) {
+    namespace d = supple::engine::detail;
+    for (std::int64_t shift : {0, 7, -7}) {
+        INFO("destination shift " << shift);
+        const Id track{model::Kind::Track, 1}, route{model::Kind::Route, 1};
+        RecordTarget target;
+        target.track = track;
+        target.midi = RecordTarget::Midi{1, 0, 0, true, shift};
+        d::Recorder recorder({target}, 48000, 5);
+        REQUIRE(recorder.open());
+        MidiInputEvent device;
+        device.frame = 3;
+        device.size = 3;
+        device.bytes[0] = 0x90;
+        device.bytes[1] = 61;
+        device.bytes[2] = 80;
+        d::RoutedMidiEvent routed;
+        routed.frame = 3;
+        routed.bytes[0] = 0x90;
+        routed.bytes[1] = 60;
+        routed.bytes[2] = 96;
+        routed.route = route;
+        routed.voice = 4;
+        recorder.capture(nullptr, 0, 50, 0);
+        recorder.captureMidi({&device, 1}, 0, 50, 0);
+        recorder.captureRoutedMidi(track, {&routed, 1}, 50);
+        device.bytes[0] = routed.bytes[0] = 0x80;
+        recorder.capture(nullptr, 0, 50, 0);  // the next loop pass
+        recorder.captureMidi({&device, 1}, 0, 50, 0);
+        recorder.captureRoutedMidi(track, {&routed, 1}, 50);
+        const auto takes = recorder.finish({0, 50});
+        REQUIRE(takes.size() == 1);
+        const auto& take = takes.front();
+        const auto clock = std::max<std::int64_t>(5, shift);
+        CHECK(take.startSample == -clock);
+        CHECK(take.frames == 100 + clock - std::min<std::int64_t>(5, shift));
+        REQUIRE(take.midi.size() == 4);
+        auto event = [&](int voice, bool on) -> const RecordedMidiEvent& {
+            auto found = std::find_if(take.midi.begin(), take.midi.end(), [&](const auto& e) {
+                return e.voice == voice && (e.bytes[0] & 0xf0) == (on ? 0x90 : 0x80);
+            });
+            REQUIRE(found != take.midi.end());
+            return *found;
+        };
+        CHECK(event(-1, true).timeline == -2);
+        CHECK(event(-1, false).timeline == 48);  // device off stays in the previous pass
+        CHECK(event(-1, false).run == 0);
+        CHECK(event(4, true).timeline == 3 - shift);
+        CHECK(event(4, true).route == route);
+        CHECK(event(4, false).timeline == (shift <= 3 ? 3 - shift : 53 - shift));
+        CHECK(event(4, false).run == (shift <= 3 ? 1 : 0));
+        CHECK(take.overflowFrames == 0);
+    }
+}
+
 TEST_CASE("racks: Note Out fan-in has distinct note addresses and survives routing edits" *
           doctest::description("rt")) {
     namespace d = supple::engine::detail;

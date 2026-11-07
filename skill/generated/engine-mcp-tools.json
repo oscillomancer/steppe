@@ -14808,7 +14808,7 @@
   {
     "name": "transport_record",
     "title": "Play and record every armed track's input or master's output.",
-    "description": "Play and record every armed track's input or master's output. Recording requires saved master rate 1 and no active master rate envelope that leaves 1 anywhere, including automation items. Non-unity recording and an armed track with unsupported output record mode are refused before opening files. An armed master records its output (after its fader, before its own items) as an item on the master; while it records, its items are silent in the punch range, or everywhere without punch. See describe for errors and examples.",
+    "description": "Play and record every armed track's input or master's output. Recording requires saved master rate 1 and no active master rate envelope that leaves 1 anywhere, including automation items. Non-unity recording and an armed track with unsupported output record mode are refused before opening files. An armed master records its output (after its fader, before its own items) as an item on the master; while it records, its items are silent in the punch range, or everywhere without punch. Armed channels in midi_overdub or midi_replace also record every incoming Note Out route, alongside an optional MIDI device input; no instrument is required. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "no_args",

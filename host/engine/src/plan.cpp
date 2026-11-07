@@ -726,6 +726,11 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
                                      in->midi ? in->midi->toChannel : 0, 0};
             }
         n.live = !n.monitorInputs.empty() || n.midiIn.has_value() || !n.recordInputs.empty();
+        // Recording Note Out consumes its delivered events on the callback.
+        // Keep source and destination together even with monitoring off.
+        if (t.record.armed && (t.record.mode == model::RecordMode::MidiOverdub ||
+                               t.record.mode == model::RecordMode::MidiReplace))
+            for (std::size_t edge : n.in) n.live = n.live || p.edges[edge].rackNotes >= 0;
         for (std::size_t e : n.in) n.live = n.live || p.nodes[p.edges[e].from].live;
         if (!n.live && keepLive && std::binary_search(keepLive->begin(), keepLive->end(), n.id))
             n.live = p.heldLive = true;

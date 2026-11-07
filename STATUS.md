@@ -278,6 +278,8 @@ instructions are in `docs/guides/installing.md`.
   Note Out (`notes_out`) plays any channel's instrument through MIDI routes,
   sharing Capture's gate and pitch/velocity rules, with poly voices, channel
   filtering/remapping, fan-out, compensation and exact RT/offline timing.
+  Armed MIDI destinations record these routes, with or without an instrument,
+  alongside device MIDI, using the recorder's loop, punch and overdub rules.
   Agents patch with `rack.patch` (named
   modules and cables in one step, laid out by signal flow and labelled by
   name; `rack.arrange` tidies a rack) or `module.add`/`cable.add`, hear a patch
@@ -789,8 +791,7 @@ Library boundaries:
   on Linux, and native macOS/Windows CI has not run on it.
 
 Engine and hosting:
-- Modular racks (ADR-0062): Note Out MIDI is not yet recorded by armed
-  destination tracks; print it with `rack.capture`. Racks do not follow a
+- Modular racks (ADR-0062): Racks do not follow a
   track's playrate map;
   cables into a plugin module's parameters modulate CLAP plug-ins only
   (VST3 has no modulation), by their first voice, at most 16 per plug-in;

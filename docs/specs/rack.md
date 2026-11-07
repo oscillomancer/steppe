@@ -464,7 +464,13 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   instrument receives gates already held. MIDI buffers are sized before
   processing, with at most 1,048,576 queued events per route and additional
   events per destination block; exceeding that plan budget refuses preparation
-  (`engine.midi_budget`). Armed tracks do not yet record Note Out MIDI.
+  (`engine.midi_budget`). An armed destination in `midi_overdub` or
+  `midi_replace` records all delivered Note Out routes, with an optional
+  device MIDI input, even with monitoring off or no instrument. The target
+  and source rack run live while armed. Recording uses the destination's
+  input timeline, without device round-trip correction for internal events.
+  Stable route/voice addresses retain overlapping equal-pitch notes. Loop
+  takes, punch clipping, overdub, replace and undo follow the MIDI recorder.
 - **MIDI.** Notes modules receive the compiled MIDI events of their source
   tracks (items, loops, playrate), and live MIDI from the device when the
   source monitors it; the node is then live.

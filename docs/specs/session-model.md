@@ -264,6 +264,9 @@ are routes from `hw_input`/`midi_input`, or from a rack's Out module,
 referenced by `track.record.input`. A Note Out module instead sends MIDI to
 any channel through an ordinary route with `midi` set; it is not a record
 input and several such routes may reach a channel. It cannot send audio or
+be selected as `record.input`; an armed `midi_overdub` or `midi_replace`
+channel records all incoming Note Out routes alongside its optional device
+input (engine.md §4), through the existing MIDI take/loop/punch rules. It cannot
 feed a key or In module. Note Out channel routing uses 0 for all/original,
 or 1..16, as on MIDI input routes. `route.add`/`route.set` accept track/module
 ids or explicit `{track: id}`/`{module: id}` endpoints; omitted fields inside

@@ -4299,7 +4299,13 @@ void registerEngineCommands(cmd::Registry& registry) {
                 "Non-unity recording and an armed track with unsupported output record mode "
                 "are refused before opening files. An armed master records its output (after "
                 "its fader, before its own items) as an item on the master; while it records, "
-                "its items are silent in the punch range, or everywhere without punch.";
+                "its items are silent in the punch range, or everywhere without punch. "
+                "Armed channels in midi_overdub or midi_replace also record every incoming "
+                "Note Out route, alongside an optional MIDI device input; no instrument is "
+                "required.";
+            c.errors.push_back(
+                {"record.midi_route", "a Note Out recording target is not armed in the loaded plan",
+                 "arm the destination in a MIDI record mode and load it before recording"});
             c.errors.push_back({"record.playrate", "master playrate can leave unity",
                                 "set rate to 1 and disable non-unity master playrate automation"});
             c.errors.push_back({"record.output_unsupported",

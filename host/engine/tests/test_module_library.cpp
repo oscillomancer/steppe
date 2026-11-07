@@ -1020,3 +1020,170 @@ TEST_CASE("command warnings: a silent apply-FX render reaches the caller") {
     auto next = f.run("track.list");
     CHECK(next.find("warnings") == nullptr);
 }
+
+namespace {
+midi::Sequence noteRecordingScene(Fixture& f, bool instrument) {
+    f.run("project.set", R"({"console9":false})");
+    f.run("track.add", R"({"name":"Generator"})");
+    f.run("track.add", R"({"name":"Recorded"})");
+    f.run("track.add", R"({"name":"Capture reference"})");
+    if (instrument) f.run("fx.add", R"({"track":"tr_2","plugin":"com.suppleaudio.test.sine"})");
+    f.run("rack.add", R"({"track":"tr_1"})");
+    f.run("module.add", R"({"rack":"rk_1","type":"notes"})");
+    f.run("module.add", R"({"rack":"rk_1","type":"notes_out"})");
+    for (const auto* port : {"pitch", "gate", "velocity"})
+        f.run("cable.add",
+              std::string(R"({"from":"mo_2.)") + port + R"(","to":"mo_3.)" + port + R"("})");
+    f.run("route.add", R"({"from":{"module":"mo_3"},"to":{"track":"tr_2"},"midi":{}})");
+    const char* phrase = "voice v; 1: C4:q E4:e r:e [G4 B4]:h";
+    auto sourceItem =
+        f.run("item.add", std::string(R"({"track":"tr_1","position":0,"length":4,"notation":")") +
+                              phrase + R"("})");
+    // MIDI files may contain equal pitches in separate voices, although a
+    // notation chord deliberately rejects duplicate pitches.
+    const auto itemId = *model::Id::parse(sourceItem["item"].asString());
+    const auto source =
+        *f.app->head().takes.find(*f.app->head().items.find(itemId)->activeTake)->source;
+    auto transaction = f.app->beginTransaction(origin, "Equal-pitch voices");
+    REQUIRE(transaction);
+    f.app->txn().modify<model::MidiSource>(source, [](auto& midi) {
+        for (auto& note : midi.sequence.notes)
+            if (note.pitch == 71) {
+                note.pitch = 67;
+                note.velocity = 70;  // keep the equal-pitch notes distinct in canonical MIDI
+            }
+    });
+    REQUIRE(f.app->commitTransaction(*transaction));
+    f.run("track.set",
+          R"({"track":"tr_2","armed":true,"record_mode":"midi_replace","monitor":"off"})");
+    auto reference = f.run(
+        "rack.capture",
+        R"({"rack":"rk_1","pitch":"mo_2.pitch","gate":"mo_2.gate","velocity":"mo_2.velocity","track":"tr_3","beats":4,"at":8})");
+    auto expected =
+        f.app->head().midi.find(*model::Id::parse(reference["source"].asString()))->sequence;
+    REQUIRE(expected.notes.size() == 4);
+    return expected;
+}
+}  // namespace
+
+TEST_CASE("Note Out recording: a take equals rack.capture in both executors" *
+          doctest::description("rt")) {
+    EngineOptions options{.anticipative = false, .workers = 0};
+    bool device = false;
+    SUBCASE("callback") {}
+    SUBCASE("anticipative") { options.anticipative = true; }
+    SUBCASE("anticipative with workers") { options = {.workers = 2}; }
+    SUBCASE("device and Note Out together") {
+        options = {.workers = 2};
+        device = true;
+    }
+    for (bool instrument : {false, true}) {
+        INFO("instrument " << instrument);
+        Fixture f;
+        auto expected = noteRecordingScene(f, instrument);
+        DummyBackend::Options dummy{.mode = DummyBackend::Mode::Manual};
+        if (device) {
+            f.run("track.set", R"({"track":"tr_2","record_midi":"*"})");
+            dummy.midiPorts = {"Keyboard"};
+            dummy.midi = [](auto& events, std::uint32_t frames, std::int64_t pos) {
+                for (auto at : {std::int64_t{0}, std::int64_t{96000}})
+                    if (at >= pos && at < pos + frames) {
+                        MidiInputEvent event;
+                        event.frame = static_cast<std::uint32_t>(at - pos);
+                        event.size = 3;
+                        event.bytes[0] = at == 0 ? 0x90 : 0x80;
+                        event.bytes[1] = 48;
+                        event.bytes[2] = at == 0 ? 70 : 0;
+                        events.push_back(event);
+                    }
+            };
+            expected.notes.push_back({0, 4 * expected.ppq, 0, 48, 70, 0});
+            expected.canonicalize();
+        }
+        DummyBackend backend(std::move(dummy));
+        REQUIRE(f.app->startEngine(
+            backend, {.sampleRate = 48000, .blockSize = 37, .midiInputs = device}, options));
+        f.run("transport.record");
+        for (int left = 2600; left > 0;) {
+            if (options.anticipative) REQUIRE(f.app->engine()->awaitRendered(4096));
+            const int count = std::min(left, 4096 / 37);
+            backend.run(count);
+            left -= count;
+        }
+        auto stopped = f.run("transport.stop");
+        CHECK(f.app->engine()->processErrors() == 0);
+        f.app->stopEngine();
+        REQUIRE(stopped["recorded"].size() == 1);
+        const auto item = *model::Id::parse(stopped["recorded"].at(0).find("item")->asString());
+        const auto& session = f.app->head();
+        const auto* take = session.takes.find(*session.items.find(item)->activeTake);
+        REQUIRE(take);
+        REQUIRE(take->source);
+        const auto& actual = session.midi.find(*take->source)->sequence;
+        CHECK(actual.ppq == expected.ppq);
+        CHECK(actual.notes == expected.notes);
+        CHECK(stopped["recorded"].at(0).find("lost_frames")->asInt() == 0);
+    }
+}
+
+TEST_CASE("Note Out recording: loop takes, punch clipping and overdub reuse the recorder" *
+          doctest::description("rt")) {
+    enum class Mode { Loop, Punch, Overdub };
+    Mode mode = Mode::Loop;
+    SUBCASE("loop") {}
+    SUBCASE("punch") { mode = Mode::Punch; }
+    SUBCASE("overdub") { mode = Mode::Overdub; }
+    for (const auto options :
+         {EngineOptions{.anticipative = false, .workers = 0}, EngineOptions{.workers = 2}}) {
+        INFO("anticipative " << options.anticipative);
+        Fixture f;
+        auto expected = noteRecordingScene(f, true);
+        std::optional<model::Id> previous;
+        if (mode == Mode::Loop) f.run("transport.loop", R"({"start_beat":0,"end_beat":4})");
+        if (mode == Mode::Punch) f.run("transport.punch", R"({"start_beat":0.5,"end_beat":2.5})");
+        if (mode == Mode::Overdub) {
+            previous = *model::Id::parse(
+                f.run("item.add",
+                      R"({"track":"tr_2","position":0,"length":4,"notation":"1: C3:w"})")["item"]
+                    .asString());
+            f.run("track.set", R"({"track":"tr_2","record_mode":"midi_overdub"})");
+            expected.notes.push_back({0, 4 * expected.ppq, 0, 48, 96, 0});
+            expected.canonicalize();
+        }
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+        REQUIRE(f.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 96}, options));
+        f.run("transport.record");
+        for (int left = mode == Mode::Loop ? 2000 : 1000; left > 0;) {
+            if (options.anticipative) REQUIRE(f.app->engine()->awaitRendered(4096));
+            const int count = std::min(left, 4096 / 96);
+            backend.run(count);
+            left -= count;
+        }
+        auto stopped = f.run("transport.stop");
+        CHECK(f.app->engine()->processErrors() == 0);
+        f.app->stopEngine();
+        REQUIRE(stopped["recorded"].size() == 1);
+        const auto item = *model::Id::parse(stopped["recorded"].at(0).find("item")->asString());
+        const auto& session = f.app->head();
+        const auto* recorded = session.items.find(item);
+        REQUIRE(recorded);
+        CHECK(recorded->takes.size() == (mode == Mode::Punch ? 1 : 2));
+        if (previous) CHECK(item == *previous);
+        for (std::size_t i = mode == Mode::Overdub ? 1 : 0; i < recorded->takes.size(); ++i) {
+            const auto& seq =
+                session.midi.find(*session.takes.find(recorded->takes[i])->source)->sequence;
+            if (mode != Mode::Punch)
+                CHECK(seq.notes == expected.notes);
+            else {
+                REQUIRE(seq.notes.size() == 4);
+                CHECK(seq.notes[0].start == 0);
+                CHECK(seq.notes[1].start == seq.ppq / 2);
+                CHECK(seq.notes[2].start == 3 * seq.ppq / 2);
+                for (const auto& note : seq.notes) CHECK(note.length == seq.ppq / 2);
+            }
+        }
+        f.run("history.undo");
+        CHECK((previous ? f.app->head().items.find(*previous)->takes.size() == 1
+                        : !f.app->head().items.contains(item)));
+    }
+}
