@@ -767,6 +767,42 @@ first use, and no plug-in code runs early to warm it.
   survive pending hash jobs (including finalized loop runs at stop); the
   background finalization adds an optional `hash` without changing their
   recovery contract.
+- **Recording a rack Out** (rack.md §6): an armed channel whose selected
+  `record.input` is an Out module records its stereo input, after input FX
+  and before its own items, inserts, fader and Console 9 encode. Arming makes
+  the channel live, even with monitoring off; a non-live source rack reaches
+  it through the existing audio frontier. The rack input remains audible as
+  before, including when stopped or playing without recording. Armed input
+  FX process this input, independently of device inputs being available.
+  `RecordTarget::rackInput` selects the channel's prepared pre-FX buffer;
+  `startRecording` resolves `outputShift` to its input timeline shift plus
+  input-FX latency, or returns `record.rack_input` if no armed rack input
+  exists in the loaded plan. The existing recorder aligns rendered input
+  against its capture clock, keeps stereo float32 samples unchanged, and
+  applies its normal padding, loop runs, punch, takes, sidecars, recovery
+  and undo rules. Input-FX warm-up is dropped and an unavailable final tail
+  is padded, just as for device input FX. Without input FX, its recorded
+  musical span is bit-identical to the offline rack output.
+- **Recording Note Out** (rack.md §6): an armed `midi_overdub` or
+  `midi_replace` channel records every Note Out route delivered to it,
+  after channel filtering/remapping, mute and compensation. Its selected
+  MIDI input device may record alongside those routes. An instrument and a
+  device record-input route are optional. Arming makes the destination and
+  its Note Out sources live, including with monitoring off. Each node has
+  preallocated storage of delivered events; the callback copies it into
+  the existing per-track MIDI recording ring. A missing instrument still
+  consumes the routes and records them.
+  `RecordTarget::Midi::routed` enables these events; `startRecording` sets
+  its `shift` from the destination node's timeline shift, or refuses with
+  `record.midi_route` if the target is not live in the loaded plan. The
+  internal events use processing position minus that shift; device
+  events retain their own round-trip correction. A mixed take spans both
+  clocks, and held notes end at their source's corrected stop. Stable route/voice
+  addresses travel through `RecordedMidiEvent` and MIDI note pairing,
+  preserving overlapping equal-pitch voices separately from device notes.
+  These addresses are recording metadata only; saved MIDI sources retain
+  their existing format. The shared MIDI commit path applies loop takes,
+  punch, replace, overdub and one undo step.
 - **Recording a master** (ADR-0057): an armed master records its output
   before its own items (`RecordTarget::output`; two channels). Every armed
   master, and every master still recording, has a record tap in the plan.

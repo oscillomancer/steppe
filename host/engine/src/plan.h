@@ -581,6 +581,9 @@ struct TakeChain {
 };
 
 struct Node {
+    // Note Out events actually delivered this block, also without an instrument.
+    // Capacity is fixed in prepareRackMidi; only this node's executor writes it.
+    std::vector<RoutedMidiEvent> routedMidi;
     Id id;  // a track's, or a rack's (rk_*)
     // A rack (ADR-0062): its runtime, its Out modules' audio this block and
     // the sends its In modules take. No chain, fader or Console 9 stage.
@@ -604,10 +607,11 @@ struct Node {
     std::vector<Stage> chain;
     // Input FX (a channel's input_chain): they process its record input, which
     // is then monitored and recorded, whenever the track is armed with an
-    // audio input. Live (the device input exists only in the callback) and
+    // audio input, including a rack Out. Live (recording reads it in the callback) and
     // outside compensation; `inputBuf` holds this block's processed input.
     std::vector<Stage> inputChain;
     std::vector<int> recordInputs;  // device channels, 0-based (one = mono to both)
+    bool recordRack = false;        // an armed channel's rack Out input
     std::int64_t inputLatency = 0;
     Stereo inputBuf;
     std::int64_t latIn = 0, latChain = 0;  // forward arrival (diagnostic), compensated chain

@@ -558,9 +558,22 @@ that note; velocity is round(127 × v), clamped to 1..127, or 96 unpatched.
 Pitch, channel and velocity latch at the rise. Stop or locate ends held notes.
 The same rules drive `rack.capture`. Route mute ends notes and unmute plays
 held gates again. Audio volume/pan controls do not apply to these MIDI routes.
-Armed destinations do not record Note Out MIDI yet: use `rack.capture` to
-print the notes. The canonical type id is `com.suppleaudio.rack.notes-out`;
+To record it live, use `track.set {track: "tr_2", armed: true,
+record_mode: "midi_replace"}` (or `midi_overdub`), then `transport.record`.
+No device input or instrument is required; an existing device input records
+alongside the routes. Loop, punch and undo work as for other MIDI takes.
+Use `rack.capture` to print the notes offline.
+The canonical type id is `com.suppleaudio.rack.notes-out`;
 `notes_out` is its short command alias.
+
+## Record the rack's audio
+
+Use `track.set {track: "tr_1", record_rack: "mo_1", armed: true,
+record_mode: "input"}`, then `transport.record`. The stereo WAV records the
+Out through input FX, before the channel's items, inserts and fader. A device
+input is not required. Loop, punch, takes, recovery and undo use the ordinary
+audio recorder. Mute the live rack feed when auditioning the recorded item
+to avoid doubling it.
 
 ## Control and automation
 
@@ -581,4 +594,3 @@ print the notes. The canonical type id is `com.suppleaudio.rack.notes-out`;
   none. `amount` is a fraction of the parameter's range (default 0.5).
 - A plug-in's latency inside a rack is not compensated.
 - Racks do not follow a track's playrate changes.
-- Recording an armed channel whose input is a rack's Out is not supported.

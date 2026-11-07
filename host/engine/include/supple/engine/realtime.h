@@ -57,6 +57,10 @@ struct RecordTarget {
     struct Midi {
         std::uint64_t ports = 0;
         int fromChannel = 0, toChannel = 0;
+        // Include Note Out routes, on the destination's musical input clock.
+        // startRecording resolves its shift from the loaded plan.
+        bool routed = false;
+        std::int64_t shift = 0;
     };
     std::optional<Midi> midi;
     // A master's output instead of device input (ADR-0057): two channels,
@@ -64,6 +68,9 @@ struct RecordTarget {
     // `outputShift`, the master's timeline shift where that mix is produced.
     bool output = false;
     std::int64_t outputShift = 0;
+    // A rack's Out instead of device channels: stereo input, before items
+    // and inserts, after input FX. outputShift is its input clock + input FX.
+    bool rackInput = false;
 };
 
 // A master recording its output (ADR-0057): its own items do not play
@@ -80,6 +87,9 @@ struct RecordedMidiEvent {
     std::int64_t timeline = 0;
     std::uint32_t run = 0;
     std::uint8_t bytes[3] = {0, 0, 0};
+    // Note Out's stable route/voice address; device messages retain -1.
+    model::Id route = {};
+    int voice = -1;
 };
 
 // A contiguous run of a recording on the timeline (ADR-0015): a loop wrap

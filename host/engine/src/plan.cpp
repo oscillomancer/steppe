@@ -716,6 +716,9 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         if (t.record.armed && t.record.input && !n.inputChain.empty())
             if (const model::Route* in = s.routes.find(*t.record.input); in && in->from.hwChannels)
                 for (int ch : *in->from.hwChannels) n.recordInputs.push_back(ch - 1);
+        if (t.record.armed && t.record.input)
+            if (const auto* input = s.routes.find(*t.record.input))
+                n.recordRack = input->from.module.has_value();
         if (monitoring && t.record.input)
             if (const model::Route* in = s.routes.find(*t.record.input)) {
                 if (in->from.hwChannels)
@@ -725,7 +728,13 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
                         Node::MidiIn{*in->from.midiDevice, in->midi ? in->midi->fromChannel : 0,
                                      in->midi ? in->midi->toChannel : 0, 0};
             }
-        n.live = !n.monitorInputs.empty() || n.midiIn.has_value() || !n.recordInputs.empty();
+        n.live = !n.monitorInputs.empty() || n.midiIn.has_value() || !n.recordInputs.empty() ||
+                 n.recordRack;
+        // Recording Note Out consumes its delivered events on the callback.
+        // Keep source and destination together even with monitoring off.
+        if (t.record.armed && (t.record.mode == model::RecordMode::MidiOverdub ||
+                               t.record.mode == model::RecordMode::MidiReplace))
+            for (std::size_t edge : n.in) n.live = n.live || p.edges[edge].rackNotes >= 0;
         for (std::size_t e : n.in) n.live = n.live || p.nodes[p.edges[e].from].live;
         if (!n.live && keepLive && std::binary_search(keepLive->begin(), keepLive->end(), n.id))
             n.live = p.heldLive = true;
@@ -995,6 +1004,9 @@ Status prepare(Plan& p, const Session& s) {
         n.aux.assign(static_cast<std::size_t>(n.auxCount), std::vector<float>(block, 0.0f));
         n.sum.init(block);
         n.preFx.init(block);
+        if (n.recordRack)
+            p.processedInputs.push_back(
+                {n.id, {n.preFx.l.data(), n.preFx.r.data()}, n.inputLatency});
         n.preFader.init(block);
         n.post.init(block);
         n.items.init(n.postItems ? block : 0);
@@ -2430,16 +2442,20 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
     };
     // Input FX: the armed record input through the input chain, every block
     // (recorded whether or not it is heard; ADR-0014).
-    const bool inputFx = !node.recordInputs.empty() && p.deviceIn;
+    const bool rackFx = node.recordRack && !node.inputChain.empty();
+    const bool inputFx = rackFx || (!node.recordInputs.empty() && p.deviceIn);
     if (inputFx) {
-        for (int c = 0; c < 2; ++c) {
-            const float* x = deviceChannel(node.recordInputs, static_cast<std::size_t>(c));
-            float* y = c == 0 ? node.inputBuf.l.data() : node.inputBuf.r.data();
-            if (x)
-                std::copy_n(x, n, y);
-            else
-                std::fill_n(y, n, 0.0f);
-        }
+        if (rackFx)
+            node.inputBuf.copyFrom(node.sum, n);
+        else
+            for (int c = 0; c < 2; ++c) {
+                const float* x = deviceChannel(node.recordInputs, static_cast<std::size_t>(c));
+                float* y = c == 0 ? node.inputBuf.l.data() : node.inputBuf.r.data();
+                if (x)
+                    std::copy_n(x, n, y);
+                else
+                    std::fill_n(y, n, 0.0f);
+            }
         for (Stage& st : node.inputChain) {
             st.blockEvents.clear();
             automateStage(st, pos, n, time::samplesAt(p.startSeconds, p.rate));
@@ -2447,6 +2463,7 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
             if (!runStage(p, st, node.inputBuf, n, transport, pos, self)) return false;
             leaveGroup(node.inputChain, st, node.inputBuf, n);
         }
+        if (rackFx) node.sum.copyFrom(node.inputBuf, n);
     }
     if (hearInput && !node.monitorInputs.empty() && p.deviceIn) {
         const float* l = inputFx ? node.inputBuf.l.data() : deviceChannel(node.monitorInputs, 0);
