@@ -1,0 +1,182 @@
+{
+  "schema": "supple.rack-preset/1.0",
+  "name": "Freeze Pad",
+  "description": "A send effect that turns what it hears into a pad, all wet: two spectral freezes, one an octave down, blur the In into a hall; raise Hold's first knob past half to hold the spectrum, turn the Freeze's blur.",
+  "modules": [
+    {
+      "type": "com.suppleaudio.rack.out",
+      "version": "1.0.0",
+      "x": 780.0,
+      "y": 249.0
+    },
+    {
+      "type": "com.suppleaudio.rack.in",
+      "version": "1.0.0",
+      "label": "Input",
+      "x": 44.0,
+      "y": 84.0
+    },
+    {
+      "type": "com.suppleaudio.rack.macro",
+      "version": "1.0.0",
+      "label": "Hold",
+      "x": 0.0,
+      "y": 258.0,
+      "params": {
+        "smooth": 0.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.freeze",
+      "version": "1.0.0",
+      "x": 216.0,
+      "y": 0.0,
+      "params": {
+        "blur": 60.0,
+        "tilt": -1.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.freeze",
+      "version": "1.0.0",
+      "label": "Octave down",
+      "x": 216.0,
+      "y": 336.0,
+      "params": {
+        "blur": 80.0,
+        "shift": -12.0,
+        "tilt": -2.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.mixer",
+      "version": "1.0.0",
+      "label": "Blend",
+      "x": 360.0,
+      "y": 139.0,
+      "params": {
+        "level_1": -2.0,
+        "level_2": -4.0,
+        "pan_1": -15.0,
+        "pan_2": 15.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.reverb",
+      "version": "1.0.0",
+      "label": "Hall",
+      "x": 592.0,
+      "y": 168.0,
+      "params": {
+        "size": 85.0,
+        "decay": 7000.0,
+        "damping": 50.0,
+        "modulation": 50.0,
+        "mix": 40.0
+      }
+    }
+  ],
+  "cables": [
+    {
+      "from": {
+        "module": 1,
+        "port": "l"
+      },
+      "to": {
+        "module": 3,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "l"
+      },
+      "to": {
+        "module": 4,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "out_1"
+      },
+      "to": {
+        "module": 3,
+        "port": "freeze_gate"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "out_1"
+      },
+      "to": {
+        "module": 4,
+        "port": "freeze_gate"
+      }
+    },
+    {
+      "from": {
+        "module": 3,
+        "port": "out"
+      },
+      "to": {
+        "module": 5,
+        "port": "in_1"
+      }
+    },
+    {
+      "from": {
+        "module": 4,
+        "port": "out"
+      },
+      "to": {
+        "module": 5,
+        "port": "in_2"
+      }
+    },
+    {
+      "from": {
+        "module": 5,
+        "port": "left"
+      },
+      "to": {
+        "module": 6,
+        "port": "in_l"
+      }
+    },
+    {
+      "from": {
+        "module": 5,
+        "port": "right"
+      },
+      "to": {
+        "module": 6,
+        "port": "in_r"
+      }
+    },
+    {
+      "from": {
+        "module": 6,
+        "port": "out_l"
+      },
+      "to": {
+        "module": 0,
+        "port": "l"
+      }
+    },
+    {
+      "from": {
+        "module": 6,
+        "port": "out_r"
+      },
+      "to": {
+        "module": 0,
+        "port": "r"
+      }
+    }
+  ]
+}
+
