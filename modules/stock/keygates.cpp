@@ -47,9 +47,11 @@ struct KeyGates : Module {
         int key = -1;  // the key it holds while on
     };
     Array<Voice, 16> voices;
+    Array<bool, 16> rose;          // this frame: the voice's gate rose
     Array<double, kLanes> struck;  // each lane's velocity, held
-    Array<bool, kLanes> gap;       // a frame low before a hit on a held key
+    Array<bool, kLanes> gap;       // this frame: a note started on a key held the last
     Array<bool, kLanes> held;      // this frame: a voice holds the key
+    Array<bool, kLanes> wasHeld;   // the last frame's held
     Array<int, kLanes> keys;       // this block's keys
 
     int keyOf(int lane) const {
@@ -77,7 +79,7 @@ struct KeyGates : Module {
         for (int c = 0; c < 16; ++c) voices[c] = Voice{};
         for (int k = 0; k < kLanes; ++k) {
             struck[k] = 0.0;
-            gap[k] = false;
+            wasHeld[k] = false;
         }
     }
 
@@ -89,30 +91,31 @@ struct KeyGates : Module {
         }
         const int n = min(max(gate.channels(), 1), 16);
         for (int i = 0; i < frames; ++i) {
-            for (int k = 0; k < kLanes; ++k) held[k] = false;
+            // Every voice's gate first, then the lanes, so the order of the
+            // voices does not matter when one hands a key to another.
             for (int c = 0; c < n; ++c) {
                 Voice& v = voices[c];
                 const double g = gate[c][i];
                 const bool was = v.on;
                 v.on = v.on ? g >= 0.25 : g >= 0.5;
-                if (v.on && !was) {
-                    v.key = roundToInt(60.0 + 12.0 * pitch[c][i]);
-                    for (int k = 0; k < kLanes; ++k) {
-                        if (keys[k] != v.key) continue;
-                        struck[k] = clamp(velocity[c][i], 0.0, 1.0);
-                        // Already held by another voice: low for this frame.
-                        for (int o = 0; o < n; ++o)
-                            if (o != c && voices[o].on && voices[o].key == v.key) gap[k] = true;
-                    }
-                }
-                if (!v.on) continue;
-                for (int k = 0; k < kLanes; ++k)
-                    if (keys[k] == v.key) held[k] = true;
+                rose[c] = v.on && !was;
+                if (rose[c]) v.key = roundToInt(60.0 + 12.0 * pitch[c][i]);
             }
             for (int k = 0; k < kLanes; ++k) {
-                out[k][0][i] = held[k] && !gap[k] ? 1.0 : 0.0;
+                held[k] = false;
                 gap[k] = false;
+                for (int c = 0; c < n; ++c) {
+                    if (!voices[c].on || voices[c].key != keys[k]) continue;
+                    held[k] = true;
+                    if (!rose[c]) continue;
+                    struck[k] = clamp(velocity[c][i], 0.0, 1.0);
+                    // Held the frame before, by any voice: low for this
+                    // frame, so the drum hits again.
+                    if (wasHeld[k]) gap[k] = true;
+                }
+                out[k][0][i] = held[k] && !gap[k] ? 1.0 : 0.0;
                 vel[k][0][i] = struck[k];
+                wasHeld[k] = held[k];
             }
         }
     }

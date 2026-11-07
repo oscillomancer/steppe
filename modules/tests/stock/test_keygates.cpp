@@ -73,3 +73,27 @@ TEST_CASE("keygates: a second note on a held key hits again; Key moves a lane") 
     // Unconnected, the velocity is full.
     CHECK(moved.output("vel_1")[32] == 1.0);
 }
+
+TEST_CASE("keygates: a key handed from one voice to another on the same frame hits again") {
+    // One voice's gate falls on the frame the other's rises, on the same key,
+    // in either order of the voices.
+    for (int first : {0, 1}) {
+        CAPTURE(first);
+        ModuleHarness h(stock("keygates"));
+        h.input("pitch", 2, [](int, std::int64_t) { return key(36); });
+        h.input("gate", 2, [first](int c, std::int64_t n) {
+            const bool early = n >= 100 && n < 200;
+            const bool late = n >= 200 && n < 300;
+            return (c == first ? early : late) ? 1.0 : 0.0;
+        });
+        h.input("velocity", 2, [first](int c, std::int64_t) { return c == first ? 0.5 : 0.9; });
+        h.run(400);
+        const auto& kick = h.output("out_1");
+        CHECK(kick[200] == 0.0);
+        CHECK(kick[201] == 1.0);
+        CHECK(h.output("vel_1")[250] == doctest::Approx(0.9));
+        int rises = 0;
+        for (std::size_t n = 1; n < kick.size(); ++n) rises += kick[n] > 0.5 && kick[n - 1] < 0.5;
+        CHECK(rises == 2);
+    }
+}
