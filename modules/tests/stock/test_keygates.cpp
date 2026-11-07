@@ -17,7 +17,7 @@ double key(int k) { return (k - 60) / 12.0; }
 
 TEST_CASE("keygates: each lane's gate follows its key, its velocity the note's") {
     ModuleHarness h(stock("keygates"));
-    // Voice 0 plays C1 (36) from 100 to 300 at 0.5; voice 1 F#1 (42) from
+    // Voice 0 plays C2 (36) from 100 to 300 at 0.5; voice 1 F#2 (42) from
     // 200 to 400 at 0.8; voice 2 E4 (64), on no lane, throughout.
     const int keys[] = {36, 42, 64};
     h.input("pitch", 3, [&](int c, std::int64_t) { return key(keys[c]); });
