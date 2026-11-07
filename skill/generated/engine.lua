@@ -1,6 +1,8 @@
 ---@meta
 -- Steppe 0.6.0 scripting reference, generated from the command registry.
 -- Do not edit: `<slug>-engine registry --lua` writes it, tools/gen/update-generated.sh regenerates it.
+-- Successful replies can include .warnings: command warnings then {code,message,path}
+-- bus diagnostics. Non-object results with bus warnings become {result=...,warnings=...}.
 -- The `q` table of a script (libs/lua-bus, ADR-0006): every command is a
 -- function, `q.run(name, args)` reaches any of them by name, `q.batch(label, body)`
 -- is one transaction, and `q.on(topic, handler)` subscribes to bus events.
@@ -16,6 +18,7 @@ q = nil
 ---@field notable any
 ---@field ltas_rms_db number
 ---@field summary string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.analyze_masking_args
 ---@field masker_track string
@@ -71,6 +74,9 @@ q = nil
 ---@class Steppe.autoitem_remove_args
 ---@field item string Automation item id, e.g. "ai_1".
 
+---@class Steppe.autoitem_remove_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
+
 ---@class Steppe.autoitem_set_args
 ---@field item string Automation item id, e.g. "ai_1".
 ---@field position? number
@@ -85,6 +91,9 @@ q = nil
 ---@class Steppe.autoitem_unpool_args
 ---@field item string Automation item id, e.g. "ai_1".
 
+---@class Steppe.autoitem_unpool_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
+
 ---@class Steppe.branch_create_args
 ---@field name string
 ---@field from? string
@@ -93,9 +102,13 @@ q = nil
 
 ---@class Steppe.branch_create_result
 ---@field name string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.branch_delete_args
 ---@field name string
+
+---@class Steppe.branch_delete_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.branch_diff_args
 ---@field a string
@@ -103,10 +116,12 @@ q = nil
 
 ---@class Steppe.branch_diff_result
 ---@field changes table[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.branch_list_result
 ---@field branches string[]
 ---@field current string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.branch_merge_args
 ---@field from string
@@ -117,6 +132,7 @@ q = nil
 ---@field up_to_date boolean
 ---@field version integer
 ---@field remapped any
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.branch_render_ab_args
 ---@field a string
@@ -130,6 +146,7 @@ q = nil
 
 ---@class Steppe.branch_switch_result
 ---@field name string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.cable_add_args
 ---@field from string
@@ -155,6 +172,7 @@ q = nil
 ---@field ok boolean
 ---@field diagnostics table[]
 ---@field plugin? table
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.dsp_edit_args
 ---@field name string
@@ -167,6 +185,7 @@ q = nil
 ---@field diagnostics table[]
 ---@field plugin? table
 ---@field listed boolean plugin.list shows it (the script player is on the plugin path)
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.dsp_export_args
 ---@field script string a name from dsp.list
@@ -182,6 +201,7 @@ q = nil
 ---@field player? string clap: the script player it was copied from
 ---@field bytes? integer
 ---@field notices? string clap: the licenses to ship with the plugin
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.dsp_get_args
 ---@field name string
@@ -190,10 +210,12 @@ q = nil
 ---@field name string
 ---@field path string
 ---@field source string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.dsp_list_result
 ---@field library string
 ---@field scripts table[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.dsp_preview_args
 ---@field plugin? string
@@ -215,12 +237,13 @@ q = nil
 ---@field edits any what pointer changed, as a merge patch
 ---@field problems string[]
 ---@field log string[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.dsp_test_args
 ---@field plugin? string
 ---@field script? string
 ---@field patch? any
----@field signals? "sine"|"sweep"|"impulse"|"noise"|"silence"|"notes"|"note"|"file"[] default: effects five, or file with audio_file; instruments three, or notes and silence with custom notes
+---@field signals? ("sine"|"sweep"|"impulse"|"noise"|"silence"|"notes"|"note"|"file")[] default: effects five, or file with audio_file; instruments three, or notes and silence with custom notes
 ---@field audio_file? string the absolute path of a WAV, FLAC or MP3 (10 minutes at most) the file signal plays through an effect
 ---@field automation? table[] discrete physical-value changes on every signal
 ---@field sidechain? table timed generated key input
@@ -240,6 +263,7 @@ q = nil
 ---@field cpu_percent number of real time, measured
 ---@field problems string[]
 ---@field log string[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.dsp_write_args
 ---@field name string the script's folder and file name
@@ -252,12 +276,14 @@ q = nil
 ---@field diagnostics table[]
 ---@field plugin? table
 ---@field listed boolean plugin.list shows it (the script player is on the plugin path)
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.engine_devices_args
 ---@field backend? "jack"|"dummy"|"portaudio"
 
 ---@class Steppe.engine_devices_result
 ---@field devices table[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.engine_start_args
 ---@field backend? "jack"|"dummy"|"portaudio"
@@ -296,7 +322,7 @@ q = nil
 ---@field live_helpers integer
 ---@field scheduling table
 ---@field workgroup table
----@field warnings string[]
+---@field warnings (string|table)[]
 ---@field memory_lock table
 ---@field cpu_idle_latency table
 ---@field meter_drops table
@@ -330,7 +356,7 @@ q = nil
 ---@field live_helpers integer
 ---@field scheduling table
 ---@field workgroup table
----@field warnings string[]
+---@field warnings (string|table)[]
 ---@field memory_lock table
 ---@field cpu_idle_latency table
 ---@field meter_drops table
@@ -338,6 +364,9 @@ q = nil
 ---@field dropped integer
 ---@field voice_dropped integer
 ---@field failed_errors any
+
+---@class Steppe.engine_stop_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.env_add_args
 ---@field track? string Track id, e.g. "tr_1".
@@ -352,12 +381,14 @@ q = nil
 ---@class Steppe.env_add_result
 ---@field env string
 ---@field points integer
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.env_list_args
 ---@field object? string
 
 ---@class Steppe.env_list_result
 ---@field envelopes table[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.env_points_set_args
 ---@field env string Envelope id, e.g. "en_1".
@@ -367,15 +398,22 @@ q = nil
 
 ---@class Steppe.env_points_set_result
 ---@field points integer
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.env_remove_args
 ---@field env string Envelope id, e.g. "en_1".
+
+---@class Steppe.env_remove_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.env_set_args
 ---@field env string Envelope id, e.g. "en_1".
 ---@field active? boolean
 ---@field visible? boolean
 ---@field mode? "trim"|"read"|"touch"|"latch"|"latch_preview"|"write"
+
+---@class Steppe.env_set_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.fx_add_args
 ---@field track? string Track id, e.g. "tr_1".
@@ -390,15 +428,18 @@ q = nil
 ---@field name string
 ---@field semantic boolean
 ---@field chain string[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.fx_chain_delete_args
 ---@field name string
 
 ---@class Steppe.fx_chain_delete_result
 ---@field path string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.fx_chain_list_result
 ---@field chains table[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.fx_chain_load_args
 ---@field track string
@@ -409,6 +450,7 @@ q = nil
 
 ---@class Steppe.fx_chain_load_result
 ---@field effects string[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.fx_chain_save_args
 ---@field track string
@@ -419,6 +461,7 @@ q = nil
 ---@class Steppe.fx_chain_save_result
 ---@field path string
 ---@field effects integer
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.fx_copy_args
 ---@field fx string
@@ -429,6 +472,7 @@ q = nil
 ---@class Steppe.fx_copy_result
 ---@field fx string
 ---@field chain string[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.fx_describe_args
 ---@field fx string Plugin instance id, e.g. "fx_1".
@@ -446,16 +490,21 @@ q = nil
 ---@field sidechain_channels? integer The plug-in's key input: route.add {fx} feeds it
 ---@field latency_samples? integer The instance's reported latency, in samples
 ---@field params_total? integer Plain parameters matching; at most 512 are listed.
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.fx_learn_list_args
 ---@field fx? string
 
 ---@class Steppe.fx_learn_list_result
 ---@field learn any
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.fx_learn_remove_args
 ---@field fx string
 ---@field param string
+
+---@class Steppe.fx_learn_remove_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.fx_learn_set_args
 ---@field fx string
@@ -470,6 +519,7 @@ q = nil
 ---@class Steppe.fx_learn_set_result
 ---@field param string
 ---@field control string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.fx_meters_args
 ---@field fx string
@@ -478,11 +528,15 @@ q = nil
 ---@class Steppe.fx_meters_result
 ---@field source string live, render, or none (nothing to read yet)
 ---@field meters any Read-only values by patch key (physical) or name
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.fx_move_args
 ---@field fx string
 ---@field track? string
 ---@field index integer
+
+---@class Steppe.fx_move_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.fx_param_get_args
 ---@field fx string
@@ -490,6 +544,7 @@ q = nil
 
 ---@class Steppe.fx_param_get_result
 ---@field value any
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.fx_param_set_args
 ---@field fx string Plugin instance id, e.g. "fx_1".
@@ -499,6 +554,7 @@ q = nil
 ---@field changed any
 ---@field description string
 ---@field inactive? string[] Params set that do not apply with the new values: kept, and heard once what fx.describe full's active_when names allows it
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.fx_patch_get_args
 ---@field fx string
@@ -506,12 +562,14 @@ q = nil
 
 ---@class Steppe.fx_patch_get_result
 ---@field patch any
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.fx_patch_list_args
 ---@field fx string
 
 ---@class Steppe.fx_patch_list_result
 ---@field patches any
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.fx_patch_merge_args
 ---@field fx string Plugin instance id, e.g. "fx_1".
@@ -521,6 +579,7 @@ q = nil
 ---@field changed any
 ---@field description string
 ---@field inactive? string[] Params set that do not apply with the new values: kept, and heard once what fx.describe full's active_when names allows it
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.fx_patch_set_args
 ---@field fx string
@@ -529,6 +588,7 @@ q = nil
 
 ---@class Steppe.fx_patch_set_result
 ---@field patch any
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.fx_preset_delete_args
 ---@field fx string
@@ -536,12 +596,14 @@ q = nil
 
 ---@class Steppe.fx_preset_delete_result
 ---@field path string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.fx_preset_list_args
 ---@field fx string
 
 ---@class Steppe.fx_preset_list_result
 ---@field presets table[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.fx_preset_load_args
 ---@field fx string
@@ -551,6 +613,7 @@ q = nil
 ---@class Steppe.fx_preset_load_result
 ---@field name string
 ---@field source string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.fx_preset_save_args
 ---@field fx string
@@ -559,12 +622,19 @@ q = nil
 
 ---@class Steppe.fx_preset_save_result
 ---@field path string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.fx_remove_args
 ---@field fx string Plugin instance id, e.g. "fx_1".
 
+---@class Steppe.fx_remove_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
+
 ---@class Steppe.fx_restart_args
 ---@field fx string Plugin instance id, e.g. "fx_1".
+
+---@class Steppe.fx_restart_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.fx_set_args
 ---@field fx string Plugin instance id, e.g. "fx_1".
@@ -575,6 +645,9 @@ q = nil
 ---@field isolation? "inherit"|"in_process"|"shared_bridge"|"dedicated"
 ---@field pins? table
 
+---@class Steppe.fx_set_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
+
 ---@class Steppe.group_add_args
 ---@field name string
 ---@field color? string
@@ -584,6 +657,7 @@ q = nil
 
 ---@class Steppe.group_add_result
 ---@field group string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.group_describe_args
 ---@field group string
@@ -592,16 +666,24 @@ q = nil
 ---@field group string
 ---@field state table
 ---@field controllers string[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.group_list_result
 ---@field groups table[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.group_members_set_args
 ---@field group string
 ---@field members string[]
 
+---@class Steppe.group_members_set_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
+
 ---@class Steppe.group_remove_args
 ---@field group string
+
+---@class Steppe.group_remove_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.group_set_args
 ---@field group string
@@ -609,6 +691,9 @@ q = nil
 ---@field color? string
 ---@field active? boolean
 ---@field links? string[]
+
+---@class Steppe.group_set_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.group_targets_args
 ---@field track? string
@@ -618,6 +703,7 @@ q = nil
 ---@class Steppe.group_targets_result
 ---@field tracks string[]
 ---@field items string[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.history_list_result
 ---@field versions table[]
@@ -626,14 +712,17 @@ q = nil
 ---@field truncated boolean
 ---@field retained_bytes integer
 ---@field budget_bytes integer
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.history_redo_result
 ---@field version integer
 ---@field label string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.history_undo_result
 ---@field version integer
 ---@field label string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.item_add_args
 ---@field track string Track id, e.g. "tr_1".
@@ -651,7 +740,7 @@ q = nil
 ---@field source? string
 ---@field position number
 ---@field length number
----@field warnings? string[]
+---@field warnings? (string|table)[]
 
 ---@class Steppe.item_apply_fx_args
 ---@field item string
@@ -661,6 +750,7 @@ q = nil
 ---@field take string
 ---@field source string
 ---@field path string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.item_consolidate_args
 ---@field items string[]
@@ -678,6 +768,7 @@ q = nil
 ---@class Steppe.item_duplicate_result
 ---@field id string
 ---@field linked? string[] (default: [])
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.item_explode_takes_args
 ---@field item string
@@ -686,6 +777,7 @@ q = nil
 ---@class Steppe.item_explode_takes_result
 ---@field items string[]
 ---@field tracks string[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.item_export_args
 ---@field item string
@@ -699,6 +791,7 @@ q = nil
 ---@field channels? integer
 ---@field frames? integer
 ---@field notes? integer
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.item_heal_args
 ---@field items string[]
@@ -720,16 +813,23 @@ q = nil
 ---@field bar? integer
 ---@field track? string Track id, e.g. "tr_1".
 
+---@class Steppe.item_move_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
+
 ---@class Steppe.item_paste_args
 ---@field version? integer
 ---@field items table[]
 
 ---@class Steppe.item_paste_result
 ---@field items string[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.item_remove_args
 ---@field bypass_groups? boolean (default: false)
 ---@field item string Item id, e.g. "it_1".
+
+---@class Steppe.item_remove_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.item_set_args
 ---@field bypass_groups? boolean (default: false)
@@ -749,6 +849,9 @@ q = nil
 ---@field color? string
 ---@field timebase? "track"|"time"|"beats"|"beats_position"
 
+---@class Steppe.item_set_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
+
 ---@class Steppe.item_split_args
 ---@field bypass_groups? boolean (default: false)
 ---@field item string
@@ -760,6 +863,7 @@ q = nil
 ---@field right string
 ---@field linked_left? string[] (default: [])
 ---@field linked_right? string[] (default: [])
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.job_cancel_args
 ---@field job string
@@ -787,18 +891,26 @@ q = nil
 
 ---@class Steppe.marker_add_result
 ---@field id string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.marker_list_result
 ---@field markers table[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.marker_remove_args
 ---@field id string
+
+---@class Steppe.marker_remove_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.marker_set_args
 ---@field id string
 ---@field pos? number
 ---@field name? string
 ---@field color? string
+
+---@class Steppe.marker_set_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.midi_edit_args
 ---@field item string
@@ -809,6 +921,7 @@ q = nil
 
 ---@class Steppe.midi_get_result
 ---@field text string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.midi_notes_args
 ---@field item string
@@ -816,6 +929,9 @@ q = nil
 ---@class Steppe.midi_write_args
 ---@field item string Item id, e.g. "it_1".
 ---@field notation string
+
+---@class Steppe.midi_write_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.module_add_args
 ---@field rack string
@@ -907,6 +1023,7 @@ q = nil
 ---@class Steppe.plugin_list_result
 ---@field plugins table[]
 ---@field scan table
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.plugin_scan_args
 ---@field wait? boolean false: scan in the background (default true)
@@ -915,6 +1032,7 @@ q = nil
 ---@field plugins table[]
 ---@field scan table
 ---@field job? string the background scan (wait: false)
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.project_get_result
 ---@field name string
@@ -991,20 +1109,26 @@ q = nil
 ---@field render? table Render settings (session-model §1.10); every member optional
 ---@field timebase? "time"|"beats"|"beats_position"
 
+---@class Steppe.project_set_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
+
 ---@class Steppe.project_template_delete_args
 ---@field name string
 
 ---@class Steppe.project_template_delete_result
 ---@field path string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.project_template_list_result
 ---@field templates table[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.project_template_load_args
 ---@field name string
 
 ---@class Steppe.project_template_load_result
 ---@field name string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.project_template_save_args
 ---@field name string
@@ -1100,12 +1224,17 @@ q = nil
 
 ---@class Steppe.region_add_result
 ---@field id string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.region_list_result
 ---@field regions table[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.region_remove_args
 ---@field id string
+
+---@class Steppe.region_remove_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.region_set_args
 ---@field id string
@@ -1113,6 +1242,9 @@ q = nil
 ---@field end? number
 ---@field name? string
 ---@field color? string
+
+---@class Steppe.region_set_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.registry_describe_args
 ---@field command string
@@ -1129,9 +1261,9 @@ q = nil
 ---@field start_beat? number
 ---@field end_beat? number
 ---@field tail_s? number Seconds rendered past the end
----@field pattern? number|string File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions}
+---@field pattern? string|table File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions}
 ---@field sample_rate? integer Default: the project rate
----@field channels? number|string 1 (mono, (L+R)/2), 2 (stereo) or "track" (stems: mono files for 1-channel tracks)
+---@field channels? string|string|"track" 1 (mono, (L+R)/2), 2 (stereo) or "track" (stems: mono files for 1-channel tracks)
 ---@field outputs? table[] 1-4 encodings of the same audio [[{format: wav, bit_depth: 32}]]
 ---@field normalize? table
 ---@field limit_true_peak_db? number A true-peak ceiling (dBTP)
@@ -1167,9 +1299,9 @@ q = nil
 ---@field start_beat? number
 ---@field end_beat? number
 ---@field tail_s? number Seconds rendered past the end
----@field pattern? number|string File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions}
+---@field pattern? string|table File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions}
 ---@field sample_rate? integer Default: the project rate
----@field channels? number|string 1 (mono, (L+R)/2), 2 (stereo) or "track" (stems: mono files for 1-channel tracks)
+---@field channels? string|string|"track" 1 (mono, (L+R)/2), 2 (stereo) or "track" (stems: mono files for 1-channel tracks)
 ---@field outputs? table[] 1-4 encodings of the same audio [[{format: wav, bit_depth: 32}]]
 ---@field normalize? table
 ---@field limit_true_peak_db? number A true-peak ceiling (dBTP)
@@ -1230,9 +1362,9 @@ q = nil
 ---@field start_beat? number
 ---@field end_beat? number
 ---@field tail_s? number Seconds rendered past the end
----@field pattern? number|string File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions}
+---@field pattern? string|table File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions}
 ---@field sample_rate? integer Default: the project rate
----@field channels? number|string 1 (mono, (L+R)/2), 2 (stereo) or "track" (stems: mono files for 1-channel tracks)
+---@field channels? string|string|"track" 1 (mono, (L+R)/2), 2 (stereo) or "track" (stems: mono files for 1-channel tracks)
 ---@field outputs? table[] 1-4 encodings of the same audio [[{format: wav, bit_depth: 32}]]
 ---@field normalize? table
 ---@field limit_true_peak_db? number A true-peak ceiling (dBTP)
@@ -1268,9 +1400,9 @@ q = nil
 ---@field start_beat? number
 ---@field end_beat? number
 ---@field tail_s? number Seconds rendered past the end
----@field pattern? number|string File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions}
+---@field pattern? string|table File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions}
 ---@field sample_rate? integer Default: the project rate
----@field channels? number|string 1 (mono, (L+R)/2), 2 (stereo) or "track" (stems: mono files for 1-channel tracks)
+---@field channels? string|string|"track" 1 (mono, (L+R)/2), 2 (stereo) or "track" (stems: mono files for 1-channel tracks)
 ---@field outputs? table[] 1-4 encodings of the same audio [[{format: wav, bit_depth: 32}]]
 ---@field normalize? table
 ---@field limit_true_peak_db? number A true-peak ceiling (dBTP)
@@ -1306,9 +1438,9 @@ q = nil
 ---@field start_beat? number
 ---@field end_beat? number
 ---@field tail_s? number Seconds rendered past the end
----@field pattern? number|string File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions}
+---@field pattern? string|table File name pattern (session-model §7.3; may contain / for subfolders), for every source or as {mix, stems, regions}
 ---@field sample_rate? integer Default: the project rate
----@field channels? number|string 1 (mono, (L+R)/2), 2 (stereo) or "track" (stems: mono files for 1-channel tracks)
+---@field channels? string|string|"track" 1 (mono, (L+R)/2), 2 (stereo) or "track" (stems: mono files for 1-channel tracks)
 ---@field outputs? table[] 1-4 encodings of the same audio [[{format: wav, bit_depth: 32}]]
 ---@field normalize? table
 ---@field limit_true_peak_db? number A true-peak ceiling (dBTP)
@@ -1352,16 +1484,21 @@ q = nil
 
 ---@class Steppe.route_add_result
 ---@field id string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.route_learn_list_args
 ---@field route? string
 
 ---@class Steppe.route_learn_list_result
 ---@field learn any
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.route_learn_remove_args
 ---@field route string
 ---@field param string
+
+---@class Steppe.route_learn_remove_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.route_learn_set_args
 ---@field route string
@@ -1373,12 +1510,17 @@ q = nil
 ---@class Steppe.route_learn_set_result
 ---@field param string
 ---@field control string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.route_list_result
 ---@field routes table[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.route_remove_args
 ---@field route string
+
+---@class Steppe.route_remove_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.route_set_args
 ---@field route string
@@ -1394,6 +1536,9 @@ q = nil
 ---@field phase_invert? boolean
 ---@field channels? table Which source channel feeds which destination channel, pair by pair: {from: [1, 2], to: [2, 1]} swaps, {from: [1, 1], to: [1, 2]} sends the left channel to both, {from: [], to: []} restores the identity
 
+---@class Steppe.route_set_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
+
 ---@class Steppe.script_run_args
 ---@field code string The Lua source. It may return a value: what it returns is converted to JSON (tables with string keys are objects, sequences are arrays).
 ---@field name? string The script's name: its commands are recorded as `lua:<name>` and its state (globals, subscriptions) is kept between runs of the same name. Defaults to the caller's client name.
@@ -1406,14 +1551,19 @@ q = nil
 ---@field log_dropped integer Cumulative lines evicted from this script's retained log.
 ---@field script string The name it ran under.
 ---@field instructions integer Lua instructions the run executed.
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.session_describe_result
 ---@field text string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.take_activate_args
 ---@field item string
 ---@field take? string
 ---@field index? integer
+
+---@class Steppe.take_activate_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.take_add_args
 ---@field item string
@@ -1421,6 +1571,7 @@ q = nil
 
 ---@class Steppe.take_add_result
 ---@field id string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.take_extract_args
 ---@field take string
@@ -1429,6 +1580,7 @@ q = nil
 
 ---@class Steppe.take_extract_result
 ---@field item string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.take_hits_detect_args
 ---@field takes string[]
@@ -1436,6 +1588,7 @@ q = nil
 
 ---@class Steppe.take_hits_detect_result
 ---@field job string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.take_hits_set_args
 ---@field take string
@@ -1449,6 +1602,7 @@ q = nil
 
 ---@class Steppe.take_list_result
 ---@field takes table[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.take_remove_args
 ---@field take string
@@ -1456,6 +1610,7 @@ q = nil
 ---@class Steppe.take_remove_result
 ---@field item string
 ---@field item_removed boolean
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.take_set_args
 ---@field take string
@@ -1469,6 +1624,9 @@ q = nil
 ---@field preserve_pitch? boolean Keep the source's pitch when the playrate changes (the default). With pitch_mode "resample" the pitch follows the speed.
 ---@field pitch? number|string Pitch offset in semitones. Stretched when the pitch is preserved, otherwise a further speed factor of 2^(pitch/12). Quantity strings are range-checked by the server.
 ---@field pitch_mode? "resample"|"signalsmith" Time-stretch algorithm: "signalsmith" (pitch-preserving, the default) or "resample" (varispeed).
+
+---@class Steppe.take_set_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.take_stretch_add_args
 ---@field take string
@@ -1489,6 +1647,7 @@ q = nil
 
 ---@class Steppe.tempo_set_result
 ---@field count integer
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.time_convert_args
 ---@field seconds? number
@@ -1501,13 +1660,20 @@ q = nil
 ---@field bar integer
 ---@field beat_in_bar integer
 ---@field fraction number
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.timesig_remove_args
 ---@field bar integer
 
+---@class Steppe.timesig_remove_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
+
 ---@class Steppe.timesig_set_args
 ---@field bar integer
 ---@field meter string
+
+---@class Steppe.timesig_set_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.track_add_args
 ---@field type? "channel"|"buss"|"master" (default: "channel")
@@ -1518,6 +1684,7 @@ q = nil
 
 ---@class Steppe.track_add_result
 ---@field track string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.track_describe_args
 ---@field track string
@@ -1535,12 +1702,14 @@ q = nil
 ---@field at number
 ---@field effective_mute boolean
 ---@field solo_silenced boolean
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.track_duplicate_args
 ---@field tracks string[]
 
 ---@class Steppe.track_duplicate_result
 ---@field tracks string[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.track_freeze_args
 ---@field track string
@@ -1558,10 +1727,14 @@ q = nil
 
 ---@class Steppe.track_learn_list_result
 ---@field learn any
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.track_learn_remove_args
 ---@field track string
 ---@field param string
+
+---@class Steppe.track_learn_remove_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.track_learn_set_args
 ---@field track string
@@ -1573,20 +1746,28 @@ q = nil
 ---@class Steppe.track_learn_set_result
 ---@field param string
 ---@field control string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.track_list_args
 ---@field at? number
 
 ---@class Steppe.track_list_result
 ---@field tracks table[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.track_move_args
 ---@field track string
 ---@field parent? string
 ---@field index? integer
 
+---@class Steppe.track_move_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
+
 ---@class Steppe.track_remove_args
 ---@field track string Track id, e.g. "tr_1".
+
+---@class Steppe.track_remove_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.track_set_args
 ---@field bypass_groups? boolean (default: false)
@@ -1614,14 +1795,19 @@ q = nil
 ---@field hw_output? integer[] Masters: the device outputs the main pair plays to: [l, r], [mono] or [] for none (engine.inputs lists them). Default: tr_0 [1, 2], other masters []
 ---@field lane_mute? boolean Masters: silence the master's own items (its prints) and nothing else
 
+---@class Steppe.track_set_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
+
 ---@class Steppe.track_template_delete_args
 ---@field name string
 
 ---@class Steppe.track_template_delete_result
 ---@field path string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.track_template_list_result
 ---@field templates table[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.track_template_load_args
 ---@field name? string
@@ -1631,6 +1817,7 @@ q = nil
 ---@class Steppe.track_template_load_result
 ---@field track string
 ---@field effects string[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.track_template_save_args
 ---@field track string
@@ -1640,6 +1827,7 @@ q = nil
 ---@class Steppe.track_template_save_result
 ---@field path string
 ---@field effects integer
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.track_unfreeze_args
 ---@field track string
@@ -1654,6 +1842,7 @@ q = nil
 ---@field loop table
 ---@field punch table
 ---@field recorded? table[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.transport_loop_args
 ---@field enabled? boolean
@@ -1669,6 +1858,7 @@ q = nil
 ---@field enabled boolean
 ---@field start_seconds number
 ---@field end_seconds number
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.transport_metronome_args
 ---@field enabled? boolean
@@ -1681,6 +1871,7 @@ q = nil
 ---@field volume_db number
 ---@field count_in_bars integer
 ---@field count_in_playback boolean
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.transport_pause_result
 ---@field playing boolean
@@ -1692,6 +1883,7 @@ q = nil
 ---@field loop table
 ---@field punch table
 ---@field recorded? table[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.transport_play_result
 ---@field playing boolean
@@ -1703,12 +1895,17 @@ q = nil
 ---@field loop table
 ---@field punch table
 ---@field recorded? table[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
+
+---@class Steppe.transport_playrate_apply_to_tempo_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.transport_playrate_get_result
 ---@field requested_rate number
 ---@field effective_rate number
 ---@field preserve_pitch boolean
 ---@field envelope? string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.transport_playrate_set_args
 ---@field rate? number
@@ -1719,6 +1916,7 @@ q = nil
 ---@field effective_rate number
 ---@field preserve_pitch boolean
 ---@field envelope? string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.transport_punch_args
 ---@field enabled? boolean
@@ -1734,6 +1932,7 @@ q = nil
 ---@field enabled boolean
 ---@field start_seconds number
 ---@field end_seconds number
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.transport_record_result
 ---@field playing boolean
@@ -1745,6 +1944,7 @@ q = nil
 ---@field loop table
 ---@field punch table
 ---@field recorded? table[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.transport_seek_args
 ---@field seconds? number
@@ -1761,6 +1961,7 @@ q = nil
 ---@field loop table
 ---@field punch table
 ---@field recorded? table[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.transport_stop_result
 ---@field playing boolean
@@ -1772,6 +1973,7 @@ q = nil
 ---@field loop table
 ---@field punch table
 ---@field recorded? table[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.vca_add_args
 ---@field group string
@@ -1780,15 +1982,22 @@ q = nil
 ---@field solo? boolean
 ---@field followers? string[]
 
+---@class Steppe.vca_add_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
+
 ---@class Steppe.vca_learn_list_args
 ---@field group? string
 
 ---@class Steppe.vca_learn_list_result
 ---@field learn any
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.vca_learn_remove_args
 ---@field group string
 ---@field param string
+
+---@class Steppe.vca_learn_remove_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.vca_learn_set_args
 ---@field group string
@@ -1800,14 +2009,21 @@ q = nil
 ---@class Steppe.vca_learn_set_result
 ---@field param string
 ---@field control string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.vca_members_set_args
 ---@field group string
 ---@field tracks? string[]
 ---@field vcas? string[]
 
+---@class Steppe.vca_members_set_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
+
 ---@class Steppe.vca_remove_args
 ---@field group string
+
+---@class Steppe.vca_remove_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.vca_set_args
 ---@field group string
@@ -1815,6 +2031,9 @@ q = nil
 ---@field mute? boolean
 ---@field solo? boolean
 ---@field followers? string[]
+
+---@class Steppe.vca_set_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.analyze
 ---@field compare fun(args: Steppe.analyze_compare_args): Steppe.analyze_compare_result Compare two renders or track outputs by perceptual descriptors.
@@ -1833,13 +2052,13 @@ q = nil
 ---@field add fun(args: Steppe.autoitem_add_args): table Put an automation item on an envelope: a block that replaces it there.
 ---@field duplicate fun(args: Steppe.autoitem_duplicate_args): table Copy an automation item (pooled by default: edits to either reach both).
 ---@field list fun(args?: Steppe.autoitem_list_args): table List automation items (all, or one envelope's), with their points.
----@field remove fun(args: Steppe.autoitem_remove_args): table Remove an automation item (the envelope under it plays again).
+---@field remove fun(args: Steppe.autoitem_remove_args): Steppe.autoitem_remove_result Remove an automation item (the envelope under it plays again).
 ---@field set fun(args: Steppe.autoitem_set_args): table Move, resize, loop, scale or rewrite an automation item.
----@field unpool fun(args: Steppe.autoitem_unpool_args): table Take an automation item out of its pool (its points stay).
+---@field unpool fun(args: Steppe.autoitem_unpool_args): Steppe.autoitem_unpool_result Take an automation item out of its pool (its points stay).
 
 ---@class Steppe.branch
 ---@field create fun(args: Steppe.branch_create_args): Steppe.branch_create_result Start a branch from a branch's head or an earlier version, and switch to it.
----@field delete fun(args: Steppe.branch_delete_args): table Delete a branch (not main, not the current one).
+---@field delete fun(args: Steppe.branch_delete_args): Steppe.branch_delete_result Delete a branch (not main, not the current one).
 ---@field diff fun(args: Steppe.branch_diff_args): Steppe.branch_diff_result What differs between two branch heads: objects added, removed, changed (fields).
 ---@field list fun(): Steppe.branch_list_result List branches and the current one.
 ---@field merge fun(args: Steppe.branch_merge_args): Steppe.branch_merge_result Merge a branch into another (default: main) by replaying its edits.
@@ -1866,13 +2085,13 @@ q = nil
 ---@field inputs fun(): table The device's audio inputs, MIDI devices and the outputs masters play to.
 ---@field start fun(args?: Steppe.engine_start_args): Steppe.engine_start_result Start playback through JACK, native PortAudio, or a device-free dummy.
 ---@field status fun(): Steppe.engine_status_result Real-time engine state: backend, rate, block, device period, latency, xruns.
----@field stop fun(): table Stop real-time playback and release the audio device.
+---@field stop fun(): Steppe.engine_stop_result Stop real-time playback and release the audio device.
 
 ---@class Steppe.env
 ---@field add fun(args: Steppe.env_add_args): Steppe.env_add_result Automate a parameter: a track's or route's mixer control, or a plugin's.
 ---@field list fun(args?: Steppe.env_list_args): Steppe.env_list_result List envelopes (optionally of one track, route or plugin).
----@field remove fun(args: Steppe.env_remove_args): table Remove an envelope (the parameter returns to its set value).
----@field set fun(args: Steppe.env_set_args): table Set an envelope's options: active (heard), mode (read, touch, latch, write).
+---@field remove fun(args: Steppe.env_remove_args): Steppe.env_remove_result Remove an envelope (the parameter returns to its set value).
+---@field set fun(args: Steppe.env_set_args): Steppe.env_set_result Set an envelope's options: active (heard), mode (read, touch, latch, write).
 
 ---@class Steppe.env.points
 ---@field set fun(args: Steppe.env_points_set_args): Steppe.env_points_set_result Replace an envelope's points (all of them, or those in a beat range).
@@ -1882,10 +2101,10 @@ q = nil
 ---@field copy fun(args: Steppe.fx_copy_args): Steppe.fx_copy_result Copy a plugin and its current settings into a track's FX chain.
 ---@field describe fun(args: Steppe.fx_describe_args): Steppe.fx_describe_result Describe an instance and its live problems; full adds parameters and patch.
 ---@field meters fun(args: Steppe.fx_meters_args): Steppe.fx_meters_result Read a plugin's meters and readouts, playing now or as a render ended.
----@field move fun(args: Steppe.fx_move_args): table Move a plugin within a track chain or to another track.
----@field remove fun(args: Steppe.fx_remove_args): table Remove a plugin instance (and its envelopes).
----@field restart fun(args: Steppe.fx_restart_args): table Re-create a plugin instance from its saved patch/state (after a crash).
----@field set fun(args: Steppe.fx_set_args): table Set instance options: bypass, offline, wet (%), label, isolation, pins.
+---@field move fun(args: Steppe.fx_move_args): Steppe.fx_move_result Move a plugin within a track chain or to another track.
+---@field remove fun(args: Steppe.fx_remove_args): Steppe.fx_remove_result Remove a plugin instance (and its envelopes).
+---@field restart fun(args: Steppe.fx_restart_args): Steppe.fx_restart_result Re-create a plugin instance from its saved patch/state (after a crash).
+---@field set fun(args: Steppe.fx_set_args): Steppe.fx_set_result Set instance options: bypass, offline, wet (%), label, isolation, pins.
 
 ---@class Steppe.fx.chain
 ---@field delete fun(args: Steppe.fx_chain_delete_args): Steppe.fx_chain_delete_result Delete a saved FX chain preset by name.
@@ -1895,7 +2114,7 @@ q = nil
 
 ---@class Steppe.fx.learn
 ---@field list fun(args?: Steppe.fx_learn_list_args): Steppe.fx_learn_list_result List the MIDI controller bindings of plugin parameters.
----@field remove fun(args: Steppe.fx_learn_remove_args): table Remove a plugin parameter's MIDI controller binding.
+---@field remove fun(args: Steppe.fx_learn_remove_args): Steppe.fx_learn_remove_result Remove a plugin parameter's MIDI controller binding.
 ---@field set fun(args: Steppe.fx_learn_set_args): Steppe.fx_learn_set_result Let a MIDI controller (CC, note, pitch bend) move a plugin parameter.
 
 ---@class Steppe.fx.param
@@ -1918,12 +2137,12 @@ q = nil
 ---@field add fun(args: Steppe.group_add_args): Steppe.group_add_result Create a named track group with optional links and members.
 ---@field describe fun(args: Steppe.group_describe_args): Steppe.group_describe_result Describe a track group's membership, links and VCA ancestry.
 ---@field list fun(): Steppe.group_list_result List track groups, linked attributes and optional VCA controls.
----@field remove fun(args: Steppe.group_remove_args): table Remove a track group and its VCA, keeping its tracks.
----@field set fun(args: Steppe.group_set_args): table Change a group's name, color, links or active state.
+---@field remove fun(args: Steppe.group_remove_args): Steppe.group_remove_result Remove a track group and its VCA, keeping its tracks.
+---@field set fun(args: Steppe.group_set_args): Steppe.group_set_result Change a group's name, color, links or active state.
 ---@field targets fun(args: Steppe.group_targets_args): Steppe.group_targets_result Resolve linked tracks or matching items for an edit or selection.
 
 ---@class Steppe.group.members
----@field set fun(args: Steppe.group_members_set_args): table Replace a group's track membership; an empty array clears it.
+---@field set fun(args: Steppe.group_members_set_args): Steppe.group_members_set_result Replace a group's track membership; an empty array clears it.
 
 ---@class Steppe.history
 ---@field list fun(): Steppe.history_list_result List the current branch's recent versions (newest first).
@@ -1939,10 +2158,10 @@ q = nil
 ---@field export fun(args: Steppe.item_export_args): Steppe.item_export_result Write an item's raw audio (WAV) or its MIDI (SMF) to a file.
 ---@field heal fun(args: Steppe.item_heal_args): table Heal compatible consecutive audio pieces without rendering.
 ---@field ["mix-to-track"] fun(args: Steppe.item_mix_to_track_args): table Mix the selected items through their strips onto a new muted channel.
----@field move fun(args: Steppe.item_move_args): table Move an item in time (position in beats or bar) and/or to another track.
+---@field move fun(args: Steppe.item_move_args): Steppe.item_move_result Move an item in time (position in beats or bar) and/or to another track.
 ---@field paste fun(args: Steppe.item_paste_args): Steppe.item_paste_result Copy items as they were in a version (a clipboard) to tracks and beats.
----@field remove fun(args: Steppe.item_remove_args): table Remove an item with its takes (unpooled sources go too).
----@field set fun(args: Steppe.item_set_args): table Set an item's position, length, playback, fades, name, color, or lock.
+---@field remove fun(args: Steppe.item_remove_args): Steppe.item_remove_result Remove an item with its takes (unpooled sources go too).
+---@field set fun(args: Steppe.item_set_args): Steppe.item_set_result Set an item's position, length, playback, fades, name, color, or lock.
 ---@field split fun(args: Steppe.item_split_args): Steppe.item_split_result Split an item at a beat, optionally at the prior audio zero crossing.
 
 ---@class Steppe.item.consolidate
@@ -1964,14 +2183,14 @@ q = nil
 ---@class Steppe.marker
 ---@field add fun(args?: Steppe.marker_add_args): Steppe.marker_add_result Add a named marker in beats.
 ---@field list fun(): Steppe.marker_list_result List rulers in this project.
----@field remove fun(args: Steppe.marker_remove_args): table Remove a ruler.
----@field set fun(args: Steppe.marker_set_args): table Edit a ruler's position, name, or color.
+---@field remove fun(args: Steppe.marker_remove_args): Steppe.marker_remove_result Remove a ruler.
+---@field set fun(args: Steppe.marker_set_args): Steppe.marker_set_result Edit a ruler's position, name, or color.
 
 ---@class Steppe.midi
 ---@field edit fun(args: Steppe.midi_edit_args): table Edit a MIDI item's notes and CCs: add, remove, move, resize, velocity, quantize.
 ---@field get fun(args: Steppe.midi_get_args): Steppe.midi_get_result Read an item's MIDI as notation.
 ---@field notes fun(args: Steppe.midi_notes_args): table List a MIDI item's notes and CC points (beats from the item's start).
----@field write fun(args: Steppe.midi_write_args): table Replace an item's MIDI with notation (the item keeps its position and length).
+---@field write fun(args: Steppe.midi_write_args): Steppe.midi_write_result Replace an item's MIDI with notation (the item keeps its position and length).
 
 ---@class Steppe.module
 ---@field add fun(args: Steppe.module_add_args): table Add a module to a rack: a type with knob values.
@@ -2004,7 +2223,7 @@ q = nil
 ---@field recover fun(args?: Steppe.project_recover_args): Steppe.project_recover_result Put recordings a crash left out back into the project (one undo step).
 ---@field recoverable fun(): Steppe.project_recoverable_result List recordings a crash left out of the project.
 ---@field save fun(args?: Steppe.project_save_args): Steppe.project_save_result Save the project (canonical JSON) to its file or a new path.
----@field set fun(args?: Steppe.project_set_args): table Change project metadata (name, title, author, notes, Console 9, timebase).
+---@field set fun(args?: Steppe.project_set_args): Steppe.project_set_result Change project metadata (name, title, author, notes, Console 9, timebase).
 
 ---@class Steppe.project.template
 ---@field delete fun(args: Steppe.project_template_delete_args): Steppe.project_template_delete_result Delete a saved project template by name.
@@ -2034,8 +2253,8 @@ q = nil
 ---@class Steppe.region
 ---@field add fun(args?: Steppe.region_add_args): Steppe.region_add_result Add a named region in beats.
 ---@field list fun(): Steppe.region_list_result List rulers in this project.
----@field remove fun(args: Steppe.region_remove_args): table Remove a ruler.
----@field set fun(args: Steppe.region_set_args): table Edit a ruler's position, name, or color.
+---@field remove fun(args: Steppe.region_remove_args): Steppe.region_remove_result Remove a ruler.
+---@field set fun(args: Steppe.region_set_args): Steppe.region_set_result Edit a ruler's position, name, or color.
 
 ---@class Steppe.registry
 ---@field describe fun(args: Steppe.registry_describe_args): table Describe a command.
@@ -2064,12 +2283,12 @@ q = nil
 ---@field add fun(args: Steppe.route_add_args): Steppe.route_add_result Send audio between strips, or a Note Out to a track's instrument.
 ---@field list fun(): Steppe.route_list_result List sends with endpoints and mixer settings.
 ---@field matrix fun(): table What can be routed where: strips, plug-in keys, sends and blocked pairs.
----@field remove fun(args: Steppe.route_remove_args): table Remove a send.
----@field set fun(args: Steppe.route_set_args): table Change a route's endpoints, tap, level, pan, mute, or channel map.
+---@field remove fun(args: Steppe.route_remove_args): Steppe.route_remove_result Remove a send.
+---@field set fun(args: Steppe.route_set_args): Steppe.route_set_result Change a route's endpoints, tap, level, pan, mute, or channel map.
 
 ---@class Steppe.route.learn
 ---@field list fun(args?: Steppe.route_learn_list_args): Steppe.route_learn_list_result List the MIDI controller bindings of send controls.
----@field remove fun(args: Steppe.route_learn_remove_args): table Remove a send control's MIDI controller binding.
+---@field remove fun(args: Steppe.route_learn_remove_args): Steppe.route_learn_remove_result Remove a send control's MIDI controller binding.
 ---@field set fun(args: Steppe.route_learn_set_args): Steppe.route_learn_set_result Let a MIDI controller move a send's level, pan, mute or tap.
 
 ---@class Steppe.script
@@ -2079,12 +2298,12 @@ q = nil
 ---@field describe fun(): Steppe.session_describe_result Describe the whole session in compact text (tracks, items, fx, routes).
 
 ---@class Steppe.take
----@field activate fun(args: Steppe.take_activate_args): table Choose the take heard from an item.
+---@field activate fun(args: Steppe.take_activate_args): Steppe.take_activate_result Choose the take heard from an item.
 ---@field add fun(args: Steppe.take_add_args): Steppe.take_add_result Add a take to an item, optionally copied from another take of that item.
 ---@field extract fun(args: Steppe.take_extract_args): Steppe.take_extract_result Take a take out of its item into an item of its own on any channel.
 ---@field list fun(args: Steppe.take_list_args): Steppe.take_list_result List the takes of an item and identify its active take.
 ---@field remove fun(args: Steppe.take_remove_args): Steppe.take_remove_result Delete a take from its item (the item goes with its last take).
----@field set fun(args: Steppe.take_set_args): table Set take gain, pan, channel mode, name, source offset, or playrate and pitch.
+---@field set fun(args: Steppe.take_set_args): Steppe.take_set_result Set take gain, pan, channel mode, name, source offset, or playrate and pitch.
 
 ---@class Steppe.take.hits
 ---@field detect fun(args: Steppe.take_hits_detect_args): Steppe.take_hits_detect_result Detect transient candidates in audio takes, then commit one undoable edit.
@@ -2102,8 +2321,8 @@ q = nil
 ---@field convert fun(args?: Steppe.time_convert_args): Steppe.time_convert_result Convert a seconds, beat, or bar position to all three time domains.
 
 ---@class Steppe.timesig
----@field remove fun(args: Steppe.timesig_remove_args): table Remove the meter change at a bar: the meter before it continues.
----@field set fun(args: Steppe.timesig_set_args): table Set the meter from a bar on, e.g. {"bar": 9, "meter": "3/4"}.
+---@field remove fun(args: Steppe.timesig_remove_args): Steppe.timesig_remove_result Remove the meter change at a bar: the meter before it continues.
+---@field set fun(args: Steppe.timesig_set_args): Steppe.timesig_set_result Set the meter from a bar on, e.g. {"bar": 9, "meter": "3/4"}.
 
 ---@class Steppe.track
 ---@field add fun(args?: Steppe.track_add_args): Steppe.track_add_result Add a channel, buss or master strip and return its id.
@@ -2111,9 +2330,9 @@ q = nil
 ---@field duplicate fun(args: Steppe.track_duplicate_args): Steppe.track_duplicate_result Duplicate channels or busses with their FX, items, sends and automation.
 ---@field freeze fun(args: Steppe.track_freeze_args): table Freeze a channel's items and FX to pre-fader audio and release its plugins.
 ---@field list fun(args?: Steppe.track_list_args): Steppe.track_list_result List tracks in tree order with their level, mute/solo, fx and items.
----@field move fun(args: Steppe.track_move_args): table Move a track under another track or reorder it among its siblings.
----@field remove fun(args: Steppe.track_remove_args): table Remove a track with its items, fx, routes and envelopes (not a folder).
----@field set fun(args: Steppe.track_set_args): table Set track fields: name, type, volume, pan, mute, solo, polarity, mono, arming.
+---@field move fun(args: Steppe.track_move_args): Steppe.track_move_result Move a track under another track or reorder it among its siblings.
+---@field remove fun(args: Steppe.track_remove_args): Steppe.track_remove_result Remove a track with its items, fx, routes and envelopes (not a folder).
+---@field set fun(args: Steppe.track_set_args): Steppe.track_set_result Set track fields: name, type, volume, pan, mute, solo, polarity, mono, arming.
 ---@field unfreeze fun(args: Steppe.track_unfreeze_args): table Restore a frozen channel's original items and plugin state.
 
 ---@class Steppe.track.freeze
@@ -2121,7 +2340,7 @@ q = nil
 
 ---@class Steppe.track.learn
 ---@field list fun(args?: Steppe.track_learn_list_args): Steppe.track_learn_list_result List the MIDI controller bindings of track controls.
----@field remove fun(args: Steppe.track_learn_remove_args): table Remove a track control's MIDI controller binding.
+---@field remove fun(args: Steppe.track_learn_remove_args): Steppe.track_learn_remove_result Remove a track control's MIDI controller binding.
 ---@field set fun(args: Steppe.track_learn_set_args): Steppe.track_learn_set_result Let a MIDI controller move a track's fader, pan, mute, solo or arm.
 
 ---@class Steppe.track.template
@@ -2142,22 +2361,22 @@ q = nil
 ---@field stop fun(): Steppe.transport_stop_result Stop playback and return to where it started (ends a recording).
 
 ---@class Steppe.transport.playrate
----@field ["apply-to-tempo"] fun(): table Scale every tempo-point BPM by master playrate, then reset the rate to 1.
+---@field ["apply-to-tempo"] fun(): Steppe.transport_playrate_apply_to_tempo_result Scale every tempo-point BPM by master playrate, then reset the rate to 1.
 ---@field get fun(): Steppe.transport_playrate_get_result Get requested/effective master playrate, pitch mode and active envelope.
 ---@field set fun(args?: Steppe.transport_playrate_set_args): Steppe.transport_playrate_set_result Set the project's master playrate ratio and preserve-pitch flag.
 
 ---@class Steppe.vca
----@field add fun(args: Steppe.vca_add_args): table Add an audio-free VCA fader to a track group.
----@field remove fun(args: Steppe.vca_remove_args): table Remove a VCA and its automation, keeping the track group.
----@field set fun(args: Steppe.vca_set_args): table Set a VCA's level, mute or solo without moving member faders.
+---@field add fun(args: Steppe.vca_add_args): Steppe.vca_add_result Add an audio-free VCA fader to a track group.
+---@field remove fun(args: Steppe.vca_remove_args): Steppe.vca_remove_result Remove a VCA and its automation, keeping the track group.
+---@field set fun(args: Steppe.vca_set_args): Steppe.vca_set_result Set a VCA's level, mute or solo without moving member faders.
 
 ---@class Steppe.vca.learn
 ---@field list fun(args?: Steppe.vca_learn_list_args): Steppe.vca_learn_list_result List the MIDI controller bindings of VCA controls.
----@field remove fun(args: Steppe.vca_learn_remove_args): table Remove a VCA control's MIDI controller binding.
+---@field remove fun(args: Steppe.vca_learn_remove_args): Steppe.vca_learn_remove_result Remove a VCA control's MIDI controller binding.
 ---@field set fun(args: Steppe.vca_learn_set_args): Steppe.vca_learn_set_result Let a MIDI controller move a VCA's fader, mute or solo.
 
 ---@class Steppe.vca.members
----@field set fun(args: Steppe.vca_members_set_args): table Replace the tracks or nested VCAs controlled by a VCA.
+---@field set fun(args: Steppe.vca_members_set_args): Steppe.vca_members_set_result Replace the tracks or nested VCAs controlled by a VCA.
 
 ---@class Steppe
 ---@field analyze Steppe.analyze Commands named analyze.*

@@ -29,6 +29,26 @@
         },
         "summary": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["notable", "ltas_rms_db", "summary"],
@@ -288,7 +308,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -391,7 +432,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -435,7 +497,29 @@
       "additionalProperties": false
     },
     "outputSchema": {
-      "type": "object"
+      "type": "object",
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      }
     },
     "annotations": {
       "readOnlyHint": false,
@@ -478,6 +562,26 @@
       "properties": {
         "name": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["name"],
@@ -508,7 +612,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -563,6 +688,26 @@
             "required": ["op", "id", "fields"],
             "additionalProperties": false
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["changes"],
@@ -596,6 +741,26 @@
         },
         "current": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["branches", "current"],
@@ -640,7 +805,27 @@
         "version": {
           "type": "integer"
         },
-        "remapped": {}
+        "remapped": {},
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
       },
       "required": ["fast_forward", "up_to_date", "version", "remapped"],
       "additionalProperties": false
@@ -710,6 +895,26 @@
       "properties": {
         "name": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["name"],
@@ -956,6 +1161,26 @@
           },
           "required": ["id", "name", "kind", "params"],
           "additionalProperties": false
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["ok", "diagnostics"],
@@ -1143,6 +1368,26 @@
         "listed": {
           "type": "boolean",
           "description": "plugin.list shows it (the script player is on the plugin path)"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["name", "path", "ok", "diagnostics", "listed"],
@@ -1215,6 +1460,26 @@
         "notices": {
           "type": "string",
           "description": "clap: the licenses to ship with the plugin"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["path", "id", "name", "format"],
@@ -1254,6 +1519,26 @@
         },
         "source": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["name", "path", "source"],
@@ -1313,6 +1598,26 @@
             "required": ["name", "path", "ok", "errors"],
             "additionalProperties": false
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["library", "scripts"],
@@ -1490,6 +1795,26 @@
           "items": {
             "type": "string"
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["plugin", "path", "width", "height", "edits", "problems", "log"],
@@ -1893,6 +2218,26 @@
           "items": {
             "type": "string"
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["plugin", "sample_rate", "latency", "signals", "cpu_percent", "problems", "log"],
@@ -2064,6 +2409,26 @@
         "listed": {
           "type": "boolean",
           "description": "plugin.list shows it (the script player is on the plugin path)"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["name", "path", "ok", "diagnostics", "listed"],
@@ -2133,6 +2498,26 @@
             ],
             "additionalProperties": false
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["devices"],
@@ -2405,7 +2790,27 @@
         "warnings": {
           "type": "array",
           "items": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": ["code", "message", "path"],
+                "additionalProperties": false
+              }
+            ]
           }
         },
         "memory_lock": {
@@ -2757,7 +3162,27 @@
         "warnings": {
           "type": "array",
           "items": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": ["code", "message", "path"],
+                "additionalProperties": false
+              }
+            ]
           }
         },
         "memory_lock": {
@@ -2917,7 +3342,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -3014,6 +3460,26 @@
         },
         "points": {
           "type": "integer"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["env", "points"],
@@ -3074,6 +3540,26 @@
             "required": ["env", "target", "param", "points", "active", "visible", "mode"],
             "additionalProperties": false
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["envelopes"],
@@ -3150,6 +3636,26 @@
       "properties": {
         "points": {
           "type": "integer"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["points"],
@@ -3181,7 +3687,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -3220,7 +3747,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -3282,6 +3830,26 @@
           "items": {
             "type": "string"
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["fx", "name", "semantic", "chain"],
@@ -3315,6 +3883,26 @@
       "properties": {
         "path": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["path"],
@@ -3360,6 +3948,26 @@
             "required": ["name", "path", "effects"],
             "additionalProperties": false
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["chains"],
@@ -3414,6 +4022,26 @@
           "items": {
             "type": "string"
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["effects"],
@@ -3464,6 +4092,26 @@
         "effects": {
           "type": "integer",
           "minimum": 0.0
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["path", "effects"],
@@ -3516,6 +4164,26 @@
           "items": {
             "type": "string"
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["fx", "chain"],
@@ -3585,6 +4253,26 @@
         "params_total": {
           "type": "integer",
           "description": "Plain parameters matching; at most 512 are listed."
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["plugin", "name", "description", "status_available"],
@@ -3615,7 +4303,27 @@
       "type": "object",
       "title": "fx_learn_list",
       "properties": {
-        "learn": {}
+        "learn": {},
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
       },
       "required": ["learn"],
       "additionalProperties": false
@@ -3649,7 +4357,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -3731,6 +4460,26 @@
         },
         "control": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["param", "control"],
@@ -3774,6 +4523,26 @@
         },
         "meters": {
           "description": "Read-only values by patch key (physical) or name"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["source", "meters"],
@@ -3812,7 +4581,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -3845,7 +4635,27 @@
       "type": "object",
       "title": "fx_param_result",
       "properties": {
-        "value": {}
+        "value": {},
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
       },
       "required": ["value"],
       "additionalProperties": false
@@ -3888,6 +4698,26 @@
             "type": "string"
           },
           "description": "Params set that do not apply with the new values: kept, and heard once what fx.describe full's active_when names allows it"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["changed", "description"],
@@ -3923,7 +4753,27 @@
       "type": "object",
       "title": "fx_patch_result",
       "properties": {
-        "patch": {}
+        "patch": {},
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
       },
       "required": ["patch"],
       "additionalProperties": false
@@ -3954,7 +4804,27 @@
       "type": "object",
       "title": "fx_patch_list_result",
       "properties": {
-        "patches": {}
+        "patches": {},
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
       },
       "required": ["patches"],
       "additionalProperties": false
@@ -3997,6 +4867,26 @@
             "type": "string"
           },
           "description": "Params set that do not apply with the new values: kept, and heard once what fx.describe full's active_when names allows it"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["changed", "description"],
@@ -4034,7 +4924,27 @@
       "type": "object",
       "title": "fx_patch_result",
       "properties": {
-        "patch": {}
+        "patch": {},
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
       },
       "required": ["patch"],
       "additionalProperties": false
@@ -4071,6 +4981,26 @@
       "properties": {
         "path": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["path"],
@@ -4121,6 +5051,26 @@
             "required": ["name", "source"],
             "additionalProperties": false
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["presets"],
@@ -4165,6 +5115,26 @@
         },
         "source": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["name", "source"],
@@ -4206,6 +5176,26 @@
       "properties": {
         "path": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["path"],
@@ -4237,7 +5227,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -4266,7 +5277,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -4358,7 +5390,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -4409,6 +5462,26 @@
         "group": {
           "type": "string",
           "pattern": "^gr_[0-9]+$"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["group"],
@@ -4565,6 +5638,26 @@
             "type": "string",
             "pattern": "^[a-z]{2}_[0-9]+$"
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["group", "state", "controllers"],
@@ -4726,6 +5819,26 @@
             "required": ["group", "state", "controllers"],
             "additionalProperties": false
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["groups"],
@@ -4763,7 +5876,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -4791,7 +5925,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -4835,7 +5990,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -4885,6 +6061,26 @@
             "type": "string",
             "pattern": "^[a-z]{2}_[0-9]+$"
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["tracks", "items"],
@@ -4947,6 +6143,26 @@
         },
         "budget_bytes": {
           "type": "integer"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": [
@@ -4984,6 +6200,26 @@
         },
         "label": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["version", "label"],
@@ -5014,6 +6250,26 @@
         },
         "label": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["version", "label"],
@@ -5092,7 +6348,27 @@
         "warnings": {
           "type": "array",
           "items": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": ["code", "message", "path"],
+                "additionalProperties": false
+              }
+            ]
           }
         }
       },
@@ -5138,6 +6414,26 @@
         },
         "path": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["take", "source", "path"],
@@ -5212,6 +6508,26 @@
             "type": "string"
           },
           "default": []
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["id"],
@@ -5259,6 +6575,26 @@
           "items": {
             "type": "string"
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["items", "tracks"],
@@ -5313,6 +6649,26 @@
         },
         "notes": {
           "type": "integer"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["path", "format"],
@@ -5414,7 +6770,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -5471,6 +6848,26 @@
           "items": {
             "type": "string"
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["items"],
@@ -5506,7 +6903,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -5603,7 +7021,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -5664,6 +7103,26 @@
             "type": "string"
           },
           "default": []
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["left", "right"],
@@ -5735,6 +7194,26 @@
       "properties": {
         "id": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["id"],
@@ -5792,6 +7271,26 @@
             "required": ["id", "timebase", "name", "color"],
             "additionalProperties": false
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["markers"],
@@ -5822,7 +7321,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -5860,7 +7380,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -6028,6 +7569,26 @@
       "properties": {
         "text": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["text"],
@@ -6084,7 +7645,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -6773,6 +8355,26 @@
           },
           "required": ["failures", "warnings", "cached_modules"],
           "additionalProperties": false
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["plugins", "scan"],
@@ -6937,6 +8539,26 @@
         "job": {
           "type": "string",
           "description": "the background scan (wait: false)"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["plugins", "scan"],
@@ -6995,21 +8617,41 @@
         "warnings": {
           "type": "array",
           "items": {
-            "type": "object",
-            "title": "load_warning",
-            "properties": {
-              "code": {
-                "type": "string"
+            "anyOf": [
+              {
+                "type": "object",
+                "title": "load_warning",
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": ["code", "message", "path"],
+                "additionalProperties": false
               },
-              "message": {
-                "type": "string"
-              },
-              "path": {
-                "type": "string"
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": ["code", "message", "path"],
+                "additionalProperties": false
               }
-            },
-            "required": ["code", "message", "path"],
-            "additionalProperties": false
+            ]
           }
         }
       },
@@ -7084,21 +8726,41 @@
         "warnings": {
           "type": "array",
           "items": {
-            "type": "object",
-            "title": "load_warning",
-            "properties": {
-              "code": {
-                "type": "string"
+            "anyOf": [
+              {
+                "type": "object",
+                "title": "load_warning",
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": ["code", "message", "path"],
+                "additionalProperties": false
               },
-              "message": {
-                "type": "string"
-              },
-              "path": {
-                "type": "string"
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": ["code", "message", "path"],
+                "additionalProperties": false
               }
-            },
-            "required": ["code", "message", "path"],
-            "additionalProperties": false
+            ]
           }
         }
       },
@@ -7215,30 +8877,50 @@
         "warnings": {
           "type": "array",
           "items": {
-            "type": "object",
-            "title": "recording_warning",
-            "properties": {
-              "code": {
-                "type": "string"
+            "anyOf": [
+              {
+                "type": "object",
+                "title": "recording_warning",
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "hint": {
+                    "type": "string"
+                  },
+                  "track": {
+                    "type": "string"
+                  },
+                  "file": {
+                    "type": "string"
+                  }
+                },
+                "required": ["code", "message", "path", "hint", "track", "file"],
+                "additionalProperties": false
               },
-              "message": {
-                "type": "string"
-              },
-              "path": {
-                "type": "string"
-              },
-              "hint": {
-                "type": "string"
-              },
-              "track": {
-                "type": "string"
-              },
-              "file": {
-                "type": "string"
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": ["code", "message", "path"],
+                "additionalProperties": false
               }
-            },
-            "required": ["code", "message", "path", "hint", "track", "file"],
-            "additionalProperties": false
+            ]
           }
         }
       },
@@ -7268,30 +8950,50 @@
         "warnings": {
           "type": "array",
           "items": {
-            "type": "object",
-            "title": "recording_warning",
-            "properties": {
-              "code": {
-                "type": "string"
+            "anyOf": [
+              {
+                "type": "object",
+                "title": "recording_warning",
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "hint": {
+                    "type": "string"
+                  },
+                  "track": {
+                    "type": "string"
+                  },
+                  "file": {
+                    "type": "string"
+                  }
+                },
+                "required": ["code", "message", "path", "hint", "track", "file"],
+                "additionalProperties": false
               },
-              "message": {
-                "type": "string"
-              },
-              "path": {
-                "type": "string"
-              },
-              "hint": {
-                "type": "string"
-              },
-              "track": {
-                "type": "string"
-              },
-              "file": {
-                "type": "string"
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": ["code", "message", "path"],
+                "additionalProperties": false
               }
-            },
-            "required": ["code", "message", "path", "hint", "track", "file"],
-            "additionalProperties": false
+            ]
           }
         },
         "recordings": {
@@ -7354,21 +9056,41 @@
         "warnings": {
           "type": "array",
           "items": {
-            "type": "object",
-            "title": "save_warning",
-            "properties": {
-              "code": {
-                "type": "string"
+            "anyOf": [
+              {
+                "type": "object",
+                "title": "save_warning",
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": ["code", "message", "path"],
+                "additionalProperties": false
               },
-              "message": {
-                "type": "string"
-              },
-              "path": {
-                "type": "string"
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": ["code", "message", "path"],
+                "additionalProperties": false
               }
-            },
-            "required": ["code", "message", "path"],
-            "additionalProperties": false
+            ]
           }
         }
       },
@@ -7744,7 +9466,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -7775,6 +9518,26 @@
       "properties": {
         "path": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["path"],
@@ -7816,6 +9579,26 @@
             "required": ["name", "path"],
             "additionalProperties": false
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["templates"],
@@ -7849,6 +9632,26 @@
       "properties": {
         "name": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["name"],
@@ -7890,21 +9693,41 @@
         "warnings": {
           "type": "array",
           "items": {
-            "type": "object",
-            "title": "save_warning",
-            "properties": {
-              "code": {
-                "type": "string"
+            "anyOf": [
+              {
+                "type": "object",
+                "title": "save_warning",
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": ["code", "message", "path"],
+                "additionalProperties": false
               },
-              "message": {
-                "type": "string"
-              },
-              "path": {
-                "type": "string"
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": ["code", "message", "path"],
+                "additionalProperties": false
               }
-            },
-            "required": ["code", "message", "path"],
-            "additionalProperties": false
+            ]
           }
         }
       },
@@ -8430,6 +10253,26 @@
       "properties": {
         "id": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["id"],
@@ -8487,6 +10330,26 @@
             "required": ["id", "timebase", "name", "color"],
             "additionalProperties": false
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["regions"],
@@ -8517,7 +10380,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -8559,7 +10443,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -11302,6 +13207,26 @@
       "properties": {
         "id": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["id"],
@@ -11332,7 +13257,27 @@
       "type": "object",
       "title": "route_learn_list",
       "properties": {
-        "learn": {}
+        "learn": {},
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
       },
       "required": ["learn"],
       "additionalProperties": false
@@ -11366,7 +13311,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -11439,6 +13405,26 @@
         },
         "control": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["param", "control"],
@@ -11579,6 +13565,26 @@
             ],
             "additionalProperties": false
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["routes"],
@@ -11625,7 +13631,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -11816,7 +13843,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -11841,6 +13889,26 @@
       "properties": {
         "text": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["text"],
@@ -11879,7 +13947,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -11914,6 +14003,26 @@
       "properties": {
         "id": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["id"],
@@ -11956,6 +14065,26 @@
       "properties": {
         "item": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["item"],
@@ -12074,6 +14203,26 @@
             ],
             "additionalProperties": false
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["takes"],
@@ -12110,6 +14259,26 @@
         },
         "item_removed": {
           "type": "boolean"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["item", "item_removed"],
@@ -12228,7 +14397,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -12290,6 +14480,26 @@
       "properties": {
         "count": {
           "type": "integer"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["count"],
@@ -12343,6 +14553,26 @@
         },
         "fraction": {
           "type": "number"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["seconds", "beat", "bar", "beat_in_bar", "fraction"],
@@ -12373,7 +14603,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -12405,7 +14656,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -12453,6 +14725,26 @@
       "properties": {
         "track": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["track"],
@@ -12529,6 +14821,26 @@
         },
         "solo_silenced": {
           "type": "boolean"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": [
@@ -12581,6 +14893,26 @@
           "items": {
             "type": "string"
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["tracks"],
@@ -12637,7 +14969,27 @@
       "type": "object",
       "title": "track_learn_list",
       "properties": {
-        "learn": {}
+        "learn": {},
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
       },
       "required": ["learn"],
       "additionalProperties": false
@@ -12671,7 +15023,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -12744,6 +15117,26 @@
         },
         "control": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["param", "control"],
@@ -12924,6 +15317,26 @@
             ],
             "additionalProperties": false
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["tracks"],
@@ -12962,7 +15375,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -12991,7 +15425,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -13144,7 +15599,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -13175,6 +15651,26 @@
       "properties": {
         "path": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["path"],
@@ -13220,6 +15716,26 @@
             "required": ["name", "path", "effects"],
             "additionalProperties": false
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["templates"],
@@ -13266,6 +15782,26 @@
           "items": {
             "type": "string"
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["track", "effects"],
@@ -13311,6 +15847,26 @@
         "effects": {
           "type": "integer",
           "minimum": 0.0
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["path", "effects"],
@@ -13473,6 +16029,26 @@
             "required": ["track", "item", "take", "file", "seconds", "lost_frames", "takes"],
             "additionalProperties": false
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": [
@@ -13548,6 +16124,26 @@
         },
         "end_seconds": {
           "type": "number"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["enabled", "start_seconds", "end_seconds"],
@@ -13612,6 +16208,26 @@
         },
         "count_in_playback": {
           "type": "boolean"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["enabled", "volume_db", "count_in_bars", "count_in_playback"],
@@ -13752,6 +16368,26 @@
             "required": ["track", "item", "take", "file", "seconds", "lost_frames", "takes"],
             "additionalProperties": false
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": [
@@ -13901,6 +16537,26 @@
             "required": ["track", "item", "take", "file", "seconds", "lost_frames", "takes"],
             "additionalProperties": false
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": [
@@ -13934,7 +16590,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -13968,6 +16645,26 @@
         },
         "envelope": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["requested_rate", "effective_rate", "preserve_pitch"],
@@ -14013,6 +16710,26 @@
         },
         "envelope": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["requested_rate", "effective_rate", "preserve_pitch"],
@@ -14079,6 +16796,26 @@
         },
         "end_seconds": {
           "type": "number"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["enabled", "start_seconds", "end_seconds"],
@@ -14219,6 +16956,26 @@
             "required": ["track", "item", "take", "file", "seconds", "lost_frames", "takes"],
             "additionalProperties": false
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": [
@@ -14382,6 +17139,26 @@
             "required": ["track", "item", "take", "file", "seconds", "lost_frames", "takes"],
             "additionalProperties": false
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": [
@@ -14531,6 +17308,26 @@
             "required": ["track", "item", "take", "file", "seconds", "lost_frames", "takes"],
             "additionalProperties": false
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": [
@@ -14599,7 +17396,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -14627,7 +17445,27 @@
       "type": "object",
       "title": "vca_learn_list",
       "properties": {
-        "learn": {}
+        "learn": {},
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
       },
       "required": ["learn"],
       "additionalProperties": false
@@ -14661,7 +17499,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -14734,6 +17593,26 @@
         },
         "control": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
         }
       },
       "required": ["param", "control"],
@@ -14778,7 +17657,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -14806,7 +17706,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -14863,7 +17784,28 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "path"],
+            "additionalProperties": false
+          },
+          "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {

@@ -1,7 +1,7 @@
 # Spec: command bus, control protocol and MCP adapter
 
 **Status:** Implemented. Interface changes go through an ADR.
-**Decision record:** ADR-0007.
+**Decision record:** ADR-0007, ADR-0063.
 **Libraries:** `libs/command-bus` (`supple::cmd`), `libs/control-protocol`
 (`supple::rpc`), `mcp/` (`supple::mcp`). All run on the model thread only
 (transports marshal requests onto it). Depend on core-json and core-schema.
@@ -143,6 +143,32 @@ bad_result`, logged loudly, and a test failure in examples); log; return.
 Handler errors pass through unchanged (their own codes), with `path`
 prefixed by `/args` when it is an args path.
 
+Successful replies may have a `warnings` array. After validating the raw
+handler result and committing any transaction, dispatch appends each
+`Context::warn()` diagnostic, including argument-decoder warnings, as
+`{code: string, message: string, path: string}`. The path is preserved as
+supplied: decoder JSON Pointers are relative to the arguments object;
+handler paths identify arguments or documents as that command describes.
+An empty path is global, and non-pointer source positions are unchanged.
+
+Command-owned warnings remain first (strings and richer objects included).
+A matching command diagnostic with the same code, message and path already
+reports a context warning, so dispatch does not duplicate it. Other context
+warnings follow in emission order. An existing non-array `warnings` value
+is retained as the first array entry when context warnings are added. For
+non-object results, a warning-bearing reply is
+`{result: <original value>, warnings: [...]}`. With no context warnings,
+replies retain their original shape. Failed invocations use the existing
+structured Error contract, without a success warning payload.
+
+The registry's result JSON Schema and MCP output schemas include optional
+warning metadata (and mixed item schemas for command-owned warnings).
+`validateResult` continues to validate the raw handler output before this
+metadata is added; handlers cannot hide invalid results behind warnings.
+Lua receives the same result table, MCP emits the same object as structured
+content and JSON text, and RPC places it in the JSON-RPC `result`. This is
+an additive extension of protocol 1 (ADR-0063).
+
 ### 1.5 `batch`
 
 Registered by the library, `Kind::Edit`, `McpTool`.
@@ -177,7 +203,9 @@ Registered by the library, `Kind::Edit`, `McpTool`.
   expression language.
 - All steps are resolvable before running (`command` names checked first,
   so a misspelled step fails before anything runs).
-- Result: `{"label": …, "results": [ … one per step … ]}`.
+- Result: `{"label": …, "results": [ … one per step … ]}`. Each step's
+  warnings stay at `results[i].warnings`, including warnings from queries;
+  they are not duplicated in a batch-wide list.
 - `Query` commands are allowed inside batches (they see earlier steps'
   effects). `Action` commands are allowed only if the host declares them
   transaction-safe (the sandbox's `render`/`analyze` are).

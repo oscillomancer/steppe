@@ -1,6 +1,8 @@
 ---@meta
 -- Steppe 0.6.0 scripting reference, generated from the command registry.
 -- Do not edit: `<slug>-engine registry --lua` writes it, tools/gen/update-generated.sh regenerates it.
+-- Successful replies can include .warnings: command warnings then {code,message,path}
+-- bus diagnostics. Non-object results with bus warnings become {result=...,warnings=...}.
 -- The `q` table of a script (libs/lua-bus, ADR-0006): every command is a
 -- function, `q.run(name, args)` reaches any of them by name, `q.batch(label, body)`
 -- is one transaction, and `q.on(topic, handler)` subscribes to bus events.
@@ -16,6 +18,7 @@ q = nil
 ---@class Steppe.analyze_result
 ---@field report any
 ---@field summary string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.compare_args
 ---@field reference string A render id (rd_1) or an audio file path.
@@ -28,6 +31,7 @@ q = nil
 ---@field ltas_rms_db number
 ---@field summary string
 ---@field loss any The score the optimizer minimizes: total, per-term contributions, and the note-off_s used per side.
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.dsp_check_args
 ---@field name? string
@@ -37,6 +41,7 @@ q = nil
 ---@field ok boolean
 ---@field diagnostics table[]
 ---@field plugin? table
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.dsp_edit_args
 ---@field name string
@@ -49,6 +54,7 @@ q = nil
 ---@field diagnostics table[]
 ---@field plugin? table
 ---@field listed boolean plugin.list shows it (the script player is on the plugin path)
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.dsp_export_args
 ---@field script string a name from dsp.list
@@ -64,6 +70,7 @@ q = nil
 ---@field player? string clap: the script player it was copied from
 ---@field bytes? integer
 ---@field notices? string clap: the licenses to ship with the plugin
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.dsp_get_args
 ---@field name string
@@ -72,10 +79,12 @@ q = nil
 ---@field name string
 ---@field path string
 ---@field source string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.dsp_list_result
 ---@field library string
 ---@field scripts table[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.dsp_preview_args
 ---@field plugin? string
@@ -97,12 +106,13 @@ q = nil
 ---@field edits any what pointer changed, as a merge patch
 ---@field problems string[]
 ---@field log string[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.dsp_test_args
 ---@field plugin? string
 ---@field script? string
 ---@field patch? any
----@field signals? "sine"|"sweep"|"impulse"|"noise"|"silence"|"notes"|"note"|"file"[] default: effects five, or file with audio_file; instruments three, or notes and silence with custom notes
+---@field signals? ("sine"|"sweep"|"impulse"|"noise"|"silence"|"notes"|"note"|"file")[] default: effects five, or file with audio_file; instruments three, or notes and silence with custom notes
 ---@field audio_file? string the absolute path of a WAV, FLAC or MP3 (10 minutes at most) the file signal plays through an effect
 ---@field automation? table[] discrete physical-value changes on every signal
 ---@field sidechain? table timed generated key input
@@ -122,6 +132,7 @@ q = nil
 ---@field cpu_percent number of real time, measured
 ---@field problems string[]
 ---@field log string[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.dsp_write_args
 ---@field name string the script's folder and file name
@@ -134,6 +145,7 @@ q = nil
 ---@field diagnostics table[]
 ---@field plugin? table
 ---@field listed boolean plugin.list shows it (the script player is on the plugin path)
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.job_cancel_args
 ---@field job string
@@ -154,6 +166,7 @@ q = nil
 
 ---@class Steppe.masking_result
 ---@field result any
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.optimize_start_args
 ---@field instance string
@@ -171,6 +184,7 @@ q = nil
 ---@field status string
 ---@field params string[]
 ---@field render string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.param_get_args
 ---@field instance string Instance id from plugin.load, e.g. "in_1".
@@ -178,6 +192,7 @@ q = nil
 
 ---@class Steppe.param_get_result
 ---@field values any
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.param_set_args
 ---@field instance string Instance id from plugin.load, e.g. "in_1".
@@ -185,6 +200,7 @@ q = nil
 
 ---@class Steppe.param_set_result
 ---@field values any
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.patch_get_args
 ---@field instance string Instance id from plugin.load, e.g. "in_1".
@@ -192,6 +208,7 @@ q = nil
 
 ---@class Steppe.patch_get_result
 ---@field patch any
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.patch_merge_args
 ---@field instance string Instance id from plugin.load, e.g. "in_1".
@@ -201,6 +218,7 @@ q = nil
 ---@field changed any
 ---@field description string
 ---@field inactive? string[] Params set that do not apply now
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.patch_set_args
 ---@field instance string Instance id from plugin.load, e.g. "in_1".
@@ -208,6 +226,7 @@ q = nil
 
 ---@class Steppe.patch_set_result
 ---@field description string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.plugin_describe_args
 ---@field instance string Instance id from plugin.load, e.g. "in_1".
@@ -224,6 +243,7 @@ q = nil
 ---@field status_available boolean The instance supplied its current problems
 ---@field problems? any Current plugin problems: code, message, scope, line when known, hint, silent; scope host when unreadable
 ---@field inactive? string[] Parameters that do not apply now
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.plugin_list_args
 ---@field filter? string Text to match in the id or name.
@@ -232,6 +252,7 @@ q = nil
 ---@class Steppe.plugin_list_result
 ---@field plugins table[]
 ---@field scan table
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.plugin_load_args
 ---@field plugin string Plugin id or .clap path.
@@ -242,12 +263,14 @@ q = nil
 ---@field name string
 ---@field semantic boolean
 ---@field chain string[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.plugin_remove_args
 ---@field instance string Instance id from plugin.load, e.g. "in_1".
 
 ---@class Steppe.plugin_remove_result
 ---@field chain string[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.preset_list_args
 ---@field plugin? string
@@ -255,6 +278,7 @@ q = nil
 
 ---@class Steppe.preset_list_result
 ---@field presets table[]
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.preset_load_args
 ---@field instance string Instance id from plugin.load, e.g. "in_1".
@@ -263,6 +287,7 @@ q = nil
 
 ---@class Steppe.preset_load_result
 ---@field description string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.preset_save_args
 ---@field instance string Instance id from plugin.load, e.g. "in_1".
@@ -272,6 +297,7 @@ q = nil
 
 ---@class Steppe.preset_save_result
 ---@field path string
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.profile_evaluate_args
 ---@field source string A render id (rd_1) or an audio file path.
@@ -279,6 +305,7 @@ q = nil
 
 ---@class Steppe.profile_evaluate_result
 ---@field result any
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.registry_describe_args
 ---@field command string
@@ -307,7 +334,7 @@ q = nil
 ---@field tail_s number
 ---@field tail_capped boolean
 ---@field latency_samples integer
----@field warnings? string[]
+---@field warnings? (string|table)[]
 ---@field log? string[]
 ---@field analysis? any
 
@@ -323,12 +350,17 @@ q = nil
 ---@field log_dropped integer Cumulative lines evicted from this script's retained log.
 ---@field script string The name it ran under.
 ---@field instructions integer Lua instructions the run executed.
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.session_get_result
 ---@field settings any
 ---@field chain any
 ---@field instances any
 ---@field renders any
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
+
+---@class Steppe.session_reset_result
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.session_set_args
 ---@field sample_rate? number|string Quantity strings are range-checked by the server.
@@ -339,6 +371,7 @@ q = nil
 
 ---@class Steppe.session_set_result
 ---@field settings any
+---@field warnings? table[] Command warnings followed by bus diagnostics {code, message, path}; absent when none.
 
 ---@class Steppe.dsp
 ---@field check fun(args?: Steppe.dsp_check_args): Steppe.dsp_check_result Compile a DSP script without saving it; return its diagnostics.
@@ -392,7 +425,7 @@ q = nil
 
 ---@class Steppe.session
 ---@field get fun(): Steppe.session_get_result Show the session: settings, chain, instances and renders.
----@field reset fun(): table Unload every plugin, delete renders and restore default settings.
+---@field reset fun(): Steppe.session_reset_result Unload every plugin, delete renders and restore default settings.
 ---@field set fun(args?: Steppe.session_set_args): Steppe.session_set_result Change session settings (rate, block size, tempo, meter, tail limit).
 
 ---@class Steppe

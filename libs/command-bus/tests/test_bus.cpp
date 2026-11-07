@@ -541,3 +541,134 @@ TEST_CASE("job publication wakes outside the store lock") {
     REQUIRE(events.size() == 1);
     CHECK(events[0].first == "job.done");
 }
+
+TEST_CASE("context and decoder warnings reach successful replies without weakening validation") {
+    auto registry = makeRegistry();
+    auto amount = schema::object<Amount>("warn_args")
+                      .field("value", &Amount::value, schema::integerOf<int>())
+                      .build();
+    auto exported = amount.jsonSchema();
+    schema::Schema<Amount> decoding(
+        "warn_args",
+        [amount](const json::Value& v, Amount& out, schema::DecodeCtx& ctx,
+                 const std::string& path) {
+            if (!amount.decodeInto(v, out, ctx, path)) return false;
+            if (ctx.warnings)
+                ctx.warnings->push_back({"args.coerced", "argument was normalized", "/value"});
+            return true;
+        },
+        [amount](const Amount& out) { return amount.encode(out); }, exported);
+    Command<Amount, Count> command;
+    command.name = "toy.warn";
+    command.kind = Kind::Edit;
+    command.exposure = Exposure::Internal;
+    command.summary = "Return a successful edit with diagnostics.";
+    command.args = decoding;
+    command.result = schema::object<Count>("closed_count")
+                         .field("count", &Count::count, schema::integerOf<int>())
+                         .build();
+    command.run = [](const Amount& a, Context& ctx) -> Result<Count> {
+        ctx.warn("toy.adjusted", "count adjusted");
+        return Count{ctx.service<Toy>().count += a.value};
+    };
+    registry.add(std::move(command));
+    FakeHost host;
+    Dispatcher dispatcher(registry, host);
+    auto result = dispatcher.execute({"toy.warn", obj(R"({"value":3})"), testOrigin});
+    REQUIRE(result);
+    CHECK((*result)["count"] == 3);
+    REQUIRE((*result)["warnings"].size() == 2);
+    CHECK((*result)["warnings"].at(0).find("code")->asString() == "args.coerced");
+    CHECK((*result)["warnings"].at(0).find("path")->asString() == "/value");
+    CHECK((*result)["warnings"].at(1).find("code")->asString() == "toy.adjusted");
+    CHECK(host.commits == 1);
+    CHECK(registry.find("toy.warn")->resultSchema.find("properties")->find("warnings") != nullptr);
+    // The handler was validated against its closed schema before diagnostics
+    // were appended. A later call has its own fresh context.
+    auto quiet = dispatcher.execute({"toy.add", obj(R"({"value":1})"), testOrigin});
+    REQUIRE(quiet);
+    CHECK(quiet->find("warnings") == nullptr);
+    auto batch = dispatcher.execute(
+        {"batch",
+         obj(R"({"steps":[{"command":"toy.warn","args":{"value":2}},{"command":"toy.add","args":{"value":1}}]})"),
+         testOrigin});
+    REQUIRE(batch);
+    CHECK(batch->find("warnings") == nullptr);
+    CHECK((*batch)["results"].at(0).find("warnings")->size() == 2);
+    CHECK((*batch)["results"].at(1).find("warnings") == nullptr);
+}
+
+TEST_CASE("context warnings merge command diagnostics and preserve non-object results") {
+    auto registry = makeRegistry();
+    Command<NoArgs, json::Value> command;
+    command.name = "toy.diagnostics";
+    command.exposure = Exposure::Internal;
+    command.summary = "Return command-owned warnings.";
+    command.args = schema::object<NoArgs>("no_args").build();
+    command.result = schema::any();
+    command.run = [](const NoArgs&, Context& ctx) -> Result<json::Value> {
+        ctx.warn("already", "already reported", "/file/thing");
+        ctx.warn("additional", "second diagnostic", "4:2");
+        return obj(
+            R"({"ok":true,"warnings":["legacy",{"path":"/file/thing","code":"already","message":"already reported","severity":"warning"}]})");
+    };
+    registry.add(std::move(command));
+    FakeHost host;
+    Dispatcher dispatcher(registry, host);
+    auto result = dispatcher.execute({"toy.diagnostics", obj("{}"), testOrigin});
+    REQUIRE(result);
+    REQUIRE((*result)["warnings"].size() == 3);
+    CHECK((*result)["warnings"].at(0) == "legacy");
+    CHECK((*result)["warnings"].at(1).find("severity")->asString() == "warning");
+    CHECK((*result)["warnings"].at(2).find("path")->asString() == "4:2");
+    Command<NoArgs, int> scalar;
+    scalar.name = "toy.scalar";
+    scalar.exposure = Exposure::Internal;
+    scalar.summary = "Return a scalar with a warning.";
+    scalar.args = schema::object<NoArgs>("no_args").build();
+    scalar.result = schema::integerOf<int>();
+    scalar.run = [](const NoArgs&, Context& ctx) -> Result<int> {
+        ctx.warn("scalar.warning", "scalar result");
+        return 7;
+    };
+    registry.add(std::move(scalar));
+    result = dispatcher.execute({"toy.scalar", obj("{}"), testOrigin});
+    REQUIRE(result);
+    CHECK((*result)["result"] == 7);
+    REQUIRE((*result)["warnings"].size() == 1);
+    CHECK((*result)["warnings"].at(0).find("path")->asString().empty());
+}
+
+TEST_CASE("warning result schemas extend typed command warning arrays") {
+    struct ResultWithWarnings {
+        std::vector<std::string> warnings;
+    };
+    Registry registry;
+    Command<NoArgs, ResultWithWarnings> command;
+    command.name = "toy.legacy";
+    command.exposure = Exposure::Internal;
+    command.summary = "Keep typed command warnings.";
+    command.args = schema::object<NoArgs>("no_args").build();
+    command.result = schema::object<ResultWithWarnings>("legacy_result")
+                         .field("warnings", &ResultWithWarnings::warnings,
+                                schema::arrayOf(schema::string()).maxItems(1))
+                         .build();
+    command.run = [](const NoArgs&, Context& ctx) -> Result<ResultWithWarnings> {
+        ctx.warn("extra", "extra diagnostic");
+        return ResultWithWarnings{{"legacy warning"}};
+    };
+    registry.add(std::move(command));
+    FakeHost host;
+    Dispatcher dispatcher(registry, host);
+    auto result = dispatcher.execute({"toy.legacy", obj("{}"), testOrigin});
+    REQUIRE(result);
+    REQUIRE((*result)["warnings"].size() == 2);
+    CHECK((*result)["warnings"].at(0) == "legacy warning");
+    const auto* warnings =
+        registry.find("toy.legacy")->resultSchema.find("properties")->find("warnings");
+    REQUIRE(warnings);
+    CHECK(warnings->find("maxItems") == nullptr);
+    REQUIRE(warnings->find("items")->find("anyOf"));
+    CHECK(warnings->find("items")->find("anyOf")->size() == 2);
+    CHECK(luaStubs(registry).find("(string|table)[]") != std::string::npos);
+}

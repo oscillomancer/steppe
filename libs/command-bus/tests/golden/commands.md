@@ -2,6 +2,8 @@
 
 Generated from the command registry.
 
+Successful replies may include `warnings`: command warnings followed by bus diagnostics `{code, message, path}`. Paths are retained as supplied by the decoder or handler. Batch steps carry their own warnings in `results[i].warnings`. A non-object result with bus warnings is `{result: <value>, warnings: [...]}`. Replies without bus warnings keep their original shape.
+
 ## `batch@1`
 
 Run commands atomically.
@@ -21,7 +23,29 @@ Kind: `edit`. Exposure: `mcp-tool`.
 
 ```json
 {
-  "type": "object"
+  "type": "object",
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": ["code", "message", "path"],
+        "additionalProperties": false
+      },
+      "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+    }
+  }
 }
 
 ```
@@ -65,7 +89,29 @@ Kind: `action`. Exposure: `mcp-exec`.
 
 ```json
 {
-  "type": "object"
+  "type": "object",
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": ["code", "message", "path"],
+        "additionalProperties": false
+      },
+      "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+    }
+  }
 }
 
 ```
@@ -113,7 +159,29 @@ Kind: `query`. Exposure: `mcp-exec`.
 
 ```json
 {
-  "type": "object"
+  "type": "object",
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": ["code", "message", "path"],
+        "additionalProperties": false
+      },
+      "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+    }
+  }
 }
 
 ```
@@ -160,7 +228,29 @@ Kind: `query`. Exposure: `mcp-exec`.
 
 ```json
 {
-  "type": "object"
+  "type": "object",
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": ["code", "message", "path"],
+        "additionalProperties": false
+      },
+      "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+    }
+  }
 }
 
 ```
@@ -201,7 +291,29 @@ Kind: `query`. Exposure: `mcp-exec`.
 
 ```json
 {
-  "type": "object"
+  "type": "object",
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": ["code", "message", "path"],
+        "additionalProperties": false
+      },
+      "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+    }
+  }
 }
 
 ```
@@ -250,7 +362,29 @@ Kind: `query`. Exposure: `mcp-exec`.
 
 ```json
 {
-  "type": "object"
+  "type": "object",
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": ["code", "message", "path"],
+        "additionalProperties": false
+      },
+      "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+    }
+  }
 }
 
 ```
@@ -299,7 +433,29 @@ Kind: `query`. Exposure: `mcp-exec`.
 
 ```json
 {
-  "type": "object"
+  "type": "object",
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": ["code", "message", "path"],
+        "additionalProperties": false
+      },
+      "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+    }
+  }
 }
 
 ```
@@ -343,7 +499,29 @@ Result:
     "additionalProperties": false
   },
   "result": {
-    "type": "object"
+    "type": "object",
+    "properties": {
+      "warnings": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": ["code", "message", "path"],
+          "additionalProperties": false
+        },
+        "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+      }
+    }
   },
   "errors": [],
   "examples": [
@@ -389,7 +567,29 @@ Kind: `query`. Exposure: `mcp-exec`.
 
 ```json
 {
-  "type": "object"
+  "type": "object",
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": ["code", "message", "path"],
+        "additionalProperties": false
+      },
+      "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+    }
+  }
 }
 
 ```
@@ -444,6 +644,26 @@ Kind: `edit`. Exposure: `mcp-tool`.
   "properties": {
     "count": {
       "type": "integer"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": ["code", "message", "path"],
+        "additionalProperties": false
+      },
+      "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
     }
   },
   "required": ["count"],
@@ -495,6 +715,26 @@ Kind: `query`. Exposure: `internal`.
     "text": {
       "type": "string",
       "minLength": 2
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": ["code", "message", "path"],
+        "additionalProperties": false
+      },
+      "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
     }
   },
   "required": ["text"],
@@ -527,6 +767,26 @@ Kind: `edit`. Exposure: `internal`.
   "properties": {
     "count": {
       "type": "integer"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": ["code", "message", "path"],
+        "additionalProperties": false
+      },
+      "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
     }
   },
   "required": ["count"],
@@ -559,6 +819,26 @@ Kind: `query`. Exposure: `mcp-exec`.
   "properties": {
     "count": {
       "type": "integer"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": ["code", "message", "path"],
+        "additionalProperties": false
+      },
+      "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
     }
   },
   "required": ["count"],
@@ -607,6 +887,26 @@ Kind: `action`. Exposure: `internal`.
   "properties": {
     "count": {
       "type": "integer"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": ["code", "message", "path"],
+        "additionalProperties": false
+      },
+      "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
     }
   },
   "required": ["count"],
@@ -640,6 +940,26 @@ Kind: `edit`. Exposure: `mcp-tool`.
   "properties": {
     "count": {
       "type": "integer"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": ["code", "message", "path"],
+        "additionalProperties": false
+      },
+      "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
     }
   },
   "required": ["count"],
@@ -693,6 +1013,26 @@ Kind: `action`. Exposure: `internal`.
     },
     "status": {
       "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": ["code", "message", "path"],
+        "additionalProperties": false
+      },
+      "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
     }
   },
   "required": ["job", "status"],
@@ -726,6 +1066,26 @@ Kind: `query`. Exposure: `internal`.
   "properties": {
     "count": {
       "type": "integer"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": ["code", "message", "path"],
+        "additionalProperties": false
+      },
+      "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
     }
   },
   "required": ["count"],
@@ -758,6 +1118,26 @@ Kind: `action`. Exposure: `internal`.
   "properties": {
     "count": {
       "type": "integer"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": ["code", "message", "path"],
+        "additionalProperties": false
+      },
+      "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
     }
   },
   "required": ["count"],

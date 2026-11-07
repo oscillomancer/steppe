@@ -108,6 +108,26 @@ cmd::Registry registry() {
         return values;
     };
     r.add(std::move(history));
+    cmd::Command<cmd::NoArgs, Count> warning;
+    warning.name = "counter.warn";
+    warning.kind = cmd::Kind::Query;
+    warning.exposure = cmd::Exposure::McpTool;
+    warning.summary = "Return a counter with a warning.";
+    warning.args = schema::object<cmd::NoArgs>("no_args").build();
+    warning.result = schema::object<Count>("warning_count")
+                         .field("count", &Count::count, schema::integerOf<int>())
+                         .build();
+    warning.examples = {
+        {"Diagnostic", json::Value::object(),
+         json::parse(
+             R"({"count":0,"warnings":[{"code":"counter.warning","message":"counter diagnostic","path":"/value"}]})")
+             .value(),
+         "empty"}};
+    warning.run = [](const cmd::NoArgs&, cmd::Context& ctx) -> Result<Count> {
+        ctx.warn("counter.warning", "counter diagnostic", "/value");
+        return Count{ctx.service<int>()};
+    };
+    r.add(std::move(warning));
     return r;
 }
 json::Value parse(std::string_view input) { return json::parse(input).value(); }
@@ -115,6 +135,22 @@ json::Value request(mcp::Server& server, std::string_view input) {
     auto output = server.handle(parse(input));
     REQUIRE(output);
     return *output;
+}
+void checkWarnings(mcp::Server& server) {
+    auto reply = request(
+        server,
+        R"({"jsonrpc":"2.0","id":50,"method":"tools/call","params":{"name":"counter_warn","arguments":{}}})");
+    const auto& result = *reply.find("result");
+    const auto* structured = result.find("structuredContent");
+    REQUIRE(structured);
+    const auto* warnings = structured->find("warnings");
+    REQUIRE(warnings);
+    REQUIRE(warnings->size() == 1);
+    CHECK(warnings->at(0).find("code")->asString() == "counter.warning");
+    CHECK(warnings->at(0).find("path")->asString() == "/value");
+    auto text = json::parse(result.find("content")->at(0).find("text")->asString());
+    REQUIRE(text);
+    CHECK(*text == *structured);
 }
 // MCP clients refuse a tool list whose output schemas are not object schemas
 // (the Python SDK fails the whole list), and structured content is an object.
@@ -202,6 +238,7 @@ TEST_CASE("in-process MCP negotiates, lists and executes with structured errors"
     CHECK(success.find("result")->find("structuredContent")->find("count")->asInt() == 3);
     CHECK(host.last.type == cmd::Origin::Type::Mcp);
     CHECK(host.last.client == "unit-client");
+    checkWarnings(server);
     auto failure = request(
         server,
         R"({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"counter_add","arguments":{"value":"bad"}}})");
@@ -262,6 +299,7 @@ TEST_CASE("proxy MCP forwards calls over the Unix control socket") {
         **proxy,
         R"({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"counter_add","arguments":{"value":5}}})");
     CHECK(success.find("result")->find("structuredContent")->find("count")->asInt() == 5);
+    checkWarnings(**proxy);
     auto failure = request(
         **proxy,
         R"({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"counter_add","arguments":{"value":"bad"}}})");

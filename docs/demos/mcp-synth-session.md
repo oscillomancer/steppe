@@ -175,6 +175,30 @@ that exactly duplicates structuredContent is shown once.
               "type": "string"
             },
             "description": "Params set that do not apply now"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "path"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
           }
         },
         "required": [
@@ -1584,6 +1608,30 @@ that exactly duplicates structuredContent is shown once.
               "type": "string"
             },
             "description": "Params set that do not apply now"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "path"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
           }
         },
         "required": [

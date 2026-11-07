@@ -998,3 +998,25 @@ TEST_CASE("Note Out routes: object endpoints, channel maps, round trip and cycle
     REQUIRE(f.call("module.remove", remove));
     CHECK_FALSE(f.app->head().routes.contains(*id));
 }
+
+TEST_CASE("command warnings: a silent apply-FX render reaches the caller") {
+    Fixture f;
+    f.run("project.set", R"({"console9":false})");
+    f.run("track.add", R"({"name":"No instrument"})");
+    f.run("item.add", R"({"track":"tr_1","position":0,"length":1,"notation":"1: C4:w"})");
+    auto rendered = f.run("item.apply-fx", R"({"item":"it_1"})");
+    REQUIRE(rendered.find("warnings"));
+    bool silent = false;
+    for (const auto& warning : rendered["warnings"].asArray()) {
+        if (const auto* code = warning.find("code"); code && *code == "render.silent") {
+            silent = true;
+            CHECK_FALSE(warning.find("message")->asString().empty());
+            CHECK(warning.find("path")->asString().empty());
+        }
+    }
+    CHECK(silent);
+    CHECK_FALSE(rendered["take"].asString().empty());
+    CHECK(std::filesystem::exists(rendered["path"].asString()));
+    auto next = f.run("track.list");
+    CHECK(next.find("warnings") == nullptr);
+}
