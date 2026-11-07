@@ -1,0 +1,462 @@
+{
+  "schema": "supple.rack-preset/1.0",
+  "name": "Drum Kit",
+  "description": "An analog drum kit played from notes on the General MIDI keys (C2 kick, D2 snare, D#2 clap, F#2 and A#2 hats, A2 tom, C#2 rim, G#3 cowbell), velocity for accents; turn each drum's tune, decay and snap.",
+  "modules": [
+    {
+      "type": "com.suppleaudio.rack.out",
+      "version": "1.0.0",
+      "x": 1212.0,
+      "y": 307.0
+    },
+    {
+      "type": "com.suppleaudio.rack.notes",
+      "version": "1.0.0",
+      "label": "Keys",
+      "x": 0.0,
+      "y": 209.0
+    },
+    {
+      "type": "com.suppleaudio.rack.keygates",
+      "version": "1.0.0",
+      "label": "Drum map",
+      "x": 144.0,
+      "y": 179.0
+    },
+    {
+      "type": "com.suppleaudio.rack.drum",
+      "version": "1.0.0",
+      "label": "Kick",
+      "x": 404.0,
+      "y": 12.0,
+      "params": {
+        "tone": 55.0,
+        "decay": 45.0,
+        "snap": 55.0,
+        "level": -6.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.drum",
+      "version": "1.0.0",
+      "label": "Snare",
+      "x": 404.0,
+      "y": 394.0,
+      "params": {
+        "model": "snare",
+        "tone": 45.0,
+        "snap": 60.0,
+        "level": -14.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.drum",
+      "version": "1.0.0",
+      "label": "Clap",
+      "x": 548.0,
+      "y": 12.0,
+      "params": {
+        "model": "clap",
+        "level": -11.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.drum",
+      "version": "1.0.0",
+      "label": "Closed hat",
+      "x": 692.0,
+      "y": 12.0,
+      "params": {
+        "model": "closed_hat",
+        "decay": 35.0,
+        "level": -12.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.drum",
+      "version": "1.0.0",
+      "label": "Open hat",
+      "x": 692.0,
+      "y": 394.0,
+      "params": {
+        "model": "open_hat",
+        "decay": 45.0,
+        "level": -13.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.drum",
+      "version": "1.0.0",
+      "label": "Tom",
+      "x": 548.0,
+      "y": 394.0,
+      "params": {
+        "model": "tom",
+        "tune": -3.0,
+        "level": -9.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.drum",
+      "version": "1.0.0",
+      "label": "Rim",
+      "x": 836.0,
+      "y": 12.0,
+      "params": {
+        "model": "rimshot",
+        "level": -13.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.drum",
+      "version": "1.0.0",
+      "label": "Cowbell",
+      "x": 836.0,
+      "y": 394.0,
+      "params": {
+        "model": "cowbell",
+        "level": -17.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.mixer",
+      "version": "1.0.0",
+      "label": "Drums",
+      "x": 980.0,
+      "y": 0.0,
+      "params": {
+        "pan_2": -8.0,
+        "pan_3": 10.0,
+        "pan_4": 25.0,
+        "master": -3.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.mixer",
+      "version": "1.0.0",
+      "label": "Metals",
+      "x": 980.0,
+      "y": 394.0,
+      "params": {
+        "pan_1": -30.0,
+        "pan_2": -20.0,
+        "pan_3": 15.0,
+        "pan_4": 35.0,
+        "master": -3.0
+      }
+    }
+  ],
+  "cables": [
+    {
+      "from": {
+        "module": 1,
+        "port": "pitch"
+      },
+      "to": {
+        "module": 2,
+        "port": "pitch"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "gate"
+      },
+      "to": {
+        "module": 2,
+        "port": "gate"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "velocity"
+      },
+      "to": {
+        "module": 2,
+        "port": "velocity"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "out_1"
+      },
+      "to": {
+        "module": 3,
+        "port": "trigger"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "vel_1"
+      },
+      "to": {
+        "module": 3,
+        "port": "accent"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "out_2"
+      },
+      "to": {
+        "module": 4,
+        "port": "trigger"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "vel_2"
+      },
+      "to": {
+        "module": 4,
+        "port": "accent"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "out_3"
+      },
+      "to": {
+        "module": 5,
+        "port": "trigger"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "vel_3"
+      },
+      "to": {
+        "module": 5,
+        "port": "accent"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "out_4"
+      },
+      "to": {
+        "module": 6,
+        "port": "trigger"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "vel_4"
+      },
+      "to": {
+        "module": 6,
+        "port": "accent"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "out_5"
+      },
+      "to": {
+        "module": 7,
+        "port": "trigger"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "vel_5"
+      },
+      "to": {
+        "module": 7,
+        "port": "accent"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "out_6"
+      },
+      "to": {
+        "module": 8,
+        "port": "trigger"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "vel_6"
+      },
+      "to": {
+        "module": 8,
+        "port": "accent"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "out_7"
+      },
+      "to": {
+        "module": 9,
+        "port": "trigger"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "vel_7"
+      },
+      "to": {
+        "module": 9,
+        "port": "accent"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "out_8"
+      },
+      "to": {
+        "module": 10,
+        "port": "trigger"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "vel_8"
+      },
+      "to": {
+        "module": 10,
+        "port": "accent"
+      }
+    },
+    {
+      "from": {
+        "module": 3,
+        "port": "out"
+      },
+      "to": {
+        "module": 11,
+        "port": "in_1"
+      }
+    },
+    {
+      "from": {
+        "module": 4,
+        "port": "out"
+      },
+      "to": {
+        "module": 11,
+        "port": "in_2"
+      }
+    },
+    {
+      "from": {
+        "module": 5,
+        "port": "out"
+      },
+      "to": {
+        "module": 11,
+        "port": "in_3"
+      }
+    },
+    {
+      "from": {
+        "module": 8,
+        "port": "out"
+      },
+      "to": {
+        "module": 11,
+        "port": "in_4"
+      }
+    },
+    {
+      "from": {
+        "module": 6,
+        "port": "out"
+      },
+      "to": {
+        "module": 12,
+        "port": "in_1"
+      }
+    },
+    {
+      "from": {
+        "module": 7,
+        "port": "out"
+      },
+      "to": {
+        "module": 12,
+        "port": "in_2"
+      }
+    },
+    {
+      "from": {
+        "module": 9,
+        "port": "out"
+      },
+      "to": {
+        "module": 12,
+        "port": "in_3"
+      }
+    },
+    {
+      "from": {
+        "module": 10,
+        "port": "out"
+      },
+      "to": {
+        "module": 12,
+        "port": "in_4"
+      }
+    },
+    {
+      "from": {
+        "module": 11,
+        "port": "left"
+      },
+      "to": {
+        "module": 0,
+        "port": "l"
+      }
+    },
+    {
+      "from": {
+        "module": 11,
+        "port": "right"
+      },
+      "to": {
+        "module": 0,
+        "port": "r"
+      }
+    },
+    {
+      "from": {
+        "module": 12,
+        "port": "left"
+      },
+      "to": {
+        "module": 0,
+        "port": "l"
+      }
+    },
+    {
+      "from": {
+        "module": 12,
+        "port": "right"
+      },
+      "to": {
+        "module": 0,
+        "port": "r"
+      }
+    }
+  ]
+}
+
