@@ -90,6 +90,9 @@ struct KeyGates : Module {
             vel[k].setChannels(1);
         }
         const int n = min(max(gate.channels(), 1), 16);
+        // Voices the cable no longer carries hold nothing: a gate already
+        // high when the channel comes back is a new note.
+        for (int c = n; c < 16; ++c) voices[c] = Voice{};
         for (int i = 0; i < frames; ++i) {
             // Every voice's gate first, then the lanes, so the order of the
             // voices does not matter when one hands a key to another.

@@ -97,3 +97,24 @@ TEST_CASE("keygates: a key handed from one voice to another on the same frame hi
         CHECK(rises == 2);
     }
 }
+
+TEST_CASE("keygates: a voice the cable stops carrying forgets its note") {
+    // Voice 1 holds the kick; the cable drops to one channel and comes back
+    // with voice 1 already high, now on the snare: that is a new note.
+    ModuleHarness h(stock("keygates"));
+    h.input("pitch", 2, [](int, std::int64_t) { return key(36); });
+    h.input("gate", 2, [](int c, std::int64_t n) { return c == 1 && n >= 32 ? 1.0 : 0.0; });
+    h.input("velocity", 2, [](int, std::int64_t) { return 0.4; });
+    h.run(128);
+    CHECK(h.output("out_1")[100] == 1.0);
+    h.input("gate", 1, [](int, std::int64_t) { return 0.0; });
+    h.run(128);
+    CHECK(h.output("out_1")[200] == 0.0);
+    h.input("pitch", 2, [](int, std::int64_t) { return key(38); });
+    h.input("gate", 2, [](int c, std::int64_t) { return c == 1 ? 1.0 : 0.0; });
+    h.input("velocity", 2, [](int, std::int64_t) { return 0.7; });
+    h.run(128);
+    CHECK(h.output("out_1")[300] == 0.0);
+    CHECK(h.output("out_2")[300] == 1.0);
+    CHECK(h.output("vel_2")[300] == doctest::Approx(0.7));
+}
