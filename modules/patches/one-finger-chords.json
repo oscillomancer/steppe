@@ -1,0 +1,277 @@
+{
+  "schema": "supple.rack-preset/1.0",
+  "name": "One-Finger Chords",
+  "description": "Play single notes: Chord builds the key's own chord on each (C major by default) and strums it on a soft saw pad through a chorus. Turn Chord's Key, Voices and Strum, or the filter's Cutoff.",
+  "modules": [
+    {
+      "type": "com.suppleaudio.rack.out",
+      "version": "1.0.0",
+      "x": 1356.0,
+      "y": 322.0
+    },
+    {
+      "type": "com.suppleaudio.rack.notes",
+      "version": "1.0.0",
+      "label": "Keys",
+      "x": 0.0,
+      "y": 224.0
+    },
+    {
+      "type": "com.suppleaudio.rack.chord",
+      "version": "1.0.0",
+      "x": 144.0,
+      "y": 241.0,
+      "params": {
+        "type": "in_major",
+        "voicing": "open",
+        "strum": 30.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.vco",
+      "version": "1.0.0",
+      "label": "Osc",
+      "x": 368.0,
+      "y": 0.0,
+      "params": {
+        "drift": 30.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.filter",
+      "version": "1.0.0",
+      "x": 548.0,
+      "y": 201.0,
+      "params": {
+        "cutoff": 900.0,
+        "resonance": 15.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.adsr",
+      "version": "1.0.0",
+      "label": "Env",
+      "x": 332.0,
+      "y": 474.0,
+      "params": {
+        "attack": 15.0,
+        "decay": 600.0,
+        "release": 700.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.vca",
+      "version": "1.0.0",
+      "label": "Amp",
+      "x": 692.0,
+      "y": 299.0,
+      "params": {
+        "level": -3.0,
+        "response": "linear"
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.poly",
+      "version": "1.0.0",
+      "label": "Spread",
+      "x": 836.0,
+      "y": 63.0,
+      "params": {
+        "spread": 70.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.chorus",
+      "version": "1.0.0",
+      "x": 980.0,
+      "y": 241.0,
+      "params": {
+        "mix": 40.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.reverb",
+      "version": "1.0.0",
+      "label": "Room",
+      "x": 1168.0,
+      "y": 241.0,
+      "params": {
+        "size": 65.0,
+        "mix": 25.0
+      }
+    }
+  ],
+  "cables": [
+    {
+      "from": {
+        "module": 1,
+        "port": "pitch"
+      },
+      "to": {
+        "module": 2,
+        "port": "pitch"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "gate"
+      },
+      "to": {
+        "module": 2,
+        "port": "gate"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "out"
+      },
+      "to": {
+        "module": 3,
+        "port": "pitch"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "out"
+      },
+      "to": {
+        "module": 4,
+        "port": "pitch"
+      }
+    },
+    {
+      "from": {
+        "module": 3,
+        "port": "saw"
+      },
+      "to": {
+        "module": 4,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "strummed"
+      },
+      "to": {
+        "module": 5,
+        "port": "gate"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "velocity"
+      },
+      "to": {
+        "module": 5,
+        "port": "velocity"
+      }
+    },
+    {
+      "from": {
+        "module": 5,
+        "port": "envelope"
+      },
+      "to": {
+        "module": 4,
+        "port": "fm"
+      }
+    },
+    {
+      "from": {
+        "module": 4,
+        "port": "low"
+      },
+      "to": {
+        "module": 6,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 5,
+        "port": "envelope"
+      },
+      "to": {
+        "module": 6,
+        "port": "cv"
+      }
+    },
+    {
+      "from": {
+        "module": 6,
+        "port": "out"
+      },
+      "to": {
+        "module": 7,
+        "port": "poly_in"
+      }
+    },
+    {
+      "from": {
+        "module": 7,
+        "port": "left"
+      },
+      "to": {
+        "module": 8,
+        "port": "in_l"
+      }
+    },
+    {
+      "from": {
+        "module": 7,
+        "port": "right"
+      },
+      "to": {
+        "module": 8,
+        "port": "in_r"
+      }
+    },
+    {
+      "from": {
+        "module": 8,
+        "port": "out_l"
+      },
+      "to": {
+        "module": 9,
+        "port": "in_l"
+      }
+    },
+    {
+      "from": {
+        "module": 8,
+        "port": "out_r"
+      },
+      "to": {
+        "module": 9,
+        "port": "in_r"
+      }
+    },
+    {
+      "from": {
+        "module": 9,
+        "port": "out_l"
+      },
+      "to": {
+        "module": 0,
+        "port": "l"
+      }
+    },
+    {
+      "from": {
+        "module": 9,
+        "port": "out_r"
+      },
+      "to": {
+        "module": 0,
+        "port": "r"
+      }
+    }
+  ]
+}
+

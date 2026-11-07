@@ -1,0 +1,225 @@
+{
+  "schema": "supple.rack-preset/1.0",
+  "name": "Ratchet Lead",
+  "description": "A biting saw lead whose notes now and then break into fading triplet rolls, each roll its own from the seed. Turn Rolls' Chance and Count for more or fewer, Filter's Cutoff and Resonance for the bite.",
+  "modules": [
+    {
+      "type": "com.suppleaudio.rack.out",
+      "version": "1.0.0",
+      "x": 1052.0,
+      "y": 322.0
+    },
+    {
+      "type": "com.suppleaudio.rack.notes",
+      "version": "1.0.0",
+      "label": "Keys",
+      "x": 0.0,
+      "y": 224.0
+    },
+    {
+      "type": "com.suppleaudio.rack.ratchet",
+      "version": "1.0.0",
+      "label": "Rolls",
+      "x": 144.0,
+      "y": 229.0,
+      "params": {
+        "chance": 50.0,
+        "length": 40.0,
+        "decay": 30.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.vco",
+      "version": "1.0.0",
+      "label": "Osc",
+      "x": 396.0,
+      "y": 0.0,
+      "params": {
+        "drift": 20.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.ladder",
+      "version": "1.0.0",
+      "label": "Filter",
+      "x": 576.0,
+      "y": 195.0,
+      "params": {
+        "cutoff": 500.0,
+        "resonance": 50.0,
+        "drive": 25.0,
+        "fm_depth": 4.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.adsr",
+      "version": "1.0.0",
+      "label": "Env",
+      "x": 360.0,
+      "y": 474.0,
+      "params": {
+        "attack": 2.0,
+        "decay": 180.0,
+        "sustain": 35.0,
+        "release": 120.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.vca",
+      "version": "1.0.0",
+      "label": "Amp",
+      "x": 720.0,
+      "y": 299.0,
+      "params": {
+        "level": -8.0,
+        "response": "linear"
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.delay",
+      "version": "1.0.0",
+      "label": "Echo",
+      "x": 864.0,
+      "y": 195.0,
+      "params": {
+        "sync": "n16",
+        "feedback": 30.0,
+        "ping_pong": true,
+        "mix": 20.0
+      }
+    }
+  ],
+  "cables": [
+    {
+      "from": {
+        "module": 1,
+        "port": "gate"
+      },
+      "to": {
+        "module": 2,
+        "port": "gate"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "out"
+      },
+      "to": {
+        "module": 5,
+        "port": "gate"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "level"
+      },
+      "to": {
+        "module": 5,
+        "port": "velocity"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "pitch"
+      },
+      "to": {
+        "module": 3,
+        "port": "pitch"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "pitch"
+      },
+      "to": {
+        "module": 4,
+        "port": "pitch"
+      }
+    },
+    {
+      "from": {
+        "module": 3,
+        "port": "saw"
+      },
+      "to": {
+        "module": 4,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 5,
+        "port": "envelope"
+      },
+      "to": {
+        "module": 4,
+        "port": "fm"
+      }
+    },
+    {
+      "from": {
+        "module": 4,
+        "port": "out"
+      },
+      "to": {
+        "module": 6,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 5,
+        "port": "envelope"
+      },
+      "to": {
+        "module": 6,
+        "port": "cv"
+      }
+    },
+    {
+      "from": {
+        "module": 6,
+        "port": "out"
+      },
+      "to": {
+        "module": 7,
+        "port": "in_l"
+      }
+    },
+    {
+      "from": {
+        "module": 6,
+        "port": "out"
+      },
+      "to": {
+        "module": 7,
+        "port": "in_r"
+      }
+    },
+    {
+      "from": {
+        "module": 7,
+        "port": "out_l"
+      },
+      "to": {
+        "module": 0,
+        "port": "l"
+      }
+    },
+    {
+      "from": {
+        "module": 7,
+        "port": "out_r"
+      },
+      "to": {
+        "module": 0,
+        "port": "r"
+      }
+    }
+  ]
+}
+
