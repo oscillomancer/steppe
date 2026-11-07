@@ -9,6 +9,13 @@ region), ADR-0015 (loop passes).
 **2026-10-15 amendment:** [ADR-0042](0042-native-midi-input.md) extends the
 backend input contract to CoreMIDI/WinMM through PortAudio on macOS/Windows.
 
+**2026-11-07 amendment:** [ADR-0065](0065-independent-record-inputs.md)
+separates a channel's MIDI
+input from its audio input, fixing the rack home-channel monitoring contract.
+The older single-input representation still loads. With both configured,
+recording takes MIDI; see the current [rack](../specs/rack.md) and
+[session-model](../specs/session-model.md) contracts.
+
 ## Context
 
 The model can already say "this track records from MIDI device X"

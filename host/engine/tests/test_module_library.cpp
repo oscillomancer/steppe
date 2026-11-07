@@ -1901,3 +1901,176 @@ TEST_CASE(
     REQUIRE(EngineApp::findPlugin(catalogue, "COM.EXAMPLE.EFFECT"));
     REQUIRE(EngineApp::findPlugin(catalogue, "some effect"));
 }
+
+TEST_CASE("rack inputs: selecting MIDI preserves rack audio in either order and across reopen") {
+    for (bool midiFirst : {false, true}) {
+        CAPTURE(midiFirst);
+        Fixture f;
+        f.run("project.set", R"({"console9":false})");
+        f.run("track.add");
+        if (midiFirst) f.run("track.set", R"({"track":"tr_1","record_midi":"*"})");
+        f.run("rack.add", R"({"track":"tr_1"})");
+        f.run("module.add", R"({"rack":"rk_1","type":"com.suppleaudio.rack.vco"})");
+        f.run("cable.add", R"({"from":"mo_2.sine","to":"mo_1.l"})");
+        const auto input = f.app->head().tracks.find({model::Kind::Track, 1})->record.input;
+        auto render = [](Fixture& app) {
+            auto result =
+                app.app->renderSession(app.app->head(), {.endSeconds = .05, .blockSize = 37});
+            REQUIRE(result);
+            return result->audio.channels;
+        };
+        const auto before = render(f);
+        double peak = 0;
+        for (float sample : before[0]) peak = std::max(peak, std::abs(double(sample)));
+        REQUIRE(peak > .01);
+        f.run("track.set", R"({"track":"tr_1","record_midi":"*"})");
+        const auto& track = *f.app->head().tracks.find({model::Kind::Track, 1});
+        CHECK(track.record.input == input);
+        REQUIRE(track.record.midiInput);
+        CHECK(track.record.midiInput != input);
+        CHECK(render(f) == before);
+        const auto path = f.dir / "rack-midi.json";
+        REQUIRE(f.app->save(path));
+        Fixture reopened;
+        std::vector<schema::Warning> warnings;
+        REQUIRE(reopened.app->open(path, &warnings));
+        CHECK(warnings.empty());
+        CHECK(render(reopened) == before);
+        REQUIRE(model::midiInputRoute(reopened.app->head(), {model::Kind::Track, 1}));
+        f.run("track.set", R"({"track":"tr_1","record_midi":null})");
+        CHECK_FALSE(model::midiInputRoute(f.app->head(), {model::Kind::Track, 1}));
+        CHECK(f.app->head().tracks.find({model::Kind::Track, 1})->record.input == input);
+        CHECK(render(f) == before);
+    }
+}
+
+TEST_CASE("rack inputs: home Notes hears monitored device MIDI in both executors") {
+    for (bool recording : {false, true})
+        for (bool anticipative : {false, true})
+            for (int workers : {0, 2}) {
+                INFO("recording " << recording << ", anticipative " << anticipative << ", workers "
+                                  << workers);
+                Fixture f;
+                f.run("project.set", R"({"console9":false})");
+                f.run("rack.add");
+                CHECK(f.app->head().tracks.find({model::Kind::Track, 1})->record.monitor ==
+                      f.app->defaultMonitor());
+                f.run("module.add", R"({"rack":"rk_1","type":"notes"})");
+                f.run("cable.add", R"({"from":"mo_2.gate","to":"mo_1.l"})");
+                f.run("track.set", R"({"track":"tr_1","record_midi":"key","midi_channel":1,
+                                   "armed":true,"monitor":"on"})");
+                // Offline MIDI at the same frames is an exact reference for the
+                // injected keyboard, including callback fragments of the rack grid.
+                model::EditTxn t(f.app->head(), f.app->head().version + 1);
+                model::MidiSource midi;
+                midi.sequence.ppq = 24000;
+                midi.sequence.length = 4800;
+                midi.sequence.notes = {{128, 896, 0, 72, 100, 0}};
+                model::Take take;
+                take.source = t.create(midi);
+                const auto tk = t.create(take);
+                model::Item item;
+                item.track = {model::Kind::Track, 1};
+                item.position = 0;
+                item.length = .2;
+                item.timebase = model::ItemTimebase::Beats;
+                item.takes = {tk};
+                item.activeTake = tk;
+                t.create(item);
+                auto state = t.commit();
+                REQUIRE(state);
+                auto expected = f.app->renderSession(*state, {.endSeconds = .05, .blockSize = 37});
+                REQUIRE(expected);
+                REQUIRE(std::any_of(expected->audio.channels[0].begin(),
+                                    expected->audio.channels[0].end(),
+                                    [](float value) { return std::abs(value) > .01f; }));
+                DummyBackend backend(
+                    {.mode = DummyBackend::Mode::Manual,
+                     .captureFrames = 8192,
+                     .midiPorts = {"Keyboard", "Pads"},
+                     .midi = [](std::vector<MidiInputEvent>& out, std::uint32_t n,
+                                std::int64_t frame) {
+                         for (const auto& e :
+                              std::array<std::array<int, 5>, 5>{{{64, 1, 0x90, 67, 100},
+                                                                 {90, 0, 0x91, 69, 100},
+                                                                 {128, 0, 0x90, 72, 100},
+                                                                 {1024, 0, 0x80, 72, 0},
+                                                                 {2600, 0, 0x90, 60, 100}}})
+                             if (e[0] >= frame && e[0] < frame + n) {
+                                 MidiInputEvent event;
+                                 event.frame = static_cast<std::uint32_t>(e[0] - frame);
+                                 event.port = static_cast<std::uint16_t>(e[1]);
+                                 event.size = 3;
+                                 for (int k = 0; k < 3; ++k)
+                                     event.bytes[k] = static_cast<std::uint8_t>(e[k + 2]);
+                                 out.push_back(event);
+                             }
+                     }});
+                REQUIRE(f.app->startEngine(
+                    backend, {.sampleRate = 48000, .blockSize = 37, .midiInputs = true},
+                    {.anticipative = anticipative,
+                     .renderBlock = 128,
+                     .renderAheadMs = 10,
+                     .workers = workers}));
+                if (recording) f.run("transport.record");
+                for (int i = 0; i < 90; ++i) {
+                    if (anticipative) REQUIRE(f.app->engine()->awaitRendered(37));
+                    backend.run(1);
+                }
+                const auto offset = f.app->engine()->outputLatency();
+                REQUIRE(backend.capture().frames() >= offset + expected->audio.frames());
+                for (std::size_t channel = 0; channel < 2; ++channel)
+                    CHECK(std::equal(expected->audio.channels[channel].begin(),
+                                     expected->audio.channels[channel].end(),
+                                     backend.capture().channels[channel].begin() + offset));
+                CHECK(f.app->engine()->processErrors() == 0);
+                REQUIRE(std::abs(backend.capture().channels[0][90 * 37 - 1]) > .01f);
+                f.run("track.set", R"({"track":"tr_1","monitor":"off"})");
+                for (int i = 0; i < 64; ++i) {
+                    if (anticipative) REQUIRE(f.app->engine()->awaitRendered(37));
+                    backend.run(1);
+                }
+                CHECK(backend.capture().channels[0][154 * 37 - 1] == 0);
+                f.run("transport.stop");
+                if (recording) {
+                    REQUIRE(f.app->head().items.size() == 1);
+                    REQUIRE(f.app->head().midi.size() == 1);
+                    CHECK(f.app->head().midi.begin()->value->sequence.notes.size() == 2);
+                } else
+                    CHECK(f.app->head().items.empty());
+                f.app->stopEngine();
+            }
+}
+
+TEST_CASE("rack inputs: audio and MIDI inputs remain independent on ordinary channels too") {
+    Fixture f;
+    f.run("track.add");
+    f.run("track.set", R"({"track":"tr_1","record_midi":"*"})");
+    auto legacy = model::projectToJson(f.app->head());
+    legacy["schema"] = "supple.project/2.7";
+    legacy["tracks"]["tr_1"]["record"].asObject().erase("midi_input");
+    auto parsed = model::projectFromJson(legacy);
+    REQUIRE(parsed);
+    REQUIRE(model::midiInputRoute(*parsed, {model::Kind::Track, 1}));
+    const auto midi = f.app->head().tracks.find({model::Kind::Track, 1})->record.midiInput;
+    f.run("track.set", R"({"track":"tr_1","record_input":[1,2]})");
+    const auto audio = f.app->head().tracks.find({model::Kind::Track, 1})->record.input;
+    REQUIRE(audio != midi);
+    CHECK(f.app->head().tracks.find({model::Kind::Track, 1})->record.midiInput == midi);
+    f.run("track.set", R"({"track":"tr_1","record_midi":"Keys","record_input":[3,4]})");
+    CHECK(f.app->head().tracks.find({model::Kind::Track, 1})->record.input == audio);
+    CHECK(f.app->head().tracks.find({model::Kind::Track, 1})->record.midiInput == midi);
+    auto invalid = model::projectToJson(f.app->head());
+    invalid["tracks"]["tr_1"]["record"]["midi_input"] = audio->str();
+    CHECK_FALSE(model::projectFromJson(invalid));
+    f.run("track.duplicate", R"({"tracks":["tr_1"]})");
+    const auto* copy = f.app->head().tracks.find({model::Kind::Track, 2});
+    REQUIRE(copy);
+    REQUIRE(copy->record.input);
+    REQUIRE(copy->record.midiInput);
+    CHECK(copy->record.input != audio);
+    CHECK(copy->record.midiInput != midi);
+    REQUIRE(model::midiInputRoute(f.app->head(), {model::Kind::Track, 2}));
+    CHECK(*model::midiInputRoute(f.app->head(), {model::Kind::Track, 2})->from.midiDevice ==
+          "Keys");
+}

@@ -571,8 +571,11 @@ Status Engine::load(const model::Session& session, const std::filesystem::path& 
         for (detail::Node& n : plan->nodes) {
             if (n.midiIn) n.midiIn->ports = midiPortMask(ports, n.midiIn->device);
             if (n.rack)  // Notes modules playing a device (ADR-0062)
-                for (detail::NotesFeed& feed : n.rack->notes)
+                for (detail::NotesFeed& feed : n.rack->notes) {
                     if (feed.device) feed.ports = midiPortMask(ports, *feed.device);
+                    if (feed.sourceDevice)
+                        feed.sourcePorts = midiPortMask(ports, *feed.sourceDevice);
+                }
         }
     }
     if (plan->instances.size() > kMaxInstances)

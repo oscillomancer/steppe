@@ -80,3 +80,4 @@ current state.
 | [0062](0062-modular-racks.md) | Modular racks | Accepted |
 | [0063](0063-command-warnings.md) | Context warnings reach successful command replies | Accepted |
 | [0064](0064-rack-latency.md) | Bounded rack latency reaches PDC | Accepted |
+| [0065](0065-independent-record-inputs.md) | Independent audio and MIDI inputs | Accepted |

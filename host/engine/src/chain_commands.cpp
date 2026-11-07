@@ -1694,6 +1694,7 @@ void registerChainCommands(cmd::Registry& registry) {
                 copy.chain = std::move(*main);
                 copy.inputChain = std::move(*input);
                 copy.record.input.reset();
+                copy.record.midiInput.reset();
                 const Id fresh = txn.create(copy);
                 ids[source] = fresh;
                 txn.modify<model::Track>(*original.parent, [&](model::Track& parent) {
@@ -1706,7 +1707,8 @@ void registerChainCommands(cmd::Registry& registry) {
                 for (const auto& r : s.routes) {
                     const bool out = r.value->from.track == source;
                     const bool recorded = original.record.input == r.id;
-                    if (!out && !recorded) continue;
+                    const bool midiInput = original.record.midiInput == r.id;
+                    if (!out && !recorded && !midiInput) continue;
                     model::Route route = *r.value;
                     if (out) route.from.track = fresh;
                     if (route.to.track == source) route.to.track = fresh;
@@ -1715,6 +1717,9 @@ void registerChainCommands(cmd::Registry& registry) {
                     if (recorded)
                         txn.modify<model::Track>(
                             fresh, [&](model::Track& t) { t.record.input = ids[r.id]; });
+                    if (midiInput)
+                        txn.modify<model::Track>(
+                            fresh, [&](model::Track& t) { t.record.midiInput = ids[r.id]; });
                 }
                 for (const auto& e : s.items) {
                     if (e.value->track != source) continue;

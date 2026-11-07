@@ -527,6 +527,7 @@ const Schema<Track>& schemaOf<Track>() {
             schema::object<RecordSettings>("record")
                 .field("armed", &RecordSettings::armed, boolean())
                 .field("input", &RecordSettings::input, idSchema())
+                .field("midi_input", &RecordSettings::midiInput, idSchema())
                 .field("monitor", &RecordSettings::monitor,
                        en<Monitor>(
                            {{Monitor::Off, "off"}, {Monitor::On, "on"}, {Monitor::Auto, "auto"}}))
@@ -1276,7 +1277,7 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
         auto migrated = migrateProject1(std::move(doc), warnings);
         if (!migrated) return std::move(migrated).error();
         doc = std::move(*migrated);
-    } else if (version->minor > 7 && warnings)
+    } else if (version->minor > 8 && warnings)
         warnings->push_back(
             {"project.newer_minor", "loading a newer project minor version", "/schema"});
     // Before 2.4 a master's hardware output could be written as a route to

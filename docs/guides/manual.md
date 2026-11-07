@@ -423,6 +423,12 @@ the parameter, and drag it up or down to change the amount. Only CLAP
 plug-ins take modulation, third-party ones too, when their parameters accept
 it; a VST3 plug-in's list says so.
 
+Selecting a MIDI input on the rack's channel keeps its audio Out connected.
+Arm the channel and turn monitoring On to play it from the keyboard (Auto
+listens while stopped or recording). The channel's audio and MIDI inputs
+are independent. With both selected, recording creates MIDI takes; clear
+MIDI with `track.set {record_midi: null}` to print the rack audio instead.
+
 Your own modules live in the library folder, and the project you save
 keeps a copy of each one it uses beside it (in `modules`), as it keeps its
 media, so the project sounds the same on another computer. Rack presets

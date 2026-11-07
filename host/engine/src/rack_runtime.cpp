@@ -242,7 +242,8 @@ void setParams(rack::Instance& in, const model::RackModule& m) {
 }  // namespace
 
 rack::Instance* RackPool::get(Id id, const model::RackModule& module,
-                              const rack::Instance::Setup& setup) {
+                              const rack::Instance::Setup& setup,
+                              const std::optional<NotesInput>& notesInput) {
     const rack::Catalog::Entry* type = catalog_->find(module.type);
     auto it = modules_.find(id);
     if (!type) {
@@ -255,7 +256,7 @@ rack::Instance* RackPool::get(Id id, const model::RackModule& module,
     if (it != modules_.end() &&
         (it->second.type != module.type || it->second.code != type->generation ||
          it->second.rate != setup.sampleRate || it->second.seed != setup.seed ||
-         &it->second.instance->type() != type->type.get())) {
+         it->second.notesInput != notesInput || &it->second.instance->type() != type->type.get())) {
         retired_.emplace_back(generation_, std::move(it->second.instance));
         modules_.erase(it);
         it = modules_.end();
@@ -273,7 +274,7 @@ rack::Instance* RackPool::get(Id id, const model::RackModule& module,
         if (!made) return nullptr;  // a host type this engine does not make here
         it = modules_
                  .emplace(id, Entry{std::move(made), module.type, type->generation,
-                                    setup.sampleRate, setup.seed})
+                                    setup.sampleRate, setup.seed, notesInput})
                  .first;
     }
     setParams(*it->second.instance, module);
@@ -527,7 +528,27 @@ Status compileRack(Plan& p, Node& n, const Session& s, Id rackId, InstancePool& 
         const std::uint64_t mix =
             (s.project->seed ^ (std::uint64_t{e.id.n} << 20)) * 0x9E3779B97F4A7C15ULL;
         setup.seed = static_cast<int>((mix >> 33) & 0x7fffffff);
-        rack::Instance* in = pool.get(e.id, m, setup);
+        // A changed Notes input retires the old instance with its plan. This
+        // releases held device gates without touching an executor's state from
+        // the main thread, including live/background handovers.
+        std::optional<RackPool::NotesInput> notesInput;
+        if (m.type == model::kNotesModule) {
+            notesInput = RackPool::NotesInput{};
+            const auto* home = s.racks.find(m.rack);
+            notesInput->source = m.source.value_or(home ? home->track : model::kMaster);
+            notesInput->device = m.device;
+            if (const auto* track = s.tracks.find(notesInput->source)) {
+                notesInput->monitoring =
+                    track->record.armed && track->record.monitor != model::Monitor::Off;
+                notesInput->tapeAuto = track->record.monitor == model::Monitor::Auto;
+            }
+            if (const auto* route = model::midiInputRoute(s, notesInput->source)) {
+                notesInput->sourceDevice = route->from.midiDevice;
+                notesInput->fromChannel = route->midi ? route->midi->fromChannel : 0;
+                notesInput->toChannel = route->midi ? route->midi->toChannel : 0;
+            }
+        }
+        rack::Instance* in = pool.get(e.id, m, setup, notesInput);
         if (!in)
             p.warnings.push_back(e.id.str() + ": module type " + m.type +
                                  " is not installed; it is silent");
@@ -545,6 +566,12 @@ Status compileRack(Plan& p, Node& n, const Session& s, Id rackId, InstancePool& 
             NotesFeed feed;
             feed.notes = notes;
             feed.device = m.device;
+            if (notesInput->monitoring) {
+                feed.sourceDevice = notesInput->sourceDevice;
+                feed.fromChannel = notesInput->fromChannel;
+                feed.toChannel = notesInput->toChannel;
+                feed.sourceAuto = notesInput->tapeAuto;
+            }
             r->notes.push_back(std::move(feed));
         } else if (auto* notesOut = dynamic_cast<rack::host::NotesOut*>(in->host())) {
             NotesOutBinding output;
@@ -740,7 +767,8 @@ void prepareRack(Plan& p, Node& n, const Session& s) {
                 ++b;
             window = std::max(window, b - a);
         }
-        feed.block.reserve(window + (feed.device ? kMaxMidiInputEvents : 0) + 1);
+        feed.block.reserve(window + (feed.device || feed.sourceDevice ? kMaxMidiInputEvents : 0) +
+                           1);
     }
     for (auto& curve : r.curves) curve->curve.cursor = 0;
 }
@@ -830,7 +858,9 @@ bool processRack(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames,
             if (feed.block.size() < feed.block.capacity() && toMidi(te.event, frame, m))
                 feed.block.push_back(m);
         }
-        if (feed.device && !p.deviceMidi.empty()) {
+        const bool hearSource =
+            feed.sourceDevice && (!feed.sourceAuto || !playing || p.deviceRecording);
+        if ((feed.device || hearSource) && !p.deviceMidi.empty()) {
             const std::size_t before = feed.block.size();
             for (const MidiInputEvent& ev : p.deviceMidi) {
                 if (ev.frame < p.deviceMidiOffset) continue;
@@ -838,7 +868,10 @@ bool processRack(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames,
                     feed.block.size() >= feed.block.capacity())
                     break;
                 std::uint8_t m[3];
-                if (!routeMidi(ev, feed.ports, 0, 0, m)) continue;
+                const bool direct = feed.device && routeMidi(ev, feed.ports, 0, 0, m);
+                if (!direct && !(hearSource && routeMidi(ev, feed.sourcePorts, feed.fromChannel,
+                                                         feed.toChannel, m)))
+                    continue;
                 feed.block.push_back({ev.frame - p.deviceMidiOffset, m[0], m[1], m[2]});
             }
             if (feed.block.size() > before)  // stable insertion sort by frame: no allocation

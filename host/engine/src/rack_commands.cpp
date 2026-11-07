@@ -751,6 +751,7 @@ void registerRackCommands(cmd::Registry& registry) {
                 track = *id;
             } else {
                 model::Track tr;
+                tr.record.monitor = e.defaultMonitor();
                 tr.name = a.name.value_or(model::nextTrackName(s, model::StripType::Channel));
                 tr.parent = model::kMaster;
                 track = t.create(tr);
@@ -766,8 +767,16 @@ void registerRackCommands(cmd::Registry& registry) {
             out.y = 40;
             const Id outId = t.create(out);
             const model::Track& home = *t.get<model::Track>(track);
-            if (home.record.input && t.get<model::Route>(*home.record.input)) {
-                t.modify<model::Route>(*home.record.input, [&](model::Route& r) {
+            if (home.record.input)
+                if (const auto* previous = t.get<model::Route>(*home.record.input);
+                    previous && previous->from.midiDevice)
+                    t.modify<model::Track>(track, [&](auto& x) {
+                        if (!x.record.midiInput) x.record.midiInput = home.record.input;
+                        x.record.input.reset();
+                    });
+            const auto audioInput = t.get<model::Track>(track)->record.input;
+            if (audioInput && t.get<model::Route>(*audioInput)) {
+                t.modify<model::Route>(*audioInput, [&](model::Route& r) {
                     r.from = model::RouteEnd{};
                     r.from.module = outId;
                     r.midi.reset();

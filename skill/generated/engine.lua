@@ -1795,7 +1795,7 @@ q = nil
 ---@field solo? string
 ---@field armed? boolean
 ---@field record_input? integer[]
----@field record_midi? string
+---@field record_midi? any
 ---@field record_rack? string A rack's Out module as the channel's input: the rack plays on the channel, before its inserts (rack.list lists them)
 ---@field midi_channel? integer
 ---@field record_mode? "input"|"midi_overdub"|"midi_replace"

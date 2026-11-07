@@ -76,7 +76,7 @@ Patch patch() {
 TEST_CASE("racks: a patch saves, reopens and serializes the same") {
     Patch p = patch();
     const std::string bytes = serializeProject(p.s);
-    CHECK(bytes.find("\"supple.project/2.7\"") != std::string::npos);
+    CHECK(bytes.find("\"supple.project/2.8\"") != std::string::npos);
     CHECK(bytes.find("\"mo_2.saw\"") != std::string::npos);
     auto loaded = parseProject(bytes);
     REQUIRE_MESSAGE(loaded, (loaded ? "" : loaded.error().message));

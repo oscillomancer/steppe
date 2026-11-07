@@ -18,6 +18,14 @@
 
 namespace supple::model {
 
+const Route* midiInputRoute(const Session& s, Id track) {
+    const auto* t = s.tracks.find(track);
+    if (!t) return nullptr;
+    const auto id = t->record.midiInput ? t->record.midiInput : t->record.input;
+    const auto* route = id ? s.routes.find(*id) : nullptr;
+    return route && route->from.midiDevice ? route : nullptr;
+}
+
 // --- ids -------------------------------------------------------------------------------
 
 namespace {

@@ -110,8 +110,8 @@ Status validateStripRules(const Session& s) {
         // monitoring, record modes and input FX stay on channels.
         if (t.type != StripType::Channel &&
             ((t.record.armed && t.type != StripType::Master) || t.record.input ||
-             t.record.monitor != Monitor::Off || t.record.mode != RecordMode::Input ||
-             !t.inputChain.empty()))
+             t.record.midiInput || t.record.monitor != Monitor::Off ||
+             t.record.mode != RecordMode::Input || !t.inputChain.empty()))
             return trackError(t.type == StripType::Master
                                   ? "a master records its output: no input, monitoring or input FX"
                                   : "only channels and masters can be armed",
@@ -131,6 +131,13 @@ Status validateStripRules(const Session& s) {
                 return Error(
                     "track.hw_output", "hw_output is two different channels, one channel or none",
                     path + "/hw_output", "e.g. [3, 4] for a pair, [5] for mono, [] for none");
+        }
+        if (t.record.midiInput) {
+            const auto* route = s.routes.find(*t.record.midiInput);
+            if (!route || !route->from.midiDevice || route->to.track != e.id)
+                return trackError("a MIDI input must enter this channel from a MIDI device",
+                                  path + "/record/midi_input",
+                                  "choose a MIDI input route into this channel");
         }
         if (t.record.input) {
             const Route* r = s.routes.find(*t.record.input);

@@ -569,7 +569,7 @@ TEST_CASE("masters: arm, audio items and lane mute round trip (ADR-0057)") {
     REQUIRE_MESSAGE(s, (s ? std::string() : s.error().toString()));
     REQUIRE(validateStripRules(*s));
     const std::string saved = serializeProject(*s);
-    CHECK(saved.find("\"supple.project/2.7\"") != std::string::npos);
+    CHECK(saved.find("\"supple.project/2.8\"") != std::string::npos);
     auto back = parseProject(saved);
     REQUIRE(back);
     CHECK(back->tracks.find(kMaster)->laneMute);
@@ -611,7 +611,7 @@ TEST_CASE("masters: arm, audio items and lane mute round trip (ADR-0057)") {
 
 TEST_CASE("project newer minor ignores unknown fields with load warnings") {
     auto doc = projectToJson(Session::create());
-    doc["schema"] = "supple.project/2.8";
+    doc["schema"] = "supple.project/2.9";
     doc["tracks"]["tr_0"]["future"] = true;
     std::vector<schema::Warning> warnings;
     auto parsed = projectFromJson(doc, &warnings);
@@ -1072,7 +1072,7 @@ TEST_CASE("render settings: a 2.2 file migrates to schema 2.3 and reopens byte-i
     CHECK(loaded->project->render ==
           render::toJson(render::settingsSchema().decode(expected).value()));
     const std::string saved = serializeProject(*loaded);
-    CHECK(saved.find("\"supple.project/2.7\"") != std::string::npos);
+    CHECK(saved.find("\"supple.project/2.8\"") != std::string::npos);
     CHECK(saved.find("tail_ms") == std::string::npos);
     auto reopened = parseProject(saved);
     REQUIRE(reopened);
