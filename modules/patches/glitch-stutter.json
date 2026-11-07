@@ -14,7 +14,10 @@
       "version": "1.0.0",
       "label": "Input",
       "x": 0.0,
-      "y": 259.0
+      "y": 259.0,
+      "params": {
+        "level": -1.0
+      }
     },
     {
       "type": "com.suppleaudio.rack.poly",
