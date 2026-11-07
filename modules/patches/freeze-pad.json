@@ -1,7 +1,7 @@
 {
   "schema": "supple.rack-preset/1.0",
   "name": "Freeze Pad",
-  "description": "A send effect that turns what it hears into a pad, all wet: two spectral freezes, one an octave down, blur the In into a hall; raise Hold's first knob past half to hold the spectrum, turn the Freeze's blur.",
+  "description": "A send effect that turns what it hears into a pad, all wet: two spectral freezes, one an octave down, blur the In into a hall; raise Hold's first knob past half while it plays to hold what it hears (raised before any sound, it holds silence), turn the Freeze's blur.",
   "modules": [
     {
       "type": "com.suppleaudio.rack.out",
