@@ -458,7 +458,8 @@ FxWindow::FxWindow(engine::EngineApp& app, cmd::Dispatcher& dispatcher, ui::Root
       favouritesFile_(std::move(favouritesFile)),
       hooks_(std::move(hooks)),
       mainBrowser_(std::make_unique<PluginBrowser>(app, dispatcher, mainRoot, favouritesFile_)),
-      watchers_(app) {}
+      watchers_(app),
+      pluginParams_(app) {}
 
 bool FxWindow::shows(model::Id fx) const {
     if (!page_) return false;
@@ -638,6 +639,37 @@ Status FxWindow::openFor(const UiState& ui, const json::Value& prompt) {
     return open(*id);
 }
 
+Status FxWindow::showRack(model::Id track, model::Id rack) {
+    SUPPLE_TRY(open(track));
+    reveal_ = rack;
+    revealUntil_ = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    revealRack();
+    return {};
+}
+
+void FxWindow::revealRack() {
+    if (!reveal_) return;
+    if (!page_ || !body_ || std::chrono::steady_clock::now() > revealUntil_) {
+        reveal_.reset();
+        return;
+    }
+    for (const RackDevice* d : devices_) {
+        if (d->rack() != *reveal_) continue;
+        const ui::Rect b = d->bounds();
+        if (b.h <= 0) return;  // not laid out yet: the next pass
+        if (auto* scroll = dynamic_cast<ui::ScrollView*>(body_->parent())) {
+            const float top = b.y - body_->bounds().y;  // in the chain's content
+            const float view = scroll->bounds().h;
+            // Only when it is not already wholly in view.
+            if (top < scroll->scroll() || top + b.h > scroll->scroll() + view)
+                scroll->scrollTo(top);
+        }
+        reveal_.reset();
+        return;
+    }
+    reveal_.reset();  // the rack does not feed the track (any more)
+}
+
 // The plugin browser on its own: what it adds goes last in the chain of the
 // track given (a strip's "+"), else of every selected track; a chain window
 // open on one of them shows it.
@@ -702,6 +734,8 @@ void FxWindow::addFxTo(const std::vector<model::Id>& tracks, const std::string& 
 void FxWindow::close() { panel_.close(); }
 
 std::optional<std::chrono::steady_clock::time_point> FxWindow::nextDeadline() const {
+    // A device to scroll to once the window is laid out: the next pass.
+    if (page_ && reveal_) return std::chrono::steady_clock::now();
     return page_ && !watchers_.modules().empty() ? nextFollow_ : std::nullopt;
 }
 
@@ -848,6 +882,7 @@ void FxWindow::tick(bool event) {
         for (RackDevice* d : devices_) d->follow();
         nextFollow_ = now + std::chrono::milliseconds(33);
     }
+    revealRack();
     if (page_ && body_)
         for (const auto& [id, cached] : latency_) {
             const auto fx = model::Id::parse(id);
@@ -1062,6 +1097,9 @@ void FxWindow::buildChain(ui::Node& body) {
         };
         rh.learn = [this](LearnRequest request) {
             if (hooks_.openLearn) hooks_.openLearn(std::move(request));
+        };
+        rh.paramName = [this](model::Id fx, const std::string& key) {
+            return pluginParams_.name(fx, key);
         };
         rh.menu = [this](std::vector<ui::MenuItem> items, ui::Point at) {
             root().openPopup(

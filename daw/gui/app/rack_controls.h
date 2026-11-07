@@ -39,7 +39,8 @@ struct MacroGroup {
 };
 // The Macro modules of `rack` (in module order) with their cabled knobs;
 // Macro modules with none are left out. `pluginParamName` names a plug-in
-// parameter a cable reaches (fx, key), else the key is used.
+// parameter a cable reaches (fx, key), as the plug-in writes it; else the
+// cable's key is used.
 std::vector<MacroGroup> macroGroups(
     const model::Session& s, const rack::Catalog& catalog, model::Id rack,
     const std::function<std::string(model::Id fx, const std::string& key)>& pluginParamName = {});

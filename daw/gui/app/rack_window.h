@@ -101,8 +101,8 @@ class RackWindow {
                    ui::Point at);
     // A cable's right-click: what it reaches, its amount, remove.
     void cableMenu(model::Id cable, ui::Point at);
-    // A plug-in's parameters (asked once per plug-in and version).
-    const racks::PluginParams& paramsOf(model::Id fx);
+    // A plug-in's parameters (asked once per fx and plug-in, shared).
+    const racks::PluginParams& paramsOf(model::Id fx) { return pluginParams_.of(fx); }
     // A search list of what can be added, at the pointer (`text` typed so
     // far); the choice lands at `space`, and takes `from`'s cable if given.
     void quickAdd(ui::Point at, ui::Point space, const std::string& text,
@@ -191,8 +191,7 @@ class RackWindow {
     std::uint64_t noticeVersion_ = 0;
     json::Value presets_ = json::Value::object();  // rack.preset.list's
     bool presetsRead_ = false;
-    // paramsOf's answers by fx, with the plug-in they were asked of.
-    std::map<model::Id, std::pair<std::string, racks::PluginParams>> pluginParams_;
+    racks::PluginParamCache pluginParams_;  // paramsOf's, shared with other views
 };
 
 }  // namespace supple::gui

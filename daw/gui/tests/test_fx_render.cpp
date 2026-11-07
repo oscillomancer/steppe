@@ -30,6 +30,7 @@
 #include "supple/ui/list.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/root.h"
+#include "supple/ui/scroll_view.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
 
@@ -2017,6 +2018,56 @@ TEST_CASE(
         automated = automated || (e.value->target.object == *model::Id::parse(macro) &&
                                   e.value->target.param == "macro_1");
     CHECK(automated);
+}
+
+TEST_CASE("a mixer strip's rack slot shows the rack's device: the chain window scrolls to it") {
+    Fixture f;
+    if (!f.ok) return;
+    auto exec = [&](const char* command, const std::string& args) {
+        auto r = f.run(command, json::parse(args).value());
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    json::Value made = exec("rack.add", R"({"name":"Lead"})");
+    const std::string rack = made["rack"].asString(), track = made["track"].asString();
+    const model::Id trackId = *model::Id::parse(track), rackId = *model::Id::parse(rack);
+    for (int i = 0; i < 10; ++i)
+        exec("fx.add", R"({"track":")" + track + R"(","plugin":"Hickory"})");
+    REQUIRE(f.fx->open(trackId));
+    f.frame();
+    auto* scroll = dynamic_cast<ui::ScrollView*>(f.panel->root().find("fx.body"));
+    REQUIRE(scroll);
+    REQUIRE(scroll->contentHeight() > scroll->bounds().h);
+    scroll->scrollToEnd();
+    f.frame();
+    REQUIRE(f.fx->rackDevices().size() == 1);
+    CHECK(f.fx->rackDevices().front()->bounds().y < scroll->bounds().y);  // scrolled out
+    // The slot's click: the window (already open) in view at the device.
+    REQUIRE(f.fx->showRack(trackId, rackId));
+    CHECK(f.fx->nextDeadline());  // the loop wakes for the layout pass
+    f.frame();
+    f.fx->tick();
+    f.frame();
+    CHECK_FALSE(f.fx->nextDeadline());  // done (and no Macro to follow)
+    REQUIRE(f.fx->rackDevices().size() == 1);
+    const ui::Rect device = f.fx->rackDevices().front()->bounds(), view = scroll->bounds();
+    CHECK(device.y >= view.y - 0.5f);
+    CHECK(device.y < view.bottom());
+    CHECK(f.fx->track() == trackId);
+    f.snapshot("fx-rack-shown.png");
+    // From another channel, too: it switches to the rack's.
+    const std::string other =
+        exec("track.add", R"({"type":"channel","name":"Other"})")["track"].asString();
+    REQUIRE(f.fx->open(*model::Id::parse(other)));
+    f.frame();
+    CHECK(f.fx->rackDevices().empty());
+    REQUIRE(f.fx->showRack(trackId, rackId));
+    f.frame();
+    f.fx->tick();
+    f.frame();
+    CHECK(f.fx->track() == trackId);
+    REQUIRE(f.fx->rackDevices().size() == 1);
+    CHECK(f.fx->rackDevices().front()->bounds().y >= scroll->bounds().y - 0.5f);
 }
 
 TEST_CASE("a Rack device without Macro modules shows its name and Open; knobs follow playback") {

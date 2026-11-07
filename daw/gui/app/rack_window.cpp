@@ -774,7 +774,8 @@ RackWindow::RackWindow(FloatingPanel& panel, AppActions& actions, cmd::Dispatche
       dispatcher_(dispatcher),
       app_(app),
       ui_(ui),
-      watchers_(app) {
+      watchers_(app),
+      pluginParams_(app) {
     actions_.addUi("ui.rack", "View: racks", [this] {
         if (isOpen())
             close();
@@ -1138,8 +1139,7 @@ Status RackWindow::reload() {
     // A plug-in parameter's socket shows the parameter's name.
     for (auto& m : scene.modules)
         if (m.fx && !m.mods.empty()) {
-            const racks::PluginParams& ps = paramsOf(*m.fx);
-            for (const std::string& key : m.mods) m.modNames[key] = ps.nameOf(key);
+            for (const std::string& key : m.mods) m.modNames[key] = pluginParams_.name(*m.fx, key);
         }
     space_->setScene(std::move(scene));
     space_->setEmptyText(s.racks.empty() ? "No racks yet. + adds one on the selected channel."
@@ -1547,18 +1547,6 @@ class PickList : public ui::Node {
 };
 
 }  // namespace
-
-const racks::PluginParams& RackWindow::paramsOf(model::Id fx) {
-    const model::FxInstance* f = app_.head().fx.find(fx);
-    const std::string plugin =
-        f ? f->plugin.format + ":" + f->plugin.id + "@" + f->plugin.version : std::string();
-    auto& [asked, params] = pluginParams_[fx];
-    if (asked != plugin || plugin.empty()) {
-        asked = plugin;
-        params = f ? racks::pluginParams(app_, *f) : racks::PluginParams{};
-    }
-    return params;
-}
 
 void RackWindow::pickParam(const model::CableEnd& from, model::Id module,
                            std::optional<model::Id> replace, ui::Point at) {
@@ -2068,22 +2056,11 @@ Status RackWindow::loadPreset(const std::string& name, std::optional<ui::Point> 
         args["y"] = std::round(static_cast<double>(at->y));
     }
     if (rackEmpty()) {
-        // A start: the patch's Out and In are the rack's own (nothing is
-        // replaced), laid out with them by signal flow, one undo step, and
-        // all of it shown.
-        const std::string rack = rack_->str();
-        auto r = dispatcher_.transact("Load patch " + name, kOrigin, [&]() -> Result<json::Value> {
-            auto loaded = dispatcher_.execute({"rack.preset.load", std::move(args), kOrigin});
-            if (!loaded) return loaded;
-            json::Value arrange = json::Value::object();
-            arrange["rack"] = rack;
-            SUPPLE_TRY(dispatcher_.execute({"rack.arrange", std::move(arrange), kOrigin}));
-            return loaded;
-        });
-        if (!r) {
-            report(r.error());
-            return r.error();
-        }
+        // A start: the patch's Outs and Ins are the rack's own (nothing is
+        // replaced), moved to the patch's places by the load (its own
+        // layout), and all of it shown.
+        auto r = exec("rack.preset.load", std::move(args));
+        if (!r) return r.error();
         sync();
         if (space_) {
             space_->select({});

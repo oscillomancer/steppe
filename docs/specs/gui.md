@@ -678,7 +678,14 @@ the menu offers None and says the engine lists the outputs); then one row with t
 (channels) and the mono pill (ADR-0022), above the pan. Everything under the
 chain has a fixed height and the chain takes what a strip's missing rows
 leave, so every strip's fader sits at the same height. The strip's plug-in chain lists every plug-in,
-scrolling when it is longer than its section, and takes the room a strip's
+after a channel's rack slots: one line per rack whose Out feeds the channel
+(`racks::racksFeeding`), in route order, with the rack's name on a rack
+module's face and a faint "rack". A click on one shows that rack's Rack
+device in the FX chain window (`FxWindow::showRack`: the window opens on the
+channel, Chain tab, scrolled to the device when it is not wholly in view);
+a double-click opens the rack window on the rack, and its release clicks
+nothing; a right-click is the strip's. The chain scrolls when it is
+longer than its section, and takes the room a strip's
 unused rows would leave (sends show only when there are some, two rows of
 them, scrolled by the wheel or a bar when there are more; busses have no arm
 row, masters no monitoring). A send's text brightens under the pointer; a
@@ -797,8 +804,12 @@ window on that rack). Below come the knobs of its Macro modules
 "Macro"). Only a knob whose output (`macro_N` out of `out_N`) is cabled
 is shown, named after what its first cable reaches: the far module's title
 and its knob's or input's name, the name's first letter lower-cased unless
-it is an initialism ("Filter cutoff", "Amp CV"), and "+N" for the output's
-other cables. A Macro with no cabled knob is left out. With none, the
+it is an initialism ("Filter cutoff", "Amp CV"); a plug-in parameter by
+its name as the plug-in writes it ("Bracken Mod Rate"); and "+N" for the
+output's other cables. Plug-in parameter names come from
+`racks::PluginParamCache`, shared with the rack window's sockets: a
+plug-in is asked once per fx (a scratch instance) and again only when that
+fx holds another plug-in or version. A Macro with no cabled knob is left out. With none, the
 device is only the name and Open: the GUI does not guess at other
 "performance" knobs. A knob's drag runs `module.set` as one undo step (its
 gesture); a double click resets it; its right-click offers a rack knob's
@@ -813,7 +824,9 @@ chain when the project changes (a cable, a label), not while a knob is
 being dragged. The window is this home because it is where a channel's
 devices are shown whole, one channel at a time with room for eight knobs
 in a row, and it already switches channels and offers a parameter's
-learn and automation. The mixer strip's chain is one line per plug-in.
+learn and automation. The mixer strip's chain is one line per plug-in, so
+a strip shows a rack as one line too, its rack slot (§4.4), which opens
+this device.
 
 Chain list with add (searchable browser over the plugin scan cache;
 favourites and stock plugins first; a stock plugin's row says what it is
@@ -1352,12 +1365,12 @@ a new channel). It follows rack.md §8.
   drop point, else beside the rack's modules), its modules selected and
   brought into view. Into an empty rack (only its own Outs and Ins) a
   load replaces nothing: the patch's Out and In are the rack's own (`io:
-  join`), the rack is laid out by signal flow with them (`rack.arrange`),
-  the load and the layout one undo step ("Load patch <name>"), and
-  everything is shown. A right-click offers Load into rack and, for the
-  user's own, Delete patch (a factory patch of the same name comes back).
-  Saving (Save as patch…, Save rack as patch…) asks a name
-  in a field over the space (the rack's label, or the one module's) and
+  join`), moved to the patch's own places, so the patch keeps its layout
+  (rack.md §7.1), one undo step, and everything is shown. A right-click
+  offers Load into rack and, for the user's own, Delete patch (a factory
+  patch of the same name comes back). Saving (Save as patch…, Save rack
+  as patch…) asks a name in a field over the space (the rack's label, or
+  the one module's) and
   calls `rack.preset.save` with the selection's ids or none; a name in use
   asks Replace "<name>" before saving with `replace`. The list is read when
   the window opens and after each save or delete.

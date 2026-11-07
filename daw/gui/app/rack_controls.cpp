@@ -36,7 +36,9 @@ std::vector<MacroGroup> macroGroups(
         if (to.object.kind == model::Kind::Fx) {
             for (const auto& m : s.modules)
                 if (m.value->fx == to.object) owner = m.id;
-            if (pluginParamName) what = pluginParamName(to.object, to.key);
+            // As the plug-in shows it ("Mod Rate"): its own words, cased its way.
+            if (pluginParamName)
+                return moduleTitle(s, catalog, owner) + " " + pluginParamName(to.object, to.key);
         } else if (const model::RackModule* m = s.modules.find(to.object)) {
             if (const rack::Catalog::Entry* t = catalog.find(m->type)) {
                 const rack::ModuleType& tt = *t->type;

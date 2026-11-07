@@ -320,8 +320,8 @@ puts any CLAP or VST3 plugin in the rack as a module; click it to open
 its editor. **Patches** lists whole patches: your own under *Yours*, and
 the ones that come with Steppe under *Factory*. Hover one to read what it
 is, search them, and double-click one or drag it into the space. Into an
-empty rack a patch arrives whole, laid out and in view, using the rack's
-own Out; Undo takes it away in one step.
+empty rack a patch arrives whole, as its author laid it out and in view,
+using the rack's own Out; Undo takes it away in one step.
 
 The quickest way to add a module is to start typing its name over the
 space, or double-click an empty spot: a list opens where the pointer is,
@@ -345,6 +345,9 @@ knobs at the top of its FX chain window (the **fx** button), named after
 what they drive ("Filter cutoff"), with **Open** to go to the rack. Turn
 them there, right-click one to automate it or to learn a MIDI controller,
 and watch them move with their automation as the song plays.
+In the mixer, that channel shows the rack as a line above its plugins,
+marked **rack**: click it to see those knobs, double-click it to open the
+rack.
 **Tidy up** in the space's right-click menu lays the rack out by signal
 flow, left to right; with several modules selected, only they move. Undo
 puts them back.

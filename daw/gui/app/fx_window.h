@@ -22,6 +22,7 @@
 #include "plugin_browser.h"
 #include "rack_controls.h"
 #include "rack_device.h"
+#include "rack_plugin_params.h"
 #include "supple/engine/app.h"
 #include "supple/model/ids.h"
 #include "supple/ui/node.h"
@@ -62,6 +63,9 @@ class FxWindow {
     std::optional<model::Id> take() const { return take_; }
     // The `ui.fx.chain` action: a track id in `prompt`, else the selected track.
     Status openFor(const UiState& ui, const json::Value& prompt);
+    // The chain window on `track` with `rack`'s Rack device in view (a mixer
+    // strip's rack slot): scrolled to it once the window is laid out.
+    Status showRack(model::Id track, model::Id rack);
     // The plugin browser alone, adding to that track's chain, or with no
     // track given to every selected track's (ui.fx.add).
     Status openToAdd(const UiState& ui, const json::Value& prompt);
@@ -70,7 +74,8 @@ class FxWindow {
 
     // Frame pass: refresh after changes made elsewhere (agents, undo).
     void tick(bool event = true);
-    // When the Rack devices' knobs next read their Macros' telemetry.
+    // When the Rack devices' knobs next read their Macros' telemetry, or now
+    // while showRack waits for the window's layout.
     std::optional<std::chrono::steady_clock::time_point> nextDeadline() const;
     // Tests: the chain's Rack devices (racks that feed the track).
     std::vector<RackDevice*> rackDevices() const { return devices_; }
@@ -198,10 +203,15 @@ class FxWindow {
     ui::Node* tabsRow_ = nullptr;
     ui::Button* title_ = nullptr;
     ui::Label* status_ = nullptr;
-    ui::Label* touched_ = nullptr;      // the last touched parameter
-    std::vector<RackDevice*> devices_;  // in body_
-    racks::Watchers watchers_;          // their Macro modules
+    ui::Label* touched_ = nullptr;          // the last touched parameter
+    std::vector<RackDevice*> devices_;      // in body_
+    racks::Watchers watchers_;              // their Macro modules
+    racks::PluginParamCache pluginParams_;  // the names of plug-in parameters they drive
     std::optional<std::chrono::steady_clock::time_point> nextFollow_;
+    // showRack's rack, until its device is in view (given up after a second).
+    std::optional<model::Id> reveal_;
+    std::chrono::steady_clock::time_point revealUntil_{};
+    void revealRack();
     std::uint64_t touchedSerial_ = 0;
     std::uint64_t shownVersion_ = ~std::uint64_t{0};
     std::uint64_t projectGeneration_ = ~std::uint64_t{0};

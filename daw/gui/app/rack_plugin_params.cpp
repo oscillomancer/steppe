@@ -6,6 +6,7 @@
 #include <cctype>
 #include <charconv>
 #include <map>
+#include <utility>
 
 #include <clap/clap.h>
 
@@ -85,5 +86,74 @@ PluginParams pluginParams(engine::EngineApp& app, const model::FxInstance& fx) {
         out.note = "None of its parameters take modulation.";
     return out;
 }
+
+// --- the shared cache ---------------------------------------------------------------
+
+namespace {
+
+// What an fx holds: "format:id@version" ("" when it is not there).
+std::string pluginOf(const model::Session& s, model::Id fx) {
+    const model::FxInstance* f = s.fx.find(fx);
+    return f ? f->plugin.format + ":" + f->plugin.id + "@" + f->plugin.version : std::string();
+}
+
+}  // namespace
+
+struct PluginParamCache::Store {
+    struct Asked {
+        std::string plugin;  // pluginOf when asked
+        PluginParams params;
+        std::map<std::string, std::string> names;  // by key
+    };
+    std::map<model::Id, Asked> byFx;
+    std::size_t asked = 0;
+};
+
+namespace {
+// The stores by app (tests run several apps), alive while a view holds one.
+std::map<const engine::EngineApp*, std::weak_ptr<PluginParamCache::Store>>& stores() {
+    static std::map<const engine::EngineApp*, std::weak_ptr<PluginParamCache::Store>> all;
+    return all;
+}
+}  // namespace
+
+PluginParamCache::PluginParamCache(engine::EngineApp& app) : app_(app) {
+    auto& slot = stores()[&app_];
+    store_ = slot.lock();
+    if (!store_) {
+        store_ = std::make_shared<Store>();
+        slot = store_;
+    }
+}
+
+PluginParamCache::~PluginParamCache() {
+    const bool last = store_.use_count() == 1;
+    store_.reset();
+    if (last) stores().erase(&app_);
+}
+
+const PluginParams& PluginParamCache::of(model::Id fx) {
+    const model::Session& s = app_.head();
+    const std::string plugin = pluginOf(s, fx);
+    Store::Asked& a = store_->byFx[fx];
+    if (a.plugin != plugin || plugin.empty()) {
+        a.plugin = plugin;
+        a.names.clear();
+        const model::FxInstance* f = s.fx.find(fx);
+        a.params = f ? pluginParams(app_, *f) : PluginParams{};
+        if (f) ++store_->asked;
+    }
+    return a.params;
+}
+
+const std::string& PluginParamCache::name(model::Id fx, const std::string& key) {
+    const PluginParams& params = of(fx);
+    Store::Asked& a = store_->byFx[fx];
+    auto it = a.names.find(key);
+    if (it == a.names.end()) it = a.names.emplace(key, params.nameOf(key)).first;
+    return it->second;
+}
+
+std::size_t PluginParamCache::asked() const { return store_->asked; }
 
 }  // namespace supple::gui::racks
