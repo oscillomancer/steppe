@@ -428,6 +428,8 @@ Arm the channel and turn monitoring On to play it from the keyboard (Auto
 listens while stopped or recording). The channel's audio and MIDI inputs
 are independent. With both selected, recording creates MIDI takes; clear
 MIDI with `track.set {record_midi: null}` to print the rack audio instead.
+`module.set {device: null}` removes an explicit Notes device, and
+`source: null` returns Notes to its rack's home channel.
 
 Your own modules live in the library folder, and the project you save
 keeps a copy of each one it uses beside it (in `modules`), as it keeps its

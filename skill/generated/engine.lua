@@ -1010,8 +1010,8 @@ q = nil
 ---@field x? number
 ---@field y? number
 ---@field bypass? boolean
----@field source? string
----@field device? string
+---@field source? any
+---@field device? any
 
 ---@class Steppe.module_write_args
 ---@field name string

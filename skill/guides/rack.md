@@ -649,4 +649,5 @@ A rack channel can keep its audio Out and a keyboard input together:
 `track.set {track: "tr_1", record_midi: "*", armed: true, monitor: "on"}`.
 Its default Notes source follows that channel. MIDI and audio selections do
 not replace each other. Recording takes MIDI when a MIDI input is selected;
-`record_midi: null` clears it to print audio.
+`record_midi: null` clears it to print audio. To clear a Notes module's own
+settings use `module.set {module: "mo_2", device: null, source: null}`.

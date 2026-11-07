@@ -9471,7 +9471,7 @@ Result:
 
 Set a module's knobs, label, place or bypass.
 
-params merge into its knobs (values in the knob's units; a choice by key; a default value is dropped from the file). A knob edit is heard at once, without a recompile. bypass passes each input to the output of its kind. label names it (an Out module's label is what channels' input menus list). preset: a factory preset by name (module.describe lists them): every knob to it, then params on top.
+params merge into its knobs (values in the knob's units; a choice by key; a default value is dropped from the file). A knob edit is heard at once, without a recompile. Notes source/device accept null to clear them (source returns to the home track; device to none). bypass passes each input to the output of its kind. label names it (an Out module's label is what channels' input menus list). preset: a factory preset by name (module.describe lists them): every knob to it, then params on top.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -9486,8 +9486,8 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | `x` | number |  | -1e+06..1e+06 |  |  |
 | `y` | number |  | -1e+06..1e+06 |  |  |
 | `bypass` | boolean |  |  |  |  |
-| `source` | string |  |  |  |  |
-| `device` | string |  |  |  |  |
+| `source` | value |  |  |  |  |
+| `device` | value |  |  |  |  |
 
 ### Result
 

@@ -2042,6 +2042,28 @@ TEST_CASE("rack inputs: home Notes hears monitored device MIDI in both executors
             }
 }
 
+TEST_CASE("module.set: null clears Notes device and source while omission retains them") {
+    Fixture f;
+    f.run("rack.add");
+    f.run("module.add", R"({"rack":"rk_1","type":"notes","device":"","source":"tr_0"})");
+    f.run("module.set", R"({"module":"mo_2","label":"Keys"})");
+    const auto* notes = f.app->head().modules.find({model::Kind::Module, 2});
+    REQUIRE(notes->device);
+    CHECK(notes->device->empty());
+    CHECK(notes->source == model::kMaster);
+    f.run("module.set", R"({"module":"mo_2","device":null,"source":null})");
+    notes = f.app->head().modules.find({model::Kind::Module, 2});
+    CHECK_FALSE(notes->device);
+    CHECK_FALSE(notes->source);
+    f.run("history.undo");
+    REQUIRE(f.app->head().modules.find({model::Kind::Module, 2})->device);
+    f.run("history.redo");
+    CHECK_FALSE(f.app->head().modules.find({model::Kind::Module, 2})->device);
+    auto wrong = f.call("module.set", *json::parse(R"({"module":"mo_1","device":null})"));
+    REQUIRE_FALSE(wrong);
+    CHECK(wrong.error().code == "rack.param");
+}
+
 TEST_CASE("rack inputs: audio and MIDI inputs remain independent on ordinary channels too") {
     Fixture f;
     f.run("track.add");

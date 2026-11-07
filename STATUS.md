@@ -286,8 +286,9 @@ instructions are in `docs/guides/installing.md`.
   legacy MIDI inputs still load). Selecting a keyboard keeps its rack Out;
   Notes on the home track follows its armed monitoring and MIDI channel map
   in both executors. With both inputs selected recording takes MIDI; clearing
-  record_midi leaves the audio path. Without a selected MIDI input, armed
-  channels record their rack Out audio input as stereo WAV,
+  record_midi leaves the audio path. Notes device/source can be cleared with
+  null. Without a selected MIDI input, armed channels record their rack Out
+  audio input as stereo WAV,
   including input FX, loop/punch takes, recovery and undo.
   Sends into rack In ports preserve the tap at the route's level and pan,
   without Console 9 trim, with the console enabled or disabled.

@@ -66,8 +66,8 @@ Fields equal to their defaults are omitted, as everywhere (session-model §5).
 | `x`, `y` | Its top-left corner in the rack's space, design units (finite, ±1e6). |
 | `params` | Knob values by key in physical units (a percent as 30, a choice by key, a toggle as a bool), as a semantic plugin's patch params. Missing keys are defaults; canonical: only non-defaults are written. |
 | `bypass` | Bypassed: see §4.6. |
-| `source` | Notes modules: the track whose MIDI it plays (unset: the rack's home track). |
-| `device` | Notes modules: a live MIDI input it always plays, armed or not, matched as a MIDI route's device (a case-insensitive substring; `""`: any input). Unset: none. |
+| `source` | Notes modules: the track whose MIDI it plays (unset: the rack's home track; `module.set {source: null}` restores that default). |
+| `device` | Notes modules: a live MIDI input it always plays, armed or not, matched as a MIDI route's device (a case-insensitive substring; `""`: any input). Unset: none (`module.set {device: null}` clears it). |
 | `fx` | Plugin modules (required there, refused elsewhere): its plug-in instance, an `fx_N` in no chain. |
 | `learn` | MIDI learn on its parameters, as an FX's (`ParamLearn`). |
 
