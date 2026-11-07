@@ -1252,7 +1252,15 @@ a new channel). It follows rack.md §8.
   Bypass, Copy, Cut, Duplicate, Randomize, Presets… (the type's factory
   patches, `module.set preset`), Show source, Capture notes to track…
   (modules with pitch and gate outputs), Save as patch… (the
-  selection) and Delete. Capture notes to track… picks a channel, then a
+  selection) and Delete. A Notes module adds MIDI input… and Plays
+  track…, each naming its current choice ("none", "any" or the device;
+  "home" or the track). MIDI input… is None ("via its channel": the home
+  or source channel's armed, monitored input; `module.set {device: null}`),
+  Any MIDI input (`device: ""`) and each device `engine.inputs` lists (a
+  saved one it does not list stays, checked, "not connected"; while the
+  engine is stopped the menu says to start it); a device is heard armed or
+  not. Plays track… is Home (the rack's channel; `source: null`) and every
+  other channel (`source`). Each pick is one undo step. Capture notes to track… picks a channel, then a
   length (1, 2, 4, 8 or 16 bars, from the bar the playhead is in) and runs
   `rack.capture` with the module's first pitch and gate outputs (and its
   `velocity` output, if any) as a job (`async`): one undo step, a MIDI item

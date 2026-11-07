@@ -398,7 +398,11 @@ MIDI controller and click OK, and that control turns the knob (a small
 dot marks it), which moves on screen as you turn it; right-click it again
 to see the binding or remove it. Right-click a module to rename, bypass,
 duplicate, randomize or delete it, to load one of its presets, or to **Show
-source**. Modules from your library (in the data folder's `modules`) can be
+source**. A **Notes** module's menu also chooses what it plays: **MIDI
+input** (None plays its channel's keyboard while the channel is armed and
+monitoring; Any or a named device plays that keyboard always, armed or not)
+and **Plays track** (Home, the rack's channel, or another channel's MIDI
+items and keyboard). Modules from your library (in the data folder's `modules`) can be
 edited and saved there and then; a stock module offers **Make editable
 copy**.
 

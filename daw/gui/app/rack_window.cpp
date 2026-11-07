@@ -1981,6 +1981,75 @@ void RackWindow::captureMenu(model::Id module, ui::Point at) {
         {at.x, at.y, 1, 1});
 }
 
+void RackWindow::notesInputMenu(model::Id module, ui::Point at) {
+    const model::RackModule* m = app_.head().modules.find(module);
+    if (!m) return;
+    auto set = [this, module](json::Value device) {
+        json::Value args = json::Value::object();
+        args["module"] = module.str();
+        args["device"] = std::move(device);
+        (void)exec("module.set", std::move(args));
+    };
+    const std::optional<std::string> current = m->device;
+    std::vector<ui::MenuItem> items;
+    items.push_back(
+        {"None", "via its channel", [set] { set(json::Value()); }, true, false, !current});
+    items.push_back({"Any MIDI input", "", [set] { set(json::Value("")); }, true, false,
+                     current && current->empty()});
+    // The devices the engine holds open (engine.inputs), as the channel
+    // input menu lists them; a saved one it does not list stays shown.
+    auto r = dispatcher_.execute({"engine.inputs", json::Value::object(), kOrigin});
+    const json::Value* running = r ? r->find("running") : nullptr;
+    const json::Value* midi = r ? r->find("midi") : nullptr;
+    bool listed = !current || current->empty();
+    if (running && running->isBool() && running->asBool() && midi && midi->isArray()) {
+        if (!midi->asArray().empty()) items.push_back({"", "", {}, true, true});
+        for (const auto& d : midi->asArray()) {
+            if (!d.isString() || d.asString().empty()) continue;
+            const std::string name = d.asString();
+            listed = listed || name == *current;
+            items.push_back({name, "", [set, name] { set(json::Value(name)); }, true, false,
+                             current && *current == name});
+        }
+    } else {
+        items.push_back({"", "", {}, true, true});
+        items.push_back({"engine stopped \u2014 start it to list the devices", "", {}, false});
+    }
+    if (!listed) items.push_back({*current, "not connected", [] {}, true, false, true});
+    root().openPopup(
+        ui::makeMenu("rack.notes.input", std::move(items), [this] { root().closePopup(); }),
+        {at.x, at.y, 1, 1});
+}
+
+void RackWindow::notesSourceMenu(model::Id module, ui::Point at) {
+    const model::Session& s = app_.head();
+    const model::RackModule* m = s.modules.find(module);
+    const model::Rack* rack = m ? s.racks.find(m->rack) : nullptr;
+    if (!m || !rack) return;
+    auto set = [this, module](json::Value source) {
+        json::Value args = json::Value::object();
+        args["module"] = module.str();
+        args["source"] = std::move(source);
+        (void)exec("module.set", std::move(args));
+    };
+    std::vector<ui::MenuItem> items;
+    items.push_back({"Home", model::trackLabel(s, rack->track), [set] { set(json::Value()); }, true,
+                     false, !m->source,
+                     root().theme().trackColor(s.tracks.find(rack->track)->color)});
+    std::vector<ui::MenuItem> others;
+    for (const auto& e : s.tracks) {
+        if (e.value->type != model::StripType::Channel || e.id == rack->track) continue;
+        others.push_back({model::trackLabel(s, e.id), "",
+                          [set, id = e.id] { set(json::Value(id.str())); }, true, false,
+                          m->source == e.id, root().theme().trackColor(e.value->color)});
+    }
+    if (!others.empty()) items.push_back({"", "", {}, true, true});
+    for (auto& item : others) items.push_back(std::move(item));
+    root().openPopup(
+        ui::makeMenu("rack.notes.source", std::move(items), [this] { root().closePopup(); }),
+        {at.x, at.y, 1, 1});
+}
+
 void RackWindow::moduleMenu(model::Id module, ui::Point at) {
     const model::RackModule* m = app_.head().modules.find(module);
     if (!m || !space_) return;
@@ -2050,6 +2119,15 @@ void RackWindow::moduleMenu(model::Id module, ui::Point at) {
                                               {at.x, at.y, 1, 1});
                          },
                          !several});
+    if (m->type == model::kNotesModule) {
+        // What it plays (rack.md §2.2): its own MIDI input, and which track's MIDI.
+        const std::string device = !m->device ? "none" : m->device->empty() ? "any" : *m->device;
+        items.push_back({"MIDI input\u2026", device,
+                         [this, module, at] { notesInputMenu(module, at); }, !several});
+        const model::Session& s = app_.head();
+        items.push_back({"Plays track\u2026", m->source ? model::trackLabel(s, *m->source) : "home",
+                         [this, module, at] { notesSourceMenu(module, at); }, !several});
+    }
     if (type && type->type->code())
         items.push_back({"Show source", "", [this, id = m->type] { showSource(id); }, !several});
     if (type && noteOutputs(*type->type))

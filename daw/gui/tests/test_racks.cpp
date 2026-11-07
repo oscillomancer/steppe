@@ -1451,6 +1451,153 @@ TEST_CASE("rack window: patches have a view of their own, searchable, with a car
     CHECK(f.racks->browserShows().size() > 40);
 }
 
+TEST_CASE("rack window: a Notes module's menu picks its MIDI input and the track it plays") {
+    // A keyboard the test plays: a manual dummy backend with one MIDI port.
+    std::mutex lock;
+    std::deque<engine::MidiInputEvent> queued;
+    engine::DummyBackend backend(engine::DummyBackend::Options{
+        .mode = engine::DummyBackend::Mode::Manual,
+        .captureFrames = 48000 * 12,
+        .midiPorts = {"Keys"},
+        .midi = [&](std::vector<engine::MidiInputEvent>& out, std::uint32_t, std::int64_t) {
+            std::lock_guard<std::mutex> g(lock);
+            while (!queued.empty()) {
+                out.push_back(queued.front());
+                queued.pop_front();
+            }
+        }});
+    Fixture f;
+    if (!f.ok) return;
+    f.app->attachCommands(*f.dispatcher);
+    auto made = f.exec("rack.add", R"({"name":"Voice"})");
+    const std::string rack = made["rack"].asString();
+    const model::Id home = *model::Id::parse(made["track"].asString());
+    f.exec("rack.preset.load", R"({"rack":")" + rack + R"(","name":"Init Voice"})");
+    auto other = f.exec("track.add", R"({"name":"Part"})");
+    const model::Id part = *model::Id::parse(other["track"].asString());
+    std::optional<model::Id> found;
+    for (const auto& e : f.app->head().modules)
+        if (e.value->type == model::kNotesModule) found = e.id;
+    REQUIRE(found);
+    const model::Id notes = *found;
+    REQUIRE(f.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 256, .midiInputs = true},
+                               {.anticipative = false}));
+    f.racks->open();
+    f.frame();
+    gui::RackSpace& space = *f.racks->space();
+    auto openMenu = [&]() -> const ui::Node* {
+        f.r().closePopups();
+        f.frame();
+        const auto at = space.bodyAt(notes);
+        REQUIRE(at);
+        f.pointer(ui::PointerEvent::Type::Down, *at, 3);
+        f.pointer(ui::PointerEvent::Type::Up, *at, 3);
+        return f.r().find("rack.module.menu");
+    };
+    auto item = [](const ui::Node& menu, const std::string& label) -> const ui::MenuItem* {
+        for (const auto& i : ui::menuItems(menu))
+            if (i.label == label) return &i;
+        return nullptr;
+    };
+    auto checked = [&](const char* id) {
+        std::vector<std::string> out;
+        if (const ui::Node* m = f.r().find(id))
+            for (const auto& i : ui::menuItems(*m))
+                if (i.checked) out.push_back(i.label);
+        return out;
+    };
+    // Played: a C4 held for a fifth of a second, what reaches the output
+    // meanwhile (the output's peak over those cycles; stopped, as a player
+    // tries a patch).
+    std::int64_t played = 0;
+    auto play = [&] {
+        for (int k = 0; k < 4; ++k) {
+            f.app->tick();
+            backend.run(1);
+            played += 256;
+        }
+        {
+            std::lock_guard<std::mutex> g(lock);
+            queued.push_back({.frame = 0, .port = 0, .size = 3, .bytes = {0x90, 60, 100}});
+        }
+        const std::int64_t from = played;
+        for (int k = 0; k < 40; ++k) backend.run(1);
+        played += 40 * 256;
+        {
+            std::lock_guard<std::mutex> g(lock);
+            queued.push_back({.frame = 0, .port = 0, .size = 3, .bytes = {0x80, 60, 0}});
+        }
+        for (int k = 0; k < 160; ++k) backend.run(1);  // the release dies away
+        played += 160 * 256;
+        float peak = 0;
+        const auto& out = backend.capture().channels[0];
+        for (std::int64_t i = from; i < from + 40 * 256 && i < std::int64_t(out.size()); ++i)
+            peak = std::max(peak, std::fabs(out[static_cast<std::size_t>(i)]));
+        return peak;
+    };
+    // At first it has no device of its own and plays its home channel.
+    const ui::Node* menu = openMenu();
+    REQUIRE(menu);
+    const ui::MenuItem* input = item(*menu, "MIDI input…");
+    const ui::MenuItem* plays = item(*menu, "Plays track…");
+    REQUIRE(input);
+    REQUIRE(plays);
+    CHECK(input->shortcut == "none");
+    CHECK(plays->shortcut == "home");
+    CHECK(play() < 1e-4f);  // nothing selected anywhere: silent
+    // The channel's own MIDI input, armed and monitoring: the keyboard plays
+    // the rack, which still sounds on the channel (ADR-0065).
+    f.exec("track.set",
+           R"({"track":")" + home.str() + R"(","record_midi":"Keys","armed":true,"monitor":"on"})");
+    f.frame();
+    CHECK(play() > 0.01f);
+    REQUIRE(f.app->head().tracks.find(home)->record.input);
+    // Unarmed, the channel's input is not heard; the module's own device is.
+    f.exec("track.set", R"({"track":")" + home.str() + R"(","armed":false})");
+    f.frame();
+    CHECK(play() < 1e-4f);
+    REQUIRE(openMenu());
+    REQUIRE(f.pick("rack.module.menu", "MIDI input"));
+    CHECK(checked("rack.notes.input") == std::vector<std::string>{"None"});
+    REQUIRE(f.r().find("rack.notes.input"));
+    CHECK(item(*f.r().find("rack.notes.input"), "Keys"));
+    f.snapshot("rack-notes-input.png");
+    REQUIRE(f.pick("rack.notes.input", "Keys"));
+    CHECK(f.app->head().modules.find(notes)->device == std::optional<std::string>("Keys"));
+    CHECK(play() > 0.01f);
+    REQUIRE(f.pick("rack.module.menu", "MIDI input") == false);  // the menu closed
+    menu = openMenu();
+    REQUIRE(menu);
+    CHECK(item(*menu, "MIDI input…")->shortcut == "Keys");
+    REQUIRE(f.pick("rack.module.menu", "MIDI input"));
+    REQUIRE(f.pick("rack.notes.input", "Any MIDI input"));
+    CHECK(f.app->head().modules.find(notes)->device == std::optional<std::string>(""));
+    CHECK(play() > 0.01f);
+    REQUIRE(openMenu());
+    REQUIRE(f.pick("rack.module.menu", "MIDI input"));
+    CHECK(checked("rack.notes.input") == std::vector<std::string>{"Any MIDI input"});
+    REQUIRE(f.pick("rack.notes.input", "None"));  // device: null
+    CHECK_FALSE(f.app->head().modules.find(notes)->device);
+    CHECK(play() < 1e-4f);
+    // Plays track: another channel's MIDI, then Home again (source: null).
+    REQUIRE(openMenu());
+    REQUIRE(f.pick("rack.module.menu", "Plays track"));
+    CHECK(checked("rack.notes.source") == std::vector<std::string>{"Home"});
+    f.snapshot("rack-notes-source.png");
+    REQUIRE(f.pick("rack.notes.source", model::trackLabel(f.app->head(), part)));
+    CHECK(f.app->head().modules.find(notes)->source == part);
+    menu = openMenu();
+    REQUIRE(menu);
+    CHECK(item(*menu, "Plays track…")->shortcut == model::trackLabel(f.app->head(), part));
+    REQUIRE(f.pick("rack.module.menu", "Plays track"));
+    REQUIRE(f.pick("rack.notes.source", "Home"));
+    CHECK_FALSE(f.app->head().modules.find(notes)->source);
+    // One undo step each.
+    f.exec("history.undo", "{}");
+    CHECK(f.app->head().modules.find(notes)->source == part);
+    f.app->stopEngine();
+}
+
 TEST_CASE("rack window: stopped, a patch that follows the song says to press play") {
     Fixture f;
     if (!f.ok) return;

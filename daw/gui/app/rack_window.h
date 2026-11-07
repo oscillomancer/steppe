@@ -164,6 +164,11 @@ class RackWindow {
     void captureNotes(model::Id module, model::Id track, int bars);
     // Its menus: a channel, then a length.
     void captureMenu(model::Id module, ui::Point at);
+    // A Notes module's live MIDI input (`device`: None, Any or a device from
+    // engine.inputs) and the track whose MIDI it plays (`source`: Home or a
+    // channel), each `module.set`, null for the default (rack.md §2.2).
+    void notesInputMenu(model::Id module, ui::Point at);
+    void notesSourceMenu(model::Id module, ui::Point at);
     // Follows the capture job (job.get); true when what is shown changed.
     bool pollCapture();
     void stopCapture();  // job.cancel

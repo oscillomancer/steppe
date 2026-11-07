@@ -438,7 +438,9 @@ instructions are in `docs/guides/installing.md`.
   (`rack.capture` as a job, 1 to 16 bars: the status bar shows its progress
   and a Stop button; a rack or channel changed meanwhile adds nothing and
   says so). The window's plug-in parameter list cables a plug-in without
-  semantic keys by its CLAP id (`fx_3.12`).
+  semantic keys by its CLAP id (`fx_3.12`). A Notes module's right-click
+  picks its MIDI input (None, Any, a device) and the track it plays (Home or
+  another channel).
 - **MIDI learn** (ADR-0027): any plug-in parameter (the FX window's MIDI
   button, or `fx.learn.set` for agents) and any action (Ctrl+L in the
   actions list) learns a controller by moving it: CC, note, pitch bend or
