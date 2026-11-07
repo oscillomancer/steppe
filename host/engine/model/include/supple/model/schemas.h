@@ -39,7 +39,8 @@ schema::Schema<ItemTimebase> itemTimebaseSchema();    // track | time | beats | 
 schema::Schema<Id> idSchema();                        // "tr_3"
 // A cable end, "mo_3.out" (rack.md §2.3); merges remap the object's id in
 // strings matching kCableEndPattern.
-inline constexpr std::string_view kCableEndPattern = "^(mo|fx)_[0-9]+\\.[a-z][a-z0-9_]*$";
+inline constexpr std::string_view kCableEndPattern =
+    "^(mo_[0-9]+\\.[a-z][a-z0-9_]*|fx_[0-9]+\\.([a-z][a-z0-9_]*|[0-9]+))$";
 schema::Schema<CableEnd> cableEndSchema();
 template <class T>
 const schema::Schema<T>& schemaOf();  // specialized for every object type

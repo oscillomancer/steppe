@@ -21,7 +21,22 @@
 #include "supple/rack/host_modules.h"
 #include "supple/rack/schedule.h"
 
+namespace supple::engine {
+class EngineApp;
+}
+
 namespace supple::engine::detail {
+
+struct PluginModTarget {
+    std::uint32_t param = 0;
+    double scale = 0;
+};
+// Main-thread resolution shared by command validation and plan preparation.
+Result<PluginModTarget> resolvePluginMod(std::span<const host::ParamInfo> params,
+                                         const json::Value* schema, const std::string& key,
+                                         bool vst3 = false);
+Status validatePluginMod(EngineApp& app, const model::FxInstance& fx, const std::string& key,
+                         const std::string& path);
 
 // The module types every engine knows: the host modules (the rack runtime's
 // and the plugin module) and the stock ones.

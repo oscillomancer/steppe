@@ -1459,3 +1459,117 @@ TEST_CASE("rack.capture: sync joins a batch, async refuses a transaction") {
     CHECK(refused.error().details[0].code == "batch.not_transactional");
     CHECK(f.app->head().items.empty());
 }
+
+TEST_CASE("rack cables: numeric CLAP ids modulate a raw plugin and survive save and preset reopen" *
+          doctest::description("rt")) {
+    Fixture f;
+    f.run("project.set", R"({"console9":false})");
+    f.run("rack.add");
+    f.run("module.add", R"({"rack":"rk_1","type":"transport"})");
+    f.run("module.add", R"({"rack":"rk_1","plugin":"com.suppleaudio.test.raw-gain"})");
+    const auto* fx = f.app->head().fx.find({model::Kind::Fx, 1});
+    REQUIRE(fx);
+    auto schema = f.app->fxSchema(*fx);
+    REQUIRE(schema);
+    CHECK(schema->isNull());
+    f.run("cable.add", R"({"from":"mo_2.playing","to":"mo_3.in_l"})");
+    f.run("cable.add", R"({"from":"mo_3.out_l","to":"mo_1.l"})");
+    const auto plain = f.level();
+    f.run("cable.add", R"({"from":"mo_2.playing","to":"fx_1.0","amount":0.1})");
+    CHECK(f.level() > plain);
+    for (const auto* invalid : {"12", "4294967296"}) {
+        auto args = json::Value::object();
+        args["from"] = "mo_2.playing";
+        args["to"] = std::string("fx_1.") + invalid;
+        const auto bad = f.call("cable.add", args);
+        REQUIRE_FALSE(bad);
+        CHECK(bad.error().code == "rack.port");
+        CHECK(bad.error().path == "/args/to");
+        CHECK(bad.error().hint.find("0") != std::string::npos);
+    }
+    auto nonmod = f.call("cable.add", *json::parse(R"({"from":"mo_2.playing","to":"fx_1.1"})"));
+    REQUIRE_FALSE(nonmod);
+    CHECK(nonmod.error().code == "rack.modulation");
+    auto saved = f.run("rack.preset.save", R"({"rack":"rk_1","name":"Numeric"})");
+    auto args = json::Value::object();
+    args["path"] = (f.dir / "song.json").string();
+    REQUIRE(f.call("project.save", args));
+    Fixture reopened;
+    REQUIRE(reopened.call("project.open", args));
+    CHECK(reopened.level() == f.level());
+    bool numeric = false;
+    for (const auto& cable : reopened.app->head().cables)
+        numeric |= cable.value->to.object.kind == model::Kind::Fx && cable.value->to.key == "0";
+    CHECK(numeric);
+    Fixture preset;
+    preset.run("project.set", R"({"console9":false})");
+    preset.run("rack.add");
+    args["rack"] = "rk_1";
+    args["path"] = saved["path"];
+    REQUIRE(preset.call("rack.preset.load", args));
+    CHECK(preset.level() == f.level());
+    OfflineSettings settings;
+    settings.endSeconds = .05;
+    settings.threads = 1;
+    auto offline = f.app->renderSession(f.app->head(), settings);
+    REQUIRE(offline);
+    for (bool anticipative : {false, true})
+        for (int workers : {0, 2}) {
+            CAPTURE(anticipative);
+            CAPTURE(workers);
+            DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 8192});
+            REQUIRE(f.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 37},
+                                       {.anticipative = anticipative, .workers = workers}));
+            f.run("transport.play");
+            for (int i = 0; i < 180; ++i) {
+                if (anticipative) REQUIRE(f.app->engine()->awaitRendered(37));
+                backend.run(1);
+            }
+            const auto delay = f.app->engine()->outputLatency();
+            f.app->stopEngine();
+            CHECK(std::equal(offline->audio.channels[0].begin(), offline->audio.channels[0].end(),
+                             backend.capture().channels[0].begin() + delay));
+        }
+}
+
+TEST_CASE("rack cables: numeric keys work in rack.patch and unknown ids name available keys") {
+    Fixture f;
+    f.run("rack.add");
+    f.run("rack.patch", R"({"rack":"rk_1","modules":{"clock":{"type":"transport"},
+        "effect":{"plugin":"com.suppleaudio.test.gain"}},
+        "cables":[["clock.playing","effect.0",0.1]]})");
+    const auto bad = f.call("cable.add", *json::parse(R"({"from":"mo_2.playing","to":"fx_1.12"})"));
+    REQUIRE_FALSE(bad);
+    CHECK(bad.error().code == "rack.port");
+    CHECK(bad.error().hint.find("gain") != std::string::npos);
+    CHECK(bad.error().hint.find("latency") != std::string::npos);
+    CHECK(bad.error().hint.find("0") != std::string::npos);
+    const auto version = f.app->head().version;
+    const auto patch = f.call("rack.patch", *json::parse(R"({"rack":"rk_1",
+        "modules":{"other":{"type":"transport"}},"cables":[["other.playing","fx_1.999"]]})"));
+    REQUIRE_FALSE(patch);
+    CHECK(f.app->head().version == version);
+    // An invalid serialized target is refused before replacing the open project.
+    auto doc = model::projectToJson(f.app->head());
+    doc["cables"]["cb_1"]["to"] = "fx_1.12";
+    const auto path = f.dir / "invalid.json";
+    REQUIRE(writeFileAtomic(path, json::writeCanonical(doc)));
+    const auto opened = f.app->open(path);
+    REQUIRE_FALSE(opened);
+    CHECK(opened.error().code == "rack.port");
+    CHECK(f.app->head().version == version);
+    // A preset's numeric target is validated too.
+    auto saved = f.run("rack.preset.save", R"({"rack":"rk_1","name":"Bad numeric"})");
+    auto text = readTextFile(saved["path"].asString(), 1 << 20);
+    REQUIRE(text);
+    auto preset = json::parse(*text);
+    REQUIRE(preset);
+    (*preset)["cables"].asArray()[0]["to"]["port"] = "999";
+    REQUIRE(writeFileAtomic(saved["path"].asString(), json::writeCanonical(*preset)));
+    auto args = json::Value::object();
+    args["rack"] = "rk_1";
+    args["path"] = saved["path"];
+    const auto loaded = f.call("rack.preset.load", args);
+    REQUIRE_FALSE(loaded);
+    CHECK(loaded.error().code == "rack.port");
+}

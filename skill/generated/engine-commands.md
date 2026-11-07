@@ -1160,7 +1160,7 @@ Result:
 
 Connect an output to an input or a knob.
 
-from: "mo_N.<output>"; to: "mo_N.<input>" or "mo_N.<knob>" (a modulation cable: amount is the knob's movement at a signal of 1, in octaves for a frequency, the knob's unit otherwise; default an octave or half the range), or a plugin module's plug-in parameter "fx_N.<key>" (CLAP modulation, amount a fraction of its range, default 0.5; it must be modulatable). Several cables into one input sum; a mono cable reaches every voice of a poly module. feedback: it closes a loop, so it carries the previous frame (a one-sample delay).
+from: "mo_N.<output>"; to: "mo_N.<input>" or "mo_N.<knob>" (a modulation cable: amount is the knob's movement at a signal of 1, in octaves for a frequency, the knob's unit otherwise; default an octave or half the range), or a plugin module's plug-in parameter "fx_N.<key>" (CLAP modulation, amount a fraction of its range, default 0.5; it must be modulatable). A numeric CLAP id is also accepted (fx_3.12); a semantic key takes precedence if it is numeric. Several cables into one input sum; a mono cable reaches every voice of a poly module. feedback: it closes a loop, so it carries the previous frame (a one-sample delay).
 
 Kind: `edit`. Exposure: `mcp-tool`.
 

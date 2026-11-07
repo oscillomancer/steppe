@@ -109,6 +109,17 @@ const clap_plugin_descriptor_t* gainDescriptor() {
     return &d;
 }
 
+// A third-party-style CLAP effect: ordinary params and state, no semantic keys.
+const clap_plugin_descriptor_t* rawGainDescriptor() {
+    static const auto descriptor = [] {
+        auto value = *gainDescriptor();
+        value.id = "com.suppleaudio.test.raw-gain";
+        value.name = "Test Raw Gain";
+        return value;
+    }();
+    return &descriptor;
+}
+
 const clap_plugin_descriptor_t* checkedGainDescriptor(bool reject) {
     static const char* features[] = {CLAP_PLUGIN_FEATURE_INSTRUMENT, CLAP_PLUGIN_FEATURE_STEREO,
                                      nullptr};
@@ -207,6 +218,7 @@ struct Gain {
     double gainMod = 0.0;   // audio thread: CLAP param_mod on gain, in CLAP units
     float delay[2][64] = {};
     int delayPos = 0;
+    bool noSemantic = false;
     bool enforceThread = false;
     bool rejectPatch = false;
     bool slowPatch = false;
@@ -482,7 +494,8 @@ const void* CLAP_ABI gainExt(const clap_plugin_t* pl, const char* id) {
     if (!std::strcmp(id, CLAP_EXT_STATE)) return &kGainState;
     if (!std::strcmp(id, CLAP_EXT_AUDIO_PORTS)) return &kGainPorts;
     if (checkedGain(pl) && !std::strcmp(id, CLAP_EXT_NOTE_PORTS)) return &kSineNotes;
-    if (!std::strcmp(id, CLAP_EXT_SUPPLE_SEMANTIC_PARAMS)) return &kGainSemantic;
+    if (!std::strcmp(id, CLAP_EXT_SUPPLE_SEMANTIC_PARAMS))
+        return G(pl)->noSemantic ? nullptr : &kGainSemantic;
     return nullptr;
 }
 
@@ -1442,7 +1455,7 @@ const clap_plugin_t* make(const clap_host_t* host, const clap_plugin_descriptor_
     return &self->plugin;
 }
 
-uint32_t CLAP_ABI factoryCount(const clap_plugin_factory_t*) { return 17; }
+uint32_t CLAP_ABI factoryCount(const clap_plugin_factory_t*) { return 18; }
 const clap_plugin_descriptor_t* CLAP_ABI factoryDesc(const clap_plugin_factory_t*, uint32_t i) {
     return i == 0    ? gainDescriptor()
            : i == 1  ? sineDescriptor()
@@ -1459,12 +1472,19 @@ const clap_plugin_descriptor_t* CLAP_ABI factoryDesc(const clap_plugin_factory_t
            : i == 12 ? multiOutDescriptor()
            : i == 14 ? contractDescriptor(false)
            : i == 15 ? contractDescriptor(true)
+           : i == 17 ? rawGainDescriptor()
            : i == 16 ? legacyKeyMixDescriptor()
            : i == 13 ? multiOut48Descriptor()
                      : nullptr;
 }
 const clap_plugin_t* CLAP_ABI factoryCreate(const clap_plugin_factory_t*, const clap_host_t* host,
                                             const char* id) {
+    if (!std::strcmp(id, rawGainDescriptor()->id)) {
+        const auto* plugin =
+            make<Gain>(host, rawGainDescriptor(), gainActivate, gainProcess, gainExt);
+        G(plugin)->noSemantic = true;
+        return plugin;
+    }
     if (!std::strcmp(id, gainDescriptor()->id)) {
         auto* plugin = const_cast<clap_plugin_t*>(
             make<Gain>(host, gainDescriptor(), gainActivate, gainProcess, gainExt));

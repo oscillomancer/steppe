@@ -12,6 +12,7 @@
 #include <supple/engine/offline.h>
 #include <supple/engine/realtime.h>
 
+#include <clap/ext/params.h>
 #include "plan.h"
 #include "rack_runtime.h"
 #include "supple/params/params.h"
@@ -1143,4 +1144,16 @@ TEST_CASE("racks: a running plug-in latency change rebuilds compensation" *
         CHECK(engine.processErrors() == 0);
         engine.stop();
     }
+}
+
+TEST_CASE("racks: numeric semantic parameter keys take precedence over CLAP ids") {
+    std::vector<host::ParamInfo> params = {{0, "Gain", "", 0, 1, 0, CLAP_PARAM_IS_MODULATABLE},
+                                           {1, "Other", "", 0, 1, 0, CLAP_PARAM_IS_MODULATABLE}};
+    const auto schema = *json::parse(R"({"params":{"1":{"id":0}}})");
+    const auto semantic = supple::engine::detail::resolvePluginMod(params, &schema, "1");
+    REQUIRE(semantic);
+    CHECK(semantic->param == 0);
+    const auto numeric = supple::engine::detail::resolvePluginMod(params, nullptr, "1");
+    REQUIRE(numeric);
+    CHECK(numeric->param == 1);
 }

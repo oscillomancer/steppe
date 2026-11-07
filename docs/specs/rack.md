@@ -76,7 +76,7 @@ Fields equal to their defaults are omitted, as everywhere (session-model §5).
 | Field | Meaning |
 |---|---|
 | `from` | `"mo_N.<output key>"` (required). |
-| `to` | `"mo_N.<input key>"`, `"mo_N.<param key>"` or `"fx_N.<param key>"` for a plugin module's plug-in (required). |
+| `to` | `"mo_N.<input key>"`, `"mo_N.<param key>"` or `"fx_N.<param key>"` or `"fx_N.<decimal CLAP id>"` for a plugin module's plug-in (required). |
 | `amount` | Present exactly when `to` is a parameter: the movement at a value of 1, in the parameter's modulation unit (§3.4). |
 | `color` | A track colour name or `"#rrggbb"`; `""` (default): by signal kind. |
 
@@ -219,6 +219,18 @@ Parameters are declared as a plugin's. In a module:
   channel).
 - Toggles take no cables. A choice or integer moved by cables reads as a
   real number from `at()`; round it (`roundToInt`).
+
+A plug-in parameter target accepts a semantic key or an unsigned decimal
+CLAP parameter id: `fx_3.gain`, `fx_3.0`, `fx_3.12`. A numeric semantic key
+wins over the same numeric id. Decimal ids use digits only (no sign, hex,
+spaces or suffix); they must resolve to an actual modulatable CLAP parameter.
+Module ports and knobs keep their letter-first keys. `rack.patch` also accepts
+`effect.12` for a named plug-in module, resolving it to that module's FX.
+Unknown targets return `rack.port`; the hint lists semantic keys and numeric
+ids. Validation is shared by cable commands, preset load/paste and project
+load. Projects with missing plug-ins still reopen with their cables retained;
+the available plug-in is checked when the cable can be resolved. Serialized
+cable ends retain the supplied key/id string through save and reopen.
 
 A cable moves a parameter by `amount × value`: for a frequency the amount is
 in octaves (`value · 2^(amount·x)`), otherwise in the parameter's unit (a
@@ -504,7 +516,7 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   and run as stages of the rack node (`Node::rackStages`, prepared and
   automated as chain stages), in sub-blocks on the grid, with notes made
   from their pitch and gate cables. A cable into `fx_N.<key>` (a semantic
-  key, a parameter id or its name) rides one of the plugin module's 16
+  key, a decimal CLAP parameter id or its name) rides one of the plugin module's 16
   hidden knobs `mod_1`..`mod_16` (−1..1, never listed); at each point of
   the rack's grid (never where a host block splits it, so renders do not
   depend on the block size) the module sends each parameter its cables'

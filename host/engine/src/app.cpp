@@ -635,6 +635,15 @@ Status EngineApp::open(const fs::path& where, std::vector<schema::Warning>* warn
     if (!text) return std::move(text).error();
     auto s = model::parseProject(*text, warnings);
     if (!s) return std::move(s).error();
+    for (const auto& cable : s->cables) {
+        const auto& target = cable.value->to;
+        if (target.object.kind != model::Kind::Fx) continue;
+        const auto* fx = s->fx.find(target.object);
+        // Missing plug-ins remain reopenable, as with strip FX.
+        if (!fx || !findPlugin(fx->plugin.id)) continue;
+        SUPPLE_TRY(
+            detail::validatePluginMod(*this, *fx, target.key, "/cables/" + cable.id.str() + "/to"));
+    }
     return replaceProject(std::move(*s), path, {}, warnings);
 }
 

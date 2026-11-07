@@ -80,6 +80,11 @@ Agents can print rack notes with `rack.capture {async:true, ...}` and follow
 undo step. A stale destination or rack needs a new capture. The rack window
 currently uses synchronous capture and waits for it.
 
+Agents can cable modulation to a plug-in parameter by semantic key or its
+CLAP id (`fx_3.gain` or `fx_3.12`; `effect.12` in a named `rack.patch`).
+`fx.describe` lists the ids, including third-party plug-ins without semantic
+keys. The target must support modulation. Numeric semantic keys take precedence.
+
 Rack plug-in latency is compensated against the song, including oversampling.
 The rack's longest audio Out path sets its clock; shorter audio and Note Out
 routes receive padding. Parallel paths summed inside the rack keep their

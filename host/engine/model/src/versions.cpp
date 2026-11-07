@@ -295,7 +295,9 @@ json::Value remapWalk(const json::Value& v, const json::Value* schema, Defs defs
         }
     if (v.isString()) {
         if (const json::Value* p = schema->find("pattern");
-            p && p->isString() && p->asString() == kCableEndPattern) {
+            p && p->isString() &&
+            (p->asString() == kCableEndPattern ||
+             p->asString() == "^(mo|fx)_[0-9]+\\.[a-z][a-z0-9_]*$")) {
             const std::string& text = v.asString();
             const auto dot = text.find('.');
             if (dot == std::string::npos) return v;
