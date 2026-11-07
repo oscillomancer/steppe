@@ -87,6 +87,12 @@ never by concurrent accumulation — so results are thread-count independent.
 
 ### 1.3 Plugin delay compensation
 
+The instance pool tracks raw plug-in latency at the activation rate separately
+from prepared stage latency in plan frames. Service compares raw with raw,
+so oversampling does not cause repeated reloads. Actual plug-in-originated
+latency/restart requests still rebuild PDC.
+
+
 - Each FX instance reports latency (CLAP `latency`); bypassed instances keep
   their latency (compensated bypass); offline instances report 0.
 - A chain's latency: sum over serial stages, max over a parallel group

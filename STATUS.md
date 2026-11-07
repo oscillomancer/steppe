@@ -293,6 +293,8 @@ instructions are in `docs/guides/installing.md`.
   without semantic metadata; both survive project and preset reopening.
   Stale saved targets warn instead of blocking project opening; new cables
   validate the actual FX state and require canonical numeric ids.
+  Oversampled FX service compares raw latency separately from prepared stage
+  latency, preventing idle/playing plan reload loops.
   Agents patch with `rack.patch` (named
   modules and cables in one step, laid out by signal flow and labelled by
   name; `rack.arrange` tidies a rack) or `module.add`/`cable.add`, hear a patch

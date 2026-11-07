@@ -107,8 +107,9 @@ class InstancePool {
         std::unique_ptr<host::Instance> instance;
         std::string pluginId;
         model::Isolation isolation = model::Isolation::InProcess;
-        std::uint32_t latency = 0;
-        bool restarting = false;  // a restart the plug-in asked for waits on processing
+        std::uint32_t latency = 0;     // prepared stage frames
+        std::uint32_t rawLatency = 0;  // plug-in frames at its activation rate
+        bool restarting = false;       // a restart the plug-in asked for waits on processing
         std::optional<Error> failure;
         std::vector<std::uint32_t> clearedAutomation;
         std::string appliedState;  // canonical patch text or blob hash last applied

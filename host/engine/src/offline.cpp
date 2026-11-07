@@ -267,8 +267,8 @@ host::Instance::Notifications InstancePool::service(Id id) {
     entry.restarting = entry.instance->restartPending();
     if (entry.instance->active()) {
         const std::uint32_t latency = entry.instance->latency();
-        notes.latencyChanged |= latency != entry.latency;
-        entry.latency = latency;
+        notes.latencyChanged |= latency != entry.rawLatency;
+        entry.rawLatency = latency;
     }
     if (!entry.instance->active() && !entry.failure && !notes.restartError &&
         entry.instance->processRequested() && entry.instance->sampleRate() > 0 &&
@@ -293,7 +293,10 @@ host::Instance::Notifications InstancePool::service(Id id) {
 }
 
 void InstancePool::rememberLatency(Id id, std::uint32_t latency) {
-    if (auto it = instances_.find(id); it != instances_.end()) it->second.latency = latency;
+    if (auto it = instances_.find(id); it != instances_.end()) {
+        it->second.latency = latency;
+        it->second.rawLatency = it->second.instance->latency();
+    }
 }
 
 bool InstancePool::restarting(Id id) const {

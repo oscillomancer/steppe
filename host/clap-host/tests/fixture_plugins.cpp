@@ -476,6 +476,7 @@ const clap_plugin_supple_semantic_params_t kGainSemantic = {
 struct GainControl {
     void (*edit)(const clap_plugin_t*, double, std::uint32_t);
     std::uint32_t (*deliveries)(const clap_plugin_t*);
+    void (*latency)(const clap_plugin_t*, bool);
 };
 void gainEditorEdit(const clap_plugin_t* pl, double value, std::uint32_t flags) {
     G(pl)->gainDb = value;
@@ -486,7 +487,11 @@ void gainEditorEdit(const clap_plugin_t* pl, double value, std::uint32_t flags) 
     hp->request_flush(G(pl)->host);
 }
 std::uint32_t gainHostDeliveries(const clap_plugin_t* pl) { return G(pl)->hostDeliveries.load(); }
-const GainControl kGainControl{gainEditorEdit, gainHostDeliveries};
+void gainRequestLatency(const clap_plugin_t* pl, bool delayed) {
+    G(pl)->latencyChoice = delayed ? 1 : 0;
+    G(pl)->host->request_restart(G(pl)->host);
+}
+const GainControl kGainControl{gainEditorEdit, gainHostDeliveries, gainRequestLatency};
 const void* CLAP_ABI gainExt(const clap_plugin_t* pl, const char* id) {
     if (!std::strcmp(id, "supple.test.gain-control")) return &kGainControl;
     if (!std::strcmp(id, CLAP_EXT_PARAMS)) return &kGainParams;

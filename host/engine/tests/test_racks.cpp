@@ -1158,6 +1158,88 @@ TEST_CASE("racks: numeric semantic parameter keys take precedence over CLAP ids"
     CHECK(numeric->param == 1);
 }
 
+TEST_CASE(
+    "racks: oversampled stages stay stable across service and plugin-requested restart aligns "
+    "outputs" *
+    doctest::description("rt")) {
+    host::setBridgeExecutable(BRIDGE_PATH);
+    struct Control {
+        void (*edit)(const clap_plugin_t*, double, std::uint32_t);
+        std::uint32_t (*deliveries)(const clap_plugin_t*);
+        void (*latency)(const clap_plugin_t*, bool);
+        std::uint32_t (*creates)();
+    };
+    model::Project project;
+    project.console9 = false;
+    model::EditTxn t(model::Session::create(project), 1);
+    const auto left = addChannel(t), right = addChannel(t);
+    t.modify<model::Track>(left, [](auto& tr) { tr.pan = -100; });
+    t.modify<model::Track>(right, [](auto& tr) { tr.pan = 100; });
+    const auto rack = t.create(model::Rack{left, "Oversampling"});
+    const auto clock = addModule(t, rack, "com.suppleaudio.rack.transport");
+    const auto dynamic = addPlugin(t, rack, "com.suppleaudio.test.gain");
+    const auto fixed = addPlugin(
+        t, rack, "com.suppleaudio.test.gain",
+        *json::parse(R"({"schema":"supple.test-gain-patch/1.0","params":{"latency":"short"}})"));
+    const auto a = addModule(t, rack, model::kOutModule), b = addModule(t, rack, model::kOutModule);
+    cable(t, clock, "clock", dynamic, "in_l");
+    cable(t, clock, "clock", fixed, "in_l");
+    cable(t, dynamic, "out_l", a, "l");
+    cable(t, fixed, "out_l", b, "l");
+    listen(t, a, left);
+    listen(t, b, right);
+    const auto fx = *t.preview().modules.find(dynamic)->fx;
+    for (const auto& entry : t.preview().fx)
+        t.modify<model::FxInstance>(entry.id, [](auto& effect) { effect.oversampling = 4; });
+    const auto state = commit(t);
+    for (bool anticipative : {false, true}) {
+        CAPTURE(anticipative);
+        auto pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 40000});
+        Engine engine(pool, media, {.anticipative = anticipative, .workers = 2});
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+        REQUIRE(engine.load(state));
+        REQUIRE(engine.awaitPlan());
+        auto run = [&] {
+            if (anticipative) REQUIRE(engine.awaitRendered(128));
+            backend.run(1);
+            engine.service();
+        };
+        const auto first = engine.planGeneration();
+        for (int i = 0; i < 20; ++i) run();
+        REQUIRE(engine.planGeneration() == first);
+        engine.play();
+        for (int i = 0; i < 40; ++i) run();
+        REQUIRE(engine.planGeneration() == first);
+        auto* instance = pool.find(fx);
+        REQUIRE(instance);
+        const auto* plugin = instance->raw();
+        const auto* control =
+            static_cast<const Control*>(plugin->get_extension(plugin, "supple.test.gain-control"));
+        REQUIRE(control);
+        control->latency(plugin, true);
+        for (int i = 0; i < 160 && (instance->latency() != 64 || !instance->processing()); ++i)
+            run();
+        CHECK(engine.planGeneration() > first);
+        REQUIRE(instance->latency() == 64);
+        const auto settled = engine.planGeneration();
+        const auto compareFrom = static_cast<std::size_t>(backend.cycles() * 128 + 2048);
+        for (int i = 0; i < 180; ++i) run();
+        CHECK(engine.planGeneration() == settled);
+        CHECK(engine.processErrors() == 0);
+        engine.stop();
+        const auto& audio = backend.capture();
+        const auto end = static_cast<std::size_t>(backend.cycles() * 128);
+        REQUIRE(end > compareFrom);
+        REQUIRE(end <= audio.frames());
+        CHECK(std::equal(audio.channels[0].begin() + compareFrom, audio.channels[0].begin() + end,
+                         audio.channels[1].begin() + compareFrom));
+        CHECK(*std::max_element(audio.channels[0].begin() + compareFrom,
+                                audio.channels[0].begin() + end) > .1f);
+    }
+}
+
 TEST_CASE("racks: In sends preserve tap level and pan without Console 9 trim" *
           doctest::description("rt")) {
     for (bool console : {false, true}) {
