@@ -522,7 +522,8 @@ Tags in the reference group the modules. Some starting points:
 - **Utility**: `vca`, `mixer`, `scale` (attenuverters), `matrix` (a 4x4
   modulation matrix), `math`, `poly`,
   `pitch`, `switcher`, `macro` (eight performance knobs), `keygates`
-  (notes to a gate per key: a drum kit played from notes), `scope`.
+  (notes to a gate per key: a drum kit played from notes), `width`
+  (stereo width by mid and side; the bass kept mono), `scope`.
 
 Ideas that work: clock a melody source from a Euclidean rhythm so notes
 and rests interlock; feed a slow `chaos` or `drift` into a filter and a
