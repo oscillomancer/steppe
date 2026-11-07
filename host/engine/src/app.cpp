@@ -684,8 +684,10 @@ Status EngineApp::open(const fs::path& where, std::vector<schema::Warning>* warn
     if (!text) return std::move(text).error();
     auto s = model::parseProject(*text, warnings);
     if (!s) return std::move(s).error();
-    PluginModValidation validation{*s, {}};
-    if (warnings)
+    if (warnings) {
+        // Scoped so that its probes are released before the engine creates
+        // the real instances (no probe sits beside its instance during open).
+        PluginModValidation validation{*s, {}};
         for (const auto& cable : s->cables) {
             const auto& target = cable.value->to;
             if (target.object.kind != model::Kind::Fx) continue;
@@ -700,6 +702,7 @@ Status EngineApp::open(const fs::path& where, std::vector<schema::Warning>* warn
                                          checked.error().hint,
                                      checked.error().path});
         }
+    }
     return replaceProject(std::move(*s), path, {}, warnings);
 }
 
