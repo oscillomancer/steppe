@@ -176,6 +176,26 @@
         "module": 0,
         "port": "r"
       }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "r"
+      },
+      "to": {
+        "module": 3,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "r"
+      },
+      "to": {
+        "module": 4,
+        "port": "in"
+      }
     }
   ]
 }
