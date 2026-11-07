@@ -133,12 +133,17 @@ void EngineApp::installPlugins(std::vector<host::PluginInfo> list, host::ScanRep
 Result<host::PluginInfo> EngineApp::findPlugin(std::string_view idOrName) {
     auto all = plugins();
     if (!all) return std::move(all).error();
-    for (const auto& p : *all)
+    return findPlugin(*all, idOrName);
+}
+
+Result<host::PluginInfo> EngineApp::findPlugin(std::span<const host::PluginInfo> catalogue,
+                                               std::string_view idOrName) {
+    for (const auto& p : catalogue)
         if (p.id == idOrName) return p;
-    for (const auto& p : *all)
+    for (const auto& p : catalogue)
         if (iequals(p.id, idOrName) || iequals(p.name, idOrName)) return p;
     std::vector<std::string_view> ids;
-    for (const auto& p : *all) ids.push_back(p.id);
+    for (const auto& p : catalogue) ids.push_back(p.id);
     const std::string best = closestMatch(idOrName, ids);
     return Error(
         "plugin.unknown", "no plugin \"" + std::string(idOrName) + "\"", {},

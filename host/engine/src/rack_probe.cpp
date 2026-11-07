@@ -495,7 +495,9 @@ void registerRackCapture(cmd::Registry& registry) {
         "play, as rack.probe takes it. The rack is not changed; edit the notes with midi.edit, "
         "or play them through any instrument. async:true returns {job}; rendering uses a snapshot, "
         "cancellation leaves the project unchanged, and completion adds one undo step. A changed "
-        "rack, track, position or project fails with rack.capture_stale; submit the capture again.";
+        "rack graph or automation, destination type/frozen state or overlapping items, timing, "
+        "or project fails with rack.capture_stale; submit again. Destination fader moves and "
+        "unrelated item edits are allowed. Notes MIDI and incoming In routes are snapshotted.";
     c.tags = {"rack", "modular", "midi"};
     c.args = schema::object<CaptureArgs>("rack_capture_args")
                  .field("async", &CaptureArgs::async, schema::boolean())
@@ -580,9 +582,20 @@ void registerRackCapture(cmd::Registry& registry) {
         if (a.notes) SUPPLE_TRY(addNotes(copyTxn, s, *rack, *a.notes, fromBeat));
         auto copy = copyTxn.commit();
         if (!copy) return std::move(copy).error();
-        auto plugins = e.plugins();
-        if (!plugins) return plugins.error();
-        std::vector<host::PluginInfo> catalogue(plugins->begin(), plugins->end());
+        InstancePool::Resolver resolver;
+        if (!a.async)
+            resolver = [&e](const model::PluginRef& ref) { return e.findPlugin(ref.id); };
+        else {
+            std::vector<host::PluginInfo> catalogue;
+            if (!copy->fx.empty()) {
+                auto plugins = e.plugins();
+                if (!plugins) return plugins.error();
+                catalogue.assign(plugins->begin(), plugins->end());
+            }
+            resolver = [catalogue = std::move(catalogue)](const model::PluginRef& ref) {
+                return EngineApp::findPlugin(catalogue, ref.id);
+            };
+        }
         auto catalog = std::make_shared<rack::Catalog>(*e.modules());
         catalog->add(detail::captureModuleType());
         OfflineSettings settings;
@@ -590,17 +603,10 @@ void registerRackCapture(cmd::Registry& registry) {
         settings.endSeconds = start + seconds;
         settings.projectDir = e.projectDir();
         settings.modules = std::move(catalog);
-        auto render = [copy = std::move(*copy), catalogue = std::move(catalogue),
+        auto render = [copy = std::move(*copy), resolver = std::move(resolver),
                        identity = e.options().identity, id, a, start, fromBeat,
                        beats](const OfflineSettings& renderSettings) -> Result<CaptureResult> {
-            InstancePool pool(
-                [&catalogue](const model::PluginRef& ref) -> Result<host::PluginInfo> {
-                    for (const auto& plugin : catalogue)
-                        if (plugin.id == ref.id) return plugin;
-                    return Error("plugin.not_found", "plugin " + ref.id + " is unavailable",
-                                 "/rack", "install the plug-in, then submit rack.capture again");
-                },
-                identity);
+            InstancePool pool(resolver, identity);
             auto rendered = renderOffline(copy, pool, renderSettings);
             if (!rendered) return std::move(rendered).error();
             const rack::Instance* in = pool.racks().find(id);
@@ -708,11 +714,12 @@ void registerRackCapture(cmd::Registry& registry) {
                  publish = std::move(publish)]() mutable -> Status {
                     if (jobs.cancelled(job)) return {};
                     const auto now = e.view();
-                    bool stale = e.projectGeneration() != generation ||
-                                 e.versions().branch() != branch ||
-                                 now.racks.find(rack) != s.racks.find(rack) ||
-                                 now.tracks.find(track) != s.tracks.find(track) ||
-                                 now.project->sampleRate != s.project->sampleRate;
+                    bool stale =
+                        e.projectGeneration() != generation || e.versions().branch() != branch ||
+                        now.racks.find(rack) != s.racks.find(rack) || !now.tracks.find(track) ||
+                        now.tracks.find(track)->type != s.tracks.find(track)->type ||
+                        now.tracks.find(track)->freeze != s.tracks.find(track)->freeze ||
+                        now.project->sampleRate != s.project->sampleRate;
                     // Immutable object identities catch removals, replacements and additions.
                     auto same = [](const auto& before, const auto& after, auto selected) {
                         for (const auto& entry : before)
@@ -740,8 +747,48 @@ void registerRackCapture(cmd::Registry& registry) {
                     stale |= !same(s.cables, now.cables, [&](const auto& entry) {
                         return module(entry.value->from.object);
                     });
+                    auto automated = [&](Id envelopeId) {
+                        for (const auto* state : {&s, &now}) {
+                            const auto* env = state->envelopes.find(envelopeId);
+                            if (!env) continue;
+                            if (module(env->target.object)) return true;
+                            const auto owner = model::moduleOfFx(*state, env->target.object);
+                            if (owner && module(*owner)) return true;
+                        }
+                        return false;
+                    };
+                    stale |= !same(s.envelopes, now.envelopes,
+                                   [&](const auto& entry) { return automated(entry.id); });
+                    stale |= !same(s.autoItems, now.autoItems, [&](const auto& entry) {
+                        return automated(entry.value->envelope);
+                    });
+                    const double first = s.timeMap->secondsAt(at),
+                                 last = s.timeMap->secondsAt(at + beats);
+                    std::set<Id> items, takes, sources;
+                    auto collect = [&](const model::Session& state) {
+                        for (const auto& entry : state.items) {
+                            if (entry.value->track != track) continue;
+                            const auto span = model::itemSpan(state, *entry.value);
+                            if (span.startSec >= last || span.endSec <= first) continue;
+                            items.insert(entry.id);
+                            for (Id take : entry.value->takes) {
+                                takes.insert(take);
+                                if (const auto* value = state.takes.find(take);
+                                    value && value->source)
+                                    sources.insert(*value->source);
+                            }
+                        }
+                    };
+                    collect(s);
+                    collect(now);
                     stale |= !same(s.items, now.items,
-                                   [&](const auto& entry) { return entry.value->track == track; });
+                                   [&](const auto& entry) { return items.contains(entry.id); });
+                    stale |= !same(s.takes, now.takes,
+                                   [&](const auto& entry) { return takes.contains(entry.id); });
+                    stale |= !same(s.midi, now.midi,
+                                   [&](const auto& entry) { return sources.contains(entry.id); });
+                    stale |= !same(s.media, now.media,
+                                   [&](const auto& entry) { return sources.contains(entry.id); });
                     if (stale || !model::checkedBeat(now, at + beats, "/at"))
                         return jobs.fail(job,
                                          Error("rack.capture_stale",

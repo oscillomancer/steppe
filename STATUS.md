@@ -302,7 +302,9 @@ instructions are in `docs/guides/installing.md`.
   name; `rack.arrange` tidies a rack) or `module.add`/`cable.add`, hear a patch
   with `rack.probe` (pitch, levels, gates, notes, CV rates from an offline
   render of a copy), print its notes to a MIDI item with `rack.capture`
-  (or `async:true` for a cancellable snapshot job with one undoable completion), write and edit library modules (`module.write`, hot
+  (or `async:true` for a cancellable snapshot job with one undoable completion;
+  rack automation changes invalidate it, destination fader/unrelated item edits
+  do not; Notes MIDI and In routes are snapshotted at start), write and edit library modules (`module.write`, hot
   reload in the running engine, `module.fork`), keep patches as rack
   presets (`rack.preset.*`, carrying the user's modules' source; projects
   keep copies of theirs too), start from factory patches that ship with the

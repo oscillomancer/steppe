@@ -235,6 +235,9 @@ class EngineApp : public cmd::Host {
     void installPlugins(std::vector<host::PluginInfo> list, host::ScanReport report);
     std::string& pluginScanJob() { return pluginScanJob_; }  // the running one, if any
     // By id (exact, then case-insensitive) or display name; hint lists the closest ids.
+    // The same id/name fallback for immutable render-job catalogues.
+    static Result<host::PluginInfo> findPlugin(std::span<const host::PluginInfo> catalogue,
+                                               std::string_view idOrName);
     Result<host::PluginInfo> findPlugin(std::string_view idOrName);
     InstancePool& instances() { return *pool_; }
     MediaCache& media() { return media_; }

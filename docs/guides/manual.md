@@ -77,7 +77,9 @@ only while the audio engine is running.
 
 Agents can print rack notes with `rack.capture {async:true, ...}` and follow
 `job.get`; `job.cancel` leaves the project unchanged. Completion adds one
-undo step. A stale destination or rack needs a new capture. The rack window
+undo step. Rack or automation edits and overlapping destination item edits
+need a new capture; destination fader moves and distant item edits are allowed.
+Notes source MIDI and incoming routes are snapshots from launch. The rack window
 captures the same way.
 
 Agents can cable modulation to a plug-in parameter by semantic key or its

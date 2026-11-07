@@ -1315,6 +1315,12 @@ TEST_CASE("rack.capture: an async snapshot completes once, matches sync bytes an
         f.run("track.add");
         f.run("rack.add", R"({"track":"tr_1"})");
         f.run("module.add", R"({"rack":"rk_1","type":"notes"})");
+        f.run("module.add", R"({"rack":"rk_1","plugin":"com.suppleaudio.test.gain"})");
+        auto tx = f.app->beginTransaction(origin, "Case-insensitive plugin reference");
+        REQUIRE(tx);
+        f.app->txn().modify<model::FxInstance>(
+            {model::Kind::Fx, 1}, [](auto& fx) { fx.plugin.id = "COM.SUPPLEAUDIO.TEST.GAIN"; });
+        REQUIRE(f.app->commitTransaction(*tx));
     };
     prepare(sync);
     prepare(async);
@@ -1358,7 +1364,7 @@ TEST_CASE("rack.capture: an async snapshot completes once, matches sync bytes an
 }
 
 TEST_CASE("rack.capture: cancelling or changing the target before completion publishes no notes") {
-    for (int change : {0, 1, 2, 3, 4, 5, 6}) {
+    for (int change = 0; change <= 16; ++change) {
         CAPTURE(change);
         std::mutex mutex;
         std::condition_variable cv;
@@ -1390,6 +1396,48 @@ TEST_CASE("rack.capture: cancelling or changing the target before completion pub
         f.run("track.add");
         f.run("rack.add", R"({"track":"tr_1"})");
         f.run("module.add", R"({"rack":"rk_1","type":"notes"})");
+
+        auto addItem = [&](model::Id track, double at) {
+            auto tx = f.app->beginTransaction(origin, "Target item");
+            REQUIRE(tx);
+            model::MidiSource source;
+            source.sequence.length = 960;
+            source.sequence.notes = {{0, 960, 0, 60, 96, 0}};
+            const auto sourceId = f.app->txn().create(source);
+            model::Take take;
+            take.source = sourceId;
+            const auto takeId = f.app->txn().create(take);
+            model::Item item;
+            item.track = track;
+            item.position = at;
+            item.length = 1;
+            item.takes = {takeId};
+            item.activeTake = takeId;
+            const auto id = f.app->txn().create(item);
+            REQUIRE(f.app->commitTransaction(*tx));
+            return id;
+        };
+        model::Id existing;
+        if (change == 15 || change == 16)
+            existing = addItem({model::Kind::Track, 2}, change == 15 ? 16 : 0);
+        if (change == 11)
+            f.run("module.add", R"({"rack":"rk_1","plugin":"com.suppleaudio.test.gain"})");
+        if (change == 12) {
+            auto tx = f.app->beginTransaction(origin, "Automation item");
+            REQUIRE(tx);
+            model::Envelope env;
+            env.target = {{model::Kind::Module, 2}, "voices"};
+            const auto envId = f.app->txn().create(env);
+            model::AutomationItem item;
+            item.envelope = envId;
+            item.points = {{0, 8}};
+            f.app->txn().create(item);
+            REQUIRE(f.app->commitTransaction(*tx));
+        }
+        if (change == 14) {
+            f.run("track.add");
+            f.run("module.add", R"({"rack":"rk_1","type":"in"})");
+        }
         auto job = f.run("rack.capture", R"({"rack":"rk_1","track":"tr_2",
             "pitch":"mo_2.pitch","gate":"mo_2.gate","beats":4,"async":true,
             "notes":"voice v; 1: C4:w"})");
@@ -1402,6 +1450,41 @@ TEST_CASE("rack.capture: cancelling or changing the target before completion pub
         if (change == 2) f.run("track.remove", R"({"track":"tr_2"})");
         if (change == 3) f.run("module.set", R"({"module":"mo_2","label":"Edited"})");
         if (change == 4) f.run("tempo.set", R"({"points":[{"beat":0,"bpm":90}]})");
+
+        if (change == 7) f.run("track.set", R"({"track":"tr_2","volume_db":-6})");
+        if (change == 8 || change == 9 || change == 13)
+            addItem({model::Kind::Track, change == 13 ? 1u : 2u}, change == 8 ? 16 : 0);
+        if (change == 10 || change == 11 || change == 12 || change == 14 || change == 15 ||
+            change == 16) {
+            auto tx = f.app->beginTransaction(origin, "Concurrent edit");
+            REQUIRE(tx);
+            if (change == 10 || change == 11) {
+                model::Envelope env;
+                env.target = {change == 10 ? model::Id{model::Kind::Module, 2}
+                                           : model::Id{model::Kind::Fx, 1},
+                              change == 10 ? "voices" : "gain"};
+                env.points = {{0, change == 10 ? 4. : -6.}};
+                f.app->txn().create(env);
+            }
+            if (change == 12)
+                for (const auto& entry : f.app->head().autoItems)
+                    f.app->txn().modify<model::AutomationItem>(
+                        entry.id, [](auto& item) { item.points = {{0, 4}}; });
+            if (change == 14) {
+                model::Route route;
+                route.from.track = model::Id{model::Kind::Track, 3};
+                route.to.module = model::Id{model::Kind::Module, 3};
+                f.app->txn().create(route);
+            }
+            if (change == 15)
+                f.app->txn().modify<model::Item>(existing, [](auto& item) { item.gainDb = -6; });
+            if (change == 16)
+                for (const auto& entry : f.app->head().midi)
+                    f.app->txn().modify<model::MidiSource>(
+                        entry.id, [](auto& source) { source.sequence.notes[0].pitch = 67; });
+            REQUIRE(f.app->commitTransaction(*tx));
+        }
+        const auto itemsBefore = f.app->head().items.size(), midiBefore = f.app->head().midi.size();
         const auto version = f.app->head().version;
         {
             std::lock_guard lock(mutex);
@@ -1418,12 +1501,13 @@ TEST_CASE("rack.capture: cancelling or changing the target before completion pub
         f.bus->flushJobEvents();
         auto state = f.bus->jobs().status(job["job"].asString());
         REQUIRE(state);
-        if (change == 6) {
+        if (change == 6 || change == 7 || change == 8 || change == 13 || change == 14 ||
+            change == 15) {
             CHECK((*state)["status"].asString() == "done");
-            CHECK(f.app->head().items.size() == 1);
+            CHECK(f.app->head().items.size() == itemsBefore + 1);
         } else {
-            CHECK(f.app->head().items.empty());
-            CHECK(f.app->head().midi.empty());
+            CHECK(f.app->head().items.size() == itemsBefore);
+            CHECK(f.app->head().midi.size() == midiBefore);
             CHECK(f.app->head().version == version);
             CHECK((*state)["status"].asString() ==
                   ((change == 0 || change == 5) ? "cancelled" : "failed"));
@@ -1687,4 +1771,27 @@ TEST_CASE("rack.get: brief uses prepared timing and full alone probes a cold plu
     CHECK(midiTiming["latency_samples"].asInt() == 64);
     CHECK(midiTiming["note_outs"].asArray()[0]["latency_samples"].asInt() == 64);
     f.app->stopEngine();
+}
+
+TEST_CASE(
+    "rack.capture: sync does not scan unused plugins and snapshot lookup keeps name fallback") {
+    host::setBridgeExecutable(std::filesystem::temp_directory_path() / "no-such-plugin-scanner");
+    struct ResetScanner {
+        ~ResetScanner() { host::setBridgeExecutable(BRIDGE_PATH); }
+    } reset;
+    Fixture f;
+    f.run("rack.add");
+    f.run("module.add", R"({"rack":"rk_1","type":"notes"})");
+    CHECK(f.app->pluginScanReport().warnings.empty());
+    f.run("rack.capture", R"({"rack":"rk_1","track":"tr_1","pitch":"mo_2.pitch",
+        "gate":"mo_2.gate","beats":1,"notes":"voice v; 1: C4:q r:*"})");
+    CHECK(f.app->pluginScanReport().warnings.empty());
+    REQUIRE(f.app->plugins());
+    CHECK_FALSE(f.app->pluginScanReport().warnings.empty());
+    host::PluginInfo plugin;
+    plugin.id = "com.example.effect";
+    plugin.name = "Some Effect";
+    const std::vector<host::PluginInfo> catalogue{plugin};
+    REQUIRE(EngineApp::findPlugin(catalogue, "COM.EXAMPLE.EFFECT"));
+    REQUIRE(EngineApp::findPlugin(catalogue, "some effect"));
 }

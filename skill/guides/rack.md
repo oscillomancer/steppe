@@ -634,6 +634,10 @@ probes.
 Cable edits validate the live FX or its restored state. Projects keep
 stale targets with warnings; preset loading skips stale cables with warnings.
 
+Async capture watches rack modules, FX, cables and automation, plus destination
+type/frozen state and overlapping items. Fader moves and distant item edits
+are allowed. Notes source MIDI and routes into In are snapshots from launch.
+
 Oversampled FX keep their raw and prepared latency values separate: servicing
 an idle or playing engine rebuilds the plan only for an actual change.
 

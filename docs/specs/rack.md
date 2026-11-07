@@ -748,9 +748,14 @@ Cancellation, including after rendering but before adoption, adds nothing.
 Completion posts one undoable edit to the main thread. The internal
 `rack.capture.commit` edit stores the rendered notes so branch replay copies
 the snapshot result rather than rendering again. A changed project or
-branch, rack definition, destination track/items, or timing map fails with
-`rack.capture_stale` and a hint to submit the current target again. Unrelated
-track edits do not invalidate the snapshot. Async capture is refused inside
+branch, rack modules/FX/cables or their knob/parameter automation (including
+automation items), or timing map fails with `rack.capture_stale` and a hint to submit the current target again. Destination checks cover existence,
+type and frozen state, and items
+(including takes/sources) overlapping `[at, at+beats]`. Destination fader
+moves, renames and unrelated item edits do not invalidate the capture.
+Inputs (Notes source MIDI and routes into In modules) are snapshotted at
+start; edits to those inputs do not invalidate the captured result. Async
+capture is refused inside
 a batch or script transaction (`batch.not_transactional`); synchronous capture
 continues to join that transaction. Without `async`, rendering and the
 returned item result remain synchronous. The rack window uses `async` (gui.md
