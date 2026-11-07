@@ -1407,6 +1407,14 @@ a new channel). It follows rack.md §8.
   the module's; Ctrl+wheel still zooms, the right button still opens the
   module's menu and the middle one still pans. A module without `pointer()`
   is dragged by its displays as by the rest of its body.
+- **Status bar.** The rack's label, its module and cable counts and the
+  selection's size, then any capture or notice. With the transport
+  stopped, a rack holding a Transport module or a module whose type is
+  tagged `sequencer` or `clock` (they play the song's beats with nothing in
+  their clock input) adds "Stopped: press play to start the patch"; it
+  goes when the transport plays and comes back when it stops, whoever
+  moved it. It is a hint from the module types: a sequencer clocked by a
+  free-running module plays while stopped all the same.
 - **Elsewhere.** A channel's input menu lists every rack's Out modules
   ("<rack> › <Out>", with the home channel's colour) after the device's
   inputs, and New rack on this channel; picking one is `track.set

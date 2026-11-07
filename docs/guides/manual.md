@@ -410,6 +410,10 @@ at, and right-click it to delete it. **Load patch…** in the space's
 right-click menu opens the Patches view. Right-click the space and choose **Add
 module…** to pick a module from the column and put it where you clicked.
 
+Patches that play from the song (a Transport module, sequencers, clocks:
+Rain Bells, Song Machine and the other generative ones) stay silent until
+you press play; while the transport is stopped, the rack window's status
+bar says so. Instrument patches need notes: MIDI items on their channel.
 A rack sends audio both ways. Its Out modules are channel inputs, and an
 **In** module takes sends: route any track to it as you would to a buss,
 and the rack becomes an effect. A **Notes** module plays its channel's

@@ -14,6 +14,7 @@
 #include "learn_dialog.h"
 #include "plugin_browser.h"
 #include "supple/engine/midi_control.h"
+#include "supple/rack/host_modules.h"
 #include "supple/ui/list.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/text_area.h"
@@ -870,6 +871,7 @@ std::string RackWindow::status() const {
     if (!space_->selection().empty())
         out += "  ·  " + std::to_string(space_->selection().size()) + " selected";
     if (capture_) out += "  ·  " + capture_->progress;
+    if (waitsForPlay()) out += "  ·  Stopped: press play to start the patch";
     if (!notice_.empty() && app_.head().version == noticeVersion_) out += "  ·  " + notice_;
     return out;
 }
@@ -1203,7 +1205,13 @@ void RackWindow::watch(bool on) {
 bool RackWindow::tick(std::chrono::steady_clock::time_point now) {
     if (plugins_ && plugins_->isOpen()) plugins_->tick();
     const bool captured = pollCapture();  // with the window closed too
-    if (!isOpen() || !nextTelemetry_ || now < *nextTelemetry_) return captured;
+    bool shown = captured;
+    if (isOpen() && waitsForPlay() != waiting_) {  // played or stopped, from anywhere
+        waiting_ = !waiting_;
+        if (status_) status_->setText(status());
+        shown = true;
+    }
+    if (!isOpen() || !nextTelemetry_ || now < *nextTelemetry_) return shown;
     nextTelemetry_ = now + kTelemetryInterval;
     bool changed = false;
     const ui::Rect seen = space_->visibleSpace();
@@ -1250,7 +1258,7 @@ bool RackWindow::tick(std::chrono::steady_clock::time_point now) {
     watchers_.set(std::move(watching));  // and off for those no view reads
     if (none && !measuring) nextTelemetry_ = now + std::chrono::milliseconds(250);
     if (changed) space_->telemetryChanged();
-    return changed || captured;
+    return changed || shown;
 }
 
 std::optional<std::chrono::steady_clock::time_point> RackWindow::nextDeadline() const {
@@ -1923,6 +1931,19 @@ void RackWindow::stopCapture() {
     args["job"] = capture_->job;
     (void)exec("job.cancel", std::move(args));
     (void)pollCapture();
+}
+
+bool RackWindow::waitsForPlay() const {
+    if (!rack_ || !space_) return false;
+    const engine::Engine* engine = app_.engine();
+    if (engine && engine->running() && engine->transport().playing) return false;
+    for (const auto& m : space_->scene().modules) {
+        if (m.typeId == rack::host::kTransport) return true;
+        if (!m.type) continue;
+        for (const auto& tag : m.type->info().tags)
+            if (tag == "sequencer" || tag == "clock") return true;
+    }
+    return false;
 }
 
 void RackWindow::showCapture() {

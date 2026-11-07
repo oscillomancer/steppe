@@ -168,6 +168,10 @@ class RackWindow {
     bool pollCapture();
     void stopCapture();  // job.cancel
     void showCapture();  // the Stop button and the status line
+    // Stopped, with a module in the rack that follows the song: a Transport
+    // module, or a type tagged sequencer or clock (they play the song's beats
+    // with nothing in their clock input). The status bar says to press play.
+    bool waitsForPlay() const;
     ui::Root& root() const { return panel_.root(); }
 
     FloatingPanel& panel_;
@@ -206,6 +210,7 @@ class RackWindow {
     };
     std::optional<Capturing> capture_;
     ui::Button* stop_ = nullptr;
+    bool waiting_ = false;  // waitsForPlay() as the status line last showed it
     json::Value presets_ = json::Value::object();  // rack.preset.list's
     bool presetsRead_ = false;
     racks::PluginParamCache pluginParams_;  // paramsOf's, shared with other views

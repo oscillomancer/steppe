@@ -1451,6 +1451,52 @@ TEST_CASE("rack window: patches have a view of their own, searchable, with a car
     CHECK(f.racks->browserShows().size() > 40);
 }
 
+TEST_CASE("rack window: stopped, a patch that follows the song says to press play") {
+    Fixture f;
+    if (!f.ok) return;
+    auto made = f.exec("rack.add", R"({"name":"Bells"})");
+    const std::string rack = made["rack"].asString();
+    f.racks->open();
+    f.frame();
+    const std::string hint = "Stopped: press play to start the patch";
+    auto hinted = [&] { return f.racks->status().find(hint) != std::string::npos; };
+    CHECK_FALSE(hinted());  // nothing in it follows the song
+    // An instrument plays from notes: no hint.
+    f.exec("rack.preset.load", R"({"rack":")" + rack + R"(","name":"Init Voice"})");
+    f.frame();
+    CHECK_FALSE(hinted());
+    // Rain Bells runs from its Transport module and sequencers.
+    f.exec("rack.remove", R"({"rack":")" + rack + R"("})");
+    made = f.exec("rack.add", R"({"name":"Bells"})");
+    f.exec("rack.preset.load",
+           R"({"rack":")" + made["rack"].asString() + R"(","name":"Rain Bells"})");
+    f.racks->open(model::Id::parse(made["rack"].asString()));
+    f.frame();
+    CHECK(hinted());
+    f.snapshot("rack-stopped-hint.png");
+    // Playing, it goes, without any edit; stopped again, it is back.
+    engine::DummyBackend backend(
+        engine::DummyBackend::Options{.mode = engine::DummyBackend::Mode::Manual});
+    REQUIRE(f.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 256},
+                               {.anticipative = false}));
+    auto now = std::chrono::steady_clock::now();
+    f.racks->tick(now += std::chrono::seconds(1));
+    CHECK(hinted());
+    f.app->engine()->play();
+    backend.run(2);
+    CHECK(f.racks->tick(now += std::chrono::seconds(1)));
+    CHECK_FALSE(hinted());
+    const auto* status = dynamic_cast<const ui::Label*>(f.r().find("rack.status"));
+    REQUIRE(status);
+    CHECK(status->valueText().find(hint) == std::string::npos);
+    f.app->engine()->pause();
+    backend.run(1);
+    f.racks->tick(now += std::chrono::seconds(1));
+    CHECK(hinted());
+    CHECK(status->valueText().find(hint) != std::string::npos);
+    f.app->stopEngine();
+}
+
 TEST_CASE("rack window: an empty rack invites a start, and a patch lands in it whole") {
     Fixture f;
     if (!f.ok) return;
