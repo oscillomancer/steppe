@@ -744,7 +744,7 @@ TEST_CASE("rack presets: a malformed file is skipped with a warning") {
         writeFileAtomic(f.app->rackPresetDir() / "bad.json",
                         R"({"schema": "supple.rack-preset/1.0", "name": "Bad", "description": 42,
                                 "modules": [{"type": "com.suppleaudio.rack.out"}], "cables": []})"));
-    json::Value list = f.run("rack.preset.list");
+    json::Value list = f.run("rack.preset.list", R"({"factory": false})");
     CHECK(list["presets"].asArray().empty());
     REQUIRE(list.find("warnings") != nullptr);
     CHECK(list["warnings"].at(0).find("code")->asString() == "rack.preset_invalid");

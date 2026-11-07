@@ -20,6 +20,7 @@
 #include "supple/engine/app.h"
 #include "supple/engine/racks.h"
 #include "supple/model/schemas.h"
+#include "supple/rack/stock.h"
 
 namespace supple::engine {
 
@@ -1602,6 +1603,7 @@ struct PresetLoad {
 };
 struct PresetList {
     std::optional<std::string> query;
+    std::optional<bool> factory;
 };
 struct PresetName {
     std::string name;
@@ -1697,13 +1699,12 @@ Result<json::Value> encodePreset(EngineApp& a, const model::Session& s, const st
 }
 
 // Reads a preset and checks its shape (not its types or plug-ins).
-Result<json::Value> readPreset(const fs::path& file) {
-    auto text = readTextFile(file, kMaxRackPreset);
-    if (!text) return std::move(text).error();
-    auto parsed = json::parse(*text);
+// `label` names it in errors (a file name).
+Result<json::Value> parsePreset(std::string_view text, const std::string& label) {
+    auto parsed = json::parse(text);
     if (!parsed) return std::move(parsed).error();
     json::Value& doc = *parsed;
-    const std::string where = file.filename().string() + ": ";
+    const std::string where = label + ": ";
     auto bad = [&](const std::string& at, const std::string& what) {
         return Error("rack.preset_invalid", where + what, at,
                      "the file is not a rack preset this version reads; save the patch again "
@@ -1788,6 +1789,34 @@ Result<json::Value> readPreset(const fs::path& file) {
             return bad(at + "/color", "color is not a string");
     }
     return std::move(doc);
+}
+
+Result<json::Value> readPreset(const fs::path& file) {
+    auto text = readTextFile(file, kMaxRackPreset);
+    if (!text) return std::move(text).error();
+    return parsePreset(*text, file.filename().string());
+}
+
+// The factory patches (modules/patches, compiled in), read once. One that
+// does not read is left out; a test keeps every one readable.
+struct FactoryPreset {
+    std::string file;
+    json::Value doc;
+};
+const std::vector<FactoryPreset>& factoryPresets() {
+    static const std::vector<FactoryPreset> all = [] {
+        std::vector<FactoryPreset> v;
+        for (const rack::FactoryPatch& p : rack::factoryPatches())
+            if (auto doc = parsePreset(p.text, std::string(p.file) + ".json"))
+                v.push_back({std::string(p.file), std::move(*doc)});
+        return v;
+    }();
+    return all;
+}
+const FactoryPreset* factoryPreset(const std::string& name) {
+    for (const FactoryPreset& p : factoryPresets())
+        if (p.doc.find("name")->asString() == name) return &p;
+    return nullptr;
 }
 
 std::string stringOr(const json::Value& o, const char* key, std::string fallback = {}) {
@@ -1881,7 +1910,8 @@ void registerRackPresetCommands(cmd::Registry& registry) {
         common(c, "rack.preset.load", Kind::Edit,
                "Add a saved preset's modules and cables to a rack.");
         c.description =
-            "name (rack.preset.list) or path (a preset file). x, y: the group's top-left "
+            "name (rack.preset.list: a saved preset, or else a factory patch) or path (a "
+            "preset file). x, y: the group's top-left "
             "(default right of the rack's modules). io: join (default) gives the preset's Out "
             "and In modules' cables to the rack's own Outs and Ins in order, so a whole patch "
             "sounds at once (extra ones are added); add makes new ones. Notes modules play the "
@@ -1916,19 +1946,22 @@ void registerRackPresetCommands(cmd::Registry& registry) {
             if (a.name.has_value() == a.path.has_value())
                 return Error("rack.preset_source", "give name or path, one of them", "/name",
                              "rack.preset.list shows the saved names");
-            fs::path file;
+            // A name is the user's preset, or else a factory patch's.
+            Result<json::Value> read = json::Value();
             if (a.name) {
                 auto p = presetPath(e, *a.name);
                 if (!p) return std::move(p).error();
-                file = *p;
                 std::error_code ec;
-                if (!fs::is_regular_file(file, ec))
+                if (fs::is_regular_file(*p, ec))
+                    read = readPreset(*p);
+                else if (const FactoryPreset* f = factoryPreset(*a.name))
+                    read = f->doc;
+                else
                     return Error("rack.preset", "no rack preset named \"" + *a.name + "\"", "/name",
-                                 "rack.preset.list shows the saved names");
+                                 "rack.preset.list shows the saved and factory names");
             } else {
-                file = e.resolve(*a.path);
+                read = readPreset(e.resolve(*a.path));
             }
-            auto read = readPreset(file);
             if (!read) return std::move(read).error();
             const json::Value& doc = *read;
             const model::Session s = e.view();
@@ -2202,20 +2235,31 @@ void registerRackPresetCommands(cmd::Registry& registry) {
     // ---------------------------------------------------------------- rack.preset.list
     [&] {
         Command<PresetList, json::Value> c;
-        common(c, "rack.preset.list", Kind::Query, "List saved rack presets: names and contents.");
+        common(c, "rack.preset.list", Kind::Query,
+               "List rack presets, saved and factory: names and contents.");
         c.description =
-            "query: a part of the name or description. Each preset: name, path, description, "
-            "its module and cable counts and its module types. Files that are not rack presets "
-            "are skipped with a warning (warnings).";
+            "query: a part of the name or description. factory: true lists only the factory "
+            "patches that ship with the app, false only the saved ones (default both). Each "
+            "preset: name, path (a saved one's) or factory: true, description, its module and "
+            "cable counts and its module types. A saved preset hides a factory patch of its "
+            "name. Files that are not rack presets are skipped with a warning (warnings).";
         c.args = schema::object<PresetList>("rack_preset_list_args")
                      .field("query", &PresetList::query, schema::string())
+                     .field("factory", &PresetList::factory, schema::boolean())
                      .build();
-        c.examples = {{"The saved presets", j("{}"),
+        c.examples = {{"The saved presets", j(R"({"factory": false})"),
                        j(R"({"presets": [{"name": "Gated VCA", "path": "<any>",
                              "modules": 3, "cables": 1,
                              "types": ["com.suppleaudio.rack.notes", "com.suppleaudio.rack.out",
                                        "com.suppleaudio.rack.vca"]}]})"),
-                       "song_with_rack_preset"}};
+                       "song_with_rack_preset"},
+                      {"A factory patch", j(R"({"query": "Init Voice", "factory": true})"),
+                       j(R"({"presets": [{"name": "Init Voice", "factory": true,
+                             "description": "<any>", "modules": 6, "cables": 9,
+                             "types": ["com.suppleaudio.rack.adsr", "com.suppleaudio.rack.filter",
+                                       "com.suppleaudio.rack.notes", "com.suppleaudio.rack.out",
+                                       "com.suppleaudio.rack.vca", "com.suppleaudio.rack.vco"]}]})"),
+                       "song_with_rack"}};
         c.run = [](const PresetList& a, Context& ctx) -> Result<json::Value> {
             const fs::path dir = app(ctx).rackPresetDir();
             auto lower = [](std::string text) {
@@ -2227,10 +2271,36 @@ void registerRackPresetCommands(cmd::Registry& registry) {
             const std::string query = lower(a.query.value_or(""));
             std::vector<std::pair<std::string, json::Value>> rows;
             json::Value warnings = json::Value::array();
+            // A row for a preset document; nullopt when the query leaves it out.
+            auto rowOf = [&](const json::Value& doc) -> std::optional<json::Value> {
+                const std::string name = doc.find("name")->asString();
+                const std::string description = stringOr(doc, "description");
+                if (!query.empty() && lower(name).find(query) == std::string::npos &&
+                    lower(description).find(query) == std::string::npos)
+                    return std::nullopt;
+                json::Value row = json::Value::object();
+                row["name"] = name;
+                if (!description.empty()) row["description"] = description;
+                row["modules"] = static_cast<std::int64_t>(doc.find("modules")->asArray().size());
+                const auto* cables = doc.find("cables");
+                row["cables"] = static_cast<std::int64_t>(cables ? cables->asArray().size() : 0);
+                std::set<std::string> kinds;
+                for (const auto& m : doc.find("modules")->asArray())
+                    kinds.insert(m.find("type")->asString());
+                json::Value types = json::Value::array();
+                for (const auto& k : kinds) types.push_back(k);
+                row["types"] = std::move(types);
+                return row;
+            };
+            std::set<std::string> saved;  // the saved presets' names
             std::error_code ec;
             for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
                 std::error_code kind;
                 if (!it->is_regular_file(kind) || it->path().extension() != ".json") continue;
+                if (a.factory == true) {  // only to know which factory patches are hidden
+                    saved.insert(it->path().stem().string());
+                    continue;
+                }
                 auto doc = readPreset(it->path());
                 if (!doc) {
                     json::Value w = json::Value::object();
@@ -2240,25 +2310,22 @@ void registerRackPresetCommands(cmd::Registry& registry) {
                     warnings.push_back(std::move(w));
                     continue;
                 }
-                const std::string name = (*doc)["name"].asString();
-                const std::string description = stringOr(*doc, "description");
-                if (!query.empty() && lower(name).find(query) == std::string::npos &&
-                    lower(description).find(query) == std::string::npos)
-                    continue;
-                json::Value row = json::Value::object();
-                row["name"] = name;
-                row["path"] = it->path().string();
-                if (!description.empty()) row["description"] = description;
-                row["modules"] = static_cast<std::int64_t>((*doc)["modules"].asArray().size());
-                const auto* cables = doc->find("cables");
-                row["cables"] = static_cast<std::int64_t>(cables ? cables->asArray().size() : 0);
-                std::set<std::string> kinds;
-                for (const auto& m : (*doc)["modules"].asArray())
-                    kinds.insert(m.find("type")->asString());
-                json::Value types = json::Value::array();
-                for (const auto& k : kinds) types.push_back(k);
-                row["types"] = std::move(types);
-                rows.emplace_back(name + '\0' + it->path().string(), std::move(row));
+                // Loading by name reads <name>.json: that file is what hides a factory patch.
+                saved.insert(it->path().stem().string());
+                auto row = rowOf(*doc);
+                if (!row) continue;
+                (*row)["path"] = it->path().string();
+                rows.emplace_back((*doc)["name"].asString() + '\0' + it->path().string(),
+                                  std::move(*row));
+            }
+            for (const FactoryPreset& f : factoryPresets()) {
+                if (a.factory == false) break;
+                const std::string name = f.doc.find("name")->asString();
+                if (saved.count(name) != 0) continue;
+                auto row = rowOf(f.doc);
+                if (!row) continue;
+                (*row)["factory"] = true;
+                rows.emplace_back(name + '\0', std::move(*row));
             }
             std::sort(rows.begin(), rows.end(),
                       [](const auto& x, const auto& y) { return x.first < y.first; });
@@ -2280,13 +2347,23 @@ void registerRackPresetCommands(cmd::Registry& registry) {
                      .build();
         c.examples = {{"Delete a preset", j(R"({"name": "Gated VCA"})"), j(R"({"path": "<any>"})"),
                        "song_with_rack_preset"}};
+        c.errors = {{"rack.preset", "no saved preset of that name", "rack.preset.list"},
+                    {"rack.preset_factory", "a factory patch cannot be deleted",
+                     "save your own version under its name instead"}};
         c.run = [](const PresetName& a, Context& ctx) -> Result<json::Value> {
             auto path = presetPath(app(ctx), a.name);
             if (!path) return std::move(path).error();
             std::error_code ec;
-            if (!fs::is_regular_file(fs::symlink_status(*path, ec)))
+            if (!fs::is_regular_file(fs::symlink_status(*path, ec))) {
+                if (factoryPreset(a.name))
+                    return Error("rack.preset_factory",
+                                 "\"" + a.name + "\" is a factory patch, which cannot be deleted",
+                                 "/name",
+                                 "save a preset under its name to keep your own version in its "
+                                 "place");
                 return Error("rack.preset", "no rack preset named \"" + a.name + "\"", "/name",
                              "rack.preset.list shows the saved names");
+            }
             if (!fs::remove(*path, ec) || ec)
                 return Error("rack.preset", "cannot delete " + path->string() + ": " + ec.message(),
                              "/name", "check the folder's permissions");

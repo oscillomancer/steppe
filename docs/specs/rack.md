@@ -498,8 +498,8 @@ examples run as tests. Ends are strings: `"mo_3.out"`.
 | `rack.arrange` | edit | `{rack, modules?, x?, y?}` → `{modules: {mo_N: {x, y}}}`: lays out the modules (default all the rack's) as §7.2 from x, y (default their top-left corner), along the cables among them; one undo step |
 | `rack.preset.save` | action | `{rack, name, modules?, description?, replace?}` → `{path, modules, cables}`: the modules (default the whole rack) and the cables among them |
 | `rack.preset.load` | edit | `{rack, name\|path, x?, y?, io?: join\|add}` → `{modules, cables, installed?, warnings?}`: one undo step; `installed` names the library modules it brought |
-| `rack.preset.list` | query | `{query?}` → presets: name, path, description, module and cable counts, module types |
-| `rack.preset.delete` | action | `{name}` → `{path}` |
+| `rack.preset.list` | query | `{query?, factory?}` → presets: name, path (a saved one's) or `factory: true`, description, module and cable counts, module types; `factory` true lists only the factory patches, false only the saved ones |
+| `rack.preset.delete` | action | `{name}` → `{path}`; a factory patch is `rack.preset_factory` |
 | `module.list` | query | `{query?, tag?}` → types: id, name, tags, one line, origin |
 | `module.describe` | query | `{type\|module}` → parameters (key, unit, range, default, help, group, choices), ports (key, signal, help, normal), size, presets |
 | `module.add` | edit | `{rack, type\|plugin, label?, x?, y?, params?, preset?, source?, device?}` → `{module, type, x, y, width, height, inputs, outputs, knobs, fx?, plugin?}` |
@@ -597,6 +597,21 @@ out with a warning (`rack.preset_knob`, `rack.preset_cable`). With
 own, in order: their cables reach the rack's Outs and Ins, so a whole
 patch saved from one rack sounds in a new one at once; extra ones are
 added. `io: add` adds them all.
+
+**Factory patches.** Rack presets that ship with the app are compiled
+into it from `modules/patches/<file>.json` (lower-case words joined by
+hyphens; MIT, like the modules). Each is a canonical rack preset of stock
+modules only, with no `sources`, and has an Out; an instrument plays from
+a Notes module, an effect hears a send into an In, and a generative patch
+plays from the song's Transport. `rack.preset.list` lists them with
+`factory: true` and no `path`, and `rack.preset.load {name}` loads one when
+no saved preset has that name: a saved preset (`<name>.json` in the preset
+folder) hides the factory patch of its name, so saving under it keeps the
+user's version, and deleting that brings the factory one back. A factory
+patch cannot be deleted (`rack.preset_factory`). A test loads each into a
+fresh rack and plays it (notes from its track, a saw sent into its In, the
+song running): it loads without a warning, sounds, and peaks at most
++1 dBFS on the track.
 
 ### 7.2 Patch layout and labels
 

@@ -10921,6 +10921,11 @@ Kind: `action`. Exposure: `mcp-tool`.
 
 ```
 
+### Errors
+
+- `rack.preset`: no saved preset of that name Hint: rack.preset.list
+- `rack.preset_factory`: a factory patch cannot be deleted Hint: save your own version under its name instead
+
 ### Examples
 
 **Delete a preset** (`song_with_rack_preset`)
@@ -10943,9 +10948,9 @@ Result:
 
 ## `rack.preset.list@1`
 
-List saved rack presets: names and contents.
+List rack presets, saved and factory: names and contents.
 
-query: a part of the name or description. Each preset: name, path, description, its module and cable counts and its module types. Files that are not rack presets are skipped with a warning (warnings).
+query: a part of the name or description. factory: true lists only the factory patches that ship with the app, false only the saved ones (default both). Each preset: name, path (a saved one's) or factory: true, description, its module and cable counts and its module types. A saved preset hides a factory patch of its name. Files that are not rack presets are skipped with a warning (warnings).
 
 Kind: `query`. Exposure: `mcp-tool`.
 
@@ -10954,6 +10959,7 @@ Kind: `query`. Exposure: `mcp-tool`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `query` | string |  |  |  |  |
+| `factory` | boolean |  |  |  |  |
 
 ### Result
 
@@ -10967,7 +10973,9 @@ Kind: `query`. Exposure: `mcp-tool`.
 **The saved presets** (`song_with_rack_preset`)
 
 ```json
-{}
+{
+  "factory": false
+}
 
 ```
 
@@ -10992,11 +11000,46 @@ Result:
 
 ```
 
+**A factory patch** (`song_with_rack`)
+
+```json
+{
+  "query": "Init Voice",
+  "factory": true
+}
+
+```
+
+Result:
+
+```json
+{
+  "presets": [
+    {
+      "name": "Init Voice",
+      "factory": true,
+      "description": "<any>",
+      "modules": 6,
+      "cables": 9,
+      "types": [
+        "com.suppleaudio.rack.adsr",
+        "com.suppleaudio.rack.filter",
+        "com.suppleaudio.rack.notes",
+        "com.suppleaudio.rack.out",
+        "com.suppleaudio.rack.vca",
+        "com.suppleaudio.rack.vco"
+      ]
+    }
+  ]
+}
+
+```
+
 ## `rack.preset.load@1`
 
 Add a saved preset's modules and cables to a rack.
 
-name (rack.preset.list) or path (a preset file). x, y: the group's top-left (default right of the rack's modules). io: join (default) gives the preset's Out and In modules' cables to the rack's own Outs and Ins in order, so a whole patch sounds at once (extra ones are added); add makes new ones. Notes modules play the rack's channel. Your own modules the preset carries are written into the library when it lacks them (installed lists them). Every embedded source must compile and declare its sources key as ModuleInfo.id before any module is installed. Knobs and cables the module types no longer have are left out with a warning (warnings); a module type or plug-in that is not installed is an error, and the rack does not change.
+name (rack.preset.list: a saved preset, or else a factory patch) or path (a preset file). x, y: the group's top-left (default right of the rack's modules). io: join (default) gives the preset's Out and In modules' cables to the rack's own Outs and Ins in order, so a whole patch sounds at once (extra ones are added); add makes new ones. Notes modules play the rack's channel. Your own modules the preset carries are written into the library when it lacks them (installed lists them). Every embedded source must compile and declare its sources key as ModuleInfo.id before any module is installed. Knobs and cables the module types no longer have are left out with a warning (warnings); a module type or plug-in that is not installed is an error, and the rack does not change.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 

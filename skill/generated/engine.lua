@@ -1061,6 +1061,7 @@ q = nil
 
 ---@class Steppe.rack_preset_list_args
 ---@field query? string
+---@field factory? boolean
 
 ---@class Steppe.rack_preset_load_args
 ---@field rack string
@@ -2025,7 +2026,7 @@ q = nil
 
 ---@class Steppe.rack.preset
 ---@field delete fun(args: Steppe.rack_preset_delete_args): table Delete a saved rack preset.
----@field list fun(args?: Steppe.rack_preset_list_args): table List saved rack presets: names and contents.
+---@field list fun(args?: Steppe.rack_preset_list_args): table List rack presets, saved and factory: names and contents.
 ---@field load fun(args: Steppe.rack_preset_load_args): table Add a saved preset's modules and cables to a rack.
 ---@field save fun(args: Steppe.rack_preset_save_args): table Save a rack's modules and cables as a preset.
 

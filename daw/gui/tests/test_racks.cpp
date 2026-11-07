@@ -1151,7 +1151,7 @@ TEST_CASE("rack window: modules saved as a rack preset load into another rack fr
     f.r().key(SDLK_RETURN);
     f.frame();
     REQUIRE(f.pick("rack.preset.replace", "Replace"));
-    json::Value list = f.exec("rack.preset.list", "{}");
+    json::Value list = f.exec("rack.preset.list", R"({"factory": false})");
     REQUIRE(list["presets"].size() == 1);
     CHECK(list["presets"].asArray()[0].find("modules")->asInt() == 1);
     // A new rack: the preset loads into it, selected and in view.

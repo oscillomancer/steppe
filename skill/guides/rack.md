@@ -39,6 +39,13 @@ with their ranges and defaults; read it before patching. `module.describe
    the source of your own modules it uses, and loading it on another
    machine installs them into that library.
 
+To start from something that already sounds, `rack.preset.list
+{factory: true}` lists the factory patches that ship with the app
+(instruments, effects and self-playing patches, each with a description of
+what to play or turn); `rack.preset.load {rack, name}` loads one, its Out
+joined to the rack's. Change it, then save it under its own name or a new
+one: a saved preset of a factory patch's name takes its place.
+
 ## rack.patch
 
 ```json
