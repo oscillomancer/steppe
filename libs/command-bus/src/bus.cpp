@@ -94,6 +94,108 @@ json::Value typeSchema(std::string_view type) {
     out["type"] = std::string(type);
     return out;
 }
+// Handler schemas stay strict; exported schemas also describe the diagnostics
+// that dispatch attaches after a successful invocation/transaction.
+json::Value warningSchema() {
+    return typeSchema("object");  // the shared contract is documented once, outside tool schemas
+}
+json::Value warningArray() {
+    auto out = typeSchema("array");
+    out["items"] = warningSchema();
+    return out;
+}
+json::Value replySchema(json::Value raw) {
+    if (auto* alternatives = raw.find("oneOf"); alternatives && alternatives->isArray()) {
+        for (auto& variant : raw["oneOf"].asArray()) variant = replySchema(std::move(variant));
+        return raw;
+    }
+    if (auto* alternatives = raw.find("anyOf"); alternatives && alternatives->isArray()) {
+        for (auto& variant : raw["anyOf"].asArray()) variant = replySchema(std::move(variant));
+        return raw;
+    }
+    const auto* type = raw.find("type");
+    if (!type || !type->isString()) return raw;  // any JSON, including replies with diagnostics
+    if (type->asString() != "object") {
+        auto wrapped =
+            objectSchema({{"result", raw}, {"warnings", warningArray()}}, {"result", "warnings"});
+        auto out = json::Value::object();
+        out["oneOf"] = json::Value::array();
+        out["oneOf"].push_back(std::move(raw));
+        out["oneOf"].push_back(std::move(wrapped));
+        return out;
+    }
+    if (!raw.find("properties")) raw["properties"] = json::Value::object();
+    auto* existing = raw["properties"].find("warnings");
+    auto combined = warningArray();
+    if (existing) {
+        const auto old = *existing;
+        const auto* oldType = old.find("type");
+        if (oldType && *oldType == "array") {
+            combined = old;
+            combined.asObject().erase("maxItems");
+            combined.asObject().erase("uniqueItems");
+            if (const auto* items = old.find("items")) {
+                const auto* itemType = items->find("type");
+                if (itemType && *itemType == "object") {
+                    combined["items"] = warningSchema();
+                } else {
+                    combined["items"] = json::Value::object();
+                    combined["items"]["anyOf"] = json::Value::array();
+                    combined["items"]["anyOf"].push_back(*items);
+                    combined["items"]["anyOf"].push_back(warningSchema());
+                }
+            }
+        } else {
+            // A command-owned scalar/object warning keeps its value. Only
+            // warning-bearing replies turn it into the first array entry.
+            combined["items"] = json::Value::object();
+            combined["items"]["anyOf"] = json::Value::array();
+            combined["items"]["anyOf"].push_back(old);
+            combined["items"]["anyOf"].push_back(warningSchema());
+            auto variants = json::Value::array();
+            variants.push_back(old);
+            variants.push_back(std::move(combined));
+            combined = json::Value::object();
+            combined["anyOf"] = std::move(variants);
+        }
+    }
+    raw["properties"]["warnings"] = std::move(combined);
+    return raw;
+}
+void appendWarnings(json::Value& result, const std::vector<Warning>& warnings) {
+    if (warnings.empty()) return;
+    if (!result.isObject()) {
+        auto wrapped = json::Value::object();
+        wrapped["result"] = std::move(result);
+        result = std::move(wrapped);
+    }
+    if (!result.find("warnings")) result["warnings"] = json::Value::array();
+    if (!result["warnings"].isArray()) {
+        auto previous = std::move(result["warnings"]);
+        result["warnings"] = json::Value::array();
+        result["warnings"].push_back(std::move(previous));
+    }
+    const std::size_t commandWarnings = result["warnings"].size();
+    for (const auto& warning : warnings) {
+        auto& entries = result["warnings"].asArray();
+        const bool alreadyReported = std::any_of(
+            entries.begin(), entries.begin() + static_cast<std::ptrdiff_t>(commandWarnings),
+            [&](const json::Value& entry) {
+                const auto* code = entry.find("code");
+                const auto* message = entry.find("message");
+                const auto* path = entry.find("path");
+                return code && message && path && *code == warning.code &&
+                       *message == warning.message && *path == warning.path;
+            });
+        if (alreadyReported) continue;
+        auto value = json::Value::object();
+        value["code"] = warning.code;
+        value["message"] = warning.message;
+        value["path"] = warning.path;
+        result["warnings"].push_back(std::move(value));
+    }
+}
+
 std::string stringField(const json::Value& value, std::string_view key) {
     const auto* member = value.find(key);
     return member && member->isString() ? member->asString() : std::string{};
@@ -499,6 +601,7 @@ Registry::Registry() {
     commands_.at({"job.list", 1}).examples.front().result["jobs"] = json::Value::array();
 }
 void Registry::addInfo(CommandInfo info) {
+    info.resultSchema = replySchema(std::move(info.resultSchema));
     assert(validName(info.name) && info.version > 0 && info.summary.size() <= 80);
     assert(info.exposure == Exposure::Internal || !info.examples.empty());
     auto key = std::pair{info.name, info.version};
@@ -767,6 +870,7 @@ Result<json::Value> Dispatcher::dispatch(const Invocation& invocation, bool inBa
         result = transact(name, invocation.origin, invoke);
     } else
         result = invoke();
+    if (result) appendWarnings(*result, context.warnings());
     return finish(std::move(result));
 }
 Result<json::Value> Dispatcher::batch(const json::Value& args, const Origin& origin) {
@@ -893,7 +997,15 @@ json::Value mcpToolList(const Registry& registry) {
     return tools;
 }
 std::string markdownReference(const Registry& registry) {
-    std::string text = "# Command reference\n\nGenerated from the command registry.\n";
+    std::string text =
+        "# Command reference\n\nGenerated from the command registry.\n"
+        "\nSuccessful replies may include `warnings`: command warnings followed by bus "
+        "diagnostics `{code: string, message: string, path: string}`. Paths are retained as "
+        "supplied by the decoder or "
+        "handler. "
+        "Batch steps carry their own warnings in `results[i].warnings`. A non-object "
+        "result with bus warnings is `{result: <value>, warnings: [...]}`. "
+        "Replies without bus warnings keep their original shape.\n";
     for (auto* info : registry.all()) {
         text += "\n## `" + info->name + "@" + std::to_string(info->version) + "`\n\n";
         text += info->summary + "\n\n" + info->description + "\n\n";
@@ -1039,7 +1151,21 @@ std::string luaType(const json::Value& schema, const json::Value& root,
         }
         return allObjects ? "table" : "string|table";
     }
-    if (schema.find("anyOf")) return "number|string";  // a number or a quantity string
+    if (const auto* variants = schema.find("anyOf"); variants && variants->isArray()) {
+        std::vector<std::string> types;
+        for (const auto& alternative : variants->asArray()) {
+            auto type = luaType(alternative, root, scope, depth + 1);
+            if (type == "any") return type;
+            if (std::find(types.begin(), types.end(), type) == types.end())
+                types.push_back(std::move(type));
+        }
+        std::string out;
+        for (const auto& type : types) {
+            if (!out.empty()) out += "|";
+            out += type;
+        }
+        return out.empty() ? "any" : out;
+    }
     const auto* type = schema.find("type");
     if (!type) return "any";
     if (type->isArray()) {
@@ -1055,7 +1181,9 @@ std::string luaType(const json::Value& schema, const json::Value& root,
     const std::string& name = type->asString();
     if (name == "array") {
         const auto* items = schema.find("items");
-        return (items ? luaType(*items, root, scope, depth + 1) : std::string("any")) + "[]";
+        auto itemType = items ? luaType(*items, root, scope, depth + 1) : std::string("any");
+        if (itemType.find('|') != std::string::npos) itemType = "(" + itemType + ")";
+        return itemType + "[]";
     }
     if (name == "object") {
         if (const auto* extra = schema.find("additionalProperties"); extra && extra->isObject())
@@ -1067,7 +1195,14 @@ std::string luaType(const json::Value& schema, const json::Value& root,
 }
 bool hasProperties(const json::Value& schema) {
     const auto* properties = schema.find("properties");
-    return properties && properties->isObject() && properties->size() > 0;
+    if (!properties || !properties->isObject() || properties->size() == 0) return false;
+    // Common metadata alone must not narrow an otherwise open result table
+    // (registry.list, for example, still has arbitrary business fields).
+    const auto* additional = schema.find("additionalProperties");
+    if (properties->size() == 1 && properties->find("warnings") &&
+        (!additional || !additional->isBool() || additional->asBool()))
+        return false;
+    return true;
 }
 std::string fieldDoc(const json::Value& schema) {
     std::string doc;
@@ -1127,6 +1262,11 @@ std::string luaStubs(const Registry& registry) {
     text +=
         "-- Do not edit: `<slug>-engine registry --lua` writes it, "
         "tools/gen/update-generated.sh regenerates it.\n";
+    text +=
+        "-- Successful replies can include .warnings: command warnings then {code,message,path}\n";
+    text +=
+        "-- bus diagnostics. Non-object results with bus warnings become "
+        "{result=...,warnings=...}.\n";
     text += "-- The `q` table of a script (libs/lua-bus, ADR-0006): every command is a\n";
     text +=
         "-- function, `q.run(name, args)` reaches any of them by name, "

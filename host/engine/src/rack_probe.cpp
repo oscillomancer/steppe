@@ -545,11 +545,8 @@ void registerRackCapture(cmd::Registry& registry) {
             if (!ev.on) continue;
             o.on = true;
             o.beat = beat;
-            o.pitch = static_cast<int>(std::clamp(std::lround(60 + 12 * ev.pitch), 0L, 127L));
-            o.velocity =
-                ev.velocity < 0
-                    ? 96
-                    : static_cast<int>(std::clamp(std::lround(127 * ev.velocity), 1L, 127L));
+            o.pitch = rack::host::noteKey(ev.pitch);
+            o.velocity = rack::host::noteVelocity(ev.velocity, ev.hasVelocity);
             voices.insert(ev.voice);
         }
         for (Open& o : open)

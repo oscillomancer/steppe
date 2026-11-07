@@ -475,6 +475,22 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
             if (!m || !index.count(m->rack) || !index.count(*r.to.track)) continue;
             const Node& rack = p.nodes[index.at(m->rack)];
             if (!rack.rack) continue;
+            if (r.midi && m->type == model::kNotesOutModule) {
+                const auto& outputs = rack.rack->notesOut;
+                const auto found =
+                    std::find_if(outputs.begin(), outputs.end(),
+                                 [&](const auto& out) { return out.id == *r.from.module; });
+                if (found == outputs.end()) continue;
+                Edge ed;
+                ed.from = index.at(m->rack);
+                ed.route = e.id;
+                ed.rackNotes = static_cast<int>(found - outputs.begin());
+                ed.midiFrom = r.midi->fromChannel;
+                ed.midiTo = r.midi->toChannel;
+                ed.muted = r.mute;
+                pending.push_back({ed.from, index.at(*r.to.track), std::move(ed), 1 + e.id.n});
+                continue;
+            }
             const auto& outs = rack.rack->outIds;
             const auto at = std::find(outs.begin(), outs.end(), *r.from.module);
             if (at == outs.end()) continue;  // a missing Out (its type is not known)
@@ -730,7 +746,7 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         for (bool changed = true; changed;) {
             changed = false;
             for (const Edge& e : p.edges)
-                if (!e.auxLinks.empty() && !p.nodes[e.from].live) {
+                if ((!e.auxLinks.empty() || e.rackNotes >= 0) && !p.nodes[e.from].live) {
                     const auto to = static_cast<std::size_t>(
                         std::find_if(p.nodes.begin(), p.nodes.end(),
                                      [&](const Node& n) {
@@ -792,8 +808,8 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
             e.stripPan = p.nodes[e.from].autoPan;
             continue;
         }
-        if (e.auxOnly) continue;       // nothing reaches the main pair
-        if (e.rackOut >= 0) continue;  // a rack's Out: its audio as is
+        if (e.auxOnly) continue;                           // nothing reaches the main pair
+        if (e.rackOut >= 0 || e.rackNotes >= 0) continue;  // a rack's Out: its audio as is
         e.encode = e.rackIn >= 0 || e.tap != model::Tap::PostFader || e.volumeDb != 0 ||
                    !e.followPan || e.mono || e.invert || e.mapped || e.muted ||
                    e.autoVolume.active() || e.autoPan.active() || e.autoMute.active();
@@ -1347,6 +1363,7 @@ Status prepare(Plan& p, const Session& s) {
             st.blockEvents.reserve(windowMax + 1 + lanes + notes + live);
         }
     }
+    SUPPLE_TRY(prepareRackMidi(p));
     for (Node& node : p.nodes)
         forEachStage(node, [](Stage& st) { st.sourceIds.reserve(st.blockEvents.capacity()); });
     // Immutable musical origins let adoption rebind compiled ids after a
@@ -1554,6 +1571,7 @@ Status checkStrips(const Plan& p) {
                              "session.describe, including the affected routes from route.list");
             // Racks (ADR-0062): an Out module's audio enters its channel as is;
             // a send into an In module is linear, through its own encoder.
+            if (e.rackNotes >= 0) continue;
             if (e.rackOut >= 0 || e.rackIn >= 0) {
                 if ((e.rackOut >= 0) == e.encode || (e.rackIn >= 0) != bool(n.rack) ||
                     (e.rackOut >= 0 && !p.nodes[e.from].rack))
@@ -1612,6 +1630,7 @@ void automateStage(Stage& st, std::int64_t pos, std::uint32_t n, std::int64_t or
 // Audio edges carry only the encoded signal and PDC; key controls are conventional.
 void addEdge(Plan& p, Edge& e, double panLawDb, Stereo& into, std::int64_t pos,
              std::uint32_t n) SUPPLE_RT {
+    if (e.rackNotes >= 0) return;
     const Stereo& tap = p.split && e.frontier ? e.frontierBuf : edgeSignal(p, e);
     e.tmp.copyFrom(tap, n);
     e.delay.process(e.tmp.l.data(), e.tmp.r.data(), n);
@@ -1862,8 +1881,16 @@ void trackVoices(Stage& st, std::array<std::uint8_t, 16 * 128>& held,
                                     liveHeld && event.noteId == -1};
                     voice.sourceId = sourceIndex < st.sourceIds.size() ? st.sourceIds[sourceIndex]
                                                                        : event.noteId;
-                    if (voice.sourceId >= 0 &&
-                        static_cast<std::size_t>(voice.sourceId) < st.noteSources.size()) {
+                    if (st.rackMidiBase >= 0 && voice.sourceId >= st.rackMidiBase &&
+                        static_cast<std::size_t>(voice.sourceId - st.rackMidiBase) <
+                            st.rackNoteSources.size()) {
+                        const auto& source = st.rackNoteSources[static_cast<std::size_t>(
+                            voice.sourceId - st.rackMidiBase)];
+                        voice.live = true;
+                        voice.origin = {kRackNoteOrigin, source.route.n, source.module.n,
+                                        source.voice, 0};
+                    } else if (voice.sourceId >= 0 &&
+                               static_cast<std::size_t>(voice.sourceId) < st.noteSources.size()) {
                         const auto& source =
                             st.noteSources[static_cast<std::size_t>(voice.sourceId)];
                         voice.origin = source.origin;
@@ -2544,6 +2571,7 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
                 for (std::size_t j = i; j > 0 && target[j - 1].time > target[j].time; --j)
                     std::swap(target[j - 1], target[j]);
     }
+    addRackMidi(p, node, pos, n, transport.playing);
     // 2b. Plugin parameter automation (automateStage).
     for (Stage& st : node.chain) automateStage(st, pos, n, time::samplesAt(p.startSeconds, p.rate));
     // 3. The FX chain, in place on `sum`.
@@ -3128,7 +3156,29 @@ void carryMix(Plan& from, Plan& to, int liveClass) SUPPLE_RT {
                                     break;
                                 }
                                 auto carried = voice;
-                                if (carried.sourceId >= 0) {
+                                if (carried.origin.item == kRackNoteOrigin) {
+                                    const auto oldSource =
+                                        os.rackMidiBase >= 0 &&
+                                                carried.sourceId >= os.rackMidiBase &&
+                                                static_cast<std::size_t>(carried.sourceId -
+                                                                         os.rackMidiBase) <
+                                                    os.rackNoteSources.size()
+                                            ? &os.rackNoteSources[static_cast<std::size_t>(
+                                                  carried.sourceId - os.rackMidiBase)]
+                                            : nullptr;
+                                    const auto found =
+                                        oldSource ? std::find(st.rackNoteSources.begin(),
+                                                              st.rackNoteSources.end(), *oldSource)
+                                                  : st.rackNoteSources.end();
+                                    if (found != st.rackNoteSources.end())
+                                        carried.sourceId =
+                                            st.rackMidiBase +
+                                            static_cast<int>(found - st.rackNoteSources.begin());
+                                    else {
+                                        carried.release = true;
+                                        carried.live = false;
+                                    }
+                                } else if (carried.sourceId >= 0) {
                                     NoteSource source;
                                     source.origin = carried.origin;
                                     source.port = carried.port;
@@ -3146,7 +3196,8 @@ void carryMix(Plan& from, Plan& to, int liveClass) SUPPLE_RT {
                                     else
                                         carried.release = true;
                                 }
-                                if (carried.live && n.releaseHeld && !n.midiIn)
+                                if (carried.live && carried.origin.item != kRackNoteOrigin &&
+                                    n.releaseHeld && !n.midiIn)
                                     carried.live = false;
                                 st.voices.push_back(carried);
                             }
@@ -3195,6 +3246,7 @@ void carryMix(Plan& from, Plan& to, int liveClass) SUPPLE_RT {
             break;
         }
     }
+    carryRackMidi(to, from, liveClass);
 }
 
 double stripGain(bool master, double db) SUPPLE_RT {

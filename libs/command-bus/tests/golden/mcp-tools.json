@@ -34,7 +34,15 @@
       "additionalProperties": false
     },
     "outputSchema": {
-      "type": "object"
+      "type": "object",
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
     },
     "annotations": {
       "readOnlyHint": false,
@@ -63,6 +71,12 @@
       "properties": {
         "count": {
           "type": "integer"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["count"],
@@ -95,6 +109,12 @@
       "properties": {
         "count": {
           "type": "integer"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["count"],

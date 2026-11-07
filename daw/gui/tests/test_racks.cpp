@@ -1087,7 +1087,7 @@ TEST_CASE("rack window: copy, paste, cut and duplicate keep the cables among the
     f.r().key(SDLK_D, ui::kCtrl);
     f.frame();
     CHECK(count(rack) == std::pair{modules + 4, cables + 2});
-    // Into another rack: rebuilt from the copy (rack.patch).
+    // Into another rack, from the engine's clipboard (rack.paste).
     REQUIRE(f.racks->addRack());
     f.frame();
     const model::Id second = *f.racks->rack();
@@ -1123,7 +1123,76 @@ TEST_CASE("rack window: copy, paste, cut and duplicate keep the cables among the
     CHECK(space.view().zoom <= 1.5);
 }
 
-TEST_CASE("rack window: modules saved as a rack preset load into another rack from the browser") {
+TEST_CASE("rack window: a cut plugin module pastes into another rack with its settings") {
+    Fixture f(ui::Theme::dark(), {FIXTURE_CLAP_PATH});
+    if (!f.ok) return;
+    Patch p(f);
+    const std::string gain =
+        f.exec("module.add",
+               R"({"rack":")" + p.rack +
+                   R"(","plugin":"com.suppleaudio.test.gain","x":840,"y":300})")["module"]
+            .asString();
+    const model::Id id = *model::Id::parse(gain), osc = *model::Id::parse(p.osc);
+    f.cable(p.osc + ".out", gain + ".in_l");
+    const std::string fx = f.app->head().modules.find(id)->fx->str();
+    f.exec("fx.param.set", R"({"fx":")" + fx + R"(","values":{"gain":-17}})");
+    f.racks->open();
+    f.frame();
+    gui::RackSpace& space = *f.racks->space();
+    // Nothing copied yet: the space's Paste is off.
+    auto pasteEnabled = [&] {
+        const ui::Rect b = space.bounds();
+        const ui::Point empty{b.x + 20, b.y + 20};
+        f.pointer(ui::PointerEvent::Type::Down, empty, 3);
+        f.pointer(ui::PointerEvent::Type::Up, empty, 3);
+        const ui::Node* menu = f.r().find("rack.space.menu");
+        REQUIRE(menu);
+        bool on = false;
+        for (const auto& item : ui::menuItems(*menu))
+            if (item.label == "Paste") on = item.enabled;
+        f.r().closePopups();
+        f.frame();
+        return on;
+    };
+    CHECK_FALSE(pasteEnabled());
+    space.select({id, osc});
+    f.r().key(SDLK_X, ui::kCtrl);
+    f.frame();
+    CHECK_FALSE(f.app->head().modules.find(id));
+    CHECK(pasteEnabled());
+    REQUIRE(f.racks->addRack());
+    f.frame();
+    const model::Id second = *f.racks->rack();
+    f.r().key(SDLK_V, ui::kCtrl);
+    f.frame();
+    REQUIRE(space.selection().size() == 2);
+    std::optional<model::Id> pasted;
+    for (model::Id m : space.selection()) {
+        const auto* rm = f.app->head().modules.find(m);
+        REQUIRE(rm);
+        CHECK(rm->rack == second);
+        if (rm->fx) pasted = rm->fx;
+    }
+    REQUIRE(pasted);
+    // The plug-in keeps its gain, and the cable between them comes too.
+    const auto value =
+        f.exec("fx.param.get", R"({"fx":")" + pasted->str() + R"(","param":"gain"})")["value"];
+    CHECK(value.asDouble() == doctest::Approx(-17));
+    std::size_t cables = 0;
+    for (const auto& c : f.app->head().cables)
+        cables += space.selection().contains(c.value->from.object) &&
+                  space.selection().contains(c.value->to.object);
+    CHECK(cables == 1);
+    // One undo step takes the paste away.
+    const std::set<model::Id> made = space.selection();
+    f.exec("history.undo", "{}");
+    f.frame();
+    for (model::Id m : made) CHECK_FALSE(f.app->head().modules.find(m));
+    CHECK_FALSE(f.app->head().fx.find(*pasted));
+    CHECK_FALSE(f.app->head().modules.find(id));  // the cut stays cut
+}
+
+TEST_CASE("rack window: modules saved as a patch load into another rack from the browser") {
     Fixture f;
     if (!f.ok) return;
     Patch p(f);
@@ -1139,8 +1208,15 @@ TEST_CASE("rack window: modules saved as a rack preset load into another rack fr
     name->setText("Voice");
     f.r().key(SDLK_RETURN);
     f.frame();
+    // Not among the modules: on the Patches view, the user's before the factory's.
     auto shows = f.racks->browserShows();
-    CHECK(std::find(shows.begin(), shows.end(), "preset:Voice") != shows.end());
+    CHECK(std::find(shows.begin(), shows.end(), "preset:Voice") == shows.end());
+    f.racks->showPatches(true);
+    f.frame();
+    shows = f.racks->browserShows();
+    REQUIRE_FALSE(shows.empty());
+    CHECK(shows.front() == "preset:Voice");
+    CHECK(std::find(shows.begin(), shows.end(), "preset:Init Voice") != shows.end());
     f.snapshot("rack-presets-browser.png");
     // The same name again: replaced only when the user says so.
     f.racks->savePreset(std::vector<model::Id>{osc});
@@ -1151,16 +1227,25 @@ TEST_CASE("rack window: modules saved as a rack preset load into another rack fr
     f.r().key(SDLK_RETURN);
     f.frame();
     REQUIRE(f.pick("rack.preset.replace", "Replace"));
-    json::Value list = f.exec("rack.preset.list", "{}");
+    json::Value list = f.exec("rack.preset.list", R"({"factory": false})");
     REQUIRE(list["presets"].size() == 1);
     CHECK(list["presets"].asArray()[0].find("modules")->asInt() == 1);
-    // A new rack: the preset loads into it, selected and in view.
+    // A new rack: the patch loads into it, in view.
     REQUIRE(f.racks->addRack());
     f.frame();
     const std::size_t before = f.racks->space()->scene().modules.size();
     REQUIRE(f.racks->addModule("preset:Voice"));
     f.frame();
     CHECK(f.racks->space()->scene().modules.size() == before + 1);
+    for (const auto& m : f.racks->space()->scene().modules) {
+        const ui::Rect seen = f.racks->space()->visibleSpace(), r = m.rect();
+        CHECK(seen.contains({r.x, r.y}));
+        CHECK(seen.contains({r.right(), r.bottom()}));
+    }
+    // In a rack with more than its Out: added beside, selected and shown.
+    REQUIRE(f.racks->addModule("preset:Voice"));
+    f.frame();
+    CHECK(f.racks->space()->scene().modules.size() == before + 2);
     CHECK(f.racks->space()->selection().size() == 1);
     // The space's menu: Add module… asks which at the pointer, and puts it there.
     const ui::Rect b = f.racks->space()->bounds();
@@ -1179,11 +1264,129 @@ TEST_CASE("rack window: modules saved as a rack preset load into another rack fr
                             std::abs(m.x + m.w / 2 - double(at.x)) < 1 &&
                             std::abs(m.y - double(at.y) + 12) < 1);
     CHECK(placed);
-    // Deleted from the browser's menu.
+    // Deleted from the browser's menu; a factory patch cannot be.
+    f.racks->browserMenu("preset:Init Voice", {b.x + 40, b.y + 40});
+    CHECK_FALSE(f.pick("rack.browser.menu", "Delete patch"));
+    f.r().closePopups();
     f.racks->browserMenu("preset:Voice", {b.x + 40, b.y + 40});
-    REQUIRE(f.pick("rack.browser.menu", "Delete preset"));
+    REQUIRE(f.pick("rack.browser.menu", "Delete patch"));
     shows = f.racks->browserShows();
     CHECK(std::find(shows.begin(), shows.end(), "preset:Voice") == shows.end());
+}
+
+TEST_CASE("rack window: patches have a view of their own, searchable, with a card on hover") {
+    Fixture f;
+    if (!f.ok) return;
+    Patch p(f);
+    f.exec("rack.preset.save",
+           R"({"rack":")" + p.rack + R"(","name":"My Bass","modules":[")" + p.osc + R"("]})");
+    f.racks->open();
+    f.frame();
+    // The default view lists module types only, so patches never move it.
+    auto shows = f.racks->browserShows();
+    CHECK(std::none_of(shows.begin(), shows.end(),
+                       [](const std::string& id) { return id.starts_with("preset:"); }));
+    CHECK(std::find(shows.begin(), shows.end(), "com.suppleaudio.rack.vco") != shows.end());
+    CHECK_FALSE(f.racks->tagChips().empty());
+    // Patches: the user's, then the factory's; no module types, no tags.
+    const auto view = f.racks->browserViewAt(true);
+    REQUIRE(view);
+    f.pointer(ui::PointerEvent::Type::Down, *view, 1);
+    f.pointer(ui::PointerEvent::Type::Up, *view, 1);
+    f.frame();
+    CHECK(f.racks->patchesShown());
+    shows = f.racks->browserShows();
+    REQUIRE(shows.size() >= 2);
+    CHECK(shows.front() == "preset:My Bass");
+    CHECK(std::all_of(shows.begin(), shows.end(),
+                      [](const std::string& id) { return id.starts_with("preset:"); }));
+    CHECK(f.racks->tagChips().empty());
+    // Searchable, by name or description.
+    auto* search = dynamic_cast<ui::TextField*>(f.r().find("rack.browser.search"));
+    REQUIRE(search);
+    CHECK(search->placeholder() == "Search patches");
+    f.r().focus(search);
+    f.r().text("subtractive");
+    f.frame();
+    CHECK(f.racks->browserShows() == std::vector<std::string>{"preset:Init Voice"});
+    // A hovered row shows its whole description beside the browser.
+    const auto row = f.racks->browserRowAt("preset:Init Voice");
+    REQUIRE(row);
+    f.pointer(ui::PointerEvent::Type::Move, *row, 0);
+    f.frame();
+    const ui::Node* card = f.r().find("rack.browser.card");
+    REQUIRE(card);
+    CHECK(card->valueText().find("A plain subtractive voice") != std::string::npos);
+    CHECK(card->valueText().find("Factory patch") != std::string::npos);
+    CHECK(card->bounds().x >= f.racks->space()->bounds().x);
+    f.snapshot("rack-patches.png");
+    // Away from it, the card goes; back to Modules, the search is the modules'.
+    const ui::Rect sb = f.racks->space()->bounds();
+    f.pointer(ui::PointerEvent::Type::Move, {sb.x + sb.w / 2, sb.y + sb.h / 2}, 0);
+    f.frame();
+    CHECK_FALSE(f.r().find("rack.browser.card"));
+    f.racks->showPatches(false);
+    f.frame();
+    CHECK(search->placeholder() == "Search modules");
+    CHECK(search->text().empty());
+    CHECK(f.racks->browserShows().size() > 40);
+}
+
+TEST_CASE("rack window: an empty rack invites a start, and a patch lands in it whole") {
+    Fixture f;
+    if (!f.ok) return;
+    auto made = f.exec("rack.add", R"({"name":"Start"})");
+    const model::Id out = *model::Id::parse(made["out"].asString());
+    f.racks->open();
+    f.frame();
+    gui::RackSpace& space = *f.racks->space();
+    REQUIRE(space.startHint());
+    f.snapshot("rack-start.png");  // the golden is rack-empty.png
+    // "start from a patch" opens the Patches view.
+    const auto link = space.startLinkAt(true);
+    REQUIRE(link);
+    f.pointer(ui::PointerEvent::Type::Down, *link, 1);
+    f.pointer(ui::PointerEvent::Type::Up, *link, 1);
+    f.frame();
+    CHECK(f.racks->patchesShown());
+    // A double-click loads one: the rack's Out is its Out (nothing replaced),
+    // laid out by signal flow, all in view, one undo step.
+    const auto row = f.racks->browserRowAt("preset:Init Voice");
+    REQUIRE(row);
+    f.pointer(ui::PointerEvent::Type::Down, *row, 1);
+    f.pointer(ui::PointerEvent::Type::Up, *row, 1);
+    f.pointer(ui::PointerEvent::Type::Down, *row, 1, 0, 2);
+    f.pointer(ui::PointerEvent::Type::Up, *row, 1);
+    f.frame();
+    const auto& modules = space.scene().modules;
+    CHECK(modules.size() == 6);
+    std::size_t outs = 0;
+    for (const auto& m : modules) outs += m.out;
+    CHECK(outs == 1);
+    CHECK(space.scene().module(out));
+    CHECK(space.scene().cables.size() == 9);
+    const ui::Rect seen = space.visibleSpace();
+    for (std::size_t i = 0; i < modules.size(); ++i) {
+        const ui::Rect r = modules[i].rect();
+        CHECK(seen.contains({r.x, r.y}));
+        CHECK(seen.contains({r.right(), r.bottom()}));
+        for (std::size_t j = i + 1; j < modules.size(); ++j)
+            CHECK(r.intersect(modules[j].rect()).empty());
+    }
+    CHECK_FALSE(space.startHint());
+    f.snapshot("rack-start-loaded.png");
+    f.exec("history.undo", "{}");
+    f.frame();
+    CHECK(space.scene().modules.size() == 1);
+    CHECK(space.startHint());
+    // "Add a module" opens the Modules view, its search focused.
+    f.frame();
+    const auto add = space.startLinkAt(false);
+    REQUIRE(add);
+    f.pointer(ui::PointerEvent::Type::Down, *add, 1);
+    f.pointer(ui::PointerEvent::Type::Up, *add, 1);
+    f.frame();
+    CHECK_FALSE(f.racks->patchesShown());
 }
 
 TEST_CASE("rack window: a cable glows with its source's signal, even from out of view") {
@@ -1203,7 +1406,7 @@ TEST_CASE("rack window: a cable glows with its source's signal, even from out of
         return in->watched();
     };
 
-    SUBCASE("the source of a cable across the view is watched") {
+    SUBCASE("the source of a cable across the view is measured, not watched") {
         engine::DummyBackend backend(
             engine::DummyBackend::Options{.mode = engine::DummyBackend::Mode::Manual});
         REQUIRE(f.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 256},
@@ -1215,20 +1418,36 @@ TEST_CASE("rack window: a cable glows with its source's signal, even from out of
         const auto sources = f.racks->space()->cableSources(f.racks->space()->visibleSpace());
         CHECK(sources == std::vector<model::Id>{lfoId});
         auto now = std::chrono::steady_clock::now();
+        auto lfoModule = [&] { return f.racks->space()->scene().module(lfoId); };
+        // Stopped, there is no level to read.
         f.racks->tick(now += std::chrono::seconds(1));
-        CHECK(watched(lfoId));
+        CHECK_FALSE(lfoModule()->measured);
+        f.app->engine()->play();
+        backend.run(8);
+        f.racks->tick(now += std::chrono::seconds(1));
+        CHECK_FALSE(watched(lfoId));  // no telemetry for it
         CHECK_FALSE(watched(vcaId));  // takes it, feeds nothing
         CHECK_FALSE(watched(farId));
-        // Its telemetry arrives, so the cable can show its level.
-        backend.run(4);
-        f.racks->tick(now += std::chrono::seconds(1));
-        CHECK(f.racks->space()->scene().module(lfoId)->live);
-        // Out of view altogether, it is not watched.
+        CHECK_FALSE(lfoModule()->live);
+        REQUIRE(lfoModule()->measured);
+        const int out = lfoModule()->type->output("out");
+        REQUIRE(out >= 0);
+        REQUIRE(static_cast<std::size_t>(out) < lfoModule()->levels.size());
+        CHECK(lfoModule()->levels[static_cast<std::size_t>(out)] ==
+              doctest::Approx(static_cast<double>(f.app->moduleOutputLevel(lfoId, "out"))));
+        CHECK(lfoModule()->levels[static_cast<std::size_t>(out)] > 0.0f);
+        CHECK_FALSE(f.racks->space()->scene().module(farId)->measured);
+        // Out of view altogether, it is not measured.
         f.racks->space()->setView({-6000, -40, 1.0});
         f.frame();
         f.racks->tick(now += std::chrono::seconds(1));
-        CHECK_FALSE(watched(lfoId));
-        CHECK_FALSE(f.racks->space()->scene().module(lfoId)->live);
+        CHECK_FALSE(lfoModule()->measured);
+        // In view, it is watched again.
+        f.racks->space()->setView({-20, -40, 1.0});
+        f.frame();
+        f.racks->tick(now += std::chrono::seconds(1));
+        CHECK(watched(lfoId));
+        CHECK_FALSE(lfoModule()->measured);
         f.app->stopEngine();
     }
 
@@ -1246,8 +1465,12 @@ TEST_CASE("rack window: a cable glows with its source's signal, even from out of
         REQUIRE(out >= 0);
         // The light around the cable, away from its jack (whose own glow
         // follows the same level).
-        auto light = [&](double level) {
-            m->live = true;
+        auto light = [&](double level, bool measured = false) {
+            // From its telemetry, or measured (out of view): the same glow.
+            m->live = !measured;
+            m->measured = measured;
+            m->levels.assign(n, 0.0f);
+            m->levels[static_cast<std::size_t>(out)] = static_cast<float>(level);
             m->telemetry.outputs.assign(n, 0.0);
             m->telemetry.peaks.assign(n, 0.0f);
             m->telemetry.channels.assign(n, 1);
@@ -1273,7 +1496,68 @@ TEST_CASE("rack window: a cable glows with its source's signal, even from out of
         CHECK(lit > dark + dark / 50);
         CHECK(light(0) == dark);
         f.snapshot("rack-cable-quiet.png");
+        CHECK(light(1, true) == lit);
+        CHECK(light(0, true) == dark);
     }
+}
+
+TEST_CASE("rack window: a sequencer's notes are captured to a track from its menu") {
+    Fixture f;
+    if (!f.ok) return;
+    const std::string rack = f.exec("rack.add", R"({"name":"Seq"})")["rack"].asString();
+    const std::string seq = f.add(rack, "sequencer", 40, 40), vca = f.add(rack, "vca", 400, 40);
+    const model::Id track = f.app->head().racks.find(*model::Id::parse(rack))->track;
+    f.racks->open();
+    f.frame();
+    gui::RackSpace& space = *f.racks->space();
+    auto menuOf = [&](const std::string& module) {
+        const auto at = space.bodyAt(*model::Id::parse(module));
+        REQUIRE(at);
+        f.pointer(ui::PointerEvent::Type::Down, *at, 3);
+        f.pointer(ui::PointerEvent::Type::Up, *at, 3);
+        const ui::Node* menu = f.r().find("rack.module.menu");
+        REQUIRE(menu);
+        std::vector<std::string> labels;
+        for (const auto& item : ui::menuItems(*menu)) labels.push_back(item.label);
+        return labels;
+    };
+    auto has = [](const std::vector<std::string>& labels, const std::string& label) {
+        return std::find(labels.begin(), labels.end(), label) != labels.end();
+    };
+    // A VCA plays no notes; a sequencer has pitch and gate outputs.
+    CHECK_FALSE(has(menuOf(vca), "Capture notes to track\u2026"));
+    f.r().closePopups();
+    f.frame();
+    REQUIRE(has(menuOf(seq), "Capture notes to track\u2026"));
+    REQUIRE(f.pick("rack.module.menu", "Capture notes to track"));
+    REQUIRE(f.pick("rack.capture.track", model::trackLabel(f.app->head(), track)));
+    const ui::Node* lengths = f.r().find("rack.capture.length");
+    REQUIRE(lengths);
+    CHECK(ui::menuItems(*lengths).front().label == "From bar 1");
+    f.snapshot("rack-capture-menu.png");
+    REQUIRE(f.pick("rack.capture.length", "1 bar"));
+    // A MIDI item of a bar (4/4) on the channel, from the song's start:
+    // the sequencer's sixteenths, each step a note.
+    const model::Session& s = f.app->head();
+    const model::Item* item = nullptr;
+    for (const auto& e : s.items)
+        if (e.value->track == track) item = e.value.get();
+    REQUIRE(item);
+    REQUIRE(item->activeTake);
+    const model::Take* take = s.takes.find(*item->activeTake);
+    REQUIRE(take);
+    const model::MidiSource* midi = take->source ? s.midi.find(*take->source) : nullptr;
+    REQUIRE(midi);
+    CHECK(midi->sequence.notes.size() == 16);
+    CHECK(midi->sequence.length == 4 * midi->sequence.ppq);
+    const ui::Node* status = f.r().find("rack.status");
+    REQUIRE(status);
+    CHECK(static_cast<const ui::Label*>(status)->text().find("Captured 16 notes to ") !=
+          std::string::npos);
+    f.snapshot("rack-capture.png");
+    // One undo step takes it away.
+    f.exec("history.undo", "{}");
+    for (const auto& e : f.app->head().items) CHECK(e.value->track != track);
 }
 
 TEST_CASE("rack window: Tidy up lays out the rack, or the selection, in one undo step") {

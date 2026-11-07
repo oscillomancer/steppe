@@ -251,17 +251,24 @@ rendered).
 
 | field | notes |
 |---|---|
-| `from` | `{track: id}` or `{hw_input: {channels: [..]}}` or `{midi_input: device}` or `{module: id}` (a rack's Out module: a channel's record input, rack.md §2.4) |
+| `from` | `{track: id}` or `{hw_input: {channels: [..]}}` or `{midi_input: device}` or `{module: id}` (a rack's Out module: a channel's record input, or Note Out with `midi`: a channel's instrument, rack.md §5–6) |
 | `to` | `{track: id}` or `{fx: id}` (a plug-in's key, ADR-0018) or `{module: id}` (a send into a rack's In module); hardware outputs are a master's `hw_output` (§1.4, ADR-0056), and a route to `hw_channels` is refused with `route.hw_output` |
 | `tap` | `post_fader` (default), `pre_fader` (post-FX), `pre_fx` |
 | `volume` dB, `pan` % or `follow` (default: the strip's pan), `mute`, `phase_invert`, `mono` | into a buss/master: realized by the send's own C9 Channel (ADR-0019 §3) |
 | `channels` | `{from: [..], to: [..]}` channel mapping, 1-based in 1..128 and up to each strip's channels (e.g. [1,2] → [3,4] for a detector on 3/4). Main pairs map the encoded send; pairs touching auxiliary channels are linear links at the route's level, mute and polarity (ADR-0020) |
-| `midi` | `{from_channel: all|1..16, to_channel: original|1..16}` or null (audio only) |
+| `midi` | `{from_channel: 0..16, to_channel: 0..16}` (0 = all/original) or null (audio only) |
 | `learn` | MIDI learn on the send's controls (ADR-0058), as a track's (§1.4): `param` `volume`, `pan`, `mute`, `phase_invert`, `mono` or `tap:post_fader`, `tap:pre_fader`, `tap:pre_fx` (a press selects that tap); omitted when empty |
 
 Folder/master sends are the tracks' `parent_send`, not routes. Record inputs
 are routes from `hw_input`/`midi_input`, or from a rack's Out module,
-referenced by `track.record.input`.
+referenced by `track.record.input`. A Note Out module instead sends MIDI to
+any channel through an ordinary route with `midi` set; it is not a record
+input and several such routes may reach a channel. It cannot send audio or
+feed a key or In module. Note Out channel routing uses 0 for all/original,
+or 1..16, as on MIDI input routes. `route.add`/`route.set` accept track/module
+ids or explicit `{track: id}`/`{module: id}` endpoints; omitted fields inside
+`midi: {}` default to 0. The serialized `MidiRouting` already has both integer
+fields; no file schema change is required and old projects keep loading.
 Cycles are rejected at edit time (`route.cycle`, naming the cycle).
 ADR-0019 §4 rules, rejected at edit time with `route.strip_type` (and a hint
 naming the allowed alternative): audio into a channel only from `hw_input`;

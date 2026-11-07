@@ -29,6 +29,17 @@ Errors are raised as tables, so `pcall` catches them and `err.code`,
 `err.message`, `err.path`, `err.hint` and `err.details` tell you exactly what
 the bus rejected and how to fix it.
 
+Successful command results can include `warnings`: command-specific warnings
+first, followed by bus diagnostics `{code, message, path}`. Paths are retained
+as emitted (argument-decoder paths are relative to the arguments object).
+Inspect `result.warnings` after a direct call or each batch step's result;
+no warnings leak to later calls. A diagnostic already reported by the command
+is not duplicated. A non-object result with bus warnings is wrapped as
+`{result = originalValue, warnings = {...}}`; warning-free replies keep their
+shape. Over MCP the same object appears in structured content and JSON text,
+and over the socket it is the JSON-RPC result. Failed calls still raise the
+structured errors described above.
+
 The sandbox is strict: `string`, `table`, `math`, `utf8`, `coroutine` and the
 base library only. There is no `io`, `os`, `debug`, `package`, `require`,
 `dofile` or `loadfile`: there is no direct filesystem, clock or process API.

@@ -29,6 +29,12 @@
         },
         "summary": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["notable", "ltas_rms_db", "summary"],
@@ -288,7 +294,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -391,7 +404,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -435,7 +455,15 @@
       "additionalProperties": false
     },
     "outputSchema": {
-      "type": "object"
+      "type": "object",
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
     },
     "annotations": {
       "readOnlyHint": false,
@@ -478,6 +506,12 @@
       "properties": {
         "name": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["name"],
@@ -508,7 +542,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -563,6 +604,12 @@
             "required": ["op", "id", "fields"],
             "additionalProperties": false
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["changes"],
@@ -596,6 +643,12 @@
         },
         "current": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["branches", "current"],
@@ -640,7 +693,13 @@
         "version": {
           "type": "integer"
         },
-        "remapped": {}
+        "remapped": {},
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
       },
       "required": ["fast_forward", "up_to_date", "version", "remapped"],
       "additionalProperties": false
@@ -710,6 +769,12 @@
       "properties": {
         "name": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["name"],
@@ -956,6 +1021,12 @@
           },
           "required": ["id", "name", "kind", "params"],
           "additionalProperties": false
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["ok", "diagnostics"],
@@ -1143,6 +1214,12 @@
         "listed": {
           "type": "boolean",
           "description": "plugin.list shows it (the script player is on the plugin path)"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["name", "path", "ok", "diagnostics", "listed"],
@@ -1215,6 +1292,12 @@
         "notices": {
           "type": "string",
           "description": "clap: the licenses to ship with the plugin"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["path", "id", "name", "format"],
@@ -1254,6 +1337,12 @@
         },
         "source": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["name", "path", "source"],
@@ -1312,6 +1401,12 @@
             },
             "required": ["name", "path", "ok", "errors"],
             "additionalProperties": false
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
           }
         }
       },
@@ -1489,6 +1584,12 @@
           "type": "array",
           "items": {
             "type": "string"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
           }
         }
       },
@@ -1893,6 +1994,12 @@
           "items": {
             "type": "string"
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["plugin", "sample_rate", "latency", "signals", "cpu_percent", "problems", "log"],
@@ -2064,6 +2171,12 @@
         "listed": {
           "type": "boolean",
           "description": "plugin.list shows it (the script player is on the plugin path)"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["name", "path", "ok", "diagnostics", "listed"],
@@ -2132,6 +2245,12 @@
               "default_output"
             ],
             "additionalProperties": false
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
           }
         }
       },
@@ -2405,7 +2524,14 @@
         "warnings": {
           "type": "array",
           "items": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object"
+              }
+            ]
           }
         },
         "memory_lock": {
@@ -2757,7 +2883,14 @@
         "warnings": {
           "type": "array",
           "items": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object"
+              }
+            ]
           }
         },
         "memory_lock": {
@@ -2917,7 +3050,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -3014,6 +3154,12 @@
         },
         "points": {
           "type": "integer"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["env", "points"],
@@ -3073,6 +3219,12 @@
             },
             "required": ["env", "target", "param", "points", "active", "visible", "mode"],
             "additionalProperties": false
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
           }
         }
       },
@@ -3150,6 +3302,12 @@
       "properties": {
         "points": {
           "type": "integer"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["points"],
@@ -3181,7 +3339,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -3220,7 +3385,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -3282,6 +3454,12 @@
           "items": {
             "type": "string"
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["fx", "name", "semantic", "chain"],
@@ -3315,6 +3493,12 @@
       "properties": {
         "path": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["path"],
@@ -3359,6 +3543,12 @@
             },
             "required": ["name", "path", "effects"],
             "additionalProperties": false
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
           }
         }
       },
@@ -3414,6 +3604,12 @@
           "items": {
             "type": "string"
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["effects"],
@@ -3464,6 +3660,12 @@
         "effects": {
           "type": "integer",
           "minimum": 0.0
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["path", "effects"],
@@ -3515,6 +3717,12 @@
           "type": "array",
           "items": {
             "type": "string"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
           }
         }
       },
@@ -3585,6 +3793,12 @@
         "params_total": {
           "type": "integer",
           "description": "Plain parameters matching; at most 512 are listed."
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["plugin", "name", "description", "status_available"],
@@ -3615,7 +3829,13 @@
       "type": "object",
       "title": "fx_learn_list",
       "properties": {
-        "learn": {}
+        "learn": {},
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
       },
       "required": ["learn"],
       "additionalProperties": false
@@ -3649,7 +3869,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -3731,6 +3958,12 @@
         },
         "control": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["param", "control"],
@@ -3774,6 +4007,12 @@
         },
         "meters": {
           "description": "Read-only values by patch key (physical) or name"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["source", "meters"],
@@ -3812,7 +4051,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -3845,7 +4091,13 @@
       "type": "object",
       "title": "fx_param_result",
       "properties": {
-        "value": {}
+        "value": {},
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
       },
       "required": ["value"],
       "additionalProperties": false
@@ -3888,6 +4140,12 @@
             "type": "string"
           },
           "description": "Params set that do not apply with the new values: kept, and heard once what fx.describe full's active_when names allows it"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["changed", "description"],
@@ -3923,7 +4181,13 @@
       "type": "object",
       "title": "fx_patch_result",
       "properties": {
-        "patch": {}
+        "patch": {},
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
       },
       "required": ["patch"],
       "additionalProperties": false
@@ -3954,7 +4218,13 @@
       "type": "object",
       "title": "fx_patch_list_result",
       "properties": {
-        "patches": {}
+        "patches": {},
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
       },
       "required": ["patches"],
       "additionalProperties": false
@@ -3997,6 +4267,12 @@
             "type": "string"
           },
           "description": "Params set that do not apply with the new values: kept, and heard once what fx.describe full's active_when names allows it"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["changed", "description"],
@@ -4034,7 +4310,13 @@
       "type": "object",
       "title": "fx_patch_result",
       "properties": {
-        "patch": {}
+        "patch": {},
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
       },
       "required": ["patch"],
       "additionalProperties": false
@@ -4071,6 +4353,12 @@
       "properties": {
         "path": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["path"],
@@ -4121,6 +4409,12 @@
             "required": ["name", "source"],
             "additionalProperties": false
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["presets"],
@@ -4165,6 +4459,12 @@
         },
         "source": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["name", "source"],
@@ -4206,6 +4506,12 @@
       "properties": {
         "path": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["path"],
@@ -4237,7 +4543,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -4266,7 +4579,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -4358,7 +4678,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -4409,6 +4736,12 @@
         "group": {
           "type": "string",
           "pattern": "^gr_[0-9]+$"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["group"],
@@ -4564,6 +4897,12 @@
           "items": {
             "type": "string",
             "pattern": "^[a-z]{2}_[0-9]+$"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
           }
         }
       },
@@ -4726,6 +5065,12 @@
             "required": ["group", "state", "controllers"],
             "additionalProperties": false
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["groups"],
@@ -4763,7 +5108,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -4791,7 +5143,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -4835,7 +5194,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -4884,6 +5250,12 @@
           "items": {
             "type": "string",
             "pattern": "^[a-z]{2}_[0-9]+$"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
           }
         }
       },
@@ -4947,6 +5319,12 @@
         },
         "budget_bytes": {
           "type": "integer"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": [
@@ -4984,6 +5362,12 @@
         },
         "label": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["version", "label"],
@@ -5014,6 +5398,12 @@
         },
         "label": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["version", "label"],
@@ -5092,7 +5482,14 @@
         "warnings": {
           "type": "array",
           "items": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object"
+              }
+            ]
           }
         }
       },
@@ -5138,6 +5535,12 @@
         },
         "path": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["take", "source", "path"],
@@ -5212,6 +5615,12 @@
             "type": "string"
           },
           "default": []
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["id"],
@@ -5258,6 +5667,12 @@
           "type": "array",
           "items": {
             "type": "string"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
           }
         }
       },
@@ -5313,6 +5728,12 @@
         },
         "notes": {
           "type": "integer"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["path", "format"],
@@ -5414,7 +5835,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -5471,6 +5899,12 @@
           "items": {
             "type": "string"
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["items"],
@@ -5506,7 +5940,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -5603,7 +6044,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -5664,6 +6112,12 @@
             "type": "string"
           },
           "default": []
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["left", "right"],
@@ -5735,6 +6189,12 @@
       "properties": {
         "id": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["id"],
@@ -5792,6 +6252,12 @@
             "required": ["id", "timebase", "name", "color"],
             "additionalProperties": false
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["markers"],
@@ -5822,7 +6288,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -5860,7 +6333,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -6028,6 +6508,12 @@
       "properties": {
         "text": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["text"],
@@ -6084,7 +6570,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -6773,6 +7266,12 @@
           },
           "required": ["failures", "warnings", "cached_modules"],
           "additionalProperties": false
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["plugins", "scan"],
@@ -6937,6 +7436,12 @@
         "job": {
           "type": "string",
           "description": "the background scan (wait: false)"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["plugins", "scan"],
@@ -6995,21 +7500,7 @@
         "warnings": {
           "type": "array",
           "items": {
-            "type": "object",
-            "title": "load_warning",
-            "properties": {
-              "code": {
-                "type": "string"
-              },
-              "message": {
-                "type": "string"
-              },
-              "path": {
-                "type": "string"
-              }
-            },
-            "required": ["code", "message", "path"],
-            "additionalProperties": false
+            "type": "object"
           }
         }
       },
@@ -7084,21 +7575,7 @@
         "warnings": {
           "type": "array",
           "items": {
-            "type": "object",
-            "title": "load_warning",
-            "properties": {
-              "code": {
-                "type": "string"
-              },
-              "message": {
-                "type": "string"
-              },
-              "path": {
-                "type": "string"
-              }
-            },
-            "required": ["code", "message", "path"],
-            "additionalProperties": false
+            "type": "object"
           }
         }
       },
@@ -7215,30 +7692,7 @@
         "warnings": {
           "type": "array",
           "items": {
-            "type": "object",
-            "title": "recording_warning",
-            "properties": {
-              "code": {
-                "type": "string"
-              },
-              "message": {
-                "type": "string"
-              },
-              "path": {
-                "type": "string"
-              },
-              "hint": {
-                "type": "string"
-              },
-              "track": {
-                "type": "string"
-              },
-              "file": {
-                "type": "string"
-              }
-            },
-            "required": ["code", "message", "path", "hint", "track", "file"],
-            "additionalProperties": false
+            "type": "object"
           }
         }
       },
@@ -7268,30 +7722,7 @@
         "warnings": {
           "type": "array",
           "items": {
-            "type": "object",
-            "title": "recording_warning",
-            "properties": {
-              "code": {
-                "type": "string"
-              },
-              "message": {
-                "type": "string"
-              },
-              "path": {
-                "type": "string"
-              },
-              "hint": {
-                "type": "string"
-              },
-              "track": {
-                "type": "string"
-              },
-              "file": {
-                "type": "string"
-              }
-            },
-            "required": ["code", "message", "path", "hint", "track", "file"],
-            "additionalProperties": false
+            "type": "object"
           }
         },
         "recordings": {
@@ -7354,21 +7785,7 @@
         "warnings": {
           "type": "array",
           "items": {
-            "type": "object",
-            "title": "save_warning",
-            "properties": {
-              "code": {
-                "type": "string"
-              },
-              "message": {
-                "type": "string"
-              },
-              "path": {
-                "type": "string"
-              }
-            },
-            "required": ["code", "message", "path"],
-            "additionalProperties": false
+            "type": "object"
           }
         }
       },
@@ -7744,7 +8161,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -7775,6 +8199,12 @@
       "properties": {
         "path": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["path"],
@@ -7816,6 +8246,12 @@
             "required": ["name", "path"],
             "additionalProperties": false
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["templates"],
@@ -7849,6 +8285,12 @@
       "properties": {
         "name": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["name"],
@@ -7890,21 +8332,7 @@
         "warnings": {
           "type": "array",
           "items": {
-            "type": "object",
-            "title": "save_warning",
-            "properties": {
-              "code": {
-                "type": "string"
-              },
-              "message": {
-                "type": "string"
-              },
-              "path": {
-                "type": "string"
-              }
-            },
-            "required": ["code", "message", "path"],
-            "additionalProperties": false
+            "type": "object"
           }
         }
       },
@@ -8202,14 +8630,17 @@
   },
   {
     "name": "rack_preset_list",
-    "title": "List saved rack presets: names and contents.",
-    "description": "List saved rack presets: names and contents. query: a part of the name or description. Each preset: name, path, description, its module and cable counts and its module types. Files that are not rack presets are skipped with a warning (warnings). See describe for errors and examples.",
+    "title": "List rack presets, saved and factory: names and contents.",
+    "description": "List rack presets, saved and factory: names and contents. query: a part of the name or description. factory: true lists only the factory patches that ship with the app, false only the saved ones (default both). Each preset: name, path (a saved one's) or factory: true, description, its module and cable counts and its module types. A saved preset hides a factory patch of its name. Files that are not rack presets are skipped with a warning (warnings). See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "rack_preset_list_args",
       "properties": {
         "query": {
           "type": "string"
+        },
+        "factory": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false
@@ -8223,7 +8654,7 @@
   {
     "name": "rack_preset_load",
     "title": "Add a saved preset's modules and cables to a rack.",
-    "description": "Add a saved preset's modules and cables to a rack. name (rack.preset.list) or path (a preset file). x, y: the group's top-left (default right of the rack's modules). io: join (default) gives the preset's Out and In modules' cables to the rack's own Outs and Ins in order, so a whole patch sounds at once (extra ones are added); add makes new ones. Notes modules play the rack's channel. Your own modules the preset carries are written into the library when it lacks them (installed lists them). Every embedded source must compile and declare its sources key as ModuleInfo.id before any module is installed. Knobs and cables the module types no longer have are left out with a warning (warnings); a module type or plug-in that is not installed is an error, and the rack does not change. See describe for errors and examples.",
+    "description": "Add a saved preset's modules and cables to a rack. name (rack.preset.list: a saved preset, or else a factory patch) or path (a preset file). x, y: the group's top-left (default right of the rack's modules). io: join (default) gives the preset's Out and In modules' cables to the rack's own Outs and Ins in order, so a whole patch sounds at once (extra ones are added); add makes new ones. Notes modules play the rack's channel. Your own modules the preset carries are written into the library when it lacks them (installed lists them). Every embedded source must compile and declare its sources key as ModuleInfo.id before any module is installed. Knobs and cables the module types no longer have are left out with a warning (warnings); a module type or plug-in that is not installed is an error, and the rack does not change. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "rack_preset_load_args",
@@ -8430,6 +8861,12 @@
       "properties": {
         "id": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["id"],
@@ -8487,6 +8924,12 @@
             "required": ["id", "timebase", "name", "color"],
             "additionalProperties": false
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["regions"],
@@ -8517,7 +8960,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -8559,7 +9009,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -11123,20 +11580,91 @@
   },
   {
     "name": "route_add",
-    "title": "Send one track to another track, bus, the master, or a plug-in's key.",
-    "description": "Send one track to another track, bus, the master, or a plug-in's key. The destination must not feed the source. Master accepts routes. With fx instead of to, the send feeds that plug-in's sidechain (key) input — e.g. a kick keying a compressor on the bass; it is delay-compensated, and soloing the keyed track does not stop the key. Hardware routing is not supported yet. See describe for errors and examples.",
+    "title": "Send audio between strips, or a Note Out to a track's instrument.",
+    "description": "Send audio between strips, or a Note Out to a track's instrument. The destination must not feed the source. Master accepts routes. With fx instead of to, the send feeds that plug-in's sidechain (key) input — e.g. a kick keying a compressor on the bass; it is delay-compensated, and soloing the keyed track does not stop the key. A Note Out uses from: {module: mo_N}, to: {track: tr_N}, midi: {} (all channels unchanged); from_channel filters and to_channel remaps, 0..16 with 0 meaning all/original. Hardware routing is not supported yet. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "route_add_args",
       "properties": {
         "from": {
-          "type": "string",
-          "pattern": "^tr_[0-9]+$"
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^(tr|mo)_[0-9]+$"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "module": {
+                  "type": "string",
+                  "pattern": "^mo_[0-9]+$"
+                }
+              },
+              "required": ["module"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "track": {
+                  "type": "string",
+                  "pattern": "^tr_[0-9]+$"
+                }
+              },
+              "required": ["track"],
+              "additionalProperties": false
+            }
+          ]
         },
         "to": {
-          "type": "string",
-          "pattern": "^(tr|mo)_[0-9]+$",
-          "description": "A track, or a rack's In module (mo_*): the send then plays into the rack, linear (no Console 9 stage)"
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^(tr|mo)_[0-9]+$"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "module": {
+                  "type": "string",
+                  "pattern": "^mo_[0-9]+$"
+                }
+              },
+              "required": ["module"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "track": {
+                  "type": "string",
+                  "pattern": "^tr_[0-9]+$"
+                }
+              },
+              "required": ["track"],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "midi": {
+          "type": "object",
+          "title": "midi_routing",
+          "properties": {
+            "from_channel": {
+              "type": "integer",
+              "minimum": 0.0,
+              "maximum": 16.0,
+              "default": 0
+            },
+            "to_channel": {
+              "type": "integer",
+              "minimum": 0.0,
+              "maximum": 16.0,
+              "default": 0
+            }
+          },
+          "additionalProperties": false,
+          "description": "Note Out MIDI routing; {} means every channel unchanged. Channel values 0..16: from 0 = all, to 0 = original."
         },
         "fx": {
           "type": "string",
@@ -11231,6 +11759,12 @@
       "properties": {
         "id": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["id"],
@@ -11261,7 +11795,13 @@
       "type": "object",
       "title": "route_learn_list",
       "properties": {
-        "learn": {}
+        "learn": {},
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
       },
       "required": ["learn"],
       "additionalProperties": false
@@ -11295,7 +11835,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -11368,6 +11915,12 @@
         },
         "control": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["param", "control"],
@@ -11472,6 +12025,25 @@
                 },
                 "required": ["from", "to"],
                 "additionalProperties": false
+              },
+              "midi": {
+                "type": "object",
+                "title": "midi_routing",
+                "properties": {
+                  "from_channel": {
+                    "type": "integer",
+                    "minimum": 0.0,
+                    "maximum": 16.0,
+                    "default": 0
+                  },
+                  "to_channel": {
+                    "type": "integer",
+                    "minimum": 0.0,
+                    "maximum": 16.0,
+                    "default": 0
+                  }
+                },
+                "additionalProperties": false
               }
             },
             "required": [
@@ -11488,6 +12060,12 @@
               "channels"
             ],
             "additionalProperties": false
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
           }
         }
       },
@@ -11535,7 +12113,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -11557,13 +12142,84 @@
           "pattern": "^sd_[0-9]+$"
         },
         "from": {
-          "type": "string",
-          "pattern": "^tr_[0-9]+$"
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^(tr|mo)_[0-9]+$"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "module": {
+                  "type": "string",
+                  "pattern": "^mo_[0-9]+$"
+                }
+              },
+              "required": ["module"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "track": {
+                  "type": "string",
+                  "pattern": "^tr_[0-9]+$"
+                }
+              },
+              "required": ["track"],
+              "additionalProperties": false
+            }
+          ]
         },
         "to": {
-          "type": "string",
-          "pattern": "^(tr|mo)_[0-9]+$",
-          "description": "A track, or a rack's In module (mo_*): the send then plays into the rack, linear (no Console 9 stage)"
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^(tr|mo)_[0-9]+$"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "module": {
+                  "type": "string",
+                  "pattern": "^mo_[0-9]+$"
+                }
+              },
+              "required": ["module"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "track": {
+                  "type": "string",
+                  "pattern": "^tr_[0-9]+$"
+                }
+              },
+              "required": ["track"],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "midi": {
+          "type": "object",
+          "title": "midi_routing",
+          "properties": {
+            "from_channel": {
+              "type": "integer",
+              "minimum": 0.0,
+              "maximum": 16.0,
+              "default": 0
+            },
+            "to_channel": {
+              "type": "integer",
+              "minimum": 0.0,
+              "maximum": 16.0,
+              "default": 0
+            }
+          },
+          "additionalProperties": false,
+          "description": "Note Out MIDI routing; {} means every channel unchanged. Channel values 0..16: from 0 = all, to 0 = original."
         },
         "fx": {
           "type": "string",
@@ -11655,7 +12311,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -11680,6 +12343,12 @@
       "properties": {
         "text": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["text"],
@@ -11718,7 +12387,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -11753,6 +12429,12 @@
       "properties": {
         "id": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["id"],
@@ -11795,6 +12477,12 @@
       "properties": {
         "item": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["item"],
@@ -11913,6 +12601,12 @@
             ],
             "additionalProperties": false
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["takes"],
@@ -11949,6 +12643,12 @@
         },
         "item_removed": {
           "type": "boolean"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["item", "item_removed"],
@@ -12067,7 +12767,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -12129,6 +12836,12 @@
       "properties": {
         "count": {
           "type": "integer"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["count"],
@@ -12182,6 +12895,12 @@
         },
         "fraction": {
           "type": "number"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["seconds", "beat", "bar", "beat_in_bar", "fraction"],
@@ -12212,7 +12931,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -12244,7 +12970,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -12292,6 +13025,12 @@
       "properties": {
         "track": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["track"],
@@ -12368,6 +13107,12 @@
         },
         "solo_silenced": {
           "type": "boolean"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": [
@@ -12419,6 +13164,12 @@
           "type": "array",
           "items": {
             "type": "string"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
           }
         }
       },
@@ -12476,7 +13227,13 @@
       "type": "object",
       "title": "track_learn_list",
       "properties": {
-        "learn": {}
+        "learn": {},
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
       },
       "required": ["learn"],
       "additionalProperties": false
@@ -12510,7 +13267,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -12583,6 +13347,12 @@
         },
         "control": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["param", "control"],
@@ -12763,6 +13533,12 @@
             ],
             "additionalProperties": false
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["tracks"],
@@ -12801,7 +13577,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -12830,7 +13613,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -12983,7 +13773,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -13014,6 +13811,12 @@
       "properties": {
         "path": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["path"],
@@ -13058,6 +13861,12 @@
             },
             "required": ["name", "path", "effects"],
             "additionalProperties": false
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
           }
         }
       },
@@ -13105,6 +13914,12 @@
           "items": {
             "type": "string"
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["track", "effects"],
@@ -13150,6 +13965,12 @@
         "effects": {
           "type": "integer",
           "minimum": 0.0
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["path", "effects"],
@@ -13312,6 +14133,12 @@
             "required": ["track", "item", "take", "file", "seconds", "lost_frames", "takes"],
             "additionalProperties": false
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": [
@@ -13387,6 +14214,12 @@
         },
         "end_seconds": {
           "type": "number"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["enabled", "start_seconds", "end_seconds"],
@@ -13451,6 +14284,12 @@
         },
         "count_in_playback": {
           "type": "boolean"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["enabled", "volume_db", "count_in_bars", "count_in_playback"],
@@ -13590,6 +14429,12 @@
             },
             "required": ["track", "item", "take", "file", "seconds", "lost_frames", "takes"],
             "additionalProperties": false
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
           }
         }
       },
@@ -13740,6 +14585,12 @@
             "required": ["track", "item", "take", "file", "seconds", "lost_frames", "takes"],
             "additionalProperties": false
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": [
@@ -13773,7 +14624,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -13807,6 +14665,12 @@
         },
         "envelope": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["requested_rate", "effective_rate", "preserve_pitch"],
@@ -13852,6 +14716,12 @@
         },
         "envelope": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["requested_rate", "effective_rate", "preserve_pitch"],
@@ -13918,6 +14788,12 @@
         },
         "end_seconds": {
           "type": "number"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["enabled", "start_seconds", "end_seconds"],
@@ -14057,6 +14933,12 @@
             },
             "required": ["track", "item", "take", "file", "seconds", "lost_frames", "takes"],
             "additionalProperties": false
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
           }
         }
       },
@@ -14221,6 +15103,12 @@
             "required": ["track", "item", "take", "file", "seconds", "lost_frames", "takes"],
             "additionalProperties": false
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": [
@@ -14370,6 +15258,12 @@
             "required": ["track", "item", "take", "file", "seconds", "lost_frames", "takes"],
             "additionalProperties": false
           }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": [
@@ -14438,7 +15332,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -14466,7 +15367,13 @@
       "type": "object",
       "title": "vca_learn_list",
       "properties": {
-        "learn": {}
+        "learn": {},
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
       },
       "required": ["learn"],
       "additionalProperties": false
@@ -14500,7 +15407,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -14573,6 +15487,12 @@
         },
         "control": {
           "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": ["param", "control"],
@@ -14617,7 +15537,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -14645,7 +15572,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {
@@ -14702,7 +15636,14 @@
     "outputSchema": {
       "type": "object",
       "title": "empty",
-      "properties": {},
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
       "additionalProperties": false
     },
     "annotations": {

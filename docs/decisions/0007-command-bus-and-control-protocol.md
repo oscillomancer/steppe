@@ -125,3 +125,8 @@ outer error is `transaction.restore_failed`; a failed outer rollback retains
 that initiating error in its details. Poison is cleared when that outer
 transaction ends. A host without mutable invocation state may return a
 successful empty callback.
+
+### Warning replies (2026-11-06)
+
+[ADR-0063](0063-command-warnings.md) defines how context warnings reach
+successful replies and their exported schemas across RPC, MCP and Lua.

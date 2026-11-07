@@ -130,7 +130,11 @@ instructions are in `docs/guides/installing.md`.
   asset limits are documented in the engine spec and manual.
 - **Command bus** (`specs/command-bus.md`, ADR-0007): about 120 typed
   commands with JSON Schema, units, examples run as tests and structured
-  errors; `batch` transactions; events; the JSON-RPC socket; the MCP adapter
+  errors. Context and decoder warnings reach successful replies in `warnings`,
+  preserving command diagnostics consistently over sockets, MCP and Lua
+  with compact per-command schemas and one shared diagnostic contract
+  (ADR-0063); strict handler result validation is unchanged. `batch`
+  transactions; events; the JSON-RPC socket; the MCP adapter
   (in process or as a proxy to the running app); Lua scripts on the bus
   (ADR-0006). Lua structured-error expansion has the same value/text budget
   as returned values, including repeated references to shared details.
@@ -271,6 +275,9 @@ instructions are in `docs/guides/installing.md`.
   all poly channels without a telemetry watch; `rack.levels` and the main-thread
   `EngineApp::moduleOutputLevel` accessor expose it independently of visibility.
   Stopped readings are zero and both executors preserve RT/offline equivalence.
+  Note Out (`notes_out`) plays any channel's instrument through MIDI routes,
+  sharing Capture's gate and pitch/velocity rules, with poly voices, channel
+  filtering/remapping, fan-out, compensation and exact RT/offline timing.
   Agents patch with `rack.patch` (named
   modules and cables in one step, laid out by signal flow and labelled by
   name; `rack.arrange` tidies a rack) or `module.add`/`cable.add`, hear a patch
@@ -278,7 +285,8 @@ instructions are in `docs/guides/installing.md`.
   render of a copy), print its notes to a MIDI item with `rack.capture`, write and edit library modules (`module.write`, hot
   reload in the running engine, `module.fork`), keep patches as rack
   presets (`rack.preset.*`, carrying the user's modules' source; projects
-  keep copies of theirs too), automate knobs (`env.add {module}`) and learn
+  keep copies of theirs too), start from factory patches that ship with the
+  app (`modules/patches`, listed with `factory: true`; a test plays each), automate knobs (`env.add {module}`) and learn
   MIDI controllers on them (`module.learn.*`). The agent guide is
   `skill/guides/rack.md`; `skill/generated/rack-modules.md` lists every
   built-in module. Linux only so far: native macOS/Windows CI has not run
@@ -367,8 +375,11 @@ instructions are in `docs/guides/installing.md`.
   channel), the source view with Make editable copy, rack Outs in a
   channel's input menu, Show/Add rack in its right-click menu, and pointer
   input on module displays (`pointer()`), MIDI learn from a knob's menu (a
-  dot marks a bound knob), rack presets (saved from the space or a
-  selection, listed and loaded from the browser), and cables into a plugin
+  dot marks a bound knob), patches (rack presets saved from the space or
+  a selection, and the factory patches, on the browser's own Patches view,
+  apart from the modules, searchable, with a card on hover; one loaded
+  into an empty rack is laid out with the rack's Out in one undo step), an
+  empty rack's "Add a module, or start from a patch", and cables into a plugin
   module's plug-in parameters (dropped on its body, picked from a searchable
   list; sockets on its edge with the parameter's name on hover, amounts
   dragged there; a cable's right-click sets the amount or removes it), and
@@ -380,9 +391,12 @@ instructions are in `docs/guides/installing.md`.
   hovered or selected modules' cables brought forward while the rest fade.
   Knob and jack names keep to cells of their own (smaller, wrapped or cut
   rather than running into a neighbour or under a control), and cables glow
-  with their source's level, read for sources out of view too.
-  Pasting into another rack or after a cut rebuilds through `rack.patch`, so
-  a plugin module's plug-in starts from its defaults there.
+  with their source's level (`moduleOutputLevel` for sources out of view,
+  while the transport plays). Copy and paste go through the engine's module
+  clipboard, so a pasted plug-in keeps its settings in any rack and after a
+  cut. A module with pitch and gate outputs captures its notes to a
+  channel's MIDI item from its right-click (`rack.capture`, 1 to 16 bars;
+  the render runs on the UI thread, so the window waits for it).
 - **MIDI learn** (ADR-0027): any plug-in parameter (the FX window's MIDI
   button, or `fx.learn.set` for agents) and any action (Ctrl+L in the
   actions list) learns a controller by moving it: CC, note, pitch bend or
@@ -775,7 +789,9 @@ Library boundaries:
   on Linux, and native macOS/Windows CI has not run on it.
 
 Engine and hosting:
-- Modular racks (ADR-0062): racks do not follow a track's playrate map;
+- Modular racks (ADR-0062): Note Out MIDI is not yet recorded by armed
+  destination tracks; print it with `rack.capture`. Racks do not follow a
+  track's playrate map;
   cables into a plugin module's parameters modulate CLAP plug-ins only
   (VST3 has no modulation), by their first voice, at most 16 per plug-in;
   a plug-in's latency inside a rack is not compensated; recording an armed channel whose input is a rack's Out is

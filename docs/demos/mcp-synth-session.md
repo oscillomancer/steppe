@@ -41,7 +41,8 @@ that exactly duplicates structuredContent is shown once.
     "serverInfo": {
       "name": "steppe",
       "version": "0.6.0"
-    }
+    },
+    "instructions": "Successful command results may include warnings: command warnings followed by bus diagnostics {code: string, message: string, path: string}. Paths are retained as emitted. Non-object results with bus warnings become {result: value, warnings: [...]}. Batch warnings stay on each step's result."
   }
 }
 ```
@@ -175,6 +176,12 @@ that exactly duplicates structuredContent is shown once.
               "type": "string"
             },
             "description": "Params set that do not apply now"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
           }
         },
         "required": [
@@ -1450,7 +1457,8 @@ that exactly duplicates structuredContent is shown once.
     "serverInfo": {
       "name": "steppe",
       "version": "0.6.0"
-    }
+    },
+    "instructions": "Successful command results may include warnings: command warnings followed by bus diagnostics {code: string, message: string, path: string}. Paths are retained as emitted. Non-object results with bus warnings become {result: value, warnings: [...]}. Batch warnings stay on each step's result."
   }
 }
 ```
@@ -1584,6 +1592,12 @@ that exactly duplicates structuredContent is shown once.
               "type": "string"
             },
             "description": "Params set that do not apply now"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
           }
         },
         "required": [
