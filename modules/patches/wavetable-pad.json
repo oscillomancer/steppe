@@ -1,0 +1,235 @@
+{
+  "schema": "supple.rack-preset/1.0",
+  "name": "Wavetable Pad",
+  "description": "A wide, slowly shifting pad: unison wavetable voices whose position an LFO drifts, a soft filter, chorus and a hall; hold chords, turn the Waves' position and the Filter's cutoff.",
+  "modules": [
+    {
+      "type": "com.suppleaudio.rack.out",
+      "version": "1.0.0",
+      "x": 1096.0,
+      "y": 276.0
+    },
+    {
+      "type": "com.suppleaudio.rack.notes",
+      "version": "1.0.0",
+      "label": "Keys",
+      "x": 36.0,
+      "y": 0.0
+    },
+    {
+      "type": "com.suppleaudio.rack.wavetable",
+      "version": "1.0.0",
+      "label": "Waves",
+      "x": 216.0,
+      "y": 374.0,
+      "params": {
+        "table": "formant",
+        "position": 30.0,
+        "unison": 3,
+        "detune": 12.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.lfo",
+      "version": "1.0.0",
+      "label": "Drift",
+      "x": 0.0,
+      "y": 370.0,
+      "params": {
+        "shape": "smooth_random",
+        "rate": 0.07,
+        "voices": 8
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.filter",
+      "version": "1.0.0",
+      "x": 432.0,
+      "y": 155.0,
+      "params": {
+        "cutoff": 2200.0,
+        "resonance": 15.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.adsr",
+      "version": "1.0.0",
+      "label": "Env",
+      "x": 216.0,
+      "y": 30.0,
+      "params": {
+        "attack": 900.0,
+        "decay": 1500.0,
+        "sustain": 70.0,
+        "release": 2500.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.vca",
+      "version": "1.0.0",
+      "label": "Amp",
+      "x": 576.0,
+      "y": 253.0,
+      "params": {
+        "level": -6.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.chorus",
+      "version": "1.0.0",
+      "x": 720.0,
+      "y": 195.0,
+      "params": {
+        "rate": 0.3,
+        "depth": 40.0,
+        "mix": 40.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.reverb",
+      "version": "1.0.0",
+      "label": "Hall",
+      "x": 908.0,
+      "y": 195.0,
+      "params": {
+        "size": 80.0,
+        "decay": 6000.0
+      }
+    }
+  ],
+  "cables": [
+    {
+      "from": {
+        "module": 1,
+        "port": "pitch"
+      },
+      "to": {
+        "module": 2,
+        "port": "pitch"
+      }
+    },
+    {
+      "from": {
+        "module": 3,
+        "port": "out"
+      },
+      "to": {
+        "module": 2,
+        "port": "position"
+      },
+      "amount": 25.0
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "out"
+      },
+      "to": {
+        "module": 4,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "pitch"
+      },
+      "to": {
+        "module": 4,
+        "port": "pitch"
+      }
+    },
+    {
+      "from": {
+        "module": 5,
+        "port": "envelope"
+      },
+      "to": {
+        "module": 4,
+        "port": "cutoff"
+      },
+      "amount": 1.0
+    },
+    {
+      "from": {
+        "module": 4,
+        "port": "low"
+      },
+      "to": {
+        "module": 6,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "gate"
+      },
+      "to": {
+        "module": 5,
+        "port": "gate"
+      }
+    },
+    {
+      "from": {
+        "module": 5,
+        "port": "envelope"
+      },
+      "to": {
+        "module": 6,
+        "port": "cv"
+      }
+    },
+    {
+      "from": {
+        "module": 6,
+        "port": "out"
+      },
+      "to": {
+        "module": 7,
+        "port": "in_l"
+      }
+    },
+    {
+      "from": {
+        "module": 7,
+        "port": "out_l"
+      },
+      "to": {
+        "module": 8,
+        "port": "in_l"
+      }
+    },
+    {
+      "from": {
+        "module": 7,
+        "port": "out_r"
+      },
+      "to": {
+        "module": 8,
+        "port": "in_r"
+      }
+    },
+    {
+      "from": {
+        "module": 8,
+        "port": "out_l"
+      },
+      "to": {
+        "module": 0,
+        "port": "l"
+      }
+    },
+    {
+      "from": {
+        "module": 8,
+        "port": "out_r"
+      },
+      "to": {
+        "module": 0,
+        "port": "r"
+      }
+    }
+  ]
+}
+

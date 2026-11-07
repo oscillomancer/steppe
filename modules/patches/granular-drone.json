@@ -1,0 +1,183 @@
+{
+  "schema": "supple.rack-preset/1.0",
+  "name": "Granular Drone",
+  "description": "A drone of grains: held notes feed a granular cloud that sprays them back, scattered and partly reversed, into a long reverb; hold one or two notes and turn the Grains' spray, size and pitch.",
+  "modules": [
+    {
+      "type": "com.suppleaudio.rack.out",
+      "version": "1.0.0",
+      "x": 880.0,
+      "y": 246.0
+    },
+    {
+      "type": "com.suppleaudio.rack.notes",
+      "version": "1.0.0",
+      "label": "Keys",
+      "x": 0.0,
+      "y": 148.0,
+      "params": {
+        "voices": 4
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.wavetable",
+      "version": "1.0.0",
+      "label": "Tone",
+      "x": 144.0,
+      "y": 0.0,
+      "params": {
+        "table": "organ",
+        "position": 50.0,
+        "unison": 2,
+        "detune": 8.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.adsr",
+      "version": "1.0.0",
+      "label": "Env",
+      "x": 144.0,
+      "y": 322.0,
+      "params": {
+        "attack": 1500.0,
+        "decay": 2000.0,
+        "sustain": 90.0,
+        "release": 3000.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.vca",
+      "version": "1.0.0",
+      "label": "Amp",
+      "x": 360.0,
+      "y": 223.0,
+      "params": {
+        "level": -6.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.granular",
+      "version": "1.0.0",
+      "label": "Grains",
+      "x": 504.0,
+      "y": 136.0,
+      "params": {
+        "size": 280.0,
+        "density": 24.0,
+        "position": 400.0,
+        "spray": 900.0,
+        "pitch": 12.0,
+        "reverse": 35.0,
+        "spread": 80.0,
+        "mix": 65.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.reverb",
+      "version": "1.0.0",
+      "label": "Space",
+      "x": 692.0,
+      "y": 165.0,
+      "params": {
+        "size": 90.0,
+        "decay": 9000.0,
+        "damping": 55.0,
+        "modulation": 50.0,
+        "mix": 40.0
+      }
+    }
+  ],
+  "cables": [
+    {
+      "from": {
+        "module": 1,
+        "port": "pitch"
+      },
+      "to": {
+        "module": 2,
+        "port": "pitch"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "gate"
+      },
+      "to": {
+        "module": 3,
+        "port": "gate"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "out"
+      },
+      "to": {
+        "module": 4,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 3,
+        "port": "envelope"
+      },
+      "to": {
+        "module": 4,
+        "port": "cv"
+      }
+    },
+    {
+      "from": {
+        "module": 4,
+        "port": "out"
+      },
+      "to": {
+        "module": 5,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 5,
+        "port": "out_l"
+      },
+      "to": {
+        "module": 6,
+        "port": "in_l"
+      }
+    },
+    {
+      "from": {
+        "module": 5,
+        "port": "out_r"
+      },
+      "to": {
+        "module": 6,
+        "port": "in_r"
+      }
+    },
+    {
+      "from": {
+        "module": 6,
+        "port": "out_l"
+      },
+      "to": {
+        "module": 0,
+        "port": "l"
+      }
+    },
+    {
+      "from": {
+        "module": 6,
+        "port": "out_r"
+      },
+      "to": {
+        "module": 0,
+        "port": "r"
+      }
+    }
+  ]
+}
+
