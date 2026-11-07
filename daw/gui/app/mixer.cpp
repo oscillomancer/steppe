@@ -12,6 +12,7 @@
 
 #include "panel_grip.h"
 #include "panel_height.h"
+#include "rack_controls.h"
 #include "strip_learn.h"
 #include "supple/model/groups.h"
 #include "supple/ui/controls.h"
@@ -229,6 +230,58 @@ class NameEdit : public ui::Node {
     bool editing_ = false;
 };
 
+// A rack that feeds a channel, above its plug-ins (signal order): its name on
+// a rack module's face, and a faint "rack". A click shows its Rack device in
+// the FX chain window, a double-click opens the rack window on it; a
+// right-click is the strip's.
+class RackSlot : public ui::Button {
+  public:
+    RackSlot(std::string id, std::string name, std::function<void()> click,
+             std::function<void()> twice)
+        : Button(std::move(id), name, std::move(click)),
+          name_(std::move(name)),
+          twice_(std::move(twice)) {}
+    bool onPointer(const ui::PointerEvent& e) override {
+        // A double-click's second press is the double-click alone: its
+        // release clicks nothing.
+        if (e.type == ui::PointerEvent::Type::Down && e.button == 1 && e.clicks >= 2) {
+            swallow_ = true;
+            if (twice_) twice_();
+            return true;
+        }
+        if (e.type == ui::PointerEvent::Type::Up && e.button == 1 && swallow_) {
+            swallow_ = false;
+            return true;
+        }
+        return Button::onPointer(e);
+    }
+    void paint(ui::Canvas& c) override {
+        const ui::Theme& t = c.theme();
+        const ui::Rect b = bounds();
+        c.fillRound(b, t.radius("s"),
+                    pressed()   ? t.color("selection")
+                    : hovered() ? t.color("raised")
+                                : t.color("module"));
+        c.strokeRound(b, t.radius("s"), t.color("rule"));
+        const float size = t.type("small"), tagSize = t.type("caption");
+        const float tagW = c.textWidth("rack", ui::Font::Ui, tagSize);
+        const float nameW = c.textWidth(name_, ui::Font::UiBold, size);
+        // The tag only where the name keeps its room.
+        const bool tag = nameW + tagW + 14 <= b.w;
+        const ui::Rect text{b.x + 4, b.y, b.w - 8 - (tag ? tagW + 4 : 0), b.h};
+        c.text(text, name_, ui::Font::UiBold, size, t.color("ink"),
+               (tag ? ui::kLeft : ui::kCenter) | ui::kMiddle);
+        if (tag)
+            c.text({b.right() - 4 - tagW, b.y, tagW, b.h}, "rack", ui::Font::Ui, tagSize,
+                   t.color("ink-faint"), ui::kLeft | ui::kMiddle);
+    }
+
+  private:
+    std::string name_;
+    std::function<void()> twice_;
+    bool swallow_ = false;
+};
+
 // A strip's plug-ins, one per row, scrolled by the wheel or a bar when the
 // chain is longer than the room the panel gives it.
 class FxList : public ui::Node {
@@ -253,8 +306,16 @@ class FxList : public ui::Node {
         add(std::move(slot));
         return ref;
     }
+    // A rack that feeds the strip: above the plug-ins, in route order.
+    RackSlot& addRack(std::unique_ptr<RackSlot> slot) {
+        RackSlot& ref = *slot;
+        racks_.push_back(&ref);
+        add(std::move(slot));
+        return ref;
+    }
     const std::vector<FxSlot*>& slots() const { return slots_; }
-    float content() const { return chainRows(static_cast<int>(slots_.size())); }
+    const std::vector<RackSlot*>& racks() const { return racks_; }
+    float content() const { return chainRows(static_cast<int>(racks_.size() + slots_.size())); }
     void arrange(const ui::Canvas& canvas, const ui::Rect& b) override {
         setBounds(b);
         const bool bar = content() > b.h + 0.5f;
@@ -266,6 +327,10 @@ class FxList : public ui::Node {
         bar_->arrange(canvas,
                       {b.right() - ui::ScrollBar::kThickness, b.y, ui::ScrollBar::kThickness, b.h});
         float y = b.y - scroll_;
+        for (RackSlot* slot : racks_) {
+            slot->arrange(canvas, {b.x, y, w, kSlotH});
+            y += kSlotH + kSlotGap;
+        }
         for (FxSlot* slot : slots_) {
             slot->arrange(canvas, {b.x, y, w, kSlotH});
             y += kSlotH + kSlotGap;
@@ -274,9 +339,11 @@ class FxList : public ui::Node {
     std::function<void()> onDoubleClick;  // on the list's empty part: add a plug-in
     bool onPointer(const ui::PointerEvent& e) override {
         if (e.type == ui::PointerEvent::Type::Down && e.button == 1 && e.clicks >= 2 &&
-            onDoubleClick && std::none_of(slots_.begin(), slots_.end(), [&](const FxSlot* slot) {
-                return slot->bounds().contains(e.pos);
-            })) {
+            onDoubleClick &&
+            std::none_of(slots_.begin(), slots_.end(),
+                         [&](const FxSlot* slot) { return slot->bounds().contains(e.pos); }) &&
+            std::none_of(racks_.begin(), racks_.end(),
+                         [&](const RackSlot* slot) { return slot->bounds().contains(e.pos); })) {
             onDoubleClick();
             return true;
         }
@@ -288,6 +355,7 @@ class FxList : public ui::Node {
     }
 
   private:
+    std::vector<RackSlot*> racks_;
     std::vector<FxSlot*> slots_;
     ui::ScrollBar* bar_ = nullptr;
     float scroll_ = 0;
@@ -822,6 +890,8 @@ std::string Mixer::structure() const {
                        std::to_string(f->label.size()) + ":" + f->label + ":" +
                        std::to_string(f->plugin.name.size()) + ":" + f->plugin.name;
         }
+        for (model::Id rack : racks::racksFeeding(s, id))
+            out += rack.str() + "," + model::rackLabel(s, rack) + ",";
         for (const auto& e : s.routes)
             if (e.value->from.track == id) {
                 out += e.id.str() + "," + std::to_string(e.value->mute);
@@ -919,6 +989,25 @@ void Mixer::rebuild() {
             args["track"] = tid;
             run("ui.fx.add", std::move(args));
         };
+        // The racks that feed it (their Outs route to its input), first.
+        if (t.type == model::StripType::Channel)
+            for (model::Id rack : racks::racksFeeding(s, id)) {
+                auto slot = std::make_unique<RackSlot>(
+                    "mixer.rack." + tid + "." + rack.str(), model::rackLabel(s, rack),
+                    [this, id, rack] {
+                        if (showRack) {
+                            showRack(id, rack);
+                            return;
+                        }
+                        json::Value args = json::Value::object();
+                        args["track"] = id.str();
+                        run("ui.fx.chain", std::move(args));
+                    },
+                    [this, rack] {
+                        if (openRack) openRack(rack);
+                    });
+                st.racks.push_back(&chain.addRack(std::move(slot)));
+            }
         for (std::size_t at = 0; at < t.chain.size(); ++at) {
             const model::Id fx = t.chain[at];
             const model::FxInstance* f = s.fx.find(fx);

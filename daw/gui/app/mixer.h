@@ -3,7 +3,9 @@
 // The mixer (docs/specs/gui.md §4.4), docked under the arrange view: strips
 // in track order grouped by type — channels, busses, masters — each with its
 // type colour, its name (a double-click renames it), "fx" (the chain) and "+"
-// (the plugin browser) at its top right, the plug-in chain (click: the
+// (the plugin browser) at its top right, a channel's rack slots (the racks
+// that feed it; click: the rack's device in the FX window; double-click: the
+// rack window), the plug-in chain (click: the
 // plug-in's editor; drag: reorder it, or copy it onto another strip; a
 // double-click on its empty part: the browser), sends (two in view, more
 // scroll; click: the routing matrix; Alt+click or right-click: delete), the
@@ -69,6 +71,11 @@ class Mixer {
     std::function<std::string(const model::Id& track)> outputText;
     std::function<void(const model::Id& track, const ui::Rect& anchor)> pickOutput;
     std::function<void(const model::Id&, const ui::Rect&)> envelopes;
+    // A channel's rack slot (a rack that feeds it, above its plug-ins): a
+    // click shows that rack's Rack device in the FX chain window (unset: the
+    // chain window), a double-click opens the rack window on the rack.
+    std::function<void(const model::Id& track, const model::Id& rack)> showRack;
+    std::function<void(const model::Id& rack)> openRack;
 
     // Tests.
     struct Strip {
@@ -82,12 +89,13 @@ class Mixer {
         ui::MonitorButton* monitor = nullptr;
         ui::Label* value = nullptr;
         ui::Meter* meter = nullptr;
-        ui::Button* fx = nullptr;     // "fx" at the strip's top right: the chain
-        ui::Button* addFx = nullptr;  // "+" beside it: the plugin browser
-        ui::Button* input = nullptr;  // channels: the record input
-        ui::Button* out = nullptr;    // the output (click: matrix; drag: a send)
-        ui::Node* rename = nullptr;   // the name's in-place editor (a double-click)
-        ui::Node* chain = nullptr;    // the plug-in list
+        ui::Button* fx = nullptr;        // "fx" at the strip's top right: the chain
+        ui::Button* addFx = nullptr;     // "+" beside it: the plugin browser
+        ui::Button* input = nullptr;     // channels: the record input
+        ui::Button* out = nullptr;       // the output (click: matrix; drag: a send)
+        ui::Node* rename = nullptr;      // the name's in-place editor (a double-click)
+        ui::Node* chain = nullptr;       // the plug-in list
+        std::vector<ui::Button*> racks;  // the rack slots, above the plug-ins
     };
     const std::vector<Strip>& strips() const { return strips_; }
 

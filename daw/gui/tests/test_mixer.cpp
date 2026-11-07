@@ -1760,3 +1760,55 @@ TEST_CASE("mixer: a group's tab and a VCA's members and env buttons open their m
     CHECK(envAnchor->y == env.y);
     CHECK(envAnchor->w == env.w);
 }
+
+TEST_CASE("mixer: a channel fed by a rack shows a rack slot above its plug-ins") {
+    Fixture f;
+    if (!f.ok) return;
+    std::vector<std::pair<std::string, std::string>> shown;
+    std::vector<std::string> opened;
+    f.mixer->showRack = [&](const model::Id& track, const model::Id& rack) {
+        shown.emplace_back(track.str(), rack.str());
+    };
+    f.mixer->openRack = [&](const model::Id& rack) { opened.push_back(rack.str()); };
+    json::Value made = f.exec("rack.add", R"({"name":"Lead"})");
+    const std::string rack = made["rack"].asString(), track = made["track"].asString();
+    const auto fx = f.addFx(track, "Hickory");
+    const auto plain = f.addTrack("channel", "Plain");
+    f.refresh();
+    // One line, named after the rack, above the plug-ins; none elsewhere.
+    const auto& st = f.strip(track);
+    REQUIRE(st.racks.size() == 1);
+    ui::Button* slot = st.racks.front();
+    CHECK(slot->id() == "mixer.rack." + track + "." + rack);
+    CHECK(slot->valueText() == "Lead");
+    const ui::Rect r = slot->bounds(), plug = f.node("mixer.fx." + fx)->bounds();
+    CHECK(near(r.h, plug.h));
+    CHECK(r.bottom() <= plug.y);
+    CHECK(near(r.x, plug.x));
+    CHECK(f.strip(plain).racks.empty());
+    f.snapshot("mixer-rack-slot.png");
+    // A click: its Rack device in the chain window.
+    f.pointer(ui::PointerEvent::Type::Down, f.centre(slot), 1);
+    f.pointer(ui::PointerEvent::Type::Up, f.centre(slot), 1);
+    REQUIRE(shown.size() == 1);
+    CHECK(shown.front() == std::make_pair(track, rack));
+    CHECK(opened.empty());
+    // A double-click: the rack window on it, and no second click.
+    f.pointer(ui::PointerEvent::Type::Down, f.centre(slot), 2);
+    f.pointer(ui::PointerEvent::Type::Up, f.centre(slot), 2);
+    CHECK(opened == std::vector<std::string>{rack});
+    CHECK(shown.size() == 1);
+    CHECK(f.editors.empty());
+    // Renamed, the slot follows.
+    f.exec("rack.set", R"({"rack":")" + rack + R"(","name":"Bells"})");
+    f.refresh();
+    REQUIRE(f.strip(track).racks.size() == 1);
+    CHECK(f.strip(track).racks.front()->valueText() == "Bells");
+    // Another rack homed there becomes the channel's input: its slot.
+    const std::string second =
+        f.exec("rack.add", R"({"track":")" + track + R"(","name":"Pad"})")["rack"].asString();
+    f.refresh();
+    REQUIRE(f.strip(track).racks.size() == 1);
+    CHECK(f.strip(track).racks.front()->id() == "mixer.rack." + track + "." + second);
+    CHECK(f.strip(track).racks.front()->valueText() == "Pad");
+}

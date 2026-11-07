@@ -345,6 +345,9 @@ knobs at the top of its FX chain window (the **fx** button), named after
 what they drive ("Filter cutoff"), with **Open** to go to the rack. Turn
 them there, right-click one to automate it or to learn a MIDI controller,
 and watch them move with their automation as the song plays.
+In the mixer, that channel shows the rack as a line above its plugins,
+marked **rack**: click it to see those knobs, double-click it to open the
+rack.
 **Tidy up** in the space's right-click menu lays the rack out by signal
 flow, left to right; with several modules selected, only they move. Undo
 puts them back.

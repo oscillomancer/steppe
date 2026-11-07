@@ -398,9 +398,12 @@ instructions are in `docs/guides/installing.md`.
   cut. A channel fed by a rack shows a Rack device at the top of its FX
   chain window: the rack's name, Open, and its Macro modules' cabled knobs,
   named after what they drive, turned as one undo step, with a rack knob's
-  Automate and MIDI learn, following automation as it plays. A module with pitch and gate outputs captures its notes to a
-  channel's MIDI item from its right-click (`rack.capture`, 1 to 16 bars;
-  the render runs on the UI thread, so the window waits for it).
+  Automate and MIDI learn, following automation as it plays; its mixer
+  strip shows the rack as a slot above its plug-ins (click: that device;
+  double-click: the rack window). A module with pitch and gate outputs
+  captures its notes to a channel's MIDI item from its right-click
+  (`rack.capture`, 1 to 16 bars; the render runs on the UI thread, so the
+  window waits for it).
 - **MIDI learn** (ADR-0027): any plug-in parameter (the FX window's MIDI
   button, or `fx.learn.set` for agents) and any action (Ctrl+L in the
   actions list) learns a controller by moving it: CC, note, pitch bend or
