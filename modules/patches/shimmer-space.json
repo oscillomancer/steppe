@@ -1,0 +1,144 @@
+{
+  "schema": "supple.rack-preset/1.0",
+  "name": "Shimmer Space",
+  "description": "A send effect of huge, rising space, all wet: a dotted-quarter echo into a long hall whose tail climbs in octaves; send pads, plucks or a vocal to the In, turn the Hall's shimmer and decay and the Return's level.",
+  "modules": [
+    {
+      "type": "com.suppleaudio.rack.out",
+      "version": "1.0.0",
+      "x": 736.0,
+      "y": 127.0
+    },
+    {
+      "type": "com.suppleaudio.rack.in",
+      "version": "1.0.0",
+      "label": "Input",
+      "x": 0.0,
+      "y": 127.0
+    },
+    {
+      "type": "com.suppleaudio.rack.delay",
+      "version": "1.0.0",
+      "label": "Echo",
+      "x": 128.0,
+      "y": 0.0,
+      "params": {
+        "sync": "n4d",
+        "feedback": 30.0,
+        "tone": -30.0,
+        "mix": 35.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.reverb",
+      "version": "1.0.0",
+      "label": "Hall",
+      "x": 316.0,
+      "y": 46.0,
+      "params": {
+        "size": 90.0,
+        "decay": 8000.0,
+        "pre_delay": 40.0,
+        "damping": 35.0,
+        "modulation": 55.0,
+        "shimmer": 40.0,
+        "mix": 100.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.mixer",
+      "version": "1.0.0",
+      "label": "Return",
+      "x": 504.0,
+      "y": 17.0,
+      "params": {
+        "pan_1": -100.0,
+        "pan_2": 100.0,
+        "master": -4.0
+      }
+    }
+  ],
+  "cables": [
+    {
+      "from": {
+        "module": 1,
+        "port": "l"
+      },
+      "to": {
+        "module": 2,
+        "port": "in_l"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "r"
+      },
+      "to": {
+        "module": 2,
+        "port": "in_r"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "out_l"
+      },
+      "to": {
+        "module": 3,
+        "port": "in_l"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "out_r"
+      },
+      "to": {
+        "module": 3,
+        "port": "in_r"
+      }
+    },
+    {
+      "from": {
+        "module": 3,
+        "port": "out_l"
+      },
+      "to": {
+        "module": 4,
+        "port": "in_1"
+      }
+    },
+    {
+      "from": {
+        "module": 3,
+        "port": "out_r"
+      },
+      "to": {
+        "module": 4,
+        "port": "in_2"
+      }
+    },
+    {
+      "from": {
+        "module": 4,
+        "port": "left"
+      },
+      "to": {
+        "module": 0,
+        "port": "l"
+      }
+    },
+    {
+      "from": {
+        "module": 4,
+        "port": "right"
+      },
+      "to": {
+        "module": 0,
+        "port": "r"
+      }
+    }
+  ]
+}
+

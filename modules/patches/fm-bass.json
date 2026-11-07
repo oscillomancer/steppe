@@ -1,0 +1,237 @@
+{
+  "schema": "supple.rack-preset/1.0",
+  "name": "FM Bass",
+  "description": "A punchy, rubbery FM bass: a modulator's level snaps down with a short envelope, harder notes brighter; play staccato low lines, turn the Carrier's index and the Modulator's feedback for growl.",
+  "modules": [
+    {
+      "type": "com.suppleaudio.rack.out",
+      "version": "1.0.0",
+      "x": 1024.0,
+      "y": 295.0
+    },
+    {
+      "type": "com.suppleaudio.rack.notes",
+      "version": "1.0.0",
+      "label": "Keys",
+      "x": 0.0,
+      "y": 197.0,
+      "params": {
+        "voices": 1,
+        "mode": "mono_last"
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.adsr",
+      "version": "1.0.0",
+      "label": "Pluck",
+      "x": 144.0,
+      "y": 210.0,
+      "params": {
+        "attack": 0.5,
+        "decay": 180.0,
+        "sustain": 30.0,
+        "release": 80.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.operator",
+      "version": "1.0.0",
+      "label": "Modulator",
+      "x": 360.0,
+      "y": 191.0,
+      "params": {
+        "feedback": 25.0,
+        "level": 10.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.operator",
+      "version": "1.0.0",
+      "label": "Carrier",
+      "x": 504.0,
+      "y": 0.0,
+      "params": {
+        "index": 3.5
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.operator",
+      "version": "1.0.0",
+      "label": "Sub",
+      "x": 504.0,
+      "y": 382.0,
+      "params": {
+        "ratio": 0.5,
+        "level": 55.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.mixer",
+      "version": "1.0.0",
+      "label": "Mix",
+      "x": 648.0,
+      "y": 13.0,
+      "params": {
+        "level_1": -4.0,
+        "level_2": -6.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.adsr",
+      "version": "1.0.0",
+      "label": "Env",
+      "x": 656.0,
+      "y": 407.0,
+      "params": {
+        "attack": 0.5,
+        "decay": 400.0,
+        "sustain": 80.0,
+        "release": 90.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.vca",
+      "version": "1.0.0",
+      "label": "Amp",
+      "x": 880.0,
+      "y": 272.0,
+      "params": {
+        "level": 4.0
+      }
+    }
+  ],
+  "cables": [
+    {
+      "from": {
+        "module": 1,
+        "port": "pitch"
+      },
+      "to": {
+        "module": 3,
+        "port": "pitch"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "pitch"
+      },
+      "to": {
+        "module": 4,
+        "port": "pitch"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "pitch"
+      },
+      "to": {
+        "module": 5,
+        "port": "pitch"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "gate"
+      },
+      "to": {
+        "module": 2,
+        "port": "gate"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "velocity"
+      },
+      "to": {
+        "module": 2,
+        "port": "velocity"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "envelope"
+      },
+      "to": {
+        "module": 3,
+        "port": "level"
+      },
+      "amount": 90.0
+    },
+    {
+      "from": {
+        "module": 3,
+        "port": "sine"
+      },
+      "to": {
+        "module": 4,
+        "port": "pm"
+      }
+    },
+    {
+      "from": {
+        "module": 4,
+        "port": "sine"
+      },
+      "to": {
+        "module": 6,
+        "port": "in_1"
+      }
+    },
+    {
+      "from": {
+        "module": 5,
+        "port": "sine"
+      },
+      "to": {
+        "module": 6,
+        "port": "in_2"
+      }
+    },
+    {
+      "from": {
+        "module": 6,
+        "port": "mono"
+      },
+      "to": {
+        "module": 8,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "gate"
+      },
+      "to": {
+        "module": 7,
+        "port": "gate"
+      }
+    },
+    {
+      "from": {
+        "module": 7,
+        "port": "envelope"
+      },
+      "to": {
+        "module": 8,
+        "port": "cv"
+      }
+    },
+    {
+      "from": {
+        "module": 8,
+        "port": "out"
+      },
+      "to": {
+        "module": 0,
+        "port": "l"
+      }
+    }
+  ]
+}
+

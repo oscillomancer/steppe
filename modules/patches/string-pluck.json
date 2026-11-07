@@ -1,0 +1,141 @@
+{
+  "schema": "supple.rack-preset/1.0",
+  "name": "String Pluck",
+  "description": "A bright plucked string, played as hard as each note, into a dotted-eighth echo and a small room; play arpeggios or chords, turn the String's damping and decay.",
+  "modules": [
+    {
+      "type": "com.suppleaudio.rack.out",
+      "version": "1.0.0",
+      "x": 664.0,
+      "y": 127.0
+    },
+    {
+      "type": "com.suppleaudio.rack.notes",
+      "version": "1.0.0",
+      "label": "Keys",
+      "x": 0.0,
+      "y": 29.0
+    },
+    {
+      "type": "com.suppleaudio.rack.string",
+      "version": "1.0.0",
+      "x": 144.0,
+      "y": 23.0,
+      "params": {
+        "decay": 2500.0,
+        "damping": 40.0,
+        "brightness": 70.0,
+        "position": 18.0,
+        "level": -2.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.delay",
+      "version": "1.0.0",
+      "label": "Echo",
+      "x": 288.0,
+      "y": 0.0,
+      "params": {
+        "sync": "n8d",
+        "feedback": 35.0,
+        "ping_pong": true,
+        "mix": 20.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.reverb",
+      "version": "1.0.0",
+      "label": "Room",
+      "x": 476.0,
+      "y": 46.0,
+      "params": {
+        "size": 35.0,
+        "decay": 1500.0,
+        "mix": 18.0
+      }
+    }
+  ],
+  "cables": [
+    {
+      "from": {
+        "module": 1,
+        "port": "pitch"
+      },
+      "to": {
+        "module": 2,
+        "port": "pitch"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "gate"
+      },
+      "to": {
+        "module": 2,
+        "port": "pluck"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "velocity"
+      },
+      "to": {
+        "module": 2,
+        "port": "velocity"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "out"
+      },
+      "to": {
+        "module": 3,
+        "port": "in_l"
+      }
+    },
+    {
+      "from": {
+        "module": 3,
+        "port": "out_l"
+      },
+      "to": {
+        "module": 4,
+        "port": "in_l"
+      }
+    },
+    {
+      "from": {
+        "module": 3,
+        "port": "out_r"
+      },
+      "to": {
+        "module": 4,
+        "port": "in_r"
+      }
+    },
+    {
+      "from": {
+        "module": 4,
+        "port": "out_l"
+      },
+      "to": {
+        "module": 0,
+        "port": "l"
+      }
+    },
+    {
+      "from": {
+        "module": 4,
+        "port": "out_r"
+      },
+      "to": {
+        "module": 0,
+        "port": "r"
+      }
+    }
+  ]
+}
+

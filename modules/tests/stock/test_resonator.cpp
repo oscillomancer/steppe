@@ -83,3 +83,23 @@ TEST_CASE("resonator: position, spread, input") {
     CHECK(peak(struck(0, 0)) < 1.5);
     CHECK(peak(struck(0, 0)) > 0.2);
 }
+
+TEST_CASE("resonator: Damping never lengthens a mode below the fundamental") {
+    // A bell's hum (an octave down) rings no longer than Decay at any Damping,
+    // so a struck bell is 60 dB down by twice Decay.
+    for (double damping : {0.0, 30.0, 45.0, 47.0, 60.0, 100.0}) {
+        CAPTURE(damping);
+        ModuleHarness h(stock("resonator"));
+        h.set("structure", 75);
+        h.set("decay", 500);
+        h.set("damping", damping);
+        h.input("strike", 1, strikeAt(0));
+        h.input("pitch", 1, constant(-1));
+        h.run(60000);
+        const auto& y = h.output("out_l");
+        const double top = peak(slice(y, 0, 4800));
+        CHECK(peak(slice(y, 48000, 60000)) < top * 1e-3);  // from 2 x Decay
+        // The hum is still there: Damping does not remove it either.
+        CHECK(amplitudeAt(slice(y, 0, 4800), kC4 / 4, 48000) > 0.05 * top);
+    }
+}

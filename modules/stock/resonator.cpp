@@ -201,7 +201,9 @@ struct Resonator : Module {
             const double hz = f0 * ratio;
             double amp = 0.0;
             if (hz < 0.45 * sr) amp = pow(ratio, -tilt) * abs(sin(pi * (n + 1.0) * pos));
-            const double t = t60 / (1.0 + damp * 3.0 * (ratio - 1.0) / sqrt(ratio));
+            // Only the modes above the fundamental die sooner: a bell's hum,
+            // below it, rings for Decay like the fundamental.
+            const double t = t60 / (1.0 + damp * 3.0 * max(0.0, ratio - 1.0) / sqrt(ratio));
             const double r = pow(10.0, -3.0 / (max(t, 0.002) * sr));
             const double w = twoPi * hz / sr;
             m.cr = r * cos(w);

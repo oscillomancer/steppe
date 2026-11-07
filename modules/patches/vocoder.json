@@ -1,0 +1,218 @@
+{
+  "schema": "supple.rack-preset/1.0",
+  "name": "Vocoder",
+  "description": "A vocoder: a voice sent to the In speaks through a chord of detuned saws played from this track's notes; send a vocal or a drum loop with its own fader down, hold chords, turn the Vocoder's bands and release.",
+  "modules": [
+    {
+      "type": "com.suppleaudio.rack.out",
+      "version": "1.0.0",
+      "x": 1072.0,
+      "y": 387.0
+    },
+    {
+      "type": "com.suppleaudio.rack.in",
+      "version": "1.0.0",
+      "label": "Input",
+      "x": 512.0,
+      "y": 277.0
+    },
+    {
+      "type": "com.suppleaudio.rack.notes",
+      "version": "1.0.0",
+      "label": "Keys",
+      "x": 0.0,
+      "y": 289.0,
+      "params": {
+        "voices": 6
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.vco",
+      "version": "1.0.0",
+      "label": "Saw 1",
+      "x": 144.0,
+      "y": 0.0,
+      "params": {
+        "fine": -8.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.vco",
+      "version": "1.0.0",
+      "label": "Saw 2",
+      "x": 144.0,
+      "y": 474.0,
+      "params": {
+        "fine": 8.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.adsr",
+      "version": "1.0.0",
+      "label": "Env",
+      "x": 288.0,
+      "y": 302.0,
+      "params": {
+        "attack": 10.0,
+        "decay": 200.0,
+        "sustain": 100.0,
+        "release": 250.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.vocoder",
+      "version": "1.0.0",
+      "x": 648.0,
+      "y": 301.0,
+      "params": {
+        "bands": 20,
+        "noise": 30.0,
+        "level": -1.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.vca",
+      "version": "1.0.0",
+      "label": "Voices",
+      "x": 504.0,
+      "y": 451.0,
+      "params": {
+        "level": -6.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.chorus",
+      "version": "1.0.0",
+      "x": 884.0,
+      "y": 306.0,
+      "params": {
+        "rate": 0.4,
+        "depth": 35.0,
+        "mix": 35.0
+      }
+    }
+  ],
+  "cables": [
+    {
+      "from": {
+        "module": 2,
+        "port": "pitch"
+      },
+      "to": {
+        "module": 3,
+        "port": "pitch"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "pitch"
+      },
+      "to": {
+        "module": 4,
+        "port": "pitch"
+      }
+    },
+    {
+      "from": {
+        "module": 3,
+        "port": "saw"
+      },
+      "to": {
+        "module": 7,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 4,
+        "port": "saw"
+      },
+      "to": {
+        "module": 7,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "l"
+      },
+      "to": {
+        "module": 6,
+        "port": "voice"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "gate"
+      },
+      "to": {
+        "module": 5,
+        "port": "gate"
+      }
+    },
+    {
+      "from": {
+        "module": 5,
+        "port": "envelope"
+      },
+      "to": {
+        "module": 7,
+        "port": "cv"
+      }
+    },
+    {
+      "from": {
+        "module": 7,
+        "port": "out"
+      },
+      "to": {
+        "module": 6,
+        "port": "carrier"
+      }
+    },
+    {
+      "from": {
+        "module": 6,
+        "port": "out"
+      },
+      "to": {
+        "module": 8,
+        "port": "in_l"
+      }
+    },
+    {
+      "from": {
+        "module": 8,
+        "port": "out_l"
+      },
+      "to": {
+        "module": 0,
+        "port": "l"
+      }
+    },
+    {
+      "from": {
+        "module": 8,
+        "port": "out_r"
+      },
+      "to": {
+        "module": 0,
+        "port": "r"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "r"
+      },
+      "to": {
+        "module": 6,
+        "port": "voice"
+      }
+    }
+  ]
+}
+
