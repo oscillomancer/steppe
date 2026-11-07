@@ -13,16 +13,24 @@ feedback and intentionally sum paths with different delays.
 
 On the main thread, after plug-in stages are prepared, compute each audio
 Out and Note Out's largest sum of plug-in latencies on feed-forward paths
-ending there. Script modules contribute zero. Collapse feedback groups;
-an entire feedback group contributes zero, including its plug-ins. Its
-internal cables already have the patch's one-frame feedback delay.
+ending there. Script modules contribute zero. Remove exactly the cables
+marked `feedback` by the schedule (backward edges in a feedback group's
+module-id order); the remaining graph is a DAG. A plug-in on a forward
+path counts even inside a loop, including a loop closed only by modulation.
+The removed cables keep the schedule's one-frame feedback delay.
 
-The rack node's latency is the maximum over its audio Outs. Read-ahead PDC
+The rack node's latency is the maximum over audio Outs and Note Outs with
+an outgoing edge. Unrouted outputs do not add latency to the song. Read-ahead PDC
 treats it like a strip with that chain latency. Notes, Transport and
 automation share the node's shifted clock. Shorter audio and Note Out edges
 receive the difference through the existing edge delay mechanism.
 Plug-in latency changes rebuild the plan as for strips. `rack.get` reports
-the node and individual output latencies.
+the node and individual output latencies from the prepared plan. Its
+brief/default path never instantiates plug-ins: without prepared timing,
+latencies are null. An explicit `detail: "full"` may probe unprepared FX.
+
+Paths that reach an Out only through modulation inputs count as latency.
+This is a dependency policy, not alignment of every internal audio path.
 
 Parallel paths inside a patch stay unaligned, as on hardware. A dry path
 summed with a plug-in path is early by that plug-in's latency; patches
@@ -33,6 +41,5 @@ no path-alignment delay storage.
 
 Independent rack outputs align with the song using existing PDC storage
 and executors. Feedback remains an intentional timing effect rather than
-an unbounded compensation problem. Latency inside a feedback group and
-unequal paths summed before an Out are not corrected. This bounded policy
+an unbounded compensation problem. Feedback back edges and unequal paths summed before an Out are not corrected. This bounded policy
 keeps timing deterministic without changing patch sound or scheduling.

@@ -390,7 +390,8 @@ Result<PluginModTarget> resolvePluginMod(std::span<const host::ParamInfo> list,
 }
 
 RackLatencies rackLatencies(const Session& session, Id rackId,
-                            const std::map<Id, std::int64_t>& moduleLatencies) {
+                            const std::map<Id, std::int64_t>& moduleLatencies,
+                            const rack::Schedule* schedule) {
     std::vector<Id> ids;
     std::map<Id, int> index, owner;
     for (const auto& entry : session.modules) {
@@ -436,43 +437,50 @@ RackLatencies rackLatencies(const Session& session, Id rackId,
     };
     for (std::size_t at = 0; at < count; ++at)
         if (order[at] < 0) visit(static_cast<int>(at));
-    std::vector<std::set<int>> edges(groups.size());
-    std::vector<int> degree(groups.size());
-    std::vector<std::int64_t> cost(groups.size()), arrival(groups.size());
-    for (std::size_t group = 0; group < groups.size(); ++group) {
-        const int member = groups[group].front();
-        const bool feedback =
-            groups[group].size() > 1 ||
-            std::find(next[member].begin(), next[member].end(), member) != next[member].end();
-        if (!feedback)
-            if (const auto found = moduleLatencies.find(ids[member]);
-                found != moduleLatencies.end())
-                cost[group] = found->second;
+    // The scheduler delays only backward cables inside a component. Removing
+    // those edges leaves a DAG, retaining plug-ins on forward paths in loops.
+    std::vector<std::vector<int>> forward(count);
+    if (schedule) {
+        const auto& patch = schedule->patch();
+        for (std::size_t i = 0; i < patch.cables.size(); ++i) {
+            const auto& cable = patch.cables[i];
+            if (!schedule->feedback(i)) forward[cable.from].push_back(cable.to);
+        }
+    } else {
+        for (std::size_t from = 0; from < count; ++from)
+            for (int to : next[from])
+                if (component[from] != component[to] || static_cast<int>(from) < to)
+                    forward[from].push_back(to);
     }
-    for (std::size_t from = 0; from < count; ++from)
-        for (int to : next[from])
-            if (component[from] != component[to] &&
-                edges[component[from]].insert(component[to]).second)
-                ++degree[component[to]];
+    std::vector<int> degree(count);
+    std::vector<std::int64_t> arrival(count);
+    for (const auto& targets : forward)
+        for (int to : targets) ++degree[to];
     std::queue<int> ready;
-    for (std::size_t group = 0; group < groups.size(); ++group)
-        if (!degree[group]) ready.push(static_cast<int>(group));
+    for (std::size_t i = 0; i < count; ++i)
+        if (!degree[i]) ready.push(static_cast<int>(i));
     while (!ready.empty()) {
-        const int group = ready.front();
+        const int at = ready.front();
         ready.pop();
-        arrival[group] += cost[group];
-        for (int to : edges[group]) {
-            arrival[to] = std::max(arrival[to], arrival[group]);
+        if (const auto cost = moduleLatencies.find(ids[at]); cost != moduleLatencies.end())
+            arrival[at] += cost->second;
+        for (int to : forward[at]) {
+            arrival[to] = std::max(arrival[to], arrival[at]);
             if (!--degree[to]) ready.push(to);
         }
     }
+    std::set<Id> routed;
+    for (const auto& route : session.routes)
+        if (route.value->from.module && route.value->to.track &&
+            session.tracks.contains(*route.value->to.track))
+            routed.insert(*route.value->from.module);
     RackLatencies result;
     for (std::size_t at = 0; at < count; ++at) {
         const auto* module = session.modules.find(ids[at]);
         if (module->type != model::kOutModule && module->type != model::kNotesOutModule) continue;
-        const auto latency = arrival[component[at]];
+        const auto latency = arrival[at];
         result.outputs[ids[at]] = latency;
-        if (module->type == model::kOutModule) result.latency = std::max(result.latency, latency);
+        if (routed.contains(ids[at])) result.latency = std::max(result.latency, latency);
     }
     return result;
 }
@@ -486,7 +494,7 @@ void prepareRackLatencies(Node& node, const Session& session) {
         for (const auto& stage : node.rackStages)
             if (stage.fx == *module->fx) costs[id] = stage.latency;
     }
-    const auto result = rackLatencies(session, rack.rack, costs);
+    const auto result = rackLatencies(session, rack.rack, costs, rack.schedule.get());
     node.latChain = result.latency;
     rack.outLatencies.clear();
     for (Id id : rack.outIds) rack.outLatencies.push_back(result.outputs.at(id));

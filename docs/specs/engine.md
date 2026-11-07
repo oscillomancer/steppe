@@ -90,7 +90,9 @@ never by concurrent accumulation — so results are thread-count independent.
 The instance pool tracks raw plug-in latency at the activation rate separately
 from prepared stage latency in plan frames. Service compares raw with raw,
 so oversampling does not cause repeated reloads. Actual plug-in-originated
-latency/restart requests still rebuild PDC.
+latency/restart requests still rebuild PDC. `Engine::rackLatencies` copies the
+latest prepared rack's node and output timing on the main thread without
+instantiating plug-ins (ADR-0064).
 
 
 - Each FX instance reports latency (CLAP `latency`); bypassed instances keep

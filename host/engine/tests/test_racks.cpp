@@ -1076,7 +1076,7 @@ TEST_CASE("racks: feed-forward latency aligns independent Outs with reference im
         }
 }
 
-TEST_CASE("racks: feedback groups contribute zero latency, feed-forward paths take the maximum") {
+TEST_CASE("racks: removing scheduler feedback edges retains forward plug-in latency") {
     model::EditTxn t(model::Session::create(), 1);
     const auto channel = addChannel(t), rack = t.create(model::Rack{channel, ""});
     const auto a = addPlugin(
@@ -1097,8 +1097,8 @@ TEST_CASE("racks: feedback groups contribute zero latency, feed-forward paths ta
     plan->media = &media;
     REQUIRE(supple::engine::detail::prepare(*plan, s));
     for (const auto& node : plan->nodes)
-        if (node.rack) CHECK(node.latChain == 0);
-    CHECK(supple::engine::detail::rackLatencies(s, rack, {{a, 64}}).latency == 0);
+        if (node.rack) CHECK(node.latChain == 64);
+    CHECK(supple::engine::detail::rackLatencies(s, rack, {{a, 64}}).latency == 64);
     model::EditTxn forward(s, 2);
     for (const auto& entry : s.cables)
         if (entry.value->to.object == a) forward.remove<model::Cable>(entry.id);
@@ -1156,6 +1156,68 @@ TEST_CASE("racks: numeric semantic parameter keys take precedence over CLAP ids"
     const auto numeric = supple::engine::detail::resolvePluginMod(params, nullptr, "1");
     REQUIRE(numeric);
     CHECK(numeric->param == 1);
+}
+
+TEST_CASE("racks: modulation back edges retain latency and only routed outputs set the node") {
+    model::Project project;
+    project.console9 = false;
+    model::EditTxn t(model::Session::create(project), 1);
+    const auto channel = addChannel(t), target = addChannel(t);
+    const auto rack = t.create(model::Rack{channel, "Timing"});
+    const auto input = addModule(t, rack, model::kInModule);
+    const auto effect = addPlugin(
+        t, rack, "com.suppleaudio.test.gain",
+        *json::parse(R"({"schema":"supple.test-gain-patch/1.0","params":{"latency":"short"}})"));
+    const auto follower = addModule(t, rack, "com.suppleaudio.rack.follower");
+    const auto output = addModule(t, rack, model::kOutModule);
+    const auto fx = *t.preview().modules.find(effect)->fx;
+    cable(t, input, "l", effect, "in_l");
+    cable(t, effect, "out_l", output, "l");
+    cable(t, effect, "out_l", follower, "in");
+    cable(t, follower, "envelope", fx, "gain", .1);
+    listen(t, output, channel);
+    const auto s = commit(t);
+    auto prepared = [&](const model::Session& state) {
+        auto pool = makePool();
+        MediaCache media;
+        auto plan = supple::engine::detail::compile(state, pool, 0, 128);
+        REQUIRE(plan);
+        plan->media = &media;
+        REQUIRE(supple::engine::detail::prepare(*plan, state));
+        for (const auto& node : plan->nodes)
+            if (node.rack) return node.latChain;
+        return std::int64_t{-1};
+    };
+    CHECK(prepared(s) == 64);
+    // The same effect is inaudible after its Out route is removed.
+    model::EditTxn unused(s, 2);
+    for (const auto& route : s.routes)
+        if (route.value->from.module == output) {
+            unused.remove<model::Route>(route.id);
+            unused.modify<model::Track>(channel, [](auto& tr) { tr.record.input.reset(); });
+        }
+    const auto direct = addModule(unused, rack, model::kOutModule);
+    listen(unused, direct, channel);
+    const auto silent = commit(unused);
+    CHECK(prepared(silent) == 0);
+    // A routed Note Out is later than the direct audio Out and sets the node.
+    model::EditTxn notes(silent, 3);
+    const auto noteOut = addModule(notes, rack, model::kNotesOutModule);
+    cable(notes, effect, "out_l", noteOut, "gate");
+    model::Route noteRoute;
+    noteRoute.from.module = noteOut;
+    noteRoute.to.track = target;
+    noteRoute.midi = model::MidiRouting{};
+    notes.create(noteRoute);
+    const auto withNotes = commit(notes);
+    CHECK(prepared(withNotes) == 64);
+    model::EditTxn midiOnly(withNotes, 4);
+    for (const auto& route : withNotes.routes)
+        if (route.value->from.module == direct) {
+            midiOnly.remove<model::Route>(route.id);
+            midiOnly.modify<model::Track>(channel, [](auto& tr) { tr.record.input.reset(); });
+        }
+    CHECK(prepared(commit(midiOnly)) == 64);
 }
 
 TEST_CASE(

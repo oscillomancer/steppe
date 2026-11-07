@@ -1282,11 +1282,11 @@ TEST_CASE("rack.get: prepared latency includes oversampling and reports individu
         REQUIRE(f.app->commitTransaction(*tx));
     };
     set(1);
-    auto rack = f.run("rack.get", R"({"rack":"rk_1"})");
+    auto rack = f.run("rack.get", R"({"rack":"rk_1","detail":"full"})");
     CHECK(rack["latency_samples"].asInt() == 64);
     CHECK(rack["outs"].asArray()[0]["latency_samples"].asInt() == 64);
     set(2);
-    rack = f.run("rack.get", R"({"rack":"rk_1"})");
+    rack = f.run("rack.get", R"({"rack":"rk_1","detail":"full"})");
     CHECK(rack["latency_samples"].asInt() > 32);  // plug-in latency / 2 plus resampler
     MediaCache media;
     auto plan = supple::engine::detail::compile(f.app->head(), f.app->instances(), 0, 128);
@@ -1296,7 +1296,7 @@ TEST_CASE("rack.get: prepared latency includes oversampling and reports individu
     for (const auto& node : plan->nodes)
         if (node.rack) CHECK(node.latChain == rack["latency_samples"].asInt());
     set(1, true);
-    CHECK(f.run("rack.get", R"({"rack":"rk_1"})")["latency_samples"].asInt() == 0);
+    CHECK(f.run("rack.get", R"({"rack":"rk_1","detail":"full"})")["latency_samples"].asInt() == 0);
 }
 
 TEST_CASE("rack.capture: an async snapshot completes once, matches sync bytes and undoes") {
@@ -1624,4 +1624,67 @@ TEST_CASE("rack cables: numeric ids reject leading zeros with a canonical hint")
                                       (key == std::string("00") ? "0" : "12"));
     }
     f.run("cable.add", R"({"from":"mo_2.playing","to":"fx_1.0"})");
+}
+
+TEST_CASE("rack.get: brief uses prepared timing and full alone probes a cold plugin") {
+    Fixture f;
+    f.run("rack.add");
+    f.run("module.add", R"({"rack":"rk_1","plugin":"com.suppleaudio.test.gain"})");
+    f.run("cable.add", R"({"from":"mo_2.out_l","to":"mo_1.l"})");
+    auto tx = f.app->beginTransaction(origin, "Latency");
+    REQUIRE(tx);
+    f.app->txn().modify<model::FxInstance>({model::Kind::Fx, 1}, [](auto& fx) {
+        fx.patch =
+            *json::parse(R"({"schema":"supple.test-gain-patch/1.0","params":{"latency":"short"}})");
+    });
+    REQUIRE(f.app->commitTransaction(*tx));
+    const auto* fx = f.app->head().fx.find({model::Kind::Fx, 1});
+    auto instance = f.app->instances().get({model::Kind::Fx, 1}, *fx, f.app->head());
+    REQUIRE(instance);
+    struct Control {
+        void (*edit)(const clap_plugin_t*, double, std::uint32_t);
+        std::uint32_t (*deliveries)(const clap_plugin_t*);
+        void (*latency)(const clap_plugin_t*, bool);
+        std::uint32_t (*creates)();
+    };
+    const auto* raw = (*instance)->raw();
+    const auto* control =
+        static_cast<const Control*>(raw->get_extension(raw, "supple.test.gain-control"));
+    REQUIRE(control);
+    const auto before = control->creates();
+    for (int i = 0; i < 3; ++i)
+        CHECK(f.run("rack.get", R"({"rack":"rk_1"})")["latency_samples"].isNull());
+    CHECK(control->creates() == before);
+    CHECK(f.run("rack.get", R"({"rack":"rk_1","detail":"full"})")["latency_samples"].asInt() == 64);
+    CHECK(control->creates() > before);
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    REQUIRE(f.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 128},
+                               {.anticipative = false, .workers = 0}));
+    const auto prepared = control->creates();
+    CHECK(f.run("rack.get", R"({"rack":"rk_1"})")["latency_samples"].asInt() == 64);
+    CHECK(f.run("rack.get", R"({"rack":"rk_1","detail":"full"})")["latency_samples"].asInt() == 64);
+    CHECK(control->creates() == prepared);
+    auto txEdit = f.app->beginTransaction(origin, "Preview output");
+    REQUIRE(txEdit);
+    model::RackModule output;
+    output.rack = {model::Kind::Rack, 1};
+    output.type = std::string(model::kOutModule);
+    f.app->txn().create(output);
+    REQUIRE(f.call("rack.get", *json::parse(R"({"rack":"rk_1"})")));
+    REQUIRE(f.app->rollbackTransaction(*txEdit));
+    f.run("module.add", R"({"rack":"rk_1","type":"notes_out"})");
+    f.run("cable.add", R"({"from":"mo_2.out_l","to":"mo_3.gate"})");
+    f.run("route.add", R"({"from":{"module":"mo_3"},"to":{"track":"tr_1"},"midi":{}})");
+    auto txMidi = f.app->beginTransaction(origin, "Only Note Out routed");
+    REQUIRE(txMidi);
+    for (const auto& route : f.app->head().routes)
+        if (route.value->from.module == model::Id{model::Kind::Module, 1})
+            f.app->txn().remove<model::Route>(route.id);
+    f.app->txn().modify<model::Track>({model::Kind::Track, 1},
+                                      [](auto& tr) { tr.record.input.reset(); });
+    REQUIRE(f.app->commitTransaction(*txMidi));
+    auto midiTiming = f.run("rack.get", R"({"rack":"rk_1"})");
+    CHECK(midiTiming["latency_samples"].asInt() == 64);
+    CHECK(midiTiming["note_outs"].asArray()[0]["latency_samples"].asInt() == 64);
+    f.app->stopEngine();
 }

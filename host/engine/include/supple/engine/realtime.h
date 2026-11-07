@@ -374,6 +374,12 @@ struct PluginOutputs {
     std::uint64_t voiceDropped = 0;  // voice tracking capacity, same lifetime
 };
 
+// Prepared main-thread rack timing, without instantiating plug-ins for queries.
+struct RackLatencyInfo {
+    std::int64_t latency = 0;
+    std::map<model::Id, std::int64_t> outputs;
+};
+
 class Engine {
   public:
     Engine(InstancePool& plugins, MediaCache& media, EngineOptions options = {});
@@ -499,6 +505,7 @@ class Engine {
     std::vector<model::Id> takeDirtyStates();
     // Main-thread watermark for deferring anticipative output recording.
     std::int64_t playedStream(std::uint64_t epoch) const;
+    std::optional<RackLatencyInfo> rackLatencies(model::Id rack, std::uint64_t version) const;
     std::uint64_t planGeneration() const { return publishedGen_; }  // main thread
     std::uint64_t pluginOutputDrops() const { return outputDrops_.load() + idleOutputDrops_; }
 

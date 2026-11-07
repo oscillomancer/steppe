@@ -243,9 +243,10 @@ struct RackLatencies {
     std::int64_t latency = 0;
     std::map<Id, std::int64_t> outputs;
 };
-// Feed-forward longest paths; a feedback component contributes no latency.
+// Longest paths after removing scheduler feedback cables; routed audio/MIDI Outs set the node.
 RackLatencies rackLatencies(const Session& session, Id rack,
-                            const std::map<Id, std::int64_t>& moduleLatencies);
+                            const std::map<Id, std::int64_t>& moduleLatencies,
+                            const rack::Schedule* schedule = nullptr);
 void prepareRackLatencies(Node& node, const Session& session);
 // After the plan's timeline shifts are solved (prepare): events and curves.
 void prepareRack(Plan& p, Node& n, const Session& s);

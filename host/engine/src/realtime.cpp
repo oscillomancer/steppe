@@ -979,6 +979,22 @@ void Engine::wakeOutputConsumed() SUPPLE_RT {
     }
 }
 
+std::optional<RackLatencyInfo> Engine::rackLatencies(model::Id id, std::uint64_t version) const {
+    if (!latest_ || latest_->version != version) return {};
+    const auto* plan = latestPlan_.load(std::memory_order_acquire);
+    if (!plan) return {};
+    for (const auto& node : plan->nodes)
+        if (node.rack && node.rack->rack == id) {
+            RackLatencyInfo result;
+            result.latency = node.latChain;
+            for (std::size_t i = 0; i < node.rack->outIds.size(); ++i)
+                result.outputs[node.rack->outIds[i]] = node.rack->outLatencies[i];
+            for (const auto& out : node.rack->notesOut) result.outputs[out.id] = out.latency;
+            return result;
+        }
+    return {};
+}
+
 void Engine::service() {
     bool reload = false;
     bool scalarLate = false;

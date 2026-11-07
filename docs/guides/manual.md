@@ -87,7 +87,7 @@ Numeric ids use canonical decimal spelling: `12`, not `012`.
 keys. The target must support modulation. Numeric semantic keys take precedence.
 
 Rack plug-in latency is compensated against the song, including oversampling.
-The rack's longest audio Out path sets its clock; shorter audio and Note Out
+The rack's longest routed audio or Note Out path sets its clock; shorter
 routes receive padding. Parallel paths summed inside the rack keep their
 relative timing; add a Delay module when the patch needs alignment.
 

@@ -503,7 +503,13 @@ std::map<Id, bool> feedbackOf(const model::Session& s, Id rack) {
     std::vector<std::vector<int>> next(nodes.size());
     std::vector<std::pair<Id, std::pair<int, int>>> edges;
     for (const auto& e : s.cables) {
-        auto a = index.find(e.value->from.object), b = index.find(e.value->to.object);
+        auto destination = e.value->to.object;
+        if (destination.kind == model::Kind::Fx) {
+            auto owner = model::moduleOfFx(s, destination);
+            if (!owner) continue;
+            destination = *owner;
+        }
+        auto a = index.find(e.value->from.object), b = index.find(destination);
         if (a == index.end() || b == index.end()) continue;
         next[static_cast<std::size_t>(a->second)].push_back(b->second);
         edges.push_back({e.id, {a->second, b->second}});
@@ -883,7 +889,8 @@ void registerRackCommands(cmd::Registry& registry) {
             "feedback (true: it closes a loop and carries the previous frame); Out modules and "
             "the channels they feed; latency_samples for each Out and the rack node, and "
             "note_outs with their latencies (ADR-0064); problems (missing types, cables that do "
-            "not fit).";
+            "not fit). Brief/default latency reads prepared values without creating plug-ins; "
+            "unprepared latency is null. detail full may probe unprepared plug-ins.";
         c.args = schema::object<RackGet>("rack_get_args")
                      .field("rack", &RackGet::rack, idOf("rk", "Rack"))
                      .field("detail", &RackGet::detail,
@@ -931,28 +938,46 @@ void registerRackCommands(cmd::Registry& registry) {
             out["cables"] = std::move(cables);
             out["outs"] = outsOf(s, *id);
             std::map<Id, std::int64_t> moduleLatencies;
-            for (const auto& module : s.modules) {
-                if (module.value->rack != *id || !module.value->fx || module.value->bypass)
-                    continue;
-                const auto* fx = s.fx.find(*module.value->fx);
-                if (!fx) continue;
-                auto latency = e.fxLatencySamples(*module.value->fx, *fx, true);
-                if (latency)
-                    moduleLatencies[module.id] = *latency;
-                else
-                    problems.push_back(module.id.str() + ": " + latency.error().toString());
-            }
-            const auto latencies = detail::rackLatencies(s, *id, moduleLatencies);
-            out["latency_samples"] = latencies.latency;
+            auto prepared = e.engine() ? e.engine()->rackLatencies(*id, s.version)
+                                       : std::optional<RackLatencyInfo>{};
+            bool available = true;
+            if (!prepared)
+                for (const auto& module : s.modules) {
+                    if (module.value->rack != *id || !module.value->fx || module.value->bypass)
+                        continue;
+                    const auto* fx = s.fx.find(*module.value->fx);
+                    if (!fx || fx->offline) continue;
+                    if (auto* instance = e.instanceOf(*module.value->fx);
+                        instance && instance->active()) {
+                        moduleLatencies[module.id] =
+                            e.instances().rememberedLatency(*module.value->fx);
+                    } else if (full) {
+                        auto latency = e.fxLatencySamples(*module.value->fx, *fx, true);
+                        if (latency)
+                            moduleLatencies[module.id] = *latency;
+                        else {
+                            available = false;
+                            problems.push_back(module.id.str() + ": " + latency.error().toString());
+                        }
+                    } else
+                        available = false;
+                }
+            const auto estimated = detail::rackLatencies(s, *id, moduleLatencies);
+            const auto latencies =
+                prepared ? detail::RackLatencies{prepared->latency, prepared->outputs} : estimated;
+            out["latency_samples"] = available ? json::Value(latencies.latency) : json::Value();
             for (auto& output : out["outs"].asArray())
                 output["latency_samples"] =
-                    latencies.outputs.at(*Id::parse(output["module"].asString()));
+                    available
+                        ? json::Value(latencies.outputs.at(*Id::parse(output["module"].asString())))
+                        : json::Value();
             out["note_outs"] = json::Value::array();
             for (const auto& [module, latency] : latencies.outputs)
-                if (s.modules.find(module)->type == model::kNotesOutModule) {
+                if (s.modules.find(module) &&
+                    s.modules.find(module)->type == model::kNotesOutModule) {
                     auto output = json::Value::object();
                     output["module"] = module.str();
-                    output["latency_samples"] = latency;
+                    output["latency_samples"] = available ? json::Value(latency) : json::Value();
                     out["note_outs"].push_back(std::move(output));
                 }
             out["problems"] = std::move(problems);

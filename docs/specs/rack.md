@@ -461,16 +461,23 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   tap; a channel's record input from an Out module is an edge from the rack
   node into the channel's input sum (linear, no Console 9 stage).
 - **Timing.** Read-ahead PDC treats the node as a strip whose latency is the
-  maximum of its audio Outs (ADR-0064). Each Out's latency is the maximum
-  sum of prepared plug-in stage latencies, including oversampling, along
-  feed-forward paths to it. Script modules and entire feedback groups
-  contribute zero. Notes, Transport and automation use the same shifted
+  maximum of its routed audio Outs and Note Outs (ADR-0064). Each Out's
+  latency is the maximum sum of prepared plug-in stage latencies, including
+  oversampling, along
+  paths in the DAG left after removing the scheduler's feedback cables.
+  Script modules contribute zero. Plug-ins on forward paths inside loops
+  count, including modulation-only loops; paths reaching an Out only through
+  modulation inputs count too. Unrouted outputs do not set the node. Notes,
+  Transport and automation use the same shifted
   node clock; the grid is aligned to that clock. An audio or Note Out edge
   with less latency adds the difference through its existing edge delay.
   Main-thread preparation computes these values; plug-in latency changes
   rebuild the plan as for strips. `rack.get` reports `latency_samples` for
   the node, each entry in `outs`, and each `{module, latency_samples}` in
   `note_outs`, in engine frames (project frames without a running engine).
+  The brief/default query reads prepared plan or pool values without creating
+  plug-ins. If timing is unavailable, latency fields are null; `detail: "full"`
+  explicitly permits probes for unprepared FX.
   Parallel paths summed inside a patch stay unaligned: insert a Delay
   module explicitly when that patch needs alignment.
 - **Note Out.** Pitch/gate becomes MIDI with the same gate detector and MIDI

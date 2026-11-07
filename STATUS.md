@@ -288,13 +288,15 @@ instructions are in `docs/guides/installing.md`.
   without Console 9 trim, with the console enabled or disabled.
   Rack audio and Note Out routes now participate in read-ahead PDC, including
   oversampling and runtime latency changes (ADR-0064); `rack.get` reports
-  the node and each output latency. Plug-in modulation cables accept numeric
+  the node and each output latency (default reads prepared timing, full can
+  probe; unprepared values are null). Routed audio and Note Outs set the node;
+  forward paths in loops count after removing scheduler back edges. Oversampled
+  FX service compares raw latency separately from prepared stage latency.
+  Plug-in modulation cables accept numeric
   CLAP parameter ids (`fx_3.12`) as well as semantic keys, including plug-ins
   without semantic metadata; both survive project and preset reopening.
   Stale saved targets warn instead of blocking project opening; new cables
   validate the actual FX state and require canonical numeric ids.
-  Oversampled FX service compares raw latency separately from prepared stage
-  latency, preventing idle/playing plan reload loops.
   Agents patch with `rack.patch` (named
   modules and cables in one step, laid out by signal flow and labelled by
   name; `rack.arrange` tidies a rack) or `module.add`/`cable.add`, hear a patch

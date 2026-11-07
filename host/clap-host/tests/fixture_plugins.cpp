@@ -205,8 +205,10 @@ const clap_plugin_descriptor_t* oversizedDescriptor(bool ports) {
 
 std::atomic<int> gThreadFailures{0};
 std::atomic<int> gPatchStarts{0};
+std::atomic<std::uint32_t> gGainCreates{0};
 
 struct Gain {
+    Gain() { ++gGainCreates; }
     clap_plugin_t plugin{};
     const clap_host_t* host = nullptr;
     std::atomic<double> gainDb{0.0};
@@ -477,6 +479,7 @@ struct GainControl {
     void (*edit)(const clap_plugin_t*, double, std::uint32_t);
     std::uint32_t (*deliveries)(const clap_plugin_t*);
     void (*latency)(const clap_plugin_t*, bool);
+    std::uint32_t (*creates)();
 };
 void gainEditorEdit(const clap_plugin_t* pl, double value, std::uint32_t flags) {
     G(pl)->gainDb = value;
@@ -491,7 +494,8 @@ void gainRequestLatency(const clap_plugin_t* pl, bool delayed) {
     G(pl)->latencyChoice = delayed ? 1 : 0;
     G(pl)->host->request_restart(G(pl)->host);
 }
-const GainControl kGainControl{gainEditorEdit, gainHostDeliveries, gainRequestLatency};
+std::uint32_t gainCreates() { return gGainCreates.load(); }
+const GainControl kGainControl{gainEditorEdit, gainHostDeliveries, gainRequestLatency, gainCreates};
 const void* CLAP_ABI gainExt(const clap_plugin_t* pl, const char* id) {
     if (!std::strcmp(id, "supple.test.gain-control")) return &kGainControl;
     if (!std::strcmp(id, CLAP_EXT_PARAMS)) return &kGainParams;
