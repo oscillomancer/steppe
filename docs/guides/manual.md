@@ -643,15 +643,16 @@ and nest controls with `vca.members.set`.
 ### Freezing a channel
 
 Choose **Freeze** from a track header or mixer strip's context menu to record its
-items, take effects and complete insert chain to project media. The job reports
-progress through the existing job system (`job.get`, `job.cancel`). When it
+items, take effects and complete insert chain to project media. It records in
+the background; the window shows no progress and cannot stop it, and if it
+fails the channel simply stays unfrozen. When it
 finishes the channel shows a small snowflake, its items are dimmed and marked, and its
 plugins are released. Fader, pan, mute, solo, their automation, sends and parent
 routing remain available. To change the sound inside the recording, choose
 **Unfreeze** from the same menu. Each completed operation is one undo step.
 
-Agents use `track.freeze {"track":"tr_1","job":true}` and
-`track.unfreeze {"track":"tr_1"}`. `track.list` reports frozen state and cache
+Agents use `track.freeze {"track":"tr_1","job":true}` (following it with
+`job.get`, stopping it with `job.cancel`) and `track.unfreeze {"track":"tr_1"}`. `track.list` reports frozen state and cache
 metadata; `session.describe` marks frozen channels. Work on other tracks can
 continue during a freeze. Completion refuses if the source sound, input files,
 project/branch or latency schedule changed; submit the freeze again.

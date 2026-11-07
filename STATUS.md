@@ -123,6 +123,8 @@ instructions are in `docs/guides/installing.md`.
   take FX and auxiliary channels, with virtual latency and plugin retirement.
   Typed freeze/unfreeze, cancellable jobs, dependency-checked completion, retained
   media for history/branches/saves, and context-menu actions with frozen markers.
+  The GUI starts the job without following it: no progress, no cancel, and a
+  later failure is not shown (agents use `job.get`/`job.cancel`).
   Mixing stays live; captured edits and global timing require unfreeze. V1
   excludes external inputs, armed tracks, non-unity master rate and partial/buss
   freeze. Cache preparation currently uses MediaCache; a prepared-source service

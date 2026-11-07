@@ -1876,8 +1876,12 @@ moves require explicit destinations for every selected peer or command bypass.
 ### Frozen channels (ADR-0054)
 
 Track-header and mixer context menus offer **Freeze** for channels and
-**Unfreeze** while frozen. Freeze starts a background job through the command
-bus; the existing job display supplies progress/cancellation. Headers and mixer
+**Unfreeze** while frozen. Freeze runs `track.freeze` as a background job
+(`job: true`) through the command bus and does not follow it: the GUI shows
+no progress and offers no cancel. Only a refusal to start reaches the error
+line; a job that fails later leaves the channel unfrozen without a message.
+The markers appear when the job's edit lands. Agents follow and cancel the
+job with `job.get` and `job.cancel`. Headers and mixer
 strips show a small snowflake (before the header's name, under the strip's name);
 original items remain visible, dimmed with a small hatch and a snowflake before
 their label. Existing fader/pan/mute/solo/send controls remain live. FX slots,
