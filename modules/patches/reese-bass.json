@@ -1,7 +1,7 @@
 {
   "schema": "supple.rack-preset/1.0",
   "name": "Reese Bass",
-  "description": "A dark, moving drum-and-bass bass: two saws detuned against each other over a sub, through a ladder a slow LFO sweeps and a soft drive; hold long low notes, turn Detune's fine and the Filter's cutoff.",
+  "description": "A dark, moving drum-and-bass bass: two saws detuned against each other over a sub at the played pitch, through a ladder a slow LFO sweeps and a soft drive; hold long low notes, turn Detune's fine and the Filter's cutoff.",
   "modules": [
     {
       "type": "com.suppleaudio.rack.out",
@@ -108,6 +108,13 @@
         "tone": -15.0,
         "level": -14.0
       }
+    },
+    {
+      "type": "com.suppleaudio.rack.vco",
+      "version": "1.0.0",
+      "label": "Sub",
+      "x": 288.0,
+      "y": 600.0
     }
   ],
   "cables": [
@@ -149,16 +156,6 @@
       "to": {
         "module": 4,
         "port": "in_2"
-      }
-    },
-    {
-      "from": {
-        "module": 2,
-        "port": "sub"
-      },
-      "to": {
-        "module": 4,
-        "port": "in_3"
       }
     },
     {
@@ -230,6 +227,26 @@
       "to": {
         "module": 0,
         "port": "l"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "pitch"
+      },
+      "to": {
+        "module": 10,
+        "port": "pitch"
+      }
+    },
+    {
+      "from": {
+        "module": 10,
+        "port": "sub"
+      },
+      "to": {
+        "module": 4,
+        "port": "in_3"
       }
     }
   ]
