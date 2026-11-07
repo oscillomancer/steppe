@@ -1,0 +1,307 @@
+{
+  "schema": "supple.rack-preset/1.0",
+  "name": "Sync Lead",
+  "description": "A screaming mono lead: a saw hard-synced to the played pitch, its own pitch swept down by an envelope, with glide, vibrato on the mod wheel and an echo; play legato, turn Sweep's decay and the Synced oscillator's coarse.",
+  "modules": [
+    {
+      "type": "com.suppleaudio.rack.out",
+      "version": "1.0.0",
+      "x": 1268.0,
+      "y": 322.0
+    },
+    {
+      "type": "com.suppleaudio.rack.notes",
+      "version": "1.0.0",
+      "label": "Keys",
+      "x": 36.0,
+      "y": 46.0,
+      "params": {
+        "voices": 1,
+        "mode": "mono_last"
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.slew",
+      "version": "1.0.0",
+      "label": "Glide",
+      "x": 216.0,
+      "y": 91.0,
+      "params": {
+        "rise": 60.0,
+        "fall": 60.0,
+        "shape": 100.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.lfo",
+      "version": "1.0.0",
+      "label": "Vibrato",
+      "x": 0.0,
+      "y": 416.0,
+      "params": {
+        "rate": 5.5
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.math",
+      "version": "1.0.0",
+      "label": "Depth",
+      "x": 216.0,
+      "y": 369.0
+    },
+    {
+      "type": "com.suppleaudio.rack.vco",
+      "version": "1.0.0",
+      "label": "Root",
+      "x": 396.0,
+      "y": 344.0,
+      "params": {
+        "fm_depth": 0.03
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.vco",
+      "version": "1.0.0",
+      "label": "Synced",
+      "x": 576.0,
+      "y": 172.0,
+      "params": {
+        "coarse": 7.0,
+        "fm_depth": 0.03
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.adsr",
+      "version": "1.0.0",
+      "label": "Sweep",
+      "x": 360.0,
+      "y": 0.0,
+      "params": {
+        "attack": 1.0,
+        "decay": 700.0,
+        "sustain": 25.0,
+        "release": 300.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.filter",
+      "version": "1.0.0",
+      "x": 756.0,
+      "y": 373.0,
+      "params": {
+        "cutoff": 5000.0,
+        "resonance": 20.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.adsr",
+      "version": "1.0.0",
+      "label": "Env",
+      "x": 720.0,
+      "y": 29.0,
+      "params": {
+        "attack": 3.0,
+        "decay": 400.0,
+        "sustain": 85.0,
+        "release": 200.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.vca",
+      "version": "1.0.0",
+      "label": "Amp",
+      "x": 936.0,
+      "y": 299.0,
+      "params": {
+        "level": -3.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.delay",
+      "version": "1.0.0",
+      "label": "Echo",
+      "x": 1080.0,
+      "y": 195.0,
+      "params": {
+        "sync": "n8d",
+        "feedback": 30.0,
+        "ping_pong": true,
+        "mix": 18.0
+      }
+    }
+  ],
+  "cables": [
+    {
+      "from": {
+        "module": 1,
+        "port": "pitch"
+      },
+      "to": {
+        "module": 2,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "out"
+      },
+      "to": {
+        "module": 5,
+        "port": "pitch"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "out"
+      },
+      "to": {
+        "module": 6,
+        "port": "pitch"
+      }
+    },
+    {
+      "from": {
+        "module": 3,
+        "port": "out"
+      },
+      "to": {
+        "module": 4,
+        "port": "a"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "modwheel"
+      },
+      "to": {
+        "module": 4,
+        "port": "b"
+      }
+    },
+    {
+      "from": {
+        "module": 4,
+        "port": "product"
+      },
+      "to": {
+        "module": 5,
+        "port": "exp_fm"
+      }
+    },
+    {
+      "from": {
+        "module": 4,
+        "port": "product"
+      },
+      "to": {
+        "module": 6,
+        "port": "exp_fm"
+      }
+    },
+    {
+      "from": {
+        "module": 5,
+        "port": "sine"
+      },
+      "to": {
+        "module": 6,
+        "port": "sync"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "gate"
+      },
+      "to": {
+        "module": 7,
+        "port": "gate"
+      }
+    },
+    {
+      "from": {
+        "module": 7,
+        "port": "envelope"
+      },
+      "to": {
+        "module": 6,
+        "port": "coarse"
+      },
+      "amount": 14.0
+    },
+    {
+      "from": {
+        "module": 6,
+        "port": "saw"
+      },
+      "to": {
+        "module": 8,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 8,
+        "port": "low"
+      },
+      "to": {
+        "module": 10,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "gate"
+      },
+      "to": {
+        "module": 9,
+        "port": "gate"
+      }
+    },
+    {
+      "from": {
+        "module": 9,
+        "port": "envelope"
+      },
+      "to": {
+        "module": 10,
+        "port": "cv"
+      }
+    },
+    {
+      "from": {
+        "module": 10,
+        "port": "out"
+      },
+      "to": {
+        "module": 11,
+        "port": "in_l"
+      }
+    },
+    {
+      "from": {
+        "module": 11,
+        "port": "out_l"
+      },
+      "to": {
+        "module": 0,
+        "port": "l"
+      }
+    },
+    {
+      "from": {
+        "module": 11,
+        "port": "out_r"
+      },
+      "to": {
+        "module": 0,
+        "port": "r"
+      }
+    }
+  ]
+}
+
