@@ -284,6 +284,8 @@ instructions are in `docs/guides/installing.md`.
   alongside device MIDI, using the recorder's loop, punch and overdub rules.
   Armed channels also record their rack Out audio input as stereo WAV,
   including input FX, loop/punch takes, recovery and undo.
+  Sends into rack In ports preserve the tap at the route's level and pan,
+  without Console 9 trim, with the console enabled or disabled.
   Rack audio and Note Out routes now participate in read-ahead PDC, including
   oversampling and runtime latency changes (ADR-0064); `rack.get` reports
   the node and each output latency. Plug-in modulation cables accept numeric

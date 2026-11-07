@@ -1157,3 +1157,94 @@ TEST_CASE("racks: numeric semantic parameter keys take precedence over CLAP ids"
     REQUIRE(numeric);
     CHECK(numeric->param == 1);
 }
+
+TEST_CASE("racks: In sends preserve tap level and pan without Console 9 trim" *
+          doctest::description("rt")) {
+    for (bool console : {false, true}) {
+        CAPTURE(console);
+        model::Project project;
+        project.console9 = console;
+        model::EditTxn t(model::Session::create(project), 1);
+        const auto source = addChannel(t), target = addChannel(t);
+        t.modify<model::Track>(source, [](auto& tr) { tr.parentSend.enabled = false; });
+        const auto sourceRack = t.create(model::Rack{source, "Source"});
+        const auto clock = addModule(t, sourceRack, "com.suppleaudio.rack.transport");
+        const auto sourceOut = addModule(t, sourceRack, model::kOutModule);
+        cable(t, clock, "playing", sourceOut, "l");
+        listen(t, sourceOut, source);
+        const auto rack = t.create(model::Rack{target, "Through"});
+        const auto in = addModule(t, rack, model::kInModule),
+                   out = addModule(t, rack, model::kOutModule);
+        cable(t, in, "l", out, "l");
+        cable(t, in, "r", out, "r");
+        listen(t, out, target);
+        model::Route route;
+        route.from.track = source;
+        route.to.module = in;
+        route.tap = model::Tap::PreFader;
+        const auto send = t.create(route);
+        const auto state = commit(t);
+        auto pool = makePool();
+        MediaCache media;
+        auto plan = supple::engine::detail::compile(state, pool, 0, 128);
+        REQUIRE(plan);
+        plan->media = &media;
+        REQUIRE(supple::engine::detail::prepare(*plan, state));
+        REQUIRE(supple::engine::detail::processBlock(*plan, 0, 128));
+        const supple::engine::detail::Node* sourceNode = nullptr;
+        const supple::engine::detail::Node* rackNode = nullptr;
+        for (const auto& node : plan->nodes) {
+            if (node.id == source) sourceNode = &node;
+            if (node.rack && node.rack->rack == rack) rackNode = &node;
+        }
+        REQUIRE(sourceNode);
+        REQUIRE(rackNode);
+        REQUIRE(rackNode->rackIns.size() == 1);
+        double panLeft = 0, panRight = 0;
+        console9::panGains(console9::panAngle(console9::nativePan(0)), panLeft, panRight);
+        const float expected = static_cast<float>(double(sourceNode->preFader.l[64]) * panLeft);
+        CHECK(rackNode->rackIns[0].l[64] == expected);
+        CHECK(rackNode->rackIns[0].r[64] ==
+              static_cast<float>(double(sourceNode->preFader.r[64]) * panRight));
+        constexpr double trim = .763932022500211;
+        console9::Channel legacy;
+        legacy.setLinear(true);
+        legacy.set(1, .5);
+        float legacyLeft = 0, legacyRight = 0;
+        const float* inputs[]{&sourceNode->preFader.l[64], &sourceNode->preFader.r[64]};
+        float* outputs[]{&legacyLeft, &legacyRight};
+        legacy.process(inputs, outputs, 1);
+        const double lift = -20 * std::log10(trim);
+        CHECK(20 * std::log10(double(expected) / double(legacyLeft)) ==
+              doctest::Approx(lift).epsilon(1e-6));
+        model::EditTxn oldLevel(state, 2);
+        oldLevel.modify<model::Route>(send,
+                                      [](auto& value) { value.volumeDb = 20 * std::log10(trim); });
+        const auto old = renderLeft(commit(oldLevel), .1, 37);
+        const auto offline = renderLeft(state, .1, 37);
+        CHECK(20 * std::log10(double(offline[1200]) / double(old[1200])) ==
+              doctest::Approx(lift).epsilon(1e-5));
+        for (bool anticipative : {false, true})
+            for (int workers : {0, 2}) {
+                INFO("anticipative " << anticipative << ", workers " << workers);
+                auto livePool = makePool();
+                MediaCache liveMedia;
+                DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 8192});
+                Engine engine(livePool, liveMedia,
+                              {.anticipative = anticipative, .workers = workers});
+                REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 37}));
+                REQUIRE(engine.load(state));
+                engine.play();
+                for (int i = 0; i < 210; ++i) {
+                    if (anticipative) REQUIRE(engine.awaitRendered(37));
+                    backend.run(1);
+                }
+                engine.stop();
+                CHECK(engine.processErrors() == 0);
+                const auto offset = engine.outputLatency();
+                REQUIRE(backend.capture().frames() >= offset + offline.size());
+                CHECK(std::equal(offline.begin(), offline.end(),
+                                 backend.capture().channels[0].begin() + offset));
+            }
+    }
+}

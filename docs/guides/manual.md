@@ -90,6 +90,10 @@ The rack's longest audio Out path sets its clock; shorter audio and Note Out
 routes receive padding. Parallel paths summed inside the rack keep their
 relative timing; add a Delay module when the patch needs alignment.
 
+Sends into rack In ports apply the route's level and pan without Console 9
+trim. Existing effect patches fed by those sends play about 2.34 dB louder
+than earlier builds; check their output level when updating.
+
 ### Printing a mix onto its master
 
 A master has an arm button in the mixer, like a channel. Arm it and press

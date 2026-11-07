@@ -2751,6 +2751,7 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
     for (std::size_t ei : node.out) {
         Edge& e = p.edges[ei];
         const Stereo& input = e.tap == model::Tap::PreFx ? node.preFx : node.preFader;
+        double previousRackPan = -1, rackLeftGain = 0, rackRightGain = 0;
         for (std::uint32_t i = 0; i < n; ++i) {
             const auto at = pos + i;
             const bool post = e.tap == model::Tap::PostFader;
@@ -2790,8 +2791,23 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
                 l = -l;
                 r = -r;
             }
-            e.encoder.sample(l, r, e.encoded.l[i], e.encoded.r[i],
-                             e.fader.gain.next() * e.fader.gate.next(), e.fader.pan.next());
+            const double sendLevel = e.fader.gain.next() * e.fader.gate.next();
+            const double sendPan = e.fader.pan.next();
+            if (e.rackIn >= 0) {
+                // A rack input is a linear tap, including its route controls,
+                // without the Console 9 encoder's fixed trim (rack.md §2.4).
+                if (sendPan != previousRackPan) {
+                    console9::panGains(console9::panAngle(sendPan), rackLeftGain, rackRightGain);
+                    previousRackPan = sendPan;
+                }
+                const double level = std::clamp(sendLevel, 0., 4.);
+                const double cleanLeft = std::isfinite(l) ? double(l) : 0.;
+                const double cleanRight = std::isfinite(r) ? double(r) : 0.;
+                e.encoded.l[i] = static_cast<float>(cleanLeft * rackLeftGain * level);
+                e.encoded.r[i] = static_cast<float>(cleanRight * rackRightGain * level);
+            } else {
+                e.encoder.sample(l, r, e.encoded.l[i], e.encoded.r[i], sendLevel, sendPan);
+            }
             // The channel map acts on the send's output (after its pan): the
             // encode is per channel, so moving encoded channels is exact.
             e.applyMap(e.encoded.l[i], e.encoded.r[i]);

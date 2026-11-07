@@ -621,3 +621,7 @@ from `fx.describe`; the parameter must be modulatable. Digits alone denote
 a decimal id; a numeric semantic key takes precedence. Module port/knob
 keys still begin with a letter. Unknown ids return `rack.port` with the
 available keys and ids in the hint. Project/preset saves retain the cable.
+
+A send into an In carries the tap at the route's level and pan without
+Console 9 trim, with the console on or off. Bare In → Out paths are about
+2.34 dB louder than earlier builds; recheck effect-patch levels when updating.
