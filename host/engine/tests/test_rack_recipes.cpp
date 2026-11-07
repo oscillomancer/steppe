@@ -6,6 +6,7 @@
 // choice key breaks this test instead of the guide.
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <map>
 #include <string>
@@ -64,11 +65,12 @@ struct Fixture {
     cmd::Registry registry;
     std::unique_ptr<EngineApp> app;
     std::unique_ptr<cmd::Dispatcher> bus;
-    Fixture() {
+    explicit Fixture(std::vector<std::filesystem::path> plugins = {}) {
         std::filesystem::create_directories(dir);
         AppOptions options;
         options.workdir = dir;
         options.pluginPath = {FIXTURE_CLAP_PATH};
+        for (auto& p : plugins) options.pluginPath.push_back(std::move(p));
         auto made = EngineApp::create(options);
         REQUIRE(made);
         app = std::move(*made);
@@ -188,4 +190,131 @@ TEST_CASE("rack recipes: the song keeps its counter-melody below the lead") {
     CHECK(p.ports["song.edge"]["gates"]["duty"].asDouble() == doctest::Approx(0.4).epsilon(0.05));
     CHECK(p.ports["song.a"]["gates"]["duty"].asDouble() == doctest::Approx(0.6).epsilon(0.05));
     CHECK(p.out["peak_db"].asDouble() > -12);
+}
+
+namespace {
+
+struct Step {
+    std::string command;  // the word after ```json
+    std::string json;     // its arguments, as printed
+};
+
+// The calls of "Compose with a rack", in order: every ```json <command> block.
+std::vector<Step> composeSteps() {
+    auto text = readTextFile(SUPPLE_RACK_GUIDE, 1 << 20);
+    REQUIRE(text);
+    const std::string& t = *text;
+    const auto begin = t.find("\n## Compose with a rack");
+    REQUIRE(begin != std::string::npos);
+    const auto end = t.find("\n## ", begin + 1);
+    std::vector<Step> out;
+    for (auto at = t.find("```json ", begin); at != std::string::npos && at < end;
+         at = t.find("```json ", at)) {
+        const auto line = t.find('\n', at);
+        const auto stop = t.find("```", line);
+        out.push_back({t.substr(at + 8, line - at - 8), t.substr(line + 1, stop - line - 1)});
+        at = stop + 3;
+    }
+    return out;
+}
+
+// D dorian's pitch classes: D E F G A B C.
+bool inDDorian(int key) {
+    const int pc = key % 12;
+    return pc == 2 || pc == 4 || pc == 5 || pc == 7 || pc == 9 || pc == 11 || pc == 0;
+}
+
+}  // namespace
+
+TEST_CASE("rack recipes: composing with a rack prints a song in D dorian to MIDI") {
+    const auto steps = composeSteps();
+    REQUIRE(steps.size() >= 6);
+    // The instruments are stock plug-ins: their step runs when they are built.
+    const std::filesystem::path stock = STOCK_CLAP_DIR;
+    const std::vector<std::filesystem::path> instruments = {stock / "Marram.clap",
+                                                            stock / "Drumlin.clap"};
+    bool built = true;
+    for (const auto& p : instruments) built = built && std::filesystem::exists(p);
+    if (!built) MESSAGE("Marram or Drumlin is not built: the instruments step is skipped");
+    Fixture f(built ? instruments : std::vector<std::filesystem::path>{});
+    std::map<std::string, json::Value> results;  // the last result of each command
+    for (const auto& step : steps) {
+        CAPTURE(step.command);
+        auto args = json::parse(step.json);
+        REQUIRE_MESSAGE(args, step.command << ": the JSON does not parse");
+        const bool fx = step.json.find("\"fx.add\"") != std::string::npos;
+        if (fx && !built) continue;
+        results[fx ? "fx" : step.command] = f.run(step.command, *args);
+    }
+    // The ids the guide names are the ones rack.patch returns on an empty project.
+    auto& ids = results["rack.patch"]["modules"];
+    CHECK(ids["tune"].asString() == "mo_4");
+    CHECK(ids["low"].asString() == "mo_5");
+    CHECK(ids["prog"].asString() == "mo_3");
+    CHECK(ids["keys"].asString() == "mo_8");
+    CHECK(ids["hits"].asString() == "mo_9");
+    auto& probe = results["rack.probe"]["ports"].asArray();
+    REQUIRE(probe.size() == 4);
+    CHECK(probe[1]["min"].asDouble() >= -16.0 / 12 - 1e-3);
+    CHECK(probe[1]["max"].asDouble() <= -3.0 / 12 + 1e-3);
+    CHECK(probe[2]["channels"].asInt() == 3);
+
+    // The captures, as the guide describes them.
+    auto& captured = results["batch"]["results"].asArray();
+    REQUIRE(captured.size() == 4);
+    const char* items[] = {"it_1", "it_2", "it_3", "it_4"};
+    for (std::size_t k = 0; k < 4; ++k) {
+        CHECK(captured[k]["item"].asString() == items[k]);
+        CHECK(captured[k]["length"].asDouble() == 112.0);
+    }
+    CHECK(captured[0]["notes"].asInt() > 180);
+    CHECK(captured[1]["notes"].asInt() > 180);
+    CHECK(captured[2]["notes"].asInt() == 84);
+    CHECK(captured[2]["voices"].asInt() == 3);
+    CHECK(captured[3]["notes"].asInt() > 300);
+
+    auto notes = [&](const char* item) {
+        json::Value args = json::Value::object();
+        args["item"] = item;
+        json::Value r = f.run("midi.notes", args);
+        return r["notes"];
+    };
+    // Lead, bass and chords in the key, the bass below the lead's range.
+    for (const char* item : {"it_1", "it_2", "it_3"}) {
+        CAPTURE(item);
+        const json::Value part = notes(item);
+        for (const auto& n : part.asArray()) CHECK(inDDorian(n.find("pitch")->asInt()));
+    }
+    int leadLow = 127, bassHigh = 0;
+    const json::Value lead = notes("it_1"), bass = notes("it_2"), drums = notes("it_4");
+    for (const auto& n : lead.asArray())
+        leadLow = std::min<int>(leadLow, static_cast<int>(n.find("pitch")->asInt()));
+    for (const auto& n : bass.asArray())
+        bassHigh = std::max<int>(bassHigh, static_cast<int>(n.find("pitch")->asInt()));
+    CHECK(leadLow >= 57);  // A3
+    CHECK(bassHigh < 67);  // under G4, the lead's highest
+    // The drums are the three keys, and the choruses have more hats than the intro.
+    int introHats = 0, chorusHats = 0;
+    for (const auto& n : drums.asArray()) {
+        const int key = n.find("pitch")->asInt();
+        CHECK((key == 36 || key == 38 || key == 42));
+        const double at = n.find("start")->asDouble();
+        if (key == 42 && at < 8) ++introHats;
+        if (key == 42 && at >= 24 && at < 40) ++chorusHats;
+    }
+    // The first chorus (bars 7 to 10) has more than twice the intro's (bars 1, 2) hats a bar.
+    CHECK(chorusHats / 4.0 > 2 * (introHats / 2.0));
+    // The edit ended the song on the home chord, D F A.
+    const json::Value chords = notes("it_3");
+    REQUIRE(chords.asArray().size() == 84);
+    std::vector<int> last;
+    for (const auto& n : chords.asArray())
+        if (n.find("start")->asDouble() == 108.0) last.push_back(n.find("pitch")->asInt());
+    CHECK(last == std::vector<int>{50, 53, 57});
+    if (built) {
+        // Each part's channel plays through its instrument.
+        auto& added = results["fx"]["results"].asArray();
+        REQUIRE(added.size() == 7);
+        for (std::size_t k : {1u, 3u, 5u}) CHECK(added[k]["source"].asString() == "factory");
+    }
 }

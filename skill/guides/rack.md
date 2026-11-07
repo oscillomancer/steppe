@@ -302,6 +302,128 @@ Probed for 10 s: `snap.out` only the chords' tones, `low.interval` 3 to
 `mix.left` peak −4 dB. Form's position is the song's bar, so a probe
 `from_beat` lands in the right section; `plan` and `bars` reshape it.
 
+## Compose with a rack
+
+A rack can write the parts and leave the playing to instruments: it
+generates notes, you probe them, `rack.capture` prints them to MIDI items,
+you edit those like any MIDI, and plug-ins play them. The rack makes no
+sound of its own here; its outputs are notes.
+
+<!-- host/engine/tests/test_rack_recipes.cpp runs every json block below, named by the command
+     after its fence, in order on a fresh project (the fx step when the stock plug-ins are built)
+     and checks the notes it captures. -->
+
+The worked example writes a 28-bar song in D dorian: Form lays out the
+sections (an intro, verses, choruses, a bridge, an outro) and asks Phrase for
+a new call at each change; Phrase writes the lead; Counter a bass line
+against it; Changes the chords; Rhythm the drums, busier as Form's energy
+rises. Each step is one call, as printed, on an empty project.
+
+**1. A rack and a channel for each part.** The rack's own channel (`tr_1`)
+stays silent.
+
+```json batch
+{"steps": [{"command": "rack.add", "args": {"name": "Writer"}},
+           {"command": "track.add", "args": {"name": "Lead"}},
+           {"command": "track.add", "args": {"name": "Bass"}},
+           {"command": "track.add", "args": {"name": "Chords"}},
+           {"command": "track.add", "args": {"name": "Drums"}}]}
+```
+
+**2. Generate.** A drum part is one poly pitch and one poly gate: Scale's
+three offsets are the drums' keys in octaves from C4 (−2 is C2, 36, a kick;
+−1.8333 D2, 38, a snare; −1.5 F♯2, 42, a closed hat: Drumlin's and General
+MIDI's), merged by one Poly beside Rhythm's three gates merged by another.
+
+```json rack.patch
+{"rack": "rk_1",
+ "modules": {"song": {"type": "form", "params": {"bars": "bars_4", "loop": false}},
+             "prog": {"type": "changes", "params": {"key": "d", "mode": "dorian", "octave": -1}},
+             "tune": {"type": "phrase", "params": {"key": "d", "mode": "dorian"}},
+             "low": {"type": "counter", "params": {"key": "d", "mode": "dorian"}},
+             "beat": {"type": "rhythm", "params": {"y": 0}},
+             "drum_keys": {"type": "scale", "params": {"offset_1": -2, "offset_2": -1.8333, "offset_3": -1.5}},
+             "keys": {"type": "poly"}, "hits": {"type": "poly"}},
+ "cables": [["song.change", "tune.write"], ["tune.pitch", "low.lead"], ["tune.gate", "low.lead_gate"],
+            ["song.energy", "beat.y", 100],
+            ["drum_keys.out_1", "keys.merge_1"], ["drum_keys.out_2", "keys.merge_2"],
+            ["drum_keys.out_3", "keys.merge_3"],
+            ["beat.kick", "hits.merge_1"], ["beat.snare", "hits.merge_2"], ["beat.hat", "hits.merge_3"]]}
+```
+
+It returns the ids by name: `song` `mo_2`, `prog` `mo_3`, `tune` `mo_4`,
+`low` `mo_5`, `beat` `mo_6`, `drum_keys` `mo_7`, `keys` `mo_8`, `hits`
+`mo_9`. Probe, capture and `module.set` take ids, so use the ones your
+call returned; in another project they differ.
+
+**3. Probe** the parts before printing them: the notes each visits, the
+interval between lead and bass, how often the drums hit.
+
+```json rack.probe
+{"rack": "rk_1", "seconds": 10, "ports": ["mo_4.pitch", "mo_5.interval", "mo_3.chord", "mo_9.merged"]}
+```
+
+`mo_4.pitch` visits D dorian's notes from A3 to G4, `mo_5.interval` stays
+3 to 16 semitones below (−1.33 to −0.25 octaves), the chord has 3 voices.
+To change a part, `module.set` its module and probe again: `prog`'s
+`change` redraws chords, `tune`'s `density` and `contrast` reshape the
+phrases, `low`'s `motion` and `hold` the bass.
+
+**4. Capture** each part for the whole song (28 bars, 112 beats), on
+sixteenths. Phrase's Accent gives the lead its velocities.
+
+```json batch
+{"steps": [
+  {"command": "rack.capture", "args": {"rack": "rk_1", "pitch": "mo_4.pitch", "gate": "mo_4.gate", "velocity": "mo_4.accent",
+                                       "track": "tr_2", "beats": 112, "quantize": 0.25, "name": "Lead"}},
+  {"command": "rack.capture", "args": {"rack": "rk_1", "pitch": "mo_5.pitch", "gate": "mo_5.gate",
+                                       "track": "tr_3", "beats": 112, "quantize": 0.25, "name": "Bass"}},
+  {"command": "rack.capture", "args": {"rack": "rk_1", "pitch": "mo_3.chord", "gate": "mo_3.gate",
+                                       "track": "tr_4", "beats": 112, "quantize": 0.25, "name": "Chords"}},
+  {"command": "rack.capture", "args": {"rack": "rk_1", "pitch": "mo_8.merged", "gate": "mo_9.merged",
+                                       "track": "tr_5", "beats": 112, "quantize": 0.25, "name": "Drums"}}]}
+```
+
+The items are `it_1` to `it_4`: about 230 lead notes, 220 bass notes, 28
+chords of three, and close to 400 drum hits that go from kick and hat in
+the intro to a backbeat in the verses and sixteenth hats in the choruses.
+Each capture renders the project again, so a long song takes a few seconds
+a part. `midi.get {item}` reads a part as notation.
+
+**5. Edit.** The progression loops, so the song stops on its third chord;
+end it on the home chord instead. `midi.notes {item: "it_3"}` lists the
+chords' notes by start: the last three, 81 to 83, are the last bar's.
+
+```json midi.edit
+{"item": "it_3", "ops": [{"op": "remove", "notes": [81, 82, 83]},
+                         {"op": "add", "pitch": 50, "start": 108, "length": 4},
+                         {"op": "add", "pitch": 53, "start": 108, "length": 4},
+                         {"op": "add", "pitch": 57, "start": 108, "length": 4}]}
+```
+
+Edit freely from here: `move` a note, `velocity` an accent, `quantize`
+with `strength`, or `midi.write` a bar of notation over the item. The
+rack is unchanged; capture again to start over.
+
+**6. Play** the parts through instruments: Marram's factory sounds for
+the lead, bass and chords, Drumlin for the drums.
+
+```json batch
+{"steps": [
+  {"command": "fx.add", "args": {"track": "tr_2", "plugin": "com.suppleaudio.marram"}, "as": "lead"},
+  {"command": "fx.preset.load", "args": {"fx": "${lead.fx}", "name": "Vowel Lead"}},
+  {"command": "fx.add", "args": {"track": "tr_3", "plugin": "com.suppleaudio.marram"}, "as": "bass"},
+  {"command": "fx.preset.load", "args": {"fx": "${bass.fx}", "name": "Pluck Bass"}},
+  {"command": "fx.add", "args": {"track": "tr_4", "plugin": "com.suppleaudio.marram"}, "as": "pad"},
+  {"command": "fx.preset.load", "args": {"fx": "${pad.fx}", "name": "Dune Pad"}},
+  {"command": "fx.add", "args": {"track": "tr_5", "plugin": "com.suppleaudio.drumlin"}}]}
+```
+
+Then mix and render as for any song (`guides/mixing.md`). To hear the
+patch itself while you shape it, cable voices into the Out as in the
+recipes, then remove them before you capture, or keep the rack as one
+more part.
+
 ## Generative building blocks
 
 Tags in the reference group the modules. Some starting points:
