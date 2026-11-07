@@ -35,6 +35,13 @@ returns use this single dispatcher result without transport-specific merging.
 This is an additive protocol-1 extension; existing warning-free responses
 and command versions are unchanged.
 
+Review refinement (2026-11-06): per-command warning schemas use only
+`{type: "array", items: {type: "object"}}`; legacy non-object warning items
+remain allowed. Closed result schemas still admit diagnostics, while the
+shared `{code: string, message: string, path: string}` contract is stated
+once in the reference header, this spec/ADR and MCP server instructions.
+This avoids repeating the same field descriptions in every tool definition.
+
 ## Consequences
 
 Callers can inspect warnings consistently and command-specific diagnostics

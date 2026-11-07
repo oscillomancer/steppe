@@ -132,6 +132,7 @@ instructions are in `docs/guides/installing.md`.
   commands with JSON Schema, units, examples run as tests and structured
   errors. Context and decoder warnings reach successful replies in `warnings`,
   preserving command diagnostics consistently over sockets, MCP and Lua
+  with compact per-command schemas and one shared diagnostic contract
   (ADR-0063); strict handler result validation is unchanged. `batch`
   transactions; events; the JSON-RPC socket; the MCP adapter
   (in process or as a proxy to the running app); Lua scripts on the bus

@@ -41,7 +41,8 @@ that exactly duplicates structuredContent is shown once.
     "serverInfo": {
       "name": "steppe",
       "version": "0.6.0"
-    }
+    },
+    "instructions": "Successful command results may include warnings: command warnings followed by bus diagnostics {code: string, message: string, path: string}. Paths are retained as emitted. Non-object results with bus warnings become {result: value, warnings: [...]}. Batch warnings stay on each step's result."
   }
 }
 ```
@@ -179,26 +180,8 @@ that exactly duplicates structuredContent is shown once.
           "warnings": {
             "type": "array",
             "items": {
-              "type": "object",
-              "properties": {
-                "code": {
-                  "type": "string"
-                },
-                "message": {
-                  "type": "string"
-                },
-                "path": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "code",
-                "message",
-                "path"
-              ],
-              "additionalProperties": false
-            },
-            "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+              "type": "object"
+            }
           }
         },
         "required": [
@@ -1474,7 +1457,8 @@ that exactly duplicates structuredContent is shown once.
     "serverInfo": {
       "name": "steppe",
       "version": "0.6.0"
-    }
+    },
+    "instructions": "Successful command results may include warnings: command warnings followed by bus diagnostics {code: string, message: string, path: string}. Paths are retained as emitted. Non-object results with bus warnings become {result: value, warnings: [...]}. Batch warnings stay on each step's result."
   }
 }
 ```
@@ -1612,26 +1596,8 @@ that exactly duplicates structuredContent is shown once.
           "warnings": {
             "type": "array",
             "items": {
-              "type": "object",
-              "properties": {
-                "code": {
-                  "type": "string"
-                },
-                "message": {
-                  "type": "string"
-                },
-                "path": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "code",
-                "message",
-                "path"
-              ],
-              "additionalProperties": false
-            },
-            "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+              "type": "object"
+            }
           }
         },
         "required": [

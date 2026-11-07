@@ -97,16 +97,11 @@ json::Value typeSchema(std::string_view type) {
 // Handler schemas stay strict; exported schemas also describe the diagnostics
 // that dispatch attaches after a successful invocation/transaction.
 json::Value warningSchema() {
-    return objectSchema({{"code", typeSchema("string")},
-                         {"message", typeSchema("string")},
-                         {"path", typeSchema("string")}},
-                        {"code", "message", "path"});
+    return typeSchema("object");  // the shared contract is documented once, outside tool schemas
 }
 json::Value warningArray() {
     auto out = typeSchema("array");
     out["items"] = warningSchema();
-    out["description"] =
-        "Command warnings followed by bus diagnostics {code, message, path}; absent when none.";
     return out;
 }
 json::Value replySchema(json::Value raw) {
@@ -140,10 +135,15 @@ json::Value replySchema(json::Value raw) {
             combined.asObject().erase("maxItems");
             combined.asObject().erase("uniqueItems");
             if (const auto* items = old.find("items")) {
-                combined["items"] = json::Value::object();
-                combined["items"]["anyOf"] = json::Value::array();
-                combined["items"]["anyOf"].push_back(*items);
-                combined["items"]["anyOf"].push_back(warningSchema());
+                const auto* itemType = items->find("type");
+                if (itemType && *itemType == "object") {
+                    combined["items"] = warningSchema();
+                } else {
+                    combined["items"] = json::Value::object();
+                    combined["items"]["anyOf"] = json::Value::array();
+                    combined["items"]["anyOf"].push_back(*items);
+                    combined["items"]["anyOf"].push_back(warningSchema());
+                }
             }
         } else {
             // A command-owned scalar/object warning keeps its value. Only
@@ -1000,7 +1000,8 @@ std::string markdownReference(const Registry& registry) {
     std::string text =
         "# Command reference\n\nGenerated from the command registry.\n"
         "\nSuccessful replies may include `warnings`: command warnings followed by bus "
-        "diagnostics `{code, message, path}`. Paths are retained as supplied by the decoder or "
+        "diagnostics `{code: string, message: string, path: string}`. Paths are retained as "
+        "supplied by the decoder or "
         "handler. "
         "Batch steps carry their own warnings in `results[i].warnings`. A non-object "
         "result with bus warnings is `{result: <value>, warnings: [...]}`. "

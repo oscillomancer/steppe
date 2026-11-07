@@ -254,6 +254,11 @@ std::optional<json::Value> Server::handle(const json::Value& request) {
         result["serverInfo"] = json::Value::object();
         result["serverInfo"]["name"] = std::string(product::kSlug);
         result["serverInfo"]["version"] = std::string(product::kVersion);
+        result["instructions"] =
+            "Successful command results may include warnings: command warnings followed by "
+            "bus diagnostics {code: string, message: string, path: string}. Paths are retained "
+            "as emitted. Non-object results with bus warnings become {result: value, warnings: "
+            "[...]}. Batch warnings stay on each step's result.";
         return response(*id, std::move(result));
     }
     if (!initialized_) return error(*id, -32000, "Initialize first");

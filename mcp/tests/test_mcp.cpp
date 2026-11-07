@@ -167,6 +167,12 @@ void checkMcpShapes(mcp::Server& server, int id) {
             sawHistory = true;
             CHECK(tool.find("outputSchema") == nullptr);
         }
+        if (tool.find("name")->asString() == "counter_warn") {
+            const auto& schema = *tool.find("outputSchema");
+            CHECK(*schema.find("additionalProperties") == false);
+            CHECK(*schema.find("properties")->find("warnings") ==
+                  parse(R"({"type":"array","items":{"type":"object"}})"));
+        }
     }
     CHECK(sawHistory);
     auto history = request(
@@ -226,6 +232,10 @@ TEST_CASE("in-process MCP negotiates, lists and executes with structured errors"
         server,
         R"({"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"unit-client"}}})");
     CHECK(initialized.find("result")->find("protocolVersion")->asString() == "2025-06-18");
+    CHECK(initialized.find("result")
+              ->find("instructions")
+              ->asString()
+              .find("{code: string, message: string, path: string}") != std::string::npos);
     auto listed = request(server, R"({"jsonrpc":"2.0","id":3,"method":"tools/list"})");
     bool found = false;
     for (const auto& tool : listed.find("result")->find("tools")->asArray())
@@ -289,6 +299,10 @@ TEST_CASE("proxy MCP forwards calls over the Unix control socket") {
         **proxy,
         R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"remote-client"}}})");
     CHECK(initialized.find("result") != nullptr);
+    CHECK(initialized.find("result")
+              ->find("instructions")
+              ->asString()
+              .find("{code: string, message: string, path: string}") != std::string::npos);
     auto listed = request(**proxy, R"({"jsonrpc":"2.0","id":2,"method":"tools/list"})");
     bool found = false;
     for (const auto& tool : listed.find("result")->find("tools")->asArray())

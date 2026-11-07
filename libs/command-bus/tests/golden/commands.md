@@ -2,7 +2,7 @@
 
 Generated from the command registry.
 
-Successful replies may include `warnings`: command warnings followed by bus diagnostics `{code, message, path}`. Paths are retained as supplied by the decoder or handler. Batch steps carry their own warnings in `results[i].warnings`. A non-object result with bus warnings is `{result: <value>, warnings: [...]}`. Replies without bus warnings keep their original shape.
+Successful replies may include `warnings`: command warnings followed by bus diagnostics `{code: string, message: string, path: string}`. Paths are retained as supplied by the decoder or handler. Batch steps carry their own warnings in `results[i].warnings`. A non-object result with bus warnings is `{result: <value>, warnings: [...]}`. Replies without bus warnings keep their original shape.
 
 ## `batch@1`
 
@@ -28,22 +28,8 @@ Kind: `edit`. Exposure: `mcp-tool`.
     "warnings": {
       "type": "array",
       "items": {
-        "type": "object",
-        "properties": {
-          "code": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          },
-          "path": {
-            "type": "string"
-          }
-        },
-        "required": ["code", "message", "path"],
-        "additionalProperties": false
-      },
-      "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        "type": "object"
+      }
     }
   }
 }
@@ -94,22 +80,8 @@ Kind: `action`. Exposure: `mcp-exec`.
     "warnings": {
       "type": "array",
       "items": {
-        "type": "object",
-        "properties": {
-          "code": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          },
-          "path": {
-            "type": "string"
-          }
-        },
-        "required": ["code", "message", "path"],
-        "additionalProperties": false
-      },
-      "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        "type": "object"
+      }
     }
   }
 }
@@ -164,22 +136,8 @@ Kind: `query`. Exposure: `mcp-exec`.
     "warnings": {
       "type": "array",
       "items": {
-        "type": "object",
-        "properties": {
-          "code": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          },
-          "path": {
-            "type": "string"
-          }
-        },
-        "required": ["code", "message", "path"],
-        "additionalProperties": false
-      },
-      "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        "type": "object"
+      }
     }
   }
 }
@@ -233,22 +191,8 @@ Kind: `query`. Exposure: `mcp-exec`.
     "warnings": {
       "type": "array",
       "items": {
-        "type": "object",
-        "properties": {
-          "code": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          },
-          "path": {
-            "type": "string"
-          }
-        },
-        "required": ["code", "message", "path"],
-        "additionalProperties": false
-      },
-      "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        "type": "object"
+      }
     }
   }
 }
@@ -296,22 +240,8 @@ Kind: `query`. Exposure: `mcp-exec`.
     "warnings": {
       "type": "array",
       "items": {
-        "type": "object",
-        "properties": {
-          "code": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          },
-          "path": {
-            "type": "string"
-          }
-        },
-        "required": ["code", "message", "path"],
-        "additionalProperties": false
-      },
-      "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        "type": "object"
+      }
     }
   }
 }
@@ -367,22 +297,8 @@ Kind: `query`. Exposure: `mcp-exec`.
     "warnings": {
       "type": "array",
       "items": {
-        "type": "object",
-        "properties": {
-          "code": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          },
-          "path": {
-            "type": "string"
-          }
-        },
-        "required": ["code", "message", "path"],
-        "additionalProperties": false
-      },
-      "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        "type": "object"
+      }
     }
   }
 }
@@ -438,22 +354,8 @@ Kind: `query`. Exposure: `mcp-exec`.
     "warnings": {
       "type": "array",
       "items": {
-        "type": "object",
-        "properties": {
-          "code": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          },
-          "path": {
-            "type": "string"
-          }
-        },
-        "required": ["code", "message", "path"],
-        "additionalProperties": false
-      },
-      "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        "type": "object"
+      }
     }
   }
 }
@@ -504,22 +406,8 @@ Result:
       "warnings": {
         "type": "array",
         "items": {
-          "type": "object",
-          "properties": {
-            "code": {
-              "type": "string"
-            },
-            "message": {
-              "type": "string"
-            },
-            "path": {
-              "type": "string"
-            }
-          },
-          "required": ["code", "message", "path"],
-          "additionalProperties": false
-        },
-        "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+          "type": "object"
+        }
       }
     }
   },
@@ -572,22 +460,8 @@ Kind: `query`. Exposure: `mcp-exec`.
     "warnings": {
       "type": "array",
       "items": {
-        "type": "object",
-        "properties": {
-          "code": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          },
-          "path": {
-            "type": "string"
-          }
-        },
-        "required": ["code", "message", "path"],
-        "additionalProperties": false
-      },
-      "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        "type": "object"
+      }
     }
   }
 }
@@ -648,22 +522,8 @@ Kind: `edit`. Exposure: `mcp-tool`.
     "warnings": {
       "type": "array",
       "items": {
-        "type": "object",
-        "properties": {
-          "code": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          },
-          "path": {
-            "type": "string"
-          }
-        },
-        "required": ["code", "message", "path"],
-        "additionalProperties": false
-      },
-      "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        "type": "object"
+      }
     }
   },
   "required": ["count"],
@@ -719,22 +579,8 @@ Kind: `query`. Exposure: `internal`.
     "warnings": {
       "type": "array",
       "items": {
-        "type": "object",
-        "properties": {
-          "code": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          },
-          "path": {
-            "type": "string"
-          }
-        },
-        "required": ["code", "message", "path"],
-        "additionalProperties": false
-      },
-      "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        "type": "object"
+      }
     }
   },
   "required": ["text"],
@@ -771,22 +617,8 @@ Kind: `edit`. Exposure: `internal`.
     "warnings": {
       "type": "array",
       "items": {
-        "type": "object",
-        "properties": {
-          "code": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          },
-          "path": {
-            "type": "string"
-          }
-        },
-        "required": ["code", "message", "path"],
-        "additionalProperties": false
-      },
-      "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        "type": "object"
+      }
     }
   },
   "required": ["count"],
@@ -823,22 +655,8 @@ Kind: `query`. Exposure: `mcp-exec`.
     "warnings": {
       "type": "array",
       "items": {
-        "type": "object",
-        "properties": {
-          "code": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          },
-          "path": {
-            "type": "string"
-          }
-        },
-        "required": ["code", "message", "path"],
-        "additionalProperties": false
-      },
-      "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        "type": "object"
+      }
     }
   },
   "required": ["count"],
@@ -891,22 +709,8 @@ Kind: `action`. Exposure: `internal`.
     "warnings": {
       "type": "array",
       "items": {
-        "type": "object",
-        "properties": {
-          "code": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          },
-          "path": {
-            "type": "string"
-          }
-        },
-        "required": ["code", "message", "path"],
-        "additionalProperties": false
-      },
-      "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        "type": "object"
+      }
     }
   },
   "required": ["count"],
@@ -944,22 +748,8 @@ Kind: `edit`. Exposure: `mcp-tool`.
     "warnings": {
       "type": "array",
       "items": {
-        "type": "object",
-        "properties": {
-          "code": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          },
-          "path": {
-            "type": "string"
-          }
-        },
-        "required": ["code", "message", "path"],
-        "additionalProperties": false
-      },
-      "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        "type": "object"
+      }
     }
   },
   "required": ["count"],
@@ -1017,22 +807,8 @@ Kind: `action`. Exposure: `internal`.
     "warnings": {
       "type": "array",
       "items": {
-        "type": "object",
-        "properties": {
-          "code": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          },
-          "path": {
-            "type": "string"
-          }
-        },
-        "required": ["code", "message", "path"],
-        "additionalProperties": false
-      },
-      "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        "type": "object"
+      }
     }
   },
   "required": ["job", "status"],
@@ -1070,22 +846,8 @@ Kind: `query`. Exposure: `internal`.
     "warnings": {
       "type": "array",
       "items": {
-        "type": "object",
-        "properties": {
-          "code": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          },
-          "path": {
-            "type": "string"
-          }
-        },
-        "required": ["code", "message", "path"],
-        "additionalProperties": false
-      },
-      "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        "type": "object"
+      }
     }
   },
   "required": ["count"],
@@ -1122,22 +884,8 @@ Kind: `action`. Exposure: `internal`.
     "warnings": {
       "type": "array",
       "items": {
-        "type": "object",
-        "properties": {
-          "code": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          },
-          "path": {
-            "type": "string"
-          }
-        },
-        "required": ["code", "message", "path"],
-        "additionalProperties": false
-      },
-      "description": "Command warnings followed by bus diagnostics {code, message, path}; absent when none."
+        "type": "object"
+      }
     }
   },
   "required": ["count"],

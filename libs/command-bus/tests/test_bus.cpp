@@ -582,7 +582,10 @@ TEST_CASE("context and decoder warnings reach successful replies without weakeni
     CHECK((*result)["warnings"].at(0).find("path")->asString() == "/value");
     CHECK((*result)["warnings"].at(1).find("code")->asString() == "toy.adjusted");
     CHECK(host.commits == 1);
-    CHECK(registry.find("toy.warn")->resultSchema.find("properties")->find("warnings") != nullptr);
+    const auto& replySchema = registry.find("toy.warn")->resultSchema;
+    CHECK(*replySchema.find("additionalProperties") == false);
+    CHECK(*replySchema.find("properties")->find("warnings") ==
+          obj(R"({"type":"array","items":{"type":"object"}})"));
     // The handler was validated against its closed schema before diagnostics
     // were appended. A later call has its own fresh context.
     auto quiet = dispatcher.execute({"toy.add", obj(R"({"value":1})"), testOrigin});
@@ -637,6 +640,11 @@ TEST_CASE("context warnings merge command diagnostics and preserve non-object re
     CHECK((*result)["result"] == 7);
     REQUIRE((*result)["warnings"].size() == 1);
     CHECK((*result)["warnings"].at(0).find("path")->asString().empty());
+    CHECK(registry.find("toy.scalar")
+              ->resultSchema.find("oneOf")
+              ->at(1)
+              .find("properties")
+              ->find("warnings") != nullptr);
 }
 
 TEST_CASE("warning result schemas extend typed command warning arrays") {
@@ -670,5 +678,33 @@ TEST_CASE("warning result schemas extend typed command warning arrays") {
     CHECK(warnings->find("maxItems") == nullptr);
     REQUIRE(warnings->find("items")->find("anyOf"));
     CHECK(warnings->find("items")->find("anyOf")->size() == 2);
+    CHECK(warnings->find("items")->find("anyOf")->at(1) == obj(R"({"type":"object"})"));
     CHECK(luaStubs(registry).find("(string|table)[]") != std::string::npos);
+
+    struct ObjectWarnings {
+        std::vector<Count> warnings;
+    };
+    Command<NoArgs, ObjectWarnings> objects;
+    objects.name = "toy.objects";
+    objects.exposure = Exposure::Internal;
+    objects.summary = "Keep richer command warnings.";
+    objects.args = schema::object<NoArgs>("no_args").build();
+    objects.result =
+        schema::object<ObjectWarnings>("object_warnings")
+            .field("warnings", &ObjectWarnings::warnings,
+                   schema::arrayOf(schema::object<Count>("count_warning")
+                                       .field("count", &Count::count, schema::integerOf<int>())
+                                       .build()))
+            .build();
+    objects.run = [](const NoArgs&, Context& ctx) -> Result<ObjectWarnings> {
+        ctx.warn("extra", "extra diagnostic");
+        return ObjectWarnings{{Count{3}}};
+    };
+    registry.add(std::move(objects));
+    result = dispatcher.execute({"toy.objects", obj("{}"), testOrigin});
+    REQUIRE(result);
+    CHECK((*result)["warnings"].size() == 2);
+    CHECK((*result)["warnings"].at(0).find("count")->asInt() == 3);
+    CHECK(*registry.find("toy.objects")->resultSchema.find("properties")->find("warnings") ==
+          obj(R"({"type":"array","items":{"type":"object"}})"));
 }

@@ -162,7 +162,11 @@ replies retain their original shape. Failed invocations use the existing
 structured Error contract, without a success warning payload.
 
 The registry's result JSON Schema and MCP output schemas include optional
-warning metadata (and mixed item schemas for command-owned warnings).
+warning metadata: `warnings: {type: "array", items: {type: "object"}}`,
+without repeating the entry fields or their description per command. Legacy
+non-object command warnings retain mixed item schemas. The shared entry
+shape is defined above and in the generated reference header; MCP
+`initialize.instructions` states it once for both server deployments.
 `validateResult` continues to validate the raw handler output before this
 metadata is added; handlers cannot hide invalid results behind warnings.
 Lua receives the same result table, MCP emits the same object as structured
