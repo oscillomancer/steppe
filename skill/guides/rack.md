@@ -603,3 +603,10 @@ Out path, including oversampling; shorter outputs receive edge padding.
 Notes, Transport and automation move together. Feedback groups contribute
 zero latency. Parallel paths summed inside the patch are left as patched:
 add a Delay module to align a dry path with a delayed plug-in path.
+
+For long note captures, add `async: true` to `rack.capture`. It returns
+`{job}`; follow `job.get` or cancel with `job.cancel`. Its completed result
+is the normal capture result and adds one undo step. Cancellation adds
+nothing. `rack.capture_stale` means the rack, destination or timing changed;
+submit again with the current target. Start async capture outside a batch
+or script transaction. Without `async`, capture remains synchronous.

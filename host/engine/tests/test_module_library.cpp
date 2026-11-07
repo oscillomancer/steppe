@@ -7,8 +7,10 @@
 
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstring>
 #include <functional>
+#include <mutex>
 
 #include "rack_runtime.h"
 #include "supple/base/files.h"
@@ -48,10 +50,10 @@ struct Fixture {
     cmd::Registry registry;
     std::unique_ptr<EngineApp> app;
     std::unique_ptr<cmd::Dispatcher> bus;
-    explicit Fixture(const std::function<void(const std::filesystem::path&)>& before = {}) {
+    explicit Fixture(const std::function<void(const std::filesystem::path&)>& before = {},
+                     AppOptions options = {}) {
         std::filesystem::create_directories(dir);
         if (before) before(dir / "modules");
-        AppOptions options;
         options.workdir = dir;
         options.pluginPath = {FIXTURE_CLAP_PATH};
         auto made = EngineApp::create(options);
@@ -345,7 +347,7 @@ TEST_CASE("rack presets: a patch saved from one rack plays in another") {
     auto edited = [&](const std::function<void(json::Value&)>& change) {
         json::Value doc = *json::parse(*first);
         for (auto& m : doc["modules"].asArray()) change(m);
-        return json::writeCanonical(doc);
+        return json::writeCompact(doc);
     };
     REQUIRE(writeFileAtomic(file.parent_path() / "Old.json", edited([](json::Value& m) {
                                 if (m["type"].asString() == "com.suppleaudio.rack.vca")
@@ -884,7 +886,7 @@ TEST_CASE("rack presets: embedded source ids are checked before installation") {
         doc["sources"]["com.example.requested"]["source"] = "broken module";
     }
     const auto path = f.dir / "bad-source.json";
-    REQUIRE(writeFileAtomic(path, json::writeCanonical(doc)));
+    REQUIRE(writeFileAtomic(path, json::writeCompact(doc)));
     json::Value a = json::Value::object();
     a["rack"] = "rk_1";
     a["path"] = path.string();
@@ -1295,4 +1297,165 @@ TEST_CASE("rack.get: prepared latency includes oversampling and reports individu
         if (node.rack) CHECK(node.latChain == rack["latency_samples"].asInt());
     set(1, true);
     CHECK(f.run("rack.get", R"({"rack":"rk_1"})")["latency_samples"].asInt() == 0);
+}
+
+TEST_CASE("rack.capture: an async snapshot completes once, matches sync bytes and undoes") {
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool finished = false;
+    AppOptions options;
+    options.jobFinishedHook = [&] {
+        std::lock_guard lock(mutex);
+        finished = true;
+        cv.notify_all();
+    };
+    Fixture sync, async({}, options);
+    auto prepare = [](Fixture& f) {
+        f.run("track.add");
+        f.run("track.add");
+        f.run("rack.add", R"({"track":"tr_1"})");
+        f.run("module.add", R"({"rack":"rk_1","type":"notes"})");
+    };
+    prepare(sync);
+    prepare(async);
+    async.run("branch.create", R"({"name":"capture"})");
+    auto args = *json::parse(R"({"rack":"rk_1","track":"tr_2","pitch":"mo_2.pitch",
+        "gate":"mo_2.gate","velocity":"mo_2.velocity","beats":4,"at":8,"quantize":0.25,
+        "notes":"voice v; 1: C4:q E4:e r:e [G4 B4]:h"})");
+    const auto expected = sync.call("rack.capture", args);
+    REQUIRE(expected);
+    const auto version = async.app->head().version;
+    args["async"] = true;
+    auto job = async.call("rack.capture", args);
+    REQUIRE(job);
+    REQUIRE(job->find("job"));
+    CHECK(async.app->head().version == version);
+    {
+        std::unique_lock lock(mutex);
+        cv.wait(lock, [&] { return finished; });
+    }
+    async.bus->flushJobEvents();
+    auto state = async.bus->jobs().status((*job)["job"].asString());
+    REQUIRE(state);
+    REQUIRE((*state)["status"].asString() == "done");
+    auto& actual = (*state)["result"];
+    CHECK(json::writeCompact(actual) == json::writeCompact(*expected));
+    const auto source = *model::Id::parse(actual["source"].asString());
+    CHECK(json::writeCompact(model::toJson(*async.app->head().midi.find(source))) ==
+          json::writeCompact(model::toJson(*sync.app->head().midi.find(source))));
+    async.run("history.undo");
+    CHECK(async.app->head().items.empty());
+    CHECK(async.app->head().midi.empty());
+    async.run("history.redo");
+    CHECK(async.app->head().items.size() == 1);
+    async.run("branch.switch", R"({"name":"main"})");
+    async.run("track.add");
+    async.run("branch.merge", R"({"from":"capture"})");
+    CHECK(async.app->head().items.size() == 1);
+    REQUIRE(async.app->head().midi.size() == 1);
+    CHECK(json::writeCompact(model::toJson(*async.app->head().midi.begin()->value)) ==
+          json::writeCompact(model::toJson(*sync.app->head().midi.find(source))));
+}
+
+TEST_CASE("rack.capture: cancelling or changing the target before completion publishes no notes") {
+    for (int change : {0, 1, 2, 3, 4, 5, 6}) {
+        CAPTURE(change);
+        std::mutex mutex;
+        std::condition_variable cv;
+        bool entered = false, release = false, finished = false;
+        AppOptions options;
+        options.jobStartedHook = [&] {
+            std::unique_lock lock(mutex);
+            entered = true;
+            cv.notify_all();
+            cv.wait(lock, [&] { return release; });
+        };
+        options.jobFinishedHook = [&] {
+            std::lock_guard lock(mutex);
+            finished = true;
+            cv.notify_all();
+        };
+        Fixture f({}, options);
+        struct Unblock {
+            std::mutex& mutex;
+            std::condition_variable& cv;
+            bool& release;
+            ~Unblock() {
+                std::lock_guard lock(mutex);
+                release = true;
+                cv.notify_all();
+            }
+        } unblock{mutex, cv, release};
+        f.run("track.add");
+        f.run("track.add");
+        f.run("rack.add", R"({"track":"tr_1"})");
+        f.run("module.add", R"({"rack":"rk_1","type":"notes"})");
+        auto job = f.run("rack.capture", R"({"rack":"rk_1","track":"tr_2",
+            "pitch":"mo_2.pitch","gate":"mo_2.gate","beats":4,"async":true,
+            "notes":"voice v; 1: C4:w"})");
+        {
+            std::unique_lock lock(mutex);
+            cv.wait(lock, [&] { return entered; });
+        }
+        if (change == 0) REQUIRE(f.bus->jobs().cancel(job["job"].asString()));
+        if (change == 1) f.run("rack.remove", R"({"rack":"rk_1"})");
+        if (change == 2) f.run("track.remove", R"({"track":"tr_2"})");
+        if (change == 3) f.run("module.set", R"({"module":"mo_2","label":"Edited"})");
+        if (change == 4) f.run("tempo.set", R"({"points":[{"beat":0,"bpm":90}]})");
+        const auto version = f.app->head().version;
+        {
+            std::lock_guard lock(mutex);
+            release = true;
+            cv.notify_all();
+        }
+        {
+            std::unique_lock lock(mutex);
+            cv.wait(lock, [&] { return finished; });
+        }
+        if (change == 5) REQUIRE(f.bus->jobs().cancel(job["job"].asString()));
+        // An unrelated edit is allowed; the worker uses its captured catalogue and session.
+        if (change == 6) f.run("track.add");
+        f.bus->flushJobEvents();
+        auto state = f.bus->jobs().status(job["job"].asString());
+        REQUIRE(state);
+        if (change == 6) {
+            CHECK((*state)["status"].asString() == "done");
+            CHECK(f.app->head().items.size() == 1);
+        } else {
+            CHECK(f.app->head().items.empty());
+            CHECK(f.app->head().midi.empty());
+            CHECK(f.app->head().version == version);
+            CHECK((*state)["status"].asString() ==
+                  ((change == 0 || change == 5) ? "cancelled" : "failed"));
+            if (change != 0 && change != 5) {
+                CHECK((*state)["error"]["code"].asString() == "rack.capture_stale");
+                CHECK_FALSE((*state)["error"]["hint"].asString().empty());
+            }
+        }
+    }
+}
+
+TEST_CASE("rack.capture: sync joins a batch, async refuses a transaction") {
+    Fixture f;
+    f.run("rack.add");
+    f.run("module.add", R"({"rack":"rk_1","type":"notes"})");
+    auto capture = *json::parse(R"({"rack":"rk_1","track":"tr_1","pitch":"mo_2.pitch",
+        "gate":"mo_2.gate","beats":1,"notes":"voice v; 1: C4:q r:*"})");
+    auto args = json::Value::object();
+    args["steps"] = json::Value::array();
+    auto step = json::Value::object();
+    step["command"] = "rack.capture";
+    step["args"] = capture;
+    args["steps"].push_back(step);
+    REQUIRE(f.call("batch", args));
+    CHECK(f.app->head().items.size() == 1);
+    f.run("history.undo");
+    CHECK(f.app->head().items.empty());
+    args["steps"].asArray()[0]["args"]["async"] = true;
+    const auto refused = f.call("batch", args);
+    REQUIRE_FALSE(refused);
+    CHECK(refused.error().code == "batch.step_failed");
+    REQUIRE_FALSE(refused.error().details.empty());
+    CHECK(refused.error().details[0].code == "batch.not_transactional");
+    CHECK(f.app->head().items.empty());
 }

@@ -75,6 +75,11 @@ all masters reach the device at the same moment, whatever their effects'
 latency. The metronome plays on outputs 1 and 2. The menu lists the outputs
 only while the audio engine is running.
 
+Agents can print rack notes with `rack.capture {async:true, ...}` and follow
+`job.get`; `job.cancel` leaves the project unchanged. Completion adds one
+undo step. A stale destination or rack needs a new capture. The rack window
+currently uses synchronous capture and waits for it.
+
 Rack plug-in latency is compensated against the song, including oversampling.
 The rack's longest audio Out path sets its clock; shorter audio and Note Out
 routes receive padding. Parallel paths summed inside the rack keep their

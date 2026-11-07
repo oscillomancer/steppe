@@ -2939,7 +2939,7 @@ std::vector<std::pair<std::string, json::Value>> EngineApp::takeEvents() {
 
 bool EngineApp::actionTransactional(std::string_view command) const {
     return command == "render.mix" || command == "render.stems" || command == "render.regions" ||
-           command == "branch.render-ab";
+           command == "branch.render-ab" || command == "rack.capture";
 }
 
 std::uint64_t EngineApp::clockMs() const {

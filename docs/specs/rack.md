@@ -538,7 +538,7 @@ examples run as tests. Ends are strings: `"mo_3.out"`.
 | `rack.list` | query | `{}` → racks with their home tracks, module counts and Out modules |
 | `rack.get` | query | `{rack, detail?: brief\|full}` → modules (id, type, label, changed params, position, size), cables (with `feedback`), Out modules and the channels they feed, node/per-Out `latency_samples`, `note_outs`, problems |
 | `rack.probe` | query | `{rack, ports: ["mo_N.<output>", …≤8], seconds? (≤10, 2), from_beat?, notes? (notation the rack's Notes modules play)}` → per port: peak, rms, dc, min, max; audio (the first 4 voices summed): dB and pitch (Hz, note, cents) when periodic; gates over the voices: count, per second, per beat, duty; pitch: the notes visited; CV: rate; a one-line description. An offline render of a copy with a listener (`ProbeModule`) on each port; nothing changes |
-| `rack.capture` | edit | `{rack, pitch, gate, velocity?, track, beats? (≤1024, 16), from_beat?, at?, quantize?, notes?, name?}` → `{item, take, source, position, length, notes, voices, warnings?}`: an offline render of a copy as `rack.probe`'s, with a listener (`CaptureModule`) on the ports, written as a MIDI item (§7.3); one undo step |
+| `rack.capture` | action | `{rack, pitch, gate, velocity?, track, beats? (≤1024, 16), from_beat?, at?, quantize?, notes?, name?, async?}` → `{item, take, source, position, length, notes, voices, warnings?}`: an offline render of a copy as `rack.probe`'s, with a listener (`CaptureModule`) on the ports, written as a MIDI item (§7.3); one undo step |
 | `rack.levels` | query | `{rack}` → `{modules: {mo_N: {port: level}}}`: every module and known output port, latest block's linear peak across all channels; stopped or silent reads zero, missing types have an empty port object |
 | `rack.patch` | edit | `{rack, modules: {name: {type\|plugin, params?, preset?, label?, x?, y?, source?, device?}}, cables?: [[from, to, amount?, color?] \| {from, to, amount?, color?}], x?, y?}` → `{modules: {name: id}, cables}`: ends `"name.port"`, `"name.knob"` (a plugin module's: its plug-in's) or `"mo_N.port"`; modules without a place laid out as §7.2; a name labels its module (§7.2); checked as `module.add` and `cable.add` check, all or nothing |
 | `rack.arrange` | edit | `{rack, modules?, x?, y?}` → `{modules: {mo_N: {x, y}}}`: lays out the modules (default all the rack's) as §7.2 from x, y (default their top-left corner), along the cables among them; one undo step |
@@ -713,6 +713,21 @@ step. The notes, in beats from `from_beat`, become a MIDI source, a take
 named `name` (default the rack's name) and an item at `at` (default
 `from_beat`) on `track`, a channel, `beats` long. The same project and
 arguments give the same notes.
+
+With `async: true`, the command returns `{job}` immediately and renders the
+immutable project and module/plug-in catalogue snapshot on a job worker.
+`job.get` reports progress and its completed result has the synchronous
+result's exact shape and bytes for the same starting state and arguments.
+Cancellation, including after rendering but before adoption, adds nothing.
+Completion posts one undoable edit to the main thread. The internal
+`rack.capture.commit` edit stores the rendered notes so branch replay copies
+the snapshot result rather than rendering again. A changed project or
+branch, rack definition, destination track/items, or timing map fails with
+`rack.capture_stale` and a hint to submit the current target again. Unrelated
+track edits do not invalidate the snapshot. Async capture is refused inside
+a batch or script transaction (`batch.not_transactional`); synchronous capture
+continues to join that transaction. Without `async`, rendering and the
+returned item result remain synchronous. The GUI currently uses that mode.
 
 ## 8. The rack window (`daw/gui`)
 
