@@ -24,10 +24,11 @@ that latency on a forward path, or use an explicit Delay module to align
 paths that need it.
 
 The rack node's latency is the maximum over audio Outs and Note Outs with
-an outgoing edge. Unrouted outputs do not add latency to the song. Read-ahead PDC
-treats it like a strip with that chain latency. Notes, Transport and
-automation share the node's shifted clock. Shorter audio and Note Out edges
-receive the difference through the existing edge delay mechanism.
+an outgoing edge. Unrouted outputs do not add latency to the song.
+Read-ahead PDC treats it like a strip with that chain latency. Notes,
+Transport and automation share the node's shifted clock. Shorter audio
+and Note Out edges receive the difference through the existing edge delay
+mechanism.
 Plug-in latency changes rebuild the plan as for strips. `rack.get` reports
 the node and individual output latencies from the prepared plan. Its
 brief/default path never instantiates plug-ins: without prepared timing,
@@ -45,5 +46,6 @@ no path-alignment delay storage.
 
 Independent rack outputs align with the song using existing PDC storage
 and executors. Feedback remains an intentional timing effect rather than
-an unbounded compensation problem. Feedback back edges and unequal paths summed before an Out are not corrected. This bounded policy
-keeps timing deterministic without changing patch sound or scheduling.
+an unbounded compensation problem. Feedback back edges and unequal paths
+summed before an Out are not corrected. This bounded policy keeps timing
+deterministic without changing patch sound or scheduling.

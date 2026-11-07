@@ -733,17 +733,17 @@ one-word name (`"bass_env"`: "Bass env", `"osc1"`: "Osc 1", `"lfo"`:
 project offline from `from_beat` for `beats` (at most 600 seconds), the
 rack's Notes modules also playing `notes` as `rack.probe`'s do, with a
 listener cabled to the `pitch`, `gate` and optional `velocity` outputs. The
-listener follows each gate voice (up to 16) as the probe counts gates: a rise
-past 0.5 starts a note at that voice's pitch (`round(60 + 12 × pitch)`,
-clamped to 0..127; a mono pitch serves every voice) and velocity
-(`round(127 × v)`, clamped to 1..127; 96 without `velocity`), and a fall below 0.25 ends
-it. A note still sounding at the end ends there. It keeps up to 65,536 gate
-changes and warns when there were more. With `quantize` (beats, 1/64..4)
-starts and ends go to the nearest grid line and a note lasts at least one
-step. The notes, in beats from `from_beat`, become a MIDI source, a take
-named `name` (default the rack's name) and an item at `at` (default
-`from_beat`) on `track`, a channel, `beats` long. The same project and
-arguments give the same notes.
+listener follows each gate voice (up to 16) as the probe counts gates: a
+rise past 0.5 starts a note at that voice's pitch
+(`round(60 + 12 × pitch)`, clamped to 0..127; a mono pitch serves every
+voice) and velocity (`round(127 × v)`, clamped to 1..127; 96 without
+`velocity`), and a fall below 0.25 ends it. A note still sounding at the
+end ends there. It keeps up to 65,536 gate changes and warns when there
+were more. With `quantize` (beats, 1/64..4) starts and ends go to the
+nearest grid line and a note lasts at least one step. The notes, in beats
+from `from_beat`, become a MIDI source, a take named `name` (default the
+rack's name) and an item at `at` (default `from_beat`) on `track`, a
+channel, `beats` long. The same project and arguments give the same notes.
 
 With `async: true`, the command returns `{job}` immediately and renders the
 immutable project and module/plug-in catalogue snapshot on a job worker.
@@ -751,20 +751,20 @@ immutable project and module/plug-in catalogue snapshot on a job worker.
 result's exact shape and bytes for the same starting state and arguments.
 Cancellation, including after rendering but before adoption, adds nothing.
 Completion posts one undoable edit to the main thread. The internal
-`rack.capture.commit` edit stores the rendered notes so branch replay copies
-the snapshot result rather than rendering again. A changed project or
-branch, rack modules/FX/cables or their knob/parameter automation (including
-automation items), or timing map fails with `rack.capture_stale` and a hint to submit the current target again. Destination checks cover existence,
-type and frozen state, and items
-(including takes/sources) overlapping `[at, at+beats]`. Destination fader
-moves, renames and unrelated item edits do not invalidate the capture.
-Inputs (Notes source MIDI and routes into In modules) are snapshotted at
-start; edits to those inputs do not invalidate the captured result. Async
-capture is refused inside
-a batch or script transaction (`batch.not_transactional`); synchronous capture
-continues to join that transaction. Without `async`, rendering and the
-returned item result remain synchronous. The rack window uses `async` (gui.md
-§4.12).
+`rack.capture.commit` edit stores the rendered notes so branch replay
+copies the snapshot result rather than rendering again. A changed project
+or branch, rack modules/FX/cables or their knob/parameter automation
+(including automation items), or timing map fails with `rack.capture_stale`
+and a hint to submit the current target again. Destination checks cover
+existence, type and frozen state, and items (including takes/sources)
+overlapping `[at, at+beats]`. Destination fader moves, renames and
+unrelated item edits do not invalidate the capture. Inputs (Notes source
+MIDI and routes into In modules) are snapshotted at start; edits to those
+inputs do not invalidate the captured result. Async capture is refused
+inside a batch or script transaction (`batch.not_transactional`);
+synchronous capture continues to join that transaction. Without `async`,
+rendering and the returned item result remain synchronous. The rack window
+uses `async` (gui.md §4.12).
 
 ## 8. The rack window (`daw/gui`)
 
