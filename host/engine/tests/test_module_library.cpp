@@ -1773,6 +1773,55 @@ TEST_CASE("rack.get: brief uses prepared timing and full alone probes a cold plu
     f.app->stopEngine();
 }
 
+TEST_CASE("rack.get: a deferred structural edit cannot use the older prepared plan") {
+    for (bool anticipative : {false, true}) {
+        CAPTURE(anticipative);
+        Fixture f;
+        f.run("transport.playrate.set", R"({"rate":0.8})");
+        f.run("rack.add");
+        f.run("module.add", R"({"rack":"rk_1","plugin":"com.suppleaudio.test.gain"})");
+        f.run("cable.add", R"({"from":"mo_2.out_l","to":"mo_1.l"})");
+        auto tx = f.app->beginTransaction(origin, "Latency");
+        REQUIRE(tx);
+        f.app->txn().modify<model::FxInstance>({model::Kind::Fx, 1}, [](auto& fx) {
+            fx.patch = *json::parse(
+                R"({"schema":"supple.test-gain-patch/1.0","params":{"latency":"short"}})");
+        });
+        REQUIRE(f.app->commitTransaction(*tx));
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+        REQUIRE(f.app->startEngine(backend, {.sampleRate = 8000, .blockSize = 128},
+                                   {.anticipative = anticipative, .workers = 0}));
+        auto& engine = *f.app->engine();
+        engine.play();
+        for (int i = 0; i < 32; ++i) {
+            if (anticipative) REQUIRE(engine.awaitRendered(1024));
+            backend.run(1);
+            engine.service();
+        }
+        CHECK(f.run("rack.get", R"({"rack":"rk_1"})")["latency_samples"].asInt() == 64);
+        // Prepare a future non-unity plan, then edit inside its deferred span.
+        f.run("env.add", R"({"track":"tr_0","param":"playrate",
+                             "points":[{"seconds":0,"value":1.25}]})");
+        const auto generation = engine.planGeneration();
+        tx = f.app->beginTransaction(origin, "Deferred output and bypass");
+        REQUIRE(tx);
+        model::RackModule output;
+        output.rack = {model::Kind::Rack, 1};
+        output.type = std::string(model::kOutModule);
+        f.app->txn().create(output);
+        f.app->txn().modify<model::RackModule>({model::Kind::Module, 2},
+                                               [](auto& module) { module.bypass = true; });
+        REQUIRE(f.app->commitTransaction(*tx));
+        REQUIRE(engine.planGeneration() == generation);
+        CHECK_FALSE(engine.rackLatencies({model::Kind::Rack, 1}, f.app->head().version));
+        auto rack = f.run("rack.get", R"({"rack":"rk_1"})");
+        CHECK(rack["latency_samples"].asInt() == 0);
+        REQUIRE(rack["outs"].asArray().size() == 2);
+        for (auto& entry : rack["outs"].asArray()) CHECK(entry["latency_samples"].asInt() == 0);
+        f.app->stopEngine();
+    }
+}
+
 TEST_CASE(
     "rack.capture: sync does not scan unused plugins and snapshot lookup keeps name fallback") {
     host::setBridgeExecutable(std::filesystem::temp_directory_path() / "no-such-plugin-scanner");

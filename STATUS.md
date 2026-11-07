@@ -289,7 +289,9 @@ instructions are in `docs/guides/installing.md`.
   Rack audio and Note Out routes now participate in read-ahead PDC, including
   oversampling and runtime latency changes (ADR-0064); `rack.get` reports
   the node and each output latency (default reads prepared timing, full can
-  probe; unprepared values are null). Routed audio and Note Outs set the node;
+  probe; unprepared values are null). Prepared queries match the compiled
+  session version even while playrate scheduling defers a structural edit.
+  Routed audio and Note Outs set the node;
   forward paths in loops count after removing scheduler back edges. Oversampled
   FX service compares raw latency separately from prepared stage latency.
   Plug-in modulation cables accept numeric

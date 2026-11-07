@@ -477,7 +477,9 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   `note_outs`, in engine frames (project frames without a running engine).
   The brief/default query reads prepared plan or pool values without creating
   plug-ins. If timing is unavailable, latency fields are null; `detail: "full"`
-  explicitly permits probes for unprepared FX.
+  explicitly permits probes for unprepared FX. Prepared values must match the
+  session version recorded at compilation; deferred edits use estimates or
+  null until their own plan is prepared.
   Parallel paths summed inside a patch stay unaligned: insert a Delay
   module explicitly when that patch needs alignment.
 - **Note Out.** Pitch/gate becomes MIDI with the same gate detector and MIDI

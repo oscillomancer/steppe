@@ -92,7 +92,9 @@ from prepared stage latency in plan frames. Service compares raw with raw,
 so oversampling does not cause repeated reloads. Actual plug-in-originated
 latency/restart requests still rebuild PDC. `Engine::rackLatencies` copies the
 latest prepared rack's node and output timing on the main thread without
-instantiating plug-ins (ADR-0064).
+instantiating plug-ins (ADR-0064). It matches the version recorded at plan
+compilation, not the latest submitted session: playrate scheduling may defer
+a structural edit while the preceding plan remains prepared.
 
 
 - Each FX instance reports latency (CLAP `latency`); bypassed instances keep

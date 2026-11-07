@@ -966,11 +966,17 @@ void registerRackCommands(cmd::Registry& registry) {
             const auto latencies =
                 prepared ? detail::RackLatencies{prepared->latency, prepared->outputs} : estimated;
             out["latency_samples"] = available ? json::Value(latencies.latency) : json::Value();
-            for (auto& output : out["outs"].asArray())
-                output["latency_samples"] =
-                    available
-                        ? json::Value(latencies.outputs.at(*Id::parse(output["module"].asString())))
-                        : json::Value();
+            for (auto& output : out["outs"].asArray()) {
+                const auto module = *Id::parse(output["module"].asString());
+                auto found = latencies.outputs.find(module);
+                if (found != latencies.outputs.end() && available)
+                    output["latency_samples"] = found->second;
+                else if (const auto fallback = estimated.outputs.find(module);
+                         fallback != estimated.outputs.end() && available)
+                    output["latency_samples"] = fallback->second;
+                else
+                    output["latency_samples"] = json::Value();
+            }
             out["note_outs"] = json::Value::array();
             for (const auto& [module, latency] : latencies.outputs)
                 if (s.modules.find(module) &&
