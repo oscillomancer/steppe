@@ -1352,12 +1352,12 @@ a new channel). It follows rack.md §8.
   drop point, else beside the rack's modules), its modules selected and
   brought into view. Into an empty rack (only its own Outs and Ins) a
   load replaces nothing: the patch's Out and In are the rack's own (`io:
-  join`), the rack is laid out by signal flow with them (`rack.arrange`),
-  the load and the layout one undo step ("Load patch <name>"), and
-  everything is shown. A right-click offers Load into rack and, for the
-  user's own, Delete patch (a factory patch of the same name comes back).
-  Saving (Save as patch…, Save rack as patch…) asks a name
-  in a field over the space (the rack's label, or the one module's) and
+  join`), moved to the patch's own places, so the patch keeps its layout
+  (rack.md §7.1), one undo step, and everything is shown. A right-click
+  offers Load into rack and, for the user's own, Delete patch (a factory
+  patch of the same name comes back). Saving (Save as patch…, Save rack
+  as patch…) asks a name in a field over the space (the rack's label, or
+  the one module's) and
   calls `rack.preset.save` with the selection's ids or none; a name in use
   asks Replace "<name>" before saving with `replace`. The list is read when
   the window opens and after each save or delete.

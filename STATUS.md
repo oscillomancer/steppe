@@ -378,10 +378,11 @@ instructions are in `docs/guides/installing.md`.
   dot marks a bound knob), patches (rack presets saved from the space or
   a selection, and the factory patches, on the browser's own Patches view,
   apart from the modules, searchable, with a card on hover; one loaded
-  into an empty rack is laid out with the rack's Out in one undo step), an
-  empty rack's "Add a module, or start from a patch", and cables into a plugin
-  module's plug-in parameters (dropped on its body, picked from a searchable
-  list; sockets on its edge with the parameter's name on hover, amounts
+  into an empty rack keeps its own layout, the rack's Out moved into it,
+  and is shown whole), an empty rack's "Add a module, or start from a
+  patch", and cables into a plugin module's plug-in parameters (dropped
+  on its body, picked from a searchable list; sockets on its edge with the
+  parameter's name on hover, amounts
   dragged there; a cable's right-click sets the amount or removes it), and
   for big patches: type or double-click to add a module at the pointer (a
   cable let go on nothing picks a module that takes it), copy, cut, paste

@@ -1350,7 +1350,7 @@ TEST_CASE("rack window: an empty rack invites a start, and a patch lands in it w
     f.frame();
     CHECK(f.racks->patchesShown());
     // A double-click loads one: the rack's Out is its Out (nothing replaced),
-    // laid out by signal flow, all in view, one undo step.
+    // moved into the patch's own layout, all in view, one undo step.
     const auto row = f.racks->browserRowAt("preset:Init Voice");
     REQUIRE(row);
     f.pointer(ui::PointerEvent::Type::Down, *row, 1);
@@ -1365,6 +1365,15 @@ TEST_CASE("rack window: an empty rack invites a start, and a patch lands in it w
     CHECK(outs == 1);
     CHECK(space.scene().module(out));
     CHECK(space.scene().cables.size() == 9);
+    // Init Voice's own places: its Out 792 right of and 98 under its Keys.
+    const auto* keys = [&]() -> const gui::RackScene::Module* {
+        for (const auto& m : modules)
+            if (m.title == "Keys") return &m;
+        return nullptr;
+    }();
+    REQUIRE(keys);
+    CHECK(space.scene().module(out)->x - keys->x == doctest::Approx(792));
+    CHECK(space.scene().module(out)->y - keys->y == doctest::Approx(98));
     const ui::Rect seen = space.visibleSpace();
     for (std::size_t i = 0; i < modules.size(); ++i) {
         const ui::Rect r = modules[i].rect();

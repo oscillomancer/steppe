@@ -320,8 +320,8 @@ puts any CLAP or VST3 plugin in the rack as a module; click it to open
 its editor. **Patches** lists whole patches: your own under *Yours*, and
 the ones that come with Steppe under *Factory*. Hover one to read what it
 is, search them, and double-click one or drag it into the space. Into an
-empty rack a patch arrives whole, laid out and in view, using the rack's
-own Out; Undo takes it away in one step.
+empty rack a patch arrives whole, as its author laid it out and in view,
+using the rack's own Out; Undo takes it away in one step.
 
 The quickest way to add a module is to start typing its name over the
 space, or double-click an empty spot: a list opens where the pointer is,

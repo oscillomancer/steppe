@@ -2068,22 +2068,11 @@ Status RackWindow::loadPreset(const std::string& name, std::optional<ui::Point> 
         args["y"] = std::round(static_cast<double>(at->y));
     }
     if (rackEmpty()) {
-        // A start: the patch's Out and In are the rack's own (nothing is
-        // replaced), laid out with them by signal flow, one undo step, and
-        // all of it shown.
-        const std::string rack = rack_->str();
-        auto r = dispatcher_.transact("Load patch " + name, kOrigin, [&]() -> Result<json::Value> {
-            auto loaded = dispatcher_.execute({"rack.preset.load", std::move(args), kOrigin});
-            if (!loaded) return loaded;
-            json::Value arrange = json::Value::object();
-            arrange["rack"] = rack;
-            SUPPLE_TRY(dispatcher_.execute({"rack.arrange", std::move(arrange), kOrigin}));
-            return loaded;
-        });
-        if (!r) {
-            report(r.error());
-            return r.error();
-        }
+        // A start: the patch's Outs and Ins are the rack's own (nothing is
+        // replaced), moved to the patch's places by the load (its own
+        // layout), and all of it shown.
+        auto r = exec("rack.preset.load", std::move(args));
+        if (!r) return r.error();
         sync();
         if (space_) {
             space_->select({});
