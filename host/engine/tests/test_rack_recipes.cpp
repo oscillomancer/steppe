@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <chrono>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -251,13 +252,17 @@ TEST_CASE("rack recipes: composing with a rack prints a song in D dorian to MIDI
     CHECK(ids["tune"].asString() == "mo_4");
     CHECK(ids["low"].asString() == "mo_5");
     CHECK(ids["prog"].asString() == "mo_3");
-    CHECK(ids["keys"].asString() == "mo_8");
-    CHECK(ids["hits"].asString() == "mo_9");
+    CHECK(ids["feel"].asString() == "mo_7");
+    CHECK(ids["parts"].asString() == "mo_8");
+    CHECK(ids["keys"].asString() == "mo_10");
     auto& probe = results["rack.probe"]["ports"].asArray();
-    REQUIRE(probe.size() == 4);
+    REQUIRE(probe.size() == 5);
     CHECK(probe[1]["min"].asDouble() >= -16.0 / 12 - 1e-3);
     CHECK(probe[1]["max"].asDouble() <= -3.0 / 12 + 1e-3);
     CHECK(probe[2]["channels"].asInt() == 3);
+    CHECK(probe[3]["max"].asDouble() > probe[3]["min"].asDouble());
+    CHECK(probe[4]["min"].asDouble() <= 0.5);  // Layers: from one part
+    CHECK(probe[4]["max"].asDouble() == 1.0);  // to all four
 
     // The captures, as the guide describes them.
     auto& captured = results["batch"]["results"].asArray();
@@ -267,7 +272,7 @@ TEST_CASE("rack recipes: composing with a rack prints a song in D dorian to MIDI
         CHECK(captured[k]["item"].asString() == items[k]);
         CHECK(captured[k]["length"].asDouble() == 112.0);
     }
-    CHECK(captured[0]["notes"].asInt() > 180);
+    CHECK(captured[0]["notes"].asInt() > 100);
     CHECK(captured[1]["notes"].asInt() > 180);
     CHECK(captured[2]["notes"].asInt() == 84);
     CHECK(captured[2]["voices"].asInt() == 3);
@@ -293,17 +298,39 @@ TEST_CASE("rack recipes: composing with a rack prints a song in D dorian to MIDI
         bassHigh = std::max<int>(bassHigh, static_cast<int>(n.find("pitch")->asInt()));
     CHECK(leadLow >= 57);  // A3
     CHECK(bassHigh < 67);  // under G4, the lead's highest
-    // The drums are the three keys, and the choruses have more hats than the intro.
+    // Layers' arrangement: lead and bass from the first verse (bar 3), the lead
+    // resting in the bridge (bars 19 to 22), the bass playing it.
+    auto during = [](const json::Value& part, double from, double to) {
+        int count = 0;
+        for (const auto& n : part.asArray()) {
+            const double at = n.find("start")->asDouble();
+            count += at >= from && at < to ? 1 : 0;
+        }
+        return count;
+    };
+    CHECK(during(lead, 0, 8) == 0);
+    CHECK(during(bass, 0, 8) == 0);
+    CHECK(during(lead, 8, 24) > 16);
+    CHECK(during(lead, 72, 88) == 0);
+    CHECK(during(bass, 72, 88) > 8);
+    CHECK(during(drums, 0, 4) == 0);
+    // The drums are the three keys at Groove's velocities, and the choruses
+    // have more hats than the intro.
     int introHats = 0, chorusHats = 0;
+    std::set<std::int64_t> velocities;
     for (const auto& n : drums.asArray()) {
+        velocities.insert(n.find("velocity")->asInt());
         const int key = n.find("pitch")->asInt();
         CHECK((key == 36 || key == 38 || key == 42));
         const double at = n.find("start")->asDouble();
-        if (key == 42 && at < 8) ++introHats;
+        if (key == 42 && at >= 4 && at < 8) ++introHats;
         if (key == 42 && at >= 24 && at < 40) ++chorusHats;
     }
-    // The first chorus (bars 7 to 10) has more than twice the intro's (bars 1, 2) hats a bar.
-    CHECK(chorusHats / 4.0 > 2 * (introHats / 2.0));
+    // The first chorus (bars 7 to 10) has more than twice the hats a bar of the
+    // intro's second bar, where the drums come in.
+    REQUIRE(introHats > 0);
+    CHECK(chorusHats / 4.0 > 2 * introHats);
+    CHECK(velocities.size() > 8);
     // The edit ended the song on the home chord, D F A.
     const json::Value chords = notes("it_3");
     REQUIRE(chords.asArray().size() == 84);

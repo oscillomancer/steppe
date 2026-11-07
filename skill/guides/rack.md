@@ -353,7 +353,8 @@ The worked example writes a 28-bar song in D dorian: Form lays out the
 sections (an intro, verses, choruses, a bridge, an outro) and asks Phrase for
 a new call at each change; Phrase writes the lead; Counter a bass line
 against it; Changes the chords; Rhythm the drums, busier as Form's energy
-rises. Each step is one call, as printed, on an empty project.
+rises, with Groove's accents; Layers arranges them by the same energy. Each
+step is one call, as printed, on an empty project.
 
 **1. A rack and a channel for each part.** The rack's own channel (`tr_1`)
 stays silent.
@@ -370,6 +371,10 @@ stays silent.
 three offsets are the drums' keys in octaves from C4 (−2 is C2, 36, a kick;
 −1.8333 D2, 38, a snare; −1.5 F♯2, 42, a closed hat: Drumlin's and General
 MIDI's), merged by one Poly beside Rhythm's three gates merged by another.
+Groove gives those gates a backbeat's velocities. Layers passes each
+part's gates from the energy its Enter names: the chords always, the drums
+from the intro's second bar, the bass from the verses and the lead in the
+verses and choruses, so the bridge is instrumental and the outro thins out.
 
 ```json rack.patch
 {"rack": "rk_1",
@@ -378,53 +383,64 @@ MIDI's), merged by one Poly beside Rhythm's three gates merged by another.
              "tune": {"type": "phrase", "params": {"key": "d", "mode": "dorian"}},
              "low": {"type": "counter", "params": {"key": "d", "mode": "dorian"}},
              "beat": {"type": "rhythm", "params": {"y": 0}},
+             "feel": {"type": "groove", "params": {"feel": "backbeat", "human": 20}},
+             "parts": {"type": "layers", "params": {"enter_1": 0, "enter_2": 30, "enter_3": 40, "enter_4": 50}},
              "drum_keys": {"type": "scale", "params": {"offset_1": -2, "offset_2": -1.8333, "offset_3": -1.5}},
              "keys": {"type": "poly"}, "hits": {"type": "poly"}},
  "cables": [["song.change", "tune.write"], ["tune.pitch", "low.lead"], ["tune.gate", "low.lead_gate"],
-            ["song.energy", "beat.y", 100],
+            ["song.energy", "beat.y", 100], ["song.energy", "parts.level"],
             ["drum_keys.out_1", "keys.merge_1"], ["drum_keys.out_2", "keys.merge_2"],
             ["drum_keys.out_3", "keys.merge_3"],
-            ["beat.kick", "hits.merge_1"], ["beat.snare", "hits.merge_2"], ["beat.hat", "hits.merge_3"]]}
+            ["beat.kick", "hits.merge_1"], ["beat.snare", "hits.merge_2"], ["beat.hat", "hits.merge_3"],
+            ["hits.merged", "feel.gate"], ["beat.accent", "feel.accent"],
+            ["prog.gate", "parts.gate_1"], ["feel.out", "parts.gate_2"],
+            ["low.gate", "parts.gate_3"], ["tune.gate", "parts.gate_4"]]}
 ```
 
 It returns the ids by name: `song` `mo_2`, `prog` `mo_3`, `tune` `mo_4`,
-`low` `mo_5`, `beat` `mo_6`, `drum_keys` `mo_7`, `keys` `mo_8`, `hits`
-`mo_9`. Probe, capture and `module.set` take ids, so use the ones your
+`low` `mo_5`, `beat` `mo_6`, `feel` `mo_7`, `parts` `mo_8`, `drum_keys`
+`mo_9`, `keys` `mo_10`, `hits` `mo_11`. Probe, capture and `module.set` take ids, so use the ones your
 call returned; in another project they differ.
 
 **3. Probe** the parts before printing them: the notes each visits, the
-interval between lead and bass, how often the drums hit.
+interval between lead and bass, the drums' velocities, how many parts play.
 
 ```json rack.probe
-{"rack": "rk_1", "seconds": 10, "ports": ["mo_4.pitch", "mo_5.interval", "mo_3.chord", "mo_9.merged"]}
+{"rack": "rk_1", "seconds": 10, "ports": ["mo_4.pitch", "mo_5.interval", "mo_3.chord", "mo_7.velocity", "mo_8.count"]}
 ```
 
 `mo_4.pitch` visits D dorian's notes from A3 to G4, `mo_5.interval` stays
-3 to 16 semitones below (−1.33 to −0.25 octaves), the chord has 3 voices.
+3 to 16 semitones below (−1.33 to −0.25 octaves), the chord has 3 voices,
+`mo_7.velocity` moves between the weak and strong steps, and `mo_8.count`
+rises from one part to four as the intro becomes the first verse.
 To change a part, `module.set` its module and probe again: `prog`'s
 `change` redraws chords, `tune`'s `density` and `contrast` reshape the
 phrases, `low`'s `motion` and `hold` the bass.
 
 **4. Capture** each part for the whole song (28 bars, 112 beats), on
-sixteenths. Phrase's Accent gives the lead its velocities.
+sixteenths, through Layers so each part plays only where it is arranged.
+Phrase's Accent gives the lead its velocities and Groove the drums'.
+Quantize snaps Groove's small timing moves to the grid and keeps its
+velocities; leave it off a part to keep its swing and lay-back.
 
 ```json batch
 {"steps": [
-  {"command": "rack.capture", "args": {"rack": "rk_1", "pitch": "mo_4.pitch", "gate": "mo_4.gate", "velocity": "mo_4.accent",
+  {"command": "rack.capture", "args": {"rack": "rk_1", "pitch": "mo_4.pitch", "gate": "mo_8.out_4", "velocity": "mo_4.accent",
                                        "track": "tr_2", "beats": 112, "quantize": 0.25, "name": "Lead"}},
-  {"command": "rack.capture", "args": {"rack": "rk_1", "pitch": "mo_5.pitch", "gate": "mo_5.gate",
+  {"command": "rack.capture", "args": {"rack": "rk_1", "pitch": "mo_5.pitch", "gate": "mo_8.out_3",
                                        "track": "tr_3", "beats": 112, "quantize": 0.25, "name": "Bass"}},
-  {"command": "rack.capture", "args": {"rack": "rk_1", "pitch": "mo_3.chord", "gate": "mo_3.gate",
+  {"command": "rack.capture", "args": {"rack": "rk_1", "pitch": "mo_3.chord", "gate": "mo_8.out_1",
                                        "track": "tr_4", "beats": 112, "quantize": 0.25, "name": "Chords"}},
-  {"command": "rack.capture", "args": {"rack": "rk_1", "pitch": "mo_8.merged", "gate": "mo_9.merged",
+  {"command": "rack.capture", "args": {"rack": "rk_1", "pitch": "mo_10.merged", "gate": "mo_8.out_2", "velocity": "mo_7.velocity",
                                        "track": "tr_5", "beats": 112, "quantize": 0.25, "name": "Drums"}}]}
 ```
 
-The items are `it_1` to `it_4`: about 230 lead notes, 220 bass notes, 28
-chords of three, and close to 400 drum hits that go from kick and hat in
-the intro to a backbeat in the verses and sixteenth hats in the choruses.
-Each capture renders the project again, so a long song takes a few seconds
-a part. `midi.get {item}` reads a part as notation.
+The items are `it_1` to `it_4`: the lead in the verses and choruses, the
+bass from the first verse, 28 chords of three, and the drums from the
+intro's second bar, going from kick and hat to a backbeat in the verses and
+sixteenth hats in the choruses. Each capture renders the project again, so
+a long song takes a few seconds a part. `midi.get {item}` reads a part as
+notation.
 
 **5. Edit.** The progression loops, so the song stops on its third chord;
 end it on the home chord instead. `midi.notes {item: "it_3"}` lists the
@@ -468,7 +484,8 @@ Tags in the reference group the modules. Some starting points:
   `rhythm` (drum patterns by density), `polyrhythm` (four counts against a
   bar), `ratchet` (bursts), `chance` (coin tosses per gate), `logic`,
   `life` (an 8x8 Game of Life as gates), `bounce` (a bouncing ball's
-  quickening hits), `dust` (random triggers with no clock, in bursts).
+  quickening hits), `dust` (random triggers with no clock, in bursts),
+  `groove` (velocities by step, swing, lay-back: feel for any gates).
 - **Melody**: `turing` (a looping shift register), `random` (notes with
   memory), `markov` (note-to-note odds, learnable), `cellular` (a 1-D
   automaton), `lsystem` (a melody grown by rewriting rules), `sequencer`
@@ -479,7 +496,8 @@ Tags in the reference group the modules. Some starting points:
   `chord`, always through `quantizer` for a key or `fit` for the chord
   playing.
 - **Structure**: `form` (a song's sections over minutes: gates for verse,
-  chorus and bridge, an energy arc, fills).
+  chorus and bridge, an energy arc, fills), `layers` (parts entering and
+  leaving on the bar as Form's energy rises and falls).
 - **Motion**: `lfo`, `function`, `stages` (a multi-stage envelope, LFO or
   gesture), `adsr`, `drift` (slow random per voice), `chaos` (Lorenz and
   Thomas attractors), `swarm` (coupled LFOs that fall into step),
