@@ -537,16 +537,15 @@ Status compileRack(Plan& p, Node& n, const Session& s, Id rackId, InstancePool& 
             const auto* home = s.racks.find(m.rack);
             notesInput->source = m.source.value_or(home ? home->track : model::kMaster);
             notesInput->device = m.device;
-            if (const auto* track = s.tracks.find(notesInput->source)) {
-                notesInput->monitoring =
-                    track->record.armed && track->record.monitor != model::Monitor::Off;
-                notesInput->tapeAuto = track->record.monitor == model::Monitor::Auto;
-            }
-            if (const auto* route = model::midiInputRoute(s, notesInput->source)) {
-                notesInput->sourceDevice = route->from.midiDevice;
-                notesInput->fromChannel = route->midi ? route->midi->fromChannel : 0;
-                notesInput->toChannel = route->midi ? route->midi->toChannel : 0;
-            }
+            if (const auto* track = s.tracks.find(notesInput->source);
+                track && track->record.armed && track->record.monitor != model::Monitor::Off)
+                if (const auto* route = model::midiInputRoute(s, notesInput->source)) {
+                    notesInput->monitoring = true;
+                    notesInput->tapeAuto = track->record.monitor == model::Monitor::Auto;
+                    notesInput->sourceDevice = route->from.midiDevice;
+                    notesInput->fromChannel = route->midi ? route->midi->fromChannel : 0;
+                    notesInput->toChannel = route->midi ? route->midi->toChannel : 0;
+                }
         }
         rack::Instance* in = pool.get(e.id, m, setup, notesInput);
         if (!in)

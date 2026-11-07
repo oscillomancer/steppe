@@ -492,8 +492,10 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   `monitor: on` listens while stopped or playing; `auto` while stopped or
   recording. An explicit Notes `device` also listens regardless of the arm.
   Each incoming event is delivered once if those device selections overlap.
-  Changing a Notes input configuration retires its instance with the old plan,
-  releasing held gates without changing audio-thread state from the model thread.
+  Choosing an inactive input on an unarmed source leaves held timeline notes
+  playing. Changing an effective live input configuration retires the Notes
+  instance with the old plan, releasing held gates without changing
+  audio-thread state from the model thread.
 - **Note Out.** Pitch/gate becomes MIDI with the same gate detector and MIDI
   quantization functions as Capture: rise at ≥0.5, fall below 0.25, key
   round(60 + 12 × pitch) clamped to 0..127, velocity round(127 × v) clamped

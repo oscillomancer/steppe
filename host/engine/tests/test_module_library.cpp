@@ -2012,6 +2012,7 @@ TEST_CASE("rack inputs: home Notes hears monitored device MIDI in both executors
                      .renderBlock = 128,
                      .renderAheadMs = 10,
                      .workers = workers}));
+                REQUIRE(f.app->engine()->awaitPlan());
                 if (recording) f.run("transport.record");
                 for (int i = 0; i < 90; ++i) {
                     if (anticipative) REQUIRE(f.app->engine()->awaitRendered(37));
@@ -2095,4 +2096,51 @@ TEST_CASE("rack inputs: audio and MIDI inputs remain independent on ordinary cha
     REQUIRE(model::midiInputRoute(f.app->head(), {model::Kind::Track, 2}));
     CHECK(*model::midiInputRoute(f.app->head(), {model::Kind::Track, 2})->from.midiDevice ==
           "Keys");
+}
+
+TEST_CASE("rack inputs: selecting inactive MIDI preserves a held timeline note") {
+    for (bool anticipative : {false, true}) {
+        CAPTURE(anticipative);
+        Fixture f;
+        f.run("project.set", R"({"console9":false})");
+        f.run("rack.add");
+        f.run("module.add", R"({"rack":"rk_1","type":"notes"})");
+        f.run("cable.add", R"({"from":"mo_2.gate","to":"mo_1.l"})");
+        auto tx = f.app->beginTransaction(origin, "Held timeline note");
+        REQUIRE(tx);
+        model::MidiSource midi;
+        midi.sequence.ppq = 960;
+        midi.sequence.length = 3840;
+        midi.sequence.notes = {{0, 3840, 0, 60, 96, 0}};
+        model::Take take;
+        take.source = f.app->txn().create(midi);
+        const auto tk = f.app->txn().create(take);
+        model::Item item;
+        item.track = {model::Kind::Track, 1};
+        item.length = 4;
+        item.timebase = model::ItemTimebase::Beats;
+        item.takes = {tk};
+        item.activeTake = tk;
+        f.app->txn().create(item);
+        REQUIRE(f.app->commitTransaction(*tx));
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 8192});
+        REQUIRE(f.app->startEngine(
+            backend, {.sampleRate = 48000, .blockSize = 37},
+            {.anticipative = anticipative, .renderBlock = 128, .renderAheadMs = 10, .workers = 0}));
+        REQUIRE(f.app->engine()->awaitPlan());
+        f.run("transport.play");
+        auto run = [&] {
+            for (int i = 0; i < 64; ++i) {
+                if (anticipative) REQUIRE(f.app->engine()->awaitRendered(37));
+                backend.run(1);
+            }
+        };
+        run();
+        REQUIRE(std::abs(backend.capture().channels[0][64 * 37 - 1]) > .01f);
+        f.run("track.set", R"({"track":"tr_1","record_midi":"*","monitor":"on"})");
+        run();
+        CHECK(backend.capture().channels[0][128 * 37 - 1] ==
+              backend.capture().channels[0][64 * 37 - 1]);
+        f.app->stopEngine();
+    }
 }
