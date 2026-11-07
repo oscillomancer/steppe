@@ -54,14 +54,22 @@ struct RecordingInfo {
     std::int64_t loopStart = 0, loopEnd = 0;
     std::string hash = {};  // optional; finalized by the background recording job
 };
-// A track's device input after its input FX (ADR-0014): what it records
+// A track's input after its input FX (ADR-0014): what it records
 // instead of the raw device channels, and the latency of those FX. For a
 // recorded master (ADR-0057), its output before its own items; the recorder
-// places it from the target's outputShift and ignores `latency`.
+// places it from the target's outputShift and ignores `latency`. A rack Out
+// uses its channel's pre-FX tap, with outputShift including its input FX.
 struct ProcessedInput {
     model::Id track;
     const float* channels[2] = {nullptr, nullptr};
     std::int64_t latency = 0;
+};
+
+struct RoutedMidiEvent {
+    std::uint32_t frame = 0;
+    std::uint8_t bytes[3] = {0, 0, 0};
+    model::Id route = {};
+    int voice = -1;
 };
 
 std::filesystem::path sidecarPath(const std::filesystem::path& wav);
@@ -82,6 +90,8 @@ class Recorder {
     // device MIDI in frames [offset, offset + frames) of `events` (ADR-0016).
     void captureMidi(std::span<const MidiInputEvent> events, std::uint32_t offset,
                      std::uint32_t frames, std::int64_t pos) SUPPLE_RT;
+    void captureRoutedMidi(model::Id track, std::span<const RoutedMidiEvent> events,
+                           std::uint32_t frames) SUPPLE_RT;
     // The consumer of the MIDI rings: the writer thread while recording, then
     // finish() after joining it.
     void drainMidi();
@@ -112,6 +122,8 @@ class Recorder {
     struct MidiEvent {
         std::int64_t at = 0;
         std::uint8_t bytes[3] = {0, 0, 0};
+        model::Id route = {};
+        int voice = -1;
     };
     struct MidiTrack {
         RecordTarget target;
@@ -123,6 +135,8 @@ class Recorder {
         std::atomic<std::uint64_t> overflow{0};
     };
     void writerLoop();
+    std::int64_t midiClock(const MidiTrack& track) const SUPPLE_RT;
+    void pushMidi(MidiTrack& track, const MidiEvent& event) SUPPLE_RT;
     void drain(Track& t, std::vector<float>& scratch);
     void padTo(Track& t, std::int64_t frame);
     void writeSidecars();

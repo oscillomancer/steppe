@@ -769,7 +769,12 @@ class Header : public ui::Node {
 
 RackWindow::RackWindow(FloatingPanel& panel, AppActions& actions, cmd::Dispatcher& dispatcher,
                        engine::EngineApp& app, UiState& ui)
-    : panel_(panel), actions_(actions), dispatcher_(dispatcher), app_(app), ui_(ui) {
+    : panel_(panel),
+      actions_(actions),
+      dispatcher_(dispatcher),
+      app_(app),
+      ui_(ui),
+      watchers_(app) {
     actions_.addUi("ui.rack", "View: racks", [this] {
         if (isOpen())
             close();
@@ -1187,9 +1192,7 @@ void RackWindow::sync() {
 
 void RackWindow::watch(bool on) {
     if (on) return;
-    for (model::Id id : watched_)
-        if (rack::Instance* in = racks::instance(app_, id)) in->watch(false);
-    watched_.clear();
+    watchers_.set({});
 }
 
 bool RackWindow::tick(std::chrono::steady_clock::time_point now) {
@@ -1237,11 +1240,9 @@ bool RackWindow::tick(std::chrono::steady_clock::time_point now) {
             changed = true;
         }
     }
-    for (model::Id id : watched_)
-        if (std::find(watching.begin(), watching.end(), id) == watching.end())
-            if (rack::Instance* in = racks::instance(app_, id)) in->watch(false);
-    watched_ = std::move(watching);
-    if (watched_.empty() && !measuring) nextTelemetry_ = now + std::chrono::milliseconds(250);
+    const bool none = watching.empty();
+    watchers_.set(std::move(watching));  // and off for those no view reads
+    if (none && !measuring) nextTelemetry_ = now + std::chrono::milliseconds(250);
     if (changed) space_->telemetryChanged();
     return changed;
 }
@@ -2025,79 +2026,21 @@ void RackWindow::paramMenu(model::Id module, int index, ui::Point at) {
     if (!m || !m->type || index < 0 || static_cast<std::size_t>(index) >= m->type->params().size())
         return;
     const auto& p = m->type->params()[static_cast<std::size_t>(index)];
-    std::vector<ui::MenuItem> items;
-    items.push_back(
-        {"Default (" + paramText(p, p.def) + ")", "Double-click",
-         [this, module, index, def = p.def] { param(module, index, def, ui::Gesture::Set); }});
-    // Automation: on the rack's home channel, as a lane of its own.
-    std::optional<model::Id> env;
-    bool shown = false;
-    for (const auto& e : app_.head().envelopes)
-        if (e.value->target.object == module && e.value->target.param == p.key) {
-            env = e.id;
-            shown = e.value->visible;
-        }
-    if (p.automatable && p.kind != script::detail::ParamModel::Kind::Toggle) {
-        if (!env) {
-            const double v = static_cast<std::size_t>(index) < m->values.size()
-                                 ? m->values[static_cast<std::size_t>(index)]
-                                 : p.def;
-            items.push_back(
-                {"Automate", "", [this, module, key = p.key, value = racks::paramJson(p, v)] {
-                     json::Value point = json::Value::object();
-                     point["beat"] = 0.0;
-                     point["value"] = value;
-                     json::Value points = json::Value::array();
-                     points.push_back(std::move(point));
-                     json::Value args = json::Value::object();
-                     args["module"] = module.str();
-                     args["param"] = key;
-                     args["points"] = std::move(points);
-                     (void)exec("env.add", std::move(args));
-                 }});
-        } else {
-            items.push_back({shown ? "Hide automation lane" : "Show automation lane", "",
-                             [this, id = *env, shown] {
-                                 json::Value args = json::Value::object();
-                                 args["env"] = id.str();
-                                 args["visible"] = !shown;
-                                 (void)exec("env.set", std::move(args));
-                             }});
-        }
-    }
-    // MIDI learn: the dialog listens; module.learn.set binds (one per knob).
-    const model::RackModule* rm = app_.head().modules.find(module);
-    const model::ParamLearn* bound = nullptr;
-    if (rm)
-        for (const auto& l : rm->learn)
-            if (l.param == p.key) bound = &l;
-    if (rm && !m->plugin) {
-        items.push_back(
-            {bound ? "MIDI: " + engine::describe(bound->control) + "\u2026" : "MIDI learn\u2026",
-             "", [this, module, index] { learn(module, index); }});
-        if (bound)
-            items.push_back({"Remove MIDI learn", "", [this, module, key = p.key] {
-                                 json::Value args = json::Value::object();
-                                 args["module"] = module.str();
-                                 args["param"] = key;
-                                 (void)exec("module.learn.remove", std::move(args));
-                             }});
-    }
-    if (p.kind == script::detail::ParamModel::Kind::Choice) {
-        items.push_back({"", "", {}, true, true});
-        const double v = static_cast<std::size_t>(index) < m->values.size()
-                             ? m->values[static_cast<std::size_t>(index)]
-                             : p.def;
-        for (std::size_t k = 0; k < p.choices.size(); ++k)
-            items.push_back({p.choices[k], "",
-                             [this, module, index, k] {
-                                 param(module, index, static_cast<double>(k), ui::Gesture::Set);
-                             },
-                             true, false, std::lround(v) == static_cast<long>(k)});
-    }
-    root().openPopup(
-        ui::makeMenu("rack.param.menu", std::move(items), [this] { root().closePopup(); }),
-        {at.x, at.y, 1, 1});
+    const double v = static_cast<std::size_t>(index) < m->values.size()
+                         ? m->values[static_cast<std::size_t>(index)]
+                         : p.def;
+    racks::KnobMenuHooks hooks;
+    hooks.exec = [this](const std::string& command, json::Value args) {
+        (void)exec(command, std::move(args));
+    };
+    hooks.set = [this, module, index](double value) {
+        param(module, index, value, ui::Gesture::Set);
+    };
+    hooks.learn = [this, module, index] { learn(module, index); };
+    root().openPopup(ui::makeMenu("rack.param.menu",
+                                  racks::knobMenu(app_.head(), module, p, v, std::move(hooks)),
+                                  [this] { root().closePopup(); }),
+                     {at.x, at.y, 1, 1});
 }
 
 void RackWindow::readPresets() {
@@ -2250,30 +2193,11 @@ void RackWindow::learn(model::Id module, int index) {
     if (!m || !m->type || index < 0 || static_cast<std::size_t>(index) >= m->type->params().size())
         return;
     const auto& p = m->type->params()[static_cast<std::size_t>(index)];
-    const model::Session s = app_.head();
-    const model::RackModule* rm = s.modules.find(module);
-    if (!rm) return;
-    LearnRequest request;
-    request.title = model::rackLabel(s, rm->rack) + " \u203a " + m->title + " \u00b7 " + p.name;
-    const bool toggle = p.kind == script::detail::ParamModel::Kind::Toggle;
-    request.takeover = !toggle;
-    request.mode = toggle ? model::ControlMode::Toggle : model::ControlMode::Absolute;
-    for (const auto& l : rm->learn)
-        if (l.param == p.key)
-            request.current = LearnChoice(static_cast<const model::ControlBinding&>(l));
-    request.onOk = [this, module, key = p.key](const LearnChoice& choice) {
-        json::Value args = learnArgs(choice);
-        args["module"] = module.str();
-        args["param"] = key;
-        (void)exec("module.learn.set", std::move(args));
-    };
-    request.onRemove = [this, module, key = p.key] {
-        json::Value args = json::Value::object();
-        args["module"] = module.str();
-        args["param"] = key;
-        (void)exec("module.learn.remove", std::move(args));
-    };
-    openLearnDialog(root(), actions_, app_, std::move(request));
+    openLearnDialog(root(), actions_, app_,
+                    racks::knobLearn(app_.head(), module, m->title, p,
+                                     [this](const std::string& command, json::Value args) {
+                                         (void)exec(command, std::move(args));
+                                     }));
 }
 
 void RackWindow::tabMenu(model::Id rack, ui::Point at) {

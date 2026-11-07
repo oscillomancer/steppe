@@ -7,6 +7,7 @@
 // effect a saw sent into its In, and a self-playing one the song running.
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <set>
 #include <string>
@@ -124,6 +125,29 @@ TEST_CASE("factory rack patches: each loads and plays under full scale") {
             REQUIRE(m != nullptr);
             if (m->type == "com.suppleaudio.rack.in")
                 f.run("route.add", R"({"from": "tr_2", "to": ")" + id.asString() + R"("})");
+        }
+        // In a fresh rack the patch keeps its layout, its Out (the rack's own) included.
+        {
+            const auto& entries = doc->find("modules")->asArray();
+            double minX = 1e9, minY = 1e9, rackX = 1e9, rackY = 1e9;
+            for (const auto& m : entries) {
+                minX = std::min(minX, m.find("x")->asDouble());
+                minY = std::min(minY, m.find("y")->asDouble());
+            }
+            for (const auto& m : f.app->head().modules)
+                if (m.value->rack == model::Id{model::Kind::Rack, 1}) {
+                    rackX = std::min(rackX, m.value->x);
+                    rackY = std::min(rackY, m.value->y);
+                }
+            for (const auto& m : entries)
+                if (m.find("type")->asString() == "com.suppleaudio.rack.out") {
+                    const model::RackModule* out =
+                        f.app->head().modules.find(model::Id{model::Kind::Module, 1});
+                    REQUIRE(out != nullptr);
+                    CHECK(out->x - rackX == doctest::Approx(m.find("x")->asDouble() - minX));
+                    CHECK(out->y - rackY == doctest::Approx(m.find("y")->asDouble() - minY));
+                    break;
+                }
         }
         json::Value report = f.run("analyze.track", R"({"track": "tr_1", "end_beat": 16})");
         const double peak = report["loudness"]["sample_peak_dbfs"].asDouble();

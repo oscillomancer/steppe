@@ -64,6 +64,13 @@ void pullRecordTaps(detail::Plan& p, std::uint64_t e, std::int64_t stream,
                 e, stream, tap.pulled.l.data(), tap.pulled.r.data(), frames);
 }
 
+void captureRoutedMidi(detail::Recorder& recorder, const detail::Plan& plan,
+                       std::uint32_t frames) SUPPLE_RT {
+    for (const auto& node : plan.nodes)
+        if ((!plan.split || node.live) && !node.routedMidi.empty())
+            recorder.captureRoutedMidi(node.id, node.routedMidi, frames);
+}
+
 }  // namespace
 
 std::uint64_t midiPortMask(const std::vector<std::string>& ports, std::string_view device) {
@@ -1487,6 +1494,7 @@ void Engine::cycleBody(const float* const* in, float* const* out, std::uint32_t 
             const auto timeline = static_cast<std::int64_t>(std::llround(plan->rateSample(pos_)));
             r->capture(ins, deviceInputs_, k, timeline, plan->processedInputs);
             r->captureMidi(plan->deviceMidi, midiBase + done, k, timeline);
+            captureRoutedMidi(*r, *plan, k);
         }
         // Metering (P5.3c): no anticipation here, so the callback renders and
         // plays in step; its own stream is the position a reader aligns to.
@@ -1783,8 +1791,32 @@ Status Engine::startRecording(std::vector<RecordTarget> targets) {
         return Error("record.nothing_armed", "no track is armed with an input", {},
                      "use track.list for a channel id, then track.set {track, armed: true, "
                      "record_input: [1, 2]}, or arm a master to record its output");
-    // A master's output is placed by its own timeline shift (ADR-0057).
+    // Rendered inputs use their musical clock; device inputs use round trip.
     const detail::Plan* plan = latestPlan_.load(std::memory_order_acquire);
+    for (RecordTarget& target : targets) {
+        if (!target.rackInput) continue;
+        const auto node = plan ? std::find_if(plan->nodes.begin(), plan->nodes.end(),
+                                              [&](const auto& n) { return n.id == target.track; })
+                               : std::vector<detail::Node>::const_iterator{};
+        if (!plan || node == plan->nodes.end() || !node->recordRack)
+            return Error("record.rack_input",
+                         "the loaded plan has no armed rack input for " + target.track.str(),
+                         "/track",
+                         "assign a rack Out with track.set {record_rack, armed: true} and load it "
+                         "before recording");
+        target.outputShift = node->timelineShift + node->inputLatency;
+    }
+    for (RecordTarget& target : targets) {
+        if (!target.midi || !target.midi->routed) continue;
+        const auto node = plan ? std::find_if(plan->nodes.begin(), plan->nodes.end(),
+                                              [&](const auto& n) { return n.id == target.track; })
+                               : std::vector<detail::Node>::const_iterator{};
+        if (!plan || node == plan->nodes.end() || !node->live)
+            return Error("record.midi_route",
+                         "the Note Out destination is not armed in the loaded plan", "/track",
+                         "arm the destination in a MIDI record mode, load it, and record again");
+        target.midi->shift = node->timelineShift;
+    }
     for (RecordTarget& t : targets) {
         if (!t.output) continue;
         const auto node = plan
@@ -2422,6 +2454,7 @@ std::uint32_t Engine::liveRender(const float* const* in, float* const* out, std:
                 static_cast<std::int64_t>(std::llround(p.rateSample(livePos_, true)));
             r->capture(in, deviceInputs_, k, timeline, p.processedInputs);
             r->captureMidi(p.deviceMidi, offset, k, timeline);
+            captureRoutedMidi(*r, p, k);
         }
         const auto next = p.rateEnabled ? livePos_ + k : loopC_.next(livePos_, livePos_ + k);
         if (detail::rateWrapped(p, livePos_, livePos_ + k, loopC_, true))

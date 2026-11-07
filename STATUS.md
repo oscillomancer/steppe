@@ -278,6 +278,10 @@ instructions are in `docs/guides/installing.md`.
   Note Out (`notes_out`) plays any channel's instrument through MIDI routes,
   sharing Capture's gate and pitch/velocity rules, with poly voices, channel
   filtering/remapping, fan-out, compensation and exact RT/offline timing.
+  Armed MIDI destinations record these routes, with or without an instrument,
+  alongside device MIDI, using the recorder's loop, punch and overdub rules.
+  Armed channels also record their rack Out audio input as stereo WAV,
+  including input FX, loop/punch takes, recovery and undo.
   Agents patch with `rack.patch` (named
   modules and cables in one step, laid out by signal flow and labelled by
   name; `rack.arrange` tidies a rack) or `module.add`/`cable.add`, hear a patch
@@ -394,7 +398,10 @@ instructions are in `docs/guides/installing.md`.
   with their source's level (`moduleOutputLevel` for sources out of view,
   while the transport plays). Copy and paste go through the engine's module
   clipboard, so a pasted plug-in keeps its settings in any rack and after a
-  cut. A module with pitch and gate outputs captures its notes to a
+  cut. A channel fed by a rack shows a Rack device at the top of its FX
+  chain window: the rack's name, Open, and its Macro modules' cabled knobs,
+  named after what they drive, turned as one undo step, with a rack knob's
+  Automate and MIDI learn, following automation as it plays. A module with pitch and gate outputs captures its notes to a
   channel's MIDI item from its right-click (`rack.capture`, 1 to 16 bars;
   the render runs on the UI thread, so the window waits for it).
 - **MIDI learn** (ADR-0027): any plug-in parameter (the FX window's MIDI
@@ -789,13 +796,13 @@ Library boundaries:
   on Linux, and native macOS/Windows CI has not run on it.
 
 Engine and hosting:
-- Modular racks (ADR-0062): Note Out MIDI is not yet recorded by armed
-  destination tracks; print it with `rack.capture`. Racks do not follow a
+- Modular racks (ADR-0062): Racks do not follow a
   track's playrate map;
   cables into a plugin module's parameters modulate CLAP plug-ins only
   (VST3 has no modulation), by their first voice, at most 16 per plug-in;
-  a plug-in's latency inside a rack is not compensated; recording an armed channel whose input is a rack's Out is
-  not supported; post-fader sends into an In module take the linear path.
+  a plug-in's latency inside a rack is not compensated;
+  `rack.capture` renders synchronously; post-fader sends into an In module
+  take the linear path.
 - The headless platform layer (ADR-0035) has natively tested macOS/Windows
   address waits, wake sources, control socket/MCP paths and user directory roots.
   Both native engines run with dummy/offline audio and native RT/offline

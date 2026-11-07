@@ -339,6 +339,12 @@ To keep what a sequencer or any module with pitch and gate outputs plays,
 right-click it, choose **Capture notes to track…**, then a channel and a
 length: the notes land there as a MIDI item, from the bar the playhead is
 in, and Undo takes them away.
+A rack's performance controls are its **Macro** modules: cable a Macro's
+outputs to what you want to play, and the channel the rack feeds shows those
+knobs at the top of its FX chain window (the **fx** button), named after
+what they drive ("Filter cutoff"), with **Open** to go to the rack. Turn
+them there, right-click one to automate it or to learn a MIDI controller,
+and watch them move with their automation as the song plays.
 **Tidy up** in the space's right-click menu lays the rack out by signal
 flow, left to right; with several modules selected, only they move. Undo
 puts them back.
@@ -566,6 +572,16 @@ For headless recording, stop the transport and save the project before closing
 an MCP connection or stopping the socket server. Shutdown finishes capture but
 does not save the project. Unsaved audio files can be recovered; unsaved MIDI
 recordings and other session edits are lost when the process exits.
+
+A rack's Note Out routes can be recorded by their destination channel. Arm
+it in MIDI replace or MIDI overdub mode, then record; loop and punch apply
+as for device MIDI. The channel needs no instrument or device input, and a
+selected MIDI device can record alongside the rack's notes.
+
+An armed channel whose input is a rack Out records stereo audio through its
+input FX, before its own items, inserts and fader. It uses ordinary audio
+takes, loop/punch recording and recovery. Disable the live rack feed when
+auditioning the recorded item to avoid doubling it.
 
 Output recording is not supported yet. If a loaded project has an armed track
 in output record mode, recording fails before creating any files. Switch that

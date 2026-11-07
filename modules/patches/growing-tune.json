@@ -1,0 +1,294 @@
+{
+  "schema": "supple.rack-preset/1.0",
+  "name": "Growing Tune",
+  "description": "Self-playing: an L-system grows a two-bar tune in D dorian that a slow drift varies on every pass, over rim and hat taps from a one-dimensional automaton (rule 90). Turn Tune's Depth and rules for another tune, Cells' Rule for other taps.",
+  "modules": [
+    {
+      "type": "com.suppleaudio.rack.out",
+      "version": "1.0.0",
+      "x": 1488.0,
+      "y": 457.0
+    },
+    {
+      "type": "com.suppleaudio.rack.transport",
+      "version": "1.0.0",
+      "label": "Clock",
+      "x": 274.0,
+      "y": 171.0,
+      "params": {
+        "division": "eighth"
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.lsystem",
+      "version": "1.0.0",
+      "label": "Tune",
+      "x": 216.0,
+      "y": 483.0,
+      "params": {
+        "depth": 6,
+        "rest": "c",
+        "loop": 16,
+        "scale": "dorian",
+        "root": "d",
+        "octave": -1
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.drift",
+      "version": "1.0.0",
+      "label": "Wander",
+      "x": 0.0,
+      "y": 361.0,
+      "params": {
+        "rate": 0.2,
+        "voices": 1
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.vco",
+      "version": "1.0.0",
+      "label": "Osc",
+      "x": 534.0,
+      "y": 512.0
+    },
+    {
+      "type": "com.suppleaudio.rack.lpg",
+      "version": "1.0.0",
+      "label": "Gate",
+      "x": 736.0,
+      "y": 764.0,
+      "params": {
+        "decay": 220.0,
+        "resonance": 30.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.cellular",
+      "version": "1.0.0",
+      "label": "Cells",
+      "x": 476.0,
+      "y": 102.0
+    },
+    {
+      "type": "com.suppleaudio.rack.drum",
+      "version": "1.0.0",
+      "label": "Rim",
+      "x": 736.0,
+      "y": 0.0,
+      "params": {
+        "model": "rimshot",
+        "level": -14.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.drum",
+      "version": "1.0.0",
+      "label": "Hat",
+      "x": 736.0,
+      "y": 382.0,
+      "params": {
+        "model": "closed_hat",
+        "decay": 30.0,
+        "level": -16.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.mixer",
+      "version": "1.0.0",
+      "label": "Mix",
+      "x": 880.0,
+      "y": 347.0,
+      "params": {
+        "level_1": -4.0,
+        "pan_2": -35.0,
+        "pan_3": 35.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.delay",
+      "version": "1.0.0",
+      "label": "Echo",
+      "x": 1112.0,
+      "y": 330.0,
+      "params": {
+        "sync": "n8d",
+        "feedback": 40.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.reverb",
+      "version": "1.0.0",
+      "label": "Room",
+      "x": 1300.0,
+      "y": 376.0,
+      "params": {
+        "mix": 25.0
+      }
+    }
+  ],
+  "cables": [
+    {
+      "from": {
+        "module": 2,
+        "port": "pitch"
+      },
+      "to": {
+        "module": 4,
+        "port": "pitch"
+      }
+    },
+    {
+      "from": {
+        "module": 4,
+        "port": "triangle"
+      },
+      "to": {
+        "module": 5,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 2,
+        "port": "gate"
+      },
+      "to": {
+        "module": 5,
+        "port": "ping"
+      }
+    },
+    {
+      "from": {
+        "module": 3,
+        "port": "out"
+      },
+      "to": {
+        "module": 2,
+        "port": "move_b"
+      },
+      "amount": 3.0
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "clock"
+      },
+      "to": {
+        "module": 6,
+        "port": "clock"
+      }
+    },
+    {
+      "from": {
+        "module": 6,
+        "port": "tap_1"
+      },
+      "to": {
+        "module": 7,
+        "port": "trigger"
+      }
+    },
+    {
+      "from": {
+        "module": 6,
+        "port": "tap_3"
+      },
+      "to": {
+        "module": 8,
+        "port": "trigger"
+      }
+    },
+    {
+      "from": {
+        "module": 5,
+        "port": "out"
+      },
+      "to": {
+        "module": 9,
+        "port": "in_1"
+      }
+    },
+    {
+      "from": {
+        "module": 7,
+        "port": "out"
+      },
+      "to": {
+        "module": 9,
+        "port": "in_2"
+      }
+    },
+    {
+      "from": {
+        "module": 8,
+        "port": "out"
+      },
+      "to": {
+        "module": 9,
+        "port": "in_3"
+      }
+    },
+    {
+      "from": {
+        "module": 9,
+        "port": "left"
+      },
+      "to": {
+        "module": 10,
+        "port": "in_l"
+      }
+    },
+    {
+      "from": {
+        "module": 9,
+        "port": "right"
+      },
+      "to": {
+        "module": 10,
+        "port": "in_r"
+      }
+    },
+    {
+      "from": {
+        "module": 10,
+        "port": "out_l"
+      },
+      "to": {
+        "module": 11,
+        "port": "in_l"
+      }
+    },
+    {
+      "from": {
+        "module": 10,
+        "port": "out_r"
+      },
+      "to": {
+        "module": 11,
+        "port": "in_r"
+      }
+    },
+    {
+      "from": {
+        "module": 11,
+        "port": "out_l"
+      },
+      "to": {
+        "module": 0,
+        "port": "l"
+      }
+    },
+    {
+      "from": {
+        "module": 11,
+        "port": "out_r"
+      },
+      "to": {
+        "module": 0,
+        "port": "r"
+      }
+    }
+  ]
+}
+

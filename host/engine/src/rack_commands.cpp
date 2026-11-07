@@ -2120,11 +2120,21 @@ void registerRackPresetCommands(cmd::Registry& registry) {
                 return Error("rack.limit", "a rack holds at most 32 In modules", "/io",
                              "use io: join, or another rack");
 
-            // The group's top-left: given, else right of the rack's modules.
-            const auto place = freePlace(e, s, *rack);
+            // The group's top-left: given, else right of the rack's modules. A
+            // rack that holds only its Outs and Ins takes the whole patch, in its
+            // own layout: from those modules' corner, the joined ones moved too.
+            const bool fresh = join && count == ownOuts.size() + ownIns.size();
+            auto place = freePlace(e, s, *rack);
+            if (fresh && count > 0) {
+                place = {model::kMaxRackCoordinate, model::kMaxRackCoordinate};
+                for (const auto& m : s.modules)
+                    if (m.value->rack == *rack)
+                        place = {std::min(place.first, m.value->x),
+                                 std::min(place.second, m.value->y)};
+            }
             const double x0 = a.x.value_or(place.first), y0 = a.y.value_or(place.second);
             for (std::size_t k = 0; k < n; ++k) {
-                if (joined[k]) continue;
+                if (joined[k] && !fresh) continue;
                 made[k].x = std::clamp(x0 + numberOr(entries[k], "x"), -model::kMaxRackCoordinate,
                                        model::kMaxRackCoordinate);
                 made[k].y = std::clamp(y0 + numberOr(entries[k], "y"), -model::kMaxRackCoordinate,
@@ -2210,6 +2220,12 @@ void registerRackPresetCommands(cmd::Registry& registry) {
             for (std::size_t k = 0; k < n; ++k) {
                 if (joined[k]) {
                     ids[k] = *joined[k];
+                    if (fresh) {
+                        model::RackModule moved = *s.modules.find(*joined[k]);
+                        moved.x = made[k].x;
+                        moved.y = made[k].y;
+                        t.put(*joined[k], std::move(moved));
+                    }
                     continue;
                 }
                 if (plugins[k]) made[k].fx = detail::installEffect(e, *plugins[k]);

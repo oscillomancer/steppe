@@ -1,0 +1,233 @@
+{
+  "schema": "supple.rack-preset/1.0",
+  "name": "Strange Attractor",
+  "description": "Self-playing: a low drone of three detuned oscillators whose filter, resonance and place in the room follow a Lorenz attractor, turned slowly round by Orbit into a long hall. Turn Storm's Rate and Chaos for faster, wilder motion.",
+  "modules": [
+    {
+      "type": "com.suppleaudio.rack.out",
+      "version": "1.0.0",
+      "x": 1232.0,
+      "y": 267.0
+    },
+    {
+      "type": "com.suppleaudio.rack.chaos",
+      "version": "1.0.0",
+      "label": "Storm",
+      "x": 440.0,
+      "y": 0.0,
+      "params": {
+        "rate": 0.12,
+        "chaos": 60.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.vco",
+      "version": "1.0.0",
+      "label": "Root",
+      "x": 0.0,
+      "y": 117.0,
+      "params": {
+        "coarse": -14.0,
+        "drift": 50.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.vco",
+      "version": "1.0.0",
+      "label": "Fifth",
+      "x": 144.0,
+      "y": 117.0,
+      "params": {
+        "coarse": -7.0,
+        "fine": 7.0,
+        "drift": 50.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.vco",
+      "version": "1.0.0",
+      "label": "Octave",
+      "x": 288.0,
+      "y": 117.0,
+      "params": {
+        "coarse": -2.0,
+        "fine": -5.0,
+        "drift": 50.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.mixer",
+      "version": "1.0.0",
+      "label": "Blend",
+      "x": 432.0,
+      "y": 314.0,
+      "params": {
+        "level_1": -2.0,
+        "level_2": -6.0,
+        "level_3": -9.0,
+        "master": -12.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.ladder",
+      "version": "1.0.0",
+      "label": "Filter",
+      "x": 664.0,
+      "y": 140.0,
+      "params": {
+        "cutoff": 350.0,
+        "resonance": 45.0,
+        "drive": 30.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.orbit",
+      "version": "1.0.0",
+      "label": "Turn",
+      "x": 808.0,
+      "y": 132.0,
+      "params": {
+        "rate": 0.05,
+        "width": 30.0,
+        "doppler": 10.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.reverb",
+      "version": "1.0.0",
+      "label": "Room",
+      "x": 1044.0,
+      "y": 186.0,
+      "params": {
+        "size": 90.0,
+        "decay": 9000.0,
+        "mix": 45.0
+      }
+    }
+  ],
+  "cables": [
+    {
+      "from": {
+        "module": 2,
+        "port": "saw"
+      },
+      "to": {
+        "module": 5,
+        "port": "in_1"
+      }
+    },
+    {
+      "from": {
+        "module": 3,
+        "port": "saw"
+      },
+      "to": {
+        "module": 5,
+        "port": "in_2"
+      }
+    },
+    {
+      "from": {
+        "module": 4,
+        "port": "pulse"
+      },
+      "to": {
+        "module": 5,
+        "port": "in_3"
+      }
+    },
+    {
+      "from": {
+        "module": 5,
+        "port": "mono"
+      },
+      "to": {
+        "module": 6,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "x"
+      },
+      "to": {
+        "module": 6,
+        "port": "fm"
+      }
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "y"
+      },
+      "to": {
+        "module": 6,
+        "port": "resonance"
+      },
+      "amount": 25.0
+    },
+    {
+      "from": {
+        "module": 1,
+        "port": "z"
+      },
+      "to": {
+        "module": 7,
+        "port": "angle"
+      },
+      "amount": 90.0
+    },
+    {
+      "from": {
+        "module": 6,
+        "port": "out"
+      },
+      "to": {
+        "module": 7,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 7,
+        "port": "left"
+      },
+      "to": {
+        "module": 8,
+        "port": "in_l"
+      }
+    },
+    {
+      "from": {
+        "module": 7,
+        "port": "right"
+      },
+      "to": {
+        "module": 8,
+        "port": "in_r"
+      }
+    },
+    {
+      "from": {
+        "module": 8,
+        "port": "out_l"
+      },
+      "to": {
+        "module": 0,
+        "port": "l"
+      }
+    },
+    {
+      "from": {
+        "module": 8,
+        "port": "out_r"
+      },
+      "to": {
+        "module": 0,
+        "port": "r"
+      }
+    }
+  ]
+}
+

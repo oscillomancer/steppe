@@ -17136,7 +17136,7 @@ Result:
 
 Play and record every armed track's input or master's output.
 
-Recording requires saved master rate 1 and no active master rate envelope that leaves 1 anywhere, including automation items. Non-unity recording and an armed track with unsupported output record mode are refused before opening files. An armed master records its output (after its fader, before its own items) as an item on the master; while it records, its items are silent in the punch range, or everywhere without punch.
+Recording requires saved master rate 1 and no active master rate envelope that leaves 1 anywhere, including automation items. Non-unity recording and an armed track with unsupported output record mode are refused before opening files. An armed master records its output (after its fader, before its own items) as an item on the master; while it records, its items are silent in the punch range, or everywhere without punch. Armed channels in midi_overdub or midi_replace also record every incoming Note Out route, alongside an optional MIDI device input; no instrument is required. Rack Out audio inputs record stereo after input FX, before items and track inserts.
 
 Kind: `action`. Exposure: `mcp-tool`.
 
@@ -17286,6 +17286,8 @@ Kind: `action`. Exposure: `mcp-tool`.
 - `engine.stopped`: the engine is not running Hint: engine.start first
 - `record.nothing_armed`: no armed track has an input Hint: track.set {armed: true, record_input: [1, 2]}, or arm a master
 - `record.busy`: the audio callback did not return for 2 s (still recording) Hint: stop again, or engine.stop (the files stay recoverable)
+- `record.rack_input`: the loaded plan has no armed rack input for the target Hint: select an Out with track.set {record_rack, armed: true} and load it before recording
+- `record.midi_route`: a Note Out recording target is not armed in the loaded plan Hint: arm the destination in a MIDI record mode and load it before recording
 - `record.playrate`: master playrate can leave unity Hint: set rate to 1 and disable non-unity master playrate automation
 - `record.output_unsupported`: output recording is not supported yet Hint: use track.set {record_mode: input} on the reported track
 

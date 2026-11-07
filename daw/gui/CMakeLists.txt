@@ -85,7 +85,7 @@ add_library(gui-app STATIC app/shell.cpp app/generate.cpp app/app_actions.cpp ap
   app/fx_params.cpp app/plugin_browser.cpp app/fx_window.cpp app/render_dialog.cpp app/history_panel.cpp app/transport_bar.cpp app/plugin_scales.cpp
   app/midi_event_list.cpp app/appearance.cpp app/track_menu.cpp app/mouse_dialog.cpp app/selection_edit.cpp app/preferences.cpp app/audio_device.cpp
   app/control_map.cpp app/learn_dialog.cpp app/help_actions.cpp app/help_support.cpp
-  app/rack_engine.cpp app/rack_face.cpp app/rack_labels.cpp app/rack_plugin_params.cpp app/rack_scene.cpp app/rack_space.cpp
+  app/rack_controls.cpp app/rack_device.cpp app/rack_engine.cpp app/rack_face.cpp app/rack_labels.cpp app/rack_plugin_params.cpp app/rack_scene.cpp app/rack_space.cpp
   app/rack_window.cpp)
 target_include_directories(gui-app PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/app)
 target_link_libraries(gui-app PUBLIC supple::gui-persistence supple::gui-service-watcher supple::gui-actions supple::gui-views supple::gui-ui supple::gui-platform

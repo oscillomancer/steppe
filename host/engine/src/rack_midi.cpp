@@ -6,7 +6,8 @@
 namespace supple::engine::detail {
 namespace {
 constexpr std::size_t kMaxMidiEvents = 1 << 20;
-void emit(Stage& stage, Edge& edge, int voice, std::uint32_t frame, bool on) SUPPLE_RT {
+void emit(Node& target, Stage* stage, Edge& edge, int voice, std::uint32_t frame,
+          bool on) SUPPLE_RT {
     auto& v = edge.midiVoices[static_cast<std::size_t>(voice)];
     host::Event event;
     event.kind = on ? host::Event::Kind::NoteOn : host::Event::Kind::NoteOff;
@@ -15,7 +16,18 @@ void emit(Stage& stage, Edge& edge, int voice, std::uint32_t frame, bool on) SUP
     event.key = static_cast<std::int16_t>(v.key);
     event.velocity = on ? v.velocity / 127.0 : 0.0;
     event.noteId = edge.midiSourceBase + voice;
-    if (stage.blockEvents.size() < stage.blockEvents.capacity()) stage.blockEvents.push_back(event);
+    if (stage && stage->blockEvents.size() < stage->blockEvents.capacity())
+        stage->blockEvents.push_back(event);
+    if (target.routedMidi.size() < target.routedMidi.capacity()) {
+        RoutedMidiEvent midi;
+        midi.frame = frame;
+        midi.route = *edge.route;
+        midi.voice = voice;
+        midi.bytes[0] = static_cast<std::uint8_t>((on ? 0x90 : 0x80) | v.channel);
+        midi.bytes[1] = static_cast<std::uint8_t>(v.key);
+        midi.bytes[2] = static_cast<std::uint8_t>(on ? v.velocity : 0);
+        target.routedMidi.push_back(midi);
+    }
     v.delivered = on;
 }
 void queue(Edge& edge, std::int64_t sample, std::uint8_t status, int key, int velocity,
@@ -31,13 +43,15 @@ void queue(Edge& edge, std::int64_t sample, std::uint8_t status, int key, int ve
 
 Status prepareRackMidi(Plan& p) {
     for (auto& node : p.nodes) {
-        if (node.noteTarget < 0) continue;
-        auto& stage = node.chain[static_cast<std::size_t>(node.noteTarget)];
+        auto* stage =
+            node.noteTarget < 0 ? nullptr : &node.chain[static_cast<std::size_t>(node.noteTarget)];
         // A nonzero render start removes old events without renumbering the
         // remaining item notes. Event count is therefore not an ID bound.
-        stage.rackMidiBase = 0;
-        for (const auto& timed : node.events)
-            stage.rackMidiBase = std::max(stage.rackMidiBase, timed.event.noteId + 1);
+        if (stage) {
+            stage->rackMidiBase = 0;
+            for (const auto& timed : node.events)
+                stage->rackMidiBase = std::max(stage->rackMidiBase, timed.event.noteId + 1);
+        }
         std::size_t extra = 0;
         for (std::size_t index : node.in) {
             auto& edge = p.edges[index];
@@ -52,23 +66,30 @@ Status prepareRackMidi(Plan& p) {
                              "/routes/" + edge.route->str(),
                              "reduce plug-in latency or route fewer Note Outs to this instrument");
             edge.midiQueue.resize(static_cast<std::size_t>(capacity));
-            edge.midiSourceBase =
-                stage.rackMidiBase + static_cast<int>(stage.rackNoteSources.size());
-            for (int voice = 0; voice < rack::kChannels; ++voice)
-                stage.rackNoteSources.push_back(
-                    {output.id, *edge.route, voice, edge.midiFrom, edge.midiTo, edge.delay.length});
+            if (stage) {
+                edge.midiSourceBase =
+                    stage->rackMidiBase + static_cast<int>(stage->rackNoteSources.size());
+                for (int voice = 0; voice < rack::kChannels; ++voice)
+                    stage->rackNoteSources.push_back({output.id, *edge.route, voice, edge.midiFrom,
+                                                      edge.midiTo, edge.delay.length});
+            }
         }
-        stage.blockEvents.reserve(stage.blockEvents.capacity() + extra);
-        stage.voices.reserve(stage.voices.capacity() + stage.rackNoteSources.size());
-        stage.pendingVoices.reserve(stage.voices.capacity());
+        node.routedMidi.reserve(extra);
+        if (stage) {
+            stage->blockEvents.reserve(stage->blockEvents.capacity() + extra);
+            stage->voices.reserve(stage->voices.capacity() + stage->rackNoteSources.size());
+            stage->pendingVoices.reserve(stage->voices.capacity());
+        }
     }
     return {};
 }
 
 void addRackMidi(Plan& p, Node& target, std::int64_t pos, std::uint32_t frames,
                  bool playing) SUPPLE_RT {
-    if (target.noteTarget < 0) return;
-    auto& stage = target.chain[static_cast<std::size_t>(target.noteTarget)];
+    target.routedMidi.clear();
+    auto* stage = target.noteTarget < 0
+                      ? nullptr
+                      : &target.chain[static_cast<std::size_t>(target.noteTarget)];
     bool appended = false;
     for (std::size_t index : target.in) {
         auto& edge = p.edges[index];
@@ -78,7 +99,7 @@ void addRackMidi(Plan& p, Node& target, std::int64_t pos, std::uint32_t frames,
         if (!playing || edge.midiRelease || edge.midiEpoch != rack.midiEpoch) {
             for (int c = 0; c < rack::kChannels; ++c) {
                 auto& voice = edge.midiVoices[static_cast<std::size_t>(c)];
-                if (voice.delivered) emit(stage, edge, c, 0, false);
+                if (voice.delivered) emit(target, stage, edge, c, 0, false);
                 voice = {};
             }
             edge.midiCount = edge.midiHead = 0;
@@ -116,12 +137,12 @@ void addRackMidi(Plan& p, Node& target, std::int64_t pos, std::uint32_t frames,
                 edge.midiHead = (edge.midiHead + 1) % edge.midiQueue.size();
                 --edge.midiCount;
                 auto& voice = edge.midiVoices[e.voice];
-                if (voice.delivered) emit(stage, edge, e.voice, frame, false);
+                if (voice.delivered) emit(target, stage, edge, e.voice, frame, false);
                 voice.high = (e.status & 0xf0) == 0x90 && e.velocity != 0;
                 voice.key = e.key;
                 voice.channel = e.status & 15;
                 voice.velocity = e.velocity;
-                if (voice.high && !muted) emit(stage, edge, e.voice, frame, true);
+                if (voice.high && !muted) emit(target, stage, edge, e.voice, frame, true);
                 appended = true;
             }
             if (muted != edge.midiMuted) {
@@ -129,15 +150,15 @@ void addRackMidi(Plan& p, Node& target, std::int64_t pos, std::uint32_t frames,
                 for (int c = 0; c < rack::kChannels; ++c) {
                     auto& voice = edge.midiVoices[static_cast<std::size_t>(c)];
                     if (muted && voice.delivered)
-                        emit(stage, edge, c, frame, false);
+                        emit(target, stage, edge, c, frame, false);
                     else if (!muted && voice.high && !voice.delivered)
-                        emit(stage, edge, c, frame, true);
+                        emit(target, stage, edge, c, frame, true);
                 }
                 appended = true;
             }
         }
     }
-    if (appended) {
+    if (appended && stage) {
         // A total ordering at ties is independent of the host's block splits.
         // Keep explicit releases first: prepareNoteIds recognizes that prefix.
         auto rank = [](const host::Event& e) {
@@ -145,8 +166,8 @@ void addRackMidi(Plan& p, Node& target, std::int64_t pos, std::uint32_t frames,
                    : e.kind == host::Event::Kind::NoteOn ? 2
                                                          : 1;
         };
-        std::sort(stage.blockEvents.begin() + static_cast<std::ptrdiff_t>(stage.releases),
-                  stage.blockEvents.end(), [&](const auto& a, const auto& b) {
+        std::sort(stage->blockEvents.begin() + static_cast<std::ptrdiff_t>(stage->releases),
+                  stage->blockEvents.end(), [&](const auto& a, const auto& b) {
                       if (a.time != b.time) return a.time < b.time;
                       if (rank(a) != rank(b)) return rank(a) < rank(b);
                       return std::tuple{a.noteId, a.port, a.channel, a.key} <
@@ -160,13 +181,14 @@ void carryRackMidi(Plan& to, Plan& from, int liveClass) SUPPLE_RT {
         if (edge.rackNotes < 0 || (liveClass >= 0 && to.nodes[edge.to].live != bool(liveClass)))
             continue;
         const auto& target = to.nodes[edge.to];
-        if (target.noteTarget < 0) continue;
         for (auto& old : from.edges) {
             const auto& oldTarget = from.nodes[old.to];
-            if (oldTarget.noteTarget < 0 ||
-                target.chain[static_cast<std::size_t>(target.noteTarget)].instance !=
-                    oldTarget.chain[static_cast<std::size_t>(oldTarget.noteTarget)].instance)
-                continue;
+            const auto instrument = [](const Node& node) {
+                return node.noteTarget < 0
+                           ? nullptr
+                           : node.chain[static_cast<std::size_t>(node.noteTarget)].instance;
+            };
+            if (instrument(target) != instrument(oldTarget)) continue;
             if ((liveClass >= 0 && from.nodes[old.to].live != bool(liveClass)) ||
                 old.rackNotes < 0 || edge.route != old.route || edge.midiFrom != old.midiFrom ||
                 edge.midiTo != old.midiTo || edge.delay.length != old.delay.length ||

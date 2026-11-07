@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <map>
+#include <tuple>
 
 #include "supple/base/files.h"
 #include "supple/base/thread.h"
@@ -147,15 +149,16 @@ Recorder::Recorder(std::vector<RecordTarget> targets, double rate, std::int64_t 
         }
         auto track = std::make_unique<Track>();
         track->target = std::move(t);
-        track->ring.init(track->target.output ? 2u
-                                              : static_cast<std::uint32_t>(std::max<std::size_t>(
-                                                    1, track->target.inputs.size())),
-                         static_cast<std::size_t>(rate * 10.0));  // ten seconds
-        // A master's output (ADR-0057) at processing position P belongs to
+        track->ring.init(
+            track->target.output || track->target.rackInput
+                ? 2u
+                : static_cast<std::uint32_t>(std::max<std::size_t>(1, track->target.inputs.size())),
+            static_cast<std::size_t>(rate * 10.0));  // ten seconds
+        // A rendered signal (a master's output or a rack input) at P belongs to
         // the timeline at P - outputShift, device input at P - latency: its
         // frames go that much later in its file (earlier when negative, the
         // first ones dropped), so every file starts at the same position.
-        if (track->target.output) {
+        if (track->target.output || track->target.rackInput) {
             track->shift = track->target.outputShift - latency_;
             track->skip = std::max<std::int64_t>(0, track->shift);
         }
@@ -204,7 +207,8 @@ void Recorder::capture(const float* const* in, std::uint32_t inChannels, std::ui
                 own = &p;
                 break;
             }
-        if (t->target.output) {  // a master's output; none this part: the drain pads silence
+        if (t->target.output ||
+            t->target.rackInput) {  // rendered signal; none this part: pad silence
             const auto from = static_cast<std::uint32_t>(std::min<std::int64_t>(frames, t->skip));
             t->skip -= from;
             if (!own || from == frames) continue;
@@ -251,15 +255,43 @@ void Recorder::captureMidi(std::span<const MidiInputEvent> events, std::uint32_t
             if (!routeMidi(ev, t->target.midi->ports, t->target.midi->fromChannel,
                            t->target.midi->toChannel, m))
                 continue;
-            const std::size_t w = t->write.load(std::memory_order_relaxed);
-            if (w - t->read.load(std::memory_order_acquire) >= MidiTrack::kRing) {
-                t->overflow.fetch_add(1, std::memory_order_relaxed);
-                continue;
-            }
-            MidiEvent& slot = t->ring[w % MidiTrack::kRing];
+            MidiEvent slot;
             slot.at = base + (ev.frame - offset);
+            slot.at += midiClock(*t) - latency_;
             std::copy_n(m, 3, slot.bytes);
-            t->write.store(w + 1, std::memory_order_release);
+            pushMidi(*t, slot);
+        }
+    }
+}
+
+std::int64_t Recorder::midiClock(const MidiTrack& track) const SUPPLE_RT {
+    const auto& midi = *track.target.midi;
+    if (!midi.routed) return latency_;
+    return midi.ports ? std::max(latency_, midi.shift) : midi.shift;
+}
+
+void Recorder::pushMidi(MidiTrack& track, const MidiEvent& event) SUPPLE_RT {
+    const auto w = track.write.load(std::memory_order_relaxed);
+    if (w - track.read.load(std::memory_order_acquire) >= MidiTrack::kRing) {
+        track.overflow.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    track.ring[w % MidiTrack::kRing] = event;
+    track.write.store(w + 1, std::memory_order_release);
+}
+
+void Recorder::captureRoutedMidi(model::Id track, std::span<const RoutedMidiEvent> events,
+                                 std::uint32_t frames) SUPPLE_RT {
+    if (runsFull_ || !started_.load(std::memory_order_relaxed)) return;
+    for (auto& t : midiTracks_) {
+        if (t->target.track != track || !t->target.midi->routed) continue;
+        for (const auto& event : events) {
+            MidiEvent slot;
+            slot.at = captured_ - frames + event.frame + midiClock(*t) - t->target.midi->shift;
+            slot.route = event.route;
+            slot.voice = event.voice;
+            std::copy_n(event.bytes, 3, slot.bytes);
+            pushMidi(*t, slot);
         }
     }
 }
@@ -399,22 +431,63 @@ std::vector<RecordedTake> Recorder::finish(LoopRange loop) {
         r.startSample = start;
         r.sampleRate = rate_;
         r.frames = captured_;
-        for (const RecordedSegment& sg : segments)
-            if (sg.fileFrame < r.frames) r.segments.push_back(sg);
+        const auto& midi = *t->target.midi;
+        const auto clock = midiClock(*t);
+        r.startSample += latency_ - clock;
+        if (midi.routed)
+            r.frames += clock - (midi.ports ? std::min(latency_, midi.shift) : midi.shift);
+        if (r.frames > 0) r.segments.push_back({0, r.startSample});
+        for (std::size_t i = 0; i < count; ++i) {
+            const auto boundary = segments_[i].fileFrame + clock;
+            if (boundary < r.frames) r.segments.push_back({boundary, segments_[i].timeline});
+        }
         r.loop = {loop.start, loop.end};
         r.overflowFrames = t->overflow.load();
-        for (const MidiEvent& ev : t->drained) {
+        auto append = [&](const MidiEvent& ev) {
             // ev.at counts captured frames like an audio file's frames; the
             // runs are in those units, already shifted by the latency.
             std::size_t k = 0;
             while (k + 1 < r.segments.size() && r.segments[k + 1].fileFrame <= ev.at) ++k;
             const RecordedSegment sg =
-                r.segments.empty() ? RecordedSegment{0, start} : r.segments[k];
+                r.segments.empty() ? RecordedSegment{0, r.startSample} : r.segments[k];
             RecordedMidiEvent e;
             e.timeline = sg.timeline + (ev.at - sg.fileFrame);
             e.run = static_cast<std::uint32_t>(k);
             std::copy_n(ev.bytes, 3, e.bytes);
+            e.route = ev.route;
+            e.voice = ev.voice;
             r.midi.push_back(e);
+        };
+        std::map<std::tuple<model::Id, int, int, int>, MidiEvent> held;
+        for (const MidiEvent& ev : t->drained) {
+            append(ev);
+            if (midi.routed && ev.bytes[1] < 128) {
+                const int kind = ev.bytes[0] & 0xf0;
+                const auto key = std::tuple{ev.route, ev.voice, ev.bytes[0] & 15, int(ev.bytes[1])};
+                if (kind == 0x90 && ev.bytes[2] != 0)
+                    held[key] = ev;
+                else if (kind == 0x80 || kind == 0x90)
+                    held.erase(key);
+            }
+        }
+        if (midi.routed) {
+            // Each source ends on its own clock, even when the take spans
+            // both endpoints (device latency and rendered input shift).
+            for (auto& [key, off] : held) {
+                (void)key;
+                off.at = captured_ + clock - (off.voice < 0 ? latency_ : midi.shift);
+                off.bytes[0] = static_cast<std::uint8_t>(0x80 | (off.bytes[0] & 15));
+                off.bytes[2] = 0;
+                append(off);
+            }
+            std::stable_sort(r.midi.begin(), r.midi.end(), [](const auto& a, const auto& b) {
+                const auto rank = [](const auto& e) {
+                    const int kind = e.bytes[0] & 0xf0;
+                    return kind == 0x80 || (kind == 0x90 && e.bytes[2] == 0) ? 0 : 1;
+                };
+                return std::tuple{a.run, a.timeline, rank(a)} <
+                       std::tuple{b.run, b.timeline, rank(b)};
+            });
         }
         if (runsFull_)
             r.warnings.emplace_back(
