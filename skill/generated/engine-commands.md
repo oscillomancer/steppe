@@ -1160,7 +1160,7 @@ Result:
 
 Connect an output to an input or a knob.
 
-from: "mo_N.<output>"; to: "mo_N.<input>" or "mo_N.<knob>" (a modulation cable: amount is the knob's movement at a signal of 1, in octaves for a frequency, the knob's unit otherwise; default an octave or half the range), or a plugin module's plug-in parameter "fx_N.<key>" (CLAP modulation, amount a fraction of its range, default 0.5; it must be modulatable). Several cables into one input sum; a mono cable reaches every voice of a poly module. feedback: it closes a loop, so it carries the previous frame (a one-sample delay).
+from: "mo_N.<output>"; to: "mo_N.<input>" or "mo_N.<knob>" (a modulation cable: amount is the knob's movement at a signal of 1, in octaves for a frequency, the knob's unit otherwise; default an octave or half the range), or a plugin module's plug-in parameter "fx_N.<key>" (CLAP modulation, amount a fraction of its range, default 0.5; it must be modulatable). A numeric CLAP id is also accepted (fx_3.12); a semantic key takes precedence if it is numeric. Several cables into one input sum; a mono cable reaches every voice of a poly module. feedback: it closes a loop, so it carries the previous frame (a one-sample delay).
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -10993,14 +10993,15 @@ Result:
 
 Record a rack's pitch and gate as notes in a MIDI item on a track.
 
-Renders the project offline from from_beat (default 0) for beats (default 16, at most 1024) and writes the notes that the pitch and gate outputs ("mo_N.<output>", poly: a note per voice) play as a MIDI item on track at at (default from_beat): a gate's rise starts a note at the pitch then (round(60 + 12 x pitch)), its fall ends it. velocity: an output (0..1) read at each rise; default 96. quantize: a grid in beats (0.25 = sixteenths) for starts and lengths. notes: notation the rack's Notes modules play, as rack.probe takes it. The rack is not changed; edit the notes with midi.edit, or play them through any instrument.
+Renders the project offline from from_beat (default 0) for beats (default 16, at most 1024) and writes the notes that the pitch and gate outputs ("mo_N.<output>", poly: a note per voice) play as a MIDI item on track at at (default from_beat): a gate's rise starts a note at the pitch then (round(60 + 12 x pitch)), its fall ends it. velocity: an output (0..1) read at each rise; default 96. quantize: a grid in beats (0.25 = sixteenths) for starts and lengths. notes: notation the rack's Notes modules play, as rack.probe takes it. The rack is not changed; edit the notes with midi.edit, or play them through any instrument. async:true returns {job}; rendering uses a snapshot, cancellation leaves the project unchanged, and completion adds one undo step. A changed rack, track, position or project fails with rack.capture_stale; submit the capture again.
 
-Kind: `edit`. Exposure: `mcp-tool`.
+Kind: `action`. Exposure: `mcp-tool`.
 
 ### Arguments
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
+| `async` | boolean |  |  | false |  |
 | `rack` | string |  |  |  | Rack id |
 | `pitch` | string |  |  |  |  |
 | `gate` | string |  |  |  |  |
@@ -11025,6 +11026,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 - `rack.unknown`: no such rack Hint: rack.list
 - `rack.port`: not an output of a module in the rack Hint: rack.get lists them
 - `rack.capture`: the render is too long Hint: capture at most 600 seconds
+- `rack.capture_stale`: capture target changed during rendering Hint: submit rack.capture again for the current rack, track and position
 
 ### Examples
 
@@ -11057,11 +11059,40 @@ Result:
 
 ```
 
+## `rack.capture.commit@1`
+
+Attach a rack capture's rendered MIDI notes.
+
+
+
+Kind: `edit`. Exposure: `internal`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `track` | string |  |  |  |  |
+| `source` | object |  |  |  |  |
+| `name` | string |  |  |  |  |
+| `at` | number |  | 0.0.. |  |  |
+| `beats` | number |  | 0.25..1024.0 |  |  |
+| `voices` | integer |  | 0.0..16.0 |  |  |
+| `warnings` | array |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
+
 ## `rack.get@1`
 
 A rack's modules, cables, Out modules and problems.
 
-Modules with their type, label, place and size and the knobs that differ from their defaults (detail full: also their input, output and knob keys); cables with feedback (true: it closes a loop and carries the previous frame); Out modules and the channels they feed; problems (missing types, cables that do not fit).
+Modules with their type, label, place and size and the knobs that differ from their defaults (detail full: also their input, output and knob keys); cables with feedback (true: it closes a loop and carries the previous frame); Out modules and the channels they feed; latency_samples for each Out and the rack node, and note_outs with their latencies (ADR-0064); problems (missing types, cables that do not fit).
 
 Kind: `query`. Exposure: `mcp-tool`.
 
@@ -11107,6 +11138,8 @@ Result:
     }
   ],
   "outs": "<any>",
+  "latency_samples": 0,
+  "note_outs": [],
   "problems": []
 }
 

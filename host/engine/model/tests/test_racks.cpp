@@ -231,3 +231,24 @@ TEST_CASE("racks: merges remap the module ids inside cable ends") {
     CHECK(out["from"] == "mo_7.out");
     CHECK(out["module"] == "mo_7");
 }
+
+TEST_CASE("rack model: numeric CLAP cable targets round trip and preserve module key rules") {
+    for (const auto* text : {"fx_3.0", "fx_3.12", "fx_3.4294967295", "fx_3.gain", "mo_3.out"}) {
+        auto parsed = CableEnd::parse(text);
+        REQUIRE(parsed);
+        CHECK(parsed->str() == text);
+        auto decoded = cableEndSchema().decode(json::Value(text));
+        REQUIRE(decoded);
+        CHECK(cableEndSchema().encode(*decoded).asString() == text);
+    }
+    for (const auto* text : {"mo_3.12", "fx_3.-1", "fx_3.+12", "fx_3.12gain", "fx_3.0x12", "fx_3."})
+        CHECK_FALSE(CableEnd::parse(text));
+}
+
+TEST_CASE("rack model: numeric cable target remapping keeps the parameter id") {
+    auto args = *json::parse(R"({"target":"fx_3.12"})");
+    auto schema = *json::parse(R"({"type":"object","properties":{"target":{"type":"string"}}})");
+    schema["properties"]["target"]["pattern"] = std::string(kCableEndPattern);
+    auto remapped = remapIds(args, schema, {{Id{Kind::Fx, 3}, Id{Kind::Fx, 9}}});
+    CHECK(remapped["target"].asString() == "fx_9.12");
+}

@@ -1007,7 +1007,7 @@ Schema<CableEnd> cableEndSchema() {
             auto end = v.isString() ? CableEnd::parse(v.asString()) : std::nullopt;
             if (!end) {
                 c.error("schema.cable_end", "expected \"<module>.<key>\"", p,
-                        "e.g. \"mo_3.out\", \"mo_4.cutoff\" or \"fx_9.cutoff\"");
+                        "e.g. \"mo_3.out\", \"mo_4.cutoff\" or \"fx_9.12\"");
                 return false;
             }
             out = std::move(*end);

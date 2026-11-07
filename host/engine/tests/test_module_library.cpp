@@ -7,8 +7,10 @@
 
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstring>
 #include <functional>
+#include <mutex>
 
 #include "rack_runtime.h"
 #include "supple/base/files.h"
@@ -48,10 +50,10 @@ struct Fixture {
     cmd::Registry registry;
     std::unique_ptr<EngineApp> app;
     std::unique_ptr<cmd::Dispatcher> bus;
-    explicit Fixture(const std::function<void(const std::filesystem::path&)>& before = {}) {
+    explicit Fixture(const std::function<void(const std::filesystem::path&)>& before = {},
+                     AppOptions options = {}) {
         std::filesystem::create_directories(dir);
         if (before) before(dir / "modules");
-        AppOptions options;
         options.workdir = dir;
         options.pluginPath = {FIXTURE_CLAP_PATH};
         auto made = EngineApp::create(options);
@@ -345,7 +347,7 @@ TEST_CASE("rack presets: a patch saved from one rack plays in another") {
     auto edited = [&](const std::function<void(json::Value&)>& change) {
         json::Value doc = *json::parse(*first);
         for (auto& m : doc["modules"].asArray()) change(m);
-        return json::writeCanonical(doc);
+        return json::writeCompact(doc);
     };
     REQUIRE(writeFileAtomic(file.parent_path() / "Old.json", edited([](json::Value& m) {
                                 if (m["type"].asString() == "com.suppleaudio.rack.vca")
@@ -884,7 +886,7 @@ TEST_CASE("rack presets: embedded source ids are checked before installation") {
         doc["sources"]["com.example.requested"]["source"] = "broken module";
     }
     const auto path = f.dir / "bad-source.json";
-    REQUIRE(writeFileAtomic(path, json::writeCanonical(doc)));
+    REQUIRE(writeFileAtomic(path, json::writeCompact(doc)));
     json::Value a = json::Value::object();
     a["rack"] = "rk_1";
     a["path"] = path.string();
@@ -1260,4 +1262,314 @@ TEST_CASE("rack Out recording: the file equals offline output in both executors"
         f.run("history.undo");
         CHECK(f.app->head().items.size() == 0);
     }
+}
+
+TEST_CASE("rack.get: prepared latency includes oversampling and reports individual outputs") {
+    Fixture f;
+    f.run("rack.add");
+    f.run("module.add", R"({"rack":"rk_1","plugin":"com.suppleaudio.test.gain"})");
+    f.run("cable.add", R"({"from":"mo_2.out_l","to":"mo_1.l"})");
+    auto set = [&](int os, bool bypass = false) {
+        auto tx = f.app->beginTransaction(origin, "Latency mode");
+        REQUIRE(tx);
+        f.app->txn().modify<model::FxInstance>({model::Kind::Fx, 1}, [&](auto& fx) {
+            fx.patch = *json::parse(
+                R"({"schema":"supple.test-gain-patch/1.0","params":{"latency":"short"}})");
+            fx.oversampling = os;
+        });
+        f.app->txn().modify<model::RackModule>({model::Kind::Module, 2},
+                                               [&](auto& m) { m.bypass = bypass; });
+        REQUIRE(f.app->commitTransaction(*tx));
+    };
+    set(1);
+    auto rack = f.run("rack.get", R"({"rack":"rk_1"})");
+    CHECK(rack["latency_samples"].asInt() == 64);
+    CHECK(rack["outs"].asArray()[0]["latency_samples"].asInt() == 64);
+    set(2);
+    rack = f.run("rack.get", R"({"rack":"rk_1"})");
+    CHECK(rack["latency_samples"].asInt() > 32);  // plug-in latency / 2 plus resampler
+    MediaCache media;
+    auto plan = supple::engine::detail::compile(f.app->head(), f.app->instances(), 0, 128);
+    REQUIRE(plan);
+    plan->media = &media;
+    REQUIRE(supple::engine::detail::prepare(*plan, f.app->head()));
+    for (const auto& node : plan->nodes)
+        if (node.rack) CHECK(node.latChain == rack["latency_samples"].asInt());
+    set(1, true);
+    CHECK(f.run("rack.get", R"({"rack":"rk_1"})")["latency_samples"].asInt() == 0);
+}
+
+TEST_CASE("rack.capture: an async snapshot completes once, matches sync bytes and undoes") {
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool finished = false;
+    AppOptions options;
+    options.jobFinishedHook = [&] {
+        std::lock_guard lock(mutex);
+        finished = true;
+        cv.notify_all();
+    };
+    Fixture sync, async({}, options);
+    auto prepare = [](Fixture& f) {
+        f.run("track.add");
+        f.run("track.add");
+        f.run("rack.add", R"({"track":"tr_1"})");
+        f.run("module.add", R"({"rack":"rk_1","type":"notes"})");
+    };
+    prepare(sync);
+    prepare(async);
+    async.run("branch.create", R"({"name":"capture"})");
+    auto args = *json::parse(R"({"rack":"rk_1","track":"tr_2","pitch":"mo_2.pitch",
+        "gate":"mo_2.gate","velocity":"mo_2.velocity","beats":4,"at":8,"quantize":0.25,
+        "notes":"voice v; 1: C4:q E4:e r:e [G4 B4]:h"})");
+    const auto expected = sync.call("rack.capture", args);
+    REQUIRE(expected);
+    const auto version = async.app->head().version;
+    args["async"] = true;
+    auto job = async.call("rack.capture", args);
+    REQUIRE(job);
+    REQUIRE(job->find("job"));
+    CHECK(async.app->head().version == version);
+    {
+        std::unique_lock lock(mutex);
+        cv.wait(lock, [&] { return finished; });
+    }
+    async.bus->flushJobEvents();
+    auto state = async.bus->jobs().status((*job)["job"].asString());
+    REQUIRE(state);
+    REQUIRE((*state)["status"].asString() == "done");
+    auto& actual = (*state)["result"];
+    CHECK(json::writeCompact(actual) == json::writeCompact(*expected));
+    const auto source = *model::Id::parse(actual["source"].asString());
+    CHECK(json::writeCompact(model::toJson(*async.app->head().midi.find(source))) ==
+          json::writeCompact(model::toJson(*sync.app->head().midi.find(source))));
+    async.run("history.undo");
+    CHECK(async.app->head().items.empty());
+    CHECK(async.app->head().midi.empty());
+    async.run("history.redo");
+    CHECK(async.app->head().items.size() == 1);
+    async.run("branch.switch", R"({"name":"main"})");
+    async.run("track.add");
+    async.run("branch.merge", R"({"from":"capture"})");
+    CHECK(async.app->head().items.size() == 1);
+    REQUIRE(async.app->head().midi.size() == 1);
+    CHECK(json::writeCompact(model::toJson(*async.app->head().midi.begin()->value)) ==
+          json::writeCompact(model::toJson(*sync.app->head().midi.find(source))));
+}
+
+TEST_CASE("rack.capture: cancelling or changing the target before completion publishes no notes") {
+    for (int change : {0, 1, 2, 3, 4, 5, 6}) {
+        CAPTURE(change);
+        std::mutex mutex;
+        std::condition_variable cv;
+        bool entered = false, release = false, finished = false;
+        AppOptions options;
+        options.jobStartedHook = [&] {
+            std::unique_lock lock(mutex);
+            entered = true;
+            cv.notify_all();
+            cv.wait(lock, [&] { return release; });
+        };
+        options.jobFinishedHook = [&] {
+            std::lock_guard lock(mutex);
+            finished = true;
+            cv.notify_all();
+        };
+        Fixture f({}, options);
+        struct Unblock {
+            std::mutex& mutex;
+            std::condition_variable& cv;
+            bool& release;
+            ~Unblock() {
+                std::lock_guard lock(mutex);
+                release = true;
+                cv.notify_all();
+            }
+        } unblock{mutex, cv, release};
+        f.run("track.add");
+        f.run("track.add");
+        f.run("rack.add", R"({"track":"tr_1"})");
+        f.run("module.add", R"({"rack":"rk_1","type":"notes"})");
+        auto job = f.run("rack.capture", R"({"rack":"rk_1","track":"tr_2",
+            "pitch":"mo_2.pitch","gate":"mo_2.gate","beats":4,"async":true,
+            "notes":"voice v; 1: C4:w"})");
+        {
+            std::unique_lock lock(mutex);
+            cv.wait(lock, [&] { return entered; });
+        }
+        if (change == 0) REQUIRE(f.bus->jobs().cancel(job["job"].asString()));
+        if (change == 1) f.run("rack.remove", R"({"rack":"rk_1"})");
+        if (change == 2) f.run("track.remove", R"({"track":"tr_2"})");
+        if (change == 3) f.run("module.set", R"({"module":"mo_2","label":"Edited"})");
+        if (change == 4) f.run("tempo.set", R"({"points":[{"beat":0,"bpm":90}]})");
+        const auto version = f.app->head().version;
+        {
+            std::lock_guard lock(mutex);
+            release = true;
+            cv.notify_all();
+        }
+        {
+            std::unique_lock lock(mutex);
+            cv.wait(lock, [&] { return finished; });
+        }
+        if (change == 5) REQUIRE(f.bus->jobs().cancel(job["job"].asString()));
+        // An unrelated edit is allowed; the worker uses its captured catalogue and session.
+        if (change == 6) f.run("track.add");
+        f.bus->flushJobEvents();
+        auto state = f.bus->jobs().status(job["job"].asString());
+        REQUIRE(state);
+        if (change == 6) {
+            CHECK((*state)["status"].asString() == "done");
+            CHECK(f.app->head().items.size() == 1);
+        } else {
+            CHECK(f.app->head().items.empty());
+            CHECK(f.app->head().midi.empty());
+            CHECK(f.app->head().version == version);
+            CHECK((*state)["status"].asString() ==
+                  ((change == 0 || change == 5) ? "cancelled" : "failed"));
+            if (change != 0 && change != 5) {
+                CHECK((*state)["error"]["code"].asString() == "rack.capture_stale");
+                CHECK_FALSE((*state)["error"]["hint"].asString().empty());
+            }
+        }
+    }
+}
+
+TEST_CASE("rack.capture: sync joins a batch, async refuses a transaction") {
+    Fixture f;
+    f.run("rack.add");
+    f.run("module.add", R"({"rack":"rk_1","type":"notes"})");
+    auto capture = *json::parse(R"({"rack":"rk_1","track":"tr_1","pitch":"mo_2.pitch",
+        "gate":"mo_2.gate","beats":1,"notes":"voice v; 1: C4:q r:*"})");
+    auto args = json::Value::object();
+    args["steps"] = json::Value::array();
+    auto step = json::Value::object();
+    step["command"] = "rack.capture";
+    step["args"] = capture;
+    args["steps"].push_back(step);
+    REQUIRE(f.call("batch", args));
+    CHECK(f.app->head().items.size() == 1);
+    f.run("history.undo");
+    CHECK(f.app->head().items.empty());
+    args["steps"].asArray()[0]["args"]["async"] = true;
+    const auto refused = f.call("batch", args);
+    REQUIRE_FALSE(refused);
+    CHECK(refused.error().code == "batch.step_failed");
+    REQUIRE_FALSE(refused.error().details.empty());
+    CHECK(refused.error().details[0].code == "batch.not_transactional");
+    CHECK(f.app->head().items.empty());
+}
+
+TEST_CASE("rack cables: numeric CLAP ids modulate a raw plugin and survive save and preset reopen" *
+          doctest::description("rt")) {
+    Fixture f;
+    f.run("project.set", R"({"console9":false})");
+    f.run("rack.add");
+    f.run("module.add", R"({"rack":"rk_1","type":"transport"})");
+    f.run("module.add", R"({"rack":"rk_1","plugin":"com.suppleaudio.test.raw-gain"})");
+    const auto* fx = f.app->head().fx.find({model::Kind::Fx, 1});
+    REQUIRE(fx);
+    auto schema = f.app->fxSchema(*fx);
+    REQUIRE(schema);
+    CHECK(schema->isNull());
+    f.run("cable.add", R"({"from":"mo_2.playing","to":"mo_3.in_l"})");
+    f.run("cable.add", R"({"from":"mo_3.out_l","to":"mo_1.l"})");
+    const auto plain = f.level();
+    f.run("cable.add", R"({"from":"mo_2.playing","to":"fx_1.0","amount":0.1})");
+    CHECK(f.level() > plain);
+    for (const auto* invalid : {"12", "4294967296"}) {
+        auto args = json::Value::object();
+        args["from"] = "mo_2.playing";
+        args["to"] = std::string("fx_1.") + invalid;
+        const auto bad = f.call("cable.add", args);
+        REQUIRE_FALSE(bad);
+        CHECK(bad.error().code == "rack.port");
+        CHECK(bad.error().path == "/args/to");
+        CHECK(bad.error().hint.find("0") != std::string::npos);
+    }
+    auto nonmod = f.call("cable.add", *json::parse(R"({"from":"mo_2.playing","to":"fx_1.1"})"));
+    REQUIRE_FALSE(nonmod);
+    CHECK(nonmod.error().code == "rack.modulation");
+    auto saved = f.run("rack.preset.save", R"({"rack":"rk_1","name":"Numeric"})");
+    auto args = json::Value::object();
+    args["path"] = (f.dir / "song.json").string();
+    REQUIRE(f.call("project.save", args));
+    Fixture reopened;
+    REQUIRE(reopened.call("project.open", args));
+    CHECK(reopened.level() == f.level());
+    bool numeric = false;
+    for (const auto& cable : reopened.app->head().cables)
+        numeric |= cable.value->to.object.kind == model::Kind::Fx && cable.value->to.key == "0";
+    CHECK(numeric);
+    Fixture preset;
+    preset.run("project.set", R"({"console9":false})");
+    preset.run("rack.add");
+    args["rack"] = "rk_1";
+    args["path"] = saved["path"];
+    REQUIRE(preset.call("rack.preset.load", args));
+    CHECK(preset.level() == f.level());
+    OfflineSettings settings;
+    settings.endSeconds = .05;
+    settings.threads = 1;
+    auto offline = f.app->renderSession(f.app->head(), settings);
+    REQUIRE(offline);
+    for (bool anticipative : {false, true})
+        for (int workers : {0, 2}) {
+            CAPTURE(anticipative);
+            CAPTURE(workers);
+            DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 8192});
+            REQUIRE(f.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 37},
+                                       {.anticipative = anticipative, .workers = workers}));
+            f.run("transport.play");
+            for (int i = 0; i < 180; ++i) {
+                if (anticipative) REQUIRE(f.app->engine()->awaitRendered(37));
+                backend.run(1);
+            }
+            const auto delay = f.app->engine()->outputLatency();
+            f.app->stopEngine();
+            CHECK(std::equal(offline->audio.channels[0].begin(), offline->audio.channels[0].end(),
+                             backend.capture().channels[0].begin() + delay));
+        }
+}
+
+TEST_CASE("rack cables: numeric keys work in rack.patch and unknown ids name available keys") {
+    Fixture f;
+    f.run("rack.add");
+    f.run("rack.patch", R"({"rack":"rk_1","modules":{"clock":{"type":"transport"},
+        "effect":{"plugin":"com.suppleaudio.test.gain"}},
+        "cables":[["clock.playing","effect.0",0.1]]})");
+    const auto bad = f.call("cable.add", *json::parse(R"({"from":"mo_2.playing","to":"fx_1.12"})"));
+    REQUIRE_FALSE(bad);
+    CHECK(bad.error().code == "rack.port");
+    CHECK(bad.error().hint.find("gain") != std::string::npos);
+    CHECK(bad.error().hint.find("latency") != std::string::npos);
+    CHECK(bad.error().hint.find("0") != std::string::npos);
+    const auto version = f.app->head().version;
+    const auto patch = f.call("rack.patch", *json::parse(R"({"rack":"rk_1",
+        "modules":{"other":{"type":"transport"}},"cables":[["other.playing","fx_1.999"]]})"));
+    REQUIRE_FALSE(patch);
+    CHECK(f.app->head().version == version);
+    // An invalid serialized target is refused before replacing the open project.
+    auto doc = model::projectToJson(f.app->head());
+    doc["cables"]["cb_1"]["to"] = "fx_1.12";
+    const auto path = f.dir / "invalid.json";
+    REQUIRE(writeFileAtomic(path, json::writeCanonical(doc)));
+    const auto opened = f.app->open(path);
+    REQUIRE_FALSE(opened);
+    CHECK(opened.error().code == "rack.port");
+    CHECK(f.app->head().version == version);
+    // A preset's numeric target is validated too.
+    auto saved = f.run("rack.preset.save", R"({"rack":"rk_1","name":"Bad numeric"})");
+    auto text = readTextFile(saved["path"].asString(), 1 << 20);
+    REQUIRE(text);
+    auto preset = json::parse(*text);
+    REQUIRE(preset);
+    (*preset)["cables"].asArray()[0]["to"]["port"] = "999";
+    REQUIRE(writeFileAtomic(saved["path"].asString(), json::writeCanonical(*preset)));
+    auto args = json::Value::object();
+    args["rack"] = "rk_1";
+    args["path"] = saved["path"];
+    const auto loaded = f.call("rack.preset.load", args);
+    REQUIRE_FALSE(loaded);
+    CHECK(loaded.error().code == "rack.port");
 }

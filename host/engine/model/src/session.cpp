@@ -951,7 +951,10 @@ std::optional<CableEnd> CableEnd::parse(std::string_view text) {
     const std::string_view key = text.substr(dot + 1);
     for (char c : key)
         if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_')) return std::nullopt;
-    if (key.front() < 'a' || key.front() > 'z') return std::nullopt;
+    if (key.front() < 'a' || key.front() > 'z') {
+        if (id->kind != Kind::Fx || key.find_first_not_of("0123456789") != std::string_view::npos)
+            return std::nullopt;
+    }
     return CableEnd{*id, std::string(key)};
 }
 

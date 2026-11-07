@@ -1149,6 +1149,7 @@ q = nil
 ---@field y? number
 
 ---@class Steppe.rack_capture_args
+---@field async? boolean (default: false)
 ---@field rack string Rack id
 ---@field pitch string
 ---@field gate string
@@ -1160,6 +1161,15 @@ q = nil
 ---@field quantize? number
 ---@field notes? string
 ---@field name? string
+
+---@class Steppe.rack_capture_commit_args
+---@field track string
+---@field source table
+---@field name string
+---@field at number
+---@field beats number
+---@field voices integer
+---@field warnings string[]
 
 ---@class Steppe.rack_get_args
 ---@field rack string
@@ -2244,6 +2254,9 @@ q = nil
 ---@field probe fun(args: Steppe.rack_probe_args): table Listen to a rack's ports: level, pitch, gate rate, notes, a CV's range.
 ---@field remove fun(args: Steppe.rack_remove_args): table Remove a rack with its modules and cables.
 ---@field set fun(args: Steppe.rack_set_args): table Rename a rack or move it to another channel.
+
+---@class Steppe.rack.capture
+---@field commit fun(args: Steppe.rack_capture_commit_args): table Attach a rack capture's rendered MIDI notes.
 
 ---@class Steppe.rack.preset
 ---@field delete fun(args: Steppe.rack_preset_delete_args): table Delete a saved rack preset.

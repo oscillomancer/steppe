@@ -352,6 +352,7 @@ struct Edge {
     // (linear: its encoder runs without Console 9), or the source rack's Out
     // module `rackOut` into a channel (its record input). -1: neither.
     int rackIn = -1, rackOut = -1;
+    std::int64_t rackLatency = 0, rackPadding = 0;
     // MIDI-only dependency from a Note Out. Queues and voices belong to the
     // destination, and stay on its executor; delay matches the solved PDC.
     int rackNotes = -1, midiFrom = 0, midiTo = 0, midiSourceBase = 0;

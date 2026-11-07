@@ -206,9 +206,8 @@ cable buffers, binds ports and parameters, and calls the modules' hooks.
 Each rack compiles to one node of the render plan, before the channels it
 feeds and after the tracks that send to it. Its In modules read route
 edges, its Out modules write buffers that edges deliver to channels'
-inputs, linearly, before their items and inserts. Read-ahead PDC treats the
-node as a strip with no chain latency (plugin modules' latency inside a
-patch is not compensated; `rack.get` reports it). A rack is live when it
+inputs, linearly, before their items and inserts. **2026-11-07 amendment:** [ADR-0064](0064-rack-latency.md) supersedes
+the original uncompensated rack-node timing policy. A rack is live when it
 plays live MIDI or a live track sends to it, and liveness propagates as
 for strips. Its MIDI comes from the source tracks' compiled events at the
 rack node's own timeline shift; its transport from the plan's time map at
@@ -265,8 +264,8 @@ is far smaller. The engine gains a node kind and the session three object
 kinds and a route end, with migration from schema 2.6. Module authors get
 determinism without effort; the price is a 32-frame control grid, and
 frame-by-frame processing inside feedback loops, which costs CPU. A rack
-runs on one thread; several racks run in parallel. Plugin latency inside a
-patch is not compensated.
+runs on one thread; several racks run in parallel. **2026-11-07 amendment:** [ADR-0064](0064-rack-latency.md) removes
+the original rack latency limit; parallel paths inside a patch remain unaligned.
 
 ## Alternatives considered
 

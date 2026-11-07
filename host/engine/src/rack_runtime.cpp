@@ -6,9 +6,13 @@
 #include <cctype>
 #include <charconv>
 #include <cmath>
+#include <functional>
 #include <map>
 #include <optional>
+#include <queue>
+#include <set>
 
+#include "supple/engine/app.h"
 #include "supple/rack/stock.h"
 
 namespace supple::engine {
@@ -321,11 +325,6 @@ script::Transport RackClock::transport(std::int64_t position) SUPPLE_RT {
 
 namespace {
 
-struct ModTarget {
-    std::uint32_t param = 0;
-    double scale = 0;  // the parameter's CLAP range
-};
-
 bool sameName(std::string_view a, std::string_view b) {
     return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
                return std::tolower(static_cast<unsigned char>(x)) ==
@@ -333,40 +332,173 @@ bool sameName(std::string_view a, std::string_view b) {
            });
 }
 
+}  // namespace
+
 // The CLAP parameter a cable into the plug-in's `key` moves: a semantic key
 // (by `schema`, its semantic description), a parameter's id or its name. It
 // must be modulatable; a VST3 plug-in takes no modulation.
-Result<ModTarget> modTarget(host::Instance& instance, const json::Value* schema,
-                            const std::string& key) {
-    if (instance.info().format == "vst3")
+Result<PluginModTarget> resolvePluginMod(std::span<const host::ParamInfo> list,
+                                         const json::Value* schema, const std::string& key,
+                                         bool vst3) {
+    if (vst3)
         return Error("rack.modulation", "VST3 plug-ins take no modulation", "",
                      "use a CLAP plug-in, or automate the parameter (env.add {fx})");
     std::optional<std::uint32_t> id;
-    std::uint32_t number = 0;
-    const auto [end, ec] = std::from_chars(key.data(), key.data() + key.size(), number);
-    if (ec == std::errc{} && end == key.data() + key.size()) id = number;
-    if (!id && schema && schema->isObject())
-        if (const json::Value* ps = schema->find("params"); ps && ps->isObject())
-            if (const json::Value* d = ps->find(key); d && d->isObject())
-                if (const json::Value* v = d->find("id"); v && v->isNumber())
+    if (schema && schema->isObject())
+        if (const auto* ps = schema->find("params"); ps && ps->isObject())
+            if (const auto* d = ps->find(key); d && d->isObject())
+                if (const auto* v = d->find("id"); v && v->isNumber())
                     id = static_cast<std::uint32_t>(v->asInt());
-    const std::vector<host::ParamInfo> list = instance.params();
+    if (!id) {
+        std::uint32_t number = 0;
+        const auto [end, ec] = std::from_chars(key.data(), key.data() + key.size(), number);
+        if (ec == std::errc{} && end == key.data() + key.size()) id = number;
+    }
     const host::ParamInfo* found = nullptr;
     for (const host::ParamInfo& info : list)
-        if (id ? info.id == *id : sameName(info.name, key)) {
+        if (id ? info.id == *id
+               : key.find_first_not_of("0123456789") != std::string::npos &&
+                     sameName(info.name, key)) {
             found = &info;
             break;
         }
-    if (!found)
+    if (!found) {
+        std::string available;
+        auto add = [&](const std::string& text) {
+            available += (available.empty() ? "" : ", ") + text;
+        };
+        if (schema && schema->isObject())
+            if (const auto* ps = schema->find("params"); ps && ps->isObject())
+                for (const auto& entry : ps->asObject()) add(entry.key);
+        for (const auto& info : list) add(std::to_string(info.id));
         return Error("rack.port", "the plug-in has no parameter " + key, "",
-                     "fx.describe lists its parameters");
+                     "available parameter keys and numeric ids: " +
+                         (available.empty() ? "none" : available) +
+                         "; fx.describe lists their ranges");
+    }
     if (!(found->flags & CLAP_PARAM_IS_MODULATABLE))
         return Error("rack.modulation", found->name + " is not modulatable", "",
                      "automate it instead (env.add {fx})");
-    return ModTarget{found->id, found->max - found->min};
+    return PluginModTarget{found->id, found->max - found->min};
 }
 
-}  // namespace
+Status validatePluginMod(EngineApp& app, const model::FxInstance& fx, const std::string& key,
+                         const std::string& path) {
+    auto info = app.findPlugin(fx.plugin.id);
+    if (!info) return std::move(info).error().at(path);
+    auto schema = app.fxSchema(fx);
+    if (!schema) return std::move(schema).error().at(path);
+    auto params = app.fxParams(fx);
+    if (!params) return std::move(params).error().at(path);
+    auto target = resolvePluginMod(*params, schema->isNull() ? nullptr : &*schema, key,
+                                   info->format == "vst3");
+    if (!target) return std::move(target).error().at(path);
+    return {};
+}
+
+RackLatencies rackLatencies(const Session& session, Id rackId,
+                            const std::map<Id, std::int64_t>& moduleLatencies) {
+    std::vector<Id> ids;
+    std::map<Id, int> index, owner;
+    for (const auto& entry : session.modules) {
+        if (entry.value->rack != rackId) continue;
+        const int at = static_cast<int>(ids.size());
+        index[entry.id] = at;
+        if (entry.value->fx) owner[*entry.value->fx] = at;
+        ids.push_back(entry.id);
+    }
+    const auto count = ids.size();
+    std::vector<std::vector<int>> next(count);
+    for (const auto& entry : session.cables) {
+        const auto a = index.find(entry.value->from.object);
+        const auto& destinations = entry.value->to.object.kind == Kind::Module ? index : owner;
+        const auto b = destinations.find(entry.value->to.object);
+        if (a != index.end() && b != destinations.end()) next[a->second].push_back(b->second);
+    }
+    std::vector<int> order(count, -1), low(count), component(count, -1), stack;
+    std::vector<bool> on(count);
+    std::vector<std::vector<int>> groups;
+    int serial = 0;
+    std::function<void(int)> visit = [&](int at) {
+        order[at] = low[at] = serial++;
+        stack.push_back(at);
+        on[at] = true;
+        for (int to : next[at]) {
+            if (order[to] < 0) {
+                visit(to);
+                low[at] = std::min(low[at], low[to]);
+            } else if (on[to])
+                low[at] = std::min(low[at], order[to]);
+        }
+        if (low[at] != order[at]) return;
+        groups.emplace_back();
+        int member;
+        do {
+            member = stack.back();
+            stack.pop_back();
+            on[member] = false;
+            component[member] = static_cast<int>(groups.size() - 1);
+            groups.back().push_back(member);
+        } while (member != at);
+    };
+    for (std::size_t at = 0; at < count; ++at)
+        if (order[at] < 0) visit(static_cast<int>(at));
+    std::vector<std::set<int>> edges(groups.size());
+    std::vector<int> degree(groups.size());
+    std::vector<std::int64_t> cost(groups.size()), arrival(groups.size());
+    for (std::size_t group = 0; group < groups.size(); ++group) {
+        const int member = groups[group].front();
+        const bool feedback =
+            groups[group].size() > 1 ||
+            std::find(next[member].begin(), next[member].end(), member) != next[member].end();
+        if (!feedback)
+            if (const auto found = moduleLatencies.find(ids[member]);
+                found != moduleLatencies.end())
+                cost[group] = found->second;
+    }
+    for (std::size_t from = 0; from < count; ++from)
+        for (int to : next[from])
+            if (component[from] != component[to] &&
+                edges[component[from]].insert(component[to]).second)
+                ++degree[component[to]];
+    std::queue<int> ready;
+    for (std::size_t group = 0; group < groups.size(); ++group)
+        if (!degree[group]) ready.push(static_cast<int>(group));
+    while (!ready.empty()) {
+        const int group = ready.front();
+        ready.pop();
+        arrival[group] += cost[group];
+        for (int to : edges[group]) {
+            arrival[to] = std::max(arrival[to], arrival[group]);
+            if (!--degree[to]) ready.push(to);
+        }
+    }
+    RackLatencies result;
+    for (std::size_t at = 0; at < count; ++at) {
+        const auto* module = session.modules.find(ids[at]);
+        if (module->type != model::kOutModule && module->type != model::kNotesOutModule) continue;
+        const auto latency = arrival[component[at]];
+        result.outputs[ids[at]] = latency;
+        if (module->type == model::kOutModule) result.latency = std::max(result.latency, latency);
+    }
+    return result;
+}
+
+void prepareRackLatencies(Node& node, const Session& session) {
+    auto& rack = *node.rack;
+    std::map<Id, std::int64_t> costs;
+    for (Id id : rack.modules) {
+        const auto* module = session.modules.find(id);
+        if (!module || !module->fx || module->bypass) continue;
+        for (const auto& stage : node.rackStages)
+            if (stage.fx == *module->fx) costs[id] = stage.latency;
+    }
+    const auto result = rackLatencies(session, rack.rack, costs);
+    node.latChain = result.latency;
+    rack.outLatencies.clear();
+    for (Id id : rack.outIds) rack.outLatencies.push_back(result.outputs.at(id));
+    for (auto& out : rack.notesOut) out.latency = result.outputs.at(out.id);
+}
 
 Status compileRack(Plan& p, Node& n, const Session& s, Id rackId, InstancePool& plugins) {
     RackPool& pool = plugins.racks();
@@ -471,7 +603,8 @@ Status compileRack(Plan& p, Node& n, const Session& s, Id rackId, InstancePool& 
                 schema = schemas.emplace(st.instance, std::move(described)).first;
             }
             auto target =
-                modTarget(*st.instance, schema->second ? &*schema->second : nullptr, c.to.key);
+                resolvePluginMod(st.instance->params(), schema->second ? &*schema->second : nullptr,
+                                 c.to.key, st.instance->info().format == "vst3");
             if (!target) {
                 p.warnings.push_back(e.id.str() + ": " + c.to.str() + ": " +
                                      target.error().message + "; the cable is not heard");

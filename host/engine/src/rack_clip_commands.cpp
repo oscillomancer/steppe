@@ -206,6 +206,11 @@ void registerRackClipCommands(cmd::Registry& registry) {
             for (auto cb : clip->cables) {
                 cb.from.object = ids.at(cb.from.object);
                 cb.to.object = ids.at(cb.to.object);
+                if (cb.to.object.kind == model::Kind::Fx) {
+                    const auto preview = t.preview();
+                    SUPPLE_TRY(detail::validatePluginMod(app, *preview.fx.find(cb.to.object),
+                                                         cb.to.key, "/cables/to"));
+                }
                 result["cables"].asArray().push_back(t.create(std::move(cb)).str());
             }
             return result;

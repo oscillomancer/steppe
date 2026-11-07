@@ -5,11 +5,14 @@
 // envelopes move module knobs, and the output does not depend on the block.
 #include <doctest/doctest.h>
 
+#include <supple/audio/audio_file.h>
+#include <chrono>
 #include <cmath>
 
 #include <supple/engine/offline.h>
 #include <supple/engine/realtime.h>
 
+#include <clap/ext/params.h>
 #include "plan.h"
 #include "rack_runtime.h"
 #include "supple/params/params.h"
@@ -596,9 +599,10 @@ namespace {
 struct NoteRouteScene {
     model::Session session, itemReference;
     Id source, target, rack, notes, noteOut;
-    NoteRouteScene(bool live, bool compensated = false) {
+    NoteRouteScene(bool live, bool compensated = false, bool rackLatency = false) {
         model::Project project;
         project.seed = 456789;
+        project.console9 = !rackLatency;
         model::EditTxn t(model::Session::create(project), 1);
         source = addChannel(t);
         target = addChannel(t);
@@ -644,6 +648,18 @@ struct NoteRouteScene {
         item.takes = {tk};
         item.activeTake = tk;
         t.create(item);
+        if (rackLatency) {
+            const auto latencyPlugin = addPlugin(
+                t, rack, "com.suppleaudio.test.gain",
+                json::parse(
+                    R"({"schema":"supple.test-gain-patch/1.0","params":{"latency":"short"}})")
+                    .value());
+            const auto latencyOut = addModule(t, rack, model::kOutModule);
+            cable(t, latencyPlugin, "out_l", latencyOut, "l");
+            // An unpatched audio input stays silent; the Out still sets the rack clock.
+            const auto silentTarget = addChannel(t);
+            listen(t, latencyOut, silentTarget);
+        }
         auto reference = t.preview();
         model::EditTxn ref(reference, 2);
         item.track = target;
@@ -677,11 +693,12 @@ struct NoteRouteScene {
 
 TEST_CASE("racks: Note Out matches MIDI items offline and in both real-time executors" *
           doctest::description("rt")) {
-    bool live = false, compensated = false;
+    bool live = false, compensated = false, rackLatency = false;
     SUBCASE("delay compensation and fan-out") { compensated = true; }
+    SUBCASE("rack latency pads Note Out") { rackLatency = true; }
     SUBCASE("anticipative rack") {}
     SUBCASE("live rack") { live = true; }
-    NoteRouteScene scene(live, compensated);
+    NoteRouteScene scene(live, compensated, rackLatency);
     const auto reference = renderLeft(scene.itemReference, 2.0, 512);
     const auto stem = renderLeft(scene.itemReference, 0.2, 37, scene.target);
     CHECK(bool(renderLeft(scene.session, 0.2, 37, scene.target) == stem));
@@ -946,4 +963,197 @@ TEST_CASE("racks: Note Out fan-in has distinct note addresses and survives routi
     CHECK(stage(plan, first).voices.size() == 2);
     CHECK(stage(plan, second).voices.size() == 1);
     for (auto* in : started) in->stopProcessing();
+}
+
+TEST_CASE("racks: feed-forward latency aligns independent Outs with reference impulses" *
+          doctest::description("rt")) {
+    bool bridged = false;
+    SUBCASE("in-process effect") {}
+    SUBCASE("shared bridge effect") {
+        host::setBridgeExecutable(BRIDGE_PATH);
+        bridged = true;
+    }
+    const auto dir =
+        std::filesystem::temp_directory_path() /
+        ("rack-pdc-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(dir);
+    struct Cleanup {
+        std::filesystem::path dir;
+        ~Cleanup() { std::filesystem::remove_all(dir); }
+    } cleanup{dir};
+    audio::AudioData audio;
+    audio.sampleRate = 48000;
+    audio.channels.assign(2, std::vector<float>(8192));
+    for (auto at : {17, 479, 480, 2027, 4095}) audio.channels[0][at] = audio.channels[1][at] = .25f;
+    const auto path = dir / "impulses.wav";
+    REQUIRE(audio::writeWav(path, audio));
+    model::Project project;
+    project.console9 = false;
+    model::EditTxn t(model::Session::create(project), 1);
+    const auto source = addChannel(t), wet = addChannel(t), dry = addChannel(t),
+               reference = addChannel(t);
+    const auto mediaId = t.create(model::MediaSource{path.string(), "", "wav", 48000, 2, 8192});
+    model::Take take;
+    take.source = mediaId;
+    const auto tk = t.create(take);
+    model::Item item;
+    item.track = source;
+    item.length = 8192. / 24000.;
+    item.takes = {tk};
+    item.activeTake = tk;
+    t.create(item);
+    t.modify<model::Track>(source, [](auto& tr) { tr.mute = true; });
+    const auto rack = t.create(model::Rack{wet, "Latency"});
+    const auto in = addModule(t, rack, model::kInModule);
+    const auto delayed = addPlugin(
+        t, rack, "com.suppleaudio.test.gain",
+        json::parse(R"({"schema":"supple.test-gain-patch/1.0","params":{"latency":"short"}})")
+            .value());
+    if (bridged) {
+        const auto fx = *t.preview().modules.find(delayed)->fx;
+        t.modify<model::FxInstance>(
+            fx, [](auto& effect) { effect.isolation = model::Isolation::SharedBridge; });
+    }
+    const auto out1 = addModule(t, rack, model::kOutModule),
+               out2 = addModule(t, rack, model::kOutModule);
+    cable(t, in, "l", delayed, "in_l");
+    cable(t, delayed, "out_l", out1, "l");
+    cable(t, in, "l", out2, "l");
+    listen(t, out1, wet);
+    listen(t, out2, dry);
+    model::Route send;
+    send.from.track = source;
+    send.to.module = in;
+    send.tap = model::Tap::PreFader;
+    t.create(send);
+    const auto referenceRack = t.create(model::Rack{reference, "Reference"});
+    const auto referenceIn = addModule(t, referenceRack, model::kInModule);
+    const auto referenceOut = addModule(t, referenceRack, model::kOutModule);
+    cable(t, referenceIn, "l", referenceOut, "l");
+    listen(t, referenceOut, reference);
+    send.to.module = referenceIn;
+    t.create(send);
+    const auto s = commit(t);
+    auto pool = makePool();
+    MediaCache media;
+    auto plan = supple::engine::detail::compile(s, pool, 0, 128);
+    REQUIRE(plan);
+    plan->media = &media;
+    REQUIRE(supple::engine::detail::prepare(*plan, s));
+    for (const auto& node : plan->nodes)
+        if (node.rack && node.rack->rack == rack) {
+            CHECK(node.latChain == 64);
+            CHECK(node.rack->outLatencies == std::vector<std::int64_t>{64, 0});
+        }
+    const auto ref = renderLeft(s, .15, 512, reference);
+    REQUIRE(*std::max_element(ref.begin(), ref.end()) > .02f);
+    for (auto target : {wet, dry}) {
+        const auto heard = renderLeft(s, .15, 37, target);
+        CHECK(bool(heard == ref));
+    }
+    const auto offline = renderLeft(s, .15, 37);
+    for (bool anticipative : {false, true})
+        for (int workers : {0, 2}) {
+            CAPTURE(anticipative);
+            CAPTURE(workers);
+            auto livePool = makePool();
+            MediaCache liveMedia;
+            DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 12288});
+            Engine engine(livePool, liveMedia, {.anticipative = anticipative, .workers = workers});
+            REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 37}));
+            REQUIRE(engine.load(s));
+            engine.play();
+            for (int i = 0; i < 320; ++i) {
+                if (anticipative) REQUIRE(engine.awaitRendered(37));
+                backend.run(1);
+            }
+            engine.stop();
+            CHECK(engine.processErrors() == 0);
+            const auto latency = engine.outputLatency();
+            const auto& cap = backend.capture().channels[0];
+            REQUIRE(cap.size() >= latency + offline.size());
+            CHECK(std::equal(offline.begin(), offline.end(), cap.begin() + latency));
+        }
+}
+
+TEST_CASE("racks: feedback groups contribute zero latency, feed-forward paths take the maximum") {
+    model::EditTxn t(model::Session::create(), 1);
+    const auto channel = addChannel(t), rack = t.create(model::Rack{channel, ""});
+    const auto a = addPlugin(
+        t, rack, "com.suppleaudio.test.gain",
+        json::parse(R"({"schema":"supple.test-gain-patch/1.0","params":{"latency":"short"}})")
+            .value());
+    const auto b = addModule(t, rack, "com.suppleaudio.rack.vca");
+    const auto out = addModule(t, rack, model::kOutModule);
+    cable(t, a, "out_l", b, "in");
+    cable(t, b, "out", a, "in_l");
+    cable(t, a, "out_l", out, "l");
+    listen(t, out, channel);
+    const auto s = commit(t);
+    auto pool = makePool();
+    MediaCache media;
+    auto plan = supple::engine::detail::compile(s, pool, 0, 128);
+    REQUIRE(plan);
+    plan->media = &media;
+    REQUIRE(supple::engine::detail::prepare(*plan, s));
+    for (const auto& node : plan->nodes)
+        if (node.rack) CHECK(node.latChain == 0);
+    CHECK(supple::engine::detail::rackLatencies(s, rack, {{a, 64}}).latency == 0);
+    model::EditTxn forward(s, 2);
+    for (const auto& entry : s.cables)
+        if (entry.value->to.object == a) forward.remove<model::Cable>(entry.id);
+    const auto feed = supple::engine::detail::rackLatencies(forward.preview(), rack, {{a, 64}});
+    CHECK(feed.latency == 64);
+    CHECK(feed.outputs.at(out) == 64);
+}
+
+TEST_CASE("racks: a running plug-in latency change rebuilds compensation" *
+          doctest::description("rt")) {
+    const auto none = modulatedGain("playing");
+    model::EditTxn edit(none, 2);
+    const Id fx{model::Kind::Fx, 1};
+    edit.modify<model::FxInstance>(
+        fx, [](auto& effect) { (*effect.patch)["params"]["latency"] = "short"; });
+    const auto delayed = commit(edit);
+    for (bool anticipative : {false, true}) {
+        auto pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+        Engine engine(pool, media, {.anticipative = anticipative, .workers = 2});
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+        REQUIRE(engine.load(none));
+        REQUIRE(engine.awaitPlan());
+        engine.play();
+        auto run = [&] {
+            if (anticipative) REQUIRE(engine.awaitRendered(128));
+            backend.run(1);
+            engine.service();
+        };
+        for (int i = 0; i < 10; ++i) run();
+        auto* instance = pool.find(fx);
+        REQUIRE(instance);
+        CHECK(instance->latency() == 0);
+        CHECK(engine.outputLatency() == 0);
+        REQUIRE(engine.load(delayed));
+        for (int i = 0; i < 160 && instance->latency() != 64; ++i) run();
+        CHECK(instance->latency() == 64);
+        for (int i = 0; i < 20; ++i) run();
+        CHECK(pool.rememberedLatency(fx) == 64);
+        CHECK(engine.outputLatency() == 64);
+        CHECK_FALSE(pool.restarting(fx));
+        CHECK(engine.processErrors() == 0);
+        engine.stop();
+    }
+}
+
+TEST_CASE("racks: numeric semantic parameter keys take precedence over CLAP ids") {
+    std::vector<host::ParamInfo> params = {{0, "Gain", "", 0, 1, 0, CLAP_PARAM_IS_MODULATABLE},
+                                           {1, "Other", "", 0, 1, 0, CLAP_PARAM_IS_MODULATABLE}};
+    const auto schema = *json::parse(R"({"params":{"1":{"id":0}}})");
+    const auto semantic = supple::engine::detail::resolvePluginMod(params, &schema, "1");
+    REQUIRE(semantic);
+    CHECK(semantic->param == 0);
+    const auto numeric = supple::engine::detail::resolvePluginMod(params, nullptr, "1");
+    REQUIRE(numeric);
+    CHECK(numeric->param == 1);
 }

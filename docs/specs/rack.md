@@ -76,7 +76,7 @@ Fields equal to their defaults are omitted, as everywhere (session-model §5).
 | Field | Meaning |
 |---|---|
 | `from` | `"mo_N.<output key>"` (required). |
-| `to` | `"mo_N.<input key>"`, `"mo_N.<param key>"` or `"fx_N.<param key>"` for a plugin module's plug-in (required). |
+| `to` | `"mo_N.<input key>"`, `"mo_N.<param key>"` or `"fx_N.<param key>"` or `"fx_N.<decimal CLAP id>"` for a plugin module's plug-in (required). |
 | `amount` | Present exactly when `to` is a parameter: the movement at a value of 1, in the parameter's modulation unit (§3.4). |
 | `color` | A track colour name or `"#rrggbb"`; `""` (default): by signal kind. |
 
@@ -219,6 +219,18 @@ Parameters are declared as a plugin's. In a module:
   channel).
 - Toggles take no cables. A choice or integer moved by cables reads as a
   real number from `at()`; round it (`roundToInt`).
+
+A plug-in parameter target accepts a semantic key or an unsigned decimal
+CLAP parameter id: `fx_3.gain`, `fx_3.0`, `fx_3.12`. A numeric semantic key
+wins over the same numeric id. Decimal ids use digits only (no sign, hex,
+spaces or suffix); they must resolve to an actual modulatable CLAP parameter.
+Module ports and knobs keep their letter-first keys. `rack.patch` also accepts
+`effect.12` for a named plug-in module, resolving it to that module's FX.
+Unknown targets return `rack.port`; the hint lists semantic keys and numeric
+ids. Validation is shared by cable commands, preset load/paste and project
+load. Projects with missing plug-ins still reopen with their cables retained;
+the available plug-in is checked when the cable can be resolved. Serialized
+cable ends retain the supplied key/id string through save and reopen.
 
 A cable moves a parameter by `amount × value`: for a frequency the amount is
 in octaves (`value · 2^(amount·x)`), otherwise in the parameter's unit (a
@@ -441,9 +453,19 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
 - **Edges.** A send to an In module is an edge into the rack node at its
   tap; a channel's record input from an Out module is an edge from the rack
   node into the channel's input sum (linear, no Console 9 stage).
-- **Timing.** Read-ahead PDC treats the node as a strip with no chain
-  latency. Its timeline shift is the node's; MIDI events and transport use
-  it. The grid is aligned to the node's timeline position.
+- **Timing.** Read-ahead PDC treats the node as a strip whose latency is the
+  maximum of its audio Outs (ADR-0064). Each Out's latency is the maximum
+  sum of prepared plug-in stage latencies, including oversampling, along
+  feed-forward paths to it. Script modules and entire feedback groups
+  contribute zero. Notes, Transport and automation use the same shifted
+  node clock; the grid is aligned to that clock. An audio or Note Out edge
+  with less latency adds the difference through its existing edge delay.
+  Main-thread preparation computes these values; plug-in latency changes
+  rebuild the plan as for strips. `rack.get` reports `latency_samples` for
+  the node, each entry in `outs`, and each `{module, latency_samples}` in
+  `note_outs`, in engine frames (project frames without a running engine).
+  Parallel paths summed inside a patch stay unaligned: insert a Delay
+  module explicitly when that patch needs alignment.
 - **Note Out.** Pitch/gate becomes MIDI with the same gate detector and MIDI
   quantization functions as Capture: rise at ≥0.5, fall below 0.25, key
   round(60 + 12 × pitch) clamped to 0..127, velocity round(127 × v) clamped
@@ -494,7 +516,7 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   and run as stages of the rack node (`Node::rackStages`, prepared and
   automated as chain stages), in sub-blocks on the grid, with notes made
   from their pitch and gate cables. A cable into `fx_N.<key>` (a semantic
-  key, a parameter id or its name) rides one of the plugin module's 16
+  key, a decimal CLAP parameter id or its name) rides one of the plugin module's 16
   hidden knobs `mod_1`..`mod_16` (−1..1, never listed); at each point of
   the rack's grid (never where a host block splits it, so renders do not
   depend on the block size) the module sends each parameter its cables'
@@ -513,8 +535,7 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   the plan and is attached on the audio thread each block, since the
   previous plan may still be running the same instance.
 - **Errors.** `rack.cycle`, `rack.unknown_type`, `rack.port`, `rack.param`,
-  `rack.limit` at edit time; plan warnings for missing types and plugin
-  latency inside a rack.
+  `rack.limit` at edit time; plan warnings for missing types.
 
 ## 7. Commands
 
@@ -527,9 +548,9 @@ examples run as tests. Ends are strings: `"mo_3.out"`.
 | `rack.remove` | edit | `{rack}` |
 | `rack.set` | edit | `{rack, name?, track?}` |
 | `rack.list` | query | `{}` → racks with their home tracks, module counts and Out modules |
-| `rack.get` | query | `{rack, detail?: brief\|full}` → modules (id, type, label, changed params, position, size), cables (with `feedback`), Out modules and the channels they feed, problems |
+| `rack.get` | query | `{rack, detail?: brief\|full}` → modules (id, type, label, changed params, position, size), cables (with `feedback`), Out modules and the channels they feed, node/per-Out `latency_samples`, `note_outs`, problems |
 | `rack.probe` | query | `{rack, ports: ["mo_N.<output>", …≤8], seconds? (≤10, 2), from_beat?, notes? (notation the rack's Notes modules play)}` → per port: peak, rms, dc, min, max; audio (the first 4 voices summed): dB and pitch (Hz, note, cents) when periodic; gates over the voices: count, per second, per beat, duty; pitch: the notes visited; CV: rate; a one-line description. An offline render of a copy with a listener (`ProbeModule`) on each port; nothing changes |
-| `rack.capture` | edit | `{rack, pitch, gate, velocity?, track, beats? (≤1024, 16), from_beat?, at?, quantize?, notes?, name?}` → `{item, take, source, position, length, notes, voices, warnings?}`: an offline render of a copy as `rack.probe`'s, with a listener (`CaptureModule`) on the ports, written as a MIDI item (§7.3); one undo step |
+| `rack.capture` | action | `{rack, pitch, gate, velocity?, track, beats? (≤1024, 16), from_beat?, at?, quantize?, notes?, name?, async?}` → `{item, take, source, position, length, notes, voices, warnings?}`: an offline render of a copy as `rack.probe`'s, with a listener (`CaptureModule`) on the ports, written as a MIDI item (§7.3); one undo step |
 | `rack.levels` | query | `{rack}` → `{modules: {mo_N: {port: level}}}`: every module and known output port, latest block's linear peak across all channels; stopped or silent reads zero, missing types have an empty port object |
 | `rack.patch` | edit | `{rack, modules: {name: {type\|plugin, params?, preset?, label?, x?, y?, source?, device?}}, cables?: [[from, to, amount?, color?] \| {from, to, amount?, color?}], x?, y?}` → `{modules: {name: id}, cables}`: ends `"name.port"`, `"name.knob"` (a plugin module's: its plug-in's) or `"mo_N.port"`; modules without a place laid out as §7.2; a name labels its module (§7.2); checked as `module.add` and `cable.add` check, all or nothing |
 | `rack.arrange` | edit | `{rack, modules?, x?, y?}` → `{modules: {mo_N: {x, y}}}`: lays out the modules (default all the rack's) as §7.2 from x, y (default their top-left corner), along the cables among them; one undo step |
@@ -704,6 +725,21 @@ step. The notes, in beats from `from_beat`, become a MIDI source, a take
 named `name` (default the rack's name) and an item at `at` (default
 `from_beat`) on `track`, a channel, `beats` long. The same project and
 arguments give the same notes.
+
+With `async: true`, the command returns `{job}` immediately and renders the
+immutable project and module/plug-in catalogue snapshot on a job worker.
+`job.get` reports progress and its completed result has the synchronous
+result's exact shape and bytes for the same starting state and arguments.
+Cancellation, including after rendering but before adoption, adds nothing.
+Completion posts one undoable edit to the main thread. The internal
+`rack.capture.commit` edit stores the rendered notes so branch replay copies
+the snapshot result rather than rendering again. A changed project or
+branch, rack definition, destination track/items, or timing map fails with
+`rack.capture_stale` and a hint to submit the current target again. Unrelated
+track edits do not invalidate the snapshot. Async capture is refused inside
+a batch or script transaction (`batch.not_transactional`); synchronous capture
+continues to join that transaction. Without `async`, rendering and the
+returned item result remain synchronous. The GUI currently uses that mode.
 
 ## 8. The rack window (`daw/gui`)
 

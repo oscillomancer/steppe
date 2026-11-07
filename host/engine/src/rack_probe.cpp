@@ -13,6 +13,7 @@
 #include "rack_runtime.h"
 #include "supple/engine/app.h"
 #include "supple/engine/offline.h"
+#include "supple/model/schemas.h"
 
 namespace supple::engine {
 
@@ -33,7 +34,35 @@ struct CaptureArgs {
     std::string rack, pitch, gate, track;
     std::optional<std::string> velocity, notes, name;
     std::optional<double> beats, fromBeat, at, quantize;
+    bool async = false;
 };
+
+struct CaptureResult {
+    midi::Sequence sequence;
+    std::int64_t voices = 0;
+    json::Value warnings = json::Value::array();
+};
+
+// Store rendered notes in the edit log so branch replay never renders them again.
+struct CaptureCommitArgs {
+    Id track;
+    model::MidiSource source;
+    std::string name;
+    double at = 0, beats = 0;
+    std::int64_t voices = 0;
+    std::vector<std::string> warnings;
+};
+auto captureCommitSchema() {
+    return schema::object<CaptureCommitArgs>("rack_capture_commit_args")
+        .field("track", &CaptureCommitArgs::track, model::idSchema())
+        .field("source", &CaptureCommitArgs::source, model::schemaOf<model::MidiSource>())
+        .field("name", &CaptureCommitArgs::name, schema::string())
+        .field("at", &CaptureCommitArgs::at, schema::number().min(0))
+        .field("beats", &CaptureCommitArgs::beats, schema::number().range(.25, 1024))
+        .field("voices", &CaptureCommitArgs::voices, schema::integer().range(0, 16))
+        .field("warnings", &CaptureCommitArgs::warnings, schema::arrayOf(schema::string()))
+        .build();
+}
 
 struct ProbeArgs {
     std::string rack;
@@ -404,9 +433,56 @@ void registerRackProbe(cmd::Registry& registry) {
 
 // rack.capture (rack.md §7.3): a rack's notes, printed as a MIDI item.
 void registerRackCapture(cmd::Registry& registry) {
+    {
+        Command<CaptureCommitArgs, json::Value> commit;
+        commit.name = "rack.capture.commit";
+        commit.kind = Kind::Edit;
+        commit.exposure = cmd::Exposure::Internal;
+        commit.summary = "Attach a rack capture's rendered MIDI notes.";
+        commit.args = captureCommitSchema();
+        commit.result = schema::any();
+        commit.run = [](const CaptureCommitArgs& a, Context& ctx) -> Result<json::Value> {
+            auto& e = ctx.service<EngineApp>();
+            const auto s = e.view();
+            const auto* track = s.tracks.find(a.track);
+            if (!track || track->type != model::StripType::Channel)
+                return Error("rack.capture_stale", "capture destination is unavailable", "/track",
+                             "submit rack.capture again onto an existing channel");
+            SUPPLE_TRY(model::checkedBeat(s, a.at + a.beats, "/at"));
+            model::EditTxn& t = e.txn();
+            model::MidiSource src;
+            src = a.source;
+            const Id mi = t.create(std::move(src));
+            model::Take take;
+            take.name = a.name;
+            take.source = mi;
+            const Id tk = t.create(std::move(take));
+            model::Item item;
+            item.track = a.track;
+            model::placeItem(s, item, a.at, a.beats);
+            item.takes = {tk};
+            item.activeTake = tk;
+            const Id it = t.create(std::move(item));
+            json::Value out = json::Value::object();
+            out["item"] = it.str();
+            out["take"] = tk.str();
+            out["source"] = mi.str();
+            out["position"] = a.at;
+            out["length"] = a.beats;
+            out["notes"] = static_cast<std::int64_t>(a.source.sequence.notes.size());
+            out["voices"] = a.voices;
+            if (!a.warnings.empty()) {
+                out["warnings"] = json::Value::array();
+                for (const auto& warning : a.warnings) out["warnings"].push_back(warning);
+            }
+            return out;
+        };
+        addChecked(registry, std::move(commit));
+    }
+
     Command<CaptureArgs, json::Value> c;
     c.name = "rack.capture";
-    c.kind = Kind::Edit;
+    c.kind = Kind::Action;
     c.exposure = cmd::Exposure::McpTool;
     c.summary = "Record a rack's pitch and gate as notes in a MIDI item on a track.";
     c.description =
@@ -417,9 +493,13 @@ void registerRackCapture(cmd::Registry& registry) {
         "velocity: an output (0..1) read at each rise; default 96. quantize: a grid in beats "
         "(0.25 = sixteenths) for starts and lengths. notes: notation the rack's Notes modules "
         "play, as rack.probe takes it. The rack is not changed; edit the notes with midi.edit, "
-        "or play them through any instrument.";
+        "or play them through any instrument. async:true returns {job}; rendering uses a snapshot, "
+        "cancellation leaves the project unchanged, and completion adds one undo step. A changed "
+        "rack, track, position or project fails with rack.capture_stale; submit the capture again.";
     c.tags = {"rack", "modular", "midi"};
     c.args = schema::object<CaptureArgs>("rack_capture_args")
+                 .field("async", &CaptureArgs::async, schema::boolean())
+                 .defaultValue(false)
                  .field("rack", &CaptureArgs::rack,
                         schema::string().pattern("^rk_[0-9]+$", "Rack id").doc("Rack id"))
                  .field("pitch", &CaptureArgs::pitch,
@@ -440,7 +520,9 @@ void registerRackCapture(cmd::Registry& registry) {
     c.result = schema::any();
     c.errors = {{"rack.unknown", "no such rack", "rack.list"},
                 {"rack.port", "not an output of a module in the rack", "rack.get lists them"},
-                {"rack.capture", "the render is too long", "capture at most 600 seconds"}};
+                {"rack.capture", "the render is too long", "capture at most 600 seconds"},
+                {"rack.capture_stale", "capture target changed during rendering",
+                 "submit rack.capture again for the current rack, track and position"}};
     c.examples = {{"Print a chord the rack plays to a MIDI item on the second track",
                    j(R"({"rack": "rk_1", "pitch": "mo_2.pitch", "gate": "mo_2.gate",
                "track": "tr_2", "beats": 4, "notes": "voice v; 1: [C4 E4 G4]:h r:h"})"),
@@ -449,6 +531,11 @@ void registerRackCapture(cmd::Registry& registry) {
                    "song_with_rack_preset"}};
     c.run = [](const CaptureArgs& a, Context& ctx) -> Result<json::Value> {
         EngineApp& e = ctx.service<EngineApp>();
+        if (a.async && e.inTransaction())
+            return Error(
+                "batch.not_transactional", "async capture cannot start inside a transaction",
+                "/async",
+                "run rack.capture with async:true outside the batch or script transaction");
         const model::Session s = e.view();
         const auto rack = Id::parse(a.rack);
         if (!rack || !s.racks.contains(*rack))
@@ -493,8 +580,9 @@ void registerRackCapture(cmd::Registry& registry) {
         if (a.notes) SUPPLE_TRY(addNotes(copyTxn, s, *rack, *a.notes, fromBeat));
         auto copy = copyTxn.commit();
         if (!copy) return std::move(copy).error();
-        InstancePool pool([&e](const model::PluginRef& ref) { return e.findPlugin(ref.id); },
-                          e.options().identity);
+        auto plugins = e.plugins();
+        if (!plugins) return plugins.error();
+        std::vector<host::PluginInfo> catalogue(plugins->begin(), plugins->end());
         auto catalog = std::make_shared<rack::Catalog>(*e.modules());
         catalog->add(detail::captureModuleType());
         OfflineSettings settings;
@@ -502,87 +590,172 @@ void registerRackCapture(cmd::Registry& registry) {
         settings.endSeconds = start + seconds;
         settings.projectDir = e.projectDir();
         settings.modules = std::move(catalog);
-        auto rendered = renderOffline(*copy, pool, settings);
-        if (!rendered) return std::move(rendered).error();
-        const rack::Instance* in = pool.racks().find(id);
-        const auto* capture = in ? dynamic_cast<const detail::CaptureModule*>(in->host()) : nullptr;
-        if (!capture) return Error("rack.capture", "the listener did not run", "/rack", "");
-        // Events to notes, in beats from the capture's start.
-        const double rate = copy->project->sampleRate;
-        midi::Sequence seq;
-        const double ppq = seq.ppq;
-        auto beatOf = [&](std::int64_t frame) {
-            return copy->timeMap->beatAt(start + static_cast<double>(frame) / rate) - fromBeat;
+        auto render = [copy = std::move(*copy), catalogue = std::move(catalogue),
+                       identity = e.options().identity, id, a, start, fromBeat,
+                       beats](const OfflineSettings& settings) -> Result<CaptureResult> {
+            InstancePool pool(
+                [&catalogue](const model::PluginRef& ref) -> Result<host::PluginInfo> {
+                    for (const auto& plugin : catalogue)
+                        if (plugin.id == ref.id) return plugin;
+                    return Error("plugin.not_found", "plugin " + ref.id + " is unavailable",
+                                 "/rack", "install the plug-in, then submit rack.capture again");
+                },
+                identity);
+            auto rendered = renderOffline(copy, pool, settings);
+            if (!rendered) return std::move(rendered).error();
+            const rack::Instance* in = pool.racks().find(id);
+            const auto* capture =
+                in ? dynamic_cast<const detail::CaptureModule*>(in->host()) : nullptr;
+            if (!capture) return Error("rack.capture", "the listener did not run", "/rack", "");
+            // Events to notes, in beats from the capture's start.
+            const double rate = copy.project->sampleRate;
+            midi::Sequence seq;
+            const double ppq = seq.ppq;
+            auto beatOf = [&](std::int64_t frame) {
+                return copy.timeMap->beatAt(start + static_cast<double>(frame) / rate) - fromBeat;
+            };
+            auto snap = [&](double beat) {
+                return a.quantize ? std::round(beat / *a.quantize) * *a.quantize : beat;
+            };
+            struct Open {
+                bool on = false;
+                double beat = 0;
+                int pitch = 60, velocity = 96;
+            };
+            std::array<Open, detail::kCaptureVoices> open{};
+            std::set<int> voices;
+            auto close = [&](Open& o, double endBeat) {
+                o.on = false;
+                const double from = std::max(0.0, snap(o.beat));
+                double until = std::min(beats, snap(endBeat));
+                if (a.quantize) until = std::max(until, from + *a.quantize);
+                if (from >= beats || until <= from) return;
+                until = std::min(until, beats);
+                midi::Note n;
+                n.start = std::llround(from * ppq);
+                n.length = std::max<std::int64_t>(1, std::llround(until * ppq) - n.start);
+                n.pitch = static_cast<std::uint8_t>(o.pitch);
+                n.velocity = static_cast<std::uint8_t>(o.velocity);
+                seq.notes.push_back(n);
+            };
+            for (const auto& ev : capture->events) {
+                Open& o = open[static_cast<std::size_t>(ev.voice)];
+                const double beat = beatOf(ev.frame);
+                if (o.on) close(o, beat);
+                if (!ev.on) continue;
+                o.on = true;
+                o.beat = beat;
+                o.pitch = rack::host::noteKey(ev.pitch);
+                o.velocity = rack::host::noteVelocity(ev.velocity, ev.hasVelocity);
+                voices.insert(ev.voice);
+            }
+            for (Open& o : open)
+                if (o.on) close(o, beats);
+            seq.length = std::llround(beats * ppq);
+            seq.canonicalize();
+            CaptureResult result;
+            result.sequence = std::move(seq);
+            result.voices = static_cast<std::int64_t>(voices.size());
+            if (capture->full)
+                result.warnings.push_back("more than " + std::to_string(detail::kCaptureEvents) +
+                                          " gate changes: the later ones are left out");
+            for (const auto& warning : rendered->warnings) result.warnings.push_back(warning);
+            return result;
         };
-        auto snap = [&](double beat) {
-            return a.quantize ? std::round(beat / *a.quantize) * *a.quantize : beat;
+        auto publish = [s, a, rack = *rack, track = *track, at, beats,
+                        &dispatcher = ctx.service<cmd::Dispatcher>(),
+                        origin = ctx.origin()](CaptureResult result) -> Result<json::Value> {
+            CaptureCommitArgs args;
+            args.track = track;
+            args.source.sequence = std::move(result.sequence);
+            args.name = a.name.value_or(model::rackLabel(s, rack));
+            args.at = at;
+            args.beats = beats;
+            args.voices = result.voices;
+            for (const auto& warning : result.warnings.asArray())
+                args.warnings.push_back(warning.asString());
+            return dispatcher.transact("rack.capture", origin, [&]() {
+                return dispatcher.execute(
+                    {"rack.capture.commit", captureCommitSchema().encode(args), origin});
+            });
         };
-        struct Open {
-            bool on = false;
-            double beat = 0;
-            int pitch = 60, velocity = 96;
-        };
-        std::array<Open, detail::kCaptureVoices> open{};
-        std::set<int> voices;
-        auto close = [&](Open& o, double endBeat) {
-            o.on = false;
-            const double from = std::max(0.0, snap(o.beat));
-            double until = std::min(beats, snap(endBeat));
-            if (a.quantize) until = std::max(until, from + *a.quantize);
-            if (from >= beats || until <= from) return;
-            until = std::min(until, beats);
-            midi::Note n;
-            n.start = std::llround(from * ppq);
-            n.length = std::max<std::int64_t>(1, std::llround(until * ppq) - n.start);
-            n.pitch = static_cast<std::uint8_t>(o.pitch);
-            n.velocity = static_cast<std::uint8_t>(o.velocity);
-            seq.notes.push_back(n);
-        };
-        for (const auto& ev : capture->events) {
-            Open& o = open[static_cast<std::size_t>(ev.voice)];
-            const double beat = beatOf(ev.frame);
-            if (o.on) close(o, beat);
-            if (!ev.on) continue;
-            o.on = true;
-            o.beat = beat;
-            o.pitch = rack::host::noteKey(ev.pitch);
-            o.velocity = rack::host::noteVelocity(ev.velocity, ev.hasVelocity);
-            voices.insert(ev.voice);
+        if (!a.async) {
+            auto rendered = render(settings);
+            if (!rendered) return rendered.error();
+            return publish(std::move(*rendered));
         }
-        for (Open& o : open)
-            if (o.on) close(o, beats);
-        seq.length = std::llround(beats * ppq);
-        seq.canonicalize();
-        const std::int64_t count = static_cast<std::int64_t>(seq.notes.size());
-        // The item.
-        model::EditTxn& t = e.txn();
-        model::MidiSource src;
-        src.sequence = std::move(seq);
-        const Id mi = t.create(std::move(src));
-        model::Take take;
-        take.name = a.name.value_or(model::rackLabel(s, *rack));
-        take.source = mi;
-        const Id tk = t.create(std::move(take));
-        model::Item item;
-        item.track = *track;
-        model::placeItem(s, item, at, beats);
-        item.takes = {tk};
-        item.activeTake = tk;
-        const Id it = t.create(std::move(item));
-        json::Value out = json::Value::object();
-        out["item"] = it.str();
-        out["take"] = tk.str();
-        out["source"] = mi.str();
-        out["position"] = at;
-        out["length"] = beats;
-        out["notes"] = count;
-        out["voices"] = static_cast<std::int64_t>(voices.size());
-        json::Value warnings = json::Value::array();
-        if (capture->full)
-            warnings.push_back("more than " + std::to_string(detail::kCaptureEvents) +
-                               " gate changes: the later ones are left out");
-        for (const auto& w : rendered->warnings) warnings.push_back(w);
-        if (!warnings.asArray().empty()) out["warnings"] = std::move(warnings);
+        auto& jobs = ctx.service<cmd::JobManager>();
+        auto& dispatcher = ctx.service<cmd::Dispatcher>();
+        const auto job = jobs.create();
+        const auto generation = e.projectGeneration();
+        const auto branch = e.versions().branch();
+        settings.cancelFlag = jobs.cancellationFlag(job);
+        settings.progressFlag = jobs.progressFlag(job);
+        e.startJob([&e, &jobs, &dispatcher, job, generation, branch, s, rack = *rack,
+                    track = *track, at, beats, origin = ctx.origin(), settings,
+                    render = std::move(render),
+                    publish = std::move(publish)](StopToken stop) mutable {
+            settings.stopToken = stop;
+            auto rendered = render(settings);
+            if (!rendered) {
+                if (!jobs.cancelled(job)) (void)jobs.fail(job, rendered.error());
+                return;
+            }
+            dispatcher.post(
+                "rack.capture.complete",
+                [&e, &jobs, job, generation, branch, s, rack, track, at, beats, origin,
+                 rendered = std::move(*rendered),
+                 publish = std::move(publish)]() mutable -> Status {
+                    if (jobs.cancelled(job)) return {};
+                    const auto now = e.view();
+                    bool stale = e.projectGeneration() != generation ||
+                                 e.versions().branch() != branch ||
+                                 now.racks.find(rack) != s.racks.find(rack) ||
+                                 now.tracks.find(track) != s.tracks.find(track) ||
+                                 now.project->sampleRate != s.project->sampleRate;
+                    // Immutable object identities catch removals, replacements and additions.
+                    auto same = [](const auto& before, const auto& after, auto selected) {
+                        for (const auto& entry : before)
+                            if (selected(entry) && after.find(entry.id) != entry.value.get())
+                                return false;
+                        for (const auto& entry : after)
+                            if (selected(entry) && before.find(entry.id) != entry.value.get())
+                                return false;
+                        return true;
+                    };
+                    stale |= !same(s.tempo, now.tempo, [](const auto&) { return true; }) ||
+                             !same(s.meters, now.meters, [](const auto&) { return true; });
+                    auto module = [&](Id id) {
+                        const auto* m = s.modules.find(id);
+                        if (!m) m = now.modules.find(id);
+                        return m && m->rack == rack;
+                    };
+                    stale |= !same(s.modules, now.modules,
+                                   [&](const auto& entry) { return entry.value->rack == rack; });
+                    stale |= !same(s.fx, now.fx, [&](const auto& entry) {
+                        const auto owner = model::moduleOfFx(s, entry.id);
+                        const auto next = model::moduleOfFx(now, entry.id);
+                        return (owner && module(*owner)) || (next && module(*next));
+                    });
+                    stale |= !same(s.cables, now.cables, [&](const auto& entry) {
+                        return module(entry.value->from.object);
+                    });
+                    stale |= !same(s.items, now.items,
+                                   [&](const auto& entry) { return entry.value->track == track; });
+                    if (stale || !model::checkedBeat(now, at + beats, "/at"))
+                        return jobs.fail(job,
+                                         Error("rack.capture_stale",
+                                               "capture target changed during rendering", "/rack",
+                                               "submit rack.capture again for the current rack, "
+                                               "track and position"));
+                    auto done = publish(std::move(rendered));
+                    if (!done) return jobs.fail(job, done.error());
+                    return jobs.complete(job, std::move(*done));
+                },
+                cmd::Dispatcher::PostKind::Edit);
+        });
+        auto out = json::Value::object();
+        out["job"] = job;
         return out;
     };
     addChecked(registry, std::move(c));

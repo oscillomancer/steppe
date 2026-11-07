@@ -250,7 +250,8 @@ class EngineApp : public cmd::Host {
     // The instance's reported latency in samples (the running one when there is
     // one, else a throwaway activation at the project rate).
     Result<json::Value> setPlainParams(model::Id id, const json::Value& values);
-    Result<std::uint32_t> fxLatencySamples(model::Id id, const model::FxInstance& fx);
+    Result<std::uint32_t> fxLatencySamples(model::Id id, const model::FxInstance& fx,
+                                           bool compensated = false);
     // fx's patch after applying `patch` (a merge patch, or a complete patch
     // when `replace`), validated by the plugin; the complete canonical patch.
     Result<json::Value> mergedPatch(const model::FxInstance& fx, const json::Value& patch,

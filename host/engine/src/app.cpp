@@ -30,6 +30,7 @@
 #include "supple/base/files.h"
 #include "supple/base/sha256.h"
 #include "supple/clap/semantic_params.h"
+#include "supple/dsp/oversampler.h"
 #include "supple/engine/jack.h"
 #include "supple/model/env_shape.h"
 #include "supple/model/schemas.h"
@@ -314,13 +315,28 @@ Result<json::Value> EngineApp::setPlainParams(model::Id id, const json::Value& v
     return changed;
 }
 
-Result<std::uint32_t> EngineApp::fxLatencySamples(model::Id id, const model::FxInstance& fx) {
+Result<std::uint32_t> EngineApp::fxLatencySamples(model::Id id, const model::FxInstance& fx,
+                                                  bool compensated) {
     if (auto owner = model::frozenOwner(view(), id))
         return model::frozenError(view(), *owner, "/fx");
     // A running instance already knows the plan's rate and block. Otherwise
     // activate a throwaway instance at the project rate: a plugin reports its
     // latency in samples, so a rate is needed even when nothing is playing.
-    if (host::Instance* live = instanceOf(id); live && live->active()) return live->latency();
+    if (compensated && fx.offline) return 0;
+    const int os =
+        compensated && (fx.oversampling == 2 || fx.oversampling == 4 || fx.oversampling == 8)
+            ? fx.oversampling
+            : 1;
+    const auto measured = [&](const host::Instance& instance) -> std::uint32_t {
+        if (os == 1) return instance.latency();
+        dsp::HalfbandOversampler filters;
+        filters.prepare(os);
+        const auto trip = filters.latency() * static_cast<std::uint32_t>(os);
+        const std::uint64_t high = std::uint64_t(instance.latency()) +
+                                   (instance.audioInputChannels() == 0 ? trip / 2 : trip);
+        return static_cast<std::uint32_t>((high + os - 1) / os);
+    };
+    if (host::Instance* live = instanceOf(id); live && live->active()) return measured(*live);
     auto info = findPlugin(fx.plugin.id);
     if (!info) return std::move(info).error();
     auto made = host::Instance::create(*info, options_.identity);
@@ -329,7 +345,9 @@ Result<std::uint32_t> EngineApp::fxLatencySamples(model::Id id, const model::FxI
     probe.setMainThreadWake(mainWake_);
     SUPPLE_TRY(restoreFx(probe, fx, view()));
     constexpr std::uint32_t kProbeBlock = 512;  // OfflineSettings' default block
-    SUPPLE_TRY(probe.activate(head().project->sampleRate, 1, kProbeBlock));
+    const auto rate =
+        compensated && engine_ ? engine_->config().sampleRate : head().project->sampleRate;
+    SUPPLE_TRY(probe.activate(rate * os, 1, kProbeBlock * os));
     if (probe.paramsNormalized() && !fx.params.empty()) {
         if (!probe.startProcessing())
             return Error("fx.process", "plugin refused the latency probe", {},
@@ -349,7 +367,7 @@ Result<std::uint32_t> EngineApp::fxLatencySamples(model::Id id, const model::FxI
                          "use fx.restart for the affected FX, or replace it with a plugin that "
                          "accepts the saved state and sample rate");
     }
-    const std::uint32_t latency = probe.latency();
+    const std::uint32_t latency = measured(probe);
     probe.deactivate();
     return latency;
 }
@@ -617,6 +635,15 @@ Status EngineApp::open(const fs::path& where, std::vector<schema::Warning>* warn
     if (!text) return std::move(text).error();
     auto s = model::parseProject(*text, warnings);
     if (!s) return std::move(s).error();
+    for (const auto& cable : s->cables) {
+        const auto& target = cable.value->to;
+        if (target.object.kind != model::Kind::Fx) continue;
+        const auto* fx = s->fx.find(target.object);
+        // Missing plug-ins remain reopenable, as with strip FX.
+        if (!fx || !findPlugin(fx->plugin.id)) continue;
+        SUPPLE_TRY(
+            detail::validatePluginMod(*this, *fx, target.key, "/cables/" + cable.id.str() + "/to"));
+    }
     return replaceProject(std::move(*s), path, {}, warnings);
 }
 
@@ -2921,7 +2948,7 @@ std::vector<std::pair<std::string, json::Value>> EngineApp::takeEvents() {
 
 bool EngineApp::actionTransactional(std::string_view command) const {
     return command == "render.mix" || command == "render.stems" || command == "render.regions" ||
-           command == "branch.render-ab";
+           command == "branch.render-ab" || command == "rack.capture";
 }
 
 std::uint64_t EngineApp::clockMs() const {

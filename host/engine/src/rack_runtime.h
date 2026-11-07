@@ -21,7 +21,22 @@
 #include "supple/rack/host_modules.h"
 #include "supple/rack/schedule.h"
 
+namespace supple::engine {
+class EngineApp;
+}
+
 namespace supple::engine::detail {
+
+struct PluginModTarget {
+    std::uint32_t param = 0;
+    double scale = 0;
+};
+// Main-thread resolution shared by command validation and plan preparation.
+Result<PluginModTarget> resolvePluginMod(std::span<const host::ParamInfo> params,
+                                         const json::Value* schema, const std::string& key,
+                                         bool vst3 = false);
+Status validatePluginMod(EngineApp& app, const model::FxInstance& fx, const std::string& key,
+                         const std::string& path);
 
 // The module types every engine knows: the host modules (the rack runtime's
 // and the plugin module) and the stock ones.
@@ -196,6 +211,7 @@ struct NotesOutBinding {
     std::vector<rack::host::NotesOut::Event> events;  // sized on main, written on audio
     std::array<rack::host::NotesOut::State, rack::kChannels> before{};
     std::size_t count = 0;
+    std::int64_t latency = 0;
 };
 
 struct RackNode {
@@ -204,6 +220,7 @@ struct RackNode {
     std::unique_ptr<rack::Schedule> schedule;
     std::vector<rack::host::Out*> outs;  // Node::rackOuts, in module id order
     std::vector<Id> outIds;
+    std::vector<std::int64_t> outLatencies;
     std::vector<rack::host::In*> ins;  // Node::rackIns
     std::vector<Id> inIds;
     std::vector<NotesFeed> notes;
@@ -224,6 +241,14 @@ struct RackNode {
 // the schedule, its Out/In bindings and Notes feeds. Warnings for what it
 // leaves out.
 Status compileRack(Plan& p, Node& n, const Session& s, Id rack, InstancePool& pool);
+struct RackLatencies {
+    std::int64_t latency = 0;
+    std::map<Id, std::int64_t> outputs;
+};
+// Feed-forward longest paths; a feedback component contributes no latency.
+RackLatencies rackLatencies(const Session& session, Id rack,
+                            const std::map<Id, std::int64_t>& moduleLatencies);
+void prepareRackLatencies(Node& node, const Session& session);
 // After the plan's timeline shifts are solved (prepare): events and curves.
 void prepareRack(Plan& p, Node& n, const Session& s);
 // MIDI-only rack edges: preallocation on main, collection at the destination,

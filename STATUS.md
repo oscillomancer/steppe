@@ -282,11 +282,17 @@ instructions are in `docs/guides/installing.md`.
   alongside device MIDI, using the recorder's loop, punch and overdub rules.
   Armed channels also record their rack Out audio input as stereo WAV,
   including input FX, loop/punch takes, recovery and undo.
+  Rack audio and Note Out routes now participate in read-ahead PDC, including
+  oversampling and runtime latency changes (ADR-0064); `rack.get` reports
+  the node and each output latency. Plug-in modulation cables accept numeric
+  CLAP parameter ids (`fx_3.12`) as well as semantic keys, including plug-ins
+  without semantic metadata; both survive project and preset reopening.
   Agents patch with `rack.patch` (named
   modules and cables in one step, laid out by signal flow and labelled by
   name; `rack.arrange` tidies a rack) or `module.add`/`cable.add`, hear a patch
   with `rack.probe` (pitch, levels, gates, notes, CV rates from an offline
-  render of a copy), print its notes to a MIDI item with `rack.capture`, write and edit library modules (`module.write`, hot
+  render of a copy), print its notes to a MIDI item with `rack.capture`
+  (or `async:true` for a cancellable snapshot job with one undoable completion), write and edit library modules (`module.write`, hot
   reload in the running engine, `module.fork`), keep patches as rack
   presets (`rack.preset.*`, carrying the user's modules' source; projects
   keep copies of theirs too), start from factory patches that ship with the
@@ -800,12 +806,12 @@ Library boundaries:
   on Linux, and native macOS/Windows CI has not run on it.
 
 Engine and hosting:
-- Modular racks (ADR-0062): Racks do not follow a
+- Modular racks (ADR-0062/0064): Racks do not follow a
   track's playrate map;
   cables into a plugin module's parameters modulate CLAP plug-ins only
   (VST3 has no modulation), by their first voice, at most 16 per plug-in;
-  a plug-in's latency inside a rack is not compensated;
-  `rack.capture` renders synchronously; post-fader sends into an In module
+  parallel paths summed inside a patch remain unaligned (ADR-0064);
+  the GUI still uses synchronous `rack.capture`; post-fader sends into an In module
   take the linear path.
 - The headless platform layer (ADR-0035) has natively tested macOS/Windows
   address waits, wake sources, control socket/MCP paths and user directory roots.
