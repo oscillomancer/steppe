@@ -826,10 +826,12 @@ struct Plan {
     // Stream position is in frames into the transport epoch.
     std::int64_t handAt = 0;
     std::uint64_t handEpoch = 0;
-    // The renderer, playing, carried the nodes this plan moves into the live
-    // region at handAt of handEpoch (no relocation since): the callback may
-    // continue them there instead of restarting them.
-    bool handCarried = false;
+    // The renderer, playing at unity, carried the nodes this plan moves into
+    // the live region at handAt of handEpoch and handed their instances over
+    // unreset, with no relocation since. The callback continues them only if
+    // it also adopts exactly at handAt, playing, in that epoch (adoptLive's
+    // `continuous`); otherwise it starts them afresh.
+    bool handContinuable = false;
     // Two executors at work (anticipative engine with live nodes): frontier
     // edges read their rings, not their sources' taps.
     bool split = false;
@@ -928,6 +930,8 @@ bool processRendererBlock(Workers* workers, Plan& p, std::int64_t pos, std::uint
 // `restartConsole` false: an executor continues the nodes (a plan swap, or
 // the live region taking nodes over from the renderer), keeping voices.
 void locateClass(Plan& p, std::int64_t pos, bool live, bool restartConsole = true) SUPPLE_RT;
+// locateClass for one node.
+void locateNode(Plan& p, Node& n, std::int64_t pos, bool restartConsole) SUPPLE_RT;
 // Audio thread: repositions every playback cursor at `pos` (events,
 // automation) and clears delay lines. Plugins are not touched. Plan adoption
 // passes restartConsole=false to preserve console state and mixer ramps.
@@ -941,8 +945,10 @@ void wrapTo(Plan& p, std::int64_t pos, int liveClass) SUPPLE_RT;
 // to the new plan's node, which releases them, and only them, if it no
 // longer hears the same MIDI input (so monitoring off never leaves a note
 // hanging, and timeline notes play on). `liveOnly`: only into live nodes
-// (the anticipative callback; a node that left it belongs to the renderer,
-// and its instance was reset on the way).
+// (the anticipative callback). A node leaving the live region belongs to
+// the renderer, and its instance was reset on the way out; one entering it
+// arrives with the renderer's state instead (adoptRendererSources), which
+// holds no device notes.
 void carryLiveNotes(Plan& from, Plan& to, bool liveOnly) SUPPLE_RT;
 // A plan swap (the 10 ms crossfade on structural swaps, engine.md §2): the
 // Console 9 state, fader ramps, stage wet levels and matching dry/channel

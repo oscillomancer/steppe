@@ -145,12 +145,17 @@ instructions are in `docs/guides/installing.md`.
   real-time output bit-identical to them; anticipative rendering for
   non-live tracks (ADR-0012) and a live region for monitored tracks
   (ADR-0014): arming or monitoring while playing keeps an instrument's or
-  rack's held timeline notes sounding, bit-identical to offline (CLAP and
-  VST3 tested; bridged instances take the same path, untested), and ending
-  monitoring ends only the keyboard's notes; a DAG worker pool with graph-bounded participation and idle
-  parking (ADR-0023), a separate live callback fork-join pool (ADR-0024)
-  with FIFO JACK helpers, a claim-based lifetime join that does not wait for
-  unclaimed helpers, and an Automatic/limit audio-thread preference;
+  rack's held timeline notes and an effect's tail sounding, bit-identical
+  to offline (CLAP and VST3 tested), and ending monitoring, or changing the
+  monitor mode, ends only the keyboard's notes. Known limits: under a
+  non-unity master playrate (or its envelope), arming or monitoring
+  mid-song still restarts the strips entering the live region, so a held
+  note cuts; a bridged plug-in passes through on a live strip (engine.md
+  §2.1), so a bridged instrument falls silent when armed. A DAG worker
+  pool with graph-bounded participation and idle parking (ADR-0023), a
+  separate live callback fork-join pool (ADR-0024) with FIFO JACK helpers,
+  a claim-based lifetime join that does not wait for unclaimed helpers, and
+  an Automatic/limit audio-thread preference;
   an opt-in host-process memory-lock preference with effective status and
   actionable OS failures (bridges excluded; cleanup also drops plug-in locks);
   a separate default-off 20 µs CPU idle-latency request with close-based

@@ -2933,58 +2933,59 @@ void locateTakes(Node& n, std::int64_t pos, bool wrap, bool keepPlaying = false)
 }
 }  // namespace
 
-void locateClass(Plan& p, std::int64_t pos, bool live, bool restartConsole) SUPPLE_RT {
-    for (Node& n : p.nodes) {
-        if (n.live != live) continue;
-        if (n.rack) locateRack(n, pos, restartConsole);
-        locateTakes(n, pos, false, !restartConsole);
-        auto it =
-            std::lower_bound(n.events.begin(), n.events.end(), pos,
-                             [](const TimedEvent& e, std::int64_t x) { return e.sample < x; });
-        n.nextEvent = static_cast<std::size_t>(it - n.events.begin());
-        n.rateEventFresh = restartConsole;
+void locateNode(Plan& p, Node& n, std::int64_t pos, bool restartConsole) SUPPLE_RT {
+    if (n.rack) locateRack(n, pos, restartConsole);
+    locateTakes(n, pos, false, !restartConsole);
+    auto it = std::lower_bound(n.events.begin(), n.events.end(), pos,
+                               [](const TimedEvent& e, std::int64_t x) { return e.sample < x; });
+    n.nextEvent = static_cast<std::size_t>(it - n.events.begin());
+    n.rateEventFresh = restartConsole;
+    if (restartConsole) {
+        n.encoder.reset();
+        n.keyEncoder.reset();
+        n.keyFader.reset();
+        n.decoder.reset();
+        n.fader.reset();
+        n.utility.reset();
+    }
+    for (std::size_t ei : n.out) {
+        Edge& e = p.edges[ei];
         if (restartConsole) {
-            n.encoder.reset();
-            n.keyEncoder.reset();
-            n.keyFader.reset();
-            n.decoder.reset();
-            n.fader.reset();
-            n.utility.reset();
+            e.encoder.reset();
+            e.fader.reset();
         }
-        for (std::size_t ei : n.out) {
-            Edge& e = p.edges[ei];
-            if (restartConsole) {
-                e.encoder.reset();
-                e.fader.reset();
-            }
-            for (Automation* a : {&e.autoVolume, &e.autoPan, &e.autoMute, &e.stripVolume,
-                                  &e.stripPan, &e.stripMute})
-                a->cursor = 0;
-            e.vcas.reset();
+        for (Automation* a :
+             {&e.autoVolume, &e.autoPan, &e.autoMute, &e.stripVolume, &e.stripPan, &e.stripMute})
+            a->cursor = 0;
+        e.vcas.reset();
+    }
+    if (restartConsole && !n.releaseHeld) n.held.fill(0);
+    for (Automation* a : {&n.autoVolume, &n.autoPan, &n.autoMute}) a->cursor = 0;
+    n.vcas.reset();
+    for (Stage& st : n.chain) {
+        if (restartConsole && !n.releaseHeld) {
+            st.voices.clear();
+            st.sleeping = false;
         }
-        if (restartConsole && !n.releaseHeld) n.held.fill(0);
-        for (Automation* a : {&n.autoVolume, &n.autoPan, &n.autoMute}) a->cursor = 0;
-        n.vcas.reset();
-        for (Stage& st : n.chain) {
-            if (restartConsole && !n.releaseHeld) {
-                st.voices.clear();
-                st.sleeping = false;
-            }
-            if (!st.preserveDryOnLocate) clearStageDelays(st);
-            st.preserveDryOnLocate = false;
-            for (ParamLane& ln : st.lanes) {
-                ln.curve.cursor = 0;
-                ln.lastSent = std::numeric_limits<double>::quiet_NaN();
-            }
-        }
-        for (std::size_t ei : n.in) {
-            Edge& e = p.edges[ei];
-            locateEdge(e, restartConsole);
-            if (!e.encode)
-                for (Automation* a : {&e.autoVolume, &e.autoPan, &e.autoMute, &e.stripPan})
-                    a->cursor = 0;
+        if (!st.preserveDryOnLocate) clearStageDelays(st);
+        st.preserveDryOnLocate = false;
+        for (ParamLane& ln : st.lanes) {
+            ln.curve.cursor = 0;
+            ln.lastSent = std::numeric_limits<double>::quiet_NaN();
         }
     }
+    for (std::size_t ei : n.in) {
+        Edge& e = p.edges[ei];
+        locateEdge(e, restartConsole);
+        if (!e.encode)
+            for (Automation* a : {&e.autoVolume, &e.autoPan, &e.autoMute, &e.stripPan})
+                a->cursor = 0;
+    }
+}
+
+void locateClass(Plan& p, std::int64_t pos, bool live, bool restartConsole) SUPPLE_RT {
+    for (Node& n : p.nodes)
+        if (n.live == live) locateNode(p, n, pos, restartConsole);
 }
 
 bool processBlockOn(Workers& workers, Plan& p, std::int64_t pos, std::uint32_t n) {

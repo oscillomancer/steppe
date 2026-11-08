@@ -204,8 +204,13 @@ when the machine is busiest, during a recording session).
   renderer now lets go without `reset()` and carries the node's stage and
   console state into the new plan's live node (it stopped rendering it at
   R, where the callback continues); the callback places such a plan
-  without a restart. Separately, a plan that stops hearing a strip's MIDI
-  input ends the device's voices alone (it ended every voice).
+  without a restart, but only when it adopts the plan exactly at R,
+  playing, in the epoch of the carry; a late adoption (after a frontier
+  miss), a pause or seek between, or a rate plan (whose renderer moves to
+  its hand position) starts the nodes that joined afresh, plug-ins reset,
+  so a note whose end fell between R and the callback cannot hang.
+  Separately, a plan that stops hearing a strip's MIDI input ends the
+  device's voices alone (it ended every voice).
   While every node is live the renderer renders nothing, but it
   keeps its stream and timeline positions one render-ahead span past the
   callback (advanced together, through the loop), so a plan that gives it

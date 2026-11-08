@@ -124,9 +124,13 @@ busses leave them out. Projects that use master takes or an armed master do
 not open in versions of Steppe from before this feature.
 
 Arming a channel or turning its monitoring on or off while the song plays
-does not interrupt it: an instrument's notes from the timeline keep sounding.
-Notes you hold on the keyboard end when the keyboard stops being heard
-(disarmed, monitoring off, or Auto while playing).
+does not interrupt it: an instrument's notes from the timeline and an
+effect's tail keep sounding. The exception is a playrate other than 1×:
+then a held note stops when the channel is armed or starts monitoring. A
+plug-in run in a separate process is not heard on a monitored channel at
+all. Notes you hold on the keyboard end when the keyboard stops being
+heard (disarmed or monitoring off) and whenever the monitor mode changes,
+for example from On to Auto.
 
 When monitoring an armed input, the latency comes from the device, input FX,
 and effects on that input's route to the master. Effects on unrelated playback

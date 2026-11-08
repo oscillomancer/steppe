@@ -584,8 +584,9 @@ class Engine {
     bool wantNow() const SUPPLE_RT { return want_ && !countHold_; }
     std::uint32_t liveRender(const float* const* in, float* const* out, std::uint32_t frames,
                              std::uint32_t offset) SUPPLE_RT;
-    // `continuous`: adopted at its handoff while playing, after the renderer
-    // carried the nodes it moves into the live region (Plan::handCarried).
+    // `continuous`: adopted exactly at its handoff while playing, in its
+    // epoch, after the renderer carried the nodes it moves into the live
+    // region (Plan::handContinuable). Otherwise those nodes start afresh.
     void adoptLive(detail::Plan* next, bool continuous = false) SUPPLE_RT;
     void adoptRendererSources(detail::Plan* next) SUPPLE_RT;
     void publishRendererPlan(detail::Plan& next, std::uint64_t epoch, bool queuedRate) SUPPLE_RT;

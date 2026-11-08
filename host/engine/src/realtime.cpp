@@ -2020,19 +2020,20 @@ bool Engine::rendererHasRoom(std::uint64_t epoch) const {
 // between them may wait for the callback's epoch acknowledgement; source/graph
 // preparation never belongs to either half.
 void Engine::adoptRendererSources(detail::Plan* next) SUPPLE_RT {
+    // Continuable only while playing at unity (a rate plan moves pos_ below).
+    const bool continuable = plan_ && next && playing_ && !next->rateEnabled;
     if (plan_ && next) {
         detail::carryRateSources(*plan_, *next, 0);
         detail::carryMix(*plan_, *next, 0);
-        // A node moving into the live region: the callback continues it from
-        // the handoff, where this renderer stopped, with its voices, delay
-        // lines, console state and plug-in state (not reset). Its share of
-        // `next` is untouched until the handoff is published below.
-        detail::carryMix(*plan_, *next, 1, 0);
+        // A node moving into the live region: the callback may continue it
+        // from the handoff, where this renderer stopped, with its voices,
+        // delay lines, console state and plug-in state (not reset). Its share
+        // of `next` is untouched until the handoff is published below.
+        if (continuable) detail::carryMix(*plan_, *next, 1, 0);
     }
-    // Continuous only while playing at unity: a rate plan moves pos_ below.
-    if (next) next->handCarried = plan_ && playing_ && !next->rateEnabled;
+    if (next) next->handContinuable = continuable;
     adoptShare(processing_, next ? &next->rendererInstances : nullptr, &processing_,
-               next ? &next->liveInstances : nullptr);
+               continuable ? &next->liveInstances : nullptr);
     plan_ = next;
     if (next && next->rateEnabled) pos_ = next->rateHandDevice;
 }
@@ -2131,7 +2132,7 @@ void Engine::rendererLoop(std::uint64_t seen) {
             if (plan) {
                 if (epoch_.load(std::memory_order_acquire) != seen) {
                     seen = relocate(seen);
-                    plan->handCarried = false;  // what was carried belongs to the old epoch
+                    plan->handContinuable = false;  // what was carried belongs to the old epoch
                 }
                 publishRendererPlan(*plan, seen, queuedRate);
             }
@@ -2295,6 +2296,27 @@ void Engine::rendererLoop(std::uint64_t seen) {
 
 // --- the live region (ADR-0014) -----------------------------------------------------------
 
+namespace {
+// A node that joined the running live region without a continuous handoff:
+// its voices, held notes, delays, console and rack restart at `pos`, and the
+// plug-ins `owner` (the callback) runs are reset.
+void restartJoined(detail::Plan& plan, detail::Node& n, std::int64_t pos,
+                   const void* owner) SUPPLE_RT {
+    detail::forEachStage(n, [&](detail::Stage& st) {
+        st.preserveDryOnLocate = false;
+        if (st.instance && st.instance->owner() == owner) st.instance->reset();
+        st.voices.clear();
+        st.pendingVoices.clear();
+        st.sleeping = false;
+    });
+    n.releaseHeld = false;
+    n.releaseLive = false;
+    n.held.fill(0);
+    n.liveHeld.fill(0);
+    detail::locateNode(plan, n, pos, true);
+}
+}  // namespace
+
 void Engine::adoptLive(detail::Plan* next, bool continuous) SUPPLE_RT {
     if (livePlan_ && next && next->split) {
         detail::carryRateSources(*livePlan_, *next, 1);
@@ -2303,12 +2325,24 @@ void Engine::adoptLive(detail::Plan* next, bool continuous) SUPPLE_RT {
     }
     adoptShare(liveProcessing_, next ? &next->liveInstances : nullptr, &liveProcessing_);
     const bool wasLive = livePlan_ && livePlan_->split;
+    detail::Plan* const previous = livePlan_;
     livePlan_ = next;
     if (!next) return;
     if (next->split) {
-        if (wasLive && liveReady_)
+        if (wasLive && liveReady_) {
             detail::locateClass(*next, livePos_, true, false);  // continue at the switch position
-        else {
+            // Nodes joining the live region continue only from an exact
+            // handoff; otherwise what the renderer carried (or left in the
+            // instance) belongs elsewhere in time: they start afresh.
+            if (!continuous)
+                for (detail::Node& n : next->nodes) {
+                    if (!n.live) continue;
+                    const bool joined = std::none_of(
+                        previous->nodes.begin(), previous->nodes.end(),
+                        [&](const detail::Node& old) { return old.id == n.id && old.live; });
+                    if (joined) restartJoined(*next, n, livePos_, &liveProcessing_);
+                }
+        } else {
             liveReady_ = false;  // entering the live mode: liveRender takes the position
             // Taken over at the handoff while playing, the renderer's nodes
             // continue with the state it carried (adoptRendererSources): held
@@ -2367,7 +2401,10 @@ void Engine::anticipativeCycle(const float* const* in, float* const* out, std::u
             const auto here =
                 livePlan_ && livePlan_->split && liveReady_ ? liveStream_ : playedStream(e);
             if (oldEpoch || !playing || here >= hand->handAt) {
-                adoptLive(hand, !oldEpoch && playing && hand->handCarried);
+                // Exactly at the handoff, playing, in its epoch: the renderer's
+                // carried state is the callback's here (adoptLive).
+                adoptLive(hand,
+                          !oldEpoch && playing && hand->handContinuable && here == hand->handAt);
                 planHandoffs_.consume();
                 wakeRenderer();
                 continue;
