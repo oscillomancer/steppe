@@ -1337,10 +1337,10 @@ Status prepare(Plan& p, const Session& s) {
                 ownInstrument.push_back(tc.item);
                 tc.events = trackEvents(s, n.id, p.startSeconds, p.rate,
                                         [&](Id item) { return item == tc.item; });
-                for (auto& ev : tc.events)  // its input runs the chain's latency ahead
-                    ev.sample = p.rateEnabled ? ev.sample + n.itemShift - tc.latency
-                                              : std::max<std::int64_t>(
-                                                    0, ev.sample + n.itemShift - tc.latency);
+                // Its input runs the chain's latency ahead. (Notes before the
+                // song's start are due at once at the first frame: the locate
+                // there takes them, locateTakes and rateEvents.)
+                for (auto& ev : tc.events) ev.sample += n.itemShift - tc.latency;
             }
             // Reserve every block's events (processing never allocates): notes
             // and their releases for its instrument, parameter automation.
@@ -1710,20 +1710,35 @@ bool runModuleStage(Plan& p, Stage& st, Stereo& io, std::uint32_t n,
 }
 
 namespace {
+void playSpan(Clip& c, Stereo& into, std::int64_t pos, std::int64_t from, std::int64_t to,
+              std::int64_t shift, std::int64_t frames) SUPPLE_RT;
+
 // An audio item's samples for [pos, pos + n), added into `into`.
 void playClip(Plan& p, Clip& c, Stereo& into, std::int64_t pos, std::uint32_t n, std::int64_t shift,
-              bool live) SUPPLE_RT {
+              bool live, std::int64_t wrapAt = std::numeric_limits<std::int64_t>::max(),
+              std::int64_t wrapBy = 0) SUPPLE_RT {
     if (p.rateEnabled) {
         playRateClip(p, c, into, pos, n, shift, live);
         return;
     }
     // Timeline sample t plays the clip at t + shift (a take chain's input
-    // runs its latency ahead).
-    const std::int64_t from = std::max<std::int64_t>(pos, c.start - shift);
-    const std::int64_t to = std::min<std::int64_t>(pos + n, c.start + c.length - shift);
+    // runs its latency ahead); from `wrapAt` on, at t + shift - wrapBy (that
+    // input has wrapped to the loop start: processTake). Each side runs only
+    // over the frames inside the item.
     const auto& ch = c.data->channels;
     const auto frames = static_cast<std::int64_t>(c.data->frames());
     if (ch.empty() || frames == 0) return;
+    const std::int64_t split = std::clamp<std::int64_t>(wrapAt, pos, pos + n);
+    playSpan(c, into, pos, pos, split, shift, frames);
+    playSpan(c, into, pos, split, pos + n, shift - wrapBy, frames);
+}
+
+// playClip's frames [from, to) of the block at `pos`, the clip at t + shift.
+void playSpan(Clip& c, Stereo& into, std::int64_t pos, std::int64_t from, std::int64_t to,
+              std::int64_t shift, std::int64_t frames) SUPPLE_RT {
+    from = std::max(from, c.start - shift);
+    to = std::min(to, c.start + c.length - shift);
+    const auto& ch = c.data->channels;
     const std::size_t right = ch.size() > 1 ? 1 : 0;
     for (std::int64_t t = from; t < to; ++t) {
         const std::int64_t k = t + shift - c.start;  // sample within the item
@@ -2330,13 +2345,99 @@ void rateEvents(Plan& p, bool live, std::span<const TimedEvent> events, Stage& s
     }
 }
 
+// The unity path's notes for a take chain's instrument (`stage`) this
+// block, input side at `shift`. A chain running ahead (shift < 0) reaches a
+// loop's end that much early, at `wrap`: there it ends the timeline notes it
+// holds and takes the loop start's notes, so they sound on time after the
+// output wraps, as the playrate path's look-ahead does (rateEvents); the
+// output's wrap then leaves them playing (locateTakes).
+void unityTakeEvents(const Plan& p, bool live, TakeChain& tc, Stage& stage, std::int64_t shift,
+                     std::int64_t pos, std::uint32_t n, const LoopRange* loop) SUPPLE_RT {
+    auto& target = stage.blockEvents;
+    const std::int64_t length = loop ? loop->end - loop->start : 0;
+    const bool looping = loop && loop->active() && shift < 0 && -shift < length && pos < loop->end;
+    const std::int64_t wrap =
+        looping ? loop->end + shift : std::numeric_limits<std::int64_t>::max();
+    auto& held = stage.pendingVoices;  // scratch (prepareNoteIds refills it)
+    held.clear();
+    if (looping)
+        for (const auto& voice : stage.voices)
+            if (!voice.live && voice.sourceId >= 0 && held.size() < held.capacity())
+                held.push_back(voice);
+    const auto deliver = [&](host::Event e) {
+        if (target.size() == target.capacity()) {  // never allocate here
+            ++stage.voiceDropped;
+            return;
+        }
+        target.push_back(e);
+        if (!looping) return;
+        if (e.kind == host::Event::Kind::NoteOn) {
+            if (held.size() < held.capacity()) {
+                HeldVoice voice;
+                voice.sourceId = e.noteId;
+                voice.port = e.port;
+                voice.channel = e.channel;
+                voice.key = e.key;
+                held.push_back(voice);
+            }
+        } else if (e.kind == host::Event::Kind::NoteOff || e.kind == host::Event::Kind::NoteChoke) {
+            std::erase_if(held, [&](const HeldVoice& v) { return v.sourceId == e.noteId; });
+        }
+    };
+    const std::int64_t stop = std::min<std::int64_t>(pos + n, wrap);
+    while (tc.nextEvent < tc.events.size() && tc.events[tc.nextEvent].sample < stop) {
+        const TimedEvent& te = tc.events[tc.nextEvent++];
+        host::Event e = te.event;
+        e.time = eventOffset(p, live, pos, n, shift, te.sample);
+        deliver(e);
+    }
+    if (!looping || pos + n <= wrap) return;
+    const auto at = static_cast<std::uint32_t>(std::max<std::int64_t>(0, wrap - pos));
+    if (tc.aheadFrom == std::numeric_limits<std::int64_t>::min()) {
+        // The look-ahead wraps: what it holds ends there.
+        for (const auto& voice : held) {
+            if (target.size() == target.capacity()) {
+                ++stage.voiceDropped;
+                continue;
+            }
+            host::Event off;
+            off.kind = host::Event::Kind::NoteOff;
+            off.time = at;
+            off.noteId = voice.sourceId;
+            off.port = voice.port;
+            off.channel = voice.channel;
+            off.key = voice.key;
+            target.push_back(off);
+        }
+        tc.aheadFrom = loop->start + shift;
+        tc.aheadLoop = {loop->start, loop->end};
+    }
+    // The loop start's notes, taken `length` later than their own time.
+    const std::int64_t upto = pos + n - length;
+    auto it = std::lower_bound(tc.events.begin(), tc.events.end(), tc.aheadFrom,
+                               [](const TimedEvent& e, std::int64_t x) { return e.sample < x; });
+    for (; it != tc.events.end() && it->sample < upto; ++it) {
+        host::Event e = it->event;
+        e.time = static_cast<std::uint32_t>(std::max<std::int64_t>(at, it->sample + length - pos));
+        if (target.size() == target.capacity()) {
+            ++stage.voiceDropped;
+            continue;
+        }
+        target.push_back(e);
+    }
+    tc.aheadFrom = std::max(tc.aheadFrom, upto);
+}
+
+void locateTake(Node& n, TakeChain& tc, std::int64_t pos, bool wrap, bool keepPlaying) SUPPLE_RT;
+
 // A take chain's block (gap log #22): its source (the clip, or its MIDI for
 // its instrument) runs `latency` ahead through its stages; the output, cut to
 // the item's span with the item and take gain, pan, fades and the take's
 // envelopes, is added to the track's sum. Outside its span it does not run;
 // it starts fresh (plugins reset) each time it is entered.
 bool processTake(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std::uint32_t n,
-                 const host::Transport& transport, const void* self) SUPPLE_RT {
+                 const host::Transport& transport, const void* self,
+                 const LoopRange* loop) SUPPLE_RT {
     for (Stage& st : tc.chain) {
         st.blockEvents.clear();
         st.outEvents.clear();
@@ -2348,6 +2449,19 @@ bool processTake(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std::uint
     const double inputEnd = mappedAt(p, node.live, pos + n + tc.latency, node.itemShift);
     const double outputStart = mappedAt(p, node.live, pos, node.itemShift);
     bool intersects = inputEnd > double(tc.start) && outputStart < double(tc.end);
+    // Unity, looping, a chain running ahead: its input reaches the loop end
+    // that much early, at `wrapAt`, and runs on from the loop start (its
+    // notes: unityTakeEvents), so what starts there sounds on time after the
+    // output wraps, as through the playrate path's timeline phase.
+    const std::int64_t ahead = tc.latency - node.itemShift;
+    const std::int64_t loopLength = loop ? loop->end - loop->start : 0;
+    const bool early = !p.rateEnabled && loop && loop->active() && ahead > 0 &&
+                       ahead < loopLength && pos < loop->end;
+    const std::int64_t wrapAt =
+        early ? loop->end - ahead : std::numeric_limits<std::int64_t>::max();
+    if (early && pos + n > wrapAt)
+        intersects = intersects || (pos + n + tc.latency - loopLength > tc.start &&
+                                    std::max(pos, wrapAt) + tc.latency - loopLength < tc.end);
     if (p.rateEnabled) {
         const auto& clock = *p.timelines[node.live ? 1 : 0];
         const double from = clock.phase(pos - node.itemShift);
@@ -2363,6 +2477,13 @@ bool processTake(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std::uint
                 to > a + cycle * clock.cycleLength() && from < b + cycle * clock.cycleLength();
         }
     }
+    // Wrapped early for a loop that is gone before the output reached its
+    // end (the callback's executor takes a loop edit without a locate; the
+    // anticipative one restarts its epoch): a locate here, which also ends
+    // the loop start's notes it took.
+    if (!p.rateEnabled && tc.aheadFrom != std::numeric_limits<std::int64_t>::min() &&
+        !(loop && loop->active() && tc.aheadLoop == std::pair{loop->start, loop->end}))
+        locateTake(node, tc, pos, false, false);
     if (!transport.playing || !intersects) {
         tc.active = false;
         return true;
@@ -2381,28 +2502,28 @@ bool processTake(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std::uint
     if (!p.rateEnabled) tc.buf.clear(n);
     if (!p.rateEnabled && tc.clip >= 0)
         playClip(p, node.clips[static_cast<std::size_t>(tc.clip)], tc.buf, pos, n, tc.latency,
-                 node.live);
+                 node.live, wrapAt, loopLength);
     if (tc.noteTarget >= 0) {
-        auto& target = tc.chain[static_cast<std::size_t>(tc.noteTarget)].blockEvents;
         if (tc.releaseHeld) {  // a loop wrap: what is held ends first
             tc.releaseHeld = false;
             releaseVoices(tc.chain[static_cast<std::size_t>(tc.noteTarget)], true);
             tc.held.fill(0);
-        } else
-            releaseVoices(tc.chain[static_cast<std::size_t>(tc.noteTarget)], true, true,
-                          static_cast<std::int64_t>(
-                              mappedAt(p, node.live, pos, node.itemShift - tc.latency)));
+        } else {
+            // A note is over when its input side has left the note's span;
+            // past an early wrap (unityTakeEvents) that side is in the next pass.
+            auto at =
+                static_cast<std::int64_t>(mappedAt(p, node.live, pos, node.itemShift - tc.latency));
+            if (!p.rateEnabled && tc.aheadFrom != std::numeric_limits<std::int64_t>::min() &&
+                loop && loop->active())
+                at -= loop->end - loop->start;
+            releaseVoices(tc.chain[static_cast<std::size_t>(tc.noteTarget)], true, true, at);
+        }
         if (p.rateEnabled)
             rateEvents(p, node.live, tc.events, tc.chain[static_cast<std::size_t>(tc.noteTarget)],
                        pos, n, node.itemShift - tc.latency, tc.rateEventFresh);
-        while (!p.rateEnabled && tc.nextEvent < tc.events.size() &&
-               double(tc.events[tc.nextEvent].sample) <
-                   mappedAt(p, node.live, pos + n, node.itemShift - tc.latency)) {
-            const TimedEvent& te = tc.events[tc.nextEvent++];
-            host::Event e = te.event;
-            e.time = eventOffset(p, node.live, pos, n, node.itemShift - tc.latency, te.sample);
-            if (target.size() < target.capacity()) target.push_back(e);  // never allocate here
-        }
+        if (!p.rateEnabled)
+            unityTakeEvents(p, node.live, tc, tc.chain[static_cast<std::size_t>(tc.noteTarget)],
+                            node.itemShift - tc.latency, pos, n, loop);
     }
     for (Stage& st : tc.chain) automateStage(st, pos, n, time::samplesAt(p.startSeconds, p.rate));
     for (Stage& st : tc.chain) {
@@ -2448,7 +2569,8 @@ bool processTake(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std::uint
 
 // One block of every node, in order. Returns false on a plugin error.
 bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
-                 const host::Transport& transport, const void* self) SUPPLE_RT {
+                 const host::Transport& transport, const void* self,
+                 const LoopRange* loop) SUPPLE_RT {
     // ADR-0025: FTZ/DAZ for the whole node, on whichever thread runs it; the
     // thread's own MXCSR is back when the node returns.
     dsp::DenormalGuard denormals;
@@ -2551,7 +2673,7 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
         if (transport.playing && c.takeChain < 0) playClip(p, c, itemsInto, pos, n, 0, node.live);
     // Takes with chains or envelopes: through their chains, into the sum.
     for (TakeChain& tc : node.takeChains)
-        if (!processTake(p, node, tc, pos, n, transport, self)) return false;
+        if (!processTake(p, node, tc, pos, n, transport, self, loop)) return false;
     // A recording master's items are silent in the punch range (ADR-0057).
     if (postItems && node.silentTo > node.silentFrom)
         for (std::uint32_t i = 0; i < n; ++i) {
@@ -2851,7 +2973,7 @@ bool processBlock(Plan& p, std::int64_t pos, std::uint32_t n, bool playing,
     host::Transport transport = transportAt(p, pos, loop);
     transport.playing = playing;
     for (std::size_t i = 0; i < p.nodes.size(); ++i)
-        if (!processNode(p, i, pos, n, transport)) return false;
+        if (!processNode(p, i, pos, n, transport, nullptr, loop)) return false;
     return true;
 }
 
@@ -2863,12 +2985,13 @@ struct BlockRun {
     const host::Transport* transport;
     const std::vector<std::size_t>* nodes = nullptr;  // task -> node; null: identity
     const void* self = nullptr;
+    const LoopRange* loop = nullptr;
     std::atomic<bool> ok{true};
 };
 void runNode(void* ctx, std::uint32_t task) SUPPLE_RT {
     auto* b = static_cast<BlockRun*>(ctx);
     const std::size_t index = b->nodes ? (*b->nodes)[task] : task;
-    if (!processNode(*b->plan, index, b->pos, b->frames, *b->transport, b->self))
+    if (!processNode(*b->plan, index, b->pos, b->frames, *b->transport, b->self, b->loop))
         b->ok.store(false, std::memory_order_relaxed);
 }
 }  // namespace
@@ -2880,7 +3003,7 @@ bool processCallbackBlock(LiveWorkers* workers, Plan& p, std::int64_t pos, std::
     syncMix(p, split ? 1 : -1);
     host::Transport transport = transportAt(p, pos, loop, split);
     transport.playing = playing;
-    BlockRun run{&p, pos, n, &transport, split ? &p.liveNodes : nullptr, self};
+    BlockRun run{&p, pos, n, &transport, split ? &p.liveNodes : nullptr, self, loop};
     TaskGraph& graph = split ? *p.liveGraph : *p.graph;
     if (workers)
         workers->run(graph, &runNode, &run);
@@ -2897,10 +3020,11 @@ bool processRendererBlock(Workers* workers, Plan& p, std::int64_t pos, std::uint
     transport.playing = playing;
     if (!workers || workers->helpers() == 0) {
         bool ok = true;
-        for (std::size_t i : p.rendererNodes) ok = processNode(p, i, pos, n, transport, self) && ok;
+        for (std::size_t i : p.rendererNodes)
+            ok = processNode(p, i, pos, n, transport, self, loop) && ok;
         return ok;
     }
-    BlockRun run{&p, pos, n, &transport, &p.rendererNodes, self};
+    BlockRun run{&p, pos, n, &transport, &p.rendererNodes, self, loop};
     workers->run(*p.rendererGraph, &runNode, &run);
     return run.ok.load(std::memory_order_relaxed);
 }
@@ -2915,39 +3039,45 @@ void locateEdge(Edge& edge, bool restart) SUPPLE_RT {
     }
 }
 // Take chains (gap log #22) after a seek (`wrap` false: fresh at the next
-// entry) or a loop wrap (held notes end; delay lines and tails kept).
-void locateTakes(Node& n, std::int64_t pos, bool wrap, bool keepPlaying = false) SUPPLE_RT {
-    for (TakeChain& tc : n.takeChains) {
-        // A seek (not a wrap, nor a handoff that keeps playing) also takes
-        // the notes between it and the chain's look-ahead (its events run
-        // `latency` early): they are due, and play at once, late, as the
-        // rate path's first window takes them (rateEvents).
-        const std::int64_t ahead = std::min<std::int64_t>(0, n.itemShift - tc.latency);
-        const auto it = std::lower_bound(
-            tc.events.begin(), tc.events.end(), !wrap && !keepPlaying ? pos + ahead : pos,
-            [](const TimedEvent& e, std::int64_t x) { return e.sample < x; });
-        tc.nextEvent = static_cast<std::size_t>(it - tc.events.begin());
-        if (!wrap) tc.rateEventFresh = !keepPlaying;
-        for (Automation* a : {&tc.volume, &tc.pan, &tc.mute}) a->cursor = 0;
-        for (Stage& st : tc.chain) {
-            if (!wrap && !keepPlaying) {
-                st.voices.clear();
-                st.sleeping = false;
-            }
-            if (!wrap && !st.preserveDryOnLocate) clearStageDelays(st);
-            st.preserveDryOnLocate = false;
-            for (ParamLane& ln : st.lanes) {
-                ln.curve.cursor = 0;
-                ln.lastSent = std::numeric_limits<double>::quiet_NaN();
-            }
+// entry) or a loop wrap (held notes end; delay lines and tails kept; a chain
+// running ahead ended them at its own, earlier wrap: unityTakeEvents).
+void locateTake(Node& n, TakeChain& tc, std::int64_t pos, bool wrap, bool keepPlaying) SUPPLE_RT {
+    // A seek (not a wrap, nor a handoff that keeps playing) also takes
+    // the notes between it and the chain's look-ahead (its events run
+    // `latency` early): they are due, and play at once, late, as the
+    // rate path's first window takes them (rateEvents).
+    const std::int64_t ahead = std::min<std::int64_t>(0, n.itemShift - tc.latency);
+    const auto it = std::lower_bound(
+        tc.events.begin(), tc.events.end(), !wrap && !keepPlaying ? pos + ahead : pos,
+        [](const TimedEvent& e, std::int64_t x) { return e.sample < x; });
+    tc.nextEvent = static_cast<std::size_t>(it - tc.events.begin());
+    if (!wrap) tc.rateEventFresh = !keepPlaying;
+    for (Automation* a : {&tc.volume, &tc.pan, &tc.mute}) a->cursor = 0;
+    for (Stage& st : tc.chain) {
+        if (!wrap && !keepPlaying) {
+            st.voices.clear();
+            st.sleeping = false;
         }
-        if (wrap) {
-            tc.releaseHeld = true;
-        } else if (!keepPlaying) {  // a seek: fresh at the next entry
-            tc.held.fill(0);
-            tc.active = false;
+        if (!wrap && !st.preserveDryOnLocate) clearStageDelays(st);
+        st.preserveDryOnLocate = false;
+        for (ParamLane& ln : st.lanes) {
+            ln.curve.cursor = 0;
+            ln.lastSent = std::numeric_limits<double>::quiet_NaN();
         }
     }
+    if (wrap) {
+        // Wrapped early (unityTakeEvents): what it held ended there, and
+        // the loop start's notes it took since play on.
+        tc.releaseHeld = tc.aheadFrom == INT64_MIN;
+        tc.aheadFrom = INT64_MIN;
+    } else if (!keepPlaying) {  // a seek: fresh at the next entry
+        tc.held.fill(0);
+        tc.active = false;
+        tc.aheadFrom = INT64_MIN;
+    }
+}
+void locateTakes(Node& n, std::int64_t pos, bool wrap, bool keepPlaying = false) SUPPLE_RT {
+    for (TakeChain& tc : n.takeChains) locateTake(n, tc, pos, wrap, keepPlaying);
 }
 }  // namespace
 
@@ -3320,6 +3450,12 @@ void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT {
                     if (otc.take == tc.take) {
                         tc.active = otc.active;
                         tc.held = otc.held;
+                        // Past an early wrap, in the old chain's coordinates:
+                        // a new latency or item shift wraps afresh.
+                        if (tc.latency == otc.latency && n.itemShift == old.itemShift) {
+                            tc.aheadFrom = otc.aheadFrom;
+                            tc.aheadLoop = otc.aheadLoop;
+                        }
                         carryStages(tc.chain, otc.chain);
                         break;
                     }

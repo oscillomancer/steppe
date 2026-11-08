@@ -13,9 +13,16 @@ struct Source {
                        std::span<float> scratch) const SUPPLE_RT {
         const auto& data = clip.data->channels[channel];
         const auto size = static_cast<std::int64_t>(data.size());
-        auto frameAt = [&](std::int64_t frame) {
+        // A frame of the source, or -1 for silence: outside the item's span
+        // the converter reads nothing (its trimmed media is not on the
+        // timeline). A loop wrap keeps the converter's history (ADR-0045):
+        // past the seam it reads the loop end's material, silent here when
+        // the item had ended there, as before the item on the first pass.
+        auto frameAt = [&](std::int64_t frame) -> std::int64_t {
             const double project = double(frame - clip.offset + clip.start - clip.deviceShift);
             frame += static_cast<std::int64_t>(std::llround(timeline.wrapped(project) - project));
+            const auto k = frame - clip.offset;  // within the item
+            if (k < 0 || k >= clip.length) return -1;
             if (clip.loop && size > 0) frame = (frame % size + size) % size;
             return frame;
         };

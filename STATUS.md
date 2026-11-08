@@ -851,6 +851,16 @@ Engine and hosting:
   (VST3 has no modulation), by their first voice, at most 16 per plug-in;
   parallel paths summed inside a patch remain unaligned (ADR-0064);
   post-fader sends into an In module take the linear path.
+- A take whose FX report latency runs its input ahead and, looping, wraps
+  that much early (engine.md, PDC). At unity a loop no longer than that
+  look-ahead has no early wrap: on every pass after the first the notes
+  inside the look-ahead after the loop start are lost, and so is its audio
+  where the item ends at the loop end; where the item goes on, what follows
+  the loop end plays in its place (the playrate path is untested there).
+  On the callback's executor (`anticipative: false`) a loop edit inside the
+  look-ahead before the loop end is a locate for the take: it starts afresh,
+  cutting what its FX still hold (up to their latency), as the anticipative
+  engine's restart does.
 - The headless platform layer (ADR-0035) has natively tested macOS/Windows
   address waits, wake sources, control socket/MCP paths and user directory roots.
   Both native engines run with dummy/offline audio and native RT/offline
@@ -993,7 +1003,10 @@ Session and editing:
   (ADR-0045). The transport knob, menu and the master Playrate lane edit it;
   knob ranges are UI state and never clamp saved values. Seeded stretch phase
   variation uses a portable integer RNG, so it matches across standard
-  libraries. Non-unity audio/MIDI
+  libraries. A trimmed item reads silence outside its span, so under the
+  pitch-preserving stretch its whole content no longer depends on the
+  trimmed media (tape conversion: only near its edges); renders from builds
+  before that change do not null against new ones. Non-unity audio/MIDI
   recording is refused, including queued transitions. Writing the playrate
   holds nothing over its curve (strip levels and pans do, ADR-0061). Compatible scalar-only live edits publish bounded clock
   controls, retain source/converter state and glide over the time between
