@@ -1412,3 +1412,77 @@ TEST_CASE("racks: In sends preserve tap level and pan without Console 9 trim" *
             }
     }
 }
+
+// The rack is not a summing stage (rack.md §2.4): a buss's send into an In
+// carries the buss's own signal, after the decode of the sum it receives and
+// before its encode to its parent, with the route's level and pan alone.
+TEST_CASE("racks: In sends from a buss carry its signal without Console 9 encoding" *
+          doctest::description("rt")) {
+    for (bool console : {false, true})
+        for (model::Tap tap : {model::Tap::PreFader, model::Tap::PostFader}) {
+            const bool post = tap == model::Tap::PostFader;
+            CAPTURE(console);
+            CAPTURE(post);
+            model::Project project;
+            project.console9 = console;
+            model::EditTxn t(model::Session::create(project), 1);
+            model::Track buss;
+            buss.type = model::StripType::Buss;
+            buss.parent = kMaster;
+            buss.volumeDb = -4.5;
+            const Id bus = t.create(buss);
+            t.modify<model::Track>(kMaster, [&](model::Track& m) { m.children.push_back(bus); });
+            model::Track channel;
+            channel.parent = bus;
+            const Id source = t.create(channel);
+            t.modify<model::Track>(bus, [&](model::Track& b) { b.children.push_back(source); });
+            const auto target = addChannel(t);
+            const auto sourceRack = t.create(model::Rack{source, "Source"});
+            const auto clock = addModule(t, sourceRack, "com.suppleaudio.rack.transport");
+            const auto sourceOut = addModule(t, sourceRack, model::kOutModule);
+            cable(t, clock, "playing", sourceOut, "l");
+            cable(t, clock, "tempo", sourceOut, "r");
+            listen(t, sourceOut, source);
+            const auto rack = t.create(model::Rack{target, "Through"});
+            const auto in = addModule(t, rack, model::kInModule),
+                       out = addModule(t, rack, model::kOutModule);
+            cable(t, in, "l", out, "l");
+            cable(t, in, "r", out, "r");
+            listen(t, out, target);
+            model::Route route;
+            route.from.track = bus;
+            route.to.module = in;
+            route.tap = tap;
+            route.volumeDb = -6;
+            route.pan = -37;
+            t.create(route);
+            const auto state = commit(t);
+            auto pool = makePool();
+            MediaCache media;
+            auto plan = supple::engine::detail::compile(state, pool, 0, 128);
+            REQUIRE(plan);
+            plan->media = &media;
+            REQUIRE(supple::engine::detail::prepare(*plan, state));
+            REQUIRE(supple::engine::detail::processBlock(*plan, 0, 128));
+            const supple::engine::detail::Node* busNode = nullptr;
+            const supple::engine::detail::Node* rackNode = nullptr;
+            for (const auto& node : plan->nodes) {
+                if (node.id == bus) busNode = &node;
+                if (node.rack && node.rack->rack == rack) rackNode = &node;
+            }
+            REQUIRE(busNode);
+            REQUIRE(rackNode);
+            REQUIRE(rackNode->rackIns.size() == 1);
+            REQUIRE(busNode->preFader.l[64] != 0);
+            CHECK(busNode->preFader.l[64] != busNode->preFader.r[64]);
+            double panLeft = 0, panRight = 0;
+            console9::panGains(console9::panAngle(console9::nativePan(-37)), panLeft, panRight);
+            const double gain = console9::faderGain(-6 + (post ? -4.5 : 0));
+            for (std::uint32_t i = 0; i < 128; ++i) {
+                CHECK(rackNode->rackIns[0].l[i] ==
+                      static_cast<float>(double(busNode->preFader.l[i]) * panLeft * gain));
+                CHECK(rackNode->rackIns[0].r[i] ==
+                      static_cast<float>(double(busNode->preFader.r[i]) * panRight * gain));
+            }
+        }
+}
