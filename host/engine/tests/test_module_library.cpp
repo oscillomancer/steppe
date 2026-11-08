@@ -5,6 +5,7 @@
 // it, in the running engine and in renders.
 #include <doctest/doctest.h>
 
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -2249,6 +2250,120 @@ TEST_CASE("rack inputs: record_take chooses MIDI, the rack's audio or both, and 
         f.run("history.undo");
         CHECK(f.app->head().items.empty());
     }
+}
+
+TEST_CASE("rack inputs: arming during playback keeps timeline notes and ends device notes" *
+          doctest::description("rt")) {
+    for (bool anticipative : {false, true})
+        for (int workers : {0, 2}) {
+            INFO("anticipative " << anticipative << ", workers " << workers);
+            Fixture f;
+            f.run("project.set", R"({"console9":false})");
+            f.run("rack.add");
+            f.run("module.add", R"({"rack":"rk_1","type":"notes"})");
+            f.run("cable.add", R"({"from":"mo_2.gate","to":"mo_1.l"})");
+            f.run("track.set", R"({"track":"tr_1","record_midi":"*","monitor":"on"})");
+            auto tx = f.app->beginTransaction(origin, "Held timeline note");
+            REQUIRE(tx);
+            model::MidiSource midi;
+            midi.sequence.ppq = 960;
+            midi.sequence.length = 3840;
+            midi.sequence.notes = {{0, 3840, 0, 60, 96, 0}};
+            model::Take take;
+            take.source = f.app->txn().create(midi);
+            const auto tk = f.app->txn().create(take);
+            model::Item item;
+            item.track = {model::Kind::Track, 1};
+            item.length = 4;
+            item.timebase = model::ItemTimebase::Beats;
+            item.takes = {tk};
+            item.activeTake = tk;
+            f.app->txn().create(item);
+            REQUIRE(f.app->commitTransaction(*tx));
+            std::atomic<bool> press{false};
+            DummyBackend backend(
+                {.mode = DummyBackend::Mode::Manual,
+                 .captureFrames = 16384,
+                 .midiPorts = {"Keyboard"},
+                 .midi = [&press](std::vector<MidiInputEvent>& out, std::uint32_t, std::int64_t) {
+                     if (!press.exchange(false)) return;
+                     MidiInputEvent event;
+                     event.size = 3;
+                     event.bytes[0] = 0x90;
+                     event.bytes[1] = 72;
+                     event.bytes[2] = 100;
+                     out.push_back(event);  // held: no note-off follows
+                 }});
+            REQUIRE(f.app->startEngine(backend,
+                                       {.sampleRate = 48000, .blockSize = 37, .midiInputs = true},
+                                       {.anticipative = anticipative,
+                                        .renderBlock = 128,
+                                        .renderAheadMs = 10,
+                                        .workers = workers}));
+            REQUIRE(f.app->engine()->awaitPlan());
+            f.run("transport.play");
+            int cycles = 0;
+            auto run = [&](int count) {
+                for (int i = 0; i < count; ++i) {
+                    if (anticipative) REQUIRE(f.app->engine()->awaitRendered(37));
+                    backend.run(1);
+                }
+                cycles += count;
+                return backend.capture().channels[0][static_cast<std::size_t>(cycles * 37 - 1)];
+            };
+            const float timeline = run(64);
+            REQUIRE(std::abs(timeline) > .01f);
+            // Arming starts monitoring: the timeline note keeps playing.
+            f.run("track.set", R"({"track":"tr_1","armed":true})");
+            CHECK(run(64) == timeline);
+            press = true;
+            CHECK(double(run(64)) == doctest::Approx(2.0 * double(timeline)));
+            // Disarming ends the held device note only.
+            f.run("track.set", R"({"track":"tr_1","armed":false})");
+            CHECK(run(64) == timeline);
+            CHECK(f.app->engine()->processErrors() == 0);
+            f.app->stopEngine();
+        }
+}
+
+TEST_CASE("rack inputs: an event both the Notes device and the channel input match arrives once" *
+          doctest::description("rt")) {
+    std::vector<float> levels;
+    for (bool overlap : {false, true}) {
+        CAPTURE(overlap);
+        Fixture f;
+        f.run("project.set", R"({"console9":false})");
+        f.run("rack.add");
+        f.run("module.add", R"({"rack":"rk_1","type":"notes","device":"Keyboard"})");
+        f.run("cable.add", R"({"from":"mo_2.gate","to":"mo_1.l"})");
+        if (overlap)
+            f.run("track.set", R"({"track":"tr_1","record_midi":"*","armed":true,"monitor":"on"})");
+        DummyBackend backend(
+            {.mode = DummyBackend::Mode::Manual,
+             .captureFrames = 8192,
+             .midiPorts = {"Keyboard"},
+             .midi = [](std::vector<MidiInputEvent>& out, std::uint32_t n, std::int64_t frame) {
+                 if (frame <= 370 && 370 < frame + n) {
+                     MidiInputEvent event;
+                     event.frame = static_cast<std::uint32_t>(370 - frame);
+                     event.size = 3;
+                     event.bytes[0] = 0x90;
+                     event.bytes[1] = 64;
+                     event.bytes[2] = 100;
+                     out.push_back(event);
+                 }
+             }});
+        REQUIRE(f.app->startEngine(backend,
+                                   {.sampleRate = 48000, .blockSize = 37, .midiInputs = true},
+                                   {.anticipative = false, .workers = 0}));
+        REQUIRE(f.app->engine()->awaitPlan());
+        backend.run(64);
+        levels.push_back(backend.capture().channels[0][64 * 37 - 1]);
+        CHECK(f.app->engine()->processErrors() == 0);
+        f.app->stopEngine();
+    }
+    REQUIRE(std::abs(levels[0]) > .01f);
+    CHECK(levels[1] == levels[0]);
 }
 
 TEST_CASE("rack inputs: selecting inactive MIDI preserves a held timeline note") {

@@ -166,6 +166,8 @@ class RackPool {
     rack::Instance* get(Id id, const model::RackModule& module, const rack::Instance::Setup& setup,
                         const std::optional<NotesInput>& notesInput = {});
     rack::Instance* find(Id id) const;
+    // Bumped whenever a Notes module's live input changes (0: never).
+    std::uint64_t liveGeneration(Id id) const;
     void setGeneration(std::uint64_t generation) { generation_ = generation; }
     void prune(const Session& session, std::uint64_t liveGeneration = UINT64_MAX);
     // Knob values from the session's modules into their instances (a knob
@@ -181,6 +183,7 @@ class RackPool {
         double rate = 0;
         int seed = 0;
         std::optional<NotesInput> notesInput;
+        std::uint64_t liveGeneration = 0;
     };
     std::shared_ptr<const rack::Catalog> catalog_;
     std::map<Id, Entry> modules_;
@@ -200,6 +203,9 @@ struct NotesFeed {
     std::uint64_t sourcePorts = 0;
     int fromChannel = 0, toChannel = 0;
     bool sourceAuto = false;
+    std::uint64_t liveGeneration = 0;       // the Notes module's live input (RackPool)
+    std::array<std::uint8_t, 128> chase{};  // velocity of each timeline key to restart
+    bool chasing = false;
 };
 
 // A module parameter's envelope, read by the schedule once per grid block.
@@ -273,6 +279,8 @@ void carryRackMidi(Plan& to, Plan& from, int liveClass) SUPPLE_RT;
 bool processRack(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames,
                  const host::Transport& transport, const void* self) SUPPLE_RT;
 // Cursors to `pos`; a seek (`restart`) or a loop wrap also ends held notes.
-void locateRack(Node& n, std::int64_t pos, bool restart) SUPPLE_RT;
+// `chase`: a restart that continues the timeline (an executor taking the
+// node over): Notes modules get the timeline's keys held at `pos` again.
+void locateRack(Node& n, std::int64_t pos, bool restart, bool chase = false) SUPPLE_RT;
 
 }  // namespace supple::engine::detail

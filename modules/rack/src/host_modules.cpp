@@ -310,7 +310,9 @@ void Notes::prepare(Instance& instance) {
     voice_ = {};
     stacked_ = 0;
     bend_ = modwheel_ = channelPressure_ = 0;
-    sustain_ = endAll_ = false;
+    sustain_ = endAll_ = endLive_ = false;
+    bendLive_ = modwheelLive_ = pressureLive_ = sustainLive_ = false;
+    keyLive_ = {};
     rotate_ = 0;
     triggerFrames_ =
         std::max(1, static_cast<int>(std::lround(instance.setup().sampleRate * 0.001)));
@@ -321,8 +323,9 @@ void Notes::release(Voice& v) {
     v.held = false;
 }
 
-void Notes::on(int key, double velocity, int voices, int mode) {
+void Notes::on(int key, double velocity, int voices, int mode, bool live) {
     keyVelocity_[static_cast<std::size_t>(key)] = velocity;
+    keyLive_[static_cast<std::size_t>(key)] = live;
     if (mode >= 3) {  // mono: the stack of keys held
         for (int i = 0; i < stacked_; ++i)
             if (stack_[static_cast<std::size_t>(i)] == key) {
@@ -346,6 +349,7 @@ void Notes::on(int key, double velocity, int voices, int mode) {
             v.trigger = triggerFrames_;
             if (!legato) v.pressure = 0;
         }
+        v.live = keyLive_[static_cast<std::size_t>(v.key)];
         v.held = true;
         v.sustained = false;
         v.age = ++clock_;
@@ -377,6 +381,7 @@ void Notes::on(int key, double velocity, int voices, int mode) {
     v.key = key;
     v.held = true;
     v.sustained = false;
+    v.live = live;
     v.velocity = velocity;
     v.pressure = 0;
     v.age = ++clock_;
@@ -404,6 +409,7 @@ void Notes::off(int key, int mode) {
             for (int i = 0; i < stacked_; ++i)
                 chosen = std::max(chosen, stack_[static_cast<std::size_t>(i)]);
         v.key = chosen;  // legato back to a key still held
+        v.live = keyLive_[static_cast<std::size_t>(chosen)];
         return;
     }
     for (Voice& v : voice_)
@@ -414,26 +420,73 @@ void Notes::handle(const MidiEvent& e, int voices, int mode) {
     const int type = e.status & 0xF0;
     const int key = e.data1 & 0x7F;
     if (type == 0x90 && e.data2 > 0) {
-        on(key, (e.data2 & 0x7F) / 127.0, voices, mode);
+        on(key, (e.data2 & 0x7F) / 127.0, voices, mode, e.live);
     } else if (type == 0x80 || type == 0x90) {
         off(key, mode);
     } else if (type == 0xA0) {
         for (Voice& v : voice_)
             if (v.key == key && (v.held || v.sustained)) v.pressure = (e.data2 & 0x7F) / 127.0;
     } else if (type == 0xB0) {
-        if (key == 1) modwheel_ = (e.data2 & 0x7F) / 127.0;
+        if (key == 1) {
+            modwheel_ = (e.data2 & 0x7F) / 127.0;
+            modwheelLive_ = e.live;
+        }
         if (key == 64) {
             sustain_ = e.data2 >= 64;
+            sustainLive_ = e.live;
             if (!sustain_)
                 for (Voice& v : voice_) v.sustained = false;
         }
         if (key == 120 || key == 123) endAll_ = true;
     } else if (type == 0xD0) {
         channelPressure_ = (e.data1 & 0x7F) / 127.0;
+        pressureLive_ = e.live;
     } else if (type == 0xE0) {
         const int value = ((e.data2 & 0x7F) << 7) | (e.data1 & 0x7F);
         bend_ = std::clamp((value - 8192) / 8192.0, -1.0, 1.0);
+        bendLive_ = e.live;
     }
+}
+
+// The live input went away or changed: end what it opened, as if every
+// held key were let go and its controllers returned to rest. The
+// timeline's voices and controllers keep their state.
+void Notes::releaseLive(int mode) {
+    if (sustainLive_ && sustain_) {
+        sustain_ = false;
+        for (Voice& v : voice_) v.sustained = false;
+    }
+    if (bendLive_) bend_ = 0;
+    if (modwheelLive_) modwheel_ = 0;
+    if (pressureLive_) channelPressure_ = 0;
+    bendLive_ = modwheelLive_ = pressureLive_ = sustainLive_ = false;
+    if (mode >= 3) {
+        int kept = 0;
+        for (int i = 0; i < stacked_; ++i) {
+            const int key = stack_[static_cast<std::size_t>(i)];
+            if (!keyLive_[static_cast<std::size_t>(key)])
+                stack_[static_cast<std::size_t>(kept++)] = key;
+        }
+        stacked_ = kept;
+        Voice& v = voice_[0];
+        if (!v.live) return;
+        if (stacked_ == 0) {
+            v.held = v.sustained = v.live = false;
+            return;
+        }
+        int chosen = stack_[static_cast<std::size_t>(stacked_ - 1)];
+        if (mode == 4)
+            for (int i = 0; i < stacked_; ++i)
+                chosen = std::min(chosen, stack_[static_cast<std::size_t>(i)]);
+        if (mode == 5)
+            for (int i = 0; i < stacked_; ++i)
+                chosen = std::max(chosen, stack_[static_cast<std::size_t>(i)]);
+        v.key = chosen;  // legato back to the timeline's key
+        v.live = false;
+        return;
+    }
+    for (Voice& v : voice_)
+        if (v.live) v.held = v.sustained = v.live = false;
 }
 
 void Notes::process(const HostContext& ctx) SUPPLE_RT {
@@ -461,6 +514,10 @@ void Notes::process(const HostContext& ctx) SUPPLE_RT {
             for (Voice& v : voice_) v.held = v.sustained = false;
             stacked_ = 0;
             endAll_ = false;
+        }
+        if (endLive_) {
+            releaseLive(mode);
+            endLive_ = false;
         }
         while (next < events_.size() &&
                events_[next].frame <= static_cast<std::uint32_t>(ctx.offset + i))
