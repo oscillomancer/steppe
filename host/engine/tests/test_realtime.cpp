@@ -2545,44 +2545,83 @@ model::Session twoKeysSession(bool armKeys, double rate = 1.0, bool preserve = f
 }  // namespace
 
 // Under a master playrate a timeline note at the very start of the song
-// plays: offline and in real time, in both executors.
+// plays: offline and in real time, in both executors, on the track's
+// instrument and on a take's (a take chain, with its own fresh window).
 TEST_CASE("master playrate: a note at tick 0 sounds, offline and in real time" *
           doctest::description("rt")) {
-    for (const bool preserve : {false, true}) {
-        INFO("preserve pitch " << preserve);
-        auto session = heldNoteSession(false, model::Monitor::On, "com.suppleaudio.test.sine");
-        model::EditTxn t(session, 3);
+    enum class Kind { Track, Take };
+    const auto session = [](Kind kind, bool preserve) {
+        model::Session base;
+        if (kind == Kind::Track) {
+            base = heldNoteSession(false, model::Monitor::On, "com.suppleaudio.test.sine");
+        } else {
+            model::EditTxn t(model::Session::create({.console9 = false}), 1);
+            model::Track track;
+            track.parent = kMaster;
+            const Id tr = t.create(track);
+            t.modify<model::Track>(kMaster, [&](model::Track& m) { m.children.push_back(tr); });
+            model::FxInstance synth;
+            synth.plugin.id = "com.suppleaudio.test.sine";
+            model::Take take;
+            take.chain = {t.create(synth)};
+            model::MidiSource src;
+            src.sequence.ppq = 960;
+            src.sequence.length = 8 * 960;
+            src.sequence.notes = {{0, 8 * 960, 0, 60, 100, 0}};
+            take.source = t.create(src);
+            const Id tk = t.create(take);
+            model::Item item;
+            item.track = tr;
+            item.length = 8.0;
+            item.takes = {tk};
+            item.activeTake = tk;
+            t.create(item);
+            base = t.commit().value();
+        }
+        model::EditTxn t(base, 3);
         auto project = t.project();
         project.playrate = {1.25, preserve};
         t.setProject(project);
-        session = t.commit().value();
-        auto pool = makePool();
-        const auto offline =
-            renderOffline(session, pool, {.startSeconds = 0, .endSeconds = 1.0}).value();
-        const auto& want = offline.audio.channels[0];
-        REQUIRE(want.size() >= 24000);  // timeline seconds: 38400 device frames at 1.25
-        double first = 0;
-        for (std::size_t i = 0; i < 2000; ++i) first = std::max(first, std::fabs(double(want[i])));
-        CHECK(first > 0.05);  // the note starts at the first frame
-        for (const EngineOptions& options : kBothExecutors) {
-            INFO("anticipative " << options.anticipative << ", workers " << options.workers);
-            auto rtPool = makePool();
-            MediaCache media;
-            DummyBackend backend(keyboard({}, 24000 + 4096));
-            Engine engine(rtPool, media, options);
-            REQUIRE(
-                engine.start(backend, {.sampleRate = 48000, .blockSize = 256, .midiInputs = true})
-                    .ok());
-            REQUIRE(engine.load(session));
-            REQUIRE(engine.awaitPlan());
-            engine.play();
-            runFrames(engine, backend, options, 24000, 256);
-            CHECK(engine.processErrors() == 0);
-            engine.stop();
-            REQUIRE(engine.outputLatency() == 0);
-            CHECK(maxDiff(backend.capture().channels[0], 0, want, 24000) == 0.0);
+        return t.commit().value();
+    };
+    // The first 2000 frames' peak: the note starts at the first frame.
+    const auto first = [](const std::vector<float>& x) {
+        double peak = 0;
+        for (std::size_t i = 0; i < 2000; ++i) peak = std::max(peak, std::fabs(double(x[i])));
+        return peak;
+    };
+    for (const Kind kind : {Kind::Track, Kind::Take})
+        for (const bool preserve : {false, true}) {
+            INFO("kind " << static_cast<int>(kind) << ", preserve pitch " << preserve);
+            const auto s = session(kind, preserve);
+            auto pool = makePool();
+            const auto offline =
+                renderOffline(s, pool, {.startSeconds = 0, .endSeconds = 1.0}).value();
+            const auto& want = offline.audio.channels[0];
+            REQUIRE(want.size() >= 24000);  // timeline seconds: 38400 device frames at 1.25
+            CHECK(first(want) > 0.05);
+            for (const EngineOptions& options : kBothExecutors) {
+                INFO("anticipative " << options.anticipative << ", workers " << options.workers);
+                auto rtPool = makePool();
+                MediaCache media;
+                DummyBackend backend(keyboard({}, 24000 + 4096));
+                Engine engine(rtPool, media, options);
+                REQUIRE(
+                    engine
+                        .start(backend, {.sampleRate = 48000, .blockSize = 256, .midiInputs = true})
+                        .ok());
+                REQUIRE(engine.load(s));
+                REQUIRE(engine.awaitPlan());
+                engine.play();
+                runFrames(engine, backend, options, 24000, 256);
+                CHECK(engine.processErrors() == 0);
+                engine.stop();
+                REQUIRE(engine.outputLatency() == 0);
+                const auto& got = backend.capture().channels[0];
+                CHECK(first(got) > 0.05);
+                CHECK(maxDiff(got, 0, want, 24000) == 0.0);
+            }
         }
-    }
 }
 
 // An effect's tail crosses into the live region with its strip: a short note
