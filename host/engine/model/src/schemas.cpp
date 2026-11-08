@@ -1581,6 +1581,57 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
                 break;
             }
     }
+    // Before independent inputs (ADR-0065), choosing a keyboard on a rack's
+    // home channel turned its Out route into the MIDI one, silencing the
+    // rack. Where that is unambiguous (the rack's one Out has no route), the
+    // MIDI route moves to midi_input and the Out feeds its channel again.
+    struct Repair {
+        Id track, midi, out;
+    };
+    std::vector<Repair> repairs;
+    if (version->major == 1 || version->minor <= 8)
+        for (const auto& rk : s.racks) {
+            const Track* home = s.tracks.find(rk.value->track);
+            if (!home || home->type != StripType::Channel || home->record.midiInput ||
+                !home->record.input)
+                continue;
+            const Route* midiRoute = s.routes.find(*home->record.input);
+            if (!midiRoute || !midiRoute->from.midiDevice || midiRoute->to.track != rk.value->track)
+                continue;
+            std::vector<Id> outs;
+            for (const auto& m : s.modules)
+                if (m.value->rack == rk.id && m.value->type == kOutModule) outs.push_back(m.id);
+            if (outs.size() != 1) continue;
+            const bool routed = std::any_of(s.routes.begin(), s.routes.end(), [&](const auto& r) {
+                return r.value->from.module == outs.front();
+            });
+            if (!routed) repairs.push_back({rk.value->track, *home->record.input, outs.front()});
+        }
+    if (!repairs.empty()) {
+        EditTxn fixed(s, 0);
+        for (const Repair& r : repairs) {
+            Route route;
+            route.from.module = r.out;
+            route.to.track = r.track;
+            const Id made = fixed.create(route);
+            fixed.modify<Track>(r.track, [&](Track& t) {
+                t.record.midiInput = r.midi;
+                t.record.input = made;
+            });
+        }
+        if (auto repaired = fixed.commit()) {
+            for (const Repair& r : repairs)
+                warn("project.rack_input_repaired",
+                     "reconnected " + r.out.str() + " as the channel's input; its MIDI input " +
+                         r.midi.str() + " stays beside it",
+                     "/tracks/" + r.track.str() + "/record");
+            return repaired;
+        }
+        for (const Repair& r : repairs)
+            warn("project.rack_input_unrepaired",
+                 r.out.str() + " has no route to its channel; choose it as the input again",
+                 "/tracks/" + r.track.str() + "/record");
+    }
     // Derive the time map and validate everything through a no-op transaction.
     EditTxn txn(s, 0);
     return txn.commit();

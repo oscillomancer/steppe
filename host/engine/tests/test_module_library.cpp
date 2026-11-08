@@ -2123,6 +2123,58 @@ TEST_CASE("rack inputs: hardware audio and MIDI replace each other on a channel"
     CHECK(refused.error().path == "/tracks/tr_1/record/input");
 }
 
+TEST_CASE("rack inputs: a project saved with MIDI in place of the rack's Out is repaired") {
+    for (bool ambiguous : {false, true}) {
+        CAPTURE(ambiguous);
+        Fixture f;
+        f.run("project.set", R"({"console9":false})");
+        f.run("track.add");
+        f.run("rack.add", R"({"track":"tr_1"})");
+        f.run("module.add", R"({"rack":"rk_1","type":"com.suppleaudio.rack.vco"})");
+        f.run("cable.add", R"({"from":"mo_2.sine","to":"mo_1.l"})");
+        if (ambiguous) f.run("module.add", R"({"rack":"rk_1","type":"out"})");
+        const model::Id tr1{model::Kind::Track, 1};
+        const auto out = *f.app->head().tracks.find(tr1)->record.input;
+        const auto audible = f.app->renderSession(f.app->head(), {.endSeconds = .05});
+        REQUIRE(audible);
+        // What record_midi did before independent inputs: the Out's route
+        // became the MIDI one, and the patch fell silent.
+        auto doc = model::projectToJson(f.app->head());
+        doc["schema"] = "supple.project/2.7";
+        json::Value from = json::Value::object();
+        from["midi_device"] = "*";
+        doc["routes"][out.str()]["from"] = std::move(from);
+        doc["routes"][out.str()]["midi"] = *json::parse(R"({"from_channel":0,"to_channel":0})");
+        std::vector<schema::Warning> warnings;
+        auto loaded = model::projectFromJson(doc, &warnings);
+        REQUIRE(loaded);
+        const auto& record = loaded->tracks.find(tr1)->record;
+        const auto repaired = std::count_if(warnings.begin(), warnings.end(), [](const auto& w) {
+            return w.code == "project.rack_input_repaired";
+        });
+        if (ambiguous) {
+            CHECK(repaired == 0);
+            CHECK(record.input == out);
+            CHECK_FALSE(record.midiInput);
+            continue;
+        }
+        CHECK(repaired == 1);
+        CHECK(record.midiInput == out);
+        REQUIRE(record.input);
+        REQUIRE(record.input != out);
+        CHECK(loaded->routes.find(*record.input)->from.module == model::Id{model::Kind::Module, 1});
+        auto rendered = f.app->renderSession(*loaded, {.endSeconds = .05});
+        REQUIRE(rendered);
+        CHECK(rendered->audio.channels == audible->audio.channels);
+        // Saved again, it reopens as is, with no repair.
+        warnings.clear();
+        auto again = model::parseProject(model::serializeProject(*loaded), &warnings);
+        REQUIRE(again);
+        CHECK(warnings.empty());
+        CHECK(model::serializeProject(*again) == model::serializeProject(*loaded));
+    }
+}
+
 TEST_CASE("rack inputs: a channel records the input it was switched to") {
     for (bool toAudio : {true, false}) {
         CAPTURE(toAudio);
