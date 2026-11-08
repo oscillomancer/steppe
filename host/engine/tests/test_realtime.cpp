@@ -2498,12 +2498,21 @@ model::Session echoSession(bool armed, model::Monitor monitor, bool pads = false
 
 // Two sine tracks on keyboardSession's MIDI input: "Pads", armed and
 // monitored (so the live region exists) and silent, and "Keys", holding key
-// 60 for two beats (1 s), armed as given; the master playrate `rate`.
-model::Session twoKeysSession(bool armKeys, double rate = 1.0, bool preserve = false) {
+// 60 for two beats (1 s), armed as given; the master playrate `rate`, or,
+// with `envelope`, a playrate envelope from 1 to 1.5 over two seconds.
+model::Session twoKeysSession(bool armKeys, double rate = 1.0, bool preserve = false,
+                              bool envelope = false) {
     model::EditTxn t(model::Session::create({.console9 = false}), 1);
     auto project = t.project();
     project.playrate = {rate, preserve};
     t.setProject(project);
+    if (envelope) {
+        model::Envelope env;
+        env.target = {kMaster, "playrate"};
+        env.timebase = model::Timebase::Time;
+        env.points = {{0, 1.0}, {2.0, 1.5}};
+        t.create(env);
+    }
     for (const char* name : {"Pads", "Keys"}) {
         model::Track tr;
         tr.name = name;
@@ -2833,12 +2842,15 @@ TEST_CASE("arming beside an armed track mid-note: exact at unity and under a pla
     struct Rate {
         double rate;
         bool preserve;
+        bool envelope = false;  // a playrate envelope, 1 to 1.5
     };
-    for (const Rate r : {Rate{1.0, false}, Rate{1.25, false}, Rate{1.25, true}})
+    for (const Rate r :
+         {Rate{1.0, false}, Rate{1.25, false}, Rate{1.25, true}, Rate{1.0, false, true}})
         for (const bool loop : {false, true})
             for (const std::uint32_t block : {256u, 37u})
                 for (const EngineOptions& options : kBothExecutors) {
-                    const double rate = r.rate;
+                    if (r.envelope && loop) continue;
+                    const double rate = r.envelope ? 0.0 : r.rate;  // 0: the envelope
                     INFO("rate " << rate << ", preserve " << r.preserve << ", loop " << loop
                                  << ", block " << block << ", anticipative " << options.anticipative
                                  << ", workers " << options.workers);
@@ -2856,7 +2868,7 @@ TEST_CASE("arming beside an armed track mid-note: exact at unity and under a pla
                                                      .blockSize = block,
                                                      .midiInputs = true})
                                     .ok());
-                        REQUIRE(engine.load(twoKeysSession(false, rate, r.preserve)));
+                        REQUIRE(engine.load(twoKeysSession(false, r.rate, r.preserve, r.envelope)));
                         REQUIRE(engine.awaitPlan());
                         // The loop wraps 2000 frames after the edit, before its handoff.
                         if (loop) engine.setLoop(0.0, double(kEdit + 2000) / 48000.0, true);
@@ -2875,7 +2887,9 @@ TEST_CASE("arming beside an armed track mid-note: exact at unity and under a pla
                             rtPool.find(keysInstrument(twoKeysSession(false)));
                         REQUIRE(keys);
                         const std::uint32_t resetsBefore = keys->resets();
-                        if (arm) REQUIRE(engine.load(twoKeysSession(true, rate, r.preserve)));
+                        if (arm)
+                            REQUIRE(
+                                engine.load(twoKeysSession(true, r.rate, r.preserve, r.envelope)));
                         runFrames(engine, backend, options, kFrames - kEdit, block);
                         engine.service();
                         resets = keys->resets() - resetsBefore;
@@ -2894,7 +2908,7 @@ TEST_CASE("arming beside an armed track mid-note: exact at unity and under a pla
                         if (!loop)
                             CHECK(maxDiff(armed, 0, offline.audio.channels[0],
                                           static_cast<std::size_t>(kFrames)) == 0.0);
-                    } else if (!loop) {
+                    } else if (!loop && !r.envelope) {
                         // The note ends at 1 s of timeline, 38400 device frames
                         // at 1.25: silence after it.
                         double after = 0;
