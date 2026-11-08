@@ -134,20 +134,21 @@ a structural edit while the preceding plan remains prepared.
   ends before the loop end or starts at the loop start. A note at the loop
   start is taken; one at the loop end is not. A note crossing the loop end
   ends at the wrap. At unity it needs a look-ahead shorter than the loop: a
-  loop no longer than it has no early wrap, and the notes and audio inside
-  the look-ahead after the loop start are lost on every pass after the first
-  (STATUS.md). Between the early wrap and the output's: a seek is a locate;
-  a plan swap that keeps the chain's latency and its item's shift continues
-  the take, and one that changes either wraps it afresh in the new chain's
-  coordinates; a loop edit (another loop, or none) is a locate for the
-  take, ending the notes it took early (the anticipative engine restarts its
-  render for any loop edit anyway). Notes its block has no room for are
-  counted in `voiceDropped` on both paths. Track/take stage parameters,
-  output-event timestamps and plugin transport use that input shift plus
-  `stage.before`, at unity rate as well as under playrate.
-  Fader controls use `S + chain`; send encoders use their source tap's
-  shift, and unencoded key controls use their destination stage's. Device
-  audio/MIDI are never read ahead.
+  loop no longer than it has no early wrap, and on every pass after the
+  first the notes inside the look-ahead after the loop start are lost; so is
+  its audio where the item ends at the loop end, and where the item goes on,
+  what follows the loop end plays in its place (STATUS.md). Between the early
+  wrap and the output's: a seek is a locate; a plan swap that keeps the
+  chain's latency and its item's shift continues the take, and one that
+  changes either wraps it afresh in the new chain's coordinates; a loop edit
+  (another loop, or none) is a locate for the take, ending the notes it took
+  early (the anticipative engine restarts its render for any loop edit
+  anyway). Notes its block has no room for are counted in `voiceDropped` on
+  both paths. Track/take stage parameters, output-event timestamps and plugin
+  transport use that input shift plus `stage.before`, at unity rate as well as
+  under playrate. Fader controls use `S + chain`; send encoders use their
+  source tap's shift, and unencoded key controls use their destination
+  stage's. Device audio/MIDI are never read ahead.
 - The solve is independent of live/arm/monitor classification. Frontier rings
   retain matching monotonic stream-frame coordinates between executors; source
   read-ahead is relative to the retained startup shift, not an additional
