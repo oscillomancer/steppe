@@ -2322,6 +2322,13 @@ void runFrames(Engine& engine, DummyBackend& backend, const EngineOptions& optio
         backend.run(cycles);
 }
 
+// The instrument on twoKeysSession's "Keys" track.
+Id keysInstrument(const model::Session& s) {
+    for (const auto& e : s.tracks)
+        if (e.value->name == "Keys") return e.value->chain.front();
+    return {};
+}
+
 const std::array<EngineOptions, 4> kBothExecutors = {
     kInCallback, EngineOptions{.anticipative = false, .workers = 2}, EngineOptions{.workers = 0},
     EngineOptions{.workers = 2}};
@@ -2715,6 +2722,9 @@ TEST_CASE("arming beside an armed track mid-note: exact at unity and under a pla
                                  << ", block " << block << ", anticipative " << options.anticipative
                                  << ", workers " << options.workers);
                     // `arm`: arm Keys at kEdit; else the reference, never armed.
+                    // `resets`: how often the Keys instrument was reset from the
+                    // edit to the end.
+                    std::uint32_t resets = 0;
                     auto run = [&](bool arm) {
                         auto rtPool = makePool();
                         MediaCache media;
@@ -2731,9 +2741,14 @@ TEST_CASE("arming beside an armed track mid-note: exact at unity and under a pla
                         if (loop) engine.setLoop(0.0, double(kEdit + 2000) / 48000.0, true);
                         engine.play();
                         runFrames(engine, backend, options, kEdit, block);
+                        host::Instance* const keys =
+                            rtPool.find(keysInstrument(twoKeysSession(false)));
+                        REQUIRE(keys);
+                        const std::uint32_t resetsBefore = keys->resets();
                         if (arm) REQUIRE(engine.load(twoKeysSession(true, rate, r.preserve)));
                         runFrames(engine, backend, options, kFrames - kEdit, block);
                         engine.service();
+                        resets = keys->resets() - resetsBefore;
                         CHECK(engine.processErrors() == 0);
                         engine.stop();
                         REQUIRE(engine.outputLatency() == 0);
@@ -2741,6 +2756,8 @@ TEST_CASE("arming beside an armed track mid-note: exact at unity and under a pla
                     };
                     const auto reference = run(false);
                     const auto armed = run(true);
+                    // An exact handoff continues the instrument: never reset.
+                    CHECK(resets == 0);
                     // Arming changes nothing: the never-armed run of this engine.
                     CHECK(maxDiff(armed, 0, reference, static_cast<std::size_t>(kFrames)) == 0.0);
                     if (rate == 1.0) {
@@ -2765,7 +2782,7 @@ TEST_CASE("arming beside an armed track mid-note: exact at unity and under a pla
 // A handoff the callback reaches late (here past the renderer's position,
 // after the renderer stalled and the frontier ran dry) cannot continue the
 // carried node: what the renderer never rendered includes the note's end.
-// The strip starts afresh, so the note does not hang.
+// The strip starts afresh, its instrument reset, so the note does not hang.
 TEST_CASE("a late handoff starts the newly live strip afresh: no note hangs" *
           doctest::description("rt")) {
     for (const std::uint32_t block : {256u, 37u})
@@ -2799,12 +2816,17 @@ TEST_CASE("a late handoff starts the newly live strip afresh: no note hangs" *
             engine.holdRenderer(true);
             REQUIRE(engine.awaitRendererHeld());
             playTo(60000, false);
+            host::Instance* const keys = pool.find(keysInstrument(twoKeysSession(false)));
+            REQUIRE(keys);
+            const std::uint32_t resetsBefore = keys->resets();
             REQUIRE(engine.load(twoKeysSession(true)));
             REQUIRE(engine.awaitPlan());  // adopted by the renderer at its stalled position
             playTo(68000, false);         // the callback takes it at once, past the handoff
             engine.holdRenderer(false);
             playTo(96000, true);
             engine.service();
+            // The callback, not continuing the instrument, reset it.
+            CHECK(keys->resets() > resetsBefore);
             CHECK(engine.processErrors() == 0);
             engine.stop();
             const auto& L = backend.capture().channels[0];
