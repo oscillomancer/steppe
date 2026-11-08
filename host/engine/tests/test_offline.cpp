@@ -1729,6 +1729,94 @@ TEST_CASE("acknowledging output-derived patches prevents a parameter echo on rel
     CHECK(instance->paramValue(0).value() != before);
 }
 
+// A plan swap that halves a compensated take's latency (two 64-frame take
+// FX, then one) after the take wrapped early (the loop end its look-ahead
+// before), before the new chain's own early wrap: the new chain wraps
+// afresh, in its own coordinates, taking the loop start's notes and none
+// from before the loop start. (In the old chain's coordinates its window
+// would start 64 frames earlier: at a note 25 frames before the loop start,
+// which it would play at the loop start.)
+TEST_CASE("a latency change after a take's early loop wrap takes only the loop's notes") {
+    model::EditTxn t(model::Session::create({.console9 = false}), 1);
+    const auto track = addTrack(t, "Take");
+    model::FxInstance synth;
+    synth.plugin.id = "com.suppleaudio.test.sine";
+    model::FxInstance delay;
+    delay.plugin.id = "com.suppleaudio.test.gain";
+    delay.patch = json::parse(R"({"schema":"supple.test-gain-patch/1.0",
+                                  "params":{"latency":"short"}})")
+                      .value();
+    const auto first = t.create(delay), second = t.create(delay);
+    model::Take take;
+    take.chain = {t.create(synth), first, second};
+    model::MidiSource src;
+    src.sequence.ppq = 960;
+    src.sequence.length = 16 * 960;
+    // The loop start + 25 frames, and 25 frames before it (another key).
+    src.sequence.notes = {{961, 240, 0, 72, 100, 0}, {959, 240, 0, 76, 100, 0}};
+    take.source = t.create(src);
+    const auto tk = t.create(take);
+    model::Item item;
+    item.track = track;
+    item.length = 8.0;
+    item.takes = {tk};
+    item.activeTake = tk;
+    t.create(item);
+    const auto twice = commit(t);
+    model::EditTxn swap(twice, 2);
+    swap.modify<model::Take>(tk, [&](model::Take& m) { m.chain.pop_back(); });
+    swap.remove<model::FxInstance>(second);
+    const auto once = commit(swap);
+    auto pool = makePool();
+    auto old = detail::compile(twice, pool, 0, 32).value();
+    REQUIRE(detail::prepare(old, twice));
+    for (auto* instance : old.instances) REQUIRE(instance->startProcessing());
+    const LoopRange loop{24000, 48000, true};
+    const auto takeOf = [](detail::Plan& p) -> detail::TakeChain& {
+        return std::find_if(p.nodes.begin(), p.nodes.end(),
+                            [](const auto& n) { return !n.takeChains.empty(); })
+            ->takeChains[0];
+    };
+    // The instrument's note-ons of each key.
+    int on72 = 0, on76 = 0;
+    const auto count = [&](const detail::TakeChain& tc) {
+        for (const auto& e : tc.chain[0].blockEvents)
+            if (e.kind == host::Event::Kind::NoteOn) ++(e.key == 72 ? on72 : on76);
+    };
+    // 96 frames before the loop end: past the old chain's early wrap (128
+    // frames before) and its taking the note (103 before), before the new
+    // one's (64 before).
+    constexpr std::int64_t kSwap = 48000 - 96;
+    for (std::int64_t pos = 0; pos < kSwap; pos += 32) {
+        REQUIRE(detail::processBlock(old, pos, 32, true, &loop));
+        count(takeOf(old));
+    }
+    REQUIRE(takeOf(old).latency == 128);
+    // Both in the first pass, and the loop start's again, taken early.
+    REQUIRE(on72 == 2);
+    REQUIRE(on76 == 1);
+    on72 = on76 = 0;
+    auto next = detail::compile(once, pool, 0, 32).value();
+    REQUIRE(detail::prepare(next, once));
+    for (auto* instance : next.instances) REQUIRE(instance->startProcessing());
+    detail::carryMix(old, next, -1);
+    detail::locate(next, kSwap, false);
+    REQUIRE(takeOf(next).latency == 64);
+    for (std::int64_t pos = kSwap; pos < 48000; pos += 32) {
+        REQUIRE(detail::processBlock(next, pos, 32, true, &loop));
+        count(takeOf(next));
+    }
+    detail::wrapTo(next, 24000, -1);
+    for (std::int64_t pos = 24000; pos < 24000 + 128; pos += 32) {
+        REQUIRE(detail::processBlock(next, pos, 32, true, &loop));
+        count(takeOf(next));
+    }
+    CHECK(on72 == 1);
+    CHECK(on76 == 0);
+    for (auto* instance : next.instances) instance->stopProcessing();
+    for (auto* instance : old.instances) instance->stopProcessing();
+}
+
 // The unity path's notes for a take's instrument count what its block has
 // no room for, as the playrate path's do (voiceDropped).
 TEST_CASE("a take's instrument counts the notes its block has no room for") {

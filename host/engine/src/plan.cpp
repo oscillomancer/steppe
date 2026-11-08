@@ -3436,8 +3436,12 @@ void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT {
                     if (otc.take == tc.take) {
                         tc.active = otc.active;
                         tc.held = otc.held;
-                        tc.aheadFrom = otc.aheadFrom;
-                        tc.aheadLoop = otc.aheadLoop;
+                        // Past an early wrap, in the old chain's coordinates:
+                        // a new latency or item shift wraps afresh.
+                        if (tc.latency == otc.latency && n.itemShift == old.itemShift) {
+                            tc.aheadFrom = otc.aheadFrom;
+                            tc.aheadLoop = otc.aheadLoop;
+                        }
                         carryStages(tc.chain, otc.chain);
                         break;
                     }
