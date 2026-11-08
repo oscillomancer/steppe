@@ -851,6 +851,14 @@ Engine and hosting:
   (VST3 has no modulation), by their first voice, at most 16 per plug-in;
   parallel paths summed inside a patch remain unaligned (ADR-0064);
   post-fader sends into an In module take the linear path.
+- A take whose FX report latency runs its input ahead and, looping, wraps
+  that much early (engine.md, PDC). At unity a loop no longer than that
+  look-ahead has no early wrap: the notes and audio inside the look-ahead
+  after the loop start are lost on every pass after the first (the
+  playrate path is untested there). On the callback's executor
+  (`anticipative: false`) a loop edit inside the look-ahead before the loop
+  end is a locate for the take: it starts afresh, cutting what its FX still
+  hold (up to their latency), as the anticipative engine's restart does.
 - The headless platform layer (ADR-0035) has natively tested macOS/Windows
   address waits, wake sources, control socket/MCP paths and user directory roots.
   Both native engines run with dummy/offline audio and native RT/offline
