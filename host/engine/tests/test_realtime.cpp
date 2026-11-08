@@ -2931,6 +2931,243 @@ TEST_CASE("a short take inside its take FX's look-ahead after the loop start pla
     std::filesystem::remove_all(dir);
 }
 
+namespace {
+// A compensated take (64 frames of latency after its instrument) whose
+// notes are (tick, duration) pairs, 960 ticks a beat at 120 BPM (a tick is
+// 25 frames), from the start of an item at `position` seconds, `length`
+// seconds long.
+model::Session compensatedTakeSession(double rate, std::vector<std::pair<int, int>> notes,
+                                      double position = 0.0, double length = 4.0) {
+    model::EditTxn t(model::Session::create({.console9 = false}), 1);
+    auto project = t.project();
+    project.playrate = {rate, false};
+    t.setProject(project);
+    model::Track track;
+    track.parent = kMaster;
+    const Id tr = t.create(track);
+    t.modify<model::Track>(kMaster, [&](model::Track& m) { m.children.push_back(tr); });
+    model::FxInstance synth;
+    synth.plugin.id = "com.suppleaudio.test.sine";
+    model::FxInstance delay;
+    delay.plugin.id = "com.suppleaudio.test.gain";
+    delay.patch = json::parse(R"({"schema":"supple.test-gain-patch/1.0",
+                                  "params":{"latency":"short"}})")
+                      .value();
+    model::Take take;
+    take.chain = {t.create(synth), t.create(delay)};
+    model::MidiSource src;
+    src.sequence.ppq = 960;
+    src.sequence.length = 16 * 960;
+    for (const auto& [tick, duration] : notes)
+        src.sequence.notes.push_back({tick, duration, 0, 72, 100, 0});
+    take.source = t.create(src);
+    const Id tk = t.create(take);
+    model::Item item;
+    item.track = tr;
+    item.timebase = model::ItemTimebase::Time;
+    item.position = position;
+    item.length = length;
+    item.takes = {tk};
+    item.activeTake = tk;
+    t.create(item);
+    return t.commit().value();
+}
+
+double peakOf(const std::vector<float>& v, std::size_t from, std::size_t n) {
+    double peak = 0;
+    for (std::size_t i = from; i < from + n && i < v.size(); ++i)
+        peak = std::max(peak, std::fabs(double(v[i])));
+    return peak;
+}
+}  // namespace
+
+// A compensated take around a loop at [0.5 s, 1 s): every pass after the
+// first plays as the first, which plays as offline, at unity and under a
+// master playrate. Its item may end before the loop end (before the
+// look-ahead wraps) or start at the loop start; notes may lie exactly at
+// the loop's start or end (the end's is never heard). A note crossing the
+// loop end ends at the wrap: every later pass plays as the second (the
+// first has no released note before it).
+TEST_CASE("a compensated take around the loop plays every pass as the first" *
+          doctest::description("rt")) {
+    struct Shape {
+        const char* name;
+        std::vector<std::pair<int, int>> notes;
+        double position, length;
+        bool crossing = false;
+    };
+    const std::vector<Shape> shapes = {
+        {"the item ends before the loop end", {{961, 240}}, 0.0, 0.75},
+        {"the item starts at the loop start", {{1, 240}}, 0.5, 0.25},
+        {"the item ends inside the look-ahead", {{961, 240}}, 0.0, 0.999},
+        {"notes at the loop start and end", {{960, 240}, {1920, 240}}, 0.0, 4.0},
+        {"a note crossing the loop end", {{1900, 240}}, 0.0, 4.0, true},
+    };
+    constexpr int kPasses = 5;
+    for (const Shape& shape : shapes)
+        for (const double rate : {1.0, 1.25}) {
+            const auto pass = static_cast<std::size_t>(24000 / rate);
+            const auto session =
+                compensatedTakeSession(rate, shape.notes, shape.position, shape.length);
+            auto pool = makePool();
+            const auto offline =
+                renderOffline(session, pool, {.startSeconds = 0, .endSeconds = 1.0}).value();
+            REQUIRE(offline.audio.channels[0].size() >= 2 * pass);
+            REQUIRE(peakOf(offline.audio.channels[0], pass, pass) > 0.05);
+            for (const std::uint32_t block : {256u, 37u})
+                for (const EngineOptions& options : kBothExecutors) {
+                    INFO(std::string(shape.name)
+                         << ", rate " << rate << ", block " << block << ", anticipative "
+                         << options.anticipative << ", workers " << options.workers);
+                    const std::size_t frames = (kPasses + 1) * pass;
+                    auto rtPool = makePool();
+                    MediaCache media;
+                    DummyBackend backend(keyboard({}, static_cast<std::int64_t>(frames) + 4096));
+                    Engine engine(rtPool, media, options);
+                    REQUIRE(
+                        engine
+                            .start(backend,
+                                   {.sampleRate = 48000, .blockSize = block, .midiInputs = true})
+                            .ok());
+                    REQUIRE(engine.load(session));
+                    REQUIRE(engine.awaitPlan());
+                    engine.setLoop(0.5, 1.0, true);
+                    engine.play();
+                    runFrames(engine, backend, options, static_cast<std::int64_t>(frames), block);
+                    CHECK(engine.processErrors() == 0);
+                    engine.stop();
+                    const auto& L = backend.capture().channels[0];
+                    // Up to the first wrap: the offline render.
+                    CHECK(maxDiff(L, 0, offline.audio.channels[0], 2 * pass) == 0.0);
+                    // A note crossing the loop end: the second pass begins with
+                    // its release, and the note has ended well before its own
+                    // onset again.
+                    const std::vector<float> first(
+                        shape.crossing
+                            ? L.begin() + static_cast<std::ptrdiff_t>(2 * pass)
+                            : offline.audio.channels[0].begin() + static_cast<std::ptrdiff_t>(pass),
+                        (shape.crossing ? L.begin() : offline.audio.channels[0].begin()) +
+                            static_cast<std::ptrdiff_t>((shape.crossing ? 3 : 2) * pass));
+                    if (shape.crossing) CHECK(peakOf(first, pass / 4, pass / 2) == 0.0);
+                    for (int k = shape.crossing ? 2 : 1; k < kPasses; ++k) {
+                        INFO("pass " << k);
+                        CHECK(maxDiff(L, (static_cast<std::size_t>(k) + 1) * pass, first, pass) ==
+                              0.0);
+                    }
+                }
+        }
+}
+
+// The loop at [0.5 s, 1 s), a compensated take's note 25 frames after the
+// loop start: playing from inside its look-ahead before the loop end (a seek
+// there, before play or, in the callback, while playing), and a plan swap
+// there after the take has wrapped early (in the callback, where the swap's
+// frame is known), every following pass plays the note on time. A swap that
+// also takes the latency away (its take FX's) wraps afresh: the note the
+// chain took early ends at the wrap, and the pass plays as the new
+// session's. (The seek
+// is before the note is due: one later is a locate past it, which plays it
+// at once, late.)
+TEST_CASE(
+    "a compensated take's note after the loop start: a seek or a plan swap in its "
+    "look-ahead" *
+    doctest::description("rt")) {
+    constexpr int kPasses = 4;
+    // Timeline frames before the loop end: inside the look-ahead (64 device
+    // frames, 80 timeline frames at 1.25), before the note's input is due.
+    constexpr std::int64_t kBefore = 60;
+    enum class Change { PlayThere, SeekThere, SwapThere, NoLatencyThere };
+    for (const double rate : {1.0, 1.25}) {
+        const auto pass = static_cast<std::size_t>(24000 / rate);
+        const auto session = compensatedTakeSession(rate, {{961, 240}});
+        // The plan swap: the same take beside a new, empty track.
+        model::EditTxn more(session, 2);
+        model::Track extra;
+        extra.parent = kMaster;
+        const Id extraId = more.create(extra);
+        more.modify<model::Track>(kMaster, [&](model::Track& m) { m.children.push_back(extraId); });
+        const auto edited = more.commit().value();
+        model::EditTxn none(session, 2);
+        for (const auto& e : session.fx)
+            if (e.value->plugin.id == "com.suppleaudio.test.gain")
+                none.modify<model::FxInstance>(e.id, [](model::FxInstance& fx) {
+                    fx.patch = json::parse(R"({"schema":"supple.test-gain-patch/1.0",
+                                               "params":{"latency":"none"}})")
+                                   .value();
+                });
+        const auto noLatency = none.commit().value();
+        auto pool = makePool();
+        const auto offline =
+            renderOffline(session, pool, {.startSeconds = 0, .endSeconds = 1.0}).value();
+        REQUIRE(offline.audio.channels[0].size() >= 2 * pass);
+        const std::vector<float> onTime(
+            offline.audio.channels[0].begin() + static_cast<std::ptrdiff_t>(pass),
+            offline.audio.channels[0].begin() + static_cast<std::ptrdiff_t>(2 * pass));
+        REQUIRE(peakOf(onTime, 0, pass) > 0.05);
+        const auto uncompensated =
+            renderOffline(noLatency, pool, {.startSeconds = 0, .endSeconds = 1.0}).value();
+        REQUIRE(uncompensated.audio.channels[0].size() >= 2 * pass);
+        const std::vector<float> onTimeNone(
+            uncompensated.audio.channels[0].begin() + static_cast<std::ptrdiff_t>(pass),
+            uncompensated.audio.channels[0].begin() + static_cast<std::ptrdiff_t>(2 * pass));
+        for (const Change change :
+             {Change::PlayThere, Change::SeekThere, Change::SwapThere, Change::NoLatencyThere})
+            for (const std::uint32_t block : {37u, 32u})
+                for (const EngineOptions& options : kBothExecutors) {
+                    if (change != Change::PlayThere && options.anticipative) continue;
+                    INFO("rate " << rate << ", change " << int(change) << ", block " << block
+                                 << ", anticipative " << options.anticipative << ", workers "
+                                 << options.workers);
+                    const std::size_t frames = 4 * pass + kPasses * pass;
+                    auto rtPool = makePool();
+                    MediaCache media;
+                    DummyBackend backend(keyboard({}, static_cast<std::int64_t>(frames) + 4096));
+                    Engine engine(rtPool, media, options);
+                    REQUIRE(
+                        engine
+                            .start(backend,
+                                   {.sampleRate = 48000, .blockSize = block, .midiInputs = true})
+                            .ok());
+                    REQUIRE(engine.load(session));
+                    REQUIRE(engine.awaitPlan());
+                    engine.setLoop(0.5, 1.0, true);
+                    const double there = double(48000 - kBefore) / 48000.0;
+                    std::int64_t played = 0;
+                    if (change == Change::PlayThere) engine.seek(there);
+                    engine.play();
+                    // Device frames from here to the output's next wrap.
+                    std::int64_t toWrap = static_cast<std::int64_t>(std::llround(kBefore / rate));
+                    if (change == Change::SeekThere) {
+                        played = static_cast<std::int64_t>(pass + pass / 2) / block * block;
+                        backend.run(played / block);
+                        engine.seek(there);
+                    } else if (change == Change::SwapThere || change == Change::NoLatencyThere) {
+                        // The second wrap's look-ahead: its last block boundary
+                        // there, after the take has wrapped early.
+                        const auto wrap = static_cast<std::int64_t>(3 * pass);
+                        played = (wrap - 1) / block * block;
+                        REQUIRE(played > wrap - static_cast<std::int64_t>(64 / rate));
+                        backend.run(played / block);
+                        REQUIRE(engine.load(change == Change::SwapThere ? edited : noLatency));
+                        REQUIRE(engine.awaitPlan());
+                        toWrap = wrap - played;
+                    }
+                    runFrames(engine, backend, options, static_cast<std::int64_t>(frames) - played,
+                              block);
+                    CHECK(engine.processErrors() == 0);
+                    engine.stop();
+                    const auto& L = backend.capture().channels[0];
+                    const auto wrapped = static_cast<std::size_t>(played + toWrap);
+                    for (int k = 0; k < kPasses; ++k) {
+                        INFO("pass " << k);
+                        CHECK(maxDiff(L, wrapped + static_cast<std::size_t>(k) * pass,
+                                      change == Change::NoLatencyThere ? onTimeNone : onTime,
+                                      pass) == 0.0);
+                    }
+                }
+    }
+}
+
 // An effect's tail crosses into the live region with its strip: a short note
 // ends before the strip is armed (or starts monitoring), and its echo, still
 // inside the effect's delay line at the handoff, is heard as offline. Alone
