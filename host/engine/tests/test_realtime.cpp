@@ -958,11 +958,19 @@ TEST_CASE("a plugin that refuses to start is passed through, not processed") {
                     e.id, [](model::FxInstance& f) { f.state = "sha256:edge-refuses-start"; });
         t.putBlob("sha256:edge-refuses-start",
                   std::make_shared<const model::Blob>(model::Blob{{1, 0, 0, 0}}));
+        Id edge;
+        for (const auto& e : s.fx)
+            if (e.value->plugin.id == "com.suppleaudio.test.edge") edge = e.id;
         REQUIRE(engine.load(t.commit().value()));
         engine.play();
         if (options.anticipative) REQUIRE(engine.awaitRendered(2560));
         backend.run(10);
         CHECK(engine.processErrors() >= 1);
+        // Reset as it refused: a retry that succeeds later starts it clean,
+        // with nothing left over (a note handed over unreset) that no
+        // note-off would end.
+        REQUIRE(pool.find(edge));
+        CHECK(pool.find(edge)->resets() >= 1);
         CHECK(engine.transport().sample == 2560);
         double peak = 0;
         for (std::size_t i = 0; i < 2560; ++i)

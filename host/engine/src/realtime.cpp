@@ -1211,6 +1211,12 @@ void Engine::startFree(std::vector<host::Instance*>& owned,
         // Ours already, refused, or still owned by the other executor.
         if (in->owner() || in->processing()) continue;
         if (!in->startProcessing()) {
+            // Refused: its stage passes audio through until a plan retries
+            // it. It forgets what it holds here, where this executor has just
+            // tried to start it: an instance handed over unreset (the
+            // renderer's held note) that the callback then restarts must not
+            // resume that note when a retry succeeds, untracked, so never ended.
+            in->reset();
             in->setOwner(&kRefused);
             processErrors_.fetch_add(1);
             notifyMain();

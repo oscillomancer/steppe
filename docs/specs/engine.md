@@ -1193,7 +1193,8 @@ harness. See the tooling README for schemas, limits and invocation details.
   generation reaches the newest published one (`service()`), so no instance
   is destroyed before the audio thread has stopped it. A plugin whose
   `start_processing()` fails is left out of processing (its stage passes
-  audio through, delay-compensated, and `processErrors` counts it); the next
+  audio through, delay-compensated, and `processErrors` counts it) and is
+  reset as it refuses, so a retry that succeeds starts it clean; the next
   plan retries it. Per-stage event storage is reserved for the most events
   any block-long window holds, so a seek off the block grid never allocates.
   Plans share ownership of the session's TimeMap (a session version may be
