@@ -2926,10 +2926,11 @@ void locateTakes(Node& n, std::int64_t pos, bool wrap, bool keepPlaying = false)
 }
 }  // namespace
 
-void locateClass(Plan& p, std::int64_t pos, bool live, bool restartConsole) SUPPLE_RT {
+void locateClass(Plan& p, std::int64_t pos, bool live, bool restartConsole,
+                 bool chaseRacks) SUPPLE_RT {
     for (Node& n : p.nodes) {
         if (n.live != live) continue;
-        if (n.rack) locateRack(n, pos, restartConsole);
+        if (n.rack) locateRack(n, pos, restartConsole, chaseRacks);
         locateTakes(n, pos, false, !restartConsole);
         auto it =
             std::lower_bound(n.events.begin(), n.events.end(), pos,

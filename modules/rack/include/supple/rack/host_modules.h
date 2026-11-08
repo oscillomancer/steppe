@@ -69,6 +69,7 @@ class In final : public HostModule {
 struct MidiEvent {
     std::uint32_t frame = 0;
     std::uint8_t status = 0, data1 = 0, data2 = 0;
+    bool live = false;  // from a device, not the timeline
 };
 
 // Shared with rack.capture: hysteretic gates and MIDI quantization.
@@ -127,6 +128,15 @@ class Notes final : public HostModule {
   public:
     void bind(std::span<const MidiEvent> events) SUPPLE_RT { events_ = events; }
     void endAll() SUPPLE_RT { endAll_ = true; }
+    // The live input changed: a newer generation releases what live events
+    // opened (voices, held keys, bend, mod wheel, pressure, sustain) and
+    // leaves the timeline's notes playing. Older generations are ignored.
+    void liveInput(std::uint64_t generation) SUPPLE_RT {
+        if (generation > liveGeneration_) {
+            liveGeneration_ = generation;
+            endLive_ = true;
+        }
+    }
     void prepare(Instance& instance) override;
     void process(const HostContext& ctx) SUPPLE_RT override;
 
@@ -136,22 +146,28 @@ class Notes final : public HostModule {
         bool held = false, sustained = false;
         double velocity = 0, pressure = 0;
         std::uint64_t age = 0;
-        int gap = 0;      // frames the gate drops for a retrigger
-        int trigger = 0;  // frames left of the retrigger output
+        int gap = 0;        // frames the gate drops for a retrigger
+        int trigger = 0;    // frames left of the retrigger output
+        bool live = false;  // opened by a live event
     };
-    void on(int key, double velocity, int voices, int mode);
+    void on(int key, double velocity, int voices, int mode, bool live);
     void off(int key, int mode);
     void release(Voice& v);
     void handle(const MidiEvent& e, int voices, int mode);
+    void releaseLive(int mode);
     std::array<Voice, kChannels> voice_{};
     std::array<int, 128> stack_{};  // mono modes: keys held, in order
     int stacked_ = 0;
     std::array<double, 128> keyVelocity_{};
+    std::array<bool, 128> keyLive_{};  // mono modes: the held key came from a device
     std::span<const MidiEvent> events_;
     std::uint64_t clock_ = 0;
     int rotate_ = 0;
     double bend_ = 0, modwheel_ = 0, channelPressure_ = 0;
-    bool sustain_ = false, endAll_ = false;
+    bool sustain_ = false, endAll_ = false, endLive_ = false;
+    // Which source set each controller last: live ones reset on endLive_.
+    bool bendLive_ = false, modwheelLive_ = false, pressureLive_ = false, sustainLive_ = false;
+    std::uint64_t liveGeneration_ = 0;
     int triggerFrames_ = 48;
 };
 

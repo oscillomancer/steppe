@@ -808,6 +808,7 @@ class Engine {
     std::int64_t livePos_ = 0;
     std::int64_t liveStream_ = 0;  // frames the live nodes played in rtEpoch_
     bool liveReady_ = false;       // livePos_ is valid for rtEpoch_
+    bool liveEntered_ = false;     // the next placement continues the renderer's timeline
 
     // Epoch bumps (seek, pause, setLoop) with the seek target and the loop,
     // written by the main thread alone under one sequence lock (odd while

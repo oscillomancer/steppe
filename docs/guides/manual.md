@@ -436,11 +436,23 @@ the channel's input menu checks its audio input (an input, a pair or a
 rack's Out) and its MIDI input (**no MIDI input**, any device or one)
 separately, and its input button shows both, such as **Bells + Keystation**.
 Arm the channel and turn monitoring On to play it from the keyboard (Auto
-listens while stopped or recording). The channel's audio and MIDI inputs
-are independent. With both selected, recording creates MIDI takes; clear
-MIDI with `track.set {record_midi: null}` to print the rack audio instead.
-`module.set {device: null}` removes an explicit Notes device, and
-`source: null` returns Notes to its rack's home channel.
+listens while stopped or recording). A new rack channel starts with the
+monitor mode set in Preferences, like any new channel. Arming or changing
+monitoring while the song plays keeps the rack's notes from the timeline
+sounding; notes you hold on the keyboard end when the keyboard stops being
+heard. On other channels a hardware input and a MIDI input still replace
+each other. What a rack channel records is its choice:
+`track.set {record_take: "midi"}` (the default) records the notes you play,
+`"audio"` the rack's sound as a WAV take, and `"both"` both in one pass, as
+two items (mute one, or the channel plays the part twice).
+`module.set {device: null}` removes an explicit Notes device (`""` listens
+to every MIDI input, like `"*"`), and `source: null` returns Notes to its
+rack's home channel.
+
+Projects saved by earlier builds after choosing a keyboard on a rack's
+channel had lost the rack's connection to its channel. Opening one
+reconnects it when the rack has a single Out, and says so in a warning;
+otherwise choose the rack's Out in the channel's input menu again.
 
 Your own modules live in the library folder, and the project you save
 keeps a copy of each one it uses beside it (in `modules`), as it keeps its

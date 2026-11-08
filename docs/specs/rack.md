@@ -492,10 +492,15 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   `monitor: on` listens while stopped or playing; `auto` while stopped or
   recording. An explicit Notes `device` also listens regardless of the arm.
   Each incoming event is delivered once if those device selections overlap.
-  Choosing an inactive input on an unarmed source leaves held timeline notes
-  playing. Changing an effective live input configuration retires the Notes
-  instance with the old plan, releasing held gates without changing
-  audio-thread state from the model thread.
+  `device: ""` matches every MIDI port, like `"*"`. Changing the live input
+  (arming, monitor mode, device or MIDI channel) keeps the instance: the
+  feed carries a newer live-input generation, and on the audio thread Notes
+  ends the voices, held keys and bend, mod wheel, pressure and sustain that
+  live events set. Timeline notes keep playing, also when the node moves
+  into the anticipative engine's live region mid-song: Notes restarts there
+  with the timeline keys held at the live position (ADR-0065). A channel
+  made by `rack.add` takes the app's default monitor mode, as `track.add`
+  does; with Auto, arming starts monitoring only while stopped or recording.
 - **Note Out.** Pitch/gate becomes MIDI with the same gate detector and MIDI
   quantization functions as Capture: rise at ≥0.5, fall below 0.25, key
   round(60 + 12 × pitch) clamped to 0..127, velocity round(127 × v) clamped

@@ -920,7 +920,9 @@ bool processRendererBlock(Workers* workers, Plan& p, std::int64_t pos, std::uint
                           const void* self, const LoopRange* loop = nullptr, bool playing = true);
 // Repositions the cursors and clears the delay lines of the live nodes (or
 // of the others) and of the edges into them.
-void locateClass(Plan& p, std::int64_t pos, bool live, bool restartConsole = true) SUPPLE_RT;
+// `chaseRacks`: racks restart but keep the timeline's held notes (rack_runtime.h).
+void locateClass(Plan& p, std::int64_t pos, bool live, bool restartConsole = true,
+                 bool chaseRacks = false) SUPPLE_RT;
 // Audio thread: repositions every playback cursor at `pos` (events,
 // automation) and clears delay lines. Plugins are not touched. Plan adoption
 // passes restartConsole=false to preserve console state and mixer ramps.

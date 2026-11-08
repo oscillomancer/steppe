@@ -219,7 +219,7 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
         rtOffset_ = 0;
         rtPrimed_ = false;
         livePlan_ = nullptr;
-        liveReady_ = false;
+        liveReady_ = liveEntered_ = false;
         callbackGen_.store(0);
     }
     deviceInputs_ =
@@ -2289,6 +2289,7 @@ void Engine::adoptLive(detail::Plan* next) SUPPLE_RT {
     }
     adoptShare(liveProcessing_, next ? &next->liveInstances : nullptr, &liveProcessing_);
     const bool wasLive = livePlan_ && livePlan_->split;
+    const bool continuing = livePlan_ != nullptr;  // not the engine's first plan
     livePlan_ = next;
     if (!next) return;
     if (next->split) {
@@ -2296,6 +2297,8 @@ void Engine::adoptLive(detail::Plan* next) SUPPLE_RT {
             detail::locateClass(*next, livePos_, true, false);  // continue at the switch position
         else {
             liveReady_ = false;  // entering the live mode: liveRender takes the position
+            // Mid-song, racks keep the timeline's held notes (ADR-0065).
+            liveEntered_ = continuing;
             for (detail::Node& n : next->nodes)  // (not continuous: carry no dry signal)
                 if (n.live)
                     detail::forEachStage(n,
@@ -2318,8 +2321,8 @@ void Engine::anticipativeCycle(const float* const* in, float* const* out, std::u
         rtEpoch_ = xport.epoch;
         rtOffset_ = 0;
         rtPrimed_ = false;
-        liveReady_ = false;
-        loopC_ = xport.loop;  // the renderer takes the loop with the epoch too
+        liveReady_ = liveEntered_ = false;  // a new epoch: the live region starts afresh
+        loopC_ = xport.loop;                // the renderer takes the loop with the epoch too
         rtEpochSeen_.store(rtEpoch_, std::memory_order_release);
         wakeRenderer();
         notifyMain();
@@ -2404,9 +2407,10 @@ std::uint32_t Engine::liveRender(const float* const* in, float* const* out, std:
         }
         livePos_ = playedPosition(rtEpoch_, epochStart_.load());
         liveStream_ = playedStream(rtEpoch_);
-        detail::locateClass(p, livePos_, true);
+        detail::locateClass(p, livePos_, true, true, liveEntered_);
         resetOwned(liveProcessing_, &p);
         liveReady_ = true;
+        liveEntered_ = false;
     }
     startFree(liveProcessing_, &p.liveInstances, self);  // let go by the renderer
     // The frontier: what the renderer made for this position. Before its

@@ -718,6 +718,7 @@ struct TrackSetArgs {
     std::optional<std::string> recordRack;  // an Out module (ADR-0062)
     std::optional<std::int64_t> midiChannel;
     std::optional<model::RecordMode> recordMode;
+    std::optional<model::RecordTake> recordTake;
     std::optional<model::Monitor> monitor;
     std::optional<bool> parentSend;
     std::optional<model::TrackTimebase> timebase;
@@ -1619,9 +1620,10 @@ void registerEngineCommands(cmd::Registry& registry) {
         c.description =
             "Only the given fields change. solo: off | on | in_place | defeat. armed + "
             "record_input (device input channels, 1-based) prepare a track for "
-            "transport.record. Audio and MIDI inputs are independent; record_midi selects a device "
-            "(null clears it). When both are set, recording takes MIDI. A device name is a "
-            "substring of "
+            "transport.record; record_midi records MIDI instead (null clears it): hardware audio "
+            "and MIDI replace each other. A rack's Out (record_rack) keeps a MIDI input beside "
+            "it, which plays its Notes; record_take then picks midi, audio or both. A device "
+            "name is a substring of "
             "the MIDI port (\"*\" = every device), with midi_channel 1-16 (0 = all). monitor: "
             "off | on | auto (auto: while armed) — a monitored track hears its input live (an "
             "instrument plays the keyboard), also while stopped. record_mode: input (new "
@@ -1669,6 +1671,10 @@ void registerEngineCommands(cmd::Registry& registry) {
                            {{model::RecordMode::Input, "input"},
                             {model::RecordMode::MidiOverdub, "midi_overdub"},
                             {model::RecordMode::MidiReplace, "midi_replace"}}))
+                .field("record_take", &TrackSetArgs::recordTake,
+                       model::recordTakeSchema().doc(
+                           "With a rack Out and a MIDI input: what recording takes (midi, the "
+                           "rack's audio as a WAV, or both in one pass; default midi)"))
                 .field("monitor", &TrackSetArgs::monitor,
                        schema::enumeration<model::Monitor>({{model::Monitor::Off, "off"},
                                                             {model::Monitor::On, "on"},
@@ -1728,7 +1734,7 @@ void registerEngineCommands(cmd::Registry& registry) {
                              "\"\" clears it");
             const model::StripType newType = a.type.value_or(s.tracks.find(*id)->type);
             if ((a.recordInput || a.recordMidi || a.recordRack || a.midiChannel || a.recordMode ||
-                 a.monitor) &&
+                 a.recordTake || a.monitor) &&
                 newType != model::StripType::Channel)
                 return Error("track.strip_type", "only channels have record inputs or monitor",
                              "/track",
@@ -1745,6 +1751,11 @@ void registerEngineCommands(cmd::Registry& registry) {
                 return Error("track.record_input", "choose one audio input: hardware or a rack Out",
                              "/record_rack",
                              "give either record_rack or record_input; MIDI is independent");
+            if (a.recordInput && a.recordMidi && !a.recordMidi->isNull())
+                return Error("track.record_input", "record hardware audio or MIDI, not both",
+                             "/record_midi",
+                             "provide either record_input for audio or record_midi for MIDI; only "
+                             "a rack's Out (record_rack) keeps a MIDI input beside it");
             if (a.hwOutput && a.type.value_or(s.tracks.find(*id)->type) != model::StripType::Master)
                 return Error("track.strip_type", "only masters play to hardware outputs",
                              "/hw_output",
@@ -1784,8 +1795,10 @@ void registerEngineCommands(cmd::Registry& registry) {
                 txn.modify<model::Track>(*id, [&](auto& tr) {
                     tr.type = *a.type;
                     // A new channel's default monitoring goes with the channel.
-                    if (*a.type != model::StripType::Channel)
+                    if (*a.type != model::StripType::Channel) {
                         tr.record.monitor = model::Monitor::Off;
+                        tr.record.take = model::RecordTake::Midi;
+                    }
                     // Only masters have a lane mute; busses are never armed (ADR-0057).
                     if (*a.type != model::StripType::Master) tr.laneMute = false;
                     if (*a.type == model::StripType::Buss) tr.record.armed = false;
@@ -1799,10 +1812,38 @@ void registerEngineCommands(cmd::Registry& registry) {
                     if (!midiInput) midiInput = input;
                     input.reset();
                 }
+            // A route and the automation of its level and pan.
+            auto removeRoute = [&](Id route) {
+                for (const auto& env : s.envelopes)
+                    if (env.value->target.object == route) {
+                        for (const auto& item : s.autoItems)
+                            if (item.value->envelope == env.id)
+                                app.txn().remove<model::AutomationItem>(item.id);
+                        app.txn().remove<model::Envelope>(env.id);
+                    }
+                app.txn().remove<model::Route>(route);
+            };
+            const model::Route* audioRoute = input ? s.routes.find(*input) : nullptr;
+            const bool hardwareAudio = audioRoute && audioRoute->from.hwChannels;
+            const bool clearMidi = a.recordMidi && a.recordMidi->isNull();
+            if ((a.recordMidi && !clearMidi) || a.midiChannel)
+                if (!a.recordMidi && !(midiInput && s.routes.find(*midiInput)))
+                    return Error("track.record_midi", "give record_midi (the device) first",
+                                 "/midi_channel",
+                                 "set record_midi to a device from engine.inputs first");
             if (a.recordInput) {
                 if (a.recordInput->empty())
                     return Error("track.record_input", "give one or more input channels",
                                  "/record_input", "e.g. [1, 2] for a stereo pair");
+                // Hardware audio and MIDI are exclusive (ADR-0065): the MIDI
+                // route becomes the audio one, as before independent inputs.
+                if (midiInput && !clearMidi) {
+                    if (!input)
+                        input = midiInput;
+                    else
+                        removeRoute(*midiInput);
+                    midiInput.reset();
+                }
                 std::vector<int> channels(a.recordInput->begin(), a.recordInput->end());
                 if (input && s.routes.find(*input)) {
                     app.txn().modify<model::Route>(*input, [&](model::Route& r) {
@@ -1818,24 +1859,19 @@ void registerEngineCommands(cmd::Registry& registry) {
                     input = app.txn().create(r);
                 }
             }
-            if (a.recordMidi && a.recordMidi->isNull()) {
-                if (midiInput) {
-                    for (const auto& env : s.envelopes)
-                        if (env.value->target.object == *midiInput) {
-                            for (const auto& item : s.autoItems)
-                                if (item.value->envelope == env.id)
-                                    app.txn().remove<model::AutomationItem>(item.id);
-                            app.txn().remove<model::Envelope>(env.id);
-                        }
-                    app.txn().remove<model::Route>(*midiInput);
-                }
+            if (clearMidi) {
+                if (midiInput) removeRoute(*midiInput);
                 midiInput.reset();
             } else if (a.recordMidi || a.midiChannel) {
+                // MIDI replaces hardware audio; only a rack's Out stays beside it.
+                if (hardwareAudio) {
+                    if (!midiInput)
+                        midiInput = input;
+                    else
+                        removeRoute(*input);
+                    input.reset();
+                }
                 const model::Route* old = midiInput ? s.routes.find(*midiInput) : nullptr;
-                if (!a.recordMidi && !(old && old->from.midiDevice))
-                    return Error("track.record_midi", "give record_midi (the device) first",
-                                 "/midi_channel",
-                                 "set record_midi to a device from engine.inputs first");
                 auto setMidi = [&](model::Route& r) {
                     r.from = model::RouteEnd{};
                     r.from.midiDevice =
@@ -1881,6 +1917,7 @@ void registerEngineCommands(cmd::Registry& registry) {
             app.txn().modify<model::Track>(*id, [&](model::Track& t) {
                 if (a.armed) t.record.armed = *a.armed;
                 if (a.recordMode) t.record.mode = *a.recordMode;
+                if (a.recordTake) t.record.take = *a.recordTake;
                 if (a.recordInput || a.recordMidi || a.recordRack || a.midiChannel)
                     t.record.input =
                         input ? input : midiInput;  // retain the MIDI-only legacy alias

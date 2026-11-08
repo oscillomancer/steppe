@@ -111,7 +111,8 @@ Status validateStripRules(const Session& s) {
         if (t.type != StripType::Channel &&
             ((t.record.armed && t.type != StripType::Master) || t.record.input ||
              t.record.midiInput || t.record.monitor != Monitor::Off ||
-             t.record.mode != RecordMode::Input || !t.inputChain.empty()))
+             t.record.mode != RecordMode::Input || t.record.take != RecordTake::Midi ||
+             !t.inputChain.empty()))
             return trackError(t.type == StripType::Master
                                   ? "a master records its output: no input, monitoring or input FX"
                                   : "only channels and masters can be armed",
@@ -147,6 +148,11 @@ Status validateStripRules(const Session& s) {
                     "a record input must enter this channel from hardware, MIDI or a rack",
                     path + "/record/input",
                     "choose a hardware, MIDI or rack Out input route into this channel");
+            // A MIDI record.input is the legacy alias of the one MIDI input.
+            if (r->from.midiDevice && t.record.midiInput && *t.record.midiInput != *t.record.input)
+                return trackError("a MIDI record input must be the channel's midi_input",
+                                  path + "/record/input",
+                                  "set record.input to the midi_input route, or to an audio input");
         }
     }
     for (const auto& e : s.items) {
