@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 // The routing matrix (docs/specs/gui.md §4.6): strips (in hierarchy) ×
-// strips and plug-in keys, from route.matrix. A strip with auxiliary channels
+// strips, plug-in keys and racks' In modules, from route.matrix. A strip with auxiliary channels
 // (a multi-out instrument's outputs, ADR-0021) has a row per channel pair
 // under its own, named by the outputs. A click selects a cell (Ctrl toggles,
 // Shift extends; a row's or column's name takes all of it, the corner every
@@ -43,8 +43,10 @@ struct MatrixModel {
         std::string strip;  // the strip's name, for an auxiliary row
     };
     struct Destination {
-        std::string id, name, kind, type, track;  // kind: track | key
-        std::string rule;                         // why no strip can feed it (channels)
+        // kind: track | key | module (a rack's In); track: a key's strip, an
+        // In module's home channel.
+        std::string id, name, kind, type, track;
+        std::string rule;  // why no strip can feed it (channels)
     };
     struct Send {
         std::string id, from, to, tap;

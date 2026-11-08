@@ -917,8 +917,8 @@ close this panel without quitting the app.
 
 
 One grid (`reaper-ux.md` addendum 2): sources (strips in hierarchy, hardware
-inputs, MIDI inputs) × destinations (parent, strips, plugin keys, hardware
-outputs). A click selects a cell, Ctrl+click toggles one, Shift+click takes
+inputs, MIDI inputs) × destinations (parent, strips, plugin keys, racks' In
+modules, hardware outputs). A click selects a cell, Ctrl+click toggles one, Shift+click takes
 the rectangle from the anchor (the last cell clicked); a click on a row's or
 column's name selects all of it (Ctrl adds it, or removes it when it is all
 selected; Shift takes the rows or columns from the last one clicked), and the
@@ -949,6 +949,15 @@ auxiliary channels (a multi-out instrument's outputs, ADR-0021) has a row per
 channel pair under its own, named by the outputs ("3/4 Kick"); a cell there
 sends that pair to the destination's main pair, and its channel menu keeps
 the pair while choosing the destination's.
+A rack's In modules (rack.md §2.4) are columns after their home channel's
+(and its keys), in id order, named "<rack> » <In>" ("Shimmer » In 1") with
+a teal mark (keys' is violet; neither hue is a strip type's). A cell sends
+into the module (`route.add {from, to: mo_N}`) and edits and goes as any
+send; an auxiliary pair's row sends that pair to the module's pair. Masters
+are refused as for strips, and a strip the rack's Outs reach (its home
+channel, and whatever that feeds) is listed as a cycle ("it would feed back").
+A rack's Out and Note Out routes are channel inputs, not sends: the grid and
+its send count leave them out.
 Matrix updates clamp scroll to the current endpoint range; paint uses
 endpoint-pair indexes for send and cycle rules.
 Commands: `route.*`, `track.set {record_input}`.

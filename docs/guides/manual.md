@@ -428,8 +428,12 @@ Rain Bells, Song Machine and the other generative ones) stay silent until
 you press play; while the transport is stopped, the rack window's status
 bar says so. Instrument patches need notes: MIDI items on their channel.
 A rack sends audio both ways. Its Out modules are channel inputs, and an
-**In** module takes sends: route any track to it as you would to a buss,
-and the rack becomes an effect. A **Notes** module plays its channel's
+**In** module takes sends, and the rack becomes an effect. Send a track to
+it in the routing matrix (**View > Routing matrix**), where each In module
+is a column named after its rack ("Shimmer » In 1"), next to the rack's
+channel. A double click on a cell sends; the level, pan, tap and channel
+controls work as for any send. A rack's own channel, and any track that
+channel feeds, can't send into it, since that would feed back. A **Notes** module plays its channel's
 MIDI (or another track's, or a MIDI input's) as pitch, gate and velocity
 cables, a voice per note; **Transport** gives the song's clock. A plugin
 module's own parameters take cables too: drop a cable on the module and
