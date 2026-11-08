@@ -1312,13 +1312,20 @@ harness. See the tooling README for schemas, limits and invocation details.
   implementation notes (recording; the live region with two executors;
   crash recovery).
 - **Loop and punch** (ADR-0015): see the ADR's implementation notes.
-- **MIDI input** (ADR-0016): device MIDI is independent of audio input.
-  `record.midi_input` names its route; old MIDI-only `record.input` remains
-  readable. `track.set {record_midi}` preserves hardware or rack audio inputs,
-  and audio selection preserves MIDI. `record_midi: null` clears MIDI alone.
-  With both inputs configured, recording takes MIDI (clear MIDI to print audio).
-  A rack's Notes module follows its source channel's armed monitoring and
-  channel map, in both executors. Explicit Notes devices still listen always.
+- **MIDI input** (ADR-0016, ADR-0065): `record.midi_input` names a
+  channel's MIDI route; old MIDI-only `record.input` remains readable.
+  Hardware audio and MIDI replace each other (`record_input` turns the MIDI
+  route into audio, `record_midi` the hardware route into MIDI);
+  `record_midi: null` clears MIDI alone. A rack Out keeps a MIDI input beside
+  it, and `record.take` decides what such a channel records in `input` mode:
+  `midi` (default), `audio` (the Out as a WAV take, as without MIDI) or
+  `both` (a MIDI and a WAV take of the same pass, two items). A rack's Notes
+  module follows its source channel's armed monitoring and channel map, in
+  both executors. Explicit Notes devices still listen always. A live-input
+  change ends only the notes and controllers live events opened (a
+  generation in the Notes feed, seen on the audio thread). A rack node
+  entering the anticipative live region mid-song restarts its Notes with the
+  timeline keys held at the live position.
 - **Smooth swaps:** a plan swap carries each strip's fader ramps and Console 9 state
   and each insert's applied wet level into the new plan
   (`carryMix`, by track and by instance, per executor); a changed volume,

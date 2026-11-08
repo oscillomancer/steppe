@@ -126,7 +126,7 @@ Fields:
 | `parent_send` | `{enabled}` | the encoded main pair into the parent (no level or channel map of its own) |
 | `hw_output` | [int] or absent | masters only (ADR-0056): the device output channels the main pair plays to, 1-based and at most 64: `[l, r]`, `[mono]` ((L+R)/2) or `[]` (none). Absent: tr_0 plays to `[1, 2]`, other masters to none. Masters sharing a channel add |
 | `lane_mute` | bool | masters only (ADR-0057): silences the master's own items and nothing else; default false |
-| `record` | `{armed, input: audio route id or null, midi_input?: MIDI route id, monitor: off|on|auto, mode: input|output|midi_overdub|midi_replace}` | channels; on masters only `armed` (it records the master's output, ADR-0057). `output` still loads from project files, but an armed output-mode channel prevents recording with `record.output_unsupported` before any file is created; use input mode instead |
+| `record` | `{armed, input: audio route id or null, midi_input?: MIDI route id, monitor: off|on|auto, mode: input|output|midi_overdub|midi_replace, take?: midi|audio|both}` | channels; on masters only `armed` (it records the master's output, ADR-0057). `output` still loads from project files, but an armed output-mode channel prevents recording with `record.output_unsupported` before any file is created; use input mode instead |
 | `timebase` | enum or `project` | default for its items (channels) |
 | `chain`, `input_chain` | [fx id] | §1.7; `input_chain` on channels only |
 | `lanes` | `{mode: none|fixed|comp, lanes: [ln id], comp: …}` | channels only |
@@ -262,12 +262,14 @@ rendered).
 Folder/master sends are the tracks' `parent_send`, not routes. Record inputs
 are routes from `hw_input`/`midi_input`, or from a rack's Out module,
 referenced by `track.record.input` for audio and `track.record.midi_input`
-for MIDI. They are independent: choosing MIDI keeps an existing rack Out or
-hardware audio input, and choosing audio keeps MIDI. A MIDI-only channel
-may retain `record.input` as an alias for compatibility with existing views.
-Old projects with MIDI only in `record.input` still load and play it without
-migration. When both inputs exist, recording takes MIDI; clear
-`track.set {record_midi: null}` to print the audio input instead (ADR-0065).
+for MIDI. Hardware audio and MIDI replace each other, as before; a rack's
+Out is the only audio input that keeps a MIDI input beside it. A MIDI-only
+channel keeps `record.input` as an alias of its `midi_input`, and a MIDI
+`record.input` must be that alias. Old projects with MIDI only in
+`record.input` still load and play it without migration. A channel with a
+rack Out and a MIDI input records `record.take` in `input` mode: `midi`
+(the default; also when the field is absent), `audio` (the Out as a WAV
+take) or `both` (two takes in one pass, ADR-0065).
 A Note Out module instead sends MIDI to
 any channel through an ordinary route with `midi` set; it is not a record
 input and several such routes may reach a channel. It cannot send audio or
@@ -1059,9 +1061,21 @@ VCAs.
 ### Independent audio and MIDI inputs (schema 2.8)
 
 Writers emit `supple.project/2.8`. The optional `record.midi_input` is a
-route from a MIDI device into the same channel. Existing 1.x and 2.x files
-remain readable: without this field the legacy MIDI `record.input` is used.
-Both references are validated, copied and remapped like other route IDs.
+route from a MIDI device into the same channel, and the optional
+`record.take` (`midi`, written only when not the default) says what a rack
+channel with a MIDI input records. Existing 1.x and 2.x files remain
+readable: without `midi_input` the legacy MIDI `record.input` is used, and
+without `take` such a channel records MIDI. Both references are validated,
+copied and remapped like other route IDs.
+
+Loading a 2.8 or older file repairs one state that earlier builds wrote:
+a rack's home channel whose `record.input` is a MIDI route (and has no
+`midi_input`), whose rack has exactly one Out module with no route. The
+MIDI route becomes `midi_input` and a new route from that Out becomes
+`record.input`, with a `project.rack_input_repaired` warning naming the
+channel. When the repaired project would not validate, the file loads
+unchanged with `project.rack_input_unrepaired`; choose the Out as the
+channel's input again.
 
 ### Modular racks (schema 2.7, ADR-0062)
 

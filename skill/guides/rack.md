@@ -647,7 +647,11 @@ Console 9 trim, with the console on or off. Bare In → Out paths are about
 
 A rack channel can keep its audio Out and a keyboard input together:
 `track.set {track: "tr_1", record_midi: "*", armed: true, monitor: "on"}`.
-Its default Notes source follows that channel. MIDI and audio selections do
-not replace each other. Recording takes MIDI when a MIDI input is selected;
-`record_midi: null` clears it to print audio. To clear a Notes module's own
-settings use `module.set {module: "mo_2", device: null, source: null}`.
+Its default Notes source follows that channel. Selecting MIDI keeps the rack
+Out, and selecting the rack keeps MIDI (on other channels hardware audio and
+MIDI replace each other). What it records is `record_take`: `"midi"` (the
+default), `"audio"` (the rack's sound as a WAV take) or `"both"` (both in
+one pass; mute one item or the part plays twice). Arming or changing
+monitoring mid-song leaves timeline notes sounding. To clear a Notes
+module's own settings use `module.set {module: "mo_2", device: null,
+source: null}`; `device: ""` listens to every input, like `"*"`.

@@ -10,11 +10,12 @@ ADR-0047 (stock plugins as scripts), ADR-0051 (read-ahead PDC). Amends
 ADR-0033's licence map (`modules/`).
 
 **2026-11-07 amendment:** [ADR-0065](0065-independent-record-inputs.md)
-separates a channel's MIDI
-input from its audio input, fixing the rack home-channel monitoring contract.
-The older single-input representation still loads. With both configured,
-recording takes MIDI; see the current [rack](../specs/rack.md) and
-[session-model](../specs/session-model.md) contracts.
+lets a rack's channel keep a MIDI input beside its Out, fixing the rack
+home-channel monitoring contract; hardware audio and MIDI still replace
+each other. The older single-input representation still loads, and
+`record.take` says what such a channel records; see the current
+[rack](../specs/rack.md) and [session-model](../specs/session-model.md)
+contracts.
 
 ## Context
 
