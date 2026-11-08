@@ -126,7 +126,7 @@ Fields:
 | `parent_send` | `{enabled}` | the encoded main pair into the parent (no level or channel map of its own) |
 | `hw_output` | [int] or absent | masters only (ADR-0056): the device output channels the main pair plays to, 1-based and at most 64: `[l, r]`, `[mono]` ((L+R)/2) or `[]` (none). Absent: tr_0 plays to `[1, 2]`, other masters to none. Masters sharing a channel add |
 | `lane_mute` | bool | masters only (ADR-0057): silences the master's own items and nothing else; default false |
-| `record` | `{armed, input: audio route id or null, midi_input?: MIDI route id, monitor: off|on|auto, mode: input|output|midi_overdub|midi_replace, take?: midi|audio|both}` | channels; on masters only `armed` (it records the master's output, ADR-0057). `output` still loads from project files, but an armed output-mode channel prevents recording with `record.output_unsupported` before any file is created; use input mode instead |
+| `record` | `{armed, input: audio route id or null, midi_input?: MIDI route id, monitor: off|on|auto, mode: input|output|midi_overdub|midi_replace}` | channels; on masters only `armed` (it records the master's output, ADR-0057). `output` still loads from project files, but an armed output-mode channel prevents recording with `record.output_unsupported` before any file is created; use input mode instead |
 | `timebase` | enum or `project` | default for its items (channels) |
 | `chain`, `input_chain` | [fx id] | §1.7; `input_chain` on channels only |
 | `lanes` | `{mode: none|fixed|comp, lanes: [ln id], comp: …}` | channels only |
