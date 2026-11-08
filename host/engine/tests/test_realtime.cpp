@@ -2432,13 +2432,36 @@ TEST_CASE("arming or monitoring mid-song keeps an instrument's held timeline not
 namespace {
 // A track with keyboardSession's MIDI input, a sine and the edge fixture as a
 // 1 s echo (a delay with pdc: ignore, so the delay is heard as a tail): one
-// short note at 0, heard again at 1 s.
-model::Session echoSession(bool armed, model::Monitor monitor) {
+// short note at 0, heard again at 1 s. With `pads`, a second sine track,
+// "Pads", on the same input, armed and monitored, and silent, so the live
+// region exists before the echo strip joins it.
+model::Session echoSession(bool armed, model::Monitor monitor, bool pads = false) {
     const model::Session base = keyboardSession();
     model::EditTxn t(base, 2);
     Id track;
     for (const auto& e : base.tracks)
         if (e.value->name == "Keys") track = e.id;
+    if (pads) {
+        model::Track tr;
+        tr.name = "Pads";
+        tr.parent = kMaster;
+        const Id p = t.create(tr);
+        t.modify<model::Track>(kMaster, [&](model::Track& m) { m.children.push_back(p); });
+        model::FxInstance sine;
+        sine.plugin.id = "com.suppleaudio.test.sine";
+        const Id f = t.create(sine);
+        model::Route in;
+        in.from.midiDevice = "key";
+        in.to.track = p;
+        in.midi = model::MidiRouting{1, 0};
+        const Id r = t.create(in);
+        t.modify<model::Track>(p, [&](model::Track& x) {
+            x.chain.push_back(f);
+            x.record.input = r;
+            x.record.armed = true;
+            x.record.monitor = model::Monitor::On;
+        });
+    }
     model::FxInstance echo;
     echo.plugin.id = "com.suppleaudio.test.edge";
     echo.pdc = model::PdcMode::Ignore;
@@ -2557,52 +2580,113 @@ TEST_CASE("master playrate: a note at tick 0 sounds, offline and in real time" *
 
 // An effect's tail crosses into the live region with its strip: a short note
 // ends before the strip is armed (or starts monitoring), and its echo, still
-// inside the effect's delay line at the handoff, is heard as offline.
+// inside the effect's delay line at the handoff, is heard as offline. Alone
+// the strip opens the live region; beside an armed track (`pads`) it joins
+// the region that exists (adoptLive's continuing branch).
 TEST_CASE("arming or monitoring mid-song keeps an effect's tail" * doctest::description("rt")) {
     constexpr std::int64_t kEdit = 12800, kFrames = 64000;
-    auto pool = makePool();
-    const auto offline = renderOffline(echoSession(false, model::Monitor::On), pool,
-                                       {.startSeconds = 0, .endSeconds = 1.5})
-                             .value();
-    const auto& want = offline.audio.channels[0];
-    REQUIRE(want.size() >= static_cast<std::size_t>(kFrames));
     struct Change {
         const char* name;
         bool armedBefore;
         model::Monitor before;
     };
-    for (const Change change : {Change{"arming", false, model::Monitor::On},
-                                Change{"monitoring on", true, model::Monitor::Off}})
-        for (const std::uint32_t block : {256u, 37u})
-            for (const EngineOptions& options : kBothExecutors) {
-                INFO(std::string(change.name)
-                     << ", block " << block << ", anticipative " << options.anticipative
-                     << ", workers " << options.workers);
-                auto rtPool = makePool();
-                MediaCache media;
-                DummyBackend backend(keyboard({}, kFrames + 4096));
-                Engine engine(rtPool, media, options);
-                REQUIRE(engine
+    for (const bool pads : {false, true}) {
+        auto pool = makePool();
+        const auto offline = renderOffline(echoSession(false, model::Monitor::On, pads), pool,
+                                           {.startSeconds = 0, .endSeconds = 1.5})
+                                 .value();
+        const auto& want = offline.audio.channels[0];
+        REQUIRE(want.size() >= static_cast<std::size_t>(kFrames));
+        for (const Change change : {Change{"arming", false, model::Monitor::On},
+                                    Change{"monitoring on", true, model::Monitor::Off}})
+            for (const std::uint32_t block : {256u, 37u})
+                for (const EngineOptions& options : kBothExecutors) {
+                    INFO(std::string(change.name)
+                         << ", pads " << pads << ", block " << block << ", anticipative "
+                         << options.anticipative << ", workers " << options.workers);
+                    auto rtPool = makePool();
+                    MediaCache media;
+                    DummyBackend backend(keyboard({}, kFrames + 4096));
+                    Engine engine(rtPool, media, options);
+                    REQUIRE(
+                        engine
                             .start(backend,
                                    {.sampleRate = 48000, .blockSize = block, .midiInputs = true})
                             .ok());
-                REQUIRE(engine.load(echoSession(change.armedBefore, change.before)));
-                REQUIRE(engine.awaitPlan());
-                engine.play();
-                runFrames(engine, backend, options, kEdit, block);
-                REQUIRE(engine.load(echoSession(true, model::Monitor::On)));
-                runFrames(engine, backend, options, kFrames - kEdit, block);
-                engine.service();
-                CHECK(engine.processErrors() == 0);
-                engine.stop();
-                REQUIRE(engine.outputLatency() == 0);
-                const auto& L = backend.capture().channels[0];
-                CHECK(maxDiff(L, 0, want, static_cast<std::size_t>(kFrames)) == 0.0);
-                double echo = 0;
-                for (std::size_t i = 48000; i < 54000; ++i)
-                    echo = std::max(echo, std::fabs(double(L[i])));
-                CHECK(echo > 0.05);
-            }
+                    REQUIRE(engine.load(echoSession(change.armedBefore, change.before, pads)));
+                    REQUIRE(engine.awaitPlan());
+                    engine.play();
+                    runFrames(engine, backend, options, kEdit, block);
+                    REQUIRE(engine.load(echoSession(true, model::Monitor::On, pads)));
+                    runFrames(engine, backend, options, kFrames - kEdit, block);
+                    engine.service();
+                    CHECK(engine.processErrors() == 0);
+                    engine.stop();
+                    REQUIRE(engine.outputLatency() == 0);
+                    const auto& L = backend.capture().channels[0];
+                    CHECK(maxDiff(L, 0, want, static_cast<std::size_t>(kFrames)) == 0.0);
+                    double echo = 0;
+                    for (std::size_t i = 48000; i < 54000; ++i)
+                        echo = std::max(echo, std::fabs(double(L[i])));
+                    CHECK(echo > 0.05);
+                }
+    }
+}
+
+// Beside an armed track, a strip whose handoff the callback reaches late
+// (the renderer stalled, the callback played on past it) starts afresh in
+// the live region: its delay line is dropped, so the echo the renderer
+// carried is not heard, and from the handoff on the output is what a fresh
+// start after the note gives (offline from there: nothing to echo).
+TEST_CASE("a late handoff beside an armed track drops an effect's tail" *
+          doctest::description("rt")) {
+    constexpr std::int64_t kFrom = 36000, kFrames = 96000;
+    auto pool = makePool();
+    const auto fresh = renderOffline(echoSession(true, model::Monitor::On, true), pool,
+                                     {.startSeconds = double(kFrom) / 48000.0, .endSeconds = 2.0})
+                           .value();
+    REQUIRE(fresh.audio.channels[0].size() >= static_cast<std::size_t>(kFrames - kFrom));
+    for (const std::uint32_t block : {256u, 37u})
+        for (const int workers : {0, 2}) {
+            INFO("block " << block << ", workers " << workers);
+            auto rtPool = makePool();
+            MediaCache media;
+            DummyBackend backend(keyboard({}, kFrames + 4096));
+            Engine engine(rtPool, media, EngineOptions{.workers = workers});
+            REQUIRE(
+                engine.start(backend, {.sampleRate = 48000, .blockSize = block, .midiInputs = true})
+                    .ok());
+            REQUIRE(engine.load(echoSession(false, model::Monitor::On, true)));
+            REQUIRE(engine.awaitPlan());
+            engine.play();
+            std::int64_t played = 0;
+            auto playTo = [&](std::int64_t to, bool ahead) {
+                const std::int64_t cycles = (to - played + block - 1) / block;
+                if (cycles <= 0) return;
+                if (ahead)
+                    runAhead(engine, backend, cycles, block);
+                else
+                    backend.run(cycles);
+                played += cycles * block;
+            };
+            playTo(12000, true);  // the note (to 6000) is in the echo's delay line
+            engine.holdRenderer(true);
+            REQUIRE(engine.awaitRendererHeld());
+            playTo(28000, false);
+            REQUIRE(engine.load(echoSession(true, model::Monitor::On, true)));
+            REQUIRE(engine.awaitPlan());  // adopted by the renderer where it stalled
+            playTo(32000, false);         // the callback takes it at once, past the handoff
+            engine.holdRenderer(false);
+            playTo(kFrames, true);
+            engine.service();
+            CHECK(engine.processErrors() == 0);
+            engine.stop();
+            const auto& L = backend.capture().channels[0];
+            REQUIRE(L.size() >= static_cast<std::size_t>(kFrames));
+            // (The exact handoff, in the test above, hears the echo at 48000.)
+            CHECK(maxDiff(L, static_cast<std::size_t>(kFrom), fresh.audio.channels[0],
+                          static_cast<std::size_t>(kFrames - kFrom)) == 0.0);
+        }
 }
 
 // With another track already armed the live region exists, so a strip armed
