@@ -1745,6 +1745,11 @@ void registerEngineCommands(cmd::Registry& registry) {
                 return Error("track.record_input", "choose one audio input: hardware or a rack Out",
                              "/record_rack",
                              "give either record_rack or record_input; MIDI is independent");
+            if (a.recordInput && a.recordMidi && !a.recordMidi->isNull())
+                return Error("track.record_input", "record hardware audio or MIDI, not both",
+                             "/record_midi",
+                             "provide either record_input for audio or record_midi for MIDI; only "
+                             "a rack's Out (record_rack) keeps a MIDI input beside it");
             if (a.hwOutput && a.type.value_or(s.tracks.find(*id)->type) != model::StripType::Master)
                 return Error("track.strip_type", "only masters play to hardware outputs",
                              "/hw_output",
@@ -1799,10 +1804,38 @@ void registerEngineCommands(cmd::Registry& registry) {
                     if (!midiInput) midiInput = input;
                     input.reset();
                 }
+            // A route and the automation of its level and pan.
+            auto removeRoute = [&](Id route) {
+                for (const auto& env : s.envelopes)
+                    if (env.value->target.object == route) {
+                        for (const auto& item : s.autoItems)
+                            if (item.value->envelope == env.id)
+                                app.txn().remove<model::AutomationItem>(item.id);
+                        app.txn().remove<model::Envelope>(env.id);
+                    }
+                app.txn().remove<model::Route>(route);
+            };
+            const model::Route* audioRoute = input ? s.routes.find(*input) : nullptr;
+            const bool hardwareAudio = audioRoute && audioRoute->from.hwChannels;
+            const bool clearMidi = a.recordMidi && a.recordMidi->isNull();
+            if ((a.recordMidi && !clearMidi) || a.midiChannel)
+                if (!a.recordMidi && !(midiInput && s.routes.find(*midiInput)))
+                    return Error("track.record_midi", "give record_midi (the device) first",
+                                 "/midi_channel",
+                                 "set record_midi to a device from engine.inputs first");
             if (a.recordInput) {
                 if (a.recordInput->empty())
                     return Error("track.record_input", "give one or more input channels",
                                  "/record_input", "e.g. [1, 2] for a stereo pair");
+                // Hardware audio and MIDI are exclusive (ADR-0065): the MIDI
+                // route becomes the audio one, as before independent inputs.
+                if (midiInput && !clearMidi) {
+                    if (!input)
+                        input = midiInput;
+                    else
+                        removeRoute(*midiInput);
+                    midiInput.reset();
+                }
                 std::vector<int> channels(a.recordInput->begin(), a.recordInput->end());
                 if (input && s.routes.find(*input)) {
                     app.txn().modify<model::Route>(*input, [&](model::Route& r) {
@@ -1818,24 +1851,19 @@ void registerEngineCommands(cmd::Registry& registry) {
                     input = app.txn().create(r);
                 }
             }
-            if (a.recordMidi && a.recordMidi->isNull()) {
-                if (midiInput) {
-                    for (const auto& env : s.envelopes)
-                        if (env.value->target.object == *midiInput) {
-                            for (const auto& item : s.autoItems)
-                                if (item.value->envelope == env.id)
-                                    app.txn().remove<model::AutomationItem>(item.id);
-                            app.txn().remove<model::Envelope>(env.id);
-                        }
-                    app.txn().remove<model::Route>(*midiInput);
-                }
+            if (clearMidi) {
+                if (midiInput) removeRoute(*midiInput);
                 midiInput.reset();
             } else if (a.recordMidi || a.midiChannel) {
+                // MIDI replaces hardware audio; only a rack's Out stays beside it.
+                if (hardwareAudio) {
+                    if (!midiInput)
+                        midiInput = input;
+                    else
+                        removeRoute(*input);
+                    input.reset();
+                }
                 const model::Route* old = midiInput ? s.routes.find(*midiInput) : nullptr;
-                if (!a.recordMidi && !(old && old->from.midiDevice))
-                    return Error("track.record_midi", "give record_midi (the device) first",
-                                 "/midi_channel",
-                                 "set record_midi to a device from engine.inputs first");
                 auto setMidi = [&](model::Route& r) {
                     r.from = model::RouteEnd{};
                     r.from.midiDevice =
