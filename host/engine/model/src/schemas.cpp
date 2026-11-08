@@ -348,6 +348,10 @@ auto timebaseS() {
 }  // namespace
 
 Schema<Timebase> timebaseSchema() { return timebaseS(); }
+Schema<RecordTake> recordTakeSchema() {
+    return en<RecordTake>(
+        {{RecordTake::Midi, "midi"}, {RecordTake::Audio, "audio"}, {RecordTake::Both, "both"}});
+}
 Schema<TrackTimebase> trackTimebaseSchema() {
     return en<TrackTimebase>({{TrackTimebase::Project, "project"},
                               {TrackTimebase::Time, "time"},
@@ -523,20 +527,21 @@ const Schema<Track>& schemaOf<Track>() {
         auto parentSend = schema::object<ParentSend>("parent_send")
                               .field("enabled", &ParentSend::enabled, boolean())
                               .build();
-        auto record =
-            schema::object<RecordSettings>("record")
-                .field("armed", &RecordSettings::armed, boolean())
-                .field("input", &RecordSettings::input, idSchema())
-                .field("midi_input", &RecordSettings::midiInput, idSchema())
-                .field("monitor", &RecordSettings::monitor,
-                       en<Monitor>(
-                           {{Monitor::Off, "off"}, {Monitor::On, "on"}, {Monitor::Auto, "auto"}}))
-                .field("mode", &RecordSettings::mode,
-                       en<RecordMode>({{RecordMode::Input, "input"},
-                                       {RecordMode::Output, "output"},
-                                       {RecordMode::MidiOverdub, "midi_overdub"},
-                                       {RecordMode::MidiReplace, "midi_replace"}}))
-                .build();
+        ObjectBuilder<RecordSettings> recordFields = schema::object<RecordSettings>("record");
+        recordFields.field("armed", &RecordSettings::armed, boolean())
+            .field("input", &RecordSettings::input, idSchema())
+            .field("midi_input", &RecordSettings::midiInput, idSchema())
+            .field(
+                "monitor", &RecordSettings::monitor,
+                en<Monitor>({{Monitor::Off, "off"}, {Monitor::On, "on"}, {Monitor::Auto, "auto"}}))
+            .field("mode", &RecordSettings::mode,
+                   en<RecordMode>({{RecordMode::Input, "input"},
+                                   {RecordMode::Output, "output"},
+                                   {RecordMode::MidiOverdub, "midi_overdub"},
+                                   {RecordMode::MidiReplace, "midi_replace"}}))
+            .field("take", &RecordSettings::take, recordTakeSchema());
+        dflt(recordFields, RecordTake::Midi);  // files without it record MIDI
+        auto record = recordFields.build();
         ObjectBuilder<Track> b = schema::object<Track>("track");
         b.field("type", &Track::type, stripTypeSchema());
         dflt(b, d.type);
