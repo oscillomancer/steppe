@@ -1647,9 +1647,12 @@ void Engine::addClicks(const detail::Plan& p, float* const* out, std::uint32_t o
             const auto device = pos + i - p.outputLatency;
             const double here = clock.position(device);
             double before = clock.position(device - 1);
-            if (clock.cycle(clock.phase(device)) != clock.cycle(clock.phase(device - 1)))
-                before =
-                    std::nextafter(clock.loopStart(), -std::numeric_limits<double>::infinity());
+            // Wrapped: the window starts at the loop start and includes it, so
+            // a beat there clicks after every wrap (a bound just below it fell
+            // within the tolerance below and skipped that click).
+            const bool wrapped =
+                clock.cycle(clock.phase(device)) != clock.cycle(clock.phase(device - 1));
+            if (wrapped) before = clock.loopStart();
             const double beat = tm.beatAt(p.startSeconds + here / p.rate);
             const double previousBeat = tm.beatAt(p.startSeconds + before / p.rate);
             const auto bb = tm.barBeat(beat);
@@ -1658,8 +1661,9 @@ void Engine::addClicks(const detail::Plan& p, float* const* out, std::uint32_t o
             const double bar = tm.beatOfBar(bb.bar);
             const double index = std::floor((beat - bar) / unit + 1e-9);
             const double tick = bar + index * unit;
-            if (on && tick > previousBeat + 1e-9 && tick <= beat + 1e-9)
-                startClick(index == 0, p.rate);
+            const bool sinceBefore =
+                wrapped ? tick >= previousBeat - 1e-9 : tick > previousBeat + 1e-9;
+            if (on && sinceBefore && tick <= beat + 1e-9) startClick(index == 0, p.rate);
             const float value = gain * clickSample();
             out[0][offset + i] += value;
             out[1][offset + i] += value;

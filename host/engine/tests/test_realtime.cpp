@@ -3989,6 +3989,53 @@ TEST_CASE("the metronome clicks every beat in the live output, accented on the b
         CHECK(std::fabs(l[onsets[1] + 6000]) == 0.0f);    // silence between clicks
         CHECK(l[onsets[2] + 100] == r[onsets[2] + 100]);  // centred
     }
+    // A two-beat loop, at unity and under a master playrate: every pass
+    // clicks both beats, the bar's first, at the loop start, after each wrap too.
+    for (const double rate : {1.0, 1.25})
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            INFO("loop, rate " << rate << ", anticipative " << options.anticipative);
+            model::EditTxn t(model::Session::create({.console9 = false}), 1);
+            auto project = t.project();
+            project.playrate = {rate, false};
+            t.setProject(project);
+            const model::Session s = t.commit().value();
+            auto rtPool = makePool();
+            MediaCache media;
+            DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000 * 2});
+            Engine engine(rtPool, media, options);
+            REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+            REQUIRE(engine.load(s));
+            REQUIRE(engine.awaitPlan());
+            engine.setMetronome(true, 0.0);
+            engine.setLoop(0.0, 1.0, true);  // beats 1 and 2 of bar 1
+            engine.play();
+            if (options.anticipative)
+                runAhead(engine, backend, 48000 * 2 / 128, 128);
+            else
+                backend.run(48000 * 2 / 128);
+            engine.stop();
+            const auto& l = backend.capture().channels[0];
+            REQUIRE(l.size() >= 96000);
+            std::vector<std::size_t> onsets;
+            for (std::size_t i = 0; i < 96000; ++i)
+                if (std::fabs(l[i]) > 0.05f && (onsets.empty() || i > onsets.back() + 4000))
+                    onsets.push_back(i);
+            const double beat = 24000.0 / rate;  // device frames
+            // Two seconds: 4 beats at unity, 5 at 1.25 (0, 19200, ... 76800).
+            REQUIRE(onsets.size() ==
+                    static_cast<std::size_t>(std::floor(96000.0 / beat - 1e-9)) + 1);
+            for (std::size_t b = 0; b < onsets.size(); ++b) {
+                INFO("beat " << b);
+                CHECK(std::fabs(double(onsets[b]) - double(b) * beat) <= 2.0);
+                float p = 0;
+                for (std::size_t i = onsets[b]; i < onsets[b] + 1920; ++i)
+                    p = std::max(p, std::fabs(l[i]));
+                if (b % 2 == 0)
+                    CHECK(p > 0.9f);  // the loop start: the bar's first beat
+                else
+                    CHECK(p < 0.7f);
+            }
+        }
 }
 
 TEST_CASE("live bridged effects pass through without callback lifecycle or processing") {
