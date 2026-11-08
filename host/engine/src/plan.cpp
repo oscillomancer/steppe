@@ -1712,21 +1712,22 @@ bool runModuleStage(Plan& p, Stage& st, Stereo& io, std::uint32_t n,
 namespace {
 // An audio item's samples for [pos, pos + n), added into `into`.
 void playClip(Plan& p, Clip& c, Stereo& into, std::int64_t pos, std::uint32_t n, std::int64_t shift,
-              bool live) SUPPLE_RT {
+              bool live, std::int64_t wrapAt = std::numeric_limits<std::int64_t>::max(),
+              std::int64_t wrapBy = 0) SUPPLE_RT {
     if (p.rateEnabled) {
         playRateClip(p, c, into, pos, n, shift, live);
         return;
     }
     // Timeline sample t plays the clip at t + shift (a take chain's input
-    // runs its latency ahead).
-    const std::int64_t from = std::max<std::int64_t>(pos, c.start - shift);
-    const std::int64_t to = std::min<std::int64_t>(pos + n, c.start + c.length - shift);
+    // runs its latency ahead); from `wrapAt` on, at t + shift - wrapBy (that
+    // input has wrapped to the loop start: processTake).
     const auto& ch = c.data->channels;
     const auto frames = static_cast<std::int64_t>(c.data->frames());
     if (ch.empty() || frames == 0) return;
     const std::size_t right = ch.size() > 1 ? 1 : 0;
-    for (std::int64_t t = from; t < to; ++t) {
-        const std::int64_t k = t + shift - c.start;  // sample within the item
+    for (std::int64_t t = pos; t < pos + n; ++t) {
+        const std::int64_t k = t + shift - (t >= wrapAt ? wrapBy : 0) - c.start;  // in the item
+        if (k < 0 || k >= c.length) continue;
         std::int64_t f = c.offset + k;
         if (c.loop) f = ((f % frames) + frames) % frames;
         if (f < 0 || f >= frames) continue;
@@ -2422,6 +2423,19 @@ bool processTake(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std::uint
     const double inputEnd = mappedAt(p, node.live, pos + n + tc.latency, node.itemShift);
     const double outputStart = mappedAt(p, node.live, pos, node.itemShift);
     bool intersects = inputEnd > double(tc.start) && outputStart < double(tc.end);
+    // Unity, looping, a chain running ahead: its input reaches the loop end
+    // that much early, at `wrapAt`, and runs on from the loop start (its
+    // notes: unityTakeEvents), so what starts there sounds on time after the
+    // output wraps, as through the playrate path's timeline phase.
+    const std::int64_t ahead = tc.latency - node.itemShift;
+    const std::int64_t loopLength = loop ? loop->end - loop->start : 0;
+    const bool early = !p.rateEnabled && loop && loop->active() && ahead > 0 &&
+                       ahead < loopLength && pos < loop->end;
+    const std::int64_t wrapAt =
+        early ? loop->end - ahead : std::numeric_limits<std::int64_t>::max();
+    if (early && pos + n > wrapAt)
+        intersects = intersects || (pos + n + tc.latency - loopLength > tc.start &&
+                                    std::max(pos, wrapAt) + tc.latency - loopLength < tc.end);
     if (p.rateEnabled) {
         const auto& clock = *p.timelines[node.live ? 1 : 0];
         const double from = clock.phase(pos - node.itemShift);
@@ -2455,7 +2469,7 @@ bool processTake(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std::uint
     if (!p.rateEnabled) tc.buf.clear(n);
     if (!p.rateEnabled && tc.clip >= 0)
         playClip(p, node.clips[static_cast<std::size_t>(tc.clip)], tc.buf, pos, n, tc.latency,
-                 node.live);
+                 node.live, wrapAt, loopLength);
     if (tc.noteTarget >= 0) {
         if (tc.releaseHeld) {  // a loop wrap: what is held ends first
             tc.releaseHeld = false;

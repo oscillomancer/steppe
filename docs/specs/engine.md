@@ -127,9 +127,10 @@ a structural edit while the preceding plan remains prepared.
   at once, late, at the first frame, on the unity and the playrate path
   alike, as an offline render from there plays them. Looping, such a take
   reaches the loop end its look-ahead early: there its held notes end and it
-  takes the loop start's notes, so they sound on time after the wrap, every
-  pass, on both paths (the playrate path through its timeline phase; the
-  unity path in `unityTakeEvents`, given the executor's loop). Track/take
+  takes the loop start's notes and audio, so they sound on time after the
+  wrap, every pass, on both paths (the playrate path through its timeline
+  phase; the unity path in `unityTakeEvents` and `playClip`, given the
+  executor's loop). This needs a look-ahead shorter than the loop. Track/take
   stage parameters, output-event timestamps and plugin transport use that
   input shift plus `stage.before`, at unity rate as well as under playrate.
   Fader controls use `S + chain`; send encoders use their source tap's
@@ -2016,6 +2017,10 @@ take latency and stage offsets (ADR-0051).
 All source converters share a 64-frame grid in compensated source time, including
 preroll: two identical sources with different take-chain latencies remain aligned.
 Looping retains converter history and reseeding occurs only for a fresh seek epoch.
+The reader is silent outside an item's span (trimmed media is not on the
+timeline), so past a loop seam the retained history holds what the loop end
+played there, and an item starting just after the loop start sounds the same
+every pass.
 MIDI uses the first device boundary reaching each timeline event; compensated
 instruments wrap/release timeline notes in their own input coordinates, preserving
 live notes. Strip/send/take automation uses the same mapping. Plugins receive
