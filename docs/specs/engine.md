@@ -120,7 +120,12 @@ a structural edit while the preceding plan remains prepared.
   trim at the selected tap's own `S + tapOffset`, after preparation. Main
   `output_latency` retains its startup/playhead meaning.
 - Clips, take output spans/fades/envelopes and track MIDI use `S`. A take's
-  input uses `S - take.latency`. Track/take stage parameters, output-event
+  input uses `S - take.latency`. A take whose input runs ahead (`S -
+  take.latency < 0`) takes, after a locate that restarts it (play, a seek,
+  a strip started afresh; not a loop wrap or a continuing handoff), its
+  notes from the locate on: those inside its look-ahead are due already and
+  play at once, late, at the first frame, on the unity and the playrate
+  path alike, as an offline render from there plays them. Track/take stage parameters, output-event
   timestamps and plugin transport use that input shift plus `stage.before`,
   at unity rate as well as under playrate. Fader controls use `S + chain`;
   send encoders use their source tap's shift, and unencoded key controls

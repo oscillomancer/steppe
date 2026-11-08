@@ -2624,6 +2624,88 @@ TEST_CASE("master playrate: a note at tick 0 sounds, offline and in real time" *
         }
 }
 
+// A take chain compensated for the 64-frame latency after its instrument
+// runs its notes that far ahead. After a locate, the notes between the
+// locate and that look-ahead are due already: they play at once, late, at
+// the first frame, on the unity and the rate path, at the song's start and
+// after a seek. A seek plays as the offline render from there.
+TEST_CASE("a compensated take's notes inside its look-ahead play at once after a locate" *
+          doctest::description("rt")) {
+    const auto session = [](double rate) {
+        model::EditTxn t(model::Session::create({.console9 = false}), 1);
+        auto project = t.project();
+        project.playrate = {rate, false};
+        t.setProject(project);
+        model::Track track;
+        track.parent = kMaster;
+        const Id tr = t.create(track);
+        t.modify<model::Track>(kMaster, [&](model::Track& m) { m.children.push_back(tr); });
+        model::FxInstance synth;
+        synth.plugin.id = "com.suppleaudio.test.sine";
+        model::FxInstance delay;
+        delay.plugin.id = "com.suppleaudio.test.gain";
+        delay.patch = json::parse(R"({"schema":"supple.test-gain-patch/1.0",
+                                      "params":{"latency":"short"}})")
+                          .value();
+        model::Take take;
+        take.chain = {t.create(synth), t.create(delay)};
+        model::MidiSource src;
+        src.sequence.ppq = 960;
+        src.sequence.length = 16 * 960;
+        // At the song's start, and 25 frames after 1 s (inside the look-ahead
+        // of a seek there).
+        src.sequence.notes = {{0, 960, 0, 60, 100, 0}, {1921, 960, 0, 72, 100, 0}};
+        take.source = t.create(src);
+        const Id tk = t.create(take);
+        model::Item item;
+        item.track = tr;
+        item.length = 8.0;
+        item.takes = {tk};
+        item.activeTake = tk;
+        t.create(item);
+        return t.commit().value();
+    };
+    const auto first = [](const std::vector<float>& x) {
+        double peak = 0;
+        for (std::size_t i = 0; i < 2000; ++i) peak = std::max(peak, std::fabs(double(x[i])));
+        return peak;
+    };
+    constexpr std::int64_t kFrames = 24000;
+    for (const double rate : {1.0, 1.25})
+        for (const double from : {0.0, 1.0}) {
+            INFO("rate " << rate << ", from " << from);
+            const auto s = session(rate);
+            auto pool = makePool();
+            const auto offline =
+                renderOffline(s, pool, {.startSeconds = from, .endSeconds = from + 1.0}).value();
+            const auto& want = offline.audio.channels[0];
+            REQUIRE(want.size() >= static_cast<std::size_t>(kFrames));
+            CHECK(first(want) > 0.05);
+            for (const EngineOptions& options : kBothExecutors) {
+                INFO("anticipative " << options.anticipative << ", workers " << options.workers);
+                auto rtPool = makePool();
+                MediaCache media;
+                DummyBackend backend(keyboard({}, kFrames + 4096));
+                Engine engine(rtPool, media, options);
+                REQUIRE(
+                    engine
+                        .start(backend, {.sampleRate = 48000, .blockSize = 256, .midiInputs = true})
+                        .ok());
+                REQUIRE(engine.load(s));
+                REQUIRE(engine.awaitPlan());
+                if (from > 0) engine.seek(from);
+                engine.play();
+                runFrames(engine, backend, options, kFrames, 256);
+                CHECK(engine.processErrors() == 0);
+                engine.stop();
+                REQUIRE(engine.outputLatency() == 0);
+                const auto& got = backend.capture().channels[0];
+                CHECK(first(got) > 0.05);
+                CHECK(maxDiff(got, 0, want, static_cast<std::size_t>(kFrames)) == 0.0);
+            }
+        }
+}
+
 // An effect's tail crosses into the live region with its strip: a short note
 // ends before the strip is armed (or starts monitoring), and its echo, still
 // inside the effect's delay line at the handoff, is heard as offline. Alone
