@@ -3168,6 +3168,67 @@ TEST_CASE(
     }
 }
 
+// The callback's executor takes a loop edit with no locate (the
+// anticipative one restarts its epoch). Edited after a compensated take has
+// wrapped early, before the output's wrap, the loop the take wrapped for is
+// gone: the take locates (the loop start's note it took ends), and a new
+// loop's notes play every pass as offline. Turned off and later set again,
+// or moved there at once.
+TEST_CASE("a loop edit inside a compensated take's look-ahead is a locate in the callback" *
+          doctest::description("rt")) {
+    const auto session = compensatedTakeSession(1.0, {{961, 240}, {2881, 240}});
+    auto pool = makePool();
+    const auto offline =
+        renderOffline(session, pool, {.startSeconds = 0, .endSeconds = 2.0}).value();
+    const auto& O = offline.audio.channels[0];
+    REQUIRE(O.size() >= 96000);
+    REQUIRE(peakOf(O, 72000, 24000) > 0.05);
+    REQUIRE(peakOf(O, 48000, 24000) == 0.0);
+    const std::vector<float> onTime(O.begin() + 72000, O.begin() + 96000);
+    for (const bool off : {true, false})
+        for (const std::uint32_t block : {37u, 32u})
+            for (const EngineOptions& options :
+                 {kInCallback, EngineOptions{.anticipative = false, .workers = 2}}) {
+                INFO("off first " << off << ", block " << block << ", workers " << options.workers);
+                constexpr std::int64_t kFrames = 72000 + 4 * 24000;
+                auto rtPool = makePool();
+                MediaCache media;
+                DummyBackend backend(keyboard({}, kFrames + 4096));
+                Engine engine(rtPool, media, options);
+                REQUIRE(engine
+                            .start(backend,
+                                   {.sampleRate = 48000, .blockSize = block, .midiInputs = true})
+                            .ok());
+                REQUIRE(engine.load(session));
+                REQUIRE(engine.awaitPlan());
+                engine.setLoop(0.5, 1.0, true);
+                engine.play();
+                // The first wrap's look-ahead, after the take wrapped early.
+                const std::int64_t edit = 47999 / block * block;
+                REQUIRE(edit > 48000 - 64);
+                backend.run(edit / block);
+                std::int64_t played = edit;
+                if (off) {
+                    engine.setLoop(0.5, 1.0, false);
+                    backend.run((60000 - played) / block);
+                    played += (60000 - played) / block * block;
+                }
+                engine.setLoop(1.5, 2.0, true);
+                backend.run((kFrames - played + block - 1) / block);
+                CHECK(engine.processErrors() == 0);
+                engine.stop();
+                const auto& L = backend.capture().channels[0];
+                CHECK(maxDiff(L, 0, O, static_cast<std::size_t>(edit)) == 0.0);
+                // The note taken early, ended there, is past by a block.
+                CHECK(peakOf(L, 48000 + 256, 72000 - 48000 - 256) == 0.0);
+                for (int k = 0; k < 4; ++k) {
+                    INFO("pass " << k);
+                    CHECK(maxDiff(L, 72000 + static_cast<std::size_t>(k) * 24000, onTime, 24000) ==
+                          0.0);
+                }
+            }
+}
+
 // An effect's tail crosses into the live region with its strip: a short note
 // ends before the strip is armed (or starts monitoring), and its echo, still
 // inside the effect's delay line at the handoff, is heard as offline. Alone

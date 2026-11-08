@@ -2390,6 +2390,7 @@ void unityTakeEvents(const Plan& p, bool live, TakeChain& tc, Stage& stage, std:
             target.push_back(off);
         }
         tc.aheadFrom = loop->start + shift;
+        tc.aheadLoop = {loop->start, loop->end};
     }
     // The loop start's notes, taken `length` later than their own time.
     const std::int64_t upto = pos + n - length;
@@ -2403,6 +2404,8 @@ void unityTakeEvents(const Plan& p, bool live, TakeChain& tc, Stage& stage, std:
     }
     tc.aheadFrom = std::max(tc.aheadFrom, upto);
 }
+
+void locateTake(Node& n, TakeChain& tc, std::int64_t pos, bool wrap, bool keepPlaying) SUPPLE_RT;
 
 // A take chain's block (gap log #22): its source (the clip, or its MIDI for
 // its instrument) runs `latency` ahead through its stages; the output, cut to
@@ -2451,6 +2454,13 @@ bool processTake(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std::uint
                 to > a + cycle * clock.cycleLength() && from < b + cycle * clock.cycleLength();
         }
     }
+    // Wrapped early for a loop that is gone before the output reached its
+    // end (the callback's executor takes a loop edit without a locate; the
+    // anticipative one restarts its epoch): a locate here, which also ends
+    // the loop start's notes it took.
+    if (!p.rateEnabled && tc.aheadFrom != std::numeric_limits<std::int64_t>::min() &&
+        !(loop && loop->active() && tc.aheadLoop == std::pair{loop->start, loop->end}))
+        locateTake(node, tc, pos, false, false);
     if (!transport.playing || !intersects) {
         tc.active = false;
         return true;
@@ -3008,42 +3018,43 @@ void locateEdge(Edge& edge, bool restart) SUPPLE_RT {
 // Take chains (gap log #22) after a seek (`wrap` false: fresh at the next
 // entry) or a loop wrap (held notes end; delay lines and tails kept; a chain
 // running ahead ended them at its own, earlier wrap: unityTakeEvents).
-void locateTakes(Node& n, std::int64_t pos, bool wrap, bool keepPlaying = false) SUPPLE_RT {
-    for (TakeChain& tc : n.takeChains) {
-        // A seek (not a wrap, nor a handoff that keeps playing) also takes
-        // the notes between it and the chain's look-ahead (its events run
-        // `latency` early): they are due, and play at once, late, as the
-        // rate path's first window takes them (rateEvents).
-        const std::int64_t ahead = std::min<std::int64_t>(0, n.itemShift - tc.latency);
-        const auto it = std::lower_bound(
-            tc.events.begin(), tc.events.end(), !wrap && !keepPlaying ? pos + ahead : pos,
-            [](const TimedEvent& e, std::int64_t x) { return e.sample < x; });
-        tc.nextEvent = static_cast<std::size_t>(it - tc.events.begin());
-        if (!wrap) tc.rateEventFresh = !keepPlaying;
-        for (Automation* a : {&tc.volume, &tc.pan, &tc.mute}) a->cursor = 0;
-        for (Stage& st : tc.chain) {
-            if (!wrap && !keepPlaying) {
-                st.voices.clear();
-                st.sleeping = false;
-            }
-            if (!wrap && !st.preserveDryOnLocate) clearStageDelays(st);
-            st.preserveDryOnLocate = false;
-            for (ParamLane& ln : st.lanes) {
-                ln.curve.cursor = 0;
-                ln.lastSent = std::numeric_limits<double>::quiet_NaN();
-            }
+void locateTake(Node& n, TakeChain& tc, std::int64_t pos, bool wrap, bool keepPlaying) SUPPLE_RT {
+    // A seek (not a wrap, nor a handoff that keeps playing) also takes
+    // the notes between it and the chain's look-ahead (its events run
+    // `latency` early): they are due, and play at once, late, as the
+    // rate path's first window takes them (rateEvents).
+    const std::int64_t ahead = std::min<std::int64_t>(0, n.itemShift - tc.latency);
+    const auto it = std::lower_bound(
+        tc.events.begin(), tc.events.end(), !wrap && !keepPlaying ? pos + ahead : pos,
+        [](const TimedEvent& e, std::int64_t x) { return e.sample < x; });
+    tc.nextEvent = static_cast<std::size_t>(it - tc.events.begin());
+    if (!wrap) tc.rateEventFresh = !keepPlaying;
+    for (Automation* a : {&tc.volume, &tc.pan, &tc.mute}) a->cursor = 0;
+    for (Stage& st : tc.chain) {
+        if (!wrap && !keepPlaying) {
+            st.voices.clear();
+            st.sleeping = false;
         }
-        if (wrap) {
-            // Wrapped early (unityTakeEvents): what it held ended there, and
-            // the loop start's notes it took since play on.
-            tc.releaseHeld = tc.aheadFrom == INT64_MIN;
-            tc.aheadFrom = INT64_MIN;
-        } else if (!keepPlaying) {  // a seek: fresh at the next entry
-            tc.held.fill(0);
-            tc.active = false;
-            tc.aheadFrom = INT64_MIN;
+        if (!wrap && !st.preserveDryOnLocate) clearStageDelays(st);
+        st.preserveDryOnLocate = false;
+        for (ParamLane& ln : st.lanes) {
+            ln.curve.cursor = 0;
+            ln.lastSent = std::numeric_limits<double>::quiet_NaN();
         }
     }
+    if (wrap) {
+        // Wrapped early (unityTakeEvents): what it held ended there, and
+        // the loop start's notes it took since play on.
+        tc.releaseHeld = tc.aheadFrom == INT64_MIN;
+        tc.aheadFrom = INT64_MIN;
+    } else if (!keepPlaying) {  // a seek: fresh at the next entry
+        tc.held.fill(0);
+        tc.active = false;
+        tc.aheadFrom = INT64_MIN;
+    }
+}
+void locateTakes(Node& n, std::int64_t pos, bool wrap, bool keepPlaying = false) SUPPLE_RT {
+    for (TakeChain& tc : n.takeChains) locateTake(n, tc, pos, wrap, keepPlaying);
 }
 }  // namespace
 
@@ -3417,6 +3428,7 @@ void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT {
                         tc.active = otc.active;
                         tc.held = otc.held;
                         tc.aheadFrom = otc.aheadFrom;
+                        tc.aheadLoop = otc.aheadLoop;
                         carryStages(tc.chain, otc.chain);
                         break;
                     }

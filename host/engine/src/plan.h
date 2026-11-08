@@ -568,8 +568,10 @@ struct TakeChain {
     std::size_t nextEvent = 0;
     // Unity, looping, a chain running ahead: past its look-ahead wrap (the
     // loop end, `latency` early), the input-side sample from which it takes
-    // the loop start's notes; INT64_MIN before it.
+    // the loop start's notes; INT64_MIN before it. `aheadLoop` is the loop
+    // (start, end) it wrapped for: any other is a locate (processTake).
     std::int64_t aheadFrom = INT64_MIN;
+    std::pair<std::int64_t, std::int64_t> aheadLoop{0, 0};
     bool rateEventFresh = true;
     int noteTarget = -1;
     std::array<std::uint8_t, 16 * 128> held{};
