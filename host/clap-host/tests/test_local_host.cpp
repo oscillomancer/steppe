@@ -4,6 +4,7 @@
 #include <doctest/doctest.h>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -689,3 +690,45 @@ TEST_CASE("CLAP descriptor readiness is ignored after unregistration") {
     CHECK(*(*made)->paramValue(10) == 1);
 }
 #endif
+
+// An executor takes a free instance with one compare-exchange: of several
+// that find it free at the same moment, exactly one gets it.
+TEST_CASE("claimOwner takes a free instance for exactly one owner") {
+    auto made = Instance::create(find("com.suppleaudio.test.gain"), {});
+    REQUIRE(made);
+    Instance& in = **made;
+    const char a = 0, b = 0, refused = 0;
+    CHECK(in.owner() == nullptr);
+    CHECK(in.claimOwner(&a));
+    CHECK(in.owner() == &a);
+    CHECK_FALSE(in.claimOwner(&b));  // held: another token cannot take it
+    CHECK_FALSE(in.claimOwner(&a));  // nor the owner again
+    CHECK(in.owner() == &a);
+    in.setOwner(&refused);  // the owner marks it (a refused start)
+    CHECK_FALSE(in.claimOwner(&b));
+    in.setOwner(nullptr);  // let go
+    CHECK(in.claimOwner(&b));
+    CHECK(in.owner() == &b);
+    in.setOwner(nullptr);
+    // Contended: every round, threads released together race for it.
+    constexpr int kThreads = 4, kRounds = 2000;
+    std::array<char, kThreads> tokens{};
+    for (int round = 0; round < kRounds; ++round) {
+        std::atomic<int> ready{0}, winners{0};
+        std::atomic<bool> go{false};
+        std::vector<std::thread> threads;
+        for (int t = 0; t < kThreads; ++t)
+            threads.emplace_back([&, t] {
+                ready.fetch_add(1);
+                while (!go.load(std::memory_order_acquire)) {
+                }
+                if (in.claimOwner(&tokens[static_cast<std::size_t>(t)])) winners.fetch_add(1);
+            });
+        while (ready.load() < kThreads) {
+        }
+        go.store(true, std::memory_order_release);
+        for (auto& th : threads) th.join();
+        REQUIRE(winners.load() == 1);
+        in.setOwner(nullptr);
+    }
+}
