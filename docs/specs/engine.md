@@ -1323,9 +1323,21 @@ harness. See the tooling README for schemas, limits and invocation details.
   module follows its source channel's armed monitoring and channel map, in
   both executors. Explicit Notes devices still listen always. A live-input
   change ends only the notes and controllers live events opened (a
-  generation in the Notes feed, seen on the audio thread). A rack node
-  entering the anticipative live region mid-song restarts its Notes with the
-  timeline keys held at the live position.
+  generation in the Notes feed, seen on the audio thread). On a strip, a
+  plan that no longer hears the same MIDI input (disarmed, monitoring off,
+  a monitor-mode, device or channel change) ends the device's voices only;
+  timeline and rack-delivered notes play on, in both executors.
+- **Class changes while playing** (ADR-0014): a node the anticipative
+  engine moves into the live region (arming or monitoring mid-song)
+  continues at the handoff where the renderer left it. The renderer hands
+  its instance over without `reset()` (CLAP, VST3 and bridged alike) and
+  carries the node's voices, held notes, delay lines, Console 9 and fader
+  state and take and input chains into the new plan (`carryMix` from its
+  class into the live one); the callback places it without a restart, so
+  held timeline notes and racks (their Notes keys included) sound on, an
+  effect keeps its state, and the output stays the offline render's. A node leaving the
+  live region stays live while the transport plays (`keepLive`). The first
+  plan and every new epoch (play, seek) still start the live nodes afresh.
 - **Smooth swaps:** a plan swap carries each strip's fader ramps and Console 9 state
   and each insert's applied wet level into the new plan
   (`carryMix`, by track and by instance, per executor); a changed volume,

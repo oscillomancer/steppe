@@ -780,12 +780,12 @@ void prepareRack(Plan& p, Node& n, const Session& s) {
             window = std::max(window, b - a);
         }
         feed.block.reserve(window + (feed.device || feed.sourceDevice ? kMaxMidiInputEvents : 0) +
-                           feed.chase.size() + 1);
+                           1);
     }
     for (auto& curve : r.curves) curve->curve.cursor = 0;
 }
 
-void locateRack(Node& n, std::int64_t pos, bool restart, bool chase) SUPPLE_RT {
+void locateRack(Node& n, std::int64_t pos, bool restart) SUPPLE_RT {
     RackNode& r = *n.rack;
     if (restart) ++r.midiEpoch;
     for (NotesFeed& feed : r.notes) {
@@ -794,23 +794,6 @@ void locateRack(Node& n, std::int64_t pos, bool restart, bool chase) SUPPLE_RT {
                              [](const TimedEvent& e, std::int64_t x) { return e.sample < x; });
         feed.next = static_cast<std::size_t>(it - feed.events.begin());
         if (restart) feed.notes->endAll();
-        feed.chase.fill(0);
-        feed.chasing = false;
-        if (!restart || !chase) continue;
-        // The keys still held at pos, in the timeline's order: bounded by the
-        // feed's events, no allocation.
-        for (std::size_t k = 0; k < feed.next; ++k) {
-            const host::Event& e = feed.events[k].event;
-            if (e.kind != host::Event::Kind::NoteOn && e.kind != host::Event::Kind::NoteOff)
-                continue;
-            const auto key = static_cast<std::size_t>(std::clamp<int>(e.key, 0, 127));
-            feed.chase[key] = e.kind == host::Event::Kind::NoteOn
-                                  ? static_cast<std::uint8_t>(std::clamp(
-                                        static_cast<int>(std::lround(e.velocity * 127.0)), 1, 127))
-                                  : 0;
-        }
-        feed.chasing = std::any_of(feed.chase.begin(), feed.chase.end(),
-                                   [](std::uint8_t v) { return v != 0; });
     }
     for (auto& output : r.notesOut)
         if (restart) output.module->endAll();
@@ -878,14 +861,6 @@ bool processRack(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames,
     const bool playing = transport.playing;
     for (NotesFeed& feed : r.notes) {
         feed.block.clear();
-        if (feed.chasing) {  // the held timeline keys, before this block's events
-            for (std::size_t key = 0; playing && key < feed.chase.size(); ++key)
-                if (feed.chase[key])
-                    feed.block.push_back(
-                        {0, 0x90, static_cast<std::uint8_t>(key), feed.chase[key]});
-            feed.chase.fill(0);
-            feed.chasing = false;
-        }
         while (playing && feed.next < feed.events.size() &&
                feed.events[feed.next].sample < pos + static_cast<std::int64_t>(frames)) {
             const TimedEvent& te = feed.events[feed.next++];

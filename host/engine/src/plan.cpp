@@ -1953,16 +1953,19 @@ void trackVoices(Stage& st, std::array<std::uint8_t, 16 * 128>& held,
 
 // Releases preserve note ids so an end for an old loop does not terminate
 // its newly retriggered overlapping voice. Live notes survive a transport wrap.
-void releaseVoices(Stage& st, bool includeLive, bool onlyPending = false,
-                   std::int64_t pos = 0) SUPPLE_RT {
+void releaseVoices(Stage& st, bool includeLive, bool onlyPending = false, std::int64_t pos = 0,
+                   bool endDevice = false) SUPPLE_RT {
     for (const auto& voice : st.voices) {
-        bool pending = voice.release;
+        // `endDevice`: the device input is no longer heard (carryLiveNotes);
+        // its voices end, the timeline's and the racks' play on.
+        const bool device = endDevice && voice.live && voice.origin.item != kRackNoteOrigin;
+        bool pending = voice.release || device;
         if (onlyPending && voice.sourceId >= 0 &&
             static_cast<std::size_t>(voice.sourceId) < st.noteSources.size()) {
             const auto& source = st.noteSources[static_cast<std::size_t>(voice.sourceId)];
             pending |= source.end < pos || source.start > pos;
         }
-        if ((voice.live && !includeLive) || (onlyPending && !pending)) continue;
+        if (!device && ((voice.live && !includeLive) || (onlyPending && !pending))) continue;
         if (st.blockEvents.size() == st.blockEvents.capacity()) break;
         host::Event off;
         off.kind = host::Event::Kind::NoteOff;
@@ -2547,17 +2550,21 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
     // 2. Route this block's events to the note target. Notes still held at
     // a loop wrap end first, at the start of the block after it.
     for (Stage& st : node.chain) st.blockEvents.clear();
+    const bool endDevice = node.releaseLive;
+    node.releaseLive = false;
     if (node.releaseHeld) {
         node.releaseHeld = false;
         if (node.noteTarget >= 0) {
             const bool routeChanged = std::all_of(node.liveHeld.begin(), node.liveHeld.end(),
                                                   [](auto count) { return count == 0; });
-            releaseVoices(node.chain[static_cast<std::size_t>(node.noteTarget)], routeChanged);
+            releaseVoices(node.chain[static_cast<std::size_t>(node.noteTarget)], routeChanged,
+                          false, 0, endDevice);
         }
         node.held.fill(0);
     } else if (node.noteTarget >= 0) {
         releaseVoices(node.chain[static_cast<std::size_t>(node.noteTarget)], true, true,
-                      static_cast<std::int64_t>(mappedAt(p, node.live, pos, node.timelineShift)));
+                      static_cast<std::int64_t>(mappedAt(p, node.live, pos, node.timelineShift)),
+                      endDevice);
     }
     if (p.rateEnabled && transport.playing && node.noteTarget >= 0)
         rateEvents(p, node.live, node.events, node.chain[static_cast<std::size_t>(node.noteTarget)],
@@ -2926,11 +2933,10 @@ void locateTakes(Node& n, std::int64_t pos, bool wrap, bool keepPlaying = false)
 }
 }  // namespace
 
-void locateClass(Plan& p, std::int64_t pos, bool live, bool restartConsole,
-                 bool chaseRacks) SUPPLE_RT {
+void locateClass(Plan& p, std::int64_t pos, bool live, bool restartConsole) SUPPLE_RT {
     for (Node& n : p.nodes) {
         if (n.live != live) continue;
-        if (n.rack) locateRack(n, pos, restartConsole, chaseRacks);
+        if (n.rack) locateRack(n, pos, restartConsole);
         locateTakes(n, pos, false, !restartConsole);
         auto it =
             std::lower_bound(n.events.begin(), n.events.end(), pos,
@@ -3085,17 +3091,16 @@ void carryLiveNotes(Plan& from, Plan& to, bool liveOnly) SUPPLE_RT {
         for (Node& n : to.nodes) {
             if (n.id != old.id) continue;
             if (liveOnly && !n.live) break;
+            // Auto monitoring does not hear the input while playing, so a
+            // change of mode may stop it: what it held ends either way.
             const bool sameRoute = n.midiIn && n.midiIn->ports == old.midiIn->ports &&
                                    n.midiIn->fromChannel == old.midiIn->fromChannel &&
-                                   n.midiIn->toChannel == old.midiIn->toChannel;
-            if (sameRoute) {
+                                   n.midiIn->toChannel == old.midiIn->toChannel &&
+                                   n.tapeAuto == old.tapeAuto;
+            if (sameRoute)
                 n.liveHeld = old.liveHeld;  // still live: its note-offs will come
-            } else {
-                for (std::size_t k = 0; k < n.held.size(); ++k)
-                    n.held[k] =
-                        static_cast<std::uint8_t>(std::min(255, n.held[k] + old.liveHeld[k]));
-                n.releaseHeld = true;  // ended at the start of the next block
-            }
+            else
+                n.releaseLive = true;  // the device's voices end at the next block's start
             break;
         }
     }
@@ -3134,12 +3139,16 @@ void writeOutputs(const Plan& p, float* const* out, std::uint32_t width, std::ui
 }
 
 void carryMix(Plan& from, Plan& to, int liveClass) SUPPLE_RT {
+    carryMix(from, to, liveClass, liveClass);
+}
+
+void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT {
     for (Node& n : to.nodes) {
-        if (liveClass >= 0 && n.live != (liveClass == 1)) continue;
+        if (toClass >= 0 && n.live != (toClass == 1)) continue;
         for (Node& old : from.nodes) {  // (plans are small; a swap is rare)
             if (old.id != n.id) continue;
             // Only what this executor processed (the other one writes the rest).
-            if (liveClass >= 0 && old.live != (liveClass == 1)) break;
+            if (fromClass >= 0 && old.live != (fromClass == 1)) break;
             // Match inside the destination's incoming edges: scanning every
             // node to rediscover each edge's destination would be cubic.
             for (std::size_t ei : n.in) {
@@ -3198,6 +3207,7 @@ void carryMix(Plan& from, Plan& to, int liveClass) SUPPLE_RT {
                     n.held[k] = static_cast<std::uint8_t>(std::min(255, n.held[k] + old.held[k]));
                 n.releaseHeld = n.releaseHeld || old.releaseHeld;
             }
+            n.releaseLive = n.releaseLive || old.releaseLive;
             auto carryStages = [&](std::vector<Stage>& chain, std::vector<Stage>& oldChain) {
                 for (Stage& st : chain)
                     for (Stage& os : oldChain)
@@ -3250,9 +3260,6 @@ void carryMix(Plan& from, Plan& to, int liveClass) SUPPLE_RT {
                                     else
                                         carried.release = true;
                                 }
-                                if (carried.live && carried.origin.item != kRackNoteOrigin &&
-                                    n.releaseHeld && !n.midiIn)
-                                    carried.live = false;
                                 st.voices.push_back(carried);
                             }
                             st.appliedWet = os.appliedWet;
@@ -3300,7 +3307,7 @@ void carryMix(Plan& from, Plan& to, int liveClass) SUPPLE_RT {
             break;
         }
     }
-    carryRackMidi(to, from, liveClass);
+    carryRackMidi(to, from, toClass, fromClass);
 }
 
 double stripGain(bool master, double db) SUPPLE_RT {

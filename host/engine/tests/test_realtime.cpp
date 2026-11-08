@@ -2267,6 +2267,133 @@ TEST_CASE("a live processing error silences the failed device block" * doctest::
     }
 }
 
+namespace {
+// keyboardSession's track, its instrument `plugin`, holding one timeline
+// note (key 60) for eight beats, 4 s at 120 bpm, with the given arm and
+// monitor mode.
+model::Session heldNoteSession(bool armed, model::Monitor monitor, const std::string& plugin) {
+    const model::Session base = keyboardSession();
+    model::EditTxn t(base, 2);
+    Id track;
+    for (const auto& e : base.tracks)
+        if (e.value->name == "Keys") track = e.id;
+    for (const auto& e : base.fx)
+        t.modify<model::FxInstance>(e.id, [&](model::FxInstance& fx) { fx.plugin.id = plugin; });
+    t.modify<model::Track>(track, [&](model::Track& x) {
+        x.record.armed = armed;
+        x.record.monitor = monitor;
+    });
+    model::MidiSource src;
+    src.sequence.ppq = 960;
+    src.sequence.length = 8 * 960;
+    src.sequence.notes = {{0, 8 * 960, 0, 60, 100, 0}};
+    model::Take take;
+    take.source = t.create(src);
+    const Id tk = t.create(take);
+    model::Item item;
+    item.track = track;
+    item.length = 8.0;
+    item.takes = {tk};
+    item.activeTake = tk;
+    t.create(item);
+    return t.commit().value();
+}
+}  // namespace
+
+// Arming, a monitor change or disarming while the song plays moves the
+// instrument between the anticipative engine's renderer and its live region;
+// the timeline note it holds keeps sounding, exactly as offline, and a key
+// held on the keyboard ends when the keyboard stops being heard.
+TEST_CASE("arming or monitoring mid-song keeps an instrument's held timeline note" *
+          doctest::description("rt")) {
+    constexpr std::uint32_t kBlock = 256;
+    constexpr std::int64_t kSegment = 80 * kBlock;  // frames between session changes
+    // A change takes effect within this (the anticipative engine's at its render horizon).
+    constexpr std::int64_t kSettle = 48 * kBlock;
+    struct Step {
+        bool armed;
+        model::Monitor monitor;
+    };
+    const std::array<Step, 5> steps = {{{false, model::Monitor::On},
+                                        {true, model::Monitor::On},
+                                        {true, model::Monitor::Auto},
+                                        {true, model::Monitor::On},
+                                        {false, model::Monitor::On}}};
+    constexpr std::int64_t kFrames = 5 * kSegment;
+    // Keys held on the keyboard, while monitored: one ended by Auto, one by disarming.
+    constexpr std::int64_t kFirst = kSegment + kSettle + 512,
+                           kSecond = 3 * kSegment + kSettle + 512;
+    // A CLAP and a VST3 instrument: their reset and processing calls differ.
+    auto scanned = host::scan(std::span<const std::filesystem::path>(&kVst3Fixture, 1));
+    REQUIRE(scanned);
+    const auto vst3 = std::find_if(scanned->begin(), scanned->end(), [](const host::PluginInfo& p) {
+        return p.name == "Test VST3 Sine";
+    });
+    REQUIRE(vst3 != scanned->end());
+    for (const std::string& plugin : {std::string("com.suppleaudio.test.sine"), vst3->id})
+        for (const EngineOptions& options :
+             {kInCallback, EngineOptions{.anticipative = false, .workers = 2},
+              EngineOptions{.workers = 0}, EngineOptions{.workers = 2}}) {
+            INFO(plugin << ", anticipative " << options.anticipative << ", workers "
+                        << options.workers);
+            auto pool = makeVstPool();
+            const auto offline = renderOffline(heldNoteSession(false, model::Monitor::On, plugin),
+                                               pool, {.startSeconds = 0, .endSeconds = 2.5})
+                                     .value();
+            const auto& want = offline.audio.channels[0];
+            REQUIRE(want.size() >= static_cast<std::size_t>(kFrames));
+            auto rtPool = makeVstPool();
+            MediaCache media;
+            DummyBackend backend(keyboard({{static_cast<int>(kFirst), 0x90, 76, 100},
+                                           {static_cast<int>(kSecond), 0x90, 72, 100}},
+                                          kFrames + 4096));
+            Engine engine(rtPool, media, options);
+            REQUIRE(
+                engine
+                    .start(backend, {.sampleRate = 48000, .blockSize = kBlock, .midiInputs = true})
+                    .ok());
+            REQUIRE(engine.load(heldNoteSession(steps[0].armed, steps[0].monitor, plugin)));
+            REQUIRE(engine.awaitPlan());
+            engine.play();
+            for (std::size_t i = 0; i < steps.size(); ++i) {
+                if (i)
+                    REQUIRE(engine.load(heldNoteSession(steps[i].armed, steps[i].monitor, plugin)));
+                if (options.anticipative)
+                    runAhead(engine, backend, kSegment / kBlock, kBlock);
+                else
+                    backend.run(kSegment / kBlock);
+                engine.service();
+            }
+            CHECK(engine.transport().sample == kFrames);
+            CHECK(engine.processErrors() == 0);
+            engine.stop();
+            REQUIRE(engine.outputLatency() == 0);
+            const auto& L = backend.capture().channels[0];
+            // The output equals the offline render from `from` to `to`.
+            const auto offlineFrom = [&](std::int64_t from, std::int64_t to) {
+                const auto a = static_cast<std::size_t>(from);
+                return maxDiff(L, a,
+                               std::vector<float>(want.begin() + static_cast<std::ptrdiff_t>(from),
+                                                  want.end()),
+                               static_cast<std::size_t>(to - from));
+            };
+            const auto keyHeard = [&](std::int64_t at) {
+                const auto i = static_cast<std::size_t>(at + 100);
+                return std::fabs(double(L[i]) - double(want[i])) > 0.0;
+            };
+            // Arming keeps the timeline note; the first key only adds to it.
+            CHECK(offlineFrom(0, kFirst) == 0.0);
+            CHECK(keyHeard(kFirst));
+            // Auto does not hear the keyboard while playing: its key ends, the
+            // note plays on through Auto and On again until the second key.
+            CHECK(offlineFrom(2 * kSegment + kSettle, kSecond) == 0.0);
+            CHECK(keyHeard(kSecond));
+            // Disarmed: the second key ends, the timeline note still sounds.
+            CHECK(offlineFrom(4 * kSegment + kSettle, kFrames) == 0.0);
+            CHECK(std::fabs(double(L[static_cast<std::size_t>(kFrames - 100)])) > 0.0);
+        }
+}
+
 TEST_CASE("MIDI monitoring preserves every event in a device block" * doctest::description("rt")) {
     for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
         auto pool = makePool();

@@ -176,9 +176,9 @@ void addRackMidi(Plan& p, Node& target, std::int64_t pos, std::uint32_t frames,
     }
 }
 
-void carryRackMidi(Plan& to, Plan& from, int liveClass) SUPPLE_RT {
+void carryRackMidi(Plan& to, Plan& from, int toClass, int fromClass) SUPPLE_RT {
     for (auto& edge : to.edges) {
-        if (edge.rackNotes < 0 || (liveClass >= 0 && to.nodes[edge.to].live != bool(liveClass)))
+        if (edge.rackNotes < 0 || (toClass >= 0 && to.nodes[edge.to].live != bool(toClass)))
             continue;
         const auto& target = to.nodes[edge.to];
         for (auto& old : from.edges) {
@@ -189,7 +189,7 @@ void carryRackMidi(Plan& to, Plan& from, int liveClass) SUPPLE_RT {
                            : node.chain[static_cast<std::size_t>(node.noteTarget)].instance;
             };
             if (instrument(target) != instrument(oldTarget)) continue;
-            if ((liveClass >= 0 && from.nodes[old.to].live != bool(liveClass)) ||
+            if ((fromClass >= 0 && from.nodes[old.to].live != bool(fromClass)) ||
                 old.rackNotes < 0 || edge.route != old.route || edge.midiFrom != old.midiFrom ||
                 edge.midiTo != old.midiTo || edge.delay.length != old.delay.length ||
                 to.nodes[edge.to].id != from.nodes[old.to].id ||

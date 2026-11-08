@@ -203,9 +203,7 @@ struct NotesFeed {
     std::uint64_t sourcePorts = 0;
     int fromChannel = 0, toChannel = 0;
     bool sourceAuto = false;
-    std::uint64_t liveGeneration = 0;       // the Notes module's live input (RackPool)
-    std::array<std::uint8_t, 128> chase{};  // velocity of each timeline key to restart
-    bool chasing = false;
+    std::uint64_t liveGeneration = 0;  // the Notes module's live input (RackPool)
 };
 
 // A module parameter's envelope, read by the schedule once per grid block.
@@ -274,13 +272,13 @@ void prepareRack(Plan& p, Node& n, const Session& s);
 Status prepareRackMidi(Plan& p);
 void addRackMidi(Plan& p, Node& target, std::int64_t pos, std::uint32_t frames,
                  bool playing) SUPPLE_RT;
-void carryRackMidi(Plan& to, Plan& from, int liveClass) SUPPLE_RT;
+void carryRackMidi(Plan& to, Plan& from, int toClass, int fromClass) SUPPLE_RT;
 // One block of a rack node (processNode's for racks).
 bool processRack(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames,
                  const host::Transport& transport, const void* self) SUPPLE_RT;
 // Cursors to `pos`; a seek (`restart`) or a loop wrap also ends held notes.
-// `chase`: a restart that continues the timeline (an executor taking the
-// node over): Notes modules get the timeline's keys held at `pos` again.
-void locateRack(Node& n, std::int64_t pos, bool restart, bool chase = false) SUPPLE_RT;
+// An executor taking the node over continues it (no restart): what the
+// other one played stays held.
+void locateRack(Node& n, std::int64_t pos, bool restart) SUPPLE_RT;
 
 }  // namespace supple::engine::detail

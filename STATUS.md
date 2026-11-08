@@ -144,7 +144,10 @@ instructions are in `docs/guides/installing.md`.
 - **Engine** (`specs/engine.md`): deterministic offline renders with
   real-time output bit-identical to them; anticipative rendering for
   non-live tracks (ADR-0012) and a live region for monitored tracks
-  (ADR-0014); a DAG worker pool with graph-bounded participation and idle
+  (ADR-0014): arming or monitoring while playing keeps an instrument's or
+  rack's held timeline notes sounding, bit-identical to offline (CLAP and
+  VST3 tested; bridged instances take the same path, untested), and ending
+  monitoring ends only the keyboard's notes; a DAG worker pool with graph-bounded participation and idle
   parking (ADR-0023), a separate live callback fork-join pool (ADR-0024)
   with FIFO JACK helpers, a claim-based lifetime join that does not wait for
   unclaimed helpers, and an Automatic/limit audio-thread preference;

@@ -1179,7 +1179,8 @@ const char kRefused = 0;
 }  // namespace
 
 void Engine::adoptShare(std::vector<host::Instance*>& owned,
-                        const std::vector<host::Instance*>* next, const void* self) SUPPLE_RT {
+                        const std::vector<host::Instance*>* next, const void* self,
+                        const std::vector<host::Instance*>* handed) SUPPLE_RT {
     // Stop what the new plan no longer gives this executor, keep the rest
     // (lists are sorted; capacity was reserved and checked in load()).
     std::size_t kept = 0;
@@ -1189,7 +1190,9 @@ void Engine::adoptShare(std::vector<host::Instance*>& owned,
         } else {
             // Leaving this executor (removed, or moving to the other one):
             // no voice may hang on, e.g. live MIDI notes when monitoring stops.
-            in->reset();
+            // One `handed` over continues where this executor left it (the
+            // renderer's, into the live region: it holds no device notes).
+            if (!handed || !std::binary_search(handed->begin(), handed->end(), in)) in->reset();
             in->stopProcessing();
             in->setOwner(nullptr);
         }
@@ -2020,8 +2023,16 @@ void Engine::adoptRendererSources(detail::Plan* next) SUPPLE_RT {
     if (plan_ && next) {
         detail::carryRateSources(*plan_, *next, 0);
         detail::carryMix(*plan_, *next, 0);
+        // A node moving into the live region: the callback continues it from
+        // the handoff, where this renderer stopped, with its voices, delay
+        // lines, console state and plug-in state (not reset). Its share of
+        // `next` is untouched until the handoff is published below.
+        detail::carryMix(*plan_, *next, 1, 0);
     }
-    adoptShare(processing_, next ? &next->rendererInstances : nullptr, &processing_);
+    // Continuous only while playing at unity: a rate plan moves pos_ below.
+    if (next) next->handCarried = plan_ && playing_ && !next->rateEnabled;
+    adoptShare(processing_, next ? &next->rendererInstances : nullptr, &processing_,
+               next ? &next->liveInstances : nullptr);
     plan_ = next;
     if (next && next->rateEnabled) pos_ = next->rateHandDevice;
 }
@@ -2118,7 +2129,10 @@ void Engine::rendererLoop(std::uint64_t seen) {
         if (adopt) {
             adoptRendererSources(plan);
             if (plan) {
-                if (epoch_.load(std::memory_order_acquire) != seen) seen = relocate(seen);
+                if (epoch_.load(std::memory_order_acquire) != seen) {
+                    seen = relocate(seen);
+                    plan->handCarried = false;  // what was carried belongs to the old epoch
+                }
                 publishRendererPlan(*plan, seen, queuedRate);
             }
         } else if (plan_) {
@@ -2281,7 +2295,7 @@ void Engine::rendererLoop(std::uint64_t seen) {
 
 // --- the live region (ADR-0014) -----------------------------------------------------------
 
-void Engine::adoptLive(detail::Plan* next) SUPPLE_RT {
+void Engine::adoptLive(detail::Plan* next, bool continuous) SUPPLE_RT {
     if (livePlan_ && next && next->split) {
         detail::carryRateSources(*livePlan_, *next, 1);
         detail::carryLiveNotes(*livePlan_, *next, true);
@@ -2289,7 +2303,6 @@ void Engine::adoptLive(detail::Plan* next) SUPPLE_RT {
     }
     adoptShare(liveProcessing_, next ? &next->liveInstances : nullptr, &liveProcessing_);
     const bool wasLive = livePlan_ && livePlan_->split;
-    const bool continuing = livePlan_ != nullptr;  // not the engine's first plan
     livePlan_ = next;
     if (!next) return;
     if (next->split) {
@@ -2297,12 +2310,16 @@ void Engine::adoptLive(detail::Plan* next) SUPPLE_RT {
             detail::locateClass(*next, livePos_, true, false);  // continue at the switch position
         else {
             liveReady_ = false;  // entering the live mode: liveRender takes the position
-            // Mid-song, racks keep the timeline's held notes (ADR-0065).
-            liveEntered_ = continuing;
-            for (detail::Node& n : next->nodes)  // (not continuous: carry no dry signal)
-                if (n.live)
-                    detail::forEachStage(n,
-                                         [](detail::Stage& st) { st.preserveDryOnLocate = false; });
+            // Taken over at the handoff while playing, the renderer's nodes
+            // continue with the state it carried (adoptRendererSources): held
+            // notes play on. Otherwise (the first plan, stopped, a seek) the
+            // live nodes start afresh.
+            liveEntered_ = continuous;
+            if (!continuous)
+                for (detail::Node& n : next->nodes)  // (not continuous: carry no dry signal)
+                    if (n.live)
+                        detail::forEachStage(
+                            n, [](detail::Stage& st) { st.preserveDryOnLocate = false; });
         }
     }
     callbackGen_.store(next->generation, std::memory_order_release);
@@ -2350,7 +2367,7 @@ void Engine::anticipativeCycle(const float* const* in, float* const* out, std::u
             const auto here =
                 livePlan_ && livePlan_->split && liveReady_ ? liveStream_ : playedStream(e);
             if (oldEpoch || !playing || here >= hand->handAt) {
-                adoptLive(hand);
+                adoptLive(hand, !oldEpoch && playing && hand->handCarried);
                 planHandoffs_.consume();
                 wakeRenderer();
                 continue;
@@ -2407,8 +2424,10 @@ std::uint32_t Engine::liveRender(const float* const* in, float* const* out, std:
         }
         livePos_ = playedPosition(rtEpoch_, epochStart_.load());
         liveStream_ = playedStream(rtEpoch_);
-        detail::locateClass(p, livePos_, true, true, liveEntered_);
-        resetOwned(liveProcessing_, &p);
+        // The first plan, or a new epoch, starts afresh; a plan taking over
+        // from the renderer mid-epoch continues (adoptLive).
+        detail::locateClass(p, livePos_, true, !liveEntered_);
+        if (!liveEntered_) resetOwned(liveProcessing_, &p);
         liveReady_ = true;
         liveEntered_ = false;
     }

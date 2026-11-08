@@ -497,8 +497,8 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   feed carries a newer live-input generation, and on the audio thread Notes
   ends the voices, held keys and bend, mod wheel, pressure and sustain that
   live events set. Timeline notes keep playing, also when the node moves
-  into the anticipative engine's live region mid-song: Notes restarts there
-  with the timeline keys held at the live position (ADR-0065). A channel
+  into the anticipative engine's live region mid-song: the live region
+  continues the rack where the renderer left it (engine.md). A channel
   made by `rack.add` takes the app's default monitor mode, as `track.add`
   does; with Auto, arming starts monitoring only while stopped or recording.
 - **Note Out.** Pitch/gate becomes MIDI with the same gate detector and MIDI

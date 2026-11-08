@@ -627,6 +627,7 @@ struct Node {
     // wrap ends them (note-offs at the start of the next block).
     std::array<std::uint8_t, 16 * 128> held{};
     bool releaseHeld = false;
+    bool releaseLive = false;  // the device's notes end (its input is no longer heard)
     std::vector<Clip> clips;
     std::vector<TakeChain> takeChains;
     // Masters (ADR-0057): their own items play after the plain gain/pan stage,
@@ -825,6 +826,10 @@ struct Plan {
     // Stream position is in frames into the transport epoch.
     std::int64_t handAt = 0;
     std::uint64_t handEpoch = 0;
+    // The renderer, playing, carried the nodes this plan moves into the live
+    // region at handAt of handEpoch (no relocation since): the callback may
+    // continue them there instead of restarting them.
+    bool handCarried = false;
     // Two executors at work (anticipative engine with live nodes): frontier
     // edges read their rings, not their sources' taps.
     bool split = false;
@@ -920,9 +925,9 @@ bool processRendererBlock(Workers* workers, Plan& p, std::int64_t pos, std::uint
                           const void* self, const LoopRange* loop = nullptr, bool playing = true);
 // Repositions the cursors and clears the delay lines of the live nodes (or
 // of the others) and of the edges into them.
-// `chaseRacks`: racks restart but keep the timeline's held notes (rack_runtime.h).
-void locateClass(Plan& p, std::int64_t pos, bool live, bool restartConsole = true,
-                 bool chaseRacks = false) SUPPLE_RT;
+// `restartConsole` false: an executor continues the nodes (a plan swap, or
+// the live region taking nodes over from the renderer), keeping voices.
+void locateClass(Plan& p, std::int64_t pos, bool live, bool restartConsole = true) SUPPLE_RT;
 // Audio thread: repositions every playback cursor at `pos` (events,
 // automation) and clears delay lines. Plugins are not touched. Plan adoption
 // passes restartConsole=false to preserve console state and mixer ramps.
@@ -933,10 +938,11 @@ void locate(Plan& p, std::int64_t pos, bool restartConsole = true) SUPPLE_RT;
 // note-offs at the start of the next block.
 void wrapTo(Plan& p, std::int64_t pos, int liveClass) SUPPLE_RT;
 // A plan swap (ADR-0016): device notes still sounding on a track carry over
-// to the new plan's node, which releases them if it no longer plays MIDI
-// live (so monitoring off never leaves a note hanging). `liveOnly`: only
-// into live nodes (the anticipative callback; a node that left it belongs to
-// the renderer, and its instance was reset on the way).
+// to the new plan's node, which releases them, and only them, if it no
+// longer hears the same MIDI input (so monitoring off never leaves a note
+// hanging, and timeline notes play on). `liveOnly`: only into live nodes
+// (the anticipative callback; a node that left it belongs to the renderer,
+// and its instance was reset on the way).
 void carryLiveNotes(Plan& from, Plan& to, bool liveOnly) SUPPLE_RT;
 // A plan swap (the 10 ms crossfade on structural swaps, engine.md §2): the
 // Console 9 state, fader ramps, stage wet levels and matching dry/channel
@@ -946,6 +952,10 @@ void carryLiveNotes(Plan& from, Plan& to, bool liveOnly) SUPPLE_RT;
 Status configureRateTransition(Plan& p, Plan* previous, PlayrateTimeline& old, std::int64_t device);
 void carryRateSources(Plan& from, Plan& to, int liveClass) SUPPLE_RT;
 void carryMix(Plan& from, Plan& to, int liveClass) SUPPLE_RT;
+// The same from `from`'s nodes of `fromClass` into `to`'s of `toClass`: the
+// renderer hands a node moving into the live region over with its state
+// (toClass 1, fromClass 0), where the callback continues it.
+void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT;
 
 // A strip's static fader gain (masters: plain gain; channels and busses: the
 // Console 9 fader law) and a send's (route plus, post fader, source level).

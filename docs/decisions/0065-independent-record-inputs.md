@@ -46,9 +46,9 @@ MIDI channel), the instance stays and its live-input generation advances.
 The audio thread sees the newer generation in the feed and ends only what
 live events opened: their voices, held keys, and the bend, mod wheel,
 pressure and sustain they set. Timeline notes keep playing. When a rack
-node enters the anticipative engine's live region mid-song, its Notes
-modules restart with the timeline keys held at that position, so arming a
-channel during playback does not cut them.
+node enters the anticipative engine's live region mid-song, it continues
+where the renderer left it (ADR-0014's class changes), so arming a channel
+during playback does not cut them.
 
 Before this change, choosing a keyboard on a rack's channel turned the Out's
 route into the MIDI route. Loading a 2.8 or older file repairs that state

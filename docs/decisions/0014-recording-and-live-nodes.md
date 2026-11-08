@@ -196,6 +196,16 @@ when the machine is busiest, during a recording session).
   An instance the pool does replace (fx.restart, a VST3 key change) has
   its editor closed on retirement while its window exists, and the UI
   reopens the editor in that window on the new instance.
+  Since 2026-11-08 the other direction is continuous too: a node entering
+  the live region while playing (arming, monitoring on) kept its owner
+  change but lost its sound, because the renderer reset the instance as
+  it let go and the callback restarted the newly live nodes, so a held
+  timeline note's voice ended and its note-on lay before the handoff. The
+  renderer now lets go without `reset()` and carries the node's stage and
+  console state into the new plan's live node (it stopped rendering it at
+  R, where the callback continues); the callback places such a plan
+  without a restart. Separately, a plan that stops hearing a strip's MIDI
+  input ends the device's voices alone (it ended every voice).
   While every node is live the renderer renders nothing, but it
   keeps its stream and timeline positions one render-ahead span past the
   callback (advanced together, through the loop), so a plan that gives it

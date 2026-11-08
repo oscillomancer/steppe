@@ -584,7 +584,9 @@ class Engine {
     bool wantNow() const SUPPLE_RT { return want_ && !countHold_; }
     std::uint32_t liveRender(const float* const* in, float* const* out, std::uint32_t frames,
                              std::uint32_t offset) SUPPLE_RT;
-    void adoptLive(detail::Plan* next) SUPPLE_RT;
+    // `continuous`: adopted at its handoff while playing, after the renderer
+    // carried the nodes it moves into the live region (Plan::handCarried).
+    void adoptLive(detail::Plan* next, bool continuous = false) SUPPLE_RT;
     void adoptRendererSources(detail::Plan* next) SUPPLE_RT;
     void publishRendererPlan(detail::Plan& next, std::uint64_t epoch, bool queuedRate) SUPPLE_RT;
     // What a pull played: the timeline sample of its first frame (or
@@ -628,8 +630,10 @@ class Engine {
     void writeTransport(F&& change);
     // One executor's share of a plan: stops what it owns that `next` lacks,
     // then starts what `next` has once the other executor has let go.
+    // `handed`: instances moving to the other executor with their state (no reset).
     void adoptShare(std::vector<host::Instance*>& owned, const std::vector<host::Instance*>* next,
-                    const void* self) SUPPLE_RT;
+                    const void* self,
+                    const std::vector<host::Instance*>* handed = nullptr) SUPPLE_RT;
     void startFree(std::vector<host::Instance*>& owned, const std::vector<host::Instance*>* next,
                    const void* self) SUPPLE_RT;
     static void resetOwned(const std::vector<host::Instance*>& owned, detail::Plan* plan) SUPPLE_RT;
@@ -808,7 +812,7 @@ class Engine {
     std::int64_t livePos_ = 0;
     std::int64_t liveStream_ = 0;  // frames the live nodes played in rtEpoch_
     bool liveReady_ = false;       // livePos_ is valid for rtEpoch_
-    bool liveEntered_ = false;     // the next placement continues the renderer's timeline
+    bool liveEntered_ = false;     // the next placement continues the renderer's nodes
 
     // Epoch bumps (seek, pause, setLoop) with the seek target and the loop,
     // written by the main thread alone under one sequence lock (odd while

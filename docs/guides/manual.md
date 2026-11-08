@@ -123,6 +123,11 @@ a master. A render of the master includes its takes; stems of channels and
 busses leave them out. Projects that use master takes or an armed master do
 not open in versions of Steppe from before this feature.
 
+Arming a channel or turning its monitoring on or off while the song plays
+does not interrupt it: an instrument's notes from the timeline keep sounding.
+Notes you hold on the keyboard end when the keyboard stops being heard
+(disarmed, monitoring off, or Auto while playing).
+
 When monitoring an armed input, the latency comes from the device, input FX,
 and effects on that input's route to the master. Effects on unrelated playback
 tracks do not delay it. If the input feeds both a direct path and a bus with
