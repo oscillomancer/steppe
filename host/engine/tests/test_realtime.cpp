@@ -2884,6 +2884,58 @@ TEST_CASE("turning a playrate on and arming in one change restarts the strip: no
             }
 }
 
+// Arming at the boundary where the playrate also changes (1.25 to 1.5):
+// the strip continues from the renderer's old timeline into the new plan's,
+// whose history up to the handoff is the old one's, and plays exactly as the
+// never-armed run of the same engine. Both wait, before the edit, until the
+// renderer is full, so the prepared boundary is the same in both runs.
+TEST_CASE("arming while the playrate changes: exact" * doctest::description("rt")) {
+    constexpr std::int64_t kEdit = 12800, kFrames = 96000;
+    for (const bool preserve : {false, true})
+        for (const std::uint32_t block : {256u, 37u})
+            for (const EngineOptions& options : kBothExecutors) {
+                INFO("preserve " << preserve << ", block " << block << ", anticipative "
+                                 << options.anticipative << ", workers " << options.workers);
+                std::uint32_t resets = 0;
+                auto run = [&](bool arm) {
+                    auto pool = makePool();
+                    MediaCache media;
+                    DummyBackend backend(keyboard({}, kFrames + 4096));
+                    Engine engine(pool, media, options);
+                    REQUIRE(
+                        engine
+                            .start(backend,
+                                   {.sampleRate = 48000, .blockSize = block, .midiInputs = true})
+                            .ok());
+                    REQUIRE(engine.load(twoKeysSession(false, 1.25, preserve)));
+                    REQUIRE(engine.awaitPlan());
+                    engine.play();
+                    runFrames(engine, backend, options, kEdit, block);
+                    if (options.anticipative)
+                        REQUIRE(engine.awaitRendered(std::numeric_limits<std::int64_t>::max()));
+                    host::Instance* const keys = pool.find(keysInstrument(twoKeysSession(false)));
+                    REQUIRE(keys);
+                    const std::uint32_t before = keys->resets();
+                    REQUIRE(engine.load(twoKeysSession(arm, 1.5, preserve)));
+                    runFrames(engine, backend, options, kFrames - kEdit, block);
+                    engine.service();
+                    resets = keys->resets() - before;
+                    CHECK(engine.effectivePlayrate() == 1.5);
+                    CHECK(engine.processErrors() == 0);
+                    engine.stop();
+                    return backend.capture().channels[0];
+                };
+                const auto reference = run(false);
+                const auto armed = run(true);
+                CHECK(resets == 0);
+                CHECK(maxDiff(armed, 0, reference, static_cast<std::size_t>(kFrames)) == 0.0);
+                double during = 0;
+                for (std::size_t i = 1000; i < 12000; ++i)
+                    during = std::max(during, std::fabs(double(armed[i])));
+                CHECK(during > 0.05);
+            }
+}
+
 // A handoff the callback reaches late (here past the renderer's position,
 // after the renderer stalled and the frontier ran dry) cannot continue the
 // carried node: what the renderer never rendered includes the note's end.
