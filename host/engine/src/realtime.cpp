@@ -2020,8 +2020,16 @@ bool Engine::rendererHasRoom(std::uint64_t epoch) const {
 // between them may wait for the callback's epoch acknowledgement; source/graph
 // preparation never belongs to either half.
 void Engine::adoptRendererSources(detail::Plan* next) SUPPLE_RT {
-    // Continuable only while playing at unity (a rate plan moves pos_ below).
-    const bool continuable = plan_ && next && playing_ && !next->rateEnabled;
+    // Continuable only while playing, from a plan of the same kind: two unity
+    // plans, or two rate plans adopted at their prepared boundary without a
+    // seek (rateAdoption is Ready only at stream == handAt, where
+    // rateHandDevice is this renderer's own device position, so pos_ below
+    // stays put). Between unity and rate the device coordinate changes.
+    const bool sameKind = plan_ && next && plan_->rateEnabled == next->rateEnabled;
+    const bool continuable =
+        sameKind && playing_ &&
+        (!next->rateEnabled || (next->rateSeekSequence == 0 && streamLocal_ == next->handAt &&
+                                pos_ == next->rateHandDevice));
     if (plan_ && next) {
         detail::carryRateSources(*plan_, *next, 0);
         detail::carryMix(*plan_, *next, 0);
