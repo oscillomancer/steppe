@@ -2791,63 +2791,82 @@ TEST_CASE("arming beside an armed track mid-note: exact at unity and under a pla
 // A handoff the callback reaches late (here past the renderer's position,
 // after the renderer stalled and the frontier ran dry) cannot continue the
 // carried node: what the renderer never rendered includes the note's end.
-// The strip starts afresh, its instrument reset, so the note does not hang.
+// The strip starts afresh, its instrument reset, so the note does not hang:
+// at unity and under a master playrate.
 TEST_CASE("a late handoff starts the newly live strip afresh: no note hangs" *
           doctest::description("rt")) {
-    for (const std::uint32_t block : {256u, 37u})
-        for (const int workers : {0, 2}) {
-            INFO("block " << block << ", workers " << workers);
-            const EngineOptions options{.workers = workers};
-            auto pool = makePool();
-            MediaCache media;
-            DummyBackend backend(keyboard({}, 96000 + 4096));
-            Engine engine(pool, media, options);
-            REQUIRE(
-                engine.start(backend, {.sampleRate = 48000, .blockSize = block, .midiInputs = true})
-                    .ok());
-            REQUIRE(engine.load(twoKeysSession(false)));
-            REQUIRE(engine.awaitPlan());
-            engine.play();
-            std::int64_t played = 0;
-            // Plays device callbacks up to frame `to`, the renderer kept ahead or not.
-            auto playTo = [&](std::int64_t to, bool ahead) {
-                const std::int64_t cycles = (to - played + block - 1) / block;
-                if (cycles <= 0) return;
-                if (ahead)
-                    runAhead(engine, backend, cycles, block);
-                else
-                    backend.run(cycles);
-                played += cycles * block;
-            };
-            playTo(24000, true);
-            // The renderer stops before the note's end (at 48000); the callback
-            // plays on past it, missing the frontier.
-            engine.holdRenderer(true);
-            REQUIRE(engine.awaitRendererHeld());
-            playTo(60000, false);
-            host::Instance* const keys = pool.find(keysInstrument(twoKeysSession(false)));
-            REQUIRE(keys);
-            const std::uint32_t resetsBefore = keys->resets();
-            REQUIRE(engine.load(twoKeysSession(true)));
-            REQUIRE(engine.awaitPlan());  // adopted by the renderer at its stalled position
-            playTo(68000, false);         // the callback takes it at once, past the handoff
-            engine.holdRenderer(false);
-            playTo(96000, true);
-            engine.service();
-            // The callback, not continuing the instrument, reset it.
-            CHECK(keys->resets() > resetsBefore);
-            CHECK(engine.processErrors() == 0);
-            engine.stop();
-            const auto& L = backend.capture().channels[0];
-            REQUIRE(L.size() >= 96000);
-            double before = 0, after = 0;
-            for (std::size_t i = 1000; i < 20000; ++i)
-                before = std::max(before, std::fabs(double(L[i])));
-            for (std::size_t i = 72000; i < 96000; ++i)
-                after = std::max(after, std::fabs(double(L[i])));
-            CHECK(before > 0.05);
-            CHECK(after == 0.0);
-        }
+    struct Rate {
+        double rate;
+        bool preserve;
+    };
+    for (const Rate r : {Rate{1.0, false}, Rate{1.25, false}, Rate{1.25, true}})
+        for (const std::uint32_t block : {256u, 37u})
+            for (const int workers : {0, 2}) {
+                INFO("rate " << r.rate << ", preserve " << r.preserve << ", block " << block
+                             << ", workers " << workers);
+                const EngineOptions options{.workers = workers};
+                auto pool = makePool();
+                MediaCache media;
+                DummyBackend backend(keyboard({}, 96000 + 4096));
+                Engine engine(pool, media, options);
+                REQUIRE(engine
+                            .start(backend,
+                                   {.sampleRate = 48000, .blockSize = block, .midiInputs = true})
+                            .ok());
+                REQUIRE(engine.load(twoKeysSession(false, r.rate, r.preserve)));
+                REQUIRE(engine.awaitPlan());
+                engine.play();
+                std::int64_t played = 0;
+                // Plays device callbacks up to frame `to`, the renderer kept ahead or not.
+                auto playTo = [&](std::int64_t to, bool ahead) {
+                    const std::int64_t cycles = (to - played + block - 1) / block;
+                    if (cycles <= 0) return;
+                    if (ahead)
+                        runAhead(engine, backend, cycles, block);
+                    else
+                        backend.run(cycles);
+                    played += cycles * block;
+                };
+                playTo(24000, true);
+                // The renderer stops before the note's end (at 48000, or 38400 at
+                // 1.25); the callback plays on past it, missing the frontier.
+                engine.holdRenderer(true);
+                REQUIRE(engine.awaitRendererHeld());
+                host::Instance* const keys = pool.find(keysInstrument(twoKeysSession(false)));
+                REQUIRE(keys);
+                const std::uint32_t resetsBefore = keys->resets();
+                if (r.rate == 1.0) {
+                    playTo(60000, false);
+                    // The renderer adopts the plan at its stalled position; the
+                    // callback, past that handoff, takes it at once.
+                    REQUIRE(engine.load(twoKeysSession(true, r.rate, r.preserve)));
+                    REQUIRE(engine.awaitPlan());
+                    playTo(68000, false);
+                } else {
+                    // A rate plan's handoff is its prepared boundary, a render-ahead
+                    // span past the callback (before the note's end, edited here):
+                    // the renderer reaches it once released, after the callback
+                    // has played past it and past the note's end.
+                    REQUIRE(engine.load(twoKeysSession(true, r.rate, r.preserve)));
+                    playTo(68000, false);
+                }
+                engine.holdRenderer(false);
+                playTo(96000, true);
+                engine.service();
+                // The callback, not continuing the instrument, reset it.
+                CHECK(keys->resets() > resetsBefore);
+                CHECK(engine.processErrors() == 0);
+                engine.stop();
+                const auto& L = backend.capture().channels[0];
+                REQUIRE(L.size() >= 96000);
+                double before = 0, after = 0;
+                for (std::size_t i = 1000; i < 20000; ++i)
+                    before = std::max(before, std::fabs(double(L[i])));
+                for (std::size_t i = 72000; i < 96000; ++i)
+                    after = std::max(after, std::fabs(double(L[i])));
+                CHECK(before > 0.05);
+                CHECK(after == 0.0);
+            }
 }
 
 TEST_CASE("MIDI monitoring preserves every event in a device block" * doctest::description("rt")) {
