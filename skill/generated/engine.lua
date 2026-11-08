@@ -1799,7 +1799,6 @@ q = nil
 ---@field record_rack? string A rack's Out module as the channel's input: the rack plays on the channel, before its inserts (rack.list lists them)
 ---@field midi_channel? integer
 ---@field record_mode? "input"|"midi_overdub"|"midi_replace"
----@field record_take? "midi"|"audio"|"both" With a rack Out and a MIDI input: what recording takes (midi, the rack's audio as a WAV, or both in one pass; default midi)
 ---@field monitor? "off"|"on"|"auto"
 ---@field parent_send? boolean The implicit send to the parent buss/master (off: only explicit sends leave the strip)
 ---@field timebase? "project"|"time"|"beats"|"beats_position" What this channel's items follow when the tempo changes (those that inherit it): project, beats, time or beats_position; they keep their place now

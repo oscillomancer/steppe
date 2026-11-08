@@ -13650,7 +13650,7 @@
   {
     "name": "track_set",
     "title": "Set track fields: name, type, volume, pan, mute, solo, polarity, mono, arming.",
-    "description": "Set track fields: name, type, volume, pan, mute, solo, polarity, mono, arming. Only the given fields change. solo: off | on | in_place | defeat. armed + record_input (device input channels, 1-based) prepare a track for transport.record; record_midi records MIDI instead (null clears it): hardware audio and MIDI replace each other. A rack's Out (record_rack) keeps a MIDI input beside it, which plays its Notes; record_take then picks midi, audio or both. A device name is a substring of the MIDI port (\"*\" = every device), with midi_channel 1-16 (0 = all). monitor: off | on | auto (auto: while armed) — a monitored track hears its input live (an instrument plays the keyboard), also while stopped. record_mode: input (new items), midi_overdub (merge into the MIDI item under the start, as a new take), midi_replace. color: red | orange | yellow | green | teal | blue | violet | grey | \"#rrggbb\" (\"\" clears it), shown as a stripe on the track. A master takes armed alone: transport.record then records its output (after its fader, before its own items) as an item on the master; lane_mute silences a master's items. See describe for errors and examples.",
+    "description": "Set track fields: name, type, volume, pan, mute, solo, polarity, mono, arming. Only the given fields change. solo: off | on | in_place | defeat. armed + record_input (device input channels, 1-based) prepare a track for transport.record; record_midi records MIDI instead (null clears it): hardware audio and MIDI replace each other. A rack's Out (record_rack) keeps a MIDI input beside it, which plays its Notes; recording then takes MIDI. A device name is a substring of the MIDI port (\"*\" = every device), with midi_channel 1-16 (0 = all). monitor: off | on | auto (auto: while armed) — a monitored track hears its input live (an instrument plays the keyboard), also while stopped. record_mode: input (new items), midi_overdub (merge into the MIDI item under the start, as a new take), midi_replace. color: red | orange | yellow | green | teal | blue | violet | grey | \"#rrggbb\" (\"\" clears it), shown as a stripe on the track. A master takes armed alone: transport.record then records its output (after its fader, before its own items) as an item on the master; lane_mute silences a master's items. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "track_set_args",
@@ -13758,11 +13758,6 @@
         "record_mode": {
           "type": "string",
           "enum": ["input", "midi_overdub", "midi_replace"]
-        },
-        "record_take": {
-          "type": "string",
-          "enum": ["midi", "audio", "both"],
-          "description": "With a rack Out and a MIDI input: what recording takes (midi, the rack's audio as a WAV, or both in one pass; default midi)"
         },
         "monitor": {
           "type": "string",

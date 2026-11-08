@@ -13,7 +13,7 @@ ADR-0033's licence map (`modules/`).
 lets a rack's channel keep a MIDI input beside its Out, fixing the rack
 home-channel monitoring contract; hardware audio and MIDI still replace
 each other. The older single-input representation still loads, and
-`record.take` says what such a channel records; see the current
+such a channel records MIDI; see the current
 [rack](../specs/rack.md) and [session-model](../specs/session-model.md)
 contracts.
 

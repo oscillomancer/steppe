@@ -649,9 +649,9 @@ A rack channel can keep its audio Out and a keyboard input together:
 `track.set {track: "tr_1", record_midi: "*", armed: true, monitor: "on"}`.
 Its default Notes source follows that channel. Selecting MIDI keeps the rack
 Out, and selecting the rack keeps MIDI (on other channels hardware audio and
-MIDI replace each other). What it records is `record_take`: `"midi"` (the
-default), `"audio"` (the rack's sound as a WAV take) or `"both"` (both in
-one pass; mute one item or the part plays twice). Arming or changing
+MIDI replace each other). With a MIDI input it records MIDI; without one,
+the rack Out's audio. To record both in one pass, arm a second channel with
+`record_rack` set to the same Out. Arming or changing
 monitoring mid-song leaves timeline notes sounding. To clear a Notes
 module's own settings use `module.set {module: "mo_2", device: null,
 source: null}`; `device: ""` listens to every input, like `"*"`.

@@ -441,10 +441,9 @@ monitor mode set in Preferences, like any new channel. Arming or changing
 monitoring while the song plays keeps the rack's notes from the timeline
 sounding; notes you hold on the keyboard end when the keyboard stops being
 heard. On other channels a hardware input and a MIDI input still replace
-each other. What a rack channel records is its choice:
-`track.set {record_take: "midi"}` (the default) records the notes you play,
-`"audio"` the rack's sound as a WAV take, and `"both"` both in one pass, as
-two items (mute one, or the channel plays the part twice).
+each other. A rack channel with a keyboard input records the notes you
+play; without one it records the rack's sound as a WAV take. To record
+both at once, arm a second channel whose input is the rack's Out.
 `module.set {device: null}` removes an explicit Notes device (`""` listens
 to every MIDI input, like `"*"`), and `source: null` returns Notes to its
 rack's home channel.

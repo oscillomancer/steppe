@@ -17,7 +17,6 @@ schema::Schema<TrackFreeze> trackFreezeSchema();
 schema::Schema<StripType> stripTypeSchema();
 schema::Schema<RoutePan> routePanSchema();
 schema::Schema<Timebase> timebaseSchema();        // time | beats | beats_position
-schema::Schema<RecordTake> recordTakeSchema();    // midi | audio | both (ADR-0065)
 schema::Schema<PinMap> pinMapSchema();            // {in, out, key}: 1-based track channels
 schema::Schema<MidiControl> midiControlSchema();  // {kind, channel, number, device}
 schema::Schema<ControlMode> controlModeSchema();  // absolute | relative1..3 | toggle

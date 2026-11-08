@@ -1662,13 +1662,7 @@ Result<TransportInfo> EngineApp::transport(std::string_view action, std::optiona
             const model::Route* in =
                 output || !tr.record.input ? nullptr : s.routes.find(*tr.record.input);
             const auto* midi = output ? nullptr : model::midiInputRoute(s, e.id);
-            // A rack Out beside a MIDI input records what record.take says (ADR-0065).
-            const bool rackAudio = in && in->from.module.has_value();
-            const model::RecordTake take =
-                rackAudio && midi && tr.record.mode == model::RecordMode::Input
-                    ? tr.record.take
-                    : model::RecordTake::Midi;
-            if (take == model::RecordTake::Audio) midi = nullptr;
+            // A rack channel with a MIDI input records MIDI, else its Out's audio (ADR-0065).
             if (routed || midi) {  // MIDI (ADR-0016): events, no file
                 RecordTarget t;
                 t.track = e.id;
@@ -1677,7 +1671,7 @@ Result<TransportInfo> EngineApp::transport(std::string_view action, std::optiona
                     midi && midi->midi ? midi->midi->fromChannel : 0,
                     midi && midi->midi ? midi->midi->toChannel : 0, routed};
                 targets.push_back(std::move(t));
-                if (take != model::RecordTake::Both) continue;
+                continue;
             }
             if (!output && (!in || (!in->from.hwChannels && !in->from.module))) continue;
             RecordTarget t;

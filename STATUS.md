@@ -288,9 +288,9 @@ instructions are in `docs/guides/installing.md`.
   hardware audio and MIDI still replace each other. Notes on the home track
   follows its armed monitoring and MIDI channel map in both executors;
   arming, monitor or device changes end only the keyboard's notes, also when
-  the rack enters the live region mid-song. `record.take` chooses what a
-  rack channel with a keyboard records: MIDI (default), the rack Out's audio
-  as stereo WAV, or both in one pass (no GUI control yet). The GUI's input
+  the rack enters the live region mid-song. A rack channel with a keyboard
+  records MIDI; a second channel with the rack's Out as input records its
+  audio in the same pass. The GUI's input
   menu checks both selections and its button names both. Notes
   device/source can be cleared with null. Armed channels record their rack Out audio input as stereo WAV,
   including input FX, loop/punch takes, recovery and undo.

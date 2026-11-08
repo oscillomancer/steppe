@@ -267,9 +267,9 @@ Out is the only audio input that keeps a MIDI input beside it. A MIDI-only
 channel keeps `record.input` as an alias of its `midi_input`, and a MIDI
 `record.input` must be that alias. Old projects with MIDI only in
 `record.input` still load and play it without migration. A channel with a
-rack Out and a MIDI input records `record.take` in `input` mode: `midi`
-(the default; also when the field is absent), `audio` (the Out as a WAV
-take) or `both` (two takes in one pass, ADR-0065).
+rack Out and a MIDI input records MIDI; without the MIDI input it records
+the Out's audio. To record both in one pass, arm a second channel whose
+`record.input` is a route from the same Out (ADR-0065).
 A Note Out module instead sends MIDI to
 any channel through an ordinary route with `midi` set; it is not a record
 input and several such routes may reach a channel. It cannot send audio or
@@ -1061,12 +1061,10 @@ VCAs.
 ### Independent audio and MIDI inputs (schema 2.8)
 
 Writers emit `supple.project/2.8`. The optional `record.midi_input` is a
-route from a MIDI device into the same channel, and the optional
-`record.take` (`midi`, written only when not the default) says what a rack
-channel with a MIDI input records. Existing 1.x and 2.x files remain
-readable: without `midi_input` the legacy MIDI `record.input` is used, and
-without `take` such a channel records MIDI. Both references are validated,
-copied and remapped like other route IDs.
+route from a MIDI device into the same channel. Existing 1.x and 2.x files
+remain readable: without `midi_input` the legacy MIDI `record.input` is
+used. Both references are validated, copied and remapped like other route
+IDs.
 
 Loading a 2.8 or older file repairs one state that earlier builds wrote:
 a rack's home channel whose `record.input` is a MIDI route (and has no

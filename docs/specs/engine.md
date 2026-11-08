@@ -1317,9 +1317,9 @@ harness. See the tooling README for schemas, limits and invocation details.
   Hardware audio and MIDI replace each other (`record_input` turns the MIDI
   route into audio, `record_midi` the hardware route into MIDI);
   `record_midi: null` clears MIDI alone. A rack Out keeps a MIDI input beside
-  it, and `record.take` decides what such a channel records in `input` mode:
-  `midi` (default), `audio` (the Out as a WAV take, as without MIDI) or
-  `both` (a MIDI and a WAV take of the same pass, two items). A rack's Notes
+  it, and such a channel records MIDI; without the MIDI input it records
+  the Out's audio as a WAV take. A second armed channel with the same Out
+  as its input records the audio in the same pass. A rack's Notes
   module follows its source channel's armed monitoring and channel map, in
   both executors. Explicit Notes devices still listen always. A live-input
   change ends only the notes and controllers live events opened (a

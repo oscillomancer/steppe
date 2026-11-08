@@ -67,8 +67,6 @@ struct MeterObj {
 enum class Solo : std::uint8_t { Off, On, InPlace, Defeat };
 enum class Monitor : std::uint8_t { Off, On, Auto };
 enum class RecordMode : std::uint8_t { Input, Output, MidiOverdub, MidiReplace };
-// What a channel with both a rack Out and a MIDI input records (ADR-0065).
-enum class RecordTake : std::uint8_t { Midi, Audio, Both };
 
 struct ParentSend {
     bool enabled = true;
@@ -80,8 +78,7 @@ struct RecordSettings {
     std::optional<Id> input;  // audio input, or a legacy MIDI-only input
     Monitor monitor = Monitor::Off;
     RecordMode mode = RecordMode::Input;
-    std::optional<Id> midiInput;         // independent route from midi_input
-    RecordTake take = RecordTake::Midi;  // with a rack Out and a MIDI input
+    std::optional<Id> midiInput;  // independent route from midi_input
     bool operator==(const RecordSettings&) const = default;
 };
 

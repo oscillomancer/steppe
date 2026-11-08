@@ -535,6 +535,8 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   source monitors it; the node is then live.
 - **Recording Out.** An armed channel with an Out as its `record.input`
   records that stereo signal after input FX, before items and track inserts.
+  With a MIDI input selected as well it records MIDI instead; to record
+  both in one pass, arm a second channel with the same Out as its input.
   The channel runs live; its source rack may render ahead through the audio
   frontier. The recorder places the samples by the channel's input timeline
   and input-FX latency, with its usual padding and take rules (engine.md §4).

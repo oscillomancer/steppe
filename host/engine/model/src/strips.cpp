@@ -111,8 +111,7 @@ Status validateStripRules(const Session& s) {
         if (t.type != StripType::Channel &&
             ((t.record.armed && t.type != StripType::Master) || t.record.input ||
              t.record.midiInput || t.record.monitor != Monitor::Off ||
-             t.record.mode != RecordMode::Input || t.record.take != RecordTake::Midi ||
-             !t.inputChain.empty()))
+             t.record.mode != RecordMode::Input || !t.inputChain.empty()))
             return trackError(t.type == StripType::Master
                                   ? "a master records its output: no input, monitoring or input FX"
                                   : "only channels and masters can be armed",

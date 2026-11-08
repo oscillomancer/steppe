@@ -30,11 +30,11 @@ Hardware audio and MIDI stay exclusive, as before: `track.set
 the only audio input that keeps a MIDI input beside it, in either order of
 selection.
 
-Such a channel chooses what it records with `record.take` (schema 2.8,
-default `midi`): `midi` records the played notes, `audio` the rack Out's
-audio as a WAV take, and `both` records both takes in one pass, as two
-items. The field applies only in `input` record mode with both inputs
-present; MIDI record modes always take MIDI. Files without it record MIDI.
+Such a channel records MIDI: a patch is generally either generative or a
+keyboard instrument, and with a keyboard selected the played notes are what
+is wanted. Without a MIDI input it records the rack Out's audio as a WAV
+take. To record both in one pass, a second channel takes the rack's Out as
+its input and is armed beside the first.
 
 A rack's Notes module follows its source channel's armed monitoring and
 MIDI channel map: On while stopped or playing, Auto while stopped or
@@ -64,7 +64,5 @@ it was, with `project.rack_input_unrepaired`.
 The GUI's existing MIDI-selection command no longer disconnects rack audio,
 and choosing a hardware input on a keyboard channel still records audio.
 Views can show both selections on a rack channel by reading both references.
-With `record.take: both`, the recorded MIDI replays through the rack while
-the audio take also plays, so the channel doubles until one item is muted.
 Copying, validation, freezing and recording account for both references; the
 audio path keeps preallocated MIDI buffers and existing executor boundaries.
