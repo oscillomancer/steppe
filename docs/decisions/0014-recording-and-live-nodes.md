@@ -206,9 +206,12 @@ when the machine is busiest, during a recording session).
   R, where the callback continues); the callback places such a plan
   without a restart, but only when it adopts the plan exactly at R,
   playing, in the epoch of the carry; a late adoption (after a frontier
-  miss), a pause or seek between, or a rate plan (whose renderer moves to
-  its hand position) starts the nodes that joined afresh, plug-ins reset,
-  so a note whose end fell between R and the callback cannot hang.
+  miss), a pause or seek between, or the first rate plan after unity
+  (whose renderer moves to its hand position) starts the nodes that
+  joined afresh, plug-ins reset, so a note whose end fell between R and
+  the callback cannot hang. Two rate plans continue as two unity plans do
+  (2026-11-08): the renderer adopts one only at its prepared boundary,
+  where its hand position is the renderer's own.
   Separately, a plan that stops hearing a strip's MIDI input ends the
   device's voices alone (it ended every voice).
   While every node is live the renderer renders nothing, but it

@@ -958,11 +958,19 @@ TEST_CASE("a plugin that refuses to start is passed through, not processed") {
                     e.id, [](model::FxInstance& f) { f.state = "sha256:edge-refuses-start"; });
         t.putBlob("sha256:edge-refuses-start",
                   std::make_shared<const model::Blob>(model::Blob{{1, 0, 0, 0}}));
+        Id edge;
+        for (const auto& e : s.fx)
+            if (e.value->plugin.id == "com.suppleaudio.test.edge") edge = e.id;
         REQUIRE(engine.load(t.commit().value()));
         engine.play();
         if (options.anticipative) REQUIRE(engine.awaitRendered(2560));
         backend.run(10);
         CHECK(engine.processErrors() >= 1);
+        // Reset as it refused: a retry that succeeds later starts it clean,
+        // with nothing left over (a note handed over unreset) that no
+        // note-off would end.
+        REQUIRE(pool.find(edge));
+        CHECK(pool.find(edge)->resets() >= 1);
         CHECK(engine.transport().sample == 2560);
         double peak = 0;
         for (std::size_t i = 0; i < 2560; ++i)
@@ -2270,10 +2278,14 @@ TEST_CASE("a live processing error silences the failed device block" * doctest::
 namespace {
 // keyboardSession's track, its instrument `plugin`, holding one timeline
 // note (key 60) for eight beats, 4 s at 120 bpm, with the given arm and
-// monitor mode.
-model::Session heldNoteSession(bool armed, model::Monitor monitor, const std::string& plugin) {
+// monitor mode; the master playrate `rate`.
+model::Session heldNoteSession(bool armed, model::Monitor monitor, const std::string& plugin,
+                               double rate = 1.0, bool preserve = false) {
     const model::Session base = keyboardSession();
     model::EditTxn t(base, 2);
+    auto project = t.project();
+    project.playrate = {rate, preserve};
+    t.setProject(project);
     Id track;
     for (const auto& e : base.tracks)
         if (e.value->name == "Keys") track = e.id;
@@ -2298,18 +2310,40 @@ model::Session heldNoteSession(bool armed, model::Monitor monitor, const std::st
     t.create(item);
     return t.commit().value();
 }
+
+// Runs `frames` device frames (rounded up to whole callbacks), the
+// anticipative engine kept ahead as a device's clock would.
+void runFrames(Engine& engine, DummyBackend& backend, const EngineOptions& options,
+               std::int64_t frames, std::uint32_t block) {
+    const std::int64_t cycles = (frames + block - 1) / block;
+    if (options.anticipative)
+        runAhead(engine, backend, cycles, block);
+    else
+        backend.run(cycles);
+}
+
+// The instrument on twoKeysSession's "Keys" track.
+Id keysInstrument(const model::Session& s) {
+    for (const auto& e : s.tracks)
+        if (e.value->name == "Keys") return e.value->chain.front();
+    return {};
+}
+
+const std::array<EngineOptions, 4> kBothExecutors = {
+    kInCallback, EngineOptions{.anticipative = false, .workers = 2}, EngineOptions{.workers = 0},
+    EngineOptions{.workers = 2}};
 }  // namespace
 
 // Arming, a monitor change or disarming while the song plays moves the
 // instrument between the anticipative engine's renderer and its live region;
-// the timeline note it holds keeps sounding, exactly as offline, and a key
-// held on the keyboard ends when the keyboard stops being heard.
+// the timeline note it holds keeps sounding, exactly as offline, at unity and
+// under a master playrate, and a key held on the keyboard ends when the
+// keyboard stops being heard.
 TEST_CASE("arming or monitoring mid-song keeps an instrument's held timeline note" *
           doctest::description("rt")) {
-    constexpr std::uint32_t kBlock = 256;
-    constexpr std::int64_t kSegment = 80 * kBlock;  // frames between session changes
+    constexpr std::int64_t kSegment = 80 * 256;  // device frames between session changes
     // A change takes effect within this (the anticipative engine's at its render horizon).
-    constexpr std::int64_t kSettle = 48 * kBlock;
+    constexpr std::int64_t kSettle = 48 * 256;
     struct Step {
         bool armed;
         model::Monitor monitor;
@@ -2323,6 +2357,10 @@ TEST_CASE("arming or monitoring mid-song keeps an instrument's held timeline not
     // Keys held on the keyboard, while monitored: one ended by Auto, one by disarming.
     constexpr std::int64_t kFirst = kSegment + kSettle + 512,
                            kSecond = 3 * kSegment + kSettle + 512;
+    struct Rate {
+        double rate;
+        bool preserve;
+    };
     // A CLAP and a VST3 instrument: their reset and processing calls differ.
     auto scanned = host::scan(std::span<const std::filesystem::path>(&kVst3Fixture, 1));
     REQUIRE(scanned);
@@ -2331,90 +2369,106 @@ TEST_CASE("arming or monitoring mid-song keeps an instrument's held timeline not
     });
     REQUIRE(vst3 != scanned->end());
     for (const std::string& plugin : {std::string("com.suppleaudio.test.sine"), vst3->id})
-        for (const EngineOptions& options :
-             {kInCallback, EngineOptions{.anticipative = false, .workers = 2},
-              EngineOptions{.workers = 0}, EngineOptions{.workers = 2}}) {
-            INFO(plugin << ", anticipative " << options.anticipative << ", workers "
-                        << options.workers);
+        for (const Rate r : {Rate{1.0, false}, Rate{1.25, false}, Rate{1.25, true}}) {
             auto pool = makeVstPool();
-            const auto offline = renderOffline(heldNoteSession(false, model::Monitor::On, plugin),
-                                               pool, {.startSeconds = 0, .endSeconds = 2.5})
+            // Offline output is in device frames: 3 s of timeline is 2.4 s at 1.25.
+            const auto offline = renderOffline(heldNoteSession(false, model::Monitor::On, plugin,
+                                                               r.rate, r.preserve),
+                                               pool, {.startSeconds = 0, .endSeconds = 3.0})
                                      .value();
             const auto& want = offline.audio.channels[0];
-            REQUIRE(want.size() >= static_cast<std::size_t>(kFrames));
-            auto rtPool = makeVstPool();
-            MediaCache media;
-            DummyBackend backend(keyboard({{static_cast<int>(kFirst), 0x90, 76, 100},
-                                           {static_cast<int>(kSecond), 0x90, 72, 100}},
-                                          kFrames + 4096));
-            Engine engine(rtPool, media, options);
-            REQUIRE(
-                engine
-                    .start(backend, {.sampleRate = 48000, .blockSize = kBlock, .midiInputs = true})
-                    .ok());
-            REQUIRE(engine.load(heldNoteSession(steps[0].armed, steps[0].monitor, plugin)));
-            REQUIRE(engine.awaitPlan());
-            engine.play();
-            for (std::size_t i = 0; i < steps.size(); ++i) {
-                if (i)
-                    REQUIRE(engine.load(heldNoteSession(steps[i].armed, steps[i].monitor, plugin)));
-                if (options.anticipative)
-                    runAhead(engine, backend, kSegment / kBlock, kBlock);
-                else
-                    backend.run(kSegment / kBlock);
-                engine.service();
-            }
-            CHECK(engine.transport().sample == kFrames);
-            CHECK(engine.processErrors() == 0);
-            engine.stop();
-            REQUIRE(engine.outputLatency() == 0);
-            const auto& L = backend.capture().channels[0];
-            // The output equals the offline render from `from` to `to`.
-            const auto offlineFrom = [&](std::int64_t from, std::int64_t to) {
-                const auto a = static_cast<std::size_t>(from);
-                return maxDiff(L, a,
-                               std::vector<float>(want.begin() + static_cast<std::ptrdiff_t>(from),
-                                                  want.end()),
-                               static_cast<std::size_t>(to - from));
-            };
-            const auto keyHeard = [&](std::int64_t at) {
-                const auto i = static_cast<std::size_t>(at + 100);
-                return std::fabs(double(L[i]) - double(want[i])) > 0.0;
-            };
-            // Arming keeps the timeline note; the first key only adds to it.
-            CHECK(offlineFrom(0, kFirst) == 0.0);
-            CHECK(keyHeard(kFirst));
-            // Auto does not hear the keyboard while playing: its key ends, the
-            // note plays on through Auto and On again until the second key.
-            CHECK(offlineFrom(2 * kSegment + kSettle, kSecond) == 0.0);
-            CHECK(keyHeard(kSecond));
-            // Disarmed: the second key ends, the timeline note still sounds.
-            CHECK(offlineFrom(4 * kSegment + kSettle, kFrames) == 0.0);
-            CHECK(std::fabs(double(L[static_cast<std::size_t>(kFrames - 100)])) > 0.0);
+            REQUIRE(want.size() >= static_cast<std::size_t>(kFrames + 1024));
+            for (const std::uint32_t block : {256u, 37u})
+                for (const EngineOptions& options : kBothExecutors) {
+                    INFO(plugin << ", rate " << r.rate << ", preserve " << r.preserve << ", block "
+                                << block << ", anticipative " << options.anticipative
+                                << ", workers " << options.workers);
+                    auto rtPool = makeVstPool();
+                    MediaCache media;
+                    DummyBackend backend(keyboard({{static_cast<int>(kFirst), 0x90, 76, 100},
+                                                   {static_cast<int>(kSecond), 0x90, 72, 100}},
+                                                  kFrames + 4096));
+                    Engine engine(rtPool, media, options);
+                    REQUIRE(
+                        engine
+                            .start(backend,
+                                   {.sampleRate = 48000, .blockSize = block, .midiInputs = true})
+                            .ok());
+                    const auto session = [&](const Step& s) {
+                        return heldNoteSession(s.armed, s.monitor, plugin, r.rate, r.preserve);
+                    };
+                    REQUIRE(engine.load(session(steps[0])));
+                    REQUIRE(engine.awaitPlan());
+                    engine.play();
+                    for (std::size_t i = 0; i < steps.size(); ++i) {
+                        if (i) REQUIRE(engine.load(session(steps[i])));
+                        runFrames(engine, backend, options, kSegment, block);
+                        engine.service();
+                    }
+                    CHECK(engine.processErrors() == 0);
+                    engine.stop();
+                    REQUIRE(engine.outputLatency() == 0);
+                    const auto& L = backend.capture().channels[0];
+                    // The output equals the offline render from `from` to `to`.
+                    const auto offlineFrom = [&](std::int64_t from, std::int64_t to) {
+                        const auto a = static_cast<std::size_t>(from);
+                        return maxDiff(
+                            L, a,
+                            std::vector<float>(want.begin() + static_cast<std::ptrdiff_t>(from),
+                                               want.end()),
+                            static_cast<std::size_t>(to - from));
+                    };
+                    const auto keyHeard = [&](std::int64_t at) {
+                        const auto i = static_cast<std::size_t>(at + 100);
+                        return std::fabs(double(L[i]) - double(want[i])) > 0.0;
+                    };
+                    // Arming keeps the timeline note; the first key only adds to it.
+                    CHECK(offlineFrom(0, kFirst) == 0.0);
+                    CHECK(keyHeard(kFirst));
+                    // Auto does not hear the keyboard while playing: its key ends, the
+                    // note plays on through Auto and On again until the second key.
+                    CHECK(offlineFrom(2 * kSegment + kSettle, kSecond) == 0.0);
+                    CHECK(keyHeard(kSecond));
+                    // Disarmed: the second key ends, the timeline note still sounds.
+                    CHECK(offlineFrom(4 * kSegment + kSettle, kFrames) == 0.0);
+                    CHECK(std::fabs(double(L[static_cast<std::size_t>(kFrames - 100)])) > 0.0);
+                }
         }
 }
 
 namespace {
-// Runs `frames` device frames (rounded up to whole callbacks), the
-// anticipative engine kept ahead as a device's clock would.
-void runFrames(Engine& engine, DummyBackend& backend, const EngineOptions& options,
-               std::int64_t frames, std::uint32_t block) {
-    const std::int64_t cycles = (frames + block - 1) / block;
-    if (options.anticipative)
-        runAhead(engine, backend, cycles, block);
-    else
-        backend.run(cycles);
-}
-
 // A track with keyboardSession's MIDI input, a sine and the edge fixture as a
 // 1 s echo (a delay with pdc: ignore, so the delay is heard as a tail): one
-// short note at 0, heard again at 1 s.
-model::Session echoSession(bool armed, model::Monitor monitor) {
+// short note at 0, heard again at 1 s. With `pads`, a second sine track,
+// "Pads", on the same input, armed and monitored, and silent, so the live
+// region exists before the echo strip joins it.
+model::Session echoSession(bool armed, model::Monitor monitor, bool pads = false) {
     const model::Session base = keyboardSession();
     model::EditTxn t(base, 2);
     Id track;
     for (const auto& e : base.tracks)
         if (e.value->name == "Keys") track = e.id;
+    if (pads) {
+        model::Track tr;
+        tr.name = "Pads";
+        tr.parent = kMaster;
+        const Id p = t.create(tr);
+        t.modify<model::Track>(kMaster, [&](model::Track& m) { m.children.push_back(p); });
+        model::FxInstance sine;
+        sine.plugin.id = "com.suppleaudio.test.sine";
+        const Id f = t.create(sine);
+        model::Route in;
+        in.from.midiDevice = "key";
+        in.to.track = p;
+        in.midi = model::MidiRouting{1, 0};
+        const Id r = t.create(in);
+        t.modify<model::Track>(p, [&](model::Track& x) {
+            x.chain.push_back(f);
+            x.record.input = r;
+            x.record.armed = true;
+            x.record.monitor = model::Monitor::On;
+        });
+    }
     model::FxInstance echo;
     echo.plugin.id = "com.suppleaudio.test.edge";
     echo.pdc = model::PdcMode::Ignore;
@@ -2445,10 +2499,10 @@ model::Session echoSession(bool armed, model::Monitor monitor) {
 // Two sine tracks on keyboardSession's MIDI input: "Pads", armed and
 // monitored (so the live region exists) and silent, and "Keys", holding key
 // 60 for two beats (1 s), armed as given; the master playrate `rate`.
-model::Session twoKeysSession(bool armKeys, double rate = 1.0) {
+model::Session twoKeysSession(bool armKeys, double rate = 1.0, bool preserve = false) {
     model::EditTxn t(model::Session::create({.console9 = false}), 1);
     auto project = t.project();
-    project.playrate.rate = rate;
+    project.playrate = {rate, preserve};
     t.setProject(project);
     for (const char* name : {"Pads", "Keys"}) {
         model::Track tr;
@@ -2475,7 +2529,7 @@ model::Session twoKeysSession(bool armKeys, double rate = 1.0) {
         model::MidiSource src;
         src.sequence.ppq = 960;
         src.sequence.length = 4 * 960;
-        src.sequence.notes = {{10, 2 * 960 - 10, 0, 60, 100, 0}};
+        src.sequence.notes = {{0, 2 * 960, 0, 60, 100, 0}};
         model::Take take;
         take.source = t.create(src);
         const Id tk = t.create(take);
@@ -2488,83 +2542,228 @@ model::Session twoKeysSession(bool armKeys, double rate = 1.0) {
     }
     return t.commit().value();
 }
-
-const std::array<EngineOptions, 4> kBothExecutors = {
-    kInCallback, EngineOptions{.anticipative = false, .workers = 2}, EngineOptions{.workers = 0},
-    EngineOptions{.workers = 2}};
 }  // namespace
+
+// Under a master playrate a timeline note at the very start of the song
+// plays: offline and in real time, in both executors, on the track's
+// instrument and on a take's (a take chain, with its own fresh window).
+TEST_CASE("master playrate: a note at tick 0 sounds, offline and in real time" *
+          doctest::description("rt")) {
+    enum class Kind { Track, Take };
+    const auto session = [](Kind kind, bool preserve) {
+        model::Session base;
+        if (kind == Kind::Track) {
+            base = heldNoteSession(false, model::Monitor::On, "com.suppleaudio.test.sine");
+        } else {
+            model::EditTxn t(model::Session::create({.console9 = false}), 1);
+            model::Track track;
+            track.parent = kMaster;
+            const Id tr = t.create(track);
+            t.modify<model::Track>(kMaster, [&](model::Track& m) { m.children.push_back(tr); });
+            model::FxInstance synth;
+            synth.plugin.id = "com.suppleaudio.test.sine";
+            model::Take take;
+            take.chain = {t.create(synth)};
+            model::MidiSource src;
+            src.sequence.ppq = 960;
+            src.sequence.length = 8 * 960;
+            src.sequence.notes = {{0, 8 * 960, 0, 60, 100, 0}};
+            take.source = t.create(src);
+            const Id tk = t.create(take);
+            model::Item item;
+            item.track = tr;
+            item.length = 8.0;
+            item.takes = {tk};
+            item.activeTake = tk;
+            t.create(item);
+            base = t.commit().value();
+        }
+        model::EditTxn t(base, 3);
+        auto project = t.project();
+        project.playrate = {1.25, preserve};
+        t.setProject(project);
+        return t.commit().value();
+    };
+    // The first 2000 frames' peak: the note starts at the first frame.
+    const auto first = [](const std::vector<float>& x) {
+        double peak = 0;
+        for (std::size_t i = 0; i < 2000; ++i) peak = std::max(peak, std::fabs(double(x[i])));
+        return peak;
+    };
+    for (const Kind kind : {Kind::Track, Kind::Take})
+        for (const bool preserve : {false, true}) {
+            INFO("kind " << static_cast<int>(kind) << ", preserve pitch " << preserve);
+            const auto s = session(kind, preserve);
+            auto pool = makePool();
+            const auto offline =
+                renderOffline(s, pool, {.startSeconds = 0, .endSeconds = 1.0}).value();
+            const auto& want = offline.audio.channels[0];
+            REQUIRE(want.size() >= 24000);  // timeline seconds: 38400 device frames at 1.25
+            CHECK(first(want) > 0.05);
+            for (const EngineOptions& options : kBothExecutors) {
+                INFO("anticipative " << options.anticipative << ", workers " << options.workers);
+                auto rtPool = makePool();
+                MediaCache media;
+                DummyBackend backend(keyboard({}, 24000 + 4096));
+                Engine engine(rtPool, media, options);
+                REQUIRE(
+                    engine
+                        .start(backend, {.sampleRate = 48000, .blockSize = 256, .midiInputs = true})
+                        .ok());
+                REQUIRE(engine.load(s));
+                REQUIRE(engine.awaitPlan());
+                engine.play();
+                runFrames(engine, backend, options, 24000, 256);
+                CHECK(engine.processErrors() == 0);
+                engine.stop();
+                REQUIRE(engine.outputLatency() == 0);
+                const auto& got = backend.capture().channels[0];
+                CHECK(first(got) > 0.05);
+                CHECK(maxDiff(got, 0, want, 24000) == 0.0);
+            }
+        }
+}
 
 // An effect's tail crosses into the live region with its strip: a short note
 // ends before the strip is armed (or starts monitoring), and its echo, still
-// inside the effect's delay line at the handoff, is heard as offline.
+// inside the effect's delay line at the handoff, is heard as offline. Alone
+// the strip opens the live region; beside an armed track (`pads`) it joins
+// the region that exists (adoptLive's continuing branch).
 TEST_CASE("arming or monitoring mid-song keeps an effect's tail" * doctest::description("rt")) {
     constexpr std::int64_t kEdit = 12800, kFrames = 64000;
-    auto pool = makePool();
-    const auto offline = renderOffline(echoSession(false, model::Monitor::On), pool,
-                                       {.startSeconds = 0, .endSeconds = 1.5})
-                             .value();
-    const auto& want = offline.audio.channels[0];
-    REQUIRE(want.size() >= static_cast<std::size_t>(kFrames));
     struct Change {
         const char* name;
         bool armedBefore;
         model::Monitor before;
     };
-    for (const Change change : {Change{"arming", false, model::Monitor::On},
-                                Change{"monitoring on", true, model::Monitor::Off}})
-        for (const std::uint32_t block : {256u, 37u})
-            for (const EngineOptions& options : kBothExecutors) {
-                INFO(std::string(change.name)
-                     << ", block " << block << ", anticipative " << options.anticipative
-                     << ", workers " << options.workers);
-                auto rtPool = makePool();
-                MediaCache media;
-                DummyBackend backend(keyboard({}, kFrames + 4096));
-                Engine engine(rtPool, media, options);
-                REQUIRE(engine
+    for (const bool pads : {false, true}) {
+        auto pool = makePool();
+        const auto offline = renderOffline(echoSession(false, model::Monitor::On, pads), pool,
+                                           {.startSeconds = 0, .endSeconds = 1.5})
+                                 .value();
+        const auto& want = offline.audio.channels[0];
+        REQUIRE(want.size() >= static_cast<std::size_t>(kFrames));
+        for (const Change change : {Change{"arming", false, model::Monitor::On},
+                                    Change{"monitoring on", true, model::Monitor::Off}})
+            for (const std::uint32_t block : {256u, 37u})
+                for (const EngineOptions& options : kBothExecutors) {
+                    INFO(std::string(change.name)
+                         << ", pads " << pads << ", block " << block << ", anticipative "
+                         << options.anticipative << ", workers " << options.workers);
+                    auto rtPool = makePool();
+                    MediaCache media;
+                    DummyBackend backend(keyboard({}, kFrames + 4096));
+                    Engine engine(rtPool, media, options);
+                    REQUIRE(
+                        engine
                             .start(backend,
                                    {.sampleRate = 48000, .blockSize = block, .midiInputs = true})
                             .ok());
-                REQUIRE(engine.load(echoSession(change.armedBefore, change.before)));
-                REQUIRE(engine.awaitPlan());
-                engine.play();
-                runFrames(engine, backend, options, kEdit, block);
-                REQUIRE(engine.load(echoSession(true, model::Monitor::On)));
-                runFrames(engine, backend, options, kFrames - kEdit, block);
-                engine.service();
-                CHECK(engine.processErrors() == 0);
-                engine.stop();
-                REQUIRE(engine.outputLatency() == 0);
-                const auto& L = backend.capture().channels[0];
-                CHECK(maxDiff(L, 0, want, static_cast<std::size_t>(kFrames)) == 0.0);
-                double echo = 0;
-                for (std::size_t i = 48000; i < 54000; ++i)
-                    echo = std::max(echo, std::fabs(double(L[i])));
-                CHECK(echo > 0.05);
-            }
+                    REQUIRE(engine.load(echoSession(change.armedBefore, change.before, pads)));
+                    REQUIRE(engine.awaitPlan());
+                    engine.play();
+                    runFrames(engine, backend, options, kEdit, block);
+                    REQUIRE(engine.load(echoSession(true, model::Monitor::On, pads)));
+                    runFrames(engine, backend, options, kFrames - kEdit, block);
+                    engine.service();
+                    CHECK(engine.processErrors() == 0);
+                    engine.stop();
+                    REQUIRE(engine.outputLatency() == 0);
+                    const auto& L = backend.capture().channels[0];
+                    CHECK(maxDiff(L, 0, want, static_cast<std::size_t>(kFrames)) == 0.0);
+                    double echo = 0;
+                    for (std::size_t i = 48000; i < 54000; ++i)
+                        echo = std::max(echo, std::fabs(double(L[i])));
+                    CHECK(echo > 0.05);
+                }
+    }
+}
+
+// Beside an armed track, a strip whose handoff the callback reaches late
+// (the renderer stalled, the callback played on past it) starts afresh in
+// the live region: its delay line is dropped, so the echo the renderer
+// carried is not heard, and from the handoff on the output is what a fresh
+// start after the note gives (offline from there: nothing to echo).
+TEST_CASE("a late handoff beside an armed track drops an effect's tail" *
+          doctest::description("rt")) {
+    constexpr std::int64_t kFrom = 36000, kFrames = 96000;
+    auto pool = makePool();
+    const auto fresh = renderOffline(echoSession(true, model::Monitor::On, true), pool,
+                                     {.startSeconds = double(kFrom) / 48000.0, .endSeconds = 2.0})
+                           .value();
+    REQUIRE(fresh.audio.channels[0].size() >= static_cast<std::size_t>(kFrames - kFrom));
+    for (const std::uint32_t block : {256u, 37u})
+        for (const int workers : {0, 2}) {
+            INFO("block " << block << ", workers " << workers);
+            auto rtPool = makePool();
+            MediaCache media;
+            DummyBackend backend(keyboard({}, kFrames + 4096));
+            Engine engine(rtPool, media, EngineOptions{.workers = workers});
+            REQUIRE(
+                engine.start(backend, {.sampleRate = 48000, .blockSize = block, .midiInputs = true})
+                    .ok());
+            REQUIRE(engine.load(echoSession(false, model::Monitor::On, true)));
+            REQUIRE(engine.awaitPlan());
+            engine.play();
+            std::int64_t played = 0;
+            auto playTo = [&](std::int64_t to, bool ahead) {
+                const std::int64_t cycles = (to - played + block - 1) / block;
+                if (cycles <= 0) return;
+                if (ahead)
+                    runAhead(engine, backend, cycles, block);
+                else
+                    backend.run(cycles);
+                played += cycles * block;
+            };
+            playTo(12000, true);  // the note (to 6000) is in the echo's delay line
+            engine.holdRenderer(true);
+            REQUIRE(engine.awaitRendererHeld());
+            playTo(28000, false);
+            REQUIRE(engine.load(echoSession(true, model::Monitor::On, true)));
+            REQUIRE(engine.awaitPlan());  // adopted by the renderer where it stalled
+            playTo(32000, false);         // the callback takes it at once, past the handoff
+            engine.holdRenderer(false);
+            playTo(kFrames, true);
+            engine.service();
+            CHECK(engine.processErrors() == 0);
+            engine.stop();
+            const auto& L = backend.capture().channels[0];
+            REQUIRE(L.size() >= static_cast<std::size_t>(kFrames));
+            // (The exact handoff, in the test above, hears the echo at 48000.)
+            CHECK(maxDiff(L, static_cast<std::size_t>(kFrom), fresh.audio.channels[0],
+                          static_cast<std::size_t>(kFrames - kFrom)) == 0.0);
+        }
 }
 
 // With another track already armed the live region exists, so a strip armed
-// mid-note joins it (adoptLive's continuing branch). At unity it continues
-// exactly, also with a loop wrap between the edit and the handoff and with a
-// handoff inside an odd-sized callback; under varispeed, where the handover
-// starts the strip afresh, the note ends on time and nothing hangs.
-TEST_CASE("arming beside an armed track mid-note: exact at unity, nothing hangs under varispeed" *
+// mid-note joins it (adoptLive's continuing branch). It continues exactly,
+// at unity (also with a loop wrap between the edit and the handoff) and
+// under a master playrate (also looping), with a handoff inside an
+// odd-sized callback too: the same engine never armed plays the same, and
+// nothing hangs.
+TEST_CASE("arming beside an armed track mid-note: exact at unity and under a playrate" *
           doctest::description("rt")) {
     constexpr std::int64_t kEdit = 12800, kFrames = 96000;
     auto pool = makePool();
     const auto offline =
         renderOffline(twoKeysSession(false), pool, {.startSeconds = 0, .endSeconds = 2.5}).value();
     REQUIRE(offline.audio.channels[0].size() >= static_cast<std::size_t>(kFrames));
-    for (const double rate : {1.0, 1.25})
+    struct Rate {
+        double rate;
+        bool preserve;
+    };
+    for (const Rate r : {Rate{1.0, false}, Rate{1.25, false}, Rate{1.25, true}})
         for (const bool loop : {false, true})
             for (const std::uint32_t block : {256u, 37u})
                 for (const EngineOptions& options : kBothExecutors) {
-                    if (rate != 1.0 && loop) continue;
-                    INFO("rate " << rate << ", loop " << loop << ", block " << block
-                                 << ", anticipative " << options.anticipative << ", workers "
-                                 << options.workers);
+                    const double rate = r.rate;
+                    INFO("rate " << rate << ", preserve " << r.preserve << ", loop " << loop
+                                 << ", block " << block << ", anticipative " << options.anticipative
+                                 << ", workers " << options.workers);
                     // `arm`: arm Keys at kEdit; else the reference, never armed.
+                    // `resets`: how often the Keys instrument was reset from the
+                    // edit to the end.
+                    std::uint32_t resets = 0;
                     auto run = [&](bool arm) {
                         auto rtPool = makePool();
                         MediaCache media;
@@ -2575,15 +2774,29 @@ TEST_CASE("arming beside an armed track mid-note: exact at unity, nothing hangs 
                                                      .blockSize = block,
                                                      .midiInputs = true})
                                     .ok());
-                        REQUIRE(engine.load(twoKeysSession(false, rate)));
+                        REQUIRE(engine.load(twoKeysSession(false, rate, r.preserve)));
                         REQUIRE(engine.awaitPlan());
                         // The loop wraps 2000 frames after the edit, before its handoff.
                         if (loop) engine.setLoop(0.0, double(kEdit + 2000) / 48000.0, true);
                         engine.play();
                         runFrames(engine, backend, options, kEdit, block);
-                        if (arm) REQUIRE(engine.load(twoKeysSession(true, rate)));
+                        if (loop && rate == 1.0 && options.anticipative) {
+                            // A unity handoff is where the renderer is when it adopts
+                            // the plan: rendered at least 4096 frames ahead of the
+                            // playhead (under kEdit + block) at the edit, so past the
+                            // wrap at kEdit + 2000, which the playhead has not reached.
+                            REQUIRE(options.renderAheadMs * 48.0 >= 4096.0);
+                            REQUIRE(engine.awaitRendered(4096));
+                            REQUIRE((kEdit + block - 1) / block * block < kEdit + 2000);
+                        }
+                        host::Instance* const keys =
+                            rtPool.find(keysInstrument(twoKeysSession(false)));
+                        REQUIRE(keys);
+                        const std::uint32_t resetsBefore = keys->resets();
+                        if (arm) REQUIRE(engine.load(twoKeysSession(true, rate, r.preserve)));
                         runFrames(engine, backend, options, kFrames - kEdit, block);
                         engine.service();
+                        resets = keys->resets() - resetsBefore;
                         CHECK(engine.processErrors() == 0);
                         engine.stop();
                         REQUIRE(engine.outputLatency() == 0);
@@ -2591,15 +2804,17 @@ TEST_CASE("arming beside an armed track mid-note: exact at unity, nothing hangs 
                     };
                     const auto reference = run(false);
                     const auto armed = run(true);
+                    // An exact handoff continues the instrument: never reset.
+                    CHECK(resets == 0);
+                    // Arming changes nothing: the never-armed run of this engine.
+                    CHECK(maxDiff(armed, 0, reference, static_cast<std::size_t>(kFrames)) == 0.0);
                     if (rate == 1.0) {
-                        CHECK(maxDiff(armed, 0, reference, static_cast<std::size_t>(kFrames)) ==
-                              0.0);
                         if (!loop)
                             CHECK(maxDiff(armed, 0, offline.audio.channels[0],
                                           static_cast<std::size_t>(kFrames)) == 0.0);
-                    } else {
+                    } else if (!loop) {
                         // The note ends at 1 s of timeline, 38400 device frames
-                        // at 1.25: silence after it, however the handover went.
+                        // at 1.25: silence after it.
                         double after = 0;
                         for (std::size_t i = 40000; i < static_cast<std::size_t>(kFrames); ++i)
                             after = std::max(after, std::fabs(double(armed[i])));
@@ -2612,61 +2827,194 @@ TEST_CASE("arming beside an armed track mid-note: exact at unity, nothing hangs 
                 }
 }
 
+// One change that both turns a playrate on (unity to 1.25) and arms a strip
+// mid-note cannot continue it: the first rate plan places its handoff in a
+// new device coordinate. The strip starts afresh, its instrument reset, and
+// nothing sounds after the note's end, also after a loop wrap.
+TEST_CASE("turning a playrate on and arming in one change restarts the strip: no note hangs" *
+          doctest::description("rt")) {
+    for (const bool loop : {false, true})
+        for (const std::uint32_t block : {256u, 37u})
+            for (const EngineOptions& options : kBothExecutors) {
+                INFO("loop " << loop << ", block " << block << ", anticipative "
+                             << options.anticipative << ", workers " << options.workers);
+                // Looping: [0, 1.5 s) wraps at 72000 before the edit at 80000
+                // (timeline 8000, mid-note); the note ends at timeline 48000,
+                // under 1.25 by device 116000, and the next wrap comes after
+                // 132000, when the note starts again.
+                const std::int64_t edit = loop ? 80000 : 12800, frames = loop ? 150000 : 96000;
+                auto pool = makePool();
+                MediaCache media;
+                DummyBackend backend(keyboard({}, frames + 4096));
+                Engine engine(pool, media, options);
+                REQUIRE(engine
+                            .start(backend,
+                                   {.sampleRate = 48000, .blockSize = block, .midiInputs = true})
+                            .ok());
+                REQUIRE(engine.load(twoKeysSession(false)));
+                REQUIRE(engine.awaitPlan());
+                if (loop) engine.setLoop(0.0, 1.5, true);
+                engine.play();
+                runFrames(engine, backend, options, edit, block);
+                host::Instance* const keys = pool.find(keysInstrument(twoKeysSession(false)));
+                REQUIRE(keys);
+                const std::uint32_t resetsBefore = keys->resets();
+                REQUIRE(engine.load(twoKeysSession(true, 1.25)));
+                runFrames(engine, backend, options, frames - edit, block);
+                engine.service();
+                if (options.anticipative) CHECK(keys->resets() > resetsBefore);
+                CHECK(engine.effectivePlayrate() == doctest::Approx(1.25).epsilon(1e-3));
+                CHECK(engine.processErrors() == 0);
+                engine.stop();
+                const auto& L = backend.capture().channels[0];
+                REQUIRE(L.size() >= static_cast<std::size_t>(frames));
+                const auto peak = [&](std::size_t from, std::size_t to) {
+                    double x = 0;
+                    for (std::size_t i = from; i < to; ++i)
+                        x = std::max(x, std::fabs(double(L[i])));
+                    return x;
+                };
+                CHECK(peak(1000, 12000) > 0.05);
+                if (loop) {
+                    CHECK(peak(118000, 132000) == 0.0);
+                    CHECK(peak(136000, 146000) > 0.05);  // the next pass, the strip now live
+                } else {
+                    CHECK(peak(46000, 96000) == 0.0);
+                }
+            }
+}
+
+// Arming at the boundary where the playrate also changes (1.25 to 1.5):
+// the strip continues from the renderer's old timeline into the new plan's,
+// whose history up to the handoff is the old one's, and plays exactly as the
+// never-armed run of the same engine. Both wait, before the edit, until the
+// renderer is full, so the prepared boundary is the same in both runs.
+TEST_CASE("arming while the playrate changes: exact" * doctest::description("rt")) {
+    constexpr std::int64_t kEdit = 12800, kFrames = 96000;
+    for (const bool preserve : {false, true})
+        for (const std::uint32_t block : {256u, 37u})
+            for (const EngineOptions& options : kBothExecutors) {
+                INFO("preserve " << preserve << ", block " << block << ", anticipative "
+                                 << options.anticipative << ", workers " << options.workers);
+                std::uint32_t resets = 0;
+                auto run = [&](bool arm) {
+                    auto pool = makePool();
+                    MediaCache media;
+                    DummyBackend backend(keyboard({}, kFrames + 4096));
+                    Engine engine(pool, media, options);
+                    REQUIRE(
+                        engine
+                            .start(backend,
+                                   {.sampleRate = 48000, .blockSize = block, .midiInputs = true})
+                            .ok());
+                    REQUIRE(engine.load(twoKeysSession(false, 1.25, preserve)));
+                    REQUIRE(engine.awaitPlan());
+                    engine.play();
+                    runFrames(engine, backend, options, kEdit, block);
+                    if (options.anticipative)
+                        REQUIRE(engine.awaitRendered(std::numeric_limits<std::int64_t>::max()));
+                    host::Instance* const keys = pool.find(keysInstrument(twoKeysSession(false)));
+                    REQUIRE(keys);
+                    const std::uint32_t before = keys->resets();
+                    REQUIRE(engine.load(twoKeysSession(arm, 1.5, preserve)));
+                    runFrames(engine, backend, options, kFrames - kEdit, block);
+                    engine.service();
+                    resets = keys->resets() - before;
+                    CHECK(engine.effectivePlayrate() == 1.5);
+                    CHECK(engine.processErrors() == 0);
+                    engine.stop();
+                    return backend.capture().channels[0];
+                };
+                const auto reference = run(false);
+                const auto armed = run(true);
+                CHECK(resets == 0);
+                CHECK(maxDiff(armed, 0, reference, static_cast<std::size_t>(kFrames)) == 0.0);
+                double during = 0;
+                for (std::size_t i = 1000; i < 12000; ++i)
+                    during = std::max(during, std::fabs(double(armed[i])));
+                CHECK(during > 0.05);
+            }
+}
+
 // A handoff the callback reaches late (here past the renderer's position,
 // after the renderer stalled and the frontier ran dry) cannot continue the
 // carried node: what the renderer never rendered includes the note's end.
-// The strip starts afresh, so the note does not hang.
+// The strip starts afresh, its instrument reset, so the note does not hang:
+// at unity and under a master playrate.
 TEST_CASE("a late handoff starts the newly live strip afresh: no note hangs" *
           doctest::description("rt")) {
-    for (const std::uint32_t block : {256u, 37u})
-        for (const int workers : {0, 2}) {
-            INFO("block " << block << ", workers " << workers);
-            const EngineOptions options{.workers = workers};
-            auto pool = makePool();
-            MediaCache media;
-            DummyBackend backend(keyboard({}, 96000 + 4096));
-            Engine engine(pool, media, options);
-            REQUIRE(
-                engine.start(backend, {.sampleRate = 48000, .blockSize = block, .midiInputs = true})
-                    .ok());
-            REQUIRE(engine.load(twoKeysSession(false)));
-            REQUIRE(engine.awaitPlan());
-            engine.play();
-            std::int64_t played = 0;
-            // Plays device callbacks up to frame `to`, the renderer kept ahead or not.
-            auto playTo = [&](std::int64_t to, bool ahead) {
-                const std::int64_t cycles = (to - played + block - 1) / block;
-                if (cycles <= 0) return;
-                if (ahead)
-                    runAhead(engine, backend, cycles, block);
-                else
-                    backend.run(cycles);
-                played += cycles * block;
-            };
-            playTo(24000, true);
-            // The renderer stops before the note's end (at 48000); the callback
-            // plays on past it, missing the frontier.
-            engine.holdRenderer(true);
-            REQUIRE(engine.awaitRendererHeld());
-            playTo(60000, false);
-            REQUIRE(engine.load(twoKeysSession(true)));
-            REQUIRE(engine.awaitPlan());  // adopted by the renderer at its stalled position
-            playTo(68000, false);         // the callback takes it at once, past the handoff
-            engine.holdRenderer(false);
-            playTo(96000, true);
-            engine.service();
-            CHECK(engine.processErrors() == 0);
-            engine.stop();
-            const auto& L = backend.capture().channels[0];
-            REQUIRE(L.size() >= 96000);
-            double before = 0, after = 0;
-            for (std::size_t i = 1000; i < 20000; ++i)
-                before = std::max(before, std::fabs(double(L[i])));
-            for (std::size_t i = 72000; i < 96000; ++i)
-                after = std::max(after, std::fabs(double(L[i])));
-            CHECK(before > 0.05);
-            CHECK(after == 0.0);
-        }
+    struct Rate {
+        double rate;
+        bool preserve;
+    };
+    for (const Rate r : {Rate{1.0, false}, Rate{1.25, false}, Rate{1.25, true}})
+        for (const std::uint32_t block : {256u, 37u})
+            for (const int workers : {0, 2}) {
+                INFO("rate " << r.rate << ", preserve " << r.preserve << ", block " << block
+                             << ", workers " << workers);
+                const EngineOptions options{.workers = workers};
+                auto pool = makePool();
+                MediaCache media;
+                DummyBackend backend(keyboard({}, 96000 + 4096));
+                Engine engine(pool, media, options);
+                REQUIRE(engine
+                            .start(backend,
+                                   {.sampleRate = 48000, .blockSize = block, .midiInputs = true})
+                            .ok());
+                REQUIRE(engine.load(twoKeysSession(false, r.rate, r.preserve)));
+                REQUIRE(engine.awaitPlan());
+                engine.play();
+                std::int64_t played = 0;
+                // Plays device callbacks up to frame `to`, the renderer kept ahead or not.
+                auto playTo = [&](std::int64_t to, bool ahead) {
+                    const std::int64_t cycles = (to - played + block - 1) / block;
+                    if (cycles <= 0) return;
+                    if (ahead)
+                        runAhead(engine, backend, cycles, block);
+                    else
+                        backend.run(cycles);
+                    played += cycles * block;
+                };
+                playTo(24000, true);
+                // The renderer stops before the note's end (at 48000, or 38400 at
+                // 1.25); the callback plays on past it, missing the frontier.
+                engine.holdRenderer(true);
+                REQUIRE(engine.awaitRendererHeld());
+                host::Instance* const keys = pool.find(keysInstrument(twoKeysSession(false)));
+                REQUIRE(keys);
+                const std::uint32_t resetsBefore = keys->resets();
+                if (r.rate == 1.0) {
+                    playTo(60000, false);
+                    // The renderer adopts the plan at its stalled position; the
+                    // callback, past that handoff, takes it at once.
+                    REQUIRE(engine.load(twoKeysSession(true, r.rate, r.preserve)));
+                    REQUIRE(engine.awaitPlan());
+                    playTo(68000, false);
+                } else {
+                    // A rate plan's handoff is its prepared boundary, a render-ahead
+                    // span past the callback (before the note's end, edited here):
+                    // the renderer reaches it once released, after the callback
+                    // has played past it and past the note's end.
+                    REQUIRE(engine.load(twoKeysSession(true, r.rate, r.preserve)));
+                    playTo(68000, false);
+                }
+                engine.holdRenderer(false);
+                playTo(96000, true);
+                engine.service();
+                // The callback, not continuing the instrument, reset it.
+                CHECK(keys->resets() > resetsBefore);
+                CHECK(engine.processErrors() == 0);
+                engine.stop();
+                const auto& L = backend.capture().channels[0];
+                REQUIRE(L.size() >= 96000);
+                double before = 0, after = 0;
+                for (std::size_t i = 1000; i < 20000; ++i)
+                    before = std::max(before, std::fabs(double(L[i])));
+                for (std::size_t i = 72000; i < 96000; ++i)
+                    after = std::max(after, std::fabs(double(L[i])));
+                CHECK(before > 0.05);
+                CHECK(after == 0.0);
+            }
 }
 
 TEST_CASE("MIDI monitoring preserves every event in a device block" * doctest::description("rt")) {
@@ -3789,6 +4137,53 @@ TEST_CASE("the metronome clicks every beat in the live output, accented on the b
         CHECK(std::fabs(l[onsets[1] + 6000]) == 0.0f);    // silence between clicks
         CHECK(l[onsets[2] + 100] == r[onsets[2] + 100]);  // centred
     }
+    // A two-beat loop, at unity and under a master playrate: every pass
+    // clicks both beats, the bar's first, at the loop start, after each wrap too.
+    for (const double rate : {1.0, 1.25})
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            INFO("loop, rate " << rate << ", anticipative " << options.anticipative);
+            model::EditTxn t(model::Session::create({.console9 = false}), 1);
+            auto project = t.project();
+            project.playrate = {rate, false};
+            t.setProject(project);
+            const model::Session s = t.commit().value();
+            auto rtPool = makePool();
+            MediaCache media;
+            DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000 * 2});
+            Engine engine(rtPool, media, options);
+            REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+            REQUIRE(engine.load(s));
+            REQUIRE(engine.awaitPlan());
+            engine.setMetronome(true, 0.0);
+            engine.setLoop(0.0, 1.0, true);  // beats 1 and 2 of bar 1
+            engine.play();
+            if (options.anticipative)
+                runAhead(engine, backend, 48000 * 2 / 128, 128);
+            else
+                backend.run(48000 * 2 / 128);
+            engine.stop();
+            const auto& l = backend.capture().channels[0];
+            REQUIRE(l.size() >= 96000);
+            std::vector<std::size_t> onsets;
+            for (std::size_t i = 0; i < 96000; ++i)
+                if (std::fabs(l[i]) > 0.05f && (onsets.empty() || i > onsets.back() + 4000))
+                    onsets.push_back(i);
+            const double beat = 24000.0 / rate;  // device frames
+            // Two seconds: 4 beats at unity, 5 at 1.25 (0, 19200, ... 76800).
+            REQUIRE(onsets.size() ==
+                    static_cast<std::size_t>(std::floor(96000.0 / beat - 1e-9)) + 1);
+            for (std::size_t b = 0; b < onsets.size(); ++b) {
+                INFO("beat " << b);
+                CHECK(std::fabs(double(onsets[b]) - double(b) * beat) <= 2.0);
+                float p = 0;
+                for (std::size_t i = onsets[b]; i < onsets[b] + 1920; ++i)
+                    p = std::max(p, std::fabs(l[i]));
+                if (b % 2 == 0)
+                    CHECK(p > 0.9f);  // the loop start: the bar's first beat
+                else
+                    CHECK(p < 0.7f);
+            }
+        }
 }
 
 TEST_CASE("live bridged effects pass through without callback lifecycle or processing") {

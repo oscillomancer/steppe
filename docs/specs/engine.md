@@ -1193,7 +1193,8 @@ harness. See the tooling README for schemas, limits and invocation details.
   generation reaches the newest published one (`service()`), so no instance
   is destroyed before the audio thread has stopped it. A plugin whose
   `start_processing()` fails is left out of processing (its stage passes
-  audio through, delay-compensated, and `processErrors` counts it); the next
+  audio through, delay-compensated, and `processErrors` counts it) and is
+  reset as it refuses, so a retry that succeeds starts it clean; the next
   plan retries it. Per-stage event storage is reserved for the most events
   any block-long window holds, so a seek off the block grid never allocates.
   Plans share ownership of the session's TimeMap (a session version may be
@@ -1329,23 +1330,28 @@ harness. See the tooling README for schemas, limits and invocation details.
   timeline and rack-delivered notes play on, in both executors.
 - **Class changes while playing** (ADR-0014): a node the anticipative
   engine moves into the live region (arming or monitoring mid-song)
-  continues at the handoff where the renderer left it. Playing at unity
-  rate, the renderer hands its instance over without `reset()` and carries
-  the node's voices, held notes, delay lines, Console 9 and fader state and
+  continues at the handoff where the renderer left it. Playing, the
+  renderer hands its instance over without `reset()` and carries the
+  node's voices, held notes, delay lines, Console 9 and fader state and
   take and input chains into the new plan (`carryMix` from its class into
-  the live one; `Plan::handContinuable`). The callback continues such a
-  node only when it adopts the plan exactly at its handoff, playing, in
-  the same epoch; then held timeline notes, racks (their Notes keys
-  included) and effect tails sound on and the output stays the offline
-  render's. Otherwise (stopped, a seek or new epoch, a late adoption after
-  a frontier miss, or a non-unity master playrate) the nodes entering the
-  live region start afresh: voices and held notes cleared, plug-ins reset,
-  racks restarted, so nothing hangs, but a held note cuts. In particular,
-  under a non-unity master playrate or its envelope, arming or monitoring
-  mid-song still cuts a held note (a known limit). Bridged stages pass
-  through on live nodes (§2.1), so a bridged instrument falls silent when
-  armed. A node leaving the live region stays live while the transport
-  plays (`keepLive`).
+  the live one; `Plan::handContinuable`), from a plan of the same kind:
+  two unity plans, or two master-playrate plans adopted at their prepared
+  handoff without a seek (`rateAdoption` is ready only there, where the
+  plan's hand device position is the renderer's own). The first plan under
+  a rate, after unity, is not continuable: the device coordinate changes
+  there. (Once a rate plan is prepared, every later plan is one until the
+  engine stops, back at 1× too, so this is the only such step.) The
+  callback continues such a node only when it adopts the plan exactly at
+  its handoff, playing, in the same epoch; then held timeline notes, racks
+  (their Notes keys included) and effect tails sound on and the output
+  stays the offline render's, at unity and under a master playrate or its
+  envelope. Otherwise (stopped, a seek or new epoch, a late adoption after
+  a frontier miss, or the switch from unity to a rate) the nodes entering
+  the live region start afresh: voices and held notes cleared, plug-ins
+  reset, racks restarted, so nothing hangs, but a held note cuts. Bridged
+  stages pass through on live nodes (§2.1), so a bridged instrument falls
+  silent when armed. A node leaving the live region stays live while the
+  transport plays (`keepLive`).
 - **Smooth swaps:** a plan swap carries each strip's fader ramps and Console 9 state
   and each insert's applied wet level into the new plan
   (`carryMix`, by track and by instance, per executor); a changed volume,

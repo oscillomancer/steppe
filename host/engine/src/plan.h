@@ -826,9 +826,10 @@ struct Plan {
     // Stream position is in frames into the transport epoch.
     std::int64_t handAt = 0;
     std::uint64_t handEpoch = 0;
-    // The renderer, playing at unity, carried the nodes this plan moves into
-    // the live region at handAt of handEpoch and handed their instances over
-    // unreset, with no relocation since. The callback continues them only if
+    // The renderer, playing, carried the nodes this plan moves into the live
+    // region at handAt of handEpoch and handed their instances over unreset,
+    // with no relocation since: from a plan of the same kind (unity or rate;
+    // adoptRendererSources). The callback continues them only if
     // it also adopts exactly at handAt, playing, in that epoch (adoptLive's
     // `continuous`); otherwise it starts them afresh.
     bool handContinuable = false;

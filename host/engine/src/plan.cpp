@@ -2274,8 +2274,13 @@ void rateEvents(Plan& p, bool live, std::span<const TimedEvent> events, Stage& s
     for (std::uint32_t i = 0; i < frames; ++i) {
         const double here = clock.phase(pos + i - shift);
         double before = clock.phase(pos + i - 1 - shift);
+        // After a locate the window is [here, here]: inclusive at its start.
+        // (Not nextafter(here, -inf): at the song's start that is a
+        // subnormal, which the audio threads' DAZ reads as zero, so a note at
+        // sample 0 fell outside the window; ADR-0025.)
+        const bool inclusive = fresh;
         if (fresh) {
-            before = std::nextafter(here, -std::numeric_limits<double>::infinity());
+            before = here;
             fresh = false;
         }
         const auto firstCycle = clock.cycle(before), lastCycle = clock.cycle(here);
@@ -2301,9 +2306,15 @@ void rateEvents(Plan& p, bool live, std::span<const TimedEvent> events, Stage& s
             const double offset = double(cycle) * (clock.looping() ? clock.cycleLength() : 0.);
             const double lower = before + double(shift) - offset;
             const double upper = here + double(shift) - offset;
-            auto event = std::upper_bound(
-                events.begin(), events.end(), lower,
-                [](double sample, const TimedEvent& e) { return sample < double(e.sample); });
+            auto event = inclusive && cycle == firstCycle
+                             ? std::lower_bound(events.begin(), events.end(), lower,
+                                                [](const TimedEvent& e, double sample) {
+                                                    return double(e.sample) < sample;
+                                                })
+                             : std::upper_bound(events.begin(), events.end(), lower,
+                                                [](double sample, const TimedEvent& e) {
+                                                    return sample < double(e.sample);
+                                                });
             for (; event != events.end() && double(event->sample) <= upper; ++event) {
                 const double original = double(event->sample - shift);
                 if (clock.looping() &&

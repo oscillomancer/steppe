@@ -1211,6 +1211,12 @@ void Engine::startFree(std::vector<host::Instance*>& owned,
         // Ours already, refused, or still owned by the other executor.
         if (in->owner() || in->processing()) continue;
         if (!in->startProcessing()) {
+            // Refused: its stage passes audio through until a plan retries
+            // it. It forgets what it holds here, where this executor has just
+            // tried to start it: an instance handed over unreset (the
+            // renderer's held note) that the callback then restarts must not
+            // resume that note when a retry succeeds, untracked, so never ended.
+            in->reset();
             in->setOwner(&kRefused);
             processErrors_.fetch_add(1);
             notifyMain();
@@ -1641,9 +1647,12 @@ void Engine::addClicks(const detail::Plan& p, float* const* out, std::uint32_t o
             const auto device = pos + i - p.outputLatency;
             const double here = clock.position(device);
             double before = clock.position(device - 1);
-            if (clock.cycle(clock.phase(device)) != clock.cycle(clock.phase(device - 1)))
-                before =
-                    std::nextafter(clock.loopStart(), -std::numeric_limits<double>::infinity());
+            // Wrapped: the window starts at the loop start and includes it, so
+            // a beat there clicks after every wrap (a bound just below it fell
+            // within the tolerance below and skipped that click).
+            const bool wrapped =
+                clock.cycle(clock.phase(device)) != clock.cycle(clock.phase(device - 1));
+            if (wrapped) before = clock.loopStart();
             const double beat = tm.beatAt(p.startSeconds + here / p.rate);
             const double previousBeat = tm.beatAt(p.startSeconds + before / p.rate);
             const auto bb = tm.barBeat(beat);
@@ -1652,8 +1661,9 @@ void Engine::addClicks(const detail::Plan& p, float* const* out, std::uint32_t o
             const double bar = tm.beatOfBar(bb.bar);
             const double index = std::floor((beat - bar) / unit + 1e-9);
             const double tick = bar + index * unit;
-            if (on && tick > previousBeat + 1e-9 && tick <= beat + 1e-9)
-                startClick(index == 0, p.rate);
+            const bool sinceBefore =
+                wrapped ? tick >= previousBeat - 1e-9 : tick > previousBeat + 1e-9;
+            if (on && sinceBefore && tick <= beat + 1e-9) startClick(index == 0, p.rate);
             const float value = gain * clickSample();
             out[0][offset + i] += value;
             out[1][offset + i] += value;
@@ -2020,8 +2030,16 @@ bool Engine::rendererHasRoom(std::uint64_t epoch) const {
 // between them may wait for the callback's epoch acknowledgement; source/graph
 // preparation never belongs to either half.
 void Engine::adoptRendererSources(detail::Plan* next) SUPPLE_RT {
-    // Continuable only while playing at unity (a rate plan moves pos_ below).
-    const bool continuable = plan_ && next && playing_ && !next->rateEnabled;
+    // Continuable only while playing, from a plan of the same kind: two unity
+    // plans, or two rate plans adopted at their prepared boundary without a
+    // seek (rateAdoption is Ready only at stream == handAt, where
+    // rateHandDevice is this renderer's own device position, so pos_ below
+    // stays put). Between unity and rate the device coordinate changes.
+    const bool sameKind = plan_ && next && plan_->rateEnabled == next->rateEnabled;
+    const bool continuable =
+        sameKind && playing_ &&
+        (!next->rateEnabled || (next->rateSeekSequence == 0 && streamLocal_ == next->handAt &&
+                                pos_ == next->rateHandDevice));
     if (plan_ && next) {
         detail::carryRateSources(*plan_, *next, 0);
         detail::carryMix(*plan_, *next, 0);
