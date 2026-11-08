@@ -1710,6 +1710,9 @@ bool runModuleStage(Plan& p, Stage& st, Stereo& io, std::uint32_t n,
 }
 
 namespace {
+void playSpan(Clip& c, Stereo& into, std::int64_t pos, std::int64_t from, std::int64_t to,
+              std::int64_t shift, std::int64_t frames) SUPPLE_RT;
+
 // An audio item's samples for [pos, pos + n), added into `into`.
 void playClip(Plan& p, Clip& c, Stereo& into, std::int64_t pos, std::uint32_t n, std::int64_t shift,
               bool live, std::int64_t wrapAt = std::numeric_limits<std::int64_t>::max(),
@@ -1720,14 +1723,25 @@ void playClip(Plan& p, Clip& c, Stereo& into, std::int64_t pos, std::uint32_t n,
     }
     // Timeline sample t plays the clip at t + shift (a take chain's input
     // runs its latency ahead); from `wrapAt` on, at t + shift - wrapBy (that
-    // input has wrapped to the loop start: processTake).
+    // input has wrapped to the loop start: processTake). Each side runs only
+    // over the frames inside the item.
     const auto& ch = c.data->channels;
     const auto frames = static_cast<std::int64_t>(c.data->frames());
     if (ch.empty() || frames == 0) return;
+    const std::int64_t split = std::clamp<std::int64_t>(wrapAt, pos, pos + n);
+    playSpan(c, into, pos, pos, split, shift, frames);
+    playSpan(c, into, pos, split, pos + n, shift - wrapBy, frames);
+}
+
+// playClip's frames [from, to) of the block at `pos`, the clip at t + shift.
+void playSpan(Clip& c, Stereo& into, std::int64_t pos, std::int64_t from, std::int64_t to,
+              std::int64_t shift, std::int64_t frames) SUPPLE_RT {
+    from = std::max(from, c.start - shift);
+    to = std::min(to, c.start + c.length - shift);
+    const auto& ch = c.data->channels;
     const std::size_t right = ch.size() > 1 ? 1 : 0;
-    for (std::int64_t t = pos; t < pos + n; ++t) {
-        const std::int64_t k = t + shift - (t >= wrapAt ? wrapBy : 0) - c.start;  // in the item
-        if (k < 0 || k >= c.length) continue;
+    for (std::int64_t t = from; t < to; ++t) {
+        const std::int64_t k = t + shift - c.start;  // sample within the item
         std::int64_t f = c.offset + k;
         if (c.loop) f = ((f % frames) + frames) % frames;
         if (f < 0 || f >= frames) continue;
