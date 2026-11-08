@@ -1999,6 +1999,12 @@ void Instance::setOwner(const void* owner) SUPPLE_RT {
     if (!owner) notifyAudio();
 }
 
+bool Instance::claimOwner(const void* owner) SUPPLE_RT {
+    const void* none = nullptr;
+    return owner_.compare_exchange_strong(none, owner, std::memory_order_acq_rel,
+                                          std::memory_order_acquire);
+}
+
 bool Instance::takeProcessRequest() SUPPLE_RT {
     const bool params = paramProcessRequested_.exchange(false, std::memory_order_acq_rel);
     const bool requested = remote_ ? remote_->takeProcessRequest()

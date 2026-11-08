@@ -1208,8 +1208,12 @@ void Engine::startFree(std::vector<host::Instance*>& owned,
                        const std::vector<host::Instance*>* next, const void* self) SUPPLE_RT {
     if (!next) return;
     for (host::Instance* in : *next) {
-        // Ours already, refused, or still owned by the other executor.
-        if (in->owner() || in->processing()) continue;
+        // Ours already, refused, or still owned by the other executor. The
+        // other executor may find the same instance free at the same moment
+        // (one handed into the live region while a newer plan, stopped or
+        // after an fx.move, gives it back to the renderer): the claim is one
+        // compare-exchange, so only one of them starts it.
+        if (in->owner() || in->processing() || !in->claimOwner(self)) continue;
         if (!in->startProcessing()) {
             // Refused: its stage passes audio through until a plan retries
             // it. It forgets what it holds here, where this executor has just
@@ -1222,7 +1226,6 @@ void Engine::startFree(std::vector<host::Instance*>& owned,
             notifyMain();
             continue;
         }
-        in->setOwner(self);
         owned.push_back(in);  // within the reserved capacity
     }
 }

@@ -350,9 +350,16 @@ class Instance {
     bool processing() const { return processing_; }
     // The host's executor that currently processes this instance (an opaque
     // token, null for none): a host with several audio threads uses it so
-    // that exactly one of them calls the audio-thread API at a time.
+    // that exactly one of them calls the audio-thread API at a time. An
+    // executor takes a free instance with claimOwner(), never by testing
+    // owner() and then calling setOwner(): two executors that both find it
+    // free could otherwise both start it. Only the owner calls setOwner(),
+    // to hand it on, mark it, or let it go (null, after stopProcessing()).
     void setOwner(const void* owner) SUPPLE_RT;
     const void* owner() const SUPPLE_RT { return owner_.load(std::memory_order_acquire); }
+    // Takes the instance for `owner` if nobody owns it (owner() is null), in
+    // one compare-exchange; false if another token holds it.
+    bool claimOwner(const void* owner) SUPPLE_RT;
     // Returns false on CLAP_PROCESS_ERROR, or when not processing. Output
     // events are appended to `out` (may be null). Queued setParam() changes
     // are delivered first, at time 0, as far as the event arena has room

@@ -2274,13 +2274,15 @@ void rateEvents(Plan& p, bool live, std::span<const TimedEvent> events, Stage& s
     for (std::uint32_t i = 0; i < frames; ++i) {
         const double here = clock.phase(pos + i - shift);
         double before = clock.phase(pos + i - 1 - shift);
-        // After a locate the window is [here, here]: inclusive at its start.
-        // (Not nextafter(here, -inf): at the song's start that is a
-        // subnormal, which the audio threads' DAZ reads as zero, so a note at
-        // sample 0 fell outside the window; ADR-0025.)
+        // After a locate the window is inclusive at its start (not
+        // nextafter(here, -inf): at the song's start that is a subnormal,
+        // which the audio threads' DAZ reads as zero, so a note at sample 0
+        // fell outside the window; ADR-0025). A chain running ahead (shift
+        // < 0, a compensated take) starts it at the locate itself: its notes
+        // between there and its look-ahead are due, and play at once, late.
         const bool inclusive = fresh;
         if (fresh) {
-            before = here;
+            before = shift < 0 ? std::min(here, clock.phase(pos + i)) : here;
             fresh = false;
         }
         const auto firstCycle = clock.cycle(before), lastCycle = clock.cycle(here);
@@ -2916,9 +2918,14 @@ void locateEdge(Edge& edge, bool restart) SUPPLE_RT {
 // entry) or a loop wrap (held notes end; delay lines and tails kept).
 void locateTakes(Node& n, std::int64_t pos, bool wrap, bool keepPlaying = false) SUPPLE_RT {
     for (TakeChain& tc : n.takeChains) {
-        const auto it =
-            std::lower_bound(tc.events.begin(), tc.events.end(), pos,
-                             [](const TimedEvent& e, std::int64_t x) { return e.sample < x; });
+        // A seek (not a wrap, nor a handoff that keeps playing) also takes
+        // the notes between it and the chain's look-ahead (its events run
+        // `latency` early): they are due, and play at once, late, as the
+        // rate path's first window takes them (rateEvents).
+        const std::int64_t ahead = std::min<std::int64_t>(0, n.itemShift - tc.latency);
+        const auto it = std::lower_bound(
+            tc.events.begin(), tc.events.end(), !wrap && !keepPlaying ? pos + ahead : pos,
+            [](const TimedEvent& e, std::int64_t x) { return e.sample < x; });
         tc.nextEvent = static_cast<std::size_t>(it - tc.events.begin());
         if (!wrap) tc.rateEventFresh = !keepPlaying;
         for (Automation* a : {&tc.volume, &tc.pan, &tc.mute}) a->cursor = 0;

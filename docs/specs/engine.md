@@ -120,7 +120,12 @@ a structural edit while the preceding plan remains prepared.
   trim at the selected tap's own `S + tapOffset`, after preparation. Main
   `output_latency` retains its startup/playhead meaning.
 - Clips, take output spans/fades/envelopes and track MIDI use `S`. A take's
-  input uses `S - take.latency`. Track/take stage parameters, output-event
+  input uses `S - take.latency`. A take whose input runs ahead (`S -
+  take.latency < 0`) takes, after a locate that restarts it (play, a seek,
+  a strip started afresh; not a loop wrap or a continuing handoff), its
+  notes from the locate on: those inside its look-ahead are due already and
+  play at once, late, at the first frame, on the unity and the playrate
+  path alike, as an offline render from there plays them. Track/take stage parameters, output-event
   timestamps and plugin transport use that input shift plus `stage.before`,
   at unity rate as well as under playrate. Fader controls use `S + chain`;
   send encoders use their source tap's shift, and unencoded key controls
@@ -1185,20 +1190,23 @@ harness. See the tooling README for schemas, limits and invocation details.
   bit-identical to the offline render for block-size-invariant plugins
   (tested at 128-frame device blocks against 512-frame offline blocks, with
   and without plugin latency).
-- **Plan hand-off:** `RtHandoff<Plan>`. `acquire()` returns the previous plan
-  to the main thread immediately, so the audio thread keeps its own
+- **Plan hand-off:** `RtHandoff<Plan>`. `acquire()` returns the previous
+  plan to the main thread immediately, so the audio thread keeps its own
   preallocated list of the instances it is processing; on adoption it stops
   instances the new plan dropped and starts new ones, then stores the plan's
   generation; the main thread prunes the instance pool only once that
   generation reaches the newest published one (`service()`), so no instance
-  is destroyed before the audio thread has stopped it. A plugin whose
-  `start_processing()` fails is left out of processing (its stage passes
-  audio through, delay-compensated, and `processErrors` counts it) and is
-  reset as it refuses, so a retry that succeeds starts it clean; the next
-  plan retries it. Per-stage event storage is reserved for the most events
-  any block-long window holds, so a seek off the block grid never allocates.
-  Plans share ownership of the session's TimeMap (a session version may be
-  freed while its plan plays).
+  is destroyed before the audio thread has stopped it. An executor takes a
+  free instance by a compare-exchange of its owner token from none
+  (`Instance::claimOwner`), so the renderer and the callback, both finding
+  one free, never both start it. A plugin whose `start_processing()` fails
+  is left out of processing (its stage passes audio through,
+  delay-compensated, and `processErrors` counts it) and is reset as it
+  refuses, so a retry that succeeds starts it clean; the next plan retries
+  it. Per-stage event storage is reserved for the most events any block-long
+  window holds, so a seek off the block grid never allocates. Plans share
+  ownership of the session's TimeMap (a session version may be freed while
+  its plan plays).
 - **Transport:** play/pause/seek/shutdown are coalescing atomics (the latest
   request wins, none is dropped however many arrive between callbacks).
   Shutdown: `Backend::stop()` promises one final zero-frame callback on the

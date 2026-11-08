@@ -2498,12 +2498,21 @@ model::Session echoSession(bool armed, model::Monitor monitor, bool pads = false
 
 // Two sine tracks on keyboardSession's MIDI input: "Pads", armed and
 // monitored (so the live region exists) and silent, and "Keys", holding key
-// 60 for two beats (1 s), armed as given; the master playrate `rate`.
-model::Session twoKeysSession(bool armKeys, double rate = 1.0, bool preserve = false) {
+// 60 for two beats (1 s), armed as given; the master playrate `rate`, or,
+// with `envelope`, a playrate envelope from 1 to 1.5 over two seconds.
+model::Session twoKeysSession(bool armKeys, double rate = 1.0, bool preserve = false,
+                              bool envelope = false) {
     model::EditTxn t(model::Session::create({.console9 = false}), 1);
     auto project = t.project();
     project.playrate = {rate, preserve};
     t.setProject(project);
+    if (envelope) {
+        model::Envelope env;
+        env.target = {kMaster, "playrate"};
+        env.timebase = model::Timebase::Time;
+        env.points = {{0, 1.0}, {2.0, 1.5}};
+        t.create(env);
+    }
     for (const char* name : {"Pads", "Keys"}) {
         model::Track tr;
         tr.name = name;
@@ -2620,6 +2629,88 @@ TEST_CASE("master playrate: a note at tick 0 sounds, offline and in real time" *
                 const auto& got = backend.capture().channels[0];
                 CHECK(first(got) > 0.05);
                 CHECK(maxDiff(got, 0, want, 24000) == 0.0);
+            }
+        }
+}
+
+// A take chain compensated for the 64-frame latency after its instrument
+// runs its notes that far ahead. After a locate, the notes between the
+// locate and that look-ahead are due already: they play at once, late, at
+// the first frame, on the unity and the rate path, at the song's start and
+// after a seek. A seek plays as the offline render from there.
+TEST_CASE("a compensated take's notes inside its look-ahead play at once after a locate" *
+          doctest::description("rt")) {
+    const auto session = [](double rate) {
+        model::EditTxn t(model::Session::create({.console9 = false}), 1);
+        auto project = t.project();
+        project.playrate = {rate, false};
+        t.setProject(project);
+        model::Track track;
+        track.parent = kMaster;
+        const Id tr = t.create(track);
+        t.modify<model::Track>(kMaster, [&](model::Track& m) { m.children.push_back(tr); });
+        model::FxInstance synth;
+        synth.plugin.id = "com.suppleaudio.test.sine";
+        model::FxInstance delay;
+        delay.plugin.id = "com.suppleaudio.test.gain";
+        delay.patch = json::parse(R"({"schema":"supple.test-gain-patch/1.0",
+                                      "params":{"latency":"short"}})")
+                          .value();
+        model::Take take;
+        take.chain = {t.create(synth), t.create(delay)};
+        model::MidiSource src;
+        src.sequence.ppq = 960;
+        src.sequence.length = 16 * 960;
+        // At the song's start, and 25 frames after 1 s (inside the look-ahead
+        // of a seek there).
+        src.sequence.notes = {{0, 960, 0, 60, 100, 0}, {1921, 960, 0, 72, 100, 0}};
+        take.source = t.create(src);
+        const Id tk = t.create(take);
+        model::Item item;
+        item.track = tr;
+        item.length = 8.0;
+        item.takes = {tk};
+        item.activeTake = tk;
+        t.create(item);
+        return t.commit().value();
+    };
+    const auto first = [](const std::vector<float>& x) {
+        double peak = 0;
+        for (std::size_t i = 0; i < 2000; ++i) peak = std::max(peak, std::fabs(double(x[i])));
+        return peak;
+    };
+    constexpr std::int64_t kFrames = 24000;
+    for (const double rate : {1.0, 1.25})
+        for (const double from : {0.0, 1.0}) {
+            INFO("rate " << rate << ", from " << from);
+            const auto s = session(rate);
+            auto pool = makePool();
+            const auto offline =
+                renderOffline(s, pool, {.startSeconds = from, .endSeconds = from + 1.0}).value();
+            const auto& want = offline.audio.channels[0];
+            REQUIRE(want.size() >= static_cast<std::size_t>(kFrames));
+            CHECK(first(want) > 0.05);
+            for (const EngineOptions& options : kBothExecutors) {
+                INFO("anticipative " << options.anticipative << ", workers " << options.workers);
+                auto rtPool = makePool();
+                MediaCache media;
+                DummyBackend backend(keyboard({}, kFrames + 4096));
+                Engine engine(rtPool, media, options);
+                REQUIRE(
+                    engine
+                        .start(backend, {.sampleRate = 48000, .blockSize = 256, .midiInputs = true})
+                        .ok());
+                REQUIRE(engine.load(s));
+                REQUIRE(engine.awaitPlan());
+                if (from > 0) engine.seek(from);
+                engine.play();
+                runFrames(engine, backend, options, kFrames, 256);
+                CHECK(engine.processErrors() == 0);
+                engine.stop();
+                REQUIRE(engine.outputLatency() == 0);
+                const auto& got = backend.capture().channels[0];
+                CHECK(first(got) > 0.05);
+                CHECK(maxDiff(got, 0, want, static_cast<std::size_t>(kFrames)) == 0.0);
             }
         }
 }
@@ -2751,12 +2842,15 @@ TEST_CASE("arming beside an armed track mid-note: exact at unity and under a pla
     struct Rate {
         double rate;
         bool preserve;
+        bool envelope = false;  // a playrate envelope, 1 to 1.5
     };
-    for (const Rate r : {Rate{1.0, false}, Rate{1.25, false}, Rate{1.25, true}})
+    for (const Rate r :
+         {Rate{1.0, false}, Rate{1.25, false}, Rate{1.25, true}, Rate{1.0, false, true}})
         for (const bool loop : {false, true})
             for (const std::uint32_t block : {256u, 37u})
                 for (const EngineOptions& options : kBothExecutors) {
-                    const double rate = r.rate;
+                    if (r.envelope && loop) continue;
+                    const double rate = r.envelope ? 0.0 : r.rate;  // 0: the envelope
                     INFO("rate " << rate << ", preserve " << r.preserve << ", loop " << loop
                                  << ", block " << block << ", anticipative " << options.anticipative
                                  << ", workers " << options.workers);
@@ -2774,7 +2868,7 @@ TEST_CASE("arming beside an armed track mid-note: exact at unity and under a pla
                                                      .blockSize = block,
                                                      .midiInputs = true})
                                     .ok());
-                        REQUIRE(engine.load(twoKeysSession(false, rate, r.preserve)));
+                        REQUIRE(engine.load(twoKeysSession(false, r.rate, r.preserve, r.envelope)));
                         REQUIRE(engine.awaitPlan());
                         // The loop wraps 2000 frames after the edit, before its handoff.
                         if (loop) engine.setLoop(0.0, double(kEdit + 2000) / 48000.0, true);
@@ -2793,7 +2887,9 @@ TEST_CASE("arming beside an armed track mid-note: exact at unity and under a pla
                             rtPool.find(keysInstrument(twoKeysSession(false)));
                         REQUIRE(keys);
                         const std::uint32_t resetsBefore = keys->resets();
-                        if (arm) REQUIRE(engine.load(twoKeysSession(true, rate, r.preserve)));
+                        if (arm)
+                            REQUIRE(
+                                engine.load(twoKeysSession(true, r.rate, r.preserve, r.envelope)));
                         runFrames(engine, backend, options, kFrames - kEdit, block);
                         engine.service();
                         resets = keys->resets() - resetsBefore;
@@ -2812,7 +2908,7 @@ TEST_CASE("arming beside an armed track mid-note: exact at unity and under a pla
                         if (!loop)
                             CHECK(maxDiff(armed, 0, offline.audio.channels[0],
                                           static_cast<std::size_t>(kFrames)) == 0.0);
-                    } else if (!loop) {
+                    } else if (!loop && !r.envelope) {
                         // The note ends at 1 s of timeline, 38400 device frames
                         // at 1.25: silence after it.
                         double after = 0;
