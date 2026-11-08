@@ -972,12 +972,16 @@ void registerExtraCommands(cmd::Registry& registry) {
         c.exposure = cmd::Exposure::McpTool;
         c.summary = "What can be routed where: strips, plug-in keys, sends and blocked pairs.";
         c.description =
-            "sources: strips in tree order (depth, parent, parent_send). destinations: strips and "
-            "plug-in keys (fx with a sidechain input). A pair is blocked when the source's rule "
-            "applies (masters feed only keys), the destination's rule applies (channels take only "
-            "hardware audio), it is the same strip, or it is listed in cycles (the destination "
-            "already feeds the source). sends: existing routes per pair. Otherwise route.add "
-            "accepts the pair. A source's channels past 2 are auxiliary (ADR-0020); "
+            "sources: strips in tree order (depth, parent, parent_send). destinations: strips "
+            "(kind track), plug-in keys (kind key: fx with a sidechain input) and racks' In "
+            "modules (kind module: mo_N, named \"<rack> \u00bb <In>\", with rack and home "
+            "track), each strip's keys and In modules after it. A pair is blocked when the "
+            "source's rule applies (masters feed only keys), the destination's rule applies "
+            "(channels take only hardware audio), it is the same strip, or it is listed in "
+            "cycles (the destination already feeds the source; for an In module, its rack's Outs "
+            "reach the source). sends: existing routes per pair (to: a strip, an fx or an In "
+            "module). Otherwise route.add accepts the pair (an In module: route.add {from, to: "
+            "mo_N}). A source's channels past 2 are auxiliary (ADR-0020); "
             "channel_names names those a multi-out plug-in writes ({\"3\": \"Kick\"}), and "
             "route.add {channels: {from: [3, 4], to: [1, 2]}} sends that pair.";
         c.tags = {"route"};
@@ -1073,6 +1077,22 @@ void registerExtraCommands(cmd::Registry& registry) {
                     k["track"] = id.str();
                     destinations.push_back(std::move(k));
                 }
+                // The In modules of the racks homed here, in id order: a send
+                // reaches a rack through them (rack.md 2.4).
+                for (const auto& rack : s.racks) {
+                    if (rack.value->track != id) continue;
+                    for (const auto& m : s.modules) {
+                        if (m.value->rack != rack.id || m.value->type != model::kInModule) continue;
+                        json::Value in = json::Value::object();
+                        in["id"] = m.id.str();
+                        in["name"] =
+                            model::rackLabel(s, rack.id) + " \u00bb " + model::moduleLabel(s, m.id);
+                        in["kind"] = "module";
+                        in["rack"] = rack.id.str();
+                        in["track"] = id.str();
+                        destinations.push_back(std::move(in));
+                    }
+                }
             }
             json::Value sends = json::Value::array();
             for (const auto& e : s.routes) {
@@ -1081,17 +1101,24 @@ void registerExtraCommands(cmd::Registry& registry) {
                 json::Value v = json::Value::object();
                 v["id"] = e.id.str();
                 v["from"] = r.from.track->str();
-                v["to"] = r.to.fx ? r.to.fx->str() : r.to.track ? r.to.track->str() : "";
+                v["to"] = r.to.fx       ? r.to.fx->str()
+                          : r.to.module ? r.to.module->str()
+                          : r.to.track  ? r.to.track->str()
+                                        : "";
                 sends.push_back(std::move(v));
             }
-            // A route from -> d feeds back when d (or the key's track) already
-            // reaches from: listed per pair, with the path.
+            // A route from -> d feeds back when d (the key's track, the In
+            // module's rack) already reaches from: listed per pair, with the
+            // path, as route.add finds it (routeCycle).
             json::Value cycles = json::Value::array();
             for (const json::Value& d : destinations.asArray()) {
                 const std::string did = d.find("id")->asString();
-                const bool key = d.find("kind")->asString() == "key";
-                const Id target = *Id::parse(key ? d.find("track")->asString() : did);
-                if (!key && s.tracks.find(target)->type == model::StripType::Channel)
+                const std::string kind = d.find("kind")->asString();
+                const bool key = kind == "key";
+                const Id target = *Id::parse(key                ? d.find("track")->asString()
+                                             : kind == "module" ? d.find("rack")->asString()
+                                                                : did);
+                if (kind == "track" && s.tracks.find(target)->type == model::StripType::Channel)
                     continue;  // type rule
                 for (const auto& [from, depth] : order) {
                     if (from == target) continue;  // the same strip
