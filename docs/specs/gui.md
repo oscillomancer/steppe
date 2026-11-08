@@ -1434,8 +1434,9 @@ a new channel). It follows rack.md §8.
   audio input (`record.input`: a channel, a stereo pair or a rack's Out)
   and the MIDI input (`record.midi_input`, or a legacy MIDI-only
   `record.input`: "no MIDI input", which is `track.set {record_midi:
-  null}`, "any MIDI device" or a device); picking one keeps the other, so
-  a rack's channel hears the rack and plays from the keyboard. The input
+  null}`, "any MIDI device" or a device). On a rack's channel picking one
+  keeps the other, so it hears the rack and plays from the keyboard;
+  elsewhere hardware audio and a MIDI device replace each other. The input
   button (TCP and mixer) names both, "<audio> + <MIDI>": a rack with one
   Out by its label alone ("Bells + Keystation"), any device as "midi"; MIDI
   alone names the device ("midi *" for any). A

@@ -2201,28 +2201,27 @@ TEST_CASE("the TCP's input menu lists the device's ports and picks one (P5.13)")
     a.root->frame(false);
     REQUIRE(inputButton());
     CHECK(inputButton()->valueText().rfind("AUX0", 0) == 0);
-    // A MIDI device is a selection of its own (ADR-0065): the audio pair
-    // stays, and the label and the menu show both.
+    // On a channel without a rack, a MIDI device replaces hardware audio
+    // (ADR-0065): one input, shown alone on the button and in the menu.
     menu = openMenu();
     REQUIRE(menu);
     menu->onActivate(8);  // the first device (Keystation)
     shell.sync();
     a.root->frame(false);
     REQUIRE(inputButton());
-    CHECK(inputButton()->valueText().rfind("AUX0", 0) == 0);
-    CHECK(inputButton()->valueText() == "AUX0+AUX1 + Keystation");
+    CHECK(inputButton()->valueText() == "Keystation");
     const model::Track* tr = a.app->head().tracks.find(id);
     REQUIRE(tr);
     REQUIRE(tr->record.input);
     const model::Route* route = a.app->head().routes.find(*tr->record.input);
     REQUIRE(route);
-    CHECK(route->from.hwChannels == std::vector<int>{1, 2});
+    CHECK_FALSE(route->from.hwChannels);
     const model::Route* midi = model::midiInputRoute(a.app->head(), id);
     REQUIRE(midi);
     CHECK(midi->from.midiDevice.value_or("") == "Keystation");
     menu = openMenu();
     REQUIRE(menu);
-    CHECK(checked(*menu) == std::vector<std::string>{ui::menuItems(*menu)[3].label, "Keystation"});
+    CHECK(checked(*menu) == std::vector<std::string>{"Keystation"});
     // While the engine is stopped the device reports nothing: one disabled
     // entry, and picking it changes nothing.
     running = false;
@@ -2234,7 +2233,7 @@ TEST_CASE("the TCP's input menu lists the device's ports and picks one (P5.13)")
     shell.sync();
     a.root->frame(false);
     REQUIRE(inputButton());
-    CHECK(inputButton()->valueText() == "AUX0+AUX1 + Keystation");  // unchanged
+    CHECK(inputButton()->valueText() == "Keystation");  // unchanged
     // A rack's Out module is listed whatever the device, "<rack> » <Out>",
     // and picked as the channel's audio input (ADR-0062); the keyboard stays.
     json::Value rack = json::Value::object();
