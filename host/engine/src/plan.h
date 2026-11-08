@@ -566,6 +566,10 @@ struct TakeChain {
     int clip = -1;                    // its audio (an index into Node::clips), or -1
     std::vector<TimedEvent> events;   // a MIDI take's, for its instrument, input side
     std::size_t nextEvent = 0;
+    // Unity, looping, a chain running ahead: past its look-ahead wrap (the
+    // loop end, `latency` early), the input-side sample from which it takes
+    // the loop start's notes; INT64_MIN before it.
+    std::int64_t aheadFrom = INT64_MIN;
     bool rateEventFresh = true;
     int noteTarget = -1;
     std::array<std::uint8_t, 16 * 128> held{};
@@ -908,8 +912,10 @@ Status prepare(Plan& p, const Session& s);
 // runs with FTZ/DAZ set; the caller's MXCSR is restored (ADR-0025).
 // `self`: with several executors, only stages whose instance this executor
 // owns are processed (the rest pass through); null: no ownership check.
+// `loop`: the executor's loop (take chains running ahead wrap early in it).
 bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t frames,
-                 const host::Transport& transport, const void* self = nullptr) SUPPLE_RT;
+                 const host::Transport& transport, const void* self = nullptr,
+                 const LoopRange* loop = nullptr) SUPPLE_RT;
 // Audio thread: one block of every node at plan sample `pos`, in order.
 // `playing` false: the transport is stopped — plugins and monitored inputs
 // run, items and MIDI do not play (and `pos` should not advance).

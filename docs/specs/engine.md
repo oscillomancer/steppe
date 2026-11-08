@@ -121,15 +121,20 @@ a structural edit while the preceding plan remains prepared.
   `output_latency` retains its startup/playhead meaning.
 - Clips, take output spans/fades/envelopes and track MIDI use `S`. A take's
   input uses `S - take.latency`. A take whose input runs ahead (`S -
-  take.latency < 0`) takes, after a locate that restarts it (play, a seek,
-  a strip started afresh; not a loop wrap or a continuing handoff), its
-  notes from the locate on: those inside its look-ahead are due already and
-  play at once, late, at the first frame, on the unity and the playrate
-  path alike, as an offline render from there plays them. Track/take stage parameters, output-event
-  timestamps and plugin transport use that input shift plus `stage.before`,
-  at unity rate as well as under playrate. Fader controls use `S + chain`;
-  send encoders use their source tap's shift, and unencoded key controls
-  use their destination stage's. Device audio/MIDI are never read ahead.
+  take.latency < 0`) takes, after a locate that restarts it (play, a seek, a
+  strip started afresh; not a loop wrap or a continuing handoff), its notes
+  from the locate on: those inside its look-ahead are due already and play
+  at once, late, at the first frame, on the unity and the playrate path
+  alike, as an offline render from there plays them. Looping, such a take
+  reaches the loop end its look-ahead early: there its held notes end and it
+  takes the loop start's notes, so they sound on time after the wrap, every
+  pass, on both paths (the playrate path through its timeline phase; the
+  unity path in `unityTakeEvents`, given the executor's loop). Track/take
+  stage parameters, output-event timestamps and plugin transport use that
+  input shift plus `stage.before`, at unity rate as well as under playrate.
+  Fader controls use `S + chain`; send encoders use their source tap's
+  shift, and unencoded key controls use their destination stage's. Device
+  audio/MIDI are never read ahead.
 - The solve is independent of live/arm/monitor classification. Frontier rings
   retain matching monotonic stream-frame coordinates between executors; source
   read-ahead is relative to the retained startup shift, not an additional

@@ -2715,6 +2715,103 @@ TEST_CASE("a compensated take's notes inside its look-ahead play at once after a
         }
 }
 
+// A compensated take (64 frames of latency after its instrument) with a note
+// just after the loop start, inside its look-ahead: every pass plays it on
+// time. The chain takes the note before the wrap, its look-ahead early, at
+// unity and under a master playrate. With the loop at 0.5 s the first pass
+// reaches the note without a wrap, as the offline render (no loop there)
+// does, and every later pass plays as the first. With the loop at the song's
+// start the first pass plays the note late (it is due at the first frame);
+// every later pass plays it on time, as the other loop's first pass.
+TEST_CASE("a compensated take's note just after the loop start plays on time every pass" *
+          doctest::description("rt")) {
+    // The note `tick`s into the song, 0.125 s long.
+    const auto session = [](double rate, int tick) {
+        model::EditTxn t(model::Session::create({.console9 = false}), 1);
+        auto project = t.project();
+        project.playrate = {rate, false};
+        t.setProject(project);
+        model::Track track;
+        track.parent = kMaster;
+        const Id tr = t.create(track);
+        t.modify<model::Track>(kMaster, [&](model::Track& m) { m.children.push_back(tr); });
+        model::FxInstance synth;
+        synth.plugin.id = "com.suppleaudio.test.sine";
+        model::FxInstance delay;
+        delay.plugin.id = "com.suppleaudio.test.gain";
+        delay.patch = json::parse(R"({"schema":"supple.test-gain-patch/1.0",
+                                      "params":{"latency":"short"}})")
+                          .value();
+        model::Take take;
+        take.chain = {t.create(synth), t.create(delay)};
+        model::MidiSource src;
+        src.sequence.ppq = 960;
+        src.sequence.length = 16 * 960;
+        src.sequence.notes = {{tick, 240, 0, 72, 100, 0}};
+        take.source = t.create(src);
+        const Id tk = t.create(take);
+        model::Item item;
+        item.track = tr;
+        item.length = 8.0;
+        item.takes = {tk};
+        item.activeTake = tk;
+        t.create(item);
+        return t.commit().value();
+    };
+    constexpr int kPasses = 5;
+    for (const double rate : {1.0, 1.25}) {
+        // Device frames: one pass (0.5 s of timeline), and the loop at 0.5 s's
+        // first pass, on time, offline (the note 25 frames into it).
+        const auto pass = static_cast<std::size_t>(24000 / rate);
+        auto pool = makePool();
+        const auto offline =
+            renderOffline(session(rate, 961), pool, {.startSeconds = 0, .endSeconds = 1.0}).value();
+        REQUIRE(offline.audio.channels[0].size() >= 2 * pass);
+        const std::vector<float> onTime(
+            offline.audio.channels[0].begin() + static_cast<std::ptrdiff_t>(pass),
+            offline.audio.channels[0].begin() + static_cast<std::ptrdiff_t>(2 * pass));
+        double heard = 0;
+        for (const float x : onTime) heard = std::max(heard, std::fabs(double(x)));
+        REQUIRE(heard > 0.05);
+        for (const bool atStart : {false, true})
+            for (const std::uint32_t block : {256u, 37u})
+                for (const EngineOptions& options : kBothExecutors) {
+                    INFO("rate " << rate << ", loop at " << (atStart ? 0.0 : 0.5) << ", block "
+                                 << block << ", anticipative " << options.anticipative
+                                 << ", workers " << options.workers);
+                    const auto s = session(rate, atStart ? 1 : 961);
+                    const std::size_t start = atStart ? 0 : pass;  // the loop start
+                    const std::size_t frames = start + kPasses * pass;
+                    auto rtPool = makePool();
+                    MediaCache media;
+                    DummyBackend backend(keyboard({}, static_cast<std::int64_t>(frames) + 4096));
+                    Engine engine(rtPool, media, options);
+                    REQUIRE(
+                        engine
+                            .start(backend,
+                                   {.sampleRate = 48000, .blockSize = block, .midiInputs = true})
+                            .ok());
+                    REQUIRE(engine.load(s));
+                    REQUIRE(engine.awaitPlan());
+                    engine.setLoop(atStart ? 0.0 : 0.5, atStart ? 0.5 : 1.0, true);
+                    engine.play();
+                    runFrames(engine, backend, options, static_cast<std::int64_t>(frames), block);
+                    CHECK(engine.processErrors() == 0);
+                    engine.stop();
+                    REQUIRE(engine.outputLatency() == 0);
+                    const auto& L = backend.capture().channels[0];
+                    if (!atStart)  // up to the first wrap: the offline render
+                        CHECK(maxDiff(L, 0, offline.audio.channels[0], start + pass) == 0.0);
+                    // Every pass after the first: on time.
+                    for (int k = 1; k < kPasses; ++k) {
+                        INFO("pass " << k);
+                        CHECK(maxDiff(L, start + static_cast<std::size_t>(k) * pass, onTime,
+                                      pass) == 0.0);
+                    }
+                }
+    }
+}
+
 // An effect's tail crosses into the live region with its strip: a short note
 // ends before the strip is armed (or starts monitoring), and its echo, still
 // inside the effect's delay line at the handoff, is heard as offline. Alone
