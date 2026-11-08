@@ -2741,6 +2741,15 @@ TEST_CASE("arming beside an armed track mid-note: exact at unity and under a pla
                         if (loop) engine.setLoop(0.0, double(kEdit + 2000) / 48000.0, true);
                         engine.play();
                         runFrames(engine, backend, options, kEdit, block);
+                        if (loop && options.anticipative) {
+                            // A unity handoff is where the renderer is when it adopts
+                            // the plan: rendered at least 4096 frames ahead of the
+                            // playhead (under kEdit + block) at the edit, so past the
+                            // wrap at kEdit + 2000, which the playhead has not reached.
+                            REQUIRE(options.renderAheadMs * 48.0 >= 4096.0);
+                            REQUIRE(engine.awaitRendered(4096));
+                            REQUIRE((kEdit + block - 1) / block * block < kEdit + 2000);
+                        }
                         host::Instance* const keys =
                             rtPool.find(keysInstrument(twoKeysSession(false)));
                         REQUIRE(keys);
