@@ -2738,8 +2738,9 @@ TEST_CASE("a late handoff beside an armed track drops an effect's tail" *
 // With another track already armed the live region exists, so a strip armed
 // mid-note joins it (adoptLive's continuing branch). It continues exactly,
 // at unity (also with a loop wrap between the edit and the handoff) and
-// under a master playrate, with a handoff inside an odd-sized callback too:
-// the same engine never armed plays the same, and nothing hangs.
+// under a master playrate (also looping), with a handoff inside an
+// odd-sized callback too: the same engine never armed plays the same, and
+// nothing hangs.
 TEST_CASE("arming beside an armed track mid-note: exact at unity and under a playrate" *
           doctest::description("rt")) {
     constexpr std::int64_t kEdit = 12800, kFrames = 96000;
@@ -2756,7 +2757,6 @@ TEST_CASE("arming beside an armed track mid-note: exact at unity and under a pla
             for (const std::uint32_t block : {256u, 37u})
                 for (const EngineOptions& options : kBothExecutors) {
                     const double rate = r.rate;
-                    if (rate != 1.0 && loop) continue;
                     INFO("rate " << rate << ", preserve " << r.preserve << ", loop " << loop
                                  << ", block " << block << ", anticipative " << options.anticipative
                                  << ", workers " << options.workers);
@@ -2780,7 +2780,7 @@ TEST_CASE("arming beside an armed track mid-note: exact at unity and under a pla
                         if (loop) engine.setLoop(0.0, double(kEdit + 2000) / 48000.0, true);
                         engine.play();
                         runFrames(engine, backend, options, kEdit, block);
-                        if (loop && options.anticipative) {
+                        if (loop && rate == 1.0 && options.anticipative) {
                             // A unity handoff is where the renderer is when it adopts
                             // the plan: rendered at least 4096 frames ahead of the
                             // playhead (under kEdit + block) at the edit, so past the
@@ -2812,7 +2812,7 @@ TEST_CASE("arming beside an armed track mid-note: exact at unity and under a pla
                         if (!loop)
                             CHECK(maxDiff(armed, 0, offline.audio.channels[0],
                                           static_cast<std::size_t>(kFrames)) == 0.0);
-                    } else {
+                    } else if (!loop) {
                         // The note ends at 1 s of timeline, 38400 device frames
                         // at 1.25: silence after it.
                         double after = 0;
@@ -2825,6 +2825,63 @@ TEST_CASE("arming beside an armed track mid-note: exact at unity and under a pla
                         CHECK(during > 0.05);
                     }
                 }
+}
+
+// One change that both turns a playrate on (unity to 1.25) and arms a strip
+// mid-note cannot continue it: the first rate plan places its handoff in a
+// new device coordinate. The strip starts afresh, its instrument reset, and
+// nothing sounds after the note's end, also after a loop wrap.
+TEST_CASE("turning a playrate on and arming in one change restarts the strip: no note hangs" *
+          doctest::description("rt")) {
+    for (const bool loop : {false, true})
+        for (const std::uint32_t block : {256u, 37u})
+            for (const EngineOptions& options : kBothExecutors) {
+                INFO("loop " << loop << ", block " << block << ", anticipative "
+                             << options.anticipative << ", workers " << options.workers);
+                // Looping: [0, 1.5 s) wraps at 72000 before the edit at 80000
+                // (timeline 8000, mid-note); the note ends at timeline 48000,
+                // under 1.25 by device 116000, and the next wrap comes after
+                // 132000, when the note starts again.
+                const std::int64_t edit = loop ? 80000 : 12800, frames = loop ? 150000 : 96000;
+                auto pool = makePool();
+                MediaCache media;
+                DummyBackend backend(keyboard({}, frames + 4096));
+                Engine engine(pool, media, options);
+                REQUIRE(engine
+                            .start(backend,
+                                   {.sampleRate = 48000, .blockSize = block, .midiInputs = true})
+                            .ok());
+                REQUIRE(engine.load(twoKeysSession(false)));
+                REQUIRE(engine.awaitPlan());
+                if (loop) engine.setLoop(0.0, 1.5, true);
+                engine.play();
+                runFrames(engine, backend, options, edit, block);
+                host::Instance* const keys = pool.find(keysInstrument(twoKeysSession(false)));
+                REQUIRE(keys);
+                const std::uint32_t resetsBefore = keys->resets();
+                REQUIRE(engine.load(twoKeysSession(true, 1.25)));
+                runFrames(engine, backend, options, frames - edit, block);
+                engine.service();
+                if (options.anticipative) CHECK(keys->resets() > resetsBefore);
+                CHECK(engine.effectivePlayrate() == doctest::Approx(1.25).epsilon(1e-3));
+                CHECK(engine.processErrors() == 0);
+                engine.stop();
+                const auto& L = backend.capture().channels[0];
+                REQUIRE(L.size() >= static_cast<std::size_t>(frames));
+                const auto peak = [&](std::size_t from, std::size_t to) {
+                    double x = 0;
+                    for (std::size_t i = from; i < to; ++i)
+                        x = std::max(x, std::fabs(double(L[i])));
+                    return x;
+                };
+                CHECK(peak(1000, 12000) > 0.05);
+                if (loop) {
+                    CHECK(peak(118000, 132000) == 0.0);
+                    CHECK(peak(136000, 146000) > 0.05);  // the next pass, the strip now live
+                } else {
+                    CHECK(peak(46000, 96000) == 0.0);
+                }
+            }
 }
 
 // A handoff the callback reaches late (here past the renderer's position,
