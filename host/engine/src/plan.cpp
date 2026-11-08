@@ -2351,7 +2351,10 @@ void unityTakeEvents(const Plan& p, bool live, TakeChain& tc, Stage& stage, std:
             if (!voice.live && voice.sourceId >= 0 && held.size() < held.capacity())
                 held.push_back(voice);
     const auto deliver = [&](host::Event e) {
-        if (target.size() == target.capacity()) return;  // never allocate here
+        if (target.size() == target.capacity()) {  // never allocate here
+            ++stage.voiceDropped;
+            return;
+        }
         target.push_back(e);
         if (!looping) return;
         if (e.kind == host::Event::Kind::NoteOn) {
@@ -2379,7 +2382,10 @@ void unityTakeEvents(const Plan& p, bool live, TakeChain& tc, Stage& stage, std:
     if (tc.aheadFrom == std::numeric_limits<std::int64_t>::min()) {
         // The look-ahead wraps: what it holds ends there.
         for (const auto& voice : held) {
-            if (target.size() == target.capacity()) break;
+            if (target.size() == target.capacity()) {
+                ++stage.voiceDropped;
+                continue;
+            }
             host::Event off;
             off.kind = host::Event::Kind::NoteOff;
             off.time = at;
@@ -2399,7 +2405,10 @@ void unityTakeEvents(const Plan& p, bool live, TakeChain& tc, Stage& stage, std:
     for (; it != tc.events.end() && it->sample < upto; ++it) {
         host::Event e = it->event;
         e.time = static_cast<std::uint32_t>(std::max<std::int64_t>(at, it->sample + length - pos));
-        if (target.size() == target.capacity()) break;
+        if (target.size() == target.capacity()) {
+            ++stage.voiceDropped;
+            continue;
+        }
         target.push_back(e);
     }
     tc.aheadFrom = std::max(tc.aheadFrom, upto);

@@ -1729,6 +1729,45 @@ TEST_CASE("acknowledging output-derived patches prevents a parameter echo on rel
     CHECK(instance->paramValue(0).value() != before);
 }
 
+// The unity path's notes for a take's instrument count what its block has
+// no room for, as the playrate path's do (voiceDropped).
+TEST_CASE("a take's instrument counts the notes its block has no room for") {
+    auto pool = makePool();
+    model::EditTxn edit(model::Session::create({.console9 = false}), 1);
+    const auto track = addTrack(edit, "Dense take");
+    model::FxInstance synth;
+    synth.plugin.id = "com.suppleaudio.test.edge";
+    const auto fx = edit.create(synth);
+    model::Take take;
+    take.chain = {fx};
+    model::MidiSource src;
+    src.sequence.ppq = 960;
+    src.sequence.length = 960;
+    // 2500 notes of a tick (25 frames): 5000 events in the first block.
+    src.sequence.notes.assign(2500, midi::Note{0, 1, 0, 69, 127, 0});
+    take.source = edit.create(src);
+    const auto tk = edit.create(take);
+    model::Item item;
+    item.track = track;
+    item.length = 1.0;
+    item.takes = {tk};
+    item.activeTake = tk;
+    edit.create(item);
+    const auto session = commit(edit);
+    auto plan = detail::compile(session, pool, 0, 64).value();
+    REQUIRE(detail::prepare(plan, session));
+    auto* instance = pool.find(fx);
+    REQUIRE(instance->startProcessing());
+    REQUIRE(detail::processBlock(plan, 0, 64));
+    auto& node =
+        *std::find_if(plan.nodes.begin(), plan.nodes.end(), [&](auto& n) { return n.id == track; });
+    REQUIRE(node.takeChains.size() == 1);
+    auto& stage = node.takeChains[0].chain[0];
+    REQUIRE(stage.blockEvents.capacity() < 5000);
+    CHECK(stage.voiceDropped == 5000 - stage.blockEvents.capacity());
+    instance->stopProcessing();
+}
+
 TEST_CASE("voice tracking overflow drops onsets before DSP and keeps loop releases addressable") {
     auto pool = makePool();
     model::EditTxn edit(model::Session::create({.console9 = false}), 1);
