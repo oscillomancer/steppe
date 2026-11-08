@@ -2103,6 +2103,88 @@ TEST_CASE("route.matrix: type rules, cycles and existing sends") {
     CHECK(refused.error().code == "route.cycle");
 }
 
+TEST_CASE("route.matrix: a rack's In modules are destinations; its own feed is a cycle") {
+    Root root;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    auto app = makeApp(root.path);
+    cmd::Dispatcher d(registry, *app);
+    auto call = [&](const char* name, const std::string& args) {
+        auto r = d.execute({name, j(args), kTest});
+        REQUIRE(r);
+        return *r;
+    };
+    const std::string synth = call("track.add", R"({"name":"Synth"})").find("track")->asString();
+    const std::string gtr = call("track.add", R"({"name":"Gtr"})").find("track")->asString();
+    const std::string fx =
+        call("track.add", R"({"type":"buss","name":"FX"})").find("track")->asString();
+    const std::string rack =
+        call("rack.add", R"({"track":")" + synth + R"("})").find("rack")->asString();
+    const std::string in1 =
+        call("module.add", R"({"rack":")" + rack + R"(","type":"in"})").find("module")->asString();
+    const std::string in2 =
+        call("module.add", R"({"rack":")" + rack + R"(","type":"in","label":"Side"})")
+            .find("module")
+            ->asString();
+    // Synth feeds FX, so FX hears the rack too.
+    call("route.add", R"({"from":")" + synth + R"(","to":")" + fx + R"("})");
+    const std::string send = call("route.add", R"({"from":")" + gtr + R"(","to":")" + in1 + R"("})")
+                                 .find("id")
+                                 ->asString();
+    const json::Value m = call("route.matrix", "{}");
+    // The In modules follow their home channel, in id order, named after the
+    // rack as the input menu names an Out.
+    const auto& dst = m.find("destinations")->asArray();
+    std::vector<std::string> ids;
+    for (const auto& x : dst) ids.push_back(x.find("id")->asString());
+    const auto home = std::find(ids.begin(), ids.end(), synth);
+    REQUIRE(home != ids.end());
+    REQUIRE(home + 2 < ids.end());
+    CHECK(*(home + 1) == in1);
+    CHECK(*(home + 2) == in2);
+    const json::Value& first = dst.at(static_cast<std::size_t>(home - ids.begin()) + 1);
+    CHECK(first.find("kind")->asString() == "module");
+    CHECK(first.find("name")->asString() == "Synth \u00bb In 1");
+    CHECK(first.find("rack")->asString() == rack);
+    CHECK(first.find("track")->asString() == synth);
+    CHECK(first.find("rule") == nullptr);
+    CHECK(dst.at(static_cast<std::size_t>(home - ids.begin()) + 2).find("name")->asString() ==
+          "Synth \u00bb Side");
+    // The send into In 1 is listed; the rack's Out feeding its channel is not a send.
+    bool listed = false;
+    for (const auto& x : m.find("sends")->asArray()) {
+        CHECK(x.find("from")->asString().starts_with("tr_"));
+        if (x.find("id")->asString() == send) {
+            listed = true;
+            CHECK(x.find("from")->asString() == gtr);
+            CHECK(x.find("to")->asString() == in1);
+        }
+    }
+    CHECK(listed);
+    // The rack's Outs reach Synth and, through it, FX: both are cycles; Gtr
+    // is not; the master is left to its rule.
+    auto cycleOf = [&](const std::string& from, const std::string& to) {
+        for (const auto& c : m.find("cycles")->asArray())
+            if (c.find("from")->asString() == from && c.find("to")->asString() == to) return true;
+        return false;
+    };
+    CHECK(cycleOf(synth, in2));
+    CHECK(cycleOf(fx, in2));
+    CHECK_FALSE(cycleOf(gtr, in2));
+    CHECK_FALSE(cycleOf("tr_0", in2));
+    // What the matrix allows, route.add accepts; what it blocks, route.add refuses.
+    CHECK(d.execute({"route.add", j(R"({"from":")" + gtr + R"(","to":")" + in2 + R"("})"), kTest}));
+    for (const std::string& from : {synth, fx}) {
+        auto refused = d.execute(
+            {"route.add", j(R"({"from":")" + from + R"(","to":")" + in2 + R"("})"), kTest});
+        REQUIRE_FALSE(refused);
+        CHECK(refused.error().code == "route.cycle");
+    }
+    auto master = d.execute({"route.add", j(R"({"from":"tr_0","to":")" + in2 + R"("})"), kTest});
+    REQUIRE_FALSE(master);
+    CHECK(master.error().code == "route.strip_type");
+}
+
 TEST_CASE("log.list: who did what, queries left out, since, origin filter, bounded") {
     Root root;
     cmd::Registry registry;

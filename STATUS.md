@@ -269,7 +269,8 @@ instructions are in `docs/guides/installing.md`.
   the Linux regression passes and macOS validation is pending.
 - **Modular racks** (ADR-0062, `specs/rack.md`): racks of modules and
   cables on a channel, in the project (schema 2.7) with undo and branches.
-  Out modules are channel inputs, In modules take sends, Notes modules play
+  Out modules are channel inputs, In modules take sends (columns of the
+  routing matrix, after their rack's channel), Notes modules play
   a track's MIDI or a live input, Transport gives the song's clock, plugin
   modules host CLAP/VST3 plug-ins (instruments played from pitch and gate
   cables). 83 stock modules (`modules/stock`: oscillators, filters,

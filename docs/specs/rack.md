@@ -101,6 +101,10 @@ Both ends are in the same rack. At most one cable joins the same two ends.
   same fader law and control smoothing but no encoder trim. This is independent
   of `project.console9`. The linear rack-edge path sanitizes non-finite inputs,
   and retains tap, mute, mono, phase, channel map and envelope behavior.
+  `route.matrix` lists each In module as a destination (`kind: "module"`,
+  with its `rack` and home `track`), its sends among `sends` and the
+  sources its rack's Outs reach among `cycles`; the routing matrix draws it
+  as a column (gui.md §4.6).
 
 ### 2.5 Invariants (`checkInvariants`)
 

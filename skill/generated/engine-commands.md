@@ -13430,7 +13430,7 @@ Result:
 
 What can be routed where: strips, plug-in keys, sends and blocked pairs.
 
-sources: strips in tree order (depth, parent, parent_send). destinations: strips and plug-in keys (fx with a sidechain input). A pair is blocked when the source's rule applies (masters feed only keys), the destination's rule applies (channels take only hardware audio), it is the same strip, or it is listed in cycles (the destination already feeds the source). sends: existing routes per pair. Otherwise route.add accepts the pair. A source's channels past 2 are auxiliary (ADR-0020); channel_names names those a multi-out plug-in writes ({"3": "Kick"}), and route.add {channels: {from: [3, 4], to: [1, 2]}} sends that pair.
+sources: strips in tree order (depth, parent, parent_send). destinations: strips (kind track), plug-in keys (kind key: fx with a sidechain input) and racks' In modules (kind module: mo_N, named "<rack> » <In>", with rack and home track), each strip's keys and In modules after it. A pair is blocked when the source's rule applies (masters feed only keys), the destination's rule applies (channels take only hardware audio), it is the same strip, or it is listed in cycles (the destination already feeds the source; for an In module, its rack's Outs reach the source). sends: existing routes per pair (to: a strip, an fx or an In module). Otherwise route.add accepts the pair (an In module: route.add {from, to: mo_N}). A source's channels past 2 are auxiliary (ADR-0020); channel_names names those a multi-out plug-in writes ({"3": "Kick"}), and route.add {channels: {from: [3, 4], to: [1, 2]}} sends that pair.
 
 Kind: `query`. Exposure: `mcp-tool`.
 

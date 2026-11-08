@@ -67,8 +67,10 @@ std::string MatrixModel::blocked(std::size_t row, std::size_t col) const {
         if (s.id == d.id) return "a strip cannot send to itself";
         if (!s.rule.empty()) return s.rule;
         if (!d.rule.empty()) return d.rule;
-    } else if (s.id == d.track) {
-        return "a strip cannot key a plug-in in its own chain";
+    } else if (d.kind == "key") {
+        if (s.id == d.track) return "a strip cannot key a plug-in in its own chain";
+    } else if (!s.rule.empty()) {  // an In module: masters are terminal
+        return s.rule;
     }
     if (const auto found = cycleIndex.find({s.id, d.id}); found != cycleIndex.end())
         return "it would feed back: " + found->second;
@@ -161,8 +163,12 @@ class Grid : public ui::Node {
             if (x + kCell < cells.x || x > cells.right()) continue;
             // A master's mark is heavier (its spine, gui.md §7).
             const float mark = d.type == "master" ? 5.0f : 3.0f;
+            // A key's mark is violet, a rack In module's teal: hues no strip
+            // type uses.
             c.fillRect({x + 4, b.y + kHeaderH - 3 - mark, kCell - 8, mark},
-                       d.kind == "key" ? t.color("agent") : typeColor(d.type));
+                       d.kind == "key"      ? t.color("agent")
+                       : d.kind == "module" ? t.color("track-teal")
+                                            : typeColor(d.type));
             nvgSave(vg);
             nvgTranslate(vg, x + kCell / 2 + 4, b.y + kHeaderH - 10);
             nvgRotate(vg, -static_cast<float>(M_PI) / 3);
@@ -392,6 +398,8 @@ Status RoutingMatrix::reload() {
         next.cyclePaths.push_back(str(c, "path"));
     }
     for (const auto& r : list->find("routes")->asArray()) {
+        // A rack's Out (a channel's input) and Note Out are not strip sends.
+        if (str(r, "from").starts_with("mo_")) continue;
         MatrixModel::Send x;
         x.id = str(r, "id");
         x.from = str(r, "from");

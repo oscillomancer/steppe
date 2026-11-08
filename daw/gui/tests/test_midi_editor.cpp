@@ -870,6 +870,90 @@ TEST_CASE("routing matrix: rules shown, a double click sends, the send edits and
     CHECK(panel.root().focused() == nullptr);
 }
 
+TEST_CASE("routing matrix: a rack's In modules are columns; a cell sends into one") {
+    Fixture f;
+    if (!f.ok) return;
+    const std::string synth = f.exec("track.add", R"({"name":"Synth"})")["track"].asString();
+    const std::string rack =
+        f.exec("rack.add", R"({"track":")" + synth + R"("})")["rack"].asString();
+    const std::string in =
+        f.exec("module.add", R"({"rack":")" + rack + R"(","type":"in"})")["module"].asString();
+    gui::FloatingPanel panel(*f.platform, *f.window, *f.root, SUPPLE_GUI_FONTS_DIR, "Panel", 860,
+                             560, 800, 360);
+    gui::RoutingMatrix matrix(panel, *f.actions, *f.dispatcher, *f.app);
+    matrix.open();
+    panel.root().frame(false);
+    REQUIRE(matrix.isOpen());
+    const auto& m = matrix.model();
+    auto row = [&](const std::string& id, int pair = 1) {
+        for (std::size_t i = 0; i < m.sources.size(); ++i)
+            if (m.sources[i].id == id && m.sources[i].pair == pair) return i;
+        FAIL("no source " << id);
+        return std::size_t{0};
+    };
+    std::size_t col = m.destinations.size();
+    for (std::size_t i = 0; i < m.destinations.size(); ++i)
+        if (m.destinations[i].id == in) col = i;
+    REQUIRE(col < m.destinations.size());
+    // The In module's column follows its channel's, named as the input menu names an Out.
+    CHECK(m.destinations[col].kind == "module");
+    CHECK(m.destinations[col].name == "Synth \u00bb In 1");
+    CHECK(m.destinations[col].track == synth);
+    REQUIRE(col > 0);
+    CHECK(m.destinations[col - 1].id == synth);
+    std::string keys;
+    for (const auto& s : m.sources)
+        if (s.name == "Keys") keys = s.id;
+    REQUIRE_FALSE(keys.empty());
+    // The rack's own channel would feed back (its Out is the channel's input);
+    // the master is terminal; another channel may send.
+    CHECK(m.blocked(row(synth), col).find("feed back") != std::string::npos);
+    CHECK_FALSE(m.blocked(row("tr_0"), col).empty());
+    CHECK(m.blocked(row(keys), col).empty());
+    // The rack's Out route is the channel's input, not a send.
+    CHECK(m.sends.empty());
+    CHECK(matrix.status().starts_with("0 sends"));
+    CHECK_FALSE(matrix.doubleClickCell(row(synth), col));
+    // A double click sends Keys into the In module (route.add {to: mo_N}), one version.
+    const auto v = f.app->head().version;
+    REQUIRE(matrix.clickCell(row(keys), col));
+    REQUIRE(matrix.doubleClickCell(row(keys), col));
+    CHECK(f.app->head().version == v + 1);
+    REQUIRE(m.sendsAt(row(keys), col).size() == 1);
+    const std::string send = m.sendsAt(row(keys), col).front()->id;
+    CHECK(matrix.selectedSend() == send);
+    const model::Route* r = f.app->head().routes.find(*model::Id::parse(send));
+    REQUIRE(r);
+    CHECK(r->to.module == model::Id::parse(in));
+    CHECK(r->from.track == model::Id::parse(keys));
+    CHECK(matrix.status().starts_with("1 sends"));
+    // It edits as any send: the level, the tap, mute.
+    REQUIRE(matrix.volumeControl());
+    matrix.volumeControl()->onChange(-6.0, ui::Gesture::Set);
+    CHECK(f.app->head().routes.find(*model::Id::parse(send))->volumeDb == doctest::Approx(-6.0));
+    REQUIRE(panel.root().click("routing.tap.pre"));
+    CHECK(m.sendsAt(row(keys), col).front()->tap == "pre_fader");
+    REQUIRE(panel.root().click("routing.mute"));
+    CHECK(m.sendsAt(row(keys), col).front()->mute);
+    f.snapshot("routing-rack-in.png", &panel.root());
+    // Remove takes it away.
+    REQUIRE(panel.root().click("routing.remove"));
+    CHECK(m.sendsAt(row(keys), col).empty());
+    CHECK_FALSE(f.app->head().routes.find(*model::Id::parse(send)));
+    // An auxiliary pair sends into the In module's pair (ADR-0021).
+    f.exec("track.set", R"({"track":")" + keys + R"(","channels":4})");
+    matrix.sync();
+    REQUIRE(matrix.doubleClickCell(row(keys, 3), col));
+    REQUIRE(m.sendsAt(row(keys, 3), col).size() == 1);
+    CHECK(m.sendsAt(row(keys), col).empty());
+    const model::Route* aux =
+        f.app->head().routes.find(*model::Id::parse(m.sendsAt(row(keys, 3), col).front()->id));
+    REQUIRE(aux);
+    CHECK(aux->to.module == model::Id::parse(in));
+    CHECK(aux->channels.from == std::vector<int>{3, 4});
+    CHECK(aux->channels.to == std::vector<int>{1, 2});
+}
+
 TEST_CASE(
     "routing matrix: cells select by click, Ctrl, Shift, row and column; controls act on all") {
     Fixture f;
