@@ -2394,6 +2394,109 @@ TEST_CASE("arming or monitoring mid-song keeps an instrument's held timeline not
         }
 }
 
+namespace {
+// Runs `frames` device frames (rounded up to whole callbacks), the
+// anticipative engine kept ahead as a device's clock would.
+void runFrames(Engine& engine, DummyBackend& backend, const EngineOptions& options,
+               std::int64_t frames, std::uint32_t block) {
+    const std::int64_t cycles = (frames + block - 1) / block;
+    if (options.anticipative)
+        runAhead(engine, backend, cycles, block);
+    else
+        backend.run(cycles);
+}
+
+// A track with keyboardSession's MIDI input, a sine and the edge fixture as a
+// 1 s echo (a delay with pdc: ignore, so the delay is heard as a tail): one
+// short note at 0, heard again at 1 s.
+model::Session echoSession(bool armed, model::Monitor monitor) {
+    const model::Session base = keyboardSession();
+    model::EditTxn t(base, 2);
+    Id track;
+    for (const auto& e : base.tracks)
+        if (e.value->name == "Keys") track = e.id;
+    model::FxInstance echo;
+    echo.plugin.id = "com.suppleaudio.test.edge";
+    echo.pdc = model::PdcMode::Ignore;
+    echo.state = "sha256:echo-48000";
+    t.putBlob(*echo.state, std::make_shared<const model::Blob>(model::Blob{{49, 0x80, 0xbb, 0}}));
+    const Id fx = t.create(echo);
+    t.modify<model::Track>(track, [&](model::Track& x) {
+        x.chain.push_back(fx);
+        x.record.armed = armed;
+        x.record.monitor = monitor;
+    });
+    model::MidiSource src;
+    src.sequence.ppq = 960;
+    src.sequence.length = 960;
+    src.sequence.notes = {{0, 240, 0, 60, 100, 0}};  // 6000 frames
+    model::Take take;
+    take.source = t.create(src);
+    const Id tk = t.create(take);
+    model::Item item;
+    item.track = track;
+    item.length = 1.0;
+    item.takes = {tk};
+    item.activeTake = tk;
+    t.create(item);
+    return t.commit().value();
+}
+
+const std::array<EngineOptions, 4> kBothExecutors = {
+    kInCallback, EngineOptions{.anticipative = false, .workers = 2}, EngineOptions{.workers = 0},
+    EngineOptions{.workers = 2}};
+}  // namespace
+
+// An effect's tail crosses into the live region with its strip: a short note
+// ends before the strip is armed (or starts monitoring), and its echo, still
+// inside the effect's delay line at the handoff, is heard as offline.
+TEST_CASE("arming or monitoring mid-song keeps an effect's tail" * doctest::description("rt")) {
+    constexpr std::int64_t kEdit = 12800, kFrames = 64000;
+    auto pool = makePool();
+    const auto offline = renderOffline(echoSession(false, model::Monitor::On), pool,
+                                       {.startSeconds = 0, .endSeconds = 1.5})
+                             .value();
+    const auto& want = offline.audio.channels[0];
+    REQUIRE(want.size() >= static_cast<std::size_t>(kFrames));
+    struct Change {
+        const char* name;
+        bool armedBefore;
+        model::Monitor before;
+    };
+    for (const Change change : {Change{"arming", false, model::Monitor::On},
+                                Change{"monitoring on", true, model::Monitor::Off}})
+        for (const std::uint32_t block : {256u, 37u})
+            for (const EngineOptions& options : kBothExecutors) {
+                INFO(std::string(change.name)
+                     << ", block " << block << ", anticipative " << options.anticipative
+                     << ", workers " << options.workers);
+                auto rtPool = makePool();
+                MediaCache media;
+                DummyBackend backend(keyboard({}, kFrames + 4096));
+                Engine engine(rtPool, media, options);
+                REQUIRE(engine
+                            .start(backend,
+                                   {.sampleRate = 48000, .blockSize = block, .midiInputs = true})
+                            .ok());
+                REQUIRE(engine.load(echoSession(change.armedBefore, change.before)));
+                REQUIRE(engine.awaitPlan());
+                engine.play();
+                runFrames(engine, backend, options, kEdit, block);
+                REQUIRE(engine.load(echoSession(true, model::Monitor::On)));
+                runFrames(engine, backend, options, kFrames - kEdit, block);
+                engine.service();
+                CHECK(engine.processErrors() == 0);
+                engine.stop();
+                REQUIRE(engine.outputLatency() == 0);
+                const auto& L = backend.capture().channels[0];
+                CHECK(maxDiff(L, 0, want, static_cast<std::size_t>(kFrames)) == 0.0);
+                double echo = 0;
+                for (std::size_t i = 48000; i < 54000; ++i)
+                    echo = std::max(echo, std::fabs(double(L[i])));
+                CHECK(echo > 0.05);
+            }
+}
+
 TEST_CASE("MIDI monitoring preserves every event in a device block" * doctest::description("rt")) {
     for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
         auto pool = makePool();
