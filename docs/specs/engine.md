@@ -2032,7 +2032,10 @@ Looping retains converter history and reseeding occurs only for a fresh seek epo
 The reader is silent outside an item's span (trimmed media is not on the
 timeline), so past a loop seam the retained history holds what the loop end
 played there, and an item starting just after the loop start sounds the same
-every pass.
+every pass. A trimmed item's content is therefore independent of its
+trimmed media. (Reading that media would change tape conversion only within
+its kernel's reach of the item's edges, but the pitch-preserving stretch,
+whose phase depends on what it was fed before, over the whole item.)
 MIDI uses the first device boundary reaching each timeline event; compensated
 instruments wrap/release timeline notes in their own input coordinates, preserving
 live notes. Strip/send/take automation uses the same mapping. Plugins receive

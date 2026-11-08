@@ -1001,7 +1001,10 @@ Session and editing:
   (ADR-0045). The transport knob, menu and the master Playrate lane edit it;
   knob ranges are UI state and never clamp saved values. Seeded stretch phase
   variation uses a portable integer RNG, so it matches across standard
-  libraries. Non-unity audio/MIDI
+  libraries. A trimmed item reads silence outside its span, so under the
+  pitch-preserving stretch its whole content no longer depends on the
+  trimmed media (tape conversion: only near its edges); renders from builds
+  before that change do not null against new ones. Non-unity audio/MIDI
   recording is refused, including queued transitions. Writing the playrate
   holds nothing over its curve (strip levels and pans do, ADR-0061). Compatible scalar-only live edits publish bounded clock
   controls, retain source/converter state and glide over the time between
