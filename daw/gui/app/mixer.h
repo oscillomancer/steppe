@@ -72,9 +72,7 @@ class Mixer {
     std::function<void(const model::Id& track, const ui::Rect& anchor)> pickOutput;
     std::function<void(const model::Id&, const ui::Rect&)> envelopes;
     // A channel's rack slot (a rack that feeds it, above its plug-ins): a
-    // click shows that rack's Rack device in the FX chain window (unset: the
-    // chain window), a double-click opens the rack window on the rack.
-    std::function<void(const model::Id& track, const model::Id& rack)> showRack;
+    // click opens the rack window on the rack.
     std::function<void(const model::Id& rack)> openRack;
 
     // Tests.

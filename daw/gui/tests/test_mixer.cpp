@@ -1764,11 +1764,7 @@ TEST_CASE("mixer: a group's tab and a VCA's members and env buttons open their m
 TEST_CASE("mixer: a channel fed by a rack shows a rack slot above its plug-ins") {
     Fixture f;
     if (!f.ok) return;
-    std::vector<std::pair<std::string, std::string>> shown;
     std::vector<std::string> opened;
-    f.mixer->showRack = [&](const model::Id& track, const model::Id& rack) {
-        shown.emplace_back(track.str(), rack.str());
-    };
     f.mixer->openRack = [&](const model::Id& rack) { opened.push_back(rack.str()); };
     json::Value made = f.exec("rack.add", R"({"name":"Lead"})");
     const std::string rack = made["rack"].asString(), track = made["track"].asString();
@@ -1787,17 +1783,14 @@ TEST_CASE("mixer: a channel fed by a rack shows a rack slot above its plug-ins")
     CHECK(near(r.x, plug.x));
     CHECK(f.strip(plain).racks.empty());
     f.snapshot("mixer-rack-slot.png");
-    // A click: its Rack device in the chain window.
+    // A click: the rack window on it, not the chain window.
     f.pointer(ui::PointerEvent::Type::Down, f.centre(slot), 1);
     f.pointer(ui::PointerEvent::Type::Up, f.centre(slot), 1);
-    REQUIRE(shown.size() == 1);
-    CHECK(shown.front() == std::make_pair(track, rack));
-    CHECK(opened.empty());
-    // A double-click: the rack window on it, and no second click.
+    CHECK(opened == std::vector<std::string>{rack});
+    // A double-click's second press opens nothing more.
     f.pointer(ui::PointerEvent::Type::Down, f.centre(slot), 2);
     f.pointer(ui::PointerEvent::Type::Up, f.centre(slot), 2);
     CHECK(opened == std::vector<std::string>{rack});
-    CHECK(shown.size() == 1);
     CHECK(f.editors.empty());
     // Renamed, the slot follows.
     f.exec("rack.set", R"({"rack":")" + rack + R"(","name":"Bells"})");

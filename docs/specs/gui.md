@@ -683,11 +683,9 @@ chain has a fixed height and the chain takes what a strip's missing rows
 leave, so every strip's fader sits at the same height. The strip's plug-in chain lists every plug-in,
 after a channel's rack slots: one line per rack whose Out feeds the channel
 (`racks::racksFeeding`), in route order, with the rack's name on a rack
-module's face and a faint "rack". A click on one shows that rack's Rack
-device in the FX chain window (`FxWindow::showRack`: the window opens on the
-channel, Chain tab, scrolled to the device when it is not wholly in view);
-a double-click opens the rack window on the rack, and its release clicks
-nothing; a right-click is the strip's. The chain scrolls when it is
+module's face and a faint "rack". A click on one opens the rack window on
+the rack (a double-click's second press does nothing more); a right-click
+is the strip's. The chain scrolls when it is
 longer than its section, and takes the room a strip's
 unused rows would leave (sends show only when there are some, two rows of
 them, scrolled by the wheel or a bar when there are more; busses have no arm
@@ -829,7 +827,7 @@ devices are shown whole, one channel at a time with room for eight knobs
 in a row, and it already switches channels and offers a parameter's
 learn and automation. The mixer strip's chain is one line per plug-in, so
 a strip shows a rack as one line too, its rack slot (§4.4), which opens
-this device.
+the rack window instead.
 
 Chain list with add (searchable browser over the plugin scan cache;
 favourites and stock plugins first; a stock plugin's row says what it is

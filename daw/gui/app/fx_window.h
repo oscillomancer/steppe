@@ -63,8 +63,9 @@ class FxWindow {
     std::optional<model::Id> take() const { return take_; }
     // The `ui.fx.chain` action: a track id in `prompt`, else the selected track.
     Status openFor(const UiState& ui, const json::Value& prompt);
-    // The chain window on `track` with `rack`'s Rack device in view (a mixer
-    // strip's rack slot): scrolled to it once the window is laid out.
+    // The chain window on `track` with `rack`'s Rack device in view:
+    // scrolled to it once the window is laid out. (Nothing binds it now; a
+    // mixer strip's rack slot opens the rack window.)
     Status showRack(model::Id track, model::Id rack);
     // The plugin browser alone, adding to that track's chain, or with no
     // track given to every selected track's (ui.fx.add).

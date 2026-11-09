@@ -2042,7 +2042,7 @@ TEST_CASE("a mixer strip's rack slot shows the rack's device: the chain window s
     f.frame();
     REQUIRE(f.fx->rackDevices().size() == 1);
     CHECK(f.fx->rackDevices().front()->bounds().y < scroll->bounds().y);  // scrolled out
-    // The slot's click: the window (already open) in view at the device.
+    // showRack: the window (already open) in view at the device.
     REQUIRE(f.fx->showRack(trackId, rackId));
     CHECK(f.fx->nextDeadline());  // the loop wakes for the layout pass
     f.frame();

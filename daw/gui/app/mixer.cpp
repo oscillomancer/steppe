@@ -231,28 +231,17 @@ class NameEdit : public ui::Node {
 };
 
 // A rack that feeds a channel, above its plug-ins (signal order): its name on
-// a rack module's face, and a faint "rack". A click shows its Rack device in
-// the FX chain window, a double-click opens the rack window on it; a
-// right-click is the strip's.
+// a rack module's face, and a faint "rack". A click opens the rack window on
+// it (a double-click's second press does nothing more); a right-click is the
+// strip's.
 class RackSlot : public ui::Button {
   public:
-    RackSlot(std::string id, std::string name, std::function<void()> click,
-             std::function<void()> twice)
-        : Button(std::move(id), name, std::move(click)),
-          name_(std::move(name)),
-          twice_(std::move(twice)) {}
+    RackSlot(std::string id, std::string name, std::function<void()> click)
+        : Button(std::move(id), name, std::move(click)), name_(std::move(name)) {}
     bool onPointer(const ui::PointerEvent& e) override {
-        // A double-click's second press is the double-click alone: its
-        // release clicks nothing.
-        if (e.type == ui::PointerEvent::Type::Down && e.button == 1 && e.clicks >= 2) {
-            swallow_ = true;
-            if (twice_) twice_();
+        if (e.button == 1 && e.clicks >= 2 &&
+            (e.type == ui::PointerEvent::Type::Down || e.type == ui::PointerEvent::Type::Up))
             return true;
-        }
-        if (e.type == ui::PointerEvent::Type::Up && e.button == 1 && swallow_) {
-            swallow_ = false;
-            return true;
-        }
         return Button::onPointer(e);
     }
     void paint(ui::Canvas& c) override {
@@ -278,8 +267,6 @@ class RackSlot : public ui::Button {
 
   private:
     std::string name_;
-    std::function<void()> twice_;
-    bool swallow_ = false;
 };
 
 // A strip's plug-ins, one per row, scrolled by the wheel or a bar when the
@@ -992,20 +979,10 @@ void Mixer::rebuild() {
         // The racks that feed it (their Outs route to its input), first.
         if (t.type == model::StripType::Channel)
             for (model::Id rack : racks::racksFeeding(s, id)) {
-                auto slot = std::make_unique<RackSlot>(
-                    "mixer.rack." + tid + "." + rack.str(), model::rackLabel(s, rack),
-                    [this, id, rack] {
-                        if (showRack) {
-                            showRack(id, rack);
-                            return;
-                        }
-                        json::Value args = json::Value::object();
-                        args["track"] = id.str();
-                        run("ui.fx.chain", std::move(args));
-                    },
-                    [this, rack] {
-                        if (openRack) openRack(rack);
-                    });
+                auto slot = std::make_unique<RackSlot>("mixer.rack." + tid + "." + rack.str(),
+                                                       model::rackLabel(s, rack), [this, rack] {
+                                                           if (openRack) openRack(rack);
+                                                       });
                 st.racks.push_back(&chain.addRack(std::move(slot)));
             }
         for (std::size_t at = 0; at < t.chain.size(); ++at) {

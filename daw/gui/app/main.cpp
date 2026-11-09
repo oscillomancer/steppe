@@ -494,11 +494,7 @@ int main(int argc, char** argv) {
             },
             [&](model::Id rack) { racks.open(rack); }},
         gui::Favourites::defaultFile(product::kSlug));
-    // A strip's rack slot: the rack's device in the chain window; the rack window.
-    mixer.showRack = [&](const model::Id& track, const model::Id& rack) {
-        if (auto r = fxWindow.showRack(track, rack); !r && appActions.onError)
-            appActions.onError(r.error().message);
-    };
+    // A strip's rack slot opens the rack window on it.
     mixer.openRack = [&](const model::Id& rack) { racks.open(rack); };
     // MIDI learn (ADR-0027): the devices' messages reach the actions bound to
     // them, or a learn dialog that listens. "Enable only when" asks the
