@@ -382,8 +382,15 @@ TEST_CASE("freeze: cancellation and a branch switch cannot publish a finished jo
     for (bool cancel : {false, true}) {
         std::mutex mutex;
         std::condition_variable cv;
-        bool finished = false;
+        bool released = false, finished = false;
         AppOptions options;
+        // The worker waits until track.freeze has returned: the bus runs posted
+        // work right after the command, so a render that finished first would
+        // be adopted before the cancel or switch below.
+        options.jobStartedHook = [&] {
+            std::unique_lock lock(mutex);
+            cv.wait(lock, [&] { return released; });
+        };
         options.jobFinishedHook = [&] {
             std::lock_guard lock(mutex);
             finished = true;
@@ -394,6 +401,8 @@ TEST_CASE("freeze: cancellation and a branch switch cannot publish a finished jo
         auto job = f.run("track.freeze", R"({"track":"tr_1","job":true})");
         {
             std::unique_lock lock(mutex);
+            released = true;
+            cv.notify_all();
             cv.wait(lock, [&] { return finished; });
         }
         // Completion is queued but not yet adopted on the model thread.
