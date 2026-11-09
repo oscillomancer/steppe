@@ -710,7 +710,9 @@ TEST_CASE("claimOwner takes a free instance for exactly one owner") {
     CHECK(in.claimOwner(&b));
     CHECK(in.owner() == &b);
     in.setOwner(nullptr);
-    // Contended: every round, threads released together race for it.
+    // Contended: every round, threads released together race for it. The
+    // waits yield: a busy spin starves the threads it waits for on a loaded
+    // machine with fewer cores than threads (it timed out on Windows CI).
     constexpr int kThreads = 4, kRounds = 2000;
     std::array<char, kThreads> tokens{};
     for (int round = 0; round < kRounds; ++round) {
@@ -720,12 +722,10 @@ TEST_CASE("claimOwner takes a free instance for exactly one owner") {
         for (int t = 0; t < kThreads; ++t)
             threads.emplace_back([&, t] {
                 ready.fetch_add(1);
-                while (!go.load(std::memory_order_acquire)) {
-                }
+                while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
                 if (in.claimOwner(&tokens[static_cast<std::size_t>(t)])) winners.fetch_add(1);
             });
-        while (ready.load() < kThreads) {
-        }
+        while (ready.load() < kThreads) std::this_thread::yield();
         go.store(true, std::memory_order_release);
         for (auto& th : threads) th.join();
         REQUIRE(winners.load() == 1);
