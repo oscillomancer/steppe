@@ -50,6 +50,7 @@ class RackDevice::MacroKnob : public ui::Knob {
 RackDevice::RackDevice(engine::EngineApp& app, model::Id rack, Hooks hooks)
     : Node("fx.rack." + rack.str()), app_(app), rack_(rack), hooks_(std::move(hooks)) {
     layout.height = ui::SizeRule::content();
+    interactive = true;  // a double-click opens the rack
     const model::Session& s = app_.head();
     title_ = model::rackLabel(s, rack_);
     catalog_ = racks::catalog(app_);
@@ -148,6 +149,12 @@ void RackDevice::turn(Knob& k, double position, ui::Gesture g) {
                     g == ui::Gesture::Move ? "rack.macro:" + k.module.str() + ":" + p->key + ":" +
                                                  std::to_string(gesture_)
                                            : std::string());
+}
+
+bool RackDevice::onPointer(const ui::PointerEvent& e) {
+    if (e.type != ui::PointerEvent::Type::Down || e.button != 1 || e.clicks < 2) return false;
+    if (hooks_.open) hooks_.open(rack_);
+    return true;
 }
 
 void RackDevice::openMenu(const Knob& k, ui::Point at) {

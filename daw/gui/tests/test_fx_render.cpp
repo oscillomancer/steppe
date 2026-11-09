@@ -1973,6 +1973,16 @@ TEST_CASE(
     // Open: the rack window on that rack.
     REQUIRE(f.click("fx.rack.open." + rack));
     CHECK(opened == std::vector<model::Id>{*model::Id::parse(rack)});
+    // So does a double-click anywhere else on the device (here its name),
+    // as on a plug-in's row; a single press opens nothing.
+    const ui::Point name{device.bounds().x + 8, device.bounds().y + 8};
+    f.uiRoot().pointer({ui::PointerEvent::Type::Down, name, 1, 1});
+    f.uiRoot().pointer({ui::PointerEvent::Type::Up, name, 1, 1});
+    CHECK(opened.size() == 1);
+    f.uiRoot().pointer({ui::PointerEvent::Type::Down, name, 1, 2});
+    f.uiRoot().pointer({ui::PointerEvent::Type::Up, name, 1, 2});
+    CHECK(opened.size() == 2);
+    CHECK(opened.back() == *model::Id::parse(rack));
     // A drag turns module.set, one undo step.
     const auto at = device.knobAt("Filter cutoff");
     REQUIRE(at);

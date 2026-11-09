@@ -800,7 +800,9 @@ POSIX FD support. Display tests remain opt-in, never enabled by normal CI.
 module to the channel, as its record input) shows each such rack first in
 its Chain tab, above the input chain, as a Rack device (`RackDevice`,
 `daw/gui/app/rack_device.h`): the rack's name, "rack", and Open (the rack
-window on that rack). Below come the knobs of its Macro modules
+window on that rack; a double-click anywhere on the device its knobs leave
+does the same, as a double-click on a plug-in's row opens its editor).
+Below come the knobs of its Macro modules
 (`com.suppleaudio.rack.macro`), grouped under each Macro's label (else
 "Macro"). Only a knob whose output (`macro_N` out of `out_N`) is cabled
 is shown, named after what its first cable reaches: the far module's title

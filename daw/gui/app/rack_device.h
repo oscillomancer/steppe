@@ -2,10 +2,10 @@
 // Copyright (c) 2026 Supple Audio
 // A channel's Rack device (gui.md §4.5, §4.12): a rack that feeds the
 // channel, shown in the FX window's chain with its name, Open (the rack
-// window on that rack) and its Macro modules' cabled knobs, named after what
-// they drive. The knobs turn module.set (a drag is one undo step), offer a
-// rack knob's right-click menu, and follow playback through the Macro
-// modules' telemetry.
+// window on that rack, as a double-click anywhere on it is) and its Macro
+// modules' cabled knobs, named after what they drive. The knobs turn
+// module.set (a drag is one undo step), offer a rack knob's right-click
+// menu, and follow playback through the Macro modules' telemetry.
 #pragma once
 
 #include <functional>
@@ -58,6 +58,8 @@ class RackDevice : public ui::Node {
     void arrange(const ui::Canvas& c, const ui::Rect& bounds) override;
     void paint(ui::Canvas& c) override;
     std::string valueText() const override;
+    // A double-click anywhere its knobs and Open leave opens the rack.
+    bool onPointer(const ui::PointerEvent& e) override;
 
   private:
     class MacroKnob;
