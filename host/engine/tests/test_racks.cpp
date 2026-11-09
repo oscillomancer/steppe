@@ -1286,7 +1286,13 @@ TEST_CASE(
         CHECK(engine.planGeneration() > first);
         REQUIRE(instance->latency() == 64);
         const auto settled = engine.planGeneration();
-        const auto compareFrom = static_cast<std::size_t>(backend.cycles() * 128 + 2048);
+        // The anticipative renderer takes the compensating plan where it has
+        // rendered to, up to its render-ahead span past what has played: the
+        // switch's transient can land that much later.
+        const auto ahead =
+            anticipative ? static_cast<std::size_t>(EngineOptions{}.renderAheadMs / 1000. * 48000)
+                         : 0;
+        const auto compareFrom = static_cast<std::size_t>(backend.cycles() * 128) + ahead + 2048;
         for (int i = 0; i < 180; ++i) run();
         CHECK(engine.planGeneration() == settled);
         CHECK(engine.processErrors() == 0);
