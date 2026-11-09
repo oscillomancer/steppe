@@ -556,6 +556,20 @@ std::optional<std::vector<Id>> routeCycle(const model::Session& s, Id from, Id t
     return path;
 }
 
+// A cycle's path by name, a rack marked as one: "Keys -> Synth (rack) ->
+// Synth". With ids, each name is followed by its id instead, "Keys (tr_2) ->
+// Synth (rk_1)", for a message an agent acts on.
+std::string cycleText(const model::Session& s, const std::vector<Id>& path, bool ids) {
+    std::string out;
+    for (Id at : path) {
+        const bool rack = at.kind == model::Kind::Rack;
+        out += out.empty() ? "" : " -> ";
+        out += rack ? model::rackLabel(s, at) : model::trackLabel(s, at);
+        if (ids || rack) out += " (" + (ids ? at.str() : std::string("rack")) + ")";
+    }
+    return out;
+}
+
 // Is `track` a descendant of `ancestor` in the folder nesting (children lists)?
 // Moving a track under one of its own descendants would make the tree cyclic.
 bool nestedUnder(const model::Session& s, Id ancestor, Id track) {
@@ -650,9 +664,7 @@ Result<model::Route> buildRoute(const RouteArgs& a, const model::Session& s, Eng
         return Error("route.strip_type", "masters are terminal", "/from",
                      "masters feed hardware outputs and renders; use a buss to group");
     if (auto cycle = routeCycle(s, *r.from.track, *target, ignored)) {
-        std::string names;
-        for (Id id : *cycle) names += (names.empty() ? "" : " -> ") + id.str();
-        return Error("route.cycle", "route creates a cycle: " + names, "/to",
+        return Error("route.cycle", "route creates a cycle: " + cycleText(s, *cycle, true), "/to",
                      "choose a destination that does not feed the source");
     }
     if (!r.to.fx && !r.midi && !r.to.module) {
@@ -979,7 +991,8 @@ void registerExtraCommands(cmd::Registry& registry) {
             "source's rule applies (masters feed only keys), the destination's rule applies "
             "(channels take only hardware audio), it is the same strip, or it is listed in "
             "cycles (the destination already feeds the source; for an In module, its rack's Outs "
-            "reach the source). sends: existing routes per pair (to: a strip, an fx or an In "
+            "reach the source; path names its ids, names the same by name). sends: existing routes "
+            "per pair (to: a strip, an fx or an In "
             "module). Otherwise route.add accepts the pair (an In module: route.add {from, to: "
             "mo_N}). A source's channels past 2 are auxiliary (ADR-0020); "
             "channel_names names those a multi-out plug-in writes ({\"3\": \"Kick\"}), and "
@@ -1127,9 +1140,10 @@ void registerExtraCommands(cmd::Registry& registry) {
                         json::Value v = json::Value::object();
                         v["from"] = from.str();
                         v["to"] = did;
-                        std::string names;
-                        for (Id at : *path) names += (names.empty() ? "" : " -> ") + at.str();
-                        v["path"] = names;
+                        std::string ids;
+                        for (Id at : *path) ids += (ids.empty() ? "" : " -> ") + at.str();
+                        v["path"] = ids;
+                        v["names"] = cycleText(s, *path, false);
                         cycles.push_back(std::move(v));
                     }
                 }
@@ -1201,10 +1215,9 @@ void registerExtraCommands(cmd::Registry& registry) {
             // track would close a feedback loop (the same check route.add uses).
             if (target != from)
                 if (auto cycle = routeCycle(s, *id, target)) {
-                    std::string names;
-                    for (Id at : *cycle) names += (names.empty() ? "" : " -> ") + at.str();
-                    return Error("tr.cycle", "the move creates a cycle: " + names, "/parent",
-                                 "choose a destination that does not feed this track");
+                    return Error("tr.cycle",
+                                 "the move creates a cycle: " + cycleText(s, *cycle, true),
+                                 "/parent", "choose a destination that does not feed this track");
                 }
             if (s.tracks.find(target)->type == model::StripType::Channel)
                 return Error("track.strip_type", "a channel cannot have children", "/parent",

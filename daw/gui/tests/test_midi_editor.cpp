@@ -907,7 +907,8 @@ TEST_CASE("routing matrix: a rack's In modules are columns; a cell sends into on
     REQUIRE_FALSE(keys.empty());
     // The rack's own channel would feed back (its Out is the channel's input);
     // the master is terminal; another channel may send.
-    CHECK(m.blocked(row(synth), col).find("feed back") != std::string::npos);
+    CHECK(m.blocked(row(synth), col) ==
+          "it would feed back: Synth (rack) -> Synth -> Synth (rack)");  // by name
     CHECK_FALSE(m.blocked(row("tr_0"), col).empty());
     CHECK(m.blocked(row(keys), col).empty());
     // The rack's Out route is the channel's input, not a send.

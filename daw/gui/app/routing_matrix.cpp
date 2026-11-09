@@ -395,7 +395,7 @@ Status RoutingMatrix::reload() {
     }
     for (const auto& c : m->find("cycles")->asArray()) {
         next.cyclePairs.emplace_back(str(c, "from"), str(c, "to"));
-        next.cyclePaths.push_back(str(c, "path"));
+        next.cyclePaths.push_back(str(c, "names"));  // the path, by name
     }
     for (const auto& r : list->find("routes")->asArray()) {
         // Only sends from a strip are the matrix's. A channel's hardware or

@@ -58,7 +58,7 @@ struct MatrixModel {
     std::vector<Destination> destinations;
     std::vector<Send> sends;
     std::vector<std::pair<std::string, std::string>> cyclePairs;  // (from, to)
-    std::vector<std::string> cyclePaths;
+    std::vector<std::string> cyclePaths;                          // by name: "Synth -> FX"
     void index();
     std::map<std::pair<std::string, std::string>, std::string> cycleIndex;
     std::map<std::pair<std::string, std::string>, std::vector<std::size_t>> sendIndex;

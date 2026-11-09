@@ -2172,13 +2172,23 @@ TEST_CASE("route.matrix: a rack's In modules are destinations; its own feed is a
     CHECK(cycleOf(fx, in2));
     CHECK_FALSE(cycleOf(gtr, in2));
     CHECK_FALSE(cycleOf("tr_0", in2));
-    // What the matrix allows, route.add accepts; what it blocks, route.add refuses.
+    // The path by id and by name (the rack unnamed: its home's, marked).
+    for (const auto& c : m.find("cycles")->asArray())
+        if (c.find("from")->asString() == fx && c.find("to")->asString() == in2) {
+            CHECK(c.find("path")->asString() ==
+                  rack + " -> " + synth + " -> " + fx + " -> " + rack);
+            CHECK(c.find("names")->asString() == "Synth (rack) -> Synth -> FX -> Synth (rack)");
+        }
+    // What the matrix allows, route.add accepts; what it blocks, route.add refuses,
+    // naming the path with its ids.
     CHECK(d.execute({"route.add", j(R"({"from":")" + gtr + R"(","to":")" + in2 + R"("})"), kTest}));
     for (const std::string& from : {synth, fx}) {
         auto refused = d.execute(
             {"route.add", j(R"({"from":")" + from + R"(","to":")" + in2 + R"("})"), kTest});
         REQUIRE_FALSE(refused);
         CHECK(refused.error().code == "route.cycle");
+        CHECK(refused.error().message.starts_with("route creates a cycle: Synth (" + rack +
+                                                  ") -> Synth (" + synth + ")"));
     }
     auto master = d.execute({"route.add", j(R"({"from":"tr_0","to":")" + in2 + R"("})"), kTest});
     REQUIRE_FALSE(master);
