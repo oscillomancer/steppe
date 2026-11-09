@@ -323,7 +323,10 @@ TEST_CASE("smooth following moves the picture in whole pixels, so nothing in it 
                 if (std::memcmp(&first.rgba[a], &next.rgba[b], 3) != 0) ++differ;
             }
         CHECK(compared > 0);
-        CHECK(differ == 0);
+        // A rasterizer may resolve a stray antialiased edge differently at the
+        // new offset (macOS showed 2 pixels); a fractional scroll changes
+        // hundreds to thousands of them (about 600 to 3200 here).
+        CHECK(differ <= 16);
     }
 }
 
