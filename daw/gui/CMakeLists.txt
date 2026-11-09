@@ -153,9 +153,12 @@ if(SUPPLE_BUILD_TESTS)
   set_tests_properties(gui-views.tests PROPERTIES ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0")
   supple_add_tests(gui-actions SOURCES tests/test_actions.cpp tests/test_tap_tempo.cpp DEPS supple::engine SDL3::SDL3 LABELS gui)
   # The app driven by keys and clicks, asserting on the session (gui.md §10).
-  supple_add_tests(gui-app SOURCES tests/test_app.cpp tests/test_help.cpp tests/test_plugin_windows.cpp tests/test_gestures.cpp
-                   tests/test_midi_editor.cpp tests/test_fx_render.cpp tests/test_ruler.cpp tests/test_tcp_sends.cpp tests/test_mixer.cpp
-                   tests/test_racks.cpp DEPS supple::script-compiler LABELS gui tsan-skip)
+  # One CTest entry per file: the whole suite takes most of the timeout on
+  # the slower CI runners.
+  set(gui_app_sources tests/test_app.cpp tests/test_help.cpp tests/test_plugin_windows.cpp tests/test_gestures.cpp
+                      tests/test_midi_editor.cpp tests/test_fx_render.cpp tests/test_ruler.cpp tests/test_tcp_sends.cpp
+                      tests/test_mixer.cpp tests/test_racks.cpp)
+  supple_add_tests(gui-app SOURCES ${gui_app_sources} DEPS supple::script-compiler LABELS gui tsan-skip SPLIT)
   target_compile_definitions(gui-app.tests PRIVATE SUPPLE_GUI_FONTS_DIR="${PROJECT_SOURCE_DIR}/assets/fonts"
                              SUPPLE_CLAP_DIR="${CMAKE_BINARY_DIR}/plugins/clap"
                              FIXTURE_CLAP_PATH="$<TARGET_FILE:clap-host-fixtures>"
@@ -172,7 +175,10 @@ if(SUPPLE_BUILD_TESTS)
   endif()
   target_compile_definitions(gui-app.tests PRIVATE SUPPLE_BRIDGE_PATH="$<TARGET_FILE:${PRODUCT_SLUG}-bridge>")
   add_dependencies(gui-app.tests ${PRODUCT_SLUG}-bridge)
-  set_tests_properties(gui-app.tests PROPERTIES ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0")
+  foreach(src ${gui_app_sources})
+    get_filename_component(stem ${src} NAME_WE)
+    set_tests_properties(gui-app.tests.${stem} PROPERTIES ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0")
+  endforeach()
   supple_add_tests(gui-ui SOURCES tests/test_ui.cpp DEPS SDL3::SDL3 LABELS gui tsan-skip)
   target_compile_definitions(gui-ui.tests PRIVATE
     SUPPLE_GUI_FONTS_DIR="${PROJECT_SOURCE_DIR}/assets/fonts"
