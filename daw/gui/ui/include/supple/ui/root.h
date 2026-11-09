@@ -24,11 +24,14 @@ union SDL_Event;
 
 namespace supple::ui {
 
-// The shortest time between two presented frames on a display of `refreshHz`
-// (60 when unknown): three quarters of the frame period, the frame rate being
-// the refresh rate divided by the smallest whole number that brings it to
-// 120 Hz or below. Vsync still paces frames; this bounds them where vsync is
-// off, and keeps high-refresh displays at <= 120 fps with even frame times.
+// The frame period on a display of `refreshHz` (60 when unknown), the frame
+// rate being the refresh rate divided by the smallest whole number that
+// brings it to 120 Hz or below. It paces a window that does not wait for
+// vsync (gui::Window::present).
+std::chrono::steady_clock::duration frameInterval(float refreshHz);
+// The shortest time between two presented frames of a vsynced window: three
+// quarters of frameInterval(). Vsync still paces frames; this keeps
+// high-refresh displays at <= 120 fps with even frame times.
 std::chrono::steady_clock::duration minFrameInterval(float refreshHz);
 
 class Root {
@@ -76,7 +79,7 @@ class Root {
     // Lays out if needed, repaints damage into the cache, blits it, paints the
     // overlays. present=false composes a snapshot for readBack().
     void frame(bool present = true);
-    // wantsFrame(), and minFrameInterval() has passed since the last presented
+    // wantsFrame(), and the frame interval has passed since the last presented
     // frame. frameDeadline() is when a wanted frame may draw, for the wait.
     bool frameReady(std::chrono::steady_clock::time_point now) const;
     std::optional<std::chrono::steady_clock::time_point> frameDeadline() const;

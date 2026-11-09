@@ -84,6 +84,46 @@ TEST_CASE("an offscreen window draws with GL and NanoVG and reads back its pixel
     CHECK(at(image.width - 4, image.height - 4) == std::array<int, 3>{0x10, 0x20, 0x30});
 }
 
+TEST_CASE("only the window last focused waits for vsync when it presents") {
+    auto platform = gui::Platform::start(gui::Platform::Driver::Offscreen);
+    if (!platform) return;
+    gui::WindowOptions options{"a", 64, 48, true};
+    auto a = gui::Window::open(**platform, options);
+    options.title = "b";
+    auto b = gui::Window::open(**platform, options);
+    REQUIRE(a);
+    REQUIRE(b);
+    auto present = [](gui::Window& w) {
+        w.beginFrame(0);
+        w.endFrame();
+        w.present();
+    };
+    auto focus = [](const gui::Window& w) {
+        SDL_Event e{};
+        e.type = SDL_EVENT_WINDOW_FOCUS_GAINED;
+        e.window.windowID = w.id();
+        REQUIRE(SDL_PushEvent(&e));  // the platform's event watch sees it
+    };
+    present(**a);
+    CHECK_FALSE((*a)->vsynced());  // nothing focused yet
+    focus(**a);
+    CHECK((*platform)->lastFocused() == (*a)->id());
+    present(**a);
+    present(**b);
+    if (!(*a)->vsynced()) {
+        MESSAGE("skipped: no swap interval here");
+        return;
+    }
+    CHECK_FALSE((*b)->vsynced());
+    focus(**b);
+    present(**a);
+    present(**b);
+    CHECK_FALSE((*a)->vsynced());
+    CHECK((*b)->vsynced());
+    SDL_PumpEvents();
+    SDL_FlushEvents(SDL_EVENT_FIRST, SDL_EVENT_LAST);
+}
+
 TEST_CASE("the platform wake event can be pushed from another thread") {
     auto platform = gui::Platform::start(gui::Platform::Driver::Offscreen);
     if (!platform) return;

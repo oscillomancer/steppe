@@ -162,11 +162,22 @@ void Root::setTheme(Theme theme) {
 
 bool Root::wantsFrame() const { return !damage_.empty() || layoutPending_ || animate_; }
 
-std::chrono::steady_clock::duration minFrameInterval(float refreshHz) {
+namespace {
+// `periods` frame periods at the capped frame rate.
+std::chrono::steady_clock::duration framePeriods(float refreshHz, double periods) {
     const double hz = refreshHz > 0 ? static_cast<double>(refreshHz) : 60.0;
     const double rate = hz / std::ceil(hz / 120.0);
     return std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-        std::chrono::duration<double>(0.75 / rate));
+        std::chrono::duration<double>(periods / rate));
+}
+}  // namespace
+
+std::chrono::steady_clock::duration frameInterval(float refreshHz) {
+    return framePeriods(refreshHz, 1.0);
+}
+
+std::chrono::steady_clock::duration minFrameInterval(float refreshHz) {
+    return framePeriods(refreshHz, 0.75);
 }
 
 bool Root::frameReady(std::chrono::steady_clock::time_point now) const {
@@ -333,7 +344,8 @@ void Root::frame(bool present) {
     if (present) {
         window_.present();
         presented_ = std::chrono::steady_clock::now();
-        frameInterval_ = minFrameInterval(window_.refreshRate());
+        frameInterval_ = window_.vsynced() ? minFrameInterval(window_.refreshRate())
+                                           : frameInterval(window_.refreshRate());
     }
 }
 

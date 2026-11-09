@@ -23,6 +23,7 @@
 #include <nanovg_gl.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -80,10 +81,26 @@ Result<std::unique_ptr<Platform>> Platform::start(Driver driver) {
     std::unique_ptr<Platform> p(new Platform(driver));
     p->wakeEvent_ = SDL_RegisterEvents(1);
     if (p->wakeEvent_ == 0) return sdlError("gui.platform", "SDL_RegisterEvents");
+    if (!SDL_AddEventWatch(&Platform::watch, p.get()))
+        return sdlError("gui.platform", "SDL_AddEventWatch");
     return p;
 }
 
-Platform::~Platform() { SDL_Quit(); }
+Platform::~Platform() {
+    SDL_RemoveEventWatch(&Platform::watch, this);
+    SDL_Quit();
+}
+
+bool Platform::watch(void* platform, SDL_Event* e) {
+    // Runs on the thread that queues the event: focus events come from the
+    // UI thread's event pump, wake events from any thread.
+    if (e->type == SDL_EVENT_WINDOW_FOCUS_GAINED) {
+        auto* p = static_cast<Platform*>(platform);
+        p->lastFocused_.store(e->window.windowID, std::memory_order_relaxed);
+        p->focusGains_.fetch_add(1, std::memory_order_relaxed);
+    }
+    return true;
+}
 
 void Platform::wake() const {
     SDL_Event e{};
@@ -93,9 +110,9 @@ void Platform::wake() const {
 
 Result<std::unique_ptr<Window>> Window::open(const Platform& platform,
                                              const WindowOptions& options) {
-    (void)platform;
     if (!options.gl) {
         std::unique_ptr<Window> w(new Window);
+        w->platform_ = &platform;
         SDL_WindowFlags flags = SDL_WINDOW_HIGH_PIXEL_DENSITY;
         if (options.resizable) flags |= SDL_WINDOW_RESIZABLE;
         if (options.hidden) flags |= SDL_WINDOW_HIDDEN;
@@ -119,6 +136,7 @@ Result<std::unique_ptr<Window>> Window::open(const Platform& platform,
     SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     std::unique_ptr<Window> w(new Window);
+    w->platform_ = &platform;
     SDL_WindowFlags flags = SDL_WINDOW_OPENGL | SDL_WINDOW_HIGH_PIXEL_DENSITY;
     if (options.resizable) flags |= SDL_WINDOW_RESIZABLE;
     if (options.utility) flags |= SDL_WINDOW_UTILITY;
@@ -132,10 +150,12 @@ Result<std::unique_ptr<Window>> Window::open(const Platform& platform,
     w->context_ = SDL_GL_CreateContext(w->window_);
     if (!w->context_) return sdlError("gui.window", "SDL_GL_CreateContext");
     SDL_GL_MakeCurrent(w->window_, static_cast<SDL_GLContext>(w->context_));
-    // Event-driven: frames only when something changed, paced by vsync and,
-    // where vsync is unavailable, by ui::Root's minimum frame interval.
-    if (!SDL_GL_SetSwapInterval(1) && platform.driver() == Platform::Driver::Native)
+    // Event-driven: frames only when something changed, paced by vsync in
+    // the focused window (present()) and by ui::Root's frame interval.
+    w->vsync_ = SDL_GL_SetSwapInterval(1);
+    if (!w->vsync_ && platform.driver() == Platform::Driver::Native)
         std::fprintf(stderr, "no vsync (%s): frames are paced by a timer\n", SDL_GetError());
+    w->interval_ = w->vsync_ ? 1 : 0;
 #if defined(_WIN32)
     if (!suppleLoadGl()) return sdlError("gui.gl", "loading OpenGL entry points");
 #endif
@@ -345,7 +365,17 @@ void Window::beginFrame(std::uint32_t rgb) {
 
 void Window::endFrame() { nvgEndFrame(vg_); }
 
-void Window::present() { SDL_GL_SwapWindow(window_); }
+void Window::present() {
+    using Clock = std::chrono::steady_clock;
+    const std::uint64_t gains = platform_->focusGains();
+    if (vsync_) {  // the context is current (beginFrame, ui::Root::frame)
+        const int want = platform_->lastFocused() == id() && gains != stalled_ ? 1 : 0;
+        if (want != interval_ && SDL_GL_SetSwapInterval(want)) interval_ = want;
+    }
+    const Clock::time_point start = Clock::now();
+    SDL_GL_SwapWindow(window_);
+    if (interval_ == 1 && Clock::now() - start > std::chrono::milliseconds(250)) stalled_ = gains;
+}
 
 Image Window::readPixels() const {
     Image image;

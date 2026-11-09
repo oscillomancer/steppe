@@ -4,6 +4,7 @@
 // benchmarks), one OpenGL 3.3 core context, NanoVG GL3 for chrome (ADR-0005).
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -16,6 +17,7 @@
 
 struct NVGcontext;
 struct SDL_Window;
+union SDL_Event;
 
 namespace supple::gui {
 
@@ -32,11 +34,18 @@ class Platform {
     std::uint32_t wakeEvent() const { return wakeEvent_; }
     // Thread-safe: interrupts SDL_WaitEvent* on the UI thread.
     void wake() const;
+    // The last of this app's windows to gain keyboard focus (0 before any),
+    // and a count of focus gains, both kept by an SDL event watch.
+    std::uint32_t lastFocused() const { return lastFocused_.load(std::memory_order_relaxed); }
+    std::uint64_t focusGains() const { return focusGains_.load(std::memory_order_relaxed); }
 
   private:
     explicit Platform(Driver d) : driver_(d) {}
+    static bool watch(void* platform, SDL_Event* e);
     Driver driver_;
     std::uint32_t wakeEvent_ = 0;
+    std::atomic<std::uint32_t> lastFocused_{0};
+    std::atomic<std::uint64_t> focusGains_{0};
 };
 
 struct WindowOptions {
@@ -105,14 +114,26 @@ class Window {
     // NanoVG frame in design units.
     void beginFrame(std::uint32_t rgb);
     void endFrame();  // flushes NanoVG's draw calls
-    void present();   // swaps buffers
+    // Swaps buffers. Only the window last focused waits for vsync: a window
+    // the desktop is not drawing (behind a maximized one, on another
+    // workspace) may get no vblank, and its vsynced swap then waits for the
+    // compositor's fallback, about a second under XWayland, holding up
+    // every window on the thread. Other windows swap at once and are paced by
+    // ui::Root's frame interval. A vsynced swap that still takes over 250 ms
+    // turns vsync off for that window until it gains focus again.
+    void present();
+    bool vsynced() const { return interval_ == 1; }
     // The currently bound read framebuffer (or the window back buffer), RGBA8.
     Image readPixels() const;
 
   private:
     Window() = default;
+    const Platform* platform_ = nullptr;
     SDL_Window* window_ = nullptr;
-    void* context_ = nullptr;  // SDL_GLContext
+    bool vsync_ = false;             // the swap interval can be set
+    int interval_ = 0;               // as set
+    std::uint64_t stalled_ = ~0ull;  // Platform::focusGains() at a stalled swap
+    void* context_ = nullptr;        // SDL_GLContext
     NVGcontext* vg_ = nullptr;
 };
 

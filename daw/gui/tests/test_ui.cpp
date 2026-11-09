@@ -269,6 +269,9 @@ TEST_CASE("presented frames are at least the minimum frame interval apart") {
     CHECK(us(0) == 12500);    // unknown: as 60 Hz
     CHECK(us(144) == 10416);  // 72 fps, every second refresh
     CHECK(us(240) == 6250);   // 120 fps
+    // A window that does not wait for vsync is paced at the whole period.
+    CHECK(std::chrono::duration_cast<microseconds>(frameInterval(60)).count() == 16666);
+    CHECK(std::chrono::duration_cast<microseconds>(frameInterval(144)).count() == 13888);
     REQUIRE_GL();
     Root root(*fixture().window, fixture().fonts, Theme::dark());
     root.setContent(std::make_unique<Node>("root"));
