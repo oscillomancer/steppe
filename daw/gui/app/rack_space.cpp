@@ -1690,8 +1690,12 @@ bool RackSpace::onKey(const ui::KeyEvent& e) {
         endDrag(false);
         return true;
     }
-    if ((e.key == SDLK_DELETE || e.key == SDLK_BACKSPACE) && !e.mods && !selection_.empty()) {
-        if (hooks_.deleteSelected) hooks_.deleteSelected();
+    // Delete, Backspace and Alt+C (the arrange view's and MIDI editor's keys)
+    // delete the selection. They stop here even with nothing selected, so the
+    // window's unhandled keys never delete the arrange view's selection.
+    if (((e.key == SDLK_DELETE || e.key == SDLK_BACKSPACE) && !e.mods) ||
+        (e.key == SDLK_C && e.mods == ui::kAlt)) {
+        if (!selection_.empty() && hooks_.deleteSelected) hooks_.deleteSelected();
         return true;
     }
     if (e.mods & ui::kCtrl) {

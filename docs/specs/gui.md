@@ -1250,7 +1250,9 @@ a new channel). It follows rack.md §8.
   or Shift+click toggles, a drag on the space draws a marquee (Ctrl or
   Shift adds), and the selection moves together as one undo step
   (`module.set x, y` in one transaction); the arrow keys nudge it 10 units
-  (Shift: 1), one undo step a press. Delete removes the selection; Ctrl+A
+  (Shift: 1), one undo step a press. Delete, Backspace or Alt+C removes
+  the selection (the space keeps these keys with nothing selected, so they
+  never reach the arrange view's selection); Ctrl+A
   selects every module. Ctrl+C copies the selection with the cables among
   its modules, Ctrl+X cuts it, Ctrl+V pastes with the copy's top-left at
   the pointer (else the middle of the view), selected and in view, and

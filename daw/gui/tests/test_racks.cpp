@@ -1190,6 +1190,43 @@ TEST_CASE("rack window: copy, paste, cut and duplicate keep the cables among the
     CHECK(space.view().zoom <= 1.5);
 }
 
+TEST_CASE("rack window: Delete, Backspace and Alt+C delete the selection, and stop there") {
+    Fixture f;
+    if (!f.ok) return;
+    Patch p(f);
+    f.racks->open();
+    f.frame();
+    gui::RackSpace& space = *f.racks->space();
+    // What the window leaves unhandled reaches the app's keys (the arrange
+    // view's edit.delete): none of these.
+    std::vector<int> leaked;
+    f.r().onUnhandledKey = [&](const ui::KeyEvent& e) {
+        leaked.push_back(e.key);
+        return false;
+    };
+    const struct {
+        int key;
+        unsigned mods;
+        const std::string* module;
+    } presses[] = {
+        {SDLK_DELETE, 0, &p.osc}, {SDLK_BACKSPACE, 0, &p.vca}, {SDLK_C, ui::kAlt, &p.scope}};
+    for (const auto& press : presses) {
+        const model::Id id = *model::Id::parse(*press.module);
+        REQUIRE(f.app->head().modules.find(id));
+        space.select({id});
+        f.r().key(press.key, press.mods);
+        f.frame();
+        CHECK_FALSE(f.app->head().modules.find(id));
+        CHECK(space.selection().empty());
+        // With nothing selected, the key deletes nothing and goes no further.
+        const auto version = f.app->head().version;
+        f.r().key(press.key, press.mods);
+        f.frame();
+        CHECK(f.app->head().version == version);
+    }
+    CHECK(leaked.empty());
+}
+
 TEST_CASE(
     "a Rack device names a Macro's plug-in parameter target after the parameter, "
     "asking the plug-in once") {

@@ -363,8 +363,8 @@ into it.
 
 Drag a module by its body to move it, Ctrl+click, Shift+click or drag a
 box on the space to select several, nudge them with the arrow keys
-(Shift: finely), and Delete removes them. Ctrl+C and Ctrl+V copy and paste
-the selected modules with the cables between them (paste lands at the
+(Shift: finely), and Delete, Backspace or Alt+C removes them. Ctrl+C and
+Ctrl+V copy and paste the selected modules with the cables between them (paste lands at the
 pointer, in this rack or another, with plug-ins' settings as they were
 when you copied), Ctrl+X cuts and Ctrl+D duplicates.
 To keep what a sequencer or any module with pitch and gate outputs plays,
