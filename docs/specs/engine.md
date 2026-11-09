@@ -1344,9 +1344,11 @@ harness. See the tooling README for schemas, limits and invocation details.
   channel's MIDI route; old MIDI-only `record.input` remains readable.
   Hardware audio and MIDI replace each other (`record_input` turns the MIDI
   route into audio, `record_midi` the hardware route into MIDI);
-  `record_midi: null` clears MIDI alone. A rack Out keeps a MIDI input beside
-  it, and such a channel records MIDI; without the MIDI input it records
-  the Out's audio as a WAV take. A second armed channel with the same Out
+  `record_midi: null` clears MIDI alone, `record_input: null` hardware
+  audio alone and `record_rack: null` a rack's Out alone (each leaves an
+  input of another kind; all three leave the channel with no input). A
+  rack Out keeps a MIDI input beside it, and such a channel records MIDI;
+  without the MIDI input it records the Out's audio as a WAV take. A second armed channel with the same Out
   as its input records the audio in the same pass. A rack's Notes
   module follows its source channel's armed monitoring and channel map, in
   both executors. Explicit Notes devices still listen always. A live-input

@@ -1443,7 +1443,13 @@ a new channel). It follows rack.md §8.
   audio input (`record.input`: a channel, a stereo pair or a rack's Out)
   and the MIDI input (`record.midi_input`, or a legacy MIDI-only
   `record.input`: "no MIDI input", which is `track.set {record_midi:
-  null}`, "any MIDI device" or a device). On a rack's channel picking one
+  null}`, "any MIDI device" or a device). "no audio input" leads the
+  device's inputs (`record_input: null`, checked without hardware audio)
+  and "no rack input" the racks' Outs (`record_rack: null`, listed when
+  there is a rack); each takes off only its own kind, so the three
+  together return the channel to its blank input. While the engine is
+  stopped, the device's list is not shown, but "no audio input" and "no
+  MIDI input" are, when there is one to take off. On a rack's channel picking one
   keeps the other, so it hears the rack and plays from the keyboard;
   elsewhere hardware audio and a MIDI device replace each other. The input
   button (TCP and mixer) names both, "<audio> + <MIDI>": a rack with one

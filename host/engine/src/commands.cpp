@@ -713,9 +713,9 @@ struct TrackSetArgs {
     std::optional<bool> mute, phaseInvert, mono;
     std::optional<std::string> solo;
     std::optional<bool> armed;
-    std::optional<std::vector<std::int64_t>> recordInput;
+    std::optional<json::Value> recordInput;  // channels, or null: no hardware audio
     std::optional<json::Value> recordMidi;
-    std::optional<std::string> recordRack;  // an Out module (ADR-0062)
+    std::optional<json::Value> recordRack;  // an Out module (ADR-0062), or null: none
     std::optional<std::int64_t> midiChannel;
     std::optional<model::RecordMode> recordMode;
     std::optional<model::Monitor> monitor;
@@ -1619,9 +1619,11 @@ void registerEngineCommands(cmd::Registry& registry) {
         c.description =
             "Only the given fields change. solo: off | on | in_place | defeat. armed + "
             "record_input (device input channels, 1-based) prepare a track for "
-            "transport.record; record_midi records MIDI instead (null clears it): hardware audio "
+            "transport.record; record_midi records MIDI instead: hardware audio "
             "and MIDI replace each other. A rack's Out (record_rack) keeps a MIDI input beside "
-            "it, which plays its Notes; recording then takes MIDI. A device name is a "
+            "it, which plays its Notes; recording then takes MIDI. null clears each one "
+            "(record_input: null takes off hardware audio, record_rack: null a rack's Out), "
+            "leaving the others. A device name is a "
             "substring of "
             "the MIDI port (\"*\" = every device), with midi_channel 1-16 (0 = all). monitor: "
             "off | on | auto (auto: while armed) — a monitored track hears its input live (an "
@@ -1658,12 +1660,15 @@ void registerEngineCommands(cmd::Registry& registry) {
                                                 "off, on, in_place or defeat"))
                 .field("armed", &TrackSetArgs::armed, schema::boolean())
                 .field("record_input", &TrackSetArgs::recordInput,
-                       schema::arrayOf(schema::integer().range(1, 64)))
+                       clearable("clearable_channels",
+                                 schema::arrayOf(schema::integer().range(1, 64))))
                 .field("record_midi", &TrackSetArgs::recordMidi, clearableString(schema::string()))
                 .field("record_rack", &TrackSetArgs::recordRack,
-                       idArg("mo", "Out module")
-                           .doc("A rack's Out module as the channel's input: the rack plays "
-                                "on the channel, before its inserts (rack.list lists them)"))
+                       clearableString(
+                           idArg("mo", "Out module")
+                               .doc("A rack's Out module as the channel's input: the rack plays "
+                                    "on the channel, before its inserts (rack.list lists them); "
+                                    "null takes a rack's Out off the input")))
                 .field("midi_channel", &TrackSetArgs::midiChannel, schema::integer().range(0, 16))
                 .field("record_mode", &TrackSetArgs::recordMode,
                        schema::enumeration<model::RecordMode>(
@@ -1742,11 +1747,22 @@ void registerEngineCommands(cmd::Registry& registry) {
             if (a.laneMute && newType != model::StripType::Master)
                 return Error("track.strip_type", "only masters have a lane mute", "/lane_mute",
                              "mute the items themselves (item.set {mute}) or the strip");
-            if (a.recordRack && a.recordInput)
+            // null clears that input; a value sets it.
+            const bool clearAudio = a.recordInput && a.recordInput->isNull();
+            const bool clearRack = a.recordRack && a.recordRack->isNull();
+            std::optional<std::vector<std::int64_t>> recordInput;
+            if (a.recordInput && !clearAudio) {
+                recordInput.emplace();
+                for (const json::Value& ch : a.recordInput->asArray())
+                    recordInput->push_back(ch.asInt());
+            }
+            const std::optional<std::string> recordRack =
+                a.recordRack && !clearRack ? std::optional(a.recordRack->asString()) : std::nullopt;
+            if (recordRack && recordInput)
                 return Error("track.record_input", "choose one audio input: hardware or a rack Out",
                              "/record_rack",
                              "give either record_rack or record_input; MIDI is independent");
-            if (a.recordInput && a.recordMidi && !a.recordMidi->isNull())
+            if (recordInput && a.recordMidi && !a.recordMidi->isNull())
                 return Error("track.record_input", "record hardware audio or MIDI, not both",
                              "/record_midi",
                              "provide either record_input for audio or record_midi for MIDI; only "
@@ -1817,15 +1833,23 @@ void registerEngineCommands(cmd::Registry& registry) {
                 app.txn().remove<model::Route>(route);
             };
             const model::Route* audioRoute = input ? s.routes.find(*input) : nullptr;
-            const bool hardwareAudio = audioRoute && audioRoute->from.hwChannels;
+            bool hardwareAudio = audioRoute && audioRoute->from.hwChannels;
+            // No hardware audio input (record_input: null), or no rack Out
+            // (record_rack: null): each takes off only an input of its kind.
+            if ((clearAudio && hardwareAudio) ||
+                (clearRack && audioRoute && audioRoute->from.module)) {
+                removeRoute(*input);
+                input.reset();
+                hardwareAudio = false;
+            }
             const bool clearMidi = a.recordMidi && a.recordMidi->isNull();
             if ((a.recordMidi && !clearMidi) || a.midiChannel)
                 if (!a.recordMidi && !(midiInput && s.routes.find(*midiInput)))
                     return Error("track.record_midi", "give record_midi (the device) first",
                                  "/midi_channel",
                                  "set record_midi to a device from engine.inputs first");
-            if (a.recordInput) {
-                if (a.recordInput->empty())
+            if (recordInput) {
+                if (recordInput->empty())
                     return Error("track.record_input", "give one or more input channels",
                                  "/record_input", "e.g. [1, 2] for a stereo pair");
                 // Hardware audio and MIDI are exclusive (ADR-0065): the MIDI
@@ -1837,7 +1861,7 @@ void registerEngineCommands(cmd::Registry& registry) {
                         removeRoute(*midiInput);
                     midiInput.reset();
                 }
-                std::vector<int> channels(a.recordInput->begin(), a.recordInput->end());
+                std::vector<int> channels(recordInput->begin(), recordInput->end());
                 if (input && s.routes.find(*input)) {
                     app.txn().modify<model::Route>(*input, [&](model::Route& r) {
                         r.from.hwChannels = channels;
@@ -1882,12 +1906,12 @@ void registerEngineCommands(cmd::Registry& registry) {
                     midiInput = app.txn().create(r);
                 }
             }
-            if (a.recordRack) {  // a rack's Out module (ADR-0062)
-                auto out = Id::parse(*a.recordRack);
+            if (recordRack) {  // a rack's Out module (ADR-0062)
+                auto out = Id::parse(*recordRack);
                 const model::RackModule* m = out ? s.modules.find(*out) : nullptr;
                 if (!m || m->type != model::kOutModule)
-                    return Error("rack.port", *a.recordRack + " is not an Out module",
-                                 "/record_rack", "rack.list lists every rack's Out modules");
+                    return Error("rack.port", *recordRack + " is not an Out module", "/record_rack",
+                                 "rack.list lists every rack's Out modules");
                 if (trackFeedsRack(s, *id, m->rack))
                     return Error(
                         "rack.cycle",

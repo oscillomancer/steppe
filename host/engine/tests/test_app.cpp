@@ -2259,6 +2259,70 @@ TEST_CASE("track.remove: a rack another channel hears moves home there; others g
     CHECK_FALSE(app->head().modules.find(at(out)));
 }
 
+TEST_CASE("track.set: null takes off hardware audio or a rack's Out, each alone") {
+    Root root;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    auto app = makeApp(root.path);
+    cmd::Dispatcher d(registry, *app);
+    auto call = [&](const char* name, const std::string& args) {
+        auto r = d.execute({name, j(args), kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    const std::string mic = call("track.add", R"({"name":"Mic"})").find("track")->asString();
+    const json::Value made = call("rack.add", R"({"name":"Synth"})");
+    const std::string synth = made.find("track")->asString(), out = made.find("out")->asString();
+    const auto track = [&](const std::string& id) {
+        return *app->head().tracks.find(*model::Id::parse(id));
+    };
+    const auto routes = [&] { return app->head().routes.size(); };
+    const auto set = [&](const std::string& id, const std::string& fields) {
+        call("track.set", R"({"track":")" + id + R"(",)" + fields + "}");
+    };
+
+    set(mic, R"("record_input":[1,2])");
+    const auto withMic = routes();
+    // A rack's Out is not hardware audio: record_rack: null leaves Mic's input.
+    set(mic, R"("record_rack":null)");
+    CHECK(track(mic).record.input);
+    set(mic, R"("record_input":null)");
+    CHECK_FALSE(track(mic).record.input);
+    CHECK_FALSE(track(mic).record.midiInput);
+    CHECK(routes() == withMic - 1);
+    set(mic, R"("record_input":null)");  // nothing to take off
+    CHECK(routes() == withMic - 1);
+
+    // Synth: its rack's Out and a keyboard. Hardware audio's null leaves both;
+    // the rack's takes off the Out, keeping the keyboard.
+    set(synth, R"("record_midi":"*")");
+    REQUIRE(track(synth).record.midiInput);
+    set(synth, R"("record_input":null)");
+    REQUIRE(track(synth).record.input);
+    CHECK(app->head().routes.find(*track(synth).record.input)->from.module ==
+          model::Id::parse(out));
+    set(synth, R"("record_rack":null)");
+    const model::Track after = track(synth);
+    REQUIRE(after.record.midiInput);
+    CHECK(app->head().routes.find(*after.record.midiInput)->from.midiDevice == "*");
+    CHECK(after.record.input == after.record.midiInput);  // the MIDI-only alias
+    // The rack stays, homed on Synth; then no MIDI input either: blank.
+    CHECK(app->head().racks.find(*model::Id::parse(made.find("rack")->asString())));
+    set(synth, R"("record_midi":null)");
+    CHECK_FALSE(track(synth).record.input);
+    CHECK_FALSE(track(synth).record.midiInput);
+    // A value with a null is still one audio input at a time.
+    auto both = d.execute(
+        {"track.set",
+         j(R"({"track":")" + synth + R"(","record_rack":")" + out + R"(","record_input":[1]})"),
+         kTest});
+    REQUIRE_FALSE(both);
+    CHECK(both.error().code == "track.record_input");
+    set(synth, R"("record_rack":")" + out + R"(","record_input":null)");
+    CHECK(app->head().routes.find(*track(synth).record.input)->from.module ==
+          model::Id::parse(out));
+}
+
 TEST_CASE("log.list: who did what, queries left out, since, origin filter, bounded") {
     Root root;
     cmd::Registry registry;

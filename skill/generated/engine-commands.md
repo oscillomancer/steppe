@@ -15616,7 +15616,7 @@ Result:
 
 Set track fields: name, type, volume, pan, mute, solo, polarity, mono, arming.
 
-Only the given fields change. solo: off | on | in_place | defeat. armed + record_input (device input channels, 1-based) prepare a track for transport.record; record_midi records MIDI instead (null clears it): hardware audio and MIDI replace each other. A rack's Out (record_rack) keeps a MIDI input beside it, which plays its Notes; recording then takes MIDI. A device name is a substring of the MIDI port ("*" = every device), with midi_channel 1-16 (0 = all). monitor: off | on | auto (auto: while armed) — a monitored track hears its input live (an instrument plays the keyboard), also while stopped. record_mode: input (new items), midi_overdub (merge into the MIDI item under the start, as a new take), midi_replace. color: red | orange | yellow | green | teal | blue | violet | grey | "#rrggbb" ("" clears it), shown as a stripe on the track. A master takes armed alone: transport.record then records its output (after its fader, before its own items) as an item on the master; lane_mute silences a master's items.
+Only the given fields change. solo: off | on | in_place | defeat. armed + record_input (device input channels, 1-based) prepare a track for transport.record; record_midi records MIDI instead: hardware audio and MIDI replace each other. A rack's Out (record_rack) keeps a MIDI input beside it, which plays its Notes; recording then takes MIDI. null clears each one (record_input: null takes off hardware audio, record_rack: null a rack's Out), leaving the others. A device name is a substring of the MIDI port ("*" = every device), with midi_channel 1-16 (0 = all). monitor: off | on | auto (auto: while armed) — a monitored track hears its input live (an instrument plays the keyboard), also while stopped. record_mode: input (new items), midi_overdub (merge into the MIDI item under the start, as a new take), midi_replace. color: red | orange | yellow | green | teal | blue | violet | grey | "#rrggbb" ("" clears it), shown as a stripe on the track. A master takes armed alone: transport.record then records its output (after its fader, before its own items) as an item on the master; lane_mute silences a master's items.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -15637,9 +15637,9 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | `mono` | boolean |  |  |  | Sum the main pair to mono (after the FX chain, before the fader and pan): a mono check on the master |
 | `solo` | string |  |  |  |  |
 | `armed` | boolean |  |  |  |  |
-| `record_input` | array |  |  |  |  |
+| `record_input` | value |  |  |  |  |
 | `record_midi` | value |  |  |  |  |
-| `record_rack` | string |  |  |  | A rack's Out module as the channel's input: the rack plays on the channel, before its inserts (rack.list lists them) |
+| `record_rack` | value |  |  |  |  |
 | `midi_channel` | integer |  | 0.0..16.0 |  |  |
 | `record_mode` | string |  |  |  |  |
 | `monitor` | string |  |  |  |  |

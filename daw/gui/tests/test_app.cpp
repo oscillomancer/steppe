@@ -2175,8 +2175,9 @@ TEST_CASE("the TCP's input menu lists the device's ports and picks one (P5.13)")
     CHECK(inputButton()->valueText() == "in \u2014");  // nothing chosen yet
     // The strip shows the port names; a narrow strip clips the tail, so the
     // name is a prefix (the menu shows them whole).
-    // After the ports: the MIDI choices ("no MIDI input", "any MIDI device",
-    // each device), a separator and "New rack on this channel".
+    // "no audio input", the ports, then the MIDI choices ("no MIDI input",
+    // "any MIDI device", each device), a separator and "New rack on this
+    // channel".
     auto checked = [](const ui::List& list) {
         std::vector<std::string> out;
         for (const auto& item : ui::menuItems(list))
@@ -2185,9 +2186,9 @@ TEST_CASE("the TCP's input menu lists the device's ports and picks one (P5.13)")
     };
     ui::List* menu = openMenu();
     REQUIRE(menu);
-    CHECK(menu->count() == 12);
-    CHECK(checked(*menu) == std::vector<std::string>{"no MIDI input"});
-    menu->onActivate(1);                      // "in 2" -> record_input [2]
+    CHECK(menu->count() == 13);
+    CHECK(checked(*menu) == std::vector<std::string>{"no audio input", "no MIDI input"});
+    menu->onActivate(2);                      // "in 2" -> record_input [2]
     CHECK(a.root->find("popup") == nullptr);  // it closed
     shell.sync();
     a.root->frame(false);
@@ -2196,7 +2197,7 @@ TEST_CASE("the TCP's input menu lists the device's ports and picks one (P5.13)")
     // A stereo pair is one entry ([n, n+1]).
     menu = openMenu();
     REQUIRE(menu);
-    menu->onActivate(3);  // stereo 1-2
+    menu->onActivate(4);  // stereo 1-2
     shell.sync();
     a.root->frame(false);
     REQUIRE(inputButton());
@@ -2205,7 +2206,7 @@ TEST_CASE("the TCP's input menu lists the device's ports and picks one (P5.13)")
     // (ADR-0065): one input, shown alone on the button and in the menu.
     menu = openMenu();
     REQUIRE(menu);
-    menu->onActivate(8);  // the first device (Keystation)
+    menu->onActivate(9);  // the first device (Keystation)
     shell.sync();
     a.root->frame(false);
     REQUIRE(inputButton());
@@ -2221,14 +2222,16 @@ TEST_CASE("the TCP's input menu lists the device's ports and picks one (P5.13)")
     CHECK(midi->from.midiDevice.value_or("") == "Keystation");
     menu = openMenu();
     REQUIRE(menu);
-    CHECK(checked(*menu) == std::vector<std::string>{"Keystation"});
+    CHECK(checked(*menu) == std::vector<std::string>{"no audio input", "Keystation"});
     // While the engine is stopped the device reports nothing: one disabled
-    // entry, and picking it changes nothing.
+    // entry, and picking it changes nothing; "no MIDI input" can still take
+    // the device off.
     running = false;
     a.root->closePopups();
     menu = openMenu();
     REQUIRE(menu);
-    CHECK(menu->count() == 3);
+    CHECK(menu->count() == 4);
+    CHECK(ui::menuItems(*menu)[1].label == "no MIDI input");
     menu->onActivate(0);
     shell.sync();
     a.root->frame(false);
@@ -2246,8 +2249,9 @@ TEST_CASE("the TCP's input menu lists the device's ports and picks one (P5.13)")
     a.root->frame(false);
     menu = openMenu();
     REQUIRE(menu);
-    REQUIRE(menu->count() == 4);
-    menu->onActivate(2);
+    REQUIRE(menu->count() == 6);  // ..., "no rack input", the Out, New rack
+    CHECK(ui::menuItems(*menu)[3].label == "no rack input");
+    menu->onActivate(4);
     shell.sync();
     a.root->frame(false);
     tr = a.app->head().tracks.find(id);
@@ -2266,10 +2270,10 @@ TEST_CASE("the TCP's input menu lists the device's ports and picks one (P5.13)")
     menu = openMenu();
     REQUIRE(menu);
     const std::string outLabel = "Bells \u00bb " + model::moduleLabel(a.app->head(), out);
-    CHECK(checked(*menu) == std::vector<std::string>{"Keystation", outLabel});
+    CHECK(checked(*menu) == std::vector<std::string>{"no audio input", "Keystation", outLabel});
     a.snapshot("tcp-input-rack-midi.png");
     // "no MIDI input" clears the device alone: the rack still plays here.
-    menu->onActivate(6);
+    menu->onActivate(7);
     shell.sync();
     a.root->frame(false);
     CHECK_FALSE(model::midiInputRoute(a.app->head(), id));
@@ -2277,6 +2281,40 @@ TEST_CASE("the TCP's input menu lists the device's ports and picks one (P5.13)")
     REQUIRE(tr->record.input);
     CHECK(a.app->head().routes.find(*tr->record.input)->from.module == out);
     CHECK(shell.inputLabel(id) == outLabel);
+    // "no rack input" takes the Out off: the channel's input is blank again,
+    // and the rack stays on its own channel.
+    menu = openMenu();
+    REQUIRE(menu);
+    REQUIRE(ui::menuItems(*menu)[12].label == "no rack input");
+    CHECK_FALSE(ui::menuItems(*menu)[12].checked);
+    menu->onActivate(12);
+    shell.sync();
+    a.root->frame(false);
+    tr = a.app->head().tracks.find(id);
+    CHECK_FALSE(tr->record.input);
+    CHECK_FALSE(tr->record.midiInput);
+    CHECK(a.app->head().racks.find(*model::Id::parse((*made)["rack"].asString())));
+    REQUIRE(inputButton());
+    CHECK(inputButton()->valueText() == "in \u2014");
+    menu = openMenu();
+    REQUIRE(menu);
+    CHECK(checked(*menu) ==
+          std::vector<std::string>{"no audio input", "no MIDI input", "no rack input"});
+    // "no audio input" takes hardware audio off, back to blank.
+    menu->onActivate(1);  // in 1
+    shell.sync();
+    a.root->frame(false);
+    REQUIRE(a.app->head().tracks.find(id)->record.input);
+    menu = openMenu();
+    REQUIRE(menu);
+    CHECK(checked(*menu) ==
+          std::vector<std::string>{"M Series Pro:capture_AUX0", "no MIDI input", "no rack input"});
+    menu->onActivate(0);
+    shell.sync();
+    a.root->frame(false);
+    CHECK_FALSE(a.app->head().tracks.find(id)->record.input);
+    REQUIRE(inputButton());
+    CHECK(inputButton()->valueText() == "in \u2014");
     // Detach the shell's tree while the shell (and the meter feed it holds a
     // reference to) is still alive: its rows release their meters on the way
     // out.

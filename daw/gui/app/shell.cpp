@@ -576,16 +576,36 @@ void Shell::openInputMenu(const model::Id& track, const ui::Rect& anchor) {
         args["track"] = track.str();
         commit("track.set", std::move(args), {});
     };
+    // Each selection can be taken off alone, back to the channel's blank
+    // input: hardware audio, the MIDI device (and a rack's Out, below).
+    auto none = [&pick](const char* label, const char* shortcut, const char* field, bool checked) {
+        ui::MenuItem m;
+        m.label = label;
+        m.shortcut = shortcut;
+        m.checked = checked;
+        m.run = [pick, field] {
+            json::Value args = json::Value::object();
+            args[field] = json::Value();  // null: takes it off, the others stay
+            pick(std::move(args));
+        };
+        return m;
+    };
     std::vector<ui::MenuItem> items;
     const json::Value* running = list.find("running");
     if (!running || !running->asBool()) {
         // The device only reports its ports while the engine holds it open
-        // (engine.inputs), so say so rather than showing a stale list.
+        // (engine.inputs), so say so rather than showing a stale list; what
+        // is chosen can still be taken off.
         items.push_back(
             {"engine stopped \u2014 start the engine to list its inputs", "", {}, false});
+        if (!current.empty()) items.push_back(none("no audio input", "in", "record_input", false));
+        if (!midiDevice.empty())
+            items.push_back(none("no MIDI input", "midi", "record_midi", false));
     } else {
         const json::Value* audio = list.find("audio");
         const std::size_t count = audio && audio->isArray() ? audio->size() : 0;
+        if (count || !current.empty())
+            items.push_back(none("no audio input", "in", "record_input", current.empty()));
         for (std::size_t i = 0; i < count; ++i) {
             const json::Value& e = audio->at(i);
             const json::Value* c = e.find("channel");
@@ -637,16 +657,7 @@ void Shell::openInputMenu(const model::Id& track, const ui::Rect& anchor) {
         const std::size_t devices = midi && midi->isArray() ? midi->size() : 0;
         if (devices || !midiDevice.empty()) {
             items.push_back({"", "", {}, true, true});  // separator
-            ui::MenuItem none;
-            none.label = "no MIDI input";
-            none.shortcut = "midi";
-            none.checked = midiDevice.empty();
-            none.run = [pick] {
-                json::Value args = json::Value::object();
-                args["record_midi"] = json::Value();  // null: clears it, audio stays
-                pick(std::move(args));
-            };
-            items.push_back(std::move(none));
+            items.push_back(none("no MIDI input", "midi", "record_midi", midiDevice.empty()));
             ui::MenuItem any;
             any.label = "any MIDI device";
             any.shortcut = "midi";
@@ -703,6 +714,8 @@ void Shell::openInputMenu(const model::Id& track, const ui::Rect& anchor) {
         std::sort(racks.begin(), racks.end(),
                   [](const ui::MenuItem& a, const ui::MenuItem& b) { return a.label < b.label; });
         if (!items.empty()) items.push_back({"", "", {}, true, true});
+        if (!racks.empty() || currentOut)
+            items.push_back(none("no rack input", "rack", "record_rack", !currentOut));
         for (auto& m : racks) items.push_back(std::move(m));
         const actions::Action* add = actions_ ? actions_->registry().find("ui.rack.add") : nullptr;
         items.push_back({"New rack on this channel", "",

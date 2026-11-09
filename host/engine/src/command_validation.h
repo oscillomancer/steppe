@@ -13,25 +13,30 @@
 namespace supple::engine {
 // Omission leaves a field unchanged; explicit null clears it. Preserve null
 // inside the optional rather than letting the normal optional decoder erase it.
-inline schema::Schema<std::optional<json::Value>> clearableString(
-    schema::Schema<std::string> inner) {
+// A value that is not null is checked against `inner`.
+template <class T>
+schema::Schema<std::optional<json::Value>> clearable(std::string name, schema::Schema<T> inner) {
     auto ex = json::Value::object();
     ex["anyOf"] = json::Value::array();
     ex["anyOf"].push_back(inner.jsonSchema());
     auto null = json::Value::object();
     null["type"] = "null";
     ex["anyOf"].push_back(std::move(null));
-    return {"clearable_string",
+    return {std::move(name),
             [inner](const json::Value& v, std::optional<json::Value>& out, schema::DecodeCtx& ctx,
                     const std::string& path) {
                 if (!v.isNull()) {
-                    std::string value;
+                    T value{};
                     if (!inner.decodeInto(v, value, ctx, path)) return false;
                 }
                 out = v;
                 return true;
             },
             [](const std::optional<json::Value>& v) { return v.value_or(json::Value()); }, ex};
+}
+inline schema::Schema<std::optional<json::Value>> clearableString(
+    schema::Schema<std::string> inner) {
+    return clearable("clearable_string", std::move(inner));
 }
 
 // A locked item refuses every change except being unlocked (item.set

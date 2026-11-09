@@ -1794,9 +1794,9 @@ q = nil
 ---@field mono? boolean Sum the main pair to mono (after the FX chain, before the fader and pan): a mono check on the master
 ---@field solo? string
 ---@field armed? boolean
----@field record_input? integer[]
+---@field record_input? any
 ---@field record_midi? any
----@field record_rack? string A rack's Out module as the channel's input: the rack plays on the channel, before its inserts (rack.list lists them)
+---@field record_rack? any
 ---@field midi_channel? integer
 ---@field record_mode? "input"|"midi_overdub"|"midi_replace"
 ---@field monitor? "off"|"on"|"auto"

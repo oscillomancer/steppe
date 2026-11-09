@@ -449,6 +449,8 @@ Selecting a MIDI input on the rack's channel keeps its audio Out connected:
 the channel's input menu checks its audio input (an input, a pair or a
 rack's Out) and its MIDI input (**no MIDI input**, any device or one)
 separately, and its input button shows both, such as **Bells + Keystation**.
+**no audio input** and **no rack input** take off a hardware input or a
+rack's Out the same way, so a channel's input can go back to empty.
 Arm the channel and turn monitoring On to play it from the keyboard (Auto
 listens while stopped or recording). A new rack channel starts with the
 monitor mode set in Preferences, like any new channel. Arming or changing
