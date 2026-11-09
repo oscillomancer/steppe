@@ -927,7 +927,7 @@ TEST_CASE("rack window: a plug-in without semantic keys is modulated by its para
     f.pointer(ui::PointerEvent::Type::Move, *space.socketAt(id, "0"), 0);
     CHECK(space.hoverText() == "Gain · +50 %");
     // Saved and reopened: the same cable, still named.
-    const std::string path = (f.dir / "raw.json").string();
+    const std::string path = (f.dir / "raw.json").generic_string();
     f.exec("project.save", R"({"path":")" + path + R"("})");
     f.exec("project.open", R"({"path":")" + path + R"("})");
     f.frame();
