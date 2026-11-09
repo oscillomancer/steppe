@@ -129,10 +129,9 @@ add_library(supple::rack-stock ALIAS rack-stock)
 
 if(SUPPLE_BUILD_TESTS)
   file(GLOB _stock_tests CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/stock/*.cpp)
-  add_executable(rack-stock.tests tests/test_stock.cpp tests/test_jit.cpp ${_stock_tests})
+  # One CTest entry per source file: the whole suite runs for minutes, past
+  # the test timeout on slower CI runners.
+  supple_add_tests(rack-stock SOURCES tests/test_stock.cpp tests/test_jit.cpp ${_stock_tests}
+                   DEPS supple::script-compiler LABELS rack SPLIT)
   target_include_directories(rack-stock.tests PRIVATE tests)
-  target_link_libraries(rack-stock.tests PRIVATE supple::rack-stock supple::script-compiler supple::doctest-main)
-  supple_target_defaults(rack-stock.tests)
-  add_test(NAME rack-stock.tests COMMAND rack-stock.tests)
-  set_tests_properties(rack-stock.tests PROPERTIES LABELS "rack")
 endif()

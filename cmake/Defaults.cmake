@@ -105,7 +105,7 @@ endfunction()
 # Builds <lib>.tests (doctest) and registers it with CTest. SPLIT registers
 # one CTest entry per source file instead (<lib>.tests.<file stem>, doctest's
 # source-file filter), so a large suite runs in parallel and each part stays
-# within the test timeout under the sanitizers.
+# within the test timeout (under the sanitizers, and on slower CI runners).
 function(supple_add_tests lib)
   if(NOT SUPPLE_BUILD_TESTS)
     return()
@@ -119,7 +119,8 @@ function(supple_add_tests lib)
   if(ARG_SPLIT)
     foreach(src ${ARG_SOURCES})
       get_filename_component(stem ${src} NAME_WE)
-      add_test(NAME ${t}.${stem} COMMAND ${t} "-sf=*/${stem}.cpp")
+      # Either separator: clang-cl's __FILE__ uses backslashes.
+      add_test(NAME ${t}.${stem} COMMAND ${t} "-sf=*/${stem}.cpp,*\\${stem}.cpp")
       list(APPEND names ${t}.${stem})
     endforeach()
   else()
@@ -127,6 +128,10 @@ function(supple_add_tests lib)
     set(names ${t})
   endif()
   set_tests_properties(${names} PROPERTIES LABELS "${lib};${ARG_LABELS}")
+  if(ARG_SPLIT)
+    # A filter that matched nothing would pass silently: fail it instead.
+    set_tests_properties(${names} PROPERTIES FAIL_REGULAR_EXPRESSION "test cases: +0 [|]")
+  endif()
   if(ARG_LABELS MATCHES "rt")
     set_tests_properties(${names} PROPERTIES ENVIRONMENT
       "RTSAN_OPTIONS=halt_on_error=1;UBSAN_OPTIONS=print_stacktrace=1")
