@@ -73,6 +73,7 @@ if(SUPPLE_BUILD_TESTS AND NOT SUPPLE_PLATFORM_LINUX)
   target_include_directories(engine.tests PRIVATE src)
   add_dependencies(engine.tests clap-host-fixtures ${PRODUCT_SLUG}-scanner ${PRODUCT_SLUG}-bridge)
   target_compile_definitions(engine.tests PRIVATE FIXTURE_CLAP_PATH="$<TARGET_FILE:clap-host-fixtures>" BRIDGE_PATH="$<TARGET_FILE:${PRODUCT_SLUG}-bridge>"
+                             STOCK_CLAP_DIR="${CMAKE_BINARY_DIR}/plugins/clap"
                              SUPPLE_RACK_GUIDE="${PROJECT_SOURCE_DIR}/skill/guides/rack.md")
 endif()
 

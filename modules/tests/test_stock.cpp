@@ -6,6 +6,7 @@
 
 #include <cctype>
 #include <cmath>
+#include <ostream>  // doctest prints string_view through it (MSVC STL)
 #include <set>
 #include <string>
 
