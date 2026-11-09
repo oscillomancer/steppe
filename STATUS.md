@@ -299,7 +299,8 @@ instructions are in `docs/guides/installing.md`.
   arming, monitor or device changes end only the keyboard's notes, also when
   the rack enters the live region mid-song. A rack channel with a keyboard
   records MIDI; a second channel with the rack's Out as input records its
-  audio in the same pass. The GUI's input
+  audio in the same pass. Removing a rack's channel moves the rack home to
+  a channel that still hears its Out or Note Out, if any. The GUI's input
   menu checks both selections and its button names both. Notes
   device/source can be cleared with null. Armed channels record their rack Out audio input as stereo WAV,
   including input FX, loop/punch takes, recovery and undo.

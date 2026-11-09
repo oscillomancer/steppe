@@ -2195,6 +2195,70 @@ TEST_CASE("route.matrix: a rack's In modules are destinations; its own feed is a
     CHECK(master.error().code == "route.strip_type");
 }
 
+TEST_CASE("track.remove: a rack another channel hears moves home there; others go") {
+    Root root;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    auto app = makeApp(root.path);
+    cmd::Dispatcher d(registry, *app);
+    auto call = [&](const char* name, const std::string& args) {
+        auto r = d.execute({name, j(args), kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    auto add = [&](const char* name) {
+        return call("track.add", std::string(R"({"name":")") + name + R"("})")
+            .find("track")
+            ->asString();
+    };
+    const std::string synth = add("Synth"), lead = add("Lead"), pad = add("Pad"), seq = add("Seq"),
+                      bass = add("Bass");
+    // Synth's rack also plays into Lead (Lead's input is its Out).
+    const json::Value made = call("rack.add", R"({"track":")" + synth + R"("})");
+    const std::string rack = made.find("rack")->asString(), out = made.find("out")->asString();
+    call("track.set", R"({"track":")" + lead + R"(","record_rack":")" + out + R"("})");
+    // Pad's rack plays only into Pad, its home.
+    const std::string alone =
+        call("rack.add", R"({"track":")" + pad + R"("})").find("rack")->asString();
+    // Seq's rack plays only MIDI into Bass, through a Note Out.
+    const std::string notes =
+        call("rack.add", R"({"track":")" + seq + R"("})").find("rack")->asString();
+    const std::string noteOut =
+        call("module.add", R"({"rack":")" + notes + R"(","type":"notes_out"})")
+            .find("module")
+            ->asString();
+    call("route.add",
+         R"({"from":{"module":")" + noteOut + R"("},"to":{"track":")" + bass + R"("},"midi":{}})");
+    const auto at = [](const std::string& id) { return *model::Id::parse(id); };
+
+    call("track.remove", R"({"track":")" + synth + R"("})");
+    const model::Rack* moved = app->head().racks.find(at(rack));
+    REQUIRE(moved);
+    CHECK(moved->track == at(lead));
+    CHECK(moved->name == "Synth");  // the name it showed, not its new home's
+    CHECK(app->head().modules.find(at(out)));
+    const model::Track* l = app->head().tracks.find(at(lead));
+    REQUIRE(l->record.input);
+    CHECK(app->head().routes.find(*l->record.input)->from.module == at(out));
+    // One undo step brings Synth and the rack's old home back.
+    call("history.undo", "{}");
+    CHECK(app->head().tracks.find(at(synth)));
+    CHECK(app->head().racks.find(at(rack))->track == at(synth));
+    CHECK(app->head().racks.find(at(rack))->name.empty());
+    call("history.redo", "{}");
+
+    call("track.remove", R"({"track":")" + seq + R"("})");
+    REQUIRE(app->head().racks.find(at(notes)));
+    CHECK(app->head().racks.find(at(notes))->track == at(bass));
+
+    call("track.remove", R"({"track":")" + pad + R"("})");
+    CHECK_FALSE(app->head().racks.find(at(alone)));
+    // Removing the rack's last channel removes it.
+    call("track.remove", R"({"track":")" + lead + R"("})");
+    CHECK_FALSE(app->head().racks.find(at(rack)));
+    CHECK_FALSE(app->head().modules.find(at(out)));
+}
+
 TEST_CASE("log.list: who did what, queries left out, since, origin filter, bounded") {
     Root root;
     cmd::Registry registry;

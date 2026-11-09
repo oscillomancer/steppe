@@ -458,6 +458,9 @@ heard. On other channels a hardware input and a MIDI input still replace
 each other. A rack channel with a keyboard input records the notes you
 play; without one it records the rack's sound as a WAV take. To record
 both at once, arm a second channel whose input is the rack's Out.
+Deleting a rack's channel deletes the rack too, unless another channel
+still hears it (its input is the rack's Out, or a Note Out plays into it):
+the rack then moves to that channel and keeps its name.
 `module.set {device: null}` removes an explicit Notes device (`""` listens
 to every MIDI input, like `"*"`), and `source: null` returns Notes to its
 rack's home channel.

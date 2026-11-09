@@ -477,10 +477,31 @@ std::string moduleReference() {
     return md;
 }
 
-// Exposed to track.remove (commands.cpp): a track's racks go with it.
+// Exposed to track.remove (commands.cpp): a track's racks go with it, except
+// a rack that another channel hears (its Out as the channel's input, else a
+// Note Out's MIDI). That rack moves home to the first such channel, keeping
+// the name it showed.
 void removeRacksOn(model::EditTxn& t, const model::Session& s, Id track) {
     for (const auto& r : s.racks) {
         if (r.value->track != track) continue;
+        std::optional<Id> audio, midi;
+        for (const auto& e : s.routes) {
+            const model::RackModule* from =
+                e.value->from.module ? s.modules.find(*e.value->from.module) : nullptr;
+            if (!from || from->rack != r.id || !e.value->to.track || *e.value->to.track == track ||
+                !s.tracks.contains(*e.value->to.track))
+                continue;
+            std::optional<Id>& to = e.value->midi ? midi : audio;
+            if (!to) to = *e.value->to.track;
+        }
+        if (const std::optional<Id> home = audio ? audio : midi) {
+            const std::string shown = model::rackLabel(s, r.id);
+            t.modify<model::Rack>(r.id, [&](model::Rack& rack) {
+                rack.track = *home;
+                rack.name = shown;
+            });
+            continue;
+        }
         for (const auto& m : s.modules)
             if (m.value->rack == r.id) removeModule(t, s, m.id);
         t.remove<model::Rack>(r.id);

@@ -60,7 +60,9 @@ A **rack** is a patching space. A project has any number (at most 64), each
 **homed on a channel** (`rack.track`), Bitwig style: by default the rack
 plays the home channel's MIDI, its first output feeds the home channel's
 input, and its parameters automate on the home channel's lanes. Removing
-the home channel removes its racks.
+the home channel removes its racks, except a rack another channel still
+hears (its Out as that channel's input, or a Note Out's MIDI): the rack
+moves home to that channel instead.
 
 A **module** is one instance of a module type in a rack: its type (a
 module id, `com.suppleaudio.rack.vco`), its knob values (a canonical patch
