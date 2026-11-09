@@ -3,3 +3,7 @@
 /libs/command-bus/tests/golden/** text eol=lf
 /skill/generated/** text eol=lf
 /plugins/suite/examples/** text eol=lf
+# Read byte for byte: the factory rack patches are checked canonical, and the
+# rack guide's recipes are parsed out of the Markdown.
+/modules/patches/** text eol=lf
+/skill/guides/** text eol=lf
