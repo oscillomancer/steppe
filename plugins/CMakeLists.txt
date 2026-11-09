@@ -239,7 +239,12 @@ if(SUPPLE_BUILD_PLUGINS)
         add_test(NAME plugin.${name}.validator
           COMMAND "${SUPPLE_BASH}" "${CMAKE_SOURCE_DIR}/tools/validator/run.sh"
                   --exclude "^preset-discovery-(crawl|load)$" "${clap}")
-        set_tests_properties(plugin.${name}.validator PROPERTIES LABELS slow SKIP_RETURN_CODE 77)
+        # Debug builds take minutes: the validator activates each plug-in
+        # dozens of times, and a sample instrument resamples its kit on every
+        # activation away from the kit's rate (Pollard: 5 of the 10 minutes
+        # the presets allow, on a slow runner more).
+        set_tests_properties(plugin.${name}.validator PROPERTIES LABELS slow SKIP_RETURN_CODE 77
+                             TIMEOUT 1500)
       endif()
     endif()
   endfunction()

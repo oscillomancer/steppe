@@ -1114,6 +1114,11 @@ Plugins:
   comparisons, including transport changes and sample-offset division automation.
 - Script numeric literals use locale-independent parsing, including float
   rounding and underflow, so comma-decimal host locales accept the same source.
+- A script's audio files are resampled again on every activation at a rate
+  other than the file's, by the template's direct sinc resampler: Pollard's
+  48 kHz kit takes about 0.6 s at 44.1 kHz (optimized; about 1.9 s in a Debug
+  build, which makes its validator run take minutes). Caching per rate, or a
+  cheaper resampler, is a template change.
 - What a script's `prepare()` sizes (Buffers, DelayLines, Stfts,
   Oversamplers) may hold 1 GiB per instance together; a request past it is
   refused before allocating and the script stops with
