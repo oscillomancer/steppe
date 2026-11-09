@@ -2401,7 +2401,17 @@ TEST_CASE("arming or monitoring mid-song keeps an instrument's held timeline not
                     REQUIRE(engine.awaitPlan());
                     engine.play();
                     for (std::size_t i = 0; i < steps.size(); ++i) {
-                        if (i) REQUIRE(engine.load(session(steps[i])));
+                        if (i) {
+                            REQUIRE(engine.load(session(steps[i])));
+                            // At unity, while everything is live, the renderer keeps a
+                            // render-ahead past what the callback has played when it
+                            // next runs, and hands over there. Waiting keeps that within
+                            // 200 ms (below kSettle) of the change, however late a busy
+                            // machine runs the renderer thread; a device's clock would
+                            // pace it. A rate plan's handoff is fixed when it is loaded,
+                            // and adopted only once played up to, so it is not awaited.
+                            if (r.rate == 1.0) REQUIRE(engine.awaitPlan());
+                        }
                         runFrames(engine, backend, options, kSegment, block);
                         engine.service();
                     }
