@@ -2070,7 +2070,12 @@ identity trajectory. Two bounded SPSC queues carry identical
 release/acquire gate commits both queues together. Boundaries follow both
 already generated clock windows plus a render/device block of publication
 headroom (at least 128 frames), so existing PDC and
-stretch lookahead is respected. Each timeline ramps linearly from its current
+stretch lookahead is respected. With the anticipative renderer they also lie
+past every window it may generate before it takes the edit (the render-ahead
+span beyond the device position last played, one render block and the windows'
+lookahead): a renderer catching up to its target could otherwise pass a
+boundary taken from its windows, and the late edit would force a recovery seek.
+When the renderer is caught up, that is where its windows already end. Each timeline ramps linearly from its current
 scalar, without restarting the converter or replacing the plan/epoch, over one
 and a half times the audio played since the previous scalar edit (at least one
 device block and 10 ms, at most 300 ms; 300 ms after a pause or a new epoch):

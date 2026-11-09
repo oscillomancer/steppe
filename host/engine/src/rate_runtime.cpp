@@ -130,8 +130,17 @@ bool Engine::loadScalarRate(const model::Session& session, const std::filesystem
 
         // History storage is reserved before plan publication. Only fixed
         // queue writes and the commit follow this frontier read.
-        const auto frontier =
+        auto frontier =
             std::max({p->timelines[0]->frontier(), p->timelines[1]->frontier(), p->rateSafeDevice});
+        // A renderer behind its render-ahead target may catch up past a
+        // frontier read now before it takes the edit, which would arrive late
+        // and force a recovery seek. Place the edit beyond everything it may
+        // render ahead of what the callback last played: the same point as
+        // the frontier when the renderer is caught up.
+        if (options_.anticipative && words[8] == epoch_.load(std::memory_order_acquire))
+            frontier = std::max(
+                frontier, consumed + aheadFrames_ + static_cast<std::int64_t>(p->block) +
+                              p->rateDeviceMargin + static_cast<std::int64_t>(p->rate * .15) + 128);
         // A callback can free a whole device block at once. Allow one such
         // refill burst (and at least two canonical quanta) before the edit.
         const auto headroom = std::max({p->block, config_.blockSize, 128u});
