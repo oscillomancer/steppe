@@ -956,8 +956,8 @@ into the module (`route.add {from, to: mo_N}`) and edits and goes as any
 send; an auxiliary pair's row sends that pair to the module's pair. Masters
 are refused as for strips, and a strip the rack's Outs reach (its home
 channel, and whatever that feeds) is listed as a cycle ("it would feed back").
-A rack's Out and Note Out routes are channel inputs, not sends: the grid and
-its send count leave them out.
+A rack's Out and Note Out routes, and a channel's hardware or MIDI input,
+are channel inputs, not sends: the grid and its send count leave them out.
 Matrix updates clamp scroll to the current endpoint range; paint uses
 endpoint-pair indexes for send and cycle rules.
 Commands: `route.*`, `track.set {record_input}`.

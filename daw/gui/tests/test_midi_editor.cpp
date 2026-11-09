@@ -954,6 +954,31 @@ TEST_CASE("routing matrix: a rack's In modules are columns; a cell sends into on
     CHECK(aux->channels.to == std::vector<int>{1, 2});
 }
 
+TEST_CASE("routing matrix: a channel's hardware or MIDI input is not a send") {
+    Fixture f;
+    if (!f.ok) return;
+    // Both inputs are routes (session-model.md §2) with no source strip.
+    const std::string mic = f.exec("track.add", R"({"name":"Mic"})")["track"].asString();
+    const std::string keys = f.exec("track.add", R"({"name":"Keyboard"})")["track"].asString();
+    f.exec("track.set", R"({"track":")" + mic + R"(","record_input":[1, 2]})");
+    f.exec("track.set", R"({"track":")" + keys + R"(","record_midi":"*"})");
+    gui::FloatingPanel panel(*f.platform, *f.window, *f.root, SUPPLE_GUI_FONTS_DIR, "Panel", 860,
+                             560, 800, 360);
+    gui::RoutingMatrix matrix(panel, *f.actions, *f.dispatcher, *f.app);
+    matrix.open();
+    panel.root().frame(false);
+    REQUIRE(matrix.isOpen());
+    CHECK(matrix.model().sends.empty());
+    CHECK(matrix.status().starts_with("0 sends"));
+    // A real send still counts beside them.
+    const std::string verb =
+        f.exec("track.add", R"({"type":"buss","name":"Verb"})")["track"].asString();
+    f.exec("route.add", R"({"from":")" + mic + R"(","to":")" + verb + R"("})");
+    matrix.sync();
+    CHECK(matrix.model().sends.size() == 1);
+    CHECK(matrix.status().starts_with("1 sends"));
+}
+
 TEST_CASE(
     "routing matrix: cells select by click, Ctrl, Shift, row and column; controls act on all") {
     Fixture f;

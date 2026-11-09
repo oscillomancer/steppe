@@ -398,8 +398,11 @@ Status RoutingMatrix::reload() {
         next.cyclePaths.push_back(str(c, "path"));
     }
     for (const auto& r : list->find("routes")->asArray()) {
-        // A rack's Out (a channel's input) and Note Out are not strip sends.
-        if (str(r, "from").starts_with("mo_")) continue;
+        // Only sends from a strip are the matrix's. A channel's hardware or
+        // MIDI input has no source strip, and a rack's Out (a channel's input)
+        // and Note Out are not strip sends.
+        const std::string from = str(r, "from");
+        if (from.empty() || from.starts_with("mo_") || str(r, "to").empty()) continue;
         MatrixModel::Send x;
         x.id = str(r, "id");
         x.from = str(r, "from");
