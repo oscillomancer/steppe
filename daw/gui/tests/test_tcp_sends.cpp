@@ -6,10 +6,8 @@
 #include "test_support.h"
 
 #include <algorithm>
-#include <cstdlib>
 #include <filesystem>
 #include "supple/engine/realtime.h"
-#include "supple/gui/png.h"
 
 #include "routing_matrix.h"
 #include "shell.h"
@@ -1049,42 +1047,26 @@ TEST_CASE("TCP: a right-click on a strip's fader or button learns a MIDI control
     CHECK_FALSE(f.root->find("strip.learn.menu"));
 }
 
-TEST_CASE("pan controls: channel and buss context menus create and hide pan lanes") {
+TEST_CASE("pan controls: channel and buss envelope menus create and hide pan lanes") {
     SendsFixture f;
     for (const model::Id track : {f.a, f.b}) {
         const auto open = [&]() {
-            const auto row = f.view().trackLayout().indexOf(track);
-            REQUIRE(row);
-            const auto r = f.view().tcpRowRect(*row);
-            ui::PointerEvent event;
-            event.type = Pointer::Down;
-            event.button = 3;
-            event.pos = {r.x + 60, r.y + 10};
-            f.root->pointer(event);
-            event.type = Pointer::Up;
-            f.root->pointer(event);
-            f.sync();
-            auto* menu = f.root->find("track.menu." + track.str());
+            f.shell->openEnvelopeMenu(track, {});
+            f.root->frame(false);
+            auto* menu = f.root->find("tcp.env." + track.str());
             REQUIRE(menu);
             return menu;
         };
-        auto* menu = open();
-        const auto items = ui::menuItems(*menu);
+        const auto find = [](const auto& items, std::string_view label) {
+            return std::find_if(items.begin(), items.end(),
+                                [&](const auto& item) { return item.label == label; });
+        };
+        auto items = ui::menuItems(*open());
         for (const char* label : {"Width envelope", "Pan left envelope", "Pan right envelope",
                                   "Gain compensation envelope"})
-            CHECK(std::any_of(items.begin(), items.end(),
-                              [&](const auto& item) { return item.label == label; }));
-        const auto width = std::find_if(items.begin(), items.end(), [](const auto& item) {
-            return item.label == "Width envelope";
-        });
+            CHECK(find(items, label) != items.end());
+        const auto width = find(items, "Width envelope");
         REQUIRE(width != items.end());
-        if (const char* out = std::getenv("SUPPLE_TEST_SNAPSHOTS")) {
-            f.root->damageAll();
-            f.root->frame(false);
-            REQUIRE(
-                gui::writePng(std::filesystem::path(out) / ("pan-lanes-" + track.str() + ".png"),
-                              f.root->readBack()));
-        }
         auto create = width->run;
         f.root->closePopup();
         create();
@@ -1096,16 +1078,14 @@ TEST_CASE("pan controls: channel and buss context menus create and hide pan lane
         REQUIRE(lane != f.app->head().envelopes.end());
         CHECK(lane->value->points.front().value == 100);
         const auto laneId = lane->id;
-        menu = open();
-        auto updated = ui::menuItems(*menu);
-        const auto shown = std::find_if(updated.begin(), updated.end(), [](const auto& item) {
-            return item.label == "Width envelope";
-        });
-        REQUIRE(shown != updated.end());
+        items = ui::menuItems(*open());
+        const auto shown = find(items, "Width envelope");
+        REQUIRE(shown != items.end());
         CHECK(shown->checked);
         auto hide = shown->run;
         f.root->closePopup();
         hide();
+        f.sync();
         CHECK_FALSE(f.app->head().envelopes.find(laneId)->visible);
     }
 }

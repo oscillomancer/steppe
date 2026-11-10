@@ -548,7 +548,7 @@ as playback does. Fade shapes and curve bends share playback's evaluator.
 Automation drawing samples only visible time and bounds loop glyph work;
 plugin automation interpolates in the playback parameter domain (ADR-0010).
 
-On channels and busses the envelope menu and track context menu also offer
+On channels and busses the envelope menu also offers
 Width, Pan left, Pan right and Gain compensation lanes, initially flat at
 the saved positions or effective boost. The three positions span −100..100;
 width reads as percent, dual positions like pan. Compensation reads off/on,

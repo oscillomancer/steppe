@@ -327,7 +327,7 @@ passes. **Gain compensation (boost pans)** keeps the centre at 0 dB and
 boosts the sides instead, which can clip a loud recording. A master's pan is
 a plain balance, with no mode or law.
 
-The track's envelope menu and its context menu offer **Width**, **Pan left**,
+The track's envelope menu offers **Width**, **Pan left**,
 **Pan right** and **Gain compensation** lanes on channels and busses. Width
 and the two positions move continuously between −100 and 100%; compensation
 switches on at 0.5 and overrides the current law's boost while its lane is

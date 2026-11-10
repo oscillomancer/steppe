@@ -12,7 +12,6 @@
 #include "supple/model/objects.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/text_field.h"
-#include "supple/views/envelope_lane.h"
 
 namespace supple::gui {
 
@@ -106,47 +105,6 @@ void TrackMenu::open(const model::Id& track, const ui::Rect& anchor,
             commit(frozen ? "track.unfreeze" : "track.freeze", std::move(args));
         };
         items.push_back(std::move(m));
-    }
-    if (const auto* tr = app.head().tracks.find(track); tr->type != model::StripType::Master) {
-        for (const char* param : {"width", "pan_left", "pan_right", "pan_boost"}) {
-            model::Envelope probe;
-            probe.target = {track, param};
-            std::optional<model::Id> lane;
-            bool shown = false;
-            for (const auto& e : app.head().envelopes)
-                if (e.value->target == probe.target) {
-                    lane = e.id;
-                    shown = e.value->visible;
-                }
-            ui::MenuItem item;
-            item.label = views::envTitle(probe) + " envelope";
-            item.checked = lane && shown;
-            const std::string key = param;
-            const double value =
-                key == "width"      ? tr->width
-                : key == "pan_left" ? tr->panLeft
-                : key == "pan_right"
-                    ? tr->panRight
-                    : (model::panLawOf(*app.head().project, *tr).boost ? 1.0 : 0.0);
-            item.run = [this, track, key, value, lane, shown] {
-                auto args = json::Value::object();
-                if (lane) {
-                    args["env"] = lane->str();
-                    args["visible"] = !shown;
-                    commit("env.set", std::move(args));
-                } else {
-                    args["track"] = track.str();
-                    args["param"] = key;
-                    args["points"] = json::Value::array();
-                    auto point = json::Value::object();
-                    point["beat"] = 0;
-                    point["value"] = value;
-                    args["points"].push_back(std::move(point));
-                    commit("env.add", std::move(args));
-                }
-            };
-            items.push_back(std::move(item));
-        }
     }
     m = {};
     m.label = "Channels…";
