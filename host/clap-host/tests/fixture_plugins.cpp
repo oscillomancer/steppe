@@ -10,6 +10,8 @@
 //   com.suppleaudio.test.sine  — instrument; 0 inputs, stereo output, CLAP and
 //     MIDI note dialects; one sine voice per key at velocity * 0.25, stops at
 //     note off and reports NOTE_END.
+//   com.suppleaudio.test.note-echo  — note effect with output note ports: echoes
+//     notes a fifth up and emits note/MIDI output of every kind (ADR-0068).
 //   com.suppleaudio.test.edge  — stereo pass-through for host edge cases. Its
 //     4-byte state is a configuration: byte 0 = refuse start_processing,
 //     bytes 1..3 = reported tail in samples (little endian; mode 20: twice
@@ -1469,7 +1471,160 @@ const clap_plugin_t* make(const clap_host_t* host, const clap_plugin_descriptor_
     return &self->plugin;
 }
 
-uint32_t CLAP_ABI factoryCount(const clap_plugin_factory_t*) { return 18; }
+// --- note echo (plug-in note and MIDI output, ADR-0068) ----------------------------
+// A note effect with one input and one output note port and no audio ports
+// (its block outputs are cleared). Each input note below key 100 comes out a
+// fifth up (CLAP note on/off, same channel, note id and velocity) and a note
+// on also emits CC 74 = velocity (CLAP_EVENT_MIDI) at the same time, after the
+// note. A MIDI 1.0 note in comes out a fifth up as MIDI. Key 120 emits a burst
+// of every kind, out of time order (see noteEchoStress); key 121 emits 300
+// CC 1 events, one per frame from the note's time (wrapping).
+
+const clap_plugin_descriptor_t* noteEchoDescriptor() {
+    static const char* features[] = {CLAP_PLUGIN_FEATURE_NOTE_EFFECT, nullptr};
+    static const clap_plugin_descriptor_t d = {CLAP_VERSION_INIT,
+                                               "com.suppleaudio.test.note-echo",
+                                               "Test Note Echo",
+                                               "Supple Audio",
+                                               "",
+                                               "",
+                                               "",
+                                               "0.1.0",
+                                               "Echoes notes a fifth up (note output tests)",
+                                               features};
+    return &d;
+}
+
+struct NoteEcho {
+    clap_plugin_t plugin{};
+    const clap_host_t* host = nullptr;
+};
+
+uint32_t CLAP_ABI noteEchoNoteCount(const clap_plugin_t*, bool) { return 1; }
+bool CLAP_ABI noteEchoNoteGet(const clap_plugin_t*, uint32_t index, bool isInput,
+                              clap_note_port_info_t* info) {
+    if (index != 0) return false;
+    std::memset(info, 0, sizeof(*info));
+    info->id = isInput ? 0 : 1;
+    info->supported_dialects = CLAP_NOTE_DIALECT_CLAP | CLAP_NOTE_DIALECT_MIDI;
+    info->preferred_dialect = CLAP_NOTE_DIALECT_CLAP;
+    std::snprintf(info->name, sizeof(info->name), isInput ? "Notes In" : "Notes Out");
+    return true;
+}
+const clap_plugin_note_ports_t kNoteEchoNotes = {noteEchoNoteCount, noteEchoNoteGet};
+const void* CLAP_ABI noteEchoExt(const clap_plugin_t*, const char* id) {
+    return !std::strcmp(id, CLAP_EXT_NOTE_PORTS) ? &kNoteEchoNotes : nullptr;
+}
+bool CLAP_ABI noteEchoActivate(const clap_plugin_t*, double, uint32_t, uint32_t) { return true; }
+
+void pushNote(const clap_output_events_t* out, uint16_t type, uint32_t time, int16_t channel,
+              int16_t key, int32_t id, double velocity) {
+    clap_event_note_t n{};
+    n.header = {sizeof(n), time, CLAP_CORE_EVENT_SPACE_ID, type, 0};
+    n.note_id = id;
+    n.port_index = 0;
+    n.channel = channel;
+    n.key = key;
+    n.velocity = velocity;
+    out->try_push(out, &n.header);
+}
+void pushMidi(const clap_output_events_t* out, uint32_t time, uint8_t status, uint8_t d1,
+              uint8_t d2) {
+    clap_event_midi_t m{};
+    m.header = {sizeof(m), time, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_MIDI, 0};
+    m.port_index = 0;
+    m.data[0] = status;
+    m.data[1] = d1;
+    m.data[2] = d2;
+    out->try_push(out, &m.header);
+}
+void pushUmp(const clap_output_events_t* out, uint32_t time, uint32_t w0, uint32_t w1) {
+    clap_event_midi2_t m{};
+    m.header = {sizeof(m), time, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_MIDI2, 0};
+    m.data[0] = w0;
+    m.data[1] = w1;
+    out->try_push(out, &m.header);
+}
+void pushExpression(const clap_output_events_t* out, uint32_t time, clap_note_expression id,
+                    int16_t key, double value) {
+    clap_event_note_expression_t x{};
+    x.header = {sizeof(x), time, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_EXPRESSION, 0};
+    x.expression_id = id;
+    x.note_id = -1;
+    x.port_index = 0;
+    x.channel = 2;
+    x.key = key;
+    x.value = value;
+    out->try_push(out, &x.header);
+}
+
+// The burst, in this push order (times relative to the block of n frames):
+//   note on 64 at n-1 · CC 7=100 at 0 · MIDI2 CC 10 (top bits 0x40) at 3 ·
+//   MIDI2 per-note pitch bend at 3 (unsupported) · SysEx at 3 (unsupported) ·
+//   pressure expression key 64 = 0.5 at 2 (poly pressure 64) · tuning
+//   expression at 2 (unsupported) · MIDI data byte 0x80 at 2 (unsupported) ·
+//   choke channel -1 key -1 at 1 · MIDI2 pitch bend (top 14 bits 0x2000) at 1 ·
+//   note on at frame n + 50 (placed at n-1) · MIDI clock at 1.
+void noteEchoStress(const clap_output_events_t* out, uint32_t n) {
+    pushNote(out, CLAP_EVENT_NOTE_ON, n - 1, 0, 64, 5, 0.75);
+    pushMidi(out, 0, 0xb0, 7, 100);
+    pushUmp(out, 3, 0x40b00a00u, 0x80000000u);  // group 0, channel 0, CC 10
+    pushUmp(out, 3, 0x40604000u, 0x80000000u);  // per-note pitch bend, key 64
+    static const uint8_t sysex[] = {0xf0, 0x7e, 0x7f, 0x06, 0x01, 0xf7};
+    clap_event_midi_sysex_t x{};
+    x.header = {sizeof(x), 3, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_MIDI_SYSEX, 0};
+    x.buffer = sysex;
+    x.size = sizeof(sysex);
+    out->try_push(out, &x.header);
+    pushExpression(out, 2, CLAP_NOTE_EXPRESSION_PRESSURE, 64, 0.5);
+    pushExpression(out, 2, CLAP_NOTE_EXPRESSION_TUNING, 64, 0.5);
+    pushMidi(out, 2, 0xb0, 0x80, 1);
+    pushNote(out, CLAP_EVENT_NOTE_CHOKE, 1, -1, -1, -1, 0);
+    pushUmp(out, 1, 0x40e30000u, 0x80000000u);  // channel 3 pitch bend, centre
+    pushNote(out, CLAP_EVENT_NOTE_ON, n + 50, 1, 65, 6, 1.0);
+    pushMidi(out, 1, 0xf8, 0, 0);
+}
+
+clap_process_status CLAP_ABI noteEchoProcess(const clap_plugin_t*, const clap_process_t* p) {
+    for (uint32_t port = 0; port < p->audio_outputs_count; ++port)
+        for (uint32_t c = 0; c < p->audio_outputs[port].channel_count; ++c)
+            std::fill_n(p->audio_outputs[port].data32[c], p->frames_count, 0.0f);
+    const auto* out = p->out_events;
+    const uint32_t count = p->in_events->size(p->in_events);
+    for (uint32_t i = 0; i < count; ++i) {
+        const auto* h = p->in_events->get(p->in_events, i);
+        if (h->space_id != CLAP_CORE_EVENT_SPACE_ID) continue;
+        if (h->type == CLAP_EVENT_NOTE_ON || h->type == CLAP_EVENT_NOTE_OFF) {
+            const auto* n = reinterpret_cast<const clap_event_note_t*>(h);
+            const bool on = h->type == CLAP_EVENT_NOTE_ON;
+            if (on && n->key == 120) {
+                noteEchoStress(out, p->frames_count);
+                continue;
+            }
+            if (on && n->key == 121) {
+                for (uint32_t k = 0; k < 300; ++k)
+                    pushMidi(out, (h->time + k) % p->frames_count, 0xb0, 1,
+                             static_cast<uint8_t>(k & 0x7f));
+                continue;
+            }
+            if (n->key < 0 || n->key >= 100) continue;
+            pushNote(out, h->type, h->time, n->channel, static_cast<int16_t>(n->key + 7),
+                     n->note_id, n->velocity);
+            if (on)
+                pushMidi(out, h->time, static_cast<uint8_t>(0xb0 | (n->channel & 15)), 74,
+                         static_cast<uint8_t>(std::lround(n->velocity * 127)));
+        } else if (h->type == CLAP_EVENT_MIDI) {
+            const auto* m = reinterpret_cast<const clap_event_midi_t*>(h);
+            const int status = m->data[0] & 0xf0;
+            if ((status == 0x80 || status == 0x90) && m->data[1] < 100)
+                pushMidi(out, h->time, m->data[0], static_cast<uint8_t>(m->data[1] + 7),
+                         m->data[2]);
+        }
+    }
+    return CLAP_PROCESS_CONTINUE;
+}
+
+uint32_t CLAP_ABI factoryCount(const clap_plugin_factory_t*) { return 19; }
 const clap_plugin_descriptor_t* CLAP_ABI factoryDesc(const clap_plugin_factory_t*, uint32_t i) {
     return i == 0    ? gainDescriptor()
            : i == 1  ? sineDescriptor()
@@ -1489,6 +1644,7 @@ const clap_plugin_descriptor_t* CLAP_ABI factoryDesc(const clap_plugin_factory_t
            : i == 17 ? rawGainDescriptor()
            : i == 16 ? legacyKeyMixDescriptor()
            : i == 13 ? multiOut48Descriptor()
+           : i == 18 ? noteEchoDescriptor()
                      : nullptr;
 }
 const clap_plugin_t* CLAP_ABI factoryCreate(const clap_plugin_factory_t*, const clap_host_t* host,
@@ -1569,6 +1725,9 @@ const clap_plugin_t* CLAP_ABI factoryCreate(const clap_plugin_factory_t*, const 
         const_cast<clap_plugin_t*>(p)->stop_processing = edgeStop;
         return p;
     }
+    if (!std::strcmp(id, noteEchoDescriptor()->id))
+        return make<NoteEcho>(host, noteEchoDescriptor(), noteEchoActivate, noteEchoProcess,
+                              noteEchoExt);
     if (!std::strcmp(id, crashDescriptor()->id))
         return make<Crash>(host, crashDescriptor(), crashActivate, crashProcess, crashExt);
     for (const auto* desc : {keyMixDescriptor(), legacyKeyMixDescriptor()})

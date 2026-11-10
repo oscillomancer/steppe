@@ -49,10 +49,13 @@ inline constexpr std::uint32_t kMagic = 0x31474253;  // "SBG1"
 // 18/19: EditorScale renegotiates a live display-scale change (ADR-0040).
 // 19/20: Cocoa editor window frames: EditorOpen takes one, EditorRequests and
 // EditorClose report one (ADR-0040).
+// 20/21: plug-in note and MIDI output (ADR-0068): the Create reply says whether
+// the plug-in outputs notes; the Header carries the host sink's capacity and
+// the unsupported-output count; OutputEvent gains its MIDI kinds and bytes.
 #if defined(_WIN32)
-inline constexpr std::uint32_t kVersion = 20;  // Windows runs one ahead: native control handles
+inline constexpr std::uint32_t kVersion = 21;  // Windows runs one ahead: native control handles
 #else
-inline constexpr std::uint32_t kVersion = 19;
+inline constexpr std::uint32_t kVersion = 20;
 #endif
 inline constexpr int kControlFd = 3;  // the bridge's end of the socketpair
 inline constexpr std::uint32_t kMaxChannels = 16;
@@ -317,7 +320,11 @@ struct Header {
     std::uint32_t hasKey;  // this block carries a key (else the plug-in gets silence)
     Transport transport;
     std::uint32_t eventCount;
-    std::uint32_t outEventCount, outEventsDropped;
+    // Process: whether the host passed a sink, and the room it has left (at
+    // most kMaxOutEvents), so the bridged plug-in sees the same pushes accepted
+    // and refused as it would in process (ADR-0068).
+    std::uint32_t outSink, outEventCapacity;
+    std::uint32_t outEventCount, outEventsDropped, outEventsUnsupported;
     std::uint32_t processing;  // the plugin's processing state after the command
     // StartProcessing: the scheduling the audio thread takes (ThreadPolicy's
     // kind and priority; kind 0, None, keeps the current one).

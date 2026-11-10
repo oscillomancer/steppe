@@ -10,5 +10,6 @@
     {"CID": "11000107220002023300030344000404", "Category": "Audio Module Class", "Name": "Test VST3 Multi-Out", "Vendor": "Supple Audio", "Version": "2.0", "Sub Categories": ["Instrument",],},
     {"CID": "11000108220002023300030344000404", "Category": "Audio Module Class", "Name": "Test VST3 Mono Adapter", "Vendor": "Supple Audio", "Version": "2.0", "Sub Categories": ["Fx",],},
     {"CID": "11000109220002023300030344000404", "Category": "Audio Module Class", "Name": "Test VST3 Stateless Controller Gain", "Vendor": "Supple Audio", "Version": "2.0", "Sub Categories": ["Fx",],},
+    {"CID": "1100010B220002023300030344000404", "Category": "Audio Module Class", "Name": "Test VST3 Note Echo", "Vendor": "Supple Audio", "Version": "2.0", "Sub Categories": ["Fx",],},
   ],
 }

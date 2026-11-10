@@ -276,6 +276,14 @@ instructions are in `docs/guides/installing.md`.
   CLAP descriptor dispatch ignores registrations removed by an earlier
   callback in the same readiness snapshot, as VST3 dispatch already does;
   the Linux regression passes and macOS validation is pending.
+  Plug-ins' note and MIDI output (ADR-0068, draft) reaches the host
+  library's output sink from CLAP (notes, MIDI 1.0, MIDI 2.0 where one short
+  message expresses it, pressure expressions) and VST3 (notes, poly pressure,
+  legacy MIDI CC output), sorted by time and identical in process and in
+  shared or dedicated bridges, and `outputsNotes()` reports output note ports
+  and event buses. The engine does not route it yet: the FX chain's MIDI bus
+  is the next stage. SysEx and per-note expressions other than pressure are
+  dropped and counted. Linux tests pass; native macOS/Windows CI is pending.
 - **MIDI sends** (ADR-0067): channel/Note Out to channel/Notes routing, channel
   filters/remapping, tap and mute controls, relay channels without instruments,
   PDC and MIDI recording. The routing window's saved Audio/MIDI mode exposes

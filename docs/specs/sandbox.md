@@ -78,7 +78,8 @@ class Instance {   // owns one plugin instance; main-thread object
 only if the plugin declares it), frame count, a sorted input event list
 (note on/off with CLAP note ids, note expressions reserved, param value
 events, MIDI 1.0 events for plugins without CLAP note ports' CLAP dialect),
-an output event sink (param gestures/values the plugin emits), transport
+an output event sink (param gestures/values, note ends, and the note and
+MIDI output the plugin emits, ADR-0068), transport
 (tempo, beat position, bar start, time signature, playing flag), and a
 steady-time sample counter.
 
@@ -222,7 +223,7 @@ CGWindowListCopyWindowInfo, unchanged frontmost application on open/reopen,
 and replacing the owner without recreating the editor. The DAW shell itself
 requires the separate port-gui integration.
 
-### Bridge notifications (POSIX v19, Windows v20; notification design ADR-0031)
+### Bridge notifications (POSIX v20, Windows v21; notification design ADR-0031)
 
 The bridge isolates crashes of ordinary plugins; it is not a security sandbox
 against hostile plugins. A shared bridge crash affects every instance in that
@@ -234,7 +235,7 @@ continues to use its existing shared-memory backing.
 ADR-0037 extends the subscription to native WakeEvent signal targets:
 Linux eventfd (unchanged), a nonblocking write-only pipe on macOS, and a
 manual-reset event duplicated into the child on Windows. POSIX negotiates
-version 19; Windows negotiates native version 20. Invalid resource types,
+version 20; Windows negotiates native version 21 (ADR-0068's note output). Invalid resource types,
 counts, versions and duplicate subscriptions remain structured errors.
 The Windows control channel transfers recipient-owned handle values; the
 parent rejects handle-bearing replies without acting on the claimed value.
@@ -662,10 +663,52 @@ pivot 800 Hz, output 0 dB.
   CLAP output events are rejected when their header or supported event body is
   undersized.
   After a bridge process acknowledgement, the client snapshots the output-event
-  count once and validates it against the 1024-event arena. An oversized count
-  fails the bridge and silences main/auxiliary output before any output copy;
-  `failed()` and structured failure queries expose the protocol violation.
-  Traversal of a valid response uses the bounded snapshot.
+  count once and validates it against the room it passed (below). An oversized
+  count, or an event kind past `Midi`, fails the bridge and silences
+  main/auxiliary output before any output copy; `failed()` and structured
+  failure queries expose the protocol violation. Traversal of a valid response
+  uses the bounded snapshot.
+- **Note and MIDI output (ADR-0068).** `OutputEvent::Kind` appends `NoteOn`,
+  `NoteOff`, `NoteChoke` and `Midi` (`midiOutput()` is true for these). Notes
+  carry the output note address `(port, channel, key, noteId)` (an on has a
+  concrete channel 0..15 and key 0..127; an off or a choke may use -1) and the
+  velocity 0..1 in `value` (0 for a choke). `Midi` carries one MIDI 1.0 short
+  message in `midi[3]`, status first and unused data bytes zero, with its
+  `port`. The struct stays 40 bytes: `midi` sits in the padding after `kind`.
+  Sources: CLAP `NOTE_ON/OFF/CHOKE` (notes); `CLAP_EVENT_MIDI` short messages;
+  `CLAP_EVENT_MIDI2` UMP types 1 and 2 exactly and type 4 down-converted (note
+  on/off, velocity 16 → 7 bits and a note on never 0; poly and channel
+  pressure; CC 32 → 7 bits; pitch bend 32 → 14 bits; program change without
+  bank); a `CLAP_NOTE_EXPRESSION_PRESSURE` on a concrete channel and key, as
+  poly pressure (0..1 → 0..127, rounded); VST3 note on/off (notes), poly
+  pressure and `kLegacyMIDICCOutEvent` (CC, aftertouch, pitch bend LSB/MSB,
+  program change, poly pressure, quarter frame, song select and position, tune
+  request, start/continue/stop, active sensing), as `Midi`. Notes stay notes and
+  MIDI stays MIDI. Not representable and counted in
+  `OutputEvents::unsupported`: SysEx (CLAP `MIDI_SYSEX`, VST3 data events),
+  other note expressions (all VST3 ones), other MIDI 2.0 messages, VST3
+  chord/scale events and cable select, and malformed events (a data byte at or
+  above 0x80, an undefined status, a note on without a concrete channel and
+  key, a non-finite velocity or value). Note and MIDI times are clamped to
+  0..frames-1. Each `process()` sorts the events it appended by time, stably,
+  with an allocation-free insertion sort, for every backing; parameter output
+  times are left as reported. `Instance::outputsNotes()` reports a CLAP output
+  note port (`note-ports`, `is_input = false`) or a VST3 event output bus,
+  which `activate()` now activates; the VST3 output event list (2048) counts
+  the events it refuses in `dropped`. A `params.flush` has no block: note and
+  MIDI output there is dropped and counted in the idle drain's `dropped`, and
+  `TakeIdleOutputs` replies still reject kinds past `NoteEnd`.
+  Bridged instances run the conversion in the child. Since POSIX v20 / Windows
+  v21 the Create reply ends its fixed fields with `u8 outputsNotes` (after
+  `u8 editor`, before the auxiliary ports), and the Header carries `outSink`
+  (the host passed a sink), `outEventCapacity` (its room, at most
+  `kMaxOutEvents` = 1024) and `outEventsUnsupported`. The child's sink has
+  exactly that room, so the plug-in sees the same pushes accepted and refused
+  as in process: events, `dropped` and `unsupported` are bit-identical in
+  process, in a shared bridge and in a dedicated one whenever the room is at
+  most 1024 (tested in `tests/test_note_output.cpp`, with RTSan on the process
+  path). The engine does not publish note or MIDI output to its main-thread
+  plugin-output queue.
 - `takeIdleOutputs()` drains CLAP `params.flush` output gestures/values on the
   main thread, local or bridged, including active-but-stopped audio-thread
   flushes. The instance retains a FIFO of 1024 events independently of the
@@ -699,7 +742,8 @@ pivot 800 Hz, output 0 dB.
   CMake target `supple::semantic-params-abi`).
 - Hermetic tests use in-tree fixture plugins (`host/clap-host/tests/
   fixture_plugins.cpp`): a gain effect with the semantic extension,
-  restartable latency and JSON state, and a sine instrument. The host was also
+  restartable latency and JSON state, a sine instrument, and a note echo
+  with output note ports (its VST3 twin is in `fixture_vst3.cpp`). The host was also
   checked by hand against the template's `Starter.clap` (scan, text I/O,
   flush, processing, state).
 

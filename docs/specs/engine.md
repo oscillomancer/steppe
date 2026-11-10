@@ -1503,7 +1503,8 @@ normal plan-adoption boundaries, including the anticipative edit horizon.
 
 `Engine::takePluginOutputs()` is main-thread only. Each record contains FX id,
 plan generation, transport epoch, timeline sample, stream sample, the entire
-`host::OutputEvent`, and idle/anticipative markers. Timeline coordinates subtract
+`host::OutputEvent`, and idle/anticipative markers. Note ends and plug-in
+note/MIDI output (ADR-0068) are not published there. Timeline coordinates subtract
 the stage's input timeline shift (§1.3); idle flush records use the service-time
 play position.
 Parameter values and gesture boundaries are copied after worker tasks finish,

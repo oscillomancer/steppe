@@ -15,6 +15,7 @@ class Vst3Instance {
     std::uint32_t inputChannels() const;
     std::uint32_t outputChannels() const;
     bool acceptsNotes() const;
+    bool outputsNotes() const;                // an event output bus (ADR-0068)
     std::uint32_t sidechainChannels() const;  // the first auxiliary input bus (ADR-0018)
     // The output buses past the main one (ADR-0021), as negotiated.
     std::vector<AudioPortInfo> auxOutputPorts() const;
