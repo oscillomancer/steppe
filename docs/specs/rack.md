@@ -714,7 +714,10 @@ user's version, and deleting that brings the factory one back. A factory
 patch cannot be deleted (`rack.preset_factory`). A test loads each into a
 fresh rack and plays it (notes from its track, a saw sent into its In, the
 song running): it loads without a warning, sounds, and peaks at most
-+1 dBFS on the track.
++1 dBFS on the track. Under unity Console 9 staging (ADR-0066), all 26
+patches have a 6.52 dB final gain reduction before Out, keeping their earlier
+balance without changing nonlinear drive or modulation. See
+`docs/research/factory-rack-levels.md` for measurements.
 
 ### 7.2 Patch layout and labels
 

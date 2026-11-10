@@ -6,7 +6,7 @@
     {
       "type": "com.suppleaudio.rack.out",
       "version": "1.0.0",
-      "x": 1616.0,
+      "x": 1760.0,
       "y": 295.0
     },
     {
@@ -114,6 +114,26 @@
         "decay": 7000.0,
         "shimmer": 20.0,
         "mix": 40.0
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.vca",
+      "version": "1.0.0",
+      "label": "Output L",
+      "x": 1616.0,
+      "y": 295.0,
+      "params": {
+        "level": -6.52
+      }
+    },
+    {
+      "type": "com.suppleaudio.rack.vca",
+      "version": "1.0.0",
+      "label": "Output R",
+      "x": 1616.0,
+      "y": 585.0,
+      "params": {
+        "level": -6.52
       }
     }
   ],
@@ -255,14 +275,34 @@
         "port": "out_l"
       },
       "to": {
-        "module": 0,
-        "port": "l"
+        "module": 11,
+        "port": "in"
       }
     },
     {
       "from": {
         "module": 10,
         "port": "out_r"
+      },
+      "to": {
+        "module": 12,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "module": 11,
+        "port": "out"
+      },
+      "to": {
+        "module": 0,
+        "port": "l"
+      }
+    },
+    {
+      "from": {
+        "module": 12,
+        "port": "out"
       },
       "to": {
         "module": 0,

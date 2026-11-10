@@ -122,3 +122,14 @@ Out, In, Notes, Transport, Plugin) are in `docs/specs/rack.md` §5.
 | `counter` | A counter-melody against a lead, note against note: consonances of the key, contrary motion, no parallel fifths or octaves, held notes tied |
 | `groove` | Feel for gates: velocities by step (downbeats, backbeat, offbeats, pushed), swing on sixteenths or eighths, lay-back and a human hand; poly |
 | `layers` | An arrangement for four parts: each part's gates pass from a level (Form's energy) upward, parts entering and leaving on the bar, with seeded rests; poly |
+
+## Factory rack patches
+
+The 26 presets in `patches/` retain their relative loudness under ADR-0066's
+unity Console 9 staging. Each has 6.52 dB less gain at its last stage before
+Out than the original patch: an existing VCA, mixer master or distortion
+output level, or a pair of output VCAs after a stereo effect. Oscillator
+levels, envelopes, drive and feedback stay at their original settings.
+The patch regression loads and analyzes every preset with notes, a saw input
+or the running song, as appropriate; each must sound and peak below +1 dBFS.
+Measurements and the exact render setup: `../docs/research/factory-rack-levels.md`.

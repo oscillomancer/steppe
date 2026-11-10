@@ -45,7 +45,11 @@ To start from something that already sounds, `rack.preset.list
 (instruments, effects and self-playing patches, each with a description of
 what to play or turn); `rack.preset.load {rack, name}` loads one, its Out
 joined to the rack's. Change it, then save it under its own name or a new
-one: a saved preset of a factory patch's name takes its place.
+one: a saved preset of a factory patch's name takes its place. All 26 factory
+patches have a final 6.52 dB trim for unity Console 9 staging (ADR-0066),
+keeping their earlier balance. Stereo effects with no output gain have two
+output VCAs; raise those together to change loudness while preserving the
+patch's drive, envelopes and feedback.
 
 ## Mistakes that cost time
 
