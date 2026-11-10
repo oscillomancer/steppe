@@ -1919,6 +1919,74 @@ Real-device tests require SUPPLE_MIDI_DEVICE_TEST exactly 1; they use fake
 audio and never open an audio device. Native SDK tests do not establish physical
 input timing, disconnect reliability or performance on every driver.
 
+### Native MIDI outputs (ADR-0069)
+
+`BackendConfig.midiOutputs` opens up to 16 destinations; `engine.start` enables
+it. `Backend::midiOutputPorts()` names them, fixed while running;
+`engine.inputs.midi_outputs` lists the same names (empty while stopped).
+No routing or clock generator is added here. `writeMidi(MidiOutputEvent)` is
+callback-only: 0-based port, frame within that engine chunk, size 1..10 and ten
+inline bytes. Messages must be complete MIDI 1.0, including system realtime,
+SPP, quarter-frame MTC and full-frame MTC SysEx. Running status and SysEx longer
+than ten bytes are rejected. The default Backend has no destinations.
+
+One fixed 1024-event budget spans the entire device period, even when audio
+splits it into chunks. Events are stably sorted by period frame (ties retain
+write order). `writeMidi` returns false on immediate rejection; accepted output
+can still be lost downstream. `midiOutDropped()` / `engine.status.midi_out_dropped`
+counts validation/budget, queue and device-write rejection, backwards per-port
+timestamps and queued events discarded at stop. Counters reset on start.
+OS-accepted output cancelled at stop is not counted. DummyBackend can declare
+ports/latencies and captures bounded output with absolute frames since start.
+Read its capture only after manual run/stop, as for audio capture.
+
+`midiOutputLatency()` / `engine.start/status.midi_output_latency` is a signed
+frame array parallel to the port names: **audio output latency minus MIDI port
+latency**. Positive L means an event at cycle frame f leaves MIDI L frames before
+audio at f reaches the speakers. Future routing must delay MIDI by L plus the
+user's signed offset; negative values require advance/lookahead. The backend
+never applies that alignment itself. MIDI latency refers to the first byte;
+external instrument processing latency still needs user calibration. JACK
+subtracts each MIDI port's maximum playback latency from the first audio port's
+maximum; optional missing latency reporting means zero. CoreMIDI/WinMM currently
+assume zero MIDI wire latency, so the delta is the audio output latency estimate.
+
+JACK registers midi_out_N connected to physical MIDI playback ports, clears
+all buffers every period and writes sorted events at their frames. Native
+audio publishes to one preallocated 2048-event SPSC queue per destination. Its
+frame zero in the sink's clock is callback entry time plus PortAudio's
+`outputBufferDacTime - currentTime - audioOutputLatency`; f adds f/rate, with
+chunk offsets applied once. With no callback time info, frame zero is entry
+time. Source clocks are Mach host time on macOS and QPC on Windows.
+
+CoreMIDI shares the input client and sends protocol-1 UMP event lists with host
+timestamps from a sender thread. Apple promises future timestamp scheduling,
+but does not document a realtime-safe send call. System messages use system
+UMPs and bounded SysEx uses SysEx7 UMPs. WinMM's sender uses MMCSS Pro Audio
+(or highest thread priority), a high-resolution waitable timer and
+midiOutShortMsg/midiOutLongMsg, all off audio. Eight preprepared long buffers
+per destination bound in-flight SysEx. Expected WinMM jitter is roughly 1 ms;
+no hardware timing measurement is claimed. There is no timeBeginPeriod or
+system-wide configuration change. Both senders poll within 1 ms; CoreMIDI
+submits future events to its scheduler immediately, WinMM sends when due. Late
+events are sent late; future routing must provide scheduling lead time.
+
+Refusing outputs are skipped, audio remains running, and
+`engine.start/status.midi_output_warnings` contains device, numeric os_error,
+message and hint (also copied into warnings). Names contain only successfully
+opened/connected destinations. Topology changes latch midi_devices_changed
+without automatic restart. JACK's optional registration callback conservatively
+includes audio port topology. Native output monitoring uses the existing device
+monitor. Stop first joins audio, then the sender (pending queued output is
+discarded); CoreMIDI flushes scheduled destination output before disposing its
+port/client and WinMM resets, unprepares buffers and closes devices. CoreMIDI's
+flush is endpoint-wide; WinMM reset can send all-notes-off on all channels.
+
+Device-free fake clocks exercise the production queue path, including scheduling,
+loss and shutdown. `SUPPLE_MIDI_DEVICE_TEST=1` alone enables native device opens
+with fake audio and no explicit MIDI sends. macOS/Windows native CI and physical
+timing/disconnect validation remain pending. No additional SDK/library is linked.
+
 ### Master playrate (ADR-0045)
 
 Project schema 2.1 stores master playrate and its `tr_0/playrate` envelope.

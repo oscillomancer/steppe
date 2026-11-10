@@ -15,6 +15,10 @@ WinMM inputs to the PortAudio backend and supersedes the MIDI deferral below.
 GUI start the native device by default (headless engine.start keeps dummy),
 asks CoreAudio for an explicit rate and lets WASAPI shared mode convert rates.
 
+**2026-11-10 draft extension:** [ADR-0069](0069-native-midi-output.md)
+adds the hardware MIDI output device contract; routing and clock generation
+remain separate work. Native output validation is pending.
+
 ## Decision
 
 - Vendor the latest eligible stable PortAudio release, v19.7.0 (2021-04-06,

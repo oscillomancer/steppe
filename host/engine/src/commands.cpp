@@ -320,6 +320,11 @@ schema::Schema<EngineStatus> engineStatusSchema() {
         .field("device_latency", &EngineStatus::deviceLatency, schema::integer())
         .field("xruns", &EngineStatus::xruns, schema::integer())
         .field("midi_dropped", &EngineStatus::midiDropped, schema::integer())
+        .field("midi_out_dropped", &EngineStatus::midiOutDropped, schema::integer())
+        .field("midi_output_warnings", &EngineStatus::midiOutputWarnings,
+               schema::arrayOf(midiInputWarningSchema()))
+        .field("midi_output_latency", &EngineStatus::midiOutputLatency,
+               schema::arrayOf(schema::integer()))
         .field("midi_warnings", &EngineStatus::midiWarnings,
                schema::arrayOf(midiInputWarningSchema()))
         .field("midi_devices_changed", &EngineStatus::midiDevicesChanged, schema::boolean())
@@ -4096,7 +4101,8 @@ void registerEngineCommands(cmd::Registry& registry) {
             "devices are idle and the rate is allowed). force_graph (JACK on PipeWire, default "
             "false) instead forces block as the graph's quantum, and rate if given, while the "
             "engine runs. PortAudio opens up to "
-            "16 native MIDI inputs; engine.inputs lists their names. Dummy is paced like a device. "
+            "16 native MIDI inputs and outputs; engine.inputs lists their names. Dummy is paced "
+            "like a device. "
             "block: the device block in frames "
             "(default 256); the device's "
             "period may differ and is reported. anticipative (default true): render ahead of "
@@ -4109,7 +4115,9 @@ void registerEngineCommands(cmd::Registry& registry) {
             "default-off host-process memory policy: requested, active, and a structured OS "
             "error on failure. cpu_idle_latency reports the default-off 20 microsecond PM QoS "
             "request, released on engine stop. A protection failure does not prevent audio "
-            "startup. MIDI inputs that refuse to open are skipped: midi_warnings reports each "
+            "startup. MIDI output refusals are in midi_output_warnings; midi_output_latency "
+            "reports signed audio-minus-MIDI frames per output. MIDI inputs that refuse to open "
+            "are skipped: midi_warnings reports each "
             "device, numeric os_error, message and corrective hint; audio continues.";
         c.tags = {"engine"};
         c.args = schema::object<EngineStartArgs>("engine_start_args")
@@ -4139,7 +4147,7 @@ void registerEngineCommands(cmd::Registry& registry) {
         c.examples = {
             {"Without a device", obj(R"({"backend": "dummy", "block": 128})"),
              obj(R"({"running": true, "backend": "dummy", "sample_rate": 48000.0, "block": 128,
-                     "period": 128, "plan_latency": 0, "device_latency": 0, "xruns": 0, "midi_dropped": 0, "midi_warnings": [],
+                     "period": 128, "plan_latency": 0, "device_latency": 0, "xruns": 0, "midi_dropped": 0, "midi_warnings": [], "midi_out_dropped": 0, "midi_output_warnings": [], "midi_output_latency": [],
                      "midi_devices_changed": false, "midi_devices_message": "",
                      "preparing_audio": false, "preparation_error": "",
                      "prepared_version": "<any>", "preparation_version": 0,
@@ -4208,16 +4216,19 @@ void registerEngineCommands(cmd::Registry& registry) {
             "audio: one entry per input channel (channel, the 1-based number track.set "
             "record_input takes, and the device port it is connected to). midi: the MIDI devices "
             "(names track.set record_midi matches; JACK ports or native CoreMIDI/WinMM inputs, "
-            "fixed until restart). outputs: one entry per output channel (channel, the number "
+            "fixed until restart). midi_outputs: destination names for the hardware output API "
+            "(routing and clock generation are separate). outputs: one entry per output channel "
+            "(channel, the number "
             "track.set hw_output takes for a master, and the port it is connected to). While the "
             "engine is stopped: running false and "
             "empty lists (engine.start opens the device).";
         c.tags = {"engine", "record"};
         c.args = schema::object<NoArgs>("no_args").build();
         c.result = schema::any();
-        c.examples = {{"Stopped", obj("{}"),
-                       obj(R"({"running": false, "audio": [], "midi": [], "outputs": []})"),
-                       "empty"}};
+        c.examples = {
+            {"Stopped", obj("{}"),
+             obj(R"({"running": false, "audio": [], "midi": [], "outputs": [], "midi_outputs": []})"),
+             "empty"}};
         c.run = [](const NoArgs&, Context& ctx) -> Result<json::Value> {
             EngineApp& app = A(ctx);
             const Backend* backend = app.backend();
@@ -4225,6 +4236,7 @@ void registerEngineCommands(cmd::Registry& registry) {
             out["running"] = backend != nullptr;
             out["audio"] = json::Value::array();
             out["midi"] = json::Value::array();
+            out["midi_outputs"] = json::Value::array();
             out["outputs"] = json::Value::array();
             if (!backend) return out;
             json::Value audio = json::Value::array();
@@ -4250,6 +4262,7 @@ void registerEngineCommands(cmd::Registry& registry) {
             out["audio"] = std::move(audio);
             out["outputs"] = std::move(outputs);
             out["midi"] = std::move(midi);
+            for (const auto& name : backend->midiOutputPorts()) out["midi_outputs"].push_back(name);
             return out;
         };
         addChecked(registry, std::move(c));
@@ -4270,6 +4283,9 @@ void registerEngineCommands(cmd::Registry& registry) {
             "away; engine.stop and engine.start again. midi_devices_changed is advisory: "
             "MIDI topology changed but audio keeps running. midi_devices_message asks for an "
             "explicit engine restart to pick up the new set; existing port names stay fixed. "
+            "midi_out_dropped counts hardware output rejections, queue/device loss and pending "
+            "events discarded at shutdown. midi_output_warnings lists outputs skipped at start; "
+            "midi_output_latency is signed audio-minus-MIDI latency per output, in frames. "
             "midi_dropped: native MIDI messages/packets rejected or lost to bounded queues "
             "(zero for other backends). midi_warnings lists inputs skipped at start, with "
             "device, numeric os_error, message and corrective hint. meter_drops: entries a full "
@@ -4296,7 +4312,7 @@ void registerEngineCommands(cmd::Registry& registry) {
         c.result = engineStatusSchema();
         c.examples = {{"Not running", obj("{}"),
                        obj(R"({"running": false, "backend": "", "sample_rate": 0.0, "block": 0,
-                     "period": 0, "plan_latency": 0, "device_latency": 0, "xruns": 0, "midi_dropped": 0, "midi_warnings": [],
+                     "period": 0, "plan_latency": 0, "device_latency": 0, "xruns": 0, "midi_dropped": 0, "midi_warnings": [], "midi_out_dropped": 0, "midi_output_warnings": [], "midi_output_latency": [],
                      "midi_devices_changed": false, "midi_devices_message": "",
                      "preparing_audio": false, "preparation_error": "",
                      "prepared_version": 0, "preparation_version": 0,

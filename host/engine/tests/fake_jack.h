@@ -43,11 +43,23 @@ struct FakeJack {
     const char* (*propsEnv)() = fn<const char* (*)()>("fakejack_props_env");
     float (*outputPeak)(const char*) = fn<float (*)(const char*)>("fakejack_output_peak");
 
+    struct WrittenMidi {
+        std::uint32_t port = 0, frame = 0;
+        std::uint64_t cycle = 0;
+        std::uint8_t size = 0, bytes[10]{};
+    };
+    unsigned (*midiWritten)() = fn<unsigned (*)()>("fakejack_midi_written");
+    unsigned (*midiClears)() = fn<unsigned (*)()>("fakejack_midi_clears");
+    void (*midiRead)(unsigned, void*) = fn<void (*)(unsigned, void*)>("fakejack_midi_read");
+    void (*topology)() = fn<void (*)()>("fakejack_topology");
+    void (*midiFail)(int, int, int) = fn<void (*)(int, int, int)>("fakejack_midi_fail");
+
     // Back to a healthy server at 48 kHz with the given period.
     void reset(std::uint32_t period = 1024) {
         stall(0);
         failOpen(0);
         failCapture(0);
+        midiFail(0, 0, 0);
         setInput(0.0f);
         setRate(48000);
         setStaleRate(0);

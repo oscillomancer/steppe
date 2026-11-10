@@ -78,6 +78,8 @@ struct Api {
     int (*setBufferSizeCallback)(JackClient*, int (*)(Frames, void*), void*) = nullptr;
     int (*setSampleRateCallback)(JackClient*, int (*)(Frames, void*), void*) = nullptr;
     void (*onShutdown)(JackClient*, void (*)(void*), void*) = nullptr;
+    int (*setPortRegistrationCallback)(JackClient*, void (*)(std::uint32_t, int, void*),
+                                       void*) = nullptr;
     JackPort* (*portRegister)(JackClient*, const char*, const char*, unsigned long,
                               unsigned long) = nullptr;
     void* (*portGetBuffer)(JackPort*, Frames) = nullptr;
@@ -91,6 +93,8 @@ struct Api {
     void (*free)(void*) = nullptr;
     std::uint32_t (*midiGetEventCount)(void*) = nullptr;  // optional: MIDI (ADR-0016)
     int (*midiEventGet)(MidiEvent*, void*, std::uint32_t) = nullptr;
+    void (*midiClearBuffer)(void*) = nullptr;
+    int (*midiEventWrite)(void*, Frames, const unsigned char*, std::size_t) = nullptr;
 };
 
 template <class F>
@@ -140,6 +144,9 @@ Result<const Api*> loadApi(const std::string& library) {
     bind(h, "jack_port_get_latency_range", api.portGetLatencyRange, optional);
     bind(h, "jack_midi_get_event_count", api.midiGetEventCount, optional);
     bind(h, "jack_midi_event_get", api.midiEventGet, optional);
+    bind(h, "jack_set_port_registration_callback", api.setPortRegistrationCallback, optional);
+    bind(h, "jack_midi_clear_buffer", api.midiClearBuffer, optional);
+    bind(h, "jack_midi_event_write", api.midiEventWrite, optional);
     if (!missing.empty()) {
         ::dlclose(h);
         return Error("backend.unavailable", library + " lacks JACK symbols: " + missing, {},
@@ -179,6 +186,12 @@ struct JackBackend::Impl {
     std::vector<std::string> midiNames;
     std::vector<MidiInputEvent> periodMidi, blockMidi;  // capacity reserved
     std::atomic<std::uint64_t> midiDropped{0};
+    std::array<JackPort*, kMaxMidiPorts> midiOutPorts{};
+    std::vector<std::string> midiOutNames;
+    std::vector<MidiInputWarning> midiOutWarnings;
+    detail::MidiOutputCycle midiOut;
+    std::atomic<bool> midiOutReady{false};
+    std::atomic<bool> midiTopologyChanged{false};
     // The rate the client runs at (read once it processes) and the latest one
     // the server reported. PipeWire reports a stale rate until the client's
     // first cycle (its default, or the latency request's denominator, before
@@ -201,6 +214,14 @@ struct JackBackend::Impl {
             out[c] = static_cast<float*>(api->portGetBuffer(outPorts[c], n));
         for (std::uint32_t c = 0; c < inputs; ++c)
             in[c] = static_cast<const float*>(api->portGetBuffer(inPorts[c], n));
+        std::array<void*, kMaxMidiPorts> midiBuffers{};
+        const auto midiOutputCount =
+            midiOutReady.load(std::memory_order_acquire) ? midiOutNames.size() : 0;
+        for (std::size_t p = 0; p < midiOutputCount; ++p) {
+            midiBuffers[p] = api->portGetBuffer(midiOutPorts[p], n);
+            if (midiBuffers[p]) api->midiClearBuffer(midiBuffers[p]);
+        }
+        midiOut.begin(n, midiOutputCount);
         const int s = state.load(std::memory_order_acquire);
         if (s == kRunning) {
             // The engine writes stereo; other opened device ports must stay silent.
@@ -219,11 +240,18 @@ struct JackBackend::Impl {
                     e.frame -= at;
                     blockMidi.push_back(e);
                 }
+                midiOut.chunk(at, len);
                 callback(inputs ? i.data() : nullptr, o.data(), len);
                 at += len;
             }
             blockMidi.clear();
+            for (const auto& event : midiOut.sorted())
+                if (!midiBuffers[event.port] ||
+                    api->midiEventWrite(midiBuffers[event.port], event.frame, event.bytes,
+                                        event.size))
+                    midiOut.drop();
         } else {
+            midiOut.chunk(0, 0);
             for (std::uint32_t c = 0; c < outputs; ++c) std::fill_n(out[c], n, 0.0f);
             if (s == kStopping) {
                 callback(nullptr, out.data(), 0);  // the final callback (Backend::stop contract)
@@ -260,6 +288,13 @@ struct JackBackend::Impl {
         for (std::size_t i = 1; i < periodMidi.size(); ++i)  // stable, allocation-free
             for (std::size_t k = i; k > 0 && periodMidi[k].frame < periodMidi[k - 1].frame; --k)
                 std::swap(periodMidi[k], periodMidi[k - 1]);
+    }
+
+    static void topologyThunk(std::uint32_t, int, void* context) {
+        auto& self = *static_cast<Impl*>(context);
+        if (!self.midiOutReady.load(std::memory_order_acquire)) return;
+        if (!self.midiTopologyChanged.exchange(true, std::memory_order_acq_rel) && self.mainWake)
+            self.mainWake->notify();
     }
 
     static int processThunk(Frames n, void* self) SUPPLE_RT {
@@ -371,6 +406,7 @@ Status JackBackend::start(const BackendConfig& config, Callback callback) {
     auto loadedApi = loadApi(options_.library);
     if (!loadedApi) return std::move(loadedApi).error();
     const Api* api = *loadedApi;
+    stoppedMidiOutDropped_ = 0;
     auto impl = std::make_unique<Impl>();
     impl->api = api;
     impl->mainWake = mainWake_;
@@ -438,6 +474,27 @@ Status JackBackend::start(const BackendConfig& config, Callback callback) {
             api->free(static_cast<void*>(ports));
         }
     }
+    if (config.midiOutputs) {
+        if (!api->midiClearBuffer || !api->midiEventWrite) {
+            impl->midiOutWarnings.push_back(
+                {"JACK MIDI outputs", 0, "JACK MIDI output symbols unavailable"});
+        } else if (const char** ports = api->getPorts(impl->client, nullptr, kMidiType,
+                                                      kPortIsPhysical | kPortIsInput)) {
+            for (std::uint32_t k = 0; ports[k] && k < Impl::kMaxMidiPorts; ++k) {
+                const std::string name = "midi_out_" + std::to_string(k + 1);
+                auto* port =
+                    api->portRegister(impl->client, name.c_str(), kMidiType, kPortIsOutput, 0);
+                if (!port) {
+                    impl->midiOutWarnings.push_back(
+                        {ports[k], 0, "could not register JACK MIDI output"});
+                    continue;
+                }
+                impl->midiOutPorts[impl->midiOutNames.size()] = port;
+                impl->midiOutNames.emplace_back(ports[k]);
+            }
+            api->free(static_cast<void*>(ports));
+        }
+    }
     if (options_.forceBufferSize && api->getBufferSize(impl->client) != config.blockSize)
         api->setBufferSize(impl->client, config.blockSize);  // granted or not: period is reported
     impl->period = api->getBufferSize(impl->client);
@@ -448,6 +505,8 @@ Status JackBackend::start(const BackendConfig& config, Callback callback) {
     api->setBufferSizeCallback(impl->client, &Impl::bufferSizeThunk, self);
     api->setSampleRateCallback(impl->client, &Impl::sampleRateThunk, self);
     api->onShutdown(impl->client, &Impl::shutdownThunk, self);
+    if ((config.midiInputs || config.midiOutputs) && api->setPortRegistrationCallback)
+        api->setPortRegistrationCallback(impl->client, &Impl::topologyThunk, self);
     active_.store(self, std::memory_order_release);  // midiInput() from the first callback
     if (api->activate(impl->client) != 0) {
         active_.store(nullptr);
@@ -486,6 +545,20 @@ Status JackBackend::start(const BackendConfig& config, Callback callback) {
     }
     for (std::uint32_t k = 0; k < impl->midiInputs; ++k)  // each device into its port
         api->connect(impl->client, midiSources[k].c_str(), api->portName(impl->midiPorts[k]));
+    std::size_t opened = 0;
+    for (std::size_t p = 0; p < impl->midiOutNames.size(); ++p) {
+        const int error = api->connect(impl->client, api->portName(impl->midiOutPorts[p]),
+                                       impl->midiOutNames[p].c_str());
+        if (error && error != EEXIST) {
+            impl->midiOutWarnings.push_back(
+                {impl->midiOutNames[p], error, "could not connect JACK MIDI output"});
+        } else {
+            impl->midiOutPorts[opened] = impl->midiOutPorts[p];
+            impl->midiOutNames[opened++] = impl->midiOutNames[p];
+        }
+    }
+    impl->midiOutNames.resize(opened);
+    impl->midiOutReady.store(true, std::memory_order_release);
     config_ = config;
     config_.sampleRate = static_cast<double>(impl->rate.load(std::memory_order_relaxed));
     impl_ = std::move(impl);
@@ -507,6 +580,7 @@ void JackBackend::stop() {
     if (!m.serverGone.load()) m.api->deactivate(m.client);
     m.close();
     active_.store(nullptr, std::memory_order_release);
+    stoppedMidiOutDropped_ = m.midiOut.dropped();
     impl_.reset();
 }
 
@@ -539,8 +613,13 @@ BackendStatus JackBackend::status() const {
     const std::string_view reason = s.serverGone    ? "the audio server went away"
                                     : s.rateChanged ? "the device's rate changed"
                                                     : std::string_view{};
-    return {s.period, s.xruns, s.outputLatency, inputLatency, s.rateChanged || s.serverGone,
-            reason};
+    return {s.period,
+            s.xruns,
+            s.outputLatency,
+            inputLatency,
+            s.rateChanged || s.serverGone,
+            reason,
+            impl_ && impl_->midiTopologyChanged.load(std::memory_order_acquire)};
 }
 
 std::span<const MidiInputEvent> JackBackend::midiInput() const {
@@ -551,6 +630,31 @@ std::span<const MidiInputEvent> JackBackend::midiInput() const {
 std::vector<std::string> JackBackend::midiPorts() const {
     return impl_ ? impl_->midiNames : std::vector<std::string>{};
 }
+
+bool JackBackend::writeMidi(const MidiOutputEvent& event) {
+    auto* self = active_.load(std::memory_order_acquire);
+    return self && self->midiOut.write(event);
+}
+std::vector<std::string> JackBackend::midiOutputPorts() const {
+    return impl_ ? impl_->midiOutNames : std::vector<std::string>{};
+}
+std::vector<std::int64_t> JackBackend::midiOutputLatency() const {
+    std::vector<std::int64_t> result;
+    if (impl_) {
+        const auto audio = stats();
+        for (std::size_t p = 0; p < impl_->midiOutNames.size(); ++p) {
+            LatencyRange range{};
+            if (impl_->api->portGetLatencyRange && !audio.serverGone)
+                impl_->api->portGetLatencyRange(impl_->midiOutPorts[p], kPlaybackLatency, &range);
+            result.push_back(static_cast<std::int64_t>(audio.outputLatency) - range.max);
+        }
+    }
+    return result;
+}
+std::vector<MidiInputWarning> JackBackend::midiOutputWarnings() const {
+    return impl_ ? impl_->midiOutWarnings : std::vector<MidiInputWarning>{};
+}
+std::uint64_t JackBackend::midiOutDropped() const { return impl_ ? impl_->midiOut.dropped() : 0; }
 
 unsigned JackBackend::liveThreadCapacity() const {
     if (!impl_ || !impl_->api->clientThreadId) return 0;

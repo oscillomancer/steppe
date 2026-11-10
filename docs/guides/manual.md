@@ -889,3 +889,14 @@ Quantization that would cross hits or land on an item edge refuses with a hint t
 choose a finer grid or lower strength. Slicing can leave faded gaps; it does not
 invent sustained tails. The previous audio continues while “Preparing audio…” is
 shown. Source preparation finishes before the new timing becomes audible.
+
+### Hardware MIDI output device status
+
+`engine.start` opens available MIDI destinations alongside inputs. Inspect
+`engine.inputs.midi_outputs` for names, and `engine.status` for
+`midi_output_warnings`, `midi_out_dropped` and `midi_output_latency` (signed
+frames, audio output latency minus MIDI output latency). A busy device is
+skipped while audio keeps running; close the application using it and restart
+the engine to retry. Device topology changes are advisory and require an
+explicit restart to adopt the new set. Hardware MIDI routing and clock/MTC
+output controls are not yet available; opening outputs alone sends no music.

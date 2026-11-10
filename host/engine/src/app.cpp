@@ -1075,8 +1075,9 @@ Status EngineApp::startEngine(std::string_view backend, std::uint32_t block, boo
     BackendConfig config;
     config.sampleRate = device.rate > 0 ? device.rate : view().project->sampleRate;
     config.blockSize = block;
-    config.inputs = 2;         // at least the device's first stereo pair, for recording
-    config.midiInputs = true;  // its MIDI inputs, for MIDI tracks (ADR-0016)
+    config.inputs = 2;          // at least the device's first stereo pair, for recording
+    config.midiOutputs = true;  // device output API (ADR-0069); routing is separate
+    config.midiInputs = true;   // its MIDI inputs, for MIDI tracks (ADR-0016)
     if (backend == "jack") {
 #if defined(__linux__)
         JackOptions o;
@@ -1586,6 +1587,12 @@ EngineStatus EngineApp::engineStatus() {
     st.xruns = static_cast<std::int64_t>(b.xruns);
     st.midiDropped = static_cast<std::int64_t>(backend_->midiDropped());
     st.midiWarnings = backend_->midiWarnings();
+    st.midiOutDropped = static_cast<std::int64_t>(backend_->midiOutDropped());
+    st.midiOutputWarnings = backend_->midiOutputWarnings();
+    st.midiOutputLatency = backend_->midiOutputLatency();
+    for (const auto& warning : st.midiOutputWarnings)
+        st.warnings.push_back(warning.device + ": " + warning.message + " (" +
+                              std::to_string(warning.osError) + "); " + warning.hint);
     for (const auto& warning : st.midiWarnings)
         st.warnings.push_back(warning.device + ": " + warning.message + " (" +
                               std::to_string(warning.osError) + "); " + warning.hint);

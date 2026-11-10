@@ -106,6 +106,10 @@ Status DummyBackend::start(const BackendConfig& config, Callback callback) {
     inPtrs_.clear();
     for (auto& c : inputs_) inPtrs_.push_back(c.data());
     inputFrame_ = 0;
+    midiOutput_.reset();
+    midiCapture_.clear();
+    if (config.midiOutputs && !options_.midiOutputPorts.empty())
+        midiCapture_.reserve(options_.midiCaptureEvents);
     midi_.clear();
     midi_.reserve(kMaxMidiInputEvents);
     capture_.sampleRate = config.sampleRate;
@@ -162,8 +166,15 @@ void DummyBackend::cycle() {
             for (std::size_t k = i; k > 0 && midi_[k].frame < midi_[k - 1].frame; --k)
                 std::swap(midi_[k], midi_[k - 1]);
     }
-    inputFrame_ += config_.blockSize;
+    midiOutput_.begin(config_.blockSize, config_.midiOutputs ? options_.midiOutputPorts.size() : 0);
     callback_(inPtrs_.empty() ? nullptr : inPtrs_.data(), out, config_.blockSize);
+    for (const auto& event : midiOutput_.sorted()) {
+        if (midiCapture_.size() == midiCapture_.capacity())
+            midiOutput_.drop();
+        else
+            midiCapture_.push_back({inputFrame_ + event.frame, event});
+    }
+    inputFrame_ += config_.blockSize;
     const auto room = std::min<std::int64_t>(config_.blockSize, options_.captureFrames - captured_);
     if (room > 0) {
         for (std::size_t c = 0; c < outputs_.size(); ++c)
@@ -171,6 +182,15 @@ void DummyBackend::cycle() {
         captured_ += room;
     }
     cycles_.fetch_add(1);
+}
+
+std::vector<std::string> DummyBackend::midiOutputPorts() const {
+    return config_.midiOutputs ? options_.midiOutputPorts : std::vector<std::string>{};
+}
+std::vector<std::int64_t> DummyBackend::midiOutputLatency() const {
+    auto result = options_.midiOutputLatency;
+    result.resize(midiOutputPorts().size());
+    return result;
 }
 
 // --- engine --------------------------------------------------------------------------

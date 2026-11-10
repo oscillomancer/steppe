@@ -5,6 +5,7 @@
 // test sets; the test drives server events (period and rate changes, xruns,
 // stalls, shutdown) through the fakejack_* functions.
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -55,6 +56,8 @@ struct Client {
     void* sampleRateArg = nullptr;
     void (*shutdown)(void*) = nullptr;
     void* shutdownArg = nullptr;
+    void (*portRegistration)(std::uint32_t, int, void*) = nullptr;
+    void* portRegistrationArg = nullptr;
     std::vector<Port*> ports;
     std::thread thread;
     std::atomic<bool> active{false};
@@ -78,6 +81,14 @@ std::atomic<Frames> g_bufferSizeRequest{0};
 std::atomic<int> g_connections{0};
 std::atomic<bool> g_failCapture{false};
 std::atomic<float> g_inputValue{0.0f};
+struct WrittenMidi {
+    std::uint32_t port = 0, frame = 0;
+    std::uint64_t cycle = 0;
+    std::uint8_t size = 0, bytes[10]{};
+};
+std::array<WrittenMidi, 65536> g_written;
+std::atomic<unsigned> g_writtenCount{0}, g_clearCount{0};
+std::atomic<bool> g_midiWriteFail{false}, g_midiRegisterFail{false}, g_midiConnectFail{false};
 std::string g_latencyEnv, g_rateEnv, g_propsEnv;
 std::mutex g_midiMutex;  // (not g_mutex: fakejack_stall holds that while the loop idles)
 std::vector<std::pair<int, MidiMessage>> g_midiQueue;  // (our MIDI port index, message)
@@ -102,7 +113,7 @@ void run(Client* c) {
             std::lock_guard lock(g_midiMutex);
             int index = 0;
             for (Port* p : c->ports) {
-                if (!p->midi) continue;
+                if (!p->midi || p->output) continue;
                 p->events.clear();
                 for (const auto& [port, m] : g_midiQueue)
                     if (port == index)
@@ -118,7 +129,7 @@ void run(Client* c) {
         g_started = true;
         c->process(n, c->processArg);
         for (Port* p : c->ports) {
-            if (!p->output) continue;
+            if (!p->output || p->midi) continue;
             float peak = p->peak.load();
             for (Frames i = 0; i < n; ++i) peak = std::max(peak, std::fabs(p->buffer[i]));
             p->peak = peak;
@@ -164,6 +175,8 @@ Client* jack_client_open(const char* name, int, int* status, ...) {
     g_started = false;
     g_connections = 0;
     g_bufferSizeRequest = 0;
+    g_writtenCount = 0;
+    g_clearCount = 0;
     g_client = new Client;
     g_client->name = name;
     if (status) *status = 0;
@@ -221,8 +234,23 @@ void jack_on_shutdown(Client* c, void (*cb)(void*), void* arg) {
     c->shutdownArg = arg;
 }
 
+int jack_set_port_registration_callback(Client* c, void (*callback)(std::uint32_t, int, void*),
+                                        void* context) {
+    c->portRegistration = callback;
+    c->portRegistrationArg = context;
+    return 0;
+}
+void fakejack_topology() {
+    std::lock_guard lock(g_mutex);
+    if (g_client && g_client->portRegistration)
+        g_client->portRegistration(1, 1, g_client->portRegistrationArg);
+}
+
 Port* jack_port_register(Client* c, const char* name, const char* type, unsigned long flags,
                          unsigned long) {
+    if (type && std::strcmp(type, "8 bit raw midi") == 0 && (flags & 0x2) &&
+        g_midiRegisterFail.load())
+        return nullptr;
     auto* p = new Port;
     p->name = c->name + ":" + name;
     p->output = (flags & 0x2) != 0;
@@ -252,11 +280,40 @@ int jack_midi_event_get(MidiEvent* event, void* buffer, std::uint32_t index) {
     return 0;
 }
 
+void jack_midi_clear_buffer(void*) { g_clearCount.fetch_add(1); }
+int jack_midi_event_write(void* buffer, Frames frame, const unsigned char* bytes,
+                          std::size_t size) {
+    if (g_midiWriteFail.load()) return 1;
+    const auto* port = static_cast<Port*>(buffer);
+    const unsigned index = g_writtenCount.load(std::memory_order_relaxed);
+    if (index == g_written.size() || size > 10) return 1;
+    auto& event = g_written[index];
+    event.port = port->name.ends_with("2") ? 1 : 0;
+    event.frame = frame;
+    event.cycle = g_cycles.load();
+    event.size = static_cast<std::uint8_t>(size);
+    std::copy_n(bytes, size, event.bytes);
+    g_writtenCount.store(index + 1, std::memory_order_release);
+    return 0;
+}
+unsigned fakejack_midi_written() { return g_writtenCount.load(std::memory_order_acquire); }
+unsigned fakejack_midi_clears() { return g_clearCount.load(); }
+void fakejack_midi_read(unsigned index, void* out) {
+    if (index < g_writtenCount.load(std::memory_order_acquire))
+        *static_cast<WrittenMidi*>(out) = g_written[index];
+}
+void fakejack_midi_fail(int write, int registration, int connection) {
+    g_midiWriteFail = write != 0;
+    g_midiRegisterFail = registration != 0;
+    g_midiConnectFail = connection != 0;
+}
+
 const char* jack_port_name(const Port* p) { return p->name.c_str(); }
 
 void jack_port_get_latency_range(Port* p, int mode, Frames* range) {
-    range[0] = (p->output && mode == 1) ? 256 : 0;
-    range[1] = (p->output && mode == 1) ? 512 : 0;
+    range[0] = (p->output && !p->midi && mode == 1) ? 256 : 0;
+    range[1] =
+        (p->output && mode == 1) ? (p->midi ? (p->name.ends_with("2") ? 768 : 128) : 512) : 0;
 }
 
 Frames jack_get_sample_rate(Client*) {
@@ -273,8 +330,10 @@ int jack_set_buffer_size(Client*, Frames n) {
 
 const char** jack_get_ports(Client*, const char*, const char* type, unsigned long flags) {
     if (type && std::strcmp(type, "8 bit raw midi") == 0) {  // physical MIDI capture ports
-        if ((flags & 0x6) != 0x6) return nullptr;
-        static const char* kMidi[] = {"system:midi_capture_1", "USB Keyboard:midi_out"};
+        static const char* kCapture[] = {"system:midi_capture_1", "USB Keyboard:midi_out"};
+        static const char* kPlayback[] = {"system:midi_playback_1", "Synth:midi_in"};
+        if ((flags & 0x4) == 0) return nullptr;
+        const auto* kMidi = (flags & 0x2) ? kCapture : kPlayback;
         auto** out = static_cast<const char**>(std::malloc(3 * sizeof(const char*)));
         out[0] = kMidi[0];
         out[1] = kMidi[1];
@@ -299,6 +358,11 @@ const char** jack_get_ports(Client*, const char*, const char* type, unsigned lon
 }
 
 int jack_connect(Client*, const char* from, const char* to) {
+    if (Port* p = findPort(from); p && p->midi && p->output) {
+        if (g_midiConnectFail.load()) return 5;
+        g_connections.fetch_add(1);
+        return 0;
+    }
     if (Port* p = findPort(to); p && !p->midi && !p->output) {
         if (g_failCapture.load() && std::strcmp(from, "system:capture_1") == 0) return 1;
         g_connections.fetch_add(1);
