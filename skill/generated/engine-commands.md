@@ -10554,7 +10554,7 @@ Result:
 
 ## `project.set@1`
 
-Change project metadata (name, title, author, notes, Console 9, timebase).
+Set project name, title, author, notes, Console 9, pan law or timebase.
 
 timebase: what items follow when the tempo changes, for items and tracks that inherit it — beats (default), time or beats_position; they keep their place now.
 
@@ -10569,6 +10569,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | `author` | string |  |  |  |  |
 | `notes` | string |  |  |  |  |
 | `console9` | boolean |  |  |  |  |
+| `pan_law` | object |  |  |  | Channels' and busses' pan law unless a strip sets its own: db is the centre's cut (0, -2.5, -3, -4.5 or -6; default 0); boost keeps the centre at 0 dB and raises the sides instead |
 | `history_budget_bytes` | integer |  | 1.0.. |  | Estimated retained history byte budget; default 1 GiB. Leases and branch boundaries may exceed it. |
 | `render` | object |  |  |  | Render settings (session-model §1.10); every member optional |
 | `timebase` | string |  |  |  |  |
@@ -10599,6 +10600,25 @@ Kind: `edit`. Exposure: `mcp-tool`.
 ```json
 {
   "name": "Demo"
+}
+
+```
+
+Result:
+
+```json
+{}
+
+```
+
+**Pan with the -3 dB law, boosting the sides** (`empty`)
+
+```json
+{
+  "pan_law": {
+    "db": -3,
+    "boost": true
+  }
 }
 
 ```
@@ -15632,6 +15652,11 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | `notes` | string |  |  |  |  |
 | `volume_db` | value | dB | -150.0..12.0 |  | Quantity strings are range-checked by the server. |
 | `pan` | value | % | -100.0..100.0 |  | Quantity strings are range-checked by the server. |
+| `pan_mode` | string |  |  |  | Channels and busses: pan (balance a stereo image, pan a mono one), dual (pan_left and pan_right place each input on its own) or width (width narrows, widens or swaps the image, pan places it) |
+| `width` | value | % | -100.0..100.0 |  | Width mode: 100 as recorded, 0 mono, -100 sides swapped Quantity strings are range-checked by the server. |
+| `pan_left` | value | % | -100.0..100.0 |  | Dual mode: where the left input goes (default -100) Quantity strings are range-checked by the server. |
+| `pan_right` | value | % | -100.0..100.0 |  | Dual mode: where the right input goes (default 100) Quantity strings are range-checked by the server. |
+| `pan_law` | value |  |  |  |  |
 | `mute` | boolean |  |  |  |  |
 | `phase_invert` | boolean |  |  |  | Flip the polarity of the main pair (after the FX chain, before the fader) |
 | `mono` | boolean |  |  |  | Sum the main pair to mono (after the FX chain, before the fader and pan): a mono check on the master |
@@ -15732,6 +15757,44 @@ Result:
   "record_midi": "*",
   "midi_channel": 1,
   "monitor": "auto"
+}
+
+```
+
+Result:
+
+```json
+{}
+
+```
+
+**Narrow a stereo strip to half width, a little right** (`song`)
+
+```json
+{
+  "track": "tr_1",
+  "pan_mode": "width",
+  "width": 50,
+  "pan": 20
+}
+
+```
+
+Result:
+
+```json
+{}
+
+```
+
+**Give a strip the -3 dB pan law** (`song`)
+
+```json
+{
+  "track": "tr_1",
+  "pan_law": {
+    "db": -3
+  }
 }
 
 ```

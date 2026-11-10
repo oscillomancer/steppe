@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <functional>
+#include <numbers>
 #include <random>
 #include "plan.h"
 
@@ -107,8 +108,8 @@ TEST_CASE("Console 9: unity staging, level matched off, correlated summing and s
     auto pool = emptyPool();
     auto on = plan(monitored(true), pool), off = plan(monitored(false), pool);
     const auto a = run(on, .001f, 128), b = run(off, .001f, 127);
-    CHECK(20 * std::log10(static_cast<double>(a[100]) / .001) ==
-          doctest::Approx(-6.518658).epsilon(.00001));
+    // Unity staging under the default 0 dB law (ADR-0066): a centred hop is unity.
+    CHECK(std::fabs(20 * std::log10(static_cast<double>(a[100]) / .001)) < 1e-4);
     CHECK(std::abs(a[100] - b[100]) < 1e-9f);
     locate(on, 0);
     CHECK(run(on, .001f, 17) == a);
@@ -134,6 +135,187 @@ TEST_CASE("Console 9: unity staging, level matched off, correlated summing and s
         20 * std::log10(static_cast<double>(peak)));
     locate(quiet, 0);
     CHECK(run(quiet, 0, 127) == silence);
+}
+
+TEST_CASE("pan laws: centre cuts, balance edges, boost and the curve family (ADR-0066)") {
+    const auto db = [](double g) { return 20 * std::log10(g); };
+    for (const double law : model::kPanLawsDb) {
+        const auto [l, r] = panSides(0, {law, false});
+        CHECK(l == r);
+        CHECK(db(l) == doctest::Approx(law == -3   ? 10 * std::log10(.5)
+                                       : law == -6 ? 20 * std::log10(.5)
+                                                   : law)
+                           .epsilon(1e-9));
+        // A hard pan: the near side at unity, the far side exactly silent.
+        const auto [hl, hr] = panSides(-1, {law, false});
+        CHECK(hl == doctest::Approx(1.0).epsilon(1e-12));
+        CHECK(hr == 0.0);
+        // Boost: the centre at 0 dB, the near side raised by the law.
+        const auto [bl, br] = panSides(0, {law, true});
+        CHECK(bl == doctest::Approx(1.0).epsilon(1e-12));
+        CHECK(br == doctest::Approx(1.0).epsilon(1e-12));
+        const auto [bh, bf] = panSides(1, {law, true});
+        CHECK(bf == doctest::Approx(1.0 / l).epsilon(1e-12));
+        CHECK(bh == 0.0);
+        // Monotonic: moving right never lowers the right side.
+        double last = -1;
+        for (int i = -100; i <= 100; ++i) {
+            const double right = panSides(i / 100.0, {law, false}).second;
+            CHECK(right >= last);
+            last = right;
+        }
+    }
+    // 0 dB is the masters' balance; -3 dB sin/cos; -6 dB sums to unity amplitude.
+    const auto [b0l, b0r] = panSides(.5, {});
+    CHECK(b0l == doctest::Approx(std::cos(.5 * std::numbers::pi / 2)).epsilon(1e-12));
+    CHECK(b0r == 1.0);
+    const auto [cl, cr] = panSides(.3, {-3, false});
+    CHECK(cl * cl + cr * cr == doctest::Approx(1.0).epsilon(1e-12));
+    const auto [ll, lr] = panSides(.3, {-6, false});
+    CHECK(ll + lr == doctest::Approx(1.0).epsilon(1e-12));
+}
+
+TEST_CASE("pan modes: pan, dual and width matrices (ADR-0066)") {
+    using model::PanMode;
+    const model::PanLaw zero{}, cut{-3, false};
+    // Pan: a balance on the 0 dB law; centred it is the identity.
+    CHECK(panMatrix({PanMode::Pan, 0, 100, -100, 100, zero}) == PanMatrix{});
+    // Dual at its defaults (hard left / hard right) is the identity under a cut law.
+    CHECK(panMatrix({PanMode::Dual, 0, 100, -100, 100, cut}) == PanMatrix{});
+    // Dual: both inputs centred under -6 dB is the mono average on both sides.
+    const auto mono = panMatrix({PanMode::Dual, 0, 100, 0, 0, {-6, false}});
+    CHECK(mono.ll == doctest::Approx(.5));
+    CHECK(mono.rl == doctest::Approx(.5));
+    CHECK(mono.lr == doctest::Approx(.5));
+    CHECK(mono.rr == doctest::Approx(.5));
+    // Dual: swapped inputs.
+    const auto swap = panMatrix({PanMode::Dual, 0, 100, 100, -100, cut});
+    CHECK(swap.ll == 0.0);
+    CHECK(swap.rl == doctest::Approx(1.0));
+    CHECK(swap.lr == doctest::Approx(1.0));
+    CHECK(swap.rr == 0.0);
+    // Width: 100% centred is the identity, 0% the average, -100% swapped.
+    CHECK(panMatrix({PanMode::Width, 0, 100, -100, 100, zero}) == PanMatrix{});
+    const auto narrow = panMatrix({PanMode::Width, 0, 0, -100, 100, zero});
+    CHECK(narrow.ll == .5);
+    CHECK(narrow.rl == .5);
+    CHECK(narrow.lr == .5);
+    CHECK(narrow.rr == .5);
+    const auto inverted = panMatrix({PanMode::Width, 0, -100, -100, 100, zero});
+    CHECK(inverted.ll == 0.0);
+    CHECK(inverted.rl == 1.0);
+    CHECK(inverted.lr == 1.0);
+    CHECK(inverted.rr == 0.0);
+    // Width: a hard pan narrows the image to mono at that speaker; nothing is lost.
+    const auto hard = panMatrix({PanMode::Width, 100, 100, -100, 100, zero});
+    CHECK(hard.ll == 0.0);
+    CHECK(hard.rl == 0.0);
+    CHECK(hard.lr == .5);
+    CHECK(hard.rr == .5);
+}
+
+TEST_CASE("Console 9: hops are unity; only each strip's own pan law cuts the centre") {
+    // ADR-0066: channel -> buss -> buss -> master. Under the 0 dB law the
+    // centred source arrives at its own level, through any number of busses;
+    // under -3 dB each of the three strips' pans cuts the centre 3 dB.
+    auto pool = emptyPool();
+    for (const bool console9 : {false, true})
+        for (const double law : {0.0, -3.0}) {
+            model::EditTxn t(model::Session::create({.console9 = console9, .seed = 9}), 1);
+            auto project = t.project();
+            project.panLaw = {law, false};
+            t.setProject(project);
+            const Id outer = strip(t, model::StripType::Buss);
+            const Id inner = strip(t, model::StripType::Buss, outer);
+            const Id ch = strip(t, model::StripType::Channel, inner);
+            model::Route input;
+            input.from.hwChannels = std::vector<int>{1};
+            input.to.track = ch;
+            const Id inputId = t.create(input);
+            t.modify<model::Track>(ch, [&](auto& tr) {
+                tr.record.monitor = model::Monitor::On;
+                tr.record.armed = true;
+                tr.record.input = inputId;
+            });
+            auto s = t.commit();
+            REQUIRE(s);
+            auto p = plan(*s, pool);
+            const auto out = run(p, .001f, 128);
+            const double expected = law == 0 ? 0.0 : 3 * 10 * std::log10(.5);
+            CHECK(20 * std::log10(static_cast<double>(out[100]) / .001) ==
+                  doctest::Approx(expected).epsilon(1e-4));
+            if (!console9 && law == 0) CHECK(out[100] == .001f);  // bit-transparent
+        }
+}
+
+TEST_CASE("pan modes reach the master, follow into sends and move without a compile") {
+    // A monitored mono input (L = R) through a linear channel under the 0 dB law.
+    auto pool = emptyPool();
+    const auto base = monitored(false);
+    const Id ch{model::Kind::Track, 1};
+    const auto render = [&](const model::Session& s) {
+        auto p = plan(s, pool);
+        return std::pair{run(p, .25f, 128), p.nodes[p.mainMaster].post.r[100]};
+    };
+    const auto edit = [&](auto change) {
+        model::EditTxn t(base, 2);
+        t.modify<model::Track>(ch, change);
+        auto s = t.commit();
+        REQUIRE(s);
+        return *s;
+    };
+    // Dual with both inputs centred: the two copies sum, as the 0 dB law says.
+    auto [dualLeft, dualRight] = render(edit([](auto& x) {
+        x.panMode = model::PanMode::Dual;
+        x.panLeft = x.panRight = 0;
+    }));
+    CHECK(dualLeft[100] == .5f);
+    CHECK(dualRight == .5f);
+    // Width hard right: the mono image at the right speaker, nothing at the left.
+    auto [wideLeft, wideRight] = render(edit([](auto& x) {
+        x.panMode = model::PanMode::Width;
+        x.pan = 100;
+    }));
+    CHECK(wideLeft[100] == 0.0f);
+    CHECK(wideRight == .25f);
+    // A following send to a buss takes the strip's mode: dual swapped to one side.
+    {
+        model::EditTxn t(base, 2);
+        t.modify<model::Track>(ch, [](auto& x) {
+            x.panMode = model::PanMode::Dual;
+            x.panLeft = x.panRight = 100;
+            x.parentSend.enabled = false;
+        });
+        const Id bus = strip(t, model::StripType::Buss);
+        model::Route send;
+        send.from.track = ch;
+        send.to.track = bus;
+        send.tap = model::Tap::PreFader;
+        t.create(send);
+        auto s = t.commit();
+        REQUIRE(s);
+        auto [left, right] = render(*s);
+        CHECK(left[100] == 0.0f);
+        CHECK(right == .5f);
+    }
+    // Width and dual positions are mix values: the running plan takes them.
+    model::EditTxn wide(base, 2);
+    wide.modify<model::Track>(ch, [](auto& x) { x.panMode = model::PanMode::Width; });
+    auto narrow = wide.commit();
+    REQUIRE(narrow);
+    auto p = plan(*narrow, pool);
+    run(p, .25f, 128, 256);
+    model::EditTxn move(*narrow, 3);
+    move.modify<model::Track>(ch, [](auto& x) {
+        x.width = 0;
+        x.pan = -100;
+    });
+    auto moved = move.commit();
+    REQUIRE(moved);
+    publishMix(p, *moved, {});
+    const auto after = run(p, .25f, 128, 2048);
+    CHECK(after.back() == .25f);  // hard left, ramped there
+    CHECK(p.nodes[p.mainMaster].post.r[127] == 0.0f);
 }
 
 TEST_CASE("Console 9: send sharing, tap encoders, control ramps and mode swaps") {
@@ -225,7 +407,7 @@ TEST_CASE("Console 9: envelope activation and reversed mode fades preserve contr
     carryMix(ramp, controlled, -1);
     const auto samples = run(controlled, .25f, 64, 64);
     CHECK(static_cast<double>(samples[0]) ==
-          doctest::Approx(.25 * std::pow(10.0, -12.0 / 20) * .472135955).epsilon(1e-6));
+          doctest::Approx(.25 * std::pow(10.0, -12.0 / 20)).epsilon(1e-6));
     CHECK(source(controlled).fader.gain.left == 0);
 
     model::EditTxn mode(base, 4);

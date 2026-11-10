@@ -305,7 +305,19 @@ struct Edge {
     model::Tap tap = model::Tap::PostFader;
     double gainL = 1.0, gainR = 1.0;
     double volumeDb = 0.0, pan = 0.0;
-    double staticGain = 1, staticPan = .5;
+    double staticGain = 1;
+    // The source strip's pan (ADR-0066): a following send uses its mode,
+    // positions and law, a positioned one pan mode with that law.
+    PanSettings source;
+    PanCache panCache;
+    PanSettings panSettings(double at) const SUPPLE_RT {
+        if (followPan) {
+            PanSettings s = source;
+            s.pan = at;
+            return s;
+        }
+        return {model::PanMode::Pan, at, 100, -100, 100, source.law};
+    }
     bool mono = false, invert = false;
     // The route's channel map (session-model §1.8) as a matrix: destination
     // channel × source channel. Off: identity.
@@ -652,7 +664,9 @@ struct Node {
     bool hasItems() const SUPPLE_RT { return !clips.empty() || !takeChains.empty(); }
     int noteTarget = -1;  // chain index receiving note events
     double volumeDb = 0.0, pan = 0.0;
-    double staticGain = 1, staticPan = .5;
+    double staticGain = 1;
+    PanSettings panSettings;  // its pan comes from `pan` or its envelope (ADR-0066)
+    PanCache panCache;
     model::StripType type = model::StripType::Channel;
     bool mute = false, master = false, decodeInput = false;
     bool phaseInvert = false, mono = false;
@@ -730,6 +744,7 @@ struct OutputTap {
 struct MixSlots {
     struct Value {
         std::atomic<double> volumeDb{0}, pan{0};  // a route's pan resolved against its source
+        std::atomic<double> width{100}, panLeft{-100}, panRight{100};  // strips (ADR-0066)
         std::atomic<bool> holdVolume{false}, holdPan{false};
     };
     std::unique_ptr<Value[]> strips;  // per node

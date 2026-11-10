@@ -426,6 +426,75 @@ TEST_CASE("real-time output equals the offline render (any block size)" *
         }
 }
 
+TEST_CASE("pan modes and laws: real-time output equals the offline render (ADR-0066)" *
+          doctest::description("rt")) {
+    // Four strips: dual, width under an automated pan, a boosted -4.5 dB
+    // project law, and a strip of its own -6 dB law with a following send into
+    // a buss, all through Console 9.
+    model::Session s = synthSession(-12.0, nullptr, 4);
+    model::EditTxn t(s, 2);
+    auto project = t.project();
+    project.console9 = true;
+    project.seed = 777;
+    project.panLaw = {-4.5, true};
+    t.setProject(project);
+    const Id dual{model::Kind::Track, 1}, wide{model::Kind::Track, 2},
+        boosted{model::Kind::Track, 3}, own{model::Kind::Track, 4};
+    t.modify<model::Track>(dual, [](auto& x) {
+        x.panMode = model::PanMode::Dual;
+        x.panLeft = -20;
+        x.panRight = 70;
+    });
+    t.modify<model::Track>(wide, [](auto& x) {
+        x.panMode = model::PanMode::Width;
+        x.width = 35;
+    });
+    model::Envelope pan;
+    pan.target = {wide, "pan"};
+    pan.timebase = model::Timebase::Time;
+    pan.points = {{0, -80}, {1.5, 60}};
+    t.create(pan);
+    t.modify<model::Track>(boosted, [](auto& x) { x.pan = 45; });
+    t.modify<model::Track>(own, [](auto& x) {
+        x.pan = -30;
+        x.panLaw = model::PanLaw{-6, false};
+    });
+    model::Track bus;
+    bus.type = model::StripType::Buss;
+    bus.parent = kMaster;
+    const Id busId = t.create(bus);
+    t.modify<model::Track>(kMaster, [&](auto& m) { m.children.push_back(busId); });
+    model::Route send;
+    send.from.track = own;
+    send.to.track = busId;
+    send.volumeDb = -3;
+    t.create(send);
+    s = t.commit().value();
+    auto pool = makePool();
+    auto offline = renderOffline(s, pool, {.startSeconds = 0, .endSeconds = 2.0}).value();
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 2}}) {
+        INFO("anticipative " << options.anticipative);
+        auto rtPool = makePool();
+        MediaCache media;
+        DummyBackend backend(
+            {.mode = DummyBackend::Mode::Manual, .captureFrames = 48000 * 2 + 4096});
+        Engine engine(rtPool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 96}));
+        REQUIRE(engine.load(s));
+        engine.play();
+        if (options.anticipative)
+            runAhead(engine, backend, (48000 * 2 + 4096) / 96, 96);
+        else
+            backend.run((48000 * 2 + 4096) / 96);
+        engine.stop();
+        CHECK(engine.processErrors() == 0);
+        const auto& cap = backend.capture();
+        const std::uint32_t L = engine.outputLatency();
+        CHECK(maxDiff(cap.channels[0], L, offline.audio.channels[0], 96000) == 0.0);
+        CHECK(maxDiff(cap.channels[1], L, offline.audio.channels[1], 96000) == 0.0);
+    }
+}
+
 TEST_CASE("several masters play to their own device outputs, in step (ADR-0056)" *
           doctest::description("rt")) {
     // Two synths: one under the main master (outputs 1/2), one under a cue
@@ -686,7 +755,7 @@ TEST_CASE("a stretched take: real-time output equals the offline render" *
     double offlinePeak = 0;
     for (std::size_t i = 0; i < 96000; ++i)
         offlinePeak = std::max(offlinePeak, std::fabs(double(offline->audio.channels[0][i])));
-    CHECK(offlinePeak > 0.3 * (0.472135955 / 0.70710678118654752));  // a stretched, audible take
+    CHECK(offlinePeak > 0.3);  // a stretched, audible take
 
     auto rtPool = makePool();
     MediaCache media;
@@ -975,9 +1044,7 @@ TEST_CASE("a plugin that refuses to start is passed through, not processed") {
         double peak = 0;
         for (std::size_t i = 0; i < 2560; ++i)
             peak = std::max(peak, std::fabs(double(backend.capture().channels[0][i])));
-        CHECK(peak >
-              0.1 * (0.472135955 /
-                     0.70710678118654752));  // the sine passes through the stage that did not start
+        CHECK(peak > 0.1);  // the sine passes through the stage that did not start
         engine.stop();
     }
 }
@@ -1118,7 +1185,7 @@ TEST_CASE(
             m = std::max(m, std::fabs(double(cap.channels[0][i])));
         return m;
     };
-    CHECK(peakOf(2304, 2560) > 0.1 * (0.472135955 / 0.70710678118654752));  // the first note sounds
+    CHECK(peakOf(2304, 2560) > 0.1);  // the first note sounds
     engine.pause();
     backend.run(1);  // the rendered audio is dropped: silent at once
     CHECK(peakOf(2560, 2816) == 0.0);
@@ -1306,15 +1373,14 @@ TEST_CASE("isolation: a plugin crashing in its bridge silences its node, the ses
             m = std::max(m, std::fabs(double(cap.channels[static_cast<std::size_t>(ch)][i])));
         return m;
     };
-    CHECK(peak(0, 5000, 10240) > 0.1 * (0.472135955 / 0.70710678118654752));
-    CHECK(peak(1, 5000, 10240) > 0.1 * (0.472135955 / 0.70710678118654752));
+    CHECK(peak(0, 5000, 10240) > 0.1);
+    CHECK(peak(1, 5000, 10240) > 0.1);
     REQUIRE(crash->setParam(1, 1.0));     // crash in its next process()
     runAhead(engine, backend, 200, 256);  // 51200 more frames
     CHECK(crash->failed());
     CHECK(pool.failed().size() == 1);
-    CHECK(peak(0, 50000, 61440) >
-          0.1 * (0.472135955 / 0.70710678118654752));  // the steady track plays on
-    CHECK(peak(1, 50000, 61440) == 0.0);               // the crashed node is silent
+    CHECK(peak(0, 50000, 61440) > 0.1);   // the steady track plays on
+    CHECK(peak(1, 50000, 61440) == 0.0);  // the crashed node is silent
     CHECK(engine.processErrors() == 0);
     engine.stop();
     CHECK(engine.lastStopOnAudioThread());
@@ -1704,7 +1770,7 @@ TEST_CASE("monitoring in the callback: the input is heard through the track, sto
     REQUIRE(engine.load(monitoring(synthSession(-6.0206))));
     backend.run(4);  // stopped: input only, through the fader (-6 dB) and centre pan (-3 dB)
     const auto& cap = backend.capture();
-    const double g = 0.5 * 0.472135955;
+    const double g = 0.5;
     CHECK(double(cap.channels[0][600]) == doctest::Approx(0.5 * g).epsilon(1e-4));
     CHECK(double(cap.channels[1][600]) == doctest::Approx(-0.25 * g).epsilon(1e-4));
     CHECK(engine.transport().sample == 0);  // stopped: time stands still
@@ -1725,7 +1791,7 @@ TEST_CASE("monitoring needs the arm; auto hears the input stopped, the timeline 
     Engine engine(pool, media, kInCallback);
     REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256, .inputs = 2}));
     const auto& cap = backend.capture();
-    const double g = 0.5 * 0.472135955;
+    const double g = 0.5;
     // Monitor on, not armed: nothing is heard.
     REQUIRE(engine.load(monitoring(synthSession(-6.0206), model::Monitor::On, false)));
     backend.run(4);
@@ -2042,7 +2108,7 @@ TEST_CASE("a note held across the loop end is released at the wrap" * doctest::d
             before = std::max(before, std::fabs(double(L[i])));
         for (std::size_t i = 49000; i < 90000; ++i)
             after = std::max(after, std::fabs(double(L[i])));
-        CHECK(before > 0.1 * (0.472135955 / 0.70710678118654752));
+        CHECK(before > 0.1);
         CHECK(after == 0.0);
     }
 }
@@ -2234,7 +2300,7 @@ TEST_CASE("MIDI monitoring: a keyboard plays the instrument live, sample-accurat
             };
             CHECK(peakIn(0, 1000) == 0.0);
             CHECK(peakIn(1000, 1010) > 0.0);  // starts at its frame
-            CHECK(peakIn(2000, 19000) > 0.1 * (0.472135955 / 0.70710678118654752));
+            CHECK(peakIn(2000, 19000) > 0.1);
             CHECK(peakIn(20000, 30720) == 0.0);  // off at 20000; channel 2 and "Pads" never sound
         }
 }
@@ -3670,7 +3736,7 @@ TEST_CASE("live buffers cover a device block larger than the render block" *
     engine.stop();
     CHECK(engine.processErrors() == 0);
     for (float sample : backend.capture().channels[0])
-        CHECK(sample == doctest::Approx(0.5 * 0.472135955).epsilon(1e-5));
+        CHECK(sample == doctest::Approx(0.5).epsilon(1e-5));
 }
 
 TEST_CASE("seeking restarts the console seeds in both executors" * doctest::description("rt")) {
@@ -3783,7 +3849,7 @@ TEST_CASE("turning MIDI monitoring off while a key is held releases the note" *
             before = std::max(before, std::fabs(double(L[i])));
         for (std::size_t i = 30000; i < 40960; ++i)
             after = std::max(after, std::fabs(double(L[i])));
-        CHECK(before > 0.1 * (0.472135955 / 0.70710678118654752));
+        CHECK(before > 0.1);
         CHECK(after == 0.0);
     }
 }
@@ -3821,10 +3887,8 @@ TEST_CASE("a monitored MIDI route change releases held notes" * doctest::descrip
                     p = std::max(p, std::fabs(double(audio[i])));
                 return p;
             };
-            CHECK(peak(2000, 10000) > 0.1 * (0.472135955 / 0.70710678118654752));
-            if (change == 0)
-                CHECK(peak(12000, 17000) >
-                      0.1 * (0.472135955 / 0.70710678118654752));  // unchanged route carries
+            CHECK(peak(2000, 10000) > 0.1);
+            if (change == 0) CHECK(peak(12000, 17000) > 0.1);  // unchanged route carries
             CHECK(peak(21000, 30000) == 0.0);  // the old device's off is filtered after edits
         }
 }
@@ -4555,10 +4619,9 @@ TEST_CASE("meters report what has been heard, not what has been rendered" *
     CHECK(levelOf(after, quietTrack).rms == 0.0);
     // A strip's meter is its signal after the fader and after the pan law, and
     // before the Console 9 encode — so a -6 dBFS item on a -6 dB fader reads
-    // its own peak times the fader law times the Channel pan law at centre
-    // (libs/console9's own gains, not a guess).
-    double panLeft = 0.0, panRight = 0.0;
-    console9::panGains(console9::panAngle(0.5), panLeft, panRight);
+    // its own peak times the fader law times the pan law at centre: unity
+    // under the default 0 dB law (ADR-0066).
+    const double panLeft = 1.0;
     double sourcePeak = 0.0;
     for (std::size_t i = 0; i < 9600 && i < tone.channels[0].size(); ++i)
         sourcePeak = std::max(sourcePeak, std::fabs(static_cast<double>(tone.channels[0][i])));
@@ -4839,10 +4902,9 @@ TEST_CASE("live bridged effects pass through without callback lifecycle or proce
                 return w.find(fxId.str()) != std::string::npos &&
                        w.find("in_process") != std::string::npos;
             }));
-            CHECK(double(backend.capture().channels[0][300]) ==
-                  doctest::Approx(.5 * .472135955).epsilon(1e-4));
+            CHECK(double(backend.capture().channels[0][300]) == doctest::Approx(.5).epsilon(1e-4));
             CHECK(double(backend.capture().channels[1][300]) ==
-                  doctest::Approx(-.25 * .472135955).epsilon(1e-4));
+                  doctest::Approx(-.25).epsilon(1e-4));
             CHECK(std::all_of(backend.capture().channels[0].begin(),
                               backend.capture().channels[0].begin() + 64,
                               [](float value) { return value == 0; }));
@@ -5798,7 +5860,7 @@ TEST_CASE("a monitored input is heard through its input FX" * doctest::descripti
         REQUIRE(engine.awaitPlan());
         backend.run(20);  // stopped: the input, the input FX, the fader and centre pan
         const auto& cap = backend.capture();
-        const double g = 0.5 * 0.472135955 * std::pow(10.0, -6.0 / 20.0);
+        const double g = 0.5 * std::pow(10.0, -6.0 / 20.0);
         CHECK(double(cap.channels[0][4000]) == doctest::Approx(0.5 * g).epsilon(1e-4));
         CHECK(double(cap.channels[1][4000]) == doctest::Approx(-0.25 * g).epsilon(1e-4));
         CHECK(engine.processErrors() == 0);

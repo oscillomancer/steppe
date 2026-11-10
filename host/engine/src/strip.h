@@ -4,6 +4,7 @@
 #pragma once
 #include <algorithm>
 #include <cmath>
+#include "pan.h"
 #include "supple/console9/console9.h"
 
 namespace supple::engine::detail {
@@ -29,22 +30,35 @@ struct ControlRamp {
         return value;
     }
 };
+// The fader, the pan matrix's four coefficients (ADR-0066) and the mute gate.
 struct FaderControl {
-    ControlRamp gain, pan, gate;
+    ControlRamp gain, gate;
+    ControlRamp pan[4];  // ll, rl, lr, rr
     bool valid = false;
-    void set(double g, double p, bool muted, bool automated, std::uint32_t frames) SUPPLE_RT {
+    void set(double g, const PanMatrix& m, bool muted, bool automated,
+             std::uint32_t frames) SUPPLE_RT {
+        const double c[4] = {m.ll, m.rl, m.lr, m.rr};
         if (!valid) {
             gain.value = gain.target = g;
-            pan.value = pan.target = p;
+            for (int i = 0; i < 4; ++i) pan[i].value = pan[i].target = c[i];
             gate.value = gate.target = muted ? 0 : 1;
             valid = true;
         }
         gain.set(g, automated ? 0 : frames);
-        pan.set(p, automated ? 0 : frames);
+        for (int i = 0; i < 4; ++i) pan[i].set(c[i], automated ? 0 : frames);
         gate.set(muted ? 0 : 1, frames);
+    }
+    PanMatrix nextPan() SUPPLE_RT {
+        return {pan[0].next(), pan[1].next(), pan[2].next(), pan[3].next()};
     }
     void reset() SUPPLE_RT { *this = {}; }
 };
+// A stereo sample through a pan matrix.
+inline void applyPan(const PanMatrix& m, float l, float r, double& ol, double& or_) SUPPLE_RT {
+    const double a = std::isfinite(l) ? double(l) : 0, b = std::isfinite(r) ? double(r) : 0;
+    ol = m.ll * a + m.rl * b;
+    or_ = m.lr * a + m.rr * b;
+}
 // The strip's polarity and mono switches (ADR-0022). A switch ramps over the
 // smoothing time like mute (polarity through silence), so it never clicks.
 struct UtilityControl {
@@ -80,11 +94,14 @@ struct ConsoleStage {
     console9::Seeds seeds;
     bool linear = false;
     std::uint32_t left = 0, span = 1;
-    double lastGain = 1, lastPan = .5, fadeFrom = 0;
+    double lastGain = 1, fadeFrom = 0;
+    // Unity staging (ADR-0066): the strip pans before the encode.
     void init(console9::Seeds s, bool off) {
         seeds = s;
         linear = off;
-        current.set(1, .5);
+        current.setStaging(console9::Staging::Unity);
+        previous.setStaging(console9::Staging::Unity);
+        current.set(1);
         current.setLinear(off);
         current.reset(s);
     }
@@ -96,7 +113,6 @@ struct ConsoleStage {
     void carry(const ConsoleStage& old, std::uint32_t frames) SUPPLE_RT {
         current = old.current;
         lastGain = old.lastGain;
-        lastPan = old.lastPan;
         if (linear != old.linear) {
             previous = old.current;
             fadeFrom = 0;
@@ -114,25 +130,23 @@ struct ConsoleStage {
         }
         current.setLinear(linear);
     }
-    void sample(float l, float r, float& ol, float& or_, double gain = 1,
-                double pan = .5) SUPPLE_RT {
+    void sample(float l, float r, float& ol, float& or_, double gain = 1) SUPPLE_RT {
         const float* in[] = {&l, &r};
         float* out[] = {&ol, &or_};
         // Sample-accurate controls, including the pre-encode mute ramp.
-        const bool changed = gain != lastGain || pan != lastPan;
-        if (changed) current.set(gain, pan);
+        const bool changed = gain != lastGain;
+        if (changed) current.set(gain);
         current.process(in, out, 1);
         if (left) {
             float pl, pr;
             float* po[] = {&pl, &pr};
-            if (changed) previous.set(gain, pan);
+            if (changed) previous.set(gain);
             previous.process(in, po, 1);
             const float t = static_cast<float>(fadeFrom + (1 - fadeFrom) * (span - --left) / span);
             ol = pl + (ol - pl) * t;
             or_ = pr + (or_ - pr) * t;
         }
         lastGain = gain;
-        lastPan = pan;
     }
 };
 }  // namespace supple::engine::detail

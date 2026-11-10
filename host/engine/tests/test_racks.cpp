@@ -128,7 +128,7 @@ TEST_CASE("racks: an Out module plays into the channel whose input it is") {
     REQUIRE(l.size() == 48000);
     // The beat phase ramps 0..1 every half second at 120 BPM; the channel
     // reaches the master at the neutral strip's gain (ADR-0019).
-    const double g = 0.472135955;
+    const double g = 1.0;
     CHECK(double(l[6000]) / g == doctest::Approx(0.25).epsilon(2e-3));
     CHECK(double(l[23990]) / g == doctest::Approx(1.0).epsilon(2e-3));
     CHECK(double(l[24010]) / g == doctest::Approx(0.0).epsilon(0.01));
@@ -187,9 +187,9 @@ TEST_CASE("racks: Notes plays the home track's MIDI into the patch") {
     t.create(item);
     const auto s = commit(t);
     const auto l = renderLeft(s, 1.5);
-    CHECK(l[12000] == 0.0f);                                                // before beat 1 (0.5 s)
-    CHECK(double(l[30000]) == doctest::Approx(0.472135955).epsilon(1e-3));  // the note
-    CHECK(l[60000] == 0.0f);                                                // after beat 2 (1 s)
+    CHECK(l[12000] == 0.0f);                                        // before beat 1 (0.5 s)
+    CHECK(double(l[30000]) == doctest::Approx(1.0).epsilon(1e-3));  // the note
+    CHECK(l[60000] == 0.0f);                                        // after beat 2 (1 s)
 }
 
 TEST_CASE("racks: an envelope moves a module's knob") {
@@ -378,8 +378,7 @@ TEST_CASE("racks: a plugin module runs its effect in the patch") {
     listen(t, out, channel);
     const auto s = commit(t);
     const auto l = renderLeft(s, 0.5);
-    CHECK(double(l[12000]) ==
-          doctest::Approx(0.472135955 * std::pow(10.0, -6.0 / 20.0)).epsilon(1e-3));
+    CHECK(double(l[12000]) == doctest::Approx(std::pow(10.0, -6.0 / 20.0)).epsilon(1e-3));
     CHECK(l == renderLeft(s, 0.5, 37));
 }
 
@@ -427,7 +426,7 @@ TEST_CASE("racks: Notes' pitch and gate play a plugin module's instrument") {
         if (i >= 50000) after = std::max(after, x);
     }
     CHECK(before == 0.0);
-    CHECK(during == doctest::Approx(0.25 * 0.472135955).epsilon(0.02));
+    CHECK(during == doctest::Approx(0.25).epsilon(0.02));
     CHECK(crossings == doctest::Approx(440 * 0.3).epsilon(0.02));  // 0.3 s of A4
     CHECK(after == 0.0);
     CHECK(l == renderLeft(s, 1.5, 37));
@@ -464,7 +463,7 @@ TEST_CASE("racks: a cable modulates a plug-in's parameter, and stops when it goe
     spec.max = 12;
     const double modDb = params::fromClap(spec, params::toClap(spec, -6) + 0.1);
     REQUIRE(modDb > -6);
-    const double base = 0.472135955;  // the channel's fader law at unity
+    const double base = 1.0;  // the channel's fader law at unity
     const auto modulated = build(true), plain = build(false);
     const auto l = renderLeft(modulated, 0.5);
     CHECK(double(l[12000]) == doctest::Approx(base * std::pow(10.0, modDb / 20.0)).epsilon(1e-3));
@@ -1341,7 +1340,7 @@ TEST_CASE("racks: In sends preserve tap level and pan without Console 9 trim" *
         envelope.target = {send, "volume"};
         envelope.timebase = model::Timebase::Time;
         envelope.points = {{0, -12}, {.01, -3}};
-        const auto volumeEnv = t.create(envelope);
+        t.create(envelope);
         const auto state = commit(t);
         auto pool = makePool();
         MediaCache media;
@@ -1359,8 +1358,8 @@ TEST_CASE("racks: In sends preserve tap level and pan without Console 9 trim" *
         REQUIRE(sourceNode);
         REQUIRE(rackNode);
         REQUIRE(rackNode->rackIns.size() == 1);
-        double panLeft = 0, panRight = 0;
-        console9::panGains(console9::panAngle(console9::nativePan(-37)), panLeft, panRight);
+        // The source strip's law: 0 dB by default (ADR-0066).
+        const auto [panLeft, panRight] = supple::engine::detail::panSides(-.37, {});
         REQUIRE(sourceNode->preFader.l[64] != 0);
         REQUIRE(sourceNode->preFader.r[64] != 0);
         CHECK(sourceNode->preFader.l[64] != sourceNode->preFader.r[64]);
@@ -1374,28 +1373,7 @@ TEST_CASE("racks: In sends preserve tap level and pan without Console 9 trim" *
                   static_cast<float>(double(sourceNode->preFader.r[i]) * panRight * gainAt(i)));
         }
         CHECK(rackNode->rackIns[0].l[127] > rackNode->rackIns[0].l[0]);
-        const float expected = rackNode->rackIns[0].l[64];
-        constexpr double trim = .763932022500211;
-        console9::Channel legacy;
-        legacy.setLinear(true);
-        legacy.set(gainAt(64), console9::nativePan(-37));
-        float legacyLeft = 0, legacyRight = 0;
-        const float* inputs[]{&sourceNode->preFader.l[64], &sourceNode->preFader.r[64]};
-        float* outputs[]{&legacyLeft, &legacyRight};
-        legacy.process(inputs, outputs, 1);
-        const double lift = -20 * std::log10(trim);
-        CHECK(20 * std::log10(double(expected) / double(legacyLeft)) ==
-              doctest::Approx(lift).epsilon(1e-6));
-        model::EditTxn oldLevel(state, 2);
-        oldLevel.modify<model::Route>(send,
-                                      [](auto& value) { value.volumeDb = 20 * std::log10(trim); });
-        oldLevel.modify<model::Envelope>(volumeEnv, [](auto& value) {
-            for (auto& point : value.points) point.value += 20 * std::log10(trim);
-        });
-        const auto old = renderLeft(commit(oldLevel), .1, 37);
         const auto offline = renderLeft(state, .1, 37);
-        CHECK(20 * std::log10(double(offline[1200]) / double(old[1200])) ==
-              doctest::Approx(lift).epsilon(1e-5));
         for (bool anticipative : {false, true})
             for (int workers : {0, 2}) {
                 INFO("anticipative " << anticipative << ", workers " << workers);
@@ -1483,8 +1461,7 @@ TEST_CASE("racks: In sends from a buss carry its signal without Console 9 encodi
             REQUIRE(rackNode->rackIns.size() == 1);
             REQUIRE(busNode->preFader.l[64] != 0);
             CHECK(busNode->preFader.l[64] != busNode->preFader.r[64]);
-            double panLeft = 0, panRight = 0;
-            console9::panGains(console9::panAngle(console9::nativePan(-37)), panLeft, panRight);
+            const auto [panLeft, panRight] = supple::engine::detail::panSides(-.37, {});
             const double gain = console9::faderGain(-6 + (post ? -4.5 : 0));
             for (std::uint32_t i = 0; i < 128; ++i) {
                 CHECK(rackNode->rackIns[0].l[i] ==

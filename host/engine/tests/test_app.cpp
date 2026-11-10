@@ -135,7 +135,7 @@ TEST_CASE("an LLM builds a song over the bus: batch, render, undo, save and reop
     CHECK((*mix)["seconds"].asDouble() == doctest::Approx(4.0));  // two bars at 120 BPM
     // velocity 96 sine (0.25 * 96/127), centred (-3 dB), gain -6 dB.
     CHECK((*mix)["peak_dbfs"].asDouble() ==
-          doctest::Approx(20 * std::log10(0.25 * 96 / 127 * 0.472135955) - 6).epsilon(0.01));
+          doctest::Approx(20 * std::log10(0.25 * 96 / 127) - 6).epsilon(0.01));
     CHECK(fs::exists((*mix)["path"].asString()));
 
     auto inlineMix = call("render.mix", R"({"name":"analyzed","analyze":"summary"})");
@@ -601,7 +601,7 @@ TEST_CASE("an LLM records a take over the bus, hears it back and undoes it") {
     REQUIRE(audio);
     double peak = 0;
     for (float x : audio->channels[0]) peak = std::max(peak, std::fabs(double(x)));
-    CHECK(peak == doctest::Approx(0.5 * 0.472135955).epsilon(0.01));
+    CHECK(peak == doctest::Approx(0.5).epsilon(0.01));
 
     // One version: undo removes the take.
     call("history.undo", "{}");
@@ -947,8 +947,8 @@ TEST_CASE("recovering a crashed recording repairs its header and plays all of it
     const auto& left = audio->channels[0];
     REQUIRE(left.size() >= 110000);
     CHECK(double(left[47000]) == 0.0);
-    CHECK(double(left[49000]) == doctest::Approx(0.25 * 0.472135955).epsilon(0.01));
-    CHECK(double(left[95000]) == doctest::Approx(0.25 * 0.472135955).epsilon(0.01));
+    CHECK(double(left[49000]) == doctest::Approx(0.25).epsilon(0.01));
+    CHECK(double(left[95000]) == doctest::Approx(0.25).epsilon(0.01));
     CHECK(double(left[97000]) == 0.0);
 }
 
@@ -1292,7 +1292,7 @@ TEST_CASE("recorded MIDI notes are clipped at punch and overdub item edges") {
             after = std::max(after, v);
     }
     CHECK(before == 0.0);
-    CHECK(during > 0.1 * (0.472135955 / 0.70710678118654752));
+    CHECK(during > 0.1);
     CHECK(after == 0.0);
 
     auto overdub = makeApp(root.path / "overdub");
@@ -2538,6 +2538,9 @@ TEST_CASE("track templates: a strip's settings and chains saved, then added as a
         "track.set",
         R"({"track": "tr_1", "volume_db": -4.5, "pan": -20, "color": "#ff8800", "monitor": "auto"})");
     call(
+        "track.set",
+        R"({"track": "tr_1", "pan_mode": "width", "width": 35, "pan_law": {"db": -4.5, "boost": true}})");
+    call(
         "fx.add",
         R"({"track": "tr_1", "plugin": "com.suppleaudio.test.gain", "patch": {"params": {"gain": -6}}})");
     call(
@@ -2557,6 +2560,10 @@ TEST_CASE("track templates: a strip's settings and chains saved, then added as a
     CHECK(strip.name == "Lead Vox");
     CHECK(strip.volumeDb == doctest::Approx(-4.5));
     CHECK(strip.pan == doctest::Approx(-20));
+    CHECK(strip.panMode == model::PanMode::Width);
+    CHECK(strip.width == doctest::Approx(35));
+    REQUIRE(strip.panLaw);
+    CHECK(*strip.panLaw == model::PanLaw{-4.5, true});
     CHECK(strip.color == "#ff8800");
     CHECK(strip.record.monitor == model::Monitor::Auto);
     REQUIRE(strip.chain.size() == 1);

@@ -63,8 +63,11 @@ MIDI (960); `timebase` default for new items (`time` | `beats` |
 `next_ids`; `history_budget_bytes` (positive estimated bytes, default 1 GiB; §6.2);
 `seed` (session randomness, e.g. dither); `console9` (bool,
 default true: Console 9 summing on every strip; false keeps its gains and pan
-law but runs the stages linear, ADR-0019 §6); `masters` (ordered master
-ids, tr_0 first). *(`pan_law` was removed with ADR-0019.)*
+laws but runs the stages linear, ADR-0019 §6); `pan_law` (`{db, boost}`:
+`db` one of 0, −2.5, −3, −4.5 or −6, default 0; `boost` default false,
+omitted when false; the law of every channel and buss without its own,
+ADR-0066); `masters` (ordered master ids, tr_0 first). *(The pre-2.0
+`pan_law` number was dropped with ADR-0019; 2.9 brings back the object.)*
 
 Master playrate (ADR-0045) is `playrate: {rate, preserve_pitch}`: a finite
 ratio 0.25..4.0 (default 1.0) and bool (default false). Missing settings in
@@ -120,7 +123,11 @@ Fields:
 | `children` | [track id] | order among siblings; empty on channels |
 | `channels` | int | 1-128 (busses and masters ≥ 2): 1/2 are the main pair (fader, pan, Console 9, meters, parent send); 3-128 are auxiliary channels that routes and plug-in pins address, never faded, panned or sent to the parent (ADR-0020); a multi-out instrument's outputs land there (ADR-0021). A mono channel is placed by its pan |
 | `volume` | dB (−inf..+12) | the fader: C9 Channel Fader on channels/busses (0 dB = native unity; +12.04 is the native top, clamped to +12), plain gain on masters |
-| `pan` | % −100..100 | C9 Channel Pan (sin/cos, −3 dB centre) on channels/busses; balance on masters (0 dB centre) |
+| `pan` | % −100..100 | on channels/busses the position under the strip's pan law, before the C9 Channel encode (`pan` and `width` modes); balance on masters (0 dB centre) |
+| `pan_mode` | `pan` \| `dual` \| `width` | channels/busses (ADR-0066), default `pan`: balance a stereo image and pan a mono one; `dual` pans each input on its own; `width` narrows, widens or swaps the image and then pans it |
+| `width` | % −100..100 | `width` mode: 100 as recorded (default), 0 mono (the average), −100 sides swapped; narrowed by (1 − \|pan\|) so a hard pan keeps both sides |
+| `pan_left`, `pan_right` | % −100..100 | `dual` mode: where the left (default −100) and right (default 100) inputs go |
+| `pan_law` | `{db, boost}` or absent | channels/busses: the strip's own law; absent follows `project.pan_law` |
 | `mute`, `solo` | bool / enum (`off`, `on`, `in_place`, `defeat`) | mute ramps the fader to −inf before the encode |
 | `phase_invert`, `mono` | bool | the main pair's polarity flip and mono sum, after the inserts and before the fader (ADR-0022), ramped like mute |
 | `parent_send` | `{enabled}` | the encoded main pair into the parent (no level or channel map of its own) |
@@ -133,13 +140,17 @@ Fields:
 | `locked`, `hidden_tcp`, `hidden_mixer`, `folder_compact` | bool / enum | UI state kept in the model because it is user intent, but tagged `ui: true` so diffs/merges can ignore it |
 | `learn` | [binding] | MIDI learn on the strip's own controls (ADR-0058), one per control, sorted by `param`, omitted when empty: `{param, midi, mode, soft_takeover}` with `midi` and `mode` as an effect's (§1.7). `param`: `volume`, `pan`, `mute`, `solo`, `phase_invert`, `mono`, `armed` (channels, masters), `monitor` (channels) or `lane_mute` (masters). Copied with `track.duplicate`, not kept by track templates; ignored by the freeze hash |
 
-`volume`, `pan` and `mute` are automatable (§1.9). Width and trim are not
-strip fields: insert a utility (Hickory) for them.
+`volume`, `pan` and `mute` are automatable (§1.9); `width`, `pan_left` and
+`pan_right` are not yet. Masters take no `pan_mode`, `width`, dual pans or
+`pan_law` (`track.strip_type`). Trim is not a strip field: insert a utility
+(Hickory) for it.
 
 Track templates (`supple.track-template/1.0`) persist the strip's `channels`
 in their `track` object and pass it to `track.add` when loaded. The optional
 field defaults to stereo (2) for older templates. Its strip-type bounds match
-`track.add`; FX pins retain their saved channel assignments.
+`track.add`; FX pins retain their saved channel assignments. The strip's
+`pan_mode`, `width`, `pan_left`, `pan_right` and `pan_law` (ADR-0066) are
+written when they differ from their defaults and set on load.
 
 Presets and templates live in the user's configuration folder: FX chain
 presets (`supple.fx-chain/1.0`) in `<config>/<slug>/chains`, a plugin's own
@@ -485,7 +496,7 @@ routes: sd_1 tr_2 → tr_6 ch 1/2→3/4 pre-fader −6 dB (sidechain)
 markers: mk_1 "Verse" bar 1 · regions: rg_1 "Chorus" bars 9–17
 ```
 
-## 5. Project file (`supple.project/2.8`)
+## 5. Project file (`supple.project/2.9`)
 
 ### 5.1 Shape
 
@@ -1058,10 +1069,21 @@ routes (§1.8) and VCAs. A 2.5 file loads unchanged; an older application openin
 file ignores `learn` with a warning, and its controllers move nothing on strips, sends or
 VCAs.
 
+### Pan modes and laws (schema 2.9, ADR-0066)
+
+Writers emit `supple.project/2.9`. The 2.9 change adds `project.pan_law` and
+the channels' and busses' `pan_mode`, `width`, `pan_left`, `pan_right` and
+`pan_law` (§1.2, §1.4), each omitted at its default, so a project that uses
+none of them saves the same bytes as before apart from its schema. A 2.8 file
+loads unchanged and pans under the default 0 dB law; there is no migration,
+so it plays louder than it did under Console 9's own law and staging. An
+older application opening a 2.9 file ignores the new fields with warnings and
+pans with its own law.
+
 ### Independent audio and MIDI inputs (schema 2.8)
 
-Writers emit `supple.project/2.8`. The optional `record.midi_input` is a
-route from a MIDI device into the same channel. Existing 1.x and 2.x files
+The 2.8 change added the optional `record.midi_input`, a route from a MIDI
+device into the same channel. Existing 1.x and 2.x files
 remain readable: without `midi_input` the legacy MIDI `record.input` is
 used. Both references are validated, copied and remapped like other route
 IDs.

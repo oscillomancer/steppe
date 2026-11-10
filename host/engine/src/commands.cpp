@@ -194,6 +194,7 @@ struct RecoverResult {
 struct ProjectSetArgs {
     std::optional<std::string> name, title, author, notes;
     std::optional<bool> console9;
+    std::optional<model::PanLaw> panLaw;
     std::optional<json::Value> render;
     std::optional<model::Timebase> timebase;
     std::optional<std::uint64_t> historyBudgetBytes;
@@ -709,6 +710,9 @@ struct TrackSetArgs {
     bool bypassGroups = false;
     std::optional<std::string> name, color, notes;
     std::optional<double> volumeDb, pan;
+    std::optional<model::PanMode> panMode;
+    std::optional<double> width, panLeft, panRight;
+    std::optional<json::Value> panLaw;  // {db, boost}, or null: the project's
     std::optional<model::StripType> type;
     std::optional<bool> mute, phaseInvert, mono;
     std::optional<std::string> solo;
@@ -990,7 +994,7 @@ void registerEngineCommands(cmd::Registry& registry) {
         c.name = "project.set";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpTool;
-        c.summary = "Change project metadata (name, title, author, notes, Console 9, timebase).";
+        c.summary = "Set project name, title, author, notes, Console 9, pan law or timebase.";
         c.description =
             "timebase: what items follow when the tempo changes, for items and tracks that "
             "inherit it — beats (default), time or beats_position; they keep their place now.";
@@ -1024,6 +1028,11 @@ void registerEngineCommands(cmd::Registry& registry) {
                      .field("author", &ProjectSetArgs::author, schema::string())
                      .field("notes", &ProjectSetArgs::notes, schema::string())
                      .field("console9", &ProjectSetArgs::console9, schema::boolean())
+                     .field("pan_law", &ProjectSetArgs::panLaw,
+                            model::panLawSchema().doc(
+                                "Channels' and busses' pan law unless a strip sets its own: db "
+                                "is the centre's cut (0, -2.5, -3, -4.5 or -6; default 0); "
+                                "boost keeps the centre at 0 dB and raises the sides instead"))
                      .field("history_budget_bytes", &ProjectSetArgs::historyBudgetBytes,
                             schema::integerOf<std::uint64_t>().min(1).doc(
                                 "Estimated retained history byte budget; default 1 GiB. Leases and "
@@ -1032,7 +1041,9 @@ void registerEngineCommands(cmd::Registry& registry) {
                      .field("timebase", &ProjectSetArgs::timebase, model::timebaseSchema())
                      .build();
         c.result = emptySchema();
-        c.examples = {{"Name it", obj(R"({"name": "Demo"})"), obj("{}"), "empty"}};
+        c.examples = {{"Name it", obj(R"({"name": "Demo"})"), obj("{}"), "empty"},
+                      {"Pan with the -3 dB law, boosting the sides",
+                       obj(R"({"pan_law": {"db": -3, "boost": true}})"), obj("{}"), "empty"}};
         c.run = [](const ProjectSetArgs& a, Context& ctx) -> Result<Empty> {
             model::EditTxn& t = A(ctx).txn();
             model::Project p = t.project();
@@ -1041,6 +1052,7 @@ void registerEngineCommands(cmd::Registry& registry) {
             if (a.author) p.author = *a.author;
             if (a.notes) p.notes = *a.notes;
             if (a.console9) p.console9 = *a.console9;
+            if (a.panLaw) p.panLaw = *a.panLaw;
             if (a.historyBudgetBytes) p.historyBudgetBytes = *a.historyBudgetBytes;
             if (a.render) {
                 if (!a.render->isObject())
@@ -1647,6 +1659,32 @@ void registerEngineCommands(cmd::Registry& registry) {
                        schema::number().range(model::kSilenceDb, 12).unit(units::Unit::dB))
                 .field("pan", &TrackSetArgs::pan,
                        schema::number().range(-100, 100).unit(units::Unit::percent))
+                .field("pan_mode", &TrackSetArgs::panMode,
+                       model::panModeSchema().doc(
+                           "Channels and busses: pan (balance a stereo image, pan a mono one), "
+                           "dual (pan_left and pan_right place each input on its own) or width "
+                           "(width narrows, widens or swaps the image, pan places it)"))
+                .field("width", &TrackSetArgs::width,
+                       schema::number()
+                           .range(-100, 100)
+                           .unit(units::Unit::percent)
+                           .doc("Width mode: 100 as recorded, 0 mono, -100 sides swapped"))
+                .field("pan_left", &TrackSetArgs::panLeft,
+                       schema::number()
+                           .range(-100, 100)
+                           .unit(units::Unit::percent)
+                           .doc("Dual mode: where the left input goes (default -100)"))
+                .field("pan_right", &TrackSetArgs::panRight,
+                       schema::number()
+                           .range(-100, 100)
+                           .unit(units::Unit::percent)
+                           .doc("Dual mode: where the right input goes (default 100)"))
+                .field("pan_law", &TrackSetArgs::panLaw,
+                       clearable("clearable_pan_law",
+                                 model::panLawSchema().doc(
+                                     "This strip's pan law: db is the centre's cut (0, -2.5, "
+                                     "-3, -4.5 or -6); boost raises the sides instead. null "
+                                     "follows project.pan_law")))
                 .field("mute", &TrackSetArgs::mute, schema::boolean())
                 .field("phase_invert", &TrackSetArgs::phaseInvert,
                        schema::boolean().doc("Flip the polarity of the main pair (after the FX "
@@ -1714,6 +1752,11 @@ void registerEngineCommands(cmd::Registry& registry) {
             {"Play and record a MIDI keyboard (any device, channel 1)",
              obj(R"({"track": "tr_1", "armed": true, "record_midi": "*", "midi_channel": 1, "monitor": "auto"})"),
              obj("{}"), "song"},
+            {"Narrow a stereo strip to half width, a little right",
+             obj(R"({"track": "tr_1", "pan_mode": "width", "width": 50, "pan": 20})"), obj("{}"),
+             "song"},
+            {"Give a strip the -3 dB pan law", obj(R"({"track": "tr_1", "pan_law": {"db": -3}})"),
+             obj("{}"), "song"},
             {"Check the mix in mono", obj(R"({"track": "tr_0", "mono": true})"), obj("{}"), "song"},
             {"Four channels: a key signal can arrive on 3/4",
              obj(R"({"track": "tr_1", "channels": 4})"), obj("{}"), "song"},
@@ -1747,6 +1790,23 @@ void registerEngineCommands(cmd::Registry& registry) {
             if (a.laneMute && newType != model::StripType::Master)
                 return Error("track.strip_type", "only masters have a lane mute", "/lane_mute",
                              "mute the items themselves (item.set {mute}) or the strip");
+            if ((a.panMode || a.width || a.panLeft || a.panRight || a.panLaw) &&
+                newType == model::StripType::Master)
+                return Error("track.strip_type",
+                             "a master's pan is a balance, with no pan mode or law",
+                             a.panLaw    ? "/pan_law"
+                             : a.panMode ? "/pan_mode"
+                                         : "/width",
+                             "use pan on the master; set pan modes and laws on channels and "
+                             "busses");
+            std::optional<model::PanLaw> panLaw;
+            if (a.panLaw && !a.panLaw->isNull()) {
+                schema::DecodeCtx decode;
+                panLaw.emplace();
+                if (!model::panLawSchema().decodeInto(*a.panLaw, *panLaw, decode, "/pan_law"))
+                    return Error("pan_law.db", "invalid pan law", "/pan_law",
+                                 "give {db: 0|-2.5|-3|-4.5|-6, boost: true|false} or null");
+            }
             // null clears that input; a value sets it.
             const bool clearAudio = a.recordInput && a.recordInput->isNull();
             const bool clearRack = a.recordRack && a.recordRack->isNull();
@@ -1945,6 +2005,11 @@ void registerEngineCommands(cmd::Registry& registry) {
                 if (a.notes) t.notes = *a.notes;
                 if (a.volumeDb) t.volumeDb = *a.volumeDb;
                 if (a.pan) t.pan = *a.pan;
+                if (a.panMode) t.panMode = *a.panMode;
+                if (a.width) t.width = *a.width;
+                if (a.panLeft) t.panLeft = *a.panLeft;
+                if (a.panRight) t.panRight = *a.panRight;
+                if (a.panLaw) t.panLaw = panLaw;
                 if (a.mute) t.mute = *a.mute;
                 if (a.phaseInvert) t.phaseInvert = *a.phaseInvert;
                 if (a.mono) t.mono = *a.mono;

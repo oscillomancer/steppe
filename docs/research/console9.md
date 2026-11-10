@@ -79,3 +79,11 @@ otherwise identical (encode gain ×0.7639, decode gain ×2).
   B = (1 − √(1 − g)) / 2. The DSP only needs the linear gain g, never B.
 - **Pan (%)** p ∈ [−100, 100] ↔ A = (p/100 + 1) / 2 (−100 = hard left).
 - Console 9 Buss is held at A = B = 0.5 and never exposed.
+
+*(Amended 2026-11-10, ADR-0066.)* The engine no longer uses the pan stage or
+the fixed trims above. It runs both stages in `Staging::Unity`: the strip
+pans before the encode with its own pan mode and law, the encode is driven
+by `x · f(2B) · 0.618` (no ×0.7639, so 2.34 dB more drive than Airwindows'
+own staging), and the decode is followed by ×φ instead of ×2 (and no pan),
+so a channel → buss pair is unity for small signals. The port keeps the
+reference staging (`Staging::Native`) for the null tests.

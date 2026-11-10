@@ -97,8 +97,9 @@ Both ends are in the same rack. At most one cable joins the same two ends.
 - **To an In module** from any track: a send, with the route's tap, level,
   pan, mute, channel map and envelopes. `"to": {"module": "mo_9"}`. Sends
   into In modules are never Console 9 encoded (the rack is not a summing
-  stage); they carry the tap's signal at the route's level and pan, with the
-  same fader law and control smoothing but no encoder trim. This is independent
+  stage); they carry the tap's signal at the route's level and pan (the
+  source strip's pan matrix when it follows, ADR-0066), with the same fader
+  law and control smoothing. This is independent
   of `project.console9`. The linear rack-edge path sanitizes non-finite inputs,
   and retains tap, mute, mono, phase, channel map and envelope behavior.
   `route.matrix` lists each In module as a destination (`kind: "module"`,

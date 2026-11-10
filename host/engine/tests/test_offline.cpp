@@ -124,22 +124,14 @@ OfflineResult render(const model::Session& s, InstancePool& pool, double seconds
     return std::move(*r);
 }
 
-constexpr double kCentre = 0.70710678118654752;  // keys
-constexpr double kStrip = 0.472135955;           // neutral Channel -> Buss, ADR-0019
-constexpr double kHardStrip = kStrip * 1.4142135623730951;
+// A centred key route: its source strip's law, 0 dB by default (ADR-0066).
+constexpr double kCentre = 1.0;
+// A centred Channel -> Buss hop at unity (ADR-0066: the 0 dB law, unity
+// staging), and its near side hard panned: the 0 dB law never raises a side.
+constexpr double kStrip = 1.0;
+constexpr double kHardStrip = 1.0;
 
 }  // namespace
-
-TEST_CASE("pan law gains") {
-    auto [l, r] = panGains(0.0, -3.0);
-    CHECK(l == doctest::Approx(kCentre).epsilon(1e-6));
-    CHECK(r == doctest::Approx(kCentre).epsilon(1e-6));
-    std::tie(l, r) = panGains(-1.0, -3.0);
-    CHECK(l == doctest::Approx(1.0).epsilon(1e-6));
-    CHECK(std::fabs(r) < 1e-12);
-    std::tie(l, r) = panGains(0.0, 0.0);
-    CHECK(l == doctest::Approx(1.0).epsilon(1e-6));
-}
 
 TEST_CASE("muted routes still order their source before their destination") {
     model::EditTxn t(model::Session::create({.console9 = false}), 1);

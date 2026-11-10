@@ -569,7 +569,7 @@ TEST_CASE("masters: arm, audio items and lane mute round trip (ADR-0057)") {
     REQUIRE_MESSAGE(s, (s ? std::string() : s.error().toString()));
     REQUIRE(validateStripRules(*s));
     const std::string saved = serializeProject(*s);
-    CHECK(saved.find("\"supple.project/2.8\"") != std::string::npos);
+    CHECK(saved.find("\"supple.project/2.9\"") != std::string::npos);
     auto back = parseProject(saved);
     REQUIRE(back);
     CHECK(back->tracks.find(kMaster)->laneMute);
@@ -611,7 +611,7 @@ TEST_CASE("masters: arm, audio items and lane mute round trip (ADR-0057)") {
 
 TEST_CASE("project newer minor ignores unknown fields with load warnings") {
     auto doc = projectToJson(Session::create());
-    doc["schema"] = "supple.project/2.9";
+    doc["schema"] = "supple.project/2.10";
     doc["tracks"]["tr_0"]["future"] = true;
     std::vector<schema::Warning> warnings;
     auto parsed = projectFromJson(doc, &warnings);
@@ -1072,7 +1072,7 @@ TEST_CASE("render settings: a 2.2 file migrates to schema 2.3 and reopens byte-i
     CHECK(loaded->project->render ==
           render::toJson(render::settingsSchema().decode(expected).value()));
     const std::string saved = serializeProject(*loaded);
-    CHECK(saved.find("\"supple.project/2.8\"") != std::string::npos);
+    CHECK(saved.find("\"supple.project/2.9\"") != std::string::npos);
     CHECK(saved.find("tail_ms") == std::string::npos);
     auto reopened = parseProject(saved);
     REQUIRE(reopened);
@@ -1122,4 +1122,47 @@ TEST_CASE("render settings: a 2.2 file migrates to schema 2.3 and reopens byte-i
         REQUIRE_FALSE(refused);
         CHECK_MESSAGE(refused.error().path == path, refused.error().toString());
     }
+}
+
+TEST_CASE("pan modes and laws save, reopen and are refused on masters (ADR-0066)") {
+    EditTxn t(Session::create(), 1);
+    auto project = t.project();
+    project.panLaw = {-4.5, true};
+    t.setProject(project);
+    Track ch;
+    ch.parent = kMaster;
+    ch.panMode = PanMode::Dual;
+    ch.panLeft = -30;
+    ch.panRight = 60;
+    ch.width = -40;
+    ch.panLaw = PanLaw{-6, false};
+    const Id id = t.create(ch);
+    t.modify<Track>(kMaster, [&](auto& tr) { tr.children.push_back(id); });
+    auto s = t.commit();
+    REQUIRE(s);
+    auto doc = projectToJson(*s);
+    CHECK(doc["project"]["pan_law"]["db"].asDouble() == -4.5);
+    CHECK(doc["project"]["pan_law"]["boost"].asBool());
+    CHECK(doc["tracks"][id.str()]["pan_mode"].asString() == "dual");
+    CHECK(doc["tracks"][id.str()]["pan_law"]["db"].asDouble() == -6);
+    CHECK_FALSE(doc["tracks"][id.str()]["pan_law"].find("boost"));  // false is the default
+    // Defaults are not written: an untouched strip's bytes are what 2.8 wrote.
+    CHECK_FALSE(doc["tracks"]["tr_0"].find("pan_mode"));
+    CHECK_FALSE(doc["tracks"]["tr_0"].find("width"));
+    CHECK_FALSE(doc["tracks"]["tr_0"].find("pan_law"));
+    auto reopened = projectFromJson(json::parse(json::writeCanonical(doc)).value());
+    REQUIRE(reopened);
+    CHECK(reopened->project->panLaw == s->project->panLaw);
+    CHECK(*reopened->tracks.find(id) == *s->tracks.find(id));
+    CHECK(json::writeCanonical(projectToJson(*reopened)) == json::writeCanonical(doc));
+    // A law off the list is refused with its path.
+    auto bad = doc;
+    bad["project"]["pan_law"]["db"] = -4.0;
+    auto refused = projectFromJson(bad);
+    REQUIRE_FALSE(refused);
+    CHECK(refused.error().code == "pan_law.db");
+    // A master balances: no pan mode or law.
+    EditTxn m(*s, 2);
+    m.modify<Track>(kMaster, [](auto& tr) { tr.panMode = PanMode::Width; });
+    CHECK_FALSE(m.commit());
 }

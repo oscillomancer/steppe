@@ -26,14 +26,23 @@ pans arrive through its mix slots (ADR-0060, §1.6) without a new plan.
 
 - **StripNode** per track *(amended 2026-09-30, ADR-0019)*, stages by strip type:
   channel `inputs → [tap: pre_fx] → items/takes → inserts → mono/polarity →
-  [tap: pre_fader] → C9 Channel (fader, pan, mute) → [tap: post_fader]`; buss
+  [tap: pre_fader] → pan, fader, mute → C9 Channel → [tap: post_fader]`; buss
   `input sum → C9 Buss → [pre_fx] → inserts → mono/polarity → [pre_fader] →
   C9 Channel → [post_fader]`; master `input sum → C9 Buss → [pre_fx] →
   inserts → mono/polarity → [pre_fader] → plain gain/pan → its own items →
   [post_fader]` → outputs/renders/monitor chain (ADR-0057). Mono and polarity (ADR-0022) act on the
   main pair, ramped like mute, never between an encode and a decode. With
-  `project.console9` off the C9 stages run linear (same gains and pan law,
-  no curves, noise or dither; ADR-0019 §6). A channel's items play *before*
+  `project.console9` off the C9 stages run linear (same gains and pan laws,
+  no curves, noise or dither; ADR-0019 §6). *(Amended 2026-11-10, ADR-0066:)*
+  a channel's or buss's pan is a 2×2 matrix from its pan mode (`pan`,
+  `dual`, `width`), positions and law (`pan.h`), applied with the fader
+  before its C9 Channel; the four coefficients ramp with the fader, or follow
+  automation per sample. The C9 stages run in `Staging::Unity` (no pan stage,
+  no encode trim, ×φ after the decode), so a hop is unity for small signals
+  and only each strip's own law cuts the centre. Following sends, key routes
+  and rack inputs use their source strip's matrix; a positioned send uses
+  `pan` mode under the source's law. Take pan is a balance (the 0 dB law).
+  `width`, `pan_left` and `pan_right` are mix values (ADR-0060) beside `pan`. A channel's items play *before*
   the chain (as in REAPER); input monitoring and record inputs enter channels
   at `inputs`. A master's items (audio only, its prints) play after its
   plain stage, at timeline shift `S + chain`, into a buffer of their own that
@@ -509,8 +518,9 @@ master equals its offline render at `outputLatency`.
 
 **Meters**. Per strip, the peak and the mean square of the strip's signal
 **after the fader and after the pan law, before the Console 9 encode**
-(`sum × faderGain × ` the stage's own `panGains` — what a user expects at
-unity: a −6 dBFS item at 0 dB reads its own peak times the Channel pan law)
+(`sum × pan matrix × faderGain` — what a user expects at unity: a −6 dBFS
+item at 0 dB reads its own peak times its strip's pan law at its position,
+which is unity at the centre under the default 0 dB law, ADR-0066)
 since the reader's last call; a master has no encode and measures its output,
 the signal the device is given. Two SPSC rings of `MeterEntry` carry the
 numbers, one per producer: the renderer thread publishes what it renders ahead
@@ -1238,8 +1248,9 @@ harness. See the tooling README for schemas, limits and invocation details.
   its own downstream path latency (ADR-0051).
 - **Mixing decisions:** instruments add their output to the track's input;
   effects mix wet/dry against the input delayed by their latency; bypass is
-  compensated (a delay of the stage's latency); the pan law applies to tracks,
-  the master pans as a balance; mute silences the post-fader tap only; a
+  compensated (a delay of the stage's latency); the pan law applies to tracks
+  (ADR-0066: each channel's and buss's own or the project's), the master pans
+  as a balance; mute silences the post-fader tap only; a
   solo-silenced track is still processed. *(Superseded by ADR-0019 for
   strips: Console 9 stages, mute as a fader ramp before the encode.)*
 - **JACK backend** (`jack.h`, `jack_backend.cpp`): libjack is dlopen'ed

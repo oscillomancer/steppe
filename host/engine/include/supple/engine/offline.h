@@ -254,10 +254,4 @@ Result<json::Value> instanceReadouts(host::Instance& in);
 Result<OfflineResult> renderOffline(const model::Session& session, InstancePool& pool,
                                     const OfflineSettings& settings);
 
-// Track pan (the master pans as a balance control instead).
-// Constant-power pan with the project's centre attenuation (pan law, dB):
-// -3 dB is classic constant power (centre 0.707, hard side 1.0); 0 dB keeps
-// the centre at unity. `pan` in [-1, 1]. Returns {left gain, right gain}.
-std::pair<double, double> panGains(double pan, double panLawDb);
-
 }  // namespace supple::engine

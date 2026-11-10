@@ -7814,8 +7814,8 @@
   },
   {
     "name": "project_set",
-    "title": "Change project metadata (name, title, author, notes, Console 9, timebase).",
-    "description": "Change project metadata (name, title, author, notes, Console 9, timebase). timebase: what items follow when the tempo changes, for items and tracks that inherit it — beats (default), time or beats_position; they keep their place now. See describe for errors and examples.",
+    "title": "Set project name, title, author, notes, Console 9, pan law or timebase.",
+    "description": "Set project name, title, author, notes, Console 9, pan law or timebase. timebase: what items follow when the tempo changes, for items and tracks that inherit it — beats (default), time or beats_position; they keep their place now. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "project_set_args",
@@ -7834,6 +7834,34 @@
         },
         "console9": {
           "type": "boolean"
+        },
+        "pan_law": {
+          "type": "object",
+          "title": "pan_law",
+          "properties": {
+            "db": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\s*[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?(?:\\s*(?:dB|db))?\\s*$"
+                }
+              ],
+              "x-unit": "dB",
+              "x-unit-strings": true,
+              "description": "Quantity strings are range-checked by the server.",
+              "enum": [0.0, -2.5, -3.0, -4.5, -6.0],
+              "default": 0.0
+            },
+            "boost": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          "additionalProperties": false,
+          "description": "Channels' and busses' pan law unless a strip sets its own: db is the centre's cut (0, -2.5, -3, -4.5 or -6; default 0); boost keeps the centre at 0 dB and raises the sides instead"
         },
         "history_budget_bytes": {
           "type": "integer",
@@ -13708,6 +13736,94 @@
           "x-unit": "%",
           "x-unit-strings": true,
           "description": "Quantity strings are range-checked by the server. (%; accepts quantity strings)"
+        },
+        "pan_mode": {
+          "type": "string",
+          "enum": ["pan", "dual", "width"],
+          "description": "Channels and busses: pan (balance a stereo image, pan a mono one), dual (pan_left and pan_right place each input on its own) or width (width narrows, widens or swaps the image, pan places it)"
+        },
+        "width": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": -100.0,
+              "maximum": 100.0
+            },
+            {
+              "type": "string",
+              "pattern": "^\\s*[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?(?:\\s*%)?\\s*$"
+            }
+          ],
+          "x-unit": "%",
+          "x-unit-strings": true,
+          "description": "Width mode: 100 as recorded, 0 mono, -100 sides swapped Quantity strings are range-checked by the server. (%; accepts quantity strings)"
+        },
+        "pan_left": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": -100.0,
+              "maximum": 100.0
+            },
+            {
+              "type": "string",
+              "pattern": "^\\s*[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?(?:\\s*%)?\\s*$"
+            }
+          ],
+          "x-unit": "%",
+          "x-unit-strings": true,
+          "description": "Dual mode: where the left input goes (default -100) Quantity strings are range-checked by the server. (%; accepts quantity strings)"
+        },
+        "pan_right": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": -100.0,
+              "maximum": 100.0
+            },
+            {
+              "type": "string",
+              "pattern": "^\\s*[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?(?:\\s*%)?\\s*$"
+            }
+          ],
+          "x-unit": "%",
+          "x-unit-strings": true,
+          "description": "Dual mode: where the right input goes (default 100) Quantity strings are range-checked by the server. (%; accepts quantity strings)"
+        },
+        "pan_law": {
+          "anyOf": [
+            {
+              "type": "object",
+              "title": "pan_law",
+              "properties": {
+                "db": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^\\s*[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?(?:\\s*(?:dB|db))?\\s*$"
+                    }
+                  ],
+                  "x-unit": "dB",
+                  "x-unit-strings": true,
+                  "description": "Quantity strings are range-checked by the server.",
+                  "enum": [0.0, -2.5, -3.0, -4.5, -6.0],
+                  "default": 0.0
+                },
+                "boost": {
+                  "type": "boolean",
+                  "default": false
+                }
+              },
+              "additionalProperties": false,
+              "description": "This strip's pan law: db is the centre's cut (0, -2.5, -3, -4.5 or -6); boost raises the sides instead. null follows project.pan_law"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "mute": {
           "type": "boolean"

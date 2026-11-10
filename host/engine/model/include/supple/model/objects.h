@@ -38,6 +38,20 @@ struct Playrate {
     bool operator==(const Playrate&) const = default;
 };
 
+// Pan laws (ADR-0066): the centre's attenuation for a mono source, as
+// REAPER offers them. Boost (gain compensation) keeps the centre at 0 dB and
+// raises the sides instead.
+inline constexpr std::array<double, 5> kPanLawsDb = {0.0, -2.5, -3.0, -4.5, -6.0};
+struct PanLaw {
+    double db = 0.0;  // one of kPanLawsDb
+    bool boost = false;
+    bool operator==(const PanLaw&) const = default;
+};
+// How a channel's or buss's pan places its two inputs (ADR-0066): pan
+// (balance stereo, pan mono), dual (each input panned on its own) or width
+// (mid/side width, then pan).
+enum class PanMode : std::uint8_t { Pan, Dual, Width };
+
 struct Project {
     std::string name, title, author, notes;
     double sampleRate = 48000.0;
@@ -45,6 +59,7 @@ struct Project {
     Timebase timebase = Timebase::Beats;
     std::string mediaDir = "media";
     bool console9 = true;
+    PanLaw panLaw;  // channels' and busses' default (ADR-0066)
     Playrate playrate;
     std::vector<Id> masters{kMaster};
     std::uint64_t seed = 0;
@@ -155,6 +170,13 @@ struct Track {
     int channels = 2;
     double volumeDb = 0.0;
     double pan = 0.0;  // % -100..100
+    // Pan mode and law (ADR-0066; channels and busses: a master balances).
+    // `width` is used in width mode, `panLeft`/`panRight` in dual mode; an
+    // absent law follows the project's.
+    PanMode panMode = PanMode::Pan;
+    double width = 100.0;                       // % -100..100
+    double panLeft = -100.0, panRight = 100.0;  // % -100..100
+    std::optional<PanLaw> panLaw;
     bool mute = false;
     // Polarity and mono switches on the main pair, after the chain and before
     // the fader (ADR-0022).
@@ -178,6 +200,11 @@ struct Track {
     std::vector<ControlLearn> learn;  // MIDI learn, one per control (ADR-0058)
     bool operator==(const Track&) const = default;
 };
+
+// The pan law a strip uses: its own, else the project's.
+inline PanLaw panLawOf(const Project& project, const Track& track) {
+    return track.panLaw.value_or(project.panLaw);
+}
 
 // A master's device output channels (1-based), with the default resolved.
 inline std::vector<int> hardwareOutputs(const Track& track, Id id) {

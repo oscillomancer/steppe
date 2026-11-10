@@ -422,6 +422,8 @@ const Schema<Project>& schemaOf<Project>() {
         dflt(b, d.mediaDir);
         b.field("console9", &Project::console9, boolean());
         dflt(b, d.console9);
+        b.field("pan_law", &Project::panLaw, panLawSchema());
+        dflt(b, d.panLaw);
         b.field("playrate", &Project::playrate, schemaOf<Playrate>());
         dflt(b, d.playrate);
         b.field("masters", &Project::masters, ids());
@@ -555,6 +557,15 @@ const Schema<Track>& schemaOf<Track>() {
         dflt(b, d.volumeDb);
         b.field("pan", &Track::pan, num().range(-100, 100));
         dflt(b, d.pan);
+        b.field("pan_mode", &Track::panMode, panModeSchema());
+        dflt(b, d.panMode);
+        b.field("width", &Track::width, num().range(-100, 100));
+        dflt(b, d.width);
+        b.field("pan_left", &Track::panLeft, num().range(-100, 100));
+        dflt(b, d.panLeft);
+        b.field("pan_right", &Track::panRight, num().range(-100, 100));
+        dflt(b, d.panRight);
+        b.field("pan_law", &Track::panLaw, panLawSchema());
         b.field("mute", &Track::mute, boolean());
         dflt(b, d.mute);
         b.field("phase_invert", &Track::phaseInvert, boolean());
@@ -1277,7 +1288,7 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
         auto migrated = migrateProject1(std::move(doc), warnings);
         if (!migrated) return std::move(migrated).error();
         doc = std::move(*migrated);
-    } else if (version->minor > 8 && warnings)
+    } else if (version->minor > 9 && warnings)
         warnings->push_back(
             {"project.newer_minor", "loading a newer project minor version", "/schema"});
     // Before 2.4 a master's hardware output could be written as a route to

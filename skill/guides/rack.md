@@ -641,9 +641,9 @@ are allowed. Notes source MIDI and routes into In are snapshots from launch.
 Oversampled FX keep their raw and prepared latency values separate: servicing
 an idle or playing engine rebuilds the plan only for an actual change.
 
-A send into an In carries the tap at the route's level and pan without
-Console 9 trim, with the console on or off. Bare In → Out paths are about
-2.34 dB louder than earlier builds; recheck effect-patch levels when updating.
+A send into an In carries the tap at the route's level and pan, unencoded,
+with the console on or off. A following send pans with its strip's mode and
+law: under the default 0 dB law a centred send is at unity.
 
 A rack channel can keep its audio Out and a keyboard input together:
 `track.set {track: "tr_1", record_midi: "*", armed: true, monitor: "on"}`.

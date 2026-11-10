@@ -139,11 +139,29 @@ one. `render.mix` includes them; stems of channels and busses do not.
 The implicit summing stages use **Airwindows Console 9, by Chris Johnson**.
 Channels encode after inserts; busses decode their input sum before inserts
 and re-encode after their fader; masters decode before their insert chain and
-finish with a plain fader and balance. The channel/buss fader and pan are the
-Console 9 controls. A centred unity channel into a centred neutral master
-has approximately **−6.52 dB** gain. Each extra neutral buss adds another
-−6.52 dB at small signals. Stage levels deliberately follow Console 9; use
-measured levels when setting insert drive and gain compensation.
+finish with a plain fader and balance. A channel's or buss's pan and fader act
+before its encode, and an encode → decode hop is unity for small signals, so
+under the default 0 dB pan law a centred channel at 0 dB reaches the master at
+its own level through any number of busses.
+
+**Pan laws.** `project.set {pan_law: {db, boost}}` sets the law of every
+channel and buss: `db` is the centre's cut for a mono source, one of 0
+(default), −2.5, −3 (constant power), −4.5 or −6 (constant amplitude). A cut
+law applies at every strip a centred signal crosses: under −3 dB a channel →
+buss → master path is 6 dB down. `boost: true` (gain compensation) keeps the
+centre at 0 dB and raises a hard-panned side by the law instead, which can
+clip a hot source. `track.set {track, pan_law: {db: -3}}` gives one strip its
+own law; `pan_law: null` returns it to the project's.
+
+**Pan modes** (`track.set {pan_mode}` on channels and busses; masters only
+balance): `pan` (default) balances a stereo image and pans a mono one;
+`dual` places each input on its own (`pan_left`, `pan_right`, defaults −100
+and 100), so you can narrow, widen, move or swap an image without dropping
+either side; `width` sets the image's width (`width`: 100 as recorded, 0 mono,
+−100 swapped) and places its centre with `pan`. Two inputs at one position
+sum, so dual pan's centred inputs follow the law (6 dB hotter for correlated
+content at 0 dB). A send that follows its strip's pan copies its mode and law.
+Only `pan` is automatable.
 
 `project.set {console9: false}` keeps these gains and pan laws and makes the
 stages linear, omitting the curves, denormal noise and dither. Small signals

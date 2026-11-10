@@ -115,7 +115,7 @@ TEST_CASE("module library: a written module plays, and an edit rebuilds it" *
     const rack::Instance* before = f.app->instances().racks().find(mo2);
     REQUIRE(before != nullptr);
     const double quiet = f.level();
-    CHECK(quiet == doctest::Approx(0.25 * 0.472135955).epsilon(1e-3));
+    CHECK(quiet == doctest::Approx(0.25).epsilon(1e-3));
 
     json::Value edited =
         f.run("module.edit", R"({"name": "level", "edits": [{"old": "0.25", "new": "0.5"}]})");
@@ -696,7 +696,7 @@ TEST_CASE("rack presets: a patch brings its own modules to another library") {
     REQUIRE_MESSAGE(loaded, (loaded ? "" : loaded.error().toString()));
     REQUIRE((*loaded).find("installed") != nullptr);
     CHECK((*loaded)["installed"].at(0).asString() == "level");
-    CHECK(there.level() == doctest::Approx(0.25 * 0.472135955).epsilon(1e-3));
+    CHECK(there.level() == doctest::Approx(0.25).epsilon(1e-3));
     // Loaded again, the library has it: nothing to install, no warning.
     auto again = there.call("rack.preset.load", args);
     REQUIRE(again);
@@ -728,7 +728,7 @@ TEST_CASE("module library: a project keeps copies of the modules it plays") {
     // Opened where the library lacks it: the project's copy plays.
     Fixture there;
     REQUIRE(there.call("project.open", args));
-    CHECK(there.level() == doctest::Approx(0.25 * 0.472135955).epsilon(1e-3));
+    CHECK(there.level() == doctest::Approx(0.25).epsilon(1e-3));
     json::Value got = there.run("module.get", R"({"type": "com.example.level"})");
     CHECK(got["origin"].asString() == "project");
     // Edited there, it goes into that library and plays; the next save copies it.
@@ -736,7 +736,7 @@ TEST_CASE("module library: a project keeps copies of the modules it plays") {
         there.run("module.edit",
                   R"({"type": "com.example.level", "edits": [{"old": "0.25", "new": "0.5"}]})");
     CHECK(edited["ok"].asBool());
-    CHECK(there.level() == doctest::Approx(0.5 * 0.472135955).epsilon(1e-3));
+    CHECK(there.level() == doctest::Approx(0.5).epsilon(1e-3));
     REQUIRE(there.call("project.save", args));
     auto saved = readTextFile(copy, 1 << 20);
     REQUIRE(saved);

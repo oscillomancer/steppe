@@ -444,19 +444,6 @@ void MediaCache::trimVariants(std::size_t samples) {
     std::erase_if(decoded_, [](const auto& entry) { return entry.second.expired(); });
 }
 
-// --- mixing helpers ---------------------------------------------------------------------
-
-std::pair<double, double> panGains(double pan, double panLawDb) {
-    const double p = std::clamp(pan, -1.0, 1.0);
-    const double angle = (p + 1.0) * std::numbers::pi / 4.0;
-    // The sin/cos curve is constant power: 1/sqrt(2) at the centre, which is
-    // what "-3 dB" means. Other laws scale it to their centre gain.
-    const double centre =
-        panLawDb == -3.0 ? std::numbers::sqrt2 / 2.0 : std::pow(10.0, panLawDb / 20.0);
-    const double scale = centre * std::numbers::sqrt2;
-    return {std::cos(angle) * scale, std::sin(angle) * scale};
-}
-
 using namespace detail;
 
 Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,

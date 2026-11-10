@@ -148,7 +148,12 @@ Result<json::Value> exportSession(EngineApp& app) {
     out["schema"] = "supple.capacity-export/1.0";
     out["sample_rate"] = app.head().project->sampleRate;
     out["tempo"] = 120;
-    out["pan_law"] = std::numbers::sqrt2 / 2;  // Console 9 pans sin/cos: -3 dB at centre
+    // The centre's gain under the project's pan law (ADR-0066).
+    const model::PanLaw law = app.head().project->panLaw;
+    out["pan_law"] = law.boost        ? 1.0
+                     : law.db == -3.0 ? std::numbers::sqrt2 / 2
+                     : law.db == -6.0 ? 0.5
+                                      : std::pow(10.0, law.db / 20);
     out["loop_seconds"] = app.loop().end;
     auto chain = [&](const model::Track& track) -> Result<json::Value> {
         auto list = json::Value::array();

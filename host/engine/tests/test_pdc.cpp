@@ -279,7 +279,7 @@ TEST_CASE("read-ahead PDC: live dry and latent bus paths meet at one sample" *
         engine.stop();
         const auto& samples = backend.capture().channels[0];
         CHECK(std::count_if(samples.begin(), samples.end(), [](float x) { return x != 0; }) == 1);
-        constexpr double strip = .472135955;
+        constexpr double strip = 1.0;  // a centred hop at unity (ADR-0066)
         CHECK(samples[512 + 37] == doctest::Approx(.25 * strip * (1 + strip)).epsilon(1e-6));
         CHECK(engine.processErrors() == 0);
     }
@@ -323,8 +323,7 @@ TEST_CASE("read-ahead PDC: recording retains the performed timeline position" *
         run(engine, backend, anticipative, 24);
         auto takes = engine.stopRecording();
         engine.stop();
-        CHECK(backend.capture().channels[0][2008] ==
-              doctest::Approx(.25 * .472135955).epsilon(1e-6));
+        CHECK(backend.capture().channels[0][2008] == doctest::Approx(.25).epsilon(1e-6));
         REQUIRE(takes);
         REQUIRE(takes->size() == 1);
         const auto& take = takes->front();
@@ -360,7 +359,7 @@ TEST_CASE("read-ahead PDC: non-grid latency aligns exact automation points with 
     REQUIRE(output);
     const auto& samples = output->audio.channels[0];
     CHECK(std::count_if(samples.begin(), samples.end(), [](float x) { return x != 0; }) == 2);
-    CHECK(samples[480] == doctest::Approx(.25 * .472135955).epsilon(1e-6));
+    CHECK(samples[480] == doctest::Approx(.25).epsilon(1e-6));
     CHECK(samples[479] == doctest::Approx(double(samples[480]) * .01).epsilon(1e-6));
 }
 
@@ -383,6 +382,6 @@ TEST_CASE("read-ahead PDC: unity plugin transport follows its stage input" *
     for (auto* instance : plan.instances) REQUIRE(instance->startProcessing());
     REQUIRE(detail::processBlock(plan, 24000, 1));
     // Its input is still at frame 23000: the node's 963 plus 37 before this stage.
-    CHECK(plan.nodes[plan.mainMaster].post.l[0] == doctest::Approx(.12 * .472135955).epsilon(1e-6));
+    CHECK(plan.nodes[plan.mainMaster].post.l[0] == doctest::Approx(.12).epsilon(1e-6));
     for (auto* instance : plan.instances) instance->stopProcessing();
 }

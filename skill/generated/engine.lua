@@ -1105,6 +1105,7 @@ q = nil
 ---@field author? string
 ---@field notes? string
 ---@field console9? boolean
+---@field pan_law? table Channels' and busses' pan law unless a strip sets its own: db is the centre's cut (0, -2.5, -3, -4.5 or -6; default 0); boost keeps the centre at 0 dB and raises the sides instead
 ---@field history_budget_bytes? integer Estimated retained history byte budget; default 1 GiB. Leases and branch boundaries may exceed it.
 ---@field render? table Render settings (session-model §1.10); every member optional
 ---@field timebase? "time"|"beats"|"beats_position"
@@ -1789,6 +1790,11 @@ q = nil
 ---@field notes? string
 ---@field volume_db? number|string Quantity strings are range-checked by the server.
 ---@field pan? number|string Quantity strings are range-checked by the server.
+---@field pan_mode? "pan"|"dual"|"width" Channels and busses: pan (balance a stereo image, pan a mono one), dual (pan_left and pan_right place each input on its own) or width (width narrows, widens or swaps the image, pan places it)
+---@field width? number|string Width mode: 100 as recorded, 0 mono, -100 sides swapped Quantity strings are range-checked by the server.
+---@field pan_left? number|string Dual mode: where the left input goes (default -100) Quantity strings are range-checked by the server.
+---@field pan_right? number|string Dual mode: where the right input goes (default 100) Quantity strings are range-checked by the server.
+---@field pan_law? any
 ---@field mute? boolean
 ---@field phase_invert? boolean Flip the polarity of the main pair (after the FX chain, before the fader)
 ---@field mono? boolean Sum the main pair to mono (after the FX chain, before the fader and pan): a mono check on the master
@@ -2234,7 +2240,7 @@ q = nil
 ---@field recover fun(args?: Steppe.project_recover_args): Steppe.project_recover_result Put recordings a crash left out back into the project (one undo step).
 ---@field recoverable fun(): Steppe.project_recoverable_result List recordings a crash left out of the project.
 ---@field save fun(args?: Steppe.project_save_args): Steppe.project_save_result Save the project (canonical JSON) to its file or a new path.
----@field set fun(args?: Steppe.project_set_args): Steppe.project_set_result Change project metadata (name, title, author, notes, Console 9, timebase).
+---@field set fun(args?: Steppe.project_set_args): Steppe.project_set_result Set project name, title, author, notes, Console 9, pan law or timebase.
 
 ---@class Steppe.project.template
 ---@field delete fun(args: Steppe.project_template_delete_args): Steppe.project_template_delete_result Delete a saved project template by name.

@@ -441,6 +441,14 @@ void registerTemplateCommands(cmd::Registry& registry) {
             doc.track["notes"] = strip.notes;
             doc.track["volume_db"] = strip.volumeDb;
             doc.track["pan"] = strip.pan;
+            // Pan mode and law (ADR-0066), written only when they are not the defaults.
+            const model::Track plain;
+            if (strip.panMode != plain.panMode)
+                doc.track["pan_mode"] = strip.panMode == model::PanMode::Dual ? "dual" : "width";
+            if (strip.width != plain.width) doc.track["width"] = strip.width;
+            if (strip.panLeft != plain.panLeft) doc.track["pan_left"] = strip.panLeft;
+            if (strip.panRight != plain.panRight) doc.track["pan_right"] = strip.panRight;
+            if (strip.panLaw) doc.track["pan_law"] = model::panLawSchema().encode(*strip.panLaw);
             static constexpr const char* kMonitor[] = {"off", "on", "auto"};
             doc.track["monitor"] = kMonitor[static_cast<std::size_t>(strip.record.monitor) % 3];
             auto main = encodeEffects(app, s, strip.chain);
@@ -514,7 +522,8 @@ void registerTemplateCommands(cmd::Registry& registry) {
             const std::string track = (*added)["track"].asString();
             json::Value set = json::Value::object();
             set["track"] = track;
-            for (const char* key : {"color", "notes", "volume_db", "pan"})
+            for (const char* key : {"color", "notes", "volume_db", "pan", "pan_mode", "width",
+                                    "pan_left", "pan_right", "pan_law"})
                 if (const json::Value* v = field(key); v && !v->isNull()) set[key] = *v;
             const bool channel = !type || !type->isString() || type->asString() == "channel";
             if (const json::Value* v = field("monitor"); channel && v && v->isString())

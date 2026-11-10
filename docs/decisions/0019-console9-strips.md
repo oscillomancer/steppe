@@ -11,6 +11,11 @@ end; routes may end at a plug-in key).
 be armed (they record their output) and hold audio items, which play after the
 plain gain/pan stage; it amends §1, §2 and §10.
 
+**Amendment, 2026-11-10:** [ADR-0066](0066-pan-modes-and-laws.md) replaces
+the Console 9 pan law with selectable laws (0 dB by default) and pan modes,
+removes the C9 Buss's fixed pan, and runs both stages at unity staging (no
+×0.7639 before the encode, ×φ after the decode); it amends §5, §6 and §9.
+
 ## Context
 
 Every mixer strip must have Airwindows' Console 9 built in: **Console 9

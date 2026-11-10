@@ -111,8 +111,10 @@ void addChecked(cmd::Registry& registry, cmd::Command<Args, Output> command) {
                             bool sound = false;
                             for (const auto& f : fields.asObject())
                                 if (f.key != "track" && f.key != "volume_db" && f.key != "pan" &&
-                                    f.key != "mute" && f.key != "solo" && f.key != "name" &&
-                                    f.key != "color" && f.key != "notes" &&
+                                    f.key != "pan_mode" && f.key != "width" &&
+                                    f.key != "pan_left" && f.key != "pan_right" &&
+                                    f.key != "pan_law" && f.key != "mute" && f.key != "solo" &&
+                                    f.key != "name" && f.key != "color" && f.key != "notes" &&
                                     f.key != "parent_send" && f.key != "locked" &&
                                     f.key != "hidden_tcp" && f.key != "hidden_mixer" &&
                                     f.key != "bypass_groups")

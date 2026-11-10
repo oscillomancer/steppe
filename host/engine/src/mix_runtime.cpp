@@ -34,7 +34,7 @@ bool entriesMatch(const model::IdMap<T>& a, const model::IdMap<T>& b, F&& same) 
 }
 
 // Whether `b` differs from `a` only in what a running plan takes without
-// compiling: strip levels and pans, send levels and pans that keep the send's
+// compiling: strip levels, pans, widths and dual pans, send levels and pans that keep the send's
 // encoding, VCA levels, and the points of held volume/pan envelopes in a
 // writing mode. Every other field is compared whole, so a field added to one
 // of these objects can never pass as a mix edit. `changed`: something did
@@ -65,9 +65,13 @@ bool mixOnly(const model::Session& a, const model::Session& b,
     if (!modules) return false;
     const bool tracks =
         entriesMatch(a.tracks, b.tracks, [&](model::Track x, const model::Track& y) {
-            changed |= x.volumeDb != y.volumeDb || x.pan != y.pan;
+            changed |= x.volumeDb != y.volumeDb || x.pan != y.pan || x.width != y.width ||
+                       x.panLeft != y.panLeft || x.panRight != y.panRight;
             x.volumeDb = y.volumeDb;
             x.pan = y.pan;
+            x.width = y.width;  // pan positions (ADR-0066); mode and law compile
+            x.panLeft = y.panLeft;
+            x.panRight = y.panRight;
             return x == y;
         });
     if (!tracks) return false;

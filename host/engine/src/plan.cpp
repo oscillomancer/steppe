@@ -21,6 +21,11 @@
 namespace supple::engine::detail {
 
 namespace {
+// A strip's pan controls (ADR-0066); a master's pan is a balance.
+PanSettings stripPan(const model::Project& project, const model::Track& t) {
+    if (t.type == model::StripType::Master) return {model::PanMode::Pan, t.pan, 100, -100, 100, {}};
+    return {t.panMode, t.pan, t.width, t.panLeft, t.panRight, model::panLawOf(project, t)};
+}
 
 std::int64_t tapOffset(const Node& n, model::Tap tap) {
     return tap == model::Tap::PreFx ? 0 : n.latChain;
@@ -313,6 +318,7 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         const model::Track& t = *s.tracks.find(n.id);
         n.volumeDb = t.volumeDb;
         n.pan = t.pan;
+        n.panSettings = stripPan(*s.project, t);
         n.type = t.type;
         n.master = t.type == model::StripType::Master;
         n.decodeInput = t.type != model::StripType::Channel;
@@ -332,7 +338,6 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
             n.silentTo = time::samplesAt(recorded->endSeconds, p.rate) - origin;
         }
         n.staticGain = stripGain(n.master, t.volumeDb);
-        n.staticPan = console9::nativePan(t.pan);
         n.encoder.init(console9::seedsFor(s.project->seed, (n.id.n << 3) | 1), p.linearConsole);
         n.keyEncoder.init(console9::seedsFor(s.project->seed, (n.id.n << 3) | 1), p.linearConsole);
         n.decoder.init(console9::seedsFor(s.project->seed, (n.id.n << 3) | 2), p.linearConsole);
@@ -538,11 +543,13 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         ed.volumeDb = r.volumeDb;
         ed.followPan = !r.pan.percent;
         ed.muted = r.mute;
-        ed.pan = r.pan.resolve(s.tracks.find(*r.from.track)->pan);
+        const model::Track& sourceTrack = *s.tracks.find(*r.from.track);
+        ed.pan = r.pan.resolve(sourceTrack.pan);
+        ed.source = stripPan(*s.project, sourceTrack);
         const double g = dbToGain(r.volumeDb);
-        auto [pl, pr] = panGains(ed.pan / 100.0, -3.0);
-        ed.gainL = g * pl;
-        ed.gainR = g * pr;
+        const PanMatrix pm = panMatrix(ed.panSettings(ed.pan));
+        ed.gainL = g * pm.ll;
+        ed.gainR = g * pm.rr;
         ed.mono = r.mono;
         ed.invert = r.phaseInvert;
         if (!r.channels.from.empty()) {
@@ -844,7 +851,6 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         e.stripPan = source.autoPan;
         e.stripMute = source.autoMute;
         e.staticGain = sendGain(e.volumeDb, e.tap, source.volumeDb);
-        e.staticPan = console9::nativePan(e.pan);
         const auto salt = std::rotl(source.id.n, 32) ^ ((e.route->n << 3) | 3);
         // A send into a rack is never Console 9 encoded (rack.md §2.4).
         e.encoder.init(console9::seedsFor(s.project->seed, salt), p.linearConsole || e.rackIn >= 0);
@@ -861,6 +867,9 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
     for (std::size_t i = 0; i < p.nodes.size(); ++i) {
         mix.strips[i].volumeDb.store(p.nodes[i].volumeDb, std::memory_order_relaxed);
         mix.strips[i].pan.store(p.nodes[i].pan, std::memory_order_relaxed);
+        mix.strips[i].width.store(p.nodes[i].panSettings.width, std::memory_order_relaxed);
+        mix.strips[i].panLeft.store(p.nodes[i].panSettings.left, std::memory_order_relaxed);
+        mix.strips[i].panRight.store(p.nodes[i].panSettings.right, std::memory_order_relaxed);
     }
     for (std::size_t i = 0; i < p.edges.size(); ++i) {
         mix.routes[i].volumeDb.store(p.edges[i].volumeDb, std::memory_order_relaxed);
@@ -1209,8 +1218,7 @@ Status prepare(Plan& p, const Session& s) {
             tc.end = time::samplesAt(span.endSec, p.rate) - origin + n.itemShift;
             const double g =
                 dbToGain(it.gainDb) * dbToGain(take.gainDb) * (take.phaseInvert ? -1.0 : 1.0);
-            const auto [pl, pr] =
-                take.pan == 0.0 ? std::pair{1.0, 1.0} : panGains(take.pan / 100.0, -3.0);
+            const auto [pl, pr] = balanceSides(take.pan / 100.0);  // ADR-0066 §4
             tc.gainL = g * pl;
             tc.gainR = g * pr;
             tc.fadeIn = time::samplesAt(it.fadeIn.length, p.rate);
@@ -1302,8 +1310,7 @@ Status prepare(Plan& p, const Session& s) {
             c.mode = take->channelMode;
             const double g =
                 dbToGain(it.gainDb) * dbToGain(take->gainDb) * (take->phaseInvert ? -1.0 : 1.0);
-            const auto [pl, pr] =
-                take->pan == 0.0 ? std::pair{1.0, 1.0} : panGains(take->pan / 100.0, -3.0);
+            const auto [pl, pr] = balanceSides(take->pan / 100.0);  // ADR-0066 §4
             c.gainL = g * pl;
             c.gainR = g * pr;
             c.fadeIn = time::samplesAt(it.fadeIn.length, p.rate);
@@ -1660,8 +1667,7 @@ bool runStage(Plan& p, Stage& st, Stereo& sum, std::uint32_t n, const host::Tran
               std::int64_t pos, const void* self) SUPPLE_RT;
 void automateStage(Stage& st, std::int64_t pos, std::uint32_t n, std::int64_t origin) SUPPLE_RT;
 // Audio edges carry only the encoded signal and PDC; key controls are conventional.
-void addEdge(Plan& p, Edge& e, double panLawDb, Stereo& into, std::int64_t pos,
-             std::uint32_t n) SUPPLE_RT {
+void addEdge(Plan& p, Edge& e, Stereo& into, std::int64_t pos, std::uint32_t n) SUPPLE_RT {
     if (e.rackNotes >= 0) return;
     const Stereo& tap = p.split && e.frontier ? e.frontierBuf : edgeSignal(p, e);
     e.tmp.copyFrom(tap, n);
@@ -1673,15 +1679,16 @@ void addEdge(Plan& p, Edge& e, double panLawDb, Stereo& into, std::int64_t pos,
             const bool muted = e.autoMute.active() ? e.autoMute.at(at) >= .5 : e.muted;
             const double g =
                 muted ? 0 : dbToGain(e.volumeCurve() ? e.autoVolume.at(at) : e.volumeDb);
-            const auto [pl, pr] = panGains((e.panCurve()                       ? e.autoPan.at(at)
-                                            : e.followPan && e.stripPanCurve() ? e.stripPan.at(at)
-                                                                               : e.pan) /
-                                               100,
-                                           panLawDb);
+            const double pan = e.panCurve()                       ? e.autoPan.at(at)
+                               : e.followPan && e.stripPanCurve() ? e.stripPan.at(at)
+                                                                  : e.pan;
+            const PanMatrix& m = e.panCache.at(e.panSettings(pan));
             if (e.mono) l = r = .5f * (l + r);
             const double sign = e.invert ? -1 : 1;
-            l *= static_cast<float>(sign * g * pl);
-            r *= static_cast<float>(sign * g * pr);
+            double pl, pr;
+            applyPan(m, l, r, pl, pr);
+            l = static_cast<float>(sign * g * pl);
+            r = static_cast<float>(sign * g * pr);
             e.applyMap(l, r);  // on the send's output, after its pan
         }
         into.l[i] += l;
@@ -1691,7 +1698,7 @@ void addEdge(Plan& p, Edge& e, double panLawDb, Stereo& into, std::int64_t pos,
 }  // namespace
 
 void addEdgeInto(Plan& p, Edge& e, Stereo& into, std::int64_t pos, std::uint32_t n) SUPPLE_RT {
-    addEdge(p, e, -3.0, into, pos, n);
+    addEdge(p, e, into, pos, n);
 }
 
 bool runModuleStage(Plan& p, Stage& st, Stereo& io, std::uint32_t n,
@@ -2554,7 +2561,7 @@ bool processTake(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std::uint
         if (tc.mute.active() && tc.mute.at(t) >= .5) g = 0.0;
         double l = tc.gainL * g, r = tc.gainR * g;
         if (tc.pan.active()) {
-            const auto [pl, pr] = panGains(tc.pan.at(t) / 100.0, -3.0);
+            const auto [pl, pr] = balanceSides(tc.pan.at(t) / 100.0);
             l *= pl;
             r *= pr;
         }
@@ -2586,7 +2593,7 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
     node.sum.clear(n);
     for (std::size_t ei : node.in)
         if (p.edges[ei].stage < 0 && !p.edges[ei].auxOnly)
-            addEdge(p, p.edges[ei], -3.0, node.sum, pos, n);
+            addEdge(p, p.edges[ei], node.sum, pos, n);
     // Monitored device input enters with the inputs (spec §1.1); auto
     // monitoring plays the timeline instead while playing without recording.
     // Device state belongs to the callback; renderer-only nodes have no
@@ -2761,7 +2768,7 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
             const int stageIndex = static_cast<int>(&st - node.chain.data());
             st.key.clear(n);
             for (std::size_t ei : node.in)
-                if (p.edges[ei].stage == stageIndex) addEdge(p, p.edges[ei], -3.0, st.key, pos, n);
+                if (p.edges[ei].stage == stageIndex) addEdge(p, p.edges[ei], st.key, pos, n);
             // Key pins: track channels into the detector (a key on 3/4).
             if (!st.keyPins.empty()) {
                 const float* kl = node.channel(st.keyPins[0]);
@@ -2811,13 +2818,14 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
     // moves); a master's meter is its output, the signal the device is given.
     const bool metered = node.meterSlot != 0xffff;
     double meterPeakL = 0.0, meterPeakR = 0.0, meterSumL = 0.0, meterSumR = 0.0;
-    double meterLeft = 0.0, meterRight = 0.0, meterPan = -1.0;
-    // Fader controls and mute act before the channel encode; masters balance decoded audio.
+    // Fader controls, pan and mute act before the channel encode; masters balance decoded audio.
     for (std::uint32_t i = 0; i < n; ++i) {
         const auto at = pos + i;
         const bool volumeCurve = node.volumeCurve(), panCurve = node.panCurve();
         double db = volumeCurve ? node.autoVolume.at(at) : node.volumeDb;
-        const double pan = panCurve ? node.autoPan.at(at) : node.pan;
+        PanSettings panSettings = node.panSettings;
+        panSettings.pan = panCurve ? node.autoPan.at(at) : node.pan;
+        const PanMatrix& panTarget = node.panCache.at(panSettings);
         bool ownMuted = node.autoMute.active() ? node.autoMute.at(at) >= .5 : node.mute;
         node.vcas.evaluate(at, db, ownMuted);
         if (!node.vcas.empty()) db = std::min(db, model::kFaderCeilingDb);
@@ -2825,29 +2833,26 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
         const double g =
             volumeCurve || !node.vcas.empty() ? stripGain(node.master, db) : node.staticGain;
         const bool automated = volumeCurve || node.vcas.automated() || panCurve;
-        node.fader.set(g, panCurve ? console9::nativePan(pan) : node.staticPan, muted, automated,
-                       p.smoothFrames);
+        node.fader.set(g, panTarget, muted, automated, p.smoothFrames);
         const double gate = node.fader.gate.next();
         const double gain = node.fader.gain.next() * gate;
-        const double nativePan = node.fader.pan.next();
+        const PanMatrix pan = node.fader.nextPan();
         if (!node.vcas.empty()) node.auxPostGain[i] = static_cast<float>(gain);
-        double keyGain = 0, keyGate = 0, keyPan = nativePan;
+        double keyGain = 0, keyGate = 0;
+        PanMatrix keyPan = pan;
         if (node.postKeyed) {
-            node.keyFader.set(g, panCurve ? console9::nativePan(pan) : node.staticPan, ownMuted,
-                              automated, p.smoothFrames);
+            node.keyFader.set(g, panTarget, ownMuted, automated, p.smoothFrames);
             keyGate = node.keyFader.gate.next();
             keyGain = node.keyFader.gain.next() * keyGate;
-            keyPan = node.keyFader.pan.next();
+            keyPan = node.keyFader.nextPan();
         }
         if (node.master) {
-            const double balance = nativePan * 2 - 1;
-            const double l = balance <= 0 ? 1 : std::cos(balance * std::numbers::pi / 2);
-            const double r = balance >= 0 ? 1 : std::cos(balance * std::numbers::pi / 2);
-            node.post.l[i] = node.sum.l[i] * static_cast<float>(gain * l);
-            node.post.r[i] = node.sum.r[i] * static_cast<float>(gain * r);
+            // A balance (pan mode, 0 dB law): one gain per side.
+            node.post.l[i] = node.sum.l[i] * static_cast<float>(gain * pan.ll);
+            node.post.r[i] = node.sum.r[i] * static_cast<float>(gain * pan.rr);
             if (node.postKeyed) {
-                node.postKey.l[i] = node.sum.l[i] * static_cast<float>(keyGain * l);
-                node.postKey.r[i] = node.sum.r[i] * static_cast<float>(keyGain * r);
+                node.postKey.l[i] = node.sum.l[i] * static_cast<float>(keyGain * keyPan.ll);
+                node.postKey.r[i] = node.sum.r[i] * static_cast<float>(keyGain * keyPan.rr);
             }
             // Its own items (ADR-0057): already mixed, so only the mute ramps them.
             if (postItems) {
@@ -2867,18 +2872,18 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
                 meterSumR += double(node.post.r[i]) * double(node.post.r[i]);
             }
         } else {
-            node.encoder.sample(node.sum.l[i], node.sum.r[i], node.post.l[i], node.post.r[i], gain,
-                                nativePan);
-            if (node.postKeyed)
-                node.keyEncoder.sample(node.sum.l[i], node.sum.r[i], node.postKey.l[i],
-                                       node.postKey.r[i], keyGain, keyPan);
+            double pl, pr;
+            applyPan(pan, node.sum.l[i], node.sum.r[i], pl, pr);
+            if (node.postKeyed) {
+                double kl, kr;
+                applyPan(keyPan, node.sum.l[i], node.sum.r[i], kl, kr);
+                node.keyEncoder.sample(static_cast<float>(kl), static_cast<float>(kr),
+                                       node.postKey.l[i], node.postKey.r[i], keyGain);
+            }
+            node.encoder.sample(static_cast<float>(pl), static_cast<float>(pr), node.post.l[i],
+                                node.post.r[i], gain);
             if (metered) {
-                if (nativePan != meterPan) {
-                    console9::panGains(console9::panAngle(nativePan), meterLeft, meterRight);
-                    meterPan = nativePan;
-                }
-                const double l = double(node.sum.l[i]) * gain * meterLeft;
-                const double r = double(node.sum.r[i]) * gain * meterRight;
+                const double l = pl * gain, r = pr * gain;
                 meterPeakL = std::max(meterPeakL, std::fabs(l));
                 meterPeakR = std::max(meterPeakR, std::fabs(r));
                 meterSumL += l * l;
@@ -2896,7 +2901,6 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
     for (std::size_t ei : node.out) {
         Edge& e = p.edges[ei];
         const Stereo& input = e.tap == model::Tap::PreFx ? node.preFx : node.preFader;
-        double previousRackPan = -1, rackLeftGain = 0, rackRightGain = 0;
         for (std::uint32_t i = 0; i < n; ++i) {
             const auto at = pos + i;
             const bool post = e.tap == model::Tap::PostFader;
@@ -2923,9 +2927,9 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
             const double g = volumeCurve || (post && (stripVolumeCurve || !e.vcas.empty()))
                                  ? db <= model::kSilenceDb ? 0.0 : console9::faderGain(db)
                                  : e.staticGain;
-            const double nativePan =
-                panCurve || (e.followPan && stripPanCurve) ? console9::nativePan(pan) : e.staticPan;
-            e.fader.set(g, nativePan, muted,
+            // A following send takes the strip's mode, positions and law (ADR-0066).
+            const PanMatrix& panTarget = e.panCache.at(e.panSettings(pan));
+            e.fader.set(g, panTarget, muted,
                         volumeCurve || panCurve ||
                             (post && (stripVolumeCurve || e.vcas.automated())) ||
                             (e.followPan && stripPanCurve),
@@ -2937,21 +2941,18 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
                 r = -r;
             }
             const double sendLevel = e.fader.gain.next() * e.fader.gate.next();
-            const double sendPan = e.fader.pan.next();
+            const PanMatrix sendPan = e.fader.nextPan();
+            double pl, pr;
+            applyPan(sendPan, l, r, pl, pr);
             if (e.rackIn >= 0) {
                 // A rack input is a linear tap, including its route controls,
-                // without the Console 9 encoder's fixed trim (rack.md §2.4).
-                if (sendPan != previousRackPan) {
-                    console9::panGains(console9::panAngle(sendPan), rackLeftGain, rackRightGain);
-                    previousRackPan = sendPan;
-                }
+                // and has no Console 9 encoder (rack.md §2.4).
                 const double level = std::clamp(sendLevel, 0., 4.);
-                const double cleanLeft = std::isfinite(l) ? double(l) : 0.;
-                const double cleanRight = std::isfinite(r) ? double(r) : 0.;
-                e.encoded.l[i] = static_cast<float>(cleanLeft * rackLeftGain * level);
-                e.encoded.r[i] = static_cast<float>(cleanRight * rackRightGain * level);
+                e.encoded.l[i] = static_cast<float>(pl * level);
+                e.encoded.r[i] = static_cast<float>(pr * level);
             } else {
-                e.encoder.sample(l, r, e.encoded.l[i], e.encoded.r[i], sendLevel, sendPan);
+                e.encoder.sample(static_cast<float>(pl), static_cast<float>(pr), e.encoded.l[i],
+                                 e.encoded.r[i], sendLevel);
             }
             // The channel map acts on the send's output (after its pan): the
             // encode is per channel, so moving encoded channels is exact.
@@ -3504,6 +3505,9 @@ void publishMix(Plan& p, const model::Session& s, std::span<const model::EnvTarg
         if (!t) continue;
         store(mix.strips[i], t->volumeDb, t->pan, held(holds, id, "volume"),
               held(holds, id, "pan"));
+        mix.strips[i].width.store(t->width, relaxed);
+        mix.strips[i].panLeft.store(t->panLeft, relaxed);
+        mix.strips[i].panRight.store(t->panRight, relaxed);
     }
     for (std::size_t i = 0; i < p.edges.size(); ++i) {
         const Edge& e = p.edges[i];
@@ -3543,7 +3547,11 @@ void syncMix(Plan& p, int liveClass) SUPPLE_RT {
         n.holdVolume = slot.holdVolume.load(relaxed);
         n.holdPan = slot.holdPan.load(relaxed);
         n.staticGain = stripGain(n.master, n.volumeDb);
-        n.staticPan = console9::nativePan(n.pan);
+        if (!n.master) {
+            n.panSettings.width = slot.width.load(relaxed);
+            n.panSettings.left = slot.panLeft.load(relaxed);
+            n.panSettings.right = slot.panRight.load(relaxed);
+        }
         syncVcas(n.vcas);
     }
     // An edge belongs to whoever reads it: a key route to its destination
@@ -3562,7 +3570,11 @@ void syncMix(Plan& p, int liveClass) SUPPLE_RT {
         e.holdStripVolume = source.holdVolume.load(relaxed);
         e.holdStripPan = source.holdPan.load(relaxed);
         e.staticGain = sendGain(e.volumeDb, e.tap, source.volumeDb.load(relaxed));
-        e.staticPan = console9::nativePan(e.pan);
+        if (!p.nodes[e.from].master) {
+            e.source.width = source.width.load(relaxed);
+            e.source.left = source.panLeft.load(relaxed);
+            e.source.right = source.panRight.load(relaxed);
+        }
         syncVcas(e.vcas);
     }
     std::atomic_thread_fence(std::memory_order_acquire);

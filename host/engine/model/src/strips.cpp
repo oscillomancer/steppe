@@ -35,6 +35,38 @@ schema::Schema<StripType> stripTypeSchema() {
                                            {StripType::Master, "master"}});
 }
 
+schema::Schema<PanLaw> panLawSchema() {
+    const auto number = schema::number().unit(schema::Unit::dB);
+    auto spec = number.jsonSchema();
+    spec["enum"] = json::Value::array();
+    for (const double db : kPanLawsDb) spec["enum"].asArray().push_back(db);
+    schema::Schema<double> db{
+        "pan_law_db",
+        [number](const json::Value& v, double& out, schema::DecodeCtx& ctx,
+                 const std::string& path) {
+            if (!number.decodeInto(v, out, ctx, path)) return false;
+            if (std::find(kPanLawsDb.begin(), kPanLawsDb.end(), out) == kPanLawsDb.end()) {
+                ctx.error("pan_law.db", "a pan law is 0, -2.5, -3, -4.5 or -6 dB", path,
+                          "set db to one of 0, -2.5, -3, -4.5 or -6");
+                return false;
+            }
+            return true;
+        },
+        [number](double v) { return number.encode(v); }, spec};
+    return schema::object<PanLaw>("pan_law")
+        .field("db", &PanLaw::db, db)
+        .defaultValue(0.0)
+        .field("boost", &PanLaw::boost, schema::boolean())
+        .defaultValue(false)
+        .omitIfDefault()
+        .build();
+}
+
+schema::Schema<PanMode> panModeSchema() {
+    return schema::enumeration<PanMode>(
+        {{PanMode::Pan, "pan"}, {PanMode::Dual, "dual"}, {PanMode::Width, "width"}});
+}
+
 schema::Schema<RoutePan> routePanSchema() {
     auto numeric = schema::number().range(-100, 100).unit(schema::Unit::percent);
     json::Value exported = json::Value::object();
@@ -91,6 +123,15 @@ Status validateStripRules(const Session& s) {
             if (t.parent || !roots.contains(e.id))
                 return trackError("a master must be a listed root", path + "/parent",
                                   "give a master no parent and list it in project.masters");
+            // A master's pan is a balance (ADR-0019 §5); modes and laws are
+            // a channel's or buss's (ADR-0066).
+            const Track plain;
+            if (t.panMode != plain.panMode || t.width != plain.width ||
+                t.panLeft != plain.panLeft || t.panRight != plain.panRight || t.panLaw)
+                return trackError("a master's pan is a balance, with no pan mode or law",
+                                  path + (t.panLaw ? "/pan_law" : "/pan_mode"),
+                                  "use pan on the master; set pan modes and laws on channels "
+                                  "and busses");
         } else {
             const Track* parent = t.parent ? s.tracks.find(*t.parent) : nullptr;
             if (!parent || parent->type == StripType::Channel)
