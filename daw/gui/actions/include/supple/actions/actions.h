@@ -64,6 +64,8 @@ struct Action {
     SoftTakeover takeover = SoftTakeover::None;
     // Set: whether the action applies now (menus grey it when false). Unset: always.
     std::function<bool(const Context&)> enabled;
+    // Set: whether the action's choice holds now (menus tick it). Unset: never.
+    std::function<bool(const Context&)> checked;
     bool fromRegistry = false;
 };
 

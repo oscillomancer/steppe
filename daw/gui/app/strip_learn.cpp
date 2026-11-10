@@ -137,19 +137,22 @@ void openStripLearn(ui::Root& root, AppActions& actions, StripControl control) {
     openLearnDialog(root, actions, actions.app(), std::move(request));
 }
 
-void openStripLearnMenu(ui::Root& root, AppActions& actions, StripControl control,
-                        const ui::Rect& anchor) {
-    if (control.objects.empty()) return;
-    const model::Session s = actions.app().head();
+std::string stripLearnLabel(const model::Session& s, const StripControl& control) {
     std::string label = "MIDI learn: " + stripControlLabel(control.param) + "…";
     for (const model::Id& id : control.objects)
         if (const model::ControlLearn* bound = bindingOf(s, id, control.param)) {
             label += " (" + engine::describe(bound->control) + ")";
             break;
         }
+    return label;
+}
+
+void openStripLearnMenu(ui::Root& root, AppActions& actions, StripControl control,
+                        const ui::Rect& anchor) {
+    if (control.objects.empty()) return;
     std::vector<ui::MenuItem> items;
     ui::MenuItem learn;
-    learn.label = std::move(label);
+    learn.label = stripLearnLabel(actions.app().head(), control);
     ui::Root* r = &root;
     AppActions* a = &actions;
     learn.run = [r, a, control] { openStripLearn(*r, *a, control); };

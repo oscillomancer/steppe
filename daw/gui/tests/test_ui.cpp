@@ -720,6 +720,68 @@ TEST_CASE("mixer controls: fader taper and gestures, pan, meter hold and clip, t
     CHECK(solo.on());
 }
 
+TEST_CASE("a split pan control: two bars, each its own value and home (ADR-0066)") {
+    REQUIRE_GL();
+    Root root(*fixture().window, fixture().fonts, Theme::dark());
+    auto content = std::make_unique<Node>("root");
+    content->layout.dir = Layout::Dir::Row;
+    content->layout.padding = Insets::all(8);
+    auto& col = content->emplace<Node>("col");
+    col.layout.dir = Layout::Dir::Column;
+    col.layout.width = SizeRule::fixed(200);
+    auto& pan = col.emplace<PanControl>("pan");
+    std::vector<std::pair<double, Gesture>> first, second;
+    pan.onChange = [&](double v, Gesture g) { first.emplace_back(v, g); };
+    pan.onSecondChange = [&](double v, Gesture g) { second.emplace_back(v, g); };
+    pan.setSplit(PanControl::Split::Dual);
+    pan.setValue(-100);
+    pan.setSecond(100);
+    root.setContent(std::move(content));
+    root.frame(false);
+    const Rect b = pan.bounds();
+    // A drag in the right half moves the second bar only.
+    const Point right{b.x + b.w * 0.9f, b.y + 8};
+    root.pointer({PointerEvent::Type::Down, right, 1});
+    root.pointer({PointerEvent::Type::Move, {right.x - b.w * 0.2f, right.y}, 1});
+    root.pointer({PointerEvent::Type::Up, {right.x - b.w * 0.2f, right.y}, 1});
+    CHECK(first.empty());
+    REQUIRE_FALSE(second.empty());
+    CHECK(pan.second() < 100);
+    CHECK(pan.part() == 1);
+    CHECK(pan.value() == -100);
+    // A double-click in the left half sends dual's left input home: hard left.
+    pan.setValue(20);
+    PointerEvent dbl{PointerEvent::Type::Down, {b.x + b.w * 0.1f, b.y + 8}, 1};
+    dbl.clicks = 2;
+    root.pointer(dbl);
+    root.pointer({PointerEvent::Type::Up, {b.x + b.w * 0.1f, b.y + 8}, 1});
+    REQUIRE_FALSE(first.empty());
+    CHECK(first.back().first == -100);
+    CHECK(first.back().second == Gesture::Set);
+    // Width: the second bar's home is 100%, and the text names both.
+    pan.setSplit(PanControl::Split::Width);
+    pan.setValue(0);
+    pan.setSecond(40);
+    CHECK(pan.valueText() == "C, width 40%");
+    PointerEvent home{PointerEvent::Type::Down, right, 1};
+    home.clicks = 2;
+    root.pointer(home);
+    root.pointer({PointerEvent::Type::Up, right, 1});
+    CHECK(pan.second() == 100);
+    // Keys move the chosen bar: down picks the second, up the first.
+    root.focus(&pan);
+    root.key(SDLK_DOWN);
+    root.key(SDLK_LEFT);
+    CHECK(pan.second() == 95);
+    root.key(SDLK_UP);
+    root.key(SDLK_RIGHT);
+    CHECK(pan.value() == 5);
+    // Unsplit, it is one bar again.
+    pan.setSplit(PanControl::Split::None);
+    pan.setValue(-30);
+    CHECK(pan.valueText() == "30L");
+}
+
 TEST_CASE("the normalized slider: relative drags, a default, keys") {
     REQUIRE_GL();
     Root root(*fixture().window, fixture().fonts, Theme::dark());

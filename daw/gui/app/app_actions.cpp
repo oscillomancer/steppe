@@ -315,9 +315,66 @@ AppActions::AppActions(const cmd::Registry& registry, cmd::Dispatcher& dispatche
     registry_.add(remove);
     for (auto [name, label] : {std::pair{"beats", "Project: items follow the beat"},
                                {"time", "Project: items follow time"},
-                               {"beats_position", "Project: items follow the beat (start only)"}})
-        registry_.add(bound(std::string("project.timebase:") + name, label, "project.set",
-                            obj({{"timebase", name}})));
+                               {"beats_position", "Project: items follow the beat (start only)"}}) {
+        auto timebase = bound(std::string("project.timebase:") + name, label, "project.set",
+                              obj({{"timebase", name}}));
+        timebase.checked = [this, name](const actions::Context&) {
+            const model::Timebase tb = app_.head().project->timebase;
+            return std::string_view(name) == (tb == model::Timebase::Time    ? "time"
+                                              : tb == model::Timebase::Beats ? "beats"
+                                                                             : "beats_position");
+        };
+        registry_.add(std::move(timebase));
+    }
+    // The project's pan law (ADR-0066): channels and busses that follow it.
+    struct PanLawEntry {
+        double db;
+        const char *id, *label;
+    };
+    for (const PanLawEntry& entry :
+         {PanLawEntry{0.0, "project.pan_law:0", "Project: pan law: 0 dB"},
+          PanLawEntry{-2.5, "project.pan_law:-2.5", "Project: pan law: \u22122.5 dB"},
+          PanLawEntry{-3.0, "project.pan_law:-3", "Project: pan law: \u22123 dB"},
+          PanLawEntry{-4.5, "project.pan_law:-4.5", "Project: pan law: \u22124.5 dB"},
+          PanLawEntry{-6.0, "project.pan_law:-6", "Project: pan law: \u22126 dB"}}) {
+        const double db = entry.db;
+        const char* label = entry.label;
+        actions::Action law;
+        law.id = entry.id;
+        law.name = label;
+        law.description =
+            "Pan channels and busses that follow the project with this law: the centre's cut, "
+            "or with gain compensation the sides' boost.";
+        law.builtin = [this, db](const actions::Context&) -> Result<json::Value> {
+            return dispatcher_.execute(
+                {"project.set",
+                 obj({{"pan_law",
+                       obj({{"db", db}, {"boost", app_.head().project->panLaw.boost}})}}),
+                 kOrigin});
+        };
+        law.checked = [this, db](const actions::Context&) {
+            return app_.head().project->panLaw.db == db;
+        };
+        registry_.add(std::move(law));
+    }
+    {
+        actions::Action boost;
+        boost.id = "project.pan_law.boost";
+        boost.name = "Project: gain compensation (boost pans)";
+        boost.description =
+            "Keep a centred source at 0 dB and boost the sides by the pan law instead of "
+            "cutting the centre (channels and busses that follow the project).";
+        boost.builtin = [this](const actions::Context&) -> Result<json::Value> {
+            const model::PanLaw law = app_.head().project->panLaw;
+            return dispatcher_.execute(
+                {"project.set", obj({{"pan_law", obj({{"db", law.db}, {"boost", !law.boost}})}}),
+                 kOrigin});
+        };
+        boost.checked = [this](const actions::Context&) {
+            return app_.head().project->panLaw.boost;
+        };
+        registry_.add(std::move(boost));
+    }
 
     // Followed by a MIDI controller (ADR-0027).
     addControl(

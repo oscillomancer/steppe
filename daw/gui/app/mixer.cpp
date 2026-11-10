@@ -10,6 +10,7 @@
 
 #include <SDL3/SDL_keycode.h>
 
+#include "pan_menu.h"
 #include "panel_grip.h"
 #include "panel_height.h"
 #include "rack_controls.h"
@@ -933,7 +934,11 @@ void Mixer::rebuild() {
                 // Strip coordinates are the window's (the row lays them out in place).
                 // On a fader, pan or button: its MIDI learn (ADR-0058).
                 if (const char* param = learnableAt(id.str(), p)) {
-                    openStripLearnMenu(root_, actions_, {{id}, param}, {p.x, p.y, 1, 1});
+                    // The pan's menu adds its mode and law (ADR-0066).
+                    if (std::string_view(param) == "pan")
+                        openPanMenu(root_, actions_, id, {p.x, p.y, 1, 1});
+                    else
+                        openStripLearnMenu(root_, actions_, {{id}, param}, {p.x, p.y, 1, 1});
                     return;
                 }
                 trackMenu_.open(id, {p.x, p.y, 1, 1}, {});
@@ -1160,14 +1165,24 @@ void Mixer::rebuild() {
         st.polarity->layout.height = st.mono->layout.height = ui::SizeRule::fixed(14);
         st.polarity->pill = st.mono->pill = true;
         st.pan = &frame->emplace<ui::PanControl>("mixer.pan." + tid);
-        st.pan->onChange = [this, tid, control = st.pan](double pan, ui::Gesture g) {
-            if (g == ui::Gesture::Begin) ++gesture_;
-            if (g == ui::Gesture::Begin || g == ui::Gesture::End) return;
-            (void)set(
-                tid, "pan", json::Value(pan),
-                g == ui::Gesture::Move ? "mixer.pan:" + tid + ":" + std::to_string(gesture_) : "",
-                bool(control->gestureModifiers() & ui::kAlt));
+        // Each bar sets what the strip's pan mode gives it (ADR-0066).
+        auto panBar = [this, tid, id, control = st.pan](int part) {
+            return [this, tid, id, control, part](double value, ui::Gesture g) {
+                if (g == ui::Gesture::Begin) ++gesture_;
+                if (g == ui::Gesture::Begin || g == ui::Gesture::End) return;
+                const model::Track* now = app_.head().tracks.find(id);
+                if (!now) return;
+                const char* field = panField(*now, part);
+                (void)set(tid, field, json::Value(value),
+                          g == ui::Gesture::Move ? "mixer." + std::string(field) + ":" + tid + ":" +
+                                                       std::to_string(gesture_)
+                                                 : "",
+                          bool(control->gestureModifiers() & ui::kAlt));
+            };
         };
+        st.pan->onChange = panBar(0);
+        st.pan->onSecondChange = panBar(1);
+        showPan(*st.pan, t);
         auto& faderRow = frame->emplace<ui::Node>("mixer.faderrow." + tid);
         faderRow.layout.dir = ui::Layout::Dir::Row;
         faderRow.layout.height = ui::SizeRule::fixed(kFaderH);
@@ -1665,7 +1680,7 @@ void Mixer::update() {
             if (!row) continue;
             row->setText(sendText(s, *route.value));
         }
-        st.pan->setValue(t->pan);
+        showPan(*st.pan, *t);
         st.mute->setOn(t->mute);
         st.solo->setOn(t->solo != model::Solo::Off);
         st.polarity->enabled = st.mono->enabled = !t->freeze;

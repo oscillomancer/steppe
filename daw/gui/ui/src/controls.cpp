@@ -191,67 +191,121 @@ PanControl::PanControl(std::string id) : Node(std::move(id), Role::Slider) {
 }
 
 void PanControl::setValue(double pan) {
-    if (dragging_ || pan == pan_) return;
+    if ((dragging_ && part_ == 0) || pan == pan_) return;
     pan_ = pan;
     invalidate();
 }
 
-std::string PanControl::valueText() const {
-    if (std::abs(pan_) < 0.5) return "C";
+void PanControl::setSecond(double value) {
+    if ((dragging_ && part_ == 1) || value == second_) return;
+    second_ = value;
+    invalidate();
+}
+
+void PanControl::setSplit(Split split) {
+    if (split == split_) return;
+    split_ = split;
+    dragging_ = false;
+    part_ = 0;
+    invalidate();
+}
+
+namespace {
+std::string position(double pan) {
+    if (std::abs(pan) < 0.5) return "C";
     char buf[16];
-    std::snprintf(buf, sizeof buf, "%.0f%s", std::abs(pan_), pan_ < 0 ? "L" : "R");
+    std::snprintf(buf, sizeof buf, "%.0f%s", std::abs(pan), pan < 0 ? "L" : "R");
     return buf;
+}
+}  // namespace
+
+std::string PanControl::valueText() const {
+    char buf[16];
+    switch (split_) {
+        case Split::Dual:
+            return position(pan_) + " / " + position(second_);
+        case Split::Width:
+            std::snprintf(buf, sizeof buf, "%.0f%%", second_);
+            return position(pan_) + ", width " + buf;
+        case Split::None:
+        default:
+            return position(pan_);
+    }
 }
 
 Size PanControl::measure(const Canvas&, Size available) { return {available.w, 16}; }
 
-void PanControl::change(double pan, Gesture g) {
-    pan = std::clamp(std::round(pan * 10) / 10, -100.0, 100.0);
-    if (pan != pan_ || g == Gesture::Begin || g == Gesture::End) {
-        pan_ = pan;
+double PanControl::home(int part) const {
+    if (split_ == Split::Dual) return part == 0 ? -100 : 100;
+    return part == 0 ? 0 : 100;  // the pan centred; the width as recorded
+}
+
+Rect PanControl::track(int part) const {
+    const Rect b = bounds();
+    const Rect whole{b.x + 2, b.y + 3, b.w - 4, b.h - 6};
+    if (split_ == Split::None) return whole;
+    const float half = (whole.w - 2) / 2;
+    return {part == 0 ? whole.x : whole.x + half + 2, whole.y, half, whole.h};
+}
+
+void PanControl::change(int part, double value, Gesture g) {
+    value = std::clamp(std::round(value * 10) / 10, -100.0, 100.0);
+    double& held = part == 0 ? pan_ : second_;
+    if (value != held || g == Gesture::Begin || g == Gesture::End) {
+        held = value;
+        part_ = part;
         invalidate();
-        auto callback = onChange;
-        if (callback) callback(pan_, g);
+        auto callback = part == 0 ? onChange : onSecondChange;
+        if (callback) callback(held, g);
     }
 }
 
 void PanControl::paint(Canvas& c) {
     const Theme& t = c.theme();
-    const Rect b = bounds();
-    const Rect tr{b.x + 2, b.y + 3, b.w - 4, b.h - 6};
-    c.fillRound(tr, 3, t.color("ground"));
-    const float mid = tr.x + tr.w / 2;
-    const float x = mid + static_cast<float>(pan_ / 100.0) * (tr.w / 2);
-    c.fillRect({std::min(mid, x), tr.y, std::abs(x - mid), tr.h},
-               t.color("accent").withAlpha(0.7f));
-    c.fillRect({mid, tr.y - 2, 1, tr.h + 4}, t.color("ink-quiet"));
-    c.fillRect({x - 1, tr.y - 1, 2, tr.h + 2},
-               dragging_ || focused() ? t.color("focus") : t.color("ink"));
+    for (int part = 0; part < (split_ == Split::None ? 1 : 2); ++part) {
+        const Rect tr = track(part);
+        const double value = part == 0 ? pan_ : second_;
+        c.fillRound(tr, 3, t.color("ground"));
+        const float mid = tr.x + tr.w / 2;
+        const float x = mid + static_cast<float>(value / 100.0) * (tr.w / 2);
+        // A width reads from the centre (mono) out; the rest are positions.
+        const bool width = split_ == Split::Width && part == 1;
+        c.fillRect({std::min(mid, x), tr.y, std::abs(x - mid), tr.h},
+                   t.color(width ? "ink-quiet" : "accent").withAlpha(0.7f));
+        c.fillRect({mid, tr.y - 2, 1, tr.h + 4}, t.color("ink-quiet"));
+        const bool active = (dragging_ || focused()) && (split_ == Split::None || part == part_);
+        c.fillRect({x - 1, tr.y - 1, 2, tr.h + 2}, active ? t.color("focus") : t.color("ink"));
+    }
 }
 
 bool PanControl::onPointer(const PointerEvent& e) {
     if (e.type == PointerEvent::Type::Down || e.type == PointerEvent::Type::Wheel)
         gestureMods_ = e.mods;
     using T = PointerEvent::Type;
+    // Split: the bar under the pointer (the right half is the second).
+    const int under = split_ != Split::None && e.pos.x >= track(1).x - 1 ? 1 : 0;
     switch (e.type) {
-        case T::Down:
+        case T::Down: {
             if (e.button != 1) return false;
             if (Root* r = root()) r->focus(this);
+            part_ = under;
             if (e.clicks >= 2) {
-                change(0.0, Gesture::Set);
+                change(under, home(under), Gesture::Set);
                 return true;
             }
             dragging_ = true;
             press_ = e.pos;
-            pressPan_ = pan_;
+            pressValue_ = under == 0 ? pan_ : second_;
             if (Root* r = root()) r->capture(this);
-            change(pan_, Gesture::Begin);
+            change(under, pressValue_, Gesture::Begin);
             return true;
+        }
         case T::Move: {
             if (!dragging_) return false;
             const double scale = (e.mods & kShift) ? 0.1 : 1.0;
-            change(pressPan_ +
-                       static_cast<double>((e.pos.x - press_.x) / std::max(1.0f, bounds().w - 4)) *
+            change(part_,
+                   pressValue_ +
+                       static_cast<double>((e.pos.x - press_.x) / std::max(1.0f, track(part_).w)) *
                            200 * scale,
                    Gesture::Move);
             return true;
@@ -261,13 +315,16 @@ bool PanControl::onPointer(const PointerEvent& e) {
             if (!dragging_) return false;
             dragging_ = false;
             if (Root* r = root()) r->capture(nullptr);
-            change(pan_, Gesture::End);
+            change(part_, part_ == 0 ? pan_ : second_, Gesture::End);
             return true;
-        case T::Wheel:
+        case T::Wheel: {
             if (!wheel) return false;  // the wheel scrolls what holds it
-            change(pan_ + static_cast<double>(e.wheelY) * ((e.mods & kShift) ? 1 : 5),
+            part_ = under;
+            const double value = under == 0 ? pan_ : second_;
+            change(under, value + static_cast<double>(e.wheelY) * ((e.mods & kShift) ? 1 : 5),
                    Gesture::Set);
             return true;
+        }
         default:
             return false;
     }
@@ -276,16 +333,24 @@ bool PanControl::onPointer(const PointerEvent& e) {
 bool PanControl::onKey(const KeyEvent& e) {
     gestureMods_ = e.mods;
     const double step = (e.mods & kShift) ? 1 : 5;
+    const double value = part_ == 0 ? pan_ : second_;
     switch (e.key) {
         case SDLK_LEFT:
-            change(pan_ - step, Gesture::Set);
+            change(part_, value - step, Gesture::Set);
             return true;
         case SDLK_RIGHT:
-            change(pan_ + step, Gesture::Set);
+            change(part_, value + step, Gesture::Set);
+            return true;
+        case SDLK_UP:
+        case SDLK_DOWN:
+            // Split: up and down choose the bar the arrows move.
+            if (split_ == Split::None) return false;
+            part_ = e.key == SDLK_DOWN ? 1 : 0;
+            invalidate();
             return true;
         case SDLK_0:
         case SDLK_HOME:
-            change(0, Gesture::Set);
+            change(part_, home(part_), Gesture::Set);
             return true;
         default:
             return false;

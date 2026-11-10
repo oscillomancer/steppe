@@ -299,6 +299,34 @@ If another edit changes an automation item's amplitude, baseline or geometry
 while you drag its points, header or edge, the drag is cancelled with a message.
 Start the drag again using the updated item.
 
+## Panning
+
+Right-click a channel's or buss's pan, in the track list or the mixer, to
+choose how it pans:
+
+- **Pan mode: pan** (the default) balances a stereo track and pans a mono
+  one.
+- **Pan mode: dual pan** splits the control in two: the left bar places
+  the left input and the right bar the right input. Narrow, widen, move or
+  swap the image without losing either side.
+- **Pan mode: pan and width** also splits it: the left bar places the
+  image, the right bar sets its width (100% as recorded, 0% mono, below 0
+  the sides swapped). Panning out narrows the image so both sides stay
+  heard.
+
+Double-click a bar to send it home (centre, hard left or right in dual pan,
+100% width). With the control focused, Up and Down choose a bar and Left and
+Right move it.
+
+The same menu sets the **pan law**: how much a centred mono signal is cut.
+**Project** follows the project's law, set in **Project** in the menu bar;
+the others (0, −2.5, −3, −4.5 and −6 dB) give the strip its own. 0 dB, the
+default, never cuts or boosts, so a centred signal keeps its level through
+any number of busses. A cut law applies at every strip a centred signal
+passes. **Gain compensation (boost pans)** keeps the centre at 0 dB and
+boosts the sides instead, which can clip a loud recording. A master's pan is
+a plain balance, with no mode or law.
+
 ## Routing
 
 **View > Routing matrix**, or a strip's **out** button, opens a grid of what

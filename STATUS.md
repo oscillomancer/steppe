@@ -180,7 +180,11 @@ instructions are in `docs/guides/installing.md`.
   every node, plug-ins and bridged plug-ins included, runs with FTZ/DAZ in
   every executor, and owned audio threads prefault their stacks (ADR-0025).
 - **Strips and routing** (ADR-0019 to ADR-0022): typed channel, buss and
-  master strips with Console 9 summing (switchable, level-matched); routes
+  master strips with Console 9 summing (switchable, level-matched; unity
+  staging, so a hop costs nothing, ADR-0066); pan modes (pan, dual pan, pan
+  and width) and pan laws (0 dB by default, −2.5 to −6 dB, gain
+  compensation) per project and per strip, from the pan's right-click menu
+  and the Project menu (ADR-0066); routes
   with taps, channel maps, mono and polarity; sidechain keys (an unrouted
   key deactivates a plug-in's key port or bus, so it can key from its own
   input); up to 128
@@ -305,7 +309,7 @@ instructions are in `docs/guides/installing.md`.
   device/source can be cleared with null. Armed channels record their rack Out audio input as stereo WAV,
   including input FX, loop/punch takes, recovery and undo.
   Sends into rack In ports preserve the tap at the route's level and pan,
-  without Console 9 trim, with the console enabled or disabled.
+  without a Console 9 encode, with the console enabled or disabled.
   Rack audio and Note Out routes now participate in read-ahead PDC, including
   oversampling and runtime latency changes (ADR-0064); `rack.get` reports
   the node and each output latency (default reads prepared timing, full can
@@ -848,6 +852,11 @@ Library boundaries:
   on Linux, and native macOS/Windows CI has not run on it.
 
 Engine and hosting:
+- Pan modes (ADR-0066): `width`, `pan_left` and `pan_right` have no
+  envelopes or MIDI learn, and group links and selection edits carry `pan`
+  only; `pan` automation does nothing in dual mode. Projects from before
+  ADR-0066 play louder (about 3.5 dB for a channel into a master, plus about
+  6.5 dB per buss on the way); there is no migration.
 - Modular racks (ADR-0062/0064): Racks do not follow a
   track's playrate map;
   cables into a plugin module's parameters modulate CLAP plug-ins only

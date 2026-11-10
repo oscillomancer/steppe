@@ -13,6 +13,7 @@
 
 #include "app_actions.h"
 #include "supple/model/ids.h"
+#include "supple/model/session.h"
 #include "supple/ui/root.h"
 
 namespace supple::gui {
@@ -27,6 +28,9 @@ struct StripControl {
 
 // The control's name for people: "Volume", "Pre-FX tap", …
 std::string stripControlLabel(std::string_view param);
+
+// Its menu entry: "MIDI learn: Pan…", naming what is bound now.
+std::string stripLearnLabel(const model::Session& s, const StripControl& control);
 
 // The control's right-click menu at `anchor`: "MIDI learn…" (naming what is
 // bound now). OK in the dialog binds every object in one undo step; Remove

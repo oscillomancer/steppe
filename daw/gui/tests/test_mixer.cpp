@@ -1690,6 +1690,76 @@ TEST_CASE("mixer: a right-click on a fader or button offers MIDI learn, elsewher
     CHECK(f.root->popupOpen());  // the track's menu
 }
 
+TEST_CASE("mixer: a pan's right-click menu sets its mode and law; its bars follow (ADR-0066)") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto a = f.addTrack("channel", "A");
+    f.refresh();
+    const auto open = [&] {
+        const ui::Point p = f.centre(f.strip(a).pan);
+        f.pointer(ui::PointerEvent::Type::Down, p, 1, 0, 3);
+        f.pointer(ui::PointerEvent::Type::Up, p, 1, 0, 3);
+        ui::Node* menu = f.root->find("strip.pan.menu");
+        REQUIRE(menu);
+        return menu;
+    };
+    // Rows: three modes, a rule, the project's law, five laws, boost, a rule, MIDI learn.
+    const auto pick = [&](ui::Node* menu, std::size_t row) {
+        const auto items = ui::menuItems(*menu);
+        REQUIRE(row < items.size());
+        auto run = items[row].run;
+        f.root->closePopup();
+        run();
+        f.refresh();
+    };
+    ui::Node* menu = open();
+    auto items = ui::menuItems(*menu);
+    REQUIRE(items.size() == 13);
+    CHECK(items[0].label == "Pan mode: pan");
+    CHECK(items[0].checked);
+    CHECK(items[4].label == "Pan law: project (0 dB)");
+    CHECK(items[4].checked);
+    CHECK(items[7].label == "Pan law: \u22123 dB");
+    CHECK(items[10].label == "Gain compensation (boost pans)");
+    CHECK_FALSE(items[10].checked);
+    CHECK(items[12].label == "MIDI learn: Pan\u2026");
+    pick(menu, 1);  // dual pan
+    CHECK(f.track(a).panMode == model::PanMode::Dual);
+    CHECK(f.strip(a).pan->split() == ui::PanControl::Split::Dual);
+    CHECK(f.strip(a).pan->value() == -100);
+    CHECK(f.strip(a).pan->second() == 100);
+    pick(open(), 7);  // -3 dB of its own
+    REQUIRE(f.track(a).panLaw);
+    CHECK(f.track(a).panLaw->db == -3);
+    CHECK_FALSE(f.track(a).panLaw->boost);
+    pick(open(), 10);  // boost its own law
+    CHECK(f.track(a).panLaw->boost);
+    menu = open();
+    CHECK(ui::menuItems(*menu)[10].checked);
+    CHECK_FALSE(ui::menuItems(*menu)[4].checked);
+    pick(menu, 4);  // back to the project's
+    CHECK_FALSE(f.track(a).panLaw);
+    pick(open(), 2);  // pan and width
+    CHECK(f.strip(a).pan->split() == ui::PanControl::Split::Width);
+    CHECK(f.strip(a).pan->second() == 100);
+    // The right bar is the width: a drag left narrows the strip.
+    const ui::Rect b = f.strip(a).pan->bounds();
+    const ui::Point right{b.x + b.w * 0.9f, b.y + b.h / 2};
+    f.pointer(ui::PointerEvent::Type::Down, right);
+    f.pointer(ui::PointerEvent::Type::Move, {right.x - b.w * 0.2f, right.y});
+    f.pointer(ui::PointerEvent::Type::Up, {right.x - b.w * 0.2f, right.y});
+    f.refresh();
+    CHECK(f.track(a).width < 100);
+    CHECK(f.track(a).pan == 0);
+    // A master's pan is a balance: its menu is MIDI learn alone.
+    const ui::Point master = f.centre(f.strip("tr_0").pan);
+    f.pointer(ui::PointerEvent::Type::Down, master, 1, 0, 3);
+    f.pointer(ui::PointerEvent::Type::Up, master, 1, 0, 3);
+    CHECK_FALSE(f.root->find("strip.pan.menu"));
+    CHECK(f.root->find("strip.learn.menu"));
+    CHECK(f.errors.empty());
+}
+
 TEST_CASE("mixer: a right-click on a VCA's fader learns MIDI for it, elsewhere the group menu") {
     Fixture f;
     if (!f.ok) return;

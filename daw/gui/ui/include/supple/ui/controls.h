@@ -102,14 +102,25 @@ class Knob : public Slider {
     double dragDelta(Point from, Point to) const override;
 };
 
-// Pan -100 (left) .. +100 (right) as a horizontal bar from the centre.
+// Pan -100 (left) .. +100 (right) as a horizontal bar from the centre. Split
+// (ADR-0066), it is two half-width bars side by side: dual pan's left and
+// right inputs, or a position and a width (-100 swapped .. 0 mono .. 100).
 class PanControl : public Node {
   public:
+    enum class Split { None, Dual, Width };
     bool wheel = true;  // false: wheel events pass to the parent (a scrolled list)
     explicit PanControl(std::string id);
+    // The first bar (pan, or dual's left input) and the second (dual's right
+    // input, or the width).
     std::function<void(double pan, Gesture)> onChange;
+    std::function<void(double value, Gesture)> onSecondChange;
     void setValue(double pan);
+    void setSecond(double value);
+    void setSplit(Split split);
     double value() const { return pan_; }
+    double second() const { return second_; }
+    Split split() const { return split_; }
+    int part() const { return part_; }  // the bar the last gesture moved: 0 or 1
     void cancelGesture() { dragging_ = false; }
     unsigned gestureModifiers() const { return gestureMods_; }
     Size measure(const Canvas& canvas, Size available) override;
@@ -120,8 +131,12 @@ class PanControl : public Node {
     bool coalescesDrag() const override { return true; }
 
   private:
-    void change(double pan, Gesture g);
-    double pan_ = 0, pressPan_ = 0;
+    void change(int part, double value, Gesture g);
+    double home(int part) const;  // a double-click's value
+    Rect track(int part) const;
+    double pan_ = 0, second_ = 100, pressValue_ = 0;
+    Split split_ = Split::None;
+    int part_ = 0;
     Point press_{};
     bool dragging_ = false;
     unsigned gestureMods_ = 0;

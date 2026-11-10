@@ -298,25 +298,37 @@ TcpPanel::Row::Row(TcpPanel& panel, std::size_t slot)
                                       : std::string{});
     };
     pan_ = &emplace<ui::PanControl>(id + ".pan");
-    pan_->onChange = [this, setTrack](double pan, ui::Gesture g) {
-        if (g == ui::Gesture::Begin) {
-            ++panel_.gestureSerial_;
-            panTrack_ = track_;
-            return;
-        }
-        if (g == ui::Gesture::End) {
-            panTrack_.reset();
-            return;
-        }
-        const auto target = g == ui::Gesture::Move ? panTrack_ : track_;
-        if (!target || target != track_) return;
-        json::Value args = trackArg(*target);
-        args["pan"] = pan;
-        args["bypass_groups"] = bool(pan_->gestureModifiers() & ui::kAlt);
-        setTrack(std::move(args), g == ui::Gesture::Move
-                                      ? gestureFor("tcp.pan", *target, panel_.gestureSerial_)
-                                      : std::string{});
+    // Split by the strip's pan mode (ADR-0066): dual's two inputs, or a
+    // position and a width.
+    auto panBar = [this, setTrack](int part) {
+        return [this, setTrack, part](double value, ui::Gesture g) {
+            if (g == ui::Gesture::Begin) {
+                ++panel_.gestureSerial_;
+                panTrack_ = track_;
+                return;
+            }
+            if (g == ui::Gesture::End) {
+                panTrack_.reset();
+                return;
+            }
+            const auto target = g == ui::Gesture::Move ? panTrack_ : track_;
+            if (!target || target != track_) return;
+            const auto split = pan_->split();
+            const char* field = split == ui::PanControl::Split::Dual
+                                    ? (part == 0 ? "pan_left" : "pan_right")
+                                : split == ui::PanControl::Split::Width && part == 1 ? "width"
+                                                                                     : "pan";
+            json::Value args = trackArg(*target);
+            args[field] = value;
+            args["bypass_groups"] = bool(pan_->gestureModifiers() & ui::kAlt);
+            setTrack(std::move(args),
+                     g == ui::Gesture::Move
+                         ? gestureFor(std::string("tcp.") + field, *target, panel_.gestureSerial_)
+                         : std::string{});
+        };
     };
+    pan_->onChange = panBar(0);
+    pan_->onSecondChange = panBar(1);
     // The wheel scrolls the track list, never a strip's level or pan.
     fader_->wheel = false;
     pan_->wheel = false;
@@ -380,7 +392,14 @@ void TcpPanel::Row::refresh(const model::Session& session) {
                       : tr->record.monitor == model::Monitor::On ? ui::MonitorButton::Mode::On
                                                                  : ui::MonitorButton::Mode::Auto);
     fader_->setValue(tr->volumeDb);
-    pan_->setValue(tr->pan);
+    // A master's pan is a balance; a channel's or buss's follows its mode.
+    const bool master = tr->type == model::StripType::Master;
+    const auto split = master || tr->panMode == model::PanMode::Pan ? ui::PanControl::Split::None
+                       : tr->panMode == model::PanMode::Dual        ? ui::PanControl::Split::Dual
+                                                                    : ui::PanControl::Split::Width;
+    pan_->setSplit(split);
+    pan_->setValue(split == ui::PanControl::Split::Dual ? tr->panLeft : tr->pan);
+    pan_->setSecond(split == ui::PanControl::Split::Dual ? tr->panRight : tr->width);
     // The record input: the view knows the channels, the app knows the device's
     // port names (engine.inputs), so the app writes the label.
     std::string channels;

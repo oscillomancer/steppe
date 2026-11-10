@@ -3,6 +3,7 @@
 #include "shell.h"
 #include <supple/model/groups.h>
 
+#include "pan_menu.h"
 #include "plugin_scales.h"
 #include "strip_learn.h"
 #include "track_menu.h"
@@ -170,10 +171,14 @@ std::unique_ptr<ui::Node> Shell::build(ui::Root& root, AppActions& actions) {
     tcp.envelopes = [this](const model::Id& track, const ui::Rect& anchor) {
         openEnvelopeMenu(track, anchor);
     };
-    // A right-click on a strip's fader, pan or button: MIDI learn (ADR-0058).
+    // A right-click on a strip's fader, pan or button: MIDI learn (ADR-0058);
+    // the pan's menu adds its mode and law (ADR-0066).
     tcp.learn = [&root, &actions](const model::Id& track, const std::string& param,
                                   const ui::Rect& anchor) {
-        openStripLearnMenu(root, actions, {{track}, param}, anchor);
+        if (param == "pan")
+            openPanMenu(root, actions, track, anchor);
+        else
+            openStripLearnMenu(root, actions, {{track}, param}, anchor);
     };
     trackMenu_ = std::make_unique<TrackMenu>(TrackMenu{
         root, dispatcher_, app_,

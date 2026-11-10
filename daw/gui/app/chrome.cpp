@@ -109,7 +109,9 @@ ChromeLayout ChromeLayout::defaults() {
          {"transport.toggle", "transport.record", "transport.loop.toggle", "-",
           "transport.seek:start", "transport.seek:end"}},
         {"Project",
-         {"project.timebase:beats", "project.timebase:time", "project.timebase:beats_position"}},
+         {"project.timebase:beats", "project.timebase:time", "project.timebase:beats_position", "-",
+          "project.pan_law:0", "project.pan_law:-2.5", "project.pan_law:-3", "project.pan_law:-4.5",
+          "project.pan_law:-6", "project.pan_law.boost"}},
         {"Help", {"ui.help.skill", "ui.help.skill_link", "ui.help.mcp", "ui.help.agent"}},
     };
     // Transport actions live in the transport bar's own row; not duplicated here.
@@ -128,7 +130,13 @@ namespace {
 // Defaults that came after layouts began saving what they knew: a file
 // without "known" is taken to know every default but these.
 const std::set<std::string, std::less<>>& addedSinceKnown() {
-    static const std::set<std::string, std::less<>> ids = {"ui.rack"};
+    static const std::set<std::string, std::less<>> ids = {"ui.rack",
+                                                           "project.pan_law:0",
+                                                           "project.pan_law:-2.5",
+                                                           "project.pan_law:-3",
+                                                           "project.pan_law:-4.5",
+                                                           "project.pan_law:-6",
+                                                           "project.pan_law.boost"};
     return ids;
 }
 
@@ -308,6 +316,7 @@ void fillChrome(ui::Node& bar, ui::Root& root, AppActions& actions, const Chrome
                 entries.push_back(
                     {name, actions.keysFor(id), [&actions, id] { actions.invoke(id); }});
                 if (a->enabled) entries.back().enabled = a->enabled(actions.context());
+                if (a->checked) entries.back().checked = a->checked(actions.context());
             }
             root.openPopup(ui::makeMenu("menu." + title + ".items", std::move(entries),
                                         [&root] { root.closePopup(); }),

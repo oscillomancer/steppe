@@ -439,7 +439,20 @@ selected). A right-click on a row's fader,
 pan, mute, lane mute, solo, polarity, mono, arm or monitoring button opens
 that control's menu instead, "MIDI learn: Volume…" (naming the bound control,
 "(CC 7 · ch 1)"): the learn dialog of §4.5 for that track alone, binding
-through `track.learn.set` (ADR-0058); the mixer's strips do the same.
+through `track.learn.set` (ADR-0058); the mixer's strips do the same. A
+channel's or buss's pan opens its pan menu instead (ADR-0066, `pan_menu.cpp`):
+"Pan mode: pan / dual pan / pan and width", a rule, "Pan law: project (0 dB)"
+and "Pan law: 0 dB … −6 dB" (the strip's own law), "Gain compensation (boost
+pans)" (ticked by the effective law; on a strip that follows the project it
+gives the strip its own law), a rule, then the pan's MIDI learn entry; each
+choice is one `track.set`. A master's pan opens MIDI learn alone. In `dual` and
+`width` modes the pan control splits into two half-width bars: dual's left and
+right inputs, or the position and the width (drawn in a quieter ink, from the
+centre). A press picks the bar under the pointer; a double-click sends it
+home (centre; hard left or right in dual; 100% width); with the control
+focused, Up and Down choose the bar the arrows move. Each bar sets its own
+field (`pan`, `pan_left`, `pan_right`, `width`); only `pan` spreads across a
+selection and through group links.
 Commands: `track.*`, `route.*`, `fx.*` (bypass/offline), transport.
 
 ### 4.3 Arrange view
@@ -1563,10 +1576,16 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   toolbar (after the nearest default before it that the list holds), and one
   the user removed stays removed. A file from before `known` is taken to
   know every default but those added since (View → Racks and the toolbar's
-  Racks, `ui.rack`).
+  Racks, `ui.rack`; the Project menu's pan law entries).
   An action may carry an `enabled` predicate over the selection context; its
   menu entry is greyed while that is false (the predicate is checked when the
-  menu opens). The Item menu's entries are built when it opens
+  menu opens). It may also carry a `checked` predicate, which ticks its entry
+  (checked when the menu opens). The Project menu's defaults are the three
+  item timebases (`project.timebase:*`, the project's ticked), a separator,
+  the project's pan law (`project.pan_law:0`, `:-2.5`, `:-3`, `:-4.5`, `:-6`,
+  the current one ticked; each keeps the boost) and **Gain compensation
+  (boost pans)** (`project.pan_law.boost`, a toggle), each one
+  `project.set {pan_law}` (ADR-0066). The Item menu's entries are built when it opens
   (`itemBarMenu`, § Menus under arrange items); action ids a user adds to it
   follow them after a separator. Loading a `menus.json` drops the item ids
   older defaults listed there (and `ui.midi.new`) from its Item list, as the
