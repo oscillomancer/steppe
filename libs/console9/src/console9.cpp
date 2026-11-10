@@ -101,9 +101,21 @@ void Stage<E, S>::reset(Seeds seeds) SUPPLE_RT {
 template <bool E, bool S>
 void Stage<E, S>::setLinear(bool linear) SUPPLE_RT {
     linear_ = linear;
+    coefficients();
+}
+template <bool E, bool S>
+void Stage<E, S>::setStaging(Staging staging) SUPPLE_RT {
+    staging_ = staging;
+    coefficients();
 }
 template <bool E, bool S>
 void Stage<E, S>::coefficients() {
+    if (staging_ == Staging::Unity) {
+        // Linear Unity Buss: the decode slope and ×φ cancel, so it is x · gain.
+        trim_ = gain_.value * (E || linear_ ? 1.0 : 1.618033988749895);
+        left_ = right_ = 1;  // exact: Unity has no pan stage
+        return;
+    }
     trim_ = gain_.value * (E ? 0.763932022500211 : 2.0);
     if constexpr (S) panGains(angle_.value, left_, right_);
 }
@@ -133,7 +145,8 @@ void Stage<E, S>::render(const T* left, const T* right, T* outLeft, T* outRight,
         for (uint32_t c = 0; c < (S ? 2u : 1u); ++c) {
             double x = std::isfinite(samples[c]) ? samples[c] : 0;
             if constexpr (Linear) {
-                if constexpr (!E) x *= 0.6180339887498949;
+                if constexpr (!E)
+                    if (staging_ == Staging::Native) x *= 0.6180339887498949;
             } else {
                 auto& state = c == 0 ? seeds_.left : seeds_.right;
                 if (std::fabs(x) < 1.18e-23) x = state * 1.18e-17;

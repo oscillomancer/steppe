@@ -18,6 +18,14 @@ double panAngle(double nativePan) SUPPLE_RT;
 // stages' trim_ (fader plus the console's own gain) is not included.
 void panGains(double angle, double& left, double& right) SUPPLE_RT;
 
+// How a stage scales around its curve (ADR-0066). Native is Airwindows' own:
+// the sin/cos pan, ×0.7639 with the fader before the encode, ×2 after the
+// decode. Unity has no pan stage (the pan argument is ignored; the host pans
+// before the encode), no encode trim, and ×φ after the decode, so an
+// encode → decode pair is unity for small signals. Linear Unity stages are
+// `x · gain` (Channel) and `x · gain` (Buss, the slope and ×φ cancelled).
+enum class Staging : uint8_t { Native, Unity };
+
 struct Seeds {
     uint32_t left = 16386, right = 16387;
     bool operator==(const Seeds&) const = default;
@@ -36,6 +44,8 @@ class Stage {
     // Plan-level choice: preserve gains/pan, omit curves/noise/dither and RNG advances.
     // Does not alter parameters, ramps or seeds; no internal mode crossfade.
     void setLinear(bool linear) SUPPLE_RT;
+    // Native (the default) or Unity; keeps gain, pan, ramps and seeds.
+    void setStaging(Staging staging) SUPPLE_RT;
     // Gain is f(2B), pan is native A. Zero ramp length applies immediately.
     // Call on the audio thread; retargeting starts from the current ramp position.
     void set(double gain, double pan = .5, uint32_t rampSamples = 0) SUPPLE_RT;
@@ -70,6 +80,7 @@ class Stage {
     double trim_ = 0, left_ = 0, right_ = 0;
     Seeds seeds_{};
     bool linear_ = false;
+    Staging staging_ = Staging::Native;
 };
 }  // namespace detail
 

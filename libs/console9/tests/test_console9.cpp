@@ -600,3 +600,64 @@ TEST_CASE("the Channel pan law at centre is measured as sin(pi/4) per channel") 
     CHECK(left == doctest::Approx(1.0).epsilon(1e-9));  // hard left
     CHECK(right == doctest::Approx(0.0).epsilon(1e-9));
 }
+
+TEST_CASE("Unity staging has no pan stage and an encode/decode pair is unity") {
+    // ADR-0066: the host pans before the encode, the Channel has no ×0.7639
+    // trim and the Buss's ×2 is ×φ, the inverse of the curves' slope.
+    const auto pair = [](bool linear, double pan, float x) {
+        Channel channel;
+        Buss buss;
+        channel.setStaging(Staging::Unity);
+        buss.setStaging(Staging::Unity);
+        channel.setLinear(linear);
+        buss.setLinear(linear);
+        channel.reset(seedsFor(3, 1));
+        buss.reset(seedsFor(3, 2));
+        channel.set(1.0, pan);
+        std::array<float, 64> l{}, r{}, el{}, er{}, dl{}, dr{};
+        l.fill(x);
+        r.fill(-x);
+        const float* in[]{l.data(), r.data()};
+        float* enc[]{el.data(), er.data()};
+        channel.process(in, enc, 64);
+        const float* encIn[]{el.data(), er.data()};
+        float* dec[]{dl.data(), dr.data()};
+        buss.process(encIn, dec, 64);
+        return std::array<float, 4>{el.back(), er.back(), dl.back(), dr.back()};
+    };
+    // Linear: the Channel is x · gain and the Buss passes its input, exactly.
+    for (const double pan : {0.0, 0.5, 1.0}) {
+        const auto out = pair(true, pan, 0.25f);
+        CHECK(identical(out[0], 0.25f));
+        CHECK(identical(out[1], -0.25f));
+        CHECK(identical(out[2], 0.25f));
+        CHECK(identical(out[3], -0.25f));
+    }
+    // Curves: small signals come back at their own level, whatever the pan.
+    for (const double pan : {0.0, 0.5, 1.0}) {
+        const auto out = pair(false, pan, 1e-3f);
+        CHECK(double(out[2]) == doctest::Approx(1e-3).epsilon(1e-4));
+        CHECK(double(out[3]) == doctest::Approx(-1e-3).epsilon(1e-4));
+    }
+    // The encode is driven by x · f(2B) · 0.618 into the curve: no trim.
+    Channel channel;
+    channel.setStaging(Staging::Unity);
+    channel.reset(seedsFor(3, 1));
+    channel.set(2.0);
+    std::array<float, 4> l{.4f, .4f, .4f, .4f}, ol{}, orr{};
+    const float* in[]{l.data(), l.data()};
+    float* out[]{ol.data(), orr.data()};
+    channel.process(in, out, 4);
+    const double u = .4 * 2.0 * 0.618033988749895;
+    CHECK(ol.back() == doctest::Approx(1 - std::pow(1 - u, 1.618033988749895)).epsilon(1e-6));
+    CHECK(double(orr.back()) == doctest::Approx(double(ol.back())));
+    // Native staging is unchanged by a round trip through Unity.
+    Channel native;
+    native.setStaging(Staging::Unity);
+    native.setStaging(Staging::Native);
+    native.setLinear(true);
+    native.set(1.0, 0.5);
+    native.process(in, out, 4);
+    CHECK(double(ol.back()) ==
+          doctest::Approx(.4 * std::sin(pi / 4) * .763932022500211).epsilon(1e-6));
+}

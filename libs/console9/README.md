@@ -38,6 +38,15 @@ once per block to a separate sample loop. It preserves settings and RNG
 state; switching/crossfading is a plan-level responsibility, with no internal
 mode ramp. There is no separate unity-gain mixer mode.
 
+`setStaging(Staging::Unity)` selects the host's staging (ADR-0066); the
+default `Staging::Native` is Airwindows' own and is what the null tests
+compare. Unity has no pan stage (the pan argument is ignored: the host pans
+before the encode), no ×0.7639 encode trim and ×φ instead of ×2 after the
+decode, so a Channel → Buss pair is unity for small signals and the encode
+is driven by `x · gain · 0.618`. Linear Unity stages are `x · gain` for the
+Channel and `x · gain` for the Buss (its slope and ×φ cancel), so a linear
+pair at unity is bit-transparent. Staging keeps settings, ramps and seeds.
+
 `set(g,A,n)` takes linear gain g=f(2B), clamped to 0…4, and native pan A,
 clamped to 0…1; n=0 is immediate. `setNative(float B,float A,n)` computes the
 native fader using the original promotion/order and constants. Gain and pan
@@ -99,7 +108,7 @@ use thresholds for silence detection.
 swept sine and noise −60…+12 dBFS, silence, signed zeros and values on both
 sides of the double and float denormal thresholds. Other tests cover sums,
 bit-exact ramp splits/retargets in all four stages, mappings/seeds, neutral
-0.4721 staging, clipping, reset, nonfinite input, mono/in-place behaviour,
+0.4721 staging, Unity staging, clipping, reset, nonfinite input, mono/in-place behaviour,
 linear ramp length and power-of-two equivalence. AU files are uncompiled
 reference text; mono kernels additionally match the stereo hard-left path.
 
