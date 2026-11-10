@@ -187,7 +187,9 @@ instructions are in `docs/guides/installing.md`.
   and the Project menu (ADR-0066). Width, dual positions and gain compensation
   have automation and MIDI learn on channels and busses, including following
   sends, keys and write holds. Pan group links and selection edits carry
-  positions, mode and law; masters keep ordinary balance. Routes
+  positions, mode and law; masters keep ordinary balance. The pan menu learns
+  each shown control, envelope menus offer all four new lanes, and both bars
+  record automation in the TCP and mixer. Routes
   with taps, channel maps, mono and polarity; sidechain keys (an unrouted
   key deactivates a plug-in's key port or bus, so it can key from its own
   input); up to 128

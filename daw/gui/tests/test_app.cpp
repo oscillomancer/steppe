@@ -2041,7 +2041,14 @@ TEST_CASE("playrate envelope: main-master menu creates, edits and hides its rati
         REQUIRE(list);
         return list;
     };
-    CHECK(menu(channel)->count() == 3);
+    auto* channelMenu = menu(channel);
+    CHECK(channelMenu->count() == 7);
+    // The channel has all pan controls, even while its saved mode is pan.
+    const auto panItems = ui::menuItems(*channelMenu);
+    CHECK(panItems[3].label == "Width envelope");
+    CHECK(panItems[4].label == "Pan left envelope");
+    CHECK(panItems[5].label == "Pan right envelope");
+    CHECK(panItems[6].label == "Gain compensation envelope");
     a.root->closePopup();
     auto* list = menu(model::kMaster);
     REQUIRE(list->count() == 4);

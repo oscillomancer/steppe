@@ -5,7 +5,11 @@
 #include <doctest/doctest.h>
 #include "test_support.h"
 
+#include <algorithm>
+#include <cstdlib>
 #include <filesystem>
+#include "supple/engine/realtime.h"
+#include "supple/gui/png.h"
 
 #include "routing_matrix.h"
 #include "shell.h"
@@ -449,7 +453,9 @@ TEST_CASE("TCP: a selection survives a right-click; Delete removes all of it in 
     ui::Node* m = f.root->find(menu);
     REQUIRE(m);
     const auto before = f.history();
-    const ui::Point del{m->bounds().x + 40, m->bounds().y + 10 * 26 + 13};  // Delete
+    const ui::Point del{
+        m->bounds().x + 40,
+        m->bounds().y + static_cast<float>(ui::menuItems(*m).size() - 1) * 26 + 13};  // Delete
     f.pointer(Pointer::Move, del);
     f.pointer(Pointer::Down, del);
     f.pointer(Pointer::Up, del);
@@ -497,9 +503,7 @@ TEST_CASE("TCP: the right-click menu renames, colours and deletes a track (one u
         f.root->pointer(e);
         f.root->frame(false);
     };
-    // Menu rows are 26 px: Rename, Color…, Timebase…, Freeze, Channels…,
-    // Groups…, (separator), [Show rack], Add rack, (separator), Duplicate,
-    // Delete.
+    // Menu rows are 26 px; track choices are located by label.
     auto pickRow = [&](const std::string& menu, int index) {
         ui::Node* m = f.root->find(menu);
         REQUIRE(m);
@@ -510,13 +514,22 @@ TEST_CASE("TCP: the right-click menu renames, colours and deletes a track (one u
         f.sync();
     };
     const std::string menu = "track.menu." + f.a.str();
+    auto pickTrack = [&](std::string_view label) {
+        auto* m = f.root->find(menu);
+        REQUIRE(m);
+        const auto items = ui::menuItems(*m);
+        auto at = std::find_if(items.begin(), items.end(),
+                               [&](const auto& item) { return item.label == label; });
+        REQUIRE(at != items.end());
+        pickRow(menu, static_cast<int>(at - items.begin()));
+    };
     // Color… opens the swatches; teal is the fifth. A selected track's
     // colour goes to the whole selection.
     f.state.selectedTracks = {f.a.str(), f.b.str()};
     rightClick();
     REQUIRE(f.root->find(menu));
     auto before = f.history();
-    pickRow(menu, 1);
+    pickTrack("Color…");
     REQUIRE(f.root->find("track.color." + f.a.str()));
     pickRow("track.color." + f.a.str(), 4);
     CHECK(f.app->head().tracks.find(f.a)->color == "teal");
@@ -525,7 +538,7 @@ TEST_CASE("TCP: the right-click menu renames, colours and deletes a track (one u
     f.state.selectedTracks = {f.a.str()};
     // Rename edits the name in place.
     rightClick();
-    pickRow(menu, 0);
+    pickTrack("Rename");
     auto* field = dynamic_cast<ui::TextField*>(f.view().tcpPanel().controlNode(f.a, "rename"));
     REQUIRE(field);
     CHECK(field->visible);
@@ -536,7 +549,7 @@ TEST_CASE("TCP: the right-click menu renames, colours and deletes a track (one u
     // Timebase… (channels): what its items follow; "Follow time" is the third.
     before = f.history();
     rightClick();
-    pickRow(menu, 2);
+    pickTrack("Timebase…");
     REQUIRE(f.root->find("track.timebase." + f.a.str()));
     pickRow("track.timebase." + f.a.str(), 2);
     CHECK(f.app->head().tracks.find(f.a)->timebase == model::TrackTimebase::Time);
@@ -544,7 +557,7 @@ TEST_CASE("TCP: the right-click menu renames, colours and deletes a track (one u
     // Channels…: four gives it aux channels 3/4 (the third choice).
     before = f.history();
     rightClick();
-    pickRow(menu, 4);
+    pickTrack("Channels…");
     REQUIRE(f.root->find("track.channels." + f.a.str()));
     pickRow("track.channels." + f.a.str(), 2);
     CHECK(f.app->head().tracks.find(f.a)->channels == 4);
@@ -560,22 +573,22 @@ TEST_CASE("TCP: the right-click menu renames, colours and deletes a track (one u
     f.actions->addUi("ui.rack.add", "Racks: add rack", "track", record(added));
     f.actions->addUi("ui.rack.show", "Racks: show rack", "track", record(shown));
     rightClick();
-    pickRow(menu, 7);
+    pickTrack("Add rack");
     CHECK(added == std::vector<std::string>{f.a.str()});
     json::Value rack = json::Value::object();
     rack["track"] = f.a.str();
     f.exec("rack.add", std::move(rack));
     f.sync();
     rightClick();
-    pickRow(menu, 7);
+    pickTrack("Show rack");
     CHECK(shown == std::vector<std::string>{f.a.str()});
     rightClick();
-    pickRow(menu, 8);
+    pickTrack("Add another rack");
     CHECK(added == std::vector<std::string>{f.a.str(), f.a.str()});
     // Delete removes it.
     before = f.history();
     rightClick();
-    pickRow(menu, 11);
+    pickTrack("Delete");
     CHECK_FALSE(f.app->head().tracks.find(f.a));
     CHECK(f.history() == before + 1);
 }
@@ -1034,4 +1047,106 @@ TEST_CASE("TCP: a right-click on a strip's fader or button learns a MIDI control
     f.root->frame(false);
     CHECK(f.root->find("track.menu." + f.a.str()));
     CHECK_FALSE(f.root->find("strip.learn.menu"));
+}
+
+TEST_CASE("pan controls: channel and buss context menus create and hide pan lanes") {
+    SendsFixture f;
+    for (const model::Id track : {f.a, f.b}) {
+        const auto open = [&]() {
+            const auto row = f.view().trackLayout().indexOf(track);
+            REQUIRE(row);
+            const auto r = f.view().tcpRowRect(*row);
+            ui::PointerEvent event;
+            event.type = Pointer::Down;
+            event.button = 3;
+            event.pos = {r.x + 60, r.y + 10};
+            f.root->pointer(event);
+            event.type = Pointer::Up;
+            f.root->pointer(event);
+            f.sync();
+            auto* menu = f.root->find("track.menu." + track.str());
+            REQUIRE(menu);
+            return menu;
+        };
+        auto* menu = open();
+        const auto items = ui::menuItems(*menu);
+        for (const char* label : {"Width envelope", "Pan left envelope", "Pan right envelope",
+                                  "Gain compensation envelope"})
+            CHECK(std::any_of(items.begin(), items.end(),
+                              [&](const auto& item) { return item.label == label; }));
+        const auto width = std::find_if(items.begin(), items.end(), [](const auto& item) {
+            return item.label == "Width envelope";
+        });
+        REQUIRE(width != items.end());
+        if (const char* out = std::getenv("SUPPLE_TEST_SNAPSHOTS")) {
+            f.root->damageAll();
+            f.root->frame(false);
+            REQUIRE(
+                gui::writePng(std::filesystem::path(out) / ("pan-lanes-" + track.str() + ".png"),
+                              f.root->readBack()));
+        }
+        auto create = width->run;
+        f.root->closePopup();
+        create();
+        f.sync();
+        const auto lane = std::find_if(
+            f.app->head().envelopes.begin(), f.app->head().envelopes.end(), [&](const auto& e) {
+                return e.value->target.object == track && e.value->target.param == "width";
+            });
+        REQUIRE(lane != f.app->head().envelopes.end());
+        CHECK(lane->value->points.front().value == 100);
+        const auto laneId = lane->id;
+        menu = open();
+        auto updated = ui::menuItems(*menu);
+        const auto shown = std::find_if(updated.begin(), updated.end(), [](const auto& item) {
+            return item.label == "Width envelope";
+        });
+        REQUIRE(shown != updated.end());
+        CHECK(shown->checked);
+        auto hide = shown->run;
+        f.root->closePopup();
+        hide();
+        CHECK_FALSE(f.app->head().envelopes.find(laneId)->visible);
+    }
+}
+
+TEST_CASE("pan controls: a TCP second bar records its writing envelope") {
+    SendsFixture f;
+    auto args = json::Value::object();
+    args["track"] = f.a.str();
+    args["pan_mode"] = "width";
+    f.exec("track.set", args);
+    args.asObject().erase("pan_mode");
+    args["param"] = "width";
+    const auto lane = *model::Id::parse(f.exec("env.add", args)["env"].asString());
+    args = json::Value::object();
+    args["env"] = lane.str();
+    args["mode"] = "latch";
+    f.exec("env.set", args);
+    engine::DummyBackend backend({.mode = engine::DummyBackend::Mode::Manual});
+    struct Stop {
+        engine::EngineApp& app;
+        ~Stop() { app.stopEngine(); }
+    } stop{*f.app};
+    REQUIRE(f.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 128},
+                               {.anticipative = false, .workers = 0}));
+    f.exec("transport.play");
+    backend.run(4);
+    f.sync();
+    const auto* control = f.view().tcpPanel().controlNode(f.a, "pan");
+    REQUIRE(control);
+    const auto bar = control->bounds();
+    f.pointer(Pointer::Down, {bar.x + .9f * bar.w, bar.y + bar.h / 2});
+    f.pointer(Pointer::Move, {bar.x + .65f * bar.w, bar.y + bar.h / 2});
+    f.pointer(Pointer::Up, {bar.x + .65f * bar.w, bar.y + bar.h / 2});
+    f.sync();
+    const auto* track = f.app->head().tracks.find(f.a);
+    REQUIRE(track);
+    CHECK(track->width < 100);
+    const auto* env = f.app->head().envelopes.find(lane);
+    REQUIRE(env);
+    REQUIRE_FALSE(env->points.empty());
+    CHECK(env->points.back().value == track->width);
+    const model::EnvTarget target{f.a, "width"};
+    CHECK(f.app->engine()->writeHolds() == std::vector<model::EnvTarget>{target});
 }

@@ -70,13 +70,20 @@ std::string ownerName(const model::Session& s, const std::vector<model::Id>& obj
 }
 
 // A level or pan follows a knob; the rest are buttons, toggled by a press.
-bool continuous(std::string_view param) { return param == "volume" || param == "pan"; }
+bool continuous(std::string_view param) {
+    return param == "volume" || param == "pan" || param == "width" || param == "pan_left" ||
+           param == "pan_right";
+}
 
 }  // namespace
 
 std::string stripControlLabel(std::string_view param) {
     if (param == "volume") return "Volume";
     if (param == "pan") return "Pan";
+    if (param == "width") return "Width";
+    if (param == "pan_left") return "Pan left";
+    if (param == "pan_right") return "Pan right";
+    if (param == "pan_boost") return "Gain compensation";
     if (param == "mute") return "Mute";
     if (param == "solo") return "Solo";
     if (param == "phase_invert") return "Polarity";

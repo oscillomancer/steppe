@@ -2408,3 +2408,33 @@ TEST_CASE("the arrangement's wheel follows the mouse map over the lanes and the 
     CHECK(saved->behaviour("arrange.wheel", ui::kShift) == "scroll_time");
     CHECK(saved->behaviour("tcp.wheel", ui::kAlt) == "zoom");
 }
+
+TEST_CASE("pan controls: lane names, percentages and compensation switch editing") {
+    for (const std::string param : {"width", "pan_left", "pan_right", "pan_boost"}) {
+        model::Envelope env;
+        env.target = {{model::Kind::Track, 1}, param};
+        const auto scale = views::envScale(env);
+        REQUIRE(scale);
+        if (param == "pan_boost") {
+            CHECK(views::envTitle(env) == "Gain compensation");
+            CHECK(scale->toNorm(.49) == 0);
+            CHECK(scale->toNorm(.5) == 1);
+            CHECK(scale->fromNorm(.49) == 0);
+            CHECK(scale->fromNorm(.5) == 1);
+            CHECK(scale->text(.49) == "off");
+            CHECK(scale->text(.5) == "on");
+        } else {
+            CHECK(scale->toNorm(-100) == 0);
+            CHECK(scale->toNorm(100) == 1);
+            CHECK(scale->fromNorm(.5) == 0);
+            CHECK(scale->fromNorm(2) == 100);
+            CHECK(views::envTitle(env) == (param == "width"      ? "Width"
+                                           : param == "pan_left" ? "Pan left"
+                                                                 : "Pan right"));
+            if (param == "width") CHECK(scale->text(35) == "+35 %");
+        }
+        const std::vector<model::EnvPoint> pts{{0, 0}};
+        const auto moved = views::movePoints(pts, pts, 0, 1, *scale);
+        CHECK(moved.points[0].value == (param == "pan_boost" ? 1 : 100));
+    }
+}

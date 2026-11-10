@@ -383,6 +383,9 @@ void Shell::openEnvelopeMenu(const model::Id& track, const ui::Rect& anchor) {
     std::vector<ui::MenuItem> items, removals;
     std::vector<const char*> params = group ? std::vector<const char*>{"volume", "mute"}
                                             : std::vector<const char*>{"volume", "pan", "mute"};
+    if (tr && tr->type != model::StripType::Master)
+        for (const char* param : {"width", "pan_left", "pan_right", "pan_boost"})
+            params.push_back(param);
     if (track == model::kMaster) params.push_back("playrate");
     for (const char* param : params) {
         std::optional<model::Id> env;
@@ -393,11 +396,9 @@ void Shell::openEnvelopeMenu(const model::Id& track, const ui::Rect& anchor) {
                 shown = e.value->visible;
             }
         ui::MenuItem m;
-        m.label = std::string(param == std::string_view("volume")     ? "Volume"
-                              : param == std::string_view("pan")      ? "Pan"
-                              : param == std::string_view("playrate") ? "Playrate"
-                                                                      : "Mute") +
-                  " envelope";
+        model::Envelope probe;
+        probe.target = {track, param};
+        m.label = views::envTitle(probe) + " envelope";
         m.checked = env && shown;
         if (env) {
             m.run = [this, id = *env, shown] {
@@ -419,10 +420,15 @@ void Shell::openEnvelopeMenu(const model::Id& track, const ui::Rect& anchor) {
             const double value =
                 group ? (param == std::string_view("volume") ? group->vca->volumeDb
                                                              : (group->vca->mute ? 1.0 : 0.0))
-                : param == std::string_view("playrate") ? s.project->playrate.rate
-                : param == std::string_view("volume")   ? tr->volumeDb
-                : param == std::string_view("pan")      ? tr->pan
-                                                        : (tr->mute ? 1.0 : 0.0);
+                : param == std::string_view("playrate")  ? s.project->playrate.rate
+                : param == std::string_view("volume")    ? tr->volumeDb
+                : param == std::string_view("pan")       ? tr->pan
+                : param == std::string_view("width")     ? tr->width
+                : param == std::string_view("pan_left")  ? tr->panLeft
+                : param == std::string_view("pan_right") ? tr->panRight
+                : param == std::string_view("pan_boost")
+                    ? (model::panLawOf(*s.project, *tr).boost ? 1.0 : 0.0)
+                    : (tr->mute ? 1.0 : 0.0);
             m.run = [this, track, param = std::string(param), value] {
                 json::Value args = json::Value::object(), points = json::Value::array(),
                             first = json::Value::object();

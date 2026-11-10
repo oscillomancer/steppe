@@ -12,9 +12,10 @@ namespace supple::gui {
 namespace {
 
 constexpr double kSilenceDb = -150.0, kTopDb = 12.0;
-constexpr const char* kShared[] = {"mute",         "solo", "armed",        "monitor",
-                                   "phase_invert", "mono", "record_input", "record_midi",
-                                   "volume_db",    "pan"};
+constexpr const char* kShared[] = {"mute",         "solo",     "armed",        "monitor",
+                                   "phase_invert", "mono",     "record_input", "record_midi",
+                                   "volume_db",    "pan",      "width",        "pan_left",
+                                   "pan_right",    "pan_mode", "pan_law"};
 
 const model::Track* trackOf(const model::Session& s, const std::string& text) {
     const auto id = model::Id::parse(text);
@@ -42,9 +43,11 @@ Result<json::Value> SelectionEdit::set(json::Value args, const std::string& gest
         seeds.insert(seeds.begin(), track);  // the touched member drives its component
     }
     std::map<std::string, json::Value> edits;
-    std::map<std::string, std::string> relativeLevel, relativePan;
+    std::map<std::string, std::string> relativeLevel;
+    std::map<std::string, std::map<std::string, std::string>> relativePan;
     for (const auto& seed : seeds) edits[seed] = args;
-    for (const char* field : {"volume_db", "pan", "mute", "solo", "armed", "monitor"}) {
+    for (const char* field : {"volume_db", "pan", "width", "pan_left", "pan_right", "pan_mode",
+                              "pan_law", "mute", "solo", "armed", "monitor"}) {
         const auto* value = args.find(field);
         if (!value) continue;
         const std::string attribute = std::string_view(field) == "volume_db" ? "volume" : field;
@@ -61,18 +64,22 @@ Result<json::Value> SelectionEdit::set(json::Value args, const std::string& gest
                 covered.insert(text);
                 if (targets.size() > 1) {
                     if (attribute == "volume") relativeLevel[text] = seed;
-                    if (attribute == "pan") relativePan[text] = seed;
+                    if (attribute == "pan" || attribute == "width" || attribute == "pan_left" ||
+                        attribute == "pan_right")
+                        relativePan[field][text] = seed;
                 }
             }
         }
     }
-    const bool level = args.find("volume_db"), pan = args.find("pan");
+    const bool level = args.find("volume_db"), pan = args.find("pan") || args.find("width") ||
+                                                     args.find("pan_left") ||
+                                                     args.find("pan_right");
     if (!gesture.empty() && (level || pan) && gesture != gesture_) {
         gesture_ = gesture;
         start_.clear();
         for (const auto& [id, unused] : edits) {
             (void)unused;
-            if (const auto* t = trackOf(s, id)) start_[id] = {t->volumeDb, t->pan};
+            if (const auto* t = trackOf(s, id)) start_[id] = *t;
         }
     }
     const bool drag = !gesture.empty() && gesture == gesture_ && start_.contains(track);
@@ -89,24 +96,31 @@ Result<json::Value> SelectionEdit::set(json::Value args, const std::string& gest
                 // Masters are armed to record their output (ADR-0057); busses never.
                 if (t->type == model::StripType::Buss) each.asObject().erase("armed");
             }
-            const auto start =
-                drag && start_.contains(id) ? start_.at(id) : std::pair{t->volumeDb, t->pan};
+            const auto start = drag && start_.contains(id) ? start_.at(id) : *t;
             if (each.find("volume_db") && (drag || relativeLevel.contains(id))) {
                 const auto& driver = drag ? track : relativeLevel.at(id);
-                const double ref = drag ? start_.at(track).first : trackOf(s, driver)->volumeDb;
+                const double ref = drag ? start_.at(track).volumeDb : trackOf(s, driver)->volumeDb;
                 const double desired = args["volume_db"].asDouble();
                 each["volume_db"] =
                     desired <= kSilenceDb ? kSilenceDb
-                    : (ref <= kSilenceDb || start.first <= kSilenceDb)
-                        ? (id == driver ? desired : start.first)
-                        : std::clamp(start.first + desired - ref, kSilenceDb, kTopDb);
+                    : (ref <= kSilenceDb || start.volumeDb <= kSilenceDb)
+                        ? (id == driver ? desired : start.volumeDb)
+                        : std::clamp(start.volumeDb + desired - ref, kSilenceDb, kTopDb);
             }
-            if (each.find("pan") && (drag || relativePan.contains(id))) {
-                const double ref =
-                    drag ? start_.at(track).second : trackOf(s, relativePan.at(id))->pan;
-                each["pan"] =
-                    std::clamp(start.second + args["pan"].asDouble() - ref, -100.0, 100.0);
+            for (const auto& [field, member] : {std::pair{"pan", &model::Track::pan},
+                                                {"width", &model::Track::width},
+                                                {"pan_left", &model::Track::panLeft},
+                                                {"pan_right", &model::Track::panRight}}) {
+                if (each.find(field) && (drag || relativePan[field].contains(id))) {
+                    const double ref = drag ? start_.at(track).*member
+                                            : trackOf(s, relativePan[field].at(id))->*member;
+                    each[field] =
+                        std::clamp(start.*member + args[field].asDouble() - ref, -100.0, 100.0);
+                }
             }
+            if (t->type == model::StripType::Master && id != track)
+                for (const char* field : {"width", "pan_left", "pan_right", "pan_mode", "pan_law"})
+                    each.asObject().erase(field);
             last = dispatcher_.execute({"track.set", each, origin});
             if (!last) return last;
         }

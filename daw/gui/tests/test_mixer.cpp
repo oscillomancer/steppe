@@ -21,8 +21,10 @@
 #include "meter_feed.h"
 #include "mixer.h"
 #include "preferences.h"
+#include "selection_edit.h"
 #include "supple/base/files.h"
 #include "supple/engine/app.h"
+#include "supple/engine/realtime.h"
 #include "supple/gui/png.h"
 #include "supple/gui/window.h"
 #include "supple/json/parse.h"
@@ -389,7 +391,10 @@ TEST_CASE("mixer: strips select like the TCP's rows, and the menu deletes the se
     ui::Node* menu = f.root->find("track.menu." + c);
     REQUIRE(menu);
     const auto before = f.steps();
-    const ui::Point del{menu->bounds().x + 40, menu->bounds().y + 10 * 26 + 13};  // Delete
+    const ui::Point del{menu->bounds().x + 40,
+                        menu->bounds().y +
+                            static_cast<float>(ui::menuItems(*menu).size() - 1) * 26 +
+                            13};  // Delete
     f.pointer(ui::PointerEvent::Type::Move, del);
     f.pointer(ui::PointerEvent::Type::Down, del);
     f.pointer(ui::PointerEvent::Type::Up, del);
@@ -671,7 +676,10 @@ TEST_CASE("mixer: the track menu duplicates the selected strips, and selects the
     f.pointer(ui::PointerEvent::Type::Up, at, 1, 0, 3);
     ui::Node* menu = f.node("track.menu." + c);
     const auto before = f.steps();
-    const ui::Point dup{menu->bounds().x + 40, menu->bounds().y + 9 * 26 + 13};  // Duplicate
+    const ui::Point dup{menu->bounds().x + 40,
+                        menu->bounds().y +
+                            static_cast<float>(ui::menuItems(*menu).size() - 2) * 26 +
+                            13};  // Duplicate
     f.pointer(ui::PointerEvent::Type::Move, dup);
     f.pointer(ui::PointerEvent::Type::Down, dup);
     f.pointer(ui::PointerEvent::Type::Up, dup);
@@ -1714,7 +1722,7 @@ TEST_CASE("mixer: a pan's right-click menu sets its mode and law; its bars follo
     };
     ui::Node* menu = open();
     auto items = ui::menuItems(*menu);
-    REQUIRE(items.size() == 13);
+    REQUIRE(items.size() == 14);
     CHECK(items[0].label == "Pan mode: pan");
     CHECK(items[0].checked);
     CHECK(items[4].label == "Pan law: project (0 dB)");
@@ -1723,11 +1731,21 @@ TEST_CASE("mixer: a pan's right-click menu sets its mode and law; its bars follo
     CHECK(items[10].label == "Gain compensation (boost pans)");
     CHECK_FALSE(items[10].checked);
     CHECK(items[12].label == "MIDI learn: Pan\u2026");
+    CHECK(items[13].label == "MIDI learn: Gain compensation\u2026");
+    f.snapshot("pan-menu-pan.png");
     pick(menu, 1);  // dual pan
     CHECK(f.track(a).panMode == model::PanMode::Dual);
     CHECK(f.strip(a).pan->split() == ui::PanControl::Split::Dual);
     CHECK(f.strip(a).pan->value() == -100);
     CHECK(f.strip(a).pan->second() == 100);
+    menu = open();
+    items = ui::menuItems(*menu);
+    REQUIRE(items.size() == 15);
+    CHECK(items[12].label == "MIDI learn: Pan left\u2026");
+    CHECK(items[13].label == "MIDI learn: Pan right\u2026");
+    CHECK(items[14].label == "MIDI learn: Gain compensation\u2026");
+    f.snapshot("pan-menu-dual.png");
+    f.root->closePopup();
     pick(open(), 7);  // -3 dB of its own
     REQUIRE(f.track(a).panLaw);
     CHECK(f.track(a).panLaw->db == -3);
@@ -1742,6 +1760,13 @@ TEST_CASE("mixer: a pan's right-click menu sets its mode and law; its bars follo
     pick(open(), 2);  // pan and width
     CHECK(f.strip(a).pan->split() == ui::PanControl::Split::Width);
     CHECK(f.strip(a).pan->second() == 100);
+    menu = open();
+    items = ui::menuItems(*menu);
+    REQUIRE(items.size() == 15);
+    CHECK(items[12].label == "MIDI learn: Pan\u2026");
+    CHECK(items[13].label == "MIDI learn: Width\u2026");
+    f.snapshot("pan-menu-width.png");
+    f.root->closePopup();
     // The right bar is the width: a drag left narrows the strip.
     const ui::Rect b = f.strip(a).pan->bounds();
     const ui::Point right{b.x + b.w * 0.9f, b.y + b.h / 2};
@@ -1874,4 +1899,59 @@ TEST_CASE("mixer: a channel fed by a rack shows a rack slot above its plug-ins")
     REQUIRE(f.strip(track).racks.size() == 1);
     CHECK(f.strip(track).racks.front()->id() == "mixer.rack." + track + "." + second);
     CHECK(f.strip(track).racks.front()->valueText() == "Pad");
+}
+
+TEST_CASE("pan controls: selected width drags keep offsets and skip masters") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto a = f.addTrack("channel", "A");
+    const auto b = f.addTrack("buss", "B");
+    f.exec("track.set", R"({"track":")" + b + R"(","width":20})");
+    f.ui.selectedTracks = {a, b, "tr_0"};
+    gui::SelectionEdit selection(*f.dispatcher, *f.app, f.ui);
+    for (double width : {80., 60., 40.}) {
+        auto args = json::Value::object();
+        args["track"] = a;
+        args["width"] = width;
+        REQUIRE(selection.set(args, "width:1"));
+    }
+    CHECK(f.track(a).width == 40);
+    CHECK(f.track(b).width == -40);
+    CHECK(f.track("tr_0").width == 100);
+    auto args = json::Value::object();
+    args["track"] = a;
+    args["pan_mode"] = "width";
+    REQUIRE(selection.set(args, {}));
+    CHECK(f.track(b).panMode == model::PanMode::Width);
+    CHECK(f.track("tr_0").panMode == model::PanMode::Pan);
+}
+
+TEST_CASE("pan controls: a mixer's second bar records a writing envelope") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto track = f.addTrack("channel", "Stereo");
+    f.exec("track.set", R"({"track":")" + track + R"(","pan_mode":"width"})");
+    const auto lane = *model::Id::parse(
+        f.exec("env.add", R"({"track":")" + track +
+                              R"(","param":"width","points":[{"beat":0,"value":0}]})")["env"]
+            .asString());
+    f.exec("env.set", R"({"env":")" + lane.str() + R"(","mode":"latch"})");
+    engine::DummyBackend backend({.mode = engine::DummyBackend::Mode::Manual});
+    struct Stop {
+        engine::EngineApp& app;
+        ~Stop() { app.stopEngine(); }
+    } stop{*f.app};
+    REQUIRE(f.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 128},
+                               {.anticipative = false, .workers = 0}));
+    f.exec("transport.play", "{}");
+    backend.run(4);
+    f.refresh();
+    const auto bar = f.strip(track).pan->bounds();
+    f.drag({bar.x + .9f * bar.w, bar.y + bar.h / 2}, {bar.x + .65f * bar.w, bar.y + bar.h / 2});
+    CHECK(f.track(track).width < 100);
+    const auto* env = f.app->head().envelopes.find(lane);
+    REQUIRE(env);
+    CHECK(env->points.back().value == f.track(track).width);
+    const model::EnvTarget target{*model::Id::parse(track), "width"};
+    CHECK(f.app->engine()->writeHolds() == std::vector<model::EnvTarget>{target});
 }

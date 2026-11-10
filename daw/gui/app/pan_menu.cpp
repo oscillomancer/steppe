@@ -10,13 +10,12 @@
 #include <utility>
 #include <vector>
 
+#include "selection_edit.h"
 #include "strip_learn.h"
 #include "supple/ui/popup.h"
 
 namespace supple::gui {
 namespace {
-
-const cmd::Origin kOrigin{cmd::Origin::Type::Ui, "gui", {}};
 
 std::string lawText(double db) {
     if (db == 0) return "0 dB";
@@ -29,7 +28,8 @@ void setTrack(AppActions& actions, const model::Id& track, const char* field, js
     json::Value args = json::Value::object();
     args["track"] = track.str();
     args[field] = std::move(value);
-    const auto r = actions.dispatcher().execute({"track.set", std::move(args), kOrigin});
+    const auto r =
+        SelectionEdit(actions.dispatcher(), actions.app(), actions.ui()).set(std::move(args), {});
     if (!r && actions.onError) actions.onError(r.error().message);
 }
 
@@ -116,8 +116,17 @@ void openPanMenu(ui::Root& root, AppActions& actions, const model::Id& track,
     });
     rule();
     ui::Root* r = &root;
-    add(stripLearnLabel(s, {{track}, "pan"}), false,
-        [r, a, track] { openStripLearn(*r, *a, {{track}, "pan"}); });
+    std::vector<std::string> controls;
+    if (t->panMode == model::PanMode::Dual)
+        controls = {"pan_left", "pan_right"};
+    else if (t->panMode == model::PanMode::Width)
+        controls = {"pan", "width"};
+    else
+        controls = {"pan"};
+    controls.push_back("pan_boost");
+    for (const auto& param : controls)
+        add(stripLearnLabel(s, {{track}, param}), false,
+            [r, a, track, param] { openStripLearn(*r, *a, {{track}, param}); });
     root.openPopup(ui::makeMenu("strip.pan.menu", std::move(items), [r] { r->closePopup(); }),
                    anchor, ui::Placement::Below);
 }

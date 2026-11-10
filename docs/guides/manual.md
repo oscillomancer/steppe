@@ -327,6 +327,17 @@ passes. **Gain compensation (boost pans)** keeps the centre at 0 dB and
 boosts the sides instead, which can clip a loud recording. A master's pan is
 a plain balance, with no mode or law.
 
+The track's envelope menu and its context menu offer **Width**, **Pan left**,
+**Pan right** and **Gain compensation** lanes on channels and busses. Width
+and the two positions move continuously between −100 and 100%; compensation
+switches on at 0.5 and overrides the current law's boost while its lane is
+active. Both bars record automation in touch, latch and write modes. Pan's
+lane keeps driving the position and has no effect in dual mode.
+
+The pan group link and selection drags move all pan positions by relative
+offsets, clamped at the ends. Mode and law choices copy to the other members;
+masters are skipped for these extra controls.
+
 ## Routing
 
 **View > Routing matrix**, or a strip's **out** button, opens a grid of what
@@ -520,6 +531,10 @@ them to MIDI controllers (`module_learn_set`).
 
 Right-click a track's fader, pan, mute, solo, polarity, mono, arm or
 monitoring button, in the track list or the mixer, and choose **MIDI learn**.
+The pan menu offers **Pan** in pan mode, **Pan left** and **Pan right** in
+dual mode, **Pan** and **Width** in width mode, and **Gain compensation** in
+every mode on channels and busses. The positions follow knobs with soft
+takeover; compensation learns as a toggle.
 Move the knob, fader or button on your controller, then click OK. Each track
 can have its own knobs, so a controller with eight faders can drive eight
 tracks. A VCA's fader, mute and solo in the mixer learn the same way. The

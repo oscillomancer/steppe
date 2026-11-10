@@ -39,8 +39,10 @@ std::string envUnit(const model::Envelope& env, const EnvScale& scale) {
     switch (scale.kind) {
         case EnvScale::Kind::Volume:
             return "volume";
+        case EnvScale::Kind::Percent:
         case EnvScale::Kind::Pan:
             return "pan";
+        case EnvScale::Kind::Boost:
         case EnvScale::Kind::Mute:
             return "mute";
         case EnvScale::Kind::Playrate:

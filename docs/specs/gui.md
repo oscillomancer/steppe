@@ -444,15 +444,21 @@ channel's or buss's pan opens its pan menu instead (ADR-0066, `pan_menu.cpp`):
 "Pan mode: pan / dual pan / pan and width", a rule, "Pan law: project (0 dB)"
 and "Pan law: 0 dB … −6 dB" (the strip's own law), "Gain compensation (boost
 pans)" (ticked by the effective law; on a strip that follows the project it
-gives the strip its own law), a rule, then the pan's MIDI learn entry; each
+gives the strip its own law), a rule, then MIDI learn entries for each shown
+control: Pan in pan mode, Pan left and Pan right in dual mode, Pan and Width
+in width mode, always followed by Gain compensation. Each entry names its
+binding; the three positions allow soft takeover and compensation defaults
+to toggle mode. Each
 choice is one `track.set`. A master's pan opens MIDI learn alone. In `dual` and
 `width` modes the pan control splits into two half-width bars: dual's left and
 right inputs, or the position and the width (drawn in a quieter ink, from the
 centre). A press picks the bar under the pointer; a double-click sends it
 home (centre; hard left or right in dual; 100% width); with the control
 focused, Up and Down choose the bar the arrows move. Each bar sets its own
-field (`pan`, `pan_left`, `pan_right`, `width`); only `pan` spreads across a
-selection and through group links.
+field (`pan`, `pan_left`, `pan_right`, `width`) and records its writing
+envelope. Selection drags and the `pan` group link carry these as relative
+percentage-point offsets, clamped to −100..100. Mode and law edits copy
+absolutely (including null); masters are skipped for the new controls.
 Commands: `track.*`, `route.*`, `fx.*` (bypass/offline), transport.
 
 ### 4.3 Arrange view
@@ -541,6 +547,13 @@ MIDI thumbnails map offset, rate and loop passes
 as playback does. Fade shapes and curve bends share playback's evaluator.
 Automation drawing samples only visible time and bounds loop glyph work;
 plugin automation interpolates in the playback parameter domain (ADR-0010).
+
+On channels and busses the envelope menu and track context menu also offer
+Width, Pan left, Pan right and Gain compensation lanes, initially flat at
+the saved positions or effective boost. The three positions span −100..100;
+width reads as percent, dual positions like pan. Compensation reads off/on,
+with the same threshold and stepped drawing as mute (≥0.5 is on). Masters
+have none of these four lanes.
 
 A strip's envelope menu lists, after its own and its effects' envelopes, its
 sends' volume, pan and mute (`env.add {route}`, flat at the send's value;

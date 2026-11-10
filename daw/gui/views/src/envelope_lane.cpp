@@ -16,8 +16,10 @@ double EnvScale::toNorm(double value) const {
     switch (kind) {
         case Kind::Volume:
             return ui::faderPosition(value);
+        case Kind::Percent:
         case Kind::Pan:
             return std::clamp((value + 100.0) / 200.0, 0.0, 1.0);
+        case Kind::Boost:
         case Kind::Mute:
             return value >= 0.5 ? 1.0 : 0.0;
         case Kind::Playrate:
@@ -38,8 +40,10 @@ double EnvScale::fromNorm(double norm) const {
     switch (kind) {
         case Kind::Volume:
             return std::max(-150.0, ui::faderDb(n));  // the floor stands for -inf
+        case Kind::Percent:
         case Kind::Pan:
             return std::round(n * 200.0 - 100.0);
+        case Kind::Boost:
         case Kind::Mute:
             return n >= 0.5 ? 1.0 : 0.0;
         case Kind::Playrate:
@@ -59,6 +63,11 @@ std::string EnvScale::text(double value) const {
             if (value <= -150.0 || !std::isfinite(value)) return "-inf dB";
             std::snprintf(buf, sizeof buf, "%+.1f dB", value);
             return buf;
+        case Kind::Percent:
+            std::snprintf(buf, sizeof buf, "%+.0f %%", value);
+            return buf;
+        case Kind::Boost:
+            return value >= .5 ? "on" : "off";
         case Kind::Pan: {
             const long p = std::lround(value);
             if (p == 0) return "C";
@@ -84,8 +93,13 @@ std::optional<EnvScale> envScale(const model::Envelope& env) {
     EnvScale s;
     if (env.target.param == "volume")
         s.kind = EnvScale::Kind::Volume;
-    else if (env.target.param == "pan")
+    else if (env.target.param == "pan" || env.target.param == "pan_left" ||
+             env.target.param == "pan_right")
         s.kind = EnvScale::Kind::Pan;
+    else if (env.target.param == "width")
+        s.kind = EnvScale::Kind::Percent;
+    else if (env.target.param == "pan_boost")
+        s.kind = EnvScale::Kind::Boost;
     else if (env.target.param == "mute")
         s.kind = EnvScale::Kind::Mute;
     else if (env.target.object == model::kMaster && env.target.param == "playrate")
@@ -99,6 +113,10 @@ std::string envTitle(const model::Envelope& env) {
     const std::string& p = env.target.param;
     if (p == "volume") return "Volume";
     if (p == "pan") return "Pan";
+    if (p == "width") return "Width";
+    if (p == "pan_left") return "Pan left";
+    if (p == "pan_right") return "Pan right";
+    if (p == "pan_boost") return "Gain compensation";
     if (p == "mute") return "Mute";
     if (p == "playrate") return "Playrate";
     return p;

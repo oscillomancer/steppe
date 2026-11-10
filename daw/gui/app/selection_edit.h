@@ -28,8 +28,8 @@ class SelectionEdit {
     cmd::Dispatcher& dispatcher_;
     engine::EngineApp& app_;
     UiState& ui_;
-    std::string gesture_;                                     // the drag start_ belongs to
-    std::map<std::string, std::pair<double, double>> start_;  // track -> (volume_db, pan)
+    std::string gesture_;                        // the drag start_ belongs to
+    std::map<std::string, model::Track> start_;  // controls at gesture start
 };
 
 }  // namespace supple::gui

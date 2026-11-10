@@ -18,7 +18,7 @@
 namespace supple::views {
 
 struct EnvScale {
-    enum class Kind { Volume, Pan, Mute, Playrate, Plugin };
+    enum class Kind { Volume, Pan, Percent, Mute, Boost, Playrate, Plugin };
     Kind kind = Kind::Volume;
     std::shared_ptr<const params::DescribedParam> param;  // Plugin: range, curve, units
     bool normalizedInterpolation = true;                  // semantic and normalized plug-in lanes
