@@ -110,6 +110,14 @@ instructions are in `docs/guides/installing.md`.
 - **Licensing** (ADR-0033, ADR-0062): DAW code is GPL-3.0-or-later; stock
   plugins, their shared libraries and `modules/` (the rack runtime and the
   stock modules) are MIT.
+- **Sync library** (ADR-0070, `specs/sync.md`): `libs/sync` has timecode
+  arithmetic (23.976 to 30 drop-frame, labels, seconds, start offsets,
+  text), MIDI clock and Song Position output at exact frames with a
+  receiver (tempo, position, lock), MTC quarter-frame and full-frame output
+  with a receiver (either direction, rate detection), LTC encode and decode
+  over libltc, and the chase tracker that turns any of them into a master
+  playrate with relocation and lock. Unit-tested under RealtimeSanitizer;
+  not yet wired to the engine (see Known limits).
 
 - **Session and history** (`specs/session-model.md`, ADR-0008): immutable
   versions with stable ids, per-branch undo, branches with object-level diff
@@ -857,6 +865,12 @@ Library boundaries:
   on Linux, and native macOS/Windows CI has not run on it.
 
 Engine and hosting:
+- Sync (ADR-0070): `libs/sync` is not called by the engine yet, so the app
+  sends no MIDI clock, MTC or LTC and cannot follow an external master; no
+  commands, project fields or GUI exist for them. Without a set project
+  rate, 23.976 and 29.97 non-drop MTC or LTC sources read 0.1% off for their
+  first two seconds. Native macOS/Windows CI has not run on the library or
+  the vendored libltc.
 - Pan modes (ADR-0066): `pan` automation does nothing in dual mode.
   Projects from before ADR-0066 play louder (about 3.5 dB for a channel into
   a master, plus about 6.5 dB per buss on the way); there is no migration.
