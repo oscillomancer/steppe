@@ -771,12 +771,12 @@ Status validateNumeric(const Session& s) {
         if (env->target.param == "playrate") return validPlayrate(value, path);
         if (env->target.object.kind == Kind::Track) {
             const auto& param = env->target.param;
-            const bool position = param == "width" || param == "pan_left" || param == "pan_right";
-            if ((position && (value < -100 || value > 100)) ||
+            const bool isPosition = param == "width" || param == "pan_left" || param == "pan_right";
+            if ((isPosition && (value < -100 || value > 100)) ||
                 (param == "pan_boost" && (value < 0 || value > 1)))
                 return Error(
                     "env.value", "pan automation value is out of range", path,
-                    position ? "use -100 through 100 percent" : "use 0 through 1 (on at 0.5)");
+                    isPosition ? "use -100 through 100 percent" : "use 0 through 1 (on at 0.5)");
         }
         if (env->target.param == "volume") {
             const double gain = value <= kSilenceDb ? 0 : std::pow(10, value / 20);
