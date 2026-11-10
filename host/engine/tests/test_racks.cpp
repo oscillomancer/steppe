@@ -1258,7 +1258,9 @@ TEST_CASE(
         CAPTURE(anticipative);
         auto pool = makePool();
         MediaCache media;
-        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 40000});
+        // Room for every cycle below, the restart's longest wait included.
+        DummyBackend backend(
+            {.mode = DummyBackend::Mode::Manual, .captureFrames = (20 + 40 + 160 + 180) * 128});
         Engine engine(pool, media, {.anticipative = anticipative, .workers = 2});
         REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
         REQUIRE(engine.load(state));
