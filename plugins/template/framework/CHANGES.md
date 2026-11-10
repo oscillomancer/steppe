@@ -4,6 +4,16 @@ The framework is versioned on its own (`framework/VERSION.txt`) so a product can
 tell which one it carries. Each entry says what a product must do, if
 anything, after `framework/tools/update_framework.cmake` brings it in.
 
+## 1.33.4
+
+What a product must do: nothing.
+
+- **Resampling a file works out its filter once for every channel.**
+  `dsp::resample` computes each output sample's tap weights once and sums
+  every channel with them, instead of again per channel: a stereo file
+  resamples in about half the time, a mono one as before, and the result
+  is the same to the bit.
+
 ## 1.33.3
 
 What a product must do: nothing.

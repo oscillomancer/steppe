@@ -1457,6 +1457,31 @@ TEST(resampling_keeps_the_band_and_drops_what_cannot_fit) {
     CHECK(db(amplitudeAt(z, 12000.0, 0, 32000.0)) < -80.0);  // 20 kHz would fold to 12
 }
 
+TEST(resampling_each_channel_is_the_same_alone_or_together) {
+    // The channels share each output sample's tap weights; none may lean on
+    // another's samples, at a rate up or down, nor change a bit doing so.
+    AudioData in;
+    in.sampleRate = 48000.0;
+    in.channel.assign(3, std::vector<float>(2000));
+    for (size_t n = 0; n < 2000; ++n) {
+        const double x = static_cast<double>(n);
+        in.channel[0][n] = static_cast<float>(std::sin(0.031 * x));
+        in.channel[1][n] = static_cast<float>(0.5 * std::sin(0.4 * x) - 0.2 * std::cos(0.07 * x));
+        in.channel[2][n] = n % 97 == 0 ? 1.0f : 0.0f;
+    }
+    for (const double rate : {44100.0, 96000.0, 1234.5678}) {
+        const AudioData together = resample(in, rate);
+        CHECK(together.channel.size() == 3);
+        for (size_t c = 0; c < 3; ++c) {
+            AudioData one;
+            one.sampleRate = in.sampleRate;
+            one.channel = {in.channel[c]};
+            const AudioData alone = resample(one, rate);
+            CHECK(alone.channel[0] == together.channel[c]);
+        }
+    }
+}
+
 TEST(disk_stream_plays_the_file_from_disk_and_restarts) {
     const std::filesystem::path dir = scratchFolder("stream");
     AudioData a;

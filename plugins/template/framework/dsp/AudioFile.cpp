@@ -218,15 +218,27 @@ AudioData resample(const AudioData& in, double sampleRate) {
     const size_t inFrames = in.frames();
     const size_t outFrames = static_cast<size_t>(std::max(1.0, std::round(static_cast<double>(inFrames) * ratio)));
     out.channel.assign(in.channel.size(), std::vector<float>(outFrames));
+    // An output sample's tap weights, worked out once for every channel.
+    std::vector<double> weights(static_cast<size_t>(2.0 * halfWidth) + 2);
     for (size_t n = 0; n < outFrames; ++n) {
         const double t = static_cast<double>(n) / ratio;  // in input samples
-        const long long first = static_cast<long long>(std::ceil(t - halfWidth));
-        const long long last = static_cast<long long>(std::floor(t + halfWidth));
-        for (size_t c = 0; c < in.channel.size(); ++c) {
-            const std::vector<float>& x = in.channel[c];
+        const long long first = std::max(0LL, static_cast<long long>(std::ceil(t - halfWidth)));
+        const long long last = std::min(static_cast<long long>(std::floor(t + halfWidth)), static_cast<long long>(inFrames) - 1);
+        const size_t taps = last >= first ? static_cast<size_t>(last - first + 1) : 0;
+        // The first channel is summed as they are worked out: a mono file
+        // goes through its taps once.
+        double* w = weights.data();
+        const float* x0 = in.channel[0].data() + first;
+        double sum0 = 0.0;
+        for (size_t i = 0; i < taps; ++i) {
+            w[i] = kernel(t - static_cast<double>(first + static_cast<long long>(i)));
+            sum0 += x0[i] * w[i];
+        }
+        out.channel[0][n] = static_cast<float>(sum0);
+        for (size_t c = 1; c < in.channel.size(); ++c) {
+            const float* x = in.channel[c].data() + first;
             double sum = 0.0;
-            for (long long k = std::max(0LL, first); k <= std::min(last, static_cast<long long>(inFrames) - 1); ++k)
-                sum += x[static_cast<size_t>(k)] * kernel(t - static_cast<double>(k));
+            for (size_t i = 0; i < taps; ++i) sum += x[i] * w[i];
             out.channel[c][n] = static_cast<float>(sum);
         }
     }
