@@ -209,3 +209,17 @@ if(NOT WIN32)
 endif()
 _supple_codec_target(tp-lame)
 add_library(supple::lame ALIAS tp-lame)
+
+# SMPTE linear timecode for sync input and output (ADR-0070): libltc 1.3.2
+# (LGPL-3.0-or-later, the approved exception recorded there). Linked only by
+# libs/sync, which only the DAW links: never plugins/, modules/ or the MIT
+# libraries. The sources need no config.h. Same flags as the codecs above:
+# warnings off, contraction off, the sanitizers' instrumentation when set.
+set(_ltc ${CMAKE_CURRENT_SOURCE_DIR}/libltc-1.3.2/src)
+add_library(tp-ltc STATIC ${_ltc}/ltc.c ${_ltc}/decoder.c ${_ltc}/encoder.c ${_ltc}/timecode.c)
+target_include_directories(tp-ltc SYSTEM PUBLIC ${_ltc})
+if(NOT WIN32)
+  target_link_libraries(tp-ltc PUBLIC m)
+endif()
+_supple_codec_target(tp-ltc)
+add_library(supple::ltc ALIAS tp-ltc)
