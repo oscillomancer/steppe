@@ -184,7 +184,10 @@ instructions are in `docs/guides/installing.md`.
   staging, so a hop costs nothing, ADR-0066); pan modes (pan, dual pan, pan
   and width) and pan laws (0 dB by default, −2.5 to −6 dB, gain
   compensation) per project and per strip, from the pan's right-click menu
-  and the Project menu (ADR-0066); routes
+  and the Project menu (ADR-0066). Width, dual positions and gain compensation
+  have automation and MIDI learn on channels and busses, including following
+  sends, keys and write holds. Pan group links and selection edits carry
+  positions, mode and law; masters keep ordinary balance. Routes
   with taps, channel maps, mono and polarity; sidechain keys (an unrouted
   key deactivates a plug-in's key port or bus, so it can key from its own
   input); up to 128
@@ -852,11 +855,10 @@ Library boundaries:
   on Linux, and native macOS/Windows CI has not run on it.
 
 Engine and hosting:
-- Pan modes (ADR-0066): `width`, `pan_left` and `pan_right` have no
-  envelopes or MIDI learn, and group links and selection edits carry `pan`
-  only; `pan` automation does nothing in dual mode. Projects from before
-  ADR-0066 play louder (about 3.5 dB for a channel into a master, plus about
-  6.5 dB per buss on the way); there is no migration.
+- Pan modes (ADR-0066): `pan` automation does nothing in dual mode.
+  Projects from before ADR-0066 play louder (about 3.5 dB for a channel into
+  a master, plus about 6.5 dB per buss on the way); there is no migration.
+  Native macOS/Windows CI for these changes remains pending before merge.
 - Modular racks (ADR-0062/0064): Racks do not follow a
   track's playrate map;
   cables into a plugin module's parameters modulate CLAP plug-ins only

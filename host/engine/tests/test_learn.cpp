@@ -652,3 +652,47 @@ TEST_CASE("MIDI learn: a controller turns a rack module's knob along its travel"
     rig.send(0xb0, 21, 127);
     CHECK(cutoff() == doctest::Approx(20 * std::pow(1000.0, 64.0 / 127)).epsilon(1e-6));
 }
+
+TEST_CASE("MIDI learn: all pan controls move, take over and refuse masters") {
+    Rig rig;
+    rig.call("track.add", R"({"name":"Stereo"})");
+    rig.call("project.set", R"({"pan_law":{"db":-3}})");
+    int cc = 21;
+    for (const std::string param : {"width", "pan_left", "pan_right", "pan_boost"}) {
+        auto args = j(R"({"track":"tr_1","midi":{"kind":"cc","channel":1},"soft_takeover":true})");
+        args["param"] = param;
+        args["midi"]["number"] = cc++;
+        if (param == "pan_boost") {
+            args["soft_takeover"] = false;
+            args["mode"] = "toggle";
+        }
+        auto result = rig.bus->execute({"track.learn.set", args, kTest});
+        REQUIRE(result);
+        args["track"] = "tr_0";
+        result = rig.bus->execute({"track.learn.set", args, kTest});
+        REQUIRE_FALSE(result);
+        CHECK(result.error().code == "track.strip_type");
+    }
+    rig.start();
+    const auto track = [&]() -> const model::Track& {
+        return *rig.app->head().tracks.find({model::Kind::Track, 1});
+    };
+    rig.send(0xb0, 21, 64);
+    CHECK(track().width == 100);  // has not caught the top
+    rig.send(0xb0, 21, 127);
+    rig.send(0xb0, 21, 64);
+    CHECK(track().width == 0);
+    rig.send(0xb0, 22, 0);
+    rig.send(0xb0, 22, 127);
+    CHECK(track().panLeft == 100);
+    rig.send(0xb0, 23, 127);
+    rig.send(0xb0, 23, 0);
+    CHECK(track().panRight == -100);
+    rig.send(0xb0, 24, 127);
+    REQUIRE(track().panLaw);
+    CHECK(track().panLaw->db == -3);
+    CHECK(track().panLaw->boost);
+    rig.send(0xb0, 24, 0);
+    rig.send(0xb0, 24, 127);
+    CHECK_FALSE(track().panLaw->boost);
+}

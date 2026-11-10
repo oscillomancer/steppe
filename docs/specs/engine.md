@@ -210,9 +210,16 @@ a structural edit while the preceding plan remains prepared.
 Envelope points are pre-converted to plan time (samples at the engine rate,
 per the time map; beat-timebase points are converted through the tempo map
 at compile time). Per block, each automated target evaluates its segments:
-- mixer targets (volume, pan, mute, send level/pan) interpolate per sample
+- mixer targets (volume, pan, width, pan_left, pan_right, pan_boost, mute,
+  send level/pan) interpolate per sample
   (gain ramps) and drive the C9 Channel (or the plain stage) — cheap and
-  exact; Console 9 stages restart their seeded dither at every locate;
+  exact; Console 9 stages restart their seeded dither at every locate.
+  Channels and busses bind the three new percentages and compensation into
+  the strip's `PanSettings` per sample; compensation ≥0.5 overrides the
+  effective law's boost while its envelope is active and nonempty. PanCache
+  recomputes only on a setting change. Following sends, keys and rack inputs
+  use private copies with their own cursors, timeline shifts and write holds;
+  positioned sends also inherit automated compensation under the source law;
 - plugin parameters receive CLAP param-value events at segment points and
   every `automation_resolution` samples inside curved/linear segments
   (default 32; always at exact point positions), in the parameter's CLAP
@@ -225,7 +232,8 @@ at compile time). Per block, each automated target evaluates its segments:
   recording follows the same conversion, and replay carries time-envelope
   points as explicit seconds through `env.points.set`.
 - write holds (ADR-0061): once a pass has written a strip's or send's
-  volume or pan, or a VCA's volume, the engine plays that target's static
+  volume or pan (including width, dual positions and compensation on channels
+  and busses), or a VCA's volume, the engine plays that target's static
   value (the hand) instead of its compiled curve until the hold ends, and
   the points the pass keeps writing reach the model without compiling
   (§1.6). Latch, latch_preview and write hold until the pass ends at pause
@@ -276,9 +284,9 @@ acknowledges via an epoch counter; the model thread destroys the old plan
 the RT thread frees memory.
 
 **Mix-value edits (ADR-0060).** A session that differs from the last one
-`Engine::load` took only in strip `volume_db`/`pan`, send `volume_db`/`pan`
-and VCA `volume_db` (and in the points of envelopes a write pass holds,
-§1.4) is not compiled. The comparison copies each changed track, route, group
+`Engine::load` took only in strip `volume_db`/`pan`/`width`/`pan_left`/`pan_right`,
+send `volume_db`/`pan` and VCA `volume_db` (and in the points of envelopes a
+write pass holds, including the new pan targets, §1.4) is not compiled. The comparison copies each changed track, route, group
 and envelope with those fields taken from the new one and compares the whole
 object, so any other change (mute, solo, a name, an FX or a route's tap)
 compiles. A send whose level moves to or from exactly 0 dB, or whose pan
@@ -2582,3 +2590,14 @@ Linked peers split at the initiating item's resolved beat, without independent
 searches. Existing locks, freeze and warp-bundle validation remain in force.
 History logs the resolved beat with `snap: none` so branch replay needs no audio
 search or source preparation. Each successful command or batch is one undo step.
+
+### Pan control MIDI learn (ADR-0066)
+
+`track.learn.*` accepts `width`, `pan_left`, `pan_right` on channels and
+busses with the pan shape (−100..100, centre detent, one percent per encoder
+step), soft takeover allowed, and `pan_boost` as a switch like mute.
+Masters refuse them with `track.strip_type`. Compensation edits preserve
+the effective law's dB value and set its boost through `track.set {pan_law}`;
+this records a writing envelope when the effective boost changes. Linked
+manual edits carry positions relatively and mode/law absolutely; playback
+of a member's envelopes never propagates through its group.

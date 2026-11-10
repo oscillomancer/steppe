@@ -163,6 +163,12 @@ Status validateStripRules(const Session& s) {
         if (t.laneMute && t.type != StripType::Master)
             return trackError("only masters have a lane mute", path + "/lane_mute",
                               "mute the items themselves, or the strip");
+        for (const auto& learn : t.learn)
+            if (t.type == StripType::Master &&
+                (learn.param == "width" || learn.param == "pan_left" ||
+                 learn.param == "pan_right" || learn.param == "pan_boost"))
+                return trackError("a master has no " + learn.param, path + "/learn",
+                                  "learn these pan controls on a channel or buss");
         if (t.hwOutput) {  // ADR-0056
             const auto& out = *t.hwOutput;
             if (t.type != StripType::Master)
@@ -221,11 +227,21 @@ Status validateStripRules(const Session& s) {
             hasPlayrate = true;
             continue;
         }
-        if (target.object.kind == Kind::Track && target.param != "volume" &&
-            target.param != "pan" && target.param != "mute")
-            return trackError("a strip envelope targets volume, pan or mute",
-                              "/envelopes/" + e.id.str() + "/target/param",
-                              "automate a utility insert for width, trim or polarity");
+        if (target.object.kind == Kind::Track) {
+            const bool position = target.param == "width" || target.param == "pan_left" ||
+                                  target.param == "pan_right";
+            const bool boost = target.param == "pan_boost";
+            if (!position && !boost && target.param != "volume" && target.param != "pan" &&
+                target.param != "mute")
+                return trackError("unknown strip envelope parameter",
+                                  "/envelopes/" + e.id.str() + "/target/param",
+                                  "use volume, pan, mute, width, pan_left, pan_right or pan_boost");
+            const Track* t = s.tracks.find(target.object);
+            if ((position || boost) && t && t->type == StripType::Master)
+                return trackError("a master's pan is a balance",
+                                  "/envelopes/" + e.id.str() + "/target/param",
+                                  "automate pan modes and gain compensation on channels or busses");
+        }
     }
     for (const auto& e : s.routes) {
         const Route& r = *e.value;

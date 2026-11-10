@@ -62,7 +62,20 @@ widen its image.
    follow it sample by sample. `pan`, `width`, `pan_left` and `pan_right`
    are mix values (ADR-0060): moving them does not recompile the plan.
    Changing the mode or the law does. `pan` automation drives `pan` in the
-   `pan` and `width` modes and does nothing in `dual`.
+   `pan` and `width` modes and does nothing in `dual`. Channels and busses
+   also have continuous `width`, `pan_left` and `pan_right` envelopes
+   (−100..100 percent) and `pan_boost` (0..1, on at ≥0.5). An active
+   nonempty `pan_boost` envelope overrides the effective law's boost per
+   sample, whether that law is the strip's or the project's. Masters refuse
+   these targets. Following sends and keys keep private copies of the curves
+   and their write holds (ADR-0061). All four targets record in touch, latch,
+   latch_preview and write; setting `pan_law`, including null, records boost
+   when its effective value changes.
+   MIDI learn accepts the three positions as continuous pan-shaped controls
+   with soft takeover, and `pan_boost` as a toggle. The `pan` group link and
+   selection drags carry all four positions by relative percentage-point
+   deltas, clamped to −100..100; mode and law (including null) copy absolutely.
+   Masters are skipped for these new controls.
 4. **The law applies once per strip**, on channels and busses alike: the
    pan matrix and fader act before the strip's C9 Channel encode. The
    C9 Buss has no pan stage. Masters keep their balance stage (ADR-0019 §5),
@@ -93,8 +106,9 @@ widen its image.
    A centred 0 dB chain under the 0 dB law is bit-transparent.
 8. **No migration.** Existing projects play louder: by 3.5 dB for a
    channel straight into a master, and by about 6.5 dB for every buss on the
-   way. Writers emit `supple.project/2.9`. An older application opening a
-   2.9 file ignores the new fields with warnings.
+   way. Writers emit `supple.project/2.9`. An older application ignores the
+   new strip fields with warnings and cannot use the new MIDI bindings;
+   builds without the new envelope targets refuse projects that use them.
 
 ## Consequences
 
@@ -108,5 +122,6 @@ widen its image.
   by default.
 - `dual` and `width` cost one extra multiply-add per channel per sample;
   `pan` mode costs what it did.
-- `width`, `pan_left` and `pan_right` have no envelopes or MIDI learn yet,
-  and group links carry `pan` only (see STATUS.md).
+- Pan automation and MIDI learn use the same controls as the GUI. A law's
+  dB value and the mode remain discrete edits that compile a plan; automation
+  changes positions and compensation sample by sample without compilation.

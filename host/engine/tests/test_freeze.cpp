@@ -94,6 +94,12 @@ TEST_CASE("freeze: exact pre-fader capture, live mixer, history and save reopen"
     CHECK_FALSE(f.call("fx.param.set", R"({"fx":"fx_1","values":{"gain_db":-6}})"));
     CHECK_FALSE(f.call("tempo.set", R"({"points":[{"beat":0,"bpm":90}]})"));
     f.run("track.set", R"({"track":"tr_1","volume_db":-6,"pan":20})");
+    f.run(
+        "track.set",
+        R"({"track":"tr_1","pan_mode":"width","width":35,"pan_left":-20,"pan_right":60,"pan_law":{"db":-3,"boost":true}})");
+    f.run(
+        "track.set",
+        R"({"track":"tr_1","pan_mode":"pan","width":100,"pan_left":-100,"pan_right":100,"pan_law":null})");
     f.run("track.unfreeze", R"({"track":"tr_1"})");
     CHECK_FALSE(f.app->head().tracks.find(track)->freeze);
     f.run("history.undo");

@@ -310,13 +310,20 @@ struct Edge {
     // positions and law, a positioned one pan mode with that law.
     PanSettings source;
     PanCache panCache;
-    PanSettings panSettings(double at) const SUPPLE_RT {
+    PanSettings panSettings(double position, std::int64_t at) SUPPLE_RT {
         if (followPan) {
             PanSettings s = source;
-            s.pan = at;
+            s.pan = position;
+            if (stripWidth.active() && !holdStripWidth) s.width = stripWidth.at(at);
+            if (stripPanLeft.active() && !holdStripPanLeft) s.left = stripPanLeft.at(at);
+            if (stripPanRight.active() && !holdStripPanRight) s.right = stripPanRight.at(at);
+            if (stripPanBoost.active() && !holdStripPanBoost)
+                s.law.boost = stripPanBoost.at(at) >= .5;
             return s;
         }
-        return {model::PanMode::Pan, at, 100, -100, 100, source.law};
+        auto law = source.law;
+        if (stripPanBoost.active() && !holdStripPanBoost) law.boost = stripPanBoost.at(at) >= .5;
+        return {model::PanMode::Pan, position, 100, -100, 100, law};
     }
     bool mono = false, invert = false;
     // The route's channel map (session-model §1.8) as a matrix: destination
@@ -331,6 +338,7 @@ struct Edge {
     }
     Automation autoVolume, autoPan, autoMute;  // route envelopes (dB, %, 0/1)
     VcaControls vcas;
+    Automation stripWidth, stripPanLeft, stripPanRight, stripPanBoost;
     Automation stripVolume, stripPan, stripMute;  // private copies: source-owned
     bool encode = false, followPan = true, muted = false;
     // A write pass holds the route's or its source strip's level or pan at
@@ -340,6 +348,14 @@ struct Edge {
     bool panCurve() const SUPPLE_RT { return autoPan.active() && !holdPan; }
     bool stripVolumeCurve() const SUPPLE_RT { return stripVolume.active() && !holdStripVolume; }
     bool stripPanCurve() const SUPPLE_RT { return stripPan.active() && !holdStripPan; }
+    bool holdStripWidth = false, holdStripPanLeft = false, holdStripPanRight = false,
+         holdStripPanBoost = false;
+    bool extraPanCurve() const SUPPLE_RT {
+        return (stripPanBoost.active() && !holdStripPanBoost) ||
+               (followPan && ((stripWidth.active() && !holdStripWidth) ||
+                              (stripPanLeft.active() && !holdStripPanLeft) ||
+                              (stripPanRight.active() && !holdStripPanRight)));
+    }
     ConsoleStage<console9::Channel> encoder;
     FaderControl fader;
     Stereo encoded;
@@ -694,6 +710,12 @@ struct Node {
     std::array<std::uint8_t, 16 * 128> liveHeld{};  // device notes sounding (per channel/key)
     bool live = false;
     Automation autoVolume, autoPan, autoMute;
+    Automation autoWidth, autoPanLeft, autoPanRight, autoPanBoost;
+    bool holdWidth = false, holdPanLeft = false, holdPanRight = false, holdPanBoost = false;
+    bool extraPanCurve() const SUPPLE_RT {
+        return (autoWidth.active() && !holdWidth) || (autoPanLeft.active() && !holdPanLeft) ||
+               (autoPanRight.active() && !holdPanRight) || (autoPanBoost.active() && !holdPanBoost);
+    }
     bool holdVolume = false, holdPan = false;  // a write pass holds them (ADR-0061)
     bool volumeCurve() const SUPPLE_RT { return autoVolume.active() && !holdVolume; }
     bool panCurve() const SUPPLE_RT { return autoPan.active() && !holdPan; }
@@ -746,6 +768,8 @@ struct MixSlots {
         std::atomic<double> volumeDb{0}, pan{0};  // a route's pan resolved against its source
         std::atomic<double> width{100}, panLeft{-100}, panRight{100};  // strips (ADR-0066)
         std::atomic<bool> holdVolume{false}, holdPan{false};
+        std::atomic<bool> holdWidth{false}, holdPanLeft{false}, holdPanRight{false},
+            holdPanBoost{false};
     };
     std::unique_ptr<Value[]> strips;  // per node
     std::unique_ptr<Value[]> routes;  // per edge (parent sends keep their compiled values)

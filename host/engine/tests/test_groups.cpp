@@ -436,3 +436,52 @@ TEST_CASE("VCA audio: independent sends and exclusive stems retain the right con
     CHECK(loud > 1);
     CHECK(low == 0);
 }
+
+TEST_CASE("pan controls: the pan link carries positions, modes and nullable laws") {
+    GroupsHost h;
+    h.tracks();
+    h.run("track.set", R"({"track":"tr_2","width":20,"pan_left":-20,"pan_right":80})");
+    h.run("track.set", R"({"track":"tr_3","width":-80,"pan_left":30,"pan_right":-90})");
+    h.run("group.add", R"({"name":"AB","members":["tr_0","tr_1","tr_2"],"links":["pan"]})");
+    h.run("group.add", R"({"name":"BC","members":["tr_2","tr_3"],"links":["pan"]})");
+    h.run(
+        "track.set",
+        R"({"track":"tr_1","width":50,"pan_left":-60,"pan_right":60,"pan_mode":"dual","pan_law":{"db":-3,"boost":true}})");
+    CHECK(h.track(2).width == -30);
+    CHECK(h.track(3).width == -100);
+    CHECK(h.track(2).panLeft == 20);
+    CHECK(h.track(3).panLeft == 70);
+    CHECK(h.track(2).panRight == 40);
+    CHECK(h.track(3).panRight == -100);
+    CHECK(h.track(0).panMode == model::PanMode::Pan);
+    CHECK_FALSE(h.track(0).panLaw);
+    CHECK(h.track(0).width == 100);
+    for (unsigned id : {1u, 2u, 3u}) {
+        CHECK(h.track(id).panMode == model::PanMode::Dual);
+        REQUIRE(h.track(id).panLaw);
+        CHECK(h.track(id).panLaw->boost);
+    }
+    h.run("track.set", R"({"track":"tr_1","pan_law":null})");
+    CHECK_FALSE(h.track(2).panLaw);
+    CHECK_FALSE(h.track(3).panLaw);
+}
+
+TEST_CASE("pan controls: envelope commands accept units and refuse masters and invalid values") {
+    GroupsHost h;
+    h.tracks();
+    for (const std::string param : {"width", "pan_left", "pan_right", "pan_boost"}) {
+        CAPTURE(param);
+        const std::string points =
+            param == "pan_boost" ? R"([{"beat":0,"value":1}])"
+                                 : R"([{"beat":0,"value":"-50 %"},{"beat":4,"value":"50 %"}])";
+        const auto args = R"({"track":"tr_1","param":")" + param + R"(","points":)" + points + "}";
+        CHECK(h.execute("env.add", args));
+        const auto master = h.execute("env.add", R"({"track":"tr_0","param":")" + param + "\"}");
+        REQUIRE_FALSE(master);
+        CHECK(master.error().code == "track.strip_type");
+        const auto invalid = h.execute("env.add", R"({"track":"tr_2","param":")" + param +
+                                                      R"(","points":[{"beat":0,"value":101}]})");
+        REQUIRE_FALSE(invalid);
+        CHECK(invalid.error().code == "env.value");
+    }
+}

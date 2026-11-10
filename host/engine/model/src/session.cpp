@@ -769,6 +769,15 @@ Status validateNumeric(const Session& s) {
     auto curveOutput = [&](const Envelope* env, double value, const std::string& path) -> Status {
         if (!env || env->target.object.kind == Kind::Fx) return {};
         if (env->target.param == "playrate") return validPlayrate(value, path);
+        if (env->target.object.kind == Kind::Track) {
+            const auto& param = env->target.param;
+            const bool position = param == "width" || param == "pan_left" || param == "pan_right";
+            if ((position && (value < -100 || value > 100)) ||
+                (param == "pan_boost" && (value < 0 || value > 1)))
+                return Error(
+                    "env.value", "pan automation value is out of range", path,
+                    position ? "use -100 through 100 percent" : "use 0 through 1 (on at 0.5)");
+        }
         if (env->target.param == "volume") {
             const double gain = value <= kSilenceDb ? 0 : std::pow(10, value / 20);
             if (!std::isfinite(gain) ||
@@ -803,6 +812,11 @@ Status validateNumeric(const Session& s) {
         SUPPLE_TRY(checkedBeat(s, ai.sourceLength, p + "/source_length"));
         SUPPLE_TRY(points(ai.points, Timebase::Beats, p + "/points"));
         const auto* envelope = s.envelopes.find(ai.envelope);
+        if (envelope && envelope->target.object.kind == Kind::Track &&
+            (envelope->target.param == "width" || envelope->target.param == "pan_left" ||
+             envelope->target.param == "pan_right" || envelope->target.param == "pan_boost"))
+            for (const auto& pt : ai.points)
+                SUPPLE_TRY(curveOutput(envelope, pt.value, p + "/points"));
         if (envelope && envelope->target.object == kMaster && envelope->target.param == "playrate")
             for (const auto& pt : ai.points) SUPPLE_TRY(validPlayrate(pt.value, p + "/points"));
         if (!std::isfinite(ai.baseline) || !std::isfinite(ai.amplitude))

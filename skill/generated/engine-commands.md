@@ -3853,7 +3853,7 @@ Result:
 
 Automate a parameter: a track's or route's mixer control, or a plugin's.
 
-Target one of track (param volume|pan|mute; playrate only on tr_0), route (volume|pan|mute), group (VCA volume|mute), or fx (a semantic key such as "gain" or "filter1.cutoff", or for other plugins a CLAP id or parameter name), or module (a rack module's knob by key, values in its unit, a choice by its key; module.describe). points: [{beat|bar|seconds, value, shape?, tension?}]; values in the parameter's unit (dB, %, Hz… — text like "800 Hz" works for plugins); shapes linear, square, slow, fast_start, fast_end, bezier. Plugin values move along the parameter's curve (a log cutoff sweeps evenly in pitch). take (param volume|pan|mute): a take envelope, its points in beats from the item's start (it moves with the item); it shapes the take after its take FX (a MIDI take needs an instrument in its take FX). Master playrate points are finite numeric ratios 0.25..4.0; an active nonempty master curve replaces the saved scalar during playback and rendering. Audio sources convert before take FX/live mixing; MIDI and automation follow the same timeline clock.
+Target one of track (param volume|pan|mute; width|pan_left|pan_right|pan_boost on channels/busses; playrate only on tr_0), route (volume|pan|mute), group (VCA volume|mute), or fx (a semantic key such as "gain" or "filter1.cutoff", or for other plugins a CLAP id or parameter name), or module (a rack module's knob by key, values in its unit, a choice by its key; module.describe). points: [{beat|bar|seconds, value, shape?, tension?}]; values in the parameter's unit (dB, %, Hz… — text like "800 Hz" works for plugins); shapes linear, square, slow, fast_start, fast_end, bezier. Plugin values move along the parameter's curve (a log cutoff sweeps evenly in pitch). take (param volume|pan|mute): a take envelope, its points in beats from the item's start (it moves with the item); it shapes the take after its take FX (a MIDI take needs an instrument in its take FX). Master playrate points are finite numeric ratios 0.25..4.0; an active nonempty master curve replaces the saved scalar during playback and rendering. Audio sources convert before take FX/live mixing; MIDI and automation follow the same timeline clock. Width and dual pans use -100..100 percent; pan_boost uses 0..1 (on at 0.5), overriding the effective law's boost while the envelope is active and nonempty.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -15248,7 +15248,7 @@ Result:
 
 Let a MIDI controller move a track's fader, pan, mute, solo or arm.
 
-One binding per control (a new one replaces it); saved with the project. param: volume, pan, mute, solo, phase_invert, mono, armed, monitor, lane_mute. midi.device: a substring of the MIDI input's name (empty: any). A level or pan follows a knob (mode absolute, soft_takeover: once it reaches the value) or an encoder (relative1 127 = -1, relative2 63 = -1, relative3 65 = -1). A button: a note or program change flips it per press, as a CC in toggle mode does; an absolute CC is on above 63. monitor goes off, on, auto in turn on each press.
+One binding per control (a new one replaces it); saved with the project. param: volume, pan, width, pan_left, pan_right, pan_boost, mute, solo, phase_invert, mono, armed, monitor, lane_mute. midi.device: a substring of the MIDI input's name (empty: any). A level or pan follows a knob (mode absolute, soft_takeover: once it reaches the value) or an encoder (relative1 127 = -1, relative2 63 = -1, relative3 65 = -1). A button: a note or program change flips it per press, as a CC in toggle mode does; an absolute CC is on above 63. monitor goes off, on, auto in turn on each press.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -15257,7 +15257,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `track` | string |  |  |  |  |
-| `param` | string |  |  |  | The control: volume, pan, mute, solo, phase_invert, mono, armed, monitor, lane_mute |
+| `param` | string |  |  |  | The control: volume, pan, width, pan_left, pan_right, pan_boost, mute, solo, phase_invert, mono, armed, monitor, lane_mute |
 | `midi` | object |  |  |  |  |
 | `mode` | string |  |  |  |  |
 | `soft_takeover` | boolean |  |  |  |  |
@@ -15290,7 +15290,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 
 ### Errors
 
-- `track.learn_param`: no such control Hint: use one of: volume, pan, mute, solo, phase_invert, mono, armed, monitor, lane_mute
+- `track.learn_param`: no such control Hint: use one of: volume, pan, width, pan_left, pan_right, pan_boost, mute, solo, phase_invert, mono, armed, monitor, lane_mute
 - `learn.mode`: toggle on a level or pan Hint: use absolute or a relative mode
 
 ### Examples

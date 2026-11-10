@@ -1803,9 +1803,13 @@ void insertPoint(std::vector<model::EnvPoint>& pts, double position, double valu
 double staticValue(const model::Session& s, const model::EnvTarget& t) {
     if (t.object == model::kMaster && t.param == "playrate") return s.project->playrate.rate;
     if (const model::Track* tr = s.tracks.find(t.object))
-        return t.param == "volume" ? tr->volumeDb
-               : t.param == "pan"  ? tr->pan
-                                   : (tr->mute ? 1.0 : 0.0);
+        return t.param == "volume"      ? tr->volumeDb
+               : t.param == "pan"       ? tr->pan
+               : t.param == "width"     ? tr->width
+               : t.param == "pan_left"  ? tr->panLeft
+               : t.param == "pan_right" ? tr->panRight
+               : t.param == "pan_boost" ? (model::panLawOf(*s.project, *tr).boost ? 1.0 : 0.0)
+                                        : (tr->mute ? 1.0 : 0.0);
     if (const auto* g = s.groups.find(t.object); g && g->vca)
         return t.param == "volume" ? g->vca->volumeDb : (g->vca->mute ? 1.0 : 0.0);
     if (const model::Route* r = s.routes.find(t.object))
@@ -1898,7 +1902,9 @@ std::vector<model::EnvTarget> EngineApp::writeHolds() const {
         const auto kind = env->target.object.kind;
         const std::string& param = env->target.param;
         if ((kind == model::Kind::Track || kind == model::Kind::Route)
-                ? param == "volume" || param == "pan"
+                ? param == "volume" || param == "pan" ||
+                      (kind == model::Kind::Track && (param == "width" || param == "pan_left" ||
+                                                      param == "pan_right" || param == "pan_boost"))
                 : kind == model::Kind::Group && param == "volume")
             holds.push_back(env->target);
     }

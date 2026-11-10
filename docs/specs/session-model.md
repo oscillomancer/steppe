@@ -138,10 +138,15 @@ Fields:
 | `chain`, `input_chain` | [fx id] | §1.7; `input_chain` on channels only |
 | `lanes` | `{mode: none|fixed|comp, lanes: [ln id], comp: …}` | channels only |
 | `locked`, `hidden_tcp`, `hidden_mixer`, `folder_compact` | bool / enum | UI state kept in the model because it is user intent, but tagged `ui: true` so diffs/merges can ignore it |
-| `learn` | [binding] | MIDI learn on the strip's own controls (ADR-0058), one per control, sorted by `param`, omitted when empty: `{param, midi, mode, soft_takeover}` with `midi` and `mode` as an effect's (§1.7). `param`: `volume`, `pan`, `mute`, `solo`, `phase_invert`, `mono`, `armed` (channels, masters), `monitor` (channels) or `lane_mute` (masters). Copied with `track.duplicate`, not kept by track templates; ignored by the freeze hash |
+| `learn` | [binding] | MIDI learn on the strip's own controls (ADR-0058), one per control, sorted by `param`, omitted when empty: `{param, midi, mode, soft_takeover}` with `midi` and `mode` as an effect's (§1.7). `param`: `volume`, `pan`, `width`, `pan_left`, `pan_right`, `pan_boost` (these four on channels/busses), `mute`, `solo`, `phase_invert`, `mono`, `armed` (channels, masters), `monitor` (channels) or `lane_mute` (masters). Copied with `track.duplicate`, not kept by track templates; ignored by the freeze hash |
 
-`volume`, `pan` and `mute` are automatable (§1.9); `width`, `pan_left` and
-`pan_right` are not yet. Masters take no `pan_mode`, `width`, dual pans or
+`volume`, `pan` and `mute` are automatable (§1.9); channels and busses also
+accept `width`, `pan_left`, `pan_right` (continuous −100..100 percent) and
+`pan_boost` (0..1, on at ≥0.5). The latter overrides the effective law's
+boost while active and nonempty, without changing the saved law. These
+positions learn MIDI with the pan shape and soft takeover; `pan_boost` is a
+toggle. `track.set {pan_law}` records compensation if its effective boost
+changes, including a return to the project law with null. Masters take no `pan_mode`, `width`, dual pans or
 `pan_law` (`track.strip_type`). Trim is not a strip field: insert a utility
 (Hickory) for it.
 
@@ -301,6 +306,8 @@ routes from any tap of any strip.
 ### 1.9 Envelopes and automation items
 
 `en_*`: `target` — one of `{track: id, param: volume|pan|mute}`,
+`{track: id, param: width|pan_left|pan_right|pan_boost}` (channels and
+busses only; `track.strip_type` on masters),
 `{track: "tr_0", param: playrate}` (one global master-rate envelope only),
 `{route: id, param: volume|pan|mute}`, `{fx: id, param: <key or CLAP id>}`,
 `{take: id, param: volume|pan|pitch|mute}`, `{tempo: true}` (the tempo map is
@@ -311,6 +318,10 @@ envelope's time domain (`time`: seconds; beat timebases: beats), sorted, with `s
 `items`: [ai id], derived at serialization from the authoritative
 `automation_items` map in numeric ID order. It is not a model field. On load,
 stale or mismatched lists are ignored with a `project.derived_items` warning.
+
+Pan width and dual-position points must be −100..100, compensation 0..1,
+including automation-item source points and scaled outputs. Compensation is
+read as a switch at 0.5; interpolation still follows the point's shape.
 
 Playrate points, including automation-item source points and their scaled
 outputs, must be finite ratios 0.25..4.0 even on inactive envelopes. The
@@ -905,9 +916,12 @@ item-group token, not a reference to this collection.
 
 For each linked attribute a manual command expands the active connected
 component, takes a snapshot, and updates each eligible member once. Volume
-uses a relative dB delta, pan a percentage-point delta; results clamp to
-existing field bounds. Discrete controls copy the requested value. Armed and
-monitor affect channels only; record input/mode, polarity and mono are local.
+uses a relative dB delta; the `pan` link carries `pan`, `width`,
+`pan_left` and `pan_right` by percentage-point deltas clamped to −100..100,
+and `pan_mode` and `pan_law` (including null) absolutely. Masters participate
+in ordinary pan only and are skipped for the new controls. Discrete controls
+copy the requested value. Armed affects channels and masters; monitor affects
+channels only. Record input/mode, polarity and mono are local.
 Finite relative moves leave silent followers silent. Setting the source to
 silence silences followers; raising a source from silence changes only that
 source (there is no finite relative delta). Prefer mute for reversible group
@@ -1001,7 +1015,8 @@ renders validate dependencies and latency scheduling at completion, not the head
 version. A changed project/branch/media directory also refuses completion.
 
 Frozen channels reject captured-content edits, including indirect pooled edits,
-new incoming dependencies and arm/monitor. Fader/pan/mute/solo, their envelopes,
+new incoming dependencies and arm/monitor. Fader/pan (all modes and laws)/mute/solo,
+their envelopes,
 outgoing sends and parent routing remain editable. Tempo/meter/master-rate and
 sample-rate edits require unfreezing all frozen tracks; those unfreezes may precede
 the timing edit in the same batch. Deletion remains undoable.
@@ -1077,8 +1092,10 @@ the channels' and busses' `pan_mode`, `width`, `pan_left`, `pan_right` and
 none of them saves the same bytes as before apart from its schema. A 2.8 file
 loads unchanged and pans under the default 0 dB law; there is no migration,
 so it plays louder than it did under Console 9's own law and staging. An
-older application opening a 2.9 file ignores the new fields with warnings and
-pans with its own law.
+older application opening a 2.9 file ignores the new strip fields with
+warnings and pans with its own law. New MIDI bindings do not move its
+controls; builds without the new envelope targets refuse projects using
+those targets. Existing files still load in this build.
 
 ### Independent audio and MIDI inputs (schema 2.8)
 

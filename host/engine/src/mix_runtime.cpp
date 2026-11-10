@@ -100,7 +100,10 @@ bool mixOnly(const model::Session& a, const model::Session& b,
         const model::EnvTarget& t = y.target;
         const auto kind = t.object.kind;
         const bool mix = (kind == model::Kind::Track || kind == model::Kind::Route)
-                             ? t.param == "volume" || t.param == "pan"
+                             ? (t.param == "volume" || t.param == "pan" ||
+                                (kind == model::Kind::Track &&
+                                 (t.param == "width" || t.param == "pan_left" ||
+                                  t.param == "pan_right" || t.param == "pan_boost")))
                              : kind == model::Kind::Group && t.param == "volume";
         if (!mix || !writing(y.mode) || !contains(holds, t)) return false;
         // A route envelope's presence decides its send's encoding.

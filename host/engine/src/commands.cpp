@@ -494,9 +494,12 @@ schema::Schema<EnvPointArg> envPointSchema() {
 }
 
 // A mixer parameter's unit, or none when `param` is not one.
-std::optional<units::Unit> mixerUnit(model::Kind, const std::string& param) {
+std::optional<units::Unit> mixerUnit(model::Kind kind, const std::string& param) {
     if (param == "volume") return units::Unit::dB;
-    if (param == "pan") return units::Unit::percent;
+    if (param == "pan" || (kind == model::Kind::Track &&
+                           (param == "width" || param == "pan_left" || param == "pan_right")))
+        return units::Unit::percent;
+    if (kind == model::Kind::Track && param == "pan_boost") return units::Unit::none;
     if (param == "mute") return units::Unit::none;
     return std::nullopt;
 }
@@ -514,6 +517,13 @@ struct EnvDomain {
 Result<EnvDomain> envDomain(EngineApp& app, const model::Session& s, const model::EnvTarget& t,
                             const char* path) {
     EnvDomain d;
+    if (t.object.kind == model::Kind::Track && (t.param == "width" || t.param == "pan_left" ||
+                                                t.param == "pan_right" || t.param == "pan_boost")) {
+        const auto* track = s.tracks.find(t.object);
+        if (track && track->type == model::StripType::Master)
+            return Error("track.strip_type", "a master's pan is a balance", path,
+                         "automate pan modes and gain compensation on channels or busses");
+    }
     if (t.param == "playrate" && t.object.kind != model::Kind::Fx) {
         if (t.object != model::kMaster)
             return Error("env.target", "master playrate belongs to tr_0", path,
@@ -550,8 +560,7 @@ Result<EnvDomain> envDomain(EngineApp& app, const model::Session& s, const model
             return Error(t.object.kind == model::Kind::Track ? "track.strip_type" : "env.param",
                          "no automatable parameter \"" + t.param + "\" on " + t.object.str(), path,
                          t.object.kind == model::Kind::Track
-                             ? "automate volume, pan or mute; use a utility insert for trim, width "
-                               "or polarity"
+                             ? "automate volume, pan, mute, width, pan_left, pan_right or pan_boost"
                              : "volume, pan, mute");
         return d;
     }
@@ -2054,11 +2063,25 @@ void registerEngineCommands(cmd::Registry& registry) {
                         if ((attribute == "armed" && old.type == model::StripType::Buss) ||
                             (attribute == "monitor" && old.type != model::StripType::Channel))
                             continue;
+                        if (attribute == "pan" && !a.pan && old.type == model::StripType::Master)
+                            continue;
                         app.txn().modify<model::Track>(member, [&](auto& tr) { change(tr, old); });
                         const auto tr = *app.view().tracks.find(member);
                         if (attribute == "volume")
                             app.recordAutomation(member, "volume", tr.volumeDb);
-                        if (attribute == "pan") app.recordAutomation(member, "pan", tr.pan);
+                        if (attribute == "pan") {
+                            if (a.pan) app.recordAutomation(member, "pan", tr.pan);
+                            if (a.width && old.type != model::StripType::Master)
+                                app.recordAutomation(member, "width", tr.width);
+                            if (a.panLeft && old.type != model::StripType::Master)
+                                app.recordAutomation(member, "pan_left", tr.panLeft);
+                            if (a.panRight && old.type != model::StripType::Master)
+                                app.recordAutomation(member, "pan_right", tr.panRight);
+                            if (a.panLaw && model::panLawOf(*s.project, old).boost !=
+                                                model::panLawOf(*s.project, tr).boost)
+                                app.recordAutomation(member, "pan_boost",
+                                                     model::panLawOf(*s.project, tr).boost ? 1 : 0);
+                        }
                         if (attribute == "mute")
                             app.recordAutomation(member, "mute", tr.mute ? 1 : 0);
                     }
@@ -2072,9 +2095,22 @@ void registerEngineCommands(cmd::Registry& registry) {
                             tr.volumeDb = std::clamp(old.volumeDb + *a.volumeDb - source.volumeDb,
                                                      model::kSilenceDb, 12.0);
                     });
-                if (a.pan)
+                if (a.pan || a.width || a.panLeft || a.panRight || a.panMode || a.panLaw)
                     spread("pan", [&](auto& tr, const auto& old) {
-                        tr.pan = std::clamp(old.pan + *a.pan - source.pan, -100.0, 100.0);
+                        if (a.pan)
+                            tr.pan = std::clamp(old.pan + *a.pan - source.pan, -100.0, 100.0);
+                        if (old.type == model::StripType::Master) return;
+                        if (a.width)
+                            tr.width =
+                                std::clamp(old.width + *a.width - source.width, -100.0, 100.0);
+                        if (a.panLeft)
+                            tr.panLeft = std::clamp(old.panLeft + *a.panLeft - source.panLeft,
+                                                    -100.0, 100.0);
+                        if (a.panRight)
+                            tr.panRight = std::clamp(old.panRight + *a.panRight - source.panRight,
+                                                     -100.0, 100.0);
+                        if (a.panMode) tr.panMode = *a.panMode;
+                        if (a.panLaw) tr.panLaw = panLaw;
                     });
                 if (a.mute) spread("mute", [&](auto& tr, const auto&) { tr.mute = *a.mute; });
                 if (a.solo) {
@@ -2090,6 +2126,14 @@ void registerEngineCommands(cmd::Registry& registry) {
             // Touch/latch/write envelopes record the change while the transport plays.
             if (a.volumeDb) app.recordAutomation(*id, "volume", *a.volumeDb);
             if (a.pan) app.recordAutomation(*id, "pan", *a.pan);
+            if (a.width) app.recordAutomation(*id, "width", *a.width);
+            if (a.panLeft) app.recordAutomation(*id, "pan_left", *a.panLeft);
+            if (a.panRight) app.recordAutomation(*id, "pan_right", *a.panRight);
+            if (a.panLaw) {
+                const bool before = model::panLawOf(*s.project, *s.tracks.find(*id)).boost;
+                const bool after = model::panLawOf(*s.project, *app.view().tracks.find(*id)).boost;
+                if (before != after) app.recordAutomation(*id, "pan_boost", after ? 1 : 0);
+            }
             if (a.mute) app.recordAutomation(*id, "mute", *a.mute ? 1.0 : 0.0);
             if (a.parentSend && *a.parentSend && !s.tracks.find(*id)->parentSend.enabled)
                 if (auto valid = model::checkInvariants(app.view()); !valid)
@@ -3392,7 +3436,8 @@ void registerEngineCommands(cmd::Registry& registry) {
         c.exposure = cmd::Exposure::McpTool;
         c.summary = "Automate a parameter: a track's or route's mixer control, or a plugin's.";
         c.description =
-            "Target one of track (param volume|pan|mute; playrate only on tr_0), route "
+            "Target one of track (param volume|pan|mute; width|pan_left|pan_right|pan_boost on "
+            "channels/busses; playrate only on tr_0), route "
             "(volume|pan|mute), group (VCA volume|mute), or "
             "fx (a semantic key such as \"gain\" or \"filter1.cutoff\", or for other plugins a "
             "CLAP id or parameter name), or module (a rack module's knob by key, values in its "
@@ -3406,7 +3451,9 @@ void registerEngineCommands(cmd::Registry& registry) {
             "instrument in its take FX). Master playrate points are finite numeric ratios "
             "0.25..4.0; an active nonempty master curve replaces the saved scalar during "
             "playback and rendering. Audio sources convert before take FX/live mixing; MIDI "
-            "and automation follow the same timeline clock.";
+            "and automation follow the same timeline clock. Width and dual pans use -100..100 "
+            "percent; pan_boost uses 0..1 (on at 0.5), overriding the effective law's "
+            "boost while the envelope is active and nonempty.";
         c.tags = {"automation"};
         c.args = schema::object<EnvAddArgs>("env_add_args")
                      .field("track", &EnvAddArgs::track, idArg("tr", "Track"))

@@ -1750,7 +1750,7 @@ q = nil
 
 ---@class Steppe.track_learn_set_args
 ---@field track string
----@field param string The control: volume, pan, mute, solo, phase_invert, mono, armed, monitor, lane_mute
+---@field param string The control: volume, pan, width, pan_left, pan_right, pan_boost, mute, solo, phase_invert, mono, armed, monitor, lane_mute
 ---@field midi table
 ---@field mode? "absolute"|"relative1"|"relative2"|"relative3"|"toggle"
 ---@field soft_takeover? boolean

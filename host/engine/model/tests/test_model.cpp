@@ -435,7 +435,7 @@ TEST_CASE("typed strips: master forest, follow pan and edit validation") {
     rejected(
         [&](EditTxn& bad) {
             Envelope e;
-            e.target = {channel, "width"};
+            e.target = {kMaster, "width"};
             bad.create(e);
         },
         "track.strip_type");
@@ -1165,4 +1165,71 @@ TEST_CASE("pan modes and laws save, reopen and are refused on masters (ADR-0066)
     EditTxn m(*s, 2);
     m.modify<Track>(kMaster, [](auto& tr) { tr.panMode = PanMode::Width; });
     CHECK_FALSE(m.commit());
+}
+
+TEST_CASE("pan controls: envelopes and learn round trip and refuse masters") {
+    EditTxn t(Session::create(), 1);
+    Track ch;
+    ch.parent = kMaster;
+    const Id id = t.create(ch);
+    t.modify<Track>(kMaster, [&](auto& tr) { tr.children.push_back(id); });
+    for (const char* param : {"width", "pan_left", "pan_right", "pan_boost"}) {
+        Envelope env;
+        env.target = {id, param};
+        env.points = {{0, 0}, {4, std::string_view(param) == "pan_boost" ? 1.0 : 100.0}};
+        t.create(env);
+        ControlLearn learn;
+        learn.param = param;
+        t.modify<Track>(id, [&](auto& tr) { tr.learn.push_back(learn); });
+    }
+    auto s = t.commit();
+    REQUIRE(s);
+    const auto doc = projectToJson(*s);
+    auto reopened = projectFromJson(doc);
+    REQUIRE(reopened);
+    CHECK(serializeProject(*reopened) == serializeProject(*s));
+    for (const char* param : {"width", "pan_left", "pan_right", "pan_boost"}) {
+        CAPTURE(param);
+        EditTxn master(*s, 2);
+        Envelope env;
+        env.target = {kMaster, param};
+        master.create(env);
+        const auto refused = master.commit();
+        REQUIRE_FALSE(refused);
+        CHECK(refused.error().code == "model.invariant");
+        auto bad = doc;
+        ControlLearn learn;
+        learn.param = param;
+        bad["tracks"]["tr_0"]["learn"] = json::Value::array();
+        bad["tracks"]["tr_0"]["learn"].push_back(controlLearnSchema().encode(learn));
+        const auto loaded = projectFromJson(bad);
+        REQUIRE_FALSE(loaded);
+        CHECK(loaded.error().code == "model.invariant");
+    }
+    for (const auto& e : s->envelopes) {
+        for (double value : {-101., 101.}) {
+            EditTxn invalid(*s, 3);
+            invalid.modify<Envelope>(e.id, [&](auto& env) { env.points[0].value = value; });
+            const auto refused = invalid.commit();
+            REQUIRE_FALSE(refused);
+            CHECK(refused.error().code == "env.value");
+        }
+    }
+    for (const auto& e : s->envelopes) {
+        EditTxn invalid(*s, 4);
+        AutomationItem item;
+        item.envelope = e.id;
+        item.length = item.sourceLength = 4;
+        item.points = {{0, 1}, {4, 1000}};
+        invalid.create(item);
+        CHECK_FALSE(invalid.commit());
+        EditTxn scaled(*s, 4);
+        item.points = {{0, 1}};
+        item.amplitude = 1000;
+        scaled.create(item);
+        CHECK_FALSE(scaled.commit());
+    }
+    EditTxn bus(*s, 4);
+    bus.modify<Track>(id, [](auto& tr) { tr.type = StripType::Buss; });
+    CHECK(bus.commit());
 }

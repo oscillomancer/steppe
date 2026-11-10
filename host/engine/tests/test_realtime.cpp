@@ -16,6 +16,7 @@
 #include <semaphore>
 #include <set>
 #include <thread>
+#include <tuple>
 #if defined(__SSE2__)
 #include <xmmintrin.h>
 #endif
@@ -454,6 +455,16 @@ TEST_CASE("pan modes and laws: real-time output equals the offline render (ADR-0
     pan.timebase = model::Timebase::Time;
     pan.points = {{0, -80}, {1.5, 60}};
     t.create(pan);
+    for (const auto& [target, param, from, to] : {std::tuple{wide, "width", -90., 75.},
+                                                  {dual, "pan_left", -100., 40.},
+                                                  {dual, "pan_right", 100., -60.},
+                                                  {own, "pan_boost", 0., 1.}}) {
+        model::Envelope env;
+        env.target = {target, param};
+        env.timebase = model::Timebase::Time;
+        env.points = {{0, from}, {.73, to}, {1.2, from}};
+        t.create(env);
+    }
     t.modify<model::Track>(boosted, [](auto& x) { x.pan = 45; });
     t.modify<model::Track>(own, [](auto& x) {
         x.pan = -30;
@@ -470,28 +481,41 @@ TEST_CASE("pan modes and laws: real-time output equals the offline render (ADR-0
     send.volumeDb = -3;
     t.create(send);
     s = t.commit().value();
-    auto pool = makePool();
-    auto offline = renderOffline(s, pool, {.startSeconds = 0, .endSeconds = 2.0}).value();
-    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 2}}) {
-        INFO("anticipative " << options.anticipative);
-        auto rtPool = makePool();
-        MediaCache media;
-        DummyBackend backend(
-            {.mode = DummyBackend::Mode::Manual, .captureFrames = 48000 * 2 + 4096});
-        Engine engine(rtPool, media, options);
-        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 96}));
-        REQUIRE(engine.load(s));
-        engine.play();
-        if (options.anticipative)
-            runAhead(engine, backend, (48000 * 2 + 4096) / 96, 96);
-        else
-            backend.run((48000 * 2 + 4096) / 96);
-        engine.stop();
-        CHECK(engine.processErrors() == 0);
-        const auto& cap = backend.capture();
-        const std::uint32_t L = engine.outputLatency();
-        CHECK(maxDiff(cap.channels[0], L, offline.audio.channels[0], 96000) == 0.0);
-        CHECK(maxDiff(cap.channels[1], L, offline.audio.channels[1], 96000) == 0.0);
+    host::setBridgeExecutable(BRIDGE_PATH);
+    for (auto isolation : {model::Isolation::InProcess, model::Isolation::SharedBridge,
+                           model::Isolation::Dedicated}) {
+        model::EditTxn isolate(s, 3);
+        for (const auto& entry : s.fx)
+            isolate.modify<model::FxInstance>(entry.id, [&](auto& f) { f.isolation = isolation; });
+        const auto isolated = isolate.commit().value();
+        CAPTURE(isolation);
+        auto pool = makePool();
+        auto offline =
+            renderOffline(isolated, pool, {.startSeconds = 0, .endSeconds = 2.0}).value();
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 2}}) {
+            // The callback deliberately bypasses bridged plug-ins; only the
+            // anticipative renderer runs their blocking bridge transport.
+            if (!options.anticipative && isolation != model::Isolation::InProcess) continue;
+            INFO("anticipative " << options.anticipative);
+            auto rtPool = makePool();
+            MediaCache media;
+            DummyBackend backend(
+                {.mode = DummyBackend::Mode::Manual, .captureFrames = 48000 * 2 + 4096});
+            Engine engine(rtPool, media, options);
+            REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 96}));
+            REQUIRE(engine.load(isolated));
+            engine.play();
+            if (options.anticipative)
+                runAhead(engine, backend, (48000 * 2 + 4096) / 96, 96);
+            else
+                backend.run((48000 * 2 + 4096) / 96);
+            engine.stop();
+            CHECK(engine.processErrors() == 0);
+            const auto& cap = backend.capture();
+            const std::uint32_t L = engine.outputLatency();
+            CHECK(maxDiff(cap.channels[0], L, offline.audio.channels[0], 96000) == 0.0);
+            CHECK(maxDiff(cap.channels[1], L, offline.audio.channels[1], 96000) == 0.0);
+        }
     }
 }
 

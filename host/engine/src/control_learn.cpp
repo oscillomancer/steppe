@@ -41,6 +41,10 @@ struct ControlSpec {
 };
 constexpr ControlSpec kTrackControls[] = {{"volume", Shape::Level, "volume_db"},
                                           {"pan", Shape::Pan, "pan"},
+                                          {"width", Shape::Pan, "width"},
+                                          {"pan_left", Shape::Pan, "pan_left"},
+                                          {"pan_right", Shape::Pan, "pan_right"},
+                                          {"pan_boost", Shape::Switch, "pan_law"},
                                           {"mute", Shape::Switch, "mute"},
                                           {"solo", Shape::Switch, "solo"},
                                           {"phase_invert", Shape::Switch, "phase_invert"},
@@ -126,6 +130,10 @@ std::optional<double> standing(const model::Session& s, Id id, const ControlSpec
         if (!t) return std::nullopt;
         if (c.param == "volume") return fader::position(t->volumeDb);
         if (c.param == "pan") return panPosition(t->pan);
+        if (c.param == "width") return panPosition(t->width);
+        if (c.param == "pan_left") return panPosition(t->panLeft);
+        if (c.param == "pan_right") return panPosition(t->panRight);
+        if (c.param == "pan_boost") return on(model::panLawOf(*s.project, *t).boost);
         if (c.param == "mute") return on(t->mute);
         if (c.param == "solo") return on(t->solo != model::Solo::Off);
         if (c.param == "phase_invert") return on(t->phaseInvert);
@@ -202,7 +210,8 @@ std::optional<double> switchValue(double current, const ControlReading& r,
 
 // What a frozen track's strip still changes (its sound is printed).
 bool frozenAllows(std::string_view param) {
-    return param == "volume" || param == "pan" || param == "mute" || param == "solo";
+    return param == "volume" || param == "pan" || param == "width" || param == "pan_left" ||
+           param == "pan_right" || param == "pan_boost" || param == "mute" || param == "solo";
 }
 
 struct LearnArgs : LearnBindingArgs {
@@ -264,17 +273,21 @@ Result<Id> target(const model::Session& s, model::Kind kind, const std::string& 
 Status checkStrip(const model::Session& s, Id id, std::string_view param) {
     if (id.kind != model::Kind::Track) return {};
     const model::Track& t = *s.tracks.find(id);
-    const bool ok = param == "monitor"     ? t.type == model::StripType::Channel
-                    : param == "armed"     ? t.type != model::StripType::Buss
-                    : param == "lane_mute" ? t.type == model::StripType::Master
-                                           : true;
+    const bool ok =
+        param == "monitor"     ? t.type == model::StripType::Channel
+        : param == "armed"     ? t.type != model::StripType::Buss
+        : param == "lane_mute" ? t.type == model::StripType::Master
+        : (param == "width" || param == "pan_left" || param == "pan_right" || param == "pan_boost")
+            ? t.type != model::StripType::Master
+            : true;
     if (ok) return {};
-    return Error("track.strip_type",
-                 std::string(model::stripTypeName(t.type)) + " has no " + std::string(param),
-                 "/param",
-                 param == "lane_mute" ? "lane_mute is a master's"
-                 : param == "armed"   ? "arm channels and masters"
-                                      : "monitoring is a channel's");
+    return Error(
+        "track.strip_type",
+        std::string(model::stripTypeName(t.type)) + " has no " + std::string(param), "/param",
+        param == "lane_mute" ? "lane_mute is a master's"
+        : param == "armed"   ? "arm channels and masters"
+        : param == "monitor" ? "monitoring is a channel's"
+                             : "learn pan modes and gain compensation on a channel or buss");
 }
 
 json::Value learnJson(std::string_view key, Id id, const model::ControlLearn& l) {
@@ -512,7 +525,13 @@ std::optional<double> EngineApp::moveControl(
     const Owner owner = ownerOf(id.kind);
     json::Value args = json::Value::object();
     args[std::string(owner.key)] = id.str();
-    args[std::string(spec->field)] = argValue(id.kind, *spec, to);
+    if (param == "pan_boost") {
+        const auto* track = s.tracks.find(id);
+        auto law = model::panLawOf(*s.project, *track);
+        law.boost = to >= .5;
+        args["pan_law"] = model::panLawSchema().encode(law);
+    } else
+        args[std::string(spec->field)] = argValue(id.kind, *spec, to);
     const cmd::Origin origin{cmd::Origin::Type::Internal, "midi", "",
                              "midi:" + id.str() + ":" + param + ":" + std::to_string(state.serial)};
     if (!commands_) return std::nullopt;

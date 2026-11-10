@@ -716,3 +716,75 @@ TEST_CASE("mix edits reach live and rendered nodes alike, across the frontier" *
                 for (std::size_t c = 0; c < 2; ++c) CHECK(cap[c] == reference[c]);
         }
 }
+
+TEST_CASE("pan controls: held writing width edits skip compilation and release the stale curve" *
+          doctest::description("rt")) {
+    Mix m = mixSession();
+    model::EditTxn initial(m.session, 2);
+    initial.modify<model::Track>(m.a, [](auto& tr) { tr.panMode = model::PanMode::Width; });
+    model::Envelope env;
+    env.target = {m.a, "width"};
+    env.mode = model::EnvMode::Latch;
+    env.points = {{0, -100}, {4, 100}};
+    const Id lane = initial.create(env);
+    const auto base = initial.commit().value();
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    Engine engine(pool, media, kInCallback);
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+    REQUIRE(engine.load(base));
+    engine.play();
+    backend.run(4);
+    const auto generation = engine.planGeneration();
+    CHECK_FALSE(engine.setWriteHolds({env.target}));
+    model::EditTxn move(base, 3);
+    move.modify<model::Track>(m.a, [](auto& tr) { tr.width = 35; });
+    move.modify<model::Envelope>(lane, [](auto& e) { e.points.push_back({8, 35}); });
+    const auto written = move.commit().value();
+    REQUIRE(engine.load(written));
+    CHECK(engine.planGeneration() == generation);
+    CHECK(engine.mixEdits() == 1);
+    backend.run(4);
+    CHECK(engine.setWriteHolds({}));
+    REQUIRE(engine.load(written));
+    CHECK(engine.planGeneration() == generation + 1);
+    engine.stop();
+}
+
+TEST_CASE("pan controls: touch latch and write record positions and effective compensation") {
+    for (const char* mode : {"touch", "latch", "latch_preview", "write"})
+        for (const std::string param : {"width", "pan_left", "pan_right", "pan_boost"}) {
+            CAPTURE(mode);
+            CAPTURE(param);
+            WriteHost h(mode);
+            h.run("project.set", R"({"pan_law":{"db":-3}})");
+            h.run("env.add",
+                  R"({"track":"tr_1","param":")" + param + R"(","points":[{"beat":0,"value":0}]})");
+            h.run("env.set", R"({"env":"en_2","mode":")" + std::string(mode) + "\"}");
+            const auto generation = h.engine().planGeneration();
+            h.run("track.set", param == "pan_boost"
+                                   ? R"({"track":"tr_1","pan_law":{"db":-3,"boost":true}})"
+                                   : R"({"track":"tr_1",")" + param + R"(":25})");
+            const model::EnvTarget target{{model::Kind::Track, 1}, param};
+            CHECK(h.engine().writeHolds() == std::vector<model::EnvTarget>{target});
+            if (param != "pan_boost") CHECK(h.engine().planGeneration() == generation);
+            const auto* env = h.app->head().envelopes.find({model::Kind::Envelope, 2});
+            REQUIRE(env);
+            CHECK(env->points.back().value == (param == "pan_boost" ? 1 : 25));
+            if (param == "pan_boost") {
+                h.run("track.set", R"({"track":"tr_1","pan_law":null})");
+                CHECK(
+                    h.app->head().envelopes.find({model::Kind::Envelope, 2})->points.back().value ==
+                    0);
+            }
+            h.backend.run(2);
+            if (std::string_view(mode) == "touch") {
+                h.app->setFixedClock(10'501);
+                h.app->tick();
+                CHECK(h.engine().writeHolds().empty());
+            }
+            h.run("transport.pause");
+            CHECK(h.engine().writeHolds().empty());
+        }
+}

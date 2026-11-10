@@ -547,7 +547,7 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         ed.pan = r.pan.resolve(sourceTrack.pan);
         ed.source = stripPan(*s.project, sourceTrack);
         const double g = dbToGain(r.volumeDb);
-        const PanMatrix pm = panMatrix(ed.panSettings(ed.pan));
+        const PanMatrix pm = panMatrix(ed.panSettings(ed.pan, 0));
         ed.gainL = g * pm.ll;
         ed.gainR = g * pm.rr;
         ed.mono = r.mono;
@@ -665,6 +665,10 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
             slot = param == "playrate" && o == model::kMaster ? &p.rateEnvelope
                    : param == "volume"                        ? &n.autoVolume
                    : param == "pan"                           ? &n.autoPan
+                   : param == "width"                         ? &n.autoWidth
+                   : param == "pan_left"                      ? &n.autoPanLeft
+                   : param == "pan_right"                     ? &n.autoPanRight
+                   : param == "pan_boost"                     ? &n.autoPanBoost
                    : param == "mute"                          ? &n.autoMute
                                                               : nullptr;
         } else if (o.kind == Kind::Route) {
@@ -829,6 +833,10 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
     for (Edge& e : p.edges) {
         if (e.stage >= 0) {
             e.stripPan = p.nodes[e.from].autoPan;
+            e.stripWidth = p.nodes[e.from].autoWidth;
+            e.stripPanLeft = p.nodes[e.from].autoPanLeft;
+            e.stripPanRight = p.nodes[e.from].autoPanRight;
+            e.stripPanBoost = p.nodes[e.from].autoPanBoost;
             continue;
         }
         if (e.auxOnly) continue;                           // nothing reaches the main pair
@@ -849,6 +857,10 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         }
         e.stripVolume = source.autoVolume;
         e.stripPan = source.autoPan;
+        e.stripWidth = source.autoWidth;
+        e.stripPanLeft = source.autoPanLeft;
+        e.stripPanRight = source.autoPanRight;
+        e.stripPanBoost = source.autoPanBoost;
         e.stripMute = source.autoMute;
         e.staticGain = sendGain(e.volumeDb, e.tap, source.volumeDb);
         const auto salt = std::rotl(source.id.n, 32) ^ ((e.route->n << 3) | 3);
@@ -1177,7 +1189,9 @@ Status prepare(Plan& p, const Session& s) {
         const std::int64_t at = n.timelineShift + n.latChain;
         // Items play at the input on channels, after the chain on masters.
         n.itemShift = n.postItems ? at : n.timelineShift;
-        for (Automation* a : {&n.autoVolume, &n.autoPan, &n.autoMute}) a->shift(at);
+        for (Automation* a : {&n.autoVolume, &n.autoPan, &n.autoWidth, &n.autoPanLeft,
+                              &n.autoPanRight, &n.autoPanBoost, &n.autoMute})
+            a->shift(at);
         n.vcas.shift(at);
         for (std::size_t ei : n.in) {
             Edge& e = p.edges[ei];
@@ -1185,8 +1199,9 @@ Status prepare(Plan& p, const Session& s) {
                              ? (p.nodes[e.from].timelineShift + tapOffset(p.nodes[e.from], e.tap))
                              : n.timelineShift;
             if (e.stage >= 0) shift += n.chain[static_cast<std::size_t>(e.stage)].before;
-            for (Automation* a : {&e.autoVolume, &e.autoPan, &e.autoMute, &e.stripVolume,
-                                  &e.stripPan, &e.stripMute})
+            for (Automation* a :
+                 {&e.autoVolume, &e.autoPan, &e.autoMute, &e.stripVolume, &e.stripWidth,
+                  &e.stripPanLeft, &e.stripPanRight, &e.stripPanBoost, &e.stripPan, &e.stripMute})
                 a->shift(shift);
             e.vcas.shift(shift);
         }
@@ -1523,7 +1538,9 @@ Status prepare(Plan& p, const Session& s) {
         static const auto table = std::make_shared<const TapeTable>();
         for (auto& node : p.nodes) {
             auto* timeline = p.timelines[node.live ? 1 : 0].get();
-            for (Automation* lane : {&node.autoVolume, &node.autoPan, &node.autoMute})
+            for (Automation* lane :
+                 {&node.autoVolume, &node.autoPan, &node.autoWidth, &node.autoPanLeft,
+                  &node.autoPanRight, &node.autoPanBoost, &node.autoMute})
                 lane->timeline = timeline;
             node.vcas.timeline(timeline);
             forEachStage(node, [&](Stage& st) {
@@ -1543,8 +1560,10 @@ Status prepare(Plan& p, const Session& s) {
             // Source-owned send envelopes use the source's executor clock;
             // unencoded key edges use their target's (same trajectory).
             auto* timeline = p.timelines[p.nodes[edge.from].live ? 1 : 0].get();
-            for (Automation* lane : {&edge.autoVolume, &edge.autoPan, &edge.autoMute,
-                                     &edge.stripVolume, &edge.stripPan, &edge.stripMute})
+            for (Automation* lane :
+                 {&edge.autoVolume, &edge.autoPan, &edge.autoMute, &edge.stripVolume,
+                  &edge.stripWidth, &edge.stripPanLeft, &edge.stripPanRight, &edge.stripPanBoost,
+                  &edge.stripPan, &edge.stripMute})
                 lane->timeline = timeline;
             edge.vcas.timeline(timeline);
         }
@@ -1682,7 +1701,7 @@ void addEdge(Plan& p, Edge& e, Stereo& into, std::int64_t pos, std::uint32_t n) 
             const double pan = e.panCurve()                       ? e.autoPan.at(at)
                                : e.followPan && e.stripPanCurve() ? e.stripPan.at(at)
                                                                   : e.pan;
-            const PanMatrix& m = e.panCache.at(e.panSettings(pan));
+            const PanMatrix& m = e.panCache.at(e.panSettings(pan, at));
             if (e.mono) l = r = .5f * (l + r);
             const double sign = e.invert ? -1 : 1;
             double pl, pr;
@@ -2825,6 +2844,13 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
         double db = volumeCurve ? node.autoVolume.at(at) : node.volumeDb;
         PanSettings panSettings = node.panSettings;
         panSettings.pan = panCurve ? node.autoPan.at(at) : node.pan;
+        if (node.autoWidth.active() && !node.holdWidth) panSettings.width = node.autoWidth.at(at);
+        if (node.autoPanLeft.active() && !node.holdPanLeft)
+            panSettings.left = node.autoPanLeft.at(at);
+        if (node.autoPanRight.active() && !node.holdPanRight)
+            panSettings.right = node.autoPanRight.at(at);
+        if (node.autoPanBoost.active() && !node.holdPanBoost)
+            panSettings.law.boost = node.autoPanBoost.at(at) >= .5;
         const PanMatrix& panTarget = node.panCache.at(panSettings);
         bool ownMuted = node.autoMute.active() ? node.autoMute.at(at) >= .5 : node.mute;
         node.vcas.evaluate(at, db, ownMuted);
@@ -2832,7 +2858,8 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
         const bool muted = node.soloSilenced || ownMuted;
         const double g =
             volumeCurve || !node.vcas.empty() ? stripGain(node.master, db) : node.staticGain;
-        const bool automated = volumeCurve || node.vcas.automated() || panCurve;
+        const bool automated =
+            volumeCurve || node.vcas.automated() || panCurve || node.extraPanCurve();
         node.fader.set(g, panTarget, muted, automated, p.smoothFrames);
         const double gate = node.fader.gate.next();
         const double gain = node.fader.gain.next() * gate;
@@ -2928,11 +2955,11 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
                                  ? db <= model::kSilenceDb ? 0.0 : console9::faderGain(db)
                                  : e.staticGain;
             // A following send takes the strip's mode, positions and law (ADR-0066).
-            const PanMatrix& panTarget = e.panCache.at(e.panSettings(pan));
+            const PanMatrix& panTarget = e.panCache.at(e.panSettings(pan, at));
             e.fader.set(g, panTarget, muted,
                         volumeCurve || panCurve ||
                             (post && (stripVolumeCurve || e.vcas.automated())) ||
-                            (e.followPan && stripPanCurve),
+                            (e.followPan && stripPanCurve) || e.extraPanCurve(),
                         p.smoothFrames);
             float l = input.l[i], r = input.r[i];
             if (e.mono) l = r = .5f * (l + r);
@@ -3104,12 +3131,15 @@ void locateNode(Plan& p, Node& n, std::int64_t pos, bool restartConsole) SUPPLE_
             e.fader.reset();
         }
         for (Automation* a :
-             {&e.autoVolume, &e.autoPan, &e.autoMute, &e.stripVolume, &e.stripPan, &e.stripMute})
+             {&e.autoVolume, &e.autoPan, &e.autoMute, &e.stripVolume, &e.stripWidth,
+              &e.stripPanLeft, &e.stripPanRight, &e.stripPanBoost, &e.stripPan, &e.stripMute})
             a->cursor = 0;
         e.vcas.reset();
     }
     if (restartConsole && !n.releaseHeld) n.held.fill(0);
-    for (Automation* a : {&n.autoVolume, &n.autoPan, &n.autoMute}) a->cursor = 0;
+    for (Automation* a : {&n.autoVolume, &n.autoPan, &n.autoWidth, &n.autoPanLeft, &n.autoPanRight,
+                          &n.autoPanBoost, &n.autoMute})
+        a->cursor = 0;
     n.vcas.reset();
     for (Stage& st : n.chain) {
         if (restartConsole && !n.releaseHeld) {
@@ -3127,7 +3157,8 @@ void locateNode(Plan& p, Node& n, std::int64_t pos, bool restartConsole) SUPPLE_
         Edge& e = p.edges[ei];
         locateEdge(e, restartConsole);
         if (!e.encode)
-            for (Automation* a : {&e.autoVolume, &e.autoPan, &e.autoMute, &e.stripPan})
+            for (Automation* a : {&e.autoVolume, &e.autoPan, &e.autoMute, &e.stripWidth,
+                                  &e.stripPanLeft, &e.stripPanRight, &e.stripPanBoost, &e.stripPan})
                 a->cursor = 0;
     }
 }
@@ -3169,13 +3200,16 @@ void locate(Plan& p, std::int64_t pos, bool restartConsole) SUPPLE_RT {
                 e.encoder.reset();
                 e.fader.reset();
             }
-            for (Automation* a : {&e.autoVolume, &e.autoPan, &e.autoMute, &e.stripVolume,
-                                  &e.stripPan, &e.stripMute})
+            for (Automation* a :
+                 {&e.autoVolume, &e.autoPan, &e.autoMute, &e.stripVolume, &e.stripWidth,
+                  &e.stripPanLeft, &e.stripPanRight, &e.stripPanBoost, &e.stripPan, &e.stripMute})
                 a->cursor = 0;
             e.vcas.reset();
         }
         if (restartConsole && !n.releaseHeld) n.held.fill(0);
-        for (Automation* a : {&n.autoVolume, &n.autoPan, &n.autoMute}) a->cursor = 0;
+        for (Automation* a : {&n.autoVolume, &n.autoPan, &n.autoWidth, &n.autoPanLeft,
+                              &n.autoPanRight, &n.autoPanBoost, &n.autoMute})
+            a->cursor = 0;
         n.vcas.reset();
         for (Stage& st : n.chain) {
             if (restartConsole && !n.releaseHeld) {
@@ -3192,7 +3226,9 @@ void locate(Plan& p, std::int64_t pos, bool restartConsole) SUPPLE_RT {
     }
     for (Edge& e : p.edges) {
         locateEdge(e, restartConsole);
-        for (Automation* a : {&e.autoVolume, &e.autoPan, &e.autoMute, &e.stripPan}) a->cursor = 0;
+        for (Automation* a : {&e.autoVolume, &e.autoPan, &e.autoMute, &e.stripWidth,
+                              &e.stripPanLeft, &e.stripPanRight, &e.stripPanBoost, &e.stripPan})
+            a->cursor = 0;
     }
 }
 
@@ -3211,13 +3247,16 @@ void wrapTo(Plan& p, std::int64_t pos, int liveClass) SUPPLE_RT {
         for (std::size_t ei : n.out) {
             Edge& e = p.edges[ei];
             e.encoder.reset();
-            for (Automation* a : {&e.autoVolume, &e.autoPan, &e.autoMute, &e.stripVolume,
-                                  &e.stripPan, &e.stripMute})
+            for (Automation* a :
+                 {&e.autoVolume, &e.autoPan, &e.autoMute, &e.stripVolume, &e.stripWidth,
+                  &e.stripPanLeft, &e.stripPanRight, &e.stripPanBoost, &e.stripPan, &e.stripMute})
                 a->cursor = 0;
             e.vcas.reset();
         }
         if (!p.rateEnabled) n.releaseHeld = true;
-        for (Automation* a : {&n.autoVolume, &n.autoPan, &n.autoMute}) a->cursor = 0;
+        for (Automation* a : {&n.autoVolume, &n.autoPan, &n.autoWidth, &n.autoPanLeft,
+                              &n.autoPanRight, &n.autoPanBoost, &n.autoMute})
+            a->cursor = 0;
         n.vcas.reset();
         for (Stage& st : n.chain)
             for (ParamLane& ln : st.lanes) {
@@ -3227,7 +3266,9 @@ void wrapTo(Plan& p, std::int64_t pos, int liveClass) SUPPLE_RT {
         for (std::size_t ei : n.in)
             if (!p.edges[ei].encode)
                 for (Automation* a : {&p.edges[ei].autoVolume, &p.edges[ei].autoPan,
-                                      &p.edges[ei].autoMute, &p.edges[ei].stripPan})
+                                      &p.edges[ei].autoMute, &p.edges[ei].stripWidth,
+                                      &p.edges[ei].stripPanLeft, &p.edges[ei].stripPanRight,
+                                      &p.edges[ei].stripPanBoost, &p.edges[ei].stripPan})
                     a->cursor = 0;
     }
 }
@@ -3508,6 +3549,10 @@ void publishMix(Plan& p, const model::Session& s, std::span<const model::EnvTarg
         mix.strips[i].width.store(t->width, relaxed);
         mix.strips[i].panLeft.store(t->panLeft, relaxed);
         mix.strips[i].panRight.store(t->panRight, relaxed);
+        mix.strips[i].holdWidth.store(held(holds, id, "width"), relaxed);
+        mix.strips[i].holdPanLeft.store(held(holds, id, "pan_left"), relaxed);
+        mix.strips[i].holdPanRight.store(held(holds, id, "pan_right"), relaxed);
+        mix.strips[i].holdPanBoost.store(held(holds, id, "pan_boost"), relaxed);
     }
     for (std::size_t i = 0; i < p.edges.size(); ++i) {
         const Edge& e = p.edges[i];
@@ -3546,6 +3591,10 @@ void syncMix(Plan& p, int liveClass) SUPPLE_RT {
         n.pan = slot.pan.load(relaxed);
         n.holdVolume = slot.holdVolume.load(relaxed);
         n.holdPan = slot.holdPan.load(relaxed);
+        n.holdWidth = slot.holdWidth.load(relaxed);
+        n.holdPanLeft = slot.holdPanLeft.load(relaxed);
+        n.holdPanRight = slot.holdPanRight.load(relaxed);
+        n.holdPanBoost = slot.holdPanBoost.load(relaxed);
         n.staticGain = stripGain(n.master, n.volumeDb);
         if (!n.master) {
             n.panSettings.width = slot.width.load(relaxed);
@@ -3569,6 +3618,10 @@ void syncMix(Plan& p, int liveClass) SUPPLE_RT {
         e.holdPan = slot.holdPan.load(relaxed);
         e.holdStripVolume = source.holdVolume.load(relaxed);
         e.holdStripPan = source.holdPan.load(relaxed);
+        e.holdStripWidth = source.holdWidth.load(relaxed);
+        e.holdStripPanLeft = source.holdPanLeft.load(relaxed);
+        e.holdStripPanRight = source.holdPanRight.load(relaxed);
+        e.holdStripPanBoost = source.holdPanBoost.load(relaxed);
         e.staticGain = sendGain(e.volumeDb, e.tap, source.volumeDb.load(relaxed));
         if (!p.nodes[e.from].master) {
             e.source.width = source.width.load(relaxed);

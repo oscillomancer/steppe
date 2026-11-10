@@ -161,7 +161,17 @@ either side; `width` sets the image's width (`width`: 100 as recorded, 0 mono,
 −100 swapped) and places its centre with `pan`. Two inputs at one position
 sum, so dual pan's centred inputs follow the law (6 dB hotter for correlated
 content at 0 dB). A send that follows its strip's pan copies its mode and law.
-Only `pan` is automatable.
+Channels and busses automate `pan`, `width`, `pan_left`, `pan_right`
+(percent −100..100) and `pan_boost` (0..1, on at ≥0.5). An active nonempty
+compensation lane overrides the strip's or project's boost per sample;
+`pan` still has no effect in dual mode. `env.add {track, param, points}`
+creates each lane. These controls record in touch/latch/write like pan;
+`track.set {pan_law}` records `pan_boost` when effective boost changes.
+`track.learn.set` binds the positions to knobs (soft takeover allowed) and
+compensation to a toggle. Masters refuse the new targets. The `pan` group
+link carries all positions relatively, clamped to −100..100, and copies
+`pan_mode` and `pan_law` (including null) absolutely; masters are skipped
+for these new controls.
 
 `project.set {console9: false}` keeps these gains and pan laws and makes the
 stages linear, omitting the curves, denormal noise and dither. Small signals

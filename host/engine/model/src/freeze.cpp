@@ -76,6 +76,13 @@ std::string freezeDependencyHash(const Session& s, Id track) {
         sound.children.clear();
         sound.parentSend = {};
         sound.volumeDb = sound.pan = 0;
+        // Pan acts after the frozen pre-fader print, including its modes/law.
+        const Track defaults;
+        sound.panMode = defaults.panMode;
+        sound.width = defaults.width;
+        sound.panLeft = defaults.panLeft;
+        sound.panRight = defaults.panRight;
+        sound.panLaw.reset();
         sound.mute = false;
         sound.solo = Solo::Off;
         sound.locked = sound.hiddenTcp = sound.hiddenMixer = false;

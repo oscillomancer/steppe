@@ -594,3 +594,93 @@ TEST_CASE("engine.strips-fuzz: typed graphs, all taps, keys, PDC and determinist
         for (auto* instance : q.instances) instance->stopProcessing();
     }
 }
+
+TEST_CASE("pan controls: sample accurate matrices, following sends and write holds" *
+          doctest::description("rt")) {
+    const Id ch{model::Kind::Track, 1};
+    for (const std::string param : {"width", "pan_left", "pan_right", "pan_boost"})
+        for (int path = 0; path < 5; ++path)
+            for (bool held : {false, true}) {
+                CAPTURE(param);
+                CAPTURE(path);
+                CAPTURE(held);
+                auto base = monitored(false);
+                model::EditTxn edit(base, 2);
+                edit.modify<model::Route>({model::Kind::Route, 1}, [](auto& r) {
+                    r.from.hwChannels = std::vector<int>{1, 2};
+                });
+                const Id target = path == 3 ? strip(edit, model::StripType::Buss) : ch;
+                if (path) {
+                    const Id bus = path == 3 ? target : strip(edit, model::StripType::Buss);
+                    edit.modify<model::Track>(ch, [](auto& tr) { tr.parentSend.enabled = false; });
+                    model::Route route;
+                    route.from.track = ch;
+                    if (path == 4)
+                        route.to.fx = fx(edit, bus, "com.suppleaudio.test.keymix");
+                    else
+                        route.to.track = bus;
+                    route.tap = path == 2 ? model::Tap::PostFader : model::Tap::PreFader;
+                    route.volumeDb = path == 2 ? -6 : 0;
+                    edit.create(route);
+                }
+                if (param == "pan_boost") {
+                    auto project = edit.project();
+                    project.panLaw = {-3, true};
+                    edit.setProject(project);
+                }
+                const auto mode = param == "width" ? model::PanMode::Width : model::PanMode::Dual;
+                edit.modify<model::Track>(target, [&](auto& tr) {
+                    tr.panMode = mode;
+                    if (param == "pan_boost")
+                        tr.panLaw.reset();
+                    else
+                        tr.panLaw = model::PanLaw{-3, false};
+                    tr.panLeft = -70;
+                    tr.panRight = 60;
+                    tr.width = 30;
+                });
+                model::Envelope env;
+                env.target = {target, param};
+                env.timebase = model::Timebase::Time;
+                env.points = {{0, param == "pan_boost" ? 0. : -100.},
+                              {.01, param == "pan_boost" ? 1. : 100.}};
+                edit.create(env);
+                auto session = edit.commit();
+                REQUIRE(session);
+                auto pool = path == 4 ? fixturePool() : emptyPool();
+                auto p = plan(*session, pool, 127);
+                for (auto* instance : p.instances) REQUIRE(instance->startProcessing());
+                const std::vector<model::EnvTarget> holds{{target, param}};
+                if (held) publishMix(p, *session, holds);
+                std::vector<float> left(127, .125f), right(127, -.0625f);
+                const float* inputs[] = {left.data(), right.data()};
+                p.deviceIn = inputs;
+                p.deviceInChannels = 2;
+                const auto* tr = session->tracks.find(target);
+                for (std::int64_t pos = 0; pos < 1016; pos += 127) {
+                    REQUIRE(processBlock(p, pos, 127));
+                    for (int i = 0; i < 127; ++i) {
+                        PanSettings setting{mode,         0,
+                                            tr->width,    tr->panLeft,
+                                            tr->panRight, model::panLawOf(*session->project, *tr)};
+                        if (!held) {
+                            const double progress = std::min(double(pos + i) / 480., 1.);
+                            const double v =
+                                param == "pan_boost" ? progress : -100 + 200 * progress;
+                            if (param == "width") setting.width = v;
+                            if (param == "pan_left") setting.left = v;
+                            if (param == "pan_right") setting.right = v;
+                            if (param == "pan_boost") setting.law.boost = v >= .5;
+                        }
+                        double l, r;
+                        applyPan(panMatrix(setting), left[i], right[i], l, r);
+                        const double gain = path == 2 ? console9::faderGain(-6) : 1;
+                        CHECK(p.nodes[p.mainMaster].post.l[i] ==
+                              doctest::Approx(l * gain).epsilon(1e-6));
+                        CHECK(p.nodes[p.mainMaster].post.r[i] ==
+                              doctest::Approx(r * gain).epsilon(1e-6));
+                    }
+                }
+                for (auto* instance : p.instances) instance->stopProcessing();
+            }
+}

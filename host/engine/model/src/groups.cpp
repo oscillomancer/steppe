@@ -34,6 +34,9 @@ std::vector<Id> trackGroups(const Session& s, Id track) {
     return out;
 }
 std::vector<Id> linkedTracks(const Session& s, Id track, std::string_view attribute) {
+    if (attribute == "width" || attribute == "pan_left" || attribute == "pan_right" ||
+        attribute == "pan_mode" || attribute == "pan_law")
+        attribute = "pan";
     std::set<Id> out{track};
     std::vector<Id> pending{track};
     while (!pending.empty()) {
