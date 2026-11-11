@@ -525,3 +525,28 @@ TEST_CASE("freeze: Save As excludes a completed but unpublished artifact") {
         }
     }
 }
+
+TEST_CASE("MIDI sends: frozen channels keep sending timeline MIDI at every tap" *
+          doctest::description("rt")) {
+    Fixture f;
+    f.run("track.add", R"({"name":"MIDI receiver"})");
+    f.run("fx.add", R"({"track":"tr_2","plugin":"com.suppleaudio.test.sine"})");
+    f.run("item.add", R"({"track":"tr_1","notation":"voice a; 1: C4:q r:*"})");
+    f.run("route.add", R"({"from":"tr_1","to":"tr_2","midi":{}})");
+    OfflineSettings settings;
+    settings.track = model::Id{model::Kind::Track, 2};
+    settings.endSeconds = .5;
+    settings.threads = 1;
+    const auto reference = f.app->renderSession(f.app->head(), settings);
+    REQUIRE(reference);
+    f.run("track.freeze", R"({"track":"tr_1"})");
+    REQUIRE(f.app->head().tracks.find(track)->freeze);
+    const auto hash = model::freezeDependencyHash(f.app->head(), track);
+    for (const char* tap : {"pre_fx", "pre_fader", "post_fader"}) {
+        f.run("route.set", std::string(R"({"route":"sd_1","tap":")") + tap + R"("})");
+        const auto frozen = f.app->renderSession(f.app->head(), settings);
+        REQUIRE(frozen);
+        CHECK(bool(frozen->audio.channels == reference->audio.channels));
+        CHECK(model::freezeDependencyHash(f.app->head(), track) == hash);
+    }
+}

@@ -9449,7 +9449,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | `x` | number |  | -1e+06..1e+06 |  |  |
 | `y` | number |  | -1e+06..1e+06 |  |  |
 | `params` | value |  |  |  |  |
-| `source` | string |  |  |  |  |
+| `source` | value |  |  |  |  |
 | `device` | string |  |  |  |  |
 | `plugin` | string |  |  |  |  |
 
@@ -10184,7 +10184,7 @@ Result:
 
 Set a module's knobs, label, place or bypass.
 
-params merge into its knobs (values in the knob's units; a choice by key; a default value is dropped from the file). A knob edit is heard at once, without a recompile. Notes source/device accept null to clear them (source returns to the home track; device to none). bypass passes each input to the output of its kind. label names it (an Out module's label is what channels' input menus list). preset: a factory preset by name (module.describe lists them): every knob to it, then params on top.
+params merge into its knobs (values in the knob's units; a choice by key; a default value is dropped from the file). A knob edit is heard at once, without a recompile. Notes source/device accept null to clear them (source returns to the home track; device to none). source: none disables the track feed while keeping routes and device. source_sends: false stops it hearing MIDI sends into its source track (its own sends and device still play). bypass passes each input to the output of its kind. label names it (an Out module's label is what channels' input menus list). preset: a factory preset by name (module.describe lists them): every knob to it, then params on top.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -10201,6 +10201,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | `bypass` | boolean |  |  |  |  |
 | `source` | value |  |  |  |  |
 | `device` | value |  |  |  |  |
+| `source_sends` | boolean |  |  |  |  |
 
 ### Result
 
@@ -13755,9 +13756,9 @@ Result:
 
 ## `route.add@1`
 
-Send audio between strips, or a Note Out to a track's instrument.
+Send audio between strips, or MIDI between channels and rack modules.
 
-The destination must not feed the source. Master accepts routes. With fx instead of to, the send feeds that plug-in's sidechain (key) input — e.g. a kick keying a compressor on the bass; it is delay-compensated, and soloing the keyed track does not stop the key. A Note Out uses from: {module: mo_N}, to: {track: tr_N}, midi: {} (all channels unchanged); from_channel filters and to_channel remaps, 0..16 with 0 meaning all/original. Hardware routing is not supported yet.
+The destination must not feed the source. Master accepts routes. With fx instead of to, the send feeds that plug-in's sidechain (key) input — e.g. a kick keying a compressor on the bass; it is delay-compensated, and soloing the keyed track does not stop the key. MIDI sends use channel or Note Out sources and channel or Notes destinations, midi: {} (all channels unchanged); from_channel filters and to_channel remaps, 0..16 with 0 meaning all/original. Hardware routing is not supported yet.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -13767,7 +13768,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | --- | --- | --- | --- | --- | --- |
 | `from` | value |  |  |  |  |
 | `to` | value |  |  |  |  |
-| `midi` | object |  |  |  | Note Out MIDI routing; {} means every channel unchanged. Channel values 0..16: from 0 = all, to 0 = original. |
+| `midi` | object |  |  |  | MIDI send routing; {} means every channel unchanged. Channel values 0..16: from 0 = all, to 0 = original. |
 | `fx` | string |  |  |  | Feed this plug-in's sidechain (key) input instead of a track's input; `to` may be left out |
 | `tap` | string |  |  |  |  |
 | `volume_db` | value | dB | -150.0..12.0 |  | Quantity strings are range-checked by the server. |
@@ -13804,8 +13805,8 @@ Kind: `edit`. Exposure: `mcp-tool`.
 
 - `route.cycle`: the send would feed back Hint: choose another destination
 - `route.no_sidechain`: the plug-in has no key input Hint: pick another plug-in
-- `route.endpoint`: a Note Out needs a channel destination and MIDI routing Hint: use from: {module: mo_N}, to: {track: tr_N}, midi: {}
-- `route.midi`: MIDI routing or audio controls do not apply to these endpoints Hint: use a Note Out source for MIDI and omit audio send controls
+- `route.endpoint`: MIDI sends need channel or note-module endpoints Hint: use from: {module: mo_N}, to: {track: tr_N}, midi: {}
+- `route.midi`: MIDI routing or audio controls do not apply to these endpoints Hint: use channel/Note Out to channel/Notes for MIDI; omit audio controls
 
 ### Examples
 
@@ -14235,9 +14236,9 @@ Result:
 
 ## `route.matrix@1`
 
-What can be routed where: strips, plug-in keys, sends and blocked pairs.
+Read audio or MIDI endpoints, existing sends and blocked pairs.
 
-sources: strips in tree order (depth, parent, parent_send). destinations: strips (kind track), plug-in keys (kind key: fx with a sidechain input) and racks' In modules (kind module: mo_N, named "<rack> » <In>", with rack and home track), each strip's keys and In modules after it. A pair is blocked when the source's rule applies (masters feed only keys), the destination's rule applies (channels take only hardware audio), it is the same strip, or it is listed in cycles (the destination already feeds the source; for an In module, its rack's Outs reach the source; path names its ids, names the same by name). sends: existing routes per pair (to: a strip, an fx or an In module). Otherwise route.add accepts the pair (an In module: route.add {from, to: mo_N}). A source's channels past 2 are auxiliary (ADR-0020); channel_names names those a multi-out plug-in writes ({"3": "Kick"}), and route.add {channels: {from: [3, 4], to: [1, 2]}} sends that pair.
+mode: audio (default) or midi. MIDI sources are channels and Note Out; destinations are channels and Notes, with no audio controls. Audio sources: strips in tree order (depth, parent, parent_send). destinations: strips (kind track), plug-in keys (kind key: fx with a sidechain input) and racks' In modules (kind module: mo_N, named "<rack> » <In>", with rack and home track), each strip's keys and In modules after it. A pair is blocked when the source's rule applies (masters feed only keys), the destination's rule applies (channels take only hardware audio), it is the same strip, or it is listed in cycles (the destination already feeds the source; for an In module, its rack's Outs reach the source; path names its ids, names the same by name). sends: existing routes per pair (to: a strip, an fx or an In module). Otherwise route.add accepts the pair (an In module: route.add {from, to: mo_N}). A source's channels past 2 are auxiliary (ADR-0020); channel_names names those a multi-out plug-in writes ({"3": "Kick"}), and route.add {channels: {from: [3, 4], to: [1, 2]}} sends that pair.
 
 Kind: `query`. Exposure: `mcp-tool`.
 
@@ -14245,6 +14246,7 @@ Kind: `query`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
+| `mode` | string |  |  | "audio" |  |
 
 ### Result
 
@@ -14340,7 +14342,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | `route` | string |  |  |  |  |
 | `from` | value |  |  |  |  |
 | `to` | value |  |  |  |  |
-| `midi` | object |  |  |  | Note Out MIDI routing; {} means every channel unchanged. Channel values 0..16: from 0 = all, to 0 = original. |
+| `midi` | object |  |  |  | MIDI send routing; {} means every channel unchanged. Channel values 0..16: from 0 = all, to 0 = original. |
 | `fx` | string |  |  |  | Feed this plug-in's sidechain (key) input instead of a track's input; `to` may be left out |
 | `tap` | string |  |  |  |  |
 | `volume_db` | value | dB | -150.0..12.0 |  | Quantity strings are range-checked by the server. |
@@ -14372,7 +14374,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 ### Errors
 
 - `route.channels`: the map pairs channels the strips do not have Hint: pair 1 and 2: {from: [1, 2], to: [2, 1]}
-- `route.endpoint`: a Note Out needs a channel destination and MIDI routing Hint: route Note Out MIDI to a channel
+- `route.endpoint`: MIDI sends need channel or note-module endpoints Hint: send channel/Note Out MIDI to a channel or Notes module
 - `route.midi`: audio controls do not apply to MIDI routes Hint: use mute and MIDI channel routing
 
 ### Examples

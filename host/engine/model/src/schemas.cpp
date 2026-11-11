@@ -1183,6 +1183,10 @@ const Schema<RackModule>& schemaOf<RackModule>() {
         b.field("bypass", &RackModule::bypass, boolean());
         dflt(b, d.bypass);
         b.field("source", &RackModule::source, idSchema());
+        b.field("source_off", &RackModule::sourceOff, boolean());
+        dflt(b, d.sourceOff);
+        b.field("source_sends", &RackModule::sourceSends, boolean());
+        dflt(b, d.sourceSends);
         b.field("device", &RackModule::device, str());
         b.field("fx", &RackModule::fx, idSchema());
         b.field("learn", &RackModule::learn, schema::arrayOf(paramLearnSchema()));
@@ -1349,6 +1353,37 @@ std::string serializeProject(const Session& s) {
     return json::writeCanonical(projectToJson(s)) + "\n";
 }
 
+namespace {
+// Sets source_sends false on each Notes module whose source track (its
+// `source`, else its rack's home track) receives a MIDI route from a track or
+// module. Malformed entries are left to schema validation.
+void migrateNotesSends(json::Value& doc) {
+    auto* modules = doc.asObject().find("modules");
+    const auto* routes = doc.find("routes");
+    const auto* racks = doc.find("racks");
+    if (!modules || !modules->isObject() || !routes || !routes->isObject()) return;
+    auto text = [](const json::Value* v) { return v && v->isString() ? v->asString() : ""; };
+    std::set<std::string> fed;
+    for (const auto& r : routes->asObject()) {
+        const auto* midi = r.value.find("midi");
+        const auto* from = r.value.find("from");
+        const auto* to = r.value.find("to");
+        if (!midi || midi->isNull() || !from || !to) continue;
+        if (from->find("module") || from->find("track"))
+            if (const std::string track = text(to->find("track")); !track.empty())
+                fed.insert(track);
+    }
+    for (auto& m : modules->asObject()) {
+        if (!m.value.isObject() || text(m.value.find("type")) != kNotesModule) continue;
+        std::string track = text(m.value.find("source"));
+        if (track.empty() && racks && racks->isObject())
+            if (const auto* rack = racks->find(text(m.value.find("rack"))))
+                track = text(rack->find("track"));
+        if (fed.contains(track)) m.value["source_sends"] = false;
+    }
+}
+}  // namespace
+
 Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Warning>* warnings) {
     json::Value doc = input;
     if (!doc.isObject()) return Error("project.type", "a project is a JSON object");
@@ -1384,6 +1419,10 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
     } else if (version->minor > 11 && warnings)
         warnings->push_back(
             {"project.newer_minor", "loading a newer project minor version", "/schema"});
+    // Before 2.10 a Notes module heard only its source track's own MIDI, never
+    // the MIDI routed into that track (Note Out routes, the only kind then).
+    // Where such a route exists, the module keeps that sound (ADR-0067).
+    if (version->major == 1 || version->minor < 10) migrateNotesSends(doc);
     // Before 2.4 a master's hardware output could be written as a route to
     // hw_channels, which nothing played (ADR-0056): it becomes the master's
     // hw_output (its first such route), and the route goes.

@@ -2,6 +2,10 @@
 
 **Status:** Accepted, 2026-11-07. Amends ADR-0062. Builds on ADR-0051.
 
+**2026-11-10 amendment:** [ADR-0067](0067-midi-sends.md) extends these MIDI
+dependencies to channel sources and Notes destinations, including implicit
+Notes readers of a channel.
+
 ## Context
 
 A plug-in module can delay its output, including through oversampling.

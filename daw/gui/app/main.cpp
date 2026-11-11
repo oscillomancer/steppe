@@ -999,12 +999,16 @@ int main(int argc, char** argv) {
             auto v = json::Value::object();
             v["fx"] = fxPanel.saveLayout();
             v["routing"] = routingPanel.saveLayout();
+            v["routing"]["mode"] = routing.midiMode() ? "midi" : "audio";
             v["rack"] = rackPanel.saveLayout();
             return v;
         },
         [&](const json::Value& v) {
             fxPanel.loadLayout(v.find("fx") ? *v.find("fx") : json::Value());
             routingPanel.loadLayout(v.find("routing") ? *v.find("routing") : json::Value());
+            if (const auto* panel = v.find("routing"))
+                if (const auto* mode = panel->find("mode"); mode && mode->isString())
+                    routing.setMidiMode(mode->asString() == "midi");
             rackPanel.loadLayout(v.find("rack") ? *v.find("rack") : json::Value());
         });
     uiFile.add(

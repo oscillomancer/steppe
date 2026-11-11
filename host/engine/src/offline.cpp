@@ -65,12 +65,23 @@ Session upstreamSession(const Session& source, Id target) {
             const auto [from, to] = routeNodes(source, *entry.value);
             if (from && to && keep.count(*to)) changed |= keep.insert(*from).second;
         }
+        // A Notes source includes incoming sends, whose channel node must
+        // remain available so its implicit reader edges can be compiled.
+        for (const auto& entry : source.modules) {
+            const auto& module = *entry.value;
+            if (module.type != model::kNotesModule || module.sourceOff || !module.sourceSends ||
+                !keep.count(module.rack))
+                continue;
+            const auto* rack = source.racks.find(module.rack);
+            const auto track = module.source.value_or(rack ? rack->track : model::kMaster);
+            changed |= keep.insert(track).second;
+        }
     }
     // A kept rack's Notes modules still play their tracks' MIDI items.
     std::set<Id> midiSources;
     for (const auto& entry : source.modules) {
         const model::RackModule& m = *entry.value;
-        if (m.type != model::kNotesModule || !keep.count(m.rack)) continue;
+        if (m.type != model::kNotesModule || m.sourceOff || !keep.count(m.rack)) continue;
         if (m.source)
             midiSources.insert(*m.source);
         else if (const model::Rack* rack = source.racks.find(m.rack))
@@ -794,12 +805,16 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
     r.freezeTailFrames = renderedFrames - outputLatency - contentFrames;
     r.outputLatency = static_cast<std::uint32_t>(outputLatency);
     r.warnings = std::move(p.warnings);
-    for (const auto& node : p.nodes)
+    for (const auto& node : p.nodes) {
+        if (node.midiDropped)
+            r.warnings.push_back(node.id.str() + ": MIDI send capacity exceeded: " +
+                                 std::to_string(node.midiDropped));
         forEachStage(node, [&](const Stage& st) {
             if (st.voiceDropped)
                 r.warnings.push_back(st.fx.str() + ": voice tracking capacity exceeded: " +
                                      std::to_string(st.voiceDropped));
         });
+    }
     r.audio.sampleRate = p.rate;
     const auto skip = static_cast<std::ptrdiff_t>(outputLatency);
     for (auto& channel : output) {

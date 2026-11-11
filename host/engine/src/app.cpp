@@ -1668,7 +1668,7 @@ Result<TransportInfo> EngineApp::transport(std::string_view action, std::optiona
                  tr.record.mode == model::RecordMode::MidiReplace) &&
                 std::any_of(s.routes.begin(), s.routes.end(), [&](const auto& route) {
                     return route.value->to.track == e.id && route.value->midi &&
-                           route.value->from.module;
+                           (route.value->from.module || route.value->from.track);
                 });
             const model::Route* in =
                 output || !tr.record.input ? nullptr : s.routes.find(*tr.record.input);
