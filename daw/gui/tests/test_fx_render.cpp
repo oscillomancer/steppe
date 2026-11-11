@@ -56,7 +56,8 @@ struct Fixture {
     std::unique_ptr<gui::RenderDialog> render;
     bool ok = false;
 
-    Fixture() {
+    // `fixtures`: the host test plug-ins too (com.suppleaudio.test.*).
+    explicit Fixture(bool fixtures = false) {
         dir = std::filesystem::path(__FILE__)
                   .parent_path()
                   .parent_path()
@@ -90,6 +91,7 @@ struct Fixture {
         options.chainDir = dir / "chains";
         options.presetDir = dir / "presets";
         options.pluginPath = {std::filesystem::path(SUPPLE_CLAP_DIR)};
+        if (fixtures) options.pluginPath.push_back(FIXTURE_CLAP_PATH);
         options.identity = host::HostIdentity{gui::test::name(), "Supple Audio", "", "0"};
         auto a = engine::EngineApp::create(options);
         REQUIRE(a);
@@ -1053,6 +1055,46 @@ TEST_CASE(
     pick(0);  // back to 1/2: stored as the default
     CHECK(f.app->head().fx.find(fx)->pins.empty());
     CHECK(gui::FxWindow::pinsText({{3, 4}, {1, 2}, {3, 4}}) == "3/4 → 1/2 · key 3/4");
+}
+
+TEST_CASE("the FX chain's MIDI out chooses replace or merge for a plug-in that sends notes") {
+    Fixture f(true);
+    if (!f.ok) return;
+    const model::Id track = f.addTrack("Arp");
+    REQUIRE(f.run("fx.add",
+                  f.args({{"track", track.str()}, {"plugin", "com.suppleaudio.test.note-echo"}})));
+    REQUIRE(
+        f.run("fx.add", f.args({{"track", track.str()}, {"plugin", "com.suppleaudio.test.sine"}})));
+    REQUIRE(f.fx->open(track));
+    f.frame();
+    const auto& chain = f.app->head().tracks.find(track)->chain;
+    REQUIRE(chain.size() == 2);
+    const model::Id echo = chain[0], sine = chain[1];
+    REQUIRE(f.app->head().fx.find(echo)->plugin.id == "com.suppleaudio.test.note-echo");
+    // Only the plug-in that sends notes has the control.
+    CHECK(f.uiRoot().find("fx.midiout." + sine.str()) == nullptr);
+    REQUIRE(f.uiRoot().find("fx.midiout." + echo.str()));
+    CHECK(f.uiRoot().find("fx.midiout." + echo.str())->valueText() == "MIDI out: replace");
+    auto pick = [&](int row) {
+        REQUIRE(f.click("fx.midiout." + echo.str()));
+        ui::Node* menu = f.uiRoot().find("fx.midiout.menu");
+        REQUIRE(menu);
+        std::vector<std::string> checked;
+        for (const auto& item : ui::menuItems(*menu))
+            if (item.checked) checked.push_back(item.label);
+        CHECK(checked.size() == 1);
+        f.snapshot("fx-midi-out.png");
+        const ui::Point p{menu->bounds().x + 30, menu->bounds().y + row * 26.0f + 13};
+        f.uiRoot().pointer({ui::PointerEvent::Type::Move, p});
+        f.uiRoot().pointer({ui::PointerEvent::Type::Down, p, 1});
+        f.uiRoot().pointer({ui::PointerEvent::Type::Up, p, 1});
+        f.frame();
+    };
+    pick(1);
+    CHECK(f.app->head().fx.find(echo)->midiOutput == model::MidiOutputMode::Merge);
+    CHECK(f.uiRoot().find("fx.midiout." + echo.str())->valueText() == "MIDI out: merge");
+    pick(0);
+    CHECK(f.app->head().fx.find(echo)->midiOutput == model::MidiOutputMode::Replace);
 }
 
 TEST_CASE("the render dialog: the preview matches render.dry-run and a job lists its file") {

@@ -99,6 +99,8 @@ class FxWindow {
     static std::string pinsText(const model::PinMap& pins);
     // The pins menu of a track-chain effect: input pair, output pair, key.
     void openPinsMenu(model::Id fx, const ui::Rect& anchor);
+    // A note-output plug-in's place on the track's MIDI bus (ADR-0068).
+    void openMidiOutputMenu(model::Id fx, const ui::Rect& anchor);
     // Engine-reported failures (engine.status failed_fx), by effect id.
     const std::set<std::string>& failed() const { return failed_; }
     void select(model::Id fx);  // alone: any multi-selection ends
@@ -134,6 +136,7 @@ class FxWindow {
     std::vector<model::Id> targets(model::Id fx) const;
     Status setEach(model::Id fx, const char* field, bool value);
     std::string latencyOf(model::Id fx);
+    bool outputsNotes(model::Id fx);                     // cached by plug-in and live instance
     void dragRow(model::Id fx, int phase, ui::Point p);  // phase: Row::Phase
     void openBrowser(bool input = false);
     void addFx(const std::string& pluginId);
@@ -182,6 +185,12 @@ class FxWindow {
         std::string text;
     };
     std::map<std::string, Latency> latency_;
+    struct NotesOut {
+        std::string plugin;
+        host::Instance* live = nullptr;
+        bool value = false;
+    };
+    std::map<std::string, NotesOut> notesOut_;
     std::set<std::string> failed_;  // engine.status failed_fx
     std::string presetChain_ = "main";
     bool chainMenuOpen_ = false;  // the Load chain… menu is showing

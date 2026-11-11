@@ -361,7 +361,17 @@ its destination in the MIDI routing matrix.
 
 **Add plugin…** puts a note effect (an arpeggiator, a chord or MIDI effect)
 at the front of a channel's FX chain and an instrument just after the note
-effects there, so the instrument plays what they send (see below).
+effects there, so the instrument plays what they send.
+
+A plug-in that sends notes changes what comes after it in its channel's FX
+chain. The instrument after it plays its notes, and so do the channel's
+pre-fader and post-fader MIDI sends; a pre-FX send still carries the
+channel's own MIDI. Its **MIDI out** button in the FX window chooses
+**Replace** (the default: only its notes go on) or **Merge** (its notes and
+the ones it heard). Bypass it to let the original notes through. Plug-ins
+without audio, only notes, sit in the chain like any other. A frozen
+channel's sends play its own MIDI again, since its plug-ins no longer run;
+freezing warns about it.
 
 **View > Routing matrix**, or a strip's **out** button, opens a grid of what
 feeds what: a row per strip (and per output pair of a multi-out instrument),

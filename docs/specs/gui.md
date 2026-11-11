@@ -883,7 +883,11 @@ leave the selection. Shift+click selects the rows from the last one clicked; on 
 multi-selection, bypass, offline and Remove act on every selected effect in
 one undo step (the editor button and a double click open only that row's
 editor), wet/dry, per-FX latency and CPU, preset
-menu, and the plugin's own GUI (native view/child of an SDL window, or a
+menu, a **MIDI out** button for a track-chain plug-in that sends notes
+(`fx.describe` `outputs_notes`; others show none) reading "MIDI out: replace"
+or "MIDI out: merge", whose menu (`fx.midiout.menu`) checks **Replace the MIDI
+it hears** or **Merge with the MIDI it hears** (`fx.set {midi_output}`, one
+undo step; ADR-0068), and the plugin's own GUI (native view/child of an SDL window, or a
 bridge-owned Cocoa window; ADR-0040, `clap.timer-support`, resize negotiated from observed
 geometry). For plugins without a GUI — and always as a second tab — a
 **semantic parameter panel** generated from the plugin's semantic schema

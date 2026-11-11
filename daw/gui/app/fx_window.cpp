@@ -754,6 +754,41 @@ std::string FxWindow::latencyOf(model::Id fx) {
     return cached.text;
 }
 
+bool FxWindow::outputsNotes(model::Id fx) {
+    const auto* model = app_.head().fx.find(fx);
+    if (!model) {
+        notesOut_.erase(fx.str());
+        return false;
+    }
+    auto* live = app_.instanceOf(fx);
+    auto& cached = notesOut_[fx.str()];
+    if (cached.plugin == model->plugin.id && cached.live == live && !cached.plugin.empty())
+        return cached.value;
+    auto notes = app_.fxOutputsNotes(fx, *model);
+    cached = {model->plugin.id, live, notes && *notes};
+    return cached.value;
+}
+
+void FxWindow::openMidiOutputMenu(model::Id fx, const ui::Rect& anchor) {
+    const model::FxInstance* inst = app_.head().fx.find(fx);
+    if (!inst) return;
+    auto set = [this, fx](const char* mode) {
+        json::Value args = json::Value::object();
+        args["fx"] = fx.str();
+        args["midi_output"] = mode;
+        if (dispatch("fx.set", std::move(args))) refresh();
+    };
+    const bool merge = inst->midiOutput == model::MidiOutputMode::Merge;
+    std::vector<ui::MenuItem> items;
+    items.push_back(
+        {"Replace the MIDI it hears", "", [set] { set("replace"); }, true, false, !merge});
+    items.push_back(
+        {"Merge with the MIDI it hears", "", [set] { set("merge"); }, true, false, merge});
+    root().openPopup(
+        ui::makeMenu("fx.midiout.menu", std::move(items), [this] { root().closePopup(); }), anchor,
+        ui::Placement::Below);
+}
+
 Status FxWindow::dispatch(const char* command, json::Value args) {
     // gesture_ carries an in-progress slider drag, so its edits coalesce into
     // one undo step (Origin::gesture); it is empty between gestures.
@@ -1215,6 +1250,16 @@ void FxWindow::buildRow(ui::Node& body, model::Id fx, std::size_t index, bool in
         if (tr && (tr->channels > 2 || !inst->pins.empty())) {
             auto& pins = l2.emplace<ui::Button>(prefix + "pins." + id, pinsText(inst->pins));
             pins.onClick = [this, fx, at = &pins] { openPinsMenu(fx, at->bounds()); };
+        }
+        // A plug-in that sends notes on a track's chain: what the plug-ins
+        // after it, and the post-FX MIDI sends, hear (ADR-0068).
+        if (tr && std::find(tr->chain.begin(), tr->chain.end(), fx) != tr->chain.end() &&
+            outputsNotes(fx)) {
+            auto& midi = l2.emplace<ui::Button>(prefix + "midiout." + id,
+                                                inst->midiOutput == model::MidiOutputMode::Merge
+                                                    ? "MIDI out: merge"
+                                                    : "MIDI out: replace");
+            midi.onClick = [this, fx, at = &midi] { openMidiOutputMenu(fx, at->bounds()); };
         }
     }
 }
