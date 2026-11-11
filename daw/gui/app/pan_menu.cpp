@@ -19,7 +19,7 @@ namespace {
 
 std::string lawText(double db) {
     if (db == 0) return "0 dB";
-    char buf[16];
+    char buf[32];
     std::snprintf(buf, sizeof buf, "−%g dB", -db);
     return buf;
 }
