@@ -169,10 +169,15 @@ class Grid : public ui::Node {
             const float mark = d.type == "master" ? 5.0f : 3.0f;
             // A key's mark is violet, a rack In module's teal: hues no strip
             // type uses.
-            c.fillRect({x + 4, b.y + kHeaderH - 3 - mark, kCell - 8, mark},
-                       d.kind == "key"      ? t.color("agent")
-                       : d.kind == "module" ? t.color("track-teal")
-                                            : typeColor(d.type));
+            if (d.kind == "midi_output") {
+                c.strokeCircle({x + kCell / 2, b.y + kHeaderH - 6}, 4, t.color("midi-send"), 1.5f);
+                c.line({x + kCell / 2 - 2, b.y + kHeaderH - 6},
+                       {x + kCell / 2 + 2, b.y + kHeaderH - 6}, t.color("midi-send"));
+            } else
+                c.fillRect({x + 4, b.y + kHeaderH - 3 - mark, kCell - 8, mark},
+                           d.kind == "key"      ? t.color("agent")
+                           : d.kind == "module" ? t.color("track-teal")
+                                                : typeColor(d.type));
             nvgSave(vg);
             nvgTranslate(vg, x + kCell / 2 + 4, b.y + kHeaderH - 10);
             nvgRotate(vg, -static_cast<float>(M_PI) / 3);
@@ -202,9 +207,15 @@ class Grid : public ui::Node {
                 continue;
             }
             const float mark = s.type == "master" ? 5.0f : 3.0f;
-            c.fillRect({b.x + indent - 3 - mark, y + 4, mark, kCell - 8}, typeColor(s.type));
-            c.text({b.x + indent, y, kLabelW - indent - 6, kCell}, s.name.empty() ? s.id : s.name,
-                   ui::Font::Ui, t.type("small"), t.color("ink"));
+            if (s.type == "midi_input") {
+                c.strokeCircle({b.x + indent - 3, y + kCell / 2}, 3.5f, t.color("midi-send"), 1.5f);
+                c.line({b.x + indent - 5, y + kCell / 2}, {b.x + indent - 1, y + kCell / 2},
+                       t.color("midi-send"));
+            } else
+                c.fillRect({b.x + indent - 3 - mark, y + 4, mark, kCell - 8}, typeColor(s.type));
+            c.text(
+                {b.x + indent + (s.type == "midi_input" ? 4 : 0), y, kLabelW - indent - 10, kCell},
+                s.name.empty() ? s.id : s.name, ui::Font::Ui, t.type("small"), t.color("ink"));
         }
         c.restore();
         // Cells.
@@ -255,6 +266,20 @@ class Grid : public ui::Node {
             }
         }
         c.restore();
+        // Physical endpoint groups have a boundary across both labels and cells.
+        for (std::size_t row = 1; row < m_.sources.size(); ++row)
+            if (m_.sources[row - 1].type == "midi_input" && m_.sources[row].type != "midi_input") {
+                const float y = gy + static_cast<float>(row) * kCell;
+                if (y >= cells.y && y <= cells.bottom())
+                    c.line({b.x, y}, {b.right(), y}, t.color("ink-quiet"), 2);
+            }
+        for (std::size_t col = 1; col < m_.destinations.size(); ++col)
+            if (m_.destinations[col].kind == "midi_output" &&
+                m_.destinations[col - 1].kind != "midi_output") {
+                const float x = gx + static_cast<float>(col) * kCell;
+                if (x >= cells.x && x <= cells.right())
+                    c.line({x, b.y}, {x, b.bottom()}, t.color("ink-quiet"), 2);
+            }
         c.fillRect({cells.x - 1, b.y, 1, b.h}, t.color("rule"));
         c.fillRect({b.x, cells.y - 1, b.w, 1}, t.color("rule"));
     }

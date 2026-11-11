@@ -1018,7 +1018,9 @@ message; select every cell of that assignment (or its column) to clear it.
 Replacing an input reports "replaces <old input>" in the status line.
 One MIDI input assignment per channel is retained. Hardware input
 to output cells are blocked; route through a channel. Missing ports named in
-projects/preferences remain visible with warnings in port status.
+projects/preferences remain visible with warnings in port status. Hardware input
+and output headers use teal socket marks; separators divide input rows from
+channel rows and channel columns from output columns.
 
 Right-click an input row or output column header for Enabled, Timing offset…
 (signed milliseconds, -1000..1000), and, on outputs, Reset notes on stop.
