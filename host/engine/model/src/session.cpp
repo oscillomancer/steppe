@@ -22,7 +22,9 @@ std::vector<Id> midiFollowers(const Session& s, Id track, std::optional<Id> sour
     std::vector<Id> out;
     for (const auto& entry : s.modules) {
         const auto& module = *entry.value;
-        if (module.type != kNotesModule || module.sourceOff || module.rack == source) continue;
+        if (module.type != kNotesModule || module.sourceOff || !module.sourceSends ||
+            module.rack == source)
+            continue;
         const auto* home = s.racks.find(module.rack);
         if (module.source.value_or(home ? home->track : kMaster) == track) out.push_back(entry.id);
     }
@@ -568,6 +570,9 @@ struct Checker {
                 fail(at("modules", e.id, "fx"), "a plugin module holds a plug-in (fx)");
             if ((m.source || m.sourceOff) && m.type != kNotesModule)
                 fail(at("modules", e.id, "source"), "only a Notes module plays a track's MIDI");
+            if (!m.sourceSends && m.type != kNotesModule)
+                fail(at("modules", e.id, "source_sends"),
+                     "only a Notes module hears its source track's sends");
             if (m.device && m.type != kNotesModule)
                 fail(at("modules", e.id, "device"), "only a Notes module plays a MIDI input");
             if (m.source && !s.tracks.contains(*m.source))

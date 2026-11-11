@@ -300,10 +300,11 @@ notes still held. `from_channel` filters and `to_channel` remaps, 0 meaning
 all/original. MIDI sends learn `mute` only (ADR-0058).
 
 A Notes module hears its source channel's pre-FX MIDI, explicit MIDI sends
-and its device input, except what its own rack's Note Outs send to that
-channel: a Note Out may play the channel its rack's Notes reads, and old
-projects that do so load unchanged. `module.add`/`module.set {source: "none"}` disables the
-source; `{source: null}` restores Home. The model stores `source_off: true`
+and its device input, and, with `source_sends` (default true), the MIDI
+routed into its source channel, except what its own rack's Note Outs send to
+that channel: a Note Out may play the channel its rack's Notes reads.
+`module.set {source_sends: false}` stops it hearing those routes.
+`module.add`/`module.set {source: "none"}` disables the source; `{source: null}` restores Home. The model stores `source_off: true`
 (default false), with no source track for None. Source changes do not remove
 explicit routes or device selection. Armed MIDI overdub/replace channels
 record all delivered MIDI routes alongside optional device MIDI input.
@@ -1100,10 +1101,13 @@ VCAs.
 ### MIDI sends (schema 2.10, ADR-0067)
 
 Writers emit `supple.project/2.10`. Notes modules add optional `source_off`
-(default false); non-null route `midi` admits channel sources and Notes
-module destinations. Existing 1.x and 2.x files retain their meaning, with
-no structural migration: absent `source_off` uses the existing Home/track
-selection. Older builds cannot use the new endpoints or source-off setting.
+(default false) and `source_sends` (default true); non-null route `midi`
+admits channel sources and Notes module destinations. Existing 1.x and 2.x
+files retain their meaning: absent `source_off` uses the existing Home/track
+selection, and since a Notes module did not hear the MIDI routed into its
+source track before 2.10, the loader sets `source_sends: false` on each
+Notes module of an older file whose source track (its `source`, else its
+rack's channel) receives a MIDI route from a track or module. Older builds cannot use the new endpoints or source-off setting.
 
 ### Pan modes and laws (schema 2.9, ADR-0066)
 

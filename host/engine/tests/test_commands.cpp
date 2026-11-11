@@ -2810,6 +2810,34 @@ TEST_CASE("MIDI sends: commands validate endpoints, controls, cycles and mute-on
     const auto matrix = run(bus, "route.matrix", R"({"mode":"midi"})");
     CHECK(matrix.find("sources")->size() == 3);       // two channels and Note Out
     CHECK(matrix.find("destinations")->size() == 3);  // two channels and Notes
+    // source_sends: false, and Notes no longer hears Source's send into
+    // Target, so its Note Out may play Source (once Source's direct send to
+    // Notes is gone).
+    set["source"] = json::Value();
+    REQUIRE(bus.execute({"module.set", set, kOrigin}));
+    auto remove = json::Value::object();
+    for (const auto& r : app->head().routes)
+        if (r.value->to.module == model::Id::parse(notes)) remove["route"] = r.id.str();
+    REQUIRE(remove.find("route"));
+    REQUIRE(bus.execute({"route.remove", remove, kOrigin}));
+    direct["to"] = "tr_1";
+    refused("route.add", direct, "route.cycle");
+    auto quiet = json::Value::object();
+    quiet["module"] = notes;
+    quiet["source_sends"] = false;
+    REQUIRE(bus.execute({"module.set", quiet, kOrigin}));
+    CHECK_FALSE(app->head().modules.find(*model::Id::parse(notes))->sourceSends);
+    REQUIRE(bus.execute({"route.add", direct, kOrigin}));
+    bool listed = false;
+    const auto got = run(bus, "rack.get", "{\"rack\":\"" + rack + "\"}");
+    for (const auto& m : got.find("modules")->asArray())
+        if (m.find("module")->asString() == notes)
+            listed = m.find("source_sends") && *m.find("source_sends") == json::Value(false);
+    CHECK(listed);
+    quiet["source_sends"] = true;
+    refused("module.set", quiet, "route.cycle");
+    quiet["module"] = output;
+    refused("module.set", quiet, "rack.param");
 }
 
 TEST_CASE("MIDI sends: Notes source None does not prevent branch id remapping") {

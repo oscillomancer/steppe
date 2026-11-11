@@ -2046,6 +2046,16 @@ void RackWindow::notesSourceMenu(model::Id module, ui::Point at) {
     }
     if (!others.empty()) items.push_back({"", "", {}, true, true});
     for (auto& item : others) items.push_back(std::move(item));
+    // Whether it also plays the MIDI sent into that track (ADR-0067).
+    items.push_back({"", "", {}, true, true});
+    items.push_back({"Hear MIDI sends", "",
+                     [this, module, on = !m->sourceSends] {
+                         json::Value args = json::Value::object();
+                         args["module"] = module.str();
+                         args["source_sends"] = on;
+                         (void)exec("module.set", std::move(args));
+                     },
+                     !m->sourceOff, false, m->sourceSends});
     root().openPopup(
         ui::makeMenu("rack.notes.source", std::move(items), [this] { root().closePopup(); }),
         {at.x, at.y, 1, 1});

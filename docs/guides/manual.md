@@ -351,7 +351,11 @@ can forward MIDI through several other channels without an instrument.
 The selected mode is saved with the window layout.
 
 A Notes module's Plays track menu offers None to hear only explicit MIDI
-sends and its chosen keyboard. Home restores its rack's channel. A Note
+sends and its chosen keyboard. Home restores its rack's channel. **Hear MIDI
+sends**, checked by default, also plays the MIDI that other channels and
+Note Outs send into the track it plays; a project from before MIDI sends
+opens with it unchecked wherever a Note Out sends into that track, so it
+sounds as it did. A Note
 Out's **MIDI channel** knob chooses channel 1–16 for outgoing notes; choose
 its destination in the MIDI routing matrix.
 

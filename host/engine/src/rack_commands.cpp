@@ -620,6 +620,7 @@ json::Value moduleEntry(EngineApp& a, const model::Session& s, Id id, bool full)
         e["source"] = "none";
     else if (m.source)
         e["source"] = m.source->str();
+    if (!m.sourceSends) e["source_sends"] = false;
     if (m.device) e["device"] = *m.device;
     if (m.fx) {
         e["fx"] = m.fx->str();
@@ -695,7 +696,7 @@ struct ModuleSet {
     std::optional<json::Value> params;
     std::optional<std::string> label, preset;
     std::optional<double> x, y;
-    std::optional<bool> bypass;
+    std::optional<bool> bypass, sourceSends;
     std::optional<json::Value> source, device;
 };
 struct ModuleDuplicate {
@@ -1311,7 +1312,9 @@ void registerRackCommands(cmd::Registry& registry) {
             "default value is dropped from the file). A knob edit is heard at once, without a "
             "recompile. Notes source/device accept null to clear them (source returns to the home "
             "track; device to none). source: none disables the track feed while keeping routes and "
-            "device. bypass passes each input to the output of its kind. label "
+            "device. source_sends: false stops it hearing MIDI sends into its source track (its "
+            "own sends and device still play). bypass passes each input to the output of its kind. "
+            "label "
             "names it "
             "(an Out module's label is what channels' input menus list). preset: a factory "
             "preset by name (module.describe lists them): every knob to it, then params on top.";
@@ -1325,6 +1328,7 @@ void registerRackCommands(cmd::Registry& registry) {
                      .field("bypass", &ModuleSet::bypass, schema::boolean())
                      .field("source", &ModuleSet::source, clearableString(notesSourceSchema()))
                      .field("device", &ModuleSet::device, clearableString(schema::string()))
+                     .field("source_sends", &ModuleSet::sourceSends, schema::boolean())
                      .build();
         c.examples = {{"Turn the VCA down", j(R"({"module": "mo_3", "params": {"level": -12}})"),
                        j("{}"), "song_with_rack"},
@@ -1357,9 +1361,13 @@ void registerRackCommands(cmd::Registry& registry) {
                 if (!params) return std::move(params).error();
                 m.params = std::move(*params);
             }
-            if ((a.source || a.device) && m.type != model::kNotesModule)
-                return Error("rack.param", "source and device are a Notes module's", "/source",
+            if ((a.source || a.device || a.sourceSends) && m.type != model::kNotesModule)
+                return Error("rack.param", "source, device and source_sends are a Notes module's",
+                             a.source   ? "/source"
+                             : a.device ? "/device"
+                                        : "/source_sends",
                              "only Notes modules play a track's MIDI");
+            if (a.sourceSends) m.sourceSends = *a.sourceSends;
             if (a.source) {
                 m.source.reset();
                 m.sourceOff = a.source->isString() && a.source->asString() == "none";

@@ -1322,7 +1322,8 @@ a new channel). It follows rack.md §8.
   saved one it does not list stays, checked, "not connected"; while the
   engine is stopped the menu says to start it); a device is heard armed or
   not. Plays track… offers None (`source: "none"`), Home (the rack's channel; `source: null`) and every
-  other channel (`source`). Each pick is one undo step. Capture notes to track… picks a channel, then a
+  other channel (`source`), then a checkable Hear MIDI sends (`source_sends`; disabled while the
+  source is None). Each pick is one undo step. Capture notes to track… picks a channel, then a
   length (1, 2, 4, 8 or 16 bars, from the bar the playhead is in) and runs
   `rack.capture` with the module's first pitch and gate outputs (and its
   `velocity` output, if any) as a job (`async`): one undo step, a MIDI item

@@ -68,6 +68,7 @@ Fields equal to their defaults are omitted, as everywhere (session-model §5).
 | `bypass` | Bypassed: see §4.6. |
 | `source` | Notes modules: the track whose MIDI it plays (unset: the rack's home track; `module.set {source: null}` restores that default; `source: "none"` disables it, serialized as `source_off: true`). |
 | `source_off` | Serialized Notes source-off switch, default false; commands expose it as `source: "none"`. |
+| `source_sends` | Notes modules: whether it hears the MIDI sends into its source track, default true (omitted). Files older than 2.10 load with false on each Notes module whose source track receives a MIDI route (ADR-0067). `module.set {source_sends}`. |
 | `device` | Notes modules: a live MIDI input it always plays, armed or not, matched as a MIDI route's device (a case-insensitive substring; `""`: any input). Unset: none (`module.set {device: null}` clears it). |
 | `fx` | Plugin modules (required there, refused elsewhere): its plug-in instance, an `fx_N` in no chain. |
 | `learn` | MIDI learn on its parameters, as an FX's (`ParamLearn`). |

@@ -69,7 +69,8 @@ Session upstreamSession(const Session& source, Id target) {
         // remain available so its implicit reader edges can be compiled.
         for (const auto& entry : source.modules) {
             const auto& module = *entry.value;
-            if (module.type != model::kNotesModule || module.sourceOff || !keep.count(module.rack))
+            if (module.type != model::kNotesModule || module.sourceOff || !module.sourceSends ||
+                !keep.count(module.rack))
                 continue;
             const auto* rack = source.racks.find(module.rack);
             const auto track = module.source.value_or(rack ? rack->track : model::kMaster);

@@ -37,11 +37,17 @@ null restores Home. The model persists this as `source_off: true`, alongside
 the existing optional source track; the command clears that track when None
 is selected. Project schema 2.10 defaults the new field to false for old files.
 
-A channel's incoming sends also feed each Notes reader of that channel,
-except the readers in the sending rack itself: a Notes module never hears
+A channel's incoming sends also feed each Notes reader of that channel
+that has `source_sends` (default true), except the readers in the sending
+rack itself: a Notes module never hears
 its own rack's Note Out through its source track. A Note Out playing the
 track its rack reads (an arpeggiator on its own instrument track, valid
-before this decision) is therefore no cycle. Those dependencies bypass the
+before this decision) is therefore no cycle. Before 2.10 a Notes module
+heard none of its source track's incoming routes, so the loader sets
+`source_sends: false` on every Notes module of an older file whose source
+track receives a MIDI route (then only Note Out routes): old projects sound
+as they did, and two racks whose Note Outs play each other's tracks, valid
+then, still open. A 2.10 file is read as written. Those dependencies bypass the
 channel's audio node: a rack may produce the channel's audio while reading
 its MIDI. Explicit and implicit dependencies
 participate in mixed audio/MIDI cycle validation. MIDI edges use PDC queues,

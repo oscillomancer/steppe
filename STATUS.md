@@ -285,8 +285,10 @@ instructions are in `docs/guides/installing.md`.
   sized by the notes that can sound at once, so plan edits during playback
   cost the held voices, not the notes in the timeline; an edit to a send
   upstream releases and retriggers its notes downstream. Frozen channels send
-  timeline MIDI at both taps. Project schema 2.10 defaults source-off to false for old
-  files. Native macOS/Windows CI and coordinator review remain pending.
+  timeline MIDI at both taps. Notes modules hear the MIDI sent into their
+  source track unless `source_sends` is off (rack menu: Hear MIDI sends);
+  files older than 2.10 load with it off wherever a MIDI route feeds that
+  track, so they sound as before. Native macOS/Windows CI and coordinator review remain pending.
 - **Modular racks** (ADR-0062, `specs/rack.md`): racks of modules and
   cables on a channel, in the project (schema 2.7) with undo and branches.
   Out modules are channel inputs, In modules take sends (columns of the

@@ -1012,6 +1012,7 @@ q = nil
 ---@field bypass? boolean
 ---@field source? any
 ---@field device? any
+---@field source_sends? boolean
 
 ---@class Steppe.module_write_args
 ---@field name string

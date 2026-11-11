@@ -302,7 +302,13 @@ TEST_CASE("MIDI sends: a Note Out may play its own Notes source; older projects 
     old["schema"] = "supple.project/2.9";
     auto loaded = projectFromJson(old);
     REQUIRE_MESSAGE(loaded, (loaded ? "" : loaded.error().toString()));
-    CHECK(serializeProject(*loaded) == serializeProject(*s));
+    // Before 2.10 its Notes heard no sends into the channel: it still does not.
+    CHECK_FALSE(loaded->modules.find(p.notes)->sourceSends);
+    EditTxn heard(*loaded, 3);
+    heard.modify<RackModule>(p.notes, [](auto& m) { m.sourceSends = true; });
+    auto same = heard.commit();
+    REQUIRE(same);
+    CHECK(serializeProject(*same) == serializeProject(*s));
     // Another rack's Notes still hears it: two racks playing each other's
     // Notes source tracks feed back.
     EditTxn cross(*s, 3);
@@ -323,6 +329,79 @@ TEST_CASE("MIDI sends: a Note Out may play its own Notes source; older projects 
     const auto refused = cross.commit();
     REQUIRE_FALSE(refused);
     CHECK(refused.error().code == "route.cycle");
+}
+
+TEST_CASE("MIDI sends: older Notes keep not hearing sends into their source track") {
+    // Two racks, each Note Out playing the other rack's channel: valid before
+    // 2.10, when a Notes module never heard what was sent into its source.
+    EditTxn t(Session::create(), 1);
+    const Id a = addChannel(t), b = addChannel(t), c = addChannel(t);
+    auto rackOn = [&](Id track) {
+        const Id rack = t.create(Rack{track, "R"});
+        RackModule m;
+        m.rack = rack;
+        m.type = std::string(kNotesModule);
+        m.version = "1.0.0";
+        m.sourceSends = false;
+        const Id notes = t.create(m);
+        m.type = std::string(kNotesOutModule);
+        m.sourceSends = true;
+        const Id out = t.create(m);
+        return std::pair{notes, out};
+    };
+    const auto [notesA, outA] = rackOn(a);
+    const auto [notesB, outB] = rackOn(b);
+    const auto [notesC, outC] = rackOn(c);
+    t.modify<RackModule>(notesC, [](auto& m) { m.sourceSends = true; });
+    Route send;
+    send.midi = MidiRouting{};
+    send.from.module = outA;
+    send.to.track = b;
+    t.create(send);
+    send.from.module = outB;
+    send.to.track = a;
+    t.create(send);
+    send.from.module = outC;  // into a channel nobody's Notes reads
+    send.to.track = addChannel(t);
+    t.create(send);
+    auto s = t.commit();
+    REQUIRE_MESSAGE(s, (s ? "" : s.error().toString()));
+    // As a 2.9 writer saved it: no source_sends.
+    auto old = projectToJson(*s);
+    old["schema"] = "supple.project/2.9";
+    for (auto& m : old["modules"].asObject()) m.value.asObject().erase("source_sends");
+    std::vector<schema::Warning> warnings;
+    auto loaded = projectFromJson(old, &warnings);
+    REQUIRE_MESSAGE(loaded, (loaded ? "" : loaded.error().toString()));
+    CHECK_FALSE(loaded->modules.find(notesA)->sourceSends);
+    CHECK_FALSE(loaded->modules.find(notesB)->sourceSends);
+    CHECK(loaded->modules.find(notesC)->sourceSends);  // its channel receives no MIDI
+    CHECK(warnings.empty());
+    // Saved at 2.10 and reopened, unchanged.
+    const auto bytes = serializeProject(*loaded);
+    CHECK(bytes == serializeProject(*s));
+    CHECK(bytes.find("\"source_sends\": false") != std::string::npos);
+    auto reopened = parseProject(bytes);
+    REQUIRE(reopened);
+    CHECK(serializeProject(*reopened) == bytes);
+    // A 2.10 file means what it says: hearing the sends is the loop.
+    old["schema"] = "supple.project/2.10";
+    auto current = projectFromJson(old);
+    REQUIRE_FALSE(current);
+    CHECK(current.error().code == "route.cycle");
+    EditTxn one(*reopened, 2);
+    one.modify<RackModule>(notesA, [](auto& m) { m.sourceSends = true; });
+    auto half = one.commit();
+    REQUIRE(half);  // one direction is no loop
+    EditTxn both(*half, 3);
+    both.modify<RackModule>(notesB, [](auto& m) { m.sourceSends = true; });
+    const auto loop = both.commit();
+    REQUIRE_FALSE(loop);
+    CHECK(loop.error().code == "route.cycle");
+    // Only a Notes module has the switch.
+    EditTxn wrong(*reopened, 2);
+    wrong.modify<RackModule>(outA, [](auto& m) { m.sourceSends = false; });
+    CHECK_FALSE(wrong.commit());
 }
 
 TEST_CASE("MIDI sends: model rejects invalid endpoints, audio controls, learn and mixed cycles") {

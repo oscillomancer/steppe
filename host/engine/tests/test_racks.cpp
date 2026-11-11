@@ -1615,11 +1615,17 @@ TEST_CASE("MIDI sends: Notes accepts direct sends and its source track's incomin
     model::Route route;
     route.from.track = source;
     route.midi = model::MidiRouting{};
+    bool heard = true;
     SUBCASE("direct with source off") {
         send.modify<model::RackModule>(notes, [](auto& m) { m.sourceOff = true; });
         route.to.module = notes;
     }
     SUBCASE("through source track") { route.to.track = target; }
+    SUBCASE("through source track, not heard") {  // a pre-2.10 project's Notes
+        send.modify<model::RackModule>(notes, [](auto& m) { m.sourceSends = false; });
+        route.to.track = target;
+        heard = false;
+    }
     SUBCASE("Note Out with source off") {
         send.modify<model::RackModule>(notes, [](auto& m) { m.sourceOff = true; });
         const auto generator = send.create(model::Rack{source, "Generator"});
@@ -1634,8 +1640,10 @@ TEST_CASE("MIDI sends: Notes accepts direct sends and its source track's incomin
     }
     send.create(route);
     const auto session = commit(send);
-    CHECK(bool(renderLeft(session, 1.0, 37) == reference));
-    CHECK(bool(renderLeft(session, 1.0, 512) == reference));
+    const auto expected = heard ? reference : renderLeft(base, 1.0, 37);
+    CHECK(heard != bool(expected == renderLeft(base, 1.0, 37)));
+    CHECK(bool(renderLeft(session, 1.0, 37) == expected));
+    CHECK(bool(renderLeft(session, 1.0, 512) == expected));
 }
 
 TEST_CASE("MIDI sends: fan-in addresses, held notes, route mute and source mute survive adoption" *
