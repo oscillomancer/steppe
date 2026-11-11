@@ -65,12 +65,22 @@ Session upstreamSession(const Session& source, Id target) {
             const auto [from, to] = routeNodes(source, *entry.value);
             if (from && to && keep.count(*to)) changed |= keep.insert(*from).second;
         }
+        // A Notes source includes incoming sends, whose channel node must
+        // remain available so its implicit reader edges can be compiled.
+        for (const auto& entry : source.modules) {
+            const auto& module = *entry.value;
+            if (module.type != model::kNotesModule || module.sourceOff || !keep.count(module.rack))
+                continue;
+            const auto* rack = source.racks.find(module.rack);
+            const auto track = module.source.value_or(rack ? rack->track : model::kMaster);
+            changed |= keep.insert(track).second;
+        }
     }
     // A kept rack's Notes modules still play their tracks' MIDI items.
     std::set<Id> midiSources;
     for (const auto& entry : source.modules) {
         const model::RackModule& m = *entry.value;
-        if (m.type != model::kNotesModule || !keep.count(m.rack)) continue;
+        if (m.type != model::kNotesModule || m.sourceOff || !keep.count(m.rack)) continue;
         if (m.source)
             midiSources.insert(*m.source);
         else if (const model::Rack* rack = source.racks.find(m.rack))

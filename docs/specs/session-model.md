@@ -267,13 +267,13 @@ rendered).
 
 | field | notes |
 |---|---|
-| `from` | `{track: id}` or `{hw_input: {channels: [..]}}` or `{midi_input: device}` or `{module: id}` (a rack's Out module: a channel's record input, or Note Out with `midi`: a channel's instrument, rack.md §5–6) |
-| `to` | `{track: id}` or `{fx: id}` (a plug-in's key, ADR-0018) or `{module: id}` (a send into a rack's In module); hardware outputs are a master's `hw_output` (§1.4, ADR-0056), and a route to `hw_channels` is refused with `route.hw_output` |
+| `from` | `{track: id}` or `{hw_input: {channels: [..]}}` or `{midi_input: device}` or `{module: id}` (a rack's Out module: a channel's record input, or Note Out with `midi`: a channel or Notes module, rack.md §5–6) |
+| `to` | `{track: id}` or `{fx: id}` (a plug-in's key, ADR-0018) or `{module: id}` (audio into In, MIDI into Notes); hardware outputs are a master's `hw_output` (§1.4, ADR-0056), and a route to `hw_channels` is refused with `route.hw_output` |
 | `tap` | `post_fader` (default), `pre_fader` (post-FX), `pre_fx` |
 | `volume` dB, `pan` % or `follow` (default: the strip's pan), `mute`, `phase_invert`, `mono` | into a buss/master: realized by the send's own C9 Channel (ADR-0019 §3) |
 | `channels` | `{from: [..], to: [..]}` channel mapping, 1-based in 1..128 and up to each strip's channels (e.g. [1,2] → [3,4] for a detector on 3/4). Main pairs map the encoded send; pairs touching auxiliary channels are linear links at the route's level, mute and polarity (ADR-0020) |
 | `midi` | `{from_channel: 0..16, to_channel: 0..16}` (0 = all/original) or null (audio only) |
-| `learn` | MIDI learn on the send's controls (ADR-0058), as a track's (§1.4): `param` `volume`, `pan`, `mute`, `phase_invert`, `mono` or `tap:post_fader`, `tap:pre_fader`, `tap:pre_fx` (a press selects that tap); omitted when empty |
+| `learn` | MIDI learn on the send's controls (ADR-0058), as a track's (§1.4): `param` `volume`, `pan`, `mute`, `phase_invert`, `mono` or `tap:post_fader`, `tap:pre_fader`, `tap:pre_fx` (a press selects that tap); MIDI sends accept mute only; omitted when empty |
 
 Folder/master sends are the tracks' `parent_send`, not routes. Record inputs
 are routes from `hw_input`/`midi_input`, or from a rack's Out module,
@@ -286,17 +286,28 @@ channel keeps `record.input` as an alias of its `midi_input`, and a MIDI
 rack Out and a MIDI input records MIDI; without the MIDI input it records
 the Out's audio. To record both in one pass, arm a second channel whose
 `record.input` is a route from the same Out (ADR-0065).
-A Note Out module instead sends MIDI to
-any channel through an ordinary route with `midi` set; it is not a record
-input and several such routes may reach a channel. It cannot send audio or
-be selected as `record.input`; an armed `midi_overdub` or `midi_replace`
-channel records all incoming Note Out routes alongside its optional device
-input (engine.md §4), through the existing MIDI take/loop/punch rules. It cannot
-feed a key or In module. Note Out channel routing uses 0 for all/original,
-or 1..16, as on MIDI input routes. `route.add`/`route.set` accept track/module
-ids or explicit `{track: id}`/`{module: id}` endpoints; omitted fields inside
-`midi: {}` default to 0. The serialized `MidiRouting` already has both integer
-fields; no file schema change is required and old projects keep loading.
+A non-null `midi` makes a route MIDI-only (ADR-0067). Sources are channel
+strips or rack Note Out modules; destinations are channel strips or rack Notes
+modules. Busses, masters, keys and In modules are refused (`route.endpoint`).
+Audio and MIDI routes are independent; the existing audio endpoint rules
+remain unchanged. Audio controls (volume, pan, phase inversion, mono and
+channel maps) are refused (`route.midi`).
+A send's `pre_fx` tap reads the source channel's timeline, monitored device
+input and incoming MIDI routes; `pre_fader` and `post_fader` read its post-FX
+MIDI. Until plug-in MIDI output lands, post-FX equals pre-FX. Post-fader also
+follows source-strip mute. Route mute releases delivered notes; unmute starts
+notes still held. `from_channel` filters and `to_channel` remaps, 0 meaning
+all/original. MIDI sends learn `mute` only (ADR-0058).
+
+A Notes module hears its source channel's pre-FX MIDI, explicit MIDI sends
+and its device input. `module.add`/`module.set {source: "none"}` disables the
+source; `{source: null}` restores Home. The model stores `source_off: true`
+(default false), with no source track for None. Source changes do not remove
+explicit routes or device selection. Armed MIDI overdub/replace channels
+record all delivered MIDI routes alongside optional device MIDI input.
+`route.add`/`route.set` accept ids or explicit track/module endpoints;
+`midi: {}` defaults both channel fields to 0. `route.matrix {mode: "midi"}`
+returns MIDI endpoints; its default `audio` mode excludes MIDI sends.
 Cycles are rejected at edit time (`route.cycle`, naming the cycle).
 ADR-0019 §4 rules, rejected at edit time with `route.strip_type` (and a hint
 naming the allowed alternative): audio into a channel only from `hw_input`;
@@ -507,7 +518,7 @@ routes: sd_1 tr_2 → tr_6 ch 1/2→3/4 pre-fader −6 dB (sidechain)
 markers: mk_1 "Verse" bar 1 · regions: rg_1 "Chorus" bars 9–17
 ```
 
-## 5. Project file (`supple.project/2.9`)
+## 5. Project file (`supple.project/2.10`)
 
 ### 5.1 Shape
 
@@ -769,8 +780,8 @@ and naming. All `edit` unless marked (q) query or (a) action.
   `fx.state.capture` (internal, from plugin notifications), `plugin.list`
   (q), `plugin.scan` (a).
 - **routes**: `route.add {from, to, tap, channels, …}`, `route.remove`,
-  `route.set`, `route.list` (q). MIDI learn on a strip's or a send's own
-  controls (ADR-0058): `track.learn.set {track, param, midi, mode?,
+  `route.set`, `route.list` (q), `route.matrix {mode: audio|midi}` (q). MIDI
+  learn on a strip's or a send's own controls (ADR-0058): `track.learn.set {track, param, midi, mode?,
   soft_takeover?}` / `route.learn.set {route, …}` (a), `track.learn.remove
   {track, param}` / `route.learn.remove {route, param}` (a),
   `track.learn.list {track?}` / `route.learn.list {route?}` (q); a VCA's
@@ -1084,9 +1095,17 @@ routes (§1.8) and VCAs. A 2.5 file loads unchanged; an older application openin
 file ignores `learn` with a warning, and its controllers move nothing on strips, sends or
 VCAs.
 
+### MIDI sends (schema 2.10, ADR-0067)
+
+Writers emit `supple.project/2.10`. Notes modules add optional `source_off`
+(default false); non-null route `midi` admits channel sources and Notes
+module destinations. Existing 1.x and 2.x files retain their meaning, with
+no structural migration: absent `source_off` uses the existing Home/track
+selection. Older builds cannot use the new endpoints or source-off setting.
+
 ### Pan modes and laws (schema 2.9, ADR-0066)
 
-Writers emit `supple.project/2.9`. The 2.9 change adds `project.pan_law` and
+The 2.9 change adds `project.pan_law` and
 the channels' and busses' `pan_mode`, `width`, `pan_left`, `pan_right` and
 `pan_law` (§1.2, §1.4), each omitted at its default, so a project that uses
 none of them saves the same bytes as before apart from its schema. A 2.8 file

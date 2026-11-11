@@ -143,3 +143,47 @@ TEST_CASE("engine shutdown commits captured audio and MIDI to the session") {
     CHECK(app.head().version == before);
     CHECK(app.head().items.empty());
 }
+
+TEST_CASE("MIDI sends: armed destinations record internal MIDI without a device or instrument") {
+    struct Root {
+        fs::path path = fs::temp_directory_path() /
+                        ("supple-midi-send-record-" + std::to_string(test::processId()));
+        Root() { fs::remove_all(path); }
+        ~Root() { fs::remove_all(path); }
+    } root;
+    auto created = EngineApp::create({.workdir = root.path});
+    REQUIRE(created);
+    auto& app = **created;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher dispatcher(registry, app);
+    auto call = [&](const char* command, std::string_view args) {
+        auto result = dispatcher.execute(
+            {command, *json::parse(args), {cmd::Origin::Type::Test, "midi-send", ""}});
+        REQUIRE_MESSAGE(result, (result ? "" : result.error().toString()));
+        return *result;
+    };
+    call("track.add", R"({"name":"Source"})");
+    call("track.add", R"({"name":"Recorder"})");
+    call("item.add", R"({"track":"tr_1","notation":"voice a; 1: C4:e r:*"})");
+    call("route.add", R"({"from":"tr_1","to":"tr_2","midi":{}})");
+    call("track.set",
+         R"({"track":"tr_2","armed":true,"monitor":"off","record_mode":"midi_overdub"})");
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    REQUIRE(app.startEngine(backend, {.sampleRate = 48000, .blockSize = 256},
+                            {.anticipative = false, .workers = 0}));
+    call("transport.record", "{}");
+    backend.run(96);
+    call("transport.stop", "{}");
+    app.stopEngine();
+    const auto target = model::Id::parse("tr_2");
+    std::size_t notes = 0;
+    for (const auto& item : app.head().items) {
+        if (item.value->track != *target || !item.value->activeTake) continue;
+        const auto* take = app.head().takes.find(*item.value->activeTake);
+        if (take && take->source)
+            if (const auto* midi = app.head().midi.find(*take->source))
+                notes += midi->sequence.notes.size();
+    }
+    CHECK(notes == 1);
+}

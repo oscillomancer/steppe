@@ -276,6 +276,14 @@ instructions are in `docs/guides/installing.md`.
   CLAP descriptor dispatch ignores registrations removed by an earlier
   callback in the same readiness snapshot, as VST3 dispatch already does;
   the Linux regression passes and macOS validation is pending.
+- **MIDI sends** (ADR-0067): channel/Note Out to channel/Notes routing, channel
+  filters/remapping, tap and mute controls, relay channels without instruments,
+  PDC and MIDI recording. The routing window's saved Audio/MIDI mode exposes
+  Note Out and Notes endpoints. Notes supports Source None; Note Out displays
+  MIDI channel. Prepared pre/post-FX streams are separate; post-FX currently
+  equals pre-FX pending plug-in MIDI output. Frozen channels send timeline
+  MIDI at both taps. Project schema 2.10 defaults source-off to false for old
+  files. Native macOS/Windows CI and coordinator review remain pending.
 - **Modular racks** (ADR-0062, `specs/rack.md`): racks of modules and
   cables on a channel, in the project (schema 2.7) with undo and branches.
   Out modules are channel inputs, In modules take sends (columns of the

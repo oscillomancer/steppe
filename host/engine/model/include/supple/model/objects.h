@@ -472,7 +472,8 @@ struct RackModule {
     double x = 0.0, y = 0.0;  // its top-left corner, design units
     json::Value params = json::Value::object();
     bool bypass = false;
-    std::optional<Id> source;  // Notes: the track whose MIDI it plays (unset: the home track)
+    std::optional<Id> source;  // Notes: unset uses the home track
+    bool sourceOff = false;    // Notes: source "none", device and incoming sends still play
     // Notes: a live MIDI input it always plays, matched as a MIDI route's
     // device (a case-insensitive substring; "": any device).
     std::optional<std::string> device;

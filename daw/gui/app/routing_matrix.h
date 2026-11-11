@@ -31,6 +31,7 @@ class Button;
 namespace supple::gui {
 
 struct MatrixModel {
+    bool midi = false;
     struct Source {
         std::string id, name, type, parent;
         int depth = 0;
@@ -52,6 +53,7 @@ struct MatrixModel {
         std::string id, from, to, tap;
         double volumeDb = 0, pan = 0;
         bool mute = false, mono = false, phaseInvert = false;
+        int midiFrom = 0, midiTo = 0;
         std::vector<int> mapFrom, mapTo;  // the channel map (empty: identity)
     };
     std::vector<Source> sources;
@@ -78,6 +80,8 @@ class RoutingMatrix {
     void close() { panel_.close(); }
     void open(std::optional<ui::Rect> anchor = std::nullopt);
     bool isOpen() const { return grid_ != nullptr; }
+    void setMidiMode(bool midi);
+    bool midiMode() const { return midiMode_; }
     void sync();  // reload when the session changed while open
 
     // A cell, by what it joins (row and column numbers move as strips do).
@@ -114,6 +118,7 @@ class RoutingMatrix {
     std::string status() const;
 
   private:
+    void midiChannelMenu(bool from);
     Status reload();
     void refresh();  // the controls, from the selection
     void select(std::set<Cell> cells, std::optional<Cell> anchor);
@@ -138,6 +143,9 @@ class RoutingMatrix {
     cmd::Dispatcher& dispatcher_;
     engine::EngineApp& app_;
     MatrixModel model_;
+    bool midiMode_ = false;
+    ui::Button *audioMode_ = nullptr, *midiModeButton_ = nullptr;
+    ui::Button *midiFrom_ = nullptr, *midiTo_ = nullptr;
     std::uint64_t version_ = 0;
     std::uint64_t projectGeneration_ = ~std::uint64_t{0};
     std::set<Cell> selection_;

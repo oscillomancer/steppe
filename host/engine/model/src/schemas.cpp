@@ -1090,6 +1090,8 @@ const Schema<RackModule>& schemaOf<RackModule>() {
         b.field("bypass", &RackModule::bypass, boolean());
         dflt(b, d.bypass);
         b.field("source", &RackModule::source, idSchema());
+        b.field("source_off", &RackModule::sourceOff, boolean());
+        dflt(b, d.sourceOff);
         b.field("device", &RackModule::device, str());
         b.field("fx", &RackModule::fx, idSchema());
         b.field("learn", &RackModule::learn, schema::arrayOf(paramLearnSchema()));
@@ -1288,7 +1290,7 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
         auto migrated = migrateProject1(std::move(doc), warnings);
         if (!migrated) return std::move(migrated).error();
         doc = std::move(*migrated);
-    } else if (version->minor > 9 && warnings)
+    } else if (version->minor > 10 && warnings)
         warnings->push_back(
             {"project.newer_minor", "loading a newer project minor version", "/schema"});
     // Before 2.4 a master's hardware output could be written as a route to

@@ -223,12 +223,13 @@ class Grid : public ui::Node {
                 if (!sends.empty()) {
                     const ui::Rect dot{r.x + 4, r.y + 4, r.w - 8, r.h - 8};
                     c.fillRound(dot, 3,
-                                sends.front()->mute ? t.color("ink-faint") : t.color("accent"));
+                                sends.front()->mute ? t.color("ink-faint")
+                                                    : t.color(m_.midi ? "midi-send" : "accent"));
                 }
                 if (sel)
                     c.strokeRound({r.x + 1, r.y + 1, r.w - 2, r.h - 2}, 3, t.color("focus"), 2);
                 // The implicit parent send: outlined when on, a faint corner mark when off.
-                if (m_.destinations[col].kind == "track" && m_.sources[row].pair == 1 &&
+                if (!m_.midi && m_.destinations[col].kind == "track" && m_.sources[row].pair == 1 &&
                     m_.sources[row].parent == m_.destinations[col].id) {
                     if (m_.sources[row].parentSend)
                         c.strokeRect({r.x + 2, r.y + 2, r.w - 4, r.h - 4}, t.color("ink-quiet"));
@@ -334,6 +335,10 @@ RoutingMatrix::RoutingMatrix(FloatingPanel& panel, AppActions& actions, cmd::Dis
                              engine::EngineApp& app)
     : panel_(panel), actions_(actions), dispatcher_(dispatcher), app_(app) {
     actions_.addUi("ui.routing", "View: routing matrix", [this] { open(); });
+    actions_.addUi("ui.routing.midi", "View: MIDI routing matrix", [this] {
+        setMidiMode(true);
+        open();
+    });
 }
 
 RoutingMatrix::~RoutingMatrix() { close(); }
@@ -346,11 +351,14 @@ Result<json::Value> RoutingMatrix::exec(const std::string& command, json::Value 
 }
 
 Status RoutingMatrix::reload() {
-    auto m = dispatcher_.execute({"route.matrix", json::Value::object(), kOrigin});
+    auto args = json::Value::object();
+    args["mode"] = midiMode_ ? "midi" : "audio";
+    auto m = dispatcher_.execute({"route.matrix", std::move(args), kOrigin});
     if (!m) return std::move(m).error();
     auto list = dispatcher_.execute({"route.list", json::Value::object(), kOrigin});
     if (!list) return std::move(list).error();
     MatrixModel next;
+    next.midi = midiMode_;
     auto str = [](const json::Value& v, const char* k) {
         const json::Value* x = v.find(k);
         return x && x->isString() ? x->asString() : std::string();
@@ -402,12 +410,21 @@ Status RoutingMatrix::reload() {
         // MIDI input has no source strip, and a rack's Out (a channel's input)
         // and Note Out are not strip sends.
         const std::string from = str(r, "from");
-        if (from.empty() || from.starts_with("mo_") || str(r, "to").empty()) continue;
+        const auto* midi = r.find("midi");
+        if (from.empty() || str(r, "to").empty() || bool(midi && !midi->isNull()) != midiMode_ ||
+            (!midiMode_ && from.starts_with("mo_")))
+            continue;
         MatrixModel::Send x;
         x.id = str(r, "id");
         x.from = str(r, "from");
         x.to = str(r, "fx").empty() ? str(r, "to") : str(r, "fx");
         x.tap = str(r, "tap");
+        if (midi && midi->isObject()) {
+            if (const auto* channel = midi->find("from_channel"))
+                x.midiFrom = static_cast<int>(channel->asDouble());
+            if (const auto* channel = midi->find("to_channel"))
+                x.midiTo = static_cast<int>(channel->asDouble());
+        }
         if (const auto* v = r.find("volume_db"); v && v->isNumber()) x.volumeDb = v->asDouble();
         if (const auto* v = r.find("pan"); v && v->isNumber()) x.pan = v->asDouble();
         if (const auto* v = r.find("mute"); v && v->isBool()) x.mute = v->asBool();
@@ -432,6 +449,7 @@ Status RoutingMatrix::reload() {
     std::erase_if(selection_, [&](const Cell& c) { return !locate(c); });
     if (anchor_ && !locate(*anchor_)) anchor_.reset();
     refresh();
+    if (status_) status_->setText(status());
     return {};
 }
 
@@ -457,6 +475,10 @@ void RoutingMatrix::open(std::optional<ui::Rect> anchor) {
     auto& title = header.emplace<ui::Label>("routing.title", "Routing", ui::Font::UiBold, "body");
     title.layout.width = ui::SizeRule::fraction();
     panel_.setTitle(title.text());
+    audioMode_ =
+        &header.emplace<ui::Button>("routing.mode.audio", "Audio", [this] { setMidiMode(false); });
+    midiModeButton_ =
+        &header.emplace<ui::Button>("routing.mode.midi", "MIDI", [this] { setMidiMode(true); });
     header.emplace<ui::Button>("routing.close", "Close", [this] { close(); });
     GridHooks hooks;
     hooks.cell = [this](std::size_t row, std::size_t col, unsigned mods) {
@@ -622,6 +644,10 @@ void RoutingMatrix::open(std::optional<ui::Rect> anchor) {
                          b, ui::Placement::Below);
     });
     channels_->layout.width = ui::SizeRule::fixed(96);
+    midiFrom_ = &row.emplace<ui::Button>("routing.midi.from", "From channel: All",
+                                         [this] { midiChannelMenu(true); });
+    midiTo_ = &row.emplace<ui::Button>("routing.midi.to", "To channel: Original",
+                                       [this] { midiChannelMenu(false); });
     // Polarity and mute: on for all unless all are on, then off for all.
     phase_ = &row.emplace<ui::Button>("routing.phase", "ø", [this] {
         bool all = true;
@@ -657,6 +683,7 @@ void RoutingMatrix::open(std::optional<ui::Rect> anchor) {
             pan_ = nullptr;
             add_ = remove_ = mute_ = nullptr;
             channels_ = phase_ = nullptr;
+            midiFrom_ = midiTo_ = audioMode_ = midiModeButton_ = nullptr;
             taps_.clear();
             selection_.clear();
             anchor_.reset();
@@ -709,7 +736,8 @@ std::optional<std::pair<std::size_t, std::size_t>> RoutingMatrix::locate(const C
 }
 
 bool RoutingMatrix::parentCell(std::size_t row, std::size_t col) const {
-    return model_.destinations[col].kind == "track" && model_.sources[row].pair == 1 &&
+    return !midiMode_ && model_.destinations[col].kind == "track" &&
+           model_.sources[row].pair == 1 &&
            model_.sources[row].parent == model_.destinations[col].id;
 }
 
@@ -836,9 +864,10 @@ void RoutingMatrix::selectAll() {
 namespace {
 
 // route.add's arguments for a cell's pair to its destination.
-json::Value addArgs(const MatrixModel::Source& s, const MatrixModel::Destination& d) {
+json::Value addArgs(const MatrixModel::Source& s, const MatrixModel::Destination& d, bool midi) {
     json::Value args = json::Value::object();
     args["from"] = s.id;
+    if (midi) args["midi"] = json::Value::object();
     args[d.kind == "key" ? "fx" : "to"] = d.id;
     if (s.pair != 1) {  // an auxiliary pair to the destination's main pair (ADR-0021)
         json::Value map = json::Value::object(), from = json::Value::array(),
@@ -860,7 +889,7 @@ Status RoutingMatrix::doubleClickCell(std::size_t row, std::size_t col) {
     if (row >= model_.sources.size() || col >= model_.destinations.size())
         return Error("gui.routing", "no such cell");
     select({cellAt(row, col)}, cellAt(row, col));
-    if (!model_.sendsAt(row, col).empty()) return {};
+    if (!model_.sendsAt(row, col).empty()) return midiMode_ ? removeSelected() : Status{};
     // The parent's cell is the implicit parent send: on or off.
     if (parentCell(row, col)) {
         json::Value args = json::Value::object();
@@ -874,7 +903,7 @@ Status RoutingMatrix::doubleClickCell(std::size_t row, std::size_t col) {
         if (status_) status_->setText("Not allowed: " + why);
         return Error("route.strip_type", why);
     }
-    auto r = exec("route.add", addArgs(model_.sources[row], model_.destinations[col]));
+    auto r = exec("route.add", addArgs(model_.sources[row], model_.destinations[col], midiMode_));
     if (!r) return std::move(r).error();
     return reload();
 }
@@ -892,7 +921,7 @@ Status RoutingMatrix::addSelected() {
             args["parent_send"] = true;
             edits.emplace_back("track.set", std::move(args));
         } else if (model_.blocked(at->first, at->second).empty()) {
-            edits.emplace_back("route.add", addArgs(s, model_.destinations[at->second]));
+            edits.emplace_back("route.add", addArgs(s, model_.destinations[at->second], midiMode_));
         }
     }
     if (edits.empty()) return {};
@@ -961,6 +990,7 @@ bool RoutingMatrix::learnAt(ui::Point p) {
         {volume_, "volume"}, {pan_, "pan"}, {mute_, "mute"}, {phase_, "phase_invert"}};
     const char* taps[] = {"tap:post_fader", "tap:pre_fader", "tap:pre_fx"};
     for (std::size_t i = 0; i < taps_.size() && i < 3; ++i) controls.push_back({taps_[i], taps[i]});
+    if (midiMode_) controls = {{mute_, "mute"}};
     StripControl control;
     for (const auto& id : selectedSends())
         if (auto parsed = model::Id::parse(id)) control.objects.push_back(*parsed);
@@ -1075,13 +1105,27 @@ void RoutingMatrix::refresh() {
         sendTitle_->setText(std::to_string(selection_.size()) + " cells selected, " +
                             std::to_string(sends.size()) + " sends");
     }
+    for (ui::Node* widget : {static_cast<ui::Node*>(volume_), static_cast<ui::Node*>(pan_),
+                             static_cast<ui::Node*>(volumeText_), static_cast<ui::Node*>(panText_),
+                             static_cast<ui::Node*>(channels_), static_cast<ui::Node*>(phase_)})
+        widget->visible = !midiMode_;
+    midiFrom_->visible = midiTo_->visible = midiMode_;
+    audioMode_->setText(midiMode_ ? "Audio" : "• Audio");
+    midiModeButton_->setText(midiMode_ ? "• MIDI" : "MIDI");
+    midiFrom_->setText("From channel: " + (x && x->midiFrom ? std::to_string(x->midiFrom) : "All"));
+    midiTo_->setText("To channel: " + (x && x->midiTo ? std::to_string(x->midiTo) : "Original"));
+    root().relayout();
     if (!x) {  // nothing to edit: neutral controls
         volume_->setValue(0);
         pan_->setValue(0);
         volumeText_->setText("");
         panText_->setText("");
         const char* plain[] = {"Post", "Pre", "Pre-FX"};
-        for (std::size_t i = 0; i < taps_.size(); ++i) taps_[i]->setText(plain[i]);
+        for (std::size_t i = 0; i < taps_.size(); ++i)
+            taps_[i]->setText(midiMode_ ? (i == 0   ? "Post-fader"
+                                           : i == 1 ? "Post-FX"
+                                                    : "Pre-FX")
+                                        : plain[i]);
         mute_->setText("Mute");
         channels_->setText("L/R");
         phase_->setText("\u00f8");
@@ -1100,7 +1144,10 @@ void RoutingMatrix::refresh() {
         bool every = true;
         for (const auto& id : sends)
             if (const auto* y = sendById(id)) every = every && y->tap == names[i];
-        taps_[i]->setText(std::string(every ? "• " : "") + labels[i]);
+        taps_[i]->setText(std::string(every ? "• " : "") + (midiMode_ ? (i == 0   ? "Post-fader"
+                                                                         : i == 1 ? "Post-FX"
+                                                                                  : "Pre-FX")
+                                                                      : labels[i]));
     }
     if (!volume_->dragging()) {
         volume_->setValue(x->volumeDb);
@@ -1111,6 +1158,45 @@ void RoutingMatrix::refresh() {
     mute_->setText(allMuted ? "Unmute" : "Mute");
     channels_->setText(channelsText(*x));
     phase_->setText(allInverted ? "ø on" : "ø");
+}
+
+void RoutingMatrix::setMidiMode(bool midi) {
+    if (midiMode_ == midi) return;
+    midiMode_ = midi;
+    selection_.clear();
+    anchor_.reset();
+    anchorRow_.reset();
+    anchorCol_.reset();
+    if (isOpen()) {
+        if (auto result = reload(); !result && status_) status_->setText(result.error().message);
+    }
+}
+
+void RoutingMatrix::midiChannelMenu(bool from) {
+    const auto* shown = sendById(selectedSend().value_or(""));
+    if (!shown) return;
+    const int selected = from ? shown->midiFrom : shown->midiTo;
+    std::vector<ui::MenuItem> items;
+    for (int channel = 0; channel <= 16; ++channel) {
+        const std::string label = channel ? std::to_string(channel) : from ? "All" : "Original";
+        items.push_back(
+            {label, "",
+             [this, from, channel] {
+                 (void)setSends(
+                     "MIDI send channel",
+                     [from, channel](const MatrixModel::Send& send) -> std::optional<json::Value> {
+                         auto edit = json::Value::object(), midi = json::Value::object();
+                         midi["from_channel"] = from ? channel : send.midiFrom;
+                         midi["to_channel"] = from ? send.midiTo : channel;
+                         edit["midi"] = std::move(midi);
+                         return edit;
+                     });
+             },
+             true, false, channel == selected});
+    }
+    root().openPopup(
+        ui::makeMenu("routing.midi.channels", std::move(items), [this] { root().closePopup(); }),
+        (from ? midiFrom_ : midiTo_)->bounds(), ui::Placement::Below);
 }
 
 void RoutingMatrix::sync() {

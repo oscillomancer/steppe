@@ -69,7 +69,9 @@ class In final : public HostModule {
 struct MidiEvent {
     std::uint32_t frame = 0;
     std::uint8_t status = 0, data1 = 0, data2 = 0;
-    bool live = false;  // from a device, not the timeline
+    bool live = false;         // from a device, not the timeline
+    std::uint64_t source = 0;  // 0: timeline, 1: device, route id + 2: MIDI send
+    int noteId = -1;           // addressed notes remain distinct at equal pitches
 };
 
 // Shared with rack.capture: hysteretic gates and MIDI quantization.
@@ -137,6 +139,15 @@ class Notes final : public HostModule {
             endLive_ = true;
         }
     }
+    void trackInput(std::uint64_t source) SUPPLE_RT {
+        if (trackSource_ != source) {
+            trackSource_ = source;
+            endTrack_ = true;
+        }
+    }
+    void endSource(std::uint64_t source) SUPPLE_RT;
+    void retainSource(std::uint64_t source, std::span<const int> notes) SUPPLE_RT;
+    void retainRoutes(std::span<const std::uint64_t> routes) SUPPLE_RT;
     void prepare(Instance& instance) override;
     void process(const HostContext& ctx) SUPPLE_RT override;
 
@@ -144,22 +155,29 @@ class Notes final : public HostModule {
     struct Voice {
         int key = -1;
         bool held = false, sustained = false;
+        std::uint64_t source = 0;
+        int noteId = -1;
         double velocity = 0, pressure = 0;
         std::uint64_t age = 0;
         int gap = 0;        // frames the gate drops for a retrigger
         int trigger = 0;    // frames left of the retrigger output
         bool live = false;  // opened by a live event
     };
-    void on(int key, double velocity, int voices, int mode, bool live);
-    void off(int key, int mode);
+    void on(int key, double velocity, int voices, int mode, bool live, std::uint64_t source,
+            int noteId);
+    void off(int key, int mode, std::uint64_t source, int noteId);
     void release(Voice& v);
     void handle(const MidiEvent& e, int voices, int mode);
     void releaseLive(int mode);
     std::array<Voice, kChannels> voice_{};
-    std::array<int, 128> stack_{};  // mono modes: keys held, in order
+    int monoChoice(int mode) const SUPPLE_RT;
+    void prune(std::uint64_t source, std::span<const int> notes,
+               std::span<const std::uint64_t> routes) SUPPLE_RT;
+    std::array<Voice, 128> stack_{};  // mono modes: independently addressed held keys
     int stacked_ = 0;
-    std::array<double, 128> keyVelocity_{};
-    std::array<bool, 128> keyLive_{};  // mono modes: the held key came from a device
+    int lastMode_ = 0;
+    std::uint64_t trackSource_ = 0;
+    bool endTrack_ = false;
     std::span<const MidiEvent> events_;
     std::uint64_t clock_ = 0;
     int rotate_ = 0;

@@ -18,6 +18,17 @@
 
 namespace supple::model {
 
+std::vector<Id> midiFollowers(const Session& s, Id track) {
+    std::vector<Id> out;
+    for (const auto& entry : s.modules) {
+        const auto& module = *entry.value;
+        if (module.type != kNotesModule || module.sourceOff) continue;
+        const auto* home = s.racks.find(module.rack);
+        if (module.source.value_or(home ? home->track : kMaster) == track) out.push_back(entry.id);
+    }
+    return out;
+}
+
 const Route* midiInputRoute(const Session& s, Id track) {
     const auto* t = s.tracks.find(track);
     if (!t) return nullptr;
@@ -383,6 +394,7 @@ struct Checker {
 
     void routes() {
         std::map<Id, std::vector<Id>> edges;  // track -> tracks it feeds
+        std::set<std::pair<Id, Id>> midiEdges;
         for (const auto& e : s.tracks)
             if (e.value->parent && e.value->parentSend.enabled)
                 edges[e.id].push_back(*e.value->parent);
@@ -396,8 +408,8 @@ struct Checker {
                          "exactly one of track, fx, hw_channels, midi_device, module");
                 if (x.module) {
                     const RackModule* m = s.modules.find(*x.module);
-                    const std::string_view want =
-                        from ? (r.midi ? kNotesOutModule : kOutModule) : kInModule;
+                    const std::string_view want = from ? (r.midi ? kNotesOutModule : kOutModule)
+                                                       : (r.midi ? kNotesModule : kInModule);
                     if (!m)
                         fail(at("routes", e.id, field),
                              "module " + x.module->str() + " does not exist");
@@ -425,10 +437,22 @@ struct Checker {
             endOk(r.to, "to", false);
             const auto* sourceModule = r.from.module ? s.modules.find(*r.from.module) : nullptr;
             const bool notesOut = sourceModule && sourceModule->type == kNotesOutModule;
-            if (notesOut) {
-                const Track* t = r.to.track ? s.tracks.find(*r.to.track) : nullptr;
-                if (!r.midi || !t || t->type != StripType::Channel)
-                    fail(at("routes", e.id, "to"), "a Note Out sends MIDI to a channel");
+            if (r.midi && !r.from.midiDevice) {
+                const Track* source = r.from.track ? s.tracks.find(*r.from.track) : nullptr;
+                const Track* target = r.to.track ? s.tracks.find(*r.to.track) : nullptr;
+                const RackModule* destination =
+                    r.to.module ? s.modules.find(*r.to.module) : nullptr;
+                if (!(notesOut || (source && source->type == StripType::Channel)) ||
+                    !(destination ? destination->type == kNotesModule
+                                  : target && target->type == StripType::Channel))
+                    fail(at("routes", e.id),
+                         "MIDI sends connect channels/Note Out to channels/Notes");
+                if (r.volumeDb != 0 || r.pan.percent || r.mono || r.phaseInvert ||
+                    !r.channels.from.empty() || !r.channels.to.empty())
+                    fail(at("routes", e.id), "MIDI sends have no audio controls");
+                for (const auto& learn : r.learn)
+                    if (learn.param != "mute")
+                        fail(at("routes", e.id, "learn"), "MIDI sends can learn mute only");
             } else if (r.from.module && r.to.track) {
                 const Track* t = s.tracks.find(*r.to.track);
                 if (t && t->type != StripType::Channel)
@@ -439,7 +463,7 @@ struct Checker {
             } else if (r.from.module && !r.to.track) {
                 fail(at("routes", e.id, "to"), "an Out module feeds a channel");
             }
-            if (r.to.module && !r.from.track)
+            if (r.to.module && !r.midi && !r.from.track)
                 fail(at("routes", e.id, "from"), "an In module takes a send from a track");
             // Racks are nodes too: a track feeds the rack of an In module it
             // sends to, and a rack its Out modules' channels.
@@ -451,7 +475,19 @@ struct Checker {
             if (r.from.module) source = rackOf(*r.from.module);
             std::optional<Id> target = r.to.fx ? trackOfFx(s, *r.to.fx) : r.to.track;
             if (r.to.module) target = rackOf(*r.to.module);
-            if (source && target) edges[*source].push_back(*target);
+            if (source && target) {
+                edges[*source].push_back(*target);
+                if (r.midi) midiEdges.emplace(*source, *target);
+            }
+            // The source track's MIDI is available before its audio input is
+            // mixed: its incoming sends also feed Notes, without depending on
+            // the track's audio node (a rack may supply that very audio input).
+            if (source && r.midi && r.to.track)
+                for (Id module : midiFollowers(s, *r.to.track)) {
+                    const Id rack = s.modules.find(module)->rack;
+                    edges[*source].push_back(rack);
+                    midiEdges.emplace(*source, rack);
+                }
         }
         // Cycle detection (iterative DFS with colours).
         std::map<Id, int> colour;
@@ -470,6 +506,24 @@ struct Checker {
                 }
                 const Id next = it->second[i++];
                 if (colour[next] == 1) {
+                    const auto first =
+                        std::find_if(stack.begin(), stack.end(),
+                                     [&](const auto& frame) { return frame.first == next; });
+                    bool midi = false;
+                    std::string path;
+                    for (auto at = first; at != stack.end(); ++at) {
+                        const Id to = at + 1 == stack.end() ? next : (at + 1)->first;
+                        midi = midi || midiEdges.contains({at->first, to});
+                        path += (path.empty() ? "" : " -> ") + at->first.str();
+                    }
+                    if (midi) {
+                        errors.emplace_back("route.cycle",
+                                            "routing cycle: " + path + " -> " + next.str(),
+                                            "/routes",
+                                            "change the MIDI route or Notes source so the "
+                                            "destination does not feed the source");
+                        return;
+                    }
                     fail("/routes", next.kind == Kind::Rack
                                         ? "routing cycle through rack " + next.str() +
                                               " (a track that feeds it hears it)"
@@ -512,7 +566,7 @@ struct Checker {
                 fail(at("modules", e.id, "fx"), "only a plugin module holds a plug-in");
             if (!m.fx && m.type == kPluginModule)
                 fail(at("modules", e.id, "fx"), "a plugin module holds a plug-in (fx)");
-            if (m.source && m.type != kNotesModule)
+            if ((m.source || m.sourceOff) && m.type != kNotesModule)
                 fail(at("modules", e.id, "source"), "only a Notes module plays a track's MIDI");
             if (m.device && m.type != kNotesModule)
                 fail(at("modules", e.id, "device"), "only a Notes module plays a MIDI input");

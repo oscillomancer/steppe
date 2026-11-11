@@ -516,7 +516,7 @@ model::Session modulatedGain(const char* mod) {
 TEST_CASE("racks: a changing modulation does not depend on the block size") {
     // Sampled on the rack's grid, not where the host's blocks split it.
     const auto s = modulatedGain("beat_phase");
-    CHECK(renderLeft(s, 0.1, 512) == renderLeft(s, 0.1, 37));
+    CHECK(bool(renderLeft(s, 0.1, 512) == renderLeft(s, 0.1, 37)));
 }
 
 TEST_CASE("racks: a plugin module's plug-in keeps its settings and modulation when replaced" *
@@ -1470,4 +1470,372 @@ TEST_CASE("racks: In sends from a buss carry its signal without Console 9 encodi
                       static_cast<float>(double(busNode->preFader.r[i]) * panRight * gain));
             }
         }
+}
+
+TEST_CASE("MIDI sends: channels without instruments forward exact timeline events in chains" *
+          doctest::description("rt")) {
+    bool compensated = false, rate = false, sourceLatency = false;
+    SUBCASE("plain") {}
+    SUBCASE("PDC and fan-out") { compensated = true; }
+    SUBCASE("master playrate") { rate = true; }
+    SUBCASE("post-FX source latency") { sourceLatency = true; }
+    NoteRouteScene scene(false, compensated);
+    // Compare the destinations alone: the generator's otherwise silent
+    // Console 9 parent send has its own noise, shifted by the changed PDC graph.
+    for (auto* session : {&scene.session, &scene.itemReference}) {
+        model::EditTxn edit(*session, 2);
+        edit.modify<model::Track>(scene.source,
+                                  [](auto& track) { track.parentSend.enabled = false; });
+        if (sourceLatency) {
+            model::FxInstance fx;
+            fx.plugin.id = "com.suppleaudio.test.gain";
+            fx.patch =
+                json::parse(
+                    R"({"schema":"supple.test-gain-patch/1.0","params":{"latency":"short"}})")
+                    .value();
+            const auto id = edit.create(fx);
+            const auto track = session == &scene.session ? scene.source : scene.target;
+            edit.modify<model::Track>(track, [&](auto& value) { value.chain.push_back(id); });
+        }
+        if (rate) {
+            auto project = edit.project();
+            project.playrate.rate = 1.5;
+            edit.setProject(project);
+        }
+        *session = commit(edit);
+    }
+    model::EditTxn t(scene.session, 3);
+    const auto relay = addChannel(t);
+    t.modify<model::Track>(relay, [](auto& track) { track.parentSend.enabled = false; });
+    for (const auto& entry : scene.session.routes) {
+        if (!entry.value->midi) continue;
+        t.modify<model::Route>(entry.id, [&](auto& route) {
+            route.from = {};
+            route.from.track = relay;
+        });
+    }
+    model::Route route;
+    route.from.track = scene.source;
+    route.to.track = relay;
+    route.midi = model::MidiRouting{};
+    t.create(route);
+    const auto session = commit(t);
+    const auto reference = renderLeft(scene.itemReference, 2.0, 512);
+    CHECK(bool(renderLeft(session, 2.0, 37) == reference));
+    CHECK(bool(renderLeft(session, 2.0, 512) == reference));
+    CHECK(bool(renderLeft(session, .2, 37, scene.target) ==
+               renderLeft(scene.itemReference, .2, 37, scene.target)));
+}
+
+TEST_CASE("MIDI sends: route filter, mapping, mute automation and source mute respect taps" *
+          doctest::description("rt")) {
+    namespace d = supple::engine::detail;
+    NoteRouteScene scene(false);
+    model::EditTxn t(scene.session, 2);
+    Id send;
+    for (const auto& entry : scene.session.routes) {
+        if (!entry.value->midi) continue;
+        send = entry.id;
+        t.modify<model::Route>(entry.id, [&](auto& r) {
+            r.from = {};
+            r.from.track = scene.source;
+        });
+    }
+    bool muted = false;
+    model::Tap tap = model::Tap::PostFader;
+    model::MidiRouting routing{1, 7};
+    SUBCASE("remap") {}
+    SUBCASE("filter") { routing.fromChannel = 2; }
+    SUBCASE("post-fader muted") { muted = true; }
+    SUBCASE("pre-FX ignores mute") {
+        muted = true;
+        tap = model::Tap::PreFx;
+    }
+    SUBCASE("post-FX ignores mute") {
+        muted = true;
+        tap = model::Tap::PreFader;
+    }
+    t.modify<model::Track>(scene.source, [&](auto& tr) { tr.mute = muted; });
+    t.modify<model::Route>(send, [&](auto& r) {
+        r.tap = tap;
+        r.midi = routing;
+    });
+    const auto session = commit(t);
+    auto pool = makePool();
+    auto plan = d::compile(session, pool, 0, 1024);
+    REQUIRE(plan);
+    REQUIRE(d::prepare(*plan, session));
+    for (auto* instance : plan->instances) REQUIRE(instance->startProcessing());
+    REQUIRE(d::processBlock(*plan, 0, 1024));
+    const auto target = std::find_if(plan->nodes.begin(), plan->nodes.end(),
+                                     [&](const auto& n) { return n.id == scene.target; });
+    REQUIRE(target != plan->nodes.end());
+    if (routing.fromChannel == 2 || (muted && tap == model::Tap::PostFader))
+        CHECK(target->routedMidi.empty());
+    else {
+        REQUIRE_FALSE(target->routedMidi.empty());
+        CHECK(target->routedMidi.front().frame == 425);  // tick 17 at 120 BPM, 48 kHz, PPQ 960
+        CHECK((target->routedMidi.front().bytes[0] & 15) == 6);
+    }
+    for (auto* instance : plan->instances) instance->stopProcessing();
+}
+
+TEST_CASE("MIDI sends: Notes accepts direct sends and its source track's incoming sends" *
+          doctest::description("rt")) {
+    model::EditTxn t(model::Session::create({.console9 = false}), 1);
+    const auto source = addChannel(t), target = addChannel(t);
+    const auto rack = t.create(model::Rack{target, ""});
+    const auto notes = addModule(t, rack, model::kNotesModule);
+    const auto clock = addModule(t, rack, "com.suppleaudio.rack.transport");
+    const auto vca = addModule(t, rack, "com.suppleaudio.rack.vca");
+    const auto out = addModule(t, rack, model::kOutModule);
+    cable(t, clock, "playing", vca, "in");
+    cable(t, notes, "gate", vca, "cv");
+    cable(t, vca, "out", out, "l");
+    listen(t, out, target);
+    model::MidiSource src;
+    src.sequence.ppq = 960;
+    src.sequence.length = 1920;
+    src.sequence.notes = {{19, 941, 0, 60, 100, 0}};
+    model::Take take;
+    take.source = t.create(src);
+    const auto tk = t.create(take);
+    model::Item item;
+    item.track = source;
+    item.length = 2;
+    item.takes = {tk};
+    item.activeTake = tk;
+    t.create(item);
+    auto base = commit(t);
+    model::EditTxn ref(base, 2);
+    ref.modify<model::Item>({model::Kind::Item, 1}, [&](auto& it) { it.track = target; });
+    const auto reference = renderLeft(commit(ref), 1.0, 37);
+    model::EditTxn send(base, 3);
+    model::Route route;
+    route.from.track = source;
+    route.midi = model::MidiRouting{};
+    SUBCASE("direct with source off") {
+        send.modify<model::RackModule>(notes, [](auto& m) { m.sourceOff = true; });
+        route.to.module = notes;
+    }
+    SUBCASE("through source track") { route.to.track = target; }
+    SUBCASE("Note Out with source off") {
+        send.modify<model::RackModule>(notes, [](auto& m) { m.sourceOff = true; });
+        const auto generator = send.create(model::Rack{source, "Generator"});
+        const auto input = addModule(send, generator, model::kNotesModule);
+        const auto output = addModule(send, generator, model::kNotesOutModule);
+        cable(send, input, "pitch", output, "pitch");
+        cable(send, input, "gate", output, "gate");
+        cable(send, input, "velocity", output, "velocity");
+        route.from = {};
+        route.from.module = output;
+        route.to.module = notes;
+    }
+    send.create(route);
+    const auto session = commit(send);
+    CHECK(bool(renderLeft(session, 1.0, 37) == reference));
+    CHECK(bool(renderLeft(session, 1.0, 512) == reference));
+}
+
+TEST_CASE("MIDI sends: fan-in addresses, held notes, route mute and source mute survive adoption" *
+          doctest::description("rt")) {
+    namespace d = supple::engine::detail;
+    NoteRouteScene scene(false);
+    model::EditTxn t(scene.session, 2);
+    Id send;
+    for (const auto& entry : scene.session.routes) {
+        if (!entry.value->midi) continue;
+        send = entry.id;
+        t.modify<model::Route>(entry.id, [&](auto& r) {
+            r.from = {};
+            r.from.track = scene.source;
+        });
+    }
+    model::Route second;
+    second.from.track = scene.source;
+    second.to.track = scene.target;
+    second.midi = model::MidiRouting{};
+    t.create(second);
+    auto session = commit(t);
+    auto pool = makePool();
+    auto compiled = d::compile(session, pool, 0, 1024);
+    REQUIRE(compiled);
+    auto plan = std::move(*compiled);
+    REQUIRE(d::prepare(plan, session));
+    std::vector<host::Instance*> started;
+    auto start = [&](d::Plan& p) {
+        for (auto* instance : p.instances)
+            if (!instance->processing()) {
+                REQUIRE(instance->startProcessing());
+                started.push_back(instance);
+            }
+    };
+    auto stage = [&](d::Plan& p) -> d::Stage& {
+        const auto n = std::find_if(p.nodes.begin(), p.nodes.end(),
+                                    [&](const auto& node) { return node.id == scene.target; });
+        REQUIRE(n != p.nodes.end());
+        REQUIRE(n->noteTarget >= 0);
+        return n->chain[static_cast<std::size_t>(n->noteTarget)];
+    };
+    start(plan);
+    REQUIRE(d::processBlock(plan, 0, 1024));
+    REQUIRE(stage(plan).voices.size() == 2);
+    CHECK(stage(plan).voices[0].noteId != stage(plan).voices[1].noteId);
+    const auto held = stage(plan).voices.front().noteId;
+    std::int64_t pos = 1024;
+    auto adopt = [&](model::EditTxn& edit) {
+        session = commit(edit);
+        auto next = d::compile(session, pool, 0, 1024);
+        REQUIRE(next);
+        REQUIRE(d::prepare(*next, session));
+        start(*next);
+        d::carryMix(plan, *next, -1);
+        d::locate(*next, pos, false);
+        plan = std::move(*next);
+        REQUIRE(d::processBlock(plan, pos, 37));
+        pos += 37;
+    };
+    model::EditTxn rename(session, 3);
+    rename.modify<model::Track>(scene.source, [](auto& tr) { tr.name = "Renamed"; });
+    adopt(rename);
+    REQUIRE(stage(plan).voices.size() == 2);
+    CHECK(stage(plan).voices.front().noteId == held);
+    // The sine fixture deliberately ends all equal channel/key voices on an
+    // off. Check the engine's independent pre-FX gates after that point;
+    // initial delivery above verifies the instrument got distinct note ids.
+    const auto streamHeld = [&] {
+        const auto target = std::find_if(plan.nodes.begin(), plan.nodes.end(),
+                                         [&](const auto& n) { return n.id == scene.target; });
+        REQUIRE(target != plan.nodes.end());
+        return std::count_if(target->midiHeld.begin(), target->midiHeld.end(),
+                             [](const auto& v) { return v.high; });
+    };
+    model::EditTxn mute(session, 4);
+    mute.modify<model::Route>(send, [](auto& route) { route.mute = true; });
+    adopt(mute);
+    CHECK(streamHeld() == 1);
+    model::EditTxn unmute(session, 5);
+    unmute.modify<model::Route>(send, [](auto& route) { route.mute = false; });
+    adopt(unmute);
+    CHECK(streamHeld() == 2);
+    model::EditTxn sourceMute(session, 6);
+    sourceMute.modify<model::Track>(scene.source, [](auto& tr) { tr.mute = true; });
+    adopt(sourceMute);
+    CHECK(streamHeld() == 0);
+    model::EditTxn early(session, 7);
+    early.modify<model::Route>(send, [](auto& route) { route.tap = model::Tap::PreFx; });
+    adopt(early);
+    CHECK(streamHeld() == 1);
+    for (auto* instance : started)
+        if (instance->processing()) instance->stopProcessing();
+}
+
+TEST_CASE("MIDI sends: adding and removing another relay input preserves existing held notes" *
+          doctest::description("rt")) {
+    namespace d = supple::engine::detail;
+    NoteRouteScene scene(false);
+    model::EditTxn t(scene.session, 2);
+    const auto relay = addChannel(t), spare = addChannel(t);
+    t.modify<model::Track>(relay, [](auto& track) { track.parentSend.enabled = false; });
+    t.modify<model::Track>(spare, [](auto& track) { track.parentSend.enabled = false; });
+    auto midi = *scene.session.midi.begin()->value;
+    for (auto& note : midi.sequence.notes) note.pitch = static_cast<std::uint8_t>(note.pitch + 7);
+    model::Take take;
+    take.source = t.create(midi);
+    const auto tk = t.create(take);
+    model::Item item;
+    item.track = spare;
+    item.length = 4;
+    item.takes = {tk};
+    item.activeTake = tk;
+    t.create(item);
+    for (const auto& entry : scene.session.routes)
+        if (entry.value->midi)
+            t.modify<model::Route>(entry.id, [&](auto& route) {
+                route.from = {};
+                route.from.track = relay;
+            });
+    model::Route send;
+    send.from.track = spare;
+    send.to.track = relay;
+    send.midi = model::MidiRouting{};
+    t.create(send);
+    auto session = commit(t);
+    auto pool = makePool();
+    auto compiled = d::compile(session, pool, 0, 1024);
+    REQUIRE(compiled);
+    auto plan = std::move(*compiled);
+    REQUIRE(d::prepare(plan, session));
+    for (auto* instance : plan.instances) REQUIRE(instance->startProcessing());
+    const auto stage = [&](d::Plan& p) -> d::Stage& {
+        const auto node = std::find_if(p.nodes.begin(), p.nodes.end(),
+                                       [&](const auto& n) { return n.id == scene.target; });
+        REQUIRE(node != p.nodes.end());
+        return node->chain[static_cast<std::size_t>(node->noteTarget)];
+    };
+    REQUIRE(d::processBlock(plan, 0, 1024));
+    REQUIRE(stage(plan).voices.size() == 1);
+    const auto address = stage(plan).voices.front().noteId;
+    const auto adopt = [&](model::EditTxn& edit, std::int64_t pos) {
+        session = commit(edit);
+        auto next = d::compile(session, pool, 0, 1024);
+        REQUIRE(next);
+        REQUIRE(d::prepare(*next, session));
+        d::carryMix(plan, *next, -1);
+        d::locate(*next, pos, false);
+        plan = std::move(*next);
+        REQUIRE(d::processBlock(plan, pos, 37));
+    };
+    model::EditTxn add(session, 3);
+    send.from.track = scene.source;
+    const auto added = add.create(send);
+    adopt(add, 1024);
+    REQUIRE(stage(plan).voices.size() == 2);
+    const auto held = std::find_if(stage(plan).voices.begin(), stage(plan).voices.end(),
+                                   [](const auto& voice) { return voice.key == 67; });
+    REQUIRE(held != stage(plan).voices.end());
+    CHECK(held->noteId == address);
+    model::EditTxn remove(session, 4);
+    remove.remove<model::Route>(added);
+    adopt(remove, 1061);
+    REQUIRE(stage(plan).voices.size() == 1);
+    CHECK(stage(plan).voices.front().noteId == address);
+    for (auto* instance : plan.instances) instance->stopProcessing();
+}
+
+TEST_CASE("MIDI sends: all-notes-off releases precede a same-frame reattack" *
+          doctest::description("rt")) {
+    namespace d = supple::engine::detail;
+    d::Node node;
+    node.midiHeld.resize(1);
+    node.midiBefore.resize(1);
+    node.midiStage.blockEvents.reserve(8);
+    node.midiSortScratch.reserve(8);
+    node.midiOrder.prepare(8, 64);
+    node.midiPreFx.reserve(8);
+    node.midiPostFx.reserve(8);
+    for (int controller : {120, 123}) {
+        node.midiHeld[0].high = true;
+        node.midiHeld[0].key = 60;
+        host::Event reset;
+        reset.kind = host::Event::Kind::Midi;
+        reset.time = 7;
+        reset.midi[0] = 0xb0;
+        reset.midi[1] = static_cast<std::uint8_t>(controller);
+        host::Event onset;
+        onset.kind = host::Event::Kind::NoteOn;
+        onset.time = 7;
+        onset.noteId = 0;
+        onset.key = 60;
+        onset.velocity = 1;
+        node.midiStage.blockEvents = {reset, onset};
+        d::finishTrackMidi(node);
+        REQUIRE(node.midiPreFx.size() == 3);
+        CHECK(node.midiPreFx[0].kind == host::Event::Kind::NoteOff);
+        CHECK(node.midiPreFx[1].kind == host::Event::Kind::Midi);
+        CHECK(node.midiPreFx[2].kind == host::Event::Kind::NoteOn);
+        CHECK(node.midiPreFx[0].time == 7);
+        CHECK(node.midiPreFx[2].time == 7);
+        CHECK(node.midiHeld[0].high);
+    }
 }

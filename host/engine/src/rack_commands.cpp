@@ -46,6 +46,24 @@ auto idOf(const char* prefix, const char* what) {
     return schema::string().pattern(std::string("^") + prefix + "_[0-9]+$",
                                     std::string(what) + " id");
 }
+auto notesSourceSchema() {
+    return schema::Schema<std::string>(
+        "notes_source",
+        [](const json::Value& value, std::string& out, schema::DecodeCtx& ctx,
+           const std::string& path) {
+            const auto id = value.isString() ? Id::parse(value.asString()) : std::nullopt;
+            if (!value.isString() ||
+                (value.asString() != "none" && (!id || id->kind != model::Kind::Track))) {
+                ctx.error("schema.type", "expected a Notes source track or none", path,
+                          "use tr_N or none; null restores Home in module.set");
+                return false;
+            }
+            out = value.asString();
+            return true;
+        },
+        [](const std::string& value) { return json::Value(value); },
+        j(R"({"oneOf":[{"type":"string","pattern":"^tr_[0-9]+$"},{"type":"string","enum":["none"]}]})"));
+}
 auto endSchema() {
     return schema::string().pattern(std::string(model::kCableEndPattern),
                                     "a module's port or knob: \"mo_3.out\"");
@@ -598,7 +616,10 @@ json::Value moduleEntry(EngineApp& a, const model::Session& s, Id id, bool full)
     e["height"] = h;
     if (m.params.isObject() && m.params.size()) e["params"] = m.params;
     if (m.bypass) e["bypass"] = true;
-    if (m.source) e["source"] = m.source->str();
+    if (m.sourceOff)
+        e["source"] = "none";
+    else if (m.source)
+        e["source"] = m.source->str();
     if (m.device) e["device"] = *m.device;
     if (m.fx) {
         e["fx"] = m.fx->str();
@@ -1140,7 +1161,7 @@ void registerRackCommands(cmd::Registry& registry) {
                      .field("x", &ModuleAdd::x, coordinate())
                      .field("y", &ModuleAdd::y, coordinate())
                      .field("params", &ModuleAdd::params, schema::any())
-                     .field("source", &ModuleAdd::source, idOf("tr", "Track"))
+                     .field("source", &ModuleAdd::source, notesSourceSchema())
                      .field("device", &ModuleAdd::device, schema::string())
                      .field("plugin", &ModuleAdd::plugin, schema::string())
                      .build();
@@ -1208,7 +1229,8 @@ void registerRackCommands(cmd::Registry& registry) {
             if ((a.source || a.device) && m.type != model::kNotesModule)
                 return Error("rack.param", "source and device are a Notes module's", "/source",
                              "add a Notes module (type notes) to play a track's MIDI");
-            if (a.source) {
+            m.sourceOff = a.source == "none";
+            if (a.source && !m.sourceOff) {
                 auto src = Id::parse(*a.source);
                 if (!src || !s.tracks.contains(*src))
                     return Error("track.unknown", "no track " + *a.source, "/source",
@@ -1288,7 +1310,8 @@ void registerRackCommands(cmd::Registry& registry) {
             "params merge into its knobs (values in the knob's units; a choice by key; a "
             "default value is dropped from the file). A knob edit is heard at once, without a "
             "recompile. Notes source/device accept null to clear them (source returns to the home "
-            "track; device to none). bypass passes each input to the output of its kind. label "
+            "track; device to none). source: none disables the track feed while keeping routes and "
+            "device. bypass passes each input to the output of its kind. label "
             "names it "
             "(an Out module's label is what channels' input menus list). preset: a factory "
             "preset by name (module.describe lists them): every knob to it, then params on top.";
@@ -1300,7 +1323,7 @@ void registerRackCommands(cmd::Registry& registry) {
                      .field("x", &ModuleSet::x, coordinate())
                      .field("y", &ModuleSet::y, coordinate())
                      .field("bypass", &ModuleSet::bypass, schema::boolean())
-                     .field("source", &ModuleSet::source, clearableString(idOf("tr", "Track")))
+                     .field("source", &ModuleSet::source, clearableString(notesSourceSchema()))
                      .field("device", &ModuleSet::device, clearableString(schema::string()))
                      .build();
         c.examples = {{"Turn the VCA down", j(R"({"module": "mo_3", "params": {"level": -12}})"),
@@ -1339,7 +1362,8 @@ void registerRackCommands(cmd::Registry& registry) {
                              "only Notes modules play a track's MIDI");
             if (a.source) {
                 m.source.reset();
-                if (!a.source->isNull()) {
+                m.sourceOff = a.source->isString() && a.source->asString() == "none";
+                if (!a.source->isNull() && !m.sourceOff) {
                     auto src = Id::parse(a.source->asString());
                     if (!src || !s.tracks.contains(*src))
                         return Error("track.unknown", "no track " + a.source->asString(), "/source",

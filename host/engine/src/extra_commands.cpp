@@ -210,6 +210,23 @@ struct RouteEntry {
     model::ChannelMap channels;
     std::optional<model::MidiRouting> midi;
 };
+std::string midiModuleLabel(const model::Session& session, Id id) {
+    const auto* module = session.modules.find(id);
+    if (!module) return id.str();
+    if (!module->label.empty()) return module->label;
+    const std::string name = module->type == model::kNotesOutModule ? "Note Out" : "Notes";
+    std::size_t count = 0, ordinal = 0;
+    for (const auto& entry : session.modules)
+        if (entry.value->rack == module->rack && entry.value->type == module->type) {
+            ++count;
+            if (entry.id == id) ordinal = count;
+        }
+    return count > 1 ? name + " " + std::to_string(ordinal) : name;
+}
+
+struct RouteMatrixArgs {
+    std::string mode = "audio";
+};
 struct RouteList {
     std::vector<RouteEntry> routes;
 };
@@ -498,7 +515,7 @@ schema::Schema<T> routeArgsSchema(const char* name) {
     b.field("from", &T::from, routeEndArg());
     b.field("to", &T::to, routeEndArg());
     b.field("midi", &T::midi,
-            midiRouteArgs().doc("Note Out MIDI routing; {} means every channel unchanged. Channel "
+            midiRouteArgs().doc("MIDI send routing; {} means every channel unchanged. Channel "
                                 "values 0..16: from 0 = all, to 0 = original."));
     b.field("fx", &T::fx,
             idSchema("fx").doc("Feed this plug-in's sidechain (key) input instead of a track's "
@@ -538,6 +555,9 @@ std::optional<std::vector<Id>> routeCycle(const model::Session& s, Id from, Id t
                             : e.value->to.fx   ? model::trackOfFx(s, *e.value->to.fx)
                                                : e.value->to.track;
         if (source && target) edges[*source].push_back(*target);
+        if (source && e.value->midi && e.value->to.track)
+            for (Id module : model::midiFollowers(s, *e.value->to.track))
+                edges[*source].push_back(s.modules.find(module)->rack);
     }
     std::set<Id> seen;
     std::vector<Id> path{to};
@@ -604,6 +624,9 @@ Result<model::Route> buildRoute(const RouteArgs& a, const model::Session& s, Eng
         }
     }
     if (a.fx) {  // a key route (ADR-0018)
+        if (r.midi)
+            return Error("route.endpoint", "a plug-in key is an audio-only destination", "/fx",
+                         "send MIDI to a channel or a Notes module with to");
         auto fx = require<model::FxInstance>(s, *a.fx, "/fx");
         if (!fx) return std::move(fx).error();
         const auto owner = model::trackOfFx(s, *fx);
@@ -623,9 +646,9 @@ Result<model::Route> buildRoute(const RouteArgs& a, const model::Session& s, Eng
     } else if (a.to && a.to->starts_with("mo_")) {  // a rack's In module (ADR-0062)
         auto to = require<model::RackModule>(s, *a.to, "/to");
         if (!to) return std::move(to).error();
-        if (s.modules.find(*to)->type != model::kInModule)
-            return Error("route.endpoint", *a.to + " is not an In module", "/to",
-                         "sends reach a rack through its In modules (rack.get)");
+        if (s.modules.find(*to)->type != (r.midi ? model::kNotesModule : model::kInModule))
+            return Error("route.endpoint", *a.to + " is not a compatible module", "/to",
+                         "audio sends reach In modules; MIDI sends reach Notes modules (rack.get)");
         r.to = model::RouteEnd{};
         r.to.module = *to;
     } else if (a.to) {
@@ -634,25 +657,45 @@ Result<model::Route> buildRoute(const RouteArgs& a, const model::Session& s, Eng
         r.to = model::RouteEnd{};
         r.to.track = *to;
     }
-    if (r.from.module) {
-        const auto* m = s.modules.find(*r.from.module);
-        const auto* to = r.to.track ? s.tracks.find(*r.to.track) : nullptr;
-        if (!m || m->type != model::kNotesOutModule || !r.midi || !to ||
-            to->type != model::StripType::Channel)
-            return Error("route.endpoint", "a Note Out sends MIDI to a channel", "/from",
-                         "use from: {module: mo_N}, to: {track: tr_N}, midi: {}");
-        if (a.tap || a.volumeDb || a.pan || a.mono || a.phaseInvert || a.channels || a.fx)
-            return Error("route.midi", "audio send controls do not apply to a Note Out", "/midi",
-                         "use mute and MIDI channel routing; cable velocity to set note strength");
-        if (auto cycle = routeCycle(s, m->rack, *r.to.track, ignored))
-            return Error("route.cycle", "the MIDI route would feed back through a rack", "/to",
-                         "choose a channel that does not feed this rack");
+    if (r.midi || r.from.module) {
+        const auto* module = r.from.module ? s.modules.find(*r.from.module) : nullptr;
+        const auto* source = r.from.track ? s.tracks.find(*r.from.track) : nullptr;
+        const auto* targetTrack = r.to.track ? s.tracks.find(*r.to.track) : nullptr;
+        const auto* targetModule = r.to.module ? s.modules.find(*r.to.module) : nullptr;
+        if (!r.midi ||
+            !(module ? module->type == model::kNotesOutModule
+                     : source && source->type == model::StripType::Channel) ||
+            !(targetModule ? targetModule->type == model::kNotesModule
+                           : targetTrack && targetTrack->type == model::StripType::Channel))
+            return Error("route.endpoint", "MIDI sends connect channels, Note Out and Notes", "/to",
+                         "send from a channel or Note Out to a channel or Notes; set midi: {}");
+        if (a.volumeDb || a.pan || a.mono || a.phaseInvert || a.channels || a.fx)
+            return Error("route.midi", "audio controls do not apply to a MIDI send", "/midi",
+                         "use tap, mute and MIDI channel routing");
+        const Id from = module ? module->rack : *r.from.track;
+        const Id to = targetModule ? targetModule->rack : *r.to.track;
+        if (auto cycle = routeCycle(s, from, to, ignored))
+            return Error("route.cycle", "route creates a cycle: " + cycleText(s, *cycle, true),
+                         "/to", "choose a destination that does not feed the source");
+        if (r.to.track)
+            for (Id follower : model::midiFollowers(s, *r.to.track))
+                if (auto cycle = routeCycle(s, from, s.modules.find(follower)->rack, ignored))
+                    return Error("route.cycle",
+                                 "route creates a cycle: " + cycleText(s, *cycle, true), "/to",
+                                 "choose a channel whose Notes readers do not feed the source");
+        if (a.tap) r.tap = *a.tap;
         if (a.mute) r.mute = *a.mute;
+        // Converting an audio route clears controls that have no MIDI meaning.
+        r.volumeDb = 0;
+        r.pan = {};
+        r.mono = r.phaseInvert = false;
+        r.channels = {};
+        if (std::any_of(r.learn.begin(), r.learn.end(),
+                        [](const auto& l) { return l.param != "mute"; }))
+            return Error("route.midi", "MIDI sends can learn mute only", "/midi",
+                         "remove other route.learn bindings before converting the send");
         return r;
     }
-    if (r.midi)
-        return Error("route.midi", "MIDI sends require a Note Out source", "/midi",
-                     "add a notes_out module and route its module id");
     const std::optional<Id> target = r.to.module
                                          ? std::optional<Id>(s.modules.find(*r.to.module)->rack)
                                      : r.to.fx ? model::trackOfFx(s, *r.to.fx)
@@ -757,12 +800,13 @@ void registerExtraCommands(cmd::Registry& registry) {
         c.name = "route.add";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpTool;
-        c.summary = "Send audio between strips, or a Note Out to a track's instrument.";
+        c.summary = "Send audio between strips, or MIDI between channels and rack modules.";
         c.description =
             "The destination must not feed the source. Master accepts routes. With fx instead of "
             "to, the send feeds that plug-in's sidechain (key) input — e.g. a kick keying a "
             "compressor on the bass; it is delay-compensated, and soloing the keyed track does not "
-            "stop the key. A Note Out uses from: {module: mo_N}, to: {track: tr_N}, midi: {} "
+            "stop the key. MIDI sends use channel or Note Out sources and channel or Notes "
+            "destinations, midi: {} "
             "(all channels unchanged); from_channel filters and to_channel remaps, 0..16 "
             "with 0 meaning all/original. Hardware routing is not supported yet.";
         c.tags = {"route", "mix"};
@@ -770,10 +814,10 @@ void registerExtraCommands(cmd::Registry& registry) {
         c.result = idResultSchema();
         c.errors = {{"route.cycle", "the send would feed back", "choose another destination"},
                     {"route.no_sidechain", "the plug-in has no key input", "pick another plug-in"},
-                    {"route.endpoint", "a Note Out needs a channel destination and MIDI routing",
+                    {"route.endpoint", "MIDI sends need channel or note-module endpoints",
                      "use from: {module: mo_N}, to: {track: tr_N}, midi: {}"},
                     {"route.midi", "MIDI routing or audio controls do not apply to these endpoints",
-                     "use a Note Out source for MIDI and omit audio send controls"}};
+                     "use channel/Note Out to channel/Notes for MIDI; omit audio controls"}};
         c.examples = {
             {"Send a track to the master", j(R"({"from":"tr_1","to":"tr_0","volume_db":"-6 dB"})"),
              j(R"({"id":"sd_1"})"), "song"},
@@ -805,8 +849,8 @@ void registerExtraCommands(cmd::Registry& registry) {
              j("{}"), "song_with_route"}};
         c.errors = {{"route.channels", "the map pairs channels the strips do not have",
                      "pair 1 and 2: {from: [1, 2], to: [2, 1]}"},
-                    {"route.endpoint", "a Note Out needs a channel destination and MIDI routing",
-                     "route Note Out MIDI to a channel"},
+                    {"route.endpoint", "MIDI sends need channel or note-module endpoints",
+                     "send channel/Note Out MIDI to a channel or Notes module"},
                     {"route.midi", "audio controls do not apply to MIDI routes",
                      "use mute and MIDI channel routing"}};
         c.run = [](const RouteSetArgs& a, Context& ctx) -> Result<Empty> {
@@ -978,13 +1022,16 @@ void registerExtraCommands(cmd::Registry& registry) {
         addChecked(registry, std::move(c));
     }();
     [&] {
-        Command<cmd::NoArgs, json::Value> c;
+        Command<RouteMatrixArgs, json::Value> c;
         c.name = "route.matrix";
         c.kind = Kind::Query;
         c.exposure = cmd::Exposure::McpTool;
-        c.summary = "What can be routed where: strips, plug-in keys, sends and blocked pairs.";
+        c.summary = "Read audio or MIDI endpoints, existing sends and blocked pairs.";
         c.description =
-            "sources: strips in tree order (depth, parent, parent_send). destinations: strips "
+            "mode: audio (default) or midi. MIDI sources are channels and Note Out; destinations "
+            "are "
+            "channels and Notes, with no audio controls. Audio sources: strips in tree order "
+            "(depth, parent, parent_send). destinations: strips "
             "(kind track), plug-in keys (kind key: fx with a sidechain input) and racks' In "
             "modules (kind module: mo_N, named \"<rack> \u00bb <In>\", with rack and home "
             "track), each strip's keys and In modules after it. A pair is blocked when the "
@@ -998,13 +1045,18 @@ void registerExtraCommands(cmd::Registry& registry) {
             "channel_names names those a multi-out plug-in writes ({\"3\": \"Kick\"}), and "
             "route.add {channels: {from: [3, 4], to: [1, 2]}} sends that pair.";
         c.tags = {"route"};
-        c.args = schema::object<cmd::NoArgs>("no_args").build();
+        auto args = schema::object<RouteMatrixArgs>("route_matrix_args");
+        args.field("mode", &RouteMatrixArgs::mode,
+                   schema::string().pattern("^(audio|midi)$", "audio or midi"));
+        args.defaultValue(std::string("audio"));
+        c.args = args.build();
         c.result = schema::any();
         c.examples = {
             {"A song's routing", j("{}"),
              j(R"({"sources":"<any>","destinations":"<any>","sends":"<any>","cycles":"<any>"})"),
              "song"}};
-        c.run = [](const cmd::NoArgs&, Context& ctx) -> Result<json::Value> {
+        c.run = [](const RouteMatrixArgs& args, Context& ctx) -> Result<json::Value> {
+            const bool midiMode = args.mode == "midi";
             EngineApp& a = app(ctx);
             const model::Session s = a.view();
             auto rule = [](const char* code, const char* message, const char* hint) {
@@ -1034,16 +1086,17 @@ void registerExtraCommands(cmd::Registry& registry) {
             json::Value sources = json::Value::array(), destinations = json::Value::array();
             for (const auto& [id, depth] : order) {
                 const model::Track& t = *s.tracks.find(id);
+                if (midiMode && t.type != model::StripType::Channel) continue;
                 json::Value src = json::Value::object();
                 src["id"] = id.str();
                 src["name"] = model::trackLabel(s, id);
                 src["type"] = std::string(model::stripTypeName(t.type));
                 src["depth"] = depth;
-                if (t.parent) {
+                if (t.parent && !midiMode) {
                     src["parent"] = t.parent->str();
                     src["parent_send"] = t.parentSend.enabled;
                 }
-                src["channels"] = t.channels;
+                src["channels"] = midiMode ? 2 : t.channels;
                 // The auxiliary channels a multi-out plug-in writes, by its
                 // ports' names (ADR-0021); the first plug-in to name one wins.
                 json::Value names = json::Value::object();
@@ -1068,17 +1121,33 @@ void registerExtraCommands(cmd::Registry& registry) {
                         "route.strip_type", "masters are terminal (they may feed plug-in keys)",
                         "masters feed hardware outputs and renders; use a buss to group");
                 sources.push_back(src);
+                if (midiMode)
+                    for (const auto& module : s.modules) {
+                        const auto* rack = s.racks.find(module.value->rack);
+                        if (!rack || rack->track != id ||
+                            module.value->type != model::kNotesOutModule)
+                            continue;
+                        auto row = json::Value::object();
+                        row["id"] = module.id.str();
+                        row["name"] = model::rackLabel(s, module.value->rack) + " » " +
+                                      midiModuleLabel(s, module.id);
+                        row["type"] = "note_out";
+                        row["depth"] = depth + 1;
+                        row["channels"] = 2;
+                        sources.push_back(std::move(row));
+                    }
                 json::Value dst = json::Value::object();
                 dst["id"] = id.str();
                 dst["name"] = model::trackLabel(s, id);
                 dst["kind"] = "track";
                 dst["type"] = std::string(model::stripTypeName(t.type));
-                if (t.type == model::StripType::Channel)
+                if (!midiMode && t.type == model::StripType::Channel)
                     dst["rule"] =
                         rule("route.strip_type", "a channel accepts only hardware audio",
                              "add a buss and route the channels into it; use fx for a key");
                 destinations.push_back(std::move(dst));
                 for (Id fx : t.chain) {
+                    if (midiMode) break;
                     const model::FxInstance* inst = s.fx.find(fx);
                     if (!inst) continue;
                     auto key = a.fxSidechainChannels(*inst);
@@ -1095,11 +1164,14 @@ void registerExtraCommands(cmd::Registry& registry) {
                 for (const auto& rack : s.racks) {
                     if (rack.value->track != id) continue;
                     for (const auto& m : s.modules) {
-                        if (m.value->rack != rack.id || m.value->type != model::kInModule) continue;
+                        if (m.value->rack != rack.id ||
+                            m.value->type != (midiMode ? model::kNotesModule : model::kInModule))
+                            continue;
                         json::Value in = json::Value::object();
                         in["id"] = m.id.str();
                         in["name"] =
-                            model::rackLabel(s, rack.id) + " \u00bb " + model::moduleLabel(s, m.id);
+                            model::rackLabel(s, rack.id) + " \u00bb " +
+                            (midiMode ? midiModuleLabel(s, m.id) : model::moduleLabel(s, m.id));
                         in["kind"] = "module";
                         in["rack"] = rack.id.str();
                         in["track"] = id.str();
@@ -1110,10 +1182,11 @@ void registerExtraCommands(cmd::Registry& registry) {
             json::Value sends = json::Value::array();
             for (const auto& e : s.routes) {
                 const model::Route& r = *e.value;
-                if (!r.from.track) continue;
+                if (bool(r.midi) != midiMode || (!r.from.track && !(midiMode && r.from.module)))
+                    continue;
                 json::Value v = json::Value::object();
                 v["id"] = e.id.str();
-                v["from"] = r.from.track->str();
+                v["from"] = r.from.track ? r.from.track->str() : r.from.module->str();
                 v["to"] = r.to.fx       ? r.to.fx->str()
                           : r.to.module ? r.to.module->str()
                           : r.to.track  ? r.to.track->str()
@@ -1131,14 +1204,26 @@ void registerExtraCommands(cmd::Registry& registry) {
                 const Id target = *Id::parse(key                ? d.find("track")->asString()
                                              : kind == "module" ? d.find("rack")->asString()
                                                                 : did);
-                if (kind == "track" && s.tracks.find(target)->type == model::StripType::Channel)
-                    continue;  // type rule
-                for (const auto& [from, depth] : order) {
-                    if (from == target) continue;  // the same strip
-                    if (!key && s.tracks.find(from)->type == model::StripType::Master) continue;
-                    if (auto path = routeCycle(s, from, target)) {
+                if (!midiMode && kind == "track" &&
+                    s.tracks.find(target)->type == model::StripType::Channel)
+                    continue;
+                for (const auto& row : sources.asArray()) {
+                    const auto fromId = *Id::parse(row.find("id")->asString());
+                    const Id from =
+                        fromId.kind == model::Kind::Module ? s.modules.find(fromId)->rack : fromId;
+                    if (!midiMode && from == target) continue;
+                    if (!key && from.kind == model::Kind::Track &&
+                        s.tracks.find(from)->type == model::StripType::Master)
+                        continue;
+                    auto path = routeCycle(s, from, target);
+                    if (!path && midiMode && kind == "track")
+                        for (Id follower : model::midiFollowers(s, target)) {
+                            path = routeCycle(s, from, s.modules.find(follower)->rack);
+                            if (path) break;
+                        }
+                    if (path) {
                         json::Value v = json::Value::object();
-                        v["from"] = from.str();
+                        v["from"] = fromId.str();
                         v["to"] = did;
                         std::string ids;
                         for (Id at : *path) ids += (ids.empty() ? "" : " -> ") + at.str();

@@ -4,6 +4,9 @@
 §7, engine.md (control messages), gui.md §4.2, §4.5, §4.6 and §6. Builds on
 ADR-0027 (MIDI learn), which left "learn on track faders directly" undone.
 
+**2026-11-10 amendment:** [ADR-0067](0067-midi-sends.md) restricts MIDI-send
+learn bindings to mute; audio sends retain the controls specified here.
+
 **2026-11-04 note:** VCA faders now take bindings too, as tracks do:
 `Vca::learn` (`volume`, `mute`, `solo`), `vca.learn.set / remove / list`,
 moved through `vca.set`, learned from a right-click on the mixer's VCA strip.

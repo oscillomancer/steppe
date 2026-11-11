@@ -2033,15 +2033,16 @@ void RackWindow::notesSourceMenu(model::Id module, ui::Point at) {
         (void)exec("module.set", std::move(args));
     };
     std::vector<ui::MenuItem> items;
+    items.push_back({"None", "", [set] { set(json::Value("none")); }, true, false, m->sourceOff});
     items.push_back({"Home", model::trackLabel(s, rack->track), [set] { set(json::Value()); }, true,
-                     false, !m->source,
+                     false, !m->sourceOff && !m->source,
                      root().theme().trackColor(s.tracks.find(rack->track)->color)});
     std::vector<ui::MenuItem> others;
     for (const auto& e : s.tracks) {
         if (e.value->type != model::StripType::Channel || e.id == rack->track) continue;
-        others.push_back({model::trackLabel(s, e.id), "",
-                          [set, id = e.id] { set(json::Value(id.str())); }, true, false,
-                          m->source == e.id, root().theme().trackColor(e.value->color)});
+        others.push_back(
+            {model::trackLabel(s, e.id), "", [set, id = e.id] { set(json::Value(id.str())); }, true,
+             false, !m->sourceOff && m->source == e.id, root().theme().trackColor(e.value->color)});
     }
     if (!others.empty()) items.push_back({"", "", {}, true, true});
     for (auto& item : others) items.push_back(std::move(item));

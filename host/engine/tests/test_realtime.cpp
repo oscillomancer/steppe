@@ -6653,3 +6653,75 @@ TEST_CASE("output consumption targets are one-shot and tagged with the playback 
     pollfd fd{wake.fd(), POLLIN, 0};
     CHECK(::poll(&fd, 1, 0) == 0);  // disarmed/unchanged work does not notify
 }
+
+TEST_CASE("MIDI sends: timeline chains null offline in both executors and all isolations" *
+          doctest::description("rt")) {
+    const auto reference = synthSession(-18.0, "com.suppleaudio.test.gain", 1);
+    const auto source = reference.tracks.find(kMaster)->children.front();
+    model::EditTxn t(reference, 2);
+    model::Track relay;
+    relay.parent = kMaster;
+    relay.parentSend.enabled = false;
+    const auto middle = t.create(relay);
+    model::Track destination = *reference.tracks.find(source);
+    destination.name = "Destination";
+    destination.children.clear();
+    const auto target = t.create(destination);
+    t.modify<model::Track>(kMaster, [&](auto& master) {
+        master.children.insert(master.children.end(), {middle, target});
+    });
+    t.modify<model::Track>(source, [](auto& track) {
+        track.chain.clear();
+        track.parentSend.enabled = false;
+    });
+    model::Route send;
+    send.from.track = source;
+    send.to.track = middle;
+    send.midi = model::MidiRouting{};
+    t.create(send);
+    send.from.track = middle;
+    send.to.track = target;
+    t.create(send);
+    const auto session = t.commit();
+    REQUIRE(session);
+    host::setBridgeExecutable(BRIDGE_PATH);
+    auto referencePool = makePool();
+    const auto offlineReference =
+        renderOffline(reference, referencePool, {.startSeconds = 0, .endSeconds = 2.0});
+    REQUIRE(offlineReference);
+    for (auto isolation : {model::Isolation::InProcess, model::Isolation::SharedBridge,
+                           model::Isolation::Dedicated}) {
+        model::EditTxn isolate(*session, 3);
+        for (const auto& fx : session->fx)
+            isolate.modify<model::FxInstance>(fx.id, [&](auto& f) { f.isolation = isolation; });
+        const auto isolated = isolate.commit();
+        REQUIRE(isolated);
+        auto pool = makePool();
+        const auto offline = renderOffline(*isolated, pool, {.startSeconds = 0, .endSeconds = 2.0});
+        REQUIRE(offline);
+        CHECK(offline->audio.channels == offlineReference->audio.channels);
+        for (const auto& options : {kInCallback, EngineOptions{.workers = 2}}) {
+            if (!options.anticipative && isolation != model::Isolation::InProcess) continue;
+            CAPTURE(isolation);
+            CAPTURE(options.anticipative);
+            auto rtPool = makePool();
+            MediaCache media;
+            DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 100096});
+            Engine engine(rtPool, media, options);
+            REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 96}));
+            REQUIRE(engine.load(*isolated));
+            engine.play();
+            if (options.anticipative)
+                runAhead(engine, backend, 100096 / 96, 96);
+            else
+                backend.run(100096 / 96);
+            engine.stop();
+            CHECK(engine.processErrors() == 0);
+            for (int channel = 0; channel < 2; ++channel)
+                CHECK(maxDiff(backend.capture().channels[static_cast<std::size_t>(channel)],
+                              engine.outputLatency(),
+                              offline->audio.channels[static_cast<std::size_t>(channel)],
+                              96000) == 0.0);
+        }
+    }
+}

@@ -2737,3 +2737,84 @@ TEST_CASE("plugin.scan in the background returns at once and installs the catalo
     }
     CHECK(run(bus, "plugin.list", "{}")["plugins"].size() == before);
 }
+
+TEST_CASE("MIDI sends: commands validate endpoints, controls, cycles and mute-only learn") {
+    Workdir dir;
+    auto app = makeApp(dir.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *app);
+    run(bus, "track.add", R"({"name":"Source"})");
+    run(bus, "track.add", R"({"name":"Target"})");
+    run(bus, "track.add", R"({"name":"Buss","type":"buss"})");
+    const auto rack = run(bus, "rack.add", R"({"track":"tr_2"})")["rack"].asString();
+    const auto notes =
+        run(bus, "module.add",
+            "{\"rack\":\"" + rack + "\",\"type\":\"notes\",\"source\":\"none\"}")["module"]
+            .asString();
+    const auto output =
+        run(bus, "module.add", "{\"rack\":\"" + rack + "\",\"type\":\"notes_out\"}")["module"]
+            .asString();
+    auto send =
+        run(bus, "route.add", R"({"from":{"track":"tr_1"},"to":{"track":"tr_2"},"midi":{}})");
+    const auto route = send["id"].asString();
+    auto refused = [&](const char* command, json::Value args, const char* code) {
+        const auto version = app->head().version;
+        const auto result = bus.execute({command, std::move(args), kOrigin});
+        REQUIRE_FALSE(result);
+        CHECK(result.error().code == code);
+        CHECK_FALSE(result.error().hint.empty());
+        CHECK(app->head().version == version);
+    };
+    for (const char* key : {"volume_db", "pan", "mono", "phase_invert", "channels"}) {
+        auto args = j(R"({"from":"tr_1","to":"tr_2","midi":{}})");
+        args[key] = std::string_view(key) == "channels" ? j(R"({"from":[1,2],"to":[1,2]})")
+                    : std::string_view(key) == "mono" || std::string_view(key) == "phase_invert"
+                        ? json::Value(false)
+                        : json::Value(0);
+        refused("route.add", std::move(args), "route.midi");
+    }
+    refused("route.add", j(R"({"from":"tr_3","to":"tr_2","midi":{}})"), "route.endpoint");
+    refused("route.add", j(R"({"from":"tr_1","to":"tr_0","midi":{}})"), "route.endpoint");
+    refused("route.add", j(R"({"from":"tr_2","to":"tr_1","midi":{}})"), "route.cycle");
+    auto learn = j(R"({"param":"volume","midi":{"kind":"cc","channel":1,"number":7}})");
+    learn["route"] = route;
+    refused("route.learn.set", learn, "route.midi");
+    learn["param"] = "mute";
+    REQUIRE(bus.execute({"route.learn.set", learn, kOrigin}));
+    auto direct = j(R"({"from":"tr_1","midi":{}})");
+    direct["to"] = notes;
+    REQUIRE(bus.execute({"route.add", direct, kOrigin}));
+    direct["from"] = output;
+    direct["to"] = "tr_1";
+    refused("route.add", direct, "route.cycle");  // Target already follows Source.
+    auto set = json::Value::object();
+    set["module"] = notes;
+    set["source"] = json::Value();
+    REQUIRE(bus.execute({"module.set", set, kOrigin}));
+    CHECK_FALSE(app->head().modules.find(*model::Id::parse(notes))->sourceOff);
+    set["source"] = "none";
+    REQUIRE(bus.execute({"module.set", set, kOrigin}));
+    CHECK(app->head().modules.find(*model::Id::parse(notes))->sourceOff);
+    auto old = model::parseProject(model::serializeProject(app->head()));
+    REQUIRE(old);
+    CHECK(old->modules.find(*model::Id::parse(notes))->sourceOff);
+    const auto matrix = run(bus, "route.matrix", R"({"mode":"midi"})");
+    CHECK(matrix.find("sources")->size() == 3);       // two channels and Note Out
+    CHECK(matrix.find("destinations")->size() == 3);  // two channels and Notes
+}
+
+TEST_CASE("MIDI sends: Notes source None does not prevent branch id remapping") {
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    const std::map<model::Id, model::Id> remap{
+        {*model::Id::parse("tr_1"), *model::Id::parse("tr_7")}};
+    for (const char* name : {"module.add", "module.set"}) {
+        const auto* command = registry.find(name);
+        REQUIRE(command);
+        auto args = j(R"({"source":"tr_1"})");
+        CHECK(model::remapIds(args, command->argsSchema, remap) == j(R"({"source":"tr_7"})"));
+        args["source"] = "none";
+        CHECK(model::remapIds(args, command->argsSchema, remap) == args);
+    }
+}

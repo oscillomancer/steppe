@@ -250,6 +250,8 @@ std::string rackLabel(const Session& s, Id rack);
 bool sendsTo(const Session& s, Id from, Id to);
 
 // The independent MIDI input, falling back to the legacy record.input route.
+// Notes modules that read this channel's pre-FX stream, including incoming MIDI.
+std::vector<Id> midiFollowers(const Session& session, Id track);
 const Route* midiInputRoute(const Session& s, Id track);
 
 // What every view calls a track: its name, or for an unnamed one a numbered

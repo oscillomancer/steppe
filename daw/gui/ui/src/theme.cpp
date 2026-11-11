@@ -53,7 +53,8 @@ Theme Theme::dark(Palette palette) {
                         {"mute", 0xd9773fu},
                         {"solo", 0xe0c341u},
                         {"polarity", 0x6db3c2u},
-                        {"mono", 0xb48ad0u}})
+                        {"mono", 0xb48ad0u},
+                        {"midi-send", 0x58b9a9u}})
         t.colors_[k] = Color::hex(v);
     // Track colours: muted enough for the graphite ground.
     for (auto [k, v] : {std::pair{"track-red", 0xc96a5eu},

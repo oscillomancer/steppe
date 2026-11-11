@@ -21,6 +21,7 @@
 #include <tuple>
 #include <vector>
 
+#include "midi_order.h"
 #include "playrate_timeline.h"
 #include "recording.h"
 #include "strip.h"
@@ -383,18 +384,24 @@ struct Edge {
     std::int64_t rackLatency = 0, rackPadding = 0;
     // MIDI-only dependency from a Note Out. Queues and voices belong to the
     // destination, and stay on its executor; delay matches the solved PDC.
-    int rackNotes = -1, midiFrom = 0, midiTo = 0, midiSourceBase = 0;
+    bool midi = false;
+    int rackNotes = -1, midiNotes = -1, midiFrom = 0, midiTo = 0, midiSourceBase = 0;
     struct MidiPending {
         std::int64_t sample = 0;
-        std::uint8_t status = 0, key = 0, velocity = 0, voice = 0;
+        host::Event event;
+        int voice = -1;
     };
     struct MidiVoice {
         bool high = false, delivered = false;
         int channel = 0, key = 60, velocity = 96;
+        int address = -1;  // stable across source-slot changes, for Notes and recording
     };
     std::vector<MidiPending> midiQueue;
     std::size_t midiHead = 0, midiCount = 0;
-    std::array<MidiVoice, 16> midiVoices{};
+    std::vector<MidiVoice> midiVoices;
+    std::vector<int> midiAddresses;
+    bool midiReconcile = false;
+    std::uint32_t midiNextVoice = 0;
     std::uint64_t midiEpoch = 0;
     bool midiStarted = false, midiRelease = false, midiMuted = false;
     // A frontier edge (anticipative source, live target): its source's tap
@@ -461,7 +468,17 @@ struct RackNoteSource {
     model::Id module, route;
     int voice = 0, from = 0, to = 0;
     std::int64_t delay = 0;
-    bool operator==(const RackNoteSource&) const = default;
+    NoteOrigin origin{};
+    int port = 0, channel = 0, key = 0;
+    model::Tap tap = model::Tap::PostFader;
+    std::vector<Id> path;  // stable route path, including equal pitches at a fan-in
+    bool operator==(const RackNoteSource& other) const {
+        return module == other.module && route == other.route && voice == other.voice &&
+               from == other.from && to == other.to && delay == other.delay &&
+               origin.address() == other.origin.address() && port == other.port &&
+               channel == other.channel && key == other.key && tap == other.tap &&
+               path == other.path;
+    }
 };
 
 struct Stage {
@@ -619,6 +636,19 @@ struct Node {
     // Note Out events actually delivered this block, also without an instrument.
     // Capacity is fixed in prepareRackMidi; only this node's executor writes it.
     std::vector<RoutedMidiEvent> routedMidi;
+    // Track MIDI is independent of the audio/instrument stage. Post-FX is an
+    // explicit seam for plug-in note output; currently it equals pre-FX.
+    Stage midiStage;
+    std::vector<host::Event> midiPreFx, midiPostFx, midiSortScratch;
+    MidiOrder midiOrder;
+    std::vector<RackNoteSource> midiSources;
+    std::vector<Edge::MidiVoice> midiHeld, midiBefore;
+    int midiLiveBase = 0;
+    std::vector<bool> midiTakeSources;
+    std::uint64_t midiEpoch = 1;
+    std::size_t midiEventRate = 0;
+    bool midiReleaseTimeline = false;
+
     Id id;  // a track's, or a rack's (rk_*)
     // A rack (ADR-0062): its runtime, its Out modules' audio this block and
     // the sends its In modules take. No chain, fader or Console 9 stage.
