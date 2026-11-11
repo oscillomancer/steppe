@@ -4,6 +4,10 @@ Date: 2026-11-11
 Status: Proposed; native CI and hardware timing trials pending
 Amends: ADR-0067 (MIDI sends), ADR-0069 (native output shutdown)
 
+2026-11-11 review correction: closing native releases use sink timestamps of
+now before port/client disposal; their normal plan delay is bypassed. The
+shutdown contract is in engine.md, Hardware MIDI routing.
+
 ## Decision
 
 Extend the unreleased project schema 2.10 with MIDI routes whose destination

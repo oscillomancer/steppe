@@ -1978,7 +1978,7 @@ opened/connected destinations. Topology changes latch midi_devices_changed
 without automatic restart. JACK's optional registration callback conservatively
 includes audio port topology. Native output monitoring uses the existing device
 monitor. Stop first emits held-note releases from the final audio callback, joins audio,
-then drains queued releases after accepted events and joins the sender. Other
+then submits queued releases with sink timestamps of now and joins the sender. Other
 future queued events are discarded. CoreMIDI never flushes endpoints; submitted
 events drain and only the owned port/client is disposed (ADR-0072). WinMM
 resets, unprepares buffers and closes owned devices; reset can send all-notes-off.
@@ -2760,7 +2760,8 @@ reset is on, and engine shutdown. Releases include sustain-off; boundary and
 shutdown resets add all-notes-off on used channels. These controllers share
 hardware channel state. `reset_on_stop: false` retains timeline notes across
 transport stops/locates; engine shutdown always releases. CoreMIDI shutdown
-lets accepted scheduled events drain without endpoint-wide flush.
+submits closing releases at sink now before disposing its port/client, without
+endpoint-wide flush. Previously accepted events drain normally.
 
 `midi.outputs.get` and `midi.inputs.get` return `{ports: [...]}` with name,
 index (-1 absent), enabled, offset_ms, latency_ms, dropped and structured warnings;

@@ -86,7 +86,7 @@ struct PortAudioBackend::Impl {
                 self.midiOut.begin(1, self.sinkStarted ? self.sink->names.size() : 0);
                 self.callback(nullptr, nullptr, 0);
                 for (const auto& event : self.midiOut.sorted())
-                    if (self.sender) (void)self.sender->push({outputNow, event});
+                    if (self.sender) (void)self.sender->push({outputNow, event, true});
                 self.final.store(1, std::memory_order_release);
                 rt::wake(self.final);
             }
@@ -394,7 +394,7 @@ void PortAudioBackend::stop() {
         self.callback(nullptr, nullptr, 0);
         const auto now = self.sinkStarted ? self.sink->now() : 0;
         for (const auto& event : self.midiOut.sorted())
-            if (self.sender) (void)self.sender->push({now, event});
+            if (self.sender) (void)self.sender->push({now, event, true});
         self.final.store(1, std::memory_order_release);
     } else if (self.api->active(self.stream) == 1 && !self.final.load(std::memory_order_acquire)) {
         const auto deadline = std::chrono::steady_clock::now() +
@@ -414,7 +414,7 @@ void PortAudioBackend::stop() {
         self.callback(nullptr, nullptr, 0);
         const auto now = self.sinkStarted ? self.sink->now() : 0;
         for (const auto& event : self.midiOut.sorted())
-            if (self.sender) (void)self.sender->push({now, event});
+            if (self.sender) (void)self.sender->push({now, event, true});
         self.final.store(1, std::memory_order_release);
     }
     if (self.sender) self.sender->stop();

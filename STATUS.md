@@ -294,7 +294,8 @@ instructions are in `docs/guides/installing.md`.
   A prepared audio delay supplies negative-offset lead (at most one second).
   The Hardware MIDI tab edits existing input assignments and hardware sends;
   header menus edit machine port preferences. CoreMIDI no longer flushes shared
-  endpoints at shutdown; held-note releases follow accepted messages.
+  endpoints at shutdown; closing note-offs are submitted at native sink now
+  before port/client disposal.
   Device-free tests cover both executors, audio nulls, lifecycle, persistence and
   GUI interactions. Native macOS/Windows CI, physical timing/disconnect testing
   and cross-client shutdown validation remain pending. Native input loss without

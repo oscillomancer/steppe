@@ -8,6 +8,7 @@ inline constexpr std::size_t kMidiOutputQueueSize = 2048;
 struct TimedMidiOutput {
     double seconds = 0;  // sink clock; first byte's requested departure time
     MidiOutputEvent event;
+    bool closing = false;  // final callback: submit releases at sink now
 };
 struct MidiOutputUmp {
     std::array<std::uint32_t, 4> words{};

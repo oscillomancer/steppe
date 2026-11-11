@@ -129,8 +129,7 @@ TEST_CASE("CoreMIDI wire encoding supports system, channel voice and full-frame 
     CHECK(encoded.count == 2);
     CHECK(encoded.words[0] == 0x30000000u);
 }
-TEST_CASE(
-    "native output shutdown drains releases after accepted future notes without endpoint flush") {
+TEST_CASE("native output shutdown sends releases now without endpoint flush") {
     Sink sink;
     auto sender = std::make_unique<detail::MidiOutputSender>(sink);
     REQUIRE(sender->push({20, {0, 0, 3, {0x90, 60, 100}}}));
@@ -140,7 +139,25 @@ TEST_CASE(
     sender->stop();
     REQUIRE(sink.sent.size() == 2);
     CHECK(sink.sent[0].event.bytes[0] == 0x80);
-    CHECK(sink.sent[0].seconds == 20);
+    CHECK(sink.sent[0].seconds == 10);
     CHECK(sink.sent[1].event.bytes[1] == 64);
     CHECK(sender->dropped() == 1);
+}
+
+TEST_CASE("timestamped closing releases bypass future due times before sender shutdown") {
+    Sink sink;
+    sink.timestamps = true;
+    auto sender = std::make_unique<detail::MidiOutputSender>(sink);
+    REQUIRE(sender->push({20, {0, 0, 3, {0x90, 60, 100}}}));
+    sender->dispatch();
+    REQUIRE(sender->push({20, {0, 0, 3, {0x80, 60, 0}}, true}));
+    sender->dispatch();
+    REQUIRE(sink.sent.size() == 2);
+    CHECK(sink.sent[0].seconds == 20);
+    CHECK(sink.sent[1].seconds == 10);
+    sink.clock = 11;
+    REQUIRE(sender->push({21, {0, 0, 3, {0xb0, 64, 0}}, true}));
+    sender->stop();
+    REQUIRE(sink.sent.size() == 3);
+    CHECK(sink.sent[2].seconds == 11);
 }

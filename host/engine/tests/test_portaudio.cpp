@@ -1256,4 +1256,5 @@ TEST_CASE("native output releases survive the audio-device-loss final callback f
     CHECK(output.stops == 1);
     REQUIRE(output.sent.size() == 1);
     CHECK(output.sent[0].event.bytes[0] == 0x80);
+    CHECK(output.sent[0].seconds == output.clock.load());
 }

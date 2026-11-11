@@ -123,7 +123,7 @@ void MidiOutputSender::stop() {
                 (status == 0xb0 && (event.event.bytes[1] == 64 || event.event.bytes[1] == 123) &&
                  !event.event.bytes[2]);
             if (release) {
-                event.seconds = std::max(event.seconds, sink_.now());
+                event.seconds = sink_.now();
                 if (!sink_.send(event)) drop(event.event.port);
             } else
                 drop(event.event.port);
@@ -141,12 +141,15 @@ bool MidiOutputSender::push(const TimedMidiOutput& event) {
         status == 0x80 || (status == 0x90 && !event.event.bytes[2]) ||
         (status == 0xb0 && (event.event.bytes[1] == 64 || event.event.bytes[1] == 123) &&
          !event.event.bytes[2]);
-    if (release) queued.seconds = std::max(queued.seconds, lastDue_[port]);
-    if (queued.seconds < lastDue_[port] || !queues_[port].push(queued)) {
+    if (queued.closing)
+        queued.seconds = sink_.now();
+    else if (release)
+        queued.seconds = std::max(queued.seconds, lastDue_[port]);
+    if ((!queued.closing && queued.seconds < lastDue_[port]) || !queues_[port].push(queued)) {
         drop(event.event.port);
         return false;
     }
-    lastDue_[port] = queued.seconds;
+    if (!queued.closing) lastDue_[port] = queued.seconds;
     return true;
 }
 double MidiOutputSender::dispatch() {
@@ -162,7 +165,9 @@ double MidiOutputSender::dispatch() {
                 next = candidate;
             }
         if (selected == queues_.size()) return sink_.now() + .001;
-        if (!sink_.timestamped() && next.seconds > sink_.now()) return next.seconds;
+        if (!sink_.timestamped() && !next.closing && next.seconds > sink_.now())
+            return next.seconds;
+        if (next.closing) next.seconds = sink_.now();
         if (!sink_.send(next)) drop(next.event.port);
         queues_[selected].consume();
     }
