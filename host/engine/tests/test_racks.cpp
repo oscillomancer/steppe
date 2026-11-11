@@ -2379,8 +2379,10 @@ TEST_CASE("MIDI bus: held notes survive plan swaps; a removed or bypassed plug-i
     SUBCASE("removed") { change = "remove"; }
     SUBCASE("bypassed") { change = "bypass"; }
     SUBCASE("merge") { change = "merge"; }
+    SUBCASE("removed between instruments") { change = "layered"; }
     model::EditTxn t(model::Session::create({.console9 = false}), 1);
     const Id source = addChannel(t), target = addChannel(t);
+    if (change == "layered") addFx(t, source, kSine);  // the note target, ahead of the echo
     const Id echo = addFx(t, source, kEcho);
     addFx(t, source, kSine);
     addFx(t, target, kSine);
@@ -2431,7 +2433,7 @@ TEST_CASE("MIDI bus: held notes survive plan swaps; a removed or bypassed plug-i
     model::EditTxn edit(session, 2);
     if (change == "rename")
         edit.modify<model::Track>(source, [](auto& tr) { tr.name = "Renamed"; });
-    if (change == "remove") {
+    if (change == "remove" || change == "layered") {
         edit.modify<model::Track>(source, [&](auto& tr) {
             tr.chain.erase(std::find(tr.chain.begin(), tr.chain.end(), echo));
         });
@@ -2458,10 +2460,11 @@ TEST_CASE("MIDI bus: held notes survive plan swaps; a removed or bypassed plug-i
         CHECK(peak(source) > 0.01f);
         CHECK(peak(target) > 0.01f);
     } else {
-        // Its notes end, here and downstream: nothing hangs.
+        // Its notes end, here and downstream: nothing hangs. (Layered, the
+        // first synth still plays the timeline's note.)
         CHECK(keys(source).empty());
         CHECK(keys(target).empty());
-        CHECK(peak(source) == 0.0f);
+        if (change != "layered") CHECK(peak(source) == 0.0f);
         CHECK(peak(target) == 0.0f);
         for (const auto& v : node(source).midiPostHeld) CHECK_FALSE(v.high);
     }

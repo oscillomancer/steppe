@@ -80,9 +80,14 @@ bool beginMidiBus(Node& node, const void* self) SUPPLE_RT {
         Stage& st = node.chain[k];
         if (!accepts(st)) continue;
         const bool isTarget = static_cast<int>(k) == node.noteTarget;
+        // A voice already flagged (a plan swap's carry could not follow it)
+        // still needs its release.
         bool any = false;
         for (auto& voice : st.voices) {
-            if (voice.release) continue;
+            if (voice.release) {
+                any = true;
+                continue;
+            }
             if (voice.origin.item == kBusNoteOrigin) {
                 voice.release =
                     !midiBusReaches(node, partOf(node, voice.sourceId - kBusNoteBase), k);
