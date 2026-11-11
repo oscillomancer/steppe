@@ -1972,6 +1972,9 @@ TEST_CASE("routing matrix: hardware ports share input assignments and output men
     panel.root().frame(false);
     auto* field = static_cast<ui::TextField*>(panel.root().find("routing.port.offset.value"));
     REQUIRE(field);
+    REQUIRE(panel.root().find("routing.port.offset.lead"));
+    CHECK(panel.root().find("routing.port.offset.lead")->valueText().find("all audio") !=
+          std::string::npos);
     field->setText("-3.5");
     REQUIRE(panel.root().click("routing.port.offset.apply"));
     CHECK(engine::midiPortSettings(f.app->midiOutputsPreferences(), "Synth").offsetMs == -3.5);

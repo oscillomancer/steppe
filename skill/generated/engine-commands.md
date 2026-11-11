@@ -8721,7 +8721,7 @@ Result:
 
 Hardware MIDI inputs, timing, settings, loss and startup warnings.
 
-ports contains name, zero-based index (-1 absent), enabled, offset_ms, latency_ms, dropped and structured warnings. Outputs also have reset_on_stop. Settings are machine preferences keyed by exact port name; they are not project state.
+ports contains name, zero-based index (-1 absent), enabled, offset_ms, latency_ms, dropped and structured warnings. Outputs also have reset_on_stop and lead_ms, the shared added audio/monitoring latency. Settings are machine preferences keyed by exact port name; they are not project state.
 
 Kind: `query`. Exposure: `mcp-tool`.
 
@@ -8759,7 +8759,7 @@ Result:
 
 Change one machine MIDI port's enabled state and timing offset.
 
-port is an exact name. offset_ms is signed -1000..1000 milliseconds. Positive offsets delay. Outputs reset_on_stop defaults true. Applying settings releases disabled/changed output routes; inputs retain the existing channel input mechanism. Returns the updated ports list.
+port is a unique case-insensitive match to a present or recorded name; settings use its exact spelling. offset_ms is signed -1000..1000 milliseconds. Positive offsets delay. Outputs reset_on_stop defaults true. Applying settings releases disabled/changed output routes; inputs retain the existing channel input mechanism. Returns the updated ports list.
 
 Kind: `action`. Exposure: `mcp-tool`.
 
@@ -8780,7 +8780,7 @@ Kind: `action`. Exposure: `mcp-tool`.
 
 ### Examples
 
-**Disable an absent port** (`empty`)
+**Disable a recorded port** (`midi_ports`)
 
 ```json
 {
@@ -8849,7 +8849,7 @@ Result:
 
 Hardware MIDI outputs, timing, settings, loss and startup warnings.
 
-ports contains name, zero-based index (-1 absent), enabled, offset_ms, latency_ms, dropped and structured warnings. Outputs also have reset_on_stop. Settings are machine preferences keyed by exact port name; they are not project state.
+ports contains name, zero-based index (-1 absent), enabled, offset_ms, latency_ms, dropped and structured warnings. Outputs also have reset_on_stop and lead_ms, the shared added audio/monitoring latency. Settings are machine preferences keyed by exact port name; they are not project state.
 
 Kind: `query`. Exposure: `mcp-tool`.
 
@@ -8887,7 +8887,7 @@ Result:
 
 Change one machine MIDI port's enabled state and timing offset.
 
-port is an exact name. offset_ms is signed -1000..1000 milliseconds. Positive offsets delay. Outputs reset_on_stop defaults true. Applying settings releases disabled/changed output routes; inputs retain the existing channel input mechanism. Returns the updated ports list.
+port is a unique case-insensitive match to a present or recorded name; settings use its exact spelling. offset_ms is signed -1000..1000 milliseconds. Positive offsets delay. Outputs reset_on_stop defaults true. Applying settings releases disabled/changed output routes; inputs retain the existing channel input mechanism. Returns the updated ports list.
 
 Kind: `action`. Exposure: `mcp-tool`.
 
@@ -8909,7 +8909,7 @@ Kind: `action`. Exposure: `mcp-tool`.
 
 ### Examples
 
-**Disable an absent port** (`empty`)
+**Disable a recorded port** (`midi_ports`)
 
 ```json
 {

@@ -374,7 +374,10 @@ audio callback. Outputs also offer **Reset notes on stop** (on by default),
 which releases notes and sustain on stop or locate. Engine shutdown always
 releases notes. These settings are saved for this machine, outside projects.
 Output alignment can add up to one second of audio latency to make an advance
-possible; engine status reports it. Separate device MIDI channels avoid shared
+possible; this also delays live input monitoring on every channel. The timing
+offset dialog previews the shared added latency; per-port `lead_ms` and engine
+status report it. Transport changes keep the audio history running, and changing
+the lead uses a 5 ms delay ramp. Separate device MIDI channels avoid shared
 sustain/controller resets between routes.
 
 **View > Routing matrix**, or a strip's **out** button, opens a grid of what

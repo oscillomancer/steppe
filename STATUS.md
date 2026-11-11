@@ -291,7 +291,9 @@ instructions are in `docs/guides/installing.md`.
   track, so they sound as before. Native macOS/Windows CI and coordinator review remain pending.
 - **Hardware MIDI routing** (ADR-0072, schema 2.10): connects channel/Note Out MIDI to
   named outputs with tap, mute, channel filter/remap and PDC/port offset timing.
-  A prepared audio delay supplies negative-offset lead (at most one second).
+  A continuous prepared audio history supplies negative-offset lead (at most
+  one second), including monitoring. Boundaries preserve its tail; lead changes
+  use a 5 ms read-delay ramp. Port status and the offset dialog expose the lead.
   The Hardware MIDI tab edits existing input assignments and hardware sends;
   header menus edit machine port preferences. CoreMIDI no longer flushes shared
   endpoints at shutdown; closing note-offs are submitted at native sink now

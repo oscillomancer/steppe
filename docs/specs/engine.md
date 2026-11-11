@@ -2745,7 +2745,10 @@ backend.midiOutputLatency[port] + offset_ms * sampleRate / 1000` (rounded to
 frames). Negative minimum delay adds prepared audio lead to all MIDI delays
 and a final audio delay; lead is limited to one second and reported by
 `midi_lead_frames`. Engine output latency, heard timing and recording account
-for it. No hardware delay may exceed ten seconds. Limits: 256 routes, 65,536
+for it. The prepared history runs continuously across stop, locate, loop wrap
+and lead-unchanged edits. Route MIDI queues clear at boundaries. A lead change
+slews the fractional read delay over 5 ms without clearing history; the initial
+plan primes its full lead normally. No hardware delay may exceed ten seconds. Limits: 256 routes, 65,536
 pending messages, 16 ports, and the existing 1,024 messages per device period.
 Equal-frame messages preserve route/event insertion order. Overflow is counted.
 Route and source mute automation is evaluated on the tapped stream's compensated
@@ -2772,7 +2775,8 @@ spelling; unknown or ambiguous calls refuse with the available exact names. Offs
 ms, positive later. Input advances clamp to this callback's start; positive
 input offsets carry across callbacks. Existing record MIDI routes perform input
 routing. Disabled inputs do not reach monitoring, recording or MIDI learn.
-Status includes `midi_inputs`, `midi_outputs`, and `midi_lead_frames`.
+Status includes `midi_inputs`, `midi_outputs`, and `midi_lead_frames`. Each output reports `lead_ms`, the shared added latency
+from the prepared note routes, also applied to live monitoring.
 Per-port dropped counts route scheduling/rejection and attributable output
 sender/device loss; native input losses without a retained port remain in the
 aggregate `midi_dropped`. Port latency_ms is the signed backend latency before

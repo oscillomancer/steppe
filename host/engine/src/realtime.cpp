@@ -231,6 +231,20 @@ void Engine::setMidiPreferences(MidiPortPreferences inputs, MidiPortPreferences 
     midiSettingsDirty_ = true;
 }
 std::uint32_t Engine::midiLeadFrames() const { return hardwareMidi_ ? hardwareMidi_->lead() : 0; }
+std::uint32_t Engine::midiLeadForOffset(std::size_t port, double offsetMs) const {
+    const auto* plan = latestPlan_.load(std::memory_order_acquire);
+    if (!plan) return 0;
+    std::int64_t lead = 0;
+    for (const auto& route : plan->hardwareMidi)
+        if (route->port >= 0) {
+            auto delay = route->delay - plan->hardwareLead;
+            if (static_cast<std::size_t>(route->port) == port)
+                delay += time::samplesAt(
+                    (offsetMs - plan->midiOutputsSettings[port].offsetMs) / 1000., plan->rate);
+            lead = std::max(lead, -delay);
+        }
+    return static_cast<std::uint32_t>(lead);
+}
 std::uint32_t Engine::outputLatency() const { return outputLatency_ + midiLeadFrames(); }
 std::uint64_t Engine::midiPortDropped(bool output, std::size_t port) const {
     return hardwareMidi_ ? hardwareMidi_->dropped(output, port) : 0;
@@ -246,7 +260,6 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
         return Error("engine.config", "the engine needs a block size and two outputs", {},
                      "provide a positive block_size and at least two output channels");
     hardwareMidi_ = std::make_unique<detail::HardwareMidiRuntime>();
-    hardwareMidi_->prepare(config.sampleRate, config.outputs);
     shutDown_ = false;
     shutdownRequested_ = false;
     // Before the backend starts: its callbacks push meter entries at once.

@@ -8,6 +8,11 @@ Amends: ADR-0067 (MIDI sends), ADR-0069 (native output shutdown)
 now before port/client disposal; their normal plan delay is bypassed. The
 shutdown contract is in engine.md, Hardware MIDI routing.
 
+2026-11-11 review correction: the audio history runs continuously across
+transport boundaries and lead-unchanged edits. Lead changes use a 5 ms read-delay
+ramp. Per-port lead_ms and the offset dialog disclose the shared monitoring
+latency. These corrections supersede the original tail-clearing description.
+
 ## Decision
 
 Extend the unreleased project schema 2.10 with MIDI routes whose destination

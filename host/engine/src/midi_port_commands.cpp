@@ -156,6 +156,11 @@ json::Value EngineApp::midiPortsState(bool output) const {
         port["enabled"] = settings.enabled;
         port["offset_ms"] = settings.offsetMs;
         if (output) port["reset_on_stop"] = settings.resetOnStop;
+        if (output)
+            port["lead_ms"] = engine_
+                                  ? double(engine_->midiLeadForOffset(index, settings.offsetMs)) *
+                                        1000. / engine_->config().sampleRate
+                                  : 0.;
         port["latency_ms"] = output && index < latency.size()
                                  ? double(latency[index]) * 1000. / backend_->config().sampleRate
                                  : 0.;
@@ -205,7 +210,8 @@ void registerMidiPortCommands(cmd::Registry& registry) {
                              : "Hardware MIDI inputs, timing, settings, loss and startup warnings.";
         get.description =
             "ports contains name, zero-based index (-1 absent), enabled, offset_ms, latency_ms, "
-            "dropped and structured warnings. Outputs also have reset_on_stop. Settings are "
+            "dropped and structured warnings. Outputs also have reset_on_stop and lead_ms, the "
+            "shared added audio/monitoring latency. Settings are "
             "machine preferences keyed by exact port name; they are not project state.";
         get.tags = {"midi", "engine"};
         get.args = schema::object<cmd::NoArgs>("no_args").build();

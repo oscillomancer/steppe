@@ -1391,6 +1391,34 @@ void RoutingMatrix::portOffset(bool output, const std::string& port) {
     form->emplace<ui::Label>("routing.port.offset.title", port + " — offset (ms)");
     auto& field =
         form->emplace<ui::TextField>("routing.port.offset.value", fmt(settings.offsetMs, 3));
+    if (output) {
+        auto& lead = form->emplace<ui::Label>("routing.port.offset.lead", "");
+        auto preview = [this, port, &lead](const std::string& text) {
+            const auto value = json::parse(text);
+            if (!value || !value->isNumber() || !std::isfinite(value->asDouble())) return;
+            if (std::abs(value->asDouble()) > 1000) {
+                lead.setText("Use an offset from -1000 to 1000 ms");
+                return;
+            }
+            double milliseconds = 0;
+            if (auto* engine = app_.engine()) {
+                auto ports = app_.midiPortsState(true);
+                for (const auto& entry : ports.asArray())
+                    if (entry.find("name")->asString() == port) {
+                        const auto index = entry.find("index")->asInt();
+                        milliseconds =
+                            engine->midiLeadForOffset(
+                                index < 0 ? std::size_t(-1) : static_cast<std::size_t>(index),
+                                value->asDouble()) *
+                            1000. / engine->config().sampleRate;
+                        break;
+                    }
+            }
+            lead.setText("adds " + fmt(milliseconds, 1) + " ms latency to all audio");
+        };
+        field.onChange = preview;
+        preview(field.text());
+    }
     auto apply = [this, output, port](const std::string& value) {
         auto number = json::parse(value);
         if (!number || !number->isNumber()) return;

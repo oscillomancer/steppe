@@ -64,6 +64,9 @@ class HardwareMidiRuntime {
     std::array<MidiInputEvent, kMaxMidiInputEvents> inputBlock_{};
     std::array<std::atomic<std::uint64_t>, 16> outputDrops_{}, inputDrops_{};
     std::vector<std::vector<float>> audioDelay_;
+    std::atomic<bool> historyReady_{false};
+    double readLead_ = 0;
+    std::uint32_t rampFrames_ = 1, rampLeft_ = 0;
     std::size_t audioCursor_ = 0;
     std::uint32_t audioFilled_ = 0;
     std::size_t wrote_ = 0;

@@ -587,6 +587,8 @@ class Engine {
     void setMidiPreferences(MidiPortPreferences inputs, MidiPortPreferences outputs);
     std::uint64_t midiPortDropped(bool output, std::size_t port) const;
     std::uint32_t midiLeadFrames() const;
+    // Owner thread: shared audio lead for a candidate offset on one port.
+    std::uint32_t midiLeadForOffset(std::size_t port, double offsetMs) const;
     const std::vector<std::string>& warnings() const { return warnings_; }
 
     // --- meters (P5.3c, engine.md §2.3) --------------------------------------------

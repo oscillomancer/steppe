@@ -472,3 +472,62 @@ TEST_CASE("hardware MIDI: existing channel input monitoring reaches output while
         engine.stop();
     }
 }
+
+TEST_CASE("hardware MIDI: negative lead preserves the audio tail across a seek") {
+    for (bool anticipative : {false, true}) {
+        Session session(model::Tap::PreFx, false, false);
+        auto pool = hardwarePool();
+        MediaCache media;
+        DummyBackend backend({.captureFrames = 14000, .midiOutputPorts = {"Synth"}});
+        Engine engine(
+            pool, media,
+            {.anticipative = anticipative, .renderBlock = 64, .renderAheadMs = 10, .workers = 0});
+        REQUIRE(engine.start(backend, {.blockSize = 64, .midiOutputs = true}));
+        engine.setMidiPreferences({}, outputSettings(-20));
+        REQUIRE(engine.load(session.value));
+        CHECK(engine.midiLeadForOffset(0, -20) == 960);
+        engine.play();
+        run(engine, backend, anticipative, 100);
+        engine.seek(0);
+        run(engine, backend, anticipative, 100);
+        engine.stop();
+        std::size_t longest = 0, zeros = 0;
+        const auto& audio = backend.capture().channels[0];
+        for (std::size_t f = 6000; f < 8500; ++f) {
+            zeros = audio[f] == 0 ? zeros + 1 : 0;
+            longest = std::max(longest, zeros);
+        }
+        CHECK(longest <= 1);
+    }
+}
+TEST_CASE("hardware MIDI: prepared audio history survives stop, wrap and lead changes") {
+    auto runtime = std::make_unique<detail::HardwareMidiRuntime>();
+    runtime->prepare(48000, 1);
+    DummyBackend backend({});
+    REQUIRE(backend.start({.blockSize = 64}, [](auto, auto, auto) {}));
+    detail::Plan plan;
+    plan.hardwareLead = 960;
+    plan.generation = 1;
+    std::array<float, 64> signal;
+    float* out[] = {signal.data()};
+    auto cycle = [&](bool playing, std::uint64_t epoch) {
+        signal.fill(1);
+        runtime->begin(backend, 64);
+        runtime->collect(plan, 0, 64, 0, playing, epoch);
+        runtime->finish(out, 1, 64, false);
+    };
+    for (int i = 0; i < 100; ++i) cycle(true, 1);
+    for (const auto epoch : {2, 3, 4}) {
+        cycle(false, epoch);
+        for (float sample : signal) CHECK(sample == 1);
+        cycle(true, epoch);
+        for (float sample : signal) CHECK(sample == 1);
+    }
+    plan.hardwareLead = 1920;
+    ++plan.generation;
+    for (int i = 0; i < 8; ++i) {
+        cycle(true, 4);
+        for (float sample : signal) CHECK(sample == 1);
+    }
+    backend.stop();
+}

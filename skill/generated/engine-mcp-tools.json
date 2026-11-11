@@ -6614,7 +6614,7 @@
   {
     "name": "midi_inputs_get",
     "title": "Hardware MIDI inputs, timing, settings, loss and startup warnings.",
-    "description": "Hardware MIDI inputs, timing, settings, loss and startup warnings. ports contains name, zero-based index (-1 absent), enabled, offset_ms, latency_ms, dropped and structured warnings. Outputs also have reset_on_stop. Settings are machine preferences keyed by exact port name; they are not project state. See describe for errors and examples.",
+    "description": "Hardware MIDI inputs, timing, settings, loss and startup warnings. ports contains name, zero-based index (-1 absent), enabled, offset_ms, latency_ms, dropped and structured warnings. Outputs also have reset_on_stop and lead_ms, the shared added audio/monitoring latency. Settings are machine preferences keyed by exact port name; they are not project state. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "no_args",
@@ -6630,7 +6630,7 @@
   {
     "name": "midi_inputs_set",
     "title": "Change one machine MIDI port's enabled state and timing offset.",
-    "description": "Change one machine MIDI port's enabled state and timing offset. port is an exact name. offset_ms is signed -1000..1000 milliseconds. Positive offsets delay. Outputs reset_on_stop defaults true. Applying settings releases disabled/changed output routes; inputs retain the existing channel input mechanism. Returns the updated ports list. See describe for errors and examples.",
+    "description": "Change one machine MIDI port's enabled state and timing offset. port is a unique case-insensitive match to a present or recorded name; settings use its exact spelling. offset_ms is signed -1000..1000 milliseconds. Positive offsets delay. Outputs reset_on_stop defaults true. Applying settings releases disabled/changed output routes; inputs retain the existing channel input mechanism. Returns the updated ports list. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "midi_port_edit",
@@ -6682,7 +6682,7 @@
   {
     "name": "midi_outputs_get",
     "title": "Hardware MIDI outputs, timing, settings, loss and startup warnings.",
-    "description": "Hardware MIDI outputs, timing, settings, loss and startup warnings. ports contains name, zero-based index (-1 absent), enabled, offset_ms, latency_ms, dropped and structured warnings. Outputs also have reset_on_stop. Settings are machine preferences keyed by exact port name; they are not project state. See describe for errors and examples.",
+    "description": "Hardware MIDI outputs, timing, settings, loss and startup warnings. ports contains name, zero-based index (-1 absent), enabled, offset_ms, latency_ms, dropped and structured warnings. Outputs also have reset_on_stop and lead_ms, the shared added audio/monitoring latency. Settings are machine preferences keyed by exact port name; they are not project state. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "no_args",
@@ -6698,7 +6698,7 @@
   {
     "name": "midi_outputs_set",
     "title": "Change one machine MIDI port's enabled state and timing offset.",
-    "description": "Change one machine MIDI port's enabled state and timing offset. port is an exact name. offset_ms is signed -1000..1000 milliseconds. Positive offsets delay. Outputs reset_on_stop defaults true. Applying settings releases disabled/changed output routes; inputs retain the existing channel input mechanism. Returns the updated ports list. See describe for errors and examples.",
+    "description": "Change one machine MIDI port's enabled state and timing offset. port is a unique case-insensitive match to a present or recorded name; settings use its exact spelling. offset_ms is signed -1000..1000 milliseconds. Positive offsets delay. Outputs reset_on_stop defaults true. Applying settings releases disabled/changed output routes; inputs retain the existing channel input mechanism. Returns the updated ports list. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "midi_port_edit",

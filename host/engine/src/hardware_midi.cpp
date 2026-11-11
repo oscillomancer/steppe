@@ -135,6 +135,8 @@ void HardwareMidiRuntime::prepare(double rate, std::uint32_t channels) {
     audioDelay_.assign(
         channels, std::vector<float>(
                       static_cast<std::size_t>(std::ceil(rate * kHardwareMidiLeadSeconds)) + 1));
+    rampFrames_ = static_cast<std::uint32_t>(std::max(1., std::round(rate * .005)));
+    historyReady_.store(true, std::memory_order_release);
 }
 std::uint64_t HardwareMidiRuntime::dropped(bool output, std::size_t port) const {
     return port < 16
@@ -188,15 +190,12 @@ bool HardwareMidiRuntime::release(RouteState& state, std::uint32_t at) {
 void HardwareMidiRuntime::adopt(Plan& plan, std::uint64_t epoch, bool playing) {
     const bool boundary = epoch != epoch_ || (playing_ && !playing);
     const bool changed = plan_ != &plan || planGeneration_ != plan.generation;
-    if (boundary) {
-        audioFilled_ = 0;
-        audioCursor_ = 0;
-    }
+    if (boundary) count_ = 0;  // Audio history and physical input-offset time keep running.
     if (changed) {
-        if (lead_ != plan.hardwareLead) {
-            audioCursor_ = 0;
-            audioFilled_ = 0;
-        }
+        if (!plan_)
+            readLead_ = plan.hardwareLead;
+        else if (lead_ != plan.hardwareLead)
+            rampLeft_ = rampFrames_;
         lead_ = plan.hardwareLead;
         leadReported_.store(lead_, std::memory_order_relaxed);
         for (auto& state : routes_)
@@ -471,16 +470,30 @@ void HardwareMidiRuntime::finish(float* const* out, std::uint32_t channels, std:
                 }
         count_ = 0;
     }
-    if (lead_ && out) {
+    if (historyReady_.load(std::memory_order_acquire) && out && !audioDelay_.empty()) {
+        const auto capacity = audioDelay_.front().size();
         for (std::uint32_t f = 0; f < frames; ++f) {
+            const auto low = static_cast<std::uint32_t>(readLead_);
+            const double fraction = readLead_ - low;
             for (std::uint32_t c = 0; c < channels && c < audioDelay_.size(); ++c) {
-                auto& value = audioDelay_[c][audioCursor_];
-                const float next = out[c][f];
-                out[c][f] = audioFilled_ >= lead_ ? value : 0;
-                value = next;
+                auto& history = audioDelay_[c];
+                history[audioCursor_] = out[c][f];
+                auto tap = [&](std::uint32_t delay) {
+                    return delay <= audioFilled_
+                               ? history[(audioCursor_ + capacity - delay) % capacity]
+                               : 0.0f;
+                };
+                const auto a = tap(low);
+                out[c][f] = fraction == 0 ? a
+                                          : static_cast<float>((1 - fraction) * double(a) +
+                                                               fraction * double(tap(low + 1)));
             }
-            audioCursor_ = (audioCursor_ + 1) % lead_;
-            if (audioFilled_ < lead_) ++audioFilled_;
+            audioCursor_ = (audioCursor_ + 1) % capacity;
+            if (audioFilled_ < capacity - 1) ++audioFilled_;
+            if (rampLeft_) {
+                readLead_ += (double(lead_) - readLead_) / rampLeft_;
+                if (!--rampLeft_) readLead_ = lead_;
+            }
         }
     }
     frame_ += frames;

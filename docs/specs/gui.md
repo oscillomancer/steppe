@@ -1023,7 +1023,8 @@ and output headers use teal socket marks; separators divide input rows from
 channel rows and channel columns from output columns.
 
 Right-click an input row or output column header for Enabled, Timing offset…
-(signed milliseconds, -1000..1000), and, on outputs, Reset notes on stop.
+(signed milliseconds, -1000..1000), and, on outputs, Reset notes on stop. The output offset dialog previews
+"adds N ms latency to all audio" as the offset is edited.
 The latter controls stop/locate releases and defaults on. Settings apply
 immediately and save in the machine preferences; `midiPortMenu` builds this
 menu for the clock extension. Output descriptors with `clock: true` draw a
