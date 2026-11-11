@@ -1986,3 +1986,18 @@ TEST_CASE("preferences: stale GUI snapshots preserve engine-owned MIDI records")
     REQUIRE(loaded);
     CHECK_FALSE(loaded->midiOutputs.at("Synth").find("clock")->asBool());
 }
+
+TEST_CASE("preferences: malformed MIDI records do not block GUI startup") {
+    Fixture f;
+    REQUIRE(f.ok);
+    const auto file = f.dir / "bad-midi-preferences.json";
+    REQUIRE(writeFileAtomic(
+        file,
+        R"({"schema":"supple.preferences/1.6","midi_outputs":{"Bad":{"offset_ms":2000},"Good":{"enabled":false}},"midi_inputs":{"Bad":{"enabled":"yes"},"Good":{"offset_ms":5}}})"));
+    const auto loaded = gui::Preferences::load(file);
+    REQUIRE(loaded);
+    CHECK_FALSE(loaded->midiOutputs.contains("Bad"));
+    CHECK_FALSE(loaded->midiInputs.contains("Bad"));
+    CHECK_FALSE(engine::midiPortSettings(loaded->midiOutputs, "Good").enabled);
+    CHECK(engine::midiPortSettings(loaded->midiInputs, "Good").offsetMs == 5);
+}

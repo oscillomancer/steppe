@@ -810,7 +810,8 @@ TEST_CASE("hardware MIDI: startup skips malformed preference records and reports
     edits["offset_ms"] = 2;
     REQUIRE((*app)->setMidiPort(true, "synth", edits));
     CHECK(midiPortSettings((*app)->midiOutputsPreferences(), "Synth").offsetMs == 2);
-    for (const auto& port : (*app)->midiPortsState(true).asArray())
+    const auto corrected = (*app)->midiPortsState(true);
+    for (const auto& port : corrected.asArray())
         for (const auto& warning : port["warnings"].asArray())
             CHECK(warning.find("code") == nullptr);
     app->reset();
