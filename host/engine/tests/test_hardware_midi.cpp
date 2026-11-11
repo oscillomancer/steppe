@@ -307,6 +307,12 @@ TEST_CASE("hardware MIDI: machine preferences, commands and project save/reopen"
         records["Synth"]["clock"] = true;
         REQUIRE((*app)->setMidiPreferences((*app)->midiInputsPreferences(), records));
     }
+    const auto saved = readFile(options.midiPreferencesFile);
+    REQUIRE(saved);
+    const auto prefs =
+        json::parse(std::string_view(reinterpret_cast<const char*>(saved->data()), saved->size()));
+    REQUIRE(prefs);
+    CHECK(prefs->find("schema")->asString() == kPreferencesSchema);
     app->reset();
     app = EngineApp::create(options);
     REQUIRE(app);

@@ -2780,3 +2780,6 @@ Preferences add `midi_inputs` and `midi_outputs` maps to
 unknown members for clock output compatibility. Defaults are enabled, zero
 offset and output reset_on_stop true. GUI and headless applications use the
 same preferences file; embedded hosts may provide their own persistence.
+
+The engine and GUI share `engine::kPreferencesSchema` for the current machine
+preferences schema, including a new engine-owned preferences file.

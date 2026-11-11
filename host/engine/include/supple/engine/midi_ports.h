@@ -6,6 +6,8 @@
 #include "supple/base/result.h"
 #include "supple/json/value.h"
 namespace supple::engine {
+// Shared current machine-preferences schema for engine and GUI writers.
+inline constexpr char kPreferencesSchema[] = "supple.preferences/1.6";
 // Machine preferences, keyed by the backend's immutable port name. The JSON
 // record is retained so subsequent clock/sync fields survive common edits.
 struct MidiPortSettings {

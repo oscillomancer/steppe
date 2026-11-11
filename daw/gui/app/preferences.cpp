@@ -14,7 +14,7 @@
 namespace supple::gui {
 namespace {
 
-constexpr const char* kSchema = "supple.preferences/1.6";
+constexpr const char* kSchema = engine::kPreferencesSchema;
 
 Error threadLimitError() {
     return Error("preferences.audio_threads", "audio processing thread limit is out of range",

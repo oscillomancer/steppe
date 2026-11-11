@@ -26,7 +26,7 @@ Status EngineApp::setMidiPreferences(MidiPortPreferences inputs, MidiPortPrefere
         if (!doc.isObject())
             return Error("midi.preferences", "preferences must be an object", "/",
                          "repair the preferences file or choose another file");
-        if (!doc.find("schema")) doc["schema"] = "supple.preferences/1.6";
+        if (!doc.find("schema")) doc["schema"] = kPreferencesSchema;
         doc["midi_inputs"] = midiPortPreferencesJson(inputs);
         doc["midi_outputs"] = midiPortPreferencesJson(outputs);
         std::filesystem::create_directories(options_.midiPreferencesFile.parent_path(), ec);
