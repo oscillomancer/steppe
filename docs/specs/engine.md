@@ -1882,7 +1882,9 @@ retain port-index order, then arrival order within a port. Preallocated chunk
 storage doubles as merge scratch; no new allocation. Events rebase into each
 engine chunk, including the final short chunk. No allocation, lock, wait or
 logging on receive/audio paths. `Backend::midiDropped()` defaults to zero;
-PortAudio exposes rejected messages and ring/period overflow through it and
+PortAudio and JACK expose rejected messages and ring/period overflow
+(JACK: a message that is neither a channel nor a sync message, or past a
+period's `kMaxMidiInputEvents` / `kMaxSyncMidiEvents`) through it and
 `engine.status.midi_dropped`. Sync messages (Clock, Start, Continue, Stop,
 Song Position, MTC quarter frames and the MTC full-frame SysEx) go to
 `Backend::syncMidi()` instead (§ External sync); other system messages and

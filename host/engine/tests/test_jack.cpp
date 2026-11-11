@@ -498,6 +498,15 @@ TEST_CASE("sync messages reach the callback beside the channel messages (ADR-007
     fake.midi(0, 950, 0x90, 60, 100);  // a note still goes to midiInput()
     REQUIRE(waitFor([&] { return count.load(std::memory_order_acquire) >= 5; }));
     REQUIRE(waitFor([&] { return channel.load() >= 1; }));
+    // What was left out is counted: the other SysEx and active sensing, then
+    // a period's sync messages past its bound.
+    CHECK(waitFor([&] { return backend.midiDropped() == 2; }));
+    listening.store(false, std::memory_order_release);
+    fake.stall(1);  // no cycle in flight: the next period takes them all
+    for (int i = 0; i < static_cast<int>(kMaxSyncMidiEvents) + 88; ++i)
+        fake.midiRaw(0, static_cast<std::uint32_t>(i), clock, 1);
+    fake.stall(0);
+    CHECK(waitFor([&] { return backend.midiDropped() == 2 + 88; }));
     backend.stop();
     REQUIRE(count.load() == 5);
     CHECK(seen[0] == std::array<int, 6>{0, 5, 0, 1, 0xFA, 0xFA});

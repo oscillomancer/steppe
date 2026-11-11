@@ -689,6 +689,9 @@ std::vector<MidiInputWarning> JackBackend::midiOutputWarnings() const {
     return impl_ ? impl_->midiOutWarnings : std::vector<MidiInputWarning>{};
 }
 std::uint64_t JackBackend::midiOutDropped() const { return impl_ ? impl_->midiOut.dropped() : 0; }
+std::uint64_t JackBackend::midiDropped() const {
+    return impl_ ? impl_->midiDropped.load(std::memory_order_relaxed) : 0;
+}
 
 unsigned JackBackend::liveThreadCapacity() const {
     if (!impl_ || !impl_->api->clientThreadId) return 0;
