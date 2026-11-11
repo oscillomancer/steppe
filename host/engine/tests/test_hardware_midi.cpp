@@ -531,3 +531,78 @@ TEST_CASE("hardware MIDI: prepared audio history survives stop, wrap and lead ch
     }
     backend.stop();
 }
+
+TEST_CASE("hardware MIDI: mix edits retain the plan and update route, source and VCA mutes") {
+    for (bool anticipative : {false, true}) {
+        Session base;
+        model::EditTxn setup(base.value, 2);
+        model::TrackGroup controller;
+        controller.members = {base.track};
+        controller.vca = model::Vca{};
+        const auto group = setup.create(controller);
+        auto session = setup.commit().value();
+        auto pool = hardwarePool();
+        MediaCache media;
+        DummyBackend backend({.midiOutputPorts = {"Synth"}});
+        Engine engine(
+            pool, media,
+            {.anticipative = anticipative, .renderBlock = 64, .renderAheadMs = 10, .workers = 0});
+        REQUIRE(engine.start(backend, {.blockSize = 64, .midiOutputs = true}));
+        REQUIRE(engine.load(session));
+        engine.play();
+        run(engine, backend, anticipative, 5);
+        const auto generation = engine.planGeneration();
+        auto apply = [&](auto change) {
+            model::EditTxn edit(session, session.version + 1);
+            change(edit);
+            session = edit.commit().value();
+            REQUIRE(engine.load(session));
+            CHECK(engine.planGeneration() == generation);
+            run(engine, backend, anticipative, 5);
+        };
+        apply([&](auto& e) {
+            e.template modify<model::Track>(base.track, [](auto& t) { t.volumeDb = -6; });
+        });
+        CHECK(engine.mixEdits() == 1);
+        for (int kind = 0; kind < 3; ++kind) {
+            const auto before = events(backend, 0x84).size();
+            auto mute = [&](bool on) {
+                apply([&](auto& e) {
+                    if (kind == 0)
+                        e.template modify<model::Route>(base.route, [&](auto& r) { r.mute = on; });
+                    else if (kind == 1)
+                        e.template modify<model::Track>(base.track, [&](auto& t) { t.mute = on; });
+                    else
+                        e.template modify<model::TrackGroup>(group,
+                                                             [&](auto& g) { g.vca->mute = on; });
+                });
+            };
+            mute(true);
+            CHECK(events(backend, 0x84).size() > before);
+            mute(false);
+        }
+        engine.stop();
+    }
+}
+TEST_CASE("hardware MIDI: scalar playrate edits retain an existing rate plan") {
+    Session base;
+    model::EditTxn initial(base.value, 2);
+    auto project = initial.project();
+    project.playrate.rate = .9;
+    project.playrate.preservePitch = false;
+    initial.setProject(project);
+    const auto session = initial.commit().value();
+    auto pool = hardwarePool();
+    MediaCache media;
+    DummyBackend backend({.midiOutputPorts = {"Synth"}});
+    Engine engine(pool, media, {.anticipative = false, .workers = 0});
+    REQUIRE(engine.start(backend, {.blockSize = 64, .midiOutputs = true}));
+    REQUIRE(engine.load(session));
+    const auto generation = engine.planGeneration();
+    model::EditTxn changed(session, 3);
+    project.playrate.rate = 1.1;
+    changed.setProject(project);
+    REQUIRE(engine.load(changed.commit().value()));
+    CHECK(engine.planGeneration() == generation);
+    engine.stop();
+}

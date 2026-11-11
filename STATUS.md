@@ -295,7 +295,8 @@ instructions are in `docs/guides/installing.md`.
   one second), including monitoring. Boundaries preserve its tail; lead changes
   use a 5 ms read-delay ramp. Port status and the offset dialog expose the lead.
   The Hardware MIDI tab edits existing input assignments and hardware sends;
-  header menus edit machine port preferences. CoreMIDI no longer flushes shared
+  header menus edit machine port preferences. Mix and scalar-rate shortcuts
+  remain active with hardware routes; mute and VCA gate values use mix slots. CoreMIDI no longer flushes shared
   endpoints at shutdown; closing note-offs are submitted at native sink now
   before port/client disposal.
   Device-free tests cover both executors, audio nulls, lifecycle, persistence and

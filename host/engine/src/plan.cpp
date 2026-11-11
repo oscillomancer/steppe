@@ -956,8 +956,10 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
     MixSlots& mix = *p.mix;
     mix.strips = std::make_unique<MixSlots::Value[]>(p.nodes.size());
     mix.routes = std::make_unique<MixSlots::Value[]>(p.edges.size());
+    mix.hardware = std::make_unique<MixSlots::Value[]>(p.hardwareMidi.size());
     mix.vcas = std::make_unique<MixSlots::Value[]>(mix.vcaIds.size());
     for (std::size_t i = 0; i < p.nodes.size(); ++i) {
+        mix.strips[i].mute.store(p.nodes[i].mute, std::memory_order_relaxed);
         mix.strips[i].volumeDb.store(p.nodes[i].volumeDb, std::memory_order_relaxed);
         mix.strips[i].pan.store(p.nodes[i].pan, std::memory_order_relaxed);
         mix.strips[i].width.store(p.nodes[i].panSettings.width, std::memory_order_relaxed);
@@ -965,11 +967,16 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         mix.strips[i].panRight.store(p.nodes[i].panSettings.right, std::memory_order_relaxed);
     }
     for (std::size_t i = 0; i < p.edges.size(); ++i) {
+        mix.routes[i].mute.store(p.edges[i].muted, std::memory_order_relaxed);
         mix.routes[i].volumeDb.store(p.edges[i].volumeDb, std::memory_order_relaxed);
         mix.routes[i].pan.store(p.edges[i].pan, std::memory_order_relaxed);
     }
-    for (const auto& [id, v] : controls)
+    for (std::size_t i = 0; i < p.hardwareMidi.size(); ++i)
+        mix.hardware[i].mute.store(p.hardwareMidi[i]->mute, std::memory_order_relaxed);
+    for (const auto& [id, v] : controls) {
         mix.vcas[v.slot].volumeDb.store(v.volumeDb, std::memory_order_relaxed);
+        mix.vcas[v.slot].mute.store(v.mute, std::memory_order_relaxed);
+    }
     return p;
 }
 
@@ -3660,6 +3667,7 @@ void publishMix(Plan& p, const model::Session& s, std::span<const model::EnvTarg
         const Id id = p.nodes[i].id;
         const model::Track* t = s.tracks.find(id);
         if (!t) continue;
+        mix.strips[i].mute.store(t->mute, relaxed);
         store(mix.strips[i], t->volumeDb, t->pan, held(holds, id, "volume"),
               held(holds, id, "pan"));
         mix.strips[i].width.store(t->width, relaxed);
@@ -3674,13 +3682,19 @@ void publishMix(Plan& p, const model::Session& s, std::span<const model::EnvTarg
         const Edge& e = p.edges[i];
         const model::Route* r = e.route ? s.routes.find(*e.route) : nullptr;
         const model::Track* source = r && r->from.track ? s.tracks.find(*r->from.track) : nullptr;
-        if (!r || !source) continue;  // a parent send: nothing to publish
+        if (!r) continue;
+        mix.routes[i].mute.store(r->mute, relaxed);
+        if (!source) continue;  // a parent send or Note Out has no strip pan
         store(mix.routes[i], r->volumeDb, r->pan.resolve(source->pan),
               held(holds, *e.route, "volume"), held(holds, *e.route, "pan"));
     }
+    for (std::size_t i = 0; i < p.hardwareMidi.size(); ++i)
+        if (const auto* route = s.routes.find(p.hardwareMidi[i]->id))
+            mix.hardware[i].mute.store(route->mute, relaxed);
     for (std::size_t i = 0; i < mix.vcaIds.size(); ++i) {
         const model::TrackGroup* g = s.groups.find(mix.vcaIds[i]);
         if (!g || !g->vca) continue;
+        mix.vcas[i].mute.store(g->vca->mute, relaxed);
         store(mix.vcas[i], g->vca->volumeDb, 0, held(holds, mix.vcaIds[i], "volume"), false);
     }
     mix.sequence.store(sequence + 2, std::memory_order_release);
@@ -3695,6 +3709,7 @@ void syncMix(Plan& p, int liveClass) SUPPLE_RT {
     auto ours = [&](const Node& n) { return liveClass < 0 || n.live == (liveClass == 1); };
     auto syncVcas = [&](VcaControls& vcas) {
         for (VcaControl& v : vcas.values) {
+            v.mute = mix.vcas[v.slot].mute.load(relaxed);
             v.volumeDb = mix.vcas[v.slot].volumeDb.load(relaxed);
             v.hold = mix.vcas[v.slot].holdVolume.load(relaxed);
         }
@@ -3703,6 +3718,7 @@ void syncMix(Plan& p, int liveClass) SUPPLE_RT {
         Node& n = p.nodes[i];
         if (!ours(n)) continue;
         const MixSlots::Value& slot = mix.strips[i];
+        n.mute = slot.mute.load(relaxed);
         n.volumeDb = slot.volumeDb.load(relaxed);
         n.pan = slot.pan.load(relaxed);
         n.holdVolume = slot.holdVolume.load(relaxed);
@@ -3728,6 +3744,7 @@ void syncMix(Plan& p, int liveClass) SUPPLE_RT {
         if (!e.route || !ours(p.nodes[e.stage >= 0 ? e.to : e.from])) continue;
         const MixSlots::Value& slot = mix.routes[i];
         const MixSlots::Value& source = mix.strips[e.from];
+        e.muted = slot.mute.load(relaxed);
         e.volumeDb = slot.volumeDb.load(relaxed);
         e.pan = slot.pan.load(relaxed);
         e.holdVolume = slot.holdVolume.load(relaxed);
@@ -3745,6 +3762,12 @@ void syncMix(Plan& p, int liveClass) SUPPLE_RT {
             e.source.right = source.panRight.load(relaxed);
         }
         syncVcas(e.vcas);
+    }
+    for (std::size_t i = 0; i < p.hardwareMidi.size(); ++i) {
+        auto& route = *p.hardwareMidi[i];
+        if (!ours(p.nodes[route.source])) continue;
+        route.mute = mix.hardware[i].mute.load(relaxed);
+        syncVcas(route.vcas);
     }
     std::atomic_thread_fence(std::memory_order_acquire);
     if (mix.sequence.load(relaxed) == sequence) seen = sequence;

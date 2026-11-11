@@ -2794,3 +2794,8 @@ preferences schema, including a new engine-owned preferences file.
 MIDI preference records have one writer, EngineApp. Generic GUI preference
 saves preserve the latest records on disk and ask the engine to persist its
 current records; opening a dialog never replaces engine state from a snapshot.
+
+Hardware routes preserve scalar-rate and mix-only edit paths. With hardware
+routes, route/source/VCA mute values join the existing atomic mix publication;
+the callback updates its hardware gate consumers without a plan compile.
+Fader edits retain the running plan and prepared audio history.

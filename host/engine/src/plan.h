@@ -824,14 +824,16 @@ struct MixSlots {
     struct Value {
         std::atomic<double> volumeDb{0}, pan{0};  // a route's pan resolved against its source
         std::atomic<double> width{100}, panLeft{-100}, panRight{100};  // strips (ADR-0066)
+        std::atomic<bool> mute{false};
         std::atomic<bool> holdVolume{false}, holdPan{false};
         std::atomic<bool> holdWidth{false}, holdPanLeft{false}, holdPanRight{false},
             holdPanBoost{false};
     };
-    std::unique_ptr<Value[]> strips;  // per node
-    std::unique_ptr<Value[]> routes;  // per edge (parent sends keep their compiled values)
-    std::unique_ptr<Value[]> vcas;    // per VCA group (pan unused)
-    std::vector<Id> vcaIds;           // main thread: the group of each VCA slot
+    std::unique_ptr<Value[]> strips;    // per node
+    std::unique_ptr<Value[]> routes;    // per edge (parent sends keep their compiled values)
+    std::unique_ptr<Value[]> vcas;      // per VCA group (pan unused)
+    std::unique_ptr<Value[]> hardware;  // per hardware MIDI route
+    std::vector<Id> vcaIds;             // main thread: the group of each VCA slot
     std::atomic<std::uint64_t> sequence{0};
     std::array<std::uint64_t, 2> seen{};  // per executor class (0: renderer or all, 1: live)
 };
