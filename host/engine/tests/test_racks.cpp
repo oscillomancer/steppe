@@ -2234,6 +2234,7 @@ namespace {
 constexpr const char* kEcho = "com.suppleaudio.test.note-echo";  // notes out a fifth up
 constexpr const char* kSine = "com.suppleaudio.test.sine";
 constexpr const char* kGain = "com.suppleaudio.test.gain";
+constexpr const char* kGen = "com.suppleaudio.test.note-gen";  // key 50, hears nothing
 
 std::vector<midi::Note> busNotes(int up = 0) {
     std::vector<midi::Note> notes;
@@ -2283,7 +2284,7 @@ model::Session busChain(std::vector<const char*> chain, std::vector<midi::Note> 
     t.modify<model::Track>(track, [&](auto& tr) { tr.chainMidi = chainMidi; });
     for (const char* plugin : chain) {
         const Id fx = addFx(t, track, plugin);
-        if (plugin == std::string_view(kEcho))
+        if (plugin == std::string_view(kEcho) || plugin == std::string_view(kGen))
             t.modify<model::FxInstance>(fx, [&](auto& f) {
                 f.midiOutput = mode;
                 f.bypass = bypass;
@@ -2324,6 +2325,30 @@ TEST_CASE("MIDI bus: a note-output plug-in replaces or merges what the plug-ins 
         CHECK(bool(
             renderLeft(busChain({kEcho, kSine}, busNotes(), model::MidiOutputMode::Replace, true),
                        1.0, block) == plain));
+    }
+}
+
+TEST_CASE("MIDI bus: a generator that hears nothing replaces or joins the channel's own MIDI" *
+          doctest::description("rt")) {
+    // The generator is no note target (it has no note input): the sine is.
+    const auto own = renderLeft(busChain({kSine}, busNotes()), 1.0);
+    const auto generated = renderLeft(busChain({kGen, kSine}, {}), 1.0);
+    REQUIRE(maxDiff(own, std::vector<float>(own.size())) > 0.01);
+    REQUIRE(maxDiff(generated, std::vector<float>(own.size())) > 0.01);
+    std::vector<float> both(own.size());
+    for (std::size_t i = 0; i < both.size(); ++i) both[i] = own[i] + generated[i];
+    for (std::uint32_t block : {37u, 512u}) {
+        CAPTURE(block);
+        // Replace: the instrument is cut off from the channel's own MIDI.
+        CHECK(bool(renderLeft(busChain({kGen, kSine}, busNotes()), 1.0, block) == generated));
+        // Merge: it hears both.
+        CHECK(maxDiff(renderLeft(busChain({kGen, kSine}, busNotes(), model::MidiOutputMode::Merge),
+                                 1.0, block),
+                      both) < 1e-6);
+        // Instrument mode: the instrument hears the channel's MIDI, nothing else.
+        CHECK(bool(renderLeft(busChain({kGen, kSine}, busNotes(), model::MidiOutputMode::Replace,
+                                       false, model::ChainMidi::Instrument),
+                              1.0, block) == own));
     }
 }
 

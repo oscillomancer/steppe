@@ -12,6 +12,9 @@
 //     note off and reports NOTE_END.
 //   com.suppleaudio.test.note-echo  — note effect with output note ports: echoes
 //     notes a fifth up and emits note/MIDI output of every kind (ADR-0068).
+//   com.suppleaudio.test.note-gen  — a note generator: no audio ports, an output
+//     note port and no input; key 50 at velocity 0.5 for 4800 frames of every
+//     9600, counted from activation or reset (ADR-0068).
 //   com.suppleaudio.test.edge  — stereo pass-through for host edge cases. Its
 //     4-byte state is a configuration: byte 0 = refuse start_processing,
 //     bytes 1..3 = reported tail in samples (little endian; mode 20: twice
@@ -1624,7 +1627,53 @@ clap_process_status CLAP_ABI noteEchoProcess(const clap_plugin_t*, const clap_pr
     return CLAP_PROCESS_CONTINUE;
 }
 
-uint32_t CLAP_ABI factoryCount(const clap_plugin_factory_t*) { return 19; }
+// A note generator (ADR-0068): it hears nothing and plays key 50 for 4800
+// frames of every 9600, counting frames from activation or reset.
+const clap_plugin_descriptor_t* noteGenDescriptor() {
+    static const char* features[] = {CLAP_PLUGIN_FEATURE_NOTE_EFFECT, nullptr};
+    static const clap_plugin_descriptor_t d = {CLAP_VERSION_INIT,
+                                               "com.suppleaudio.test.note-gen",
+                                               "Test Note Generator",
+                                               "Supple Audio",
+                                               "",
+                                               "",
+                                               "",
+                                               "0.1.0",
+                                               "Plays a note it does not hear (note output tests)",
+                                               features};
+    return &d;
+}
+
+struct NoteGen {
+    clap_plugin_t plugin{};
+    const clap_host_t* host = nullptr;
+    uint64_t frames = 0;
+};
+NoteGen* NG(const clap_plugin_t* p) { return static_cast<NoteGen*>(p->plugin_data); }
+
+uint32_t CLAP_ABI noteGenNoteCount(const clap_plugin_t*, bool isInput) { return isInput ? 0 : 1; }
+bool CLAP_ABI noteGenNoteGet(const clap_plugin_t* p, uint32_t index, bool isInput,
+                             clap_note_port_info_t* info) {
+    return !isInput && noteEchoNoteGet(p, index, false, info);
+}
+const clap_plugin_note_ports_t kNoteGenNotes = {noteGenNoteCount, noteGenNoteGet};
+const void* CLAP_ABI noteGenExt(const clap_plugin_t*, const char* id) {
+    return !std::strcmp(id, CLAP_EXT_NOTE_PORTS) ? &kNoteGenNotes : nullptr;
+}
+bool CLAP_ABI noteGenActivate(const clap_plugin_t* p, double, uint32_t, uint32_t) {
+    NG(p)->frames = 0;
+    return true;
+}
+clap_process_status CLAP_ABI noteGenProcess(const clap_plugin_t* p, const clap_process_t* pr) {
+    auto& frames = NG(p)->frames;
+    for (uint32_t i = 0; i < pr->frames_count; ++i, ++frames)
+        if (frames % 9600 == 0 || frames % 9600 == 4800)
+            pushNote(pr->out_events, frames % 9600 ? CLAP_EVENT_NOTE_OFF : CLAP_EVENT_NOTE_ON, i, 0,
+                     50, 1, 0.5);
+    return CLAP_PROCESS_CONTINUE;
+}
+
+uint32_t CLAP_ABI factoryCount(const clap_plugin_factory_t*) { return 20; }
 const clap_plugin_descriptor_t* CLAP_ABI factoryDesc(const clap_plugin_factory_t*, uint32_t i) {
     return i == 0    ? gainDescriptor()
            : i == 1  ? sineDescriptor()
@@ -1645,6 +1694,7 @@ const clap_plugin_descriptor_t* CLAP_ABI factoryDesc(const clap_plugin_factory_t
            : i == 16 ? legacyKeyMixDescriptor()
            : i == 13 ? multiOut48Descriptor()
            : i == 18 ? noteEchoDescriptor()
+           : i == 19 ? noteGenDescriptor()
                      : nullptr;
 }
 const clap_plugin_t* CLAP_ABI factoryCreate(const clap_plugin_factory_t*, const clap_host_t* host,
@@ -1728,6 +1778,12 @@ const clap_plugin_t* CLAP_ABI factoryCreate(const clap_plugin_factory_t*, const 
     if (!std::strcmp(id, noteEchoDescriptor()->id))
         return make<NoteEcho>(host, noteEchoDescriptor(), noteEchoActivate, noteEchoProcess,
                               noteEchoExt);
+    if (!std::strcmp(id, noteGenDescriptor()->id)) {
+        const clap_plugin_t* p =
+            make<NoteGen>(host, noteGenDescriptor(), noteGenActivate, noteGenProcess, noteGenExt);
+        const_cast<clap_plugin_t*>(p)->reset = [](const clap_plugin_t* pl) { NG(pl)->frames = 0; };
+        return p;
+    }
     if (!std::strcmp(id, crashDescriptor()->id))
         return make<Crash>(host, crashDescriptor(), crashActivate, crashProcess, crashExt);
     for (const auto* desc : {keyMixDescriptor(), legacyKeyMixDescriptor()})
