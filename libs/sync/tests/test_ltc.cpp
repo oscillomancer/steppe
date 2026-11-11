@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cmath>
+#include <tuple>
 #include <vector>
 
 using namespace supple;
@@ -315,6 +316,24 @@ TEST_CASE("ltc: reverse playback decodes backwards") {
     for (std::size_t i = 1; i < seen.size(); ++i) {
         CHECK(seen[i].reverse);
         CHECK(seen[i].count == seen[i - 1].count - 1);
+    }
+}
+
+TEST_CASE("ltc: an expected rate settles its pair only") {
+    // 25 fps LTC with 30 expected keeps 25; 29.97 with 30 expected is 30.
+    for (const auto& [sent, expected, heard] :
+         std::vector<std::tuple<FrameRate, FrameRate, FrameRate>>{
+             {FrameRate::Fps25, FrameRate::Fps30, FrameRate::Fps25},
+             {FrameRate::Fps2997, FrameRate::Fps30, FrameRate::Fps30},
+             {FrameRate::Fps24, FrameRate::Fps23976, FrameRate::Fps23976}}) {
+        CAPTURE(rateName(sent));
+        Signal s;
+        LtcDecoderConfig config;
+        config.expected = expected;
+        const LinearMap map(0.0, 0.0, 1.0 / 48000.0);
+        const RoundTrip r = roundTrip(sent, map, 2.0, s, config);
+        CHECK(r.rate == heard);
+        CHECK(breaks(r.frames) == 0);
     }
 }
 

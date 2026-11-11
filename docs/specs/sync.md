@@ -212,9 +212,12 @@ sample rate 8–768 kHz, level −60..0 dBFS, queue 1..1024 frames;
   sample after the frame; backwards the frame's own start (count).
 - Lock after four consecutive frames each one on from the last (either
   way); a break is a jump; 0.2 s without a frame loses the signal.
-- Rate: the drop flag means 29.97df; else the expected rate; else the
-  integer rate nearest the frame length until two seconds of consecutive
-  frames, whose mean length then decides 23.976/24 and 29.97/30 once.
+- Rate: the drop flag means 29.97df; else the integer rate nearest the
+  frame length (24, 25 or 30); an expected rate holds instead (it settles
+  23.976/24 and 29.97/30, and a varispeed source matches no standard length)
+  unless the frames are within 3% of another family's length, when the
+  source keeps its own rate; without one, two seconds of consecutive frames
+  decide 23.976/24 and 29.97/30 once by their mean length.
 
 Measured: at 44.1, 48 and 96 kHz and every rate, every frame decodes from
 the first; observations within 0.07 ms; frame starts within 3 samples of

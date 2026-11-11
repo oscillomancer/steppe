@@ -68,6 +68,9 @@ struct LtcDecoderConfig {
     double sampleRate = 48000.0;
     // The project's rate, when set: LTC cannot tell 24 from 23.976, nor 30
     // from 29.97 non-drop, except by measuring frame lengths (two seconds).
+    // It holds at any speed, except that a source whose frames are within 3%
+    // of another standard rate's length (25 against an expected 30) keeps its
+    // own.
     std::optional<FrameRate> expected{};
     // Decoded frames held per feed() call: one second at 30 fps by default,
     // so feed() blocks up to a second long.

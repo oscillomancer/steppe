@@ -280,13 +280,25 @@ struct LtcDecoder::Impl {
 
     FrameRate resolve(bool drop, int label, double frameLength) const SUPPLE_RT {
         if (drop) return FrameRate::Fps2997Drop;
-        if (config.expected && !rateInfo(*config.expected).drop) return *config.expected;
-        if (rateMeasured && rate != FrameRate::Fps2997Drop && rateInfo(rate).nominal > label)
-            return rate;
         // Until decided: the integer rate nearest the run's mean frame length,
         // or this frame's own length.
         const double length = measured > 0.0 ? measured : frameLength;
-        return nearest(config.sampleRate / std::max(length, 1.0), label, false);
+        const double fps = config.sampleRate / std::max(length, 1.0);
+        const FrameRate integer = nearest(fps, label, false);
+        // The expected rate holds (it settles 23.976/24 and 29.97/30, and a
+        // varispeed source's frames match no standard length) unless the
+        // frames are within 3% of another family's: that source keeps its own.
+        if (config.expected && !rateInfo(*config.expected).drop) {
+            const auto& e = rateInfo(*config.expected);
+            const auto& i = rateInfo(integer);
+            if (i.nominal == e.nominal || std::abs(fps - i.fps()) > 0.03 * i.fps() ||
+                i.nominal <= label)
+                return *config.expected;
+        }
+        if (rateMeasured && rate != FrameRate::Fps2997Drop && rateInfo(rate).nominal > label &&
+            rateInfo(rate).nominal == rateInfo(integer).nominal)
+            return rate;
+        return integer;
     }
 
     void accept(const LTCFrameExt& ext) SUPPLE_RT {
