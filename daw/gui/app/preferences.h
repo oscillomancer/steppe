@@ -2,8 +2,8 @@
 // Copyright (c) 2026 Supple Audio
 // Preferences (Edit > Preferences…): app-wide settings, never project state.
 // The monitoring mode, audio thread limit, opt-in process controls, render
-// folder, import copying and the audio device are saved to
-// <config>/<slug>/preferences.json (supple.preferences/1.6). Buttons open the
+// folder, import copying, the audio device and external sync are saved to
+// <config>/<slug>/preferences.json (supple.preferences/1.7). Buttons open the
 // audio device and mouse modifiers dialogs.
 #pragma once
 
@@ -29,6 +29,7 @@ struct Preferences {
     bool copyImports = true;        // imported audio is copied into the project's media folder
     AudioDeviceSettings audio;      // the device the engine starts with (1.5)
     bool renderOpenFolder = false;  // open the render folder when a render finishes (1.6)
+    engine::SyncSettings sync;      // external sync and LTC output (1.7, ADR-0071)
     static std::filesystem::path defaultFile(std::string_view slug);
     static Result<Preferences> load(const std::filesystem::path& file);  // absent: defaults
     Status save(const std::filesystem::path& file) const;
@@ -54,6 +55,8 @@ class PreferencesDialog {
     Status setRenderOpenFolder(bool on);
     // The audio device dialog's settings: saved (the dialog applies them).
     Status setAudioDevice(const AudioDeviceSettings& audio);
+    // The sync settings (from the sync dialog, or an agent's sync.set): saved.
+    Status setSync(const engine::SyncSettings& sync);
     // Opens the audio device dialog (the Audio device row's button).
     std::function<void()> onAudioDevice;
     std::function<std::string()> audioSummary;  // the row's text

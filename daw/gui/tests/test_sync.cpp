@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
-// Timecode and sync in the GUI (gui.md §4.8): the project timecode dialog.
+// Timecode and sync in the GUI (gui.md §4.13): the project timecode dialog,
+// the tempo button's sync menu and state, and the sync settings dialog.
 #include <doctest/doctest.h>
 #include "product_fixture.h"
 #include "test_support.h"
@@ -14,10 +15,13 @@
 #include "supple/gui/window.h"
 #include "supple/json/parse.h"
 #include "supple/ui/forms.h"
+#include "supple/ui/popup.h"
 #include "supple/ui/root.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
+#include "sync_dialog.h"
 #include "timecode_dialog.h"
+#include "transport_bar.h"
 
 using namespace supple;
 
@@ -34,6 +38,8 @@ struct Fixture {
     cmd::Registry registry;
     std::unique_ptr<cmd::Dispatcher> dispatcher;
     std::unique_ptr<ui::Root> root;
+    gui::UiState ui;
+    std::unique_ptr<gui::AppActions> actions;
     bool ok = false;
 
     Fixture() {
@@ -68,6 +74,8 @@ struct Fixture {
         engine::registerEngineCommands(registry);
         dispatcher = std::make_unique<cmd::Dispatcher>(registry, *app);
         root = std::make_unique<ui::Root>(*window, fonts, ui::Theme::dark());
+        actions = std::make_unique<gui::AppActions>(
+            registry, *dispatcher, *app, ui, actions::Keymap::defaultFile(gui::test::slug()));
         auto frame = std::make_unique<ui::Node>("window");
         frame->layout.dir = ui::Layout::Dir::Column;
         frame->emplace<ui::Node>("arrange").layout.height = ui::SizeRule::fraction();
@@ -76,6 +84,7 @@ struct Fixture {
         ok = true;
     }
     ~Fixture() {
+        actions.reset();
         root.reset();
         dispatcher.reset();
         app.reset();
@@ -144,4 +153,102 @@ TEST_CASE("project timecode: the dialog edits the project's rate and start") {
     dialog.refresh();
     f.root->frame(false);
     CHECK(f.node("timecode.rate.set")->valueText() == "30 fps");
+}
+
+TEST_CASE("sync: the tempo button's menu chooses the source and shows the state") {
+    Fixture f;
+    if (!f.ok) return;
+    std::vector<std::string> opened;
+    f.actions->addUi("ui.sync.settings", "Transport: sync settings…",
+                     [&] { opened.push_back("settings"); });
+    gui::TransportBar bar(*f.app, *f.actions, *f.dispatcher, *f.root);
+    f.root->setContent(bar.build());
+    bar.sync();
+    f.root->frame(false);
+    CHECK(f.node("transport.tempo")->valueText() == "120");
+    // A right click opens the menu: the sources, Off checked, and the dialog.
+    REQUIRE(f.root->click("transport.tempo", 3));
+    f.root->frame(false);
+    auto* menu = f.root->find("transport.sync.menu");
+    REQUIRE(menu);
+    const auto items = ui::menuItems(*menu);
+    REQUIRE(items.size() == 6);
+    CHECK(items[0].label == "External sync: Off");
+    CHECK(items[0].checked);
+    CHECK(items[2].label == "External sync: MTC");
+    CHECK(items[5].label == "Sync settings...");
+    items[2].run();
+    f.root->closePopups();
+    CHECK(f.app->syncSettings().source == "mtc");
+    // On: "EXT" and the tempo heard, tinted red while nothing arrives (no engine).
+    bar.sync();
+    f.root->frame(false);
+    CHECK(f.node("transport.tempo")->valueText() == "EXT 120.0");
+    REQUIRE(f.root->click("transport.tempo", 3));
+    f.root->frame(false);
+    ui::menuItems(*f.root->find("transport.sync.menu"))[5].run();
+    CHECK(opened.size() == 1);
+    // A left click still edits the tempo.
+    f.root->closePopups();
+    REQUIRE(f.root->click("transport.tempo"));
+    f.root->frame(false);
+    CHECK(f.root->find("tempo.field"));
+}
+
+TEST_CASE("sync: the settings dialog sets, saves and follows an agent's changes") {
+    Fixture f;
+    if (!f.ok) return;
+    std::vector<engine::SyncSettings> saved;
+    gui::SyncDialog dialog(*f.root, *f.dispatcher, *f.app, [&](const engine::SyncSettings& s) {
+        saved.push_back(s);
+        return Status{};
+    });
+    bool timecode = false;
+    dialog.onTimecode = [&] { timecode = true; };
+    dialog.open();
+    f.root->frame(false);
+    REQUIRE(dialog.isOpen());
+    CHECK(f.node("sync.source.set")->valueText() == "Off (Steppe is the master)");
+    CHECK(f.root->find("sync.midi.set") == nullptr);  // rows follow the source
+    CHECK(f.node("sync.timecode.value")->valueText() == "30 fps from 00:00:00:00");
+    // MIDI clock: its rows appear; each change is saved.
+    dynamic_cast<ui::Dropdown*>(f.node("sync.source.set"))->choose("midi_clock");
+    f.root->frame(false);
+    REQUIRE(f.root->find("sync.midi.set"));
+    REQUIRE(f.root->find("sync.follow.set"));
+    CHECK(f.app->syncSettings().source == "midi_clock");
+    REQUIRE(saved.size() == 1);
+    CHECK(saved.back().source == "midi_clock");
+    dynamic_cast<ui::Checkbox*>(f.node("sync.follow.set"))->toggle();
+    CHECK_FALSE(f.app->syncSettings().followTempo);
+    auto* offset = dynamic_cast<ui::TextField*>(f.node("sync.offset.set"));
+    REQUIRE(offset);
+    offset->onSubmit("-12.5");
+    CHECK(f.app->syncSettings().offsetMs == -12.5);
+    dynamic_cast<ui::Dropdown*>(f.node("sync.loss.set"))->choose("50");
+    CHECK(f.app->syncSettings().onLoss == "freewheel");
+    CHECK(f.app->syncSettings().freewheelFrames == 50);
+    dynamic_cast<ui::Checkbox*>(f.node("sync.ltc_out.set"))->toggle();
+    CHECK(f.app->syncSettings().ltcOutput);
+    CHECK(saved.size() == 5);
+    CHECK(saved.back() == f.app->syncSettings());
+    // The status says what it waits for.
+    CHECK(f.node("sync.status.0")->valueText() == "Start the audio engine to follow a master.");
+    // The timecode row opens the project's timecode.
+    f.root->frame(false);
+    REQUIRE(f.root->click("sync.timecode.edit"));
+    CHECK(timecode);
+    // An agent's sync.set: saved, and shown when the dialog refreshes.
+    dialog.open();
+    f.exec("sync.set", R"({"source": "ltc", "ltc_input": 2})");
+    dialog.refresh();
+    f.root->frame(false);
+    CHECK(saved.back().source == "ltc");
+    REQUIRE(f.root->find("sync.ltc_input.set"));
+    CHECK(f.node("sync.ltc_input.set")->valueText().find("Input 2") == 0);
+    // A refused value shows its message and changes nothing.
+    json::Value bad = json::Value::object();
+    bad["offset_ms"] = 99999;
+    CHECK_FALSE(dialog.set(bad));
+    CHECK(f.app->syncSettings().offsetMs == -12.5);
 }

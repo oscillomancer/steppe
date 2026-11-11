@@ -14,7 +14,7 @@
 namespace supple::gui {
 namespace {
 
-constexpr const char* kSchema = "supple.preferences/1.6";
+constexpr const char* kSchema = "supple.preferences/1.7";
 
 Error threadLimitError() {
     return Error("preferences.audio_threads", "audio processing thread limit is out of range",
@@ -76,7 +76,8 @@ Result<Preferences> Preferences::load(const std::filesystem::path& file) {
          schema->asString() != "supple.preferences/1.2" &&
          schema->asString() != "supple.preferences/1.3" &&
          schema->asString() != "supple.preferences/1.4" &&
-         schema->asString() != "supple.preferences/1.5"))
+         schema->asString() != "supple.preferences/1.5" &&
+         schema->asString() != "supple.preferences/1.6"))
         return Error("preferences.schema", file.string() + " is not a " + kSchema + " document",
                      "/schema");
     if (const json::Value* m = doc->find("default_monitor")) {
@@ -131,6 +132,16 @@ Result<Preferences> Preferences::load(const std::filesystem::path& file) {
         if (!audio) return std::move(audio).error();
         out.audio = std::move(*audio);
     }
+    if (const auto* v = doc->find("sync")) {  // 1.7, ADR-0071
+        auto sync = engine::parseSyncSettings(*v);
+        if (!sync) {
+            Error e = std::move(sync).error();
+            e.code = "preferences.sync";
+            e.path = "/sync" + e.path;
+            return e;
+        }
+        out.sync = std::move(*sync);
+    }
     return out;
 }
 
@@ -146,6 +157,7 @@ Status Preferences::save(const std::filesystem::path& file) const {
     doc["copy_imported_media"] = copyImports;
     doc["render_open_folder"] = renderOpenFolder;
     doc["audio"] = audioDeviceJson(audio);
+    doc["sync"] = engine::syncSettingsJson(sync);
     std::error_code ec;
     std::filesystem::create_directories(file.parent_path(), ec);
     return writeFileAtomic(file, json::writeCanonical(doc) + "\n");
@@ -407,6 +419,15 @@ Status PreferencesDialog::setAudioDevice(const AudioDeviceSettings& audio) {
     if (!file_.empty()) SUPPLE_TRY(next.save(file_));
     prefs_ = next;
     refresh();
+    return {};
+}
+
+Status PreferencesDialog::setSync(const engine::SyncSettings& sync) {
+    if (sync == prefs_.sync) return {};
+    auto next = prefs_;
+    next.sync = sync;
+    if (!file_.empty()) SUPPLE_TRY(next.save(file_));
+    prefs_ = next;
     return {};
 }
 

@@ -328,6 +328,7 @@ field's range. The toolkit has no input timestamps, so taps use a steady
 clock at button activation. Tap returns focus to the field; Set or Enter
 applies the value through `tempo.set`, preserving the other tempo points
 and ramps. Cancel discards it; reopening starts a fresh tap sequence.
+A right click on the tempo button opens the sync menu (§4.13).
 
 The transport's time-map controls appear as meter, tempo, a small playrate
 knob and a two-line Rate readout (ADR-0045). Unity is at the knob's top/center
@@ -1504,6 +1505,38 @@ on Enter or when the field loses focus, is one `project.set {timecode}`
 each (undoable). A refused value shows its message and hint on the
 dialog's status line (`timecode.status`) and changes nothing; the controls
 follow the project (an undo, an agent's edit) while the dialog is open.
+
+**The tempo button's right click** (`transport.sync.menu`): **External
+sync: Off**, **MIDI clock**, **MTC** and **LTC** (the current source
+checked; each the action `sync.source:off|midi_clock|mtc|ltc`, one
+`sync.set {source}`), a separator, and **Sync
+settings…** (`ui.sync.settings`, also in the Transport menu, which the
+defaults list after its seek entries; layouts saved before it get it).
+While a source is on the button reads **EXT** and the tempo heard (the
+master's for MIDI clock; the project's at the playhead times the playrate
+heard for timecode), tinted green (`meter`) when locked and running, in the
+accent while the signal arrives but is not locked, red (`armed`) when none
+arrives; the transport bar then refreshes at 4 Hz while stopped too.
+
+**Sync settings…** (`sync`): **Follow** (`sync.source.set`: Off, MIDI
+clock, MIDI Time Code (MTC), SMPTE LTC (audio)); for MIDI clock and MTC
+**MIDI input** (`sync.midi.set`: the engine's ports, or the saved name
+marked not connected); for LTC **LTC input** (`sync.ltc_input.set`: the
+device's input channels); for MIDI clock **Tempo** (`sync.follow.set`, a
+checkbox: follow the master's tempo, pitch preserved); with any source
+**Offset (ms)** (`sync.offset.set`, a field committed on Enter or blur)
+and **When the signal stops** (`sync.loss.set`: Stop, or keep playing for
+10, 25, 50 or 100 frames); **LTC output** (`sync.ltc_out.set` Send LTC,
+the channel `sync.ltc_out.channel`, the level `sync.ltc_out.level` −24 to
+−6 dBFS; a saved channel the device lacks reads "Output N (not on this
+device: LTC uses output M)", M the device's last, which the engine uses
+meanwhile); **Project timecode** (the rate and start, and Change…, which
+opens Project > Timecode…); three status lines (`sync.status.*`: waiting
+for a signal on its input, or running/locked with the master's tempo or
+timecode, the chase rate and the error; LTC output on; the warnings). Each
+control is one `sync.set`; rows follow the source. Every change, an agent's
+`sync.set` included, is saved as `preferences.json`'s `sync` (1.7), which
+the app applies at start.
 
 ## 5. Agent panel (removed)
 

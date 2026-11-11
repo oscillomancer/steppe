@@ -107,7 +107,7 @@ ChromeLayout ChromeLayout::defaults() {
         {"Item", {}},
         {"Transport",
          {"transport.toggle", "transport.record", "transport.loop.toggle", "-",
-          "transport.seek:start", "transport.seek:end"}},
+          "transport.seek:start", "transport.seek:end", "-", "ui.sync.settings"}},
         {"Project",
          {"project.timebase:beats", "project.timebase:time", "project.timebase:beats_position", "-",
           "project.pan_law:0", "project.pan_law:-2.5", "project.pan_law:-3", "project.pan_law:-4.5",
@@ -137,7 +137,8 @@ const std::set<std::string, std::less<>>& addedSinceKnown() {
                                                            "project.pan_law:-4.5",
                                                            "project.pan_law:-6",
                                                            "project.pan_law.boost",
-                                                           "ui.project.timecode"};
+                                                           "ui.project.timecode",
+                                                           "ui.sync.settings"};
     return ids;
 }
 

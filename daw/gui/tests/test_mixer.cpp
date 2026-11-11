@@ -1129,6 +1129,12 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
     values.audio.rate = 96000;
     values.audio.block = 128;
     values.audio.forceGraph = true;
+    values.sync.source = "mtc";
+    values.sync.midiInput = "Interface MIDI 1";
+    values.sync.offsetMs = 12.5;
+    values.sync.onLoss = "freewheel";
+    values.sync.ltcOutput = true;
+    values.sync.ltcOutputChannel = 4;
     REQUIRE(values.save(file));
     auto loaded = gui::Preferences::load(file);
     REQUIRE(loaded);
@@ -1140,13 +1146,14 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
     CHECK_FALSE(loaded->copyImports);
     CHECK(loaded->renderOpenFolder);
     CHECK(loaded->audio == values.audio);
+    CHECK(loaded->sync == values.sync);
     const auto bytes = readFile(file).value();
-    CHECK(std::string(bytes.begin(), bytes.end()).find("supple.preferences/1.6") !=
+    CHECK(std::string(bytes.begin(), bytes.end()).find("supple.preferences/1.7") !=
           std::string::npos);
     REQUIRE(loaded->save(file));
     CHECK(readFile(file).value() == bytes);
     // Older schemas load, with defaults for what they lack.
-    for (const char* version : {"1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6"}) {
+    for (const char* version : {"1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7"}) {
         REQUIRE(writeFileAtomic(
             file, std::string("{\"schema\":\"supple.preferences/") + version + "\"}"));
         auto old = gui::Preferences::load(file);
@@ -1158,6 +1165,7 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
         CHECK(old->copyImports);
         CHECK_FALSE(old->renderOpenFolder);
         CHECK(old->audio == gui::AudioDeviceSettings{});
+        CHECK(old->sync == engine::SyncSettings{});
     }
     // A wrong value names its field.
     for (auto [field, bad] : {std::pair{"audio_threads", "65"},
@@ -1190,6 +1198,20 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
         REQUIRE_FALSE(rejected);
         CHECK(rejected.error().code == "preferences.audio");
         CHECK(rejected.error().path == std::string("/audio/") + field);
+        CHECK_FALSE(rejected.error().hint.empty());
+    }
+    // And a wrong sync value, under /sync (1.7).
+    for (auto [field, bad] : {std::pair{"source", "\"smpte\""},
+                              {"offset_ms", "\"5\""},
+                              {"ltc_input", "0"},
+                              {"freewheel_frames", "1000"}}) {
+        REQUIRE(
+            writeFileAtomic(file, std::string(R"({"schema":"supple.preferences/1.7","sync":{")") +
+                                      field + "\":" + bad + "}}"));
+        auto rejected = gui::Preferences::load(file);
+        REQUIRE_FALSE(rejected);
+        CHECK(rejected.error().code == "preferences.sync");
+        CHECK(rejected.error().path == std::string("/sync/") + field);
         CHECK_FALSE(rejected.error().hint.empty());
     }
 }

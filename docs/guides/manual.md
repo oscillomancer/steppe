@@ -196,6 +196,52 @@ as HH:MM:SS:FF (with `;` before the frames in drop-frame) and press Enter.
 The setting is saved with the project and undoable, and timecode sync and
 LTC output use it.
 
+### Following another machine (sync)
+
+Steppe can follow a master: a drum machine or another DAW sending **MIDI
+clock**, a video deck or DAW sending **MTC**, or a tape machine or video
+system sending **SMPTE LTC** as audio. Right-click the tempo button in the
+transport bar and choose the source; **Sync settings…** in the same menu
+(or Transport > Sync settings…) chooses where it arrives:
+
+- **MIDI clock** and **MTC** arrive on a MIDI input: choose it in **MIDI
+  input**.
+- **LTC** arrives on an audio input: choose the channel in **LTC input**.
+
+When the master plays, Steppe starts at the same place and follows it
+by changing its playrate slightly, with the pitch kept, so it stays with
+the master even if their clocks differ. When the master stops, so does
+Steppe; when it jumps, Steppe jumps too. With MIDI clock, **Follow the
+master's tempo** plays the project at the master's tempo (a 126 bpm master
+plays a 120 bpm project 5% faster); without it, only Start, Stop and Song
+Position are followed. MTC and LTC positions use the project's timecode
+(Project > Timecode…): a master at 01:00:10:00 plays a project that starts
+at 01:00:00:00 from its tenth second. **Offset** moves Steppe later
+(positive) or earlier against the master, and **When the signal stops**
+either stops at once or keeps playing for a few frames, for signals with
+gaps.
+
+The tempo button then reads **EXT** and the tempo heard: green when locked
+to the master, orange while it is catching up, red when nothing arrives.
+The project's own playrate is not changed, and renders are unaffected.
+You can record while following: takes are placed where the master was.
+While following, Steppe processes the whole project live, as when
+monitoring an input, so very heavy projects may need a larger buffer.
+When it follows the master's speed (MTC, LTC, or MIDI clock with Follow
+the master's tempo), audio items play through the time stretcher, which
+sounds very close to, but is not exactly, normal playback.
+
+**LTC output** (off until you turn it on) sends the transport's timecode as
+LTC on an output channel you choose (it replaces anything a master sends to
+that channel), so a tape machine, a camera or another DAW can follow
+Steppe. The timecode is the position of the audio leaving with it, so
+plug-in latency does not put it early. If the chosen channel is not on the
+current device, LTC goes to the device's last output instead, and the
+dialog says so; your choice is kept for when the device has it. It is
+silent while the transport is stopped.
+
+Real devices' timing has not been measured on every system yet.
+
 ## Rendering
 
 **File > Render…** opens the render dialog; **File > Mix** renders the mix

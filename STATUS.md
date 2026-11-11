@@ -126,9 +126,11 @@ instructions are in `docs/guides/installing.md`.
   Position (Start, Continue, Stop, follow tempo or transport only), MTC and
   LTC on an input channel drive the transport and a live chase rate (pitch
   preserved, never saved; offline renders unaffected; recording works while
-  slaved); LTC of the transport on a chosen output. `sync.get`/`sync.set`
-  and `engine.status.sync`. Devices deliver sync messages beside channel
-  messages on JACK, CoreMIDI and WinMM. Tested with scripted dummy devices.
+  slaved); LTC of the transport on a chosen output. `sync.get`/`sync.set`,
+  `engine.status.sync`, the tempo button's right-click menu and Sync
+  settings…, saved in the preferences. Devices deliver sync messages beside
+  channel messages on JACK, CoreMIDI and WinMM. Tested with scripted dummy
+  devices.
 
 - **Session and history** (`specs/session-model.md`, ADR-0008): immutable
   versions with stable ids, per-branch undo, branches with object-level diff

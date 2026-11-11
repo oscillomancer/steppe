@@ -52,6 +52,7 @@ class TransportBar {
     void openTempoForm();
     void openMeterForm();
     void openRateMenu();
+    void openSyncMenu();  // the tempo button's right click (ADR-0071)
 
     engine::EngineApp& app_;
     AppActions& actions_;
@@ -75,6 +76,7 @@ class TransportBar {
     ui::Node* rateReadout_ = nullptr;
     std::uint64_t rateGesture_ = 0;
     bool moving_ = false;
+    bool syncOn_ = false;  // external sync is on: the tempo button refreshes at 4 Hz
     std::optional<std::chrono::steady_clock::time_point> lastStatus_;
 };
 
