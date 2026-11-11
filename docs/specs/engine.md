@@ -2773,7 +2773,10 @@ Held notes release on removal, mute, disabling/re-timing, stop/locate when
 reset is on, and engine shutdown. Releases include sustain-off; boundary and
 shutdown resets add all-notes-off on used channels. These controllers share
 hardware channel state. `reset_on_stop: false` retains timeline notes across
-transport stops/locates; engine shutdown always releases. CoreMIDI shutdown
+transport stops/locates; engine shutdown always releases. While stopped, this
+preference suppresses only releases of high timeline slots held before the
+block. Live onsets always pass, including on a newly allocated/reused slot.
+CoreMIDI shutdown
 stamps closing releases at `max(now, lastDue[port])`, after accepted events,
 then retains its port/client until the latest submitted timestamp, capped at
 250 ms from sender stop (`kMidiOutputCloseWaitSeconds` and
