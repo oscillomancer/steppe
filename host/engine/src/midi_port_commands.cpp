@@ -25,10 +25,20 @@ Result<json::Value> preferencesDocument(const std::filesystem::path& file) {
     return doc;
 }
 Status writeMidiRecords(const std::filesystem::path& file, json::Value doc,
-                        const MidiPortPreferences& inputs, const MidiPortPreferences& outputs) {
+                        const MidiPortPreferences& inputs, const MidiPortPreferences& outputs,
+                        const std::array<std::vector<MidiPortPreferenceWarning>, 2>& warnings) {
     if (!doc.find("schema")) doc["schema"] = kPreferencesSchema;
-    doc["midi_inputs"] = midiPortPreferencesJson(inputs);
-    doc["midi_outputs"] = midiPortPreferencesJson(outputs);
+    for (bool output : {false, true}) {
+        const auto& preferences = output ? outputs : inputs;
+        auto records = midiPortPreferencesJson(preferences);
+        for (const auto& warning : warnings[output ? 1 : 0]) {
+            if (warning.section) {
+                if (preferences.empty()) records = warning.raw;
+            } else if (!preferences.contains(warning.port))
+                records[warning.port] = warning.raw;
+        }
+        doc[output ? "midi_outputs" : "midi_inputs"] = std::move(records);
+    }
     std::error_code ec;
     std::filesystem::create_directories(file.parent_path(), ec);
     return writeFileAtomic(file, json::writeCanonical(doc) + "\n");
@@ -37,7 +47,8 @@ Status writeMidiRecords(const std::filesystem::path& file, json::Value doc,
 Status EngineApp::writeMidiPreferences(const std::filesystem::path& file) const {
     auto doc = preferencesDocument(file);
     if (!doc) return doc.error();
-    return writeMidiRecords(file, std::move(*doc), midiInputsPreferences_, midiOutputsPreferences_);
+    return writeMidiRecords(file, std::move(*doc), midiInputsPreferences_, midiOutputsPreferences_,
+                            midiPreferencesWarnings_);
 }
 Status EngineApp::setMidiPreferences(MidiPortPreferences inputs, MidiPortPreferences outputs,
                                      bool save) {
@@ -59,8 +70,8 @@ Status EngineApp::setMidiPreferences(MidiPortPreferences inputs, MidiPortPrefere
         }
     }
     if (doc) {
-        auto written =
-            writeMidiRecords(options_.midiPreferencesFile, std::move(*doc), inputs, outputs);
+        auto written = writeMidiRecords(options_.midiPreferencesFile, std::move(*doc), inputs,
+                                        outputs, midiPreferencesWarnings_);
         if (!written) {
             if (engine_) {
                 engine_->setMidiPreferences(oldInputs, oldOutputs);
@@ -74,8 +85,9 @@ Status EngineApp::setMidiPreferences(MidiPortPreferences inputs, MidiPortPrefere
     midiOutputsPreferences_ = std::move(outputs);
     for (bool output : {false, true}) {
         const auto& preferences = output ? midiOutputsPreferences_ : midiInputsPreferences_;
-        std::erase_if(midiPreferencesWarnings_[output ? 1 : 0],
-                      [&](const auto& warning) { return preferences.contains(warning.port); });
+        std::erase_if(midiPreferencesWarnings_[output ? 1 : 0], [&](const auto& warning) {
+            return warning.section ? !preferences.empty() : preferences.contains(warning.port);
+        });
     }
     return {};
 }
@@ -110,7 +122,14 @@ Status EngineApp::setMidiPort(bool output, const std::string& name, const json::
     auto inputs = midiInputsPreferences_, outputs = midiOutputsPreferences_;
     auto& preferences = output ? outputs : inputs;
     auto& record = preferences[canonical];
-    if (!record.isObject()) record = json::Value::object();
+    if (!record.isObject()) {
+        record = json::Value::object();
+        // An explicit correction starts from the skipped raw record, so valid
+        // peers and future fields survive fixing its invalid member.
+        for (const auto& warning : midiPreferencesWarnings_[output ? 1 : 0])
+            if (!warning.section && warning.port == canonical && warning.raw.isObject())
+                record = warning.raw;
+    }
     for (const auto& entry : edits.asObject()) record[entry.key] = entry.value;
     return setMidiPreferences(std::move(inputs), std::move(outputs));
 }

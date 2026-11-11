@@ -975,3 +975,61 @@ TEST_CASE("hardware MIDI: delayed live onsets survive reset-off boundaries") {
                         engine.stop();
                     }
 }
+
+TEST_CASE("hardware MIDI: unrelated preference writes retain malformed raw records") {
+    const auto dir = std::filesystem::temp_directory_path() /
+                     ("midi-raw-record-" + std::to_string(test::processId()));
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    AppOptions options;
+    options.workdir = dir;
+    options.midiPreferencesFile = dir / "preferences.json";
+    const auto original =
+        json::parse(
+            R"({"schema":"supple.preferences/1.6","midi_outputs":{"Synth":{"offset_ms":2000,"enabled":false,"reset_on_stop":false,"extra":{"keep":[1,"two"]}},"WrongType":17,"Drums":{"enabled":false}},"midi_inputs":{"Broken":{"enabled":"bad","offset_ms":5},"Keyboard":{"offset_ms":3}}})")
+            .value();
+    REQUIRE(writeFileAtomic(options.midiPreferencesFile, json::writeCanonical(original)));
+    auto app = EngineApp::create(options);
+    REQUIRE(app);
+    auto read = [&](const std::filesystem::path& file) {
+        const auto bytes = readFile(file);
+        REQUIRE(bytes);
+        auto value = json::parse(
+            std::string_view(reinterpret_cast<const char*>(bytes->data()), bytes->size()));
+        REQUIRE(value);
+        return *value;
+    };
+    auto checkRaw = [&](json::Value saved) {
+        CHECK(saved["midi_outputs"]["Synth"] == *original.find("midi_outputs")->find("Synth"));
+        CHECK(saved["midi_outputs"]["WrongType"] == json::Value(17));
+        CHECK(saved["midi_inputs"]["Broken"] == *original.find("midi_inputs")->find("Broken"));
+    };
+    // Writing a new file also retains the raw records: no reread can supply them.
+    REQUIRE((*app)->writeMidiPreferences(dir / "copy.json"));
+    checkRaw(read(dir / "copy.json"));
+    auto edit = json::Value::object();
+    edit["offset_ms"] = 7;
+    REQUIRE((*app)->setMidiPort(true, "Drums", edit));
+    checkRaw(read(options.midiPreferencesFile));
+    edit["offset_ms"] = 9;
+    REQUIRE((*app)->setMidiPort(false, "Keyboard", edit));
+    checkRaw(read(options.midiPreferencesFile));
+    edit["offset_ms"] = 2;
+    REQUIRE((*app)->setMidiPort(true, "synth", edit));
+    auto corrected = read(options.midiPreferencesFile);
+    CHECK_FALSE(corrected["midi_outputs"]["Synth"]["enabled"].asBool());
+    CHECK_FALSE(corrected["midi_outputs"]["Synth"]["reset_on_stop"].asBool());
+    CHECK(corrected["midi_outputs"]["Synth"]["offset_ms"].asDouble() == 2);
+    CHECK(corrected["midi_outputs"]["Synth"]["extra"] ==
+          *original.find("midi_outputs")->find("Synth")->find("extra"));
+    CHECK(corrected["midi_inputs"]["Broken"] == *original.find("midi_inputs")->find("Broken"));
+    CHECK(corrected["midi_outputs"]["WrongType"] == json::Value(17));
+    app->reset();
+    app = EngineApp::create(options);
+    REQUIRE(app);
+    CHECK_FALSE(midiPortSettings((*app)->midiOutputsPreferences(), "Synth").enabled);
+    CHECK(midiPortSettings((*app)->midiOutputsPreferences(), "Synth").offsetMs == 2);
+    CHECK_FALSE((*app)->midiInputsPreferences().contains("Broken"));
+    app->reset();
+    std::filesystem::remove_all(dir);
+}

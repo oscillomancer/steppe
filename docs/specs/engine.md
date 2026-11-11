@@ -2822,7 +2822,11 @@ Startup uses `loadMidiPortPreferences` to skip each malformed MIDI record while
 retaining valid peers; a malformed input/output section is skipped as a whole.
 `midi.outputs.get` / `midi.inputs.get` retain skipped names with structured
 `midi.preferences` warnings (code, path, message, hint). A successful correction
-clears that record's warning. Command edits still use strict validation.
+clears that record's warning. Skipped raw JSON records (and malformed whole
+sections) are retained and written back unchanged on unrelated edits, including
+writes to a new preferences file. An explicit correction merges into the raw
+object, preserving its other fields, then validates strictly before replacing it.
+Command edits still use strict validation.
 
 Hardware routes preserve scalar-rate and mix-only edit paths. With hardware
 routes, route/source/VCA mute values join the existing atomic mix publication;

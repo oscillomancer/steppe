@@ -43,7 +43,7 @@ MidiPortPreferences loadMidiPortPreferences(const json::Value& value, bool outpu
     MidiPortPreferences result;
     if (!value.isObject()) {
         auto parsed = parseMidiPortPreferences(value, output);
-        warnings.push_back({"", parsed.error()});
+        warnings.push_back({"", parsed.error(), value, true});
         return result;
     }
     for (const auto& entry : value.asObject()) {
@@ -53,7 +53,7 @@ MidiPortPreferences loadMidiPortPreferences(const json::Value& value, bool outpu
         if (parsed)
             result.insert(parsed->begin(), parsed->end());
         else
-            warnings.push_back({entry.key, parsed.error()});
+            warnings.push_back({entry.key, parsed.error(), entry.value});
     }
     return result;
 }

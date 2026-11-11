@@ -22,6 +22,8 @@ Result<MidiPortPreferences> parseMidiPortPreferences(const json::Value&, bool ou
 struct MidiPortPreferenceWarning {
     std::string port;  // empty: invalid whole input/output section
     Error error;
+    json::Value raw;       // retained unchanged on writes until explicitly corrected
+    bool section = false;  // raw is an invalid whole section, not one record
 };
 // Startup only: retain valid records and report each skipped record. Command
 // edits use the strict parser above and still refuse malformed settings.

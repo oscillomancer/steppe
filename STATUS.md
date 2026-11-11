@@ -324,7 +324,8 @@ instructions are in `docs/guides/installing.md`.
   a native-validation limit; WinMM releases remain immediate.
   Device-free tests cover both executors, audio nulls, lifecycle, persistence and
   GUI interactions. Malformed machine MIDI records are skipped with port-status
-  warnings while valid records load. Native macOS/Windows CI, physical timing/disconnect testing
+  warnings while valid records load; their raw JSON survives unrelated preference
+  writes until explicitly corrected. Native macOS/Windows CI, physical timing/disconnect testing
   and cross-client shutdown validation remain pending. Native input loss without
   port attribution remains in aggregate MIDI loss status.
 - **Modular racks** (ADR-0062, `specs/rack.md`): racks of modules and
