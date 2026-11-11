@@ -1849,6 +1849,15 @@ TEST_CASE("routing matrix: MIDI mode exposes channels and note modules with MIDI
     REQUIRE(panel.root().click("routing.mode.midi"));
     panel.root().frame(false);
     REQUIRE(matrix.midiMode());
+    // The switch shows the mode: the MIDI tab lit, the Audio tab not.
+    const auto tab = [&](const char* id) {
+        return static_cast<const ui::Toggle*>(panel.root().find(id))->on();
+    };
+    CHECK(tab("routing.mode.midi"));
+    CHECK_FALSE(tab("routing.mode.audio"));
+    REQUIRE(panel.root().click("routing.mode.midi"));  // the lit tab stays lit
+    CHECK(tab("routing.mode.midi"));
+    CHECK(matrix.midiMode());
     const auto& model = matrix.model();
     bool hasOutput = false, hasNotes = false;
     std::size_t row = 0, col = 0;
@@ -1888,10 +1897,16 @@ TEST_CASE("routing matrix: MIDI mode exposes channels and note modules with MIDI
     REQUIRE(panel.root().click("routing.midi.from"));
     CHECK(panel.root().find("routing.midi.channels") != nullptr);
     panel.root().closePopup();
+    // A double-click on a send selects it, in both modes; Remove removes it.
     REQUIRE(matrix.doubleClickCell(row, col));
+    CHECK(model.sendsAt(row, col).size() == 1);
+    REQUIRE(panel.root().click("routing.remove"));
     CHECK(model.sendsAt(row, col).empty());
     REQUIRE(panel.root().click("routing.mode.audio"));
     CHECK_FALSE(matrix.midiMode());
+    CHECK(tab("routing.mode.audio"));
+    CHECK_FALSE(tab("routing.mode.midi"));
+    f.snapshot("routing-audio.png", &panel.root());
     CHECK(matrix.volumeControl()->visible);
     matrix.setMidiMode(true);
     matrix.close();

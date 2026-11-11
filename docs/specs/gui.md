@@ -949,7 +949,8 @@ window. The panel Close button, WM close request and unhandled Escape all
 close this panel without quitting the app.
 
 
-The header switches **Audio | MIDI** (ADR-0067); the mode persists in the
+The header switches **Audio | MIDI** (ADR-0067), two latching tabs with the
+active mode lit in the accent colour; the mode persists in the
 `windows.routing.mode` UI sidecar field. Audio mode is the existing grid; MIDI
 routes do not appear in it. In Audio mode (`reaper-ux.md` addendum 2), sources (strips in hierarchy, hardware
 inputs, MIDI inputs) × destinations (parent, strips, plugin keys, racks' In
@@ -959,7 +960,9 @@ column's name selects all of it (Ctrl adds it, or removes it when it is all
 selected; Shift takes the rows or columns from the last one clicked), and the
 corner or Ctrl+A every cell. The selection is kept by source, pair and
 destination across reloads. A double click on a cell without a send adds one
-(`route.add`; the parent's cell turns the parent send on or off). **Add**
+(`route.add`; the parent's cell turns the parent send on or off); on a cell
+with a send it only selects it, in Audio and MIDI mode alike (Remove or
+Delete removes). **Add**
 does that for every selected cell that can take one and **Remove** (also
 Delete) removes every selected cell's sends (the parent's: the parent send
 off), each one undo step. The controls act on every send in the selection,
@@ -998,8 +1001,7 @@ MIDI mode lists channels in hierarchy order, then their racks' Note Out
 modules indented below them. Columns are channels, each followed by its
 racks' Notes modules. Busses, masters, plug-in keys and In modules are absent.
 MIDI sends use the `midi-send` theme token (teal), distinct from strip send
-colours. The usual selection and Add/Remove gestures apply; double-click
-also removes an existing MIDI send. The controls show pre-FX, post-FX
+colours. The usual selection, double-click and Add/Remove gestures apply. The controls show pre-FX, post-FX
 (`pre_fader`) and post-fader taps, mute, From channel (All or 1–16) and To
 channel (Original or 1–16). These edits act on selected sends in one undo
 step; right-click learns mute only. Audio controls are hidden. The action

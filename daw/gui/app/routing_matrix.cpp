@@ -475,10 +475,14 @@ void RoutingMatrix::open(std::optional<ui::Rect> anchor) {
     auto& title = header.emplace<ui::Label>("routing.title", "Routing", ui::Font::UiBold, "body");
     title.layout.width = ui::SizeRule::fraction();
     panel_.setTitle(title.text());
-    audioMode_ =
-        &header.emplace<ui::Button>("routing.mode.audio", "Audio", [this] { setMidiMode(false); });
-    midiModeButton_ =
-        &header.emplace<ui::Button>("routing.mode.midi", "MIDI", [this] { setMidiMode(true); });
+    // A click on the lit tab keeps it lit: the switch always shows one mode.
+    audioMode_ = &header.emplace<ui::Toggle>("routing.mode.audio", "Audio", "accent",
+                                             [this](bool) { setMidiMode(false); });
+    midiModeButton_ = &header.emplace<ui::Toggle>("routing.mode.midi", "MIDI", "accent",
+                                                  [this](bool) { setMidiMode(true); });
+    audioMode_->layout.width = midiModeButton_->layout.width = ui::SizeRule::fixed(64);
+    audioMode_->setOn(!midiMode_);
+    midiModeButton_->setOn(midiMode_);
     header.emplace<ui::Button>("routing.close", "Close", [this] { close(); });
     GridHooks hooks;
     hooks.cell = [this](std::size_t row, std::size_t col, unsigned mods) {
@@ -683,7 +687,8 @@ void RoutingMatrix::open(std::optional<ui::Rect> anchor) {
             pan_ = nullptr;
             add_ = remove_ = mute_ = nullptr;
             channels_ = phase_ = nullptr;
-            midiFrom_ = midiTo_ = audioMode_ = midiModeButton_ = nullptr;
+            midiFrom_ = midiTo_ = nullptr;
+            audioMode_ = midiModeButton_ = nullptr;
             taps_.clear();
             selection_.clear();
             anchor_.reset();
@@ -889,7 +894,8 @@ Status RoutingMatrix::doubleClickCell(std::size_t row, std::size_t col) {
     if (row >= model_.sources.size() || col >= model_.destinations.size())
         return Error("gui.routing", "no such cell");
     select({cellAt(row, col)}, cellAt(row, col));
-    if (!model_.sendsAt(row, col).empty()) return midiMode_ ? removeSelected() : Status{};
+    // A cell with a send: selected, as in either mode (Remove or Delete removes).
+    if (!model_.sendsAt(row, col).empty()) return {};
     // The parent's cell is the implicit parent send: on or off.
     if (parentCell(row, col)) {
         json::Value args = json::Value::object();
@@ -1110,8 +1116,8 @@ void RoutingMatrix::refresh() {
                              static_cast<ui::Node*>(channels_), static_cast<ui::Node*>(phase_)})
         widget->visible = !midiMode_;
     midiFrom_->visible = midiTo_->visible = midiMode_;
-    audioMode_->setText(midiMode_ ? "Audio" : "• Audio");
-    midiModeButton_->setText(midiMode_ ? "• MIDI" : "MIDI");
+    audioMode_->setOn(!midiMode_);
+    midiModeButton_->setOn(midiMode_);
     midiFrom_->setText("From channel: " + (x && x->midiFrom ? std::to_string(x->midiFrom) : "All"));
     midiTo_->setText("To channel: " + (x && x->midiTo ? std::to_string(x->midiTo) : "Original"));
     root().relayout();
@@ -1161,6 +1167,8 @@ void RoutingMatrix::refresh() {
 }
 
 void RoutingMatrix::setMidiMode(bool midi) {
+    if (audioMode_) audioMode_->setOn(!midi);
+    if (midiModeButton_) midiModeButton_->setOn(midi);
     if (midiMode_ == midi) return;
     midiMode_ = midi;
     selection_.clear();

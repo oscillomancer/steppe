@@ -144,7 +144,9 @@ class RoutingMatrix {
     engine::EngineApp& app_;
     MatrixModel model_;
     bool midiMode_ = false;
-    ui::Button *audioMode_ = nullptr, *midiModeButton_ = nullptr;
+    // The mode switch: two latching tabs, the active one lit (as the render
+    // dialog's output tabs).
+    ui::Toggle *audioMode_ = nullptr, *midiModeButton_ = nullptr;
     ui::Button *midiFrom_ = nullptr, *midiTo_ = nullptr;
     std::uint64_t version_ = 0;
     std::uint64_t projectGeneration_ = ~std::uint64_t{0};
