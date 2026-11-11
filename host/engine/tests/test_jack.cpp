@@ -576,3 +576,97 @@ TEST_CASE("JACK reports its callback thread's scheduling once started") {
     backend.stop();
     CHECK(backend.callbackPolicy() == ThreadPolicy{});
 }
+
+TEST_CASE("JACK MIDI outputs connect, clear periods, sort frames and report signed latency") {
+    auto& fake = fakeJack();
+    fake.reset(211);
+    JackBackend backend(fakeOptions());
+    std::atomic<bool> emit{false}, done{false};
+    unsigned chunk = 0;
+    REQUIRE(backend.start({.blockSize = 64, .midiOutputs = true}, [&](auto, auto, unsigned n) {
+        if (!n || !emit.load(std::memory_order_acquire)) return;
+        // Two callbacks in one 211-frame period. Deliberately unsorted ties.
+        if (!chunk) {
+            backend.writeMidi({63, 0, 1, {0xf8}});
+            backend.writeMidi({1, 1, 3, {0xf2, 1, 2}});
+            backend.writeMidi({1, 1, 2, {0xf1, 3}});
+            backend.writeMidi({0, 0, 10, {0xf0, 0x7f, 0x7f, 1, 1, 0, 2, 3, 4, 0xf7}});
+        } else if (chunk == 1) {
+            backend.writeMidi({0, 0, 1, {0xfa}});
+        }
+        ++chunk;
+        if (chunk == 4) {
+            emit.store(false);
+            done.store(true, std::memory_order_release);
+        }
+    }));
+    CHECK(backend.midiOutputPorts() ==
+          std::vector<std::string>{"system:midi_playback_1", "Synth:midi_in"});
+    CHECK(backend.midiOutputLatency() == std::vector<std::int64_t>{384, -256});
+    CHECK(fake.connections() == 4);  // two audio + two MIDI
+    fake.topology();
+    CHECK(backend.status().midiDevicesChanged);
+    CHECK_FALSE(backend.status().restartNeeded);
+    // Stall establishes the start of an entire device period.
+    fake.stall(1);
+    emit.store(true, std::memory_order_release);
+    fake.stall(0);
+    while (!done.load(std::memory_order_acquire)) std::this_thread::yield();
+    fake.stall(1);
+    REQUIRE(fake.midiWritten() == 5);
+    const auto clears = fake.midiClears();
+    CHECK(clears >= 2);
+    const auto cycles = fake.cycles();
+    FakeJack::WrittenMidi e;
+    fake.midiRead(0, &e);
+    CHECK(e.frame == 0);
+    CHECK(e.size == 10);
+    fake.midiRead(1, &e);
+    CHECK(e.frame == 1);
+    CHECK(e.bytes[0] == 0xf2);
+    fake.midiRead(2, &e);
+    CHECK(e.frame == 1);
+    CHECK(e.bytes[0] == 0xf1);
+    fake.midiRead(3, &e);
+    CHECK(e.frame == 63);
+    fake.midiRead(4, &e);
+    CHECK(e.frame == 64);
+    CHECK(backend.midiOutDropped() == 0);
+    fake.stall(0);
+    while (fake.cycles() <= cycles + 1) std::this_thread::yield();
+    fake.stall(1);
+    CHECK(fake.midiClears() > clears);
+    CHECK(fake.midiWritten() == 5);  // no event repeated into subsequent periods
+    fake.stall(0);
+    backend.stop();
+}
+
+TEST_CASE("JACK MIDI output failures are best effort and writes count losses") {
+    auto& fake = fakeJack();
+    fake.reset(64);
+    SUBCASE("port registration refusal") { fake.midiFail(0, 1, 0); }
+    SUBCASE("connection refusal") { fake.midiFail(0, 0, 1); }
+    JackBackend backend(fakeOptions());
+    REQUIRE(backend.start({.blockSize = 64, .midiOutputs = true}, [](auto, auto, auto) {}));
+    CHECK(backend.midiOutputPorts().empty());
+    REQUIRE(backend.midiOutputWarnings().size() == 2);
+    CHECK_FALSE(backend.midiOutputWarnings()[0].hint.empty());
+    backend.stop();
+    fake.reset(64);
+    fake.midiFail(1, 0, 0);
+    std::atomic<bool> emit{false}, done{false};
+    REQUIRE(backend.start({.blockSize = 64, .midiOutputs = true}, [&](auto, auto, unsigned n) {
+        if (!n || !emit.exchange(false, std::memory_order_acq_rel)) return;
+        for (std::size_t k = 0; k <= kMaxMidiOutputEvents; ++k)
+            backend.writeMidi({0, 0, 1, {0xf8}});
+        done.store(true, std::memory_order_release);
+    }));
+    emit.store(true, std::memory_order_release);
+    while (!done.load(std::memory_order_acquire)) std::this_thread::yield();
+    fake.stall(1);
+    CHECK(backend.midiOutDropped() == kMaxMidiOutputEvents + 1);
+    CHECK(fake.midiWritten() == 0);
+    fake.stall(0);
+    backend.stop();
+    fake.reset(64);
+}

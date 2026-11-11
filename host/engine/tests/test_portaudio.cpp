@@ -6,6 +6,7 @@
 #include <mutex>
 #include "../../../tests/file_platform.h"
 #include "midi_input.h"
+#include "midi_output.h"
 #include "portaudio_api.h"
 #include "supple/engine/app.h"
 #include "supple/engine/offline.h"
@@ -44,9 +45,10 @@ struct Driver {
         if (audio.joinable()) audio.join();
         current = nullptr;
     }
-    int drive(unsigned long frames, PaStreamCallbackFlags flags = 0) {
-        return callback(input.channelCount ? inputs.data() : nullptr, outputs.data(), frames,
-                        nullptr, flags, context);
+    int drive(unsigned long frames, PaStreamCallbackFlags flags = 0,
+              const PaStreamCallbackTimeInfo* time = nullptr) {
+        return callback(input.channelCount ? inputs.data() : nullptr, outputs.data(), frames, time,
+                        flags, context);
     }
     static const detail::PortAudioApi api;
 };
@@ -1014,8 +1016,10 @@ TEST_CASE("real native MIDI inputs enumerate and receive only on explicit opt-in
     const char* enabled = std::getenv("SUPPLE_MIDI_DEVICE_TEST");
     if (!enabled || std::string_view(enabled) != "1") return;
     Driver driver;  // MIDI alone: never open the audio device
-    PortAudioBackend backend({}, Driver::api, detail::nativeMidiSource());
-    REQUIRE(backend.start({.midiInputs = true}, [](auto, auto, auto) {}));
+    auto source = detail::nativeMidiSource();
+    auto sink = detail::nativeMidiSink(source.get());
+    PortAudioBackend backend({}, Driver::api, std::move(source), std::move(sink));
+    REQUIRE(backend.start({.midiInputs = true, .midiOutputs = true}, [](auto, auto, auto) {}));
     CHECK_FALSE(backend.midiPorts().empty());
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     driver.drive(256);
@@ -1052,5 +1056,201 @@ TEST_CASE("native MIDI topology changes are advisory and audio monitoring contin
     CHECK(wake.drain());
     CHECK(backend.status().restartNeeded);
     CHECK(backend.status().restartReason == "sample rate changed");
+    backend.stop();
+}
+
+namespace {
+struct FakeSink : detail::MidiSink {
+    std::atomic<double> clock{10};
+    std::mutex mutex;
+    std::vector<detail::TimedMidiOutput> sent;
+    std::atomic<unsigned> sentCount{0}, waits{0};
+    std::atomic<unsigned> prepared{0}, released{0};
+    std::atomic<bool> topology{false};
+    unsigned starts = 0, stops = 0;
+    bool fail = false;
+    Status start() override {
+        ++starts;
+        if (fail)
+            return Error("backend.midi", "fixture output setup failed", "/midi_outputs", "retry");
+        names = {"Synth", "Clock"};
+        latencySeconds = {.001, .004};
+        warnings = {{"Busy synth", 5, "fixture output busy"}};
+        return okStatus();
+    }
+    void stop() override { ++stops; }
+    double now() const SUPPLE_RT override { return clock.load(std::memory_order_relaxed); }
+    bool timestamped() const override { return true; }
+    bool send(const detail::TimedMidiOutput& e) override {
+        {
+            std::lock_guard lock(mutex);
+            sent.push_back(e);
+        }
+        sentCount.fetch_add(1, std::memory_order_release);
+        return true;
+    }
+    bool changed() override { return topology.load(std::memory_order_acquire); }
+    void prepareThread() override { prepared.fetch_add(1, std::memory_order_release); }
+    void releaseThread() override { released.fetch_add(1, std::memory_order_release); }
+    void waitUntil(double seconds) override {
+        waits.fetch_add(1, std::memory_order_release);
+        detail::MidiSink::waitUntil(seconds);
+    }
+};
+}  // namespace
+TEST_CASE("PortAudio MIDI output maps its device clock into the sink clock across chunks") {
+    Driver driver;
+    auto sink = std::make_unique<FakeSink>();
+    auto& output = *sink;
+    PortAudioBackend backend({}, Driver::api, {}, std::move(sink));
+    bool accepted = true;
+    REQUIRE(backend.start({.blockSize = 64, .midiOutputs = true}, [&](auto, auto, unsigned n) {
+        if (n) {
+            accepted = backend.writeMidi({n - 1, 1, 2, {0xf1, 4}}) && accepted;
+            accepted = backend.writeMidi({0, 0, 1, {0xf8}}) && accepted;
+        }
+    }));
+    CHECK(output.starts == 1);
+    CHECK(backend.midiOutputPorts() == std::vector<std::string>{"Synth", "Clock"});
+    CHECK(backend.midiOutputLatency() == std::vector<std::int64_t>{48, -96});
+    REQUIRE(backend.midiOutputWarnings().size() == 1);
+    CHECK(backend.midiOutputWarnings()[0].osError == 5);
+    // A different PortAudio epoch: output frame zero reaches DAC at 100.012,
+    // currentTime is 100. Sink time is 10; audio latency is .002 seconds.
+    PaStreamCallbackTimeInfo time{100, 100, 100.012};
+    driver.drive(211, 0, &time);
+    CHECK(accepted);
+    while (output.sentCount.load(std::memory_order_acquire) < 8) std::this_thread::yield();
+    {
+        std::lock_guard lock(output.mutex);
+        REQUIRE(output.sent.size() == 8);
+        const unsigned frames[] = {0, 63, 64, 127, 128, 191, 192, 210};
+        for (unsigned n = 0; n < 8; ++n)
+            CHECK(output.sent[n].seconds == doctest::Approx(10.01 + frames[n] / 48000.0));
+    }
+    CHECK(backend.midiOutDropped() == 0);
+    backend.stop();
+    CHECK(output.stops == 1);
+    CHECK(output.prepared.load() == 1);
+    CHECK(output.released.load() == 1);
+    REQUIRE(backend.start({.midiOutputs = true}, [](auto, auto, auto) {}));
+    backend.stop();
+    CHECK(output.starts == 2);
+    CHECK(output.released.load() == 2);
+}
+TEST_CASE("native MIDI output setup refusal is nonfatal and command status reports it") {
+    Driver driver;
+    auto sink = std::make_unique<FakeSink>();
+    sink->fail = true;
+    PortAudioBackend backend({}, Driver::api, {}, std::move(sink));
+    unsigned frames = 0;
+    REQUIRE(backend.start({.midiOutputs = true}, [&](auto, auto, unsigned n) { frames += n; }));
+    driver.drive(256);
+    CHECK(frames == 256);
+    CHECK(backend.midiOutputPorts().empty());
+    REQUIRE(backend.midiOutputWarnings().size() == 1);
+    CHECK(backend.midiOutputWarnings()[0].message == "fixture output setup failed");
+    CHECK(backend.midiOutputWarnings()[0].hint == "retry");
+    backend.stop();
+}
+TEST_CASE("MIDI hardware output listing, warning and latency survive the command boundary") {
+    Driver driver;
+    auto sink = std::make_unique<FakeSink>();
+    PortAudioBackend backend({}, Driver::api, {}, std::move(sink));
+    const auto dir = std::filesystem::temp_directory_path() /
+                     ("supple-midi-output-" + std::to_string(test::processId()));
+    struct Cleanup {
+        std::filesystem::path path;
+        ~Cleanup() { std::filesystem::remove_all(path); }
+    } cleanup{dir};
+    AppOptions options;
+    options.workdir = dir;
+    options.pluginPath = {FIXTURE_CLAP_PATH};
+    auto opened = EngineApp::create(options);
+    REQUIRE(opened);
+    auto& app = **opened;
+    REQUIRE(app.startEngine(backend, {.midiOutputs = true}, {.workers = 1}));
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher dispatcher(registry, app);
+    app.attachCommands(dispatcher);
+    auto status = dispatcher.execute(
+        {"engine.status", json::Value::object(), {cmd::Origin::Type::Test, "midi-output", ""}});
+    REQUIRE(status);
+    CHECK((*status)["midi_out_dropped"] == 0);
+    REQUIRE((*status)["midi_output_latency"].asArray().size() == 2);
+    CHECK((*status)["midi_output_latency"].asArray()[1] == -96);
+    REQUIRE((*status)["midi_output_warnings"].asArray().size() == 1);
+    CHECK((*status)["midi_output_warnings"].asArray()[0]["device"] == "Busy synth");
+    auto ports = dispatcher.execute(
+        {"engine.inputs", json::Value::object(), {cmd::Origin::Type::Test, "midi-output", ""}});
+    REQUIRE(ports);
+    REQUIRE((*ports)["midi_outputs"].asArray().size() == 2);
+    CHECK((*ports)["midi_outputs"].asArray()[0] == "Synth");
+    app.stopEngine();
+}
+
+TEST_CASE("native sender shutdown discards future messages without waiting for due time") {
+    struct WaitingSink : FakeSink {
+        bool timestamped() const override { return false; }
+    };
+    Driver driver;
+    auto sink = std::make_unique<WaitingSink>();
+    auto& output = *sink;
+    PortAudioBackend backend({}, Driver::api, {}, std::move(sink));
+    REQUIRE(backend.start({.blockSize = 64, .midiOutputs = true}, [&](auto, auto, unsigned n) {
+        if (n) backend.writeMidi({0, 0, 1, {0xf8}});
+    }));
+    PaStreamCallbackTimeInfo time{100, 100, 110};
+    driver.drive(64, 0, &time);  // event due ten seconds ahead; fake clock never advances
+    backend.stop();
+    CHECK(backend.midiOutDropped() == 1);
+    CHECK(output.sentCount.load() == 0);
+    CHECK(output.released.load() == 1);
+    CHECK(output.stops == 1);
+}
+
+TEST_CASE("native output topology is advisory and leaves audio running") {
+    Driver driver;
+    auto api = Driver::api;
+    api.native = true;  // enables the production device monitor with fake devices
+    auto sink = std::make_unique<FakeSink>();
+    auto& output = *sink;
+    output.topology.store(true);
+    PortAudioBackend backend({}, api, {}, std::move(sink));
+    unsigned frames = 0;
+    REQUIRE(backend.start({.midiOutputs = true}, [&](auto, auto, unsigned n) { frames += n; }));
+    while (!backend.status().midiDevicesChanged) std::this_thread::yield();
+    CHECK_FALSE(backend.status().restartNeeded);
+    driver.drive(256);
+    CHECK(frames == 256);
+    CHECK(backend.midiOutputPorts().size() == 2);
+    backend.stop();
+}
+
+TEST_CASE("native output snapshots host time before collecting MIDI input") {
+    Driver driver;
+    auto sink = std::make_unique<FakeSink>();
+    auto& output = *sink;
+    struct BusyInput : FakeMidi {
+        std::atomic<double>& outputClock;
+        explicit BusyInput(std::atomic<double>& outputClockRef) : outputClock(outputClockRef) {}
+        double now() const SUPPLE_RT override {
+            outputClock.store(20, std::memory_order_relaxed);  // simulate receive work after entry
+            return 10;
+        }
+    };
+    auto source = std::make_unique<BusyInput>(output.clock);
+    PortAudioBackend backend({}, Driver::api, std::move(source), std::move(sink));
+    REQUIRE(backend.start({.midiInputs = true, .midiOutputs = true}, [&](auto, auto, unsigned n) {
+        if (n) backend.writeMidi({0, 0, 1, {0xf8}});
+    }));
+    driver.drive(256);
+    while (!output.sentCount.load(std::memory_order_acquire)) std::this_thread::yield();
+    {
+        std::lock_guard lock(output.mutex);
+        REQUIRE(output.sent.size() == 1);
+        CHECK(output.sent[0].seconds == 10);
+    }
     backend.stop();
 }

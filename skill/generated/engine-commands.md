@@ -2860,7 +2860,7 @@ Result:
 
 The device's audio inputs, MIDI devices and the outputs masters play to.
 
-audio: one entry per input channel (channel, the 1-based number track.set record_input takes, and the device port it is connected to). midi: the MIDI devices (names track.set record_midi matches; JACK ports or native CoreMIDI/WinMM inputs, fixed until restart). outputs: one entry per output channel (channel, the number track.set hw_output takes for a master, and the port it is connected to). While the engine is stopped: running false and empty lists (engine.start opens the device).
+audio: one entry per input channel (channel, the 1-based number track.set record_input takes, and the device port it is connected to). midi: the MIDI devices (names track.set record_midi matches; JACK ports or native CoreMIDI/WinMM inputs, fixed until restart). midi_outputs: destination names for the hardware output API (routing and clock generation are separate). outputs: one entry per output channel (channel, the number track.set hw_output takes for a master, and the port it is connected to). While the engine is stopped: running false and empty lists (engine.start opens the device).
 
 Kind: `query`. Exposure: `mcp-tool`.
 
@@ -2892,7 +2892,8 @@ Result:
   "running": false,
   "audio": [],
   "midi": [],
-  "outputs": []
+  "outputs": [],
+  "midi_outputs": []
 }
 
 ```
@@ -2901,7 +2902,7 @@ Result:
 
 Start playback through JACK, native PortAudio, or a device-free dummy.
 
-backend: jack (Linux default), portaudio (macOS/Windows native device), or dummy (default elsewhere, no device). For portaudio, host_api, input_device and output_device select exact names from engine.devices. inputs defaults to 0 (playback only); outputs (the device channels masters can play to, track.set hw_output) defaults to one per physical playback port with JACK (2 to 64) and 2 otherwise. rate defaults to the project rate; a rate given is asked of the device (CoreAudio switches the device's rate when it can, WASAPI converts) or, with JACK on PipeWire, suggested to the graph (node.rate: applied only while the devices are idle and the rate is allowed). force_graph (JACK on PipeWire, default false) instead forces block as the graph's quantum, and rate if given, while the engine runs. PortAudio opens up to 16 native MIDI inputs; engine.inputs lists their names. Dummy is paced like a device. block: the device block in frames (default 256); the device's period may differ and is reported. anticipative (default true): render ahead of the playhead on worker threads (edits are heard up to 200 ms later); false renders everything in the audio callback. The engine runs at the device's rate (media is resampled; renders stay at the project's rate). Background and live thread capacities follows the app's Audio processing threads preference (Automatic by default); live helpers join each callback with no added latency. memory_lock reports the default-off host-process memory policy: requested, active, and a structured OS error on failure. cpu_idle_latency reports the default-off 20 microsecond PM QoS request, released on engine stop. A protection failure does not prevent audio startup. MIDI inputs that refuse to open are skipped: midi_warnings reports each device, numeric os_error, message and corrective hint; audio continues.
+backend: jack (Linux default), portaudio (macOS/Windows native device), or dummy (default elsewhere, no device). For portaudio, host_api, input_device and output_device select exact names from engine.devices. inputs defaults to 0 (playback only); outputs (the device channels masters can play to, track.set hw_output) defaults to one per physical playback port with JACK (2 to 64) and 2 otherwise. rate defaults to the project rate; a rate given is asked of the device (CoreAudio switches the device's rate when it can, WASAPI converts) or, with JACK on PipeWire, suggested to the graph (node.rate: applied only while the devices are idle and the rate is allowed). force_graph (JACK on PipeWire, default false) instead forces block as the graph's quantum, and rate if given, while the engine runs. PortAudio opens up to 16 native MIDI inputs and outputs; engine.inputs lists their names. Dummy is paced like a device. block: the device block in frames (default 256); the device's period may differ and is reported. anticipative (default true): render ahead of the playhead on worker threads (edits are heard up to 200 ms later); false renders everything in the audio callback. The engine runs at the device's rate (media is resampled; renders stay at the project's rate). Background and live thread capacities follows the app's Audio processing threads preference (Automatic by default); live helpers join each callback with no added latency. memory_lock reports the default-off host-process memory policy: requested, active, and a structured OS error on failure. cpu_idle_latency reports the default-off 20 microsecond PM QoS request, released on engine stop. A protection failure does not prevent audio startup. MIDI output refusals are in midi_output_warnings; midi_output_latency reports signed audio-minus-MIDI frames per output. MIDI inputs that refuse to open are skipped: midi_warnings reports each device, numeric os_error, message and corrective hint; audio continues.
 
 Kind: `action`. Exposure: `mcp-tool`.
 
@@ -2966,6 +2967,38 @@ Kind: `action`. Exposure: `mcp-tool`.
     "midi_dropped": {
       "type": "integer"
     },
+    "midi_out_dropped": {
+      "type": "integer"
+    },
+    "midi_output_warnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "midi_input_warning",
+        "properties": {
+          "device": {
+            "type": "string"
+          },
+          "os_error": {
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          },
+          "hint": {
+            "type": "string"
+          }
+        },
+        "required": ["device", "os_error", "message", "hint"],
+        "additionalProperties": false
+      }
+    },
+    "midi_output_latency": {
+      "type": "array",
+      "items": {
+        "type": "integer"
+      }
+    },
     "midi_warnings": {
       "type": "array",
       "items": {
@@ -3312,6 +3345,9 @@ Kind: `action`. Exposure: `mcp-tool`.
     "device_latency",
     "xruns",
     "midi_dropped",
+    "midi_out_dropped",
+    "midi_output_warnings",
+    "midi_output_latency",
     "midi_warnings",
     "midi_devices_changed",
     "midi_devices_message",
@@ -3373,6 +3409,9 @@ Result:
   "xruns": 0,
   "midi_dropped": 0,
   "midi_warnings": [],
+  "midi_out_dropped": 0,
+  "midi_output_warnings": [],
+  "midi_output_latency": [],
   "midi_devices_changed": false,
   "midi_devices_message": "",
   "preparing_audio": false,
@@ -3431,7 +3470,7 @@ Result:
 
 Real-time engine state: backend, rate, block, device period, latency, xruns.
 
-preparing_audio: source preparation is pending; the previous ready plan stays audible. prepared_version is the last compiled version, preparation_version the pending target (zero when idle); preparation_error explains a failed preparation. plan_latency: the session's plugin delay in frames; device_latency: frames from the engine's outputs to the device. restart_needed: the device changed rate or went away; engine.stop and engine.start again. midi_devices_changed is advisory: MIDI topology changed but audio keeps running. midi_devices_message asks for an explicit engine restart to pick up the new set; existing port names stay fixed. sync: external sync (sync.get has the same status with the settings). midi_dropped: native MIDI messages/packets rejected or lost to bounded queues (zero for other backends). midi_warnings lists inputs skipped at start, with device, numeric os_error, message and corrective hint. meter_drops: entries a full ring dropped (the renderer's, the audio callback's) — a strip's peak/RMS missed a block, never audio. dropped/voice_dropped count lost plug-in output/voice records. memory_lock reports requested/active and an optional OS error with errno and a corrective hint, including while stopped. Bridges are excluded. cpu_idle_latency reports the owned 20 microsecond request with the same status/error fields; it affects system idle while held and leaves CPU frequency policy unchanged. live_helpers is the enabled live helper capacity. scheduling: each thread class's policy (none, normal, fifo, rr, high) and priority as applied at start: the device callback, live helpers, renderer and background helpers (real-time below a real-time callback when permitted). workgroup: whether the live helpers joined the device's audio workgroup (macOS CoreAudio; state none, ready, joined, partial or failed, with the helper counts and the last refusal's OS error, message and hint). warnings includes scheduling fallbacks and plan warnings with corrective actions. failed_errors adds structured code, message, path and hint to each failure. failed_fx: isolated plugins whose process crashed or hung (silent now; fx.restart re-creates them).
+preparing_audio: source preparation is pending; the previous ready plan stays audible. prepared_version is the last compiled version, preparation_version the pending target (zero when idle); preparation_error explains a failed preparation. plan_latency: the session's plugin delay in frames; device_latency: frames from the engine's outputs to the device. restart_needed: the device changed rate or went away; engine.stop and engine.start again. midi_devices_changed is advisory: MIDI topology changed but audio keeps running. midi_devices_message asks for an explicit engine restart to pick up the new set; existing port names stay fixed. midi_out_dropped counts hardware output rejections, queue/device loss and pending events discarded at shutdown. midi_output_warnings lists outputs skipped at start; midi_output_latency is signed audio-minus-MIDI latency per output, in frames. sync: external sync (sync.get has the same status with the settings). midi_dropped: native MIDI messages/packets rejected or lost to bounded queues (zero for other backends). midi_warnings lists inputs skipped at start, with device, numeric os_error, message and corrective hint. meter_drops: entries a full ring dropped (the renderer's, the audio callback's) — a strip's peak/RMS missed a block, never audio. dropped/voice_dropped count lost plug-in output/voice records. memory_lock reports requested/active and an optional OS error with errno and a corrective hint, including while stopped. Bridges are excluded. cpu_idle_latency reports the owned 20 microsecond request with the same status/error fields; it affects system idle while held and leaves CPU frequency policy unchanged. live_helpers is the enabled live helper capacity. scheduling: each thread class's policy (none, normal, fifo, rr, high) and priority as applied at start: the device callback, live helpers, renderer and background helpers (real-time below a real-time callback when permitted). workgroup: whether the live helpers joined the device's audio workgroup (macOS CoreAudio; state none, ready, joined, partial or failed, with the helper counts and the last refusal's OS error, message and hint). warnings includes scheduling fallbacks and plan warnings with corrective actions. failed_errors adds structured code, message, path and hint to each failure. failed_fx: isolated plugins whose process crashed or hung (silent now; fx.restart re-creates them).
 
 Kind: `query`. Exposure: `mcp-tool`.
 
@@ -3485,6 +3524,38 @@ Kind: `query`. Exposure: `mcp-tool`.
     },
     "midi_dropped": {
       "type": "integer"
+    },
+    "midi_out_dropped": {
+      "type": "integer"
+    },
+    "midi_output_warnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "midi_input_warning",
+        "properties": {
+          "device": {
+            "type": "string"
+          },
+          "os_error": {
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          },
+          "hint": {
+            "type": "string"
+          }
+        },
+        "required": ["device", "os_error", "message", "hint"],
+        "additionalProperties": false
+      }
+    },
+    "midi_output_latency": {
+      "type": "array",
+      "items": {
+        "type": "integer"
+      }
     },
     "midi_warnings": {
       "type": "array",
@@ -3832,6 +3903,9 @@ Kind: `query`. Exposure: `mcp-tool`.
     "device_latency",
     "xruns",
     "midi_dropped",
+    "midi_out_dropped",
+    "midi_output_warnings",
+    "midi_output_latency",
     "midi_warnings",
     "midi_devices_changed",
     "midi_devices_message",
@@ -3881,6 +3955,9 @@ Result:
   "xruns": 0,
   "midi_dropped": 0,
   "midi_warnings": [],
+  "midi_out_dropped": 0,
+  "midi_output_warnings": [],
+  "midi_output_latency": [],
   "midi_devices_changed": false,
   "midi_devices_message": "",
   "preparing_audio": false,

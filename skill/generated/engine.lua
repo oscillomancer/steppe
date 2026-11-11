@@ -311,6 +311,9 @@ q = nil
 ---@field device_latency integer
 ---@field xruns integer
 ---@field midi_dropped integer
+---@field midi_out_dropped integer
+---@field midi_output_warnings table[]
+---@field midi_output_latency integer[]
 ---@field midi_warnings table[]
 ---@field midi_devices_changed boolean
 ---@field midi_devices_message string
@@ -346,6 +349,9 @@ q = nil
 ---@field device_latency integer
 ---@field xruns integer
 ---@field midi_dropped integer
+---@field midi_out_dropped integer
+---@field midi_output_warnings table[]
+---@field midi_output_latency integer[]
 ---@field midi_warnings table[]
 ---@field midi_devices_changed boolean
 ---@field midi_devices_message string

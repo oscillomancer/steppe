@@ -130,7 +130,8 @@ struct BackendConfig {
     double sampleRate = 48000.0;
     std::uint32_t blockSize = 256;
     std::uint32_t inputs = 0, outputs = 2;
-    bool midiInputs = false;  // open the device's MIDI inputs too (ADR-0016)
+    bool midiInputs = false;   // open the device's MIDI inputs too (ADR-0016)
+    bool midiOutputs = false;  // open hardware MIDI destinations (ADR-0069)
 };
 
 // A short MIDI message from a device input during one callback (ADR-0016).
@@ -141,6 +142,40 @@ struct MidiInputEvent {
     std::uint8_t bytes[3] = {0, 0, 0};
 };
 inline constexpr std::size_t kMaxMidiInputEvents = 1024;  // per callback
+
+// Hardware output, relative to the current engine callback (ADR-0069).
+// Complete MIDI 1.0 messages, including system common/realtime and bounded SysEx.
+struct MidiOutputEvent {
+    std::uint32_t frame = 0;
+    std::uint16_t port = 0;  // index into midiOutputPorts()
+    std::uint8_t size = 0;   // 1..10, no running status
+    std::uint8_t bytes[10]{};
+};
+inline constexpr std::size_t kMaxMidiOutputEvents = 1024;  // per device period
+namespace detail {
+// Fixed callback staging shared by all backends. Stable frame order at flush.
+class MidiOutputCycle {
+  public:
+    void begin(std::uint32_t frames, std::size_t ports) SUPPLE_RT;
+    void chunk(std::uint32_t offset, std::uint32_t frames) SUPPLE_RT;
+    bool write(const MidiOutputEvent&) SUPPLE_RT;
+    std::span<const MidiOutputEvent> sorted() SUPPLE_RT;
+    void drop(std::uint64_t count = 1) SUPPLE_RT {
+        dropped_.fetch_add(count, std::memory_order_relaxed);
+    }
+    std::uint64_t dropped() const { return dropped_.load(std::memory_order_relaxed); }
+    void reset() {
+        dropped_.store(0);
+        begin(0, 0);
+    }
+
+  private:
+    std::array<MidiOutputEvent, kMaxMidiOutputEvents> events_{};
+    std::size_t count_ = 0, ports_ = 0;
+    std::uint32_t offset_ = 0, frames_ = 0;
+    std::atomic<std::uint64_t> dropped_{0};
+};
+}  // namespace detail
 
 // Whether a device event passes a MIDI route: its port is in `ports` (bit
 // per Backend::midiPorts() index) and its channel matches `fromChannel`
@@ -292,6 +327,17 @@ class Backend {
     // The MIDI input ports, named after their devices (fixed while running).
     virtual std::vector<std::string> midiPorts() const { return {}; }
     virtual std::vector<MidiInputWarning> midiWarnings() const { return {}; }
+    // Output writes are callback-only, bounded and allocation-free. False
+    // counts a rejected event; accepted events may still be lost downstream.
+    virtual bool writeMidi(const MidiOutputEvent&) SUPPLE_RT { return false; }
+    virtual std::vector<std::string> midiOutputPorts() const { return {}; }
+    virtual std::uint64_t midiOutDropped() const { return 0; }
+    virtual std::vector<MidiInputWarning> midiOutputWarnings() const { return {}; }
+    // Audio output latency minus MIDI port latency, in frames (signed).
+    // At equal cycle frames, positive means MIDI leaves earlier than audio.
+    // Routing must DELAY MIDI by this plus the user's offset to align it.
+    // Backends do not apply this compensation implicitly. Owner thread only.
+    virtual std::vector<std::int64_t> midiOutputLatency() const { return {}; }
     // What each audio input channel is connected to (index 0 = channel 1;
     // "" when unconnected), fixed while running. Main thread.
     virtual std::vector<std::string> inputNames() const { return {}; }
@@ -316,6 +362,11 @@ class DummyBackend : public Backend {
             input;
         // Tests: MIDI input ports and the events of each cycle (appended to
         // `events`, frames within the cycle; `frame` as for `input`).
+        std::vector<std::string> midiOutputPorts;
+        std::vector<std::int64_t> midiOutputLatency;
+        // Captured events use absolute frames since start. Fixed capacity
+        // chosen before start; overflow counts as output drops.
+        std::size_t midiCaptureEvents = 65536;
         std::vector<std::string> midiPorts;
         std::function<void(std::vector<MidiInputEvent>& events, std::uint32_t frames,
                            std::int64_t frame)>
@@ -339,12 +390,26 @@ class DummyBackend : public Backend {
     std::span<const SyncMidiEvent> syncMidi() const override { return sync_; }
     std::vector<std::string> midiPorts() const override { return options_.midiPorts; }
 
+    bool writeMidi(const MidiOutputEvent& event) SUPPLE_RT override {
+        return midiOutput_.write(event);
+    }
+    std::vector<std::string> midiOutputPorts() const override;
+    std::vector<std::int64_t> midiOutputLatency() const override;
+    std::uint64_t midiOutDropped() const override { return midiOutput_.dropped(); }
+    struct CapturedMidi {
+        std::int64_t frame = 0;
+        MidiOutputEvent event;
+    };
+    std::span<const CapturedMidi> midiCapture() const { return midiCapture_; }  // after run/stop
+
     void run(std::int64_t cycles);  // Manual mode: run cycles now, on this thread
     std::int64_t cycles() const { return cycles_.load(); }
     // Every output channel; read after stop() / run().
     const audio::AudioData& capture() const { return capture_; }
 
   private:
+    detail::MidiOutputCycle midiOutput_;
+    std::vector<CapturedMidi> midiCapture_;
     std::vector<MidiInputEvent> midi_;  // this cycle's (capacity reserved)
     std::vector<SyncMidiEvent> sync_;   // likewise
     void cycle();

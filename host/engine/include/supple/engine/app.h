@@ -150,7 +150,9 @@ struct EngineStatus {
     std::int64_t block = 0, period = 0;
     std::int64_t planLatency = 0, deviceLatency = 0;  // frames
     std::int64_t xruns = 0, cycles = 0, processErrors = 0;
-    std::int64_t midiDropped = 0;
+    std::int64_t midiDropped = 0, midiOutDropped = 0;
+    std::vector<MidiInputWarning> midiOutputWarnings;
+    std::vector<std::int64_t> midiOutputLatency;
     std::vector<MidiInputWarning> midiWarnings;
     bool midiDevicesChanged = false;
     std::string midiDevicesMessage;
