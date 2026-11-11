@@ -42,6 +42,8 @@ void registerMixCommands(cmd::Registry& registry);
 void registerHealCommands(cmd::Registry& registry);
 void registerSyncCommands(cmd::Registry& registry);
 schema::Schema<SyncReport> syncStatusSchema();
+void registerMidiOutputCommands(cmd::Registry& registry);
+schema::Schema<MidiOutputReport> midiOutputStatusSchema();
 void registerLearnCommands(cmd::Registry& registry);
 void registerControlLearnCommands(cmd::Registry& registry);
 void registerDspCommands(cmd::Registry& registry);
@@ -365,6 +367,8 @@ schema::Schema<EngineStatus> engineStatusSchema() {
         .field("voice_dropped", &EngineStatus::voiceDropped, schema::integer())
         .field("failed_errors", &EngineStatus::failedErrors, schema::any())
         .field("sync", &EngineStatus::sync, syncStatusSchema())
+        .field("midi_outputs", &EngineStatus::midiOutputs,
+               schema::arrayOf(midiOutputStatusSchema()))
         .build();
 }
 
@@ -990,6 +994,7 @@ void registerEngineCommands(cmd::Registry& registry) {
     registerMixCommands(registry);
     registerHealCommands(registry);
     registerSyncCommands(registry);
+    registerMidiOutputCommands(registry);
     registerLearnCommands(registry);
     registerControlLearnCommands(registry);
     registerDspCommands(registry);
@@ -4218,7 +4223,8 @@ void registerEngineCommands(cmd::Registry& registry) {
                      "memory_lock": {"requested": false, "active": false},
                      "cpu_idle_latency": {"requested": false, "active": false},
                      "meter_drops": {"renderer": 0, "callback": 0}, "failed_fx": [],
-                     "dropped": 0, "voice_dropped": 0, "failed_errors": [], "sync": "<any>"})"),
+                     "dropped": 0, "voice_dropped": 0, "failed_errors": [], "sync": "<any>",
+                     "midi_outputs": []})"),
              "empty"}};
         c.run = [](const EngineStartArgs& a, Context& ctx) -> Result<EngineStatus> {
             EngineApp& app = A(ctx);
@@ -4342,8 +4348,11 @@ void registerEngineCommands(cmd::Registry& registry) {
             "events discarded at shutdown. midi_output_warnings lists outputs skipped at start; "
             "midi_output_latency is signed audio-minus-MIDI latency per output, in frames. "
             "sync: external sync (sync.get has the same status with the settings). "
+            "midi_outputs: what each MIDI output sends (clock, transport, spp, mtc; "
+            "midi.outputs.get has the same with the settings). "
             "midi_dropped: MIDI input messages/packets rejected or lost to bounded queues "
-            "(JACK and native; zero for the dummy backend). midi_warnings lists inputs skipped at start, with "
+            "(JACK and native; zero for the dummy backend). midi_warnings lists inputs skipped at "
+            "start, with "
             "device, numeric os_error, message and corrective hint. meter_drops: entries a full "
             "ring "
             "dropped (the renderer's, the audio callback's) — a strip's peak/RMS missed a block, "
@@ -4384,7 +4393,8 @@ void registerEngineCommands(cmd::Registry& registry) {
                      "memory_lock": {"requested": false, "active": false},
                      "cpu_idle_latency": {"requested": false, "active": false},
                      "meter_drops": {"renderer": 0, "callback": 0}, "failed_fx": [],
-                     "dropped": 0, "voice_dropped": 0, "failed_errors": [], "sync": "<any>"})"),
+                     "dropped": 0, "voice_dropped": 0, "failed_errors": [], "sync": "<any>",
+                     "midi_outputs": []})"),
                        "empty"}};
         c.run = [](const NoArgs&, Context& ctx) -> Result<EngineStatus> {
             return A(ctx).engineStatus();

@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 // The audio callback's share of external sync (ADR-0071): receivers, the
-// chase tracker and the LTC encoder. Built on the main thread for a
-// configuration (it allocates the LTC buffers), then owned by one callback.
+// chase tracker, the LTC encoder, and MIDI clock and MTC output (ADR-0072).
+// Built on the main thread for a configuration (it allocates the LTC
+// buffers and the timeline history), then owned by one callback.
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -38,11 +40,16 @@ struct SyncCycle {
     double timelineStart = 0.0, timelineEnd = 0.0;
     // The timeline wrapped at the loop's end to its start inside the cycle.
     bool wrapped = false;
+    bool loopActive = false;  // the transport loops (output predicted ahead wraps too)
     double loopStart = 0.0, loopEnd = 0.0;
     std::int64_t planLatency = 0;            // frames from processing to the device outputs
     std::int64_t outputLatency = 0;          // frames from processing to the listener
     std::int64_t inputLatency = 0;           // frames from the device input to the callback
     const time::TimeMap* timeMap = nullptr;  // the plan's (beats for MIDI clock)
+    // MIDI clock and MTC output: the device, and each port's counts.
+    Backend* midiOut = nullptr;
+    std::atomic<std::uint64_t>* outSent = nullptr;     // kMaxSyncOutputs each
+    std::atomic<std::uint64_t>* outDropped = nullptr;  // likewise
 };
 
 class SyncRuntime {
@@ -63,6 +70,7 @@ class SyncRuntime {
     void feedMidi(const SyncCycle& c) SUPPLE_RT;
     void feedLtc(const SyncCycle& c) SUPPLE_RT;
     void writeLtc(const SyncCycle& c) SUPPLE_RT;
+    void writeMidi(const SyncCycle& c) SUPPLE_RT;
     // The timeline the cycle processed, as spans (two at a loop wrap).
     void remember(const SyncCycle& c) SUPPLE_RT;
     // The cycle's speed in timeline seconds per frame, a wrap included.
@@ -99,6 +107,39 @@ class SyncRuntime {
     };
     std::vector<Span> spans_;
     std::size_t spanHead_ = 0, spanCount_ = 0;
+    // The loop of the latest cycle, for output predicted beyond the newest span.
+    bool loopActive_ = false;
+    double loopStart_ = 0.0, loopEnd_ = 0.0;
+    // One piece of the timeline, by processed device frame: from the history,
+    // or predicted ahead of it at the newest span's speed. `known`: false
+    // before the oldest span kept (nothing to tell a receiver).
+    struct Piece {
+        std::int64_t device = 0;
+        std::int64_t frames = 0;
+        double start = 0.0;
+        double slope = 0.0;
+        bool playing = false;
+        bool known = true;
+    };
+    // Calls visit(Piece) for [from, to), in order.
+    template <typename Visit>
+    void pieces(std::int64_t from, std::int64_t to, Visit&& visit) const SUPPLE_RT;
+
+    // MIDI clock and MTC output, per Backend::midiOutputPorts() index.
+    struct Port {
+        explicit Port(const sync::TimecodeMapping& m) : mtc(m) {}
+        sync::ClockGenerator clock;
+        sync::MtcGenerator mtc;
+        bool known = false;         // `expected` holds a position
+        bool playing = false;       // the latest piece played
+        double expected = 0.0;      // timeline seconds the next piece continues from
+        double lastClock = -1e300;  // output frame of the latest F8 sent
+    };
+    void emit(std::size_t port, const SyncOutput& out, const Piece& piece, std::int64_t delay,
+              const time::TimeMap* map, sync::EventBuffer& events) SUPPLE_RT;
+    std::vector<Port> ports_;
+    std::array<std::atomic<std::int64_t>, kMaxSyncOutputs> delays_{};
+    std::vector<sync::MidiEvent> eventStorage_;
     double notifiedRate_ = 1.0;
     std::int64_t notifiedAt_ = 0;
 };

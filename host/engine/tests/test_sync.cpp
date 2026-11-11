@@ -3,7 +3,8 @@
 // External sync in the engine (ADR-0071): a manual dummy device scripted with
 // MIDI clock, MTC and LTC from libs/sync's generators; the transport follows,
 // the chase rate never reaches the project, offline renders ignore it, and
-// LTC output decodes back to the transport.
+// LTC output decodes back to the transport. MIDI clock and MTC output
+// (ADR-0072) land on the device's captured MIDI where their audio is heard.
 #include <doctest/doctest.h>
 
 #include <unistd.h>
@@ -48,7 +49,10 @@ struct Rig {
     sync::EventBuffer events{storage};
     bool anticipative;
 
-    explicit Rig(bool ahead, std::uint32_t outputs = 2, std::int64_t capture = 0)
+    // MIDI outputs "Synth" and "Clock Out", with `midiLatency` (audio minus
+    // MIDI, frames) each.
+    explicit Rig(bool ahead, std::uint32_t outputs = 2, std::int64_t capture = 0,
+                 std::vector<std::int64_t> midiLatency = {0, 0})
         : anticipative(ahead) {
         fs::remove_all(dir);
         fs::create_directories(dir);
@@ -64,6 +68,8 @@ struct Rig {
         o.mode = DummyBackend::Mode::Manual;
         o.captureFrames = capture;
         o.midiPorts = {"Desk", "Clock In"};
+        o.midiOutputPorts = {"Synth", "Clock Out"};
+        o.midiOutputLatency = std::move(midiLatency);
         o.sync = [this](std::vector<SyncMidiEvent>& out, std::uint32_t n, std::int64_t from) {
             if (!midi) return;
             events.clear();
@@ -89,7 +95,8 @@ struct Rig {
                                   .blockSize = kBlock,
                                   .inputs = 1,
                                   .outputs = outputs,
-                                  .midiInputs = true},
+                                  .midiInputs = true,
+                                  .midiOutputs = true},
                                  {.anticipative = ahead})
                     .ok());
     }
@@ -641,4 +648,376 @@ TEST_CASE("midi clock without follow tempo: Start plays where the master is hear
                 locate * 1000, " ms)");
         CHECK(std::abs(error) < 0.002);
     }
+}
+
+// --- MIDI clock and MTC output (ADR-0072) ------------------------------------
+
+namespace {
+
+// What one output port was sent, in order (absolute device frames).
+std::vector<DummyBackend::CapturedMidi> sentTo(const Rig& rig, std::uint16_t port) {
+    std::vector<DummyBackend::CapturedMidi> out;
+    for (const auto& m : rig.backend->midiCapture())
+        if (m.event.port == port) out.push_back(m);
+    return out;
+}
+
+bool is(const DummyBackend::CapturedMidi& m, std::uint8_t status) {
+    return m.event.size > 0 && m.event.bytes[0] == status;
+}
+
+// The clocks after `from` (absolute frame), in order.
+std::vector<std::int64_t> clocksFrom(const std::vector<DummyBackend::CapturedMidi>& sent,
+                                     std::int64_t from) {
+    std::vector<std::int64_t> frames;
+    for (const auto& m : sent)
+        if (m.frame >= from && is(m, 0xF8)) frames.push_back(m.frame);
+    return frames;
+}
+
+// The first message with `status` at or after `from`, or null.
+const DummyBackend::CapturedMidi* first(const std::vector<DummyBackend::CapturedMidi>& sent,
+                                        std::uint8_t status, std::int64_t from = 0) {
+    for (const auto& m : sent)
+        if (m.frame >= from && is(m, status)) return &m;
+    return nullptr;
+}
+
+int songPosition(const DummyBackend::CapturedMidi& m) {
+    return m.event.bytes[1] | (m.event.bytes[2] << 7);
+}
+
+}  // namespace
+
+TEST_CASE("midi clock output: clocks at the heard frames across a tempo change and a loop wrap") {
+    for (bool ahead : {false, true}) {
+        CAPTURE(ahead);
+        Rig rig(ahead, 2, static_cast<std::int64_t>(kRate * 8));
+        rig.latency(8);  // 512 frames: the audio leaves that much after processing
+        rig.item(clicks(8, {1.0, 2.0}));
+        // 120 bpm for four beats (2 s), then 90.
+        rig.run("tempo.set",
+                R"({"points": [{"beat": 0, "bpm": 120}, {"beat": 4, "bpm": 90, "ramp": false}]})");
+        rig.run("midi.outputs.set",
+                R"({"port": "Synth", "clock": true, "transport": true, "spp": true})");
+        REQUIRE(rig.app->engine()->awaitPlan());
+        rig.run("transport.seek", R"({"seconds": 0})");
+        const std::int64_t played = rig.device;
+        rig.run("transport.play", "{}");
+        rig.seconds(3.0);
+        rig.run("transport.pause", "{}");
+        rig.seconds(0.2);
+        const std::int64_t looped = rig.device;
+        rig.run("transport.loop", R"({"start_seconds": 2, "end_seconds": 3})");
+        rig.run("transport.seek", R"({"seconds": 2.5})");
+        rig.run("transport.play", "{}");
+        rig.seconds(1.0);
+        rig.app->stopEngine();
+        const auto& audio = rig.backend->capture().channels[0];
+        const auto sent = sentTo(rig, 0);
+        // Timeline 1 s is heard at the first click: the frame every position is heard at.
+        const std::int64_t one = click(audio, played);
+        REQUIRE(one > 0);
+        const auto heard = [&](double seconds) { return double(one) + (seconds - 1.0) * kRate; };
+        const auto& map = *rig.app->head().timeMap;
+        // Start where the transport starts to be heard (the plan's pre-roll
+        // before timeline 0), then clock k where beat k/24 is.
+        const auto* start = first(sent, 0xFA, played);
+        REQUIRE(start);
+        CHECK(std::abs(double(start->frame) - heard(-512.0 / kRate)) <= 1.0);
+        const auto clocks = clocksFrom(sent, start->frame);
+        REQUIRE(clocks.size() > 140);  // 3 s: 96 clocks at 120, then 36 a second at 90
+        int worst = 0;
+        for (std::size_t k = 0; k < 130; ++k) {
+            const double expected = heard(map.secondsAt(double(k) / 24.0));
+            worst = std::max(worst, int(std::abs(double(clocks[k]) - std::ceil(expected))));
+        }
+        MESSAGE("largest clock error, frames: ", worst);
+        CHECK(worst <= 1);
+        // The pause: Stop, then the Song Position where it stands.
+        const auto* stop = first(sent, 0xFC, start->frame);
+        REQUIRE(stop);
+        CHECK(stop->frame < looped);
+        // Resuming at 2.5 s (beat 4.75): Song Position 19 (the next 16th) and Continue.
+        const auto* resume = first(sent, 0xFB, looped);
+        REQUIRE(resume);
+        const auto* spp = first(sent, 0xF2, looped);
+        REQUIRE(spp);
+        CHECK(songPosition(*spp) == 19);
+        // The wrap at 3 s, heard where the 2 s click is: Stop, Song Position 16
+        // (beat 4), Continue, and the clocks of beat 4 on at 90 bpm.
+        const std::int64_t wrap = click(audio, looped);
+        REQUIRE(wrap > looped);
+        const auto* wrapStop = first(sent, 0xFC, resume->frame + 1);
+        REQUIRE(wrapStop);
+        CHECK(std::abs(wrapStop->frame - wrap) <= 1);
+        const auto* wrapSpp = first(sent, 0xF2, wrapStop->frame);
+        const auto* wrapContinue = first(sent, 0xFB, wrapStop->frame);
+        REQUIRE(wrapSpp);
+        REQUIRE(wrapContinue);
+        CHECK(songPosition(*wrapSpp) == 16);
+        CHECK(std::abs(wrapContinue->frame - wrap) <= 1);
+        const auto after = clocksFrom(sent, wrapContinue->frame);
+        REQUIRE(after.size() > 10);
+        const double period = 60.0 / 90.0 / 24.0 * kRate;
+        for (std::size_t k = 0; k < 10; ++k)
+            CHECK(std::abs(double(after[k]) - std::ceil(double(wrap) + double(k) * period)) <= 1.0);
+    }
+}
+
+TEST_CASE("midi clock output: Song Position and Continue from mid-bar, a locate, a count-in") {
+    Rig rig(false, 2, static_cast<std::int64_t>(kRate * 10));
+    rig.run("midi.outputs.set",
+            R"({"port": "Synth", "clock": true, "transport": true, "spp": true})");
+    // From 1.3 s at 120 bpm (beat 2.6): Song Position 11, Continue at once,
+    // and the first clock at the 16th's frame (beat 2.75, 0.075 s later).
+    rig.run("transport.seek", R"({"seconds": 1.3})");
+    rig.seconds(0.1);
+    const std::int64_t played = rig.device;
+    rig.run("transport.play", "{}");
+    rig.seconds(0.5);
+    const std::int64_t located = rig.device;
+    rig.run("transport.seek", R"({"seconds": 4})");  // a locate while playing
+    rig.seconds(0.5);
+    rig.run("transport.pause", "{}");
+    rig.seconds(0.1);
+    // A count-in: nothing is sent until the timeline moves.
+    rig.run("transport.metronome", R"({"count_in_bars": 1, "count_in_playback": true})");
+    rig.run("transport.seek", R"({"seconds": 0})");
+    rig.seconds(0.1);
+    const std::int64_t counted = rig.device;
+    rig.run("transport.play", "{}");
+    rig.seconds(3.0);
+    rig.app->stopEngine();
+    const auto sent = sentTo(rig, 0);
+    // The cycle the play landed in: Song Position, Continue, then clocks.
+    const auto* spp = first(sent, 0xF2, played);
+    const auto* cont = first(sent, 0xFB, played);
+    REQUIRE(spp);
+    REQUIRE(cont);
+    CHECK(songPosition(*spp) == 11);
+    CHECK(spp->frame <= cont->frame);
+    const auto* stray = first(sent, 0xFA, played);  // no Start away from beat 0
+    CHECK((stray == nullptr || stray->frame >= counted));
+    const auto clocks = clocksFrom(sent, cont->frame);
+    REQUIRE(clocks.size() > 2);
+    CHECK(std::abs(double(clocks[0] - cont->frame) - 0.075 * kRate) <= 1.0);
+    CHECK(std::abs(double(clocks[1] - clocks[0]) - 1000.0) <= 1.0);  // 120 bpm: 1000 frames
+    // The locate: Stop, Song Position 32 (beat 8), Continue, in that order at one frame.
+    const auto* stop = first(sent, 0xFC, located);
+    REQUIRE(stop);
+    const auto* spp2 = first(sent, 0xF2, located);
+    const auto* cont2 = first(sent, 0xFB, located);
+    REQUIRE(spp2);
+    REQUIRE(cont2);
+    CHECK(songPosition(*spp2) == 32);
+    CHECK(stop->frame == spp2->frame);
+    CHECK(spp2->frame == cont2->frame);
+    CHECK(stop < spp2);
+    CHECK(spp2 < cont2);
+    // The count-in (one bar, 2 s): Start comes when it ends, not before.
+    const auto* start = first(sent, 0xFA, counted);
+    REQUIRE(start);
+    CHECK(start->frame - counted > static_cast<std::int64_t>(1.9 * kRate));
+    CHECK(clocksFrom(sent, counted).front() >= start->frame);
+}
+
+TEST_CASE("mtc output: quarter frames decode to the heard position, with plan latency") {
+    for (bool ahead : {false, true}) {
+        CAPTURE(ahead);
+        Rig rig(ahead, 2, static_cast<std::int64_t>(kRate * 6));
+        rig.latency(8);  // 512 frames
+        rig.item(clicks(6, {2.0}));
+        rig.run("midi.outputs.set", R"({"port": "Synth", "mtc": true})");
+        rig.run("transport.seek", R"({"seconds": 1})");
+        const std::int64_t played = rig.device;
+        rig.run("transport.play", "{}");
+        rig.seconds(2.5);
+        rig.app->stopEngine();
+        const auto& audio = rig.backend->capture().channels[0];
+        const std::int64_t two = click(audio, played);
+        REQUIRE(two > 0);
+        const double start = rig.app->head().project->timecode.startSeconds();
+        sync::MtcReceiverConfig rc;
+        rc.sampleRate = kRate;
+        rc.expected = rig.app->head().project->timecode.rate;
+        sync::MtcReceiver receiver(rc);
+        double worst = 0.0;
+        int observed = 0;
+        for (const auto& m : sentTo(rig, 0)) {
+            if (!receiver.feed(double(m.frame),
+                               std::span<const std::uint8_t>(m.event.bytes, m.event.size)))
+                continue;
+            if (!receiver.locked() || double(m.frame) < double(two) - 0.5 * kRate) continue;
+            const sync::Observation o = receiver.lastObservation();
+            // Heard at: the 2 s click's frame, plus the position's distance from 2 s.
+            const double expected = double(two) + (o.position - start - 2.0) * kRate;
+            worst = std::max(worst, std::abs(o.frame - expected));
+            ++observed;
+        }
+        MESSAGE("MTC: largest error ", worst, " frames over ", observed, " quarter frames");
+        CHECK(observed > 100);
+        CHECK(worst < 16.0);  // a 30 fps frame is 1600
+    }
+}
+
+TEST_CASE("midi clock output: per-port offset, and a negative latency predicted ahead") {
+    for (bool ahead : {false, true}) {
+        CAPTURE(ahead);
+        // Synth's MIDI is 100 frames faster than its audio; Clock Out's 300 slower.
+        Rig rig(ahead, 2, static_cast<std::int64_t>(kRate * 4), {100, -300});
+        rig.item(clicks(4, {0.5}));
+        rig.run("midi.outputs.set",
+                R"({"port": "Synth", "clock": true, "transport": true, "offset_ms": 5})");
+        rig.run("midi.outputs.set", R"({"port": "Clock Out", "clock": true, "transport": true,
+                                        "spp": true})");
+        auto ports = rig.run("midi.outputs.get", "{}")["ports"];
+        REQUIRE(ports.size() == 2);  // the device's order
+        CHECK(ports.asArray()[1]["name"].asString() == "Clock Out");
+        CHECK(ports.asArray()[1]["delay_ms"].asDouble() == doctest::Approx(-300.0 / 48.0));
+        CHECK(ports.asArray()[0]["delay_ms"].asDouble() ==
+              doctest::Approx(340.0 / 48.0));  // 100 frames + 5 ms
+        CHECK(ports.asArray()[0]["latency_ms"].asDouble() == doctest::Approx(100.0 / 48.0));
+        rig.run("transport.seek", R"({"seconds": 0})");
+        const std::int64_t played = rig.device;
+        rig.run("transport.play", "{}");
+        rig.seconds(2.0);
+        auto report = rig.run("midi.outputs.get", "{}")["ports"];
+        CHECK(report.asArray()[0]["dropped"].asInt() == 0);
+        CHECK(report.asArray()[0]["sent"].asInt() > 40);
+        rig.app->stopEngine();
+        const std::int64_t heard0 = click(rig.backend->capture().channels[0], played) - 24000;
+        // 120 bpm: clock k is heard at heard0 + 1000 k.
+        const auto synth = clocksFrom(sentTo(rig, 0), played);
+        REQUIRE(synth.size() > 40);
+        for (std::size_t k = 0; k < 40; ++k)
+            CHECK(std::abs(synth[k] - (heard0 + 1000 * std::int64_t(k) + 340)) <= 1);
+        // A negative delay cannot be met for what is already processed: the
+        // start lands with the first cycle (late by up to 300 frames), at the
+        // 16th the timeline will be at, and the clocks are predicted ahead.
+        const auto out = sentTo(rig, 1);
+        const auto* cont = first(out, 0xFB, played);
+        REQUIRE(cont);
+        const DummyBackend::CapturedMidi* spp = nullptr;  // sent with the Continue
+        for (const auto& m : out)
+            if (is(m, 0xF2) && m.frame == cont->frame) spp = &m;
+        REQUIRE(spp);
+        CHECK(songPosition(*spp) == 1);
+        CHECK(cont->frame == heard0);
+        const auto clocks = clocksFrom(out, played);
+        REQUIRE(clocks.size() > 40);
+        for (std::size_t k = 0; k < 30; ++k)
+            CHECK(std::abs(clocks[k] - (heard0 + 1000 * std::int64_t(k + 6) - 300)) <= 1);
+    }
+}
+
+TEST_CASE("midi clock output: clock while stopped, and nothing echoed to the sync master") {
+    Rig rig(false, 2, 0);
+    rig.run("midi.outputs.set", R"({"port": "Synth", "clock": true, "clock_while_stopped": true})");
+    rig.seconds(0.5);
+    const auto clocks = clocksFrom(sentTo(rig, 0), 0);
+    REQUIRE(clocks.size() > 20);
+    for (std::size_t k = 1; k < clocks.size(); ++k)
+        CHECK(std::abs(double(clocks[k] - clocks[k - 1]) - 1000.0) <= 1.0);  // 120 bpm
+    // The sync master's device ("Clock In"/"Clock Out"): its clock is not sent
+    // back to it, with a warning; MTC would still go.
+    rig.run("sync.set", R"({"source": "midi_clock", "midi_input": "Clock In"})");
+    auto r = rig.bus->execute(
+        {"midi.outputs.set",
+         json::parse(R"({"port": "Clock Out", "clock": true, "transport": true, "mtc": true})")
+             .value(),
+         kOrigin});
+    REQUIRE(r);
+    const SyncOutput& out = rig.app->engine()->syncConfig().outputs[1];
+    CHECK_FALSE(out.clock);
+    CHECK_FALSE(out.transport);
+    CHECK(out.mtc);
+    auto ports = (*r)["ports"];
+    REQUIRE(ports.size() == 2);
+    auto& clockOut = ports.asArray()[1];
+    CHECK(clockOut["name"].asString() == "Clock Out");
+    CHECK(clockOut["index"].asInt() == 1);
+    REQUIRE(clockOut["suppressed"].size() == 2);
+    CHECK(clockOut["suppressed"].asArray()[0].asString() == "clock");
+    CHECK(clockOut["sends"].asArray()[0].asString() == "mtc");
+    REQUIRE(clockOut["warnings"].size() == 1);  // on the port, and in the sync warnings
+    bool warned = false;
+    const json::Value got = rig.run("sync.get", "{}");
+    for (const auto& w : got.find("status")->find("warnings")->asArray())
+        warned = warned || w.asString().find("Clock Out") != std::string::npos;
+    CHECK(warned);
+}
+
+TEST_CASE("midi outputs: get, set, validation, engine.status and the JSON round trip") {
+    Rig rig(false);
+    // Every output the device has, at the defaults.
+    auto got = rig.run("midi.outputs.get", "{}");
+    REQUIRE(got["ports"].size() == 2);
+    auto& synth = got["ports"].asArray()[0];
+    CHECK(synth["name"].asString() == "Synth");
+    CHECK(synth["index"].asInt() == 0);
+    CHECK(synth["enabled"].asBool());
+    CHECK(synth["reset_on_stop"].asBool());
+    CHECK_FALSE(synth["clock"].asBool());
+    CHECK(rig.app->midiOutputSettings().empty());
+    auto set = rig.run("midi.outputs.set", R"({"port": "Synth", "clock": true})");
+    CHECK(set["ports"].asArray()[0]["clock"].asBool());
+    CHECK(set["ports"].asArray()[0]["sends"].asArray()[0].asString() == "clock");
+    CHECK(rig.app->engine()->syncConfig().outputs[0].clock);
+    // Omitted members keep their values.
+    set = rig.run("midi.outputs.set", R"({"port": "Synth", "spp": true})");
+    CHECK(set["ports"].asArray()[0]["clock"].asBool());
+    CHECK(set["ports"].asArray()[0]["spp"].asBool());
+    // A disabled port sends nothing, and keeps its clock settings.
+    rig.run("midi.outputs.set", R"({"port": "Synth", "enabled": false})");
+    CHECK_FALSE(rig.app->engine()->syncConfig().outputs[0].clock);
+    CHECK(rig.app->midiOutputSettings().front().clock);
+    rig.run("midi.outputs.set", R"({"port": "Synth", "enabled": true})");
+    CHECK(rig.app->engine()->syncConfig().outputs[0].clock);
+    for (const char* bad :
+         {R"({"port": "Synth", "offset_ms": 5000})", R"({"port": "Synth", "beat": true})",
+          R"({"clock": true})", R"({"port": ""})", R"({"port": "Synth", "mtc": 1})",
+          R"({"port": "Synth", "enabled": "yes"})"}) {
+        auto r = rig.bus->execute({"midi.outputs.set", json::parse(bad).value(), kOrigin});
+        REQUIRE_FALSE(r);
+        INFO(bad, r.error().toString());
+        const Error& e = r.error().details.empty() ? r.error() : r.error().details.front();
+        CHECK_FALSE(e.hint.empty());
+    }
+    // A port that is not there is kept, after the device's, with a warning.
+    auto r = rig.bus->execute({"midi.outputs.set",
+                               json::parse(R"({"port": "Drum Machine", "mtc": true})").value(),
+                               kOrigin});
+    REQUIRE(r);
+    REQUIRE((*r)["ports"].size() == 3);
+    CHECK((*r)["ports"].asArray()[2]["name"].asString() == "Drum Machine");
+    CHECK((*r)["ports"].asArray()[2]["index"].asInt() == -1);
+    auto status = rig.run("engine.status", "{}");
+    REQUIRE(status["midi_outputs"].size() == 3);
+    CHECK(status["midi_outputs"].asArray()[0]["sends"].asArray()[0].asString() == "clock");
+    // Back at every default: the record goes.
+    rig.run("midi.outputs.set", R"({"port": "Drum Machine", "mtc": false})");
+    CHECK(rig.app->midiOutputSettings().size() == 1);
+    // The records round-trip through preferences' {"<port>": {...}}.
+    MidiOutputSettings a;
+    a.port = "B";
+    a.mtc = true;
+    a.offsetMs = -2.5;
+    a.resetOnStop = false;
+    MidiOutputSettings b;
+    b.port = "A";
+    b.enabled = false;
+    b.clock = b.transport = b.spp = b.clockWhileStopped = true;
+    const json::Value saved = midiOutputListJson({a, b});
+    CHECK(saved.find("A"));
+    CHECK_FALSE(saved.find("A")->find("port"));
+    auto back = parseMidiOutputList(saved);
+    REQUIRE(back);
+    REQUIRE(back->size() == 2);
+    CHECK((*back)[0] == b);
+    CHECK((*back)[1] == a);
+    CHECK_FALSE(parseMidiOutputList(json::parse(R"([{"port": "A"}])").value()));
+    auto wrong = parseMidiOutputList(json::parse(R"({"A": {"offset_ms": 5000}})").value());
+    REQUIRE_FALSE(wrong);
+    CHECK(wrong.error().path == "/A/offset_ms");
 }

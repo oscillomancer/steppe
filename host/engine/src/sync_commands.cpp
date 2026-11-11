@@ -226,6 +226,7 @@ SyncConfig EngineApp::syncConfigFor(std::vector<std::string>* warnings) const {
                                             ", which LTC output replaces; move one of them");
                 }
     }
+    (void)resolveMidiOutputs(c, warnings);  // MIDI clock and MTC output (ADR-0072)
     return c;
 }
 

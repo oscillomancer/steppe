@@ -572,6 +572,20 @@ class Engine {
     // the scalar control path (ADR-0046) on a sync plan. Never saved.
     void setSyncRate(double scale);
     double syncRate() const { return syncScale_; }
+    // MIDI clock and MTC output (ADR-0072): messages written to, and refused
+    // by, each Backend::midiOutputPorts() index since start.
+    std::uint64_t syncOutputSent(std::size_t port) const {
+        return port < kMaxSyncOutputs ? syncOutSent_[port].load(std::memory_order_relaxed) : 0;
+    }
+    std::uint64_t syncOutputDropped(std::size_t port) const {
+        return port < kMaxSyncOutputs ? syncOutDropped_[port].load(std::memory_order_relaxed) : 0;
+    }
+    std::vector<std::string> midiOutputPorts() const {
+        return backend_ ? backend_->midiOutputPorts() : std::vector<std::string>{};
+    }
+    std::vector<std::int64_t> midiOutputLatency() const {
+        return backend_ ? backend_->midiOutputLatency() : std::vector<std::int64_t>{};
+    }
     // Main thread: waits (bounded) until the renderer has acted on every
     // transport request, so transport() reports the new state. With the
     // renderer in the callback: two audio cycles (none for a manual backend).
@@ -681,6 +695,7 @@ class Engine {
     std::int64_t syncDevice_ = 0;            // audio thread: device frames since start
     bool syncPlayed_ = false;                // audio thread: the previous cycle played
     std::atomic<std::int64_t> syncOutputLatency_{0}, syncInputLatency_{0}, syncPlanLatency_{0};
+    std::array<std::atomic<std::uint64_t>, kMaxSyncOutputs> syncOutSent_{}, syncOutDropped_{};
     static constexpr std::size_t kSyncWords = (sizeof(SyncStatus) + 7) / 8;
     std::array<std::atomic<std::uint64_t>, kSyncWords> syncWords_{};
     std::atomic<std::uint64_t> syncSeq_{0};

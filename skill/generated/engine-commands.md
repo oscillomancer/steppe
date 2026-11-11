@@ -3329,6 +3329,95 @@ Kind: `action`. Exposure: `mcp-tool`.
         "warnings"
       ],
       "additionalProperties": false
+    },
+    "midi_outputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "midi_output",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "index": {
+            "type": "integer"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "offset_ms": {
+            "type": "number"
+          },
+          "reset_on_stop": {
+            "type": "boolean"
+          },
+          "latency_ms": {
+            "type": "number"
+          },
+          "dropped": {
+            "type": "integer"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "clock": {
+            "type": "boolean"
+          },
+          "transport": {
+            "type": "boolean"
+          },
+          "spp": {
+            "type": "boolean"
+          },
+          "mtc": {
+            "type": "boolean"
+          },
+          "clock_while_stopped": {
+            "type": "boolean"
+          },
+          "sends": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "suppressed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "delay_ms": {
+            "type": "number"
+          },
+          "sent": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "index",
+          "enabled",
+          "offset_ms",
+          "reset_on_stop",
+          "latency_ms",
+          "dropped",
+          "warnings",
+          "clock",
+          "transport",
+          "spp",
+          "mtc",
+          "clock_while_stopped",
+          "sends",
+          "suppressed",
+          "delay_ms",
+          "sent"
+        ],
+        "additionalProperties": false
+      }
     }
   },
   "required": [
@@ -3367,7 +3456,8 @@ Kind: `action`. Exposure: `mcp-tool`.
     "dropped",
     "voice_dropped",
     "failed_errors",
-    "sync"
+    "sync",
+    "midi_outputs"
   ],
   "additionalProperties": false
 }
@@ -3461,7 +3551,8 @@ Result:
   "dropped": 0,
   "voice_dropped": 0,
   "failed_errors": [],
-  "sync": "<any>"
+  "sync": "<any>",
+  "midi_outputs": []
 }
 
 ```
@@ -3470,7 +3561,7 @@ Result:
 
 Real-time engine state: backend, rate, block, device period, latency, xruns.
 
-preparing_audio: source preparation is pending; the previous ready plan stays audible. prepared_version is the last compiled version, preparation_version the pending target (zero when idle); preparation_error explains a failed preparation. plan_latency: the session's plugin delay in frames; device_latency: frames from the engine's outputs to the device. restart_needed: the device changed rate or went away; engine.stop and engine.start again. midi_devices_changed is advisory: MIDI topology changed but audio keeps running. midi_devices_message asks for an explicit engine restart to pick up the new set; existing port names stay fixed. midi_out_dropped counts hardware output rejections, queue/device loss and pending events discarded at shutdown. midi_output_warnings lists outputs skipped at start; midi_output_latency is signed audio-minus-MIDI latency per output, in frames. sync: external sync (sync.get has the same status with the settings). midi_dropped: MIDI input messages/packets rejected or lost to bounded queues (JACK and native; zero for the dummy backend). midi_warnings lists inputs skipped at start, with device, numeric os_error, message and corrective hint. meter_drops: entries a full ring dropped (the renderer's, the audio callback's) — a strip's peak/RMS missed a block, never audio. dropped/voice_dropped count lost plug-in output/voice records. memory_lock reports requested/active and an optional OS error with errno and a corrective hint, including while stopped. Bridges are excluded. cpu_idle_latency reports the owned 20 microsecond request with the same status/error fields; it affects system idle while held and leaves CPU frequency policy unchanged. live_helpers is the enabled live helper capacity. scheduling: each thread class's policy (none, normal, fifo, rr, high) and priority as applied at start: the device callback, live helpers, renderer and background helpers (real-time below a real-time callback when permitted). workgroup: whether the live helpers joined the device's audio workgroup (macOS CoreAudio; state none, ready, joined, partial or failed, with the helper counts and the last refusal's OS error, message and hint). warnings includes scheduling fallbacks and plan warnings with corrective actions. failed_errors adds structured code, message, path and hint to each failure. failed_fx: isolated plugins whose process crashed or hung (silent now; fx.restart re-creates them).
+preparing_audio: source preparation is pending; the previous ready plan stays audible. prepared_version is the last compiled version, preparation_version the pending target (zero when idle); preparation_error explains a failed preparation. plan_latency: the session's plugin delay in frames; device_latency: frames from the engine's outputs to the device. restart_needed: the device changed rate or went away; engine.stop and engine.start again. midi_devices_changed is advisory: MIDI topology changed but audio keeps running. midi_devices_message asks for an explicit engine restart to pick up the new set; existing port names stay fixed. midi_out_dropped counts hardware output rejections, queue/device loss and pending events discarded at shutdown. midi_output_warnings lists outputs skipped at start; midi_output_latency is signed audio-minus-MIDI latency per output, in frames. sync: external sync (sync.get has the same status with the settings). midi_outputs: what each MIDI output sends (clock, transport, spp, mtc; midi.outputs.get has the same with the settings). midi_dropped: MIDI input messages/packets rejected or lost to bounded queues (JACK and native; zero for the dummy backend). midi_warnings lists inputs skipped at start, with device, numeric os_error, message and corrective hint. meter_drops: entries a full ring dropped (the renderer's, the audio callback's) — a strip's peak/RMS missed a block, never audio. dropped/voice_dropped count lost plug-in output/voice records. memory_lock reports requested/active and an optional OS error with errno and a corrective hint, including while stopped. Bridges are excluded. cpu_idle_latency reports the owned 20 microsecond request with the same status/error fields; it affects system idle while held and leaves CPU frequency policy unchanged. live_helpers is the enabled live helper capacity. scheduling: each thread class's policy (none, normal, fifo, rr, high) and priority as applied at start: the device callback, live helpers, renderer and background helpers (real-time below a real-time callback when permitted). workgroup: whether the live helpers joined the device's audio workgroup (macOS CoreAudio; state none, ready, joined, partial or failed, with the helper counts and the last refusal's OS error, message and hint). warnings includes scheduling fallbacks and plan warnings with corrective actions. failed_errors adds structured code, message, path and hint to each failure. failed_fx: isolated plugins whose process crashed or hung (silent now; fx.restart re-creates them).
 
 Kind: `query`. Exposure: `mcp-tool`.
 
@@ -3887,6 +3978,95 @@ Kind: `query`. Exposure: `mcp-tool`.
         "warnings"
       ],
       "additionalProperties": false
+    },
+    "midi_outputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "midi_output",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "index": {
+            "type": "integer"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "offset_ms": {
+            "type": "number"
+          },
+          "reset_on_stop": {
+            "type": "boolean"
+          },
+          "latency_ms": {
+            "type": "number"
+          },
+          "dropped": {
+            "type": "integer"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "clock": {
+            "type": "boolean"
+          },
+          "transport": {
+            "type": "boolean"
+          },
+          "spp": {
+            "type": "boolean"
+          },
+          "mtc": {
+            "type": "boolean"
+          },
+          "clock_while_stopped": {
+            "type": "boolean"
+          },
+          "sends": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "suppressed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "delay_ms": {
+            "type": "number"
+          },
+          "sent": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "index",
+          "enabled",
+          "offset_ms",
+          "reset_on_stop",
+          "latency_ms",
+          "dropped",
+          "warnings",
+          "clock",
+          "transport",
+          "spp",
+          "mtc",
+          "clock_while_stopped",
+          "sends",
+          "suppressed",
+          "delay_ms",
+          "sent"
+        ],
+        "additionalProperties": false
+      }
     }
   },
   "required": [
@@ -3925,7 +4105,8 @@ Kind: `query`. Exposure: `mcp-tool`.
     "dropped",
     "voice_dropped",
     "failed_errors",
-    "sync"
+    "sync",
+    "midi_outputs"
   ],
   "additionalProperties": false
 }
@@ -4013,7 +4194,8 @@ Result:
   "dropped": 0,
   "voice_dropped": 0,
   "failed_errors": [],
-  "sync": "<any>"
+  "sync": "<any>",
+  "midi_outputs": []
 }
 
 ```
@@ -8877,6 +9059,320 @@ Result:
   "position": "<any>",
   "notes": "<any>",
   "cc": "<any>"
+}
+
+```
+
+## `midi.outputs.get@1`
+
+Show each MIDI output's settings and what it sends (clock, SPP, MTC).
+
+Per MIDI output (port: its name in engine.inputs.midi_outputs): enabled (false: the port sends nothing); offset_ms (-1000..1000) sends the port's MIDI later (negative: earlier); reset_on_stop (hardware MIDI routing); clock sends MIDI clock (24 per quarter note) while the transport plays; transport sends Start, Continue and Stop; spp sends Song Position before Continue and on locates (a start between 16ths continues from the next one); mtc sends MIDI time code at the project's timecode; clock_while_stopped keeps clocking at the tempo while stopped. Clock and MTC leave with the audio they belong to: after the plan's latency, the output's audio-minus-MIDI latency and the offset. Nothing is sent during a count-in. ports: each output the running device has (index into engine.inputs.midi_outputs), then saved records for outputs it lacks (index -1), with the settings, latency_ms (audio minus MIDI), warnings, what it sends now, what it does not send back to the sync master (suppressed), delay_ms (plan latency + latency + offset), and the clock and MTC messages sent and dropped since the engine started.
+
+Kind: `query`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "midi_outputs_info",
+  "properties": {
+    "ports": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "midi_output",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "index": {
+            "type": "integer"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "offset_ms": {
+            "type": "number"
+          },
+          "reset_on_stop": {
+            "type": "boolean"
+          },
+          "latency_ms": {
+            "type": "number"
+          },
+          "dropped": {
+            "type": "integer"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "clock": {
+            "type": "boolean"
+          },
+          "transport": {
+            "type": "boolean"
+          },
+          "spp": {
+            "type": "boolean"
+          },
+          "mtc": {
+            "type": "boolean"
+          },
+          "clock_while_stopped": {
+            "type": "boolean"
+          },
+          "sends": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "suppressed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "delay_ms": {
+            "type": "number"
+          },
+          "sent": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "index",
+          "enabled",
+          "offset_ms",
+          "reset_on_stop",
+          "latency_ms",
+          "dropped",
+          "warnings",
+          "clock",
+          "transport",
+          "spp",
+          "mtc",
+          "clock_while_stopped",
+          "sends",
+          "suppressed",
+          "delay_ms",
+          "sent"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["ports"],
+  "additionalProperties": false
+}
+
+```
+
+### Examples
+
+**No device running** (`empty`)
+
+```json
+{}
+
+```
+
+Result:
+
+```json
+{
+  "ports": []
+}
+
+```
+
+## `midi.outputs.set@1`
+
+Set a MIDI output's settings: clock, transport, SPP, MTC, offset.
+
+Per MIDI output (port: its name in engine.inputs.midi_outputs): enabled (false: the port sends nothing); offset_ms (-1000..1000) sends the port's MIDI later (negative: earlier); reset_on_stop (hardware MIDI routing); clock sends MIDI clock (24 per quarter note) while the transport plays; transport sends Start, Continue and Stop; spp sends Song Position before Continue and on locates (a start between 16ths continues from the next one); mtc sends MIDI time code at the project's timecode; clock_while_stopped keeps clocking at the tempo while stopped. Clock and MTC leave with the audio they belong to: after the plan's latency, the output's audio-minus-MIDI latency and the offset. Nothing is sent during a count-in. Omitted members keep their values; a record back at every default is removed. Machine settings: not an undo step, not saved in the project (the app keeps them with its preferences). ports: each output the running device has (index into engine.inputs.midi_outputs), then saved records for outputs it lacks (index -1), with the settings, latency_ms (audio minus MIDI), warnings, what it sends now, what it does not send back to the sync master (suppressed), delay_ms (plan latency + latency + offset), and the clock and MTC messages sent and dropped since the engine started.
+
+Kind: `action`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `port` | string |  |  |  |  |
+| `enabled` | boolean |  |  |  |  |
+| `offset_ms` | number |  | -1000..1000 |  |  |
+| `reset_on_stop` | boolean |  |  |  |  |
+| `clock` | boolean |  |  |  |  |
+| `transport` | boolean |  |  |  |  |
+| `spp` | boolean |  |  |  |  |
+| `mtc` | boolean |  |  |  |  |
+| `clock_while_stopped` | boolean |  |  |  |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "midi_outputs_info",
+  "properties": {
+    "ports": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "midi_output",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "index": {
+            "type": "integer"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "offset_ms": {
+            "type": "number"
+          },
+          "reset_on_stop": {
+            "type": "boolean"
+          },
+          "latency_ms": {
+            "type": "number"
+          },
+          "dropped": {
+            "type": "integer"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "clock": {
+            "type": "boolean"
+          },
+          "transport": {
+            "type": "boolean"
+          },
+          "spp": {
+            "type": "boolean"
+          },
+          "mtc": {
+            "type": "boolean"
+          },
+          "clock_while_stopped": {
+            "type": "boolean"
+          },
+          "sends": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "suppressed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "delay_ms": {
+            "type": "number"
+          },
+          "sent": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "index",
+          "enabled",
+          "offset_ms",
+          "reset_on_stop",
+          "latency_ms",
+          "dropped",
+          "warnings",
+          "clock",
+          "transport",
+          "spp",
+          "mtc",
+          "clock_while_stopped",
+          "sends",
+          "suppressed",
+          "delay_ms",
+          "sent"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["ports"],
+  "additionalProperties": false
+}
+
+```
+
+### Examples
+
+**Clock, transport and Song Position to an interface, stored while it is away** (`empty`)
+
+```json
+{
+  "port": "Interface",
+  "clock": true,
+  "transport": true,
+  "spp": true
+}
+
+```
+
+Result:
+
+```json
+{
+  "ports": [
+    {
+      "name": "Interface",
+      "index": -1,
+      "enabled": true,
+      "offset_ms": 0.0,
+      "reset_on_stop": true,
+      "latency_ms": 0.0,
+      "dropped": 0,
+      "warnings": [],
+      "clock": true,
+      "transport": true,
+      "spp": true,
+      "mtc": false,
+      "clock_while_stopped": false,
+      "sends": [],
+      "suppressed": [],
+      "delay_ms": 0.0,
+      "sent": 0
+    }
+  ]
 }
 
 ```

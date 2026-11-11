@@ -123,6 +123,58 @@ Status validateSyncSettings(const SyncSettings& settings);
 Result<SyncSettings> parseSyncSettings(const json::Value& value, SyncSettings base = {});
 json::Value syncSettingsJson(const SyncSettings& settings);
 
+// A hardware MIDI output's settings (ADR-0072): machine settings like
+// SyncSettings, keyed by the output's exact name. One record per port for
+// everything it carries: Phase 2's routing owns enabled, offsetMs and
+// resetOnStop (offsetMs is shared by routed MIDI and clock); this phase
+// adds the clock members.
+struct MidiOutputSettings {
+    std::string port;                // the output's name (the preferences' key)
+    bool enabled = true;             // the port is used at all (false: nothing is sent)
+    double offsetMs = 0.0;           // positive: the port's MIDI goes out that much later
+    bool resetOnStop = true;         // Phase 2: notes off on stop (stored only here)
+    bool clock = false;              // MIDI clock (F8), 24 per quarter note
+    bool transport = false;          // Start, Continue, Stop
+    bool spp = false;                // Song Position Pointer before Continue and on locates
+    bool mtc = false;                // MIDI time code at the project's timecode
+    bool clockWhileStopped = false;  // keep clocking at the tempo while stopped
+    bool operator==(const MidiOutputSettings&) const = default;
+    // Every member at its default: the record can be dropped.
+    bool idle() const {
+        return enabled && offsetMs == 0.0 && resetOnStop && !clock && !transport && !spp && !mtc &&
+               !clockWhileStopped;
+    }
+};
+// Validates a record (code midi.outputs, path /<field>, with a hint).
+Status validateMidiOutputSettings(const MidiOutputSettings& settings);
+// One record's members (and `port`, for midi.outputs.set); absent members
+// keep `base`'s values. The JSON has `port` only when `withPort`.
+Result<MidiOutputSettings> parseMidiOutputSettings(const json::Value& value,
+                                                   MidiOutputSettings base = {});
+json::Value midiOutputSettingsJson(const MidiOutputSettings& settings, bool withPort = false);
+// preferences.json's midi_outputs: {"<port>": {members}}, idle records
+// dropped, sorted by port.
+Result<std::vector<MidiOutputSettings>> parseMidiOutputList(const json::Value& value);
+json::Value midiOutputListJson(const std::vector<MidiOutputSettings>& list);
+
+// One MIDI output as midi.outputs.get and engine.status report it: each
+// output the device has, then stored records for outputs it lacks (index -1).
+struct MidiOutputReport {
+    std::string name;
+    int index = -1;  // into engine.inputs.midi_outputs; -1: not connected
+    bool enabled = true;
+    double offsetMs = 0.0;
+    bool resetOnStop = true;
+    double latencyMs = 0.0;  // the device's audio-minus-MIDI latency
+    std::int64_t dropped = 0;
+    std::vector<std::string> warnings;
+    bool clock = false, transport = false, spp = false, mtc = false, clockWhileStopped = false;
+    std::vector<std::string> sends;       // what goes out now: clock, transport, spp, mtc, ...
+    std::vector<std::string> suppressed;  // set but not echoed to the sync master
+    double delayMs = 0.0;                 // after processing: plan latency + latency + offset
+    std::int64_t sent = 0;
+};
+
 // What sync is doing (engine.status, sync.get).
 struct SyncReport {
     std::string source = "off";
@@ -169,7 +221,8 @@ struct EngineStatus {
     std::vector<std::string> failedFx;           // isolated instances whose bridge crashed or hung
     std::int64_t dropped = 0, voiceDropped = 0;  // plug-in output/voice transport
     json::Value failedErrors = json::Value::array();
-    SyncReport sync;  // external sync (ADR-0071)
+    SyncReport sync;                            // external sync (ADR-0071)
+    std::vector<MidiOutputReport> midiOutputs;  // clock and MTC output (ADR-0072)
 };
 
 struct RecordingWarning {
@@ -521,6 +574,14 @@ class EngineApp : public cmd::Host {
     const SyncSettings& syncSettings() const { return syncSettings_; }
     Status setSyncSettings(const SyncSettings& settings);
     SyncReport syncReport();
+    // MIDI outputs' settings (ADR-0072): the records, sorted by port; set
+    // replaces the record for settings.port (idle: removes it).
+    const std::vector<MidiOutputSettings>& midiOutputSettings() const {
+        return midiOutputSettings_;
+    }
+    Status setMidiOutputSettings(const MidiOutputSettings& settings);
+    Status setMidiOutputSettings(std::vector<MidiOutputSettings> list);
+    std::vector<MidiOutputReport> midiOutputReport();
 
     // --- main-thread service (event/deadline driven) --------------------------------
     // Frees retired plans, emits fx.failed (so subscribers see failures without
@@ -801,11 +862,16 @@ class EngineApp : public cmd::Host {
     // External sync (ADR-0071, sync_commands.cpp).
     SyncSettings syncSettings_;
     SyncConfig syncConfigFor(std::vector<std::string>* warnings) const;
+    // Fills c.outputs from the MIDI output settings; adds per-port warnings
+    // to `perPort` (by output index) when given.
+    void resolveMidiOutputs(SyncConfig& c, std::vector<std::string>* warnings,
+                            std::vector<std::vector<std::string>>* perPort = nullptr) const;
     void applySync();                // the settings and the project's timecode to the engine
     void serviceSync();              // tick(): the engine's sync status to the transport
     SyncStatus syncSeen_;            // what serviceSync last acted on
     double syncSeekSeconds_ = 0.05;  // how long a seek takes to be heard (measured)
     std::vector<std::string> syncWarnings_;
+    std::vector<MidiOutputSettings> midiOutputSettings_;
     std::vector<std::filesystem::path> recordingFiles_;  // while recording
     bool recordingMasters_ = false;  // armed masters record their output (ADR-0057)
     std::set<model::Id> reportedFailures_;

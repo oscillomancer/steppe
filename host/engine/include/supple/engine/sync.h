@@ -4,10 +4,13 @@
 // engine.md § External sync). The audio callback feeds the chosen source's
 // receiver (MIDI clock, MTC, or the LTC decoder on an input channel), runs
 // the chase tracker against the transport it plays, and writes LTC to an
-// output channel; the main thread (EngineApp) turns what it reports into
-// transport changes and the live chase rate.
+// output channel and MIDI clock and MTC to MIDI outputs (ADR-0072); the main
+// thread (EngineApp) turns what it reports into transport changes and the
+// live chase rate.
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -19,6 +22,26 @@ namespace supple::engine {
 
 enum class SyncSource : std::uint8_t { Off, MidiClock, Mtc, Ltc };
 std::string_view syncSourceName(SyncSource source);  // off | midi_clock | mtc | ltc
+
+// What one MIDI output sends (ADR-0072), by Backend::midiOutputPorts() index.
+inline constexpr std::size_t kMaxSyncOutputs = 16;
+struct SyncOutput {
+    bool clock = false;         // F8, 24 per quarter note
+    bool transport = false;     // FA, FB, FC
+    bool spp = false;           // F2 before Continue and on locates
+    bool mtc = false;           // quarter frames and full frames
+    bool whileStopped = false;  // clock: keep clocking at the tempo while stopped
+    // Frames after the audio is processed that its messages go out, on top of
+    // the plan's latency: the port's audio-minus-MIDI latency plus the user's
+    // offset (negative: earlier, predicted ahead).
+    std::int64_t delay = 0;
+    bool operator==(const SyncOutput&) const = default;
+    bool sends() const { return clock || transport || spp || mtc; }
+    bool sameKinds(const SyncOutput& o) const {
+        return clock == o.clock && transport == o.transport && spp == o.spp && mtc == o.mtc &&
+               whileStopped == o.whileStopped;
+    }
+};
 
 // What the engine runs with, resolved by EngineApp from the settings: port
 // and channel indices, the project's timecode.
@@ -34,14 +57,22 @@ struct SyncConfig {
     // loss is final (0: stop at once).
     double freewheelSeconds = 0.0;
     sync::TimecodeMapping timecode{sync::FrameRate::Fps30, {}};
+    std::array<SyncOutput, kMaxSyncOutputs> outputs{};  // MIDI clock and MTC output
     bool operator==(const SyncConfig&) const = default;
     // Whether `other` needs another runtime (receivers, LTC buffers); the
-    // rest (follow tempo, offset, freewheel) changes in place, keeping what
-    // the receivers know.
+    // rest (follow tempo, offset, freewheel, the outputs' delays) changes in
+    // place, keeping what the receivers and generators know.
     bool sameRuntime(const SyncConfig& other) const {
+        for (std::size_t i = 0; i < outputs.size(); ++i)
+            if (!outputs[i].sameKinds(other.outputs[i])) return false;
         return source == other.source && midiPort == other.midiPort && ltcInput == other.ltcInput &&
                ltcOutput == other.ltcOutput && ltcLevelDb == other.ltcLevelDb &&
                timecode == other.timecode;
+    }
+    bool sendsMidi() const {
+        for (const SyncOutput& o : outputs)
+            if (o.sends()) return true;
+        return false;
     }
     // Whether the engine runs a sync plan, every node live so transport
     // changes land with the device's latency: an input source. LTC output

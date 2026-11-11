@@ -265,6 +265,8 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
     midiSource_ = &backend;  // before any callback (backend_ is set after start returns)
     syncDevice_ = 0;
     syncRt_ = nullptr;
+    for (auto& n : syncOutSent_) n.store(0, std::memory_order_relaxed);
+    for (auto& n : syncOutDropped_) n.store(0, std::memory_order_relaxed);
     syncSeq_.store(0, std::memory_order_relaxed);
     auto started = backend.start(config, [this](const float* const* in, float* const* out,
                                                 std::uint32_t n) { cycle(in, out, n); });
@@ -1445,6 +1447,7 @@ void Engine::runSync(const float* const* in, float* const* out, std::uint32_t fr
     c.timelineStart = playing ? before / rate : after / rate;
     c.timelineEnd = after / rate;
     c.wrapped = wrapped;
+    c.loopActive = loopC_.active();
     c.loopStart = static_cast<double>(loopC_.start) / rate;
     c.loopEnd = static_cast<double>(loopC_.end) / rate;
     c.planLatency = syncPlanLatency_.load(std::memory_order_relaxed);
@@ -1452,6 +1455,9 @@ void Engine::runSync(const float* const* in, float* const* out, std::uint32_t fr
     c.inputLatency = syncInputLatency_.load(std::memory_order_relaxed);
     const detail::Plan* p = ring_ ? livePlan_ : plan_;
     c.timeMap = p ? p->timeMap.get() : nullptr;
+    c.midiOut = midiSource_;
+    c.outSent = syncOutSent_.data();
+    c.outDropped = syncOutDropped_.data();
     syncPlayed_ = playing;
     if (rt->process(c)) notifyMain();
     publishSyncStatus(rt->status());

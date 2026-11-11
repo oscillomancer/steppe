@@ -2027,7 +2027,7 @@ run. Offline renders compile without overrides.
 `BackendConfig.midiOutputs` opens up to 16 destinations; `engine.start` enables
 it. `Backend::midiOutputPorts()` names them, fixed while running;
 `engine.inputs.midi_outputs` lists the same names (empty while stopped).
-No routing or clock generator is added here. `writeMidi(MidiOutputEvent)` is
+Clock and MTC generation is § MIDI clock and MTC output. `writeMidi(MidiOutputEvent)` is
 callback-only: 0-based port, frame within that engine chunk, size 1..10 and ten
 inline bytes. Messages must be complete MIDI 1.0, including system realtime,
 SPP, quarter-frame MTC and full-frame MTC SysEx. Running status and SysEx longer
@@ -2089,6 +2089,59 @@ Device-free fake clocks exercise the production queue path, including scheduling
 loss and shutdown. `SUPPLE_MIDI_DEVICE_TEST=1` alone enables native device opens
 with fake audio and no explicit MIDI sends. macOS/Windows native CI and physical
 timing/disconnect validation remain pending. No additional SDK/library is linked.
+
+### MIDI clock and MTC output (ADR-0072)
+
+**Settings.** `EngineApp` holds the `MidiOutputSettings` records
+`{port, enabled, offset_ms, reset_on_stop, clock, transport, spp, mtc,
+clock_while_stopped}` (the per-port record hardware MIDI routing shares:
+it owns enabled, offset_ms and reset_on_stop), sorted by port, records at
+every default dropped (`midi.outputs.get`, `midi.outputs.set`; the GUI
+saves them as `preferences.json`'s `midi_outputs` `{"<port>": {...}}`).
+`syncConfigFor` resolves each record against `Engine::midiOutputPorts()`
+by exact name into `SyncConfig.outputs[i]` (`kMaxSyncOutputs` = 16): for
+an enabled port the kinds, and `delay` = `midiOutputLatency()[i]` + offset
+in frames; a disabled port sends nothing. While the sync
+source is MIDI clock or MTC on an input whose device is that output (names
+equal without capture/playback, in/out, input/output, midiin/midiout), the
+kinds the master sends are cleared (clock, transport, SPP, clock while
+stopped; or MTC), with a warning in the sync warnings; `sameRuntime()`
+compares the kinds, so a kind change builds a runtime and a delay change
+adjusts in place.
+
+**The callback.** A runtime with any sending output keeps the span ring
+(as for LTC output: the timeline processed per cycle, the stopped position
+in stopped spans, two spans at a wrap, 4096) and per output a
+`ClockGenerator`, an `MtcGenerator` (the project's timecode) and where the
+last piece ended. Each cycle, after LTC, for each sending output i with
+total delay D = plan latency + delay_i, the window `[c, c + n)` reads the
+timeline at `[c − D, c + n − D)` as pieces: spans clipped to it (before
+the oldest: unknown, nothing sent), then, past the newest span (D < 0), a
+prediction at its speed wrapping at the loop's end. Each piece at output
+frame a: stopped: Stop if running, MTC stops, and when it is a stop or a
+seek (more than 5 ms from where the last piece ended) Song Position and a
+full frame where it stands; with `clock_while_stopped` F8 every
+60 / (24 bpm) seconds at the tempo there, continuing the last clock's
+phase. Playing: start (Start at or before beat 0, else Song Position of
+the next 16th and Continue) when not running, locate (Stop, Song Position,
+Continue; MTC full frame) on a step over 5 ms, then clocks and quarter
+frames inside the piece, beats through the plan's time map with its exact
+inverse. Events go through a 2048-entry buffer, filtered by kind (F8
+clock; F2 spp; FA, FB, FC transport; F1 and the full frame mtc), to
+`writeMidi` at `ceil(frame) − c`; refusals and a full buffer count in
+`Engine::syncOutputDropped(i)`, sent messages in `syncOutputSent(i)`
+(reset at start). Count-in cycles do not play, so nothing but the
+optional free clock goes out until the timeline moves. Offline renders
+send nothing.
+
+**Status.** `midi.outputs.get` returns `{ports}`, and
+`engine.status.midi_outputs` the same list: each output of the running
+device in order, at the defaults when it has no record, then each record
+whose output is absent (`index` −1): `{name, index, enabled, offset_ms,
+reset_on_stop, latency_ms, dropped, warnings, clock, transport, spp, mtc,
+clock_while_stopped, sends, suppressed, delay_ms, sent}`. `delay_ms` is
+plan latency + latency + offset; `warnings` holds the port's own (the
+echo guard's).
 
 ### Master playrate (ADR-0045)
 

@@ -1578,6 +1578,7 @@ EngineStatus EngineApp::engineStatus() {
         st.failedErrors.asArray().push_back(std::move(failure));
     }
     st.sync = syncReport();
+    st.midiOutputs = midiOutputReport();
     if (!engine_ || !backend_) return st;
     const BackendStatus b = backend_->status();
     st.running = true;
