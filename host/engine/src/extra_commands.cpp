@@ -556,7 +556,7 @@ std::optional<std::vector<Id>> routeCycle(const model::Session& s, Id from, Id t
                                                : e.value->to.track;
         if (source && target) edges[*source].push_back(*target);
         if (source && e.value->midi && e.value->to.track)
-            for (Id module : model::midiFollowers(s, *e.value->to.track))
+            for (Id module : model::midiFollowers(s, *e.value->to.track, source))
                 edges[*source].push_back(s.modules.find(module)->rack);
     }
     std::set<Id> seen;
@@ -678,7 +678,7 @@ Result<model::Route> buildRoute(const RouteArgs& a, const model::Session& s, Eng
             return Error("route.cycle", "route creates a cycle: " + cycleText(s, *cycle, true),
                          "/to", "choose a destination that does not feed the source");
         if (r.to.track)
-            for (Id follower : model::midiFollowers(s, *r.to.track))
+            for (Id follower : model::midiFollowers(s, *r.to.track, from))
                 if (auto cycle = routeCycle(s, from, s.modules.find(follower)->rack, ignored))
                     return Error("route.cycle",
                                  "route creates a cycle: " + cycleText(s, *cycle, true), "/to",
@@ -1217,7 +1217,7 @@ void registerExtraCommands(cmd::Registry& registry) {
                         continue;
                     auto path = routeCycle(s, from, target);
                     if (!path && midiMode && kind == "track")
-                        for (Id follower : model::midiFollowers(s, target)) {
+                        for (Id follower : model::midiFollowers(s, target, from)) {
                             path = routeCycle(s, from, s.modules.find(follower)->rack);
                             if (path) break;
                         }

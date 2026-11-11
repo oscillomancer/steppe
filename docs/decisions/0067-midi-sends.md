@@ -35,9 +35,13 @@ null restores Home. The model persists this as `source_off: true`, alongside
 the existing optional source track; the command clears that track when None
 is selected. Project schema 2.10 defaults the new field to false for old files.
 
-A channel's incoming sends also feed each Notes reader of that channel.
-Those dependencies bypass the channel's audio node: a rack may produce the
-channel's audio while reading its MIDI. Explicit and implicit dependencies
+A channel's incoming sends also feed each Notes reader of that channel,
+except the readers in the sending rack itself: a Notes module never hears
+its own rack's Note Out through its source track. A Note Out playing the
+track its rack reads (an arpeggiator on its own instrument track, valid
+before this decision) is therefore no cycle. Those dependencies bypass the
+channel's audio node: a rack may produce the channel's audio while reading
+its MIDI. Explicit and implicit dependencies
 participate in mixed audio/MIDI cycle validation. MIDI edges use PDC queues,
 fixed prepared event/voice storage and the existing MIDI budget error. A
 source feeding a live destination runs live, keeping MIDI off the audio-only

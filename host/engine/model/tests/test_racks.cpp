@@ -279,6 +279,52 @@ TEST_CASE("MIDI sends: channel endpoints, Notes source off and old projects roun
     CHECK(serializeProject(*loaded) == serializeProject(p.s));
 }
 
+TEST_CASE("MIDI sends: a Note Out may play its own Notes source; older projects with one open") {
+    // The arpeggiator on its own track: the rack's Notes reads the home
+    // channel, its Note Out plays that channel's instrument. The Notes module
+    // does not hear its own rack's Note Out, so this is no cycle.
+    Patch p = patch();
+    EditTxn t(p.s, 2);
+    RackModule noteOut;
+    noteOut.rack = p.rack;
+    noteOut.type = std::string(kNotesOutModule);
+    noteOut.version = "1.0.0";
+    const Id output = t.create(noteOut);
+    t.create(Cable{{p.notes, "gate"}, {output, "gate"}, std::nullopt, ""});
+    Route back;
+    back.from.module = output;
+    back.to.track = p.channel;
+    back.midi = MidiRouting{};
+    t.create(back);
+    auto s = t.commit();
+    REQUIRE_MESSAGE(s, (s ? "" : s.error().toString()));
+    auto old = projectToJson(*s);
+    old["schema"] = "supple.project/2.9";
+    auto loaded = projectFromJson(old);
+    REQUIRE_MESSAGE(loaded, (loaded ? "" : loaded.error().toString()));
+    CHECK(serializeProject(*loaded) == serializeProject(*s));
+    // Another rack's Notes still hears it: two racks playing each other's
+    // Notes source tracks feed back.
+    EditTxn cross(*s, 3);
+    const Id rack = cross.create(Rack{p.other, "Echo"});
+    RackModule notes;
+    notes.rack = rack;
+    notes.type = std::string(kNotesModule);
+    notes.version = "1.0.0";
+    cross.create(notes);
+    noteOut.rack = rack;
+    const Id echo = cross.create(noteOut);
+    back.from.module = output;
+    back.to.track = p.other;
+    cross.create(back);
+    back.from.module = echo;
+    back.to.track = p.channel;
+    cross.create(back);
+    const auto refused = cross.commit();
+    REQUIRE_FALSE(refused);
+    CHECK(refused.error().code == "route.cycle");
+}
+
 TEST_CASE("MIDI sends: model rejects invalid endpoints, audio controls, learn and mixed cycles") {
     Patch p = patch();
     Route send;

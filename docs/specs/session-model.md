@@ -300,7 +300,9 @@ notes still held. `from_channel` filters and `to_channel` remaps, 0 meaning
 all/original. MIDI sends learn `mute` only (ADR-0058).
 
 A Notes module hears its source channel's pre-FX MIDI, explicit MIDI sends
-and its device input. `module.add`/`module.set {source: "none"}` disables the
+and its device input, except what its own rack's Note Outs send to that
+channel: a Note Out may play the channel its rack's Notes reads, and old
+projects that do so load unchanged. `module.add`/`module.set {source: "none"}` disables the
 source; `{source: null}` restores Home. The model stores `source_off: true`
 (default false), with no source track for None. Source changes do not remove
 explicit routes or device selection. Armed MIDI overdub/replace channels

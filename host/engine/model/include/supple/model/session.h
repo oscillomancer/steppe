@@ -249,9 +249,12 @@ std::string rackLabel(const Session& s, Id rack);
 // GUI's send drags add at most one. Sends from auxiliary pairs do not count.
 bool sendsTo(const Session& s, Id from, Id to);
 
+// The Notes modules that read `track`'s pre-FX stream, so also hear the MIDI
+// routed to it. `source` is the route's source node: a Notes module never
+// hears its own rack's Note Out through its source track (ADR-0067), so the
+// Notes modules of a source rack are left out.
+std::vector<Id> midiFollowers(const Session& session, Id track, std::optional<Id> source = {});
 // The independent MIDI input, falling back to the legacy record.input route.
-// Notes modules that read this channel's pre-FX stream, including incoming MIDI.
-std::vector<Id> midiFollowers(const Session& session, Id track);
 const Route* midiInputRoute(const Session& s, Id track);
 
 // What every view calls a track: its name, or for an unnamed one a numbered

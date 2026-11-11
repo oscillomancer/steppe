@@ -542,7 +542,11 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
 - **MIDI.** Notes modules receive the compiled MIDI events of their source
   tracks (items, loops, playrate), incoming MIDI sends to those tracks, explicit
   sends to the module, and live MIDI from the device when the source monitors
-  it; the node is then live. Source None disables only the track feed. The
+  it; the node is then live. A Notes module never hears its own rack's Note
+  Outs through its source track, so a Note Out may play the instrument of the
+  track its rack's Notes reads (an arpeggiator on its own track); another
+  rack's Note Out into that track is heard, and a loop between two racks that
+  way is a cycle. Source None disables only the track feed. The
   routing window's MIDI mode connects channels/Note Out to channels/Notes.
   `rack::host::MidiEvent` carries a source namespace and optional note id;
   addressed equal-pitch notes retain independent releases in polyphonic and

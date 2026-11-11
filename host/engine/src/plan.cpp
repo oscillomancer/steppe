@@ -183,7 +183,7 @@ Result<std::vector<Id>> topoOrder(const Session& s) {
             if (const model::RackModule* m = s.modules.find(*r.to.module)) to = m->rack;
         if (from && to) link(*from, *to);
         if (from && r.midi && r.to.track)
-            for (Id module : model::midiFollowers(s, *r.to.track))
+            for (Id module : model::midiFollowers(s, *r.to.track, from))
                 link(*from, s.modules.find(module)->rack);
     }
     std::set<Id> ready;
@@ -486,7 +486,10 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
             if (r.to.module) destinations.push_back(*r.to.module);
             if (r.to.track) {
                 destinations.push_back(*r.to.track);
-                const auto followers = model::midiFollowers(s, *r.to.track);
+                const auto* sourceModule = r.from.module ? s.modules.find(*r.from.module) : nullptr;
+                const auto followers = model::midiFollowers(
+                    s, *r.to.track,
+                    sourceModule ? std::optional<Id>(sourceModule->rack) : r.from.track);
                 destinations.insert(destinations.end(), followers.begin(), followers.end());
             }
             for (Id destination : destinations) {

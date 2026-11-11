@@ -2793,6 +2793,14 @@ TEST_CASE("MIDI sends: commands validate endpoints, controls, cycles and mute-on
     set["source"] = json::Value();
     REQUIRE(bus.execute({"module.set", set, kOrigin}));
     CHECK_FALSE(app->head().modules.find(*model::Id::parse(notes))->sourceOff);
+    // Notes reads Target again; its own rack's Note Out may play Target.
+    direct["to"] = "tr_2";
+    const auto own = bus.execute({"route.add", direct, kOrigin});
+    REQUIRE_MESSAGE(own, (own ? "" : own.error().toString()));
+    const auto cycles = run(bus, "route.matrix", R"({"mode":"midi"})");
+    for (const auto& cycle : cycles.find("cycles")->asArray())
+        CHECK_FALSE(
+            (cycle.find("from")->asString() == output && cycle.find("to")->asString() == "tr_2"));
     set["source"] = "none";
     REQUIRE(bus.execute({"module.set", set, kOrigin}));
     CHECK(app->head().modules.find(*model::Id::parse(notes))->sourceOff);

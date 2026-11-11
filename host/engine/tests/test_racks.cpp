@@ -1803,6 +1803,28 @@ TEST_CASE("MIDI sends: adding and removing another relay input preserves existin
     for (auto* instance : plan.instances) instance->stopProcessing();
 }
 
+TEST_CASE("MIDI sends: a rack's Notes does not hear its own Note Out through its source track") {
+    namespace d = supple::engine::detail;
+    NoteRouteScene scene(false);
+    model::EditTxn t(scene.session, 2);
+    for (const auto& entry : scene.session.routes)
+        if (entry.value->midi)
+            t.modify<model::Route>(entry.id, [&](auto& route) { route.to.track = scene.source; });
+    const auto session = commit(t);
+    auto pool = makePool();
+    auto plan = d::compile(session, pool, 0, 512);
+    REQUIRE_MESSAGE(plan, (plan ? "" : plan.error().toString()));
+    REQUIRE(d::prepare(*plan, session));
+    std::size_t sends = 0;
+    for (const auto& edge : plan->edges) {
+        if (!edge.midi) continue;
+        ++sends;
+        CHECK(plan->nodes[edge.from].id == scene.rack);
+        CHECK(plan->nodes[edge.to].id == scene.source);
+    }
+    CHECK(sends == 1);
+}
+
 TEST_CASE("MIDI sends: all-notes-off releases precede a same-frame reattack" *
           doctest::description("rt")) {
     namespace d = supple::engine::detail;

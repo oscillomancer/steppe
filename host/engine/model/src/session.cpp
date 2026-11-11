@@ -18,11 +18,11 @@
 
 namespace supple::model {
 
-std::vector<Id> midiFollowers(const Session& s, Id track) {
+std::vector<Id> midiFollowers(const Session& s, Id track, std::optional<Id> source) {
     std::vector<Id> out;
     for (const auto& entry : s.modules) {
         const auto& module = *entry.value;
-        if (module.type != kNotesModule || module.sourceOff) continue;
+        if (module.type != kNotesModule || module.sourceOff || module.rack == source) continue;
         const auto* home = s.racks.find(module.rack);
         if (module.source.value_or(home ? home->track : kMaster) == track) out.push_back(entry.id);
     }
@@ -483,7 +483,7 @@ struct Checker {
             // mixed: its incoming sends also feed Notes, without depending on
             // the track's audio node (a rack may supply that very audio input).
             if (source && r.midi && r.to.track)
-                for (Id module : midiFollowers(s, *r.to.track)) {
+                for (Id module : midiFollowers(s, *r.to.track, source)) {
                     const Id rack = s.modules.find(module)->rack;
                     edges[*source].push_back(rack);
                     midiEdges.emplace(*source, rack);
