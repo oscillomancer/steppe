@@ -303,7 +303,7 @@ bool validReply(Op op, Reader r) {
     switch (op) {
         case Op::Create: {
             if (!r.u32()) return false;
-            r.skip(15);
+            r.skip(16);
             const auto ports = r.u32();  // auxiliary outputs: name, channels
             if (ports > kMaxAuxPorts) return false;
             for (std::uint32_t i = 0; i < ports && r.ok(); ++i) {

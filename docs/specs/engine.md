@@ -1438,7 +1438,7 @@ harness. See the tooling README for schemas, limits and invocation details.
   build); it moves to the background decode with the disk cache.
   `stretch_markers` use prepared item-local warped audio (ADR-0053; see below).
 - **Live pool** (`live_workers.{h,cpp}`): callback fork-join as specified in §2.2.
-- **Not yet:** MIDI output ports, crossfades for
+- **Not yet:** crossfades for
   structural changes (inserting or removing plugins). B1/B2 measurements:
   `docs/benchmarks/b1.md`, `b2.md` (tooling: `tools/bench/README.md`).
 
@@ -1503,7 +1503,8 @@ normal plan-adoption boundaries, including the anticipative edit horizon.
 
 `Engine::takePluginOutputs()` is main-thread only. Each record contains FX id,
 plan generation, transport epoch, timeline sample, stream sample, the entire
-`host::OutputEvent`, and idle/anticipative markers. Timeline coordinates subtract
+`host::OutputEvent`, and idle/anticipative markers. Note ends and plug-in
+note/MIDI output (ADR-0068) are not published there. Timeline coordinates subtract
 the stage's input timeline shift (§1.3); idle flush records use the service-time
 play position.
 Parameter values and gesture boundaries are copied after worker tasks finish,
@@ -2080,17 +2081,18 @@ message and hint (also copied into warnings). Names contain only successfully
 opened/connected destinations. Topology changes latch midi_devices_changed
 without automatic restart. JACK's optional registration callback conservatively
 includes audio port topology. Native output monitoring uses the existing device
-monitor. Stop first joins audio, then the sender (pending queued output is
-discarded); CoreMIDI flushes scheduled destination output before disposing its
-port/client and WinMM resets, unprepares buffers and closes devices. CoreMIDI's
-flush is endpoint-wide; WinMM reset can send all-notes-off on all channels.
+monitor. Stop first emits held-note releases from the final audio callback, joins audio,
+then submits queued releases with sink timestamps of now and joins the sender. Other
+future queued events are discarded. CoreMIDI never flushes endpoints; submitted
+events drain and only the owned port/client is disposed (ADR-0072). WinMM
+resets, unprepares buffers and closes owned devices; reset can send all-notes-off.
 
 Device-free fake clocks exercise the production queue path, including scheduling,
 loss and shutdown. `SUPPLE_MIDI_DEVICE_TEST=1` alone enables native device opens
 with fake audio and no explicit MIDI sends. macOS/Windows native CI and physical
 timing/disconnect validation remain pending. No additional SDK/library is linked.
 
-### MIDI clock and MTC output (ADR-0072)
+### MIDI clock and MTC output (ADR-0073)
 
 **Settings.** `EngineApp` holds the `MidiOutputSettings` records
 `{port, enabled, offset_ms, reset_on_stop, clock, transport, spp, mtc,
@@ -2843,8 +2845,8 @@ Every channel has prepared `midiPreFx` and `midiPostFx` event buffers,
 independent of its instrument. Timeline events (including loops and master
 playrate), monitored device events and incoming routes merge at exact frames
 before feeding its instrument. MIDI routes can form A → B → C chains through
-channels without instruments. Post-FX currently copies pre-FX, leaving one
-explicit replacement/merge seam for plug-in MIDI output. A frozen channel's
+channels without instruments. Post-FX is the chain's MIDI bus after the
+chain (below; ADR-0068). A frozen channel's
 pre/post-FX MIDI is its timeline MIDI; no MIDI is recovered from its audio
 print. Outgoing MIDI send changes do not invalidate the audio freeze hash;
 incoming external MIDI remains unsupported for freeze.
@@ -2896,3 +2898,165 @@ would put a voice's release before its own onset (late events or playrate
 compression), the frame retains input chronology. Prepared sorting scratch
 keeps both channel and Notes event ordering allocation-free. All-notes-off
 releases stay at their controller, before a same-frame reattack.
+
+### Hardware MIDI routing (ADR-0072)
+
+Project schema 2.10 additionally accepts MIDI-only routes from channels/Note Out
+to `to.midi_device`, addressed by `route.add/set {to_midi: name, midi: {}}`.
+Taps, mute and MIDI channel filtering/remapping follow internal MIDI sends.
+Hardware source nodes and their dependencies run live in both executors.
+The callback uses prepared descriptors and fixed queues; offline renders
+never write devices. Missing output names warn; duplicate ambiguous names fail.
+
+Route delay is `plan.outputLatency - source.timelineShift - tappedLatency +
+backend.midiOutputLatency[port] + offset_ms * sampleRate / 1000` (rounded to
+frames). Negative minimum delay adds prepared audio lead to all MIDI delays and a
+final audio delay; lead is limited to one second and reported by `midi_lead_frames`.
+Engine output latency, heard timing and recording account for it. History is
+allocated on the owner thread only when publishing a plan with non-zero lead, and
+runs only during non-zero lead or a tap crossfade. It continues across stop, locate,
+loop wrap and lead-unchanged edits while lead is needed. The first negative-offset
+route after an inactive history primes silence once. On return to zero lead,
+owner-thread reclamation waits for the final crossfade acknowledgment and retirement
+of every plan that could use it.
+
+Boundaries drop only queued timeline-origin note-ons, retaining delayed live onsets,
+releases, other messages and mute markers on reset-off ports; reset-on routes
+invalidate their queues through the route generation. A lead change crossfades fixed
+old/new integer-delay taps over 5 ms without clearing history or changing their
+playback rate. Rapid edits finish the active fade, then fade to the latest target.
+The initial plan primes its full lead normally.
+
+No hardware delay may exceed ten seconds. Limits: 256 routes, 65,536 pending
+messages, 16 ports, and the existing 1,024 messages per device period. Equal-frame
+messages preserve route/event insertion order. Overflow is counted. Timeline origin
+is captured with each stream event before a slot can be freed or reused, carried
+through the FX bus and hardware queue, and retained for mute-retriggered notes.
+Live/device and generated plug-in notes keep device time across boundaries on
+reset-off ports. Route and source mute automation is evaluated on the tapped
+stream's compensated clock, including its source shift and master playrate
+trajectory. Channel post-FX and post-fader routes read the chain's final MIDI bus
+(ADR-0068), including plug-in note output; pre-FX routes read the original stream.
+The bus keeps the chain's input clock, so its tap latency cancels against delivery
+compensation. New or re-timed post-FX routes restart the bus's held notes, including
+plug-in voices, rather than the pre-FX pool. Rack Note Out events already include
+their latency.
+
+Port disable gates the next callback and releases notes before the render-ahead
+horizon; enabling and timing changes adopt with their prepared plan.
+Held notes release on removal, mute, disabling/re-timing, stop/locate when
+reset is on, and engine shutdown. Releases include sustain-off; boundary and
+shutdown resets add all-notes-off on used channels. These controllers share
+hardware channel state. `reset_on_stop: false` retains timeline notes across
+transport stops/locates; engine shutdown always releases. While stopped, this
+preference suppresses only timeline-origin releases whose pre-block slot was
+high and Timeline. Live onsets and releases pass even when a slot is newly
+allocated or reused from a timeline note.
+CoreMIDI shutdown
+stamps closing releases at `max(now, lastDue[port])`, after accepted events,
+then retains its port/client until the latest submitted timestamp, capped at
+250 ms from sender stop (`kMidiOutputCloseWaitSeconds` and
+`midiOutputCloseDeadline`, shared with a future final clock Stop). The wait is
+on the control thread and covers the remaining scheduled plan/device delay.
+Longer horizons can outlast that cap and require native validation. No
+endpoint-wide flush is used. WinMM still drops future onsets and sends releases
+immediately; JACK still writes its final period.
+
+`midi.outputs.get` and `midi.inputs.get` return `{ports: [...]}` with name,
+index (-1 absent), enabled, offset_ms, latency_ms, dropped and structured warnings;
+outputs also have reset_on_stop. `.set {port, enabled?, offset_ms?, reset_on_stop?}`
+(input omits reset) applies a machine preference. Port names resolve by a unique
+case-insensitive match among present or recorded names, stored with the exact
+spelling; unknown or ambiguous calls refuse with the available exact names. Offsets are finite -1000..1000
+ms, positive later. Input advances clamp to this callback's start; positive
+input offsets carry across callbacks. Existing record MIDI routes perform input
+routing. Disabled inputs do not reach monitoring, recording or MIDI learn.
+Status includes `midi_inputs`, `midi_outputs`, and `midi_lead_frames`. Each output reports `lead_ms`, the shared added latency
+from the prepared note routes, also applied to live monitoring.
+Per-port dropped counts route scheduling/rejection and attributable output
+sender/device loss; native input losses without a retained port remain in the
+aggregate `midi_dropped`. Port latency_ms is the signed backend latency before
+user offset/lead; inputs currently report zero device latency.
+
+Preferences add `midi_inputs` and `midi_outputs` maps to
+`supple.preferences/1.6`, keyed by exact enumerated port name. Records retain
+unknown members for clock output compatibility. Defaults are enabled, zero
+offset and output reset_on_stop true. GUI and headless applications use the
+same preferences file; embedded hosts may provide their own persistence.
+
+The engine and GUI share `engine::kPreferencesSchema` for the current machine
+preferences schema, including a new engine-owned preferences file.
+
+MIDI preference records have one writer, EngineApp. Generic GUI preference
+saves preserve the latest records on disk and ask the engine to persist its
+current records; opening a dialog never replaces engine state from a snapshot.
+Startup uses `loadMidiPortPreferences` to skip each malformed MIDI record while
+retaining valid peers; a malformed input/output section is skipped as a whole.
+`midi.outputs.get` / `midi.inputs.get` retain skipped names with structured
+`midi.preferences` warnings (code, path, message, hint). A successful correction
+clears that record's warning. Skipped raw JSON records (and malformed whole
+sections) are retained and written back unchanged on unrelated edits, including
+writes to a new preferences file. An explicit correction merges into the raw
+object, preserving its other fields, then validates strictly before replacing it.
+Command edits still use strict validation.
+
+Hardware routes preserve scalar-rate and mix-only edit paths. With hardware
+routes, route/source/VCA mute values join the existing atomic mix publication;
+the callback updates its hardware gate consumers without a plan compile.
+Fader edits retain the running plan and prepared audio history.
+
+### The FX chain's MIDI bus (ADR-0068)
+
+A track's chain carries a MIDI bus (`midi_bus.cpp`). Per block, before the
+note target's releases, `beginMidiBus` decides which note-output stages are
+on the bus: running in this executor, processing and not bypassed (a stage
+that then fails outputs nothing but stays on the bus). Part −1 is the
+pre-FX stream; part *q* is the *q*th note-output stage. A part reaches
+stage *k* when it comes before *k*, is on the bus, and no replacing stage on
+the bus lies between it and *k*; the pre-FX part reaches *k* when no
+replacing stage on the bus lies before *k*. What a stage holds of a part
+that no longer reaches it ends at the start of its block (the note target's
+with its own releases); if the pre-FX part no longer reaches the note
+target, its pre-FX voices end and it no longer hears that part.
+
+After `finishTrackMidi`, `fillMidiBus` copies `midiPreFx` onto the bus,
+marking a take's own notes and controllers (`midiChain`) so no plug-in of
+the track hears them; sends still do. Before each stage, `feedMidiBus`
+gives a note-accepting stage the bus, notes under `kBusNoteBase` + their
+bus id (the note target skips the pre-FX part, which it already heard under
+its own ids), merged by time with its automation and releases. A track whose
+`chain_midi` is `instrument` (`Node::midiBusOn` false) has no note-output
+stages on the bus and feeds no stage: only the note target hears the
+track's MIDI, and post-FX equals pre-FX, as before 2.10. A plug-in with
+note ports and no audio ports runs in either mode, the audio passing it. After each
+stage, `stageMidiBus` turns a note-output stage's output into bus events:
+notes (and MIDI 1.0 note messages) take its voice slots, keyed by the
+plug-in's `(port, channel, key, note id)`, with an end before an onset on a
+held address and CLAP wildcard ends; all-notes-off ends that channel; other
+MIDI passes. Replace makes that the bus; merge interleaves it after the
+bus's own events at each frame. `finishMidiBus` writes `midiPostFx`: first
+the releases of post-FX voices of parts no longer reaching the end, then
+the bus; `midiPostHeld` follows it, and post-FX send restarts read its
+block-start copy. Every listening stage tracks its voices (`trackVoices`),
+bus notes marked `kBusNoteOrigin`.
+
+Bus ids are the pre-FX slots, then `kBusVoices` (256) per note-output
+stage. Adoption (`carryBus`) keeps a continuing stage's held notes and maps
+their old bus ids to new ones (same instance and FX id), maps pre-FX ids
+by the pool's remap, carries `midiPostHeld`, remaps listening stages'
+bus notes (else they end, at the start of the next block, also on a
+listener other than the note target) and lets post-FX sends carry their
+voices by the same map. A seek ends the pre-FX part's post-FX notes and what other stages
+than the note target hold of it.
+
+A note-output stage's sink holds `kBusOutputEvents` (1024, the bridge
+arena's room). Bounds: a stage adds 256 voices and `kBusStageEvents`
+(2 × 1024 + 2 × 256) events per block to the bus; `midiPostWindow` and
+`midiPostRate` add two blocks and one of that per stage, plus a release per
+bus voice; post-FX taps size their queues and voices from them. A
+listening stage reserves what can reach it: the pre-FX part unless it is
+the note target, and the stages ahead of it; a chain without note-output
+stages reserves what it did before. A stage with note ports and no audio
+ports (`midiOnly`) runs with no audio buffers; the audio passes it through
+its compensation delay, and it is never oversampled. Bus notes keep the
+chain's input time; post-FX taps add `latChain`.

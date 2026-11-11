@@ -7,6 +7,7 @@ using namespace supple::engine;
 namespace {
 struct Sink : detail::MidiSink {
     double clock = 10;
+    std::vector<double> waits;
     std::vector<detail::TimedMidiOutput> sent;
     bool fail = false, timestamps = false;
     Sink() { names = {"Synth", "Clock"}; }
@@ -17,6 +18,10 @@ struct Sink : detail::MidiSink {
     bool send(const detail::TimedMidiOutput& e) override {
         sent.push_back(e);
         return !fail;
+    }
+    void waitUntil(double deadline) override {
+        waits.push_back(deadline);
+        clock = std::max(clock, deadline);
     }
     bool changed() override { return false; }
 };
@@ -78,6 +83,8 @@ TEST_CASE("native output scheduler uses fake due times and preserves port order"
     REQUIRE(sender->push({13, {0, 0, 1, {0xf8}}}));
     sender->dispatch();
     CHECK(sender->dropped() == 2);
+    CHECK(sender->dropped(0) == 2);
+    CHECK(sender->dropped(1) == 0);
 }
 TEST_CASE("native output queue overflow and shutdown discard pending output") {
     Sink sink;
@@ -107,6 +114,7 @@ TEST_CASE("dummy MIDI output capture retains absolute frames and bounded losses"
     CHECK(backend.midiCapture()[1].frame == 63);
     CHECK(backend.midiCapture()[2].frame == 64);
     CHECK(backend.midiOutDropped() == 1);
+    CHECK(backend.midiOutAsyncDropped(0) == 1);
 }
 
 TEST_CASE("CoreMIDI wire encoding supports system, channel voice and full-frame SysEx7 UMPs") {
@@ -125,4 +133,56 @@ TEST_CASE("CoreMIDI wire encoding supports system, channel voice and full-frame 
     encoded = detail::midiOutputUmp({0, 0, 2, {0xf0, 0xf7}});
     CHECK(encoded.count == 2);
     CHECK(encoded.words[0] == 0x30000000u);
+}
+TEST_CASE("native output shutdown sends releases now without endpoint flush") {
+    Sink sink;
+    auto sender = std::make_unique<detail::MidiOutputSender>(sink);
+    REQUIRE(sender->push({20, {0, 0, 3, {0x90, 60, 100}}}));
+    REQUIRE(sender->push(
+        {10, {0, 0, 3, {0x80, 60, 0}}}));  // clamped behind previously scheduled events
+    REQUIRE(sender->push({10, {0, 0, 3, {0xb0, 64, 0}}}));
+    sender->stop();
+    REQUIRE(sink.sent.size() == 2);
+    CHECK(sink.sent[0].event.bytes[0] == 0x80);
+    CHECK(sink.sent[0].seconds == 10);
+    CHECK(sink.sent[1].event.bytes[1] == 64);
+    CHECK(sender->dropped() == 1);
+}
+
+TEST_CASE("timestamped closing releases follow accepted events and wait before disposal") {
+    Sink sink;
+    sink.timestamps = true;
+    auto sender = std::make_unique<detail::MidiOutputSender>(sink);
+    REQUIRE(sender->push({20, {0, 0, 3, {0x90, 60, 100}}}));
+    sender->dispatch();
+    REQUIRE(sender->push({20, {0, 0, 3, {0x80, 60, 0}}, true}));
+    sender->dispatch();
+    REQUIRE(sink.sent.size() == 2);
+    CHECK(sink.sent[0].seconds == 20);
+    CHECK(sink.sent[1].seconds == 20);
+    sink.clock = 11;
+    REQUIRE(sender->push({21, {0, 0, 3, {0xb0, 64, 0}}, true}));
+    sender->stop();
+    REQUIRE(sink.sent.size() == 3);
+    CHECK(sink.sent[2].seconds == 20);
+    REQUIRE(sink.waits.size() == 1);
+    CHECK(sink.waits[0] == doctest::Approx(11.25));
+}
+
+TEST_CASE("timestamped native close waits the remaining plan delay up to the shared bound") {
+    for (double delay : {.05, 1.}) {
+        Sink sink;
+        sink.timestamps = true;
+        auto sender = std::make_unique<detail::MidiOutputSender>(sink);
+        REQUIRE(sender->push({10 + delay, {0, 0, 3, {0x90, 60, 100}}}));
+        sender->dispatch();
+        REQUIRE(sender->push({10, {0, 0, 3, {0x80, 60, 0}}, true}));
+        sender->stop();
+        REQUIRE(sink.sent.size() == 2);
+        CHECK(sink.sent[1].seconds == doctest::Approx(10 + delay));
+        CHECK(sink.clock ==
+              doctest::Approx(10 + std::min(delay, detail::kMidiOutputCloseWaitSeconds)));
+        sink.stop();  // port disposal follows sender's bounded wait
+    }
+    CHECK(detail::midiOutputCloseDeadline(10, 9) == 10);
 }

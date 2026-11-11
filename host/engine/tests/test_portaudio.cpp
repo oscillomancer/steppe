@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 #include <doctest/doctest.h>
+#include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <mutex>
@@ -1124,9 +1125,16 @@ TEST_CASE("PortAudio MIDI output maps its device clock into the sink clock acros
     {
         std::lock_guard lock(output.mutex);
         REQUIRE(output.sent.size() == 8);
+        // Independent port queues can become visible between sender scans.
+        // Compare their requested due times, preserving the port association.
+        auto sent = output.sent;
+        std::sort(sent.begin(), sent.end(),
+                  [](const auto& a, const auto& b) { return a.seconds < b.seconds; });
         const unsigned frames[] = {0, 63, 64, 127, 128, 191, 192, 210};
-        for (unsigned n = 0; n < 8; ++n)
-            CHECK(output.sent[n].seconds == doctest::Approx(10.01 + frames[n] / 48000.0));
+        for (unsigned n = 0; n < 8; ++n) {
+            CHECK(sent[n].seconds == doctest::Approx(10.01 + frames[n] / 48000.0));
+            CHECK(sent[n].event.port == n % 2);
+        }
     }
     CHECK(backend.midiOutDropped() == 0);
     backend.stop();
@@ -1182,6 +1190,11 @@ TEST_CASE("MIDI hardware output listing, warning and latency survive the command
     CHECK((*status)["midi_output_latency"].asArray()[1] == -96);
     REQUIRE((*status)["midi_output_warnings"].asArray().size() == 1);
     CHECK((*status)["midi_output_warnings"].asArray()[0]["device"] == "Busy synth");
+    const auto& outputPorts = (*status)["midi_outputs"].asArray();
+    REQUIRE(outputPorts.size() == 3);
+    CHECK(*outputPorts[2].find("name") == "Busy synth");
+    CHECK(outputPorts[2].find("index")->asInt() == -1);
+    CHECK(outputPorts[2].find("warnings")->asArray()[0].find("os_error")->asInt() == 5);
     auto ports = dispatcher.execute(
         {"engine.inputs", json::Value::object(), {cmd::Origin::Type::Test, "midi-output", ""}});
     REQUIRE(ports);
@@ -1253,4 +1266,28 @@ TEST_CASE("native output snapshots host time before collecting MIDI input") {
         CHECK(output.sent[0].seconds == 10);
     }
     backend.stop();
+}
+
+TEST_CASE("native output releases survive the audio-device-loss final callback fallback") {
+    Driver driver;
+    driver.active = 0;
+    auto api = Driver::api;
+    api.threaded = true;
+    auto sink = std::make_unique<FakeSink>();
+    auto& output = *sink;
+    PortAudioBackend backend({}, api, {}, std::move(sink));
+    unsigned finals = 0;
+    REQUIRE(backend.start({.blockSize = 64, .midiOutputs = true}, [&](auto, auto, unsigned frames) {
+        if (!frames) {
+            ++finals;
+            CHECK(output.stops == 0);
+            CHECK(backend.writeMidi({0, 0, 3, {0x80, 60, 0}}));
+        }
+    }));
+    backend.stop();
+    CHECK(finals == 1);
+    CHECK(output.stops == 1);
+    REQUIRE(output.sent.size() == 1);
+    CHECK(output.sent[0].event.bytes[0] == 0x80);
+    CHECK(output.sent[0].seconds == output.clock.load());
 }

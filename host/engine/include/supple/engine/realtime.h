@@ -34,6 +34,7 @@
 #include "supple/base/main_thread_wake.h"
 #include "supple/base/spsc.h"
 #include "supple/base/thread.h"
+#include "supple/engine/midi_ports.h"
 #include "supple/engine/offline.h"
 #include "supple/engine/sync.h"
 
@@ -46,6 +47,7 @@ class SyncRuntime;
 class Workers;
 class LiveWorkers;
 class Recorder;
+class HardwareMidiRuntime;
 }  // namespace detail
 
 class MeterBank;  // meters.h: per-strip peak/RMS telemetry (P5.3c)
@@ -332,6 +334,8 @@ class Backend {
     virtual bool writeMidi(const MidiOutputEvent&) SUPPLE_RT { return false; }
     virtual std::vector<std::string> midiOutputPorts() const { return {}; }
     virtual std::uint64_t midiOutDropped() const { return 0; }
+    // Loss after callback acceptance, attributed to an output port.
+    virtual std::uint64_t midiOutAsyncDropped(std::size_t) const { return 0; }
     virtual std::vector<MidiInputWarning> midiOutputWarnings() const { return {}; }
     // Audio output latency minus MIDI port latency, in frames (signed).
     // At equal cycle frames, positive means MIDI leaves earlier than audio.
@@ -396,6 +400,9 @@ class DummyBackend : public Backend {
     std::vector<std::string> midiOutputPorts() const override;
     std::vector<std::int64_t> midiOutputLatency() const override;
     std::uint64_t midiOutDropped() const override { return midiOutput_.dropped(); }
+    std::uint64_t midiOutAsyncDropped(std::size_t port) const override {
+        return port < 16 ? midiAsyncDrops_[port].load() : 0;
+    }
     struct CapturedMidi {
         std::int64_t frame = 0;
         MidiOutputEvent event;
@@ -411,9 +418,11 @@ class DummyBackend : public Backend {
     detail::MidiOutputCycle midiOutput_;
     std::vector<CapturedMidi> midiCapture_;
     void captureMidi();                 // this callback's MIDI output, into midiCapture_
+    std::array<std::atomic<std::uint64_t>, 16> midiAsyncDrops_{};
     std::vector<MidiInputEvent> midi_;  // this cycle's (capacity reserved)
     std::vector<SyncMidiEvent> sync_;   // likewise
     void cycle();
+    void finishMidi();
     Options options_;
     BackendConfig config_;
     Callback callback_;
@@ -573,7 +582,7 @@ class Engine {
     // the scalar control path (ADR-0046) on a sync plan. Never saved.
     void setSyncRate(double scale);
     double syncRate() const { return syncScale_; }
-    // MIDI clock and MTC output (ADR-0072): messages written to, and refused
+    // MIDI clock and MTC output (ADR-0073): messages written to, and refused
     // by, each Backend::midiOutputPorts() index since start.
     std::uint64_t syncOutputSent(std::size_t port) const {
         return port < kMaxSyncOutputs ? syncOutSent_[port].load(std::memory_order_relaxed) : 0;
@@ -650,7 +659,12 @@ class Engine {
     std::uint64_t planGeneration() const { return publishedGen_; }  // main thread
     std::uint64_t pluginOutputDrops() const { return outputDrops_.load() + idleOutputDrops_; }
 
-    std::uint32_t outputLatency() const { return outputLatency_; }
+    std::uint32_t outputLatency() const;
+    void setMidiPreferences(MidiPortPreferences inputs, MidiPortPreferences outputs);
+    std::uint64_t midiPortDropped(bool output, std::size_t port) const;
+    std::uint32_t midiLeadFrames() const;
+    // Owner thread: shared audio lead for a candidate offset on one port.
+    std::uint32_t midiLeadForOffset(std::size_t port, double offsetMs) const;
     const std::vector<std::string>& warnings() const { return warnings_; }
 
     // --- meters (P5.3c, engine.md §2.3) --------------------------------------------
@@ -698,7 +712,7 @@ class Engine {
     std::atomic<std::int64_t> syncOutputLatency_{0}, syncInputLatency_{0}, syncPlanLatency_{0};
     std::array<std::atomic<std::uint64_t>, kMaxSyncOutputs> syncOutSent_{}, syncOutDropped_{};
     // Engine stop: the main thread asks the callback for the runtime's
-    // farewell (Stop to running slaves) and waits for it (ADR-0072 §9).
+    // farewell (Stop to running slaves) and waits for it (ADR-0073 §9).
     std::atomic<bool> syncFarewell_{false}, syncTransportRunning_{false};
     std::atomic<std::uint32_t> syncFarewells_{0};
     void sayFarewell() SUPPLE_RT;  // audio thread: the current runtime's
@@ -819,6 +833,10 @@ class Engine {
     std::atomic<std::uint64_t> outputDrops_{0}, voiceDrops_{0};
     std::uint64_t idleOutputDrops_ = 0;
     bool notificationReload_ = false;
+    MidiPortPreferences midiInputsPreferences_, midiOutputsPreferences_;
+    bool midiSettingsDirty_ = false;
+    std::unique_ptr<detail::HardwareMidiRuntime> hardwareMidi_;
+    std::span<const MidiInputEvent> deviceMidi_;
     InstancePool& plugins_;
     MediaCache& media_;
     MainThreadWake* mainWake_ = nullptr;

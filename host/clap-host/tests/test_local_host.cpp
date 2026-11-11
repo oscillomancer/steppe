@@ -83,7 +83,7 @@ TEST_CASE("host Unicode conversion bounds and validates plugin text") {
 TEST_CASE("VST3 fixture scans, processes, and restores state") {
     auto found = scan(std::span<const std::filesystem::path>(&kVst3Fixture, 1));
     REQUIRE(found);
-    REQUIRE(found->size() == 8);
+    REQUIRE(found->size() == 9);
     CHECK((*found)[0].format == "vst3");
     CHECK((*found)[0].id.rfind("vst3:", 0) == 0);
     CHECK((*found)[0].version == "2.0");
@@ -180,7 +180,7 @@ TEST_CASE("a VST3 reset ends the notes the host delivered") {
 TEST_CASE("scan finds the fixtures with their capabilities") {
     auto list = scan(std::span<const std::filesystem::path>(&kFixture, 1));
     REQUIRE(list);
-    REQUIRE(list->size() == 18);
+    REQUIRE(list->size() == 20);
     const auto gain = find("com.suppleaudio.test.gain");
     CHECK_FALSE(gain.instrument);
     CHECK(gain.semantic);

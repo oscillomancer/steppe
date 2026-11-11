@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 #include "plan.h"
+#include "hardware_midi.h"
 #include "live_workers.h"
 #include "rack_runtime.h"
 #include "supple/model/fade_shape.h"
@@ -355,6 +356,7 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
             st.wet = fx.wet / 100.0;
             st.autoBypassOnSilence = fx.autoBypassOnSilence;
             st.pdcIgnore = fx.pdc == model::PdcMode::Ignore;
+            st.busMerge = fx.midiOutput == model::MidiOutputMode::Merge;
             st.parallel = fx.parallel;
             st.os = fx.oversampling == 2 || fx.oversampling == 4 || fx.oversampling == 8
                         ? fx.oversampling
@@ -371,6 +373,7 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
             return st;
         };
         n.auxCount = std::clamp(t.channels - 2, 0, model::kMaxTrackChannels - 2);
+        n.midiBusOn = t.chainMidi == model::ChainMidi::Bus;
         n.freeze = t.freeze;
         if (n.freeze) continue;  // Original objects remain in the model, not this plan.
         const int channels = 2 + n.auxCount;
@@ -481,6 +484,29 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
     }
     for (const auto& e : s.routes) {
         const model::Route& r = *e.value;
+        if (r.to.midiDevice && r.midi) {
+            auto route = std::make_shared<HardwareRoute>();
+            route->id = e.id;
+            route->device = *r.to.midiDevice;
+            route->tap = r.tap;
+            route->mute = r.mute;
+            route->fromChannel = r.midi->fromChannel;
+            route->toChannel = r.midi->toChannel;
+            const auto from = r.from.module ? s.modules.find(*r.from.module)->rack : *r.from.track;
+            route->source = index.at(from);
+            auto& source = p.nodes[route->source];
+            source.hardwareMidiSource = source.midiSends = true;
+            if (r.from.module) {
+                const auto& outs = source.rack->notesOut;
+                const auto found = std::find_if(outs.begin(), outs.end(), [&](const auto& output) {
+                    return output.id == *r.from.module;
+                });
+                if (found == outs.end()) continue;
+                route->rackNotes = static_cast<int>(found - outs.begin());
+            }
+            p.hardwareMidi.push_back(std::move(route));
+            continue;
+        }
         if (r.midi && !r.from.midiDevice) {
             std::vector<Id> destinations;
             if (r.to.module) destinations.push_back(*r.to.module);
@@ -716,6 +742,9 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
                    : param == "mute"                          ? &n.autoMute
                                                               : nullptr;
         } else if (o.kind == Kind::Route) {
+            if (param == "mute")
+                for (auto& route : p.hardwareMidi)
+                    if (route->id == o) route->muteCurve = a;
             for (Edge& ed : p.edges)
                 if (ed.route == o) {
                     Automation* curve = param == "volume" ? &ed.autoVolume
@@ -766,6 +795,7 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         if (n.rack) {
             // A rack playing a device's MIDI is live, as a monitored track.
             n.live =
+                n.hardwareMidiSource ||
                 std::any_of(n.rack->notes.begin(), n.rack->notes.end(), [](const NotesFeed& f) {
                     return f.device.has_value() || f.sourceDevice.has_value();
                 });
@@ -790,11 +820,11 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
                     for (int ch : *in->from.hwChannels) n.monitorInputs.push_back(ch - 1);
             }
         if (monitoring)
-            if (const auto* in = model::midiInputRoute(s, n.id))
+            if (const auto* in = model::midiInputRoute(s, n.id); in && !in->mute)
                 n.midiIn = Node::MidiIn{*in->from.midiDevice, in->midi ? in->midi->fromChannel : 0,
                                         in->midi ? in->midi->toChannel : 0, 0};
-        n.live = !n.monitorInputs.empty() || n.midiIn.has_value() || !n.recordInputs.empty() ||
-                 n.recordRack;
+        n.live = n.hardwareMidiSource || !n.monitorInputs.empty() || n.midiIn.has_value() ||
+                 !n.recordInputs.empty() || n.recordRack;
         // Recording Note Out consumes its delivered events on the callback.
         // Keep source and destination together even with monitoring off.
         if (t.record.armed && (t.record.mode == model::RecordMode::MidiOverdub ||
@@ -942,8 +972,10 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
     MixSlots& mix = *p.mix;
     mix.strips = std::make_unique<MixSlots::Value[]>(p.nodes.size());
     mix.routes = std::make_unique<MixSlots::Value[]>(p.edges.size());
+    mix.hardware = std::make_unique<MixSlots::Value[]>(p.hardwareMidi.size());
     mix.vcas = std::make_unique<MixSlots::Value[]>(mix.vcaIds.size());
     for (std::size_t i = 0; i < p.nodes.size(); ++i) {
+        mix.strips[i].mute.store(p.nodes[i].mute, std::memory_order_relaxed);
         mix.strips[i].volumeDb.store(p.nodes[i].volumeDb, std::memory_order_relaxed);
         mix.strips[i].pan.store(p.nodes[i].pan, std::memory_order_relaxed);
         mix.strips[i].width.store(p.nodes[i].panSettings.width, std::memory_order_relaxed);
@@ -951,11 +983,16 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         mix.strips[i].panRight.store(p.nodes[i].panSettings.right, std::memory_order_relaxed);
     }
     for (std::size_t i = 0; i < p.edges.size(); ++i) {
+        mix.routes[i].mute.store(p.edges[i].muted, std::memory_order_relaxed);
         mix.routes[i].volumeDb.store(p.edges[i].volumeDb, std::memory_order_relaxed);
         mix.routes[i].pan.store(p.edges[i].pan, std::memory_order_relaxed);
     }
-    for (const auto& [id, v] : controls)
+    for (std::size_t i = 0; i < p.hardwareMidi.size(); ++i)
+        mix.hardware[i].mute.store(p.hardwareMidi[i]->mute, std::memory_order_relaxed);
+    for (const auto& [id, v] : controls) {
         mix.vcas[v.slot].volumeDb.store(v.volumeDb, std::memory_order_relaxed);
+        mix.vcas[v.slot].mute.store(v.mute, std::memory_order_relaxed);
+    }
     return p;
 }
 
@@ -1000,6 +1037,12 @@ Status prepare(Plan& p, const Session& s) {
         if (st.instance) {
             host::Instance& in = *st.instance;
             p.pool->service(st.fx);
+            // A plug-in without audio, only notes (an arpeggiator; ADR-0068):
+            // it runs for the MIDI bus, the audio passes it, delayed by its
+            // latency. Oversampling has nothing to resample.
+            st.midiOnly = in.audioInputChannels() == 0 && in.audioOutputChannels() == 0 &&
+                          (in.acceptsNotes() || in.outputsNotes());
+            if (st.midiOnly) st.os = 1;
             const auto os = static_cast<std::uint32_t>(st.os);
             const bool keyChanged = in.sidechainActive() != (st.keyed && in.sidechainChannels());
             if (in.active() && (in.sampleRate() != p.rate * os || in.maxFrames() < block * os ||
@@ -1010,7 +1053,7 @@ Status prepare(Plan& p, const Session& s) {
                 SUPPLE_TRY(in.activate(p.rate * os, 1, p.block * os));
             }
             st.keyChannels = std::min<std::uint32_t>(in.sidechainChannels(), 2);
-            st.instrument = in.audioInputChannels() == 0;
+            st.instrument = in.audioInputChannels() == 0 && !st.midiOnly;
             if (p.pool->failure(st.fx)) {
                 st.latency = p.pool->rememberedLatency(st.fx);
             } else if (os > 1) {
@@ -1033,7 +1076,7 @@ Status prepare(Plan& p, const Session& s) {
                 st.latency = in.latency();
             }
             if (in.active()) p.pool->rememberLatency(st.fx, static_cast<std::uint32_t>(st.latency));
-            if (in.audioOutputChannels() != 2)
+            if (in.audioOutputChannels() != 2 && !st.midiOnly)
                 return Error(
                     "engine.layout", in.info().name + " does not have a stereo output", {},
                     "choose a plugin output layout with a stereo main pair, or replace the plugin");
@@ -1049,7 +1092,8 @@ Status prepare(Plan& p, const Session& s) {
             st.voices.reserve(4096);
             st.pendingVoices.reserve(4096);
         }
-        st.outStorage.resize(256);
+        // A note-output plug-in's events feed the MIDI bus (ADR-0068).
+        st.outStorage.resize(st.instance && st.instance->outputsNotes() ? kBusOutputEvents : 256);
         st.outEvents.storage = st.outStorage;
         return {};
     };
@@ -1078,6 +1122,10 @@ Status prepare(Plan& p, const Session& s) {
             SUPPLE_TRY(prepareStage(st));
             if (n.noteTarget < 0 && st.instance && st.instance->acceptsNotes())
                 n.noteTarget = stageIndex;
+            if (n.midiBusOn && st.instance && st.instance->outputsNotes()) {
+                st.busPart = static_cast<int>(n.midiBusStages.size());
+                n.midiBusStages.push_back(stageIndex);
+            }
             // Auxiliary outputs as far as the plug-in has them (ADR-0021).
             const std::size_t auxOuts = st.instance ? st.instance->auxOutputChannels() : 0;
             if (st.auxOutPin.size() > auxOuts) st.auxOutPin.resize(auxOuts);
@@ -2014,7 +2062,7 @@ void prepareNoteIds(Stage& st) SUPPLE_RT {
 
 // Merge input-note and output-end clocks before updating the held counters.
 // The plug-in may finish one overlapping voice while another remains held.
-void trackVoices(Stage& st, std::array<std::uint8_t, 16 * 128>& held,
+void trackVoices(Stage& st, std::array<std::uint8_t, 16 * 128>* held,
                  std::array<std::uint8_t, 16 * 128>* liveHeld = nullptr) SUPPLE_RT {
     if (!st.processed) return;  // input events not delivered during a compensated bypass
     auto remove = [&](std::int16_t port, std::int16_t channel, std::int16_t key, std::int32_t id) {
@@ -2036,7 +2084,11 @@ void trackVoices(Stage& st, std::array<std::uint8_t, 16 * 128>& held,
                                     liveHeld && event.noteId == -1};
                     voice.sourceId = sourceIndex < st.sourceIds.size() ? st.sourceIds[sourceIndex]
                                                                        : event.noteId;
-                    if (st.rackMidiBase >= 0 && voice.sourceId >= st.rackMidiBase) {
+                    if (voice.sourceId >= kBusNoteBase) {
+                        // A bus note (ADR-0068): its bus id is its identity.
+                        voice.live = true;
+                        voice.origin = {kBusNoteOrigin, 0, 0, 0, 0};
+                    } else if (st.rackMidiBase >= 0 && voice.sourceId >= st.rackMidiBase) {
                         // A routed note: its slot is its identity (carryRackMidi).
                         voice.live = true;
                         voice.origin = {kRackNoteOrigin, 0, 0, 0, 0};
@@ -2060,11 +2112,12 @@ void trackVoices(Stage& st, std::array<std::uint8_t, 16 * 128>& held,
             remove(event.port, event.channel, event.key, event.noteId);
         }
     }
-    held.fill(0);
+    if (!held) return;
+    held->fill(0);
     if (liveHeld) liveHeld->fill(0);
     for (const auto& voice : st.voices) {
         if (voice.channel < 0 || voice.channel > 15 || voice.key < 0 || voice.key > 127) continue;
-        auto& counts = voice.live && liveHeld ? *liveHeld : held;
+        auto& counts = voice.live && liveHeld ? *liveHeld : *held;
         auto& count = counts[static_cast<std::size_t>(voice.channel * 128 + voice.key)];
         if (count < 255) ++count;
     }
@@ -2077,7 +2130,8 @@ void releaseVoices(Stage& st, bool includeLive, bool onlyPending = false, std::i
     for (const auto& voice : st.voices) {
         // `endDevice`: the device input is no longer heard (carryLiveNotes);
         // its voices end, the timeline's and the racks' play on.
-        const bool device = endDevice && voice.live && voice.origin.item != kRackNoteOrigin;
+        const bool device = endDevice && voice.live && voice.origin.item != kRackNoteOrigin &&
+                            voice.origin.item != kBusNoteOrigin;
         bool pending = voice.release || device;
         if (onlyPending && voice.sourceId >= 0 &&
             static_cast<std::size_t>(voice.sourceId) < st.noteSources.size()) {
@@ -2211,10 +2265,10 @@ bool runStage(Plan& p, Stage& st, Stereo& sum, std::uint32_t n, const host::Tran
         for (host::Event& e : st.blockEvents) e.time *= os;
     }
     host::ProcessBlock b;
-    b.inputs = st.instrument ? nullptr : in;
-    b.inputChannels = st.instrument ? 0 : 2;
-    b.outputs = out;
-    b.outputChannels = 2;
+    b.inputs = st.instrument || st.midiOnly ? nullptr : in;
+    b.inputChannels = st.instrument || st.midiOnly ? 0 : 2;
+    b.outputs = st.midiOnly ? nullptr : out;
+    b.outputChannels = st.midiOnly ? 0 : 2;
     if (st.keyed) {
         b.sidechain = key;
         b.sidechainChannels = st.keyChannels;
@@ -2257,6 +2311,11 @@ bool runStage(Plan& p, Stage& st, Stereo& sum, std::uint32_t n, const host::Tran
     st.processed = true;
     st.auxWritten = true;
     st.sleeping = st.autoBypassOnSilence && st.instance->sleeping();
+    if (st.midiOnly) {  // its audio is what came in, compensated
+        st.dry.process(sum.l.data(), sum.r.data(), n);
+        st.appliedWet = target;
+        return true;
+    }
     // Dry signal delayed by the stage's latency: an instrument adds its
     // output to what came in; an effect mixes wet and dry.
     st.dryBuf.copyFrom(sum, n);
@@ -2635,7 +2694,8 @@ bool processTake(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std::uint
         if (!runStage(p, st, tc.buf, n, transport, pos, self)) return false;
         leaveGroup(tc.chain, st, tc.buf, n);
     }
-    if (tc.noteTarget >= 0) trackVoices(tc.chain[static_cast<std::size_t>(tc.noteTarget)], tc.held);
+    if (tc.noteTarget >= 0)
+        trackVoices(tc.chain[static_cast<std::size_t>(tc.noteTarget)], &tc.held);
     const std::int64_t length = tc.end - tc.start;
     for (std::uint32_t i = 0; i < n; ++i) {
         const std::int64_t t = pos + i;
@@ -2809,6 +2869,9 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
     // 2. Route this block's events to the note target. Notes still held at
     // a loop wrap end first, at the start of the block after it.
     for (Stage& st : node.chain) st.blockEvents.clear();
+    // The MIDI bus (ADR-0068): which note-output plug-ins run, and the
+    // releases of what no longer reaches a stage.
+    const bool preFxTarget = beginMidiBus(node, self);
     const bool endDevice = node.releaseLive;
     node.releaseLive = false;
     if (node.releaseHeld) {
@@ -2877,7 +2940,8 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
     }
     addRackMidi(p, node, pos, n, transport.playing);
     finishTrackMidi(node);
-    if (node.noteTarget >= 0) {
+    fillMidiBus(node);
+    if (node.noteTarget >= 0 && preFxTarget) {
         // The pre-FX stream plays the note target under its own ids: item
         // notes' compiled ids, keys by tuple, routed notes past kRoutedNoteBase.
         auto& target = node.chain[static_cast<std::size_t>(node.noteTarget)];
@@ -2894,8 +2958,9 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
     }
     // 2b. Plugin parameter automation (automateStage).
     for (Stage& st : node.chain) automateStage(st, pos, n, time::samplesAt(p.startSeconds, p.rate));
-    // 3. The FX chain, in place on `sum`.
+    // 3. The FX chain, in place on `sum`; the MIDI bus through it.
     for (Stage& st : node.chain) {
+        feedMidiBus(node, st, static_cast<std::size_t>(&st - node.chain.data()));
         // Its key first, every block (the key edges' delay lines and
         // automation keep time even while the stage is bypassed).
         if (st.keyed) {
@@ -2923,10 +2988,16 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
         } else if (!runPinned(p, node, st, n, transport, pos, self)) {
             return false;
         }
+        stageMidiBus(node, st);
     }
-    if (node.noteTarget >= 0)
-        trackVoices(node.chain[static_cast<std::size_t>(node.noteTarget)], node.held,
-                    &node.liveHeld);
+    finishMidiBus(node);
+    for (std::size_t k = 0; k < node.chain.size(); ++k) {
+        Stage& st = node.chain[k];
+        if (static_cast<int>(k) == node.noteTarget)
+            trackVoices(st, &node.held, &node.liveHeld);
+        else if (st.instance && st.instance->acceptsNotes())
+            trackVoices(st, nullptr);  // the bus's other listeners (ADR-0068)
+    }
     // 3b. Polarity and mono (ADR-0022), on the main pair after the chain:
     // before the fader and the Console 9 encode, as the pre-fader taps hear it.
     if (node.frozenAudio) {
@@ -3528,7 +3599,10 @@ void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT {
                                     break;
                                 }
                                 auto carried = voice;
-                                if (carried.origin.item == kRackNoteOrigin) {
+                                if (carried.origin.item == kBusNoteOrigin) {
+                                    // A bus note follows its bus id, remapped
+                                    // after the pools (carryRackMidi).
+                                } else if (carried.origin.item == kRackNoteOrigin) {
                                     // A routed note follows its voice slot,
                                     // remapped after the pool (carryRackMidi).
                                     if (st.rackMidiBase < 0) {
@@ -3646,6 +3720,7 @@ void publishMix(Plan& p, const model::Session& s, std::span<const model::EnvTarg
         const Id id = p.nodes[i].id;
         const model::Track* t = s.tracks.find(id);
         if (!t) continue;
+        mix.strips[i].mute.store(t->mute, relaxed);
         store(mix.strips[i], t->volumeDb, t->pan, held(holds, id, "volume"),
               held(holds, id, "pan"));
         mix.strips[i].width.store(t->width, relaxed);
@@ -3660,13 +3735,19 @@ void publishMix(Plan& p, const model::Session& s, std::span<const model::EnvTarg
         const Edge& e = p.edges[i];
         const model::Route* r = e.route ? s.routes.find(*e.route) : nullptr;
         const model::Track* source = r && r->from.track ? s.tracks.find(*r->from.track) : nullptr;
-        if (!r || !source) continue;  // a parent send: nothing to publish
+        if (!r) continue;
+        mix.routes[i].mute.store(r->mute, relaxed);
+        if (!source) continue;  // a parent send or Note Out has no strip pan
         store(mix.routes[i], r->volumeDb, r->pan.resolve(source->pan),
               held(holds, *e.route, "volume"), held(holds, *e.route, "pan"));
     }
+    for (std::size_t i = 0; i < p.hardwareMidi.size(); ++i)
+        if (const auto* route = s.routes.find(p.hardwareMidi[i]->id))
+            mix.hardware[i].mute.store(route->mute, relaxed);
     for (std::size_t i = 0; i < mix.vcaIds.size(); ++i) {
         const model::TrackGroup* g = s.groups.find(mix.vcaIds[i]);
         if (!g || !g->vca) continue;
+        mix.vcas[i].mute.store(g->vca->mute, relaxed);
         store(mix.vcas[i], g->vca->volumeDb, 0, held(holds, mix.vcaIds[i], "volume"), false);
     }
     mix.sequence.store(sequence + 2, std::memory_order_release);
@@ -3681,6 +3762,7 @@ void syncMix(Plan& p, int liveClass) SUPPLE_RT {
     auto ours = [&](const Node& n) { return liveClass < 0 || n.live == (liveClass == 1); };
     auto syncVcas = [&](VcaControls& vcas) {
         for (VcaControl& v : vcas.values) {
+            v.mute = mix.vcas[v.slot].mute.load(relaxed);
             v.volumeDb = mix.vcas[v.slot].volumeDb.load(relaxed);
             v.hold = mix.vcas[v.slot].holdVolume.load(relaxed);
         }
@@ -3689,6 +3771,7 @@ void syncMix(Plan& p, int liveClass) SUPPLE_RT {
         Node& n = p.nodes[i];
         if (!ours(n)) continue;
         const MixSlots::Value& slot = mix.strips[i];
+        n.mute = slot.mute.load(relaxed);
         n.volumeDb = slot.volumeDb.load(relaxed);
         n.pan = slot.pan.load(relaxed);
         n.holdVolume = slot.holdVolume.load(relaxed);
@@ -3714,6 +3797,7 @@ void syncMix(Plan& p, int liveClass) SUPPLE_RT {
         if (!e.route || !ours(p.nodes[e.stage >= 0 ? e.to : e.from])) continue;
         const MixSlots::Value& slot = mix.routes[i];
         const MixSlots::Value& source = mix.strips[e.from];
+        e.muted = slot.mute.load(relaxed);
         e.volumeDb = slot.volumeDb.load(relaxed);
         e.pan = slot.pan.load(relaxed);
         e.holdVolume = slot.holdVolume.load(relaxed);
@@ -3731,6 +3815,12 @@ void syncMix(Plan& p, int liveClass) SUPPLE_RT {
             e.source.right = source.panRight.load(relaxed);
         }
         syncVcas(e.vcas);
+    }
+    for (std::size_t i = 0; i < p.hardwareMidi.size(); ++i) {
+        auto& route = *p.hardwareMidi[i];
+        if (!ours(p.nodes[route.source])) continue;
+        route.mute = mix.hardware[i].mute.load(relaxed);
+        syncVcas(route.vcas);
     }
     std::atomic_thread_fence(std::memory_order_acquire);
     if (mix.sequence.load(relaxed) == sequence) seen = sequence;

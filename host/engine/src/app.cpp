@@ -86,6 +86,22 @@ Result<std::unique_ptr<EngineApp>> EngineApp::create(AppOptions options, model::
             "engine.workdir", "cannot create " + options.workdir.string(), {},
             "pass a writable workdir and ensure its parent directory exists and has space");
     auto app = std::unique_ptr<EngineApp>(new EngineApp(std::move(options)));
+    if (!app->options_.midiPreferencesFile.empty()) {
+        std::error_code existsError;
+        if (fs::exists(app->options_.midiPreferencesFile, existsError)) {
+            auto bytes = readFile(app->options_.midiPreferencesFile);
+            if (!bytes) return bytes.error();
+            auto doc = json::parse(
+                std::string_view(reinterpret_cast<const char*>(bytes->data()), bytes->size()));
+            if (!doc) return doc.error();
+            for (bool output : {false, true})
+                if (const auto* value = doc->find(output ? "midi_outputs" : "midi_inputs")) {
+                    (output ? app->midiOutputsPreferences_ : app->midiInputsPreferences_) =
+                        loadMidiPortPreferences(*value, output,
+                                                app->midiPreferencesWarnings_[output ? 1 : 0]);
+                }
+        }
+    }
     dsp_commands::nameScriptLibrary(app->scriptDir());
     if (!app->serviceWaitable().valid())
         return Error("engine.service_wake", "cannot create the main-thread service descriptor", {},
@@ -198,6 +214,20 @@ Result<std::uint32_t> EngineApp::fxSidechainChannels(const model::FxInstance& fx
     auto in = scratch(fx);
     if (!in) return std::move(in).error();
     return (*in)->sidechainChannels();
+}
+
+Result<bool> EngineApp::fxOutputsNotes(model::Id id, const model::FxInstance& fx) {
+    if (const host::Instance* live = instanceOf(id)) return live->outputsNotes();
+    auto in = scratch(fx);
+    if (!in) return std::move(in).error();
+    return (*in)->outputsNotes();
+}
+
+Result<bool> EngineApp::fxAcceptsNotes(model::Id id, const model::FxInstance& fx) {
+    if (const host::Instance* live = instanceOf(id)) return live->acceptsNotes();
+    auto in = scratch(fx);
+    if (!in) return std::move(in).error();
+    return (*in)->acceptsNotes();
 }
 
 Result<std::vector<host::AudioPortInfo>> EngineApp::fxAuxOutputs(const model::FxInstance& fx) {
@@ -1025,6 +1055,7 @@ Status EngineApp::startEngine(Backend& backend, const BackendConfig& config,
     engine_ = std::make_unique<Engine>(*pool_, media_, effective);
     engine_->setMainThreadWake(mainWake_);
     backend.setMainThreadWake(&mainWake_);
+    engine_->setMidiPreferences(midiInputsPreferences_, midiOutputsPreferences_);
     auto st = engine_->start(backend, config);
     if (!st) {
         engine_.reset();
@@ -1112,7 +1143,10 @@ Status EngineApp::startEngine(std::string_view backend, std::uint32_t block, boo
     } else if (backend == "dummy") {
         config.outputs = device.outputs > 0 ? device.outputs : 2;
         ownedBackend_ = std::make_unique<DummyBackend>(
-            DummyBackend::Options{.mode = DummyBackend::Mode::Thread, .paced = true});
+            DummyBackend::Options{.mode = DummyBackend::Mode::Thread,
+                                  .paced = true,
+                                  .midiOutputPorts = options_.dummyMidiOutputs,
+                                  .midiPorts = options_.dummyMidiInputs});
     } else {
         return Error("engine.backend", "unknown backend " + std::string(backend), {},
                      "select jack, portaudio or dummy");
@@ -1556,6 +1590,9 @@ void EngineApp::restartFx(model::Id fx) {
 EngineStatus EngineApp::engineStatus() {
     checkFailures();
     EngineStatus st;
+    st.midiInputs = midiPortsState(false);
+    st.midiOutputs = midiPortsState(true);
+    st.midiLeadFrames = engine_ ? engine_->midiLeadFrames() : 0;
     st.preparingAudio = !pendingSourceKey_.empty();
     st.preparationVersion = st.preparingAudio ? head().version : 0;
     st.preparedVersion = loadedHead_ ? loadedHead_->version : 0;
@@ -1578,7 +1615,6 @@ EngineStatus EngineApp::engineStatus() {
         st.failedErrors.asArray().push_back(std::move(failure));
     }
     st.sync = syncReport();
-    st.midiOutputs = midiOutputReport();
     if (!engine_ || !backend_) return st;
     const BackendStatus b = backend_->status();
     st.running = true;
@@ -3041,6 +3077,11 @@ void EngineApp::invoked(std::string_view command, int, const json::Value& args, 
 
 void EngineApp::setupFixture(cmd::Dispatcher& d, std::string_view fixture) {
     if (fixture == "empty") return;
+    if (fixture == "midi_ports") {
+        (void)setMidiPreferences({{"Test port", json::Value::object()}},
+                                 {{"Test port", json::Value::object()}}, false);
+        return;
+    }
     if (fixture == "engine_running") {  // the dummy backend: no device
         auto st = startEngine("dummy", 256);
         assert(st && "fixture engine failed");

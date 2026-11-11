@@ -1067,6 +1067,10 @@ TEST_CASE("preferences: the dialog applies each setting at once and saves it") {
     gui::PreferencesDialog prefs(*f.root, *f.app, mouse, gui::Preferences{}, file);
     CHECK(f.app->defaultMonitor() == model::Monitor::On);
     CHECK(f.app->copyImportedMedia());
+    auto port = json::Value::object();
+    port["clock"] = true;
+    port["offset_ms"] = -2.5;
+    REQUIRE(f.app->setMidiPreferences({}, {{"Synth", port}}, false));
     prefs.open();
     f.root->frame(false);
     REQUIRE(prefs.isOpen());
@@ -1092,6 +1096,8 @@ TEST_CASE("preferences: the dialog applies each setting at once and saves it") {
     auto saved = gui::Preferences::load(file);
     REQUIRE(saved);
     CHECK(saved->defaultMonitor == model::Monitor::Off);
+    CHECK(saved->midiOutputs.at("Synth").find("clock")->asBool());
+    CHECK(engine::midiPortSettings(saved->midiOutputs, "Synth").offsetMs == -2.5);
     CHECK(saved->audioThreads == 4);
     CHECK_FALSE(saved->copyImports);
     CHECK(saved->renderDirectory == f.dir / "my renders");
@@ -1135,11 +1141,6 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
     values.sync.onLoss = "freewheel";
     values.sync.ltcOutput = true;
     values.sync.ltcOutputChannel = 4;
-    engine::MidiOutputSettings clock;
-    clock.port = "Interface MIDI 1";
-    clock.clock = clock.transport = clock.spp = true;
-    clock.offsetMs = -3.5;
-    values.midiOutputs = {clock};
     REQUIRE(values.save(file));
     auto loaded = gui::Preferences::load(file);
     REQUIRE(loaded);
@@ -1152,7 +1153,7 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
     CHECK(loaded->renderOpenFolder);
     CHECK(loaded->audio == values.audio);
     CHECK(loaded->sync == values.sync);
-    CHECK(loaded->midiOutputs == values.midiOutputs);
+    CHECK(loaded->midiOutputs.empty());  // the engine writes these records, not the GUI
     const auto bytes = readFile(file).value();
     CHECK(std::string(bytes.begin(), bytes.end()).find("supple.preferences/1.8") !=
           std::string::npos);
@@ -1174,6 +1175,23 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
         CHECK(old->sync == engine::SyncSettings{});
         CHECK(old->midiOutputs.empty());
     }
+    // A 1.8 clock record on disk (the engine's midi.outputs.set) loads, and a
+    // GUI save keeps it as written.
+    const std::string records =
+        R"({"Interface MIDI 1":{"clock":true,"offset_ms":-3.5,"spp":true,"transport":true}})";
+    REQUIRE(writeFileAtomic(file, R"({"schema":"supple.preferences/1.8","midi_outputs":)" +
+                                      records + "}"));
+    auto clocked = gui::Preferences::load(file);
+    REQUIRE(clocked);
+    const auto clock = engine::midiPortSettings(clocked->midiOutputs, "Interface MIDI 1");
+    CHECK((clock.clock && clock.transport && clock.spp && !clock.mtc));
+    CHECK(clock.offsetMs == -3.5);
+    REQUIRE(clocked->save(file));
+    const auto kept = readFile(file).value();
+    auto keptDoc = json::parse(std::string(kept.begin(), kept.end())).value();
+    REQUIRE(keptDoc.find("midi_outputs"));
+    CHECK(json::writeCanonical(*keptDoc.find("midi_outputs")) ==
+          json::writeCanonical(json::parse(records).value()));
     // A wrong value names its field.
     for (auto [field, bad] : {std::pair{"audio_threads", "65"},
                               {"audio_threads", "1.5"},
@@ -1221,14 +1239,14 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
         CHECK(rejected.error().path == std::string("/sync/") + field);
         CHECK_FALSE(rejected.error().hint.empty());
     }
-    // And a wrong MIDI output record, under /midi_outputs/<port> (1.8).
-    REQUIRE(writeFileAtomic(
-        file, R"({"schema":"supple.preferences/1.8","midi_outputs":{"A":{"offset_ms":5000}}})"));
-    auto rejected = gui::Preferences::load(file);
-    REQUIRE_FALSE(rejected);
-    CHECK(rejected.error().code == "preferences.midi_outputs");
-    CHECK(rejected.error().path == "/midi_outputs/A/offset_ms");
-    CHECK_FALSE(rejected.error().hint.empty());
+    // A wrong MIDI output record is skipped, not fatal: the engine reports it
+    // (midi.outputs.get warnings), and its valid peers load (1.8).
+    REQUIRE(writeFileAtomic(file, R"({"schema":"supple.preferences/1.8","midi_outputs":)"
+                                  R"({"A":{"mtc":1},"B":{"clock":true}}})"));
+    auto skipped = gui::Preferences::load(file);
+    REQUIRE(skipped);
+    CHECK_FALSE(skipped->midiOutputs.contains("A"));
+    CHECK(engine::midiPortSettings(skipped->midiOutputs, "B").clock);
 }
 
 namespace {
@@ -1991,4 +2009,44 @@ TEST_CASE("pan controls: a mixer's second bar records a writing envelope") {
     CHECK(env->points.back().value == f.track(track).width);
     const model::EnvTarget target{*model::Id::parse(track), "width"};
     CHECK(f.app->engine()->writeHolds() == std::vector<model::EnvTarget>{target});
+}
+
+TEST_CASE("preferences: stale GUI snapshots preserve engine-owned MIDI records") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto file = f.dir / "preferences.json";
+    gui::Preferences stale;
+    stale.midiOutputs["Synth"] = json::parse(R"({"clock":true,"offset_ms":-5})").value();
+    REQUIRE(stale.save(file));
+    const auto current = json::parse(R"({"clock":false,"offset_ms":12})").value();
+    REQUIRE(f.app->setMidiPreferences({}, {{"Synth", current}}, false));
+    REQUIRE(f.app->writeMidiPreferences(file));
+    REQUIRE(stale.save(file));
+    auto loaded = gui::Preferences::load(file);
+    REQUIRE(loaded);
+    CHECK_FALSE(loaded->midiOutputs.at("Synth").find("clock")->asBool());
+    CHECK(engine::midiPortSettings(loaded->midiOutputs, "Synth").offsetMs == 12);
+    views::MouseMap map;
+    gui::MouseDialog mouse(*f.root, map, {});
+    gui::PreferencesDialog prefs(*f.root, *f.app, mouse, stale, file);
+    CHECK(engine::midiPortSettings(f.app->midiOutputsPreferences(), "Synth").offsetMs == 12);
+    REQUIRE(prefs.setAudioThreads(2));
+    loaded = gui::Preferences::load(file);
+    REQUIRE(loaded);
+    CHECK_FALSE(loaded->midiOutputs.at("Synth").find("clock")->asBool());
+}
+
+TEST_CASE("preferences: malformed MIDI records do not block GUI startup") {
+    Fixture f;
+    REQUIRE(f.ok);
+    const auto file = f.dir / "bad-midi-preferences.json";
+    REQUIRE(writeFileAtomic(
+        file,
+        R"({"schema":"supple.preferences/1.6","midi_outputs":{"Bad":{"offset_ms":2000},"Good":{"enabled":false}},"midi_inputs":{"Bad":{"enabled":"yes"},"Good":{"offset_ms":5}}})"));
+    const auto loaded = gui::Preferences::load(file);
+    REQUIRE(loaded);
+    CHECK_FALSE(loaded->midiOutputs.contains("Bad"));
+    CHECK_FALSE(loaded->midiInputs.contains("Bad"));
+    CHECK_FALSE(engine::midiPortSettings(loaded->midiOutputs, "Good").enabled);
+    CHECK(engine::midiPortSettings(loaded->midiInputs, "Good").offsetMs == 5);
 }

@@ -21,6 +21,7 @@
 #include "app_actions.h"
 #include "floating_panel.h"
 #include "supple/ui/controls.h"
+#include "supple/ui/popup.h"
 #include "supple/ui/root.h"
 
 namespace supple::ui {
@@ -47,7 +48,8 @@ struct MatrixModel {
         // kind: track | key | module (a rack's In); track: a key's strip, an
         // In module's home channel.
         std::string id, name, kind, type, track;
-        std::string rule;  // why no strip can feed it (channels)
+        bool clock = false;  // Phase 3 sets this in route.matrix
+        std::string rule;    // why no strip can feed it (channels)
     };
     struct Send {
         std::string id, from, to, tap;
@@ -55,6 +57,7 @@ struct MatrixModel {
         bool mute = false, mono = false, phaseInvert = false;
         int midiFrom = 0, midiTo = 0;
         std::vector<int> mapFrom, mapTo;  // the channel map (empty: identity)
+        bool allInputs = false;           // one wildcard input assignment expanded over rows
     };
     std::vector<Source> sources;
     std::vector<Destination> destinations;
@@ -82,6 +85,10 @@ class RoutingMatrix {
     bool isOpen() const { return grid_ != nullptr; }
     void setMidiMode(bool midi);
     bool midiMode() const { return midiMode_; }
+    void setHardwareMidiMode();
+    bool hardwareMidiMode() const { return hardwareMidiMode_; }
+    // Shared port-menu seam: clock output extends this function in Phase 3.
+    std::vector<ui::MenuItem> midiPortMenu(bool output, const std::string& port);
     void sync();  // reload when the session changed while open
 
     // A cell, by what it joins (row and column numbers move as strips do).
@@ -118,6 +125,8 @@ class RoutingMatrix {
     std::string status() const;
 
   private:
+    std::string inputReplacement(const MatrixModel::Source&, const MatrixModel::Destination&) const;
+    std::string statusMessage_;
     void midiChannelMenu(bool from);
     Status reload();
     void refresh();  // the controls, from the selection
@@ -143,10 +152,13 @@ class RoutingMatrix {
     cmd::Dispatcher& dispatcher_;
     engine::EngineApp& app_;
     MatrixModel model_;
-    bool midiMode_ = false;
+    void portContext(bool output, const std::string& port, ui::Point at);
+    void portOffset(bool output, const std::string& port);
+    bool midiMode_ = false, hardwareMidiMode_ = false;
+    std::uint64_t midiPreferencesRevision_ = 0;
     // The mode switch: two latching tabs, the active one lit (as the render
     // dialog's output tabs).
-    ui::Toggle *audioMode_ = nullptr, *midiModeButton_ = nullptr;
+    ui::Toggle *audioMode_ = nullptr, *midiModeButton_ = nullptr, *hardwareModeButton_ = nullptr;
     ui::Button *midiFrom_ = nullptr, *midiTo_ = nullptr;
     std::uint64_t version_ = 0;
     std::uint64_t projectGeneration_ = ~std::uint64_t{0};

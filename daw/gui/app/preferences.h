@@ -30,8 +30,9 @@ struct Preferences {
     AudioDeviceSettings audio;      // the device the engine starts with (1.5)
     bool renderOpenFolder = false;  // open the render folder when a render finishes (1.6)
     engine::SyncSettings sync;      // external sync and LTC output (1.7, ADR-0071)
-    // What each MIDI output sends: clock, transport, SPP, MTC (1.8, ADR-0072).
-    std::vector<engine::MidiOutputSettings> midiOutputs;
+    // The MIDI port records (routing, ADR-0072; clock output, 1.8, ADR-0073),
+    // read for display. The engine is their only writer (midi.*.set).
+    engine::MidiPortPreferences midiInputs, midiOutputs;
     static std::filesystem::path defaultFile(std::string_view slug);
     static Result<Preferences> load(const std::filesystem::path& file);  // absent: defaults
     Status save(const std::filesystem::path& file) const;
@@ -59,8 +60,6 @@ class PreferencesDialog {
     Status setAudioDevice(const AudioDeviceSettings& audio);
     // The sync settings (from the sync dialog, or an agent's sync.set): saved.
     Status setSync(const engine::SyncSettings& sync);
-    // The MIDI outputs' clock and MTC settings (an agent's midi.outputs.set): saved.
-    Status setMidiOutputs(const std::vector<engine::MidiOutputSettings>& outputs);
     // Opens the audio device dialog (the Audio device row's button).
     std::function<void()> onAudioDevice;
     std::function<std::string()> audioSummary;  // the row's text
@@ -68,6 +67,7 @@ class PreferencesDialog {
     std::function<void(const std::string&)> onError;
 
   private:
+    Status save(Preferences& prefs);
     ui::Root& root_;
     engine::EngineApp& app_;
     MouseDialog& mouse_;

@@ -4,6 +4,8 @@
 policy of leaving system-wide settings alone. Contract: engine.md, native MIDI
 outputs. Native macOS/Windows compilation and hardware validation are pending.
 
+2026-11-11: [ADR-0072](0072-hardware-midi-routing.md) amends the CoreMIDI shutdown policy: no endpoint-wide flush; engine releases and accepted messages drain.
+
 ## Decision
 
 BackendConfig.midiOutputs opts into opening up to 16 hardware destinations;

@@ -884,7 +884,17 @@ leave the selection. Shift+click selects the rows from the last one clicked; on 
 multi-selection, bypass, offline and Remove act on every selected effect in
 one undo step (the editor button and a double click open only that row's
 editor), wet/dry, per-FX latency and CPU, preset
-menu, and the plugin's own GUI (native view/child of an SDL window, or a
+menu, a **MIDI out** button for a track-chain plug-in that sends notes
+(`fx.describe` `outputs_notes`; others show none) reading "MIDI out: replace"
+or "MIDI out: merge", whose menu (`fx.midiout.menu`) checks **Replace the MIDI
+it hears** or **Merge with the MIDI it hears** (`fx.set {midi_output}`, one
+undo step; ADR-0068); beside the main chain's **Chain** heading, when the
+choice changes something (a plug-in in the chain sends notes, or two or more
+take them) or `chain_midi` is not the default, a button
+(`fx.chain.midi`) reading "MIDI: through the chain" or "MIDI: instrument
+only" whose menu (`fx.chainmidi.menu`) checks **MIDI through the chain: each
+plug-in hears it** or **Only the instrument hears MIDI (before 2.10)**
+(`track.set {chain_midi}`, one undo step); and the plugin's own GUI (native view/child of an SDL window, or a
 bridge-owned Cocoa window; ADR-0040, `clap.timer-support`, resize negotiated from observed
 geometry). For plugins without a GUI — and always as a second tab — a
 **semantic parameter panel** generated from the plugin's semantic schema
@@ -950,7 +960,7 @@ window. The panel Close button, WM close request and unhandled Escape all
 close this panel without quitting the app.
 
 
-The header switches **Audio | MIDI** (ADR-0067), two latching tabs with the
+The header switches **Audio | MIDI | Hardware MIDI** (ADR-0067/0072), three latching tabs with the
 active mode lit in the accent colour; the mode persists in the
 `windows.routing.mode` UI sidecar field. Audio mode is the existing grid; MIDI
 routes do not appear in it. In Audio mode (`reaper-ux.md` addendum 2), sources (strips in hierarchy, hardware
@@ -1007,6 +1017,33 @@ colours. The usual selection, double-click and Add/Remove gestures apply. The co
 channel (Original or 1–16). These edits act on selected sends in one undo
 step; right-click learns mute only. Audio controls are hidden. The action
 `ui.routing.midi` opens this mode, including in offscreen snapshots.
+Hardware MIDI mode (`windows.routing.mode: "hardware_midi"`, action
+`ui.routing.hardware`) prepends hardware input rows to the channel/Note Out
+rows and appends hardware output columns to channel columns. All channels
+are available, including empty channels that can receive MIDI. Notes module
+columns remain in MIDI mode. MIDI colours and MIDI controls apply. Input to
+channel cells edit `track.set {record_midi: name}`; Remove clears that existing
+assignment. Wildcard (*) cells have an outlined asterisk; they represent one
+shared input assignment. Removing only part of a wildcard assignment refuses
+with a status message; select every cell (or its column) to clear it. On a
+machine with one input, selecting its sole wildcard cell is the whole assignment.
+Replacing an input reports "replaces <old input>" in the status line.
+One MIDI input assignment per channel is retained. Hardware input
+to output cells are blocked; route through a channel. Missing ports named in
+projects/preferences remain visible with warnings in port status. Hardware input
+and output headers use teal socket marks; separators divide input rows from
+channel rows and channel columns from output columns.
+
+Right-click an input row or output column header for Enabled, Timing offset…
+(signed milliseconds, -1000..1000), and, on outputs, Reset notes on stop. The output offset dialog previews
+"adds N ms latency to all audio" as the offset is edited.
+The latter controls stop/locate releases and defaults on. Settings apply
+immediately and save in the machine preferences; `midiPortMenu` builds this
+menu for the clock extension. Output descriptors with `clock: true` draw a
+clock mark. The dummy fixture flag `--dummy-midi --audio dummy` declares
+Keyboard/Pads inputs and Hardware synth/Drum machine outputs for offscreen
+render checks, without opening devices.
+
 Matrix updates clamp scroll to the current endpoint range; paint uses
 endpoint-pair indexes for send and cycle rules.
 Commands: `route.*`, `track.set {record_input}`.
@@ -1553,7 +1590,7 @@ timecode, the chase rate and the error; LTC output on; the warnings). Each
 control is one `sync.set`; rows follow the source. Every change, an agent's
 `sync.set` included, is saved as `preferences.json`'s `sync` (1.7), which
 the app applies at start. The MIDI outputs' clock and MTC settings
-(ADR-0072; no window yet) are saved the same way as `midi_outputs` (1.8,
+(ADR-0073; no window yet) are saved the same way as `midi_outputs` (1.8,
 `{"<port>": {enabled, offset_ms, reset_on_stop, clock, transport, spp,
 mtc, clock_while_stopped}}`, records at every default omitted) whenever
 they change (`midi.outputs.set`) and applied at start.

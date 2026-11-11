@@ -44,6 +44,7 @@ schema::Schema<ParamLearn> paramLearnSchema();        // {param, midi, mode, …
 schema::Schema<ControlLearn> controlLearnSchema();    // {param, midi, mode, …} (ADR-0058)
 schema::Schema<TrackTimebase> trackTimebaseSchema();  // project | time | beats | beats_position
 schema::Schema<ItemTimebase> itemTimebaseSchema();    // track | time | beats | beats_position
+schema::Schema<ChainMidi> chainMidiSchema();          // bus | instrument (ADR-0068)
 schema::Schema<Id> idSchema();                        // "tr_3"
 // A cable end, "mo_3.out" (rack.md §2.3); merges remap the object's id in
 // strings matching kCableEndPattern.

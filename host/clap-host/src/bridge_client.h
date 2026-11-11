@@ -24,7 +24,7 @@ namespace supple::host {
 struct RemotePorts {
     std::uint32_t inChannels = 0, outChannels = 0, keyChannels = 0;
     std::vector<AudioPortInfo> auxOutputs;  // ADR-0021
-    bool acceptsNotes = false, semantic = false, editor = false;
+    bool acceptsNotes = false, outputsNotes = false, semantic = false, editor = false;
 };
 
 class RemoteInstance;

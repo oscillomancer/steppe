@@ -190,6 +190,7 @@ struct JackBackend::Impl {
     std::array<JackPort*, kMaxMidiPorts> midiOutPorts{};
     std::vector<std::string> midiOutNames;
     std::vector<MidiInputWarning> midiOutWarnings;
+    std::array<std::atomic<std::uint64_t>, 16> midiAsyncDrops{};
     detail::MidiOutputCycle midiOut;
     std::atomic<bool> midiOutReady{false};
     std::atomic<bool> midiTopologyChanged{false};
@@ -254,19 +255,21 @@ struct JackBackend::Impl {
             }
             blockMidi.clear();
             blockSync.clear();
-            for (const auto& event : midiOut.sorted())
-                if (!midiBuffers[event.port] ||
-                    api->midiEventWrite(midiBuffers[event.port], event.frame, event.bytes,
-                                        event.size))
-                    midiOut.drop();
         } else {
-            midiOut.chunk(0, 0);
+            midiOut.chunk(0, 1);
             for (std::uint32_t c = 0; c < outputs; ++c) std::fill_n(out[c], n, 0.0f);
             if (s == kStopping) {
                 callback(nullptr, out.data(), 0);  // the final callback (Backend::stop contract)
                 state.store(kStopped, std::memory_order_release);
             }
         }
+        for (const auto& event : midiOut.sorted())
+            if (!midiBuffers[event.port] ||
+                api->midiEventWrite(midiBuffers[event.port], event.frame, event.bytes,
+                                    event.size)) {
+                midiOut.drop();
+                midiAsyncDrops[event.port].fetch_add(1, std::memory_order_relaxed);
+            }
         cycles.fetch_add(1, std::memory_order_relaxed);
         return 0;
     }
@@ -687,6 +690,9 @@ std::vector<std::int64_t> JackBackend::midiOutputLatency() const {
 }
 std::vector<MidiInputWarning> JackBackend::midiOutputWarnings() const {
     return impl_ ? impl_->midiOutWarnings : std::vector<MidiInputWarning>{};
+}
+std::uint64_t JackBackend::midiOutAsyncDropped(std::size_t port) const {
+    return impl_ && port < 16 ? impl_->midiAsyncDrops[port].load(std::memory_order_relaxed) : 0;
 }
 std::uint64_t JackBackend::midiOutDropped() const { return impl_ ? impl_->midiOut.dropped() : 0; }
 std::uint64_t JackBackend::midiDropped() const {

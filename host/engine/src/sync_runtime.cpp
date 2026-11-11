@@ -437,7 +437,7 @@ void SyncRuntime::writeMidi(const SyncCycle& c) SUPPLE_RT {
         const SyncOutput& out = config_.outputs[i];
         if (!out.sends()) continue;
         // Output frame d carries what the audio processed at d - delay
-        // leaves with (ADR-0071 §9, ADR-0072): the plan's latency, then the
+        // leaves with (ADR-0071 §9, ADR-0073): the plan's latency, then the
         // port's audio-minus-MIDI latency and the user's offset.
         const std::int64_t delay =
             std::max<std::int64_t>(c.planLatency, 0) + delays_[i].load(std::memory_order_relaxed);

@@ -1,4 +1,4 @@
-# ADR-0072: MIDI clock, Song Position and MTC output
+# ADR-0073: MIDI clock, Song Position and MTC output
 
 **Status:** Proposed, 2026-11-11. Builds on ADR-0069 (hardware MIDI
 outputs), ADR-0070 (the sync library's generators) and ADR-0071 (external

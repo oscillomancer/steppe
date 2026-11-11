@@ -163,6 +163,12 @@ struct ControlLearn : ControlBinding {
     bool operator==(const ControlLearn&) const = default;
 };
 
+// What a track's FX chain does with its MIDI (ADR-0068). bus: the chain is a
+// MIDI bus (every plug-in with a note input hears it, note-output plug-ins
+// feed it); instrument: as before 2.10, only the first plug-in with a note
+// input hears the track's MIDI and plug-ins' note output goes nowhere.
+enum class ChainMidi : std::uint8_t { Bus, Instrument };
+
 struct Track {
     StripType type = StripType::Channel;
     std::string name, color, notes;
@@ -197,6 +203,7 @@ struct Track {
     RecordSettings record;
     TrackTimebase timebase = TrackTimebase::Project;
     std::vector<Id> chain, inputChain;
+    ChainMidi chainMidi = ChainMidi::Bus;
     // UI intent (kept in the model, ignored by merges' conflict checks).
     bool locked = false, hiddenTcp = false, hiddenMixer = false;
     std::optional<TrackFreeze> freeze;
@@ -310,6 +317,9 @@ struct MidiSource {
 
 enum class Isolation : std::uint8_t { Inherit, InProcess, SharedBridge, Dedicated };
 enum class PdcMode : std::uint8_t { Compensate, Ignore };
+// A note-output plug-in's place on its track's MIDI bus (ADR-0068): its
+// output replaces what reached it, or is merged with it.
+enum class MidiOutputMode : std::uint8_t { Replace, Merge };
 
 struct PluginRef {
     std::string format = "clap";  // clap | vst3 | lv2 | container
@@ -347,6 +357,7 @@ struct FxInstance {
     bool parallel = false;
     PdcMode pdc = PdcMode::Compensate;
     bool autoBypassOnSilence = false;
+    MidiOutputMode midiOutput = MidiOutputMode::Replace;  // plug-ins with note output
     // State: the canonical patch (semantic plugins) or a blob reference plus
     // the last known CLAP values (display/diff only; the blob is authoritative).
     std::optional<json::Value> patch;
@@ -361,7 +372,7 @@ struct RouteEnd {
     std::optional<Id> track;
     std::optional<Id> fx;  // to only: a plug-in's sidechain input (key), ADR-0018
     std::optional<std::vector<int>> hwChannels;  // hw_input (from) / hw_output (to), 1-based
-    std::optional<std::string> midiDevice;       // midi_input (from only)
+    std::optional<std::string> midiDevice;  // MIDI input (from) or hardware output (to), by name
     // A rack's module (ADR-0062): from an Out module (a channel's record
     // input), to an In module (a send into the rack).
     std::optional<Id> module;

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 #include "freeze_commands.h"
+#include <algorithm>
 #include <chrono>
 #include "command_validation.h"
 #include "render_commands.h"
@@ -364,6 +365,28 @@ void registerFreezeCommands(cmd::Registry& registry) {
                 return result(a.track, true);
             auto work = prepare(app, a.track);
             if (!work) return work.error();
+            // Frozen, the chain no longer runs: post-FX MIDI sends carry the
+            // timeline's MIDI, not a note-output plug-in's (ADR-0068).
+            {
+                const model::Session s = app.view();
+                const model::Track& t = *s.tracks.find(a.track);
+                const bool postSends = t.chainMidi == model::ChainMidi::Bus &&
+                                       std::any_of(s.routes.begin(), s.routes.end(), [&](auto& r) {
+                                           return r.value->midi && r.value->from.track == a.track &&
+                                                  r.value->tap != model::Tap::PreFx;
+                                       });
+                for (model::Id fx : t.chain)
+                    if (auto notes = postSends ? app.fxOutputsNotes(fx, *s.fx.find(fx))
+                                               : Result<bool>(false);
+                        notes && *notes) {
+                        ctx.warn("freeze.midi_output",
+                                 fx.str() +
+                                     " sends notes: frozen, the channel's post-FX MIDI "
+                                     "sends carry its timeline MIDI instead",
+                                 "/track");
+                        break;
+                    }
+            }
             auto plugins = app.plugins();
             if (!plugins) return plugins.error();
             std::vector<host::PluginInfo> catalogue(plugins->begin(), plugins->end());

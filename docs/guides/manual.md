@@ -396,10 +396,11 @@ masters are skipped for these extra controls.
 
 ## Routing
 
-The routing window's **Audio | MIDI** buttons select the kind of send.
+The routing window's **Audio | MIDI | Hardware MIDI** buttons select the kind of send.
 MIDI mode shows channels and rack Note Outs down the left, channels and
-Notes modules across the top. Double-click a cell to connect them (again
-to disconnect), or select cells and use Add/Remove. Set the tap, Mute,
+Notes modules across the top. Double-click an empty cell to connect them
+(double-clicking a send only selects it), or select cells and use Add/Remove
+(or Delete). Set the tap, Mute,
 From channel (All or 1–16), and To channel (Original or 1–16) below the grid.
 Post-fader follows the source's mute; pre-FX and post-FX keep sending while
 the source is muted. Right-click Mute to learn a controller. A channel
@@ -414,6 +415,53 @@ opens with it unchecked wherever a Note Out sends into that track, so it
 sounds as it did. A Note
 Out's **MIDI channel** knob chooses channel 1–16 for outgoing notes; choose
 its destination in the MIDI routing matrix.
+
+Hardware MIDI routing is the routing window's third tab, **Hardware MIDI**.
+Inputs and channels/Note Outs are rows; channels and device outputs are columns.
+Double-click to connect, select and Remove to disconnect. Connecting an input
+sets the channel's existing MIDI input; a channel has one such input assignment.
+Route an input through a channel to reach a device output. Taps, mute and MIDI
+channel controls work as in the MIDI tab. Device connections save by name and
+warn if missing on reopen.
+
+Right-click a hardware input row or output column header for **Enabled** and
+**Timing offset…**. Positive milliseconds delay; negative milliseconds advance.
+The range is -1000 to 1000 ms. A live input can advance only within its current
+audio callback. Outputs also offer **Reset notes on stop** (on by default),
+which releases notes and sustain on stop or locate. Engine shutdown always
+releases notes. These settings are saved for this machine, outside projects.
+Output alignment can add up to one second of audio latency to make an advance
+possible; this also delays live input monitoring on every channel. The timing
+offset dialog previews the shared added latency; per-port `lead_ms` and engine
+status report it. While lead is needed, transport changes keep its history
+running, and changing the lead uses a 5 ms crossfade between delay taps.
+Zero-lead projects keep no running history; adding the first negative-offset
+route primes its delay with silence once. Separate device MIDI channels avoid shared
+sustain/controller resets between routes.
+
+**Add plugin…** puts a note effect (an arpeggiator, a chord or MIDI effect)
+at the front of a channel's FX chain and an instrument just after the note
+effects there, so the instrument plays what they send.
+
+A plug-in that sends notes changes what comes after it in its channel's FX
+chain. The instrument after it plays its notes, and so do the channel's
+post-FX and post-fader MIDI sends, including sends to hardware outputs;
+a pre-FX send still carries the channel's own MIDI. Its **MIDI out** button in the FX window chooses
+**Replace** (the default: only its notes go on) or **Merge** (its notes and
+the ones it heard). Bypass it to let the original notes through. Plug-ins
+without audio, only notes, sit in the chain like any other. A frozen
+channel's sends play its own MIDI again, since its plug-ins no longer run;
+freezing warns about it.
+
+Every plug-in in the chain that takes notes hears them, a second instrument
+or a MIDI-triggered gate after the first one included. To keep the older
+behaviour, where only the first such plug-in hears the channel's MIDI and
+nothing a plug-in sends goes anywhere, click **MIDI: through the chain** beside
+the chain's heading (shown when a plug-in there sends notes, or two or more
+take them) and
+choose **Only the instrument hears MIDI**. Projects saved before this version
+open that way on every channel with two or more plug-ins, so they sound as
+they did; switch it back to hear the new routing.
 
 **View > Routing matrix**, or a strip's **out** button, opens a grid of what
 feeds what: a row per strip (and per output pair of a multi-out instrument),
@@ -973,24 +1021,25 @@ shown. Source preparation finishes before the new timing becomes audible.
 frames, audio output latency minus MIDI output latency). A busy device is
 skipped while audio keeps running; close the application using it and restart
 the engine to retry. Device topology changes are advisory and require an
-explicit restart to adopt the new set. Hardware MIDI routing is not yet
-available; opening outputs alone sends no music.
+explicit restart to adopt the new set. `midi.inputs.get`/`midi.outputs.get` show
+per-port settings and warnings. Opening outputs alone sends no music; add
+hardware routes in the routing window.
 
 ### MIDI clock and MTC to other devices
 
 A drum machine, sequencer or video system can follow Steppe over a MIDI
-output. There is no window for it yet; an agent sets it with
-`midi.outputs.set`, one output at a time, for example
-`{"port": "Interface", "clock": true, "transport": true, "spp": true}`:
+output. An agent sets it with `midi.outputs.set`, one output at a time, for
+example `{"port": "Interface", "clock": true, "transport": true, "spp": true}`:
 `clock` sends MIDI clock while playing, `transport` Start, Continue and
 Stop, `spp` the song position (so a device starts mid-song in the right
 place), `mtc` MIDI time code at the project's timecode, and
 `clock_while_stopped` keeps the clock running at the tempo while stopped.
 `offset_ms` moves that output's MIDI later (or earlier, negative) to suit
-the device, and `enabled: false` silences the output. The port is the
-output's name exactly as `midi.outputs.get` lists it. Clock and MTC are
-off until you turn them on, and the settings are kept with your
-preferences, also for a device that is not connected now.
+the device, notes and clock alike, and `enabled: false` silences the output.
+The port is the output's name as `midi.outputs.get` lists it (any letter
+case, as long as only one output matches). Clock and MTC are off until you
+turn them on, and the settings are kept with your preferences, also for a
+device that is not connected now.
 The messages are timed with the audio you hear, so plug-in latency does
 not put them early; nothing is sent during a count-in, and an output on
 the device Steppe follows (Transport sync) does not get its own clock

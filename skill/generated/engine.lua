@@ -311,6 +311,9 @@ q = nil
 ---@field device_latency integer
 ---@field xruns integer
 ---@field midi_dropped integer
+---@field midi_inputs any
+---@field midi_outputs any
+---@field midi_lead_frames integer
 ---@field midi_out_dropped integer
 ---@field midi_output_warnings table[]
 ---@field midi_output_latency integer[]
@@ -334,7 +337,6 @@ q = nil
 ---@field voice_dropped integer
 ---@field failed_errors any
 ---@field sync table
----@field midi_outputs table[]
 
 ---@class Steppe.engine_status_result
 ---@field running boolean
@@ -350,6 +352,9 @@ q = nil
 ---@field device_latency integer
 ---@field xruns integer
 ---@field midi_dropped integer
+---@field midi_inputs any
+---@field midi_outputs any
+---@field midi_lead_frames integer
 ---@field midi_out_dropped integer
 ---@field midi_output_warnings table[]
 ---@field midi_output_latency integer[]
@@ -373,7 +378,6 @@ q = nil
 ---@field voice_dropped integer
 ---@field failed_errors any
 ---@field sync table
----@field midi_outputs table[]
 
 ---@class Steppe.engine_stop_result
 ---@field warnings? table[]
@@ -499,6 +503,7 @@ q = nil
 ---@field problems? any Current plugin problems: code, message, scope, line when known, hint, silent; scope host when unreadable
 ---@field sidechain_channels? integer The plug-in's key input: route.add {fx} feeds it
 ---@field latency_samples? integer The instance's reported latency, in samples
+---@field outputs_notes? boolean The loaded plug-in sends notes or MIDI: fx.set midi_output chooses replace or merge
 ---@field params_total? integer Plain parameters matching; at most 512 are listed.
 ---@field warnings? table[]
 
@@ -654,6 +659,7 @@ q = nil
 ---@field label? string
 ---@field isolation? "inherit"|"in_process"|"shared_bridge"|"dedicated"
 ---@field pins? table
+---@field midi_output? "replace"|"merge"
 
 ---@class Steppe.fx_set_result
 ---@field warnings? table[]
@@ -933,12 +939,13 @@ q = nil
 ---@field text string
 ---@field warnings? table[]
 
+---@class Steppe.midi_inputs_set_args
+---@field port string
+---@field enabled? boolean
+---@field offset_ms? number
+
 ---@class Steppe.midi_notes_args
 ---@field item string
-
----@class Steppe.midi_outputs_get_result
----@field ports table[]
----@field warnings? table[]
 
 ---@class Steppe.midi_outputs_set_args
 ---@field port string
@@ -950,10 +957,6 @@ q = nil
 ---@field spp? boolean
 ---@field mtc? boolean
 ---@field clock_while_stopped? boolean
-
----@class Steppe.midi_outputs_set_result
----@field ports table[]
----@field warnings? table[]
 
 ---@class Steppe.midi_write_args
 ---@field item string Item id, e.g. "it_1".
@@ -1518,6 +1521,7 @@ q = nil
 ---@class Steppe.route_add_args
 ---@field from string|table
 ---@field to? string|table
+---@field to_midi? string Exact hardware MIDI output name; requires midi: {} and replaces to/fx.
 ---@field midi? table MIDI send routing; {} means every channel unchanged. Channel values 0..16: from 0 = all, to 0 = original.
 ---@field fx? string Feed this plug-in's sidechain (key) input instead of a track's input; `to` may be left out
 ---@field tap? "post_fader"|"pre_fader"|"pre_fx"
@@ -1575,6 +1579,7 @@ q = nil
 ---@field route string
 ---@field from? string|table
 ---@field to? string|table
+---@field to_midi? string Exact hardware MIDI output name; requires midi: {} and replaces to/fx.
 ---@field midi? table MIDI send routing; {} means every channel unchanged. Channel values 0..16: from 0 = all, to 0 = original.
 ---@field fx? string Feed this plug-in's sidechain (key) input instead of a track's input; `to` may be left out
 ---@field tap? "post_fader"|"pre_fader"|"pre_fx"
@@ -1870,6 +1875,7 @@ q = nil
 ---@field channels? integer 1-2: the strip's main pair; up to 128 adds auxiliary channels 3-128 for routes and plug-in pins (a detector on 3/4, a multi-out instrument's outputs), outside the fader, pan and parent send
 ---@field hw_output? integer[] Masters: the device outputs the main pair plays to: [l, r], [mono] or [] for none (engine.inputs lists them). Default: tr_0 [1, 2], other masters []
 ---@field lane_mute? boolean Masters: silence the master's own items (its prints) and nothing else
+---@field chain_midi? "bus"|"instrument" What the FX chain does with MIDI: bus (default; plug-ins hear and feed it in order) or instrument (only the first plug-in with a note input hears the track's MIDI; plug-ins' note output goes nowhere)
 
 ---@class Steppe.track_set_result
 ---@field warnings? table[]
@@ -2180,7 +2186,7 @@ q = nil
 ---@field move fun(args: Steppe.fx_move_args): Steppe.fx_move_result Move a plugin within a track chain or to another track.
 ---@field remove fun(args: Steppe.fx_remove_args): Steppe.fx_remove_result Remove a plugin instance (and its envelopes).
 ---@field restart fun(args: Steppe.fx_restart_args): Steppe.fx_restart_result Re-create a plugin instance from its saved patch/state (after a crash).
----@field set fun(args: Steppe.fx_set_args): Steppe.fx_set_result Set instance options: bypass, offline, wet (%), label, isolation, pins.
+---@field set fun(args: Steppe.fx_set_args): Steppe.fx_set_result Set instance options: bypass, offline, wet, label, isolation, pins, MIDI.
 
 ---@class Steppe.fx.chain
 ---@field delete fun(args: Steppe.fx_chain_delete_args): Steppe.fx_chain_delete_result Delete a saved FX chain preset by name.
@@ -2268,9 +2274,13 @@ q = nil
 ---@field notes fun(args: Steppe.midi_notes_args): table List a MIDI item's notes and CC points (beats from the item's start).
 ---@field write fun(args: Steppe.midi_write_args): Steppe.midi_write_result Replace an item's MIDI with notation (the item keeps its position and length).
 
+---@class Steppe.midi.inputs
+---@field get fun(): table Hardware MIDI inputs, timing, settings, loss and startup warnings.
+---@field set fun(args: Steppe.midi_inputs_set_args): table Change one machine MIDI port's enabled state and timing offset.
+
 ---@class Steppe.midi.outputs
----@field get fun(): Steppe.midi_outputs_get_result Show each MIDI output's settings and what it sends (clock, SPP, MTC).
----@field set fun(args: Steppe.midi_outputs_set_args): Steppe.midi_outputs_set_result Set a MIDI output's settings: clock, transport, SPP, MTC, offset.
+---@field get fun(): table Hardware MIDI outputs: settings, clock/MTC, timing, loss, warnings.
+---@field set fun(args: Steppe.midi_outputs_set_args): table Change one MIDI output: enabled, offset, reset, clock, SPP, MTC.
 
 ---@class Steppe.module
 ---@field add fun(args: Steppe.module_add_args): table Add a module to a rack: a type with knob values.

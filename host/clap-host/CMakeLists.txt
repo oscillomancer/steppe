@@ -61,7 +61,7 @@ if(SUPPLE_BUILD_TESTS)
   else()
     set(_host_tests tests/test_native_host.cpp tests/test_main_thread_wake.cpp)
   endif()
-  supple_add_tests(clap-host SOURCES ${_host_tests} tests/test_child_process.cpp tests/test_local_host.cpp tests/test_bridge_native.cpp tests/test_editors.cpp tests/test_editor_display.cpp LABELS rt)
+  supple_add_tests(clap-host SOURCES ${_host_tests} tests/test_child_process.cpp tests/test_local_host.cpp tests/test_note_output.cpp tests/test_bridge_native.cpp tests/test_editors.cpp tests/test_editor_display.cpp LABELS rt)
   if(APPLE)
     set_source_files_properties(tests/test_editor_display.cpp PROPERTIES LANGUAGE OBJCXX
                                COMPILE_OPTIONS "${_bridge_objcxx_options};-fobjc-arc")

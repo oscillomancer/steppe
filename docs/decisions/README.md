@@ -82,7 +82,10 @@ current state.
 | [0064](0064-rack-latency.md) | Bounded rack latency reaches PDC | Accepted |
 | [0065](0065-independent-record-inputs.md) | A rack's channel keeps its MIDI input beside its audio | Accepted |
 | [0066](0066-pan-modes-and-laws.md) | Pan modes, selectable pan laws and unity Console 9 staging | Accepted |
+| [0067](0067-midi-sends.md) | MIDI sends between channels and rack note modules | Accepted |
+| [0068](0068-plugin-midi-output.md) | Plug-in note and MIDI output | Accepted |
 | [0069](0069-native-midi-output.md) | Hardware MIDI output device layer | Draft |
 | [0070](0070-timecode-and-sync.md) | Timecode and sync: MIDI clock, MTC, LTC and the chase tracker | Accepted |
 | [0071](0071-external-sync.md) | External sync input, LTC output and the project timecode | Proposed |
-| [0072](0072-midi-clock-output.md) | MIDI clock, Song Position and MTC output | Proposed |
+| [0072](0072-hardware-midi-routing.md) | Hardware MIDI routes, port preferences and causal alignment | Proposed |
+| [0073](0073-midi-clock-output.md) | MIDI clock, Song Position and MTC output | Proposed |

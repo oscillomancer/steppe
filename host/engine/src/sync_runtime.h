@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 // The audio callback's share of external sync (ADR-0071): receivers, the
-// chase tracker, the LTC encoder, and MIDI clock and MTC output (ADR-0072).
+// chase tracker, the LTC encoder, and MIDI clock and MTC output (ADR-0073).
 // Built on the main thread for a configuration (it allocates the LTC
 // buffers and the timeline history), then owned by one callback.
 #pragma once
@@ -65,7 +65,7 @@ class SyncRuntime {
     bool process(const SyncCycle& cycle) SUPPLE_RT;
     // The runtime is leaving (replaced, or the engine stops): Stop at frame 0
     // of the current callback on every port whose transport runs, so no
-    // slave is left playing; it sends nothing after (ADR-0072 §9).
+    // slave is left playing; it sends nothing after (ADR-0073 §9).
     void farewell(Backend* out, std::atomic<std::uint64_t>* sent,
                   std::atomic<std::uint64_t>* dropped) SUPPLE_RT;
     // A port's transport is running (Stop would go out at a farewell).

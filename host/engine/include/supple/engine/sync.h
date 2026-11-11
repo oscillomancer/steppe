@@ -4,7 +4,7 @@
 // engine.md § External sync). The audio callback feeds the chosen source's
 // receiver (MIDI clock, MTC, or the LTC decoder on an input channel), runs
 // the chase tracker against the transport it plays, and writes LTC to an
-// output channel and MIDI clock and MTC to MIDI outputs (ADR-0072); the main
+// output channel and MIDI clock and MTC to MIDI outputs (ADR-0073); the main
 // thread (EngineApp) turns what it reports into transport changes and the
 // live chase rate.
 #pragma once
@@ -23,7 +23,7 @@ namespace supple::engine {
 enum class SyncSource : std::uint8_t { Off, MidiClock, Mtc, Ltc };
 std::string_view syncSourceName(SyncSource source);  // off | midi_clock | mtc | ltc
 
-// What one MIDI output sends (ADR-0072), by Backend::midiOutputPorts() index.
+// What one MIDI output sends (ADR-0073), by Backend::midiOutputPorts() index.
 inline constexpr std::size_t kMaxSyncOutputs = 16;
 struct SyncOutput {
     bool clock = false;         // F8, 24 per quarter note

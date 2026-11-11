@@ -4,7 +4,7 @@
 // MIDI clock, MTC and LTC from libs/sync's generators; the transport follows,
 // the chase rate never reaches the project, offline renders ignore it, and
 // LTC output decodes back to the transport. MIDI clock and MTC output
-// (ADR-0072) land on the device's captured MIDI where their audio is heard.
+// (ADR-0073) land on the device's captured MIDI where their audio is heard.
 #include <doctest/doctest.h>
 
 #include <unistd.h>
@@ -650,7 +650,7 @@ TEST_CASE("midi clock without follow tempo: Start plays where the master is hear
     }
 }
 
-// --- MIDI clock and MTC output (ADR-0072) ------------------------------------
+// --- MIDI clock and MTC output (ADR-0073) ------------------------------------
 
 namespace {
 
@@ -959,7 +959,7 @@ TEST_CASE("midi outputs: get, set, validation, engine.status and the JSON round 
     CHECK(synth["enabled"].asBool());
     CHECK(synth["reset_on_stop"].asBool());
     CHECK_FALSE(synth["clock"].asBool());
-    CHECK(rig.app->midiOutputSettings().empty());
+    CHECK(rig.app->midiOutputsPreferences().empty());
     auto set = rig.run("midi.outputs.set", R"({"port": "Synth", "clock": true})");
     CHECK(set["ports"].asArray()[0]["clock"].asBool());
     CHECK(set["ports"].asArray()[0]["sends"].asArray()[0].asString() == "clock");
@@ -971,7 +971,7 @@ TEST_CASE("midi outputs: get, set, validation, engine.status and the JSON round 
     // A disabled port sends nothing, and keeps its clock settings.
     rig.run("midi.outputs.set", R"({"port": "Synth", "enabled": false})");
     CHECK_FALSE(rig.app->engine()->syncConfig().outputs[0].clock);
-    CHECK(rig.app->midiOutputSettings().front().clock);
+    CHECK(midiPortSettings(rig.app->midiOutputsPreferences(), "Synth").clock);
     rig.run("midi.outputs.set", R"({"port": "Synth", "enabled": true})");
     CHECK(rig.app->engine()->syncConfig().outputs[0].clock);
     for (const char* bad :
@@ -984,42 +984,41 @@ TEST_CASE("midi outputs: get, set, validation, engine.status and the JSON round 
         const Error& e = r.error().details.empty() ? r.error() : r.error().details.front();
         CHECK_FALSE(e.hint.empty());
     }
-    // A port that is not there is kept, after the device's, with a warning.
+    // One case-insensitive match names the port; its exact spelling is kept.
+    rig.run("midi.outputs.set", R"({"port": "clock out", "mtc": true})");
+    CHECK(rig.app->midiOutputsPreferences().contains("Clock Out"));
+    // A port that is neither present nor recorded is refused, naming the ports.
     auto r = rig.bus->execute({"midi.outputs.set",
                                json::parse(R"({"port": "Drum Machine", "mtc": true})").value(),
                                kOrigin});
-    REQUIRE(r);
-    REQUIRE((*r)["ports"].size() == 3);
-    CHECK((*r)["ports"].asArray()[2]["name"].asString() == "Drum Machine");
-    CHECK((*r)["ports"].asArray()[2]["index"].asInt() == -1);
+    REQUIRE_FALSE(r);
+    CHECK(r.error().code == "midi.port_unknown");
+    CHECK(r.error().hint.find("\"Clock Out\"") != std::string::npos);
     auto status = rig.run("engine.status", "{}");
-    REQUIRE(status["midi_outputs"].size() == 3);
+    REQUIRE(status["midi_outputs"].size() == 2);
     CHECK(status["midi_outputs"].asArray()[0]["sends"].asArray()[0].asString() == "clock");
+    CHECK(status["midi_outputs"].asArray()[1]["sends"].asArray()[0].asString() == "mtc");
     // Back at every default: the record goes.
-    rig.run("midi.outputs.set", R"({"port": "Drum Machine", "mtc": false})");
-    CHECK(rig.app->midiOutputSettings().size() == 1);
-    // The records round-trip through preferences' {"<port>": {...}}.
-    MidiOutputSettings a;
-    a.port = "B";
-    a.mtc = true;
-    a.offsetMs = -2.5;
-    a.resetOnStop = false;
-    MidiOutputSettings b;
-    b.port = "A";
-    b.enabled = false;
-    b.clock = b.transport = b.spp = b.clockWhileStopped = true;
-    const json::Value saved = midiOutputListJson({a, b});
-    CHECK(saved.find("A"));
-    CHECK_FALSE(saved.find("A")->find("port"));
-    auto back = parseMidiOutputList(saved);
+    rig.run("midi.outputs.set", R"({"port": "Clock Out", "mtc": false})");
+    CHECK(rig.app->midiOutputsPreferences().size() == 1);
+    // The records round-trip through preferences' {"<port>": {...}}, with
+    // the routing members and members a later version adds.
+    const auto saved = json::parse(R"({"A": {"enabled": false, "clock": true, "transport": true,
+        "spp": true, "clock_while_stopped": true, "future": 3},
+        "B": {"mtc": true, "offset_ms": -2.5, "reset_on_stop": false}})")
+                           .value();
+    auto back = parseMidiPortPreferences(saved, true);
     REQUIRE(back);
-    REQUIRE(back->size() == 2);
-    CHECK((*back)[0] == b);
-    CHECK((*back)[1] == a);
-    CHECK_FALSE(parseMidiOutputList(json::parse(R"([{"port": "A"}])").value()));
-    auto wrong = parseMidiOutputList(json::parse(R"({"A": {"offset_ms": 5000}})").value());
+    CHECK(json::writeCanonical(midiPortPreferencesJson(*back)) == json::writeCanonical(saved));
+    const auto a = midiPortSettings(*back, "A"), b = midiPortSettings(*back, "B");
+    CHECK_FALSE(a.enabled);
+    CHECK((a.clock && a.transport && a.spp && a.clockWhileStopped && !a.mtc));
+    CHECK((b.mtc && b.offsetMs == -2.5 && !b.resetOnStop && !b.clock));
+    auto wrong = parseMidiPortPreferences(json::parse(R"({"A": {"mtc": 1}})").value(), true);
     REQUIRE_FALSE(wrong);
-    CHECK(wrong.error().path == "/A/offset_ms");
+    CHECK(wrong.error().path == "/midi_outputs/A/mtc");
+    // Inputs carry no output members.
+    CHECK_FALSE(parseMidiPortPreferences(json::parse(R"({"A": {"clock": true}})").value(), false));
 }
 
 TEST_CASE("midi clock output: no slave is left playing") {

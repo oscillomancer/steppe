@@ -1072,7 +1072,7 @@ TEST_CASE("VST3 scan retains search path precedence and suppresses repeated bund
     const std::array<fs::path, 3> paths{first.parent_path(), second.parent_path(), first};
     auto found = scan(paths);
     REQUIRE(found);
-    REQUIRE(found->size() == 16);  // two bundles of eight classes
+    REQUIRE(found->size() == 18);  // two bundles of nine classes
     CHECK(found->front().path == first);
     CHECK(found->back().path == second);
 }
@@ -1392,7 +1392,7 @@ TEST_CASE("bridge protocol v6 retains nested structured error details") {
     CHECK(decoded.details[0].hint == "correct it");
     REQUIRE(decoded.details[0].details.size() == 1);
     CHECK(decoded.details[0].details[0].code == "leaf");
-    CHECK(bridge::kVersion == 19);
+    CHECK(bridge::kVersion == 20);
 }
 
 TEST_CASE("editor failures destroy the partial editor and show-hide requests reach its owner") {

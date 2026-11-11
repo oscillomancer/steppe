@@ -131,7 +131,7 @@ instructions are in `docs/guides/installing.md`.
   settings…, saved in the preferences. Devices deliver sync messages beside
   channel messages on JACK, CoreMIDI and WinMM. Tested with scripted dummy
   devices.
-- **MIDI clock and MTC output** (ADR-0072): per MIDI output, clock (24 per
+- **MIDI clock and MTC output** (ADR-0073): per MIDI output, clock (24 per
   quarter note), Start/Continue/Stop, Song Position, MTC at the project's
   timecode, clock while stopped, and a signed offset; each message leaves
   with the audio it belongs to (plan latency, the port's audio-minus-MIDI
@@ -306,12 +306,27 @@ instructions are in `docs/guides/installing.md`.
   CLAP descriptor dispatch ignores registrations removed by an earlier
   callback in the same readiness snapshot, as VST3 dispatch already does;
   the Linux regression passes and macOS validation is pending.
+  Plug-ins' note and MIDI output (ADR-0068) reaches the host
+  library's output sink from CLAP (notes, MIDI 1.0, MIDI 2.0 where one short
+  message expresses it, pressure expressions) and VST3 (notes, poly pressure,
+  legacy MIDI CC output), sorted by time and identical in process and in
+  shared or dedicated bridges, and `outputsNotes()` reports output note ports
+  and event buses. A track's FX chain is a MIDI bus: a note-output plug-in
+  replaces (or, `midi_output: merge`, merges into) what the plug-ins after it
+  and the post-FX MIDI sends hear; plug-ins with only note ports run in a
+  chain. A track's `chain_midi: instrument` keeps the behaviour before 2.10
+  (only the first plug-in with a note input hears the track's MIDI); older
+  files open with it on every chain of two or more plug-ins. Offline and both real-time executors agree in every isolation. Take
+  chains, input FX and rack plugin modules keep their own note routing; a
+  frozen channel's post-FX sends carry its timeline MIDI (`track.freeze`
+  warns). SysEx and per-note expressions other than pressure are dropped and
+  counted. Linux tests pass; native macOS/Windows CI is pending.
 - **MIDI sends** (ADR-0067): channel/Note Out to channel/Notes routing, channel
   filters/remapping, tap and mute controls, relay channels without instruments,
   PDC and MIDI recording. The routing window's saved Audio/MIDI mode exposes
   Note Out and Notes endpoints. Notes supports Source None; Note Out displays
-  MIDI channel. Prepared pre/post-FX streams are separate; post-FX currently
-  equals pre-FX pending plug-in MIDI output. Held notes take slots of a pool
+  MIDI channel. Post-FX taps read the FX chain's MIDI bus after the chain
+  (ADR-0068). Held notes take slots of a pool
   sized by the notes that can sound at once, so plan edits during playback
   cost the held voices, not the notes in the timeline; an edit to a send
   upstream releases and retriggers its notes downstream. Frozen channels send
@@ -319,6 +334,30 @@ instructions are in `docs/guides/installing.md`.
   source track unless `source_sends` is off (rack menu: Hear MIDI sends);
   files older than 2.10 load with it off wherever a MIDI route feeds that
   track, so they sound as before. Native macOS/Windows CI and coordinator review remain pending.
+- **Hardware MIDI routing** (ADR-0072, schema 2.10): connects channel/Note Out MIDI to
+  named outputs with tap, mute, channel filter/remap and PDC/port offset timing.
+  Post-FX/post-fader taps and held-note recovery use the final FX chain MIDI bus,
+  including plug-in output; pre-FX taps keep the original stream.
+  Owner-prepared audio history supplies negative-offset lead (at most one
+  second), including monitoring. Zero-lead plans skip its allocation/processing;
+  the first negative-offset route primes silence once. Boundaries preserve its
+  tail while lead is needed; lead changes
+  use a 5 ms crossfade between fixed delay taps. Reset-off ports retain delayed releases across
+  stop/locate while only stale timeline onsets are dropped; delayed live notes
+  keep their device clock. Stopped live input
+  monitoring also works with reset disabled. Port status and the offset dialog expose the lead.
+  The Hardware MIDI tab edits existing input assignments and hardware sends;
+  header menus edit machine port preferences. Mix and scalar-rate shortcuts
+  remain active with hardware routes; mute and VCA gate values use mix slots. CoreMIDI no longer flushes shared
+  endpoints at shutdown; CoreMIDI closing releases follow accepted timestamps
+  before a shared, at-most-250 ms disposal wait. Longer scheduled horizons remain
+  a native-validation limit; WinMM releases remain immediate.
+  Device-free tests cover both executors, audio nulls, lifecycle, persistence and
+  GUI interactions. Malformed machine MIDI records are skipped with port-status
+  warnings while valid records load; their raw JSON survives unrelated preference
+  writes until explicitly corrected. Native macOS/Windows CI, physical timing/disconnect testing
+  and cross-client shutdown validation remain pending. Native input loss without
+  port attribution remains in aggregate MIDI loss status.
 - **Modular racks** (ADR-0062, `specs/rack.md`): racks of modules and
   cables on a channel, in the project (schema 2.7) with undo and branches.
   Out modules are channel inputs, In modules take sends (columns of the
@@ -900,7 +939,7 @@ Library boundaries:
   on Linux, and native macOS/Windows CI has not run on it.
 
 Engine and hosting:
-- Sync (ADR-0070, ADR-0071, ADR-0072): sync input, LTC output and MIDI
+- Sync (ADR-0070, ADR-0071, ADR-0073): sync input, LTC output and MIDI
   clock/MTC output are tested only with dummy devices: real
   interfaces' timing, WinMM's millisecond timestamps, LTC over analogue
   lines and the CoreMIDI/WinMM sync paths (written blind on Linux) need
@@ -1015,8 +1054,8 @@ Engine and hosting:
   JACK playback ports, timestamped CoreMIDI sends off audio, and QPC/timer-based
   WinMM sends off audio. engine.inputs lists destinations; start/status report
   output warnings, drops and signed audio-minus-MIDI latency per port.
-  Clock/SPP/MTC generation uses them (ADR-0072); MIDI routing and the output
-  GUI are pending. CoreMIDI/WinMM
+  Hardware MIDI routing and its Hardware MIDI grid (ADR-0072) and clock/SPP/MTC
+  output (ADR-0073) use them. CoreMIDI/WinMM
   wire latency is estimated as zero; WinMM expected jitter is about 1 ms.
   Native macOS/Windows CI and hardware validation have not run for outputs.
   No direct PipeWire/ALSA backend.
@@ -1247,7 +1286,6 @@ detail; core-params formats magnitudes beyond six decimals imprecisely;
 - Profile the 64-frame worst case; a pipelined bridge mode.
 - Close the capacity gap with REAPER (B2) by making the anticipative
   renderer cheaper, then keep refining capacity in both modes.
-- Hardware MIDI routing and the GUI for clock/sync output, a disk-backed
-  media cache.
+- A disk-backed media cache.
 - Lua ergonomics (a script library path, hot reload).
 - Native audio/MIDI hardware validation and GUI hardening on macOS and Windows.

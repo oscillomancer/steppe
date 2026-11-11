@@ -8,9 +8,9 @@ find_package(ZLIB REQUIRED)
 supple_add_library(engine
   SOURCES src/transients.cpp src/audio_commands.cpp src/prepared_sources.cpp src/offline.cpp src/plan.cpp src/workers.cpp src/live_workers.cpp src/realtime.cpp src/recording.cpp
           src/stretch.cpp src/playrate_dsp.cpp src/playrate_timeline.cpp src/rate_sources.cpp src/rate_runtime.cpp src/mix_runtime.cpp src/meters.cpp src/runtime_protection.cpp src/media_files.cpp
-          src/rack_runtime.cpp src/rack_midi.cpp src/rack_clip_commands.cpp src/rack_level_commands.cpp src/rack_commands.cpp src/module_library.cpp src/module_commands.cpp src/rack_probe.cpp src/app.cpp src/plugin_outputs.cpp src/commands.cpp src/extra_commands.cpp src/group_commands.cpp src/midi_commands.cpp src/analysis_commands.cpp
+          src/rack_runtime.cpp src/rack_midi.cpp src/midi_bus.cpp src/rack_clip_commands.cpp src/rack_level_commands.cpp src/rack_commands.cpp src/module_library.cpp src/module_commands.cpp src/rack_probe.cpp src/app.cpp src/plugin_outputs.cpp src/commands.cpp src/extra_commands.cpp src/group_commands.cpp src/midi_commands.cpp src/analysis_commands.cpp
           src/freeze_commands.cpp src/consolidate_commands.cpp src/export_commands.cpp src/mix_commands.cpp src/heal_commands.cpp src/render_commands.cpp src/render_settings.cpp src/render_chain.cpp src/chain_commands.cpp src/take_commands.cpp src/learn.cpp src/control_learn.cpp src/dsp_commands.cpp
-          src/midi_control.cpp src/midi_output.cpp src/midi_input.cpp src/portaudio_backend.cpp src/portaudio_native.cpp src/sync_runtime.cpp src/sync_commands.cpp src/midi_output_commands.cpp
+          src/midi_control.cpp src/midi_ports.cpp src/hardware_midi.cpp src/midi_port_commands.cpp src/midi_output.cpp src/midi_input.cpp src/portaudio_backend.cpp src/portaudio_native.cpp src/sync_runtime.cpp src/sync_commands.cpp src/midi_clock_outputs.cpp
   DEPS supple::model supple::clap-host supple::audio-file supple::timeline supple::semantic-params-abi
        supple::command-bus supple::lua-bus supple::notation supple::core-params supple::core-analysis
        supple::core-dsp supple::signalsmith-stretch supple::console9 supple::rack
@@ -145,7 +145,7 @@ if(SUPPLE_BUILD_TESTS)
 endif()
 
 if(SUPPLE_BUILD_TESTS)
-  add_executable(engine-portaudio.tests tests/test_portaudio.cpp tests/test_midi_output.cpp)
+  add_executable(engine-portaudio.tests tests/test_portaudio.cpp tests/test_midi_output.cpp tests/test_hardware_midi.cpp)
   target_link_libraries(engine-portaudio.tests PRIVATE supple::engine supple::doctest-main)
   target_include_directories(engine-portaudio.tests PRIVATE src)
   target_include_directories(engine-portaudio.tests SYSTEM PRIVATE ${PROJECT_SOURCE_DIR}/third_party/portaudio-19.7.0/include)
