@@ -3,6 +3,7 @@
 #include <doctest/doctest.h>
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 
 #include "../../../tests/file_platform.h"
@@ -182,8 +183,19 @@ TEST_CASE("MIDI sends: armed destinations record internal MIDI without a device 
         if (item.value->track != *target || !item.value->activeTake) continue;
         const auto* take = app.head().takes.find(*item.value->activeTake);
         if (take && take->source)
-            if (const auto* midi = app.head().midi.find(*take->source))
+            if (const auto* midi = app.head().midi.find(*take->source)) {
                 notes += midi->sequence.notes.size();
+                // Where the source plays it: the first beat, an eighth long
+                // (one tick of tolerance for the beat conversion).
+                const double ppq = midi->sequence.ppq;
+                for (const auto& note : midi->sequence.notes) {
+                    const double start =
+                        item.value->position - take->startOffset + double(note.start) / ppq;
+                    CHECK(std::abs(start) <= 1 / ppq);
+                    CHECK(std::abs(double(note.length) / ppq - 0.5) <= 1 / ppq);
+                    CHECK(note.pitch == 60);
+                }
+            }
     }
     CHECK(notes == 1);
 }
