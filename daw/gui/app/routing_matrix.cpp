@@ -6,6 +6,7 @@
 #include <nanovg.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 
@@ -61,6 +62,8 @@ std::string MatrixModel::pairText(int pair, int width) {
 std::string MatrixModel::blocked(std::size_t row, std::size_t col) const {
     const Source& s = sources[row];
     const Destination& d = destinations[col];
+    if (s.type == "midi_input" && d.kind != "track")
+        return "connect a hardware input through a channel";
     if (s.pair != 1 && d.kind == "key")
         return "a key takes a strip's main pair; the plug-in's pins can read others";
     if (d.kind == "track") {
@@ -94,6 +97,7 @@ struct GridHooks {
     std::function<void(std::size_t, std::size_t)> doubleCell;
     std::function<void(std::size_t, unsigned)> row;
     std::function<void(std::size_t, unsigned)> column;
+    std::function<void(std::size_t, ui::Point)> rowContext, columnContext;
     std::function<void()> all;
     std::function<void()> remove;
     std::function<bool(std::size_t, std::size_t)> selected;
@@ -165,15 +169,26 @@ class Grid : public ui::Node {
             const float mark = d.type == "master" ? 5.0f : 3.0f;
             // A key's mark is violet, a rack In module's teal: hues no strip
             // type uses.
-            c.fillRect({x + 4, b.y + kHeaderH - 3 - mark, kCell - 8, mark},
-                       d.kind == "key"      ? t.color("agent")
-                       : d.kind == "module" ? t.color("track-teal")
-                                            : typeColor(d.type));
+            if (d.kind == "midi_output") {
+                c.strokeCircle({x + kCell / 2, b.y + kHeaderH - 6}, 4, t.color("midi-send"), 1.5f);
+                c.line({x + kCell / 2 - 2, b.y + kHeaderH - 6},
+                       {x + kCell / 2 + 2, b.y + kHeaderH - 6}, t.color("midi-send"));
+            } else
+                c.fillRect({x + 4, b.y + kHeaderH - 3 - mark, kCell - 8, mark},
+                           d.kind == "key"      ? t.color("agent")
+                           : d.kind == "module" ? t.color("track-teal")
+                                                : typeColor(d.type));
             nvgSave(vg);
             nvgTranslate(vg, x + kCell / 2 + 4, b.y + kHeaderH - 10);
             nvgRotate(vg, -static_cast<float>(M_PI) / 3);
-            c.text({0, -8, kHeaderH * 1.05f, 16}, d.name.empty() ? d.id : d.name, ui::Font::Ui,
-                   t.type("caption"), d.kind == "key" ? t.color("ink-quiet") : t.color("ink"),
+            if (d.clock) {
+                c.strokeCircle({5, 0}, 4, t.color("ink"));
+                c.line({5, -3}, {5, 0}, t.color("ink"));
+                c.line({5, 0}, {8, 1}, t.color("ink"));
+            }
+            c.text({d.clock ? 14.0f : 0.0f, -8, kHeaderH * 1.05f, 16},
+                   d.name.empty() ? d.id : d.name, ui::Font::Ui, t.type("caption"),
+                   d.kind == "key" ? t.color("ink-quiet") : t.color("ink"),
                    ui::kLeft | ui::kMiddle);
             nvgRestore(vg);
         }
@@ -192,9 +207,15 @@ class Grid : public ui::Node {
                 continue;
             }
             const float mark = s.type == "master" ? 5.0f : 3.0f;
-            c.fillRect({b.x + indent - 3 - mark, y + 4, mark, kCell - 8}, typeColor(s.type));
-            c.text({b.x + indent, y, kLabelW - indent - 6, kCell}, s.name.empty() ? s.id : s.name,
-                   ui::Font::Ui, t.type("small"), t.color("ink"));
+            if (s.type == "midi_input") {
+                c.strokeCircle({b.x + indent - 3, y + kCell / 2}, 3.5f, t.color("midi-send"), 1.5f);
+                c.line({b.x + indent - 5, y + kCell / 2}, {b.x + indent - 1, y + kCell / 2},
+                       t.color("midi-send"));
+            } else
+                c.fillRect({b.x + indent - 3 - mark, y + 4, mark, kCell - 8}, typeColor(s.type));
+            c.text(
+                {b.x + indent + (s.type == "midi_input" ? 4 : 0), y, kLabelW - indent - 10, kCell},
+                s.name.empty() ? s.id : s.name, ui::Font::Ui, t.type("small"), t.color("ink"));
         }
         c.restore();
         // Cells.
@@ -222,9 +243,15 @@ class Grid : public ui::Node {
                 }
                 if (!sends.empty()) {
                     const ui::Rect dot{r.x + 4, r.y + 4, r.w - 8, r.h - 8};
-                    c.fillRound(dot, 3,
-                                sends.front()->mute ? t.color("ink-faint")
-                                                    : t.color(m_.midi ? "midi-send" : "accent"));
+                    const auto colour = sends.front()->mute
+                                            ? t.color("ink-faint")
+                                            : t.color(m_.midi ? "midi-send" : "accent");
+                    if (sends.front()->allInputs) {
+                        c.strokeRound(dot, 3, colour);
+                        c.text(dot, "*", ui::Font::UiBold, t.type("small"), colour,
+                               ui::kCenter | ui::kMiddle);
+                    } else
+                        c.fillRound(dot, 3, colour);
                 }
                 if (sel)
                     c.strokeRound({r.x + 1, r.y + 1, r.w - 2, r.h - 2}, 3, t.color("focus"), 2);
@@ -239,6 +266,20 @@ class Grid : public ui::Node {
             }
         }
         c.restore();
+        // Physical endpoint groups have a boundary across both labels and cells.
+        for (std::size_t row = 1; row < m_.sources.size(); ++row)
+            if (m_.sources[row - 1].type == "midi_input" && m_.sources[row].type != "midi_input") {
+                const float y = gy + static_cast<float>(row) * kCell;
+                if (y >= cells.y && y <= cells.bottom())
+                    c.line({b.x, y}, {b.right(), y}, t.color("ink-quiet"), 2);
+            }
+        for (std::size_t col = 1; col < m_.destinations.size(); ++col)
+            if (m_.destinations[col].kind == "midi_output" &&
+                m_.destinations[col - 1].kind != "midi_output") {
+                const float x = gx + static_cast<float>(col) * kCell;
+                if (x >= cells.x && x <= cells.right())
+                    c.line({x, b.y}, {x, b.bottom()}, t.color("ink-quiet"), 2);
+            }
         c.fillRect({cells.x - 1, b.y, 1, b.h}, t.color("rule"));
         c.fillRect({b.x, cells.y - 1, b.w, 1}, t.color("rule"));
     }
@@ -258,6 +299,15 @@ class Grid : public ui::Node {
             hovered_.reset();
             hooks_.hover(std::nullopt);
             invalidate();
+            return true;
+        }
+        if (e.type == T::Down && e.button == 3) {
+            const auto b = bounds();
+            if (e.pos.x < b.x + kLabelW && e.pos.y >= b.y + kHeaderH) {
+                if (auto row = rowAt(e.pos.y)) hooks_.rowContext(*row, e.pos);
+            } else if (e.pos.y < b.y + kHeaderH && e.pos.x >= b.x + kLabelW) {
+                if (auto col = columnAt(e.pos.x)) hooks_.columnContext(*col, e.pos);
+            }
             return true;
         }
         if (e.type == T::Down && e.button == 1) {
@@ -335,6 +385,10 @@ RoutingMatrix::RoutingMatrix(FloatingPanel& panel, AppActions& actions, cmd::Dis
                              engine::EngineApp& app)
     : panel_(panel), actions_(actions), dispatcher_(dispatcher), app_(app) {
     actions_.addUi("ui.routing", "View: routing matrix", [this] { open(); });
+    actions_.addUi("ui.routing.hardware", "View: hardware MIDI routing matrix", [this] {
+        setHardwareMidiMode();
+        open();
+    });
     actions_.addUi("ui.routing.midi", "View: MIDI routing matrix", [this] {
         setMidiMode(true);
         open();
@@ -352,7 +406,7 @@ Result<json::Value> RoutingMatrix::exec(const std::string& command, json::Value 
 
 Status RoutingMatrix::reload() {
     auto args = json::Value::object();
-    args["mode"] = midiMode_ ? "midi" : "audio";
+    args["mode"] = hardwareMidiMode_ ? "hardware_midi" : midiMode_ ? "midi" : "audio";
     auto m = dispatcher_.execute({"route.matrix", std::move(args), kOrigin});
     if (!m) return std::move(m).error();
     auto list = dispatcher_.execute({"route.list", json::Value::object(), kOrigin});
@@ -398,6 +452,8 @@ Status RoutingMatrix::reload() {
         dst.kind = str(d, "kind");
         dst.type = str(d, "type");
         dst.track = str(d, "track");
+        if (const auto* clock = d.find("clock"); clock && clock->isBool())
+            dst.clock = clock->asBool();
         if (const auto* rule = d.find("rule")) dst.rule = str(*rule, "message");
         next.destinations.push_back(std::move(dst));
     }
@@ -409,15 +465,33 @@ Status RoutingMatrix::reload() {
         // Only sends from a strip are the matrix's. A channel's hardware or
         // MIDI input has no source strip, and a rack's Out (a channel's input)
         // and Note Out are not strip sends.
-        const std::string from = str(r, "from");
+        std::string from = str(r, "from"), to = str(r, "to");
+        const auto input = str(r, "from_midi"), output = str(r, "to_midi");
+        if (hardwareMidiMode_ && r.find("from_midi") && r.find("from_midi")->isString())
+            from = "midi_in:" + input;
+        if (hardwareMidiMode_ && !output.empty()) to = "midi_out:" + output;
+        auto samePort = [](const std::string& x, const std::string& y) {
+            return x.size() == y.size() &&
+                   std::equal(x.begin(), x.end(), y.begin(), [](unsigned char a, unsigned char b) {
+                       return std::tolower(a) == std::tolower(b);
+                   });
+        };
+        if (hardwareMidiMode_) {
+            for (const auto& s : next.sources)
+                if (s.type == "midi_input" && samePort(s.name, input)) from = s.id;
+            for (const auto& d : next.destinations)
+                if (d.kind == "midi_output" && samePort(d.name, output)) to = d.id;
+        }
         const auto* midi = r.find("midi");
-        if (from.empty() || str(r, "to").empty() || bool(midi && !midi->isNull()) != midiMode_ ||
+        if (from.empty() || to.empty() || bool(midi && !midi->isNull()) != midiMode_ ||
             (!midiMode_ && from.starts_with("mo_")))
             continue;
         MatrixModel::Send x;
         x.id = str(r, "id");
-        x.from = str(r, "from");
-        x.to = str(r, "fx").empty() ? str(r, "to") : str(r, "fx");
+        x.allInputs = hardwareMidiMode_ && r.find("from_midi") && r.find("from_midi")->isString() &&
+                      (input.empty() || input == "*");
+        x.from = from;
+        x.to = str(r, "fx").empty() ? to : str(r, "fx");
         x.tap = str(r, "tap");
         if (midi && midi->isObject()) {
             if (const auto* channel = midi->find("from_channel"))
@@ -438,13 +512,23 @@ Status RoutingMatrix::reload() {
                             (side[0] == 'f' ? x.mapFrom : x.mapTo)
                                 .push_back(static_cast<int>(n.asDouble()));
         }
-        next.sends.push_back(std::move(x));
+        if (hardwareMidiMode_) {
+            for (const auto& send : m->find("sends")->asArray())
+                if (str(send, "id") == x.id) {
+                    auto copy = x;
+                    copy.from = str(send, "from");
+                    copy.to = str(send, "to");
+                    next.sends.push_back(std::move(copy));
+                }
+        } else
+            next.sends.push_back(std::move(x));
     }
     next.index();
     model_ = std::move(next);
     if (grid_) static_cast<Grid*>(grid_)->modelChanged();
     projectGeneration_ = app_.projectGeneration();
     version_ = app_.head().version;
+    midiPreferencesRevision_ = app_.midiPreferencesRevision();
     // Cells whose strips went go from the selection.
     std::erase_if(selection_, [&](const Cell& c) { return !locate(c); });
     if (anchor_ && !locate(*anchor_)) anchor_.reset();
@@ -481,8 +565,13 @@ void RoutingMatrix::open(std::optional<ui::Rect> anchor) {
     midiModeButton_ = &header.emplace<ui::Toggle>("routing.mode.midi", "MIDI", "accent",
                                                   [this](bool) { setMidiMode(true); });
     audioMode_->layout.width = midiModeButton_->layout.width = ui::SizeRule::fixed(64);
+    hardwareModeButton_ =
+        &header.emplace<ui::Toggle>("routing.mode.hardware", "Hardware MIDI", "accent",
+                                    [this](bool) { setHardwareMidiMode(); });
+    hardwareModeButton_->layout.width = ui::SizeRule::fixed(140);
+    hardwareModeButton_->setOn(hardwareMidiMode_);
     audioMode_->setOn(!midiMode_);
-    midiModeButton_->setOn(midiMode_);
+    midiModeButton_->setOn(midiMode_ && !hardwareMidiMode_);
     header.emplace<ui::Button>("routing.close", "Close", [this] { close(); });
     GridHooks hooks;
     hooks.cell = [this](std::size_t row, std::size_t col, unsigned mods) {
@@ -493,6 +582,14 @@ void RoutingMatrix::open(std::optional<ui::Rect> anchor) {
     };
     hooks.row = [this](std::size_t row, unsigned mods) { clickRow(row, mods); };
     hooks.column = [this](std::size_t col, unsigned mods) { clickColumn(col, mods); };
+    hooks.rowContext = [this](std::size_t row, ui::Point p) {
+        const auto& s = model_.sources[row];
+        if (s.type == "midi_input") portContext(false, s.name, p);
+    };
+    hooks.columnContext = [this](std::size_t col, ui::Point p) {
+        const auto& d = model_.destinations[col];
+        if (d.kind == "midi_output") portContext(true, d.name, p);
+    };
     hooks.all = [this] { selectAll(); };
     hooks.remove = [this] { (void)removeSelected(); };
     hooks.selected = [this](std::size_t row, std::size_t col) { return isSelected(row, col); };
@@ -508,7 +605,9 @@ void RoutingMatrix::open(std::optional<ui::Rect> anchor) {
             s.pair != 1 ? s.strip + " " + s.name : (s.name.empty() ? s.id : s.name);
         const std::string pair = from + " → " + (d.name.empty() ? d.id : d.name);
         const auto sends = model_.sendsAt(cell->first, cell->second);
-        if (!sends.empty())
+        if (!sends.empty() && sends.front()->allInputs)
+            status_->setText(pair + ": All inputs (*) — one shared assignment");
+        else if (!sends.empty())
             status_->setText(pair + ": " + dbText(sends.front()->volumeDb) + ", " +
                              sends.front()->tap + (sends.front()->mute ? ", muted" : "") +
                              " — click to select");
@@ -519,7 +618,8 @@ void RoutingMatrix::open(std::optional<ui::Rect> anchor) {
                                          ? ": the parent send, on — double-click to turn it off"
                                          : ": the parent send, off — double-click to turn it on"));
         else
-            status_->setText(pair + ": double-click to send");
+            status_->setText(pair + ": double-click to send" +
+                             (inputReplacement(s, d).empty() ? "" : "; " + inputReplacement(s, d)));
     };
     auto& grid = panel->emplace<Grid>(model_, std::move(hooks));
     grid_ = &grid;
@@ -688,7 +788,7 @@ void RoutingMatrix::open(std::optional<ui::Rect> anchor) {
             add_ = remove_ = mute_ = nullptr;
             channels_ = phase_ = nullptr;
             midiFrom_ = midiTo_ = nullptr;
-            audioMode_ = midiModeButton_ = nullptr;
+            audioMode_ = midiModeButton_ = hardwareModeButton_ = nullptr;
             taps_.clear();
             selection_.clear();
             anchor_.reset();
@@ -721,6 +821,7 @@ std::string RoutingMatrix::channelsText(const MatrixModel::Send& x) {
 }
 
 std::string RoutingMatrix::status() const {
+    if (!statusMessage_.empty()) return statusMessage_;
     return std::to_string(model_.sends.size()) +
            " sends · click to select (Ctrl, Shift, a row or column name: more), "
            "double-click to send";
@@ -777,6 +878,7 @@ std::optional<std::string> RoutingMatrix::selectedSend() const {
 }
 
 void RoutingMatrix::select(std::set<Cell> cells, std::optional<Cell> anchor) {
+    statusMessage_.clear();
     selection_ = std::move(cells);
     if (anchor) anchor_ = std::move(anchor);
     refresh();
@@ -873,7 +975,9 @@ json::Value addArgs(const MatrixModel::Source& s, const MatrixModel::Destination
     json::Value args = json::Value::object();
     args["from"] = s.id;
     if (midi) args["midi"] = json::Value::object();
-    args[d.kind == "key" ? "fx" : "to"] = d.id;
+    args[d.kind == "midi_output" ? "to_midi"
+         : d.kind == "key"       ? "fx"
+                                 : "to"] = d.kind == "midi_output" ? d.name : d.id;
     if (s.pair != 1) {  // an auxiliary pair to the destination's main pair (ADR-0021)
         json::Value map = json::Value::object(), from = json::Value::array(),
                     to = json::Value::array();
@@ -890,6 +994,17 @@ json::Value addArgs(const MatrixModel::Source& s, const MatrixModel::Destination
 
 }  // namespace
 
+std::string RoutingMatrix::inputReplacement(const MatrixModel::Source& source,
+                                            const MatrixModel::Destination& dest) const {
+    if (source.type != "midi_input" || dest.kind != "track") return {};
+    const auto id = model::Id::parse(dest.id);
+    if (!id) return {};
+    const auto session = app_.view();
+    const auto* input = model::midiInputRoute(session, *id);
+    if (!input || !input->from.midiDevice || *input->from.midiDevice == source.name) return {};
+    return dest.name + ": replaces " +
+           (input->from.midiDevice->empty() ? "*" : *input->from.midiDevice);
+}
 Status RoutingMatrix::doubleClickCell(std::size_t row, std::size_t col) {
     if (row >= model_.sources.size() || col >= model_.destinations.size())
         return Error("gui.routing", "no such cell");
@@ -909,12 +1024,23 @@ Status RoutingMatrix::doubleClickCell(std::size_t row, std::size_t col) {
         if (status_) status_->setText("Not allowed: " + why);
         return Error("route.strip_type", why);
     }
-    auto r = exec("route.add", addArgs(model_.sources[row], model_.destinations[col], midiMode_));
+    const auto& source = model_.sources[row];
+    const auto& dest = model_.destinations[col];
+    const auto replacement = inputReplacement(source, dest);
+    auto input = json::Value::object();
+    input["track"] = dest.id;
+    input["record_midi"] = source.name;
+    auto r = source.type == "midi_input" ? exec("track.set", std::move(input))
+                                         : exec("route.add", addArgs(source, dest, midiMode_));
     if (!r) return std::move(r).error();
-    return reload();
+    SUPPLE_TRY(reload());
+    statusMessage_ = replacement;
+    if (status_) status_->setText(status());
+    return {};
 }
 
 Status RoutingMatrix::addSelected() {
+    std::string replacements;
     std::vector<std::pair<std::string, json::Value>> edits;
     for (const Cell& c : selection_) {
         const auto at = locate(c);
@@ -927,7 +1053,17 @@ Status RoutingMatrix::addSelected() {
             args["parent_send"] = true;
             edits.emplace_back("track.set", std::move(args));
         } else if (model_.blocked(at->first, at->second).empty()) {
-            edits.emplace_back("route.add", addArgs(s, model_.destinations[at->second], midiMode_));
+            const auto& d = model_.destinations[at->second];
+            if (s.type == "midi_input") {
+                const auto replacement = inputReplacement(s, d);
+                if (!replacement.empty())
+                    replacements += (replacements.empty() ? "" : "; ") + replacement;
+                auto input = json::Value::object();
+                input["track"] = d.id;
+                input["record_midi"] = s.name;
+                edits.emplace_back("track.set", std::move(input));
+            } else
+                edits.emplace_back("route.add", addArgs(s, d, midiMode_));
         }
     }
     if (edits.empty()) return {};
@@ -938,15 +1074,41 @@ Status RoutingMatrix::addSelected() {
                                       return json::Value::object();
                                   });
     if (!r) return std::move(r).error();
-    return reload();
+    SUPPLE_TRY(reload());
+    statusMessage_ = replacements;
+    if (status_) status_->setText(status());
+    return {};
 }
 
 Status RoutingMatrix::removeSelected() {
+    for (const auto& id : selectedSends())
+        if (const auto* send = sendById(id); send && send->allInputs) {
+            bool whole = true;
+            for (std::size_t row = 0; row < model_.sources.size(); ++row)
+                for (std::size_t col = 0; col < model_.destinations.size(); ++col)
+                    for (const auto* cell : model_.sendsAt(row, col))
+                        if (cell->id == id && !isSelected(row, col)) whole = false;
+            if (!whole) {
+                statusMessage_ =
+                    "All inputs (*) is one assignment; select all its cells for this channel, or "
+                    "replace its input";
+                if (status_) status_->setText(status());
+                return Error("gui.routing_all_inputs", statusMessage_, "/selection",
+                             "select all wildcard cells in the channel column");
+            }
+        }
     std::vector<std::pair<std::string, json::Value>> edits;
     for (const auto& id : selectedSends()) {
         json::Value args = json::Value::object();
-        args["route"] = id;
-        edits.emplace_back("route.remove", std::move(args));
+        const auto* send = sendById(id);
+        if (send && send->from.starts_with("midi_in:")) {
+            args["track"] = send->to;
+            args["record_midi"] = nullptr;
+            edits.emplace_back("track.set", std::move(args));
+        } else {
+            args["route"] = id;
+            edits.emplace_back("route.remove", std::move(args));
+        }
     }
     for (const Cell& c : selection_)
         if (const auto at = locate(c);
@@ -1117,7 +1279,8 @@ void RoutingMatrix::refresh() {
         widget->visible = !midiMode_;
     midiFrom_->visible = midiTo_->visible = midiMode_;
     audioMode_->setOn(!midiMode_);
-    midiModeButton_->setOn(midiMode_);
+    midiModeButton_->setOn(midiMode_ && !hardwareMidiMode_);
+    hardwareModeButton_->setOn(hardwareMidiMode_);
     midiFrom_->setText("From channel: " + (x && x->midiFrom ? std::to_string(x->midiFrom) : "All"));
     midiTo_->setText("To channel: " + (x && x->midiTo ? std::to_string(x->midiTo) : "Original"));
     root().relayout();
@@ -1169,7 +1332,9 @@ void RoutingMatrix::refresh() {
 void RoutingMatrix::setMidiMode(bool midi) {
     if (audioMode_) audioMode_->setOn(!midi);
     if (midiModeButton_) midiModeButton_->setOn(midi);
-    if (midiMode_ == midi) return;
+    if (midiMode_ == midi && !hardwareMidiMode_) return;
+    hardwareMidiMode_ = false;
+    if (hardwareModeButton_) hardwareModeButton_->setOn(false);
     midiMode_ = midi;
     selection_.clear();
     anchor_.reset();
@@ -1178,6 +1343,99 @@ void RoutingMatrix::setMidiMode(bool midi) {
     if (isOpen()) {
         if (auto result = reload(); !result && status_) status_->setText(result.error().message);
     }
+}
+
+void RoutingMatrix::setHardwareMidiMode() {
+    setMidiMode(true);
+    hardwareMidiMode_ = true;
+    if (hardwareModeButton_) hardwareModeButton_->setOn(true);
+    if (midiModeButton_) midiModeButton_->setOn(false);
+    selection_.clear();
+    anchor_.reset();
+    if (isOpen()) (void)reload();
+}
+
+std::vector<ui::MenuItem> RoutingMatrix::midiPortMenu(bool output, const std::string& port) {
+    const auto settings = engine::midiPortSettings(
+        output ? app_.midiOutputsPreferences() : app_.midiInputsPreferences(), port);
+    auto change = [this, output, port](const char* field, bool value) {
+        auto args = json::Value::object();
+        args["port"] = port;
+        args[field] = value;
+        (void)exec(output ? "midi.outputs.set" : "midi.inputs.set", std::move(args));
+        (void)reload();
+    };
+    std::vector<ui::MenuItem> items;
+    items.push_back({"Enabled", "", [change, settings] { change("enabled", !settings.enabled); },
+                     true, false, settings.enabled});
+    items.push_back({"Timing offset…", "", [this, output, port] { portOffset(output, port); }});
+    if (output)
+        items.push_back({"Reset notes on stop", "",
+                         [change, settings] { change("reset_on_stop", !settings.resetOnStop); },
+                         true, false, settings.resetOnStop});
+    return items;
+}
+void RoutingMatrix::portContext(bool output, const std::string& port, ui::Point at) {
+    root().openPopup(ui::makeMenu("routing.port.menu", midiPortMenu(output, port),
+                                  [this] { root().closePopup(); }),
+                     {at.x, at.y, 1, 1});
+}
+void RoutingMatrix::portOffset(bool output, const std::string& port) {
+    const auto settings = engine::midiPortSettings(
+        output ? app_.midiOutputsPreferences() : app_.midiInputsPreferences(), port);
+    auto form = std::make_unique<ui::Node>("routing.port.offset");
+    form->layout.dir = ui::Layout::Dir::Column;
+    form->layout.width = ui::SizeRule::fixed(340);
+    form->layout.padding = ui::Insets::all(12);
+    form->layout.gap = 8;
+    form->emplace<ui::Label>("routing.port.offset.title", port + " — offset (ms)");
+    auto& field =
+        form->emplace<ui::TextField>("routing.port.offset.value", fmt(settings.offsetMs, 3));
+    if (output) {
+        auto& lead = form->emplace<ui::Label>("routing.port.offset.lead", "");
+        auto preview = [this, port, &lead](const std::string& text) {
+            const auto value = json::parse(text);
+            if (!value || !value->isNumber() || !std::isfinite(value->asDouble())) return;
+            if (std::abs(value->asDouble()) > 1000) {
+                lead.setText("Use an offset from -1000 to 1000 ms");
+                return;
+            }
+            double milliseconds = 0;
+            if (auto* engine = app_.engine()) {
+                auto ports = app_.midiPortsState(true);
+                for (const auto& entry : ports.asArray())
+                    if (entry.find("name")->asString() == port) {
+                        const auto index = entry.find("index")->asInt();
+                        milliseconds =
+                            engine->midiLeadForOffset(
+                                index < 0 ? std::size_t(-1) : static_cast<std::size_t>(index),
+                                value->asDouble()) *
+                            1000. / engine->config().sampleRate;
+                        break;
+                    }
+            }
+            lead.setText("adds " + fmt(milliseconds, 1) + " ms latency to all audio");
+        };
+        field.onChange = preview;
+        preview(field.text());
+    }
+    auto apply = [this, output, port](const std::string& value) {
+        auto number = json::parse(value);
+        if (!number || !number->isNumber()) return;
+        auto args = json::Value::object();
+        args["port"] = port;
+        args["offset_ms"] = *number;
+        if (exec(output ? "midi.outputs.set" : "midi.inputs.set", std::move(args))) {
+            root().closePopup();
+            (void)reload();
+        }
+    };
+    field.onSubmit = apply;
+    form->emplace<ui::Button>("routing.port.offset.apply", "Apply",
+                              [apply, &field] { apply(field.text()); });
+    root().openPopup(std::move(form), {0, 0, 1, 1}, ui::Placement::Center);
+    root().focus(&field);
+    field.selectAll();
 }
 
 void RoutingMatrix::midiChannelMenu(bool from) {
@@ -1209,7 +1467,8 @@ void RoutingMatrix::midiChannelMenu(bool from) {
 
 void RoutingMatrix::sync() {
     if (isOpen() &&
-        (app_.projectGeneration() != projectGeneration_ || app_.head().version != version_))
+        (app_.projectGeneration() != projectGeneration_ || app_.head().version != version_ ||
+         app_.midiPreferencesRevision() != midiPreferencesRevision_))
         (void)reload();
 }
 

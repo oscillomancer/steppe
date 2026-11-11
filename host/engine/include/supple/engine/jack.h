@@ -78,6 +78,12 @@ class JackBackend : public Backend {
     BackendStatus status() const override;
     std::span<const MidiInputEvent> midiInput() const override;
     std::vector<std::string> midiPorts() const override;
+    bool writeMidi(const MidiOutputEvent&) SUPPLE_RT override;
+    std::vector<std::string> midiOutputPorts() const override;
+    std::vector<std::int64_t> midiOutputLatency() const override;
+    std::vector<MidiInputWarning> midiOutputWarnings() const override;
+    std::uint64_t midiOutDropped() const override;
+    std::uint64_t midiOutAsyncDropped(std::size_t port) const override;
     std::vector<std::string> inputNames() const override;
     std::vector<std::string> outputNames() const override;
     // The device's physical capture ports, in order, from a short-lived
@@ -96,8 +102,9 @@ class JackBackend : public Backend {
     MainThreadWake* mainWake_ = nullptr;
     Options options_;
     BackendConfig config_;
+    std::uint64_t stoppedMidiOutDropped_ = 0;
     std::unique_ptr<Impl> impl_;
-    std::atomic<const Impl*> active_{nullptr};  // set before activation (audio-thread reads)
+    std::atomic<Impl*> active_{nullptr};  // set before activation (audio-thread reads)
 };
 
 }  // namespace supple::engine

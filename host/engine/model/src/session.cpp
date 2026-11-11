@@ -425,8 +425,10 @@ struct Checker {
                                                     : " is not an In module (routes go to In "
                                                       "modules)"));
                 }
-                if (!from && x.midiDevice)
-                    fail(at("routes", e.id, field), "a route cannot send to a MIDI input");
+                if (!from && x.midiDevice && x.midiDevice->empty())
+                    fail(at("routes", e.id, field), "a MIDI device name must not be empty");
+                if (!from && x.midiDevice && !r.midi)
+                    fail(at("routes", e.id, field), "a MIDI output requires MIDI routing");
                 if (from && x.fx)
                     fail(at("routes", e.id, field), "a route cannot come from a plug-in's key");
                 if (x.track && !s.tracks.contains(*x.track))
@@ -439,14 +441,18 @@ struct Checker {
             endOk(r.to, "to", false);
             const auto* sourceModule = r.from.module ? s.modules.find(*r.from.module) : nullptr;
             const bool notesOut = sourceModule && sourceModule->type == kNotesOutModule;
+            if (r.to.midiDevice && (r.from.midiDevice || r.from.hwChannels))
+                fail(at("routes", e.id, "from"),
+                     "a hardware MIDI output requires a channel or Note Out source");
             if (r.midi && !r.from.midiDevice) {
                 const Track* source = r.from.track ? s.tracks.find(*r.from.track) : nullptr;
                 const Track* target = r.to.track ? s.tracks.find(*r.to.track) : nullptr;
                 const RackModule* destination =
                     r.to.module ? s.modules.find(*r.to.module) : nullptr;
                 if (!(notesOut || (source && source->type == StripType::Channel)) ||
-                    !(destination ? destination->type == kNotesModule
-                                  : target && target->type == StripType::Channel))
+                    !(r.to.midiDevice ||
+                      (destination ? destination->type == kNotesModule
+                                   : target && target->type == StripType::Channel)))
                     fail(at("routes", e.id),
                          "MIDI sends connect channels/Note Out to channels/Notes");
                 if (r.volumeDb != 0 || r.pan.percent || r.mono || r.phaseInvert ||

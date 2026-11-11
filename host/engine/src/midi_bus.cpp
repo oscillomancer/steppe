@@ -129,6 +129,7 @@ void fillMidiBus(Node& node) SUPPLE_RT {
         b.event = node.midiPreFx[i];
         b.part = -1;
         b.stages = i < node.midiChain.size() && node.midiChain[i] != 0;
+        b.timeline = i < node.midiPreTimeline.size() && node.midiPreTimeline[i] != 0;
         node.midiBus.push_back(b);
     }
 }
@@ -269,11 +270,14 @@ void stageMidiBus(Node& node, Stage& st) SUPPLE_RT {
 void finishMidiBus(Node& node) SUPPLE_RT {
     auto& post = node.midiPostFx;
     post.clear();
+    node.midiPostTimeline.clear();
     const std::size_t end = node.chain.size();
-    auto put = [&](const host::Event& e) {
-        if (post.size() < post.capacity())
+    auto put = [&](const host::Event& e, bool timeline = false) {
+        if (post.size() < post.capacity() &&
+            node.midiPostTimeline.size() < node.midiPostTimeline.capacity()) {
             post.push_back(e);
-        else
+            node.midiPostTimeline.push_back(timeline ? 1 : 0);
+        } else
             ++node.midiDropped;
     };
     // What it held of a part that no longer reaches it ends first.
@@ -287,7 +291,7 @@ void finishMidiBus(Node& node) SUPPLE_RT {
     }
     for (const BusEvent& b : node.midiBus) {
         const auto& e = b.event;
-        put(e);
+        put(e, b.timeline);
         if (e.noteId < 0 || static_cast<std::size_t>(e.noteId) >= node.midiPostHeld.size())
             continue;
         auto& v = node.midiPostHeld[static_cast<std::size_t>(e.noteId)];

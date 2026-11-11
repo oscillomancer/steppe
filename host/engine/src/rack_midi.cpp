@@ -324,6 +324,7 @@ Status prepareRackMidi(Plan& p) {
         node.midiRouted.assign(inputs - static_cast<std::size_t>(node.midiRoutedBase), {});
         node.midiRemap.reserve(pool);
         node.midiPreFx.reserve(capacity);
+        node.midiPreTimeline.reserve(capacity);
         node.midiPostFx.reserve(capacity);
         node.midiInstrument.reserve(capacity);
         node.midiSortScratch.reserve(capacity);
@@ -359,6 +360,7 @@ Status prepareRackMidi(Plan& p) {
         node.midiBusNext.reserve(bus);
         node.midiBusGen.reserve(parts ? kBusStageEvents : 0);
         node.midiPostFx.reserve(bus + busVoices);
+        node.midiPostTimeline.reserve(bus + busVoices);
         node.midiPostHeld.assign(busVoices, {});
         node.midiPostBefore.assign(node.midiSends ? busVoices : 0, {});
         node.midiBusRemap.reserve(parts * kBusVoices);
@@ -430,15 +432,19 @@ void finishTrackMidi(Node& node) SUPPLE_RT {
     out.clear();
     ids.clear();
     node.midiChain.clear();
+    node.midiPreTimeline.clear();
     // `chain`: the track's plug-ins hear it (ADR-0068), unlike a note or
     // controller of a take with its own instrument.
-    auto emit = [&](const host::Event& e, std::int32_t instrument, std::optional<bool> chain = {}) {
+    auto emit = [&](const host::Event& e, std::int32_t instrument, std::optional<bool> chain = {},
+                    bool timeline = false) {
         if (out.size() == out.capacity() || ids.size() == ids.capacity() ||
-            node.midiChain.size() == node.midiChain.capacity()) {
+            node.midiChain.size() == node.midiChain.capacity() ||
+            node.midiPreTimeline.size() == node.midiPreTimeline.capacity()) {
             ++node.midiDropped;
             return;
         }
         out.push_back(e);
+        node.midiPreTimeline.push_back(timeline ? 1 : 0);
         ids.push_back(instrument);
         node.midiChain.push_back(
             chain.value_or(instrument != -2 && instrument != kNotTargetNote) ? 1 : 0);
@@ -471,7 +477,8 @@ void finishTrackMidi(Node& node) SUPPLE_RT {
         emit(off,
              v.orphan && v.kind != MidiSlot::Kind::Routed ? kNotTargetNote
                                                           : instrumentId(v.kind, v.input, slot),
-             v.orphan ? std::optional<bool>(true) : std::nullopt);
+             v.orphan ? std::optional<bool>(true) : std::nullopt,
+             v.kind == MidiSlot::Kind::Timeline);
         if (v.orphan && v.kind == MidiSlot::Kind::Routed) {
             RoutedMidiEvent midi;  // what recording heard begin ends with it
             midi.frame = time;
@@ -533,7 +540,7 @@ void finishTrackMidi(Node& node) SUPPLE_RT {
             node.midiInput[static_cast<std::size_t>(input)] = slot;
             auto on = e;
             on.noteId = slot;
-            emit(on, instrumentId(kind, input, slot));
+            emit(on, instrumentId(kind, input, slot), {}, kind == MidiSlot::Kind::Timeline);
             continue;
         }
         if (slot < 0) {
@@ -542,13 +549,13 @@ void finishTrackMidi(Node& node) SUPPLE_RT {
             if (kind != MidiSlot::Kind::Routed) {
                 auto off = e;
                 off.noteId = -1;
-                emit(off, instrumentId(kind, input, -1));
+                emit(off, instrumentId(kind, input, -1), {}, kind == MidiSlot::Kind::Timeline);
             }
             continue;
         }
         auto off = e;
         off.noteId = slot;
-        emit(off, instrumentId(kind, input, slot));
+        emit(off, instrumentId(kind, input, slot), {}, kind == MidiSlot::Kind::Timeline);
         freeSlot(node, slot);
     }
 }

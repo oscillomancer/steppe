@@ -14,7 +14,7 @@
 namespace supple::gui {
 namespace {
 
-constexpr const char* kSchema = "supple.preferences/1.6";
+constexpr const char* kSchema = engine::kPreferencesSchema;
 
 Error threadLimitError() {
     return Error("preferences.audio_threads", "audio processing thread limit is out of range",
@@ -131,6 +131,14 @@ Result<Preferences> Preferences::load(const std::filesystem::path& file) {
         if (!audio) return std::move(audio).error();
         out.audio = std::move(*audio);
     }
+    for (bool output : {false, true}) {
+        if (const auto* ports = doc->find(output ? "midi_outputs" : "midi_inputs")) {
+            std::vector<engine::MidiPortPreferenceWarning> warnings;
+            // EngineApp loads the same file and surfaces these startup warnings.
+            (output ? out.midiOutputs : out.midiInputs) =
+                engine::loadMidiPortPreferences(*ports, output, warnings);
+        }
+    }
     return out;
 }
 
@@ -146,6 +154,17 @@ Status Preferences::save(const std::filesystem::path& file) const {
     doc["copy_imported_media"] = copyImports;
     doc["render_open_folder"] = renderOpenFolder;
     doc["audio"] = audioDeviceJson(audio);
+    // These records belong to the engine; preserve the current disk value.
+    std::error_code lookupError;
+    if (std::filesystem::exists(file, lookupError)) {
+        auto bytes = readFile(file);
+        if (!bytes) return bytes.error();
+        auto stored = json::parse(
+            std::string_view(reinterpret_cast<const char*>(bytes->data()), bytes->size()));
+        if (!stored) return stored.error();
+        for (const auto* key : {"midi_inputs", "midi_outputs"})
+            if (const auto* value = stored->find(key)) doc[key] = *value;
+    }
     std::error_code ec;
     std::filesystem::create_directories(file.parent_path(), ec);
     return writeFileAtomic(file, json::writeCanonical(doc) + "\n");
@@ -163,6 +182,11 @@ PreferencesDialog::PreferencesDialog(ui::Root& root, engine::EngineApp& app, Mou
     (void)app_.setPreventDeepIdle(prefs_.preventDeepIdle);
     if (!prefs_.renderDirectory.empty()) app_.setRendersDir(prefs_.renderDirectory);
     app_.setCopyImportedMedia(prefs_.copyImports);
+}
+
+Status PreferencesDialog::save(Preferences& prefs) {
+    SUPPLE_TRY(prefs.save(file_));
+    return app_.writeMidiPreferences(file_);
 }
 
 bool PreferencesDialog::isOpen() const { return root_.find("prefs") != nullptr; }
@@ -354,7 +378,7 @@ void PreferencesDialog::setDefaultMonitor(model::Monitor m) {
     prefs_.defaultMonitor = m;
     app_.setDefaultMonitor(m);
     if (!file_.empty())
-        if (auto saved = prefs_.save(file_); !saved && onError)
+        if (auto saved = save(prefs_); !saved && onError)
             onError("preferences: " + saved.error().toString());
     refresh();
 }
@@ -364,7 +388,7 @@ Status PreferencesDialog::setAudioThreads(unsigned limit) {
     auto next = prefs_;
     next.audioThreads = limit;
     // A failed save leaves both the displayed and effective preference intact.
-    if (!file_.empty()) SUPPLE_TRY(next.save(file_));
+    if (!file_.empty()) SUPPLE_TRY(save(next));
     SUPPLE_TRY(app_.setAudioThreadLimit(limit));
     prefs_ = next;
     refresh();
@@ -374,7 +398,7 @@ Status PreferencesDialog::setAudioThreads(unsigned limit) {
 Status PreferencesDialog::setMemoryLock(bool requested) {
     auto next = prefs_;
     next.lockMemory = requested;
-    if (!file_.empty()) SUPPLE_TRY(next.save(file_));
+    if (!file_.empty()) SUPPLE_TRY(save(next));
     prefs_ = next;
     auto applied = app_.setMemoryLock(requested);
     refresh();
@@ -384,7 +408,7 @@ Status PreferencesDialog::setMemoryLock(bool requested) {
 Status PreferencesDialog::setPreventDeepIdle(bool requested) {
     auto next = prefs_;
     next.preventDeepIdle = requested;
-    if (!file_.empty()) SUPPLE_TRY(next.save(file_));
+    if (!file_.empty()) SUPPLE_TRY(save(next));
     prefs_ = next;
     auto applied = app_.setPreventDeepIdle(requested);
     refresh();
@@ -394,7 +418,7 @@ Status PreferencesDialog::setPreventDeepIdle(bool requested) {
 Status PreferencesDialog::setCopyImports(bool on) {
     auto next = prefs_;
     next.copyImports = on;
-    if (!file_.empty()) SUPPLE_TRY(next.save(file_));
+    if (!file_.empty()) SUPPLE_TRY(save(next));
     prefs_ = next;
     app_.setCopyImportedMedia(on);
     refresh();
@@ -404,7 +428,7 @@ Status PreferencesDialog::setCopyImports(bool on) {
 Status PreferencesDialog::setAudioDevice(const AudioDeviceSettings& audio) {
     auto next = prefs_;
     next.audio = audio;
-    if (!file_.empty()) SUPPLE_TRY(next.save(file_));
+    if (!file_.empty()) SUPPLE_TRY(save(next));
     prefs_ = next;
     refresh();
     return {};
@@ -413,7 +437,7 @@ Status PreferencesDialog::setAudioDevice(const AudioDeviceSettings& audio) {
 Status PreferencesDialog::setRenderOpenFolder(bool on) {
     auto next = prefs_;
     next.renderOpenFolder = on;
-    if (!file_.empty()) SUPPLE_TRY(next.save(file_));
+    if (!file_.empty()) SUPPLE_TRY(save(next));
     prefs_ = next;
     return {};
 }
@@ -424,7 +448,7 @@ Status PreferencesDialog::setRenderDirectory(const std::filesystem::path& dir) {
                      "/render_directory", "choose a folder in the render dialog");
     auto next = prefs_;
     next.renderDirectory = dir;
-    if (!file_.empty()) SUPPLE_TRY(next.save(file_));
+    if (!file_.empty()) SUPPLE_TRY(save(next));
     prefs_ = next;
     app_.setRendersDir(dir);
     return {};

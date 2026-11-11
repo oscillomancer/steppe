@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 #include "plan.h"
+#include "hardware_midi.h"
 #include "live_workers.h"
 #include "rack_runtime.h"
 #include "supple/model/fade_shape.h"
@@ -483,6 +484,29 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
     }
     for (const auto& e : s.routes) {
         const model::Route& r = *e.value;
+        if (r.to.midiDevice && r.midi) {
+            auto route = std::make_shared<HardwareRoute>();
+            route->id = e.id;
+            route->device = *r.to.midiDevice;
+            route->tap = r.tap;
+            route->mute = r.mute;
+            route->fromChannel = r.midi->fromChannel;
+            route->toChannel = r.midi->toChannel;
+            const auto from = r.from.module ? s.modules.find(*r.from.module)->rack : *r.from.track;
+            route->source = index.at(from);
+            auto& source = p.nodes[route->source];
+            source.hardwareMidiSource = source.midiSends = true;
+            if (r.from.module) {
+                const auto& outs = source.rack->notesOut;
+                const auto found = std::find_if(outs.begin(), outs.end(), [&](const auto& output) {
+                    return output.id == *r.from.module;
+                });
+                if (found == outs.end()) continue;
+                route->rackNotes = static_cast<int>(found - outs.begin());
+            }
+            p.hardwareMidi.push_back(std::move(route));
+            continue;
+        }
         if (r.midi && !r.from.midiDevice) {
             std::vector<Id> destinations;
             if (r.to.module) destinations.push_back(*r.to.module);
@@ -709,6 +733,9 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
                    : param == "mute"                          ? &n.autoMute
                                                               : nullptr;
         } else if (o.kind == Kind::Route) {
+            if (param == "mute")
+                for (auto& route : p.hardwareMidi)
+                    if (route->id == o) route->muteCurve = a;
             for (Edge& ed : p.edges)
                 if (ed.route == o) {
                     Automation* curve = param == "volume" ? &ed.autoVolume
@@ -759,6 +786,7 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         if (n.rack) {
             // A rack playing a device's MIDI is live, as a monitored track.
             n.live =
+                n.hardwareMidiSource ||
                 std::any_of(n.rack->notes.begin(), n.rack->notes.end(), [](const NotesFeed& f) {
                     return f.device.has_value() || f.sourceDevice.has_value();
                 });
@@ -783,11 +811,11 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
                     for (int ch : *in->from.hwChannels) n.monitorInputs.push_back(ch - 1);
             }
         if (monitoring)
-            if (const auto* in = model::midiInputRoute(s, n.id))
+            if (const auto* in = model::midiInputRoute(s, n.id); in && !in->mute)
                 n.midiIn = Node::MidiIn{*in->from.midiDevice, in->midi ? in->midi->fromChannel : 0,
                                         in->midi ? in->midi->toChannel : 0, 0};
-        n.live = !n.monitorInputs.empty() || n.midiIn.has_value() || !n.recordInputs.empty() ||
-                 n.recordRack;
+        n.live = n.hardwareMidiSource || !n.monitorInputs.empty() || n.midiIn.has_value() ||
+                 !n.recordInputs.empty() || n.recordRack;
         // Recording Note Out consumes its delivered events on the callback.
         // Keep source and destination together even with monitoring off.
         if (t.record.armed && (t.record.mode == model::RecordMode::MidiOverdub ||
@@ -930,8 +958,10 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
     MixSlots& mix = *p.mix;
     mix.strips = std::make_unique<MixSlots::Value[]>(p.nodes.size());
     mix.routes = std::make_unique<MixSlots::Value[]>(p.edges.size());
+    mix.hardware = std::make_unique<MixSlots::Value[]>(p.hardwareMidi.size());
     mix.vcas = std::make_unique<MixSlots::Value[]>(mix.vcaIds.size());
     for (std::size_t i = 0; i < p.nodes.size(); ++i) {
+        mix.strips[i].mute.store(p.nodes[i].mute, std::memory_order_relaxed);
         mix.strips[i].volumeDb.store(p.nodes[i].volumeDb, std::memory_order_relaxed);
         mix.strips[i].pan.store(p.nodes[i].pan, std::memory_order_relaxed);
         mix.strips[i].width.store(p.nodes[i].panSettings.width, std::memory_order_relaxed);
@@ -939,11 +969,16 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         mix.strips[i].panRight.store(p.nodes[i].panSettings.right, std::memory_order_relaxed);
     }
     for (std::size_t i = 0; i < p.edges.size(); ++i) {
+        mix.routes[i].mute.store(p.edges[i].muted, std::memory_order_relaxed);
         mix.routes[i].volumeDb.store(p.edges[i].volumeDb, std::memory_order_relaxed);
         mix.routes[i].pan.store(p.edges[i].pan, std::memory_order_relaxed);
     }
-    for (const auto& [id, v] : controls)
+    for (std::size_t i = 0; i < p.hardwareMidi.size(); ++i)
+        mix.hardware[i].mute.store(p.hardwareMidi[i]->mute, std::memory_order_relaxed);
+    for (const auto& [id, v] : controls) {
         mix.vcas[v.slot].volumeDb.store(v.volumeDb, std::memory_order_relaxed);
+        mix.vcas[v.slot].mute.store(v.mute, std::memory_order_relaxed);
+    }
     return p;
 }
 
@@ -3671,6 +3706,7 @@ void publishMix(Plan& p, const model::Session& s, std::span<const model::EnvTarg
         const Id id = p.nodes[i].id;
         const model::Track* t = s.tracks.find(id);
         if (!t) continue;
+        mix.strips[i].mute.store(t->mute, relaxed);
         store(mix.strips[i], t->volumeDb, t->pan, held(holds, id, "volume"),
               held(holds, id, "pan"));
         mix.strips[i].width.store(t->width, relaxed);
@@ -3685,13 +3721,19 @@ void publishMix(Plan& p, const model::Session& s, std::span<const model::EnvTarg
         const Edge& e = p.edges[i];
         const model::Route* r = e.route ? s.routes.find(*e.route) : nullptr;
         const model::Track* source = r && r->from.track ? s.tracks.find(*r->from.track) : nullptr;
-        if (!r || !source) continue;  // a parent send: nothing to publish
+        if (!r) continue;
+        mix.routes[i].mute.store(r->mute, relaxed);
+        if (!source) continue;  // a parent send or Note Out has no strip pan
         store(mix.routes[i], r->volumeDb, r->pan.resolve(source->pan),
               held(holds, *e.route, "volume"), held(holds, *e.route, "pan"));
     }
+    for (std::size_t i = 0; i < p.hardwareMidi.size(); ++i)
+        if (const auto* route = s.routes.find(p.hardwareMidi[i]->id))
+            mix.hardware[i].mute.store(route->mute, relaxed);
     for (std::size_t i = 0; i < mix.vcaIds.size(); ++i) {
         const model::TrackGroup* g = s.groups.find(mix.vcaIds[i]);
         if (!g || !g->vca) continue;
+        mix.vcas[i].mute.store(g->vca->mute, relaxed);
         store(mix.vcas[i], g->vca->volumeDb, 0, held(holds, mix.vcaIds[i], "volume"), false);
     }
     mix.sequence.store(sequence + 2, std::memory_order_release);
@@ -3706,6 +3748,7 @@ void syncMix(Plan& p, int liveClass) SUPPLE_RT {
     auto ours = [&](const Node& n) { return liveClass < 0 || n.live == (liveClass == 1); };
     auto syncVcas = [&](VcaControls& vcas) {
         for (VcaControl& v : vcas.values) {
+            v.mute = mix.vcas[v.slot].mute.load(relaxed);
             v.volumeDb = mix.vcas[v.slot].volumeDb.load(relaxed);
             v.hold = mix.vcas[v.slot].holdVolume.load(relaxed);
         }
@@ -3714,6 +3757,7 @@ void syncMix(Plan& p, int liveClass) SUPPLE_RT {
         Node& n = p.nodes[i];
         if (!ours(n)) continue;
         const MixSlots::Value& slot = mix.strips[i];
+        n.mute = slot.mute.load(relaxed);
         n.volumeDb = slot.volumeDb.load(relaxed);
         n.pan = slot.pan.load(relaxed);
         n.holdVolume = slot.holdVolume.load(relaxed);
@@ -3739,6 +3783,7 @@ void syncMix(Plan& p, int liveClass) SUPPLE_RT {
         if (!e.route || !ours(p.nodes[e.stage >= 0 ? e.to : e.from])) continue;
         const MixSlots::Value& slot = mix.routes[i];
         const MixSlots::Value& source = mix.strips[e.from];
+        e.muted = slot.mute.load(relaxed);
         e.volumeDb = slot.volumeDb.load(relaxed);
         e.pan = slot.pan.load(relaxed);
         e.holdVolume = slot.holdVolume.load(relaxed);
@@ -3756,6 +3801,12 @@ void syncMix(Plan& p, int liveClass) SUPPLE_RT {
             e.source.right = source.panRight.load(relaxed);
         }
         syncVcas(e.vcas);
+    }
+    for (std::size_t i = 0; i < p.hardwareMidi.size(); ++i) {
+        auto& route = *p.hardwareMidi[i];
+        if (!ours(p.nodes[route.source])) continue;
+        route.mute = mix.hardware[i].mute.load(relaxed);
+        syncVcas(route.vcas);
     }
     std::atomic_thread_fence(std::memory_order_acquire);
     if (mix.sequence.load(relaxed) == sequence) seen = sequence;

@@ -113,6 +113,8 @@ std::atomic<bool> g_interrupted{false};
 
 engine::AppOptions cliOptions() {
     engine::AppOptions options;
+    if (const auto root = paths::config(); !root.empty())
+        options.midiPreferencesFile = root / product::kSlug / "preferences.json";
     options.identity.name = std::string(product::kName);
     options.identity.vendor = std::string(product::kVendor);
     options.identity.version = std::string(product::kVersion);

@@ -34,6 +34,7 @@
 #include "workers.h"
 
 namespace supple::engine::detail {
+struct HardwareRoute;
 
 using model::Id;
 using model::Kind;
@@ -502,6 +503,7 @@ struct BusEvent {
     host::Event event;
     std::int16_t part = -1;
     bool stages = true;
+    bool timeline = false;  // origin captured before a pre-FX slot can be reused
 };
 // The post-FX stream's held notes, by bus id (sends restart and carry them).
 struct PostVoice {
@@ -701,6 +703,7 @@ struct Node {
     // post-FX is the chain's MIDI bus after the chain (ADR-0068).
     Stage midiStage;
     std::vector<host::Event> midiPreFx, midiPostFx, midiSortScratch;
+    std::vector<std::uint8_t> midiPreTimeline, midiPostTimeline;  // parallel event origins
     std::vector<std::int32_t> midiInstrument;  // parallel to midiPreFx: the note target's id
     std::vector<std::uint8_t> midiChain;       // parallel to midiPreFx: the chain hears it
     // The chain's MIDI bus (ADR-0068): this block's events between stages,
@@ -729,7 +732,7 @@ struct Node {
     // Bounds on its MIDI stream for the sends that read it: events at one
     // frame, and events in any `block` consecutive frames (not block-aligned).
     std::size_t midiEventRate = 0, midiWindow = 0;
-    bool midiReleaseTimeline = false, midiSends = false;
+    bool midiReleaseTimeline = false, midiSends = false, hardwareMidiSource = false;
 
     Id id;  // a track's, or a rack's (rk_*)
     // A rack (ADR-0062): its runtime, its Out modules' audio this block and
@@ -879,14 +882,16 @@ struct MixSlots {
     struct Value {
         std::atomic<double> volumeDb{0}, pan{0};  // a route's pan resolved against its source
         std::atomic<double> width{100}, panLeft{-100}, panRight{100};  // strips (ADR-0066)
+        std::atomic<bool> mute{false};
         std::atomic<bool> holdVolume{false}, holdPan{false};
         std::atomic<bool> holdWidth{false}, holdPanLeft{false}, holdPanRight{false},
             holdPanBoost{false};
     };
-    std::unique_ptr<Value[]> strips;  // per node
-    std::unique_ptr<Value[]> routes;  // per edge (parent sends keep their compiled values)
-    std::unique_ptr<Value[]> vcas;    // per VCA group (pan unused)
-    std::vector<Id> vcaIds;           // main thread: the group of each VCA slot
+    std::unique_ptr<Value[]> strips;    // per node
+    std::unique_ptr<Value[]> routes;    // per edge (parent sends keep their compiled values)
+    std::unique_ptr<Value[]> vcas;      // per VCA group (pan unused)
+    std::unique_ptr<Value[]> hardware;  // per hardware MIDI route
+    std::vector<Id> vcaIds;             // main thread: the group of each VCA slot
     std::atomic<std::uint64_t> sequence{0};
     std::array<std::uint64_t, 2> seen{};  // per executor class (0: renderer or all, 1: live)
 };
@@ -1000,6 +1005,9 @@ struct Plan {
     bool deviceRecording = false;  // a take is being recorded (auto monitoring hears the input)
     // The callback's device MIDI (frames within the cycle) and where the part
     // of the cycle being processed starts.
+    std::vector<std::shared_ptr<HardwareRoute>> hardwareMidi;
+    std::array<MidiPortSettings, 16> midiInputsSettings{}, midiOutputsSettings{};
+    std::uint32_t hardwareLead = 0;
     std::span<const MidiInputEvent> deviceMidi;
     std::uint32_t deviceMidiOffset = 0;
     // Armed channels with input FX: what the recorder takes instead of the

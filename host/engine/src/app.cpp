@@ -86,6 +86,22 @@ Result<std::unique_ptr<EngineApp>> EngineApp::create(AppOptions options, model::
             "engine.workdir", "cannot create " + options.workdir.string(), {},
             "pass a writable workdir and ensure its parent directory exists and has space");
     auto app = std::unique_ptr<EngineApp>(new EngineApp(std::move(options)));
+    if (!app->options_.midiPreferencesFile.empty()) {
+        std::error_code existsError;
+        if (fs::exists(app->options_.midiPreferencesFile, existsError)) {
+            auto bytes = readFile(app->options_.midiPreferencesFile);
+            if (!bytes) return bytes.error();
+            auto doc = json::parse(
+                std::string_view(reinterpret_cast<const char*>(bytes->data()), bytes->size()));
+            if (!doc) return doc.error();
+            for (bool output : {false, true})
+                if (const auto* value = doc->find(output ? "midi_outputs" : "midi_inputs")) {
+                    (output ? app->midiOutputsPreferences_ : app->midiInputsPreferences_) =
+                        loadMidiPortPreferences(*value, output,
+                                                app->midiPreferencesWarnings_[output ? 1 : 0]);
+                }
+        }
+    }
     dsp_commands::nameScriptLibrary(app->scriptDir());
     if (!app->serviceWaitable().valid())
         return Error("engine.service_wake", "cannot create the main-thread service descriptor", {},
@@ -1039,6 +1055,7 @@ Status EngineApp::startEngine(Backend& backend, const BackendConfig& config,
     engine_ = std::make_unique<Engine>(*pool_, media_, effective);
     engine_->setMainThreadWake(mainWake_);
     backend.setMainThreadWake(&mainWake_);
+    engine_->setMidiPreferences(midiInputsPreferences_, midiOutputsPreferences_);
     auto st = engine_->start(backend, config);
     if (!st) {
         engine_.reset();
@@ -1089,8 +1106,9 @@ Status EngineApp::startEngine(std::string_view backend, std::uint32_t block, boo
     BackendConfig config;
     config.sampleRate = device.rate > 0 ? device.rate : view().project->sampleRate;
     config.blockSize = block;
-    config.inputs = 2;         // at least the device's first stereo pair, for recording
-    config.midiInputs = true;  // its MIDI inputs, for MIDI tracks (ADR-0016)
+    config.inputs = 2;          // at least the device's first stereo pair, for recording
+    config.midiOutputs = true;  // device output API (ADR-0069); routing is separate
+    config.midiInputs = true;   // its MIDI inputs, for MIDI tracks (ADR-0016)
     if (backend == "jack") {
 #if defined(__linux__)
         JackOptions o;
@@ -1124,7 +1142,10 @@ Status EngineApp::startEngine(std::string_view backend, std::uint32_t block, boo
     } else if (backend == "dummy") {
         config.outputs = device.outputs > 0 ? device.outputs : 2;
         ownedBackend_ = std::make_unique<DummyBackend>(
-            DummyBackend::Options{.mode = DummyBackend::Mode::Thread, .paced = true});
+            DummyBackend::Options{.mode = DummyBackend::Mode::Thread,
+                                  .paced = true,
+                                  .midiOutputPorts = options_.dummyMidiOutputs,
+                                  .midiPorts = options_.dummyMidiInputs});
     } else {
         return Error("engine.backend", "unknown backend " + std::string(backend), {},
                      "select jack, portaudio or dummy");
@@ -1567,6 +1588,9 @@ void EngineApp::restartFx(model::Id fx) {
 EngineStatus EngineApp::engineStatus() {
     checkFailures();
     EngineStatus st;
+    st.midiInputs = midiPortsState(false);
+    st.midiOutputs = midiPortsState(true);
+    st.midiLeadFrames = engine_ ? engine_->midiLeadFrames() : 0;
     st.preparingAudio = !pendingSourceKey_.empty();
     st.preparationVersion = st.preparingAudio ? head().version : 0;
     st.preparedVersion = loadedHead_ ? loadedHead_->version : 0;
@@ -1600,6 +1624,12 @@ EngineStatus EngineApp::engineStatus() {
     st.xruns = static_cast<std::int64_t>(b.xruns);
     st.midiDropped = static_cast<std::int64_t>(backend_->midiDropped());
     st.midiWarnings = backend_->midiWarnings();
+    st.midiOutDropped = static_cast<std::int64_t>(backend_->midiOutDropped());
+    st.midiOutputWarnings = backend_->midiOutputWarnings();
+    st.midiOutputLatency = backend_->midiOutputLatency();
+    for (const auto& warning : st.midiOutputWarnings)
+        st.warnings.push_back(warning.device + ": " + warning.message + " (" +
+                              std::to_string(warning.osError) + "); " + warning.hint);
     for (const auto& warning : st.midiWarnings)
         st.warnings.push_back(warning.device + ": " + warning.message + " (" +
                               std::to_string(warning.osError) + "); " + warning.hint);
@@ -3044,6 +3074,11 @@ void EngineApp::invoked(std::string_view command, int, const json::Value& args, 
 
 void EngineApp::setupFixture(cmd::Dispatcher& d, std::string_view fixture) {
     if (fixture == "empty") return;
+    if (fixture == "midi_ports") {
+        (void)setMidiPreferences({{"Test port", json::Value::object()}},
+                                 {{"Test port", json::Value::object()}}, false);
+        return;
+    }
     if (fixture == "engine_running") {  // the dummy backend: no device
         auto st = startEngine("dummy", 256);
         assert(st && "fixture engine failed");

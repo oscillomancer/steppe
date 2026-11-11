@@ -274,7 +274,7 @@ rendered).
 | field | notes |
 |---|---|
 | `from` | `{track: id}` or `{hw_input: {channels: [..]}}` or `{midi_input: device}` or `{module: id}` (a rack's Out module: a channel's record input, or Note Out with `midi`: a channel or Notes module, rack.md §5–6) |
-| `to` | `{track: id}` or `{fx: id}` (a plug-in's key, ADR-0018) or `{module: id}` (audio into In, MIDI into Notes); hardware outputs are a master's `hw_output` (§1.4, ADR-0056), and a route to `hw_channels` is refused with `route.hw_output` |
+| `to` | `{midi_device: name}` for MIDI-only hardware output (ADR-0072), or `{track: id}` or `{fx: id}` (a plug-in's key, ADR-0018) or `{module: id}` (audio into In, MIDI into Notes); hardware outputs are a master's `hw_output` (§1.4, ADR-0056), and a route to `hw_channels` is refused with `route.hw_output` |
 | `tap` | `post_fader` (default), `pre_fader` (post-FX), `pre_fx` |
 | `volume` dB, `pan` % or `follow` (default: the strip's pan), `mute`, `phase_invert`, `mono` | into a buss/master: realized by the send's own C9 Channel (ADR-0019 §3) |
 | `channels` | `{from: [..], to: [..]}` channel mapping, 1-based in 1..128 and up to each strip's channels (e.g. [1,2] → [3,4] for a detector on 3/4). Main pairs map the encoded send; pairs touching auxiliary channels are linear links at the route's level, mute and polarity (ADR-0020) |
@@ -293,8 +293,8 @@ rack Out and a MIDI input records MIDI; without the MIDI input it records
 the Out's audio. To record both in one pass, arm a second channel whose
 `record.input` is a route from the same Out (ADR-0065).
 A non-null `midi` makes a route MIDI-only (ADR-0067). Sources are channel
-strips or rack Note Out modules; destinations are channel strips or rack Notes
-modules. Busses, masters, keys and In modules are refused (`route.endpoint`).
+strips or rack Note Out modules; destinations are channel strips, rack Notes
+modules or named hardware MIDI outputs (`to.midi_device`, ADR-0072). Busses, masters, keys and In modules are refused (`route.endpoint`).
 Audio and MIDI routes are independent; the existing audio endpoint rules
 remain unchanged. Audio controls (volume, pan, phase inversion, mono and
 channel maps) are refused (`route.midi`).
@@ -318,6 +318,12 @@ record all delivered MIDI routes alongside optional device MIDI input.
 `route.add`/`route.set` accept ids or explicit track/module endpoints;
 `midi: {}` defaults both channel fields to 0. `route.matrix {mode: "midi"}`
 returns MIDI endpoints; its default `audio` mode excludes MIDI sends.
+Hardware output routes use `route.add/set {to_midi: name, midi: {}}`; they have
+no destination track/fx/module and cannot introduce a graph cycle. Port names
+match case-insensitively at engine preparation. Missing ports warn; routes
+still save/reopen canonically in schema 2.10. Per-port machine settings are
+separate app preferences. `route.list` includes `from_midi` and `to_midi`;
+`route.matrix {mode: "hardware_midi"}` includes physical endpoints.
 Cycles are rejected at edit time (`route.cycle`, naming the cycle).
 ADR-0019 §4 rules, rejected at edit time with `route.strip_type` (and a hint
 naming the allowed alternative): audio into a channel only from `hw_input`;

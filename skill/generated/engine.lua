@@ -311,6 +311,12 @@ q = nil
 ---@field device_latency integer
 ---@field xruns integer
 ---@field midi_dropped integer
+---@field midi_inputs any
+---@field midi_outputs any
+---@field midi_lead_frames integer
+---@field midi_out_dropped integer
+---@field midi_output_warnings table[]
+---@field midi_output_latency integer[]
 ---@field midi_warnings table[]
 ---@field midi_devices_changed boolean
 ---@field midi_devices_message string
@@ -345,6 +351,12 @@ q = nil
 ---@field device_latency integer
 ---@field xruns integer
 ---@field midi_dropped integer
+---@field midi_inputs any
+---@field midi_outputs any
+---@field midi_lead_frames integer
+---@field midi_out_dropped integer
+---@field midi_output_warnings table[]
+---@field midi_output_latency integer[]
 ---@field midi_warnings table[]
 ---@field midi_devices_changed boolean
 ---@field midi_devices_message string
@@ -925,8 +937,19 @@ q = nil
 ---@field text string
 ---@field warnings? table[]
 
+---@class Steppe.midi_inputs_set_args
+---@field port string
+---@field enabled? boolean
+---@field offset_ms? number
+
 ---@class Steppe.midi_notes_args
 ---@field item string
+
+---@class Steppe.midi_outputs_set_args
+---@field port string
+---@field enabled? boolean
+---@field offset_ms? number
+---@field reset_on_stop? boolean
 
 ---@class Steppe.midi_write_args
 ---@field item string Item id, e.g. "it_1".
@@ -1487,6 +1510,7 @@ q = nil
 ---@class Steppe.route_add_args
 ---@field from string|table
 ---@field to? string|table
+---@field to_midi? string Exact hardware MIDI output name; requires midi: {} and replaces to/fx.
 ---@field midi? table MIDI send routing; {} means every channel unchanged. Channel values 0..16: from 0 = all, to 0 = original.
 ---@field fx? string Feed this plug-in's sidechain (key) input instead of a track's input; `to` may be left out
 ---@field tap? "post_fader"|"pre_fader"|"pre_fx"
@@ -1544,6 +1568,7 @@ q = nil
 ---@field route string
 ---@field from? string|table
 ---@field to? string|table
+---@field to_midi? string Exact hardware MIDI output name; requires midi: {} and replaces to/fx.
 ---@field midi? table MIDI send routing; {} means every channel unchanged. Channel values 0..16: from 0 = all, to 0 = original.
 ---@field fx? string Feed this plug-in's sidechain (key) input instead of a track's input; `to` may be left out
 ---@field tap? "post_fader"|"pre_fader"|"pre_fx"
@@ -2215,6 +2240,14 @@ q = nil
 ---@field get fun(args: Steppe.midi_get_args): Steppe.midi_get_result Read an item's MIDI as notation.
 ---@field notes fun(args: Steppe.midi_notes_args): table List a MIDI item's notes and CC points (beats from the item's start).
 ---@field write fun(args: Steppe.midi_write_args): Steppe.midi_write_result Replace an item's MIDI with notation (the item keeps its position and length).
+
+---@class Steppe.midi.inputs
+---@field get fun(): table Hardware MIDI inputs, timing, settings, loss and startup warnings.
+---@field set fun(args: Steppe.midi_inputs_set_args): table Change one machine MIDI port's enabled state and timing offset.
+
+---@class Steppe.midi.outputs
+---@field get fun(): table Hardware MIDI outputs, timing, settings, loss and startup warnings.
+---@field set fun(args: Steppe.midi_outputs_set_args): table Change one machine MIDI port's enabled state and timing offset.
 
 ---@class Steppe.module
 ---@field add fun(args: Steppe.module_add_args): table Add a module to a rack: a type with knob values.

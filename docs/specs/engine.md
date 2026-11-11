@@ -1438,7 +1438,7 @@ harness. See the tooling README for schemas, limits and invocation details.
   build); it moves to the background decode with the disk cache.
   `stretch_markers` use prepared item-local warped audio (ADR-0053; see below).
 - **Live pool** (`live_workers.{h,cpp}`): callback fork-join as specified in §2.2.
-- **Not yet:** MIDI output ports, crossfades for
+- **Not yet:** crossfades for
   structural changes (inserting or removing plugins). B1/B2 measurements:
   `docs/benchmarks/b1.md`, `b2.md` (tooling: `tools/bench/README.md`).
 
@@ -1919,6 +1919,75 @@ queue destruction. Linux keeps JACK and builds only device-free shared logic.
 Real-device tests require SUPPLE_MIDI_DEVICE_TEST exactly 1; they use fake
 audio and never open an audio device. Native SDK tests do not establish physical
 input timing, disconnect reliability or performance on every driver.
+
+### Native MIDI outputs (ADR-0069)
+
+`BackendConfig.midiOutputs` opens up to 16 destinations; `engine.start` enables
+it. `Backend::midiOutputPorts()` names them, fixed while running;
+`engine.inputs.midi_outputs` lists the same names (empty while stopped).
+No routing or clock generator is added here. `writeMidi(MidiOutputEvent)` is
+callback-only: 0-based port, frame within that engine chunk, size 1..10 and ten
+inline bytes. Messages must be complete MIDI 1.0, including system realtime,
+SPP, quarter-frame MTC and full-frame MTC SysEx. Running status and SysEx longer
+than ten bytes are rejected. The default Backend has no destinations.
+
+One fixed 1024-event budget spans the entire device period, even when audio
+splits it into chunks. Events are stably sorted by period frame (ties retain
+write order). `writeMidi` returns false on immediate rejection; accepted output
+can still be lost downstream. `midiOutDropped()` / `engine.status.midi_out_dropped`
+counts validation/budget, queue and device-write rejection, backwards per-port
+timestamps and queued events discarded at stop. Counters reset on start.
+OS-accepted output cancelled at stop is not counted. DummyBackend can declare
+ports/latencies and captures bounded output with absolute frames since start.
+Read its capture only after manual run/stop, as for audio capture.
+
+`midiOutputLatency()` / `engine.start/status.midi_output_latency` is a signed
+frame array parallel to the port names: **audio output latency minus MIDI port
+latency**. Positive L means an event at cycle frame f leaves MIDI L frames before
+audio at f reaches the speakers. Future routing must delay MIDI by L plus the
+user's signed offset; negative values require advance/lookahead. The backend
+never applies that alignment itself. MIDI latency refers to the first byte;
+external instrument processing latency still needs user calibration. JACK
+subtracts each MIDI port's maximum playback latency from the first audio port's
+maximum; optional missing latency reporting means zero. CoreMIDI/WinMM currently
+assume zero MIDI wire latency, so the delta is the audio output latency estimate.
+
+JACK registers midi_out_N connected to physical MIDI playback ports, clears
+all buffers every period and writes sorted events at their frames. Native
+audio publishes to one preallocated 2048-event SPSC queue per destination. Its
+frame zero in the sink's clock is callback entry time plus PortAudio's
+`outputBufferDacTime - currentTime - audioOutputLatency`; f adds f/rate, with
+chunk offsets applied once. With no callback time info, frame zero is entry
+time. Source clocks are Mach host time on macOS and QPC on Windows.
+
+CoreMIDI shares the input client and sends protocol-1 UMP event lists with host
+timestamps from a sender thread. Apple promises future timestamp scheduling,
+but does not document a realtime-safe send call. System messages use system
+UMPs and bounded SysEx uses SysEx7 UMPs. WinMM's sender uses MMCSS Pro Audio
+(or highest thread priority), a high-resolution waitable timer and
+midiOutShortMsg/midiOutLongMsg, all off audio. Eight preprepared long buffers
+per destination bound in-flight SysEx. Expected WinMM jitter is roughly 1 ms;
+no hardware timing measurement is claimed. There is no timeBeginPeriod or
+system-wide configuration change. Both senders poll within 1 ms; CoreMIDI
+submits future events to its scheduler immediately, WinMM sends when due. Late
+events are sent late; future routing must provide scheduling lead time.
+
+Refusing outputs are skipped, audio remains running, and
+`engine.start/status.midi_output_warnings` contains device, numeric os_error,
+message and hint (also copied into warnings). Names contain only successfully
+opened/connected destinations. Topology changes latch midi_devices_changed
+without automatic restart. JACK's optional registration callback conservatively
+includes audio port topology. Native output monitoring uses the existing device
+monitor. Stop first emits held-note releases from the final audio callback, joins audio,
+then submits queued releases with sink timestamps of now and joins the sender. Other
+future queued events are discarded. CoreMIDI never flushes endpoints; submitted
+events drain and only the owned port/client is disposed (ADR-0072). WinMM
+resets, unprepares buffers and closes owned devices; reset can send all-notes-off.
+
+Device-free fake clocks exercise the production queue path, including scheduling,
+loss and shutdown. `SUPPLE_MIDI_DEVICE_TEST=1` alone enables native device opens
+with fake audio and no explicit MIDI sends. macOS/Windows native CI and physical
+timing/disconnect validation remain pending. No additional SDK/library is linked.
 
 ### Master playrate (ADR-0045)
 
@@ -2662,6 +2731,112 @@ would put a voice's release before its own onset (late events or playrate
 compression), the frame retains input chronology. Prepared sorting scratch
 keeps both channel and Notes event ordering allocation-free. All-notes-off
 releases stay at their controller, before a same-frame reattack.
+
+### Hardware MIDI routing (ADR-0072)
+
+Project schema 2.10 additionally accepts MIDI-only routes from channels/Note Out
+to `to.midi_device`, addressed by `route.add/set {to_midi: name, midi: {}}`.
+Taps, mute and MIDI channel filtering/remapping follow internal MIDI sends.
+Hardware source nodes and their dependencies run live in both executors.
+The callback uses prepared descriptors and fixed queues; offline renders
+never write devices. Missing output names warn; duplicate ambiguous names fail.
+
+Route delay is `plan.outputLatency - source.timelineShift - tappedLatency +
+backend.midiOutputLatency[port] + offset_ms * sampleRate / 1000` (rounded to
+frames). Negative minimum delay adds prepared audio lead to all MIDI delays and a
+final audio delay; lead is limited to one second and reported by `midi_lead_frames`.
+Engine output latency, heard timing and recording account for it. History is
+allocated on the owner thread only when publishing a plan with non-zero lead, and
+runs only during non-zero lead or a tap crossfade. It continues across stop, locate,
+loop wrap and lead-unchanged edits while lead is needed. The first negative-offset
+route after an inactive history primes silence once. On return to zero lead,
+owner-thread reclamation waits for the final crossfade acknowledgment and retirement
+of every plan that could use it.
+
+Boundaries drop only queued timeline-origin note-ons, retaining delayed live onsets,
+releases, other messages and mute markers on reset-off ports; reset-on routes
+invalidate their queues through the route generation. A lead change crossfades fixed
+old/new integer-delay taps over 5 ms without clearing history or changing their
+playback rate. Rapid edits finish the active fade, then fade to the latest target.
+The initial plan primes its full lead normally.
+
+No hardware delay may exceed ten seconds. Limits: 256 routes, 65,536 pending
+messages, 16 ports, and the existing 1,024 messages per device period. Equal-frame
+messages preserve route/event insertion order. Overflow is counted. Timeline origin
+is captured with each stream event before a slot can be freed or reused, carried
+through the FX bus and hardware queue, and retained for mute-retriggered notes.
+Live/device and generated plug-in notes keep device time across boundaries on
+reset-off ports. Route and source mute automation is evaluated on the tapped
+stream's compensated clock, including its source shift and master playrate
+trajectory. Channel post-FX and post-fader routes read the chain's final MIDI bus
+(ADR-0068), including plug-in note output; pre-FX routes read the original stream.
+The bus keeps the chain's input clock, so its tap latency cancels against delivery
+compensation. New or re-timed post-FX routes restart the bus's held notes, including
+plug-in voices, rather than the pre-FX pool. Rack Note Out events already include
+their latency.
+
+Port disable gates the next callback and releases notes before the render-ahead
+horizon; enabling and timing changes adopt with their prepared plan.
+Held notes release on removal, mute, disabling/re-timing, stop/locate when
+reset is on, and engine shutdown. Releases include sustain-off; boundary and
+shutdown resets add all-notes-off on used channels. These controllers share
+hardware channel state. `reset_on_stop: false` retains timeline notes across
+transport stops/locates; engine shutdown always releases. While stopped, this
+preference suppresses only timeline-origin releases whose pre-block slot was
+high and Timeline. Live onsets and releases pass even when a slot is newly
+allocated or reused from a timeline note.
+CoreMIDI shutdown
+stamps closing releases at `max(now, lastDue[port])`, after accepted events,
+then retains its port/client until the latest submitted timestamp, capped at
+250 ms from sender stop (`kMidiOutputCloseWaitSeconds` and
+`midiOutputCloseDeadline`, shared with a future final clock Stop). The wait is
+on the control thread and covers the remaining scheduled plan/device delay.
+Longer horizons can outlast that cap and require native validation. No
+endpoint-wide flush is used. WinMM still drops future onsets and sends releases
+immediately; JACK still writes its final period.
+
+`midi.outputs.get` and `midi.inputs.get` return `{ports: [...]}` with name,
+index (-1 absent), enabled, offset_ms, latency_ms, dropped and structured warnings;
+outputs also have reset_on_stop. `.set {port, enabled?, offset_ms?, reset_on_stop?}`
+(input omits reset) applies a machine preference. Port names resolve by a unique
+case-insensitive match among present or recorded names, stored with the exact
+spelling; unknown or ambiguous calls refuse with the available exact names. Offsets are finite -1000..1000
+ms, positive later. Input advances clamp to this callback's start; positive
+input offsets carry across callbacks. Existing record MIDI routes perform input
+routing. Disabled inputs do not reach monitoring, recording or MIDI learn.
+Status includes `midi_inputs`, `midi_outputs`, and `midi_lead_frames`. Each output reports `lead_ms`, the shared added latency
+from the prepared note routes, also applied to live monitoring.
+Per-port dropped counts route scheduling/rejection and attributable output
+sender/device loss; native input losses without a retained port remain in the
+aggregate `midi_dropped`. Port latency_ms is the signed backend latency before
+user offset/lead; inputs currently report zero device latency.
+
+Preferences add `midi_inputs` and `midi_outputs` maps to
+`supple.preferences/1.6`, keyed by exact enumerated port name. Records retain
+unknown members for clock output compatibility. Defaults are enabled, zero
+offset and output reset_on_stop true. GUI and headless applications use the
+same preferences file; embedded hosts may provide their own persistence.
+
+The engine and GUI share `engine::kPreferencesSchema` for the current machine
+preferences schema, including a new engine-owned preferences file.
+
+MIDI preference records have one writer, EngineApp. Generic GUI preference
+saves preserve the latest records on disk and ask the engine to persist its
+current records; opening a dialog never replaces engine state from a snapshot.
+Startup uses `loadMidiPortPreferences` to skip each malformed MIDI record while
+retaining valid peers; a malformed input/output section is skipped as a whole.
+`midi.outputs.get` / `midi.inputs.get` retain skipped names with structured
+`midi.preferences` warnings (code, path, message, hint). A successful correction
+clears that record's warning. Skipped raw JSON records (and malformed whole
+sections) are retained and written back unchanged on unrelated edits, including
+writes to a new preferences file. An explicit correction merges into the raw
+object, preserving its other fields, then validates strictly before replacing it.
+Command edits still use strict validation.
+
+Hardware routes preserve scalar-rate and mix-only edit paths. With hardware
+routes, route/source/VCA mute values join the existing atomic mix publication;
+the callback updates its hardware gate consumers without a plan compile.
+Fader edits retain the running plan and prepared audio history.
 
 ### The FX chain's MIDI bus (ADR-0068)
 

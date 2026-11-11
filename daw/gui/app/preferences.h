@@ -29,6 +29,7 @@ struct Preferences {
     bool copyImports = true;        // imported audio is copied into the project's media folder
     AudioDeviceSettings audio;      // the device the engine starts with (1.5)
     bool renderOpenFolder = false;  // open the render folder when a render finishes (1.6)
+    engine::MidiPortPreferences midiInputs, midiOutputs;
     static std::filesystem::path defaultFile(std::string_view slug);
     static Result<Preferences> load(const std::filesystem::path& file);  // absent: defaults
     Status save(const std::filesystem::path& file) const;
@@ -61,6 +62,7 @@ class PreferencesDialog {
     std::function<void(const std::string&)> onError;
 
   private:
+    Status save(Preferences& prefs);
     ui::Root& root_;
     engine::EngineApp& app_;
     MouseDialog& mouse_;

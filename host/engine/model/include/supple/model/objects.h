@@ -368,7 +368,7 @@ struct RouteEnd {
     std::optional<Id> track;
     std::optional<Id> fx;  // to only: a plug-in's sidechain input (key), ADR-0018
     std::optional<std::vector<int>> hwChannels;  // hw_input (from) / hw_output (to), 1-based
-    std::optional<std::string> midiDevice;       // midi_input (from only)
+    std::optional<std::string> midiDevice;  // MIDI input (from) or hardware output (to), by name
     // A rack's module (ADR-0062): from an Out module (a channel's record
     // input), to an In module (a send into the rack).
     std::optional<Id> module;

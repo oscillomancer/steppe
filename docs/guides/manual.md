@@ -340,7 +340,7 @@ masters are skipped for these extra controls.
 
 ## Routing
 
-The routing window's **Audio | MIDI** buttons select the kind of send.
+The routing window's **Audio | MIDI | Hardware MIDI** buttons select the kind of send.
 MIDI mode shows channels and rack Note Outs down the left, channels and
 Notes modules across the top. Double-click an empty cell to connect them
 (double-clicking a send only selects it), or select cells and use Add/Remove
@@ -360,14 +360,37 @@ sounds as it did. A Note
 Out's **MIDI channel** knob chooses channel 1–16 for outgoing notes; choose
 its destination in the MIDI routing matrix.
 
+Hardware MIDI routing is the routing window's third tab, **Hardware MIDI**.
+Inputs and channels/Note Outs are rows; channels and device outputs are columns.
+Double-click to connect, select and Remove to disconnect. Connecting an input
+sets the channel's existing MIDI input; a channel has one such input assignment.
+Route an input through a channel to reach a device output. Taps, mute and MIDI
+channel controls work as in the MIDI tab. Device connections save by name and
+warn if missing on reopen.
+
+Right-click a hardware input row or output column header for **Enabled** and
+**Timing offset…**. Positive milliseconds delay; negative milliseconds advance.
+The range is -1000 to 1000 ms. A live input can advance only within its current
+audio callback. Outputs also offer **Reset notes on stop** (on by default),
+which releases notes and sustain on stop or locate. Engine shutdown always
+releases notes. These settings are saved for this machine, outside projects.
+Output alignment can add up to one second of audio latency to make an advance
+possible; this also delays live input monitoring on every channel. The timing
+offset dialog previews the shared added latency; per-port `lead_ms` and engine
+status report it. While lead is needed, transport changes keep its history
+running, and changing the lead uses a 5 ms crossfade between delay taps.
+Zero-lead projects keep no running history; adding the first negative-offset
+route primes its delay with silence once. Separate device MIDI channels avoid shared
+sustain/controller resets between routes.
+
 **Add plugin…** puts a note effect (an arpeggiator, a chord or MIDI effect)
 at the front of a channel's FX chain and an instrument just after the note
 effects there, so the instrument plays what they send.
 
 A plug-in that sends notes changes what comes after it in its channel's FX
 chain. The instrument after it plays its notes, and so do the channel's
-pre-fader and post-fader MIDI sends; a pre-FX send still carries the
-channel's own MIDI. Its **MIDI out** button in the FX window chooses
+post-FX and post-fader MIDI sends, including sends to hardware outputs;
+a pre-FX send still carries the channel's own MIDI. Its **MIDI out** button in the FX window chooses
 **Replace** (the default: only its notes go on) or **Merge** (its notes and
 the ones it heard). Bypass it to let the original notes through. Plug-ins
 without audio, only notes, sit in the chain like any other. A frozen
@@ -933,3 +956,15 @@ Quantization that would cross hits or land on an item edge refuses with a hint t
 choose a finer grid or lower strength. Slicing can leave faded gaps; it does not
 invent sustained tails. The previous audio continues while “Preparing audio…” is
 shown. Source preparation finishes before the new timing becomes audible.
+
+### Hardware MIDI output device status
+
+`engine.start` opens available MIDI destinations alongside inputs. Inspect
+`engine.inputs.midi_outputs` for names, and `engine.status` for
+`midi_output_warnings`, `midi_out_dropped` and `midi_output_latency` (signed
+frames, audio output latency minus MIDI output latency). A busy device is
+skipped while audio keeps running; close the application using it and restart
+the engine to retry. Device topology changes are advisory and require an
+explicit restart to adopt the new set. `midi.inputs.get`/`midi.outputs.get` show
+per-port settings and warnings. Opening outputs alone sends no music; add
+hardware routes in the routing window. Clock/MTC output controls are pending.

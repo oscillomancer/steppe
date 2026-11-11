@@ -6,6 +6,10 @@ Contract: engine.md, native MIDI inputs.
 **2026-10-15 amendment:** The startup and topology policies below are superseded by the
 follow-up decisions at the end of this ADR.
 
+**2026-11-10 draft extension:** [ADR-0069](0069-native-midi-output.md)
+adds the hardware MIDI output device contract; routing and clock generation
+remain separate work. Native output validation is pending.
+
 ## Decision
 
 PortAudio opens up to 16 native MIDI sources when BackendConfig.midiInputs is

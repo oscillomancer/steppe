@@ -1067,6 +1067,10 @@ TEST_CASE("preferences: the dialog applies each setting at once and saves it") {
     gui::PreferencesDialog prefs(*f.root, *f.app, mouse, gui::Preferences{}, file);
     CHECK(f.app->defaultMonitor() == model::Monitor::On);
     CHECK(f.app->copyImportedMedia());
+    auto port = json::Value::object();
+    port["clock"] = true;
+    port["offset_ms"] = -2.5;
+    REQUIRE(f.app->setMidiPreferences({}, {{"Synth", port}}, false));
     prefs.open();
     f.root->frame(false);
     REQUIRE(prefs.isOpen());
@@ -1092,6 +1096,8 @@ TEST_CASE("preferences: the dialog applies each setting at once and saves it") {
     auto saved = gui::Preferences::load(file);
     REQUIRE(saved);
     CHECK(saved->defaultMonitor == model::Monitor::Off);
+    CHECK(saved->midiOutputs.at("Synth").find("clock")->asBool());
+    CHECK(engine::midiPortSettings(saved->midiOutputs, "Synth").offsetMs == -2.5);
     CHECK(saved->audioThreads == 4);
     CHECK_FALSE(saved->copyImports);
     CHECK(saved->renderDirectory == f.dir / "my renders");
@@ -1954,4 +1960,44 @@ TEST_CASE("pan controls: a mixer's second bar records a writing envelope") {
     CHECK(env->points.back().value == f.track(track).width);
     const model::EnvTarget target{*model::Id::parse(track), "width"};
     CHECK(f.app->engine()->writeHolds() == std::vector<model::EnvTarget>{target});
+}
+
+TEST_CASE("preferences: stale GUI snapshots preserve engine-owned MIDI records") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto file = f.dir / "preferences.json";
+    gui::Preferences stale;
+    stale.midiOutputs["Synth"] = json::parse(R"({"clock":true,"offset_ms":-5})").value();
+    REQUIRE(stale.save(file));
+    const auto current = json::parse(R"({"clock":false,"offset_ms":12})").value();
+    REQUIRE(f.app->setMidiPreferences({}, {{"Synth", current}}, false));
+    REQUIRE(f.app->writeMidiPreferences(file));
+    REQUIRE(stale.save(file));
+    auto loaded = gui::Preferences::load(file);
+    REQUIRE(loaded);
+    CHECK_FALSE(loaded->midiOutputs.at("Synth").find("clock")->asBool());
+    CHECK(engine::midiPortSettings(loaded->midiOutputs, "Synth").offsetMs == 12);
+    views::MouseMap map;
+    gui::MouseDialog mouse(*f.root, map, {});
+    gui::PreferencesDialog prefs(*f.root, *f.app, mouse, stale, file);
+    CHECK(engine::midiPortSettings(f.app->midiOutputsPreferences(), "Synth").offsetMs == 12);
+    REQUIRE(prefs.setAudioThreads(2));
+    loaded = gui::Preferences::load(file);
+    REQUIRE(loaded);
+    CHECK_FALSE(loaded->midiOutputs.at("Synth").find("clock")->asBool());
+}
+
+TEST_CASE("preferences: malformed MIDI records do not block GUI startup") {
+    Fixture f;
+    REQUIRE(f.ok);
+    const auto file = f.dir / "bad-midi-preferences.json";
+    REQUIRE(writeFileAtomic(
+        file,
+        R"({"schema":"supple.preferences/1.6","midi_outputs":{"Bad":{"offset_ms":2000},"Good":{"enabled":false}},"midi_inputs":{"Bad":{"enabled":"yes"},"Good":{"offset_ms":5}}})"));
+    const auto loaded = gui::Preferences::load(file);
+    REQUIRE(loaded);
+    CHECK_FALSE(loaded->midiOutputs.contains("Bad"));
+    CHECK_FALSE(loaded->midiInputs.contains("Bad"));
+    CHECK_FALSE(engine::midiPortSettings(loaded->midiOutputs, "Good").enabled);
+    CHECK(engine::midiPortSettings(loaded->midiInputs, "Good").offsetMs == 5);
 }

@@ -7,6 +7,7 @@
 #include <limits>
 #include <mutex>
 #include "midi_input.h"
+#include "midi_output.h"
 #include "portaudio_api.h"
 #include "supple/base/rt.h"
 #include "supple/engine/portaudio.h"
@@ -45,6 +46,11 @@ struct PortAudioBackend::Impl {
     std::unique_ptr<detail::MidiInputBuffer> midiBuffer;
     std::span<const MidiInputEvent> blockMidi;
     bool midiStarted = false;
+    std::unique_ptr<detail::MidiSink> sink;
+    std::unique_ptr<detail::MidiOutputSender> sender;
+    detail::MidiOutputCycle midiOut;
+    bool sinkStarted = false;
+    std::vector<MidiInputWarning> outputWarnings;
     Callback callback;
     PaStream* stream = nullptr;
     bool initialized = false;
@@ -68,14 +74,19 @@ struct PortAudioBackend::Impl {
         if (wake) wake->notify();
     }
     static int process(const void* input, void* output, unsigned long frames,
-                       const PaStreamCallbackTimeInfo*, PaStreamCallbackFlags flags,
+                       const PaStreamCallbackTimeInfo* time, PaStreamCallbackFlags flags,
                        void* context) SUPPLE_RT {
         auto& self = *static_cast<Impl*>(context);
+        // Snapshot before input collection or engine work can consume time.
+        const double outputNow = self.sender ? self.sink->now() : 0;
         auto* out = static_cast<float* const*>(output);
         auto* in = static_cast<const float* const*>(input);
         if (self.stopping.load(std::memory_order_acquire)) {
             if (!self.final.load(std::memory_order_acquire)) {
+                self.midiOut.begin(1, self.sinkStarted ? self.sink->names.size() : 0);
                 self.callback(nullptr, nullptr, 0);
+                for (const auto& event : self.midiOut.sorted())
+                    if (self.sender) (void)self.sender->push({outputNow, event, true});
                 self.final.store(1, std::memory_order_release);
                 rt::wake(self.final);
             }
@@ -93,6 +104,17 @@ struct PortAudioBackend::Impl {
             changed = true;
         }
         if (self.midiStarted) self.midiBuffer->collect(self.midi->now(), self.config.sampleRate, n);
+        self.midiOut.begin(n, self.sinkStarted ? self.sink->names.size() : 0);
+        double midiBase = 0;
+        if (self.sender) {
+            midiBase = outputNow;
+            // PortAudio times share a clock with each other, not necessarily
+            // with QPC/mach time. Anchor their difference at callback entry.
+            if (time && std::isfinite(time->outputBufferDacTime) &&
+                std::isfinite(time->currentTime))
+                midiBase += time->outputBufferDacTime - time->currentTime -
+                            self.outputLatency / self.config.sampleRate;
+        }
         std::array<const float*, 64> inputs{};
         std::array<float*, 64> outputs{};
         for (std::uint32_t offset = 0; offset < n;) {
@@ -102,9 +124,13 @@ struct PortAudioBackend::Impl {
             for (std::uint32_t c = 0; c < self.config.outputs; ++c) outputs[c] = out[c] + offset;
             self.blockMidi = self.midiStarted ? self.midiBuffer->chunk(offset, count)
                                               : std::span<const MidiInputEvent>{};
+            self.midiOut.chunk(offset, count);
             self.callback(in ? inputs.data() : nullptr, outputs.data(), count);
             offset += count;
         }
+        for (const auto& event : self.midiOut.sorted())
+            if (self.sender)
+                (void)self.sender->push({midiBase + event.frame / self.config.sampleRate, event});
         self.blockMidi = {};
         if (changed) self.notify();
         return paContinue;
@@ -121,6 +147,7 @@ PortAudioBackend::PortAudioBackend(PortAudioOptions options) : impl_(std::make_u
     impl_->options = std::move(options);
     impl_->api = detail::nativePortAudioApi();
     impl_->midi = detail::nativeMidiSource();
+    impl_->sink = detail::nativeMidiSink(impl_->midi.get());
 }
 PortAudioBackend::PortAudioBackend(PortAudioOptions options, const detail::PortAudioApi& api)
     : impl_(std::make_unique<Impl>()) {
@@ -131,6 +158,12 @@ PortAudioBackend::PortAudioBackend(PortAudioOptions options, const detail::PortA
                                    std::unique_ptr<detail::MidiSource> midi)
     : PortAudioBackend(std::move(options), api) {
     impl_->midi = std::move(midi);
+}
+PortAudioBackend::PortAudioBackend(PortAudioOptions options, const detail::PortAudioApi& api,
+                                   std::unique_ptr<detail::MidiSource> midi,
+                                   std::unique_ptr<detail::MidiSink> sink)
+    : PortAudioBackend(std::move(options), api, std::move(midi)) {
+    impl_->sink = std::move(sink);
 }
 PortAudioBackend::~PortAudioBackend() { stop(); }
 void PortAudioBackend::setMainThreadWake(MainThreadWake* wake) { impl_->wake = wake; }
@@ -149,6 +182,9 @@ Status PortAudioBackend::start(const BackendConfig& config, Callback callback) {
         return Error("backend.config", "invalid rate, block, channels or stop timeout", "/backend",
                      "use 1..768000 Hz, a positive block, 0..64 inputs and 2..64 outputs");
     self.midiBuffer.reset();
+    self.midiOut.reset();
+    self.sender.reset();
+    self.outputWarnings.clear();
     const auto& api = *self.api;
     PaError error = api.initialize();
     if (error != paNoError) return failure(api, error, "/backend");
@@ -158,6 +194,10 @@ Status PortAudioBackend::start(const BackendConfig& config, Callback callback) {
             api.close(self.stream);
             self.stream = nullptr;
         }
+        if (self.sender) self.sender->stop();
+        self.sender.reset();
+        if (self.sink) self.sink->stop();
+        self.sinkStarted = false;
         if (self.midi) self.midi->stop();
         self.midiStarted = false;
         self.midiBuffer.reset();
@@ -278,6 +318,25 @@ Status PortAudioBackend::start(const BackendConfig& config, Callback callback) {
             self.midiStarted = true;
         }
     }
+    if (config.midiOutputs && self.sink) {
+        self.sink->names.clear();
+        self.sink->warnings.clear();
+        self.sink->latencySeconds.clear();
+        auto started = self.sink->start();
+        if (started && !self.sink->names.empty()) {
+            self.sender = std::make_unique<detail::MidiOutputSender>(*self.sink);
+            started = self.sender->start();
+        }
+        self.outputWarnings = self.sink->warnings;
+        if (!started) {
+            self.sender.reset();
+            self.sink->stop();
+            self.sink->names.clear();
+            self.outputWarnings.push_back(
+                {"MIDI outputs", 0, started.error().message, started.error().hint});
+        } else
+            self.sinkStarted = true;
+    }
     error = api.finished(self.stream, Impl::finished);
     if (error != paNoError) return fail(failure(api, error, "/backend"));
     error = api.start(self.stream);
@@ -297,7 +356,9 @@ Status PortAudioBackend::start(const BackendConfig& config, Callback callback) {
                             deviceRateChanged = rate != startedDeviceRate;
                         }
                     }
-                    const bool midiChanged = state.midiStarted && state.midi->changed();
+                    const bool inputsChanged = state.midiStarted && state.midi->changed();
+                    const bool outputsChanged = state.sinkStarted && state.sink->changed();
+                    const bool midiChanged = inputsChanged || outputsChanged;
                     if (midiChanged && !state.midiChanged.exchange(true, std::memory_order_acq_rel))
                         state.notify();
                     if (observed.restartNeeded || deviceRateChanged) {
@@ -329,7 +390,11 @@ void PortAudioBackend::stop() {
     if (self.monitor.joinable()) self.monitor.join();
     self.stopping.store(true, std::memory_order_release);
     if (!self.api->threaded) {
+        self.midiOut.begin(1, self.sinkStarted ? self.sink->names.size() : 0);
         self.callback(nullptr, nullptr, 0);
+        const auto now = self.sinkStarted ? self.sink->now() : 0;
+        for (const auto& event : self.midiOut.sorted())
+            if (self.sender) (void)self.sender->push({now, event, true});
         self.final.store(1, std::memory_order_release);
     } else if (self.api->active(self.stream) == 1 && !self.final.load(std::memory_order_acquire)) {
         const auto deadline = std::chrono::steady_clock::now() +
@@ -342,11 +407,24 @@ void PortAudioBackend::stop() {
     self.api->stop(self.stream);
     self.api->close(self.stream);
     self.stream = nullptr;
+    if (!self.final.load(std::memory_order_acquire)) {
+        // Audio may have disappeared while MIDI remains connected. Its joined
+        // fallback callback must still release notes before closing MIDI.
+        self.midiOut.begin(1, self.sinkStarted ? self.sink->names.size() : 0);
+        self.callback(nullptr, nullptr, 0);
+        const auto now = self.sinkStarted ? self.sink->now() : 0;
+        for (const auto& event : self.midiOut.sorted())
+            if (self.sender) (void)self.sender->push({now, event, true});
+        self.final.store(1, std::memory_order_release);
+    }
+    if (self.sender) self.sender->stop();
+    // Retain counters until the next start, after pending queues are discarded.
+    if (self.sink) self.sink->stop();
+    self.sinkStarted = false;
     if (self.midi) self.midi->stop();
     self.midiStarted = false;
     self.blockMidi = {};
     self.midiBuffer.reset();
-    if (!self.final.load(std::memory_order_acquire)) self.callback(nullptr, nullptr, 0);
     self.callback = {};
     if (self.initialized) self.api->terminate();
     self.initialized = false;
@@ -378,6 +456,33 @@ std::vector<MidiInputWarning> PortAudioBackend::midiWarnings() const {
 }
 std::uint64_t PortAudioBackend::midiDropped() const {
     return impl_->midiBuffer ? impl_->midiBuffer->dropped() : 0;
+}
+bool PortAudioBackend::writeMidi(const MidiOutputEvent& event) {
+    return impl_->midiOut.write(event);
+}
+std::vector<std::string> PortAudioBackend::midiOutputPorts() const {
+    return impl_->sinkStarted ? impl_->sink->names : std::vector<std::string>{};
+}
+std::vector<std::int64_t> PortAudioBackend::midiOutputLatency() const {
+    std::vector<std::int64_t> result;
+    if (impl_->sinkStarted)
+        for (std::size_t p = 0; p < impl_->sink->names.size(); ++p) {
+            const double seconds =
+                p < impl_->sink->latencySeconds.size() ? impl_->sink->latencySeconds[p] : 0;
+            result.push_back(
+                static_cast<std::int64_t>(impl_->outputLatency) -
+                static_cast<std::int64_t>(std::llround(seconds * impl_->config.sampleRate)));
+        }
+    return result;
+}
+std::vector<MidiInputWarning> PortAudioBackend::midiOutputWarnings() const {
+    return impl_->outputWarnings;
+}
+std::uint64_t PortAudioBackend::midiOutDropped() const {
+    return impl_->midiOut.dropped() + (impl_->sender ? impl_->sender->dropped() : 0);
+}
+std::uint64_t PortAudioBackend::midiOutAsyncDropped(std::size_t port) const {
+    return impl_->sender ? impl_->sender->dropped(port) : 0;
 }
 bool PortAudioBackend::nativeThreadPolicy() const { return impl_->api && impl_->api->native; }
 Status PortAudioBackend::prepareCurrentThread(bool live) {

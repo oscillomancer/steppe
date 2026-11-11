@@ -41,7 +41,7 @@ bool entriesMatch(const model::IdMap<T>& a, const model::IdMap<T>& b, F&& same) 
 // change; `stale` gains the held targets whose curves the plan no longer
 // matches. Keep the collections in step with model::Session.
 bool mixOnly(const model::Session& a, const model::Session& b,
-             const std::vector<model::EnvTarget>& holds, bool& changed,
+             const std::vector<model::EnvTarget>& holds, bool hardwareMidi, bool& changed,
              std::vector<model::EnvTarget>& stale) {
     if (!(a.project == b.project || *a.project == *b.project)) return false;
     if (!a.tempo.sameStorage(b.tempo) || !a.meters.sameStorage(b.meters) ||
@@ -67,6 +67,10 @@ bool mixOnly(const model::Session& a, const model::Session& b,
         entriesMatch(a.tracks, b.tracks, [&](model::Track x, const model::Track& y) {
             changed |= x.volumeDb != y.volumeDb || x.pan != y.pan || x.width != y.width ||
                        x.panLeft != y.panLeft || x.panRight != y.panRight;
+            if (hardwareMidi) {
+                changed |= x.mute != y.mute;
+                x.mute = y.mute;
+            }
             x.volumeDb = y.volumeDb;
             x.pan = y.pan;
             x.width = y.width;  // pan positions (ADR-0066); mode and law compile
@@ -80,12 +84,21 @@ bool mixOnly(const model::Session& a, const model::Session& b,
             if (x.vca && y.vca) {
                 changed |= x.vca->volumeDb != y.vca->volumeDb;
                 x.vca->volumeDb = y.vca->volumeDb;
+                if (hardwareMidi) {
+                    changed |= x.vca->mute != y.vca->mute;
+                    x.vca->mute = y.vca->mute;
+                }
             }
             return x == y;
         });
     if (!groups) return false;
     const bool routes =
         entriesMatch(a.routes, b.routes, [&](model::Route x, const model::Route& y) {
+            if (hardwareMidi && x.midi && !x.from.midiDevice) {
+                changed |= x.mute != y.mute;
+                x.mute = y.mute;
+                return x == y;
+            }
             // Only sends between strips are plan edges; a level of exactly 0 dB
             // (with nothing else set) is summed without an encoder (plan.cpp).
             if (!x.from.track || !(x.to.track || x.to.fx)) return false;
@@ -128,7 +141,9 @@ bool Engine::loadMixValues(const model::Session& session, const std::filesystem:
     if (releasesStaleCurve()) return false;
     bool changed = false;
     std::vector<model::EnvTarget> stale = staleCurves_;
-    if (!mixOnly(*latest_, session, writeHolds_, changed, stale) || !changed) return false;
+    if (!mixOnly(*latest_, session, writeHolds_, !p->hardwareMidi.empty(), changed, stale) ||
+        !changed)
+        return false;
     detail::publishMix(*p, session, writeHolds_);
     plugins_.racks().applyParams(session);
     holdsPending_ = false;

@@ -6,6 +6,7 @@ namespace supple::engine {
 namespace detail {
 struct PortAudioApi;
 class MidiSource;
+class MidiSink;
 }  // namespace detail
 struct PortAudioOptions {
     // Exact names. Empty selects the platform's default host API/device.
@@ -29,6 +30,9 @@ class PortAudioBackend final : public Backend {
     PortAudioBackend(PortAudioOptions options, const detail::PortAudioApi& api);
     PortAudioBackend(PortAudioOptions options, const detail::PortAudioApi& api,
                      std::unique_ptr<detail::MidiSource> midi);
+    PortAudioBackend(PortAudioOptions options, const detail::PortAudioApi& api,
+                     std::unique_ptr<detail::MidiSource> midi,
+                     std::unique_ptr<detail::MidiSink> sink);
     ~PortAudioBackend() override;
     Status start(const BackendConfig&, Callback) override;
     void stop() override;
@@ -42,6 +46,12 @@ class PortAudioBackend final : public Backend {
     std::vector<std::string> midiPorts() const override;
     std::vector<MidiInputWarning> midiWarnings() const override;
     std::uint64_t midiDropped() const override;
+    bool writeMidi(const MidiOutputEvent&) SUPPLE_RT override;
+    std::vector<std::string> midiOutputPorts() const override;
+    std::vector<std::int64_t> midiOutputLatency() const override;
+    std::vector<MidiInputWarning> midiOutputWarnings() const override;
+    std::uint64_t midiOutDropped() const override;
+    std::uint64_t midiOutAsyncDropped(std::size_t port) const override;
     bool nativeThreadPolicy() const override;
     Status prepareCurrentThread(bool live) override;
     void releaseCurrentThread() override;

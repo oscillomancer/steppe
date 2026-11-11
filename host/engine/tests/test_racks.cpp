@@ -2016,6 +2016,8 @@ supple::engine::detail::Node midiStream(std::size_t pool, std::size_t inputs) {
     node.midiOrder.prepare(16, 64);
     node.midiPreFx.reserve(16);
     node.midiPostFx.reserve(16);
+    node.midiPreTimeline.reserve(16);
+    node.midiPostTimeline.reserve(16);
     node.midiInstrument.reserve(16);
     node.midiChain.reserve(16);
     return node;

@@ -959,7 +959,7 @@ window. The panel Close button, WM close request and unhandled Escape all
 close this panel without quitting the app.
 
 
-The header switches **Audio | MIDI** (ADR-0067), two latching tabs with the
+The header switches **Audio | MIDI | Hardware MIDI** (ADR-0067/0072), three latching tabs with the
 active mode lit in the accent colour; the mode persists in the
 `windows.routing.mode` UI sidecar field. Audio mode is the existing grid; MIDI
 routes do not appear in it. In Audio mode (`reaper-ux.md` addendum 2), sources (strips in hierarchy, hardware
@@ -1016,6 +1016,33 @@ colours. The usual selection, double-click and Add/Remove gestures apply. The co
 channel (Original or 1–16). These edits act on selected sends in one undo
 step; right-click learns mute only. Audio controls are hidden. The action
 `ui.routing.midi` opens this mode, including in offscreen snapshots.
+Hardware MIDI mode (`windows.routing.mode: "hardware_midi"`, action
+`ui.routing.hardware`) prepends hardware input rows to the channel/Note Out
+rows and appends hardware output columns to channel columns. All channels
+are available, including empty channels that can receive MIDI. Notes module
+columns remain in MIDI mode. MIDI colours and MIDI controls apply. Input to
+channel cells edit `track.set {record_midi: name}`; Remove clears that existing
+assignment. Wildcard (*) cells have an outlined asterisk; they represent one
+shared input assignment. Removing only part of a wildcard assignment refuses
+with a status message; select every cell (or its column) to clear it. On a
+machine with one input, selecting its sole wildcard cell is the whole assignment.
+Replacing an input reports "replaces <old input>" in the status line.
+One MIDI input assignment per channel is retained. Hardware input
+to output cells are blocked; route through a channel. Missing ports named in
+projects/preferences remain visible with warnings in port status. Hardware input
+and output headers use teal socket marks; separators divide input rows from
+channel rows and channel columns from output columns.
+
+Right-click an input row or output column header for Enabled, Timing offset…
+(signed milliseconds, -1000..1000), and, on outputs, Reset notes on stop. The output offset dialog previews
+"adds N ms latency to all audio" as the offset is edited.
+The latter controls stop/locate releases and defaults on. Settings apply
+immediately and save in the machine preferences; `midiPortMenu` builds this
+menu for the clock extension. Output descriptors with `clock: true` draw a
+clock mark. The dummy fixture flag `--dummy-midi --audio dummy` declares
+Keyboard/Pads inputs and Hardware synth/Drum machine outputs for offscreen
+render checks, without opening devices.
+
 Matrix updates clamp scroll to the current endpoint range; paint uses
 endpoint-pair indexes for send and cycle rules.
 Commands: `route.*`, `track.set {record_input}`.

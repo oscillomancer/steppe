@@ -17,6 +17,10 @@ such a channel records MIDI; see the current
 [rack](../specs/rack.md) and [session-model](../specs/session-model.md)
 contracts.
 
+**2026-11-10 draft extension:** [ADR-0069](0069-native-midi-output.md)
+adds the hardware MIDI output device contract; routing and clock generation
+remain separate work. Native output validation is pending.
+
 ## Context
 
 The model can already say "this track records from MIDI device X"

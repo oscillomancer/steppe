@@ -86,6 +86,10 @@ probes and conformance tests also link host libraries.
   no receive/audio allocations or locks (ADR-0042). The existing native device
   monitor reports topology as an advisory without restarting audio; it recycles WinMM
   SysEx discard buffers outside the receive callback.
+- **Native MIDI sender thread** — audio publishes bounded events into one
+  preallocated SPSC queue per output. CoreMIDI schedules host-timestamped UMPs;
+  WinMM waits on a process-owned high-resolution timer and sends when due.
+  Device calls and SysEx buffer ownership stay outside audio (ADR-0069).
 - **Worker threads** — execute graph partitions in parallel (lock-free work
   distribution with atomic dependency counters) and anticipative render-ahead
   for tracks that are not live (not armed / not input-monitored), with larger
