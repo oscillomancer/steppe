@@ -57,6 +57,7 @@ struct MatrixModel {
         bool mute = false, mono = false, phaseInvert = false;
         int midiFrom = 0, midiTo = 0;
         std::vector<int> mapFrom, mapTo;  // the channel map (empty: identity)
+        bool allInputs = false;           // one wildcard input assignment expanded over rows
     };
     std::vector<Source> sources;
     std::vector<Destination> destinations;
@@ -124,6 +125,8 @@ class RoutingMatrix {
     std::string status() const;
 
   private:
+    std::string inputReplacement(const MatrixModel::Source&, const MatrixModel::Destination&) const;
+    std::string statusMessage_;
     void midiChannelMenu(bool from);
     Status reload();
     void refresh();  // the controls, from the selection

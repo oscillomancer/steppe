@@ -232,9 +232,15 @@ class Grid : public ui::Node {
                 }
                 if (!sends.empty()) {
                     const ui::Rect dot{r.x + 4, r.y + 4, r.w - 8, r.h - 8};
-                    c.fillRound(dot, 3,
-                                sends.front()->mute ? t.color("ink-faint")
-                                                    : t.color(m_.midi ? "midi-send" : "accent"));
+                    const auto colour = sends.front()->mute
+                                            ? t.color("ink-faint")
+                                            : t.color(m_.midi ? "midi-send" : "accent");
+                    if (sends.front()->allInputs) {
+                        c.strokeRound(dot, 3, colour);
+                        c.text(dot, "*", ui::Font::UiBold, t.type("small"), colour,
+                               ui::kCenter | ui::kMiddle);
+                    } else
+                        c.fillRound(dot, 3, colour);
                 }
                 if (sel)
                     c.strokeRound({r.x + 1, r.y + 1, r.w - 2, r.h - 2}, 3, t.color("focus"), 2);
@@ -457,6 +463,8 @@ Status RoutingMatrix::reload() {
             continue;
         MatrixModel::Send x;
         x.id = str(r, "id");
+        x.allInputs = hardwareMidiMode_ && r.find("from_midi") && r.find("from_midi")->isString() &&
+                      (input.empty() || input == "*");
         x.from = from;
         x.to = str(r, "fx").empty() ? to : str(r, "fx");
         x.tap = str(r, "tap");
@@ -572,7 +580,9 @@ void RoutingMatrix::open(std::optional<ui::Rect> anchor) {
             s.pair != 1 ? s.strip + " " + s.name : (s.name.empty() ? s.id : s.name);
         const std::string pair = from + " → " + (d.name.empty() ? d.id : d.name);
         const auto sends = model_.sendsAt(cell->first, cell->second);
-        if (!sends.empty())
+        if (!sends.empty() && sends.front()->allInputs)
+            status_->setText(pair + ": All inputs (*) — one shared assignment");
+        else if (!sends.empty())
             status_->setText(pair + ": " + dbText(sends.front()->volumeDb) + ", " +
                              sends.front()->tap + (sends.front()->mute ? ", muted" : "") +
                              " — click to select");
@@ -583,7 +593,8 @@ void RoutingMatrix::open(std::optional<ui::Rect> anchor) {
                                          ? ": the parent send, on — double-click to turn it off"
                                          : ": the parent send, off — double-click to turn it on"));
         else
-            status_->setText(pair + ": double-click to send");
+            status_->setText(pair + ": double-click to send" +
+                             (inputReplacement(s, d).empty() ? "" : "; " + inputReplacement(s, d)));
     };
     auto& grid = panel->emplace<Grid>(model_, std::move(hooks));
     grid_ = &grid;
@@ -785,6 +796,7 @@ std::string RoutingMatrix::channelsText(const MatrixModel::Send& x) {
 }
 
 std::string RoutingMatrix::status() const {
+    if (!statusMessage_.empty()) return statusMessage_;
     return std::to_string(model_.sends.size()) +
            " sends · click to select (Ctrl, Shift, a row or column name: more), "
            "double-click to send";
@@ -841,6 +853,7 @@ std::optional<std::string> RoutingMatrix::selectedSend() const {
 }
 
 void RoutingMatrix::select(std::set<Cell> cells, std::optional<Cell> anchor) {
+    statusMessage_.clear();
     selection_ = std::move(cells);
     if (anchor) anchor_ = std::move(anchor);
     refresh();
@@ -956,6 +969,17 @@ json::Value addArgs(const MatrixModel::Source& s, const MatrixModel::Destination
 
 }  // namespace
 
+std::string RoutingMatrix::inputReplacement(const MatrixModel::Source& source,
+                                            const MatrixModel::Destination& dest) const {
+    if (source.type != "midi_input" || dest.kind != "track") return {};
+    const auto id = model::Id::parse(dest.id);
+    if (!id) return {};
+    const auto session = app_.view();
+    const auto* input = model::midiInputRoute(session, *id);
+    if (!input || !input->from.midiDevice || *input->from.midiDevice == source.name) return {};
+    return dest.name + ": replaces " +
+           (input->from.midiDevice->empty() ? "*" : *input->from.midiDevice);
+}
 Status RoutingMatrix::doubleClickCell(std::size_t row, std::size_t col) {
     if (row >= model_.sources.size() || col >= model_.destinations.size())
         return Error("gui.routing", "no such cell");
@@ -977,16 +1001,21 @@ Status RoutingMatrix::doubleClickCell(std::size_t row, std::size_t col) {
     }
     const auto& source = model_.sources[row];
     const auto& dest = model_.destinations[col];
+    const auto replacement = inputReplacement(source, dest);
     auto input = json::Value::object();
     input["track"] = dest.id;
     input["record_midi"] = source.name;
     auto r = source.type == "midi_input" ? exec("track.set", std::move(input))
                                          : exec("route.add", addArgs(source, dest, midiMode_));
     if (!r) return std::move(r).error();
-    return reload();
+    SUPPLE_TRY(reload());
+    statusMessage_ = replacement;
+    if (status_) status_->setText(status());
+    return {};
 }
 
 Status RoutingMatrix::addSelected() {
+    std::string replacements;
     std::vector<std::pair<std::string, json::Value>> edits;
     for (const Cell& c : selection_) {
         const auto at = locate(c);
@@ -1001,6 +1030,9 @@ Status RoutingMatrix::addSelected() {
         } else if (model_.blocked(at->first, at->second).empty()) {
             const auto& d = model_.destinations[at->second];
             if (s.type == "midi_input") {
+                const auto replacement = inputReplacement(s, d);
+                if (!replacement.empty())
+                    replacements += (replacements.empty() ? "" : "; ") + replacement;
                 auto input = json::Value::object();
                 input["track"] = d.id;
                 input["record_midi"] = s.name;
@@ -1017,10 +1049,29 @@ Status RoutingMatrix::addSelected() {
                                       return json::Value::object();
                                   });
     if (!r) return std::move(r).error();
-    return reload();
+    SUPPLE_TRY(reload());
+    statusMessage_ = replacements;
+    if (status_) status_->setText(status());
+    return {};
 }
 
 Status RoutingMatrix::removeSelected() {
+    for (const auto& id : selectedSends())
+        if (const auto* send = sendById(id); send && send->allInputs) {
+            bool whole = selection_.size() > 1;
+            for (std::size_t row = 0; row < model_.sources.size(); ++row)
+                for (std::size_t col = 0; col < model_.destinations.size(); ++col)
+                    for (const auto* cell : model_.sendsAt(row, col))
+                        if (cell->id == id && !isSelected(row, col)) whole = false;
+            if (!whole) {
+                statusMessage_ =
+                    "All inputs (*) is one assignment; select all its cells for this channel, or "
+                    "replace its input";
+                if (status_) status_->setText(status());
+                return Error("gui.routing_all_inputs", statusMessage_, "/selection",
+                             "select all wildcard cells in the channel column");
+            }
+        }
     std::vector<std::pair<std::string, json::Value>> edits;
     for (const auto& id : selectedSends()) {
         json::Value args = json::Value::object();

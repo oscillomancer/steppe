@@ -1986,3 +1986,38 @@ TEST_CASE("routing matrix: hardware ports share input assignments and output men
     REQUIRE(panel.root().click("routing.mode.midi"));
     CHECK_FALSE(matrix.hardwareMidiMode());
 }
+
+TEST_CASE("routing matrix: wildcard input removal is atomic and replacements are explicit") {
+    Fixture f;
+    if (!f.ok) return;
+    auto record = json::Value::object();
+    REQUIRE(f.app->setMidiPreferences({{"Keyboard", record}, {"Pads", record}}, {}, false));
+    const auto channel = f.exec("track.add", R"({"name":"Input target"})")["track"].asString();
+    f.exec("track.set", R"({"track":")" + channel + R"(","record_midi":"*"})");
+    gui::FloatingPanel panel(*f.platform, *f.window, *f.root, SUPPLE_GUI_FONTS_DIR, "Panel", 1000,
+                             560, 800, 360);
+    gui::RoutingMatrix matrix(panel, *f.actions, *f.dispatcher, *f.app);
+    matrix.setHardwareMidiMode();
+    matrix.open();
+    panel.root().frame(false);
+    const auto& model = matrix.model();
+    std::size_t col = 0;
+    for (std::size_t i = 0; i < model.destinations.size(); ++i)
+        if (model.destinations[i].id == channel) col = i;
+    REQUIRE(model.sendsAt(0, col).size() == 1);
+    CHECK(model.sendsAt(0, col)[0]->allInputs);
+    REQUIRE(matrix.clickCell(0, col));
+    CHECK_FALSE(matrix.removeSelected());
+    CHECK(matrix.status().find("All inputs (*)") != std::string::npos);
+    CHECK(model.sendsAt(0, col).size() == 1);
+    CHECK(model.sendsAt(1, col).size() == 1);
+    matrix.clickColumn(col);
+    REQUIRE(matrix.removeSelected());
+    CHECK(model.sendsAt(0, col).empty());
+    REQUIRE(matrix.doubleClickCell(0, col));
+    REQUIRE(matrix.doubleClickCell(1, col));
+    CHECK(matrix.status().find("replaces Keyboard") != std::string::npos);
+    f.exec("track.set", R"({"track":")" + channel + R"(","record_midi":"*"})");
+    matrix.sync();
+    f.snapshot("routing-hardware-all-inputs.png", &panel.root());
+}

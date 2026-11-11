@@ -1012,7 +1012,11 @@ rows and appends hardware output columns to channel columns. All channels
 are available, including empty channels that can receive MIDI. Notes module
 columns remain in MIDI mode. MIDI colours and MIDI controls apply. Input to
 channel cells edit `track.set {record_midi: name}`; Remove clears that existing
-assignment. One MIDI input assignment per channel is retained. Hardware input
+assignment. Wildcard (*) cells have an outlined asterisk; they represent one
+shared input assignment. Removing a single wildcard cell refuses with a status
+message; select every cell of that assignment (or its column) to clear it.
+Replacing an input reports "replaces <old input>" in the status line.
+One MIDI input assignment per channel is retained. Hardware input
 to output cells are blocked; route through a channel. Missing ports named in
 projects/preferences remain visible with warnings in port status.
 
