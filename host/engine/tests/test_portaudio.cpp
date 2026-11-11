@@ -1221,3 +1221,26 @@ TEST_CASE("native output snapshots host time before collecting MIDI input") {
     }
     backend.stop();
 }
+
+TEST_CASE("native output releases survive the audio-device-loss final callback fallback") {
+    Driver driver;
+    driver.active = 0;
+    auto api = Driver::api;
+    api.threaded = true;
+    auto sink = std::make_unique<FakeSink>();
+    auto& output = *sink;
+    PortAudioBackend backend({}, api, {}, std::move(sink));
+    unsigned finals = 0;
+    REQUIRE(backend.start({.blockSize = 64, .midiOutputs = true}, [&](auto, auto, unsigned frames) {
+        if (!frames) {
+            ++finals;
+            CHECK(output.stops == 0);
+            CHECK(backend.writeMidi({0, 0, 3, {0x80, 60, 0}}));
+        }
+    }));
+    backend.stop();
+    CHECK(finals == 1);
+    CHECK(output.stops == 1);
+    REQUIRE(output.sent.size() == 1);
+    CHECK(output.sent[0].event.bytes[0] == 0x80);
+}

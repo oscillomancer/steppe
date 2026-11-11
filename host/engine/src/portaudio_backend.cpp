@@ -407,6 +407,16 @@ void PortAudioBackend::stop() {
     self.api->stop(self.stream);
     self.api->close(self.stream);
     self.stream = nullptr;
+    if (!self.final.load(std::memory_order_acquire)) {
+        // Audio may have disappeared while MIDI remains connected. Its joined
+        // fallback callback must still release notes before closing MIDI.
+        self.midiOut.begin(1, self.sinkStarted ? self.sink->names.size() : 0);
+        self.callback(nullptr, nullptr, 0);
+        const auto now = self.sinkStarted ? self.sink->now() : 0;
+        for (const auto& event : self.midiOut.sorted())
+            if (self.sender) (void)self.sender->push({now, event});
+        self.final.store(1, std::memory_order_release);
+    }
     if (self.sender) self.sender->stop();
     // Retain counters until the next start, after pending queues are discarded.
     if (self.sink) self.sink->stop();
@@ -415,7 +425,6 @@ void PortAudioBackend::stop() {
     self.midiStarted = false;
     self.blockMidi = {};
     self.midiBuffer.reset();
-    if (!self.final.load(std::memory_order_acquire)) self.callback(nullptr, nullptr, 0);
     self.callback = {};
     if (self.initialized) self.api->terminate();
     self.initialized = false;

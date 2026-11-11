@@ -169,6 +169,7 @@ bool HardwareMidiRuntime::release(RouteState& state, std::uint32_t at) {
         }
     for (unsigned channel = 0; channel < 16; ++channel)
         if (state.channels & (1u << channel)) {
+            if (wrote_ >= kMaxMidiOutputEvents - 512) return false;
             if (!write(state, {at, 0, 3, {static_cast<std::uint8_t>(0xb0 | channel), 64, 0}}))
                 return false;
         }
