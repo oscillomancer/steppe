@@ -342,8 +342,9 @@ masters are skipped for these extra controls.
 
 The routing window's **Audio | MIDI** buttons select the kind of send.
 MIDI mode shows channels and rack Note Outs down the left, channels and
-Notes modules across the top. Double-click a cell to connect them (again
-to disconnect), or select cells and use Add/Remove. Set the tap, Mute,
+Notes modules across the top. Double-click an empty cell to connect them
+(double-clicking a send only selects it), or select cells and use Add/Remove
+(or Delete). Set the tap, Mute,
 From channel (All or 1–16), and To channel (Original or 1–16) below the grid.
 Post-fader follows the source's mute; pre-FX and post-FX keep sending while
 the source is muted. Right-click Mute to learn a controller. A channel
