@@ -2699,7 +2699,14 @@ of 16 for late releases), every live key when it has a MIDI input, and the
 voices of each incoming send's source (16 per Note Out). Its sends carry
 slot ids, a send's voices are its source's slots, and every queue and
 budget multiplies these voice counts, never the number of notes in the
-timeline. Adoption on the audio thread therefore walks the held voices:
+timeline. Event buffers are sized per block: a channel's timeline window,
+a release per slot, live input, and for each incoming send the events its
+source carries in any `block` consecutive frames (`midiWindow`) plus a
+release and restart per source voice per mute transition. A PDC delay only
+shifts a send's stream, so one such window covers a block whatever the
+delay (the queue holds two, plus the delay at the source's per-frame rate):
+a relay chain grows by each hop's own voices, never doubling per hop (a
+six-hop chain of 32-note chords reserves 1767 events at its end). Adoption on the audio thread therefore walks the held voices:
 item notes keep their slots by musical identity, live keys by key, routed
 notes through the unchanged send that delivered them. A send whose route,
 tap, channel filter or remap, PDC delay or ends changed starts afresh: what

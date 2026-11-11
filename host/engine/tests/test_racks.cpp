@@ -2156,3 +2156,72 @@ TEST_CASE("MIDI sends: an onset on a held input ends the held note first" *
     CHECK(full.midiPreFx.size() == 1);
     CHECK(full.midiDropped == 1);
 }
+
+TEST_CASE("MIDI sends: a relay chain's reservations grow by each hop, not twice" *
+          doctest::description("rt")) {
+    // Chords of 32 notes every eighth of a beat, relayed through six
+    // channels without instruments. Each hop's buffers once took twice the
+    // previous hop's; now each adds its own voices.
+    namespace d = supple::engine::detail;
+    model::EditTxn t(model::Session::create({.console9 = false}), 1);
+    std::vector<Id> chain{addChannel(t)};
+    model::MidiSource src;
+    src.sequence.ppq = 960;
+    src.sequence.length = 960 * 8;
+    for (int tick = 0; tick < 960 * 8; tick += 120)
+        for (int k = 0; k < 32; ++k)
+            src.sequence.notes.push_back({tick, 60, 0, static_cast<std::uint8_t>(40 + k), 100, 0});
+    model::Take take;
+    take.source = t.create(src);
+    const auto tk = t.create(take);
+    model::Item item;
+    item.track = chain.front();
+    item.length = 8;
+    item.takes = {tk};
+    item.activeTake = tk;
+    t.create(item);
+    for (int hop = 0; hop < 6; ++hop) {
+        chain.push_back(addChannel(t));
+        model::Route route;
+        route.from.track = chain[chain.size() - 2];
+        route.to.track = chain.back();
+        route.midi = model::MidiRouting{};
+        t.create(route);
+    }
+    const auto session = commit(t);
+    auto pool = makePool();
+    auto plan = d::compile(session, pool, 0, 512);
+    REQUIRE(plan);
+    const auto prepared = d::prepare(*plan, session);
+    REQUIRE_MESSAGE(prepared, (prepared ? "" : prepared.error().toString()));
+    const auto node = [&](Id id) -> d::Node& {
+        const auto n = std::find_if(plan->nodes.begin(), plan->nodes.end(),
+                                    [&](const auto& x) { return x.id == id; });
+        REQUIRE(n != plan->nodes.end());
+        return *n;
+    };
+    std::vector<std::size_t> capacity, queue;
+    for (Id id : chain) capacity.push_back(node(id).midiPreFx.capacity());
+    for (std::size_t hop = 1; hop < chain.size(); ++hop)
+        for (const auto& edge : plan->edges)
+            if (edge.midi && plan->nodes[edge.to].id == chain[hop])
+                queue.push_back(edge.midiQueue.size());
+    REQUIRE(queue.size() == 6);
+    // The sixth hop adds a little more than the first did (each pool holds
+    // its source's voices and a margin); doubling would add 32 times more.
+    CAPTURE(capacity);
+    CAPTURE(queue);
+    CHECK(capacity[6] - capacity[5] < 3 * (capacity[1] - capacity[0]));
+    CHECK(queue[5] - queue[4] < 3 * (queue[1] - queue[0]));
+    CHECK(capacity[6] < 2000);  // 1767; doubling per hop made it 18063
+    // And nothing is dropped: the last hop carries every source event.
+    std::size_t sent = 0, received = 0;
+    for (std::int64_t pos = 0; pos < 48000 * 4; pos += 512) {
+        REQUIRE(d::processBlock(*plan, pos, 512));
+        sent += node(chain.front()).midiPreFx.size();
+        received += node(chain.back()).midiPreFx.size();
+    }
+    CHECK(sent > 1000);
+    CHECK(received == sent);
+    for (Id id : chain) CHECK(node(id).midiDropped == 0);
+}

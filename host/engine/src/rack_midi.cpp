@@ -242,13 +242,18 @@ Status prepareRackMidi(Plan& p) {
             auto& edge = p.edges[index];
             if (!edge.midi) continue;
             const auto& source = p.nodes[edge.from];
-            const std::size_t voices =
-                edge.rackNotes >= 0 ? rack::kChannels : source.midiHeld.size();
+            const bool notesOut = edge.rackNotes >= 0;
+            const std::size_t voices = notesOut ? rack::kChannels : source.midiHeld.size();
+            // What the source sends in `block` frames. A delay only shifts
+            // the stream, so a block here takes one such window of a track's
+            // (its midiWindow), whatever the PDC: a relay chain grows by each
+            // hop's own events, never doubling per hop. A Note Out's bound
+            // is per frame; two of its blocks keep the original margin.
             const std::size_t perBlock =
-                edge.rackNotes >= 0 ? static_cast<std::size_t>(rack::kChannels) * (p.block + 2)
-                                    : source.midiPreFx.capacity();
-            const std::size_t perFrame =
-                edge.rackNotes >= 0 ? rack::kChannels : source.midiEventRate;
+                notesOut ? static_cast<std::size_t>(rack::kChannels) * (p.block + 2)
+                         : source.midiWindow;
+            const std::size_t due = notesOut ? 2 * perBlock : perBlock;
+            const std::size_t perFrame = notesOut ? rack::kChannels : source.midiEventRate;
             const std::uint64_t queued =
                 2 * static_cast<std::uint64_t>(perBlock) +
                 static_cast<std::uint64_t>(
@@ -276,11 +281,14 @@ Status prepareRackMidi(Plan& p) {
             for (const auto& vca : edge.vcas.values) points += vca.gate.points.size();
             // Each mute transition ends or restarts at most every voice.
             const auto transitions = points ? std::min<std::size_t>(p.block, points + 2) : 1;
-            capacity += 2 * perBlock + (transitions + 2) * voices;
-            rate += 2 * perFrame + (points ? voices : 0);
+            capacity += due + (transitions + 2) * voices;
+            rate += (notesOut ? 2 : 1) * perFrame + (points ? voices : 0);
             SUPPLE_TRY(budget(capacity, path));
         }
         node.midiEventRate = rate;
+        // A window of `block` frames may straddle two blocks of live input;
+        // releases come once, at the block start it holds.
+        node.midiWindow = capacity + (node.midiIn ? kMaxMidiInputEvents : 0);
         SUPPLE_TRY(budget(capacity, "/tracks/" + node.id.str()));
         if (node.rack) {
             for (auto& feed : node.rack->notes) {
