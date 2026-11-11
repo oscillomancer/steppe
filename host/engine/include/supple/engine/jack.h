@@ -77,6 +77,7 @@ class JackBackend : public Backend {
     Stats stats() const;
     BackendStatus status() const override;
     std::span<const MidiInputEvent> midiInput() const override;
+    std::span<const SyncMidiEvent> syncMidi() const override;
     std::vector<std::string> midiPorts() const override;
     std::vector<std::string> inputNames() const override;
     std::vector<std::string> outputNames() const override;

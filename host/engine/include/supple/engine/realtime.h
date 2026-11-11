@@ -157,6 +157,41 @@ inline bool routeMidi(const MidiInputEvent& e, std::uint64_t ports, int fromChan
     out[2] = e.size > 2 ? e.bytes[2] : 0;
     return true;
 }
+// A sync message from a device input (ADR-0071): Clock (F8), Start (FA),
+// Continue (FB), Stop (FC), Song Position (F2 lsb msb), an MTC quarter
+// frame (F1 dd) or an MTC full frame (F0 7F <id> 01 01 hh mm ss ff F7).
+// Backends deliver them beside the channel messages of midiInput(), which
+// keeps its contract.
+struct SyncMidiEvent {
+    std::uint32_t frame = 0;  // within the callback's frames
+    std::uint16_t port = 0;   // index into Backend::midiPorts()
+    std::uint8_t size = 0;    // 1..10
+    std::array<std::uint8_t, 10> bytes{};
+};
+inline constexpr std::size_t kMaxSyncMidiEvents = 512;  // per callback
+// The size of the sync message `bytes` starts with, or 0 when it is not one
+// (a full frame needs all ten bytes in place). `size` bytes are readable.
+inline std::size_t syncMidiSize(const std::uint8_t* bytes, std::size_t size) SUPPLE_RT {
+    if (size == 0) return 0;
+    switch (bytes[0]) {
+        case 0xF8:
+        case 0xFA:
+        case 0xFB:
+        case 0xFC:
+            return 1;
+        case 0xF1:
+            return size >= 2 && bytes[1] < 0x80 ? 2 : 0;
+        case 0xF2:
+            return size >= 3 && bytes[1] < 0x80 && bytes[2] < 0x80 ? 3 : 0;
+        case 0xF0:
+            return size >= 10 && bytes[1] == 0x7F && bytes[3] == 0x01 && bytes[4] == 0x01 &&
+                           bytes[9] == 0xF7
+                       ? 10
+                       : 0;
+        default:
+            return 0;
+    }
+}
 // A device's control message for MIDI learn (ADR-0027): a note, a CC, a
 // program change or a pitch bend, as heard, in arrival order.
 struct ControlMidiEvent {
@@ -247,6 +282,10 @@ class Backend {
     // MIDI (ADR-0016). Inside the callback only: this cycle's device events,
     // sorted by frame (at most kMaxMidiInputEvents; more are dropped).
     virtual std::span<const MidiInputEvent> midiInput() const { return {}; }
+    // Inside the callback only: this cycle's sync messages (ADR-0071), sorted
+    // by frame, from every port (at most kMaxSyncMidiEvents; more are dropped,
+    // and counted in midiDropped() where the backend reports drops).
+    virtual std::span<const SyncMidiEvent> syncMidi() const { return {}; }
     virtual std::uint64_t midiDropped() const { return 0; }
     // The MIDI input ports, named after their devices (fixed while running).
     virtual std::vector<std::string> midiPorts() const { return {}; }
@@ -279,6 +318,10 @@ class DummyBackend : public Backend {
         std::function<void(std::vector<MidiInputEvent>& events, std::uint32_t frames,
                            std::int64_t frame)>
             midi;
+        // Tests: the sync messages of each cycle (ADR-0071), likewise.
+        std::function<void(std::vector<SyncMidiEvent>& events, std::uint32_t frames,
+                           std::int64_t frame)>
+            sync;
     };
     explicit DummyBackend(Options options);
     ~DummyBackend() override;
@@ -291,6 +334,7 @@ class DummyBackend : public Backend {
     Status prepareLiveThread(std::thread::native_handle_type) override { return okStatus(); }
     ThreadPolicy callbackPolicy() override;  // Thread mode: its thread's
     std::span<const MidiInputEvent> midiInput() const override { return midi_; }
+    std::span<const SyncMidiEvent> syncMidi() const override { return sync_; }
     std::vector<std::string> midiPorts() const override { return options_.midiPorts; }
 
     void run(std::int64_t cycles);  // Manual mode: run cycles now, on this thread
@@ -300,6 +344,7 @@ class DummyBackend : public Backend {
 
   private:
     std::vector<MidiInputEvent> midi_;  // this cycle's (capacity reserved)
+    std::vector<SyncMidiEvent> sync_;   // likewise
     void cycle();
     Options options_;
     BackendConfig config_;

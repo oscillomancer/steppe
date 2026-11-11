@@ -44,6 +44,7 @@ struct PortAudioBackend::Impl {
     std::unique_ptr<detail::MidiSource> midi;
     std::unique_ptr<detail::MidiInputBuffer> midiBuffer;
     std::span<const MidiInputEvent> blockMidi;
+    std::span<const SyncMidiEvent> blockSync;
     bool midiStarted = false;
     Callback callback;
     PaStream* stream = nullptr;
@@ -102,10 +103,13 @@ struct PortAudioBackend::Impl {
             for (std::uint32_t c = 0; c < self.config.outputs; ++c) outputs[c] = out[c] + offset;
             self.blockMidi = self.midiStarted ? self.midiBuffer->chunk(offset, count)
                                               : std::span<const MidiInputEvent>{};
+            self.blockSync = self.midiStarted ? self.midiBuffer->syncChunk(offset, count)
+                                              : std::span<const SyncMidiEvent>{};
             self.callback(in ? inputs.data() : nullptr, outputs.data(), count);
             offset += count;
         }
         self.blockMidi = {};
+        self.blockSync = {};
         if (changed) self.notify();
         return paContinue;
     }
@@ -370,6 +374,7 @@ std::vector<std::string> PortAudioBackend::inputNames() const {
     return std::vector<std::string>(impl_->config.inputs, impl_->inputName);
 }
 std::span<const MidiInputEvent> PortAudioBackend::midiInput() const { return impl_->blockMidi; }
+std::span<const SyncMidiEvent> PortAudioBackend::syncMidi() const { return impl_->blockSync; }
 std::vector<std::string> PortAudioBackend::midiPorts() const {
     return impl_->midiBuffer ? impl_->midiBuffer->names : std::vector<std::string>{};
 }

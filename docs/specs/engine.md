@@ -1883,8 +1883,15 @@ storage doubles as merge scratch; no new allocation. Events rebase into each
 engine chunk, including the final short chunk. No allocation, lock, wait or
 logging on receive/audio paths. `Backend::midiDropped()` defaults to zero;
 PortAudio exposes rejected messages and ring/period overflow through it and
-`engine.status.midi_dropped`. SysEx/system messages are dropped and counted
-per reported packet/buffer; driver-unreported SysEx loss cannot be counted.
+`engine.status.midi_dropped`. Sync messages (Clock, Start, Continue, Stop,
+Song Position, MTC quarter frames and the MTC full-frame SysEx) go to
+`Backend::syncMidi()` instead (ADR-0071): JACK classifies its events, the
+native buffer keeps a 512-entry sync queue per port, CoreMIDI routes UMP
+type 1 and reassembles SysEx7 into the full frame, WinMM routes MIM_DATA's
+system messages and reads the full frame from a long buffer; at most 512
+per callback, sorted by frame, ten bytes each. `midiInput()` is
+unchanged. Other system messages and SysEx are dropped and counted per
+reported packet/buffer; driver-unreported SysEx loss cannot be counted.
 Two fixed WinMM long buffers are recycled on the monitor, never inside its
 MIDI callback. Short-message reception does not depend on recycling them.
 

@@ -108,6 +108,8 @@ Status DummyBackend::start(const BackendConfig& config, Callback callback) {
     inputFrame_ = 0;
     midi_.clear();
     midi_.reserve(kMaxMidiInputEvents);
+    sync_.clear();
+    sync_.reserve(kMaxSyncMidiEvents);
     capture_.sampleRate = config.sampleRate;
     capture_.channels.assign(
         config.outputs, std::vector<float>(static_cast<std::size_t>(options_.captureFrames), 0.0f));
@@ -161,6 +163,14 @@ void DummyBackend::cycle() {
         for (std::size_t i = 1; i < midi_.size(); ++i)  // stable, allocation-free
             for (std::size_t k = i; k > 0 && midi_[k].frame < midi_[k - 1].frame; --k)
                 std::swap(midi_[k], midi_[k - 1]);
+    }
+    sync_.clear();
+    if (options_.sync && config_.midiInputs) {
+        options_.sync(sync_, config_.blockSize, inputFrame_);
+        if (sync_.size() > kMaxSyncMidiEvents) sync_.resize(kMaxSyncMidiEvents);
+        for (std::size_t i = 1; i < sync_.size(); ++i)
+            for (std::size_t k = i; k > 0 && sync_[k].frame < sync_[k - 1].frame; --k)
+                std::swap(sync_[k], sync_[k - 1]);
     }
     inputFrame_ += config_.blockSize;
     callback_(inPtrs_.empty() ? nullptr : inPtrs_.data(), out, config_.blockSize);

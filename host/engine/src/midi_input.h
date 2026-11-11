@@ -12,6 +12,13 @@ struct TimedMidi {
     std::uint8_t bytes[3]{};
     std::uint8_t size = 0;
 };
+// A sync message (ADR-0071) with its source time.
+struct TimedSync {
+    double seconds = 0;
+    std::array<std::uint8_t, 10> bytes{};
+    std::uint8_t size = 0;
+};
+inline constexpr std::size_t kSyncQueueSize = 512;
 // Fixed storage, allocated before any device opens. One OS producer per port;
 // one audio consumer. Names are finalized before audio starts; OS producers
 // use only their assigned queue index, so partial opens can compact the list.
@@ -21,7 +28,13 @@ class MidiInputBuffer {
     std::vector<MidiInputWarning> warnings;
     // Startup only, after closing a failed source and before reusing its index.
     void discard(std::size_t port);
+    // A channel message packed little-endian (status in the low byte). A
+    // one-byte system real-time message or system common quarter frame /
+    // song position goes to the sync messages instead.
     void push(std::size_t port, double seconds, std::uint32_t message) SUPPLE_RT;
+    // A complete sync message (syncMidiSize() == size); others are drops.
+    void pushSync(std::size_t port, double seconds, const std::uint8_t* bytes,
+                  std::size_t size) SUPPLE_RT;
     void drop(std::uint64_t count = 1) SUPPLE_RT {
         dropped_.fetch_add(count, std::memory_order_relaxed);
     }
@@ -31,12 +44,18 @@ class MidiInputBuffer {
     // busy producer cannot extend the callback's work indefinitely.
     void collect(double end, double rate, std::uint32_t frames) SUPPLE_RT;
     std::span<const MidiInputEvent> chunk(std::uint32_t offset, std::uint32_t frames) SUPPLE_RT;
+    // The sync messages collect() took, for one block, as chunk().
+    std::span<const SyncMidiEvent> syncChunk(std::uint32_t offset, std::uint32_t frames) SUPPLE_RT;
 
   private:
+    void collectSync(double end, double rate, std::uint32_t frames) SUPPLE_RT;
     std::array<SpscRing<TimedMidi, kMidiQueueSize>, kMidiInputPorts> queues_;
+    std::array<SpscRing<TimedSync, kSyncQueueSize>, kMidiInputPorts> syncQueues_;
     std::atomic<std::uint64_t> dropped_{0};
     std::array<MidiInputEvent, kMaxMidiInputEvents> period_{}, block_{};
     std::size_t count_ = 0, next_ = 0;
+    std::array<SyncMidiEvent, kMaxSyncMidiEvents> syncPeriod_{}, syncBlock_{};
+    std::size_t syncCount_ = 0, syncNext_ = 0;
 };
 class MidiSource {
   public:

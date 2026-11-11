@@ -963,7 +963,8 @@ Engine and hosting:
   non-restart topology advisories
   (ADR-0042). Device-free timing/overflow/lifecycle tests cover the shared path;
   physical MIDI timing/disconnect behavior needs SUPPLE_MIDI_DEVICE_TEST=1 trials.
-  SysEx is discarded; WinMM timestamps have millisecond resolution. WinMM names
+  SysEx other than MTC's full frame is discarded (sync messages are kept
+  for ADR-0071's sync input); WinMM timestamps have millisecond resolution. WinMM names
   do not distinguish two identical devices, or a replacement from the original;
   this will be addressed with Windows MIDI Services once its App SDK is released
   for production (ADR-0042).

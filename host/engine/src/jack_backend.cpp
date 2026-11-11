@@ -178,6 +178,7 @@ struct JackBackend::Impl {
     std::uint32_t midiInputs = 0;
     std::vector<std::string> midiNames;
     std::vector<MidiInputEvent> periodMidi, blockMidi;  // capacity reserved
+    std::vector<SyncMidiEvent> periodSync, blockSync;   // likewise (ADR-0071)
     std::atomic<std::uint64_t> midiDropped{0};
     // The rate the client runs at (read once it processes) and the latest one
     // the server reported. PipeWire reports a stale rate until the client's
@@ -208,7 +209,7 @@ struct JackBackend::Impl {
             collectMidi(n);
             std::array<float*, kMaxPorts> o;
             std::array<const float*, kMaxPorts> i;
-            std::size_t next = 0;  // into periodMidi
+            std::size_t next = 0, nextSync = 0;  // into periodMidi, periodSync
             for (Frames at = 0; at < n;) {
                 const Frames len = std::min<Frames>(block, n - at);
                 for (std::uint32_t c = 0; c < outputs; ++c) o[c] = out[c] + at;
@@ -219,10 +220,18 @@ struct JackBackend::Impl {
                     e.frame -= at;
                     blockMidi.push_back(e);
                 }
+                blockSync.clear();
+                for (; nextSync < periodSync.size() && periodSync[nextSync].frame < at + len;
+                     ++nextSync) {
+                    SyncMidiEvent e = periodSync[nextSync];
+                    e.frame -= at;
+                    blockSync.push_back(e);
+                }
                 callback(inputs ? i.data() : nullptr, o.data(), len);
                 at += len;
             }
             blockMidi.clear();
+            blockSync.clear();
         } else {
             for (std::uint32_t c = 0; c < outputs; ++c) std::fill_n(out[c], n, 0.0f);
             if (s == kStopping) {
@@ -234,16 +243,31 @@ struct JackBackend::Impl {
         return 0;
     }
 
-    // This period's short MIDI messages from every port, sorted by frame
-    // (longer ones, e.g. system exclusive, and overflow are counted).
+    // This period's short MIDI messages from every port, sorted by frame, and
+    // its sync messages (ADR-0071); other system messages, other SysEx and
+    // overflow are counted.
     void collectMidi(Frames n) SUPPLE_RT {
         periodMidi.clear();
+        periodSync.clear();
         for (std::uint32_t p = 0; p < midiInputs; ++p) {
             void* buffer = api->portGetBuffer(midiPorts[p], n);
             const std::uint32_t count = buffer ? api->midiGetEventCount(buffer) : 0;
             for (std::uint32_t k = 0; k < count; ++k) {
                 MidiEvent ev{};
                 if (api->midiEventGet(&ev, buffer, k) != 0) continue;
+                if (const auto sync = syncMidiSize(ev.buffer, ev.size); sync && sync == ev.size) {
+                    if (periodSync.size() == periodSync.capacity()) {
+                        midiDropped.fetch_add(1, std::memory_order_relaxed);
+                        continue;
+                    }
+                    SyncMidiEvent e;
+                    e.frame = std::min<Frames>(ev.time, n - 1);
+                    e.port = static_cast<std::uint16_t>(p);
+                    e.size = static_cast<std::uint8_t>(sync);
+                    std::copy_n(ev.buffer, sync, e.bytes.begin());
+                    periodSync.push_back(e);
+                    continue;
+                }
                 if (ev.size == 0 || ev.size > 3 || ev.buffer[0] >= 0xf0 ||
                     periodMidi.size() == periodMidi.capacity()) {
                     midiDropped.fetch_add(1, std::memory_order_relaxed);
@@ -260,6 +284,9 @@ struct JackBackend::Impl {
         for (std::size_t i = 1; i < periodMidi.size(); ++i)  // stable, allocation-free
             for (std::size_t k = i; k > 0 && periodMidi[k].frame < periodMidi[k - 1].frame; --k)
                 std::swap(periodMidi[k], periodMidi[k - 1]);
+        for (std::size_t i = 1; i < periodSync.size(); ++i)
+            for (std::size_t k = i; k > 0 && periodSync[k].frame < periodSync[k - 1].frame; --k)
+                std::swap(periodSync[k], periodSync[k - 1]);
     }
 
     static int processThunk(Frames n, void* self) SUPPLE_RT {
@@ -422,6 +449,8 @@ Status JackBackend::start(const BackendConfig& config, Callback callback) {
     }
     impl->periodMidi.reserve(kMaxMidiInputEvents);
     impl->blockMidi.reserve(kMaxMidiInputEvents);
+    impl->periodSync.reserve(kMaxSyncMidiEvents);
+    impl->blockSync.reserve(kMaxSyncMidiEvents);
     std::vector<std::string> midiSources;  // the physical MIDI capture ports we listen to
     if (config.midiInputs && api->midiGetEventCount && api->midiEventGet) {
         if (const char** ports =
@@ -546,6 +575,11 @@ BackendStatus JackBackend::status() const {
 std::span<const MidiInputEvent> JackBackend::midiInput() const {
     const Impl* m = active_.load(std::memory_order_acquire);  // the audio thread's view
     return m ? std::span<const MidiInputEvent>(m->blockMidi) : std::span<const MidiInputEvent>();
+}
+
+std::span<const SyncMidiEvent> JackBackend::syncMidi() const {
+    const Impl* m = active_.load(std::memory_order_acquire);
+    return m ? std::span<const SyncMidiEvent>(m->blockSync) : std::span<const SyncMidiEvent>();
 }
 
 std::vector<std::string> JackBackend::midiPorts() const {
