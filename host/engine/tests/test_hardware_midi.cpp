@@ -412,3 +412,43 @@ TEST_CASE("hardware MIDI: route and source mute automation follow compensated MI
             engine.stop();
         }
 }
+
+TEST_CASE("hardware MIDI: existing channel input monitoring reaches output while stopped") {
+    for (bool anticipative : {false, true}) {
+        Session base(model::Tap::PreFx, false, false);
+        model::EditTxn edit(base.value, 2);
+        model::Route input;
+        input.from.midiDevice = "Keyboard";
+        input.to.track = base.track;
+        input.midi = model::MidiRouting{0, 3};
+        const auto id = edit.create(input);
+        edit.modify<model::Track>(base.track, [&](auto& t) {
+            t.record.armed = true;
+            t.record.monitor = model::Monitor::On;
+            t.record.input = id;
+            t.record.midiInput = id;
+        });
+        const auto s = edit.commit();
+        REQUIRE(s);
+        auto pool = hardwarePool();
+        MediaCache media;
+        DummyBackend backend({.midiOutputPorts = {"Synth"},
+                              .midiPorts = {"Keyboard"},
+                              .midi = [](auto& events, unsigned, std::int64_t frame) {
+                                  if (frame == 0) events.push_back({7, 0, 3, {0x90, 60, 100}});
+                                  if (frame == 64) events.push_back({9, 0, 3, {0x80, 60, 0}});
+                              }});
+        Engine engine(
+            pool, media,
+            {.anticipative = anticipative, .renderBlock = 64, .renderAheadMs = 10, .workers = 0});
+        REQUIRE(engine.start(backend, {.blockSize = 64, .midiInputs = true, .midiOutputs = true}));
+        REQUIRE(engine.load(*s));
+        REQUIRE(engine.awaitPlan());
+        run(engine, backend, anticipative, 3);
+        REQUIRE(events(backend, 0x94).size() == 1);
+        CHECK(events(backend, 0x94)[0] == 7);
+        REQUIRE(events(backend, 0x84).size() == 1);
+        CHECK(events(backend, 0x84)[0] == 73);
+        engine.stop();
+    }
+}

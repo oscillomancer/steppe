@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 #include <doctest/doctest.h>
+#include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <mutex>
@@ -1091,9 +1092,16 @@ TEST_CASE("PortAudio MIDI output maps its device clock into the sink clock acros
     {
         std::lock_guard lock(output.mutex);
         REQUIRE(output.sent.size() == 8);
+        // Independent port queues can become visible between sender scans.
+        // Compare their requested due times, preserving the port association.
+        auto sent = output.sent;
+        std::sort(sent.begin(), sent.end(),
+                  [](const auto& a, const auto& b) { return a.seconds < b.seconds; });
         const unsigned frames[] = {0, 63, 64, 127, 128, 191, 192, 210};
-        for (unsigned n = 0; n < 8; ++n)
-            CHECK(output.sent[n].seconds == doctest::Approx(10.01 + frames[n] / 48000.0));
+        for (unsigned n = 0; n < 8; ++n) {
+            CHECK(sent[n].seconds == doctest::Approx(10.01 + frames[n] / 48000.0));
+            CHECK(sent[n].event.port == n % 2);
+        }
     }
     CHECK(backend.midiOutDropped() == 0);
     backend.stop();
