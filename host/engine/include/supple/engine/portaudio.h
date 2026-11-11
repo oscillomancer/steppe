@@ -48,6 +48,7 @@ class PortAudioBackend final : public Backend {
     std::vector<MidiInputWarning> midiWarnings() const override;
     std::uint64_t midiDropped() const override;
     bool writeMidi(const MidiOutputEvent&) SUPPLE_RT override;
+    std::size_t midiOutputUsed() const SUPPLE_RT override;
     std::vector<std::string> midiOutputPorts() const override;
     std::vector<std::int64_t> midiOutputLatency() const override;
     std::vector<MidiInputWarning> midiOutputWarnings() const override;

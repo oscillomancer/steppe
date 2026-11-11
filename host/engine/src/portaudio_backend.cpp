@@ -465,6 +465,7 @@ std::uint64_t PortAudioBackend::midiDropped() const {
 bool PortAudioBackend::writeMidi(const MidiOutputEvent& event) {
     return impl_->midiOut.write(event);
 }
+std::size_t PortAudioBackend::midiOutputUsed() const { return impl_->midiOut.size(); }
 std::vector<std::string> PortAudioBackend::midiOutputPorts() const {
     return impl_->sinkStarted ? impl_->sink->names : std::vector<std::string>{};
 }

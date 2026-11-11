@@ -77,7 +77,6 @@ class HardwareMidiRuntime {
     std::uint32_t fadeFrames_ = 1, fadeLeft_ = 0;
     std::size_t audioCursor_ = 0;
     std::uint32_t audioFilled_ = 0;
-    std::size_t wrote_ = 0;
     std::uint32_t lead_ = 0, frames_ = 0;
     std::atomic<std::uint32_t> leadReported_{0};
     std::int64_t frame_ = 0;

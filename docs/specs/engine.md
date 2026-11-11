@@ -2140,7 +2140,9 @@ Continue; MTC full frame) on a step over 5 ms, then clocks and quarter
 frames inside the piece, beats through the plan's time map with its exact
 inverse. Events go through a 2048-entry buffer, filtered by kind (F8
 clock; F2 spp; FA, FB, FC transport; F1 and the full frame mtc), to
-`writeMidi` at `ceil(frame) − c`; refusals and a full buffer count in
+`writeMidi` at `ceil(frame) − c`, while the period's buffer is short of
+the release reserve (`kMaxMidiOutputEvents` − `kMidiReleaseReserve`, every
+writer counted); refusals and a full buffer count in
 `Engine::syncOutputDropped(i)`, sent messages in `syncOutputSent(i)`
 (reset at start). Count-in cycles do not play, so nothing but the
 optional free clock goes out until the timeline moves. Offline renders
@@ -2952,7 +2954,10 @@ playback rate. Rapid edits finish the active fade, then fade to the latest targe
 The initial plan primes its full lead normally.
 
 No hardware delay may exceed ten seconds. Limits: 256 routes, 65,536 pending
-messages, 16 ports, and the existing 1,024 messages per device period. Equal-frame
+messages, 16 ports, and the existing 1,024 messages per device period, shared by
+routed MIDI, clock and MTC (`Backend::midiOutputUsed()` counts every writer):
+releases stop at 1,024 − `kMidiReleaseReserve` (512) and clock and MTC too, so
+the last 512 always carry a stop's CC64/CC123 resets. Equal-frame
 messages preserve route/event insertion order. Overflow is counted. Timeline origin
 is captured with each stream event before a slot can be freed or reused, carried
 through the FX bus and hardware queue, and retained for mute-retriggered notes.

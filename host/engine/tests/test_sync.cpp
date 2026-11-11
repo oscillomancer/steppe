@@ -35,6 +35,16 @@ constexpr double kRate = 48000.0;
 constexpr std::uint32_t kBlock = 256;
 const cmd::Origin kOrigin{cmd::Origin::Type::Test, "sync", ""};
 
+// A dummy device whose period's MIDI buffer also holds `busy` events from
+// other writers, for the shared release reserve.
+struct BusyBackend : DummyBackend {
+    using DummyBackend::DummyBackend;
+    std::size_t busy = 0;
+    std::size_t midiOutputUsed() const SUPPLE_RT override {
+        return DummyBackend::midiOutputUsed() + busy;
+    }
+};
+
 // A master: MIDI messages scheduled at absolute device frames, delivered in
 // the cycle that holds them, or audio on an input channel.
 struct Rig {
@@ -42,7 +52,7 @@ struct Rig {
     std::unique_ptr<EngineApp> app;
     cmd::Registry registry;
     std::unique_ptr<cmd::Dispatcher> bus;
-    std::unique_ptr<DummyBackend> backend;
+    std::unique_ptr<BusyBackend> backend;
     std::function<void(std::int64_t from, std::uint32_t n, sync::EventBuffer& out)> midi;
     std::function<void(std::int64_t from, std::span<float> out)> audio;
     std::vector<sync::MidiEvent> storage = std::vector<sync::MidiEvent>(4096);
@@ -89,7 +99,7 @@ struct Rig {
             for (std::uint32_t c = 0; c < channels; ++c) std::fill_n(in[c], n, 0.0f);
             if (audio && channels > 0) audio(from, std::span<float>(in[0], n));
         };
-        backend = std::make_unique<DummyBackend>(o);
+        backend = std::make_unique<BusyBackend>(o);
         REQUIRE(app->startEngine(*backend,
                                  {.sampleRate = kRate,
                                   .blockSize = kBlock,
@@ -1092,6 +1102,39 @@ TEST_CASE("midi clock output: a port earlier than the audio leads it, and clock 
             CHECK(std::abs(clocks[k] - clocksEarly[k] - offset) <= 1);
         }
     }
+}
+
+TEST_CASE("midi clock output: clock and MTC leave the period's release reserve to resets") {
+    // One period buffer for routed notes, clock and MTC (kMaxMidiOutputEvents):
+    // what other writers filled counts, and the last kMidiReleaseReserve
+    // events are the stop's all-notes-off.
+    Rig rig(false);
+    rig.run("midi.outputs.set", R"({"port": "Synth", "clock": true, "transport": true})");
+    rig.run("track.add", R"({"name": "Keys"})");
+    rig.run("item.add", R"({"track": "tr_1", "notation": "voice a; 1: C4:w"})");
+    rig.run("route.add", R"({"from": "tr_1", "to_midi": "Synth", "midi": {}})");
+    rig.run("transport.play", "{}");
+    rig.seconds(0.3);
+    const auto clocksBefore = clocksFrom(sentTo(rig, 0), 0).size();
+    CHECK(clocksBefore > 10);
+    const auto droppedBefore = rig.app->engine()->syncOutputDropped(0);
+    rig.backend->busy = kMaxMidiOutputEvents - kMidiReleaseReserve;
+    const std::int64_t full = rig.device;
+    rig.seconds(0.3);
+    CHECK(clocksFrom(sentTo(rig, 0), full).empty());
+    CHECK(rig.app->engine()->syncOutputDropped(0) > droppedBefore + 10);
+    // Engine stop with the buffer that full: the held note cannot have its
+    // note-off, but the reserve still carries the port's reset.
+    const std::int64_t stopped = rig.device;
+    rig.app->stopEngine();
+    bool reset = false, off = false;
+    for (const auto& m : sentTo(rig, 0)) {
+        if (m.frame < stopped) continue;
+        reset = reset || ((m.event.bytes[0] & 0xf0) == 0xb0 && m.event.bytes[1] == 123);
+        off = off || (m.event.bytes[0] & 0xf0) == 0x80;
+    }
+    CHECK(reset);
+    CHECK_FALSE(off);
 }
 
 TEST_CASE("midi outputs: one command set carries routing and clock members") {

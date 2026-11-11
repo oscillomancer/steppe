@@ -175,7 +175,6 @@ std::uint64_t HardwareMidiRuntime::dropped(bool output, std::size_t port) const 
 void HardwareMidiRuntime::begin(Backend& backend, std::uint32_t frames) {
     backend_ = &backend;
     frames_ = frames;
-    wrote_ = 0;
 }
 bool HardwareMidiRuntime::write(RouteState& state, const MidiOutputEvent& value) {
     auto event = value;
@@ -184,7 +183,6 @@ bool HardwareMidiRuntime::write(RouteState& state, const MidiOutputEvent& value)
         outputDrops_[event.port].fetch_add(1, std::memory_order_relaxed);
         return false;
     }
-    ++wrote_;
     if (event.bytes[0] < 0xf0)
         state.channels |= static_cast<std::uint16_t>(1u << (event.bytes[0] & 15));
     const auto key = std::size_t(event.bytes[0] & 15) * 128 + event.bytes[1];
@@ -199,8 +197,10 @@ bool HardwareMidiRuntime::write(RouteState& state, const MidiOutputEvent& value)
 bool HardwareMidiRuntime::release(RouteState& state, std::uint32_t at) {
     for (std::size_t key = 0; key < state.held.size(); ++key)
         while (state.held[key]) {
-            if (wrote_ >= kMaxMidiOutputEvents - 512)
-                return false;  // reserve bounded whole-port panic capacity
+            // The period's buffer, clock and MTC included, keeps the reserve
+            // for whole-port resets.
+            if (backend_->midiOutputUsed() >= kMaxMidiOutputEvents - kMidiReleaseReserve)
+                return false;
             if (!write(state, {at,
                                0,
                                3,
@@ -210,7 +210,8 @@ bool HardwareMidiRuntime::release(RouteState& state, std::uint32_t at) {
         }
     for (unsigned channel = 0; channel < 16; ++channel)
         if (state.channels & (1u << channel)) {
-            if (wrote_ >= kMaxMidiOutputEvents - 512) return false;
+            if (backend_->midiOutputUsed() >= kMaxMidiOutputEvents - kMidiReleaseReserve)
+                return false;
             if (!write(state, {at, 0, 3, {static_cast<std::uint8_t>(0xb0 | channel), 64, 0}}))
                 return false;
         }

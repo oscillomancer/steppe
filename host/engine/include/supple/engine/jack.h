@@ -80,6 +80,7 @@ class JackBackend : public Backend {
     std::span<const SyncMidiEvent> syncMidi() const override;
     std::vector<std::string> midiPorts() const override;
     bool writeMidi(const MidiOutputEvent&) SUPPLE_RT override;
+    std::size_t midiOutputUsed() const SUPPLE_RT override;
     std::vector<std::string> midiOutputPorts() const override;
     std::vector<std::int64_t> midiOutputLatency() const override;
     std::vector<MidiInputWarning> midiOutputWarnings() const override;

@@ -462,7 +462,10 @@ void SyncRuntime::writeMidi(const SyncCycle& c) SUPPLE_RT {
             m.port = static_cast<std::uint16_t>(i);
             m.size = e.size;
             std::copy_n(e.bytes.begin(), e.size, m.bytes);
-            if (c.midiOut->writeMidi(m))
+            // Clock and MTC share the period's buffer with routed MIDI and
+            // leave its release reserve to note-offs and resets.
+            if (c.midiOut->midiOutputUsed() < kMaxMidiOutputEvents - kMidiReleaseReserve &&
+                c.midiOut->writeMidi(m))
                 ++sent;
             else
                 ++dropped;

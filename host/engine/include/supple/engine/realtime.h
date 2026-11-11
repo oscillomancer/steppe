@@ -154,6 +154,10 @@ struct MidiOutputEvent {
     std::uint8_t bytes[10]{};
 };
 inline constexpr std::size_t kMaxMidiOutputEvents = 1024;  // per device period
+// Of a period's output events, what only releases and resets may use: note
+// streams and clock or MTC stop short of it, so a stop's whole-port
+// all-notes-off always fits (16 channels x CC64 + CC123 x 16 ports).
+inline constexpr std::size_t kMidiReleaseReserve = 512;
 namespace detail {
 // Fixed callback staging shared by all backends. Stable frame order at flush.
 class MidiOutputCycle {
@@ -161,6 +165,7 @@ class MidiOutputCycle {
     void begin(std::uint32_t frames, std::size_t ports) SUPPLE_RT;
     void chunk(std::uint32_t offset, std::uint32_t frames) SUPPLE_RT;
     bool write(const MidiOutputEvent&) SUPPLE_RT;
+    std::size_t size() const SUPPLE_RT { return count_; }  // written this period
     std::span<const MidiOutputEvent> sorted() SUPPLE_RT;
     void drop(std::uint64_t count = 1) SUPPLE_RT {
         dropped_.fetch_add(count, std::memory_order_relaxed);
@@ -332,6 +337,9 @@ class Backend {
     // Output writes are callback-only, bounded and allocation-free. False
     // counts a rejected event; accepted events may still be lost downstream.
     virtual bool writeMidi(const MidiOutputEvent&) SUPPLE_RT { return false; }
+    // Events accepted so far this device period, by every writer (routed
+    // MIDI, clock and MTC), for the shared release reserve.
+    virtual std::size_t midiOutputUsed() const SUPPLE_RT { return 0; }
     virtual std::vector<std::string> midiOutputPorts() const { return {}; }
     virtual std::uint64_t midiOutDropped() const { return 0; }
     // Loss after callback acceptance, attributed to an output port.
@@ -397,6 +405,7 @@ class DummyBackend : public Backend {
     bool writeMidi(const MidiOutputEvent& event) SUPPLE_RT override {
         return midiOutput_.write(event);
     }
+    std::size_t midiOutputUsed() const SUPPLE_RT override { return midiOutput_.size(); }
     std::vector<std::string> midiOutputPorts() const override;
     std::vector<std::int64_t> midiOutputLatency() const override;
     std::uint64_t midiOutDropped() const override { return midiOutput_.dropped(); }

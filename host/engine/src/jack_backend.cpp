@@ -672,6 +672,10 @@ bool JackBackend::writeMidi(const MidiOutputEvent& event) {
     auto* self = active_.load(std::memory_order_acquire);
     return self && self->midiOut.write(event);
 }
+std::size_t JackBackend::midiOutputUsed() const {
+    auto* self = active_.load(std::memory_order_acquire);
+    return self ? self->midiOut.size() : 0;
+}
 std::vector<std::string> JackBackend::midiOutputPorts() const {
     return impl_ ? impl_->midiOutNames : std::vector<std::string>{};
 }
