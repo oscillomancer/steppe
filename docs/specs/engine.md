@@ -2122,7 +2122,8 @@ delay change adjusts in place.
 in stopped spans, two spans at a wrap, 4096) and per output a
 `ClockGenerator`, an `MtcGenerator` (the project's timecode) and where the
 last piece ended. Each cycle, after LTC, for each sending output i with
-total delay D = plan latency + delay_i, the window `[c, c + n)` reads the
+total delay D = plan latency + hardware MIDI lead + delay_i (never
+negative once the plan's lead covers the port; see below), the window `[c, c + n)` reads the
 timeline at `[c − D, c + n − D)` as pieces: spans clipped to it (before
 the oldest: unknown, nothing sent), then, past the newest span (D < 0), a
 prediction at its speed wrapping at the loop's end. Each piece at output
@@ -2928,6 +2929,10 @@ Route delay is `plan.outputLatency - source.timelineShift - tappedLatency +
 backend.midiOutputLatency[port] + offset_ms * sampleRate / 1000` (rounded to
 frames). Negative minimum delay adds prepared audio lead to all MIDI delays and a
 final audio delay; lead is limited to one second and reported by `midi_lead_frames`.
+Ports that send clock, transport, SPP or MTC (ADR-0073) count with
+`plan.outputLatency + backend.midiOutputLatency[port] + offset`, so a clock-only
+port faster than its audio gets the lead too; the sync runtime's plan and heard
+latencies include it, and clock follows a lead change at once (no slew).
 Engine output latency, heard timing and recording account for it. History is
 allocated on the owner thread only when publishing a plan with non-zero lead, and
 runs only during non-zero lead or a tap crossfade. It continues across stop, locate,

@@ -114,6 +114,18 @@ Status prepareHardwareMidi(Plan& plan, Backend& backend, const MidiPortPreferenc
             v.volumeDb = 0;
         }
     }
+    // Clock, Song Position and MTC leave after the plan's latency, the
+    // port's latency and its offset (ADR-0073): a port that sends them
+    // earlier than the audio is heard needs the same lead as a routed one.
+    for (std::size_t p = 0; p < ports.size() && p < 16; ++p) {
+        const auto& settings = plan.midiOutputsSettings[p];
+        if (!settings.enabled ||
+            !(settings.clock || settings.transport || settings.spp || settings.mtc))
+            continue;
+        const std::int64_t delay = plan.outputLatency + (p < latency.size() ? latency[p] : 0) +
+                                   time::samplesAt(settings.offsetMs / 1000., plan.rate);
+        lead = std::max(lead, -delay);
+    }
     if (lead > static_cast<std::int64_t>(plan.rate * kHardwareMidiLeadSeconds))
         return Error("engine.midi_lead", "MIDI advance exceeds one second of prepared audio lead",
                      "/midi_outputs",

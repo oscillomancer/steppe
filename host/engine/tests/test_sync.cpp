@@ -861,22 +861,27 @@ TEST_CASE("mtc output: quarter frames decode to the heard position, with plan la
     }
 }
 
-TEST_CASE("midi clock output: per-port offset, and a negative latency predicted ahead") {
+TEST_CASE("midi clock output: per-port offset, and a port faster than its audio gets the lead") {
     for (bool ahead : {false, true}) {
         CAPTURE(ahead);
-        // Synth's MIDI is 100 frames faster than its audio; Clock Out's 300 slower.
+        // Synth's MIDI is 100 frames faster than its audio; Clock Out's 300
+        // slower, so its clock must leave 300 frames before the audio it
+        // belongs to: the shared audio lead (ADR-0073 §10) delays the audio
+        // instead of predicting the clock.
         Rig rig(ahead, 2, static_cast<std::int64_t>(kRate * 4), {100, -300});
         rig.item(clicks(4, {0.5}));
         rig.run("midi.outputs.set",
                 R"({"port": "Synth", "clock": true, "transport": true, "offset_ms": 5})");
         rig.run("midi.outputs.set", R"({"port": "Clock Out", "clock": true, "transport": true,
                                         "spp": true})");
+        rig.seconds(0.05);  // the callback adopts the plan with its lead
+        CHECK(rig.app->engine()->midiLeadFrames() == 300);
         auto ports = rig.run("midi.outputs.get", "{}")["ports"];
         REQUIRE(ports.size() == 2);  // the device's order
         CHECK(ports.asArray()[1]["name"].asString() == "Clock Out");
-        CHECK(ports.asArray()[1]["delay_ms"].asDouble() == doctest::Approx(-300.0 / 48.0));
+        CHECK(ports.asArray()[1]["delay_ms"].asDouble() == doctest::Approx(0.0));
         CHECK(ports.asArray()[0]["delay_ms"].asDouble() ==
-              doctest::Approx(340.0 / 48.0));  // 100 frames + 5 ms
+              doctest::Approx(640.0 / 48.0));  // lead + 100 frames + 5 ms
         CHECK(ports.asArray()[0]["latency_ms"].asDouble() == doctest::Approx(100.0 / 48.0));
         rig.run("transport.seek", R"({"seconds": 0})");
         const std::int64_t played = rig.device;
@@ -892,22 +897,15 @@ TEST_CASE("midi clock output: per-port offset, and a negative latency predicted 
         REQUIRE(synth.size() > 40);
         for (std::size_t k = 0; k < 40; ++k)
             CHECK(std::abs(synth[k] - (heard0 + 1000 * std::int64_t(k) + 340)) <= 1);
-        // A negative delay cannot be met for what is already processed: the
-        // start lands with the first cycle (late by up to 300 frames), at the
-        // 16th the timeline will be at, and the clocks are predicted ahead.
+        // Clock Out: Start from beat 0, no Continue, and every clock 300
+        // frames before its audio, from the first.
         const auto out = sentTo(rig, 1);
-        const auto* cont = first(out, 0xFB, played);
-        REQUIRE(cont);
-        const DummyBackend::CapturedMidi* spp = nullptr;  // sent with the Continue
-        for (const auto& m : out)
-            if (is(m, 0xF2) && m.frame == cont->frame) spp = &m;
-        REQUIRE(spp);
-        CHECK(songPosition(*spp) == 1);
-        CHECK(cont->frame == heard0);
+        REQUIRE(first(out, 0xFA, played));
+        CHECK_FALSE(first(out, 0xFB, played));
         const auto clocks = clocksFrom(out, played);
         REQUIRE(clocks.size() > 40);
-        for (std::size_t k = 0; k < 30; ++k)
-            CHECK(std::abs(clocks[k] - (heard0 + 1000 * std::int64_t(k + 6) - 300)) <= 1);
+        for (std::size_t k = 0; k < 40; ++k)
+            CHECK(std::abs(clocks[k] - (heard0 + 1000 * std::int64_t(k) - 300)) <= 1);
     }
 }
 
@@ -1019,6 +1017,58 @@ TEST_CASE("midi outputs: get, set, validation, engine.status and the JSON round 
     CHECK(wrong.error().path == "/midi_outputs/A/mtc");
     // Inputs carry no output members.
     CHECK_FALSE(parseMidiPortPreferences(json::parse(R"({"A": {"clock": true}})").value(), false));
+}
+
+TEST_CASE("midi clock output: a port earlier than the audio leads it, and clock follows the lead") {
+    // Synth sends 20 ms before its audio, more than the plan's 512 frames of
+    // latency: the shared hardware MIDI lead (ADR-0072) covers it although
+    // it carries no routed notes, and Clock Out, at offset 0, then waits
+    // with the delayed audio (ADR-0073 §10).
+    for (bool ahead : {false, true}) {
+        CAPTURE(ahead);
+        Rig rig(ahead, 2, static_cast<std::int64_t>(kRate * 4));
+        rig.latency(8);  // 512 frames: the audio leaves that much after processing
+        rig.item(clicks(4, {1.0}));
+        rig.run("midi.outputs.set",
+                R"({"port": "Synth", "clock": true, "transport": true, "offset_ms": -20})");
+        rig.run("midi.outputs.set", R"({"port": "Clock Out", "clock": true, "transport": true})");
+        REQUIRE(rig.app->engine()->awaitPlan());
+        const std::int64_t offset = std::llround(0.020 * kRate), lead = offset - 512;
+        rig.run("transport.seek", R"({"seconds": 0})");
+        const std::int64_t played = rig.device;
+        rig.run("transport.play", "{}");
+        rig.seconds(2.0);
+        CHECK(rig.app->engine()->midiLeadFrames() == lead);
+        // What the sync runtime takes as heard includes the lead too.
+        const double heardLatency = rig.app->engine()->syncStatus().heardLatency * kRate;
+        CHECK(heardLatency == doctest::Approx(double(512 + lead)));  // the dummy adds none
+        rig.app->stopEngine();
+        const auto& audio = rig.backend->capture().channels[0];
+        // Timeline 1 s is heard at the click, the lead included.
+        const std::int64_t one = click(audio, played);
+        REQUIRE(one > 0);
+        const auto heard = [&](double seconds) { return double(one) + (seconds - 1.0) * kRate; };
+        const auto clock = sentTo(rig, 1), early = sentTo(rig, 0);
+        const auto* start = first(clock, 0xFA, played);
+        const auto* startEarly = first(early, 0xFA, played);
+        REQUIRE(start);
+        REQUIRE(startEarly);
+        // Start where the transport starts to be heard: its pre-roll covers
+        // the plan's latency and the lead. Synth's cannot precede the play.
+        CHECK(std::abs(double(start->frame) - heard(-double(512 + lead) / kRate)) <= 1.0);
+        CHECK(startEarly->frame <= start->frame);
+        CHECK(startEarly->frame >= played);
+        // Clock k at beat k/24 (120 bpm: 1/48 s apart), with the audio and
+        // the offset early.
+        const auto clocks = clocksFrom(clock, start->frame);
+        const auto clocksEarly = clocksFrom(early, startEarly->frame);
+        REQUIRE(clocks.size() > 40);
+        REQUIRE(clocksEarly.size() > 40);
+        for (std::size_t k = 0; k < 40; ++k) {
+            CHECK(std::abs(double(clocks[k]) - std::ceil(heard(double(k) / 48.0))) <= 1.0);
+            CHECK(std::abs(clocks[k] - clocksEarly[k] - offset) <= 1);
+        }
+    }
 }
 
 TEST_CASE("midi outputs: one command set carries routing and clock members") {

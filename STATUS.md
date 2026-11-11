@@ -949,9 +949,10 @@ Engine and hosting:
   plays audio clips through the stretcher, close to but not the same as
   unsynced playback even when locked; Steppe stops when the master plays
   backwards; recorded takes drift from the timeline by the chase rate's
-  distance from 1. A MIDI output whose total delay is negative (a MIDI port
-  slower than the audio, or a large negative offset) is predicted ahead:
-  starts, stops and locates reach it late by up to that delay. The
+  distance from 1. A MIDI output that must send before its audio (a MIDI port
+  slower than the audio, or a negative offset beyond the plan latency)
+  adds that much latency to all audio and monitoring, the shared hardware
+  MIDI lead (at most 1 s), clock-only ports included. The
   same-device test against echoing to the sync master compares port names.
   A slave on a device that vanished with no callback left to carry it (a
   JACK server that went away, an unplugged MIDI device) is not sent its

@@ -72,7 +72,10 @@ output port, which Phase 2's hardware MIDI routing extends.
    transport will. A start, stop or locate the prediction could not know
    lands with the first cycle that processes it, late by up to |delay|; a
    start there begins at the position the timeline is predicted to be at
-   (Song Position of the next 16th and Continue, not Start).
+   (Song Position of the next 16th and Continue, not Start). With
+   ADR-0072 merged, the audio lead (§10) keeps every sending port's delay
+   from going negative, so the prediction is left for the moment between a
+   plan's preparation and its adoption.
 
 4. **What a jump sends.** Each piece of the window is compared with where
    the previous one ended: a step over 5 ms of timeline is a locate
@@ -144,6 +147,19 @@ output port, which Phase 2's hardware MIDI routing extends.
    disposing it. A slave is left playing only when its device is gone with
    no callback to carry the Stop (a JACK server that went away, an
    unplugged MIDI device).
+
+10. **The audio lead covers clock ports (ADR-0072).** ADR-0072 delays all
+    audio by the hardware MIDI lead, the most any routed port's MIDI must
+    leave before its audio. A port sending clock, transport, SPP or MTC
+    counts the same way (plan latency + its latency + offset < 0 needs that
+    much lead), and the lead is part of the plan latency the runtime uses
+    for its delays and for the heard position. A port faster than its audio
+    is then met exactly, at the price of that latency on all audio and
+    monitoring (`lead_ms`), at most one second (more refuses the plan,
+    `engine.midi_lead`). Clock and MTC follow a lead change at once, with
+    no slew of their own; the audio crossfades its taps over 5 ms
+    (ADR-0072), so a clock tick inside that fade can be off its audio by up
+    to the change.
 
 ## Consequences
 

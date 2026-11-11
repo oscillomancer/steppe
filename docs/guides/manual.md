@@ -1036,6 +1036,8 @@ place), `mtc` MIDI time code at the project's timecode, and
 `clock_while_stopped` keeps the clock running at the tempo while stopped.
 `offset_ms` moves that output's MIDI later (or earlier, negative) to suit
 the device, notes and clock alike, and `enabled: false` silences the output.
+An offset earlier than the audio's own latency delays all audio by the
+difference (`lead_ms` shows it), so the clock still lands on time.
 The port is the output's name as `midi.outputs.get` lists it (any letter
 case, as long as only one output matches). Clock and MTC are off until you
 turn them on, and the settings are kept with your preferences, also for a

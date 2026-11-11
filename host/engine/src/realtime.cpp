@@ -747,9 +747,12 @@ Status Engine::load(const model::Session& session, const std::filesystem::path& 
     plan->rateDeviceMargin += plan->hardwareLead;
     midiSettingsDirty_ = false;
     outputLatency_ = static_cast<std::uint32_t>(plan->outputLatency);
-    syncOutputLatency_.store(plan->outputLatency + backend_->status().outputLatency,
+    // Audio is heard after the plan's latency and the hardware MIDI lead,
+    // which every sending port's clock and MTC follow too (ADR-0073 §10).
+    syncOutputLatency_.store(plan->outputLatency + plan->hardwareLead +
+                                 backend_->status().outputLatency,
                              std::memory_order_relaxed);
-    syncPlanLatency_.store(plan->outputLatency, std::memory_order_relaxed);
+    syncPlanLatency_.store(plan->outputLatency + plan->hardwareLead, std::memory_order_relaxed);
     warnings_ = plan->warnings;
     for (const detail::OutputTap& o : plan->outputs)  // ADR-0056
         if (std::max(o.left, o.right) >= static_cast<int>(deviceOutputs_))
