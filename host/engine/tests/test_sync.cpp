@@ -275,6 +275,29 @@ TEST_CASE("sync settings: get, set, validation, and the status in engine.status"
     CHECK(said);
 }
 
+TEST_CASE("midi clock: a disabled MIDI input does not drive the chase") {
+    Rig rig(false);
+    rig.run("sync.set", R"({"source": "midi_clock", "midi_input": "Clock In"})");
+    rig.run("midi.inputs.set", R"({"port": "Clock In", "enabled": false})");
+    CHECK(rig.app->engine()->syncConfig().midiPort == -1);
+    bool warned = false;
+    const json::Value got = rig.run("sync.get", "{}");
+    for (const auto& w : got.find("status")->find("warnings")->asArray())
+        warned = warned || w.asString().find("is disabled") != std::string::npos;
+    CHECK(warned);
+    ClockMaster master;
+    master.startFrame = 4800;
+    rig.midi = std::ref(master);
+    rig.seconds(0.6);
+    CHECK_FALSE(rig.transport().playing);
+    CHECK_FALSE(rig.status().present);
+    // Enabled again: the chase follows the running master.
+    rig.run("midi.inputs.set", R"({"port": "Clock In", "enabled": true})");
+    CHECK(rig.app->engine()->syncConfig().midiPort == 1);
+    rig.seconds(0.6);
+    CHECK(rig.status().present);
+}
+
 TEST_CASE("midi clock: Start, tempo follow, Stop, Song Position and Continue") {
     for (bool ahead : {false, true}) {
         CAPTURE(ahead);

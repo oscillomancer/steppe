@@ -9,7 +9,9 @@ the shutdown path and the audio lead)
 2026-11-11 integration with ADR-0073: the port record also carries the clock
 members, validated by the same parser; the sender's shutdown keeps a clock
 slave's Stop (FC) with the releases; the audio lead also covers ports that
-send clock or MTC. ADR-0073 §1, §9 and §10 describe them.
+send clock or MTC. ADR-0073 §1, §9 and §10 describe them. A disabled
+input also stops the sync chase (ADR-0071) from following it; an input's
+offset_ms does not apply to the chase.
 
 2026-11-11 review correction: closing native releases use sink timestamps of
 now before port/client disposal; their normal plan delay is bypassed. The

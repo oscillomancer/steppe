@@ -190,6 +190,19 @@ SyncConfig EngineApp::syncConfigFor(std::vector<std::string>* warnings) const {
                                       "{midi_input})"
                                     : "sync: no MIDI input is named \"" + s.midiInput +
                                           "\"; engine.devices lists them");
+        // A disabled input feeds nothing, the chase included (ADR-0072's
+        // port settings); its offset_ms is for played and recorded MIDI,
+        // the chase has its own (sync.set offset_ms, ADR-0071).
+        if (c.midiPort >= 0 &&
+            !midiPortSettings(midiInputsPreferences_, ports[static_cast<std::size_t>(c.midiPort)])
+                 .enabled) {
+            if (warnings)
+                warnings->push_back("sync: the MIDI input \"" +
+                                    ports[static_cast<std::size_t>(c.midiPort)] +
+                                    "\" is disabled, so nothing is followed; enable it with "
+                                    "midi.inputs.set {enabled: true}");
+            c.midiPort = -1;
+        }
     }
     if (c.source == SyncSource::Ltc) {
         if (static_cast<std::uint32_t>(s.ltcInput) <= device.inputs)

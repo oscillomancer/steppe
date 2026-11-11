@@ -5,6 +5,11 @@ ADR-0045 and ADR-0046 (the master playrate) and ADR-0050 (machine-specific
 preferences). Contracts: `docs/specs/session-model.md`, `docs/specs/engine.md`,
 `docs/specs/gui.md`.
 
+2026-11-11, with hardware MIDI routing (ADR-0072): a MIDI input disabled in
+its port record is not followed (the chase reports it in its warnings), and
+that record's `offset_ms` does not move the chase, whose input latency is
+§9's and whose own offset is `sync.set`'s.
+
 ## Context
 
 Following an external master (MIDI clock with Song Position, MIDI Time

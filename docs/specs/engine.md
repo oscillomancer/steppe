@@ -1942,7 +1942,10 @@ scripts them for tests.
 
 **Settings and status.** `EngineApp` holds `SyncSettings` (`sync.get`,
 `sync.set`; ADR-0071 §2) and resolves them for the engine: the MIDI port by
-exact name, else the first containing it (case-insensitive); the input and
+exact name, else the first containing it (case-insensitive), none (with a
+warning) while that input is disabled in its MIDI port record (ADR-0072;
+its `offset_ms` moves played and recorded MIDI, not the chase, whose
+latency is §9's and whose offset is `sync.set`'s); the input and
 output channels against the device; the project's timecode; the freewheel
 time from its frames. Unresolvable members become warnings in
 `engine.status.sync.warnings` and `sync.set`'s warnings, as does an LTC
@@ -3000,9 +3003,12 @@ aggregate `midi_dropped`. Port latency_ms is the signed backend latency before
 user offset/lead; inputs currently report zero device latency.
 
 Preferences add `midi_inputs` and `midi_outputs` maps to
-`supple.preferences/1.6`, keyed by exact enumerated port name. Records retain
-unknown members for clock output compatibility. Defaults are enabled, zero
-offset and output reset_on_stop true. GUI and headless applications use the
+`supple.preferences/1.6` (1.8 adds the outputs' clock members, ADR-0073),
+keyed by exact enumerated port name. Records retain unknown members, so a
+later version's survive edits. Defaults are enabled, zero offset, output
+reset_on_stop true and every clock member false. The engine writer raises
+an older schema label to the current one. A disabled input also stops the
+sync chase from following it. GUI and headless applications use the
 same preferences file; embedded hosts may provide their own persistence.
 
 The engine and GUI share `engine::kPreferencesSchema` for the current machine
