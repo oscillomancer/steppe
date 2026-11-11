@@ -139,7 +139,12 @@ void MidiOutputSender::stop() {
         }
     if (sink_.timestamped()) {
         const double deadline = midiOutputCloseDeadline(sink_.now(), lastSent_);
-        while (sink_.now() < deadline) sink_.waitUntil(deadline);
+        const auto limit = std::chrono::steady_clock::now() +
+                           std::chrono::duration<double>(kMidiOutputCloseWaitSeconds);
+        // Also bound a broken/stationary sink clock; the OS wait itself is
+        // polled at most 1 ms. Device-free sinks need not advance with wall time.
+        while (sink_.now() < deadline && std::chrono::steady_clock::now() < limit)
+            sink_.waitUntil(deadline);
     }
 }
 bool MidiOutputSender::push(const TimedMidiOutput& event) {
