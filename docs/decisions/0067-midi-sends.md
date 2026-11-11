@@ -58,8 +58,11 @@ frontier rings.
 Voice storage follows the notes that can sound at once, never the notes in
 the timeline: each channel's held notes take slots of a prepared pool (its
 items' overlap, its live keys, its sends' source voices), and its sends'
-voices, queues and budgets multiply those slots. Plan adoption on the audio
-thread is therefore bounded by the voices held. A held note survives an
+voices, queues and budgets multiply those slots. A send reserves for one
+block the events its source can carry in any block-length window, which a
+delay only shifts, so relay chains add each hop's own events instead of
+doubling them. Plan adoption on the audio thread is therefore bounded by
+the voices held. A held note survives an
 edit through its own musical identity (item notes), its key (live input)
 or the unchanged send that delivered it; a send whose parameters changed
 anywhere upstream (route, tap, channels, PDC delay) releases what it

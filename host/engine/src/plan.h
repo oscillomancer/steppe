@@ -670,7 +670,9 @@ struct Node {
     std::vector<bool> midiTakeSources;
     std::uint64_t midiEpoch = 1;
     std::uint64_t midiDropped = 0;  // notes or events past a prepared capacity
-    std::size_t midiEventRate = 0;
+    // Bounds on its MIDI stream for the sends that read it: events at one
+    // frame, and events in any `block` consecutive frames (not block-aligned).
+    std::size_t midiEventRate = 0, midiWindow = 0;
     bool midiReleaseTimeline = false, midiSends = false;
 
     Id id;  // a track's, or a rack's (rk_*)
