@@ -1045,11 +1045,11 @@ void registerExtraCommands(cmd::Registry& registry) {
             "channel_names names those a multi-out plug-in writes ({\"3\": \"Kick\"}), and "
             "route.add {channels: {from: [3, 4], to: [1, 2]}} sends that pair.";
         c.tags = {"route"};
-        auto args = schema::object<RouteMatrixArgs>("route_matrix_args");
-        args.field("mode", &RouteMatrixArgs::mode,
-                   schema::string().pattern("^(audio|midi)$", "audio or midi"));
-        args.defaultValue(std::string("audio"));
-        c.args = args.build();
+        auto matrixArgs = schema::object<RouteMatrixArgs>("route_matrix_args");
+        matrixArgs.field("mode", &RouteMatrixArgs::mode,
+                         schema::string().pattern("^(audio|midi)$", "audio or midi"));
+        matrixArgs.defaultValue(std::string("audio"));
+        c.args = matrixArgs.build();
         c.result = schema::any();
         c.examples = {
             {"A song's routing", j("{}"),
