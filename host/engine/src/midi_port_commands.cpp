@@ -72,6 +72,11 @@ Status EngineApp::setMidiPreferences(MidiPortPreferences inputs, MidiPortPrefere
     ++midiPreferencesRevision_;
     midiInputsPreferences_ = std::move(inputs);
     midiOutputsPreferences_ = std::move(outputs);
+    for (bool output : {false, true}) {
+        const auto& preferences = output ? midiOutputsPreferences_ : midiInputsPreferences_;
+        std::erase_if(midiPreferencesWarnings_[output ? 1 : 0],
+                      [&](const auto& warning) { return preferences.contains(warning.port); });
+    }
     return {};
 }
 Status EngineApp::setMidiPort(bool output, const std::string& name, const json::Value& edits) {
@@ -119,7 +124,13 @@ json::Value EngineApp::midiPortsState(bool output) const {
                               ? (output ? backend_->midiOutputWarnings() : backend_->midiWarnings())
                               : std::vector<MidiInputWarning>{};
     const auto& preferences = output ? midiOutputsPreferences_ : midiInputsPreferences_;
+    const auto& loadWarnings = midiPreferencesWarnings_[output ? 1 : 0];
+    const std::string sectionName = output ? "MIDI outputs" : "MIDI inputs";
     std::vector<std::string> all = names;
+    for (const auto& warning : loadWarnings) {
+        const auto& name = warning.port.empty() ? sectionName : warning.port;
+        if (std::find(all.begin(), all.end(), name) == all.end()) all.push_back(name);
+    }
     for (const auto& [name, settings] : preferences) {
         (void)settings;
         if (std::find(all.begin(), all.end(), name) == all.end()) all.push_back(name);
@@ -170,6 +181,17 @@ json::Value EngineApp::midiPortsState(bool output) const {
                                             (output ? backend_->midiOutAsyncDropped(index) : 0))
                 : std::int64_t{0};
         port["warnings"] = json::Value::array();
+        for (const auto& warning : loadWarnings)
+            if (warning.port.empty() || warning.port == name) {
+                auto w = json::Value::object();
+                w["device"] = warning.port.empty() ? sectionName : warning.port;
+                w["os_error"] = 0;
+                w["code"] = warning.error.code;
+                w["path"] = warning.error.path;
+                w["message"] = "Skipped malformed MIDI preference record: " + warning.error.message;
+                w["hint"] = warning.error.hint;
+                port["warnings"].push_back(std::move(w));
+            }
         for (const auto& warning : warnings)
             if (warning.device == name || warning.device == "MIDI outputs" ||
                 warning.device == "MIDI inputs") {

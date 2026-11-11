@@ -28,6 +28,11 @@ scheduled delay, capped at 250 ms. The common sender deadline/bound can also
 serve a final clock Stop. Delays beyond the cap remain a native-test limit.
 WinMM remains immediate and JACK remains in-period; no endpoint flush.
 
+2026-11-11 re-review correction D: malformed machine MIDI records are skipped
+at startup with structured port-status warnings; valid records still load.
+Command edits continue to validate strictly. The GUI uses the same tolerant
+startup loader; the engine retains and reports the warnings.
+
 ## Decision
 
 Extend the unreleased project schema 2.10 with MIDI routes whose destination

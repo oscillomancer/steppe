@@ -133,9 +133,10 @@ Result<Preferences> Preferences::load(const std::filesystem::path& file) {
     }
     for (bool output : {false, true}) {
         if (const auto* ports = doc->find(output ? "midi_outputs" : "midi_inputs")) {
-            auto parsed = engine::parseMidiPortPreferences(*ports, output);
-            if (!parsed) return parsed.error();
-            (output ? out.midiOutputs : out.midiInputs) = std::move(*parsed);
+            std::vector<engine::MidiPortPreferenceWarning> warnings;
+            // EngineApp loads the same file and surfaces these startup warnings.
+            (output ? out.midiOutputs : out.midiInputs) =
+                engine::loadMidiPortPreferences(*ports, output, warnings);
         }
     }
     return out;

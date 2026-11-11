@@ -96,10 +96,9 @@ Result<std::unique_ptr<EngineApp>> EngineApp::create(AppOptions options, model::
             if (!doc) return doc.error();
             for (bool output : {false, true})
                 if (const auto* value = doc->find(output ? "midi_outputs" : "midi_inputs")) {
-                    auto parsed = parseMidiPortPreferences(*value, output);
-                    if (!parsed) return parsed.error();
                     (output ? app->midiOutputsPreferences_ : app->midiInputsPreferences_) =
-                        std::move(*parsed);
+                        loadMidiPortPreferences(*value, output,
+                                                app->midiPreferencesWarnings_[output ? 1 : 0]);
                 }
         }
     }

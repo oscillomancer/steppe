@@ -38,6 +38,25 @@ Result<MidiPortPreferences> parseMidiPortPreferences(const json::Value& value, b
     }
     return result;
 }
+MidiPortPreferences loadMidiPortPreferences(const json::Value& value, bool output,
+                                            std::vector<MidiPortPreferenceWarning>& warnings) {
+    MidiPortPreferences result;
+    if (!value.isObject()) {
+        auto parsed = parseMidiPortPreferences(value, output);
+        warnings.push_back({"", parsed.error()});
+        return result;
+    }
+    for (const auto& entry : value.asObject()) {
+        auto single = json::Value::object();
+        single[entry.key] = entry.value;
+        auto parsed = parseMidiPortPreferences(single, output);
+        if (parsed)
+            result.insert(parsed->begin(), parsed->end());
+        else
+            warnings.push_back({entry.key, parsed.error()});
+    }
+    return result;
+}
 json::Value midiPortPreferencesJson(const MidiPortPreferences& preferences) {
     auto result = json::Value::object();
     for (const auto& [name, value] : preferences) result[name] = value;

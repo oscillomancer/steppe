@@ -3,6 +3,7 @@
 #pragma once
 #include <map>
 #include <string>
+#include <vector>
 #include "supple/base/result.h"
 #include "supple/json/value.h"
 namespace supple::engine {
@@ -18,5 +19,13 @@ struct MidiPortSettings {
 using MidiPortPreferences = std::map<std::string, json::Value, std::less<>>;
 MidiPortSettings midiPortSettings(const MidiPortPreferences&, std::string_view name);
 Result<MidiPortPreferences> parseMidiPortPreferences(const json::Value&, bool output);
+struct MidiPortPreferenceWarning {
+    std::string port;  // empty: invalid whole input/output section
+    Error error;
+};
+// Startup only: retain valid records and report each skipped record. Command
+// edits use the strict parser above and still refuse malformed settings.
+MidiPortPreferences loadMidiPortPreferences(const json::Value&, bool output,
+                                            std::vector<MidiPortPreferenceWarning>& warnings);
 json::Value midiPortPreferencesJson(const MidiPortPreferences&);
 }  // namespace supple::engine

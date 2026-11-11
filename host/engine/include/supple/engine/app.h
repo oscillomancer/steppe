@@ -655,6 +655,7 @@ class EngineApp : public cmd::Host {
     // Declared first: outlives instances, engine/backend, and worker joins.
     MainThreadWake mainWake_;
     MidiPortPreferences midiInputsPreferences_, midiOutputsPreferences_;
+    std::array<std::vector<MidiPortPreferenceWarning>, 2> midiPreferencesWarnings_;
     std::uint64_t midiPreferencesRevision_ = 0;
     AppOptions options_;
     std::atomic<std::uint64_t> projectGeneration_{0};

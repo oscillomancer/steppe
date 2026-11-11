@@ -764,3 +764,54 @@ TEST_CASE("hardware MIDI: reset-off boundaries preserve delayed releases and dro
                 CHECK(events(backend, 0x84).size() == (beforeOnset ? 0 : 1));
             }
 }
+
+TEST_CASE("hardware MIDI: startup skips malformed preference records and reports each warning") {
+    const auto dir = std::filesystem::temp_directory_path() /
+                     ("midi-bad-record-" + std::to_string(test::processId()));
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    AppOptions options;
+    options.workdir = dir;
+    options.midiPreferencesFile = dir / "preferences.json";
+    REQUIRE(writeFileAtomic(
+        options.midiPreferencesFile,
+        R"({"schema":"supple.preferences/1.6","midi_outputs":{"Synth":{"offset_ms":2000},"Drums":{"enabled":false}},"midi_inputs":{"Broken":{"enabled":3},"Keyboard":{"offset_ms":5}}})"));
+    auto app = EngineApp::create(options);
+    REQUIRE(app);
+    CHECK_FALSE((*app)->midiOutputsPreferences().contains("Synth"));
+    CHECK_FALSE((*app)->midiInputsPreferences().contains("Broken"));
+    CHECK_FALSE(midiPortSettings((*app)->midiOutputsPreferences(), "Drums").enabled);
+    CHECK(midiPortSettings((*app)->midiInputsPreferences(), "Keyboard").offsetMs == 5);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, **app);
+    for (bool output : {false, true}) {
+        const auto state = bus.execute({output ? "midi.outputs.get" : "midi.inputs.get",
+                                        json::Value::object(),
+                                        {cmd::Origin::Type::Ui, "test", {}}});
+        REQUIRE(state);
+        bool found = false;
+        for (const auto& port : (*state)["ports"].asArray()) {
+            if (port["name"].asString() != (output ? "Synth" : "Broken")) continue;
+            CHECK(port["offset_ms"].asDouble() == 0);
+            for (const auto& warning : port["warnings"].asArray())
+                if (const auto* code = warning.find("code");
+                    code && code->asString() == "midi.preferences") {
+                    found = true;
+                    CHECK(warning["path"].asString().find(output ? "/midi_outputs/Synth/offset_ms"
+                                                                 : "/midi_inputs/Broken/enabled") ==
+                          0);
+                }
+        }
+        CHECK(found);
+    }
+    auto edits = json::Value::object();
+    edits["offset_ms"] = 2;
+    REQUIRE((*app)->setMidiPort(true, "synth", edits));
+    CHECK(midiPortSettings((*app)->midiOutputsPreferences(), "Synth").offsetMs == 2);
+    for (const auto& port : (*app)->midiPortsState(true).asArray())
+        for (const auto& warning : port["warnings"].asArray())
+            CHECK(warning.find("code") == nullptr);
+    app->reset();
+    std::filesystem::remove_all(dir);
+}

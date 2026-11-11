@@ -2806,6 +2806,11 @@ preferences schema, including a new engine-owned preferences file.
 MIDI preference records have one writer, EngineApp. Generic GUI preference
 saves preserve the latest records on disk and ask the engine to persist its
 current records; opening a dialog never replaces engine state from a snapshot.
+Startup uses `loadMidiPortPreferences` to skip each malformed MIDI record while
+retaining valid peers; a malformed input/output section is skipped as a whole.
+`midi.outputs.get` / `midi.inputs.get` retain skipped names with structured
+`midi.preferences` warnings (code, path, message, hint). A successful correction
+clears that record's warning. Command edits still use strict validation.
 
 Hardware routes preserve scalar-rate and mix-only edit paths. With hardware
 routes, route/source/VCA mute values join the existing atomic mix publication;
