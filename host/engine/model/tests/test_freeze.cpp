@@ -28,7 +28,7 @@ Session frozenSession() {
 TEST_CASE("freeze model: canonical round trip and older files") {
     auto s = frozenSession();
     auto text = serializeProject(s);
-    CHECK(text.find("supple.project/2.9") != std::string::npos);
+    CHECK(text.find("supple.project/2.10") != std::string::npos);
     auto loaded = parseProject(text);
     REQUIRE(loaded);
     CHECK(serializeProject(*loaded) == text);
@@ -74,4 +74,37 @@ TEST_CASE("freeze model: mix controls stay live and timing and sound stay locked
     auto unfrozen = unfreeze.commit();
     REQUIRE(unfrozen);
     CHECK(unfrozen->timeMap->bpmAt(0) == 80);
+}
+
+TEST_CASE("freeze model: outgoing MIDI sends leave the audio dependency hash unchanged") {
+    const auto session = frozenSession();
+    const Id source{Kind::Track, 1};
+    const auto hash = freezeDependencyHash(session, source);
+    EditTxn edit(session, 3);
+    Track target;
+    target.parent = kMaster;
+    const auto destination = edit.create(target);
+    edit.modify<Track>(kMaster, [&](auto& master) { master.children.push_back(destination); });
+    Route route;
+    route.from.track = source;
+    route.to.track = destination;
+    route.midi = MidiRouting{2, 8};
+    route.tap = Tap::PreFx;
+    const auto send = edit.create(route);
+    auto changed = edit.commit();
+    REQUIRE(changed);
+    CHECK(freezeDependencyHash(*changed, source) == hash);
+    EditTxn mute(*changed, 4);
+    mute.modify<Route>(send, [](auto& r) {
+        r.mute = true;
+        r.tap = Tap::PostFader;
+    });
+    changed = mute.commit();
+    REQUIRE(changed);
+    CHECK(freezeDependencyHash(*changed, source) == hash);
+    EditTxn input(*changed, 5);
+    route.from.track = destination;
+    route.to.track = source;
+    input.create(route);
+    CHECK_FALSE(input.commit());
 }

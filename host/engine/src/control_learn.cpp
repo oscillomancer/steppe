@@ -271,6 +271,8 @@ Result<Id> target(const model::Session& s, model::Kind kind, const std::string& 
 // A control the strip has: monitoring is a channel's, arming a channel's or
 // a master's, the lane mute a master's.
 Status checkStrip(const model::Session& s, Id id, std::string_view param) {
+    if (id.kind == model::Kind::Route && s.routes.find(id)->midi && param != "mute")
+        return Error("route.midi", "MIDI sends can learn mute only", "/param", "use param: mute");
     if (id.kind != model::Kind::Track) return {};
     const model::Track& t = *s.tracks.find(id);
     const bool ok =

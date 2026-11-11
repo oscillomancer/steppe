@@ -2,6 +2,10 @@
 
 **Status:** Accepted, 2026-11-05.
 
+**2026-11-10 amendment:** [ADR-0067](0067-midi-sends.md) adds channel MIDI sends,
+Notes destinations and Source None, and exposes Note Out in the MIDI routing
+matrix. Existing audio routing rules remain unchanged.
+
 Contracts: `docs/specs/rack.md` (model, runtime, engine, commands, GUI),
 `skill/guides/modules.md` (the module language), `skill/guides/rack.md`
 (patching, for agents). Builds on ADR-0008 (session model), ADR-0014 (live

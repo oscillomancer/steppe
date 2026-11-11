@@ -340,6 +340,25 @@ masters are skipped for these extra controls.
 
 ## Routing
 
+The routing window's **Audio | MIDI** buttons select the kind of send.
+MIDI mode shows channels and rack Note Outs down the left, channels and
+Notes modules across the top. Double-click a cell to connect them (again
+to disconnect), or select cells and use Add/Remove. Set the tap, Mute,
+From channel (All or 1–16), and To channel (Original or 1–16) below the grid.
+Post-fader follows the source's mute; pre-FX and post-FX keep sending while
+the source is muted. Right-click Mute to learn a controller. A channel
+can forward MIDI through several other channels without an instrument.
+The selected mode is saved with the window layout.
+
+A Notes module's Plays track menu offers None to hear only explicit MIDI
+sends and its chosen keyboard. Home restores its rack's channel. **Hear MIDI
+sends**, checked by default, also plays the MIDI that other channels and
+Note Outs send into the track it plays; a project from before MIDI sends
+opens with it unchecked wherever a Note Out sends into that track, so it
+sounds as it did. A Note
+Out's **MIDI channel** knob chooses channel 1–16 for outgoing notes; choose
+its destination in the MIDI routing matrix.
+
 **View > Routing matrix**, or a strip's **out** button, opens a grid of what
 feeds what: a row per strip (and per output pair of a multi-out instrument),
 a column per destination. A square with a dot is a send; a crossed-out square
@@ -694,7 +713,7 @@ an MCP connection or stopping the socket server. Shutdown finishes capture but
 does not save the project. Unsaved audio files can be recovered; unsaved MIDI
 recordings and other session edits are lost when the process exits.
 
-A rack's Note Out routes can be recorded by their destination channel. Arm
+MIDI sends, including a rack's Note Out routes, can be recorded by their destination channel. Arm
 it in MIDI replace or MIDI overdub mode, then record; loop and punch apply
 as for device MIDI. The channel needs no instrument or device input, and a
 selected MIDI device can record alongside the rack's notes.

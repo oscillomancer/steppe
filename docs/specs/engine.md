@@ -835,12 +835,12 @@ first use, and no plug-in code runs early to warm it.
   and undo rules. Input-FX warm-up is dropped and an unavailable final tail
   is padded, just as for device input FX. Without input FX, its recorded
   musical span is bit-identical to the offline rack output.
-- **Recording Note Out** (rack.md §6): an armed `midi_overdub` or
-  `midi_replace` channel records every Note Out route delivered to it,
+- **Recording MIDI sends** (rack.md §6): an armed `midi_overdub` or
+  `midi_replace` channel records every MIDI send or Note Out route delivered to it,
   after channel filtering/remapping, mute and compensation. Its selected
   MIDI input device may record alongside those routes. An instrument and a
   device record-input route are optional. Arming makes the destination and
-  its Note Out sources live, including with monitoring off. Each node has
+  its MIDI sources live, including with monitoring off. Each node has
   preallocated storage of delivered events; the callback copies it into
   the existing per-track MIDI recording ring. A missing instrument still
   consumes the routes and records them.
@@ -2669,3 +2669,56 @@ the effective law's dB value and set its boost through `track.set {pan_law}`;
 this records a writing envelope when the effective boost changes. Linked
 manual edits carry positions relatively and mode/law absolutely; playback
 of a member's envelopes never propagates through its group.
+
+### MIDI sends (ADR-0067)
+
+Every channel has prepared `midiPreFx` and `midiPostFx` event buffers,
+independent of its instrument. Timeline events (including loops and master
+playrate), monitored device events and incoming routes merge at exact frames
+before feeding its instrument. MIDI routes can form A → B → C chains through
+channels without instruments. Post-FX currently copies pre-FX, leaving one
+explicit replacement/merge seam for plug-in MIDI output. A frozen channel's
+pre/post-FX MIDI is its timeline MIDI; no MIDI is recovered from its audio
+print. Outgoing MIDI send changes do not invalidate the audio freeze hash;
+incoming external MIDI remains unsupported for freeze.
+
+Channel/Note Out → channel/Notes edges participate in graph order, mixed
+cycle checks and read-ahead PDC. Source-track incoming routes also feed that
+track's Notes readers, ordered before the rack without depending on the
+track's audio result. All MIDI sources of live destinations run live; no
+MIDI crosses frontier audio rings. Event queues and voice storage are
+prepared on the model thread, bounded by `engine.midi_budget`. Route mute
+releases delivered notes and unmute restarts keys still held. Post-fader
+sends additionally follow source-strip mute; earlier taps do not. No audio
+fader, pan or Console 9 stage alters MIDI.
+
+Each channel's held notes take slots of a prepared pool sized by how many
+can sound at once: the most item notes its timeline overlaps (plus a margin
+of 16 for late releases), every live key when it has a MIDI input, and the
+voices of each incoming send's source (16 per Note Out). Its sends carry
+slot ids, a send's voices are its source's slots, and every queue and
+budget multiplies these voice counts, never the number of notes in the
+timeline. Adoption on the audio thread therefore walks the held voices:
+item notes keep their slots by musical identity, live keys by key, routed
+notes through the unchanged send that delivered them. A send whose route,
+tap, channel filter or remap, PDC delay or ends changed starts afresh: what
+it delivered ends at the next block's start (also downstream through relay
+channels), then the notes still held start again, so an edit anywhere
+upstream releases and retriggers instead of doubling a voice. An onset on an
+input that is still held ends the held note first. Equal pitches from
+separate sources stay independent: each holds its own slot. Notes or events
+past a prepared capacity are dropped and counted with `voice_dropped`
+(offline: a warning naming the track). The instrument retains its existing
+4096-voice timeline/device budget; incoming routes add their voices. A send's
+channel filter and remap apply to channel messages only; system messages
+pass unchanged.
+
+MIDI sends ignore solo: a solo-silenced source still plays its MIDI. In the
+solo signal path a MIDI send between channels counts downstream only:
+soloing its source keeps the destination it plays audible, while soloing
+the destination does not un-silence the source's own sound (an audio send
+does both ways, since the destination's signal contains the source's). At a shared frame releases normally precede onsets. If that
+would put a voice's release before its own onset (late events or playrate
+compression), the frame retains input chronology. Prepared sorting scratch
+keeps both channel and Notes event ordering allocation-free. All-notes-off
+releases stay at their controller, before a same-frame reattack.

@@ -357,3 +357,64 @@ TEST_CASE("rack: Note Out shares capture rules, latches its notes and ends them 
     schedule->process(14, 4, clock);
     CHECK(count == 0);
 }
+
+TEST_CASE("rack: Notes keeps equal-pitch MIDI sources independent in every allocation mode") {
+    for (int mode = 0; mode < 6; ++mode) {
+        CAPTURE(mode);
+        auto notes = host::make(host::notesType(), Instance::Setup{});
+        notes->setParam(1, mode);
+        Patch patch;
+        patch.modules = {{1, notes.get(), false, {}}};
+        auto schedule = Schedule::build(patch);
+        REQUIRE(schedule);
+        std::array<host::MidiEvent, 4> events{{{0, 0x90, 60, 100, false, 11, 7},
+                                               {1, 0x90, 60, 80, false, 12, 8},
+                                               {10, 0x80, 60, 0, false, 11, 7},
+                                               {20, 0x80, 60, 0, false, 12, 8}}};
+        static_cast<host::Notes*>(notes->host())->bind(events);
+        FixedClock clock;
+        schedule->process(0, 32, clock);
+        const auto* gate = schedule->output(0, 1);
+        auto gates = [&](int frame) {
+            double total = 0;
+            for (int voice = 0; voice < schedule->outputChannels(0, 1); ++voice)
+                total += gate[voice * kGrid + frame];
+            return total;
+        };
+        CHECK(gates(5) == (mode >= 3 ? 1 : 2));
+        CHECK(gates(15) == 1);
+        CHECK(gates(25) == 0);
+    }
+}
+
+TEST_CASE("rack: Notes source off releases the track while preserving route inputs") {
+    for (int mode : {0, 3, 4, 5}) {
+        CAPTURE(mode);
+        auto notes = host::make(host::notesType(), Instance::Setup{});
+        notes->setParam(1, mode);
+        auto* input = static_cast<host::Notes*>(notes->host());
+        input->trackInput(1);
+        Patch patch;
+        patch.modules = {{1, notes.get(), false, {}}};
+        auto schedule = Schedule::build(patch);
+        REQUIRE(schedule);
+        std::array<host::MidiEvent, 2> events{
+            {{0, 0x90, 60, 100, false, 12, 8}, {1, 0x90, 60, 80, false, 0, 3}}};
+        input->bind(events);
+        FixedClock clock;
+        schedule->process(0, 32, clock);
+        input->bind({});
+        input->trackInput(UINT64_MAX);
+        schedule->process(32, 32, clock);
+        double gates = 0;
+        for (int voice = 0; voice < schedule->outputChannels(0, 1); ++voice)
+            gates += schedule->output(0, 1)[voice * kGrid + 5];
+        CHECK(gates == 1);
+        input->retainRoutes({});
+        schedule->process(64, 32, clock);
+        gates = 0;
+        for (int voice = 0; voice < schedule->outputChannels(0, 1); ++voice)
+            gates += schedule->output(0, 1)[voice * kGrid + 5];
+        CHECK(gates == 0);
+    }
+}

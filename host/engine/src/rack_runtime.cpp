@@ -487,8 +487,10 @@ RackLatencies rackLatencies(const Session& session, Id rackId,
     }
     std::set<Id> routed;
     for (const auto& route : session.routes)
-        if (route.value->from.module && route.value->to.track &&
-            session.tracks.contains(*route.value->to.track))
+        if (route.value->from.module &&
+            ((route.value->to.track && session.tracks.contains(*route.value->to.track)) ||
+             (route.value->midi && route.value->to.module &&
+              session.modules.contains(*route.value->to.module))))
             routed.insert(*route.value->from.module);
     RackLatencies result;
     for (std::size_t at = 0; at < count; ++at) {
@@ -547,7 +549,9 @@ Status compileRack(Plan& p, Node& n, const Session& s, Id rackId, InstancePool& 
         if (m.type == model::kNotesModule) {
             notesInput = RackPool::NotesInput{};
             const auto* home = s.racks.find(m.rack);
-            notesInput->source = m.source.value_or(home ? home->track : model::kMaster);
+            notesInput->source = m.sourceOff
+                                     ? model::kMaster
+                                     : m.source.value_or(home ? home->track : model::kMaster);
             notesInput->device = m.device;
             if (const auto* track = s.tracks.find(notesInput->source);
                 track && track->record.armed && track->record.monitor != model::Monitor::Off)
@@ -576,6 +580,8 @@ Status compileRack(Plan& p, Node& n, const Session& s, Id rackId, InstancePool& 
         } else if (auto* notes = dynamic_cast<rack::host::Notes*>(in->host())) {
             NotesFeed feed;
             feed.notes = notes;
+            feed.id = e.id;
+            if (!m.sourceOff) feed.source = notesInput->source;
             feed.liveGeneration = pool.liveGeneration(e.id);
             feed.device = m.device;
             if (notesInput->monitoring) {
@@ -768,19 +774,30 @@ void prepareRack(Plan& p, Node& n, const Session& s) {
         NotesFeed& feed = r.notes[f++];
         const model::Rack* home = s.racks.find(r.rack);
         const Id source = m->source.value_or(home ? home->track : model::kMaster);
-        feed.events = compileTrackEvents(s, source, p.startSeconds, p.rate);
+        if (!m->sourceOff) feed.events = compileTrackEvents(s, source, p.startSeconds, p.rate);
         for (auto& ev : feed.events) ev.sample += n.timelineShift;
-        std::size_t window = 0;
-        for (std::size_t a = 0, b = 0; a < feed.events.size(); ++a) {
-            if (b < a) b = a;
-            while (b < feed.events.size() &&
-                   feed.events[b].sample <
-                       feed.events[a].sample + static_cast<std::int64_t>(p.block))
-                ++b;
-            window = std::max(window, b - a);
-        }
-        feed.block.reserve(window + (feed.device || feed.sourceDevice ? kMaxMidiInputEvents : 0) +
-                           1);
+        const auto eventWindow = [&](std::int64_t frames) {
+            std::size_t most = 0;
+            for (std::size_t a = 0, b = 0; a < feed.events.size(); ++a) {
+                if (b < a) b = a;
+                while (b < feed.events.size() &&
+                       feed.events[b].sample < feed.events[a].sample + frames)
+                    ++b;
+                most = std::max(most, b - a);
+            }
+            return most;
+        };
+        const std::size_t window = eventWindow(static_cast<std::int64_t>(p.block));
+        // The playrate path (rackTimelineEvents): up to four blocks' events
+        // and a release per held note, as a track's stream.
+        const std::size_t voices = timelineVoiceBound(feed.events);
+        const std::size_t rateWindow =
+            p.rateEnabled ? eventWindow(4 * static_cast<std::int64_t>(p.block)) + voices + 1 : 0;
+        feed.midiStage.blockEvents.reserve(rateWindow);
+        feed.midiStage.voices.reserve(voices);
+        feed.midiStage.pendingVoices.reserve(voices);
+        feed.block.reserve(std::max(window, rateWindow) +
+                           (feed.device || feed.sourceDevice ? kMaxMidiInputEvents : 0) + 1);
     }
     for (auto& curve : r.curves) curve->curve.cursor = 0;
 }
@@ -793,7 +810,11 @@ void locateRack(Node& n, std::int64_t pos, bool restart) SUPPLE_RT {
             std::lower_bound(feed.events.begin(), feed.events.end(), pos,
                              [](const TimedEvent& e, std::int64_t x) { return e.sample < x; });
         feed.next = static_cast<std::size_t>(it - feed.events.begin());
-        if (restart) feed.notes->endAll();
+        feed.rateFresh = restart;
+        if (restart) {
+            feed.notes->endAll();
+            feed.midiStage.voices.clear();
+        }
     }
     for (auto& output : r.notesOut)
         if (restart) output.module->endAll();
@@ -804,6 +825,7 @@ namespace {
 // A host event as a MIDI short message at a frame.
 bool toMidi(const host::Event& e, std::uint32_t frame, rack::host::MidiEvent& out) {
     out.frame = frame;
+    out.noteId = e.noteId;
     const auto channel = static_cast<std::uint8_t>(std::clamp<int>(e.channel, 0, 15));
     switch (e.kind) {
         case host::Event::Kind::NoteOn:
@@ -861,7 +883,15 @@ bool processRack(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames,
     const bool playing = transport.playing;
     for (NotesFeed& feed : r.notes) {
         feed.block.clear();
-        while (playing && feed.next < feed.events.size() &&
+        if (playing && p.rateEnabled) {
+            rackTimelineEvents(p, n, feed, pos, frames);
+            for (const auto& e : feed.midiStage.blockEvents) {
+                rack::host::MidiEvent event;
+                if (feed.block.size() < feed.block.capacity() && toMidi(e, e.time, event))
+                    feed.block.push_back(event);
+            }
+        }
+        while (playing && !p.rateEnabled && feed.next < feed.events.size() &&
                feed.events[feed.next].sample < pos + static_cast<std::int64_t>(frames)) {
             const TimedEvent& te = feed.events[feed.next++];
             rack::host::MidiEvent m;
@@ -884,7 +914,7 @@ bool processRack(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames,
                 if (!direct && !(hearSource && routeMidi(ev, feed.sourcePorts, feed.fromChannel,
                                                          feed.toChannel, m)))
                     continue;
-                feed.block.push_back({ev.frame - p.deviceMidiOffset, m[0], m[1], m[2], true});
+                feed.block.push_back({ev.frame - p.deviceMidiOffset, m[0], m[1], m[2], true, 1});
             }
             if (feed.block.size() > before)  // stable insertion sort by frame: no allocation
                 for (std::size_t i = 1; i < feed.block.size(); ++i)
@@ -892,7 +922,22 @@ bool processRack(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames,
                          --j)
                         std::swap(feed.block[j - 1], feed.block[j]);
         }
+        feed.notes->trackInput(feed.source ? feed.source->n : UINT64_MAX);
+        feed.notes->retainRoutes(feed.routes);
         feed.notes->liveInput(feed.liveGeneration);
+    }
+    addRackMidi(p, n, pos, frames, playing);
+    for (NotesFeed& feed : r.notes) {
+        feed.order.sort(
+            feed.block, feed.sortScratch, [](const auto& e) { return e.frame; },
+            [](const auto& e) {
+                return std::tuple{e.source, e.noteId, int(e.status & 15), int(e.data1)};
+            },
+            [](const auto& e) {
+                return (e.status & 0xf0) == 0x80 || ((e.status & 0xf0) == 0x90 && !e.data2) ? 0
+                       : (e.status & 0xf0) == 0x90                                          ? 2
+                                                                                            : 1;
+            });
         feed.notes->bind(feed.block);
     }
     for (std::size_t k = 0; k < r.outs.size(); ++k) {

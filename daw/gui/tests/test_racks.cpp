@@ -1619,7 +1619,7 @@ TEST_CASE("rack window: a Notes module's menu picks its MIDI input and the track
     // Plays track: another channel's MIDI, then Home again (source: null).
     REQUIRE(openMenu());
     REQUIRE(f.pick("rack.module.menu", "Plays track"));
-    CHECK(checked("rack.notes.source") == std::vector<std::string>{"Home"});
+    CHECK(checked("rack.notes.source") == std::vector<std::string>{"Home", "Hear MIDI sends"});
     f.snapshot("rack-notes-source.png");
     REQUIRE(f.pick("rack.notes.source", model::trackLabel(f.app->head(), part)));
     CHECK(f.app->head().modules.find(notes)->source == part);
@@ -1632,6 +1632,18 @@ TEST_CASE("rack window: a Notes module's menu picks its MIDI input and the track
     // One undo step each.
     f.exec("history.undo", "{}");
     CHECK(f.app->head().modules.find(notes)->source == part);
+    // Hear MIDI sends: on by default, checkable at the menu's end.
+    REQUIRE(openMenu());
+    REQUIRE(f.pick("rack.module.menu", "Plays track"));
+    REQUIRE(f.pick("rack.notes.source", "Hear MIDI sends"));
+    CHECK_FALSE(f.app->head().modules.find(notes)->sourceSends);
+    CHECK(f.app->head().modules.find(notes)->source == part);
+    REQUIRE(openMenu());
+    REQUIRE(f.pick("rack.module.menu", "Plays track"));
+    CHECK(checked("rack.notes.source") ==
+          std::vector<std::string>{model::trackLabel(f.app->head(), part)});
+    REQUIRE(f.pick("rack.notes.source", "Hear MIDI sends"));
+    CHECK(f.app->head().modules.find(notes)->sourceSends);
     f.app->stopEngine();
 }
 

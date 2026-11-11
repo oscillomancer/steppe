@@ -551,7 +551,7 @@ module with `rack.probe` before using it.
 ## Play another track's instrument
 
 Add `notes_out` (Note Out) and cable pitch, gate and optional velocity into it.
-Its `channel` knob is 1..16. Route it with one call:
+Its **MIDI channel** knob (`channel`) is 1..16; it selects a MIDI channel, not a track. Route it with one call:
 
 ```json
 route.add {"from":{"module":"mo_3"},"to":{"track":"tr_2"},"midi":{}}
@@ -659,3 +659,21 @@ the rack Out's audio. To record both in one pass, arm a second channel with
 monitoring mid-song leaves timeline notes sounding. To clear a Notes
 module's own settings use `module.set {module: "mo_2", device: null,
 source: null}`; `device: ""` listens to every input, like `"*"`.
+
+## MIDI sends
+
+`route.add {from: {track: "tr_1"}, to: {track: "tr_2"}, midi: {}}`
+sends a channel's timeline, monitored input and incoming MIDI to another
+channel. Sources can also be Note Out modules; destinations can also be Notes
+modules. Relays need no instrument. Filter/remap with `midi.from_channel` and
+`midi.to_channel` (0 = all/original). `pre_fx` reads pre-FX MIDI; `pre_fader`
+and `post_fader` read post-FX (currently identical). Post-fader follows the
+source mute; route mute releases notes and unmute restarts keys still held.
+MIDI learn supports mute only; audio level/pan/mono/channel controls do not apply.
+
+`module.set {module: "mo_1", source: "none"}` disables the Notes module's
+track source while keeping its device and explicit MIDI sends. Null restores
+Home. Note Out's MIDI channel knob (`channel`) selects a MIDI channel, not a
+track. The routing window's MIDI mode exposes both Notes and Note Out modules.
+Frozen channels keep sending timeline MIDI at both taps; the frozen audio
+print produces no MIDI. MIDI overdub/replace records delivered sends.

@@ -21,6 +21,7 @@
 #include <tuple>
 #include <vector>
 
+#include "midi_order.h"
 #include "playrate_timeline.h"
 #include "recording.h"
 #include "strip.h"
@@ -381,20 +382,30 @@ struct Edge {
     // module `rackOut` into a channel (its record input). -1: neither.
     int rackIn = -1, rackOut = -1;
     std::int64_t rackLatency = 0, rackPadding = 0;
-    // MIDI-only dependency from a Note Out. Queues and voices belong to the
-    // destination, and stay on its executor; delay matches the solved PDC.
-    int rackNotes = -1, midiFrom = 0, midiTo = 0, midiSourceBase = 0;
+    // A MIDI send (ADR-0067): from a channel's MIDI stream or a Note Out
+    // (`rackNotes`), to a channel or a Notes module (`midiNotes`). Queues and
+    // voices belong to the destination, and stay on its executor; delay
+    // matches the solved PDC. A voice per source voice slot (a Note Out: per
+    // channel); a track destination takes its voices as inputs from
+    // `midiSourceBase` (Node::midiInput).
+    bool midi = false;
+    int rackNotes = -1, midiNotes = -1, midiFrom = 0, midiTo = 0, midiSourceBase = 0;
     struct MidiPending {
         std::int64_t sample = 0;
-        std::uint8_t status = 0, key = 0, velocity = 0, voice = 0;
+        host::Event event;
+        int voice = -1;
     };
     struct MidiVoice {
         bool high = false, delivered = false;
         int channel = 0, key = 60, velocity = 96;
+        int address = -1;  // per delivered note: Notes and recording tell equal pitches apart
     };
     std::vector<MidiPending> midiQueue;
     std::size_t midiHead = 0, midiCount = 0;
-    std::array<MidiVoice, 16> midiVoices{};
+    std::vector<MidiVoice> midiVoices;
+    std::vector<int> midiAddresses;  // adoption: the delivered ones, for a Notes destination
+    bool midiReconcile = false;
+    std::uint32_t midiNextVoice = 0;
     std::uint64_t midiEpoch = 0;
     bool midiStarted = false, midiRelease = false, midiMuted = false;
     // A frontier edge (anticipative source, live target): its source's tap
@@ -454,19 +465,37 @@ inline bool matchesVoice(const HeldVoice& voice, std::int16_t port, std::int16_t
            (key == -1 || voice.key == key) && (noteId == -1 || voice.noteId == noteId);
 }
 
-// Stable dynamic note origins survive plan edits without sharing a MIDI
-// address with item notes or another route/voice.
+// Routed notes reach an instrument with compiled ids kRoutedNoteBase + their
+// voice slot in the track's MIDI stream (Node::midiHeld), clear of item note
+// ids; adoption remaps the slot (carryRackMidi). Their voices are marked with
+// kRackNoteOrigin.
 inline constexpr std::uint64_t kRackNoteOrigin = UINT64_MAX;
-struct RackNoteSource {
-    model::Id module, route;
-    int voice = 0, from = 0, to = 0;
-    std::int64_t delay = 0;
-    bool operator==(const RackNoteSource&) const = default;
+inline constexpr std::int32_t kRoutedNoteBase = 1 << 30;
+// Node::midiInstrument for an event the note target does not play (a take
+// with its own instrument plays it).
+inline constexpr std::int32_t kNotTargetNote = INT32_MIN;
+
+// One held note of a track's MIDI stream (ADR-0067). The input is what it
+// came in as: an item note's compiled id, a live key or a routed voice
+// (Node::midiInput). An orphan lost its input at adoption (an edited note, a
+// changed or removed send): it ends at the next block's start.
+struct MidiSlot {
+    enum class Kind : std::uint8_t { Timeline, Live, Routed };
+    bool high = false, orphan = false;
+    Kind kind = Kind::Timeline;
+    std::int16_t channel = 0, key = 0;
+    std::uint8_t velocity = 96;
+    std::int32_t input = -1;
+    model::Id route{};  // routed: the route and address its recording is under
+    std::int32_t address = -1;
+};
+struct MidiRoutedInput {
+    model::Id route{};
+    std::int32_t address = -1;
 };
 
 struct Stage {
-    int rackMidiBase = -1;
-    std::vector<RackNoteSource> rackNoteSources;
+    int rackMidiBase = -1;               // kRoutedNoteBase on a track's note target
     host::Instance* instance = nullptr;  // null: placeholder (pass-through)
     Id fx;
     std::vector<ParamLane> lanes;
@@ -619,6 +648,31 @@ struct Node {
     // Note Out events actually delivered this block, also without an instrument.
     // Capacity is fixed in prepareRackMidi; only this node's executor writes it.
     std::vector<RoutedMidiEvent> routedMidi;
+    // Track MIDI (ADR-0067) is independent of the audio/instrument stage.
+    // `midiStage` collects this block's inputs: item notes (compiled ids
+    // below midiLiveBase), live keys (midiLiveBase + channel * 128 + key) and
+    // routed voices (from midiRoutedBase, a range per incoming send). Held
+    // notes take slots of a pool sized by how many can sound at once
+    // (prepareRackMidi), so budgets and adoption scale with held voices, not
+    // with the notes in the timeline. The streams a send taps carry slot ids.
+    // Post-FX is an explicit seam for plug-in note output; currently it
+    // equals pre-FX.
+    Stage midiStage;
+    std::vector<host::Event> midiPreFx, midiPostFx, midiSortScratch;
+    std::vector<std::int32_t> midiInstrument;  // parallel to midiPreFx: the note target's id
+    MidiOrder midiOrder;
+    std::vector<MidiSlot> midiHeld, midiBefore;  // the pool; its state at the block's start
+    std::vector<std::int32_t> midiFree;          // free slots, a stack
+    std::vector<std::int32_t> midiInput;         // input -> slot (-1: none)
+    std::vector<MidiRoutedInput> midiRouted;     // routed input -> its delivered note
+    std::vector<std::pair<std::int32_t, std::int32_t>> midiRemap;  // adoption: old -> new slot
+    std::int32_t midiLiveBase = 0, midiRoutedBase = 0;
+    std::vector<bool> midiTakeSources;
+    std::uint64_t midiEpoch = 1;
+    std::uint64_t midiDropped = 0;  // notes or events past a prepared capacity
+    std::size_t midiEventRate = 0;
+    bool midiReleaseTimeline = false, midiSends = false;
+
     Id id;  // a track's, or a rack's (rk_*)
     // A rack (ADR-0062): its runtime, its Out modules' audio this block and
     // the sends its In modules take. No chain, fader or Console 9 stage.

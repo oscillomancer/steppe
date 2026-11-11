@@ -202,8 +202,11 @@ EffectiveLevel effectiveTrackLevel(const Session& s, Id track, double seconds) {
             };
             for (const auto& e : s.tracks)
                 if (e.value->parent && e.value->parentSend.enabled) edge(e.id, *e.value->parent);
+            // A MIDI send keeps what its soloed source plays audible, but a
+            // soloed destination does not bring back its source's sound: the
+            // MIDI arrives whether or not the source is heard (ADR-0067).
             for (const auto& e : s.routes)
-                if (e.value->from.track && e.value->to.track)
+                if (e.value->from.track && e.value->to.track && (forward || !e.value->midi))
                     edge(*e.value->from.track, *e.value->to.track);
         }
     }
