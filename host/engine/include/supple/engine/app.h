@@ -81,6 +81,13 @@ struct AppOptions {
     std::shared_ptr<RuntimeProtectionOps> runtimeProtectionOps;  // null: Linux operations
     std::function<void()> jobStartedHook;   // worker-entry barrier for deterministic tests
     std::function<void()> jobFinishedHook;  // worker completion notification for tests
+    // External sync's locate time (ADR-0071 §4): how long a seek takes to be
+    // heard, which starts and relocates lead by. Unset: measured on the
+    // steady clock as the app seeks (production). Set: that many seconds
+    // (clamped to 0-0.5), never measured, for a device whose time does not
+    // pass while the main thread seeks (the dummy backend's manual mode;
+    // tests, which must not pass or fail by the wall clock).
+    std::optional<double> syncLocateSeconds;
 };
 
 // Meter entries a full ring dropped (P5.3c): the renderer's ring and the audio

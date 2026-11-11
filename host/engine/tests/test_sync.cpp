@@ -61,15 +61,18 @@ struct Rig {
     bool anticipative;
 
     // MIDI outputs "Synth" and "Clock Out", with `midiLatency` (audio minus
-    // MIDI, frames) each.
+    // MIDI, frames) each. `locate` is the app's fixed locate time.
     explicit Rig(bool ahead, std::uint32_t outputs = 2, std::int64_t capture = 0,
-                 std::vector<std::int64_t> midiLatency = {0, 0})
+                 std::vector<std::int64_t> midiLatency = {0, 0}, double locate = 0.0)
         : anticipative(ahead) {
         fs::remove_all(dir);
         fs::create_directories(dir);
         AppOptions options;
         options.workdir = dir;
         options.pluginPath = {FIXTURE_CLAP_PATH};  // Test Gain, for plan latency
+        // A manual device's time stands still while the app seeks: its locate
+        // time is fixed, whatever the wall clock (and a sanitizer) says.
+        options.syncLocateSeconds = locate;
         auto created = EngineApp::create(options, {.console9 = false});
         REQUIRE(created);
         app = std::move(*created);
@@ -371,6 +374,31 @@ TEST_CASE("midi clock: Start, tempo follow, Stop, Song Position and Continue") {
         master.stopAt = rig.device + 100;
         rig.seconds(0.1);
         CHECK_FALSE(rig.transport().playing);
+    }
+}
+
+TEST_CASE("midi clock: Start leads by the locate time, which sync.get reports") {
+    for (bool ahead : {false, true}) {
+        CAPTURE(ahead);
+        // The same master and device with a locate time of 0 and of 100 ms:
+        // the transport starts 100 ms of the master's tempo further on.
+        // (One rig at a time: they share a working folder.)
+        std::vector<double> beats;
+        for (double locate : {0.0, 0.1}) {
+            Rig rig(ahead, 2, 0, {0, 0}, locate);
+            rig.run("sync.set",
+                    R"({"source": "midi_clock", "midi_input": "Clock In", "follow_tempo": false})");
+            const json::Value got = rig.run("sync.get", "{}");
+            CHECK(got.find("status")->find("locate_ms")->asDouble() ==
+                  doctest::Approx(locate * 1000.0));
+            ClockMaster master;
+            master.startFrame = 4800;
+            rig.midi = std::ref(master);
+            for (int i = 0; i < 400 && !rig.transport().playing; ++i) rig.cycle();
+            REQUIRE(rig.transport().playing);
+            beats.push_back(rig.beat());
+        }
+        CHECK(beats[1] - beats[0] == doctest::Approx(0.1 * 120.0 / 60.0).epsilon(1e-6));
     }
 }
 

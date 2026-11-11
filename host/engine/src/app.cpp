@@ -86,6 +86,8 @@ Result<std::unique_ptr<EngineApp>> EngineApp::create(AppOptions options, model::
             "engine.workdir", "cannot create " + options.workdir.string(), {},
             "pass a writable workdir and ensure its parent directory exists and has space");
     auto app = std::unique_ptr<EngineApp>(new EngineApp(std::move(options)));
+    if (const auto& fixed = app->options_.syncLocateSeconds)  // ADR-0071 §4
+        app->syncSeekSeconds_ = std::clamp(*fixed, 0.0, 0.5);
     if (!app->options_.midiPreferencesFile.empty()) {
         std::error_code existsError;
         if (fs::exists(app->options_.midiPreferencesFile, existsError)) {

@@ -296,6 +296,11 @@ void EngineApp::serviceSync() {
     if (s.runtime != was.runtime) return;
     const TransportState t = engine_->transport();
     const auto timing = [&](auto&& action) {
+        if (options_.syncLocateSeconds) {  // fixed (AppOptions): nothing to measure
+            syncSeekSeconds_ = std::clamp(*options_.syncLocateSeconds, 0.0, 0.5);
+            action();
+            return;
+        }
         const auto began = std::chrono::steady_clock::now();
         action();
         const double took =

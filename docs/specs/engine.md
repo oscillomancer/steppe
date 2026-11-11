@@ -2002,6 +2002,12 @@ the heard time) plus the measured seek time × the master's speed, and
 plays; a relocate request seeks likewise; running backwards pauses; a jump
 (full frame) while stopped seeks. A final loss pauses. Then
 `Engine::setSyncRate(chase rate)` while playing, 1 otherwise.
+The measured seek time (`locate_ms`) averages how long these seeks took on
+the steady clock, each new one weighing half, clamped to 0-500 ms and
+starting at 50 ms. `AppOptions::syncLocateSeconds` fixes it instead, for a
+device whose time stands still while the main thread seeks: the dummy
+backend's manual mode, in tests, which must not pass or fail by the wall
+clock.
 
 **The sync plan and the chase scale.** While `SyncConfig::listens()` (an
 input source) `load()` compiles with `SyncOverrides`: the plan is
