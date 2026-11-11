@@ -2587,7 +2587,9 @@ void registerEngineCommands(cmd::Registry& registry) {
             "MIDI take on its own. An instrument with outputs past its main pair (a multi-out "
             "sampler's Kick, Snare...) gets that many more channels on the track, and its "
             "pins.out sends each output there; route.matrix lists them and route.add "
-            "{channels: {from: [3, 4]}} sends one to a buss.";
+            "{channels: {from: [3, 4]}} sends one to a buss. Without index, a note effect "
+            "(an arpeggiator) goes to the front of the track's chain, ahead of what it plays, and "
+            "an instrument after the note effects there.";
         c.tags = {"fx"};
         c.args = schema::object<FxAddArgs>("fx_add_args")
                      .field("track", &FxAddArgs::track, idArg("tr", "Track"))
@@ -2695,9 +2697,26 @@ void registerEngineCommands(cmd::Registry& registry) {
             std::size_t at =
                 a.index ? std::min<std::size_t>(static_cast<std::size_t>(*a.index), chain.size())
                         : chain.size();
-            // An instrument goes to the front of the track's chain unless the
-            // caller said where; the input chain keeps the caller's order.
-            if (!input && info->instrument && !a.index) at = 0;
+            // Unless the caller said where (the input chain keeps the
+            // caller's order): a note effect goes to the front of the track's
+            // chain, ahead of what plays its notes (ADR-0068), and an
+            // instrument after the note effects there.
+            const auto noteEffect = [](const host::PluginInfo& p) {
+                return std::find(p.features.begin(), p.features.end(),
+                                 CLAP_PLUGIN_FEATURE_NOTE_EFFECT) != p.features.end();
+            };
+            if (!input && !a.index && noteEffect(*info)) {
+                at = 0;
+            } else if (!input && !a.index && info->instrument) {
+                at = 0;
+                while (at < chain.size()) {
+                    const model::FxInstance* existing = s.fx.find(chain[at]);
+                    auto known = existing ? app.findPlugin(existing->plugin.id)
+                                          : Result<host::PluginInfo>(Error("", ""));
+                    if (!known || !noteEffect(*known)) break;
+                    ++at;
+                }
+            }
             chain.insert(chain.begin() + static_cast<std::ptrdiff_t>(at), id);
             t.modify<model::Track>(*track, [&](model::Track& modified) {
                 (input ? modified.inputChain : modified.chain) = chain;

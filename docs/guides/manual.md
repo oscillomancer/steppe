@@ -359,6 +359,10 @@ sounds as it did. A Note
 Out's **MIDI channel** knob chooses channel 1–16 for outgoing notes; choose
 its destination in the MIDI routing matrix.
 
+**Add plugin…** puts a note effect (an arpeggiator, a chord or MIDI effect)
+at the front of a channel's FX chain and an instrument just after the note
+effects there, so the instrument plays what they send (see below).
+
 **View > Routing matrix**, or a strip's **out** button, opens a grid of what
 feeds what: a row per strip (and per output pair of a multi-out instrument),
 a column per destination. A square with a dot is a send; a crossed-out square

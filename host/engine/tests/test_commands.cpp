@@ -283,6 +283,18 @@ TEST_CASE("MIDI bus: fx.set chooses a note-output plug-in's replace or merge") {
     run(bus, "track.add", R"({"name":"Arp"})");
     run(bus, "fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.note-echo"})");
     run(bus, "fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.sine"})");
+    // The instrument goes after the note effect that plays it, a note effect
+    // ahead of the instrument.
+    const auto track = *model::Id::parse("tr_1");
+    CHECK(app->head().tracks.find(track)->chain ==
+          std::vector<model::Id>{*model::Id::parse("fx_1"), *model::Id::parse("fx_2")});
+    run(bus, "track.add", R"({"name":"Synth first"})");
+    run(bus, "fx.add", R"({"track":"tr_2","plugin":"com.suppleaudio.test.gain"})");
+    run(bus, "fx.add", R"({"track":"tr_2","plugin":"com.suppleaudio.test.sine"})");
+    run(bus, "fx.add", R"({"track":"tr_2","plugin":"com.suppleaudio.test.note-echo"})");
+    CHECK(app->head().tracks.find(*model::Id::parse("tr_2"))->chain ==
+          std::vector<model::Id>{*model::Id::parse("fx_5"), *model::Id::parse("fx_4"),
+                                 *model::Id::parse("fx_3")});
     const auto echo = run(bus, "fx.describe", R"({"fx":"fx_1"})");
     REQUIRE(echo.find("outputs_notes"));
     CHECK(*echo.find("outputs_notes") == json::Value(true));
