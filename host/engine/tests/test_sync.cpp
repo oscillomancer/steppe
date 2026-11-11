@@ -1168,9 +1168,10 @@ TEST_CASE("midi outputs: the engine writes the clock members and raises an older
     CHECK(synth->find("clock")->asBool());
     CHECK(synth->find("offset_ms")->asDouble() == 2);
     // A newer label (a later version's file) is kept.
-    REQUIRE(writeFileAtomic(options.midiPreferencesFile, R"({"schema":"supple.preferences/1.12"})"));
-    REQUIRE(bus->execute({"midi.outputs.set",
-                         json::parse(R"({"port": "Synth", "mtc": true})").value(), kOrigin}));
+    REQUIRE(
+        writeFileAtomic(options.midiPreferencesFile, R"({"schema":"supple.preferences/1.12"})"));
+    REQUIRE(bus->execute(
+        {"midi.outputs.set", json::parse(R"({"port": "Synth", "mtc": true})").value(), kOrigin}));
     const auto later = readFile(options.midiPreferencesFile).value();
     CHECK(std::string(later.begin(), later.end()).find("supple.preferences/1.12") !=
           std::string::npos);

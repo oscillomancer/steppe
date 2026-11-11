@@ -426,7 +426,7 @@ class DummyBackend : public Backend {
   private:
     detail::MidiOutputCycle midiOutput_;
     std::vector<CapturedMidi> midiCapture_;
-    void captureMidi();                 // this callback's MIDI output, into midiCapture_
+    void captureMidi();  // this callback's MIDI output, into midiCapture_
     std::array<std::atomic<std::uint64_t>, 16> midiAsyncDrops_{};
     std::vector<MidiInputEvent> midi_;  // this cycle's (capacity reserved)
     std::vector<SyncMidiEvent> sync_;   // likewise

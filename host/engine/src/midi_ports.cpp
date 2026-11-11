@@ -31,11 +31,11 @@ bool midiPortRecordIdle(const json::Value& record) {
     if (!record.isObject()) return false;
     for (const auto& field : record.asObject()) {
         const auto& v = field.value;
-        const bool idle =
-            field.key == "enabled" || field.key == "reset_on_stop" ? v.isBool() && v.asBool()
-            : field.key == "offset_ms"                             ? v.isNumber() && v.asDouble() == 0
-            : outputFlag(field.key)                                ? v.isBool() && !v.asBool()
-                                                                   : false;
+        const bool idle = field.key == "enabled" || field.key == "reset_on_stop"
+                              ? v.isBool() && v.asBool()
+                          : field.key == "offset_ms" ? v.isNumber() && v.asDouble() == 0
+                          : outputFlag(field.key)    ? v.isBool() && !v.asBool()
+                                                     : false;
         if (!idle) return false;
     }
     return true;

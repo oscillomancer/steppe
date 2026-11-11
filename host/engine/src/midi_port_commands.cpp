@@ -41,8 +41,7 @@ Status writeMidiRecords(const std::filesystem::path& file, json::Value doc,
         return n;
     };
     const auto* schema = doc.find("schema");
-    if (!schema || !schema->isString() ||
-        minor(schema->asString()) < minor(current))
+    if (!schema || !schema->isString() || minor(schema->asString()) < minor(current))
         doc["schema"] = kPreferencesSchema;
     for (bool output : {false, true}) {
         const auto& preferences = output ? outputs : inputs;
@@ -219,11 +218,10 @@ json::Value EngineApp::midiPortsState(bool output) const {
         // Routed MIDI, clock and MTC, and the backend's asynchronous loss.
         port["dropped"] =
             engine_ && found != names.end()
-                ? static_cast<std::int64_t>(
-                      engine_->midiPortDropped(output, index) +
-                      (output ? backend_->midiOutAsyncDropped(index) +
-                                    engine_->syncOutputDropped(index)
-                              : 0))
+                ? static_cast<std::int64_t>(engine_->midiPortDropped(output, index) +
+                                            (output ? backend_->midiOutAsyncDropped(index) +
+                                                          engine_->syncOutputDropped(index)
+                                                    : 0))
                 : std::int64_t{0};
         port["warnings"] = json::Value::array();
         for (const auto& warning : loadWarnings)

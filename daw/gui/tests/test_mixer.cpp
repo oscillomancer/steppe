@@ -1179,8 +1179,8 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
     // GUI save keeps it as written.
     const std::string records =
         R"({"Interface MIDI 1":{"clock":true,"offset_ms":-3.5,"spp":true,"transport":true}})";
-    REQUIRE(writeFileAtomic(file, R"({"schema":"supple.preferences/1.8","midi_outputs":)" +
-                                      records + "}"));
+    REQUIRE(writeFileAtomic(
+        file, R"({"schema":"supple.preferences/1.8","midi_outputs":)" + records + "}"));
     auto clocked = gui::Preferences::load(file);
     REQUIRE(clocked);
     const auto clock = engine::midiPortSettings(clocked->midiOutputs, "Interface MIDI 1");

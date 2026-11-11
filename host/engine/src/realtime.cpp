@@ -20,9 +20,9 @@
 
 #include <cstring>
 #include "hardware_midi.h"
-#include "midi_output.h"
 #include "live_workers.h"
 #include "meters.h"
+#include "midi_output.h"
 
 #include "plan.h"
 #include "rack_runtime.h"
@@ -749,9 +749,9 @@ Status Engine::load(const model::Session& session, const std::filesystem::path& 
     outputLatency_ = static_cast<std::uint32_t>(plan->outputLatency);
     // Audio is heard after the plan's latency and the hardware MIDI lead,
     // which every sending port's clock and MTC follow too (ADR-0073 §10).
-    syncOutputLatency_.store(plan->outputLatency + plan->hardwareLead +
-                                 backend_->status().outputLatency,
-                             std::memory_order_relaxed);
+    syncOutputLatency_.store(
+        plan->outputLatency + plan->hardwareLead + backend_->status().outputLatency,
+        std::memory_order_relaxed);
     syncPlanLatency_.store(plan->outputLatency + plan->hardwareLead, std::memory_order_relaxed);
     warnings_ = plan->warnings;
     for (const detail::OutputTap& o : plan->outputs)  // ADR-0056

@@ -1375,8 +1375,8 @@ std::vector<ui::MenuItem> RoutingMatrix::midiPortMenu(bool output, const std::st
         rule.separator = true;
         items.push_back(rule);
         auto flag = [&](const char* label, const char* field, bool on, bool usable = true) {
-            items.push_back({label, "", [change, field, on] { change(field, !on); }, usable,
-                             false, on});
+            items.push_back(
+                {label, "", [change, field, on] { change(field, !on); }, usable, false, on});
         };
         flag("Send clock", "clock", settings.clock);
         flag("Send transport", "transport", settings.transport);

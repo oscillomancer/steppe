@@ -95,7 +95,6 @@ void EngineApp::resolveMidiOutputs(SyncConfig& c, std::vector<std::string>* warn
     }
 }
 
-
 void EngineApp::addClockReport(json::Value& port, int index, const MidiPortSettings& s,
                                const std::vector<std::vector<std::string>>& perPort) const {
     port["clock"] = s.clock;
