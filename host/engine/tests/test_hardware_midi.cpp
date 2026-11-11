@@ -760,7 +760,7 @@ TEST_CASE("hardware MIDI: reset-off boundaries preserve delayed releases and dro
                 CHECK(events(backend, 0x94).size() == (beforeOnset ? 0 : 1));
                 CHECK(events(backend, 0x84).size() == (beforeOnset ? 0 : 1));
                 for (const auto& e : backend.midiCapture())
-                    CHECK_FALSE(e.event.bytes[0] == 0xb4 && e.event.bytes[1] == 123);
+                    CHECK_FALSE((e.event.bytes[0] == 0xb4 && e.event.bytes[1] == 123));
                 engine.stop();
                 CHECK(events(backend, 0x84).size() == (beforeOnset ? 0 : 1));
             }
@@ -783,37 +783,39 @@ TEST_CASE("hardware MIDI: startup skips malformed preference records and reports
     CHECK_FALSE((*app)->midiInputsPreferences().contains("Broken"));
     CHECK_FALSE(midiPortSettings((*app)->midiOutputsPreferences(), "Drums").enabled);
     CHECK(midiPortSettings((*app)->midiInputsPreferences(), "Keyboard").offsetMs == 5);
-    cmd::Registry registry;
-    registerEngineCommands(registry);
-    cmd::Dispatcher bus(registry, **app);
-    for (bool output : {false, true}) {
-        const auto state = bus.execute({output ? "midi.outputs.get" : "midi.inputs.get",
-                                        json::Value::object(),
-                                        {cmd::Origin::Type::Ui, "test", {}}});
-        REQUIRE(state);
-        bool found = false;
-        for (const auto& port : (*state)["ports"].asArray()) {
-            if (port["name"].asString() != (output ? "Synth" : "Broken")) continue;
-            CHECK(port["offset_ms"].asDouble() == 0);
-            for (const auto& warning : port["warnings"].asArray())
-                if (const auto* code = warning.find("code");
-                    code && code->asString() == "midi.preferences") {
-                    found = true;
-                    CHECK(warning["path"].asString().find(output ? "/midi_outputs/Synth/offset_ms"
-                                                                 : "/midi_inputs/Broken/enabled") ==
-                          0);
-                }
+    {
+        cmd::Registry registry;
+        registerEngineCommands(registry);
+        cmd::Dispatcher bus(registry, **app);
+        for (bool output : {false, true}) {
+            const auto state = bus.execute({output ? "midi.outputs.get" : "midi.inputs.get",
+                                            json::Value::object(),
+                                            {cmd::Origin::Type::Ui, "test", {}}});
+            REQUIRE(state);
+            bool found = false;
+            for (const auto& port : state->find("ports")->asArray()) {
+                if (port.find("name")->asString() != (output ? "Synth" : "Broken")) continue;
+                CHECK(port.find("offset_ms")->asDouble() == 0);
+                for (const auto& warning : port.find("warnings")->asArray())
+                    if (const auto* code = warning.find("code");
+                        code && code->asString() == "midi.preferences") {
+                        found = true;
+                        CHECK(warning.find("path")->asString().find(
+                                  output ? "/midi_outputs/Synth/offset_ms"
+                                         : "/midi_inputs/Broken/enabled") == 0);
+                    }
+            }
+            CHECK(found);
         }
-        CHECK(found);
+        auto edits = json::Value::object();
+        edits["offset_ms"] = 2;
+        REQUIRE((*app)->setMidiPort(true, "synth", edits));
+        CHECK(midiPortSettings((*app)->midiOutputsPreferences(), "Synth").offsetMs == 2);
+        const auto corrected = (*app)->midiPortsState(true);
+        for (const auto& port : corrected.asArray())
+            for (const auto& warning : port.find("warnings")->asArray())
+                CHECK(warning.find("code") == nullptr);
     }
-    auto edits = json::Value::object();
-    edits["offset_ms"] = 2;
-    REQUIRE((*app)->setMidiPort(true, "synth", edits));
-    CHECK(midiPortSettings((*app)->midiOutputsPreferences(), "Synth").offsetMs == 2);
-    const auto corrected = (*app)->midiPortsState(true);
-    for (const auto& port : corrected.asArray())
-        for (const auto& warning : port["warnings"].asArray())
-            CHECK(warning.find("code") == nullptr);
     app->reset();
     std::filesystem::remove_all(dir);
 }
@@ -850,7 +852,7 @@ TEST_CASE("hardware MIDI: lead changes crossfade two fixed history taps") {
             const double mix = std::min(1., double(at - start + 1) / 240.);
             const float expected = static_cast<float>((1 - mix) * double(sample(at - 64)) +
                                                       mix * double(sample(at - 128)));
-            CHECK(signal[f] == doctest::Approx(expected).epsilon(.000001));
+            CHECK(signal[f] == doctest::Approx(double(expected)).epsilon(.000001));
         }
     }
     backend.stop();
