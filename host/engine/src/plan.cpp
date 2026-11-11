@@ -643,10 +643,14 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
                     down[e.id].push_back(*e.value->parent);
                     up[*e.value->parent].push_back(e.id);
                 }
+            // A MIDI send floods down only: soloing its source keeps what
+            // it plays audible; soloing the destination does not bring back
+            // the source's own sound, since MIDI sends ignore solo
+            // (ADR-0067; model::effectiveTrackLevel agrees).
             for (const auto& e : s.routes)
                 if (e.value->from.track && e.value->to.track) {
                     down[*e.value->from.track].push_back(*e.value->to.track);
-                    up[*e.value->to.track].push_back(*e.value->from.track);
+                    if (!e.value->midi) up[*e.value->to.track].push_back(*e.value->from.track);
                 }
             std::set<Id> audible = soloed;
             auto flood = [&](std::map<Id, std::vector<Id>>& g) {

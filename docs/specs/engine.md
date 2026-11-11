@@ -2643,7 +2643,13 @@ past a prepared capacity are dropped and counted with `voice_dropped`
 (offline: a warning naming the track). The instrument retains its existing
 4096-voice timeline/device budget; incoming routes add their voices. A send's
 channel filter and remap apply to channel messages only; system messages
-pass unchanged. At a shared frame releases normally precede onsets. If that
+pass unchanged.
+
+MIDI sends ignore solo: a solo-silenced source still plays its MIDI. In the
+solo signal path a MIDI send between channels counts downstream only:
+soloing its source keeps the destination it plays audible, while soloing
+the destination does not un-silence the source's own sound (an audio send
+does both ways, since the destination's signal contains the source's). At a shared frame releases normally precede onsets. If that
 would put a voice's release before its own onset (late events or playrate
 compression), the frame retains input chronology. Prepared sorting scratch
 keeps both channel and Notes event ordering allocation-free. All-notes-off

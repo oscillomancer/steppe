@@ -15,6 +15,7 @@
 #include <clap/ext/params.h>
 #include "plan.h"
 #include "rack_runtime.h"
+#include "supple/model/groups.h"
 #include "supple/params/params.h"
 
 using namespace supple;
@@ -2048,6 +2049,39 @@ TEST_CASE("MIDI sends: all-notes-off releases precede a same-frame reattack" *
         CHECK(std::count_if(node.midiHeld.begin(), node.midiHeld.end(),
                             [](const auto& v) { return v.high; }) == 1);
     }
+}
+
+TEST_CASE("MIDI sends: solo follows a MIDI send downstream only") {
+    namespace d = supple::engine::detail;
+    model::EditTxn t(model::Session::create({.console9 = false}), 1);
+    const auto source = addChannel(t), target = addChannel(t), other = addChannel(t);
+    model::Route route;
+    route.from.track = source;
+    route.to.track = target;
+    route.midi = model::MidiRouting{};
+    t.create(route);
+    const auto base = commit(t);
+    const auto silenced = [&](Id soloed) {
+        model::EditTxn edit(base, 2);
+        edit.modify<model::Track>(soloed, [](auto& x) { x.solo = model::Solo::On; });
+        const auto session = commit(edit);
+        auto pool = makePool();
+        auto plan = d::compile(session, pool, 0, 256);
+        REQUIRE(plan);
+        std::map<Id, bool> out;
+        for (const auto& node : plan->nodes) out[node.id] = node.soloSilenced;
+        for (Id id : {source, target, other})
+            CHECK(model::effectiveTrackLevel(session, id, 0).soloSilenced == out[id]);
+        return out;
+    };
+    auto soloTarget = silenced(target);  // the source's sound stays silenced
+    CHECK(soloTarget[source]);
+    CHECK_FALSE(soloTarget[target]);
+    CHECK(soloTarget[other]);
+    auto soloSource = silenced(source);  // what it plays stays audible
+    CHECK_FALSE(soloSource[source]);
+    CHECK_FALSE(soloSource[target]);
+    CHECK(soloSource[other]);
 }
 
 TEST_CASE("MIDI sends: channel filter and remap leave system messages alone" *

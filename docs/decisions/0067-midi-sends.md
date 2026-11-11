@@ -27,7 +27,9 @@ instrument and its pre-FX sends. A separately named, prepared post-FX stream
 currently copies pre-FX; plug-in MIDI output will replace/merge it at that
 seam. Pre-fader means post-FX. Post-fader additionally follows source mute;
 its own mute releases delivered notes and unmute restarts keys still held.
-There is no MIDI velocity scaling by the audio fader.
+There is no MIDI velocity scaling by the audio fader. MIDI sends ignore solo;
+soloing a MIDI send's source keeps its destination audible, but soloing the
+destination leaves the source's own sound solo-silenced.
 
 Notes modules hear their source channel's pre-FX MIDI plus explicit incoming
 routes and their own device input. `source: "none"` disables the source;
