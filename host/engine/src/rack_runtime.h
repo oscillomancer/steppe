@@ -274,13 +274,19 @@ RackLatencies rackLatencies(const Session& session, Id rack,
 void prepareRackLatencies(Node& node, const Session& session);
 // After the plan's timeline shifts are solved (prepare): events and curves.
 void prepareRack(Plan& p, Node& n, const Session& s);
-// MIDI-only rack edges: preallocation on main, collection at the destination,
-// and carrying queues at adoption (audio thread, no cross-executor MIDI).
+// MIDI sends (ADR-0067): preallocation on main, collection at the destination,
+// and carrying voices and queues at adoption (audio thread, no cross-executor
+// MIDI). A track's MIDI stream per block: beginTrackMidi (releases), its
+// inputs into midiStage, finishTrackMidi (voice slots, midiPreFx/midiPostFx).
 Status prepareRackMidi(Plan& p);
+// The most item notes `events` hold at once, with a margin: voice storage.
+std::size_t timelineVoiceBound(const std::vector<TimedEvent>& events);
 void beginTrackMidi(Node& node, bool playing, bool hearDevice) SUPPLE_RT;
 void rackTimelineEvents(Plan& plan, Node& node, NotesFeed& feed, std::int64_t pos,
                         std::uint32_t frames) SUPPLE_RT;
 void finishTrackMidi(Node& node) SUPPLE_RT;
+// A seek or restart: the stream holds nothing (its sends see a new epoch).
+void resetTrackMidi(Node& node) SUPPLE_RT;
 void addRackMidi(Plan& p, Node& target, std::int64_t pos, std::uint32_t frames,
                  bool playing) SUPPLE_RT;
 void carryRackMidi(Plan& to, Plan& from, int toClass, int fromClass) SUPPLE_RT;

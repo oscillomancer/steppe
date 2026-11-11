@@ -776,20 +776,28 @@ void prepareRack(Plan& p, Node& n, const Session& s) {
         const Id source = m->source.value_or(home ? home->track : model::kMaster);
         if (!m->sourceOff) feed.events = compileTrackEvents(s, source, p.startSeconds, p.rate);
         for (auto& ev : feed.events) ev.sample += n.timelineShift;
-        std::size_t window = 0;
-        for (std::size_t a = 0, b = 0; a < feed.events.size(); ++a) {
-            if (b < a) b = a;
-            while (b < feed.events.size() &&
-                   feed.events[b].sample <
-                       feed.events[a].sample + static_cast<std::int64_t>(p.block))
-                ++b;
-            window = std::max(window, b - a);
-        }
-        feed.midiStage.blockEvents.reserve(feed.events.size() + 4096);
-        feed.midiStage.voices.reserve(4096);
-        feed.midiStage.pendingVoices.reserve(4096);
-        feed.block.reserve(window + (feed.device || feed.sourceDevice ? kMaxMidiInputEvents : 0) +
-                           1);
+        const auto eventWindow = [&](std::int64_t frames) {
+            std::size_t most = 0;
+            for (std::size_t a = 0, b = 0; a < feed.events.size(); ++a) {
+                if (b < a) b = a;
+                while (b < feed.events.size() &&
+                       feed.events[b].sample < feed.events[a].sample + frames)
+                    ++b;
+                most = std::max(most, b - a);
+            }
+            return most;
+        };
+        const std::size_t window = eventWindow(static_cast<std::int64_t>(p.block));
+        // The playrate path (rackTimelineEvents): up to four blocks' events
+        // and a release per held note, as a track's stream.
+        const std::size_t voices = timelineVoiceBound(feed.events);
+        const std::size_t rateWindow =
+            p.rateEnabled ? eventWindow(4 * static_cast<std::int64_t>(p.block)) + voices + 1 : 0;
+        feed.midiStage.blockEvents.reserve(rateWindow);
+        feed.midiStage.voices.reserve(voices);
+        feed.midiStage.pendingVoices.reserve(voices);
+        feed.block.reserve(std::max(window, rateWindow) +
+                           (feed.device || feed.sourceDevice ? kMaxMidiInputEvents : 0) + 1);
     }
     for (auto& curve : r.curves) curve->curve.cursor = 0;
 }

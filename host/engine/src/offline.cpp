@@ -804,12 +804,16 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
     r.freezeTailFrames = renderedFrames - outputLatency - contentFrames;
     r.outputLatency = static_cast<std::uint32_t>(outputLatency);
     r.warnings = std::move(p.warnings);
-    for (const auto& node : p.nodes)
+    for (const auto& node : p.nodes) {
+        if (node.midiDropped)
+            r.warnings.push_back(node.id.str() + ": MIDI send capacity exceeded: " +
+                                 std::to_string(node.midiDropped));
         forEachStage(node, [&](const Stage& st) {
             if (st.voiceDropped)
                 r.warnings.push_back(st.fx.str() + ": voice tracking capacity exceeded: " +
                                      std::to_string(st.voiceDropped));
         });
+    }
     r.audio.sampleRate = p.rate;
     const auto skip = static_cast<std::ptrdiff_t>(outputLatency);
     for (auto& channel : output) {

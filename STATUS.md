@@ -281,8 +281,11 @@ instructions are in `docs/guides/installing.md`.
   PDC and MIDI recording. The routing window's saved Audio/MIDI mode exposes
   Note Out and Notes endpoints. Notes supports Source None; Note Out displays
   MIDI channel. Prepared pre/post-FX streams are separate; post-FX currently
-  equals pre-FX pending plug-in MIDI output. Frozen channels send timeline
-  MIDI at both taps. Project schema 2.10 defaults source-off to false for old
+  equals pre-FX pending plug-in MIDI output. Held notes take slots of a pool
+  sized by the notes that can sound at once, so plan edits during playback
+  cost the held voices, not the notes in the timeline; an edit to a send
+  upstream releases and retriggers its notes downstream. Frozen channels send
+  timeline MIDI at both taps. Project schema 2.10 defaults source-off to false for old
   files. Native macOS/Windows CI and coordinator review remain pending.
 - **Modular racks** (ADR-0062, `specs/rack.md`): racks of modules and
   cables on a channel, in the project (schema 2.7) with undo and branches.

@@ -1146,6 +1146,11 @@ void Engine::publishPluginOutputs(detail::Plan& p, bool renderer, std::uint64_t 
     bool changed = false;
     for (auto& node : p.nodes) {
         if (options_.anticipative && node.live == renderer) continue;
+        // A MIDI send's notes or events past its prepared capacity (ADR-0067)
+        // count with the voices an instrument could not track.
+        changed |= node.midiDropped != 0;
+        voiceDrops_.fetch_add(node.midiDropped, std::memory_order_relaxed);
+        node.midiDropped = 0;
         detail::forEachStage(node, [&](detail::Stage& st) {
             changed |= st.voiceDropped != 0 || st.outEvents.dropped != 0;
             voiceDrops_.fetch_add(st.voiceDropped, std::memory_order_relaxed);

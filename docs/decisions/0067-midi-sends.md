@@ -45,9 +45,20 @@ its MIDI. Explicit and implicit dependencies
 participate in mixed audio/MIDI cycle validation. MIDI edges use PDC queues,
 fixed prepared event/voice storage and the existing MIDI budget error. A
 source feeding a live destination runs live, keeping MIDI off the audio-only
-frontier rings. Musical source identities, route paths and retained per-route note addresses
-keep equal pitches independent and preserve held state across unrelated plan
-edits.
+frontier rings.
+
+Voice storage follows the notes that can sound at once, never the notes in
+the timeline: each channel's held notes take slots of a prepared pool (its
+items' overlap, its live keys, its sends' source voices), and its sends'
+voices, queues and budgets multiply those slots. Plan adoption on the audio
+thread is therefore bounded by the voices held. A held note survives an
+edit through its own musical identity (item notes), its key (live input)
+or the unchanged send that delivered it; a send whose parameters changed
+anywhere upstream (route, tap, channels, PDC delay) releases what it
+delivered, downstream too, and retriggers the notes still held, so an edit
+never doubles a voice. An onset on a held input ends the held note first.
+Plug-in note output (the post-FX seam) will add its own slots to the same
+pools: a send's voices are its tapped stream's slots.
 
 Armed MIDI overdub/replace channels record delivered sends alongside optional
 device input. Internal events use the destination input clock, without device

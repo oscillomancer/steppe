@@ -1803,6 +1803,87 @@ TEST_CASE("MIDI sends: adding and removing another relay input preserves existin
     for (auto* instance : plan.instances) instance->stopProcessing();
 }
 
+TEST_CASE("MIDI sends: an edit to an upstream send releases and retriggers downstream" *
+          doctest::description("rt")) {
+    // Source -> relay -> target (an instrument). Changing the first send
+    // mid-note changes the note downstream too: one release, one onset,
+    // never a second voice for the same note.
+    namespace d = supple::engine::detail;
+    std::string edit;
+    SUBCASE("from channel") { edit = "from"; }
+    SUBCASE("to channel") { edit = "to"; }
+    SUBCASE("tap") { edit = "tap"; }
+    SUBCASE("unrelated") { edit = "rename"; }
+    NoteRouteScene scene(false);
+    model::EditTxn t(scene.session, 2);
+    const auto relay = addChannel(t);
+    t.modify<model::Track>(relay, [](auto& track) { track.parentSend.enabled = false; });
+    for (const auto& entry : scene.session.routes)
+        if (entry.value->midi)
+            t.modify<model::Route>(entry.id, [&](auto& route) {
+                route.from = {};
+                route.from.track = relay;
+            });
+    model::Route first;
+    first.from.track = scene.source;
+    first.to.track = relay;
+    first.midi = model::MidiRouting{};
+    const auto send = t.create(first);
+    auto session = commit(t);
+    auto pool = makePool();
+    auto compiled = d::compile(session, pool, 0, 1024);
+    REQUIRE(compiled);
+    auto plan = std::move(*compiled);
+    REQUIRE(d::prepare(plan, session));
+    for (auto* instance : plan.instances) REQUIRE(instance->startProcessing());
+    const auto stage = [&]() -> d::Stage& {
+        const auto node = std::find_if(plan.nodes.begin(), plan.nodes.end(),
+                                       [&](const auto& n) { return n.id == scene.target; });
+        REQUIRE(node != plan.nodes.end());
+        return node->chain[static_cast<std::size_t>(node->noteTarget)];
+    };
+    std::int64_t pos = 0;
+    const auto run = [&](std::int64_t until) {
+        while (pos < until) {
+            const auto n = static_cast<std::uint32_t>(std::min<std::int64_t>(256, until - pos));
+            REQUIRE(d::processBlock(plan, pos, n));
+            pos += n;
+            CHECK(stage().voices.size() <= 1);
+        }
+    };
+    run(1024);  // the first note (60) sounds from frame 425 to 7000
+    REQUIRE(stage().voices.size() == 1);
+    const auto before = stage().voices.front().noteId;
+    model::EditTxn change(session, 3);
+    if (edit == "from")
+        change.modify<model::Route>(send, [](auto& r) { r.midi = model::MidiRouting{1, 0}; });
+    if (edit == "to")
+        change.modify<model::Route>(send, [](auto& r) { r.midi = model::MidiRouting{0, 1}; });
+    if (edit == "tap")
+        change.modify<model::Route>(send, [](auto& r) { r.tap = model::Tap::PreFx; });
+    if (edit == "rename") change.modify<model::Track>(relay, [](auto& r) { r.name = "Relay"; });
+    session = commit(change);
+    auto next = d::compile(session, pool, 0, 1024);
+    REQUIRE(next);
+    REQUIRE(d::prepare(*next, session));
+    for (auto* instance : next->instances)
+        if (!instance->processing()) REQUIRE(instance->startProcessing());
+    d::carryMix(plan, *next, -1);
+    d::locate(*next, pos, false);
+    plan = std::move(*next);
+    run(3000);
+    REQUIRE(stage().voices.size() == 1);
+    // An unrelated edit keeps the voice; a changed send replays it.
+    CHECK((stage().voices.front().noteId == before) == (edit == "rename"));
+    CHECK(stage().voices.front().key == 60);
+    run(8192);  // past the note's end, before the next one
+    CHECK(stage().voices.empty());
+    for (const auto& node : plan.nodes)
+        CHECK(std::none_of(node.midiHeld.begin(), node.midiHeld.end(),
+                           [](const auto& v) { return v.high; }));
+    for (auto* instance : plan.instances) instance->stopProcessing();
+}
+
 TEST_CASE("MIDI sends: a rack's Notes does not hear its own Note Out through its source track") {
     namespace d = supple::engine::detail;
     NoteRouteScene scene(false);
@@ -1825,39 +1906,211 @@ TEST_CASE("MIDI sends: a rack's Notes does not hear its own Note Out through its
     CHECK(sends == 1);
 }
 
+namespace {
+// A source with `count` item notes that never overlap, a MIDI send to an
+// empty target channel; `mutePoints` of mute automation on the source.
+model::Session manyNotes(int count, int mutePoints, Id& source, Id& target) {
+    model::EditTxn t(model::Session::create({.console9 = false}), 1);
+    source = addChannel(t);
+    target = addChannel(t);
+    model::MidiSource src;
+    src.sequence.ppq = 960;
+    src.sequence.length = 240 * count + 960;
+    for (int i = 0; i < count; ++i)
+        src.sequence.notes.push_back(
+            {240 * i, 120, 0, static_cast<std::uint8_t>(36 + i % 48), 100, 0});
+    model::Take take;
+    take.source = t.create(src);
+    const auto tk = t.create(take);
+    model::Item item;
+    item.track = source;
+    item.length = count / 4.0 + 2;
+    item.takes = {tk};
+    item.activeTake = tk;
+    t.create(item);
+    model::Route route;
+    route.from.track = source;
+    route.to.track = target;
+    route.midi = model::MidiRouting{};
+    t.create(route);
+    if (mutePoints) {
+        model::Envelope env;
+        env.target = {source, "mute"};
+        for (int i = 0; i < mutePoints; ++i) env.points.push_back({double(i), double(i % 2)});
+        t.create(env);
+    }
+    return commit(t);
+}
+}  // namespace
+
+TEST_CASE("MIDI sends: voice storage follows the notes held at once, not the notes" *
+          doctest::description("rt")) {
+    // Adoption walks the voice pools and send voices (carryRackMidi), and
+    // every budget multiplies them: none may grow with the timeline.
+    namespace d = supple::engine::detail;
+    for (int count : {100, 10000}) {
+        CAPTURE(count);
+        Id source, target;
+        const auto session = manyNotes(count, 200, source, target);
+        auto pool = makePool();
+        auto plan = d::compile(session, pool, 0, 512);
+        REQUIRE(plan);
+        const auto prepared = d::prepare(*plan, session);
+        REQUIRE_MESSAGE(prepared, (prepared ? "" : prepared.error().toString()));
+        const auto node = [&](Id id) -> d::Node& {
+            const auto n = std::find_if(plan->nodes.begin(), plan->nodes.end(),
+                                        [&](const auto& x) { return x.id == id; });
+            REQUIRE(n != plan->nodes.end());
+            return *n;
+        };
+        const auto& from = node(source);
+        const auto& to = node(target);
+        // One item note at a time, a margin for late releases.
+        CHECK(from.midiHeld.size() <= 32);
+        CHECK(to.midiHeld.size() <= 2 * from.midiHeld.size());
+        for (const auto& edge : plan->edges)
+            if (edge.midi) {
+                CHECK(edge.midiVoices.size() == from.midiHeld.size());
+                CHECK(edge.midiQueue.size() < 100000);
+            }
+        CHECK(to.midiPreFx.capacity() < 100000);
+        // Adoption still finds a held note by its musical identity.
+        REQUIRE(d::processBlock(*plan, 0, 512));
+        auto next = d::compile(session, pool, 0, 512);
+        REQUIRE(next);
+        REQUIRE(d::prepare(*next, session));
+        d::carryMix(*plan, *next, -1);
+        const auto held = [](const d::Node& n) {
+            return std::count_if(n.midiHeld.begin(), n.midiHeld.end(),
+                                 [](const auto& v) { return v.high && !v.orphan; });
+        };
+        CHECK(held(from) == 1);  // the first note, ticks 0 to 120
+        const auto carried = std::find_if(next->nodes.begin(), next->nodes.end(),
+                                          [&](const auto& n) { return n.id == source; });
+        REQUIRE(carried != next->nodes.end());
+        CHECK(held(*carried) == 1);
+    }
+}
+
+namespace {
+// A track's MIDI stream alone: `pool` voice slots for item notes 0..inputs-1.
+supple::engine::detail::Node midiStream(std::size_t pool, std::size_t inputs) {
+    supple::engine::detail::Node node;
+    node.midiHeld.assign(pool, {});
+    for (std::size_t s = pool; s-- > 0;) node.midiFree.push_back(static_cast<std::int32_t>(s));
+    node.midiFree.reserve(pool);
+    node.midiInput.assign(inputs, -1);
+    node.midiLiveBase = node.midiRoutedBase = static_cast<std::int32_t>(inputs);
+    node.midiStage.blockEvents.reserve(16);
+    node.midiSortScratch.reserve(16);
+    node.midiOrder.prepare(16, 64);
+    node.midiPreFx.reserve(16);
+    node.midiPostFx.reserve(16);
+    node.midiInstrument.reserve(16);
+    return node;
+}
+host::Event noteEvent(host::Event::Kind kind, std::uint32_t time, int id, int key = 60) {
+    host::Event e;
+    e.kind = kind;
+    e.time = time;
+    e.noteId = id;
+    e.key = static_cast<std::int16_t>(key);
+    e.velocity = kind == host::Event::Kind::NoteOn ? 1 : 0;
+    return e;
+}
+}  // namespace
+
 TEST_CASE("MIDI sends: all-notes-off releases precede a same-frame reattack" *
           doctest::description("rt")) {
     namespace d = supple::engine::detail;
-    d::Node node;
-    node.midiHeld.resize(1);
-    node.midiBefore.resize(1);
-    node.midiStage.blockEvents.reserve(8);
-    node.midiSortScratch.reserve(8);
-    node.midiOrder.prepare(8, 64);
-    node.midiPreFx.reserve(8);
-    node.midiPostFx.reserve(8);
+    using K = host::Event::Kind;
     for (int controller : {120, 123}) {
-        node.midiHeld[0].high = true;
-        node.midiHeld[0].key = 60;
+        auto node = midiStream(2, 1);
+        node.midiStage.blockEvents = {noteEvent(K::NoteOn, 3, 0)};
+        d::finishTrackMidi(node);
+        REQUIRE(node.midiHeld[0].high);
         host::Event reset;
-        reset.kind = host::Event::Kind::Midi;
+        reset.kind = K::Midi;
         reset.time = 7;
         reset.midi[0] = 0xb0;
         reset.midi[1] = static_cast<std::uint8_t>(controller);
-        host::Event onset;
-        onset.kind = host::Event::Kind::NoteOn;
-        onset.time = 7;
-        onset.noteId = 0;
-        onset.key = 60;
-        onset.velocity = 1;
-        node.midiStage.blockEvents = {reset, onset};
+        node.midiStage.blockEvents = {reset, noteEvent(K::NoteOn, 7, 0)};
         d::finishTrackMidi(node);
         REQUIRE(node.midiPreFx.size() == 3);
-        CHECK(node.midiPreFx[0].kind == host::Event::Kind::NoteOff);
-        CHECK(node.midiPreFx[1].kind == host::Event::Kind::Midi);
-        CHECK(node.midiPreFx[2].kind == host::Event::Kind::NoteOn);
+        CHECK(node.midiPreFx[0].kind == K::NoteOff);
+        CHECK(node.midiPreFx[1].kind == K::Midi);
+        CHECK(node.midiPreFx[2].kind == K::NoteOn);
         CHECK(node.midiPreFx[0].time == 7);
         CHECK(node.midiPreFx[2].time == 7);
-        CHECK(node.midiHeld[0].high);
+        // The note target hears the same, under the item note's id.
+        CHECK(node.midiInstrument[0] == 0);
+        CHECK(node.midiInstrument[2] == 0);
+        CHECK(std::count_if(node.midiHeld.begin(), node.midiHeld.end(),
+                            [](const auto& v) { return v.high; }) == 1);
     }
+}
+
+TEST_CASE("MIDI sends: channel filter and remap leave system messages alone" *
+          doctest::description("rt")) {
+    namespace d = supple::engine::detail;
+    using K = host::Event::Kind;
+    model::EditTxn t(model::Session::create({.console9 = false}), 1);
+    const auto source = addChannel(t), target = addChannel(t);
+    model::Route route;
+    route.from.track = source;
+    route.to.track = target;
+    route.midi = model::MidiRouting{2, 5};  // channel 2 only, onto channel 5
+    t.create(route);
+    const auto session = commit(t);
+    auto pool = makePool();
+    auto plan = d::compile(session, pool, 0, 64);
+    REQUIRE(plan);
+    REQUIRE(d::prepare(*plan, session));
+    const auto node = [&](Id id) -> d::Node& {
+        const auto n = std::find_if(plan->nodes.begin(), plan->nodes.end(),
+                                    [&](const auto& x) { return x.id == id; });
+        REQUIRE(n != plan->nodes.end());
+        return *n;
+    };
+    const auto midi = [](std::uint32_t time, std::uint8_t status, std::uint8_t data) {
+        host::Event e;
+        e.kind = K::Midi;
+        e.time = time;
+        e.midi[0] = status;
+        e.midi[1] = data;
+        return e;
+    };
+    auto& from = node(source);
+    from.midiPreFx = from.midiPostFx = {midi(3, 0xf8, 0), midi(4, 0xb1, 7), midi(5, 0xb0, 7)};
+    auto& to = node(target);
+    to.midiStage.blockEvents.clear();
+    d::addRackMidi(*plan, to, 0, 64, true);
+    const auto& got = to.midiStage.blockEvents;
+    REQUIRE(got.size() == 2);
+    CHECK(got[0].midi[0] == 0xf8);  // a clock has no channel to filter or remap
+    CHECK(got[1].midi[0] == 0xb4);  // channel 2 moved to 5; channel 1 filtered out
+}
+
+TEST_CASE("MIDI sends: an onset on a held input ends the held note first" *
+          doctest::description("rt")) {
+    namespace d = supple::engine::detail;
+    using K = host::Event::Kind;
+    auto node = midiStream(4, 1);
+    node.midiStage.blockEvents = {noteEvent(K::NoteOn, 1, 0), noteEvent(K::NoteOn, 5, 0, 62)};
+    d::finishTrackMidi(node);
+    REQUIRE(node.midiPreFx.size() == 3);
+    CHECK(node.midiPreFx[0].kind == K::NoteOn);
+    CHECK(node.midiPreFx[1].kind == K::NoteOff);
+    CHECK(node.midiPreFx[1].key == 60);
+    CHECK(node.midiPreFx[1].noteId == node.midiPreFx[0].noteId);
+    CHECK(node.midiPreFx[2].kind == K::NoteOn);
+    CHECK(node.midiPreFx[2].key == 62);
+    CHECK(std::count_if(node.midiHeld.begin(), node.midiHeld.end(),
+                        [](const auto& v) { return v.high; }) == 1);
+    // A full pool drops the onset and counts it, and the note target does not hear it.
+    auto full = midiStream(1, 2);
+    full.midiStage.blockEvents = {noteEvent(K::NoteOn, 1, 0), noteEvent(K::NoteOn, 2, 1, 64)};
+    d::finishTrackMidi(full);
+    CHECK(full.midiPreFx.size() == 1);
+    CHECK(full.midiDropped == 1);
 }

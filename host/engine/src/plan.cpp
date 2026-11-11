@@ -2018,14 +2018,10 @@ void trackVoices(Stage& st, std::array<std::uint8_t, 16 * 128>& held,
                                     liveHeld && event.noteId == -1};
                     voice.sourceId = sourceIndex < st.sourceIds.size() ? st.sourceIds[sourceIndex]
                                                                        : event.noteId;
-                    if (st.rackMidiBase >= 0 && voice.sourceId >= st.rackMidiBase &&
-                        static_cast<std::size_t>(voice.sourceId - st.rackMidiBase) <
-                            st.rackNoteSources.size()) {
-                        const auto& source = st.rackNoteSources[static_cast<std::size_t>(
-                            voice.sourceId - st.rackMidiBase)];
+                    if (st.rackMidiBase >= 0 && voice.sourceId >= st.rackMidiBase) {
+                        // A routed note: its slot is its identity (carryRackMidi).
                         voice.live = true;
-                        voice.origin = {kRackNoteOrigin, source.route.n, source.module.n,
-                                        source.voice, 0};
+                        voice.origin = {kRackNoteOrigin, 0, 0, 0, 0};
                     } else if (voice.sourceId >= 0 &&
                                static_cast<std::size_t>(voice.sourceId) < st.noteSources.size()) {
                         const auto& source =
@@ -2864,18 +2860,18 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
     addRackMidi(p, node, pos, n, transport.playing);
     finishTrackMidi(node);
     if (node.noteTarget >= 0) {
+        // The pre-FX stream plays the note target under its own ids: item
+        // notes' compiled ids, keys by tuple, routed notes past kRoutedNoteBase.
         auto& target = node.chain[static_cast<std::size_t>(node.noteTarget)];
-        for (auto event : node.midiPreFx) {
-            if (event.noteId == -2 ||
-                (event.noteId >= 0 &&
-                 static_cast<std::size_t>(event.noteId) < node.midiTakeSources.size() &&
-                 node.midiTakeSources[static_cast<std::size_t>(event.noteId)]))
-                continue;
-            if (node.midiIn && event.noteId >= node.midiLiveBase &&
-                event.noteId < node.midiLiveBase + 16 * 128)
-                event.noteId = -1;
+        for (std::size_t i = 0; i < node.midiPreFx.size(); ++i) {
+            const auto id = node.midiInstrument[i];
+            if (id == -2 || id == kNotTargetNote) continue;  // a take's own
+            auto event = node.midiPreFx[i];
+            event.noteId = id;
             if (target.blockEvents.size() < target.blockEvents.capacity())
                 target.blockEvents.push_back(event);
+            else
+                ++target.voiceDropped;
         }
     }
     // 2b. Plugin parameter automation (automateStage).
@@ -3218,9 +3214,7 @@ void locateNode(Plan& p, Node& n, std::int64_t pos, bool restartConsole) SUPPLE_
     n.nextEvent = static_cast<std::size_t>(it - n.events.begin());
     n.rateEventFresh = restartConsole;
     if (restartConsole) {
-        ++n.midiEpoch;
-        n.midiStage.voices.clear();
-        for (auto& voice : n.midiHeld) voice = {};
+        resetTrackMidi(n);
         n.encoder.reset();
         n.keyEncoder.reset();
         n.keyFader.reset();
@@ -3291,9 +3285,7 @@ void locate(Plan& p, std::int64_t pos, bool restartConsole) SUPPLE_RT {
         n.nextEvent = static_cast<std::size_t>(it - n.events.begin());
         n.rateEventFresh = restartConsole;
         if (restartConsole) {
-            ++n.midiEpoch;
-            n.midiStage.voices.clear();
-            for (auto& voice : n.midiHeld) voice = {};
+            resetTrackMidi(n);
             n.encoder.reset();
             n.keyEncoder.reset();
             n.keyFader.reset();
@@ -3519,24 +3511,9 @@ void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT {
                                 }
                                 auto carried = voice;
                                 if (carried.origin.item == kRackNoteOrigin) {
-                                    const auto oldSource =
-                                        os.rackMidiBase >= 0 &&
-                                                carried.sourceId >= os.rackMidiBase &&
-                                                static_cast<std::size_t>(carried.sourceId -
-                                                                         os.rackMidiBase) <
-                                                    os.rackNoteSources.size()
-                                            ? &os.rackNoteSources[static_cast<std::size_t>(
-                                                  carried.sourceId - os.rackMidiBase)]
-                                            : nullptr;
-                                    const auto found =
-                                        oldSource ? std::find(st.rackNoteSources.begin(),
-                                                              st.rackNoteSources.end(), *oldSource)
-                                                  : st.rackNoteSources.end();
-                                    if (found != st.rackNoteSources.end())
-                                        carried.sourceId =
-                                            st.rackMidiBase +
-                                            static_cast<int>(found - st.rackNoteSources.begin());
-                                    else {
+                                    // A routed note follows its voice slot,
+                                    // remapped after the pool (carryRackMidi).
+                                    if (st.rackMidiBase < 0) {
                                         carried.release = true;
                                         carried.live = false;
                                     }

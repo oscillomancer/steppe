@@ -2618,15 +2618,32 @@ Channel/Note Out → channel/Notes edges participate in graph order, mixed
 cycle checks and read-ahead PDC. Source-track incoming routes also feed that
 track's Notes readers, ordered before the rack without depending on the
 track's audio result. All MIDI sources of live destinations run live; no
-MIDI crosses frontier audio rings. Event queues and note addressing are
+MIDI crosses frontier audio rings. Event queues and voice storage are
 prepared on the model thread, bounded by `engine.midi_budget`. Route mute
 releases delivered notes and unmute restarts keys still held. Post-fader
 sends additionally follow source-strip mute; earlier taps do not. No audio
-fader, pan or Console 9 stage alters MIDI. Stable musical and route-path
-identities preserve held notes across unrelated edits and keep equal pitches
-from separate sources independently addressable. The instrument retains its
-existing 4096-voice timeline/device budget; incoming routes add prepared
-voice slots. At a shared frame releases normally precede onsets. If that
+fader, pan or Console 9 stage alters MIDI.
+
+Each channel's held notes take slots of a prepared pool sized by how many
+can sound at once: the most item notes its timeline overlaps (plus a margin
+of 16 for late releases), every live key when it has a MIDI input, and the
+voices of each incoming send's source (16 per Note Out). Its sends carry
+slot ids, a send's voices are its source's slots, and every queue and
+budget multiplies these voice counts, never the number of notes in the
+timeline. Adoption on the audio thread therefore walks the held voices:
+item notes keep their slots by musical identity, live keys by key, routed
+notes through the unchanged send that delivered them. A send whose route,
+tap, channel filter or remap, PDC delay or ends changed starts afresh: what
+it delivered ends at the next block's start (also downstream through relay
+channels), then the notes still held start again, so an edit anywhere
+upstream releases and retriggers instead of doubling a voice. An onset on an
+input that is still held ends the held note first. Equal pitches from
+separate sources stay independent: each holds its own slot. Notes or events
+past a prepared capacity are dropped and counted with `voice_dropped`
+(offline: a warning naming the track). The instrument retains its existing
+4096-voice timeline/device budget; incoming routes add their voices. A send's
+channel filter and remap apply to channel messages only; system messages
+pass unchanged. At a shared frame releases normally precede onsets. If that
 would put a voice's release before its own onset (late events or playrate
 compression), the frame retains input chronology. Prepared sorting scratch
 keeps both channel and Notes event ordering allocation-free. All-notes-off
