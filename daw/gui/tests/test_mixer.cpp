@@ -1961,3 +1961,28 @@ TEST_CASE("pan controls: a mixer's second bar records a writing envelope") {
     const model::EnvTarget target{*model::Id::parse(track), "width"};
     CHECK(f.app->engine()->writeHolds() == std::vector<model::EnvTarget>{target});
 }
+
+TEST_CASE("preferences: stale GUI snapshots preserve engine-owned MIDI records") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto file = f.dir / "preferences.json";
+    gui::Preferences stale;
+    stale.midiOutputs["Synth"] = json::parse(R"({"clock":true,"offset_ms":-5})").value();
+    REQUIRE(stale.save(file));
+    const auto current = json::parse(R"({"clock":false,"offset_ms":12})").value();
+    REQUIRE(f.app->setMidiPreferences({}, {{"Synth", current}}, false));
+    REQUIRE(f.app->writeMidiPreferences(file));
+    REQUIRE(stale.save(file));
+    auto loaded = gui::Preferences::load(file);
+    REQUIRE(loaded);
+    CHECK_FALSE(loaded->midiOutputs.at("Synth").find("clock")->asBool());
+    CHECK(engine::midiPortSettings(loaded->midiOutputs, "Synth").offsetMs == 12);
+    views::MouseMap map;
+    gui::MouseDialog mouse(*f.root, map, {});
+    gui::PreferencesDialog prefs(*f.root, *f.app, mouse, stale, file);
+    CHECK(engine::midiPortSettings(f.app->midiOutputsPreferences(), "Synth").offsetMs == 12);
+    REQUIRE(prefs.setAudioThreads(2));
+    loaded = gui::Preferences::load(file);
+    REQUIRE(loaded);
+    CHECK_FALSE(loaded->midiOutputs.at("Synth").find("clock")->asBool());
+}

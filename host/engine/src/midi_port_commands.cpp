@@ -7,53 +7,66 @@
 #include "supple/engine/app.h"
 #include "supple/json/json.h"
 namespace supple::engine {
+namespace {
+Result<json::Value> preferencesDocument(const std::filesystem::path& file) {
+    auto doc = json::Value::object();
+    std::error_code ec;
+    if (std::filesystem::exists(file, ec)) {
+        auto bytes = readFile(file);
+        if (!bytes) return bytes.error();
+        auto parsed = json::parse(
+            std::string_view(reinterpret_cast<const char*>(bytes->data()), bytes->size()));
+        if (!parsed) return parsed.error();
+        doc = std::move(*parsed);
+    }
+    if (!doc.isObject())
+        return Error("midi.preferences", "preferences must be an object", "/",
+                     "repair the preferences file or choose another file");
+    return doc;
+}
+Status writeMidiRecords(const std::filesystem::path& file, json::Value doc,
+                        const MidiPortPreferences& inputs, const MidiPortPreferences& outputs) {
+    if (!doc.find("schema")) doc["schema"] = kPreferencesSchema;
+    doc["midi_inputs"] = midiPortPreferencesJson(inputs);
+    doc["midi_outputs"] = midiPortPreferencesJson(outputs);
+    std::error_code ec;
+    std::filesystem::create_directories(file.parent_path(), ec);
+    return writeFileAtomic(file, json::writeCanonical(doc) + "\n");
+}
+}  // namespace
+Status EngineApp::writeMidiPreferences(const std::filesystem::path& file) const {
+    auto doc = preferencesDocument(file);
+    if (!doc) return doc.error();
+    return writeMidiRecords(file, std::move(*doc), midiInputsPreferences_, midiOutputsPreferences_);
+}
 Status EngineApp::setMidiPreferences(MidiPortPreferences inputs, MidiPortPreferences outputs,
                                      bool save) {
     SUPPLE_TRY(parseMidiPortPreferences(midiPortPreferencesJson(inputs), false));
     SUPPLE_TRY(parseMidiPortPreferences(midiPortPreferencesJson(outputs), true));
-    const auto oldInputs = midiInputsPreferences_, oldOutputs = midiOutputsPreferences_;
+    std::optional<json::Value> doc;
     if (save && !options_.midiPreferencesFile.empty()) {
-        auto doc = json::Value::object();
-        std::error_code ec;
-        if (std::filesystem::exists(options_.midiPreferencesFile, ec)) {
-            auto bytes = readFile(options_.midiPreferencesFile);
-            if (!bytes) return bytes.error();
-            auto parsed = json::parse(
-                std::string_view(reinterpret_cast<const char*>(bytes->data()), bytes->size()));
-            if (!parsed) return parsed.error();
-            doc = std::move(*parsed);
+        auto read = preferencesDocument(options_.midiPreferencesFile);
+        if (!read) return read.error();
+        doc = std::move(*read);
+    }
+    const auto oldInputs = midiInputsPreferences_, oldOutputs = midiOutputsPreferences_;
+    if (engine_) {
+        engine_->setMidiPreferences(inputs, outputs);
+        auto loaded = engine_->load(head(), projectDir());
+        if (!loaded) {
+            engine_->setMidiPreferences(oldInputs, oldOutputs);
+            return loaded;
         }
-        if (!doc.isObject())
-            return Error("midi.preferences", "preferences must be an object", "/",
-                         "repair the preferences file or choose another file");
-        if (!doc.find("schema")) doc["schema"] = kPreferencesSchema;
-        doc["midi_inputs"] = midiPortPreferencesJson(inputs);
-        doc["midi_outputs"] = midiPortPreferencesJson(outputs);
-        std::filesystem::create_directories(options_.midiPreferencesFile.parent_path(), ec);
-        if (engine_) {
-            engine_->setMidiPreferences(inputs, outputs);
-            auto loaded = engine_->load(head(), projectDir());
-            if (!loaded) {
-                engine_->setMidiPreferences(oldInputs, oldOutputs);
-                return loaded;
-            }
-        }
+    }
+    if (doc) {
         auto written =
-            writeFileAtomic(options_.midiPreferencesFile, json::writeCanonical(doc) + "\n");
+            writeMidiRecords(options_.midiPreferencesFile, std::move(*doc), inputs, outputs);
         if (!written) {
             if (engine_) {
                 engine_->setMidiPreferences(oldInputs, oldOutputs);
                 (void)engine_->load(head(), projectDir());
             }
             return written;
-        }
-    }
-    if ((!save || options_.midiPreferencesFile.empty()) && engine_) {
-        engine_->setMidiPreferences(inputs, outputs);
-        auto loaded = engine_->load(head(), projectDir());
-        if (!loaded) {
-            engine_->setMidiPreferences(oldInputs, oldOutputs);
-            return loaded;
         }
     }
     ++midiPreferencesRevision_;

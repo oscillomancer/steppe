@@ -415,6 +415,8 @@ class EngineApp : public cmd::Host {
     const MidiPortPreferences& midiOutputsPreferences() const { return midiOutputsPreferences_; }
     Status setMidiPreferences(MidiPortPreferences inputs, MidiPortPreferences outputs,
                               bool save = true);
+    // The engine is the sole writer of MIDI records, including GUI saves.
+    Status writeMidiPreferences(const std::filesystem::path& file) const;
     Status setMidiPort(bool output, const std::string& name, const json::Value& edits);
     json::Value midiPortsState(bool output) const;
     std::uint64_t midiPreferencesRevision() const { return midiPreferencesRevision_; }

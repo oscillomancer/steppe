@@ -153,8 +153,17 @@ Status Preferences::save(const std::filesystem::path& file) const {
     doc["copy_imported_media"] = copyImports;
     doc["render_open_folder"] = renderOpenFolder;
     doc["audio"] = audioDeviceJson(audio);
-    doc["midi_inputs"] = engine::midiPortPreferencesJson(midiInputs);
-    doc["midi_outputs"] = engine::midiPortPreferencesJson(midiOutputs);
+    // These records belong to the engine; preserve the current disk value.
+    std::error_code lookupError;
+    if (std::filesystem::exists(file, lookupError)) {
+        auto bytes = readFile(file);
+        if (!bytes) return bytes.error();
+        auto stored = json::parse(
+            std::string_view(reinterpret_cast<const char*>(bytes->data()), bytes->size()));
+        if (!stored) return stored.error();
+        for (const auto* key : {"midi_inputs", "midi_outputs"})
+            if (const auto* value = stored->find(key)) doc[key] = *value;
+    }
     std::error_code ec;
     std::filesystem::create_directories(file.parent_path(), ec);
     return writeFileAtomic(file, json::writeCanonical(doc) + "\n");
@@ -163,7 +172,6 @@ Status Preferences::save(const std::filesystem::path& file) const {
 PreferencesDialog::PreferencesDialog(ui::Root& root, engine::EngineApp& app, MouseDialog& mouse,
                                      Preferences prefs, std::filesystem::path file)
     : root_(root), app_(app), mouse_(mouse), prefs_(prefs), file_(std::move(file)) {
-    (void)app_.setMidiPreferences(prefs_.midiInputs, prefs_.midiOutputs, false);
     app_.setDefaultMonitor(prefs_.defaultMonitor);
     // Loaded preferences are validated; callers constructing a struct directly
     // still cannot pass an invalid engine setting.
@@ -176,9 +184,8 @@ PreferencesDialog::PreferencesDialog(ui::Root& root, engine::EngineApp& app, Mou
 }
 
 Status PreferencesDialog::save(Preferences& prefs) {
-    prefs.midiInputs = app_.midiInputsPreferences();
-    prefs.midiOutputs = app_.midiOutputsPreferences();
-    return prefs.save(file_);
+    SUPPLE_TRY(prefs.save(file_));
+    return app_.writeMidiPreferences(file_);
 }
 
 bool PreferencesDialog::isOpen() const { return root_.find("prefs") != nullptr; }

@@ -2786,3 +2786,7 @@ same preferences file; embedded hosts may provide their own persistence.
 
 The engine and GUI share `engine::kPreferencesSchema` for the current machine
 preferences schema, including a new engine-owned preferences file.
+
+MIDI preference records have one writer, EngineApp. Generic GUI preference
+saves preserve the latest records on disk and ask the engine to persist its
+current records; opening a dialog never replaces engine state from a snapshot.
