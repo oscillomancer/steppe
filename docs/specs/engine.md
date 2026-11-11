@@ -2094,22 +2094,28 @@ timing/disconnect validation remain pending. No additional SDK/library is linked
 
 ### MIDI clock and MTC output (ADR-0073)
 
-**Settings.** `EngineApp` holds the `MidiOutputSettings` records
-`{port, enabled, offset_ms, reset_on_stop, clock, transport, spp, mtc,
-clock_while_stopped}` (the per-port record hardware MIDI routing shares:
-it owns enabled, offset_ms and reset_on_stop), sorted by port, records at
-every default dropped (`midi.outputs.get`, `midi.outputs.set`; the GUI
-saves them as `preferences.json`'s `midi_outputs` `{"<port>": {...}}`).
-`syncConfigFor` resolves each record against `Engine::midiOutputPorts()`
-by exact name into `SyncConfig.outputs[i]` (`kMaxSyncOutputs` = 16): for
-an enabled port the kinds, and `delay` = `midiOutputLatency()[i]` + offset
-in frames; a disabled port sends nothing. While the sync
+**Settings.** Clock output reads the same per-port record as hardware MIDI
+routing (`MidiPortPreferences`, `midi_ports.h`; see "Hardware MIDI routing
+(ADR-0072)"): routing owns `enabled`, `offset_ms` and `reset_on_stop`, and
+the record adds `clock`, `transport`, `spp`, `mtc` and
+`clock_while_stopped` (booleans, outputs only, validated by
+`parseMidiPortPreferences`; `MidiPortSettings` carries them). The records
+live in `preferences.json` (`supple.preferences/1.8`) as `midi_outputs`
+`{"<port>": {...}}`; `EngineApp` is their only writer (`midi.outputs.set`),
+and a malformed record is skipped at startup with a warning, as for
+routing. `midi.outputs.set` resolves its port by a unique case-insensitive
+match, applies the edits, drops a record back at every default, then
+rebuilds the plan and `applySync()`. `syncConfigFor` resolves each output
+of `Engine::midiOutputPorts()` by its exact name into
+`SyncConfig.outputs[i]` (`kMaxSyncOutputs` = 16): for an enabled port the
+kinds, and `delay` = `midiOutputLatency()[i]` + offset in frames; a
+disabled port sends nothing. While the sync
 source is MIDI clock or MTC on an input whose device is that output (names
 equal without capture/playback, in/out, input/output, midiin/midiout), the
 kinds the master sends are cleared (clock, transport, SPP, clock while
-stopped; or MTC), with a warning in the sync warnings; `sameRuntime()`
-compares the kinds, so a kind change builds a runtime and a delay change
-adjusts in place.
+stopped; or MTC), with a warning in the sync warnings and on the port;
+`sameRuntime()` compares the kinds, so a kind change builds a runtime and a
+delay change adjusts in place.
 
 **The callback.** A runtime with any sending output keeps the span ring
 (as for LTC output: the timeline processed per cycle, the stopped position
@@ -2148,13 +2154,15 @@ cycles; the dummy backend opens a one-frame MIDI window for that callback
 and captures it, JACK and PortAudio refuse writes there.
 
 **Status.** `midi.outputs.get` returns `{ports}`, and
-`engine.status.midi_outputs` the same list: each output of the running
-device in order, at the defaults when it has no record, then each record
-whose output is absent (`index` −1): `{name, index, enabled, offset_ms,
-reset_on_stop, latency_ms, dropped, warnings, clock, transport, spp, mtc,
-clock_while_stopped, sends, suppressed, delay_ms, sent}`. `delay_ms` is
-plan latency + latency + offset; `warnings` holds the port's own (the
-echo guard's).
+`engine.status.midi_outputs` the same list (`EngineApp::midiPortsState`):
+routing's port list (see "Hardware MIDI routing (ADR-0072)") with, for each
+output, `clock`, `transport`, `spp`, `mtc` and `clock_while_stopped` as
+set, `sends` (what goes out now), `suppressed` (set but not sent to the
+sync master's device), `delay_ms` (plan latency + latency + offset) and
+`sent` (clock and MTC messages since the engine started). `dropped` sums
+routed MIDI, clock and MTC and the backend's asynchronous loss. The
+routing grid's hardware column `clock` flag (`route.matrix`
+`hardware_midi`) is true when `sends` has `clock`.
 
 ### Master playrate (ADR-0045)
 

@@ -1290,7 +1290,13 @@ void registerExtraCommands(cmd::Registry& registry) {
                     col["id"] = "midi_out:" + port.find("name")->asString();
                     col["name"] = port.find("name")->asString();
                     col["kind"] = "midi_output";
-                    if (const auto* clock = port.find("clock")) col["clock"] = *clock;
+                    // Sends clock now (ADR-0073): set, enabled, connected and not
+                    // the sync master's own device.
+                    bool clock = false;
+                    if (const auto* kinds = port.find("sends"))
+                        for (const auto& kind : kinds->asArray())
+                            clock = clock || kind.asString() == "clock";
+                    col["clock"] = clock;
                     destinations.push_back(std::move(col));
                 }
             }

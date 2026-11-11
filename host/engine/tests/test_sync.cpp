@@ -1021,6 +1021,51 @@ TEST_CASE("midi outputs: get, set, validation, engine.status and the JSON round 
     CHECK_FALSE(parseMidiPortPreferences(json::parse(R"({"A": {"clock": true}})").value(), false));
 }
 
+TEST_CASE("midi outputs: one command set carries routing and clock members") {
+    // Hardware routing (ADR-0072) and clock output (ADR-0073) once each had
+    // their own midi.outputs.*: one registration, with both sets of members.
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    int outputs = 0;
+    for (const cmd::CommandInfo* info : registry.all())
+        outputs += info->name == "midi.outputs.set" || info->name == "midi.outputs.get";
+    CHECK(outputs == 2);
+    const auto* set = registry.find("midi.outputs.set");
+    REQUIRE(set);
+    const auto* properties = set->argsSchema.find("properties");
+    REQUIRE(properties);
+    for (const char* member : {"port", "enabled", "offset_ms", "reset_on_stop", "clock",
+                               "transport", "spp", "mtc", "clock_while_stopped"})
+        CHECK_MESSAGE(properties->find(member), member);
+    const auto* inputs = registry.find("midi.inputs.set")->argsSchema.find("properties");
+    REQUIRE(inputs);
+    CHECK_FALSE(inputs->find("clock"));
+    CHECK_FALSE(inputs->find("reset_on_stop"));
+}
+
+TEST_CASE("midi outputs: the routing grid's clock flag is what an output sends now") {
+    Rig rig(false);
+    auto clockOf = [&](const std::string& name) {
+        const auto matrix = rig.run("route.matrix", R"({"mode": "hardware_midi"})");
+        for (const auto& d : matrix.find("destinations")->asArray())
+            if (d.find("name") && d.find("name")->asString() == name)
+                return d.find("clock") && d.find("clock")->asBool();
+        FAIL("no column " << name);
+        return false;
+    };
+    CHECK_FALSE(clockOf("Synth"));
+    rig.run("midi.outputs.set", R"({"port": "Synth", "clock": true})");
+    CHECK(clockOf("Synth"));
+    // Set but disabled: kept, not sent, so no clock mark.
+    rig.run("midi.outputs.set", R"({"port": "Synth", "enabled": false})");
+    CHECK_FALSE(clockOf("Synth"));
+    rig.run("midi.outputs.set", R"({"port": "Synth", "enabled": true})");
+    CHECK(clockOf("Synth"));
+    // Transport alone is not clock.
+    rig.run("midi.outputs.set", R"({"port": "Clock Out", "transport": true})");
+    CHECK_FALSE(clockOf("Clock Out"));
+}
+
 TEST_CASE("midi clock output: no slave is left playing") {
     Rig rig(false, 2, 0);
     rig.run("midi.outputs.set", R"({"port": "Synth", "clock": true, "transport": true})");

@@ -4,6 +4,13 @@
 outputs), ADR-0070 (the sync library's generators) and ADR-0071 (external
 sync, its §9 labelling rule and the project timecode). Contracts:
 `docs/specs/engine.md`, `docs/specs/gui.md` (the preferences file).
+Shares the per-port record and `midi.outputs.*` with ADR-0072 (hardware
+MIDI routing); both amend ADR-0069's shutdown policy.
+
+2026-11-11, integration with ADR-0072: this ADR was drafted as 0072 and
+renumbered. §1 now describes the one shared record and command set; §9 the
+shutdown as it is with routing merged (the final callback does carry MIDI);
+§10 the shared audio lead.
 
 ## Context
 
@@ -20,21 +27,22 @@ output port, which Phase 2's hardware MIDI routing extends.
 ## Decision
 
 1. **Settings per output port, the machine's, in one record shared with
-   hardware MIDI routing.** `MidiOutputSettings` `{port, enabled,
-   offset_ms, reset_on_stop, clock, transport, spp, mtc,
-   clock_while_stopped}`, keyed by the output's exact name. Phase 2's
-   routing owns `enabled` (default true), `offset_ms` (signed, −1000..1000
-   ms, positive later; one offset per port, shared by routed MIDI and
-   clock) and `reset_on_stop` (default true); this ADR adds the clock
-   members, all off by default, so a port sends no clock until asked. A
-   disabled port sends nothing. `midi.outputs.set {port, ...}` changes one
-   record (omitted members kept; a record back at every default is
-   removed); `midi.outputs.get` returns `{ports: [...]}`: every output the
-   running device has, then the stored records for outputs it lacks
-   (`index` −1), each with the record's members and its state (§8). The
-   GUI keeps the records in `preferences.json` as `midi_outputs`
-   `{"<port>": {members}}` (supple.preferences/1.8) and saves every
-   change, an agent's included, like the sync settings (ADR-0071 §2).
+   hardware MIDI routing.** One record per port in ADR-0072's
+   `midi_outputs` `{"<port>": {members}}` (supple.preferences/1.8), keyed
+   by the output's exact name. Routing owns `enabled` (default true),
+   `offset_ms` (signed, −1000..1000 ms, positive later; one offset per
+   port, shared by routed MIDI and clock) and `reset_on_stop` (default
+   true); this ADR adds `clock`, `transport`, `spp`, `mtc` and
+   `clock_while_stopped`, booleans, all off by default, so a port sends no
+   clock until asked. A disabled port sends nothing. One parser validates
+   every member (a malformed record is skipped at startup with a warning,
+   ADR-0072), and the engine is the records' only writer.
+   `midi.outputs.set {port, ...}` (ADR-0072's command, with these members
+   added) changes one record: the port is a unique case-insensitive match
+   to a present or recorded name, omitted members are kept, a record back
+   at every default is removed, and the plan and the sync configuration
+   are rebuilt. `midi.outputs.get` returns `{ports: [...]}`: routing's port
+   list, each output with the record's members and its clock state (§8).
 
 2. **The callback generates, in both executors.** The settings resolve on
    the main thread into `SyncConfig.outputs` (16, by

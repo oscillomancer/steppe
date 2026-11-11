@@ -1590,10 +1590,11 @@ timecode, the chase rate and the error; LTC output on; the warnings). Each
 control is one `sync.set`; rows follow the source. Every change, an agent's
 `sync.set` included, is saved as `preferences.json`'s `sync` (1.7), which
 the app applies at start. The MIDI outputs' clock and MTC settings
-(ADR-0073; no window yet) are saved the same way as `midi_outputs` (1.8,
+(ADR-0073) are members of the MIDI port records, `midi_outputs` (1.8,
 `{"<port>": {enabled, offset_ms, reset_on_stop, clock, transport, spp,
-mtc, clock_while_stopped}}`, records at every default omitted) whenever
-they change (`midi.outputs.set`) and applied at start.
+mtc, clock_while_stopped}}`), which the engine writes on every
+`midi.outputs.set` and reads at start; a GUI save keeps them as they are
+on disk.
 
 ## 5. Agent panel (removed)
 
