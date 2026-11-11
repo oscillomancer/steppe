@@ -425,7 +425,8 @@ channel controls work as in the MIDI tab. Device connections save by name and
 warn if missing on reopen.
 
 Right-click a hardware input row or output column header for **Enabled** and
-**Timing offset…**. Positive milliseconds delay; negative milliseconds advance.
+**Timing offset…**; outputs also have the clock items described in "MIDI
+clock and MTC to other devices". Positive milliseconds delay; negative milliseconds advance.
 The range is -1000 to 1000 ms. A live input can advance only within its current
 audio callback. Outputs also offer **Reset notes on stop** (on by default),
 which releases notes and sustain on stop or locate. Engine shutdown always
@@ -1028,8 +1029,13 @@ hardware routes in the routing window.
 ### MIDI clock and MTC to other devices
 
 A drum machine, sequencer or video system can follow Steppe over a MIDI
-output. An agent sets it with `midi.outputs.set`, one output at a time, for
-example `{"port": "Interface", "clock": true, "transport": true, "spp": true}`:
+output. In the routing window's **Hardware MIDI** tab, right-click the
+output's column header: **Send clock**, **Send transport**, **Song Position
+Pointer**, **MTC** and **Clock while stopped** (once Send clock is on) turn
+each on or off, beside **Reset notes on stop** and **Timing offset…**. An
+output that is sending clock shows a small clock before its name. An agent
+sets the same with `midi.outputs.set`, one output at a time, for example
+`{"port": "Interface", "clock": true, "transport": true, "spp": true}`:
 `clock` sends MIDI clock while playing, `transport` Start, Continue and
 Stop, `spp` the song position (so a device starts mid-song in the right
 place), `mtc` MIDI time code at the project's timecode, and

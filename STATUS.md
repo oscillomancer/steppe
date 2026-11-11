@@ -137,9 +137,11 @@ instructions are in `docs/guides/installing.md`.
   with the audio it belongs to (plan latency, the port's audio-minus-MIDI
   latency and the offset), across tempo changes, playrate, loop wraps and
   locates, in both executors; nothing during a count-in; not echoed to the
-  sync master's device. `midi.outputs.get`/`midi.outputs.set`,
-  `engine.status.midi_outputs`, saved in the preferences; no GUI yet
-  (Phase 2's Hardware MIDI tab). Tested on the dummy device's captured MIDI.
+  sync master's device. One port record and command set with hardware MIDI
+  routing (`midi.outputs.get`/`midi.outputs.set`,
+  `engine.status.midi_outputs`), saved by the engine in the preferences; in
+  the GUI, the Hardware MIDI tab's output header menu and a clock mark on
+  outputs sending clock. Tested on the dummy device's captured MIDI.
 
 - **Session and history** (`specs/session-model.md`, ADR-0008): immutable
   versions with stable ids, per-branch undo, branches with object-level diff
@@ -957,7 +959,6 @@ Engine and hosting:
   A slave on a device that vanished with no callback left to carry it (a
   JACK server that went away, an unplugged MIDI device) is not sent its
   final Stop.
-  MIDI clock and MTC output have no GUI yet.
 - Pan modes (ADR-0066): `pan` automation does nothing in dual mode.
   Projects from before ADR-0066 play louder (about 3.5 dB for a channel into
   a master, plus about 6.5 dB per buss on the way); there is no migration.

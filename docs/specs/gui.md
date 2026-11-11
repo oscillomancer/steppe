@@ -1034,13 +1034,19 @@ projects/preferences remain visible with warnings in port status. Hardware input
 and output headers use teal socket marks; separators divide input rows from
 channel rows and channel columns from output columns.
 
-Right-click an input row or output column header for Enabled, Timing offset…
-(signed milliseconds, -1000..1000), and, on outputs, Reset notes on stop. The output offset dialog previews
-"adds N ms latency to all audio" as the offset is edited.
-The latter controls stop/locate releases and defaults on. Settings apply
-immediately and save in the machine preferences; `midiPortMenu` builds this
-menu for the clock extension. Output descriptors with `clock: true` draw a
-clock mark. The dummy fixture flag `--dummy-midi --audio dummy` declares
+Right-click an input row or output column header (`midiPortMenu`) for
+Enabled, then on outputs, after a rule, the clock output items (ADR-0073):
+Send clock, Send transport, Song Position Pointer, MTC and Clock while
+stopped (greyed until Send clock is on); after another rule Reset notes on
+stop; last Timing offset… (signed milliseconds, -1000..1000; inputs have
+Enabled and Timing offset… only). Checked items show the record's values,
+and each item is one `midi.inputs.set`/`midi.outputs.set`. The output
+offset dialog previews "adds N ms latency to all audio" as the offset is
+edited. Reset notes on stop controls stop/locate releases and defaults on.
+Settings apply immediately and the engine saves them in the machine
+preferences. An output column whose descriptor has `clock: true` (it sends
+clock now: set, enabled, connected and not the sync master's device;
+`route.matrix`) draws a small clock before its name. The dummy fixture flag `--dummy-midi --audio dummy` declares
 Keyboard/Pads inputs and Hardware synth/Drum machine outputs for offscreen
 render checks, without opening devices.
 

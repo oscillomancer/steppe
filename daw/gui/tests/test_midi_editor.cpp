@@ -1949,7 +1949,8 @@ TEST_CASE("routing matrix: hardware ports share input assignments and output men
     REQUIRE(matrix.doubleClickCell(row, out));
     REQUIRE(model.sendsAt(row, out).size() == 1);
     CHECK_FALSE(matrix.volumeControl()->visible);
-    CHECK(model.destinations[out].clock);
+    // A stored clock record with no device running sends nothing: no mark.
+    CHECK_FALSE(model.destinations[out].clock);
     CHECK_FALSE(static_cast<ui::Toggle*>(panel.root().find("routing.mode.midi"))->on());
     CHECK(static_cast<ui::Toggle*>(panel.root().find("routing.mode.hardware"))->on());
     // Drive the header's actual right-click path, then inspect and invoke its menu.
@@ -1963,10 +1964,18 @@ TEST_CASE("routing matrix: hardware ports share input assignments and output men
     auto* menu = panel.root().find("routing.port.menu");
     REQUIRE(menu);
     const auto items = ui::menuItems(*menu);
-    REQUIRE(items.size() == 3);
-    CHECK(items[0].checked);
-    CHECK(items[2].checked);
-    auto timing = items[1].run;
+    auto item = [&](const std::string& label) -> const ui::MenuItem& {
+        for (const auto& i : items)
+            if (i.label == label) return i;
+        FAIL("no menu item " << label);
+        return items.front();
+    };
+    REQUIRE(items.size() == 10);  // Enabled | five clock items | Reset, Timing offset
+    CHECK(item("Enabled").checked);
+    CHECK(item("Send clock").checked);
+    CHECK(item("Reset notes on stop").checked);
+    CHECK(items.back().label == "Timing offset…");
+    auto timing = item("Timing offset…").run;
     panel.root().closePopup();
     timing();
     panel.root().frame(false);
@@ -1979,6 +1988,7 @@ TEST_CASE("routing matrix: hardware ports share input assignments and output men
     REQUIRE(panel.root().click("routing.port.offset.apply"));
     CHECK(engine::midiPortSettings(f.app->midiOutputsPreferences(), "Synth").offsetMs == -3.5);
     auto settings = matrix.midiPortMenu(true, "Synth");
+    REQUIRE(settings[0].label == "Enabled");
     settings[0].run();
     CHECK_FALSE(engine::midiPortSettings(f.app->midiOutputsPreferences(), "Synth").enabled);
     f.snapshot("routing-hardware-midi.png", &panel.root());
@@ -2044,7 +2054,8 @@ TEST_CASE("routing matrix: output offset previews the prepared shared audio lead
     matrix.open();
     panel.root().frame(false);
     auto menu = matrix.midiPortMenu(true, "Synth");
-    menu[1].run();
+    REQUIRE(menu.back().label == "Timing offset…");
+    menu.back().run();
     panel.root().frame(false);
     auto* field = static_cast<ui::TextField*>(panel.root().find("routing.port.offset.value"));
     REQUIRE(field);
@@ -2055,6 +2066,88 @@ TEST_CASE("routing matrix: output offset previews the prepared shared audio lead
     REQUIRE(lead);
     CHECK(lead->valueText() == "adds 20.0 ms latency to all audio");
     f.snapshot("routing-hardware-offset-lead.png", &panel.root());
+}
+
+TEST_CASE("routing matrix: an output header's menu sets clock output, its mark shows it sends") {
+    Fixture f;
+    if (!f.ok) return;
+    engine::DummyBackend backend({.midiOutputPorts = {"Synth", "Drums"}});
+    struct Stop {
+        engine::EngineApp& app;
+        ~Stop() { app.stopEngine(); }
+    } stop{*f.app};
+    REQUIRE(f.app->startEngine(backend, {.blockSize = 64, .midiOutputs = true},
+                               {.anticipative = false, .workers = 0}));
+    gui::FloatingPanel panel(*f.platform, *f.window, *f.root, SUPPLE_GUI_FONTS_DIR, "Panel", 1000,
+                             560, 800, 360);
+    gui::RoutingMatrix matrix(panel, *f.actions, *f.dispatcher, *f.app);
+    matrix.setHardwareMidiMode();
+    matrix.open();
+    panel.root().frame(false);
+    auto column = [&](const std::string& name) {
+        for (const auto& d : matrix.model().destinations)
+            if (d.kind == "midi_output" && d.name == name) return d;
+        FAIL("no column " << name);
+        return matrix.model().destinations.front();
+    };
+    auto run = [&](const std::string& port, const std::string& label) {
+        for (auto& item : matrix.midiPortMenu(true, port))
+            if (item.label == label) {
+                REQUIRE(item.enabled);
+                item.run();
+                panel.root().frame(false);
+                return;
+            }
+        FAIL("no menu item " << label);
+    };
+    auto menuItem = [&](const std::string& port, const std::string& label) {
+        for (auto& item : matrix.midiPortMenu(true, port))
+            if (item.label == label) return item;
+        FAIL("no menu item " << label);
+        return ui::MenuItem{};
+    };
+    CHECK_FALSE(column("Synth").clock);
+    // Clock while stopped needs the clock.
+    CHECK_FALSE(menuItem("Synth", "Clock while stopped").enabled);
+    for (const char* label : {"Send clock", "Send transport", "Song Position Pointer", "MTC"})
+        run("Synth", label);
+    run("Synth", "Clock while stopped");
+    const auto s = engine::midiPortSettings(f.app->midiOutputsPreferences(), "Synth");
+    CHECK((s.clock && s.transport && s.spp && s.mtc && s.clockWhileStopped));
+    CHECK(f.app->engine()->syncConfig().outputs[0].clock);
+    CHECK(column("Synth").clock);
+    CHECK_FALSE(column("Drums").clock);
+    for (const char* label : {"Send clock", "Send transport", "Song Position Pointer", "MTC",
+                              "Clock while stopped", "Reset notes on stop"})
+        CHECK_MESSAGE(menuItem("Synth", label).checked, label);
+    // Transport alone: no clock mark.
+    run("Drums", "Send transport");
+    CHECK_FALSE(column("Drums").clock);
+    run("Synth", "Reset notes on stop");
+    CHECK_FALSE(engine::midiPortSettings(f.app->midiOutputsPreferences(), "Synth").resetOnStop);
+    f.snapshot("routing-hardware-clock.png", &panel.root());
+    // The header's right-click opens the same menu.
+    std::size_t out = 0;
+    for (std::size_t i = 0; i < matrix.model().destinations.size(); ++i)
+        if (matrix.model().destinations[i].name == "Synth") out = i;
+    const auto b = matrix.grid()->bounds();
+    ui::PointerEvent click;
+    click.type = ui::PointerEvent::Type::Down;
+    click.button = 3;
+    click.pos = {b.x + 190 + float(out) * 22 + 11, b.y + 60};
+    REQUIRE(matrix.grid()->onPointer(click));
+    panel.root().frame(false);
+    auto* menu = panel.root().find("routing.port.menu");
+    REQUIRE(menu);
+    CHECK(ui::menuItems(*menu).size() == 10);
+    f.snapshot("routing-hardware-clock-menu.png", &panel.root());
+    panel.root().closePopup();
+    // Off again, every member back at its default: the record goes.
+    for (const char* label : {"Clock while stopped", "Send clock", "Send transport",
+                              "Song Position Pointer", "MTC", "Reset notes on stop"})
+        run("Synth", label);
+    CHECK_FALSE(f.app->midiOutputsPreferences().contains("Synth"));
+    CHECK_FALSE(column("Synth").clock);
 }
 
 TEST_CASE("routing matrix: a single wildcard input cell can be removed") {
