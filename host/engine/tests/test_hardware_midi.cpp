@@ -269,6 +269,8 @@ TEST_CASE("hardware MIDI: machine preferences, commands and project save/reopen"
     options.midiPreferencesFile = dir / "preferences.json";
     auto app = EngineApp::create(options);
     REQUIRE(app);
+    REQUIRE((*app)->setMidiPreferences({{"Keys", json::Value::object()}},
+                                       {{"Synth", json::Value::object()}}, false));
     {
         cmd::Registry registry;
         registerEngineCommands(registry);
@@ -280,8 +282,20 @@ TEST_CASE("hardware MIDI: machine preferences, commands and project save/reopen"
             return *result;
         };
         call("midi.outputs.set",
-             R"({"port":"Synth","enabled":false,"offset_ms":-2,"reset_on_stop":false})");
+             R"({"port":"sYnTh","enabled":false,"offset_ms":-2,"reset_on_stop":false})");
         call("midi.inputs.set", R"({"port":"Keys","offset_ms":3})");
+        CHECK_FALSE((*app)->midiOutputsPreferences().contains("sYnTh"));
+        auto unknown = bus.execute({"midi.outputs.set",
+                                    json::parse(R"({"port":"typo","enabled":false})").value(),
+                                    {cmd::Origin::Type::Ui, "test", {}}});
+        REQUIRE_FALSE(unknown);
+        CHECK(unknown.error().hint.find("Synth") != std::string::npos);
+        auto ambiguous = (*app)->midiOutputsPreferences();
+        ambiguous["synth"] = json::Value::object();
+        REQUIRE((*app)->setMidiPreferences((*app)->midiInputsPreferences(), ambiguous, false));
+        CHECK_FALSE((*app)->setMidiPort(true, "Synth", json::Value::object()));
+        ambiguous.erase("synth");
+        REQUIRE((*app)->setMidiPreferences((*app)->midiInputsPreferences(), ambiguous, false));
         const auto track = call("track.add", R"({"name":"Hardware source"})")["track"].asString();
         const auto send =
             call(

@@ -65,9 +65,33 @@ Status EngineApp::setMidiPort(bool output, const std::string& name, const json::
     if (name.empty())
         return Error("midi.port", "a MIDI port name is required", "/port",
                      "use a name from midi.inputs.get or midi.outputs.get");
+    const auto state = midiPortsState(output);
+    std::set<std::string> names, matches;
+    for (const auto& port : state.asArray()) {
+        const auto& exact = port.find("name")->asString();
+        names.insert(exact);
+        if (name.size() == exact.size() && std::equal(name.begin(), name.end(), exact.begin(),
+                                                      [](unsigned char x, unsigned char y) {
+                                                          return std::tolower(x) == std::tolower(y);
+                                                      }))
+            matches.insert(exact);
+    }
+    std::string hint = "Exact port names:";
+    for (const auto& exact : names) hint += " \"" + exact + "\"";
+    hint += names.empty() ? " none; connect a MIDI device and restart the engine, or load its "
+                            "recorded preferences"
+                          : "; resolve ambiguous names or remove stale records, then retry";
+    if (matches.size() != 1)
+        return Error(matches.empty() ? "midi.port_unknown" : "midi.port_ambiguous",
+                     matches.empty() ? "unknown MIDI port" : "MIDI port name is ambiguous", "/port",
+                     hint);
+    if (!edits.isObject())
+        return Error("midi.preferences", "port edits must be an object", "/",
+                     "use enabled, offset_ms and output reset_on_stop fields");
+    const auto& canonical = *matches.begin();
     auto inputs = midiInputsPreferences_, outputs = midiOutputsPreferences_;
     auto& preferences = output ? outputs : inputs;
-    auto& record = preferences[name];
+    auto& record = preferences[canonical];
     if (!record.isObject()) record = json::Value::object();
     for (const auto& entry : edits.asObject()) record[entry.key] = entry.value;
     return setMidiPreferences(std::move(inputs), std::move(outputs));
@@ -187,7 +211,8 @@ void registerMidiPortCommands(cmd::Registry& registry) {
         set.exposure = cmd::Exposure::McpTool;
         set.summary = "Change one machine MIDI port's enabled state and timing offset.";
         set.description =
-            "port is an exact name. offset_ms is signed -1000..1000 milliseconds. Positive offsets "
+            "port is a unique case-insensitive match to a present or recorded name; settings use "
+            "its exact spelling. offset_ms is signed -1000..1000 milliseconds. Positive offsets "
             "delay. Outputs reset_on_stop defaults true. Applying settings releases "
             "disabled/changed output routes; inputs retain the existing channel input mechanism. "
             "Returns the updated ports list.";
@@ -199,9 +224,9 @@ void registerMidiPortCommands(cmd::Registry& registry) {
         set.args = fields.build();
         set.result = schema::any();
         set.tags = {"midi", "engine"};
-        set.examples = {{"Disable an absent port",
+        set.examples = {{"Disable a recorded port",
                          json::parse(R"({"port":"Test port","enabled":false})").value(),
-                         json::parse(R"({"ports":"<any>"})").value(), "empty"}};
+                         json::parse(R"({"ports":"<any>"})").value(), "midi_ports"}};
         set.run = [output](const PortEdit& args, cmd::Context& ctx) -> Result<json::Value> {
             auto& app = ctx.service<EngineApp>();
             auto edits = json::Value::object();

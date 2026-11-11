@@ -2766,7 +2766,9 @@ endpoint-wide flush. Previously accepted events drain normally.
 `midi.outputs.get` and `midi.inputs.get` return `{ports: [...]}` with name,
 index (-1 absent), enabled, offset_ms, latency_ms, dropped and structured warnings;
 outputs also have reset_on_stop. `.set {port, enabled?, offset_ms?, reset_on_stop?}`
-(input omits reset) applies a machine preference. Offsets are finite -1000..1000
+(input omits reset) applies a machine preference. Port names resolve by a unique
+case-insensitive match among present or recorded names, stored with the exact
+spelling; unknown or ambiguous calls refuse with the available exact names. Offsets are finite -1000..1000
 ms, positive later. Input advances clamp to this callback's start; positive
 input offsets carry across callbacks. Existing record MIDI routes perform input
 routing. Disabled inputs do not reach monitoring, recording or MIDI learn.

@@ -3061,6 +3061,11 @@ void EngineApp::invoked(std::string_view command, int, const json::Value& args, 
 
 void EngineApp::setupFixture(cmd::Dispatcher& d, std::string_view fixture) {
     if (fixture == "empty") return;
+    if (fixture == "midi_ports") {
+        (void)setMidiPreferences({{"Test port", json::Value::object()}},
+                                 {{"Test port", json::Value::object()}}, false);
+        return;
+    }
     if (fixture == "engine_running") {  // the dummy backend: no device
         auto st = startEngine("dummy", 256);
         assert(st && "fixture engine failed");
