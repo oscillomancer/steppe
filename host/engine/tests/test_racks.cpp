@@ -2016,6 +2016,7 @@ supple::engine::detail::Node midiStream(std::size_t pool, std::size_t inputs) {
     node.midiPreFx.reserve(16);
     node.midiPostFx.reserve(16);
     node.midiInstrument.reserve(16);
+    node.midiChain.reserve(16);
     return node;
 }
 host::Event noteEvent(host::Event::Kind kind, std::uint32_t time, int id, int key = 60) {

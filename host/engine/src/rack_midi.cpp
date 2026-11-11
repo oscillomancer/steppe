@@ -433,7 +433,8 @@ void finishTrackMidi(Node& node) SUPPLE_RT {
     // `chain`: the track's plug-ins hear it (ADR-0068), unlike a note or
     // controller of a take with its own instrument.
     auto emit = [&](const host::Event& e, std::int32_t instrument, std::optional<bool> chain = {}) {
-        if (out.size() == out.capacity()) {
+        if (out.size() == out.capacity() || ids.size() == ids.capacity() ||
+            node.midiChain.size() == node.midiChain.capacity()) {
             ++node.midiDropped;
             return;
         }
