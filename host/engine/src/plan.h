@@ -34,6 +34,7 @@
 #include "workers.h"
 
 namespace supple::engine::detail {
+struct HardwareRoute;
 
 using model::Id;
 using model::Kind;
@@ -671,7 +672,7 @@ struct Node {
     std::uint64_t midiEpoch = 1;
     std::uint64_t midiDropped = 0;  // notes or events past a prepared capacity
     std::size_t midiEventRate = 0;
-    bool midiReleaseTimeline = false, midiSends = false;
+    bool midiReleaseTimeline = false, midiSends = false, hardwareMidiSource = false;
 
     Id id;  // a track's, or a rack's (rk_*)
     // A rack (ADR-0062): its runtime, its Out modules' audio this block and
@@ -942,6 +943,9 @@ struct Plan {
     bool deviceRecording = false;  // a take is being recorded (auto monitoring hears the input)
     // The callback's device MIDI (frames within the cycle) and where the part
     // of the cycle being processed starts.
+    std::vector<std::shared_ptr<HardwareRoute>> hardwareMidi;
+    std::array<MidiPortSettings, 16> midiInputsSettings{}, midiOutputsSettings{};
+    std::uint32_t hardwareLead = 0;
     std::span<const MidiInputEvent> deviceMidi;
     std::uint32_t deviceMidiOffset = 0;
     // Armed channels with input FX: what the recorder takes instead of the

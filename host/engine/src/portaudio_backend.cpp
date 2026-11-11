@@ -83,7 +83,10 @@ struct PortAudioBackend::Impl {
         auto* in = static_cast<const float* const*>(input);
         if (self.stopping.load(std::memory_order_acquire)) {
             if (!self.final.load(std::memory_order_acquire)) {
+                self.midiOut.begin(1, self.sinkStarted ? self.sink->names.size() : 0);
                 self.callback(nullptr, nullptr, 0);
+                for (const auto& event : self.midiOut.sorted())
+                    if (self.sender) (void)self.sender->push({outputNow, event});
                 self.final.store(1, std::memory_order_release);
                 rt::wake(self.final);
             }
@@ -387,7 +390,11 @@ void PortAudioBackend::stop() {
     if (self.monitor.joinable()) self.monitor.join();
     self.stopping.store(true, std::memory_order_release);
     if (!self.api->threaded) {
+        self.midiOut.begin(1, self.sinkStarted ? self.sink->names.size() : 0);
         self.callback(nullptr, nullptr, 0);
+        const auto now = self.sinkStarted ? self.sink->now() : 0;
+        for (const auto& event : self.midiOut.sorted())
+            if (self.sender) (void)self.sender->push({now, event});
         self.final.store(1, std::memory_order_release);
     } else if (self.api->active(self.stream) == 1 && !self.final.load(std::memory_order_acquire)) {
         const auto deadline = std::chrono::steady_clock::now() +
@@ -464,6 +471,9 @@ std::vector<MidiInputWarning> PortAudioBackend::midiOutputWarnings() const {
 }
 std::uint64_t PortAudioBackend::midiOutDropped() const {
     return impl_->midiOut.dropped() + (impl_->sender ? impl_->sender->dropped() : 0);
+}
+std::uint64_t PortAudioBackend::midiOutAsyncDropped(std::size_t port) const {
+    return impl_->sender ? impl_->sender->dropped(port) : 0;
 }
 bool PortAudioBackend::nativeThreadPolicy() const { return impl_->api && impl_->api->native; }
 Status PortAudioBackend::prepareCurrentThread(bool live) {

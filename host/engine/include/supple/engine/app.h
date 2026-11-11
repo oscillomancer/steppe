@@ -31,6 +31,7 @@
 
 #include "supple/cmd/bus.h"
 #include "supple/engine/midi_control.h"
+#include "supple/engine/midi_ports.h"
 #include "supple/engine/offline.h"
 #include "supple/engine/portaudio.h"
 #include "supple/engine/realtime.h"
@@ -47,6 +48,10 @@ class RuntimeProtection;
 }
 
 struct AppOptions {
+    std::vector<std::string> dummyMidiInputs,
+        dummyMidiOutputs;                       // explicitly declared dummy fixtures
+    std::filesystem::path midiPreferencesFile;  // empty: embedding owns persistence
+
     std::vector<std::filesystem::path> pluginPath;  // empty = host::defaultSearchPath()
     host::HostIdentity identity;
     std::filesystem::path chainDir;     // empty = the user config directory / <slug> / chains
@@ -112,7 +117,8 @@ struct EngineStatus {
     std::int64_t block = 0, period = 0;
     std::int64_t planLatency = 0, deviceLatency = 0;  // frames
     std::int64_t xruns = 0, cycles = 0, processErrors = 0;
-    std::int64_t midiDropped = 0, midiOutDropped = 0;
+    std::int64_t midiDropped = 0, midiOutDropped = 0, midiLeadFrames = 0;
+    json::Value midiInputs = json::Value::array(), midiOutputs = json::Value::array();
     std::vector<MidiInputWarning> midiOutputWarnings;
     std::vector<std::int64_t> midiOutputLatency;
     std::vector<MidiInputWarning> midiWarnings;
@@ -405,6 +411,13 @@ class EngineApp : public cmd::Host {
     const RuntimeProtectionStatus& memoryLockStatus() const;
     Status setPreventDeepIdle(bool requested);
     const RuntimeProtectionStatus& cpuIdleLatencyStatus() const;
+    const MidiPortPreferences& midiInputsPreferences() const { return midiInputsPreferences_; }
+    const MidiPortPreferences& midiOutputsPreferences() const { return midiOutputsPreferences_; }
+    Status setMidiPreferences(MidiPortPreferences inputs, MidiPortPreferences outputs,
+                              bool save = true);
+    Status setMidiPort(bool output, const std::string& name, const json::Value& edits);
+    json::Value midiPortsState(bool output) const;
+    std::uint64_t midiPreferencesRevision() const { return midiPreferencesRevision_; }
     void stopEngine();
     Engine* engine() { return engine_.get(); }
     const Backend* backend() const { return backend_; }  // null while stopped
@@ -635,6 +648,8 @@ class EngineApp : public cmd::Host {
     bool copyImports_ = false;
     // Declared first: outlives instances, engine/backend, and worker joins.
     MainThreadWake mainWake_;
+    MidiPortPreferences midiInputsPreferences_, midiOutputsPreferences_;
+    std::uint64_t midiPreferencesRevision_ = 0;
     AppOptions options_;
     std::atomic<std::uint64_t> projectGeneration_{0};
     cmd::Dispatcher* commands_ = nullptr;

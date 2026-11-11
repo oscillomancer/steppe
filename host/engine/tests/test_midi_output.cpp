@@ -126,3 +126,18 @@ TEST_CASE("CoreMIDI wire encoding supports system, channel voice and full-frame 
     CHECK(encoded.count == 2);
     CHECK(encoded.words[0] == 0x30000000u);
 }
+TEST_CASE(
+    "native output shutdown drains releases after accepted future notes without endpoint flush") {
+    Sink sink;
+    auto sender = std::make_unique<detail::MidiOutputSender>(sink);
+    REQUIRE(sender->push({20, {0, 0, 3, {0x90, 60, 100}}}));
+    REQUIRE(sender->push(
+        {10, {0, 0, 3, {0x80, 60, 0}}}));  // clamped behind previously scheduled events
+    REQUIRE(sender->push({10, {0, 0, 3, {0xb0, 64, 0}}}));
+    sender->stop();
+    REQUIRE(sink.sent.size() == 2);
+    CHECK(sink.sent[0].event.bytes[0] == 0x80);
+    CHECK(sink.sent[0].seconds == 20);
+    CHECK(sink.sent[1].event.bytes[1] == 64);
+    CHECK(sender->dropped() == 1);
+}

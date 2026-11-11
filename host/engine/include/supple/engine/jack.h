@@ -83,6 +83,7 @@ class JackBackend : public Backend {
     std::vector<std::int64_t> midiOutputLatency() const override;
     std::vector<MidiInputWarning> midiOutputWarnings() const override;
     std::uint64_t midiOutDropped() const override;
+    std::uint64_t midiOutAsyncDropped(std::size_t port) const override;
     std::vector<std::string> inputNames() const override;
     std::vector<std::string> outputNames() const override;
     // The device's physical capture ports, in order, from a short-lived

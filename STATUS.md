@@ -289,6 +289,16 @@ instructions are in `docs/guides/installing.md`.
   source track unless `source_sends` is off (rack menu: Hear MIDI sends);
   files older than 2.10 load with it off wherever a MIDI route feeds that
   track, so they sound as before. Native macOS/Windows CI and coordinator review remain pending.
+- **Hardware MIDI routing** (ADR-0072, schema 2.10): connects channel/Note Out MIDI to
+  named outputs with tap, mute, channel filter/remap and PDC/port offset timing.
+  A prepared audio delay supplies negative-offset lead (at most one second).
+  The Hardware MIDI tab edits existing input assignments and hardware sends;
+  header menus edit machine port preferences. CoreMIDI no longer flushes shared
+  endpoints at shutdown; held-note releases follow accepted messages.
+  Device-free tests cover both executors, audio nulls, lifecycle, persistence and
+  GUI interactions. Native macOS/Windows CI, physical timing/disconnect testing
+  and cross-client shutdown validation remain pending. Native input loss without
+  port attribution remains in aggregate MIDI loss status.
 - **Modular racks** (ADR-0062, `specs/rack.md`): racks of modules and
   cables on a channel, in the project (schema 2.7) with undo and branches.
   Out modules are channel inputs, In modules take sends (columns of the
@@ -967,7 +977,8 @@ Engine and hosting:
   JACK playback ports, timestamped CoreMIDI sends off audio, and QPC/timer-based
   WinMM sends off audio. engine.inputs lists destinations; start/status report
   output warnings, drops and signed audio-minus-MIDI latency per port. MIDI
-  routing, clock/SPP/MTC generation and output GUI are pending. CoreMIDI/WinMM
+  hardware routing and its Hardware MIDI grid are implemented (ADR-0072);
+  clock/SPP/MTC generation is pending. CoreMIDI/WinMM
   wire latency is estimated as zero; WinMM expected jitter is about 1 ms.
   Native macOS/Windows CI and hardware validation have not run for outputs.
   No direct PipeWire/ALSA backend.
@@ -1198,6 +1209,6 @@ detail; core-params formats magnitudes beyond six decimals imprecisely;
 - Profile the 64-frame worst case; a pipelined bridge mode.
 - Close the capacity gap with REAPER (B2) by making the anticipative
   renderer cheaper, then keep refining capacity in both modes.
-- Hardware MIDI routing and clock/sync output, a disk-backed media cache.
+- Hardware clock/sync output, a disk-backed media cache.
 - Lua ergonomics (a script library path, hot reload).
 - Native audio/MIDI hardware validation and GUI hardening on macOS and Windows.

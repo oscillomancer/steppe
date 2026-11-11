@@ -26,6 +26,7 @@
 #include "supple/ui/controls.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/text_area.h"
+#include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
 #include "supple/views/mouse_map.h"
 
@@ -1912,4 +1913,76 @@ TEST_CASE("routing matrix: MIDI mode exposes channels and note modules with MIDI
     matrix.close();
     matrix.open();
     CHECK(matrix.midiMode());
+}
+
+TEST_CASE("routing matrix: hardware ports share input assignments and output menus") {
+    Fixture f;
+    if (!f.ok) return;
+    auto input = json::Value::object();
+    input["enabled"] = true;
+    auto output = input;
+    output["clock"] = true;
+    REQUIRE(f.app->setMidiPreferences({{"Keyboard", input}}, {{"Synth", output}}, false));
+    gui::FloatingPanel panel(*f.platform, *f.window, *f.root, SUPPLE_GUI_FONTS_DIR, "Panel", 1000,
+                             560, 800, 360);
+    gui::RoutingMatrix matrix(panel, *f.actions, *f.dispatcher, *f.app);
+    matrix.open();
+    panel.root().frame(false);
+    REQUIRE(panel.root().click("routing.mode.hardware"));
+    panel.root().frame(false);
+    REQUIRE(matrix.hardwareMidiMode());
+    CHECK(matrix.midiMode());
+    const auto& model = matrix.model();
+    REQUIRE(model.sources.front().type == "midi_input");
+    std::size_t row = 0, col = 0, out = 0;
+    for (std::size_t i = 0; i < model.sources.size(); ++i)
+        if (model.sources[i].type == "channel") row = i;
+    for (std::size_t i = 0; i < model.destinations.size(); ++i) {
+        if (model.destinations[i].kind == "track") col = i;
+        if (model.destinations[i].kind == "midi_output") out = i;
+    }
+    REQUIRE(matrix.doubleClickCell(0, col));
+    CHECK(model.sendsAt(0, col).size() == 1);
+    REQUIRE(matrix.clickCell(0, col));
+    REQUIRE(matrix.removeSelected());
+    CHECK(model.sendsAt(0, col).empty());
+    REQUIRE(matrix.doubleClickCell(row, out));
+    REQUIRE(model.sendsAt(row, out).size() == 1);
+    CHECK_FALSE(matrix.volumeControl()->visible);
+    CHECK(model.destinations[out].clock);
+    CHECK_FALSE(static_cast<ui::Toggle*>(panel.root().find("routing.mode.midi"))->on());
+    CHECK(static_cast<ui::Toggle*>(panel.root().find("routing.mode.hardware"))->on());
+    // Drive the header's actual right-click path, then inspect and invoke its menu.
+    const auto b = matrix.grid()->bounds();
+    ui::PointerEvent click;
+    click.type = ui::PointerEvent::Type::Down;
+    click.button = 3;
+    click.pos = {b.x + 190 + float(out) * 22 + 11, b.y + 60};
+    REQUIRE(matrix.grid()->onPointer(click));
+    panel.root().frame(false);
+    auto* menu = panel.root().find("routing.port.menu");
+    REQUIRE(menu);
+    const auto items = ui::menuItems(*menu);
+    REQUIRE(items.size() == 3);
+    CHECK(items[0].checked);
+    CHECK(items[2].checked);
+    auto timing = items[1].run;
+    panel.root().closePopup();
+    timing();
+    panel.root().frame(false);
+    auto* field = static_cast<ui::TextField*>(panel.root().find("routing.port.offset.value"));
+    REQUIRE(field);
+    field->setText("-3.5");
+    REQUIRE(panel.root().click("routing.port.offset.apply"));
+    CHECK(engine::midiPortSettings(f.app->midiOutputsPreferences(), "Synth").offsetMs == -3.5);
+    auto settings = matrix.midiPortMenu(true, "Synth");
+    settings[0].run();
+    CHECK_FALSE(engine::midiPortSettings(f.app->midiOutputsPreferences(), "Synth").enabled);
+    f.snapshot("routing-hardware-midi.png", &panel.root());
+    matrix.close();
+    matrix.open();
+    CHECK(matrix.hardwareMidiMode());
+    panel.root().frame(false);
+    REQUIRE(panel.root().click("routing.mode.midi"));
+    CHECK_FALSE(matrix.hardwareMidiMode());
 }

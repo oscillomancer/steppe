@@ -47,6 +47,7 @@ void registerRackCommands(cmd::Registry& registry);
 void registerRackClipCommands(cmd::Registry& registry);
 void registerRackLevelCommands(cmd::Registry& registry);
 void registerModuleCommands(cmd::Registry& registry);
+void registerMidiPortCommands(cmd::Registry& registry);
 void registerRackProbe(cmd::Registry& registry);
 void removeRacksOn(model::EditTxn& t, const model::Session& s, model::Id track);
 
@@ -320,6 +321,9 @@ schema::Schema<EngineStatus> engineStatusSchema() {
         .field("device_latency", &EngineStatus::deviceLatency, schema::integer())
         .field("xruns", &EngineStatus::xruns, schema::integer())
         .field("midi_dropped", &EngineStatus::midiDropped, schema::integer())
+        .field("midi_inputs", &EngineStatus::midiInputs, schema::any())
+        .field("midi_outputs", &EngineStatus::midiOutputs, schema::any())
+        .field("midi_lead_frames", &EngineStatus::midiLeadFrames, schema::integer())
         .field("midi_out_dropped", &EngineStatus::midiOutDropped, schema::integer())
         .field("midi_output_warnings", &EngineStatus::midiOutputWarnings,
                schema::arrayOf(midiInputWarningSchema()))
@@ -976,6 +980,7 @@ void registerEngineCommands(cmd::Registry& registry) {
     registerRackClipCommands(registry);
     registerRackLevelCommands(registry);
     registerModuleCommands(registry);
+    registerMidiPortCommands(registry);
     registerRackProbe(registry);
     lua::registerScriptCommands(registry);
     // ---------------------------------------------------------------- project.get
@@ -4278,7 +4283,10 @@ void registerEngineCommands(cmd::Registry& registry) {
             "audible. "
             "prepared_version is the last compiled version, preparation_version the pending target "
             "(zero when idle); preparation_error explains a failed preparation. "
-            "plan_latency: the session's plugin delay in frames; device_latency: frames from "
+            "plan_latency: plugin delay plus prepared MIDI audio lead in frames; midi_lead_frames "
+            "reports the latter. midi_inputs/midi_outputs give per-port "
+            "enabled/timing/loss/warnings "
+            "(as midi.inputs.get/midi.outputs.get). device_latency: frames from "
             "the engine's outputs to the device. restart_needed: the device changed rate or went "
             "away; engine.stop and engine.start again. midi_devices_changed is advisory: "
             "MIDI topology changed but audio keeps running. midi_devices_message asks for an "

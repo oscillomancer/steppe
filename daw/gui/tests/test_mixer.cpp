@@ -1067,6 +1067,10 @@ TEST_CASE("preferences: the dialog applies each setting at once and saves it") {
     gui::PreferencesDialog prefs(*f.root, *f.app, mouse, gui::Preferences{}, file);
     CHECK(f.app->defaultMonitor() == model::Monitor::On);
     CHECK(f.app->copyImportedMedia());
+    auto port = json::Value::object();
+    port["clock"] = true;
+    port["offset_ms"] = -2.5;
+    REQUIRE(f.app->setMidiPreferences({}, {{"Synth", port}}, false));
     prefs.open();
     f.root->frame(false);
     REQUIRE(prefs.isOpen());
@@ -1092,6 +1096,8 @@ TEST_CASE("preferences: the dialog applies each setting at once and saves it") {
     auto saved = gui::Preferences::load(file);
     REQUIRE(saved);
     CHECK(saved->defaultMonitor == model::Monitor::Off);
+    CHECK(saved->midiOutputs.at("Synth").find("clock")->asBool());
+    CHECK(engine::midiPortSettings(saved->midiOutputs, "Synth").offsetMs == -2.5);
     CHECK(saved->audioThreads == 4);
     CHECK_FALSE(saved->copyImports);
     CHECK(saved->renderDirectory == f.dir / "my renders");

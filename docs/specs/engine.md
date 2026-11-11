@@ -1438,7 +1438,7 @@ harness. See the tooling README for schemas, limits and invocation details.
   build); it moves to the background decode with the disk cache.
   `stretch_markers` use prepared item-local warped audio (ADR-0053; see below).
 - **Live pool** (`live_workers.{h,cpp}`): callback fork-join as specified in §2.2.
-- **Not yet:** MIDI output ports, crossfades for
+- **Not yet:** crossfades for
   structural changes (inserting or removing plugins). B1/B2 measurements:
   `docs/benchmarks/b1.md`, `b2.md` (tooling: `tools/bench/README.md`).
 
@@ -1977,10 +1977,11 @@ message and hint (also copied into warnings). Names contain only successfully
 opened/connected destinations. Topology changes latch midi_devices_changed
 without automatic restart. JACK's optional registration callback conservatively
 includes audio port topology. Native output monitoring uses the existing device
-monitor. Stop first joins audio, then the sender (pending queued output is
-discarded); CoreMIDI flushes scheduled destination output before disposing its
-port/client and WinMM resets, unprepares buffers and closes devices. CoreMIDI's
-flush is endpoint-wide; WinMM reset can send all-notes-off on all channels.
+monitor. Stop first emits held-note releases from the final audio callback, joins audio,
+then drains queued releases after accepted events and joins the sender. Other
+future queued events are discarded. CoreMIDI never flushes endpoints; submitted
+events drain and only the owned port/client is disposed (ADR-0072). WinMM
+resets, unprepares buffers and closes owned devices; reset can send all-notes-off.
 
 Device-free fake clocks exercise the production queue path, including scheduling,
 loss and shutdown. `SUPPLE_MIDI_DEVICE_TEST=1` alone enables native device opens
@@ -2722,3 +2723,47 @@ would put a voice's release before its own onset (late events or playrate
 compression), the frame retains input chronology. Prepared sorting scratch
 keeps both channel and Notes event ordering allocation-free. All-notes-off
 releases stay at their controller, before a same-frame reattack.
+
+### Hardware MIDI routing (ADR-0072)
+
+Project schema 2.10 additionally accepts MIDI-only routes from channels/Note Out
+to `to.midi_device`, addressed by `route.add/set {to_midi: name, midi: {}}`.
+Taps, mute and MIDI channel filtering/remapping follow internal MIDI sends.
+Hardware source nodes and their dependencies run live in both executors.
+The callback uses prepared descriptors and fixed queues; offline renders
+never write devices. Missing output names warn; duplicate ambiguous names fail.
+
+Route delay is `plan.outputLatency - source.timelineShift - tappedLatency +
+backend.midiOutputLatency[port] + offset_ms * sampleRate / 1000` (rounded to
+frames). Negative minimum delay adds prepared audio lead to all MIDI delays
+and a final audio delay; lead is limited to one second and reported by
+`midi_lead_frames`. Engine output latency, heard timing and recording account
+for it. No hardware delay may exceed ten seconds. Limits: 256 routes, 65,536
+pending messages, 16 ports, and the existing 1,024 messages per device period.
+Equal-frame messages preserve route/event insertion order. Overflow is counted.
+
+Held notes release on removal, mute, disabling/re-timing, stop/locate when
+reset is on, and engine shutdown. Releases include sustain-off; boundary and
+shutdown resets add all-notes-off on used channels. These controllers share
+hardware channel state. `reset_on_stop: false` retains timeline notes across
+transport stops/locates; engine shutdown always releases. CoreMIDI shutdown
+lets accepted scheduled events drain without endpoint-wide flush.
+
+`midi.outputs.get` and `midi.inputs.get` return `{ports: [...]}` with name,
+index (-1 absent), enabled, offset_ms, latency_ms, dropped and structured warnings;
+outputs also have reset_on_stop. `.set {port, enabled?, offset_ms?, reset_on_stop?}`
+(input omits reset) applies a machine preference. Offsets are finite -1000..1000
+ms, positive later. Input advances clamp to this callback's start; positive
+input offsets carry across callbacks. Existing record MIDI routes perform input
+routing. Disabled inputs do not reach monitoring, recording or MIDI learn.
+Status includes `midi_inputs`, `midi_outputs`, and `midi_lead_frames`.
+Per-port dropped counts route scheduling/rejection and attributable output
+sender/device loss; native input losses without a retained port remain in the
+aggregate `midi_dropped`. Port latency_ms is the signed backend latency before
+user offset/lead; inputs currently report zero device latency.
+
+Preferences add `midi_inputs` and `midi_outputs` maps to
+`supple.preferences/1.6`, keyed by exact enumerated port name. Records retain
+unknown members for clock output compatibility. Defaults are enabled, zero
+offset and output reset_on_stop true. GUI and headless applications use the
+same preferences file; embedded hosts may provide their own persistence.

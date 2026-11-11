@@ -37,7 +37,6 @@ class CoreMidiSink final : public MidiSink {
     MIDIPortRef output_ = 0;
     std::array<MIDIEndpointRef, kMidiOutputPorts> destinations_{}, topology_{};
     ItemCount destinationCount_ = 0;
-    std::array<bool, kMidiOutputPorts> sent_{};
     double secondsPerTick_ = 1e-9;
 
   public:
@@ -48,7 +47,6 @@ class CoreMidiSink final : public MidiSink {
         names.clear();
         warnings.clear();
         latencySeconds.clear();
-        sent_.fill(false);
         mach_timebase_info_data_t timebase{};
         mach_timebase_info(&timebase);
         secondsPerTick_ = static_cast<double>(timebase.numer) / timebase.denom * 1e-9;
@@ -91,9 +89,9 @@ class CoreMidiSink final : public MidiSink {
         return okStatus();
     }
     void stop() override {
-        // Cancel this application's scheduled output before disposing its port.
-        for (std::size_t p = 0; p < names.size(); ++p)
-            if (output_ && sent_[p]) MIDIFlushOutput(destinations_[p]);
+        // CoreMIDI owns accepted scheduled events. Never flush an endpoint:
+        // that would cancel other clients' traffic too. Engine releases its
+        // held notes before close; accepted events drain in timestamp order.
         if (output_) MIDIPortDispose(output_);
         output_ = 0;
         if (acquired_) client_->release();
@@ -114,7 +112,6 @@ class CoreMidiSink final : public MidiSink {
             !MIDIEventListAdd(&list, sizeof(list), packet, stamp, ump.count, ump.words.data()))
             return false;
         const bool accepted = MIDISendEventList(output_, destinations_[e.port], &list) == noErr;
-        sent_[e.port] = sent_[e.port] || accepted;
         return accepted;
     }
     bool changed() override {

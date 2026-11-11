@@ -16,6 +16,7 @@
 #include "supple/base/thread.h"
 #include "supple/host/clap_host.h"
 
+#include "hardware_midi.h"
 #include "live_workers.h"
 #include "meters.h"
 #include "plan.h"
@@ -108,6 +109,7 @@ Status DummyBackend::start(const BackendConfig& config, Callback callback) {
     inputFrame_ = 0;
     midiOutput_.reset();
     midiCapture_.clear();
+    for (auto& drop : midiAsyncDrops_) drop.store(0);
     if (config.midiOutputs && !options_.midiOutputPorts.empty())
         midiCapture_.reserve(options_.midiCaptureEvents);
     midi_.clear();
@@ -131,7 +133,7 @@ Status DummyBackend::start(const BackendConfig& config, Callback callback) {
                     std::this_thread::sleep_until(next);
                 }
             }
-            callback_(nullptr, outPtrs_.data(), 0);  // the final callback (Backend::stop contract)
+            finishMidi();  // final callback and bounded note release
         });
     }
     return okStatus();
@@ -142,7 +144,19 @@ void DummyBackend::stop() {
     if (thread_.joinable()) {
         thread_.join();
     } else if (wasRunning && callback_) {
-        callback_(nullptr, outPtrs_.data(), 0);  // Manual: the caller is the audio thread
+        finishMidi();  // Manual: the caller is the audio thread
+    }
+}
+
+void DummyBackend::finishMidi() {
+    midiOutput_.begin(1, config_.midiOutputs ? options_.midiOutputPorts.size() : 0);
+    callback_(nullptr, outPtrs_.data(), 0);
+    for (const auto& event : midiOutput_.sorted()) {
+        if (midiCapture_.size() == midiCapture_.capacity()) {
+            midiOutput_.drop();
+            midiAsyncDrops_[event.port].fetch_add(1);
+        } else
+            midiCapture_.push_back({inputFrame_, event});
     }
 }
 
@@ -169,9 +183,10 @@ void DummyBackend::cycle() {
     midiOutput_.begin(config_.blockSize, config_.midiOutputs ? options_.midiOutputPorts.size() : 0);
     callback_(inPtrs_.empty() ? nullptr : inPtrs_.data(), out, config_.blockSize);
     for (const auto& event : midiOutput_.sorted()) {
-        if (midiCapture_.size() == midiCapture_.capacity())
+        if (midiCapture_.size() == midiCapture_.capacity()) {
             midiOutput_.drop();
-        else
+            midiAsyncDrops_[event.port].fetch_add(1);
+        } else
             midiCapture_.push_back({inputFrame_ + event.frame, event});
     }
     inputFrame_ += config_.blockSize;
@@ -210,6 +225,17 @@ Engine::Engine(InstancePool& plugins, MediaCache& media, EngineOptions options)
 
 Engine::~Engine() { stop(); }
 
+void Engine::setMidiPreferences(MidiPortPreferences inputs, MidiPortPreferences outputs) {
+    midiInputsPreferences_ = std::move(inputs);
+    midiOutputsPreferences_ = std::move(outputs);
+    midiSettingsDirty_ = true;
+}
+std::uint32_t Engine::midiLeadFrames() const { return hardwareMidi_ ? hardwareMidi_->lead() : 0; }
+std::uint32_t Engine::outputLatency() const { return outputLatency_ + midiLeadFrames(); }
+std::uint64_t Engine::midiPortDropped(bool output, std::size_t port) const {
+    return hardwareMidi_ ? hardwareMidi_->dropped(output, port) : 0;
+}
+
 unsigned Engine::liveHelpers() const { return liveWorkers_ ? liveWorkers_->helpers() : 0; }
 
 Status Engine::start(Backend& backend, const BackendConfig& config) {
@@ -219,6 +245,8 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
     if (config.outputs < 2 || config.blockSize == 0)
         return Error("engine.config", "the engine needs a block size and two outputs", {},
                      "provide a positive block_size and at least two output channels");
+    hardwareMidi_ = std::make_unique<detail::HardwareMidiRuntime>();
+    hardwareMidi_->prepare(config.sampleRate, config.outputs);
     shutDown_ = false;
     shutdownRequested_ = false;
     // Before the backend starts: its callbacks push meter entries at once.
@@ -256,6 +284,7 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
         return started;
     }
     config_ = backend.config();  // what the device granted (e.g. its rate)
+    hardwareMidi_->prepare(config_.sampleRate, config_.outputs);
     backend_ = &backend;
     startWarnings_.clear();
     scheduling_ = {};
@@ -478,7 +507,9 @@ Status Engine::load(const model::Session& session, const std::filesystem::path& 
     if (recording()) SUPPLE_TRY(model::validateRecordingPlayrate(session));
     // Neither shortcut may release a hold whose compiled curve is stale; the
     // scalar one publishes no mix values, so it carries pending holds after.
-    const bool compile = releasesStaleCurve();
+    const bool compile = midiSettingsDirty_ ||
+                         (!plans_.empty() && !plans_.back()->hardwareMidi.empty()) ||
+                         releasesStaleCurve();
     if (!compile && loadScalarRate(session, projectDir)) {
         applyPendingHolds();
         return {};
@@ -634,6 +665,11 @@ Status Engine::load(const model::Session& session, const std::filesystem::path& 
         plan->processedInputs.push_back(
             {plan->nodes[tap.node].id, {from.l.data(), from.r.data()}, 0});
     }
+    SUPPLE_TRY(detail::prepareHardwareMidi(*plan, *backend_, midiInputsPreferences_,
+                                           midiOutputsPreferences_));
+    plan->rateBackendLatency += plan->hardwareLead;
+    plan->rateDeviceMargin += plan->hardwareLead;
+    midiSettingsDirty_ = false;
     outputLatency_ = static_cast<std::uint32_t>(plan->outputLatency);
     warnings_ = plan->warnings;
     for (const detail::OutputTap& o : plan->outputs)  // ADR-0056
@@ -886,7 +922,8 @@ Engine::MeterClock Engine::meterClock() const {
     }
     const std::int64_t played = playedStream(clock.epoch);
     const std::int64_t latency =
-        backend_ ? static_cast<std::int64_t>(backend_->status().outputLatency) : 0;
+        backend_ ? static_cast<std::int64_t>(backend_->status().outputLatency + midiLeadFrames())
+                 : 0;
     clock.heardStream = std::max<std::int64_t>(0, played - latency);
     return clock;
 }
@@ -1287,18 +1324,26 @@ void Engine::cycle(const float* const* in, float* const* out, std::uint32_t fram
         Engine& engine;
         std::uint64_t errors, misses, generation, stopped, epoch;
         bool playing;
-        explicit InCycle(Engine& e)
+        float* const* out;
+        std::uint32_t frames;
+        explicit InCycle(Engine& e, float* const* output, std::uint32_t count)
             : engine(e),
               errors(e.processErrors_.load()),
               misses(e.misses_.load()),
               generation(e.callbackGen_.load()),
               stopped(e.stoppedGen_.load()),
               epoch(e.rtPosEpoch_.load()),
-              playing(e.reportedPlaying_.load()) {
+              playing(e.reportedPlaying_.load()),
+              out(output),
+              frames(count) {
             e.cycleSeq_.fetch_add(1);
         }
         ~InCycle() {
             auto& e = engine;
+            if (e.hardwareMidi_)
+                e.hardwareMidi_->finish(
+                    out, e.deviceOutputs_, frames,
+                    frames == 0 || e.shutdownRequested_.load(std::memory_order_relaxed));
             e.cycleSeq_.fetch_add(1, std::memory_order_release);
             e.wakeOutputConsumed();
             if (errors != e.processErrors_.load() || misses != e.misses_.load() ||
@@ -1306,7 +1351,8 @@ void Engine::cycle(const float* const* in, float* const* out, std::uint32_t fram
                 epoch != e.rtPosEpoch_.load() || playing != e.reportedPlaying_.load())
                 e.notifyMain();
         }
-    } inCycle(*this);
+    } inCycle(*this, out, frames);
+    hardwareMidi_->begin(*midiSource_, frames);
     if (frames == 0) {  // the backend's final callback: stop every plugin here
         // Anticipative: the renderer stopped its share as it ended; the live
         // share is this thread's.
@@ -1327,6 +1373,8 @@ void Engine::cycle(const float* const* in, float* const* out, std::uint32_t fram
         }
         return;
     }
+    deviceMidi_ =
+        hardwareMidi_->input(midiSource_->midiInput(), latestPlan_.load(std::memory_order_acquire));
     pushControlMidi();
     // The play request first, then a count-in request (playCountIn stores them
     // in the other order), so this cycle cannot play past a count it missed.
@@ -1366,7 +1414,7 @@ void Engine::cycle(const float* const* in, float* const* out, std::uint32_t fram
 void Engine::pushControlMidi() SUPPLE_RT {
     if (!midiSource_) return;
     bool changed = false;
-    for (const MidiInputEvent& e : midiSource_->midiInput()) {
+    for (const MidiInputEvent& e : deviceMidi_) {
         if (e.size == 0 || !isControlMidi(e.bytes[0])) continue;
         changed = true;
         ControlMidiEvent c;
@@ -1498,7 +1546,7 @@ void Engine::cycleBody(const float* const* in, float* const* out, std::uint32_t 
         plan->deviceIn = in;
         plan->deviceInChannels = deviceInputs_;
         plan->deviceRecording = recorder_.load() != nullptr;
-        plan->deviceMidi = midiSource_->midiInput();
+        plan->deviceMidi = deviceMidi_;
         plan->deviceMidiOffset = midiBase;
     }
     if (plan && !playing_ && !shutDown_.load() && frames <= plan->block) {
@@ -1507,6 +1555,7 @@ void Engine::cycleBody(const float* const* in, float* const* out, std::uint32_t 
         // process()), nothing plays.
         if (detail::processCallbackBlock(liveWorkersReady_.load(std::memory_order_acquire), *plan,
                                          pos_, frames, false, false, &processing_)) {
+            hardwareMidi_->collect(*plan, pos_, frames, midiBase, false, rtEpoch_);
             publishPluginOutputs(*plan, false, rtEpoch_, pos_, rtStream_.load());
             writeDevice(*plan, out, 0, frames);
             // Metering (P5.3c): monitored input is heard as it is produced —
@@ -1542,6 +1591,7 @@ void Engine::cycleBody(const float* const* in, float* const* out, std::uint32_t 
             ok = false;
             break;
         }
+        hardwareMidi_->collect(*plan, pos_, k, midiBase + done, true, rtEpoch_);
         publishPluginOutputs(*plan, false, rtEpoch_, pos_, meterStream);
         writeDevice(*plan, out, done, k);
         addClicks(*plan, out, done, pos_, k);
@@ -1889,7 +1939,7 @@ Status Engine::startRecording(std::vector<RecordTarget> targets) {
     }
     const BackendStatus b = backend_->status();
     const std::int64_t latency =
-        static_cast<std::int64_t>(outputLatency_) + b.outputLatency + b.inputLatency;
+        static_cast<std::int64_t>(outputLatency()) + b.outputLatency + b.inputLatency;
     auto rec = std::make_unique<detail::Recorder>(std::move(targets), config_.sampleRate, latency);
     SUPPLE_TRY(rec->open());
     recorderOwned_ = std::move(rec);
@@ -2374,6 +2424,7 @@ void Engine::adoptLive(detail::Plan* next, bool continuous) SUPPLE_RT {
     detail::Plan* const previous = livePlan_;
     livePlan_ = next;
     if (!next) return;
+    hardwareMidi_->collect(*next, livePos_, 0, 0, wantNow(), rtEpoch_);
     if (next->split) {
         if (wasLive && liveReady_) {
             detail::locateClass(*next, livePos_, true, false);  // continue at the switch position
@@ -2484,8 +2535,7 @@ void Engine::anticipativeCycle(const float* const* in, float* const* out, std::u
                                livePlan_ ? std::span<const detail::ProcessedInput>(
                                                livePlan_->processedInputs)
                                          : std::span<const detail::ProcessedInput>());
-                    r->captureMidi(midiSource_->midiInput(), midiBase + done, played.frames,
-                                   timeline);
+                    r->captureMidi(deviceMidi_, midiBase + done, played.frames, timeline);
                     r->lose(k - played.frames);
                 } else if (playing) {
                     r->lose(k);
@@ -2553,7 +2603,7 @@ std::uint32_t Engine::liveRender(const float* const* in, float* const* out, std:
     p.deviceIn = in;
     p.deviceInChannels = deviceInputs_;
     p.deviceRecording = recorder_.load() != nullptr;
-    p.deviceMidi = midiSource_->midiInput();
+    p.deviceMidi = deviceMidi_;
     p.deviceMidiOffset = offset;
     const bool ok = detail::processCallbackBlock(liveWorkersReady_.load(std::memory_order_acquire),
                                                  p, livePos_, k, playing, true, self, &loopC_);
@@ -2561,6 +2611,7 @@ std::uint32_t Engine::liveRender(const float* const* in, float* const* out, std:
         processErrors_.fetch_add(1);
         notifyMain();
     }
+    if (ok) hardwareMidi_->collect(p, livePos_, k, offset, playing, rtEpoch_);
     publishPluginOutputs(p, false, rtEpoch_, livePos_, liveStream_);
     // Metering (P5.3c): the callback measures the live nodes it just played, at
     // the position it played them from. While the transport is stopped nothing

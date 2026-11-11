@@ -11,8 +11,8 @@
 //          [--bench] [--no-socket] [--instance NAME] [--socket PATH]
 //          [--workdir DIR] [--plugin-path P]... [--generate N] [--script]
 //          [--idle SECONDS] [--view START_SECONDS,PIXELS_PER_SECOND]
-//          [--audio jack|portaudio|dummy|none] [--theme dark|light|FILE] [--palette warm|ink]
-//          (without --audio, interactive runs start the device saved in Preferences)
+//          [--audio jack|portaudio|dummy|none] [--dummy-midi] [--theme dark|light|FILE] [--palette
+//          warm|ink] (without --audio, interactive runs start the device saved in Preferences)
 //          [--action ID]...
 #include <SDL3/SDL.h>
 #if defined(_WIN32)
@@ -84,10 +84,11 @@ struct Options {
     std::string instance = "default";
     bool offscreen = false, bench = false, serve = true, script = false;
     int width = 1280, height = 800, frames = 0;  // frames 0 = run until closed
-    int generate = 0;                            // tracks of a generated session
-    double idleSeconds = 0;                      // measure idle CPU after the frames
-    double viewStart = -1, viewPps = 0;          // initial lanes viewport
-    std::string audio;  // jack | portaudio | dummy | none; native default: dummy
+    bool dummyMidi = false;
+    int generate = 0;                    // tracks of a generated session
+    double idleSeconds = 0;              // measure idle CPU after the frames
+    double viewStart = -1, viewPps = 0;  // initial lanes viewport
+    std::string audio;                   // jack | portaudio | dummy | none; native default: dummy
     // Override the saved appearance for this run (not saved): dark | light | a
     // supple.theme/1.0 file, and warm | ink.
     std::string theme, palette;
@@ -123,7 +124,8 @@ int usage() {
                  "       [--bench] [--no-socket] [--instance NAME] [--socket PATH]\n"
                  "       [--workdir DIR] [--plugin-path P]... [--generate N] [--script]\n"
                  "       [--idle SECONDS] [--view START_SECONDS,PIXELS_PER_SECOND]\n"
-                 "       [--audio jack|portaudio|dummy|none] [--theme dark|light|FILE] [--palette "
+                 "       [--audio jack|portaudio|dummy|none] [--dummy-midi] [--theme "
+                 "dark|light|FILE] [--palette "
                  "warm|ink]\n"
                  "       [--action ID]...\n",
                  std::string(product::kSlug).c_str());
@@ -142,6 +144,8 @@ bool parse(int argc, char** argv, Options& o) {
             o.serve = false;
         else if (a == "--script")
             o.script = true;
+        else if (a == "--dummy-midi")
+            o.dummyMidi = true;
         else if (a == "--audio") {
             const char* v = value();
             if (!v || (std::string(v) != "jack" && std::string(v) != "portaudio" &&
@@ -284,6 +288,11 @@ int main(int argc, char** argv) {
     }
 
     engine::AppOptions options;
+    if (!o.offscreen) options.midiPreferencesFile = gui::Preferences::defaultFile(product::kSlug);
+    if (o.dummyMidi) {
+        options.dummyMidiInputs = {"Keyboard", "Pads"};
+        options.dummyMidiOutputs = {"Hardware synth", "Drum machine"};
+    }
     options.identity.name = std::string(product::kName);
     options.identity.vendor = std::string(product::kVendor);
     options.identity.version = std::string(product::kVersion);
@@ -971,7 +980,9 @@ int main(int argc, char** argv) {
             auto v = json::Value::object();
             v["fx"] = fxPanel.saveLayout();
             v["routing"] = routingPanel.saveLayout();
-            v["routing"]["mode"] = routing.midiMode() ? "midi" : "audio";
+            v["routing"]["mode"] = routing.hardwareMidiMode() ? "hardware_midi"
+                                   : routing.midiMode()       ? "midi"
+                                                              : "audio";
             v["rack"] = rackPanel.saveLayout();
             return v;
         },
@@ -979,8 +990,10 @@ int main(int argc, char** argv) {
             fxPanel.loadLayout(v.find("fx") ? *v.find("fx") : json::Value());
             routingPanel.loadLayout(v.find("routing") ? *v.find("routing") : json::Value());
             if (const auto* panel = v.find("routing"))
-                if (const auto* mode = panel->find("mode"); mode && mode->isString())
+                if (const auto* mode = panel->find("mode"); mode && mode->isString()) {
                     routing.setMidiMode(mode->asString() == "midi");
+                    if (mode->asString() == "hardware_midi") routing.setHardwareMidiMode();
+                }
             rackPanel.loadLayout(v.find("rack") ? *v.find("rack") : json::Value());
         });
     uiFile.add(

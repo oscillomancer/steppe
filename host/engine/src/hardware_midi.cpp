@@ -1,0 +1,485 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (c) 2026 Supple Audio
+#include "hardware_midi.h"
+#include <algorithm>
+#include <cctype>
+#include <cmath>
+#include "rack_runtime.h"
+namespace supple::engine::detail {
+namespace {
+bool sameName(const std::string& a, const std::string& b) {
+    return a.size() == b.size() &&
+           std::equal(a.begin(), a.end(), b.begin(), [](unsigned char x, unsigned char y) {
+               return std::tolower(x) == std::tolower(y);
+           });
+}
+bool later(const auto& a, const auto& b) {
+    return a.at > b.at || (a.at == b.at && a.order > b.order);
+}
+MidiOutputEvent convert(const host::Event& event) SUPPLE_RT {
+    MidiOutputEvent result;
+    result.frame = event.time;
+    if (event.kind == host::Event::Kind::NoteOn || event.kind == host::Event::Kind::NoteOff ||
+        event.kind == host::Event::Kind::NoteChoke) {
+        result.size = 3;
+        result.bytes[0] = static_cast<std::uint8_t>(
+            (event.kind == host::Event::Kind::NoteOn ? 0x90 : 0x80) | (event.channel & 15));
+        result.bytes[1] = static_cast<std::uint8_t>(event.key);
+        result.bytes[2] = event.kind == host::Event::Kind::NoteOn
+                              ? static_cast<std::uint8_t>(
+                                    std::clamp<long>(std::lround(event.velocity * 127), 1, 127))
+                              : 0;
+    } else if (event.kind == host::Event::Kind::Midi) {
+        std::copy_n(event.midi, 3, result.bytes);
+        const auto status = result.bytes[0];
+        result.size = status < 0xf0                      ? ((status & 0xe0) == 0xc0 ? 2 : 3)
+                      : status == 0xf2                   ? 3
+                      : status == 0xf1 || status == 0xf3 ? 2
+                      : status >= 0xf6                   ? 1
+                                                         : 0;
+    }
+    return result;
+}
+}  // namespace
+Status prepareHardwareMidi(Plan& plan, Backend& backend, const MidiPortPreferences& inputs,
+                           const MidiPortPreferences& outputs) {
+    const auto ports = backend.midiOutputPorts(), sources = backend.midiPorts();
+    const auto latency = backend.midiOutputLatency();
+    for (std::size_t p = 0; p < 16; ++p) {
+        plan.midiInputsSettings[p] = midiPortSettings(inputs, p < sources.size() ? sources[p] : "");
+        plan.midiOutputsSettings[p] = midiPortSettings(outputs, p < ports.size() ? ports[p] : "");
+    }
+    for (auto& node : plan.nodes)
+        for (std::size_t p = 0; p < 16; ++p)
+            if (!plan.midiInputsSettings[p].enabled) {
+                if (node.midiIn) node.midiIn->ports &= ~(std::uint64_t{1} << p);
+                if (node.rack)
+                    for (auto& feed : node.rack->notes) {
+                        feed.ports &= ~(std::uint64_t{1} << p);
+                        feed.sourcePorts &= ~(std::uint64_t{1} << p);
+                    }
+            }
+    if (plan.hardwareMidi.size() > kHardwareMidiRoutes)
+        return Error("engine.midi_budget", "too many hardware MIDI routes", "/routes",
+                     "use at most 256 hardware MIDI routes");
+    std::int64_t lead = 0;
+    for (auto& pointer : plan.hardwareMidi) {
+        auto& route = *pointer;
+        const auto& node = plan.nodes[route.source];
+        for (std::size_t p = 0; p < ports.size() && p < 16; ++p)
+            if (sameName(ports[p], route.device)) {
+                if (route.port >= 0)
+                    return Error("engine.midi_port", "MIDI output name is ambiguous",
+                                 "/routes/" + route.id.str() + "/to/midi_device",
+                                 "rename duplicate MIDI destinations before starting the engine");
+                route.port = static_cast<int>(p);
+            }
+        if (route.port < 0) {
+            plan.warnings.push_back(route.id.str() + ": MIDI output " + route.device +
+                                    " is absent; connect it and restart the engine");
+            continue;
+        }
+        const auto p = static_cast<std::size_t>(route.port);
+        if (!plan.midiOutputsSettings[p].enabled) {
+            route.port = -1;
+            continue;
+        }
+        const auto tapped =
+            route.rackNotes >= 0
+                ? node.rack->notesOut[static_cast<std::size_t>(route.rackNotes)].latency
+            : route.tap == model::Tap::PreFx ? 0
+                                             : node.latChain;
+        // Channel post-FX streams currently retain pre-FX timestamps (ADR-0067).
+        // Their tapped latency is added at delivery, cancelling its subtraction
+        // here. Rack Note Out timestamps already include its prepared latency.
+        const auto eventClockLatency = route.rackNotes >= 0 ? tapped : 0;
+        route.delay = plan.outputLatency - node.timelineShift - eventClockLatency +
+                      (p < latency.size() ? latency[p] : 0) +
+                      time::samplesAt(plan.midiOutputsSettings[p].offsetMs / 1000., plan.rate);
+        lead = std::max(lead, -route.delay);
+        route.sourceMute = node.autoMute;
+        route.vcas = node.vcas;
+        for (auto& v : route.vcas.values) {
+            v.volume.points.clear();
+            v.volumeDb = 0;
+        }
+    }
+    if (lead > static_cast<std::int64_t>(plan.rate * kHardwareMidiLeadSeconds))
+        return Error("engine.midi_lead", "MIDI advance exceeds one second of prepared audio lead",
+                     "/midi_outputs",
+                     "increase the MIDI output timing offset or reduce the port's advance/latency");
+    plan.hardwareLead = static_cast<std::uint32_t>(lead);
+    for (auto& route : plan.hardwareMidi) {
+        route->delay += lead;
+        if (route->delay > static_cast<std::int64_t>(plan.rate * 10))
+            return Error("engine.midi_delay", "hardware MIDI delay exceeds ten seconds", "/routes",
+                         "reduce plugin delay or the output timing offset");
+    }
+    if (lead)
+        plan.warnings.push_back("Hardware MIDI alignment adds " + std::to_string(lead) +
+                                " frames of prepared audio lead");
+    return {};
+}
+HardwareMidiRuntime::HardwareMidiRuntime() = default;
+void HardwareMidiRuntime::prepare(double rate, std::uint32_t channels) {
+    audioDelay_.assign(
+        channels, std::vector<float>(
+                      static_cast<std::size_t>(std::ceil(rate * kHardwareMidiLeadSeconds)) + 1));
+}
+std::uint64_t HardwareMidiRuntime::dropped(bool output, std::size_t port) const {
+    return port < 16
+               ? (output ? outputDrops_[port] : inputDrops_[port]).load(std::memory_order_relaxed)
+               : 0;
+}
+void HardwareMidiRuntime::begin(Backend& backend, std::uint32_t frames) {
+    backend_ = &backend;
+    frames_ = frames;
+    wrote_ = 0;
+}
+bool HardwareMidiRuntime::write(RouteState& state, const MidiOutputEvent& value) {
+    auto event = value;
+    event.port = static_cast<std::uint16_t>(state.port);
+    if (!backend_->writeMidi(event)) {
+        outputDrops_[event.port].fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    ++wrote_;
+    if (event.bytes[0] < 0xf0)
+        state.channels |= static_cast<std::uint16_t>(1u << (event.bytes[0] & 15));
+    const auto key = std::size_t(event.bytes[0] & 15) * 128 + event.bytes[1];
+    if ((event.bytes[0] & 0xf0) == 0x90 && event.bytes[2]) {
+        if (state.held[key] < 65535) ++state.held[key];
+    } else if ((event.bytes[0] & 0xf0) == 0x80 ||
+               ((event.bytes[0] & 0xf0) == 0x90 && !event.bytes[2])) {
+        if (state.held[key]) --state.held[key];
+    }
+    return true;
+}
+bool HardwareMidiRuntime::release(RouteState& state, std::uint32_t at) {
+    for (std::size_t key = 0; key < state.held.size(); ++key)
+        while (state.held[key]) {
+            if (wrote_ >= kMaxMidiOutputEvents - 512)
+                return false;  // reserve bounded whole-port panic capacity
+            if (!write(state, {at,
+                               0,
+                               3,
+                               {static_cast<std::uint8_t>(0x80 | (key / 128)),
+                                static_cast<std::uint8_t>(key % 128), 0}}))
+                return false;
+        }
+    for (unsigned channel = 0; channel < 16; ++channel)
+        if (state.channels & (1u << channel)) {
+            if (!write(state, {at, 0, 3, {static_cast<std::uint8_t>(0xb0 | channel), 64, 0}}))
+                return false;
+        }
+    return true;
+}
+void HardwareMidiRuntime::adopt(Plan& plan, std::uint64_t epoch, bool playing) {
+    const bool boundary = epoch != epoch_ || (playing_ && !playing);
+    const bool changed = plan_ != &plan;
+    if (boundary) {
+        audioFilled_ = 0;
+        audioCursor_ = 0;
+    }
+    if (changed) {
+        if (lead_ != plan.hardwareLead) {
+            audioCursor_ = 0;
+            audioFilled_ = 0;
+        }
+        lead_ = plan.hardwareLead;
+        leadReported_.store(lead_, std::memory_order_relaxed);
+        for (auto& state : routes_)
+            if (state.active) {
+                auto found = std::find_if(
+                    plan.hardwareMidi.begin(), plan.hardwareMidi.end(), [&](const auto& r) {
+                        return r->id.n == state.id && r->port == state.port &&
+                               r->delay == state.delay && r->tap == state.tap &&
+                               r->fromChannel == state.from && r->toChannel == state.to &&
+                               r->port >= 0;
+                    });
+                if (found == plan.hardwareMidi.end()) {
+                    state.release = true;
+                    ++state.generation;
+                }
+            }
+        plan_ = &plan;
+    }
+    std::array<std::uint16_t, 16> resetChannels{};
+    for (const auto& state : routes_)
+        if (state.active && state.port >= 0 &&
+            !plan.midiOutputsSettings[static_cast<std::size_t>(state.port)].enabled)
+            resetChannels[static_cast<std::size_t>(state.port)] |= state.channels;
+    for (auto& state : routes_)
+        if (state.active && boundary && state.reset) {
+            state.release = true;
+            state.started = false;
+            ++state.generation;
+            resetChannels[static_cast<std::size_t>(state.port)] |= state.channels;
+        }
+    for (auto& state : routes_)
+        if (state.active && state.release && release(state)) {
+            state.active = false;
+            state.release = false;
+        }
+    for (std::size_t p = 0; p < 16; ++p)
+        for (unsigned channel = 0; channel < 16; ++channel)
+            if (resetChannels[p] & (1u << channel)) {
+                for (const auto cc : {64, 123})
+                    if (!backend_->writeMidi({0,
+                                              static_cast<std::uint16_t>(p),
+                                              3,
+                                              {static_cast<std::uint8_t>(0xb0 | channel),
+                                               static_cast<std::uint8_t>(cc), 0}}))
+                        outputDrops_[p].fetch_add(1, std::memory_order_relaxed);
+            }
+    for (const auto& r : plan.hardwareMidi) {
+        if (r->port < 0) continue;
+        auto found = std::find_if(routes_.begin(), routes_.end(), [&](const auto& s) {
+            return s.active && !s.release && s.id == r->id.n;
+        });
+        if (found == routes_.end()) {
+            found = std::find_if(routes_.begin(), routes_.end(),
+                                 [](const auto& s) { return !s.active; });
+            if (found == routes_.end()) {
+                outputDrops_[static_cast<std::size_t>(r->port)].fetch_add(
+                    1, std::memory_order_relaxed);
+                continue;
+            }
+            const auto generation = found->generation + 1;
+            *found = {};
+            found->generation = generation;
+            found->active = true;
+            found->id = r->id.n;
+            found->port = r->port;
+            found->delay = r->delay;
+            found->tap = r->tap;
+            found->from = r->fromChannel;
+            found->to = r->toChannel;
+            found->started =
+                boundary && plan.midiOutputsSettings[static_cast<std::size_t>(r->port)].resetOnStop;
+        }
+        found->reset = plan.midiOutputsSettings[static_cast<std::size_t>(r->port)].resetOnStop;
+    }
+    if (changed) {
+        std::size_t keep = 0;
+        for (std::size_t i = 0; i < count_; ++i) {
+            const auto& pending = queue_[i];
+            const auto& state = routes_[pending.slot];
+            if (state.active && !state.release && state.generation == pending.generation)
+                queue_[keep++] = pending;
+        }
+        count_ = keep;
+        std::make_heap(queue_.begin(), queue_.begin() + static_cast<std::ptrdiff_t>(count_),
+                       [](const auto& a, const auto& b) { return later(a, b); });
+    }
+    epoch_ = epoch;
+    playing_ = playing;
+}
+void HardwareMidiRuntime::schedule(std::size_t slot, MidiOutputEvent event, std::int64_t delay,
+                                   std::uint32_t offset) {
+    auto& state = routes_[slot];
+    if (count_ == queue_.size()) {
+        outputDrops_[static_cast<std::size_t>(state.port)].fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    queue_[count_++] = {frame_ + offset + event.frame + delay, order_++, state.generation,
+                        static_cast<std::uint16_t>(slot), event};
+    std::push_heap(queue_.begin(), queue_.begin() + static_cast<std::ptrdiff_t>(count_),
+                   [](const auto& a, const auto& b) { return later(a, b); });
+}
+void HardwareMidiRuntime::collect(Plan& plan, std::int64_t pos, std::uint32_t frames,
+                                  std::uint32_t offset, bool playing, std::uint64_t epoch) {
+    adopt(plan, epoch, playing);
+    if (!frames) return;
+    for (auto& pointer : plan.hardwareMidi) {
+        auto& route = *pointer;
+        if (route.port < 0) continue;
+        auto state = std::find_if(routes_.begin(), routes_.end(), [&](const auto& s) {
+            return s.active && !s.release && s.id == route.id.n;
+        });
+        if (state == routes_.end()) continue;
+        const auto slot = static_cast<std::size_t>(state - routes_.begin());
+        auto& source = plan.nodes[route.source];
+        auto filter = [&](MidiOutputEvent event) {
+            if (event.size && event.bytes[0] < 0xf0) {
+                if (state->from && (event.bytes[0] & 15) != state->from - 1) event.size = 0;
+                if (state->to)
+                    event.bytes[0] =
+                        static_cast<std::uint8_t>((event.bytes[0] & 0xf0) | (state->to - 1));
+            }
+            return event;
+        };
+        auto logical = [&](const MidiOutputEvent& event) {
+            if (!event.size) return;
+            const auto key = std::size_t(event.bytes[0] & 15) * 128 + event.bytes[1];
+            if ((event.bytes[0] & 0xf0) == 0x90 && event.bytes[2]) {
+                if (state->logical[key] < 65535) ++state->logical[key];
+                state->velocity[key] = event.bytes[2];
+            } else if ((event.bytes[0] & 0xf0) == 0x80 ||
+                       ((event.bytes[0] & 0xf0) == 0x90 && !event.bytes[2])) {
+                if (state->logical[key]) --state->logical[key];
+            }
+        };
+        const auto& stream = route.tap == model::Tap::PreFx ? source.midiPreFx : source.midiPostFx;
+        const auto* rack = source.rack && route.rackNotes >= 0
+                               ? &source.rack->notesOut[static_cast<std::size_t>(route.rackNotes)]
+                               : nullptr;
+        if (!state->started) {
+            if (rack) {
+                if (playing)
+                    for (const auto& held : rack->before)
+                        if (held.high)
+                            logical(filter({0,
+                                            0,
+                                            3,
+                                            {static_cast<std::uint8_t>(0x90 | held.channel),
+                                             static_cast<std::uint8_t>(held.key),
+                                             static_cast<std::uint8_t>(held.velocity)}}));
+            } else
+                for (std::size_t voice = 0; voice < source.midiBefore.size(); ++voice) {
+                    const auto& held = source.midiBefore[voice];
+                    if (!held.high || held.orphan ||
+                        (!playing && held.kind == MidiSlot::Kind::Timeline))
+                        continue;
+                    if (std::any_of(stream.begin(), stream.end(), [&](const auto& e) {
+                            return e.time == 0 && e.noteId == static_cast<int>(voice);
+                        }))
+                        continue;
+                    logical(filter({0,
+                                    0,
+                                    3,
+                                    {static_cast<std::uint8_t>(0x90 | held.channel),
+                                     static_cast<std::uint8_t>(held.key),
+                                     static_cast<std::uint8_t>(held.velocity)}}));
+                }
+        }
+        std::size_t next = 0;
+        for (std::uint32_t f = 0; f < frames; ++f) {
+            bool silent = route.muteCurve.active() ? route.muteCurve.at(pos + f) >= .5 : route.mute;
+            if (route.tap == model::Tap::PostFader && !source.rack) {
+                silent |=
+                    route.sourceMute.active() ? route.sourceMute.at(pos + f) >= .5 : source.mute;
+                double ignored = 0;
+                route.vcas.evaluate(pos + f, ignored, silent);
+            }
+            if (silent && !state->muted) schedule(slot, {f, 0, 0, {}}, route.delay, offset);
+            if (!silent && (!state->started || state->muted))
+                for (std::size_t key = 0; key < state->logical.size(); ++key)
+                    for (unsigned n = 0; n < state->logical[key]; ++n)
+                        schedule(slot,
+                                 {f,
+                                  0,
+                                  3,
+                                  {static_cast<std::uint8_t>(0x90 | (key / 128)),
+                                   static_cast<std::uint8_t>(key % 128), state->velocity[key]}},
+                                 route.delay, offset);
+            state->started = true;
+            state->muted = silent;
+            if (rack) {
+                while (next < rack->count && rack->events[next].midi.frame == f) {
+                    const auto& e = rack->events[next++].midi;
+                    if (!playing) continue;
+                    auto event = filter({f, 0, 3, {e.status, e.data1, e.data2}});
+                    logical(event);
+                    if (!silent && event.size) schedule(slot, event, route.delay, offset);
+                }
+            } else
+                while (next < stream.size() && stream[next].time == f) {
+                    const auto& e = stream[next++];
+                    if (!playing && !state->reset && e.noteId >= 0 &&
+                        static_cast<std::size_t>(e.noteId) < source.midiBefore.size() &&
+                        source.midiBefore[static_cast<std::size_t>(e.noteId)].kind ==
+                            MidiSlot::Kind::Timeline)
+                        continue;
+                    auto event = filter(convert(e));
+                    logical(event);
+                    if (!silent && event.size) schedule(slot, event, route.delay, offset);
+                }
+        }
+    }
+}
+void HardwareMidiRuntime::finish(float* const* out, std::uint32_t channels, std::uint32_t frames,
+                                 bool closing) {
+    if (closing) count_ = 0;
+    while (count_ && queue_[0].at < frame_ + frames) {
+        std::pop_heap(queue_.begin(), queue_.begin() + static_cast<std::ptrdiff_t>(count_),
+                      [](const auto& a, const auto& b) { return later(a, b); });
+        auto pending = queue_[--count_];
+        auto& state = routes_[pending.slot];
+        if (!state.active || state.release || state.generation != pending.generation) continue;
+        pending.event.frame =
+            static_cast<std::uint32_t>(std::max<std::int64_t>(0, pending.at - frame_));
+        if (pending.event.size)
+            (void)write(state, pending.event);
+        else if (!release(state, pending.event.frame))
+            state.release = true;
+    }
+    if (closing) {
+        std::array<std::uint16_t, 16> used{};
+        for (auto& state : routes_)
+            if (state.active) {
+                (void)release(state);
+                used[static_cast<std::size_t>(state.port)] |= state.channels;
+            }
+        for (std::size_t p = 0; p < 16; ++p)
+            for (unsigned c = 0; c < 16; ++c)
+                if (used[p] & (1u << c)) {
+                    for (const auto cc : {64, 123})
+                        if (!backend_->writeMidi({0,
+                                                  static_cast<std::uint16_t>(p),
+                                                  3,
+                                                  {static_cast<std::uint8_t>(0xb0 | c),
+                                                   static_cast<std::uint8_t>(cc), 0}}))
+                            outputDrops_[p].fetch_add(1, std::memory_order_relaxed);
+                }
+        count_ = 0;
+    }
+    if (lead_ && out) {
+        for (std::uint32_t f = 0; f < frames; ++f) {
+            for (std::uint32_t c = 0; c < channels && c < audioDelay_.size(); ++c) {
+                auto& value = audioDelay_[c][audioCursor_];
+                const float next = out[c][f];
+                out[c][f] = audioFilled_ >= lead_ ? value : 0;
+                value = next;
+            }
+            audioCursor_ = (audioCursor_ + 1) % lead_;
+            if (audioFilled_ < lead_) ++audioFilled_;
+        }
+    }
+    frame_ += frames;
+}
+std::span<const MidiInputEvent> HardwareMidiRuntime::input(std::span<const MidiInputEvent> raw,
+                                                           const Plan* plan) {
+    for (const auto& e : raw) {
+        const auto settings =
+            plan && e.port < 16 ? plan->midiInputsSettings[e.port] : MidiPortSettings{};
+        if (!settings.enabled) continue;
+        const auto delay = plan ? time::samplesAt(settings.offsetMs / 1000., plan->rate) : 0;
+        if (inputCount_ == inputQueue_.size()) {
+            if (e.port < 16) inputDrops_[e.port].fetch_add(1, std::memory_order_relaxed);
+            continue;
+        }
+        inputQueue_[inputCount_++] = {
+            frame_ + std::max<std::int64_t>(0, std::int64_t(e.frame) + delay), order_++, e};
+        std::push_heap(inputQueue_.begin(),
+                       inputQueue_.begin() + static_cast<std::ptrdiff_t>(inputCount_),
+                       [](const auto& a, const auto& b) { return later(a, b); });
+    }
+    std::size_t count = 0;
+    while (inputCount_ && inputQueue_[0].at < frame_ + frames_) {
+        std::pop_heap(inputQueue_.begin(),
+                      inputQueue_.begin() + static_cast<std::ptrdiff_t>(inputCount_),
+                      [](const auto& a, const auto& b) { return later(a, b); });
+        auto event = inputQueue_[--inputCount_];
+        if (plan && event.event.port < 16 && !plan->midiInputsSettings[event.event.port].enabled)
+            continue;
+        if (count < inputBlock_.size()) {
+            event.event.frame =
+                static_cast<std::uint32_t>(std::max<std::int64_t>(0, event.at - frame_));
+            inputBlock_[count++] = event.event;
+        } else if (event.event.port < 16)
+            inputDrops_[event.event.port].fetch_add(1, std::memory_order_relaxed);
+    }
+    return {inputBlock_.data(), count};
+}
+}  // namespace supple::engine::detail

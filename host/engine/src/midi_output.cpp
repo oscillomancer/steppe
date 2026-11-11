@@ -96,6 +96,7 @@ Status MidiOutputSender::start() {
                      "stop before restarting the sender");
     lastDue_.fill(0);
     dropped_.store(0);
+    for (auto& dropped : portDrops_) dropped.store(0);
     quit_.store(false);
     try {
         thread_ = std::thread([this] {
@@ -115,18 +116,37 @@ void MidiOutputSender::stop() {
     if (thread_.joinable()) thread_.join();
     TimedMidiOutput event;
     for (auto& queue : queues_)
-        while (queue.pop(event)) dropped_.fetch_add(1, std::memory_order_relaxed);
+        while (queue.pop(event)) {
+            const auto status = event.event.bytes[0] & 0xf0;
+            const bool release =
+                status == 0x80 || (status == 0x90 && !event.event.bytes[2]) ||
+                (status == 0xb0 && (event.event.bytes[1] == 64 || event.event.bytes[1] == 123) &&
+                 !event.event.bytes[2]);
+            if (release) {
+                event.seconds = std::max(event.seconds, sink_.now());
+                if (!sink_.send(event)) drop(event.event.port);
+            } else
+                drop(event.event.port);
+        }
 }
 bool MidiOutputSender::push(const TimedMidiOutput& event) {
     const auto port = event.event.port;
-    // Preserve chronological runs across periods. A clock discontinuity cannot
-    // block an earlier event behind a future queue head: reject it, count loss.
-    if (port >= sink_.names.size() || port >= queues_.size() || !std::isfinite(event.seconds) ||
-        event.seconds < lastDue_[port] || !queues_[port].push(event)) {
-        dropped_.fetch_add(1, std::memory_order_relaxed);
+    if (port >= sink_.names.size() || port >= queues_.size() || !std::isfinite(event.seconds)) {
+        drop(event.event.port);
         return false;
     }
-    lastDue_[port] = event.seconds;
+    auto queued = event;
+    const auto status = event.event.bytes[0] & 0xf0;
+    const bool release =
+        status == 0x80 || (status == 0x90 && !event.event.bytes[2]) ||
+        (status == 0xb0 && (event.event.bytes[1] == 64 || event.event.bytes[1] == 123) &&
+         !event.event.bytes[2]);
+    if (release) queued.seconds = std::max(queued.seconds, lastDue_[port]);
+    if (queued.seconds < lastDue_[port] || !queues_[port].push(queued)) {
+        drop(event.event.port);
+        return false;
+    }
+    lastDue_[port] = queued.seconds;
     return true;
 }
 double MidiOutputSender::dispatch() {
@@ -143,7 +163,7 @@ double MidiOutputSender::dispatch() {
             }
         if (selected == queues_.size()) return sink_.now() + .001;
         if (!sink_.timestamped() && next.seconds > sink_.now()) return next.seconds;
-        if (!sink_.send(next)) dropped_.fetch_add(1, std::memory_order_relaxed);
+        if (!sink_.send(next)) drop(next.event.port);
         queues_[selected].consume();
     }
     return sink_.now();

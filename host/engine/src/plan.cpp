@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 #include "plan.h"
+#include "hardware_midi.h"
 #include "live_workers.h"
 #include "rack_runtime.h"
 #include "supple/model/fade_shape.h"
@@ -481,6 +482,29 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
     }
     for (const auto& e : s.routes) {
         const model::Route& r = *e.value;
+        if (r.to.midiDevice && r.midi) {
+            auto route = std::make_shared<HardwareRoute>();
+            route->id = e.id;
+            route->device = *r.to.midiDevice;
+            route->tap = r.tap;
+            route->mute = r.mute;
+            route->fromChannel = r.midi->fromChannel;
+            route->toChannel = r.midi->toChannel;
+            const auto from = r.from.module ? s.modules.find(*r.from.module)->rack : *r.from.track;
+            route->source = index.at(from);
+            auto& source = p.nodes[route->source];
+            source.hardwareMidiSource = source.midiSends = true;
+            if (r.from.module) {
+                const auto& outs = source.rack->notesOut;
+                const auto found = std::find_if(outs.begin(), outs.end(), [&](const auto& output) {
+                    return output.id == *r.from.module;
+                });
+                if (found == outs.end()) continue;
+                route->rackNotes = static_cast<int>(found - outs.begin());
+            }
+            p.hardwareMidi.push_back(std::move(route));
+            continue;
+        }
         if (r.midi && !r.from.midiDevice) {
             std::vector<Id> destinations;
             if (r.to.module) destinations.push_back(*r.to.module);
@@ -707,6 +731,9 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
                    : param == "mute"                          ? &n.autoMute
                                                               : nullptr;
         } else if (o.kind == Kind::Route) {
+            if (param == "mute")
+                for (auto& route : p.hardwareMidi)
+                    if (route->id == o) route->muteCurve = a;
             for (Edge& ed : p.edges)
                 if (ed.route == o) {
                     Automation* curve = param == "volume" ? &ed.autoVolume
@@ -757,6 +784,7 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         if (n.rack) {
             // A rack playing a device's MIDI is live, as a monitored track.
             n.live =
+                n.hardwareMidiSource ||
                 std::any_of(n.rack->notes.begin(), n.rack->notes.end(), [](const NotesFeed& f) {
                     return f.device.has_value() || f.sourceDevice.has_value();
                 });
@@ -781,11 +809,11 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
                     for (int ch : *in->from.hwChannels) n.monitorInputs.push_back(ch - 1);
             }
         if (monitoring)
-            if (const auto* in = model::midiInputRoute(s, n.id))
+            if (const auto* in = model::midiInputRoute(s, n.id); in && !in->mute)
                 n.midiIn = Node::MidiIn{*in->from.midiDevice, in->midi ? in->midi->fromChannel : 0,
                                         in->midi ? in->midi->toChannel : 0, 0};
-        n.live = !n.monitorInputs.empty() || n.midiIn.has_value() || !n.recordInputs.empty() ||
-                 n.recordRack;
+        n.live = n.hardwareMidiSource || !n.monitorInputs.empty() || n.midiIn.has_value() ||
+                 !n.recordInputs.empty() || n.recordRack;
         // Recording Note Out consumes its delivered events on the callback.
         // Keep source and destination together even with monitoring off.
         if (t.record.armed && (t.record.mode == model::RecordMode::MidiOverdub ||

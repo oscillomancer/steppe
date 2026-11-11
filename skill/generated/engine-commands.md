@@ -2967,6 +2967,11 @@ Kind: `action`. Exposure: `mcp-tool`.
     "midi_dropped": {
       "type": "integer"
     },
+    "midi_inputs": {},
+    "midi_outputs": {},
+    "midi_lead_frames": {
+      "type": "integer"
+    },
     "midi_out_dropped": {
       "type": "integer"
     },
@@ -3277,6 +3282,9 @@ Kind: `action`. Exposure: `mcp-tool`.
     "device_latency",
     "xruns",
     "midi_dropped",
+    "midi_inputs",
+    "midi_outputs",
+    "midi_lead_frames",
     "midi_out_dropped",
     "midi_output_warnings",
     "midi_output_latency",
@@ -3400,7 +3408,7 @@ Result:
 
 Real-time engine state: backend, rate, block, device period, latency, xruns.
 
-preparing_audio: source preparation is pending; the previous ready plan stays audible. prepared_version is the last compiled version, preparation_version the pending target (zero when idle); preparation_error explains a failed preparation. plan_latency: the session's plugin delay in frames; device_latency: frames from the engine's outputs to the device. restart_needed: the device changed rate or went away; engine.stop and engine.start again. midi_devices_changed is advisory: MIDI topology changed but audio keeps running. midi_devices_message asks for an explicit engine restart to pick up the new set; existing port names stay fixed. midi_out_dropped counts hardware output rejections, queue/device loss and pending events discarded at shutdown. midi_output_warnings lists outputs skipped at start; midi_output_latency is signed audio-minus-MIDI latency per output, in frames. midi_dropped: native MIDI messages/packets rejected or lost to bounded queues (zero for other backends). midi_warnings lists inputs skipped at start, with device, numeric os_error, message and corrective hint. meter_drops: entries a full ring dropped (the renderer's, the audio callback's) — a strip's peak/RMS missed a block, never audio. dropped/voice_dropped count lost plug-in output/voice records. memory_lock reports requested/active and an optional OS error with errno and a corrective hint, including while stopped. Bridges are excluded. cpu_idle_latency reports the owned 20 microsecond request with the same status/error fields; it affects system idle while held and leaves CPU frequency policy unchanged. live_helpers is the enabled live helper capacity. scheduling: each thread class's policy (none, normal, fifo, rr, high) and priority as applied at start: the device callback, live helpers, renderer and background helpers (real-time below a real-time callback when permitted). workgroup: whether the live helpers joined the device's audio workgroup (macOS CoreAudio; state none, ready, joined, partial or failed, with the helper counts and the last refusal's OS error, message and hint). warnings includes scheduling fallbacks and plan warnings with corrective actions. failed_errors adds structured code, message, path and hint to each failure. failed_fx: isolated plugins whose process crashed or hung (silent now; fx.restart re-creates them).
+preparing_audio: source preparation is pending; the previous ready plan stays audible. prepared_version is the last compiled version, preparation_version the pending target (zero when idle); preparation_error explains a failed preparation. plan_latency: plugin delay plus prepared MIDI audio lead in frames; midi_lead_frames reports the latter. midi_inputs/midi_outputs give per-port enabled/timing/loss/warnings (as midi.inputs.get/midi.outputs.get). device_latency: frames from the engine's outputs to the device. restart_needed: the device changed rate or went away; engine.stop and engine.start again. midi_devices_changed is advisory: MIDI topology changed but audio keeps running. midi_devices_message asks for an explicit engine restart to pick up the new set; existing port names stay fixed. midi_out_dropped counts hardware output rejections, queue/device loss and pending events discarded at shutdown. midi_output_warnings lists outputs skipped at start; midi_output_latency is signed audio-minus-MIDI latency per output, in frames. midi_dropped: native MIDI messages/packets rejected or lost to bounded queues (zero for other backends). midi_warnings lists inputs skipped at start, with device, numeric os_error, message and corrective hint. meter_drops: entries a full ring dropped (the renderer's, the audio callback's) — a strip's peak/RMS missed a block, never audio. dropped/voice_dropped count lost plug-in output/voice records. memory_lock reports requested/active and an optional OS error with errno and a corrective hint, including while stopped. Bridges are excluded. cpu_idle_latency reports the owned 20 microsecond request with the same status/error fields; it affects system idle while held and leaves CPU frequency policy unchanged. live_helpers is the enabled live helper capacity. scheduling: each thread class's policy (none, normal, fifo, rr, high) and priority as applied at start: the device callback, live helpers, renderer and background helpers (real-time below a real-time callback when permitted). workgroup: whether the live helpers joined the device's audio workgroup (macOS CoreAudio; state none, ready, joined, partial or failed, with the helper counts and the last refusal's OS error, message and hint). warnings includes scheduling fallbacks and plan warnings with corrective actions. failed_errors adds structured code, message, path and hint to each failure. failed_fx: isolated plugins whose process crashed or hung (silent now; fx.restart re-creates them).
 
 Kind: `query`. Exposure: `mcp-tool`.
 
@@ -3453,6 +3461,11 @@ Kind: `query`. Exposure: `mcp-tool`.
       "type": "integer"
     },
     "midi_dropped": {
+      "type": "integer"
+    },
+    "midi_inputs": {},
+    "midi_outputs": {},
+    "midi_lead_frames": {
       "type": "integer"
     },
     "midi_out_dropped": {
@@ -3765,6 +3778,9 @@ Kind: `query`. Exposure: `mcp-tool`.
     "device_latency",
     "xruns",
     "midi_dropped",
+    "midi_inputs",
+    "midi_outputs",
+    "midi_lead_frames",
     "midi_out_dropped",
     "midi_output_warnings",
     "midi_output_latency",
@@ -8695,6 +8711,88 @@ Result:
 
 ```
 
+## `midi.inputs.get@1`
+
+Hardware MIDI inputs, timing, settings, loss and startup warnings.
+
+ports contains name, zero-based index (-1 absent), enabled, offset_ms, latency_ms, dropped and structured warnings. Outputs also have reset_on_stop. Settings are machine preferences keyed by exact port name; they are not project state.
+
+Kind: `query`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
+
+**No devices** (`empty`)
+
+```json
+{}
+
+```
+
+Result:
+
+```json
+{
+  "ports": []
+}
+
+```
+
+## `midi.inputs.set@1`
+
+Change one machine MIDI port's enabled state and timing offset.
+
+port is an exact name. offset_ms is signed -1000..1000 milliseconds. Positive offsets delay. Outputs reset_on_stop defaults true. Applying settings releases disabled/changed output routes; inputs retain the existing channel input mechanism. Returns the updated ports list.
+
+Kind: `action`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `port` | string |  |  |  |  |
+| `enabled` | boolean |  |  |  |  |
+| `offset_ms` | number |  | -1000.0..1000.0 |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
+
+**Disable an absent port** (`empty`)
+
+```json
+{
+  "port": "Test port",
+  "enabled": false
+}
+
+```
+
+Result:
+
+```json
+{
+  "ports": "<any>"
+}
+
+```
+
 ## `midi.notes@1`
 
 List a MIDI item's notes and CC points (beats from the item's start).
@@ -8737,6 +8835,89 @@ Result:
   "position": "<any>",
   "notes": "<any>",
   "cc": "<any>"
+}
+
+```
+
+## `midi.outputs.get@1`
+
+Hardware MIDI outputs, timing, settings, loss and startup warnings.
+
+ports contains name, zero-based index (-1 absent), enabled, offset_ms, latency_ms, dropped and structured warnings. Outputs also have reset_on_stop. Settings are machine preferences keyed by exact port name; they are not project state.
+
+Kind: `query`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
+
+**No devices** (`empty`)
+
+```json
+{}
+
+```
+
+Result:
+
+```json
+{
+  "ports": []
+}
+
+```
+
+## `midi.outputs.set@1`
+
+Change one machine MIDI port's enabled state and timing offset.
+
+port is an exact name. offset_ms is signed -1000..1000 milliseconds. Positive offsets delay. Outputs reset_on_stop defaults true. Applying settings releases disabled/changed output routes; inputs retain the existing channel input mechanism. Returns the updated ports list.
+
+Kind: `action`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `port` | string |  |  |  |  |
+| `enabled` | boolean |  |  |  |  |
+| `offset_ms` | number |  | -1000.0..1000.0 |  |  |
+| `reset_on_stop` | boolean |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
+
+**Disable an absent port** (`empty`)
+
+```json
+{
+  "port": "Test port",
+  "enabled": false
+}
+
+```
+
+Result:
+
+```json
+{
+  "ports": "<any>"
 }
 
 ```
@@ -13048,7 +13229,7 @@ Result:
 
 Send audio between strips, or MIDI between channels and rack modules.
 
-The destination must not feed the source. Master accepts routes. With fx instead of to, the send feeds that plug-in's sidechain (key) input — e.g. a kick keying a compressor on the bass; it is delay-compensated, and soloing the keyed track does not stop the key. MIDI sends use channel or Note Out sources and channel or Notes destinations, midi: {} (all channels unchanged); from_channel filters and to_channel remaps, 0..16 with 0 meaning all/original. Hardware routing is not supported yet.
+The destination must not feed the source. Master accepts routes. With fx instead of to, the send feeds that plug-in's sidechain (key) input — e.g. a kick keying a compressor on the bass; it is delay-compensated, and soloing the keyed track does not stop the key. MIDI sends use channel or Note Out sources and channel or Notes destinations, midi: {} (all channels unchanged); from_channel filters and to_channel remaps, 0..16 with 0 meaning all/original. to_midi selects a hardware MIDI output by exact name instead of to. Missing outputs warn while audio keeps playing.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -13058,6 +13239,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | --- | --- | --- | --- | --- | --- |
 | `from` | value |  |  |  |  |
 | `to` | value |  |  |  |  |
+| `to_midi` | string |  |  |  | Exact hardware MIDI output name; requires midi: {} and replaces to/fx. |
 | `midi` | object |  |  |  | MIDI send routing; {} means every channel unchanged. Channel values 0..16: from 0 = all, to 0 = original. |
 | `fx` | string |  |  |  | Feed this plug-in's sidechain (key) input instead of a track's input; `to` may be left out |
 | `tap` | string |  |  |  |  |
@@ -13475,6 +13657,12 @@ Kind: `query`. Exposure: `mcp-tool`.
               }
             },
             "additionalProperties": false
+          },
+          "from_midi": {
+            "type": "string"
+          },
+          "to_midi": {
+            "type": "string"
           }
         },
         "required": [
@@ -13528,7 +13716,7 @@ Result:
 
 Read audio or MIDI endpoints, existing sends and blocked pairs.
 
-mode: audio (default) or midi. MIDI sources are channels and Note Out; destinations are channels and Notes, with no audio controls. Audio sources: strips in tree order (depth, parent, parent_send). destinations: strips (kind track), plug-in keys (kind key: fx with a sidechain input) and racks' In modules (kind module: mo_N, named "<rack> » <In>", with rack and home track), each strip's keys and In modules after it. A pair is blocked when the source's rule applies (masters feed only keys), the destination's rule applies (channels take only hardware audio), it is the same strip, or it is listed in cycles (the destination already feeds the source; for an In module, its rack's Outs reach the source; path names its ids, names the same by name). sends: existing routes per pair (to: a strip, an fx or an In module). Otherwise route.add accepts the pair (an In module: route.add {from, to: mo_N}). A source's channels past 2 are auxiliary (ADR-0020); channel_names names those a multi-out plug-in writes ({"3": "Kick"}), and route.add {channels: {from: [3, 4], to: [1, 2]}} sends that pair.
+mode: audio (default), midi or hardware_midi (channels/Note Out and hardware inputs to channels/hardware outputs). MIDI sources are channels and Note Out; destinations are channels and Notes, with no audio controls. Audio sources: strips in tree order (depth, parent, parent_send). destinations: strips (kind track), plug-in keys (kind key: fx with a sidechain input) and racks' In modules (kind module: mo_N, named "<rack> » <In>", with rack and home track), each strip's keys and In modules after it. A pair is blocked when the source's rule applies (masters feed only keys), the destination's rule applies (channels take only hardware audio), it is the same strip, or it is listed in cycles (the destination already feeds the source; for an In module, its rack's Outs reach the source; path names its ids, names the same by name). sends: existing routes per pair (to: a strip, an fx or an In module). Otherwise route.add accepts the pair (an In module: route.add {from, to: mo_N}). A source's channels past 2 are auxiliary (ADR-0020); channel_names names those a multi-out plug-in writes ({"3": "Kick"}), and route.add {channels: {from: [3, 4], to: [1, 2]}} sends that pair.
 
 Kind: `query`. Exposure: `mcp-tool`.
 
@@ -13632,6 +13820,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | `route` | string |  |  |  |  |
 | `from` | value |  |  |  |  |
 | `to` | value |  |  |  |  |
+| `to_midi` | string |  |  |  | Exact hardware MIDI output name; requires midi: {} and replaces to/fx. |
 | `midi` | object |  |  |  | MIDI send routing; {} means every channel unchanged. Channel values 0..16: from 0 = all, to 0 = original. |
 | `fx` | string |  |  |  | Feed this plug-in's sidechain (key) input instead of a track's input; `to` may be left out |
 | `tap` | string |  |  |  |  |

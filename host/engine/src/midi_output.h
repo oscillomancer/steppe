@@ -21,7 +21,7 @@ class MidiSink {
     virtual ~MidiSink() = default;
     // Called before the sender/audio threads. Best effort per destination.
     virtual Status start() = 0;
-    virtual void stop() = 0;  // after sender joined; cancel pending OS messages
+    virtual void stop() = 0;  // after sender joined; release the owned port/client
     std::vector<std::string> names;
     std::vector<MidiInputWarning> warnings;
     std::vector<double> latencySeconds;  // unknown: zero; fixed while running
@@ -46,11 +46,19 @@ class MidiOutputSender {
     // A deterministic sender step for fake clocks (same path as run()).
     double dispatch();
     std::uint64_t dropped() const { return dropped_.load(std::memory_order_relaxed); }
+    std::uint64_t dropped(std::size_t port) const {
+        return port < portDrops_.size() ? portDrops_[port].load(std::memory_order_relaxed) : 0;
+    }
 
   private:
     MidiSink& sink_;
     std::array<SpscRing<TimedMidiOutput, kMidiOutputQueueSize>, kMidiOutputPorts> queues_;
     std::array<double, kMidiOutputPorts> lastDue_{};  // producer only
+    void drop(std::size_t port) {
+        dropped_.fetch_add(1, std::memory_order_relaxed);
+        if (port < portDrops_.size()) portDrops_[port].fetch_add(1, std::memory_order_relaxed);
+    }
+    std::array<std::atomic<std::uint64_t>, kMidiOutputPorts> portDrops_{};
     std::atomic<std::uint64_t> dropped_{0};
     std::atomic<bool> quit_{false};
     std::thread thread_;
