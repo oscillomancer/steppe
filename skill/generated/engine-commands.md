@@ -8726,7 +8726,7 @@ Result:
 
 Hardware MIDI inputs, timing, settings, loss and startup warnings.
 
-ports contains name, zero-based index (-1 absent), enabled, offset_ms, latency_ms, dropped and structured warnings. Outputs also have reset_on_stop and lead_ms, the shared added audio/monitoring latency. Settings are machine preferences keyed by exact port name; they are not project state.
+ports contains name, zero-based index (-1 absent), enabled, offset_ms, latency_ms, dropped and structured warnings. Outputs also have reset_on_stop. Output lead_ms is the shared lead added to all audio, including monitoring. Settings are machine preferences keyed by exact port name; they are not project state.
 
 Kind: `query`. Exposure: `mcp-tool`.
 
@@ -8854,7 +8854,7 @@ Result:
 
 Hardware MIDI outputs, timing, settings, loss and startup warnings.
 
-ports contains name, zero-based index (-1 absent), enabled, offset_ms, latency_ms, dropped and structured warnings. Outputs also have reset_on_stop and lead_ms, the shared added audio/monitoring latency. Settings are machine preferences keyed by exact port name; they are not project state.
+ports contains name, zero-based index (-1 absent), enabled, offset_ms, latency_ms, dropped and structured warnings. Outputs also have reset_on_stop. Output lead_ms is the shared lead added to all audio, including monitoring. Settings are machine preferences keyed by exact port name; they are not project state.
 
 Kind: `query`. Exposure: `mcp-tool`.
 

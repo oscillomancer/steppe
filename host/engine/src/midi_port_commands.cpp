@@ -232,8 +232,8 @@ void registerMidiPortCommands(cmd::Registry& registry) {
                              : "Hardware MIDI inputs, timing, settings, loss and startup warnings.";
         get.description =
             "ports contains name, zero-based index (-1 absent), enabled, offset_ms, latency_ms, "
-            "dropped and structured warnings. Outputs also have reset_on_stop and lead_ms, the "
-            "shared added audio/monitoring latency. Settings are "
+            "dropped and structured warnings. Outputs also have reset_on_stop. Output lead_ms "
+            "is the shared lead added to all audio, including monitoring. Settings are "
             "machine preferences keyed by exact port name; they are not project state.";
         get.tags = {"midi", "engine"};
         get.args = schema::object<cmd::NoArgs>("no_args").build();
