@@ -146,7 +146,7 @@ std::shared_ptr<const ModuleType> notesOutType() {
     static const auto t = ModuleType::host(
         info(kNotesOut, "Note Out", "Poly pitch and gates play another track's instrument.",
              {"io", "midi", "poly"}),
-        {param("channel", "Channel", Kind::Integer, 1, 16, 1, Unit::None,
+        {param("channel", "MIDI channel", Kind::Integer, 1, 16, 1, Unit::None,
                "The MIDI channel of new notes, 1 to 16.")},
         {port("pitch", "Pitch", Signal::Pitch, false,
               "Each voice's pitch: 0 is C4, 1 per octave. A mono pitch serves every voice."),
@@ -312,7 +312,9 @@ void Notes::prepare(Instance& instance) {
     bend_ = modwheel_ = channelPressure_ = 0;
     sustain_ = endAll_ = endLive_ = false;
     bendLive_ = modwheelLive_ = pressureLive_ = sustainLive_ = false;
-    keyLive_ = {};
+    lastMode_ = 0;
+    trackSource_ = 0;
+    endTrack_ = false;
     rotate_ = 0;
     triggerFrames_ =
         std::max(1, static_cast<int>(std::lround(instance.setup().sampleRate * 0.001)));
@@ -323,33 +325,37 @@ void Notes::release(Voice& v) {
     v.held = false;
 }
 
-void Notes::on(int key, double velocity, int voices, int mode, bool live) {
-    keyVelocity_[static_cast<std::size_t>(key)] = velocity;
-    keyLive_[static_cast<std::size_t>(key)] = live;
-    if (mode >= 3) {  // mono: the stack of keys held
-        for (int i = 0; i < stacked_; ++i)
-            if (stack_[static_cast<std::size_t>(i)] == key) {
+void Notes::on(int key, double velocity, int voices, int mode, bool live, std::uint64_t source,
+               int noteId) {
+    if (mode >= 3) {
+        for (int i = 0; i < stacked_; ++i) {
+            const auto& held = stack_[static_cast<std::size_t>(i)];
+            if (held.key == key && held.source == source && held.noteId == noteId) {
                 std::copy(stack_.begin() + i + 1, stack_.begin() + stacked_, stack_.begin() + i);
                 --stacked_;
                 break;
             }
-        if (stacked_ < 128) stack_[static_cast<std::size_t>(stacked_++)] = key;
-        int chosen = key;
-        if (mode == 4)
-            for (int i = 0; i < stacked_; ++i)
-                chosen = std::min(chosen, stack_[static_cast<std::size_t>(i)]);
-        if (mode == 5)
-            for (int i = 0; i < stacked_; ++i)
-                chosen = std::max(chosen, stack_[static_cast<std::size_t>(i)]);
+        }
+        if (stacked_ == static_cast<int>(stack_.size())) return;
+        Voice held;
+        held.key = key;
+        held.velocity = velocity;
+        held.live = live;
+        held.source = source;
+        held.noteId = noteId;
+        stack_[static_cast<std::size_t>(stacked_++)] = held;
+        const auto& chosen = stack_[static_cast<std::size_t>(monoChoice(mode))];
         Voice& v = voice_[0];
-        if (chosen != v.key || !(v.held || v.sustained)) {
+        if (chosen.key != v.key || !(v.held || v.sustained)) {
             const bool legato = v.held || v.sustained;
-            v.key = chosen;
-            v.velocity = keyVelocity_[static_cast<std::size_t>(chosen)];
+            v.key = chosen.key;
+            v.velocity = chosen.velocity;
             v.trigger = triggerFrames_;
             if (!legato) v.pressure = 0;
         }
-        v.live = keyLive_[static_cast<std::size_t>(v.key)];
+        v.live = chosen.live;
+        v.source = chosen.source;
+        v.noteId = chosen.noteId;
         v.held = true;
         v.sustained = false;
         v.age = ++clock_;
@@ -358,7 +364,9 @@ void Notes::on(int key, double velocity, int voices, int mode, bool live) {
     int chosen = -1;
     if (mode == 1)  // reuse: the voice that played this key
         for (int c = 0; c < voices; ++c)
-            if (voice_[static_cast<std::size_t>(c)].key == key) chosen = c;
+            if (const auto& v = voice_[static_cast<std::size_t>(c)];
+                v.key == key && (!v.held || (v.source == source && v.noteId == noteId)))
+                chosen = c;
     if (chosen < 0) {
         const int start = mode == 0 ? rotate_ % voices : 0;
         for (int k = 0; k < voices && chosen < 0; ++k) {
@@ -379,6 +387,8 @@ void Notes::on(int key, double velocity, int voices, int mode, bool live) {
     Voice& v = voice_[static_cast<std::size_t>(chosen)];
     if (v.held || v.sustained) v.gap = 1;  // retaken: the gate drops for a frame
     v.key = key;
+    v.source = source;
+    v.noteId = noteId;
     v.held = true;
     v.sustained = false;
     v.live = live;
@@ -388,41 +398,43 @@ void Notes::on(int key, double velocity, int voices, int mode, bool live) {
     v.trigger = triggerFrames_;
 }
 
-void Notes::off(int key, int mode) {
+void Notes::off(int key, int mode, std::uint64_t source, int noteId) {
     if (mode >= 3) {
-        for (int i = 0; i < stacked_; ++i)
-            if (stack_[static_cast<std::size_t>(i)] == key) {
+        bool found = false;
+        for (int i = 0; i < stacked_; ++i) {
+            const auto& held = stack_[static_cast<std::size_t>(i)];
+            if (held.key == key && held.source == source && (noteId < 0 || held.noteId == noteId)) {
                 std::copy(stack_.begin() + i + 1, stack_.begin() + stacked_, stack_.begin() + i);
                 --stacked_;
+                found = true;
                 break;
             }
+        }
+        if (!found) return;
         Voice& v = voice_[0];
         if (stacked_ == 0) {
-            if (v.key == key) release(v);
+            release(v);
             return;
         }
-        int chosen = stack_[static_cast<std::size_t>(stacked_ - 1)];
-        if (mode == 4)
-            for (int i = 0; i < stacked_; ++i)
-                chosen = std::min(chosen, stack_[static_cast<std::size_t>(i)]);
-        if (mode == 5)
-            for (int i = 0; i < stacked_; ++i)
-                chosen = std::max(chosen, stack_[static_cast<std::size_t>(i)]);
-        v.key = chosen;  // legato back to a key still held
-        v.live = keyLive_[static_cast<std::size_t>(chosen)];
+        const auto& chosen = stack_[static_cast<std::size_t>(monoChoice(mode))];
+        v.key = chosen.key;
+        v.live = chosen.live;
+        v.source = chosen.source;
+        v.noteId = chosen.noteId;
         return;
     }
     for (Voice& v : voice_)
-        if (v.key == key && v.held) release(v);
+        if (v.key == key && v.held && v.source == source && (noteId < 0 || v.noteId == noteId))
+            release(v);
 }
 
 void Notes::handle(const MidiEvent& e, int voices, int mode) {
     const int type = e.status & 0xF0;
     const int key = e.data1 & 0x7F;
     if (type == 0x90 && e.data2 > 0) {
-        on(key, (e.data2 & 0x7F) / 127.0, voices, mode, e.live);
+        on(key, (e.data2 & 0x7F) / 127.0, voices, mode, e.live, e.source, e.noteId);
     } else if (type == 0x80 || type == 0x90) {
-        off(key, mode);
+        off(key, mode, e.source, e.noteId);
     } else if (type == 0xA0) {
         for (Voice& v : voice_)
             if (v.key == key && (v.held || v.sustained)) v.pressure = (e.data2 & 0x7F) / 127.0;
@@ -462,11 +474,9 @@ void Notes::releaseLive(int mode) {
     bendLive_ = modwheelLive_ = pressureLive_ = sustainLive_ = false;
     if (mode >= 3) {
         int kept = 0;
-        for (int i = 0; i < stacked_; ++i) {
-            const int key = stack_[static_cast<std::size_t>(i)];
-            if (!keyLive_[static_cast<std::size_t>(key)])
-                stack_[static_cast<std::size_t>(kept++)] = key;
-        }
+        for (int i = 0; i < stacked_; ++i)
+            if (!stack_[static_cast<std::size_t>(i)].live)
+                stack_[static_cast<std::size_t>(kept++)] = stack_[static_cast<std::size_t>(i)];
         stacked_ = kept;
         Voice& v = voice_[0];
         if (!v.live) return;
@@ -474,25 +484,65 @@ void Notes::releaseLive(int mode) {
             v.held = v.sustained = v.live = false;
             return;
         }
-        int chosen = stack_[static_cast<std::size_t>(stacked_ - 1)];
-        if (mode == 4)
-            for (int i = 0; i < stacked_; ++i)
-                chosen = std::min(chosen, stack_[static_cast<std::size_t>(i)]);
-        if (mode == 5)
-            for (int i = 0; i < stacked_; ++i)
-                chosen = std::max(chosen, stack_[static_cast<std::size_t>(i)]);
-        v.key = chosen;  // legato back to the timeline's key
-        v.live = false;
+        const auto& chosen = stack_[static_cast<std::size_t>(monoChoice(mode))];
+        v.key = chosen.key;
+        v.live = chosen.live;
+        v.source = chosen.source;
+        v.noteId = chosen.noteId;
         return;
     }
     for (Voice& v : voice_)
         if (v.live) v.held = v.sustained = v.live = false;
 }
 
+int Notes::monoChoice(int mode) const SUPPLE_RT {
+    int chosen = stacked_ - 1;
+    for (int i = 0; i < stacked_; ++i) {
+        const int key = stack_[static_cast<std::size_t>(i)].key;
+        const int current = stack_[static_cast<std::size_t>(chosen)].key;
+        if ((mode == 4 && key <= current) || (mode == 5 && key >= current)) chosen = i;
+    }
+    return chosen;
+}
+void Notes::endSource(std::uint64_t source) SUPPLE_RT { retainSource(source, {}); }
+void Notes::retainSource(std::uint64_t source, std::span<const int> notes) SUPPLE_RT {
+    prune(source, notes, {});
+}
+void Notes::retainRoutes(std::span<const std::uint64_t> routes) SUPPLE_RT {
+    prune(UINT64_MAX, {}, routes);
+}
+void Notes::prune(std::uint64_t source, std::span<const int> notes,
+                  std::span<const std::uint64_t> routes) SUPPLE_RT {
+    const auto keep = [&](const Voice& voice) {
+        if (source == UINT64_MAX)
+            return voice.source < 2 ||
+                   std::find(routes.begin(), routes.end(), voice.source) != routes.end();
+        return voice.source != source ||
+               std::find(notes.begin(), notes.end(), voice.noteId) != notes.end();
+    };
+    const bool replace = !keep(voice_[0]);
+    int kept = 0;
+    for (int i = 0; i < stacked_; ++i)
+        if (keep(stack_[static_cast<std::size_t>(i)]))
+            stack_[static_cast<std::size_t>(kept++)] = stack_[static_cast<std::size_t>(i)];
+    stacked_ = kept;
+    for (auto& voice : voice_)
+        if (!keep(voice)) voice.held = voice.sustained = false;
+    if (lastMode_ >= 3 && stacked_ && replace) {
+        const auto& chosen = stack_[static_cast<std::size_t>(monoChoice(lastMode_))];
+        voice_[0].key = chosen.key;
+        voice_[0].source = chosen.source;
+        voice_[0].noteId = chosen.noteId;
+        voice_[0].live = chosen.live;
+        voice_[0].held = true;
+    }
+}
+
 void Notes::process(const HostContext& ctx) SUPPLE_RT {
     Instance& in = *ctx.instance;
     const int voices = std::clamp(in.paramMember(0).index(), 1, kChannels);
     const int mode = std::clamp(in.paramMember(1).index(), 0, 5);
+    lastMode_ = mode;
     const double range = in.paramMember(2).value();
     const int poly = mode >= 3 ? 1 : voices;
     script::Output& pitch = in.outputMember(0);
@@ -510,6 +560,10 @@ void Notes::process(const HostContext& ctx) SUPPLE_RT {
     while (next < events_.size() && events_[next].frame < static_cast<std::uint32_t>(ctx.offset))
         ++next;
     for (int i = 0; i < ctx.frames; ++i) {
+        if (endTrack_) {
+            endSource(0);
+            endTrack_ = false;
+        }
         if (endAll_) {
             for (Voice& v : voice_) v.held = v.sustained = false;
             stacked_ = 0;

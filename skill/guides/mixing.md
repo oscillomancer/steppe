@@ -35,6 +35,13 @@ Group a change and its render in one `batch`: one undo step, atomic.
 
 Use `route.add {"from":"tr_1","to":"tr_2","tap":"post_fader","volume_db":"-6 dB"}` to feed a bus track; place bus processing in that track's FX chain and use `route.list` to inspect sends. `route.set` changes a send's level, pan, tap, endpoints, or mute; `route.remove` deletes it. The destination must not feed the source, including through folder parent sends. The `channels` argument maps one-based source channels to destination channels, for example `{"from":[3,4],"to":[1,2]}`. Hardware endpoints are not available through these commands yet.
 
+For MIDI, use `route.add {"from":"tr_1","to":"tr_2","midi":{}}`.
+Channel or Note Out sources feed channels or Notes modules; busses and masters
+are audio-only. MIDI sends have tap, mute and from/to-channel mapping, with
+mute-only MIDI learn. `route.matrix {"mode":"midi"}` lists their endpoints.
+The default post-fader tap follows source mute; pre-FX and pre-fader (post-FX)
+do not. Audio and MIDI routes between the same endpoints stay independent.
+
 To sidechain, route into the plugin's key: `route.add {"from":"tr_1","fx":"fx_3","tap":"post_fader"}` (tr_1 is the kick track and fx_3 is the compressor on the bass track; `fx.describe` shows `sidechain_channels` when a plugin has a key input, otherwise the route fails with `route.no_sidechain`). The key is delay-compensated, follows the source's mute at a post-fader tap, and keeps sounding when another track is soloed.
 
 Use `plugin.list` to find a plugin id for `fx.add`; the returned `fx` (also shown by `session.describe`) identifies the loaded instance. Use `plugin.scan` to refresh the catalogue, `fx.move` to reorder a chain, `fx.patch.get/set` for a semantic patch, and `fx.param.get` for one value. For arrangement edits, `item.set/split/duplicate` and `take.list/add/set/activate` change clips and takes; `marker.*` and `region.*` label the timeline, while `time.convert` maps seconds, beats, and bars.

@@ -182,6 +182,9 @@ Result<std::vector<Id>> topoOrder(const Session& s) {
         if (r.to.module)
             if (const model::RackModule* m = s.modules.find(*r.to.module)) to = m->rack;
         if (from && to) link(*from, *to);
+        if (from && r.midi && r.to.track)
+            for (Id module : model::midiFollowers(s, *r.to.track, from))
+                link(*from, s.modules.find(module)->rack);
     }
     std::set<Id> ready;
     for (const auto& [id, d] : indeg)
@@ -478,6 +481,50 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
     }
     for (const auto& e : s.routes) {
         const model::Route& r = *e.value;
+        if (r.midi && !r.from.midiDevice) {
+            std::vector<Id> destinations;
+            if (r.to.module) destinations.push_back(*r.to.module);
+            if (r.to.track) {
+                destinations.push_back(*r.to.track);
+                const auto* sourceModule = r.from.module ? s.modules.find(*r.from.module) : nullptr;
+                const auto followers = model::midiFollowers(
+                    s, *r.to.track,
+                    sourceModule ? std::optional<Id>(sourceModule->rack) : r.from.track);
+                destinations.insert(destinations.end(), followers.begin(), followers.end());
+            }
+            for (Id destination : destinations) {
+                std::optional<Id> from = r.from.track, to = destination;
+                if (r.from.module) from = s.modules.find(*r.from.module)->rack;
+                if (destination.kind == model::Kind::Module) to = s.modules.find(destination)->rack;
+                if (!from || !to || !index.count(*from) || !index.count(*to)) continue;
+                Edge ed;
+                ed.midi = true;
+                ed.from = index.at(*from);
+                ed.route = e.id;
+                ed.tap = r.tap;
+                ed.midiFrom = r.midi->fromChannel;
+                ed.midiTo = r.midi->toChannel;
+                ed.muted = r.mute;
+                if (r.from.module) {
+                    const auto& outs = p.nodes[ed.from].rack->notesOut;
+                    const auto at = std::find_if(outs.begin(), outs.end(), [&](const auto& x) {
+                        return x.id == *r.from.module;
+                    });
+                    if (at == outs.end()) continue;
+                    ed.rackNotes = static_cast<int>(at - outs.begin());
+                }
+                if (destination.kind == model::Kind::Module) {
+                    const auto& feeds = p.nodes[index.at(*to)].rack->notes;
+                    const auto at = std::find_if(feeds.begin(), feeds.end(), [&](const auto& x) {
+                        return x.id == destination;
+                    });
+                    if (at == feeds.end()) continue;
+                    ed.midiNotes = static_cast<int>(at - feeds.begin());
+                }
+                pending.push_back({ed.from, index.at(*to), std::move(ed), 1 + e.id.n});
+            }
+            continue;
+        }
         // Racks (ADR-0062): an Out module into its channel, unity; a send
         // into an In module, at the route's tap, level and pan.
         if (r.from.module && r.to.track) {
@@ -485,22 +532,6 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
             if (!m || !index.count(m->rack) || !index.count(*r.to.track)) continue;
             const Node& rack = p.nodes[index.at(m->rack)];
             if (!rack.rack) continue;
-            if (r.midi && m->type == model::kNotesOutModule) {
-                const auto& outputs = rack.rack->notesOut;
-                const auto found =
-                    std::find_if(outputs.begin(), outputs.end(),
-                                 [&](const auto& out) { return out.id == *r.from.module; });
-                if (found == outputs.end()) continue;
-                Edge ed;
-                ed.from = index.at(m->rack);
-                ed.route = e.id;
-                ed.rackNotes = static_cast<int>(found - outputs.begin());
-                ed.midiFrom = r.midi->fromChannel;
-                ed.midiTo = r.midi->toChannel;
-                ed.muted = r.mute;
-                pending.push_back({ed.from, index.at(*r.to.track), std::move(ed), 1 + e.id.n});
-                continue;
-            }
             const auto& outs = rack.rack->outIds;
             const auto at = std::find(outs.begin(), outs.end(), *r.from.module);
             if (at == outs.end()) continue;  // a missing Out (its type is not known)
@@ -612,10 +643,14 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
                     down[e.id].push_back(*e.value->parent);
                     up[*e.value->parent].push_back(e.id);
                 }
+            // A MIDI send floods down only: soloing its source keeps what
+            // it plays audible; soloing the destination does not bring back
+            // the source's own sound, since MIDI sends ignore solo
+            // (ADR-0067; model::effectiveTrackLevel agrees).
             for (const auto& e : s.routes)
                 if (e.value->from.track && e.value->to.track) {
                     down[*e.value->from.track].push_back(*e.value->to.track);
-                    up[*e.value->to.track].push_back(*e.value->from.track);
+                    if (!e.value->midi) up[*e.value->to.track].push_back(*e.value->from.track);
                 }
             std::set<Id> audible = soloed;
             auto flood = [&](std::map<Id, std::vector<Id>>& g) {
@@ -673,11 +708,14 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
                                                               : nullptr;
         } else if (o.kind == Kind::Route) {
             for (Edge& ed : p.edges)
-                if (ed.route == o)
-                    slot = param == "volume" ? &ed.autoVolume
-                           : param == "pan"  ? &ed.autoPan
-                           : param == "mute" ? &ed.autoMute
-                                             : nullptr;
+                if (ed.route == o) {
+                    Automation* curve = param == "volume" ? &ed.autoVolume
+                                        : param == "pan"  ? &ed.autoPan
+                                        : param == "mute" ? &ed.autoMute
+                                                          : nullptr;
+                    if (curve) *curve = a;
+                }
+            continue;
         } else if (o.kind == Kind::Take) {
             // Positions are item-relative beats: they move with the item.
             for (Node& n : p.nodes)
@@ -752,7 +790,7 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         // Keep source and destination together even with monitoring off.
         if (t.record.armed && (t.record.mode == model::RecordMode::MidiOverdub ||
                                t.record.mode == model::RecordMode::MidiReplace))
-            for (std::size_t edge : n.in) n.live = n.live || p.edges[edge].rackNotes >= 0;
+            for (std::size_t edge : n.in) n.live = n.live || p.edges[edge].midi;
         for (std::size_t e : n.in) n.live = n.live || p.nodes[p.edges[e].from].live;
         if (!n.live && keepLive && std::binary_search(keepLive->begin(), keepLive->end(), n.id))
             n.live = p.heldLive = true;
@@ -773,7 +811,7 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         for (bool changed = true; changed;) {
             changed = false;
             for (const Edge& e : p.edges)
-                if ((!e.auxLinks.empty() || e.rackNotes >= 0) && !p.nodes[e.from].live) {
+                if ((!e.auxLinks.empty() || e.midi) && !p.nodes[e.from].live) {
                     const auto to = static_cast<std::size_t>(
                         std::find_if(p.nodes.begin(), p.nodes.end(),
                                      [&](const Node& n) {
@@ -839,8 +877,23 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
             e.stripPanBoost = p.nodes[e.from].autoPanBoost;
             continue;
         }
-        if (e.auxOnly) continue;                           // nothing reaches the main pair
-        if (e.rackOut >= 0 || e.rackNotes >= 0) continue;  // a rack's Out: its audio as is
+        if (e.auxOnly) continue;  // nothing reaches the main pair
+        if (e.midi) {
+            e.stripMute = p.nodes[e.from].autoMute;
+            if (e.tap == model::Tap::PostFader) {
+                e.vcas = p.nodes[e.from].vcas;
+                for (auto& vca : e.vcas.values) {
+                    vca.volume.points.clear();  // MIDI follows mute, never audio gain
+                    vca.volumeDb = 0;
+                    controlPoints += vca.gate.points.size();
+                }
+                if (controlPoints > 1000000)
+                    return Error("automation.budget", "MIDI sends exceed the VCA curve budget",
+                                 "/groups", "reduce VCA mute automation or MIDI fan-out");
+            }
+            continue;
+        }
+        if (e.rackOut >= 0) continue;  // a rack's Out: its audio as is
         e.encode = e.rackIn >= 0 || e.tap != model::Tap::PostFader || e.volumeDb != 0 ||
                    !e.followPan || e.mono || e.invert || e.mapped || e.muted ||
                    e.autoVolume.active() || e.autoPan.active() || e.autoMute.active();
@@ -1377,10 +1430,20 @@ Status prepare(Plan& p, const Session& s) {
                 st.blockEvents.reserve(need);
             }
         }
-        n.events = trackEvents(s, n.id, p.startSeconds, p.rate, [&](Id item) {
-            return std::find(ownInstrument.begin(), ownInstrument.end(), item) ==
-                   ownInstrument.end();
-        });
+        n.events = trackEvents(s, n.id, p.startSeconds, p.rate);
+        // Sends hear every MIDI item, including takes with instruments. Those
+        // takes still play only their own instruments on this strip.
+        for (auto& timed : n.events) {
+            const bool own = std::any_of(ownInstrument.begin(), ownInstrument.end(),
+                                         [&](Id id) { return id.n == timed.origin.item; });
+            if (!own) continue;
+            if (timed.event.noteId >= 0) {
+                const auto id = static_cast<std::size_t>(timed.event.noteId);
+                if (n.midiTakeSources.size() <= id) n.midiTakeSources.resize(id + 1);
+                n.midiTakeSources[id] = true;
+            } else
+                timed.event.noteId = -2;  // local take controller; sends still carry it
+        }
         for (auto& ev : n.events) ev.sample += n.timelineShift;
         // Reserve the most events any block-long window holds (events are
         // sorted; after a seek, blocks start anywhere), so processBlock never
@@ -1417,13 +1480,14 @@ Status prepare(Plan& p, const Session& s) {
             st.blockEvents.reserve(windowMax + 1 + lanes + notes + live);
         }
     }
-    SUPPLE_TRY(prepareRackMidi(p));
-    for (Node& node : p.nodes)
-        forEachStage(node, [](Stage& st) { st.sourceIds.reserve(st.blockEvents.capacity()); });
     // Immutable musical origins let adoption rebind compiled ids after a
     // MIDI edit or time-map change. Build the lookup here, never scan a model on audio.
     auto sources = [](Stage& st, const std::vector<TimedEvent>& events) {
         std::map<decltype(NoteSource{}.addressWithoutOrdinal()), std::uint32_t> counts;
+        for (const auto& timed : events)
+            if (timed.event.noteId >= 0 &&
+                st.noteSources.size() <= static_cast<std::size_t>(timed.event.noteId))
+                st.noteSources.resize(static_cast<std::size_t>(timed.event.noteId) + 1);
         for (const auto& timed : events) {
             const auto& event = timed.event;
             if (event.kind != host::Event::Kind::NoteOn || event.noteId < 0) continue;
@@ -1449,12 +1513,16 @@ Status prepare(Plan& p, const Session& s) {
                   [](const auto& a, const auto& b) { return a.address() < b.address(); });
     };
     for (Node& node : p.nodes) {
+        sources(node.midiStage, node.events);
         if (node.noteTarget >= 0)
             sources(node.chain[static_cast<std::size_t>(node.noteTarget)], node.events);
         for (TakeChain& tc : node.takeChains)
             if (tc.noteTarget >= 0)
                 sources(tc.chain[static_cast<std::size_t>(tc.noteTarget)], tc.events);
     }
+    SUPPLE_TRY(prepareRackMidi(p));
+    for (Node& node : p.nodes)
+        forEachStage(node, [](Stage& st) { st.sourceIds.reserve(st.blockEvents.capacity()); });
     // The node graph for the worker pool: a node waits for its edges' sources.
     std::vector<std::vector<std::uint32_t>> deps(p.nodes.size());
     for (std::size_t i = 0; i < p.nodes.size(); ++i)
@@ -1629,7 +1697,7 @@ Status checkStrips(const Plan& p) {
                              "session.describe, including the affected routes from route.list");
             // Racks (ADR-0062): an Out module's audio enters its channel as is;
             // a send into an In module is linear, through its own encoder.
-            if (e.rackNotes >= 0) continue;
+            if (e.midi) continue;
             if (e.rackOut >= 0 || e.rackIn >= 0) {
                 if ((e.rackOut >= 0) == e.encode || (e.rackIn >= 0) != bool(n.rack) ||
                     (e.rackOut >= 0 && !p.nodes[e.from].rack))
@@ -1687,7 +1755,7 @@ bool runStage(Plan& p, Stage& st, Stereo& sum, std::uint32_t n, const host::Tran
 void automateStage(Stage& st, std::int64_t pos, std::uint32_t n, std::int64_t origin) SUPPLE_RT;
 // Audio edges carry only the encoded signal and PDC; key controls are conventional.
 void addEdge(Plan& p, Edge& e, Stereo& into, std::int64_t pos, std::uint32_t n) SUPPLE_RT {
-    if (e.rackNotes >= 0) return;
+    if (e.midi) return;
     const Stereo& tap = p.split && e.frontier ? e.frontierBuf : edgeSignal(p, e);
     e.tmp.copyFrom(tap, n);
     e.delay.process(e.tmp.l.data(), e.tmp.r.data(), n);
@@ -1954,14 +2022,10 @@ void trackVoices(Stage& st, std::array<std::uint8_t, 16 * 128>& held,
                                     liveHeld && event.noteId == -1};
                     voice.sourceId = sourceIndex < st.sourceIds.size() ? st.sourceIds[sourceIndex]
                                                                        : event.noteId;
-                    if (st.rackMidiBase >= 0 && voice.sourceId >= st.rackMidiBase &&
-                        static_cast<std::size_t>(voice.sourceId - st.rackMidiBase) <
-                            st.rackNoteSources.size()) {
-                        const auto& source = st.rackNoteSources[static_cast<std::size_t>(
-                            voice.sourceId - st.rackMidiBase)];
+                    if (st.rackMidiBase >= 0 && voice.sourceId >= st.rackMidiBase) {
+                        // A routed note: its slot is its identity (carryRackMidi).
                         voice.live = true;
-                        voice.origin = {kRackNoteOrigin, source.route.n, source.module.n,
-                                        source.voice, 0};
+                        voice.origin = {kRackNoteOrigin, 0, 0, 0, 0};
                     } else if (voice.sourceId >= 0 &&
                                static_cast<std::size_t>(voice.sourceId) < st.noteSources.size()) {
                         const auto& source =
@@ -2593,6 +2657,26 @@ bool processTake(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std::uint
 
 }  // namespace
 
+void rackTimelineEvents(Plan& p, Node& node, NotesFeed& feed, std::int64_t pos,
+                        std::uint32_t frames) SUPPLE_RT {
+    auto& stage = feed.midiStage;
+    stage.blockEvents.clear();
+    rateEvents(p, node.live, feed.events, stage, pos, frames, node.timelineShift, feed.rateFresh);
+    for (const auto& event : stage.blockEvents) {
+        if (event.kind == host::Event::Kind::NoteOn &&
+            stage.voices.size() < stage.voices.capacity()) {
+            HeldVoice voice;
+            voice.sourceId = event.noteId;
+            voice.channel = event.channel;
+            voice.key = event.key;
+            stage.voices.push_back(voice);
+        } else if (event.kind == host::Event::Kind::NoteOff ||
+                   event.kind == host::Event::Kind::NoteChoke) {
+            std::erase_if(stage.voices, [&](const auto& v) { return v.sourceId == event.noteId; });
+        }
+    }
+}
+
 // One block of every node, in order. Returns false on a plugin error.
 bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
                  const host::Transport& transport, const void* self,
@@ -2714,6 +2798,7 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
     const bool endDevice = node.releaseLive;
     node.releaseLive = false;
     if (node.releaseHeld) {
+        node.midiReleaseTimeline = true;
         node.releaseHeld = false;
         if (node.noteTarget >= 0) {
             const bool routeChanged = std::all_of(node.liveHeld.begin(), node.liveHeld.end(),
@@ -2727,24 +2812,24 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
                       static_cast<std::int64_t>(mappedAt(p, node.live, pos, node.timelineShift)),
                       endDevice);
     }
-    if (p.rateEnabled && transport.playing && node.noteTarget >= 0)
-        rateEvents(p, node.live, node.events, node.chain[static_cast<std::size_t>(node.noteTarget)],
-                   pos, n, node.timelineShift, node.rateEventFresh);
+    beginTrackMidi(node, transport.playing, hearInput && !endDevice);
+    if (p.rateEnabled && transport.playing)
+        rateEvents(p, node.live, node.events, node.midiStage, pos, n, node.timelineShift,
+                   node.rateEventFresh);
     while (!p.rateEnabled && transport.playing && node.nextEvent < node.events.size() &&
            double(node.events[node.nextEvent].sample) <
                mappedAt(p, node.live, pos + n, node.timelineShift)) {
         const TimedEvent& te = node.events[node.nextEvent++];
-        if (node.noteTarget < 0) continue;
         host::Event e = te.event;
         e.time = eventOffset(p, node.live, pos, n, node.timelineShift, te.sample);
-        auto& target = node.chain[static_cast<std::size_t>(node.noteTarget)].blockEvents;
+        auto& target = node.midiStage.blockEvents;
         if (target.size() < target.capacity()) target.push_back(e);  // never allocate here
     }
     // Live MIDI from the device (ADR-0016), playing or not, after timeline MIDI
     // at the same frame; not counted as held (a loop wrap does not cut what
     // the performer holds).
-    if (hearInput && node.midiIn && node.noteTarget >= 0 && !p.deviceMidi.empty()) {
-        auto& target = node.chain[static_cast<std::size_t>(node.noteTarget)].blockEvents;
+    if (hearInput && node.midiIn && !p.deviceMidi.empty()) {
+        auto& target = node.midiStage.blockEvents;
         const std::size_t before = target.size();
         for (const MidiInputEvent& ev : p.deviceMidi) {
             if (ev.frame < p.deviceMidiOffset) continue;
@@ -2777,6 +2862,22 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
                     std::swap(target[j - 1], target[j]);
     }
     addRackMidi(p, node, pos, n, transport.playing);
+    finishTrackMidi(node);
+    if (node.noteTarget >= 0) {
+        // The pre-FX stream plays the note target under its own ids: item
+        // notes' compiled ids, keys by tuple, routed notes past kRoutedNoteBase.
+        auto& target = node.chain[static_cast<std::size_t>(node.noteTarget)];
+        for (std::size_t i = 0; i < node.midiPreFx.size(); ++i) {
+            const auto id = node.midiInstrument[i];
+            if (id == -2 || id == kNotTargetNote) continue;  // a take's own
+            auto event = node.midiPreFx[i];
+            event.noteId = id;
+            if (target.blockEvents.size() < target.blockEvents.capacity())
+                target.blockEvents.push_back(event);
+            else
+                ++target.voiceDropped;
+        }
+    }
     // 2b. Plugin parameter automation (automateStage).
     for (Stage& st : node.chain) automateStage(st, pos, n, time::samplesAt(p.startSeconds, p.rate));
     // 3. The FX chain, in place on `sum`.
@@ -3117,6 +3218,7 @@ void locateNode(Plan& p, Node& n, std::int64_t pos, bool restartConsole) SUPPLE_
     n.nextEvent = static_cast<std::size_t>(it - n.events.begin());
     n.rateEventFresh = restartConsole;
     if (restartConsole) {
+        resetTrackMidi(n);
         n.encoder.reset();
         n.keyEncoder.reset();
         n.keyFader.reset();
@@ -3187,6 +3289,7 @@ void locate(Plan& p, std::int64_t pos, bool restartConsole) SUPPLE_RT {
         n.nextEvent = static_cast<std::size_t>(it - n.events.begin());
         n.rateEventFresh = restartConsole;
         if (restartConsole) {
+            resetTrackMidi(n);
             n.encoder.reset();
             n.keyEncoder.reset();
             n.keyFader.reset();
@@ -3412,24 +3515,9 @@ void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT {
                                 }
                                 auto carried = voice;
                                 if (carried.origin.item == kRackNoteOrigin) {
-                                    const auto oldSource =
-                                        os.rackMidiBase >= 0 &&
-                                                carried.sourceId >= os.rackMidiBase &&
-                                                static_cast<std::size_t>(carried.sourceId -
-                                                                         os.rackMidiBase) <
-                                                    os.rackNoteSources.size()
-                                            ? &os.rackNoteSources[static_cast<std::size_t>(
-                                                  carried.sourceId - os.rackMidiBase)]
-                                            : nullptr;
-                                    const auto found =
-                                        oldSource ? std::find(st.rackNoteSources.begin(),
-                                                              st.rackNoteSources.end(), *oldSource)
-                                                  : st.rackNoteSources.end();
-                                    if (found != st.rackNoteSources.end())
-                                        carried.sourceId =
-                                            st.rackMidiBase +
-                                            static_cast<int>(found - st.rackNoteSources.begin());
-                                    else {
+                                    // A routed note follows its voice slot,
+                                    // remapped after the pool (carryRackMidi).
+                                    if (st.rackMidiBase < 0) {
                                         carried.release = true;
                                         carried.live = false;
                                     }

@@ -66,7 +66,9 @@ Fields equal to their defaults are omitted, as everywhere (session-model §5).
 | `x`, `y` | Its top-left corner in the rack's space, design units (finite, ±1e6). |
 | `params` | Knob values by key in physical units (a percent as 30, a choice by key, a toggle as a bool), as a semantic plugin's patch params. Missing keys are defaults; canonical: only non-defaults are written. |
 | `bypass` | Bypassed: see §4.6. |
-| `source` | Notes modules: the track whose MIDI it plays (unset: the rack's home track; `module.set {source: null}` restores that default). |
+| `source` | Notes modules: the track whose MIDI it plays (unset: the rack's home track; `module.set {source: null}` restores that default; `source: "none"` disables it, serialized as `source_off: true`). |
+| `source_off` | Serialized Notes source-off switch, default false; commands expose it as `source: "none"`. |
+| `source_sends` | Notes modules: whether it hears the MIDI sends into its source track, default true (omitted). Files older than 2.10 load with false on each Notes module whose source track receives a MIDI route (ADR-0067). `module.set {source_sends}`. |
 | `device` | Notes modules: a live MIDI input it always plays, armed or not, matched as a MIDI route's device (a case-insensitive substring; `""`: any input). Unset: none (`module.set {device: null}` clears it). |
 | `fx` | Plugin modules (required there, refused elsewhere): its plug-in instance, an `fx_N` in no chain. |
 | `learn` | MIDI learn on its parameters, as an FX's (`ParamLearn`). |
@@ -456,8 +458,8 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
 |---|---|---|---|
 | `out` | in `l` (audio), `r` (audio, normalled to `l`) | `level` dB −60..12 (0) | Its label names it in the input menu; poly cables are summed |
 | `in` | out `l`, `r` (audio) | `level` dB −60..12 (0) | Fed by sends (`route.add {to: {module}}`) |
-| `notes` | out `pitch`, `gate`, `velocity` (unipolar), `pressure` (unipolar), `retrigger` (gate), poly; `bend` (cv), `modwheel` (unipolar) mono | `voices` 1..16 (8), `mode` (`rotate`, `reuse`, `reset`, `mono_last`, `mono_low`, `mono_high`), `bend_range` semitones 0..24 (2) | MIDI from `source` (default: the home track): its MIDI items and its live MIDI input when armed and monitoring; auto monitors while stopped or recording |
-| `notes_out` (id suffix `notes-out`) | in `pitch`, `gate`, `velocity` (poly) | `channel` 1..16 (1) | Note Out plays a channel's instrument through `route.add {from: {module: mo_N}, to: {track: tr_X}, midi: {}}`; the short type alias `notes_out` is accepted by module commands |
+| `notes` | out `pitch`, `gate`, `velocity` (unipolar), `pressure` (unipolar), `retrigger` (gate), poly; `bend` (cv), `modwheel` (unipolar) mono | `voices` 1..16 (8), `mode` (`rotate`, `reuse`, `reset`, `mono_last`, `mono_low`, `mono_high`), `bend_range` semitones 0..24 (2) | MIDI from `source` (default: the home track): its MIDI items, incoming MIDI sends and monitored live input, plus explicit sends to the module; None disables the source; auto monitors while stopped or recording |
+| `notes_out` (id suffix `notes-out`) | in `pitch`, `gate`, `velocity` (poly) | `channel` 1..16 (1), displayed **MIDI channel** | Note Out plays a channel's instrument through `route.add {from: {module: mo_N}, to: {track: tr_X}, midi: {}}`; the short type alias `notes_out` is accepted by module commands |
 | `transport` | out `playing` (gate), `reset` (trigger at play and locate), `bar` and `beat` (triggers), `clock` (trigger at `division`), `bar_phase`, `beat_phase` (phase), `tempo` (cv: bpm / 300) | `division` (1/1 … 1/64, dotted, triplets; 1/16) , `swing` % 0..75 (0) | From the timeline: positions are exact at every frame |
 | `plugin` | in `in_l`, `in_r` (audio, `in_r` normalled to `in_l`; poly cables summed), `pitch`, `gate`, `velocity` (poly, normal 0.8); out `out_l`, `out_r` (audio) | the plug-in's, as cable targets `fx_N.<key>` | Its `fx` is an ordinary FX instance in no chain; clicking the module opens its editor. Each gate channel is a voice: rising to 0.5 or above plays key round(60 + 12 × pitch) at its velocity, falling below 0.25 (or its cable going) ends it |
 
@@ -514,8 +516,10 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   up to 16. Key, channel and velocity latch at the rise; a disappearing voice
   ends its note. Transport stop, locate and loop wrap end held notes; a high
   gate at a locate starts a new note. No notes start while stopped.
+  The MIDI channel knob selects the outgoing MIDI channel, not a track.
   A MIDI route from Note Out to a channel merges events into its instrument
-  alongside MIDI items and monitored MIDI, at their exact frames. Routes may
+  alongside MIDI items and monitored MIDI, at their exact frames. Note Out
+  can also send to Notes modules. Routes may
   fan out and multiple Note Outs may feed one instrument: each route/voice
   has distinct CLAP note addressing, including equal pitches. `midi: {}`
   defaults to all channels unchanged; `from_channel` 0 (all) or 1..16 filters,
@@ -537,8 +541,20 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   Stable route/voice addresses retain overlapping equal-pitch notes. Loop
   takes, punch clipping, overdub, replace and undo follow the MIDI recorder.
 - **MIDI.** Notes modules receive the compiled MIDI events of their source
-  tracks (items, loops, playrate), and live MIDI from the device when the
-  source monitors it; the node is then live.
+  tracks (items, loops, playrate), incoming MIDI sends to those tracks, explicit
+  sends to the module, and live MIDI from the device when the source monitors
+  it; the node is then live. A Notes module never hears its own rack's Note
+  Outs through its source track, so a Note Out may play the instrument of the
+  track its rack's Notes reads (an arpeggiator on its own track); another
+  rack's Note Out into that track is heard, and a loop between two racks that
+  way is a cycle. Source None disables only the track feed. The
+  routing window's MIDI mode connects channels/Note Out to channels/Notes.
+  `rack::host::MidiEvent` carries a source namespace and optional note id;
+  addressed equal-pitch notes retain independent releases in polyphonic and
+  mono allocation modes. The host gives each Notes feed its track-source
+  identity and the retained route namespaces/addresses; source changes end
+  only that track feed, removed routes end only their notes, and a plan edit
+  can rebind event slots while preserving held route addresses.
 - **Recording Out.** An armed channel with an Out as its `record.input`
   records that stereo signal after input FX, before items and track inserts.
   With a MIDI input selected as well it records MIDI instead; to record

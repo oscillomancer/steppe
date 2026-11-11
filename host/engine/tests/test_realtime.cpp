@@ -6653,3 +6653,174 @@ TEST_CASE("output consumption targets are one-shot and tagged with the playback 
     pollfd fd{wake.fd(), POLLIN, 0};
     CHECK(::poll(&fd, 1, 0) == 0);  // disarmed/unchanged work does not notify
 }
+
+TEST_CASE("MIDI sends: timeline chains null offline in both executors and all isolations" *
+          doctest::description("rt")) {
+    const auto reference = synthSession(-18.0, "com.suppleaudio.test.gain", 1);
+    const auto source = reference.tracks.find(kMaster)->children.front();
+    model::EditTxn t(reference, 2);
+    model::Track relay;
+    relay.parent = kMaster;
+    relay.parentSend.enabled = false;
+    const auto middle = t.create(relay);
+    model::Track destination = *reference.tracks.find(source);
+    destination.name = "Destination";
+    destination.children.clear();
+    const auto target = t.create(destination);
+    t.modify<model::Track>(kMaster, [&](auto& master) {
+        master.children.insert(master.children.end(), {middle, target});
+    });
+    t.modify<model::Track>(source, [](auto& track) {
+        track.chain.clear();
+        track.parentSend.enabled = false;
+    });
+    model::Route send;
+    send.from.track = source;
+    send.to.track = middle;
+    send.midi = model::MidiRouting{};
+    t.create(send);
+    send.from.track = middle;
+    send.to.track = target;
+    t.create(send);
+    const auto session = t.commit();
+    REQUIRE(session);
+    host::setBridgeExecutable(BRIDGE_PATH);
+    auto referencePool = makePool();
+    const auto offlineReference =
+        renderOffline(reference, referencePool, {.startSeconds = 0, .endSeconds = 2.0});
+    REQUIRE(offlineReference);
+    for (auto isolation : {model::Isolation::InProcess, model::Isolation::SharedBridge,
+                           model::Isolation::Dedicated}) {
+        model::EditTxn isolate(*session, 3);
+        for (const auto& fx : session->fx)
+            isolate.modify<model::FxInstance>(fx.id, [&](auto& f) { f.isolation = isolation; });
+        const auto isolated = isolate.commit();
+        REQUIRE(isolated);
+        auto pool = makePool();
+        const auto offline = renderOffline(*isolated, pool, {.startSeconds = 0, .endSeconds = 2.0});
+        REQUIRE(offline);
+        CHECK(offline->audio.channels == offlineReference->audio.channels);
+        for (const auto& options : {kInCallback, EngineOptions{.workers = 2}}) {
+            if (!options.anticipative && isolation != model::Isolation::InProcess) continue;
+            CAPTURE(isolation);
+            CAPTURE(options.anticipative);
+            auto rtPool = makePool();
+            MediaCache media;
+            DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 100096});
+            Engine engine(rtPool, media, options);
+            REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 96}));
+            REQUIRE(engine.load(*isolated));
+            engine.play();
+            if (options.anticipative)
+                runAhead(engine, backend, 100096 / 96, 96);
+            else
+                backend.run(100096 / 96);
+            engine.stop();
+            CHECK(engine.processErrors() == 0);
+            for (int channel = 0; channel < 2; ++channel)
+                CHECK(maxDiff(backend.capture().channels[static_cast<std::size_t>(channel)],
+                              engine.outputLatency(),
+                              offline->audio.channels[static_cast<std::size_t>(channel)],
+                              96000) == 0.0);
+        }
+    }
+}
+
+TEST_CASE("MIDI sends: Notes destinations and compensated taps null offline in both executors" *
+          doctest::description("rt")) {
+    // The source plays a sine through a latency plug-in: post-FX sends wait
+    // for its chain (PDC), a pre-FX send does not. A third send plays a rack
+    // whose Notes gates a VCA on the transport's running signal.
+    const auto base = synthSession(-18.0, "com.suppleaudio.test.gain", 1);
+    const auto source = base.tracks.find(kMaster)->children.front();
+    model::EditTxn t(base, 2);
+    auto addTrack = [&](const char* name, bool synth) {
+        model::Track track;
+        track.name = name;
+        track.parent = kMaster;
+        const auto id = t.create(track);
+        t.modify<model::Track>(kMaster, [&](auto& master) { master.children.push_back(id); });
+        if (synth) {
+            model::FxInstance fx;
+            fx.plugin.id = "com.suppleaudio.test.sine";
+            const auto f = t.create(fx);
+            t.modify<model::Track>(id, [&](auto& x) { x.chain.push_back(f); });
+        }
+        return id;
+    };
+    auto send = [&](model::Route route, model::Tap tap) {
+        route.from.track = source;
+        route.midi = model::MidiRouting{};
+        route.tap = tap;
+        t.create(route);
+    };
+    model::Route to;
+    to.to.track = addTrack("Post-fader", true);
+    send(to, model::Tap::PostFader);
+    to.to.track = addTrack("Pre-FX", true);
+    send(to, model::Tap::PreFx);
+    const auto keys = addTrack("Rack", false);
+    const auto rack = t.create(model::Rack{keys, "Gate"});
+    auto module = [&](std::string_view type) {
+        model::RackModule m;
+        m.rack = rack;
+        m.type = std::string(type);
+        m.version = "1.0.0";
+        return t.create(m);
+    };
+    const auto notes = module(model::kNotesModule);
+    t.modify<model::RackModule>(notes, [](auto& m) { m.sourceOff = true; });
+    const auto clock = module("com.suppleaudio.rack.transport");
+    const auto vca = module("com.suppleaudio.rack.vca");
+    const auto out = module(model::kOutModule);
+    t.create(model::Cable{{clock, "playing"}, {vca, "in"}, std::nullopt, ""});
+    t.create(model::Cable{{notes, "gate"}, {vca, "cv"}, std::nullopt, ""});
+    t.create(model::Cable{{vca, "out"}, {out, "l"}, std::nullopt, ""});
+    model::Route input;
+    input.from.module = out;
+    input.to.track = keys;
+    const auto record = t.create(input);
+    t.modify<model::Track>(keys, [&](auto& track) { track.record.input = record; });
+    model::Route gate;
+    gate.to.module = notes;
+    send(gate, model::Tap::PostFader);
+    const auto session = t.commit();
+    REQUIRE_MESSAGE(session, (session ? "" : session.error().toString()));
+    auto pool = makePool();
+    const auto offline = renderOffline(*session, pool, {.startSeconds = 0, .endSeconds = 2.0});
+    REQUIRE(offline);
+    // Each destination sounds on its own: the comparison below is not of silence.
+    for (const auto& entry : session->tracks) {
+        if (entry.id == kMaster || entry.id == source) continue;
+        auto own = makePool();
+        OfflineSettings settings{.startSeconds = 0, .endSeconds = 2.0};
+        settings.track = entry.id;
+        const auto alone = renderOffline(*session, own, settings);
+        REQUIRE(alone);
+        float peak = 0;
+        for (float v : alone->audio.channels[0]) peak = std::max(peak, std::abs(v));
+        CAPTURE(entry.value->name);
+        CHECK(peak > 0.01f);
+    }
+    for (const auto& options : {kInCallback, EngineOptions{.workers = 2}}) {
+        CAPTURE(options.anticipative);
+        auto rtPool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 100096});
+        Engine engine(rtPool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 96}));
+        REQUIRE(engine.load(*session));
+        engine.play();
+        if (options.anticipative)
+            runAhead(engine, backend, 100096 / 96, 96);
+        else
+            backend.run(100096 / 96);
+        engine.stop();
+        CHECK(engine.processErrors() == 0);
+        for (int channel = 0; channel < 2; ++channel)
+            CHECK(maxDiff(backend.capture().channels[static_cast<std::size_t>(channel)],
+                          engine.outputLatency(),
+                          offline->audio.channels[static_cast<std::size_t>(channel)],
+                          96000) == 0.0);
+    }
+}

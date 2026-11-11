@@ -949,7 +949,10 @@ window. The panel Close button, WM close request and unhandled Escape all
 close this panel without quitting the app.
 
 
-One grid (`reaper-ux.md` addendum 2): sources (strips in hierarchy, hardware
+The header switches **Audio | MIDI** (ADR-0067), two latching tabs with the
+active mode lit in the accent colour; the mode persists in the
+`windows.routing.mode` UI sidecar field. Audio mode is the existing grid; MIDI
+routes do not appear in it. In Audio mode (`reaper-ux.md` addendum 2), sources (strips in hierarchy, hardware
 inputs, MIDI inputs) × destinations (parent, strips, plugin keys, racks' In
 modules, hardware outputs). A click selects a cell, Ctrl+click toggles one, Shift+click takes
 the rectangle from the anchor (the last cell clicked); a click on a row's or
@@ -957,7 +960,9 @@ column's name selects all of it (Ctrl adds it, or removes it when it is all
 selected; Shift takes the rows or columns from the last one clicked), and the
 corner or Ctrl+A every cell. The selection is kept by source, pair and
 destination across reloads. A double click on a cell without a send adds one
-(`route.add`; the parent's cell turns the parent send on or off). **Add**
+(`route.add`; the parent's cell turns the parent send on or off); on a cell
+with a send it only selects it, in Audio and MIDI mode alike (Remove or
+Delete removes). **Add**
 does that for every selected cell that can take one and **Remove** (also
 Delete) removes every selected cell's sends (the parent's: the parent send
 off), each one undo step. The controls act on every send in the selection,
@@ -989,8 +994,18 @@ into the module (`route.add {from, to: mo_N}`) and edits and goes as any
 send; an auxiliary pair's row sends that pair to the module's pair. Masters
 are refused as for strips, and a strip the rack's Outs reach (its home
 channel, and whatever that feeds) is listed as a cycle ("it would feed back").
-A rack's Out and Note Out routes, and a channel's hardware or MIDI input,
-are channel inputs, not sends: the grid and its send count leave them out.
+A rack's Out and a channel's hardware or MIDI input are record inputs;
+Audio mode leaves those and all MIDI sends out of its send count.
+
+MIDI mode lists channels in hierarchy order, then their racks' Note Out
+modules indented below them. Columns are channels, each followed by its
+racks' Notes modules. Busses, masters, plug-in keys and In modules are absent.
+MIDI sends use the `midi-send` theme token (teal), distinct from strip send
+colours. The usual selection, double-click and Add/Remove gestures apply. The controls show pre-FX, post-FX
+(`pre_fader`) and post-fader taps, mute, From channel (All or 1–16) and To
+channel (Original or 1–16). These edits act on selected sends in one undo
+step; right-click learns mute only. Audio controls are hidden. The action
+`ui.routing.midi` opens this mode, including in offscreen snapshots.
 Matrix updates clamp scroll to the current endpoint range; paint uses
 endpoint-pair indexes for send and cycle rules.
 Commands: `route.*`, `track.set {record_input}`.
@@ -1306,8 +1321,9 @@ a new channel). It follows rack.md §8.
   Any MIDI input (`device: ""`) and each device `engine.inputs` lists (a
   saved one it does not list stays, checked, "not connected"; while the
   engine is stopped the menu says to start it); a device is heard armed or
-  not. Plays track… is Home (the rack's channel; `source: null`) and every
-  other channel (`source`). Each pick is one undo step. Capture notes to track… picks a channel, then a
+  not. Plays track… offers None (`source: "none"`), Home (the rack's channel; `source: null`) and every
+  other channel (`source`), then a checkable Hear MIDI sends (`source_sends`; disabled while the
+  source is None). Each pick is one undo step. Capture notes to track… picks a channel, then a
   length (1, 2, 4, 8 or 16 bars, from the bar the playhead is in) and runs
   `rack.capture` with the module's first pitch and gate outputs (and its
   `velocity` output, if any) as a job (`async`): one undo step, a MIDI item

@@ -76,7 +76,7 @@ Patch patch() {
 TEST_CASE("racks: a patch saves, reopens and serializes the same") {
     Patch p = patch();
     const std::string bytes = serializeProject(p.s);
-    CHECK(bytes.find("\"supple.project/2.9\"") != std::string::npos);
+    CHECK(bytes.find("\"supple.project/2.10\"") != std::string::npos);
     CHECK(bytes.find("\"mo_2.saw\"") != std::string::npos);
     auto loaded = parseProject(bytes);
     REQUIRE_MESSAGE(loaded, (loaded ? "" : loaded.error().message));
@@ -251,4 +251,216 @@ TEST_CASE("rack model: numeric cable target remapping keeps the parameter id") {
     schema["properties"]["target"]["pattern"] = std::string(kCableEndPattern);
     auto remapped = remapIds(args, schema, {{Id{Kind::Fx, 3}, Id{Kind::Fx, 9}}});
     CHECK(remapped["target"].asString() == "fx_9.12");
+}
+
+TEST_CASE("MIDI sends: channel endpoints, Notes source off and old projects round trip") {
+    Patch p = patch();
+    EditTxn t(p.s, 2);
+    Route route;
+    route.from.track = p.other;
+    route.to.track = p.channel;
+    route.midi = MidiRouting{2, 5};
+    const auto send = t.create(route);
+    t.modify<RackModule>(p.notes, [](auto& m) { m.sourceOff = true; });
+    auto s = t.commit();
+    REQUIRE(s);
+    const auto bytes = serializeProject(*s);
+    CHECK(bytes.find("supple.project/2.10") != std::string::npos);
+    auto reopened = parseProject(bytes);
+    REQUIRE(reopened);
+    CHECK(reopened->modules.find(p.notes)->sourceOff);
+    CHECK(reopened->routes.find(send)->midi->toChannel == 5);
+    CHECK(serializeProject(*reopened) == bytes);
+    auto old = projectToJson(p.s);
+    old["schema"] = "supple.project/2.9";
+    auto loaded = projectFromJson(old);
+    REQUIRE(loaded);
+    CHECK_FALSE(loaded->modules.find(p.notes)->sourceOff);
+    CHECK(serializeProject(*loaded) == serializeProject(p.s));
+}
+
+TEST_CASE("MIDI sends: a Note Out may play its own Notes source; older projects with one open") {
+    // The arpeggiator on its own track: the rack's Notes reads the home
+    // channel, its Note Out plays that channel's instrument. The Notes module
+    // does not hear its own rack's Note Out, so this is no cycle.
+    Patch p = patch();
+    EditTxn t(p.s, 2);
+    RackModule noteOut;
+    noteOut.rack = p.rack;
+    noteOut.type = std::string(kNotesOutModule);
+    noteOut.version = "1.0.0";
+    const Id output = t.create(noteOut);
+    t.create(Cable{{p.notes, "gate"}, {output, "gate"}, std::nullopt, ""});
+    Route back;
+    back.from.module = output;
+    back.to.track = p.channel;
+    back.midi = MidiRouting{};
+    t.create(back);
+    auto s = t.commit();
+    REQUIRE_MESSAGE(s, (s ? "" : s.error().toString()));
+    auto old = projectToJson(*s);
+    old["schema"] = "supple.project/2.9";
+    auto loaded = projectFromJson(old);
+    REQUIRE_MESSAGE(loaded, (loaded ? "" : loaded.error().toString()));
+    // Before 2.10 its Notes heard no sends into the channel: it still does not.
+    CHECK_FALSE(loaded->modules.find(p.notes)->sourceSends);
+    EditTxn heard(*loaded, 3);
+    heard.modify<RackModule>(p.notes, [](auto& m) { m.sourceSends = true; });
+    auto same = heard.commit();
+    REQUIRE(same);
+    CHECK(serializeProject(*same) == serializeProject(*s));
+    // Another rack's Notes still hears it: two racks playing each other's
+    // Notes source tracks feed back.
+    EditTxn cross(*s, 3);
+    const Id rack = cross.create(Rack{p.other, "Echo"});
+    RackModule notes;
+    notes.rack = rack;
+    notes.type = std::string(kNotesModule);
+    notes.version = "1.0.0";
+    cross.create(notes);
+    noteOut.rack = rack;
+    const Id echo = cross.create(noteOut);
+    back.from.module = output;
+    back.to.track = p.other;
+    cross.create(back);
+    back.from.module = echo;
+    back.to.track = p.channel;
+    cross.create(back);
+    const auto refused = cross.commit();
+    REQUIRE_FALSE(refused);
+    CHECK(refused.error().code == "route.cycle");
+}
+
+TEST_CASE("MIDI sends: older Notes keep not hearing sends into their source track") {
+    // Two racks, each Note Out playing the other rack's channel: valid before
+    // 2.10, when a Notes module never heard what was sent into its source.
+    EditTxn t(Session::create(), 1);
+    const Id a = addChannel(t), b = addChannel(t), c = addChannel(t);
+    auto rackOn = [&](Id track) {
+        const Id rack = t.create(Rack{track, "R"});
+        RackModule m;
+        m.rack = rack;
+        m.type = std::string(kNotesModule);
+        m.version = "1.0.0";
+        m.sourceSends = false;
+        const Id notes = t.create(m);
+        m.type = std::string(kNotesOutModule);
+        m.sourceSends = true;
+        const Id out = t.create(m);
+        return std::pair{notes, out};
+    };
+    const auto [notesA, outA] = rackOn(a);
+    const auto [notesB, outB] = rackOn(b);
+    const auto [notesC, outC] = rackOn(c);
+    t.modify<RackModule>(notesC, [](auto& m) { m.sourceSends = true; });
+    Route send;
+    send.midi = MidiRouting{};
+    send.from.module = outA;
+    send.to.track = b;
+    t.create(send);
+    send.from.module = outB;
+    send.to.track = a;
+    t.create(send);
+    send.from.module = outC;  // into a channel nobody's Notes reads
+    send.to.track = addChannel(t);
+    t.create(send);
+    auto s = t.commit();
+    REQUIRE_MESSAGE(s, (s ? "" : s.error().toString()));
+    // As a 2.9 writer saved it: no source_sends.
+    auto old = projectToJson(*s);
+    old["schema"] = "supple.project/2.9";
+    for (auto& m : old["modules"].asObject()) m.value.asObject().erase("source_sends");
+    std::vector<schema::Warning> warnings;
+    auto loaded = projectFromJson(old, &warnings);
+    REQUIRE_MESSAGE(loaded, (loaded ? "" : loaded.error().toString()));
+    CHECK_FALSE(loaded->modules.find(notesA)->sourceSends);
+    CHECK_FALSE(loaded->modules.find(notesB)->sourceSends);
+    CHECK(loaded->modules.find(notesC)->sourceSends);  // its channel receives no MIDI
+    CHECK(warnings.empty());
+    // Saved at 2.10 and reopened, unchanged.
+    const auto bytes = serializeProject(*loaded);
+    CHECK(bytes == serializeProject(*s));
+    CHECK(bytes.find("\"source_sends\": false") != std::string::npos);
+    auto reopened = parseProject(bytes);
+    REQUIRE(reopened);
+    CHECK(serializeProject(*reopened) == bytes);
+    // A 2.10 file means what it says: hearing the sends is the loop.
+    old["schema"] = "supple.project/2.10";
+    auto current = projectFromJson(old);
+    REQUIRE_FALSE(current);
+    CHECK(current.error().code == "route.cycle");
+    EditTxn one(*reopened, 2);
+    one.modify<RackModule>(notesA, [](auto& m) { m.sourceSends = true; });
+    auto half = one.commit();
+    REQUIRE(half);  // one direction is no loop
+    EditTxn both(*half, 3);
+    both.modify<RackModule>(notesB, [](auto& m) { m.sourceSends = true; });
+    const auto loop = both.commit();
+    REQUIRE_FALSE(loop);
+    CHECK(loop.error().code == "route.cycle");
+    // Only a Notes module has the switch.
+    EditTxn wrong(*reopened, 2);
+    wrong.modify<RackModule>(outA, [](auto& m) { m.sourceSends = false; });
+    CHECK_FALSE(wrong.commit());
+}
+
+TEST_CASE("MIDI sends: model rejects invalid endpoints, audio controls, learn and mixed cycles") {
+    Patch p = patch();
+    Route send;
+    send.from.track = p.other;
+    send.to.track = p.channel;
+    send.midi = MidiRouting{};
+    auto valid = [&](Route route) {
+        EditTxn t(p.s, 2);
+        t.create(route);
+        return t.commit();
+    };
+    SUBCASE("channel to channel") { CHECK(valid(send)); }
+    SUBCASE("channel to Notes") {
+        send.to = {};
+        send.to.module = p.notes;
+        CHECK(valid(send));
+    }
+    SUBCASE("master source") {
+        send.from.track = kMaster;
+        CHECK_FALSE(valid(send));
+    }
+    SUBCASE("master destination") {
+        send.to.track = kMaster;
+        CHECK_FALSE(valid(send));
+    }
+    SUBCASE("In destination") {
+        send.to = {};
+        send.to.module = p.in;
+        CHECK_FALSE(valid(send));
+    }
+    SUBCASE("audio level") {
+        send.volumeDb = -3;
+        CHECK_FALSE(valid(send));
+    }
+    SUBCASE("audio channels") {
+        send.channels = {{1}, {2}};
+        CHECK_FALSE(valid(send));
+    }
+    SUBCASE("audio pan") {
+        send.pan.percent = 0;
+        CHECK_FALSE(valid(send));
+    }
+    SUBCASE("learn tap") {
+        send.learn.push_back({{}, "tap:pre_fx"});
+        CHECK_FALSE(valid(send));
+    }
+    SUBCASE("mixed cycle") {
+        // Other -> rack (audio), rack -> home (audio), home -> other (MIDI).
+        send.from.track = p.channel;
+        send.to.track = p.other;
+        CHECK_FALSE(valid(send));
+    }
+    SUBCASE("implicit Notes reader cycle") {
+        // Home -> Notes on home: its rack already feeds home with audio.
+        send.from.track = p.channel;
+        send.to = {};
+        send.to.module = p.notes;
+        CHECK_FALSE(valid(send));
+    }
 }
