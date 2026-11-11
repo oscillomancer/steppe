@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "supple/audio/audio_file.h"
+#include "supple/base/files.h"
 #include "supple/engine/app.h"
 #include "supple/json/parse.h"
 #include "supple/sync/ltc.h"
@@ -1135,6 +1136,47 @@ TEST_CASE("midi clock output: clock and MTC leave the period's release reserve t
     }
     CHECK(reset);
     CHECK_FALSE(off);
+}
+
+TEST_CASE("midi outputs: the engine writes the clock members and raises an older schema") {
+    const fs::path dir =
+        fs::temp_directory_path() / ("supple-sync-prefs-" + std::to_string(::getpid()));
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    AppOptions options;
+    options.workdir = dir;
+    options.midiPreferencesFile = dir / "preferences.json";
+    REQUIRE(writeFileAtomic(options.midiPreferencesFile,
+                            R"({"schema":"supple.preferences/1.6","lock_memory":true,)"
+                            R"("midi_outputs":{"Synth":{"offset_ms":2}}})"));
+    auto created = EngineApp::create(options, {.console9 = false});
+    REQUIRE(created);
+    auto app = std::move(*created);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    auto bus = std::make_unique<cmd::Dispatcher>(registry, *app);
+    auto r = bus->execute(
+        {"midi.outputs.set", json::parse(R"({"port": "synth", "clock": true})").value(), kOrigin});
+    REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+    const auto bytes = readFile(options.midiPreferencesFile).value();
+    const auto doc = json::parse(std::string(bytes.begin(), bytes.end())).value();
+    CHECK(doc.find("schema")->asString() == kPreferencesSchema);
+    CHECK(std::string(kPreferencesSchema) == "supple.preferences/1.8");
+    CHECK(doc.find("lock_memory")->asBool());  // the GUI's members are kept
+    const auto* synth = doc.find("midi_outputs")->find("Synth");
+    REQUIRE(synth);
+    CHECK(synth->find("clock")->asBool());
+    CHECK(synth->find("offset_ms")->asDouble() == 2);
+    // A newer label (a later version's file) is kept.
+    REQUIRE(writeFileAtomic(options.midiPreferencesFile, R"({"schema":"supple.preferences/1.12"})"));
+    REQUIRE(bus->execute({"midi.outputs.set",
+                         json::parse(R"({"port": "Synth", "mtc": true})").value(), kOrigin}));
+    const auto later = readFile(options.midiPreferencesFile).value();
+    CHECK(std::string(later.begin(), later.end()).find("supple.preferences/1.12") !=
+          std::string::npos);
+    bus.reset();
+    app.reset();
+    fs::remove_all(dir);
 }
 
 TEST_CASE("midi outputs: one command set carries routing and clock members") {
