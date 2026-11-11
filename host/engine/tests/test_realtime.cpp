@@ -6824,3 +6824,115 @@ TEST_CASE("MIDI sends: Notes destinations and compensated taps null offline in b
                           96000) == 0.0);
     }
 }
+
+TEST_CASE("MIDI bus: plug-in note output nulls offline in both executors and all isolations" *
+          doctest::description("rt")) {
+    // The source's echo plays its sine a fifth up, then a latent plug-in;
+    // a post-fader send carries the echo's notes to a channel's sine and to
+    // a rack whose Notes plays a sine module (ADR-0068). Variants: replace,
+    // merge, and the source's chain without a bus (chain_midi: instrument).
+    for (int variant : {0, 1, 2}) {
+        CAPTURE(variant);
+        const auto mode =
+            variant == 1 ? model::MidiOutputMode::Merge : model::MidiOutputMode::Replace;
+        const auto base = synthSession(-18.0, "com.suppleaudio.test.gain", 1);
+        const auto source = base.tracks.find(kMaster)->children.front();
+        model::EditTxn t(base, 2);
+        model::FxInstance echo;
+        echo.plugin.id = "com.suppleaudio.test.note-echo";
+        echo.midiOutput = mode;
+        const auto echoId = t.create(echo);
+        t.modify<model::Track>(source, [&](auto& tr) {
+            tr.chain.insert(tr.chain.begin(), echoId);
+            if (variant == 2) tr.chainMidi = model::ChainMidi::Instrument;
+        });
+        auto addTrack = [&] {
+            model::Track track;
+            track.parent = kMaster;
+            const auto id = t.create(track);
+            t.modify<model::Track>(kMaster, [&](auto& master) { master.children.push_back(id); });
+            return id;
+        };
+        model::FxInstance sine;
+        sine.plugin.id = "com.suppleaudio.test.sine";
+        const auto channel = addTrack();
+        const auto synth = t.create(sine);
+        t.modify<model::Track>(channel, [&](auto& tr) { tr.chain = {synth}; });
+        const auto racked = addTrack();
+        const auto rack = t.create(model::Rack{racked, ""});
+        auto module = [&](std::string_view type, std::optional<Id> fx = {}) {
+            model::RackModule m;
+            m.rack = rack;
+            m.type = std::string(type);
+            m.version = "1.0.0";
+            m.fx = fx;
+            return t.create(m);
+        };
+        const auto notes = module(model::kNotesModule);
+        const auto voice = module(model::kPluginModule, t.create(sine));
+        const auto out = module(model::kOutModule);
+        for (const char* port : {"pitch", "gate", "velocity"})
+            t.create(model::Cable{{notes, port}, {voice, port}, std::nullopt, ""});
+        t.create(model::Cable{{voice, "out_l"}, {out, "l"}, std::nullopt, ""});
+        model::Route input;
+        input.from.module = out;
+        input.to.track = racked;
+        const auto inputId = t.create(input);
+        t.modify<model::Track>(racked, [&](auto& tr) { tr.record.input = inputId; });
+        model::Route send;
+        send.from.track = source;
+        send.midi = model::MidiRouting{};
+        send.to.track = channel;
+        t.create(send);
+        send.to = {};
+        send.to.module = notes;
+        t.create(send);
+        const auto session = t.commit();
+        REQUIRE_MESSAGE(session, (session ? "" : session.error().toString()));
+        host::setBridgeExecutable(BRIDGE_PATH);
+        auto referencePool = makePool();
+        const auto reference =
+            renderOffline(*session, referencePool, {.startSeconds = 0, .endSeconds = 2.0});
+        REQUIRE(reference);
+        double peak = 0;
+        for (float x : reference->audio.channels[0]) peak = std::max(peak, double(std::fabs(x)));
+        REQUIRE(peak > 0.01);
+        for (auto isolation : {model::Isolation::InProcess, model::Isolation::SharedBridge,
+                               model::Isolation::Dedicated}) {
+            CAPTURE(isolation);
+            model::EditTxn isolate(*session, 3);
+            for (const auto& fx : session->fx)
+                isolate.modify<model::FxInstance>(fx.id, [&](auto& f) { f.isolation = isolation; });
+            const auto isolated = isolate.commit();
+            REQUIRE(isolated);
+            auto pool = makePool();
+            const auto offline =
+                renderOffline(*isolated, pool, {.startSeconds = 0, .endSeconds = 2.0});
+            REQUIRE(offline);
+            CHECK(offline->audio.channels == reference->audio.channels);
+            for (const auto& options : {kInCallback, EngineOptions{.workers = 2}}) {
+                // Bridged plug-ins never run on the device thread.
+                if (!options.anticipative && isolation != model::Isolation::InProcess) continue;
+                CAPTURE(options.anticipative);
+                auto rtPool = makePool();
+                MediaCache media;
+                DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 100096});
+                Engine engine(rtPool, media, options);
+                REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 96}));
+                REQUIRE(engine.load(*isolated));
+                engine.play();
+                if (options.anticipative)
+                    runAhead(engine, backend, 100096 / 96, 96);
+                else
+                    backend.run(100096 / 96);
+                engine.stop();
+                CHECK(engine.processErrors() == 0);
+                for (int c = 0; c < 2; ++c)
+                    CHECK(maxDiff(backend.capture().channels[static_cast<std::size_t>(c)],
+                                  engine.outputLatency(),
+                                  offline->audio.channels[static_cast<std::size_t>(c)],
+                                  96000) == 0.0);
+            }
+        }
+    }
+}

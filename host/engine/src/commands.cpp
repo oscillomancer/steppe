@@ -737,6 +737,7 @@ struct TrackSetArgs {
     std::optional<std::int64_t> channels;
     std::optional<std::vector<std::int64_t>> hwOutput;
     std::optional<bool> laneMute;
+    std::optional<model::ChainMidi> chainMidi;
 };
 struct TrackEntry {
     bool frozen = false;
@@ -820,6 +821,7 @@ struct FxSetArgs {
     std::optional<std::string> label;
     std::optional<model::Isolation> isolation;
     std::optional<model::PinMap> pins;
+    std::optional<model::MidiOutputMode> midiOutput;
 };
 struct FxPatchArgs {
     std::string fx;
@@ -847,6 +849,7 @@ struct FxDescription {
     std::optional<std::int64_t> paramsTotal;
     std::optional<std::int64_t> sidechainChannels;  // a key input (ADR-0018)
     std::optional<std::int64_t> latencySamples;     // the instance's reported latency
+    std::optional<bool> outputsNotes;               // note output ports (ADR-0068)
 };
 constexpr std::size_t kMaxListedParams = 512;
 
@@ -1653,7 +1656,10 @@ void registerEngineCommands(cmd::Registry& registry) {
             "midi_replace. color: red | orange | yellow | green | teal | blue | violet | grey | "
             "\"#rrggbb\" (\"\" clears it), shown as a stripe on the track. A master takes "
             "armed alone: transport.record then records its output (after its fader, before "
-            "its own items) as an item on the master; lane_mute silences a master's items.";
+            "its own items) as an item on the master; lane_mute silences a master's items. "
+            "chain_midi: bus (every plug-in with a note input hears the chain's MIDI, a "
+            "note-output plug-in feeds those after it and the post-FX sends) or instrument "
+            "(only the first such plug-in hears the track's MIDI, as before 2.10).";
         c.tags = {"track", "mixer"};
         c.args =
             schema::object<TrackSetArgs>("track_set_args")
@@ -1749,6 +1755,11 @@ void registerEngineCommands(cmd::Registry& registry) {
                 .field("lane_mute", &TrackSetArgs::laneMute,
                        schema::boolean().doc("Masters: silence the master's own items (its "
                                              "prints) and nothing else"))
+                .field("chain_midi", &TrackSetArgs::chainMidi,
+                       model::chainMidiSchema().doc(
+                           "What the FX chain does with MIDI: bus (default; plug-ins hear and "
+                           "feed it in order) or instrument (only the first plug-in with a note "
+                           "input hears the track's MIDI; plug-ins' note output goes nowhere)"))
                 .build();
         c.result = emptySchema();
         c.examples = {
@@ -1774,7 +1785,9 @@ void registerEngineCommands(cmd::Registry& registry) {
             {"Arm the main master to print the mix", obj(R"({"track": "tr_0", "armed": true})"),
              obj("{}"), "song"},
             {"Hear the live mix without the print", obj(R"({"track": "tr_0", "lane_mute": true})"),
-             obj("{}"), "song"}};
+             obj("{}"), "song"},
+            {"Only the instrument hears the track's MIDI, as before 2.10",
+             obj(R"({"track": "tr_1", "chain_midi": "instrument"})"), obj("{}"), "song"}};
         c.run = [](const TrackSetArgs& a, Context& ctx) -> Result<Empty> {
             EngineApp& app = A(ctx);
             const model::Session s = app.view();
@@ -2028,6 +2041,7 @@ void registerEngineCommands(cmd::Registry& registry) {
                 if (a.hwOutput)
                     t.hwOutput = std::vector<int>(a.hwOutput->begin(), a.hwOutput->end());
                 if (a.laneMute) t.laneMute = *a.laneMute;
+                if (a.chainMidi) t.chainMidi = *a.chainMidi;
                 if (a.solo)
                     t.solo = *a.solo == "on"         ? model::Solo::On
                              : *a.solo == "in_place" ? model::Solo::InPlace
@@ -2585,7 +2599,9 @@ void registerEngineCommands(cmd::Registry& registry) {
             "MIDI take on its own. An instrument with outputs past its main pair (a multi-out "
             "sampler's Kick, Snare...) gets that many more channels on the track, and its "
             "pins.out sends each output there; route.matrix lists them and route.add "
-            "{channels: {from: [3, 4]}} sends one to a buss.";
+            "{channels: {from: [3, 4]}} sends one to a buss. Without index, a note effect "
+            "(an arpeggiator) goes to the front of the track's chain, ahead of what it plays, and "
+            "an instrument after the note effects there.";
         c.tags = {"fx"};
         c.args = schema::object<FxAddArgs>("fx_add_args")
                      .field("track", &FxAddArgs::track, idArg("tr", "Track"))
@@ -2693,9 +2709,26 @@ void registerEngineCommands(cmd::Registry& registry) {
             std::size_t at =
                 a.index ? std::min<std::size_t>(static_cast<std::size_t>(*a.index), chain.size())
                         : chain.size();
-            // An instrument goes to the front of the track's chain unless the
-            // caller said where; the input chain keeps the caller's order.
-            if (!input && info->instrument && !a.index) at = 0;
+            // Unless the caller said where (the input chain keeps the
+            // caller's order): a note effect goes to the front of the track's
+            // chain, ahead of what plays its notes (ADR-0068), and an
+            // instrument after the note effects there.
+            const auto noteEffect = [](const host::PluginInfo& p) {
+                return std::find(p.features.begin(), p.features.end(),
+                                 CLAP_PLUGIN_FEATURE_NOTE_EFFECT) != p.features.end();
+            };
+            if (!input && !a.index && noteEffect(*info)) {
+                at = 0;
+            } else if (!input && !a.index && info->instrument) {
+                at = 0;
+                while (at < chain.size()) {
+                    const model::FxInstance* existing = s.fx.find(chain[at]);
+                    auto known = existing ? app.findPlugin(existing->plugin.id)
+                                          : Result<host::PluginInfo>(Error("", ""));
+                    if (!known || !noteEffect(*known)) break;
+                    ++at;
+                }
+            }
             chain.insert(chain.begin() + static_cast<std::ptrdiff_t>(at), id);
             t.modify<model::Track>(*track, [&](model::Track& modified) {
                 (input ? modified.inputChain : modified.chain) = chain;
@@ -2757,7 +2790,7 @@ void registerEngineCommands(cmd::Registry& registry) {
         c.name = "fx.set";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpTool;
-        c.summary = "Set instance options: bypass, offline, wet (%), label, isolation, pins.";
+        c.summary = "Set instance options: bypass, offline, wet, label, isolation, pins, MIDI.";
         c.description =
             "isolation: in_process, dedicated (the plugin runs in a process of its own: a "
             "crash silences only it), shared_bridge (one process for all such plugins), "
@@ -2766,7 +2799,10 @@ void registerEngineCommands(cmd::Registry& registry) {
             "({out: [l, r]}) and keys from ({key: [3, 4]}: a detector on 3/4, for a plugin "
             "with a sidechain input); {} restores 1/2 in and out. out past its first two "
             "entries: a track channel for each of the plugin's auxiliary output channels in "
-            "order (0: unconnected); fx.add sets them for a multi-out instrument.";
+            "order (0: unconnected); fx.add sets them for a multi-out instrument. midi_output, "
+            "for a plug-in with note output (fx.describe outputs_notes): replace (default) "
+            "gives the plug-ins after it, and the track's post-FX MIDI sends, only its output; "
+            "merge adds its output to the MIDI that reached it.";
         c.tags = {"fx"};
         c.args = schema::object<FxSetArgs>("fx_set_args")
                      .field("fx", &FxSetArgs::fx, idArg("fx", "Plugin instance"))
@@ -2782,6 +2818,10 @@ void registerEngineCommands(cmd::Registry& registry) {
                                  {model::Isolation::SharedBridge, "shared_bridge"},
                                  {model::Isolation::Dedicated, "dedicated"}}))
                      .field("pins", &FxSetArgs::pins, model::pinMapSchema())
+                     .field("midi_output", &FxSetArgs::midiOutput,
+                            schema::enumeration<model::MidiOutputMode>(
+                                {{model::MidiOutputMode::Replace, "replace"},
+                                 {model::MidiOutputMode::Merge, "merge"}}))
                      .build();
         c.result = emptySchema();
         c.examples = {
@@ -2828,6 +2868,7 @@ void registerEngineCommands(cmd::Registry& registry) {
                 if (a.label) f.label = *a.label;
                 if (a.isolation) f.isolation = *a.isolation;
                 if (a.pins) f.pins = *a.pins;
+                if (a.midiOutput) f.midiOutput = *a.midiOutput;
             });
             return Empty{};
         };
@@ -3029,6 +3070,9 @@ void registerEngineCommands(cmd::Registry& registry) {
                        schema::integer().doc("The plug-in's key input: route.add {fx} feeds it"))
                 .field("latency_samples", &FxDescription::latencySamples,
                        schema::integer().doc("The instance's reported latency, in samples"))
+                .field("outputs_notes", &FxDescription::outputsNotes,
+                       schema::boolean().doc("The loaded plug-in sends notes or MIDI: fx.set "
+                                             "midi_output chooses replace or merge"))
                 .field("params_total", &FxDescription::paramsTotal,
                        schema::integer().doc("Plain parameters matching; at most " +
                                              std::to_string(kMaxListedParams) + " are listed."))
@@ -3076,6 +3120,7 @@ void registerEngineCommands(cmd::Registry& registry) {
             r.description = *d;
             if (auto key = app.fxSidechainChannels(fx); key && *key > 0) r.sidechainChannels = *key;
             if (auto latency = app.fxLatencySamples(*id, fx)) r.latencySamples = *latency;
+            if (auto notes = app.fxOutputsNotes(*id, fx); notes && *notes) r.outputsNotes = true;
             if (a.full) {
                 auto schema = app.fxSchema(fx);
                 if (!schema && live) schema = live->semanticSchema();

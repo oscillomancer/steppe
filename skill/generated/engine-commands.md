@@ -4328,7 +4328,7 @@ Result:
 
 Insert a plugin into a track's (or a take's) FX chain and return its id.
 
-plugin: id or name from plugin.list; patch: an initial (partial) patch for semantic plugins. chain: main (default; the track's effects) or input (the recorded-input chain). take instead of track: the take's own chain (take FX) — the item plays through it before the track's input, cut to the item; an instrument there plays a MIDI take on its own. An instrument with outputs past its main pair (a multi-out sampler's Kick, Snare...) gets that many more channels on the track, and its pins.out sends each output there; route.matrix lists them and route.add {channels: {from: [3, 4]}} sends one to a buss.
+plugin: id or name from plugin.list; patch: an initial (partial) patch for semantic plugins. chain: main (default; the track's effects) or input (the recorded-input chain). take instead of track: the take's own chain (take FX) — the item plays through it before the track's input, cut to the item; an instrument there plays a MIDI take on its own. An instrument with outputs past its main pair (a multi-out sampler's Kick, Snare...) gets that many more channels on the track, and its pins.out sends each output there; route.matrix lists them and route.add {channels: {from: [3, 4]}} sends one to a buss. Without index, a note effect (an arpeggiator) goes to the front of the track's chain, ahead of what it plays, and an instrument after the note effects there.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -4848,6 +4848,10 @@ Kind: `query`. Exposure: `mcp-tool`.
     "latency_samples": {
       "type": "integer",
       "description": "The instance's reported latency, in samples"
+    },
+    "outputs_notes": {
+      "type": "boolean",
+      "description": "The loaded plug-in sends notes or MIDI: fx.set midi_output chooses replace or merge"
     },
     "params_total": {
       "type": "integer",
@@ -5953,9 +5957,9 @@ Result:
 
 ## `fx.set@1`
 
-Set instance options: bypass, offline, wet (%), label, isolation, pins.
+Set instance options: bypass, offline, wet, label, isolation, pins, MIDI.
 
-isolation: in_process, dedicated (the plugin runs in a process of its own: a crash silences only it), shared_bridge (one process for all such plugins), inherit (the project default: in_process). pins: which of the track's channels (1-based; track.set channels adds 3-128) the plugin reads ({in: [l, r]}), writes ({out: [l, r]}) and keys from ({key: [3, 4]}: a detector on 3/4, for a plugin with a sidechain input); {} restores 1/2 in and out. out past its first two entries: a track channel for each of the plugin's auxiliary output channels in order (0: unconnected); fx.add sets them for a multi-out instrument.
+isolation: in_process, dedicated (the plugin runs in a process of its own: a crash silences only it), shared_bridge (one process for all such plugins), inherit (the project default: in_process). pins: which of the track's channels (1-based; track.set channels adds 3-128) the plugin reads ({in: [l, r]}), writes ({out: [l, r]}) and keys from ({key: [3, 4]}: a detector on 3/4, for a plugin with a sidechain input); {} restores 1/2 in and out. out past its first two entries: a track channel for each of the plugin's auxiliary output channels in order (0: unconnected); fx.add sets them for a multi-out instrument. midi_output, for a plug-in with note output (fx.describe outputs_notes): replace (default) gives the plug-ins after it, and the track's post-FX MIDI sends, only its output; merge adds its output to the MIDI that reached it.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -5970,6 +5974,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | `label` | string |  |  |  |  |
 | `isolation` | string |  |  |  |  |
 | `pins` | object |  |  |  |  |
+| `midi_output` | string |  |  |  |  |
 
 ### Result
 
@@ -15638,7 +15643,7 @@ Result:
 
 Set track fields: name, type, volume, pan, mute, solo, polarity, mono, arming.
 
-Only the given fields change. solo: off | on | in_place | defeat. armed + record_input (device input channels, 1-based) prepare a track for transport.record; record_midi records MIDI instead: hardware audio and MIDI replace each other. A rack's Out (record_rack) keeps a MIDI input beside it, which plays its Notes; recording then takes MIDI. null clears each one (record_input: null takes off hardware audio, record_rack: null a rack's Out), leaving the others. A device name is a substring of the MIDI port ("*" = every device), with midi_channel 1-16 (0 = all). monitor: off | on | auto (auto: while armed) — a monitored track hears its input live (an instrument plays the keyboard), also while stopped. record_mode: input (new items), midi_overdub (merge into the MIDI item under the start, as a new take), midi_replace. color: red | orange | yellow | green | teal | blue | violet | grey | "#rrggbb" ("" clears it), shown as a stripe on the track. A master takes armed alone: transport.record then records its output (after its fader, before its own items) as an item on the master; lane_mute silences a master's items.
+Only the given fields change. solo: off | on | in_place | defeat. armed + record_input (device input channels, 1-based) prepare a track for transport.record; record_midi records MIDI instead: hardware audio and MIDI replace each other. A rack's Out (record_rack) keeps a MIDI input beside it, which plays its Notes; recording then takes MIDI. null clears each one (record_input: null takes off hardware audio, record_rack: null a rack's Out), leaving the others. A device name is a substring of the MIDI port ("*" = every device), with midi_channel 1-16 (0 = all). monitor: off | on | auto (auto: while armed) — a monitored track hears its input live (an instrument plays the keyboard), also while stopped. record_mode: input (new items), midi_overdub (merge into the MIDI item under the start, as a new take), midi_replace. color: red | orange | yellow | green | teal | blue | violet | grey | "#rrggbb" ("" clears it), shown as a stripe on the track. A master takes armed alone: transport.record then records its output (after its fader, before its own items) as an item on the master; lane_mute silences a master's items. chain_midi: bus (every plug-in with a note input hears the chain's MIDI, a note-output plug-in feeds those after it and the post-FX sends) or instrument (only the first such plug-in hears the track's MIDI, as before 2.10).
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -15675,6 +15680,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | `channels` | integer |  | 1.0..128.0 |  | 1-2: the strip's main pair; up to 128 adds auxiliary channels 3-128 for routes and plug-in pins (a detector on 3/4, a multi-out instrument's outputs), outside the fader, pan and parent send |
 | `hw_output` | array |  |  |  | Masters: the device outputs the main pair plays to: [l, r], [mono] or [] for none (engine.inputs lists them). Default: tr_0 [1, 2], other masters [] |
 | `lane_mute` | boolean |  |  |  | Masters: silence the master's own items (its prints) and nothing else |
+| `chain_midi` | string |  |  |  | What the FX chain does with MIDI: bus (default; plug-ins hear and feed it in order) or instrument (only the first plug-in with a note input hears the track's MIDI; plug-ins' note output goes nowhere) |
 
 ### Result
 
@@ -15882,6 +15888,23 @@ Result:
 {
   "track": "tr_0",
   "lane_mute": true
+}
+
+```
+
+Result:
+
+```json
+{}
+
+```
+
+**Only the instrument hears the track's MIDI, as before 2.10** (`song`)
+
+```json
+{
+  "track": "tr_1",
+  "chain_midi": "instrument"
 }
 
 ```

@@ -8,7 +8,7 @@ find_package(ZLIB REQUIRED)
 supple_add_library(engine
   SOURCES src/transients.cpp src/audio_commands.cpp src/prepared_sources.cpp src/offline.cpp src/plan.cpp src/workers.cpp src/live_workers.cpp src/realtime.cpp src/recording.cpp
           src/stretch.cpp src/playrate_dsp.cpp src/playrate_timeline.cpp src/rate_sources.cpp src/rate_runtime.cpp src/mix_runtime.cpp src/meters.cpp src/runtime_protection.cpp src/media_files.cpp
-          src/rack_runtime.cpp src/rack_midi.cpp src/rack_clip_commands.cpp src/rack_level_commands.cpp src/rack_commands.cpp src/module_library.cpp src/module_commands.cpp src/rack_probe.cpp src/app.cpp src/plugin_outputs.cpp src/commands.cpp src/extra_commands.cpp src/group_commands.cpp src/midi_commands.cpp src/analysis_commands.cpp
+          src/rack_runtime.cpp src/rack_midi.cpp src/midi_bus.cpp src/rack_clip_commands.cpp src/rack_level_commands.cpp src/rack_commands.cpp src/module_library.cpp src/module_commands.cpp src/rack_probe.cpp src/app.cpp src/plugin_outputs.cpp src/commands.cpp src/extra_commands.cpp src/group_commands.cpp src/midi_commands.cpp src/analysis_commands.cpp
           src/freeze_commands.cpp src/consolidate_commands.cpp src/export_commands.cpp src/mix_commands.cpp src/heal_commands.cpp src/render_commands.cpp src/render_settings.cpp src/render_chain.cpp src/chain_commands.cpp src/take_commands.cpp src/learn.cpp src/control_learn.cpp src/dsp_commands.cpp
           src/midi_control.cpp src/midi_input.cpp src/portaudio_backend.cpp src/portaudio_native.cpp
   DEPS supple::model supple::clap-host supple::audio-file supple::timeline supple::semantic-params-abi

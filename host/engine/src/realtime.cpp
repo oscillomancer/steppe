@@ -1158,7 +1158,9 @@ void Engine::publishPluginOutputs(detail::Plan& p, bool renderer, std::uint64_t 
             outputDrops_.fetch_add(st.outEvents.dropped, std::memory_order_relaxed);
             for (std::size_t i = 0; i < st.outEvents.count; ++i) {
                 const auto& event = st.outEvents.storage[i];
-                if (event.kind == host::OutputEvent::Kind::NoteEnd) continue;
+                // Voice ends and note/MIDI output stay on the audio path;
+                // the main thread takes parameter outputs only.
+                if (event.kind == host::OutputEvent::Kind::NoteEnd || event.midiOutput()) continue;
                 changed = true;
                 PluginOutput output;
                 output.fx = st.fx;

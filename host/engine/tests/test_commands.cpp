@@ -274,6 +274,91 @@ TEST_CASE("FX descriptions reset shared scratch instances") {
     CHECK(run(bus, "fx.describe", R"({"fx":"fx_2"})")["description"] == defaults);
 }
 
+TEST_CASE("MIDI bus: fx.set chooses a note-output plug-in's replace or merge") {
+    Workdir dir;
+    auto app = makeApp(dir.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *app);
+    run(bus, "track.add", R"({"name":"Arp"})");
+    run(bus, "fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.note-echo"})");
+    run(bus, "fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.sine"})");
+    // The instrument goes after the note effect that plays it, a note effect
+    // ahead of the instrument.
+    const auto track = *model::Id::parse("tr_1");
+    CHECK(app->head().tracks.find(track)->chain ==
+          std::vector<model::Id>{*model::Id::parse("fx_1"), *model::Id::parse("fx_2")});
+    run(bus, "track.add", R"({"name":"Synth first"})");
+    run(bus, "fx.add", R"({"track":"tr_2","plugin":"com.suppleaudio.test.gain"})");
+    run(bus, "fx.add", R"({"track":"tr_2","plugin":"com.suppleaudio.test.sine"})");
+    run(bus, "fx.add", R"({"track":"tr_2","plugin":"com.suppleaudio.test.note-echo"})");
+    CHECK(app->head().tracks.find(*model::Id::parse("tr_2"))->chain ==
+          std::vector<model::Id>{*model::Id::parse("fx_5"), *model::Id::parse("fx_4"),
+                                 *model::Id::parse("fx_3")});
+    const auto echo = run(bus, "fx.describe", R"({"fx":"fx_1"})");
+    REQUIRE(echo.find("outputs_notes"));
+    CHECK(*echo.find("outputs_notes") == json::Value(true));
+    CHECK_FALSE(run(bus, "fx.describe", R"({"fx":"fx_2"})").find("outputs_notes"));
+    const auto id = *model::Id::parse("fx_1");
+    CHECK(app->head().fx.find(id)->midiOutput == model::MidiOutputMode::Replace);
+    const auto before = model::serializeProject(app->head());
+    CHECK(before.find("midi_output") == std::string::npos);  // the default is not saved
+    run(bus, "fx.set", R"({"fx":"fx_1","midi_output":"merge"})");
+    CHECK(app->head().fx.find(id)->midiOutput == model::MidiOutputMode::Merge);
+    const auto saved = model::serializeProject(app->head());
+    CHECK(saved.find("\"midi_output\": \"merge\"") != std::string::npos);
+    auto reopened = model::parseProject(saved);
+    REQUIRE(reopened);
+    CHECK(reopened->fx.find(id)->midiOutput == model::MidiOutputMode::Merge);
+    CHECK(model::serializeProject(*reopened) == saved);
+    const auto refused =
+        bus.execute({"fx.set", j(R"({"fx":"fx_1","midi_output":"both"})"), kOrigin});
+    REQUIRE_FALSE(refused);
+    CHECK_FALSE(refused.error().hint.empty());
+    run(bus, "history.undo", "{}");
+    CHECK(app->head().fx.find(id)->midiOutput == model::MidiOutputMode::Replace);
+}
+
+TEST_CASE("MIDI bus: track.set chain_midi turns a chain's bus off and on, with templates") {
+    Workdir dir;
+    AppOptions options;
+    options.workdir = dir.path;
+    options.templateDir = dir.path / "templates";
+    options.projectTemplateDir = dir.path / "project-templates";
+    options.pluginPath = {FIXTURE_CLAP_PATH};
+    auto created = EngineApp::create(options, {.console9 = false});
+    REQUIRE(created);
+    auto app = std::move(*created);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *app);
+    run(bus, "track.add", R"({"name":"Layers"})");
+    run(bus, "fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.sine"})");
+    run(bus, "fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.gain"})");
+    const auto track = *model::Id::parse("tr_1");
+    CHECK(app->head().tracks.find(track)->chainMidi == model::ChainMidi::Bus);
+    CHECK(model::serializeProject(app->head()).find("chain_midi") == std::string::npos);
+    run(bus, "track.set", R"({"track":"tr_1","chain_midi":"instrument"})");
+    CHECK(app->head().tracks.find(track)->chainMidi == model::ChainMidi::Instrument);
+    const auto saved = model::serializeProject(app->head());
+    auto reopened = model::parseProject(saved);
+    REQUIRE(reopened);
+    CHECK(reopened->tracks.find(track)->chainMidi == model::ChainMidi::Instrument);
+    CHECK(model::serializeProject(*reopened) == saved);
+    // A track template keeps it with the chain.
+    run(bus, "track.template.save", R"({"track":"tr_1","name":"Layers"})");
+    const auto loaded = run(bus, "track.template.load", R"({"name":"Layers"})");
+    const auto copy = *model::Id::parse(loaded.find("track")->asString());
+    CHECK(app->head().tracks.find(copy)->chainMidi == model::ChainMidi::Instrument);
+    const auto refused =
+        bus.execute({"track.set", j(R"({"track":"tr_1","chain_midi":"chain"})"), kOrigin});
+    REQUIRE_FALSE(refused);
+    CHECK_FALSE(refused.error().hint.empty());
+    run(bus, "history.undo", "{}");
+    run(bus, "history.undo", "{}");
+    CHECK(app->head().tracks.find(track)->chainMidi == model::ChainMidi::Bus);
+}
+
 TEST_CASE("route sends through a gain bus, rejects cycles and replays in a branch merge") {
     Workdir dir;
     auto app = makeApp(dir.path);

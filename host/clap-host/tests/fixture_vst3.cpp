@@ -16,6 +16,7 @@
 #include "pluginterfaces/base/ibstream.h"
 #include "pluginterfaces/gui/iplugviewcontentscalesupport.h"
 #include "pluginterfaces/vst/ivstevents.h"
+#include "pluginterfaces/vst/ivstmidicontrollers.h"
 #include "pluginterfaces/vst/ivstparameterchanges.h"
 #include "public.sdk/source/common/pluginview.h"
 #include "public.sdk/source/vst/vstsinglecomponenteffect.h"
@@ -36,6 +37,8 @@ const FUID kAdapterId(0x11000108, 0x22000202, 0x33000303, 0x44000404);
 // SDK's getState, which answers kNotImplemented.
 const FUID kStatelessId(0x11000109, 0x22000202, 0x33000303, 0x44000404);
 const FUID kStatelessControllerId(0x1100010A, 0x22000202, 0x33000303, 0x44000404);
+// Note output (ADR-0068): an event input and an event output bus.
+const FUID kNoteEchoId(0x1100010B, 0x22000202, 0x33000303, 0x44000404);
 constexpr double kTau = 6.28318530717958647692;
 
 // The host must call the edit controller on the thread that initialized the
@@ -166,7 +169,11 @@ class Fixture final : public SingleComponentEffect {
     // MultiOut (ADR-0021): an instrument with a main output (0.125) and an
     // auxiliary "Kick" output bus (0.25), constant levels. Adapter: a gain that
     // offers stereo but refuses it at setBusArrangements and settles on mono.
-    enum Kind { Gain, Sine, Delay, Sidechain, Separate, MultiOut, Adapter, Stateless };
+    // NoteEcho (ADR-0068): a gain (as Gain) whose input notes come out a fifth up
+    // (note on/off, same channel, id and velocity); each note on is followed by
+    // a legacy CC 74 = velocity and a poly pressure 0.5 on the new key, and a
+    // pitch bend (LSB 1, MSB 64) and a data (SysEx) event at the block's end.
+    enum Kind { Gain, Sine, Delay, Sidechain, Separate, MultiOut, Adapter, Stateless, NoteEcho };
     explicit Fixture(Kind kind, bool controller = false)
         : controller_(controller), kind_(kind), value_(kind == Delay ? 0.0 : 0.5) {}
     tresult PLUGIN_API initialize(FUnknown* context) override {
@@ -178,7 +185,8 @@ class Fixture final : public SingleComponentEffect {
         addAudioOutput(STR16("Output"), SpeakerArr::kStereo);
         if (kind_ == MultiOut)
             addAudioOutput(STR16("Kick"), SpeakerArr::kStereo, BusTypes::kAux, 0);
-        if (kind_ == Sine) addEventInput(STR16("Notes"));
+        if (kind_ == Sine || kind_ == NoteEcho) addEventInput(STR16("Notes"));
+        if (kind_ == NoteEcho) addEventOutput(STR16("Notes Out"));
         parameters.addParameter(kind_ == Gain || kind_ == Sidechain ? STR16("Gain")
                                 : kind_ == Delay                    ? STR16("Latency")
                                                                     : STR16("Level"),
@@ -285,6 +293,7 @@ class Fixture final : public SingleComponentEffect {
                         ++gNoteIdOffs[event.noteOff.noteId];
                 }
             }
+        if (kind_ == NoteEcho && data.numSamples > 0) echoNotes(data);
         if (data.numSamples == 0) {
             if (data.inputParameterChanges) {
                 for (int32 q = 0; q < data.inputParameterChanges->getParameterCount(); ++q) {
@@ -370,6 +379,44 @@ class Fixture final : public SingleComponentEffect {
     }
     OBJ_METHODS(Fixture, SingleComponentEffect)
   private:
+    void echoNotes(ProcessData& data) {
+        if (!data.inputEvents || !data.outputEvents) return;
+        auto* out = data.outputEvents;
+        for (int32 i = 0; i < data.inputEvents->getEventCount(); ++i) {
+            Event in{};
+            if (data.inputEvents->getEvent(i, in) != kResultOk) continue;
+            Event e = in;
+            if (in.type == Event::kNoteOnEvent) {
+                e.noteOn.pitch = static_cast<int16>(in.noteOn.pitch + 7);
+                out->addEvent(e);
+                Event cc{};
+                cc.sampleOffset = in.sampleOffset;
+                cc.type = Event::kLegacyMIDICCOutEvent;
+                cc.midiCCOut = {74, static_cast<int8>(in.noteOn.channel),
+                                static_cast<int8>(std::lround(in.noteOn.velocity * 127)), 0};
+                out->addEvent(cc);
+                Event pressure{};
+                pressure.sampleOffset = in.sampleOffset;
+                pressure.type = Event::kPolyPressureEvent;
+                pressure.polyPressure = {in.noteOn.channel, e.noteOn.pitch, 0.5f, in.noteOn.noteId};
+                out->addEvent(pressure);
+            } else if (in.type == Event::kNoteOffEvent) {
+                e.noteOff.pitch = static_cast<int16>(in.noteOff.pitch + 7);
+                out->addEvent(e);
+            }
+        }
+        Event bend{};
+        bend.sampleOffset = data.numSamples - 1;
+        bend.type = Event::kLegacyMIDICCOutEvent;
+        bend.midiCCOut = {kPitchBend, 0, 1, 64};
+        out->addEvent(bend);
+        static const uint8 sysex[] = {0xf0, 0x7e, 0x7f, 0x06, 0x01, 0xf7};
+        Event data_{};
+        data_.sampleOffset = data.numSamples - 1;
+        data_.type = Event::kDataEvent;
+        data_.data = {sizeof(sysex), DataEvent::kMidiSysEx, sysex};
+        out->addEvent(data_);
+    }
     void watchControllerCall() {
         if (processing_.load(std::memory_order_relaxed) && std::this_thread::get_id() != owner_)
             gControllerCallsOffThread.fetch_add(1, std::memory_order_relaxed);
@@ -391,12 +438,13 @@ class Factory final
         *info = PFactoryInfo("Supple Audio", "https://supple.audio", "dev@supple.audio", 0);
         return kResultOk;
     }
-    int32 PLUGIN_API countClasses() override { return 10; }
+    int32 PLUGIN_API countClasses() override { return 11; }
     tresult PLUGIN_API getClassInfo(int32 index, PClassInfo* info) override {
-        if (!info || index < 0 || index >= 10) return kInvalidArgument;
+        if (!info || index < 0 || index >= 11) return kInvalidArgument;
         const FUID ids[] = {
             kGainId,     kSineId,       kDelayId,   kSidechainId, kSeparateId,
-            kMultiOutId, kControllerId, kAdapterId, kStatelessId, kStatelessControllerId};
+            kMultiOutId, kControllerId, kAdapterId, kStatelessId, kStatelessControllerId,
+            kNoteEchoId};
         const char* names[] = {"Test VST3 Gain",
                                "Test VST3 Sine",
                                "Test VST3 Latency",
@@ -406,7 +454,8 @@ class Factory final
                                "Test VST3 Gain Controller",
                                "Test VST3 Mono Adapter",
                                "Test VST3 Stateless Controller Gain",
-                               "Test VST3 Stateless Controller"};
+                               "Test VST3 Stateless Controller",
+                               "Test VST3 Note Echo"};
         *info = PClassInfo(
             ids[index], PClassInfo::kManyInstances,
             index == 6 || index == 9 ? kVstComponentControllerClass : kVstAudioEffectClass,
@@ -414,10 +463,11 @@ class Factory final
         return kResultOk;
     }
     tresult PLUGIN_API getClassInfo2(int32 index, PClassInfo2* info) override {
-        if (!info || index < 0 || index >= 10) return kInvalidArgument;
+        if (!info || index < 0 || index >= 11) return kInvalidArgument;
         const FUID ids[] = {
             kGainId,     kSineId,       kDelayId,   kSidechainId, kSeparateId,
-            kMultiOutId, kControllerId, kAdapterId, kStatelessId, kStatelessControllerId};
+            kMultiOutId, kControllerId, kAdapterId, kStatelessId, kStatelessControllerId,
+            kNoteEchoId};
         const char* names[] = {"Test VST3 Gain",
                                "Test VST3 Sine",
                                "Test VST3 Latency",
@@ -427,7 +477,8 @@ class Factory final
                                "Test VST3 Gain Controller",
                                "Test VST3 Mono Adapter",
                                "Test VST3 Stateless Controller Gain",
-                               "Test VST3 Stateless Controller"};
+                               "Test VST3 Stateless Controller",
+                               "Test VST3 Note Echo"};
         *info = PClassInfo2(
             ids[index], PClassInfo::kManyInstances,
             index == 6 || index == 9 ? kVstComponentControllerClass : kVstAudioEffectClass,
@@ -440,7 +491,8 @@ class Factory final
         *obj = nullptr;
         const FUID ids[] = {
             kGainId,     kSineId,       kDelayId,   kSidechainId, kSeparateId,
-            kMultiOutId, kControllerId, kAdapterId, kStatelessId, kStatelessControllerId};
+            kMultiOutId, kControllerId, kAdapterId, kStatelessId, kStatelessControllerId,
+            kNoteEchoId};
         for (int i = 0; i < 6; ++i) {
             if (std::memcmp(cid, ids[i], 16) != 0) continue;
             auto* plugin = new Fixture(static_cast<Fixture::Kind>(i));
@@ -450,6 +502,12 @@ class Factory final
         }
         if (std::memcmp(cid, kAdapterId, 16) == 0) {
             auto* plugin = new Fixture(Fixture::Adapter);
+            const auto result = plugin->queryInterface(iid, obj);
+            plugin->release();
+            return result;
+        }
+        if (std::memcmp(cid, kNoteEchoId, 16) == 0) {
+            auto* plugin = new Fixture(Fixture::NoteEcho);
             const auto result = plugin->queryInterface(iid, obj);
             plugin->release();
             return result;

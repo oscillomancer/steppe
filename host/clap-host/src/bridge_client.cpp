@@ -258,6 +258,7 @@ Result<std::unique_ptr<RemoteInstance>> RemoteInstance::spawn(
     ports.semantic = r.u8() != 0;
     ports.keyChannels = r.u32();
     ports.editor = r.u8() != 0;
+    ports.outputsNotes = r.u8() != 0;
     const std::uint32_t auxPorts = r.u32();
     for (std::uint32_t i = 0; i < auxPorts && i < kMaxAuxPorts && r.ok(); ++i) {
         AudioPortInfo port;
@@ -915,6 +916,11 @@ bool RemoteInstance::process(const ProcessBlock& b, OutputEvents* out) SUPPLE_RT
     hdr_->steadyTime = b.steadyTime;
     hdr_->hasTransport = b.transport ? 1 : 0;
     if (b.transport) hdr_->transport = *b.transport;
+    const std::uint32_t room = out ? static_cast<std::uint32_t>(std::min<std::size_t>(
+                                         out->storage.size() - out->count, kMaxOutEvents))
+                                   : 0;
+    hdr_->outSink = out ? 1 : 0;
+    hdr_->outEventCapacity = room;
     if (!command(Cmd::Process)) {
         silence();
         return true;
@@ -922,7 +928,12 @@ bool RemoteInstance::process(const ProcessBlock& b, OutputEvents* out) SUPPLE_RT
     // The acknowledged arena is untrusted. Snapshot once, before copying any
     // output, and fail through the same atomic path as a dead bridge.
     const std::uint32_t outEventCount = hdr_->outEventCount;
-    if (outEventCount > kMaxOutEvents) {
+    const auto* oe = reinterpret_cast<const OutputEvent*>(base + layout_.outEvents);
+    bool kindsValid = true;
+    for (std::uint32_t i = 0; i < outEventCount && i < room; ++i)
+        kindsValid &= static_cast<std::uint8_t>(oe[i].kind) <=
+                      static_cast<std::uint8_t>(OutputEvent::Kind::Midi);
+    if (outEventCount > room || !kindsValid) {
         process_->fail(BridgeProcess::kProtocolViolation);
         silence();
         return true;
@@ -943,7 +954,6 @@ bool RemoteInstance::process(const ProcessBlock& b, OutputEvents* out) SUPPLE_RT
             std::fill_n(b.auxOutputs[c], b.frames, 0.0f);
     }
     if (out) {
-        const auto* oe = reinterpret_cast<const OutputEvent*>(base + layout_.outEvents);
         for (std::uint32_t i = 0; i < outEventCount; ++i) {
             if (out->count < out->storage.size())
                 out->storage[out->count++] = oe[i];
@@ -951,6 +961,7 @@ bool RemoteInstance::process(const ProcessBlock& b, OutputEvents* out) SUPPLE_RT
                 ++out->dropped;
         }
         out->dropped += hdr_->outEventsDropped;
+        out->unsupported += hdr_->outEventsUnsupported;
     }
     return hdr_->result != 0;
 }
