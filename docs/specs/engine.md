@@ -2113,8 +2113,10 @@ live in `preferences.json` (`supple.preferences/1.8`) as `midi_outputs`
 `{"<port>": {...}}`; `EngineApp` is their only writer (`midi.outputs.set`),
 and a malformed record is skipped at startup with a warning, as for
 routing. `midi.outputs.set` resolves its port by a unique case-insensitive
-match, applies the edits, drops a record back at every default, then
-rebuilds the plan and `applySync()`. `syncConfigFor` resolves each output
+match among present and recorded names (a port that is neither is refused,
+as for routing: a record is made while its device is connected), applies
+the edits, drops a record back at every default, then rebuilds the plan and
+`applySync()`. `syncConfigFor` resolves each output
 of `Engine::midiOutputPorts()` by its exact name into
 `SyncConfig.outputs[i]` (`kMaxSyncOutputs` = 16): for an enabled port the
 kinds, and `delay` = `midiOutputLatency()[i]` + offset in frames; a
@@ -2963,7 +2965,9 @@ No hardware delay may exceed ten seconds. Limits: 256 routes, 65,536 pending
 messages, 16 ports, and the existing 1,024 messages per device period, shared by
 routed MIDI, clock and MTC (`Backend::midiOutputUsed()` counts every writer):
 releases stop at 1,024 − `kMidiReleaseReserve` (512) and clock and MTC too, so
-the last 512 always carry a stop's CC64/CC123 resets. Equal-frame
+the last 512 are left for a stop's CC64/CC123 resets. Routed note messages
+are not held to the reserve: a period of more than 512 of them can still
+crowd the resets out. Equal-frame
 messages preserve route/event insertion order. Overflow is counted. Timeline origin
 is captured with each stream event before a slot can be freed or reused, carried
 through the FX bus and hardware queue, and retained for mute-retriggered notes.

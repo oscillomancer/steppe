@@ -39,8 +39,9 @@ output port, which Phase 2's hardware MIDI routing extends.
    ADR-0072), and the engine is the records' only writer.
    `midi.outputs.set {port, ...}` (ADR-0072's command, with these members
    added) changes one record: the port is a unique case-insensitive match
-   to a present or recorded name, omitted members are kept, a record back
-   at every default is removed, and the plan and the sync configuration
+   to a present or recorded name (any other is refused, so a record is
+   made while its device is connected), omitted members are kept, a record
+   back at every default is removed, and the plan and the sync configuration
    are rebuilt. `midi.outputs.get` returns `{ports: [...]}`: routing's port
    list, each output with the record's members and its clock state (§8).
 
