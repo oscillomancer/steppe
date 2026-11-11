@@ -2743,33 +2743,37 @@ never write devices. Missing output names warn; duplicate ambiguous names fail.
 
 Route delay is `plan.outputLatency - source.timelineShift - tappedLatency +
 backend.midiOutputLatency[port] + offset_ms * sampleRate / 1000` (rounded to
-frames). Negative minimum delay adds prepared audio lead to all MIDI delays
-and a final audio delay; lead is limited to one second and reported by
-`midi_lead_frames`. Engine output latency, heard timing and recording account
-for it. History is allocated on the owner thread only when publishing a plan
-with non-zero lead, and runs only during non-zero lead or a tap crossfade.
-It continues across stop, locate, loop wrap and lead-unchanged edits while lead
-is needed. The first negative-offset route after an inactive history primes
-silence once. On return to zero lead, owner-thread reclamation waits for the
-final crossfade acknowledgment and retirement of every plan that could use it. Boundaries drop only queued timeline-origin note-ons, retaining delayed live
-onsets, releases, other messages and mute markers on reset-off ports; reset-on routes
-invalidate their queues through the route generation. A lead change
-crossfades fixed old/new integer-delay taps over 5 ms without clearing history
-or changing their playback rate. Rapid edits finish the active fade, then fade
-to the latest target. The initial plan primes its full lead normally. No hardware delay may exceed ten seconds. Limits: 256 routes, 65,536
-pending messages, 16 ports, and the existing 1,024 messages per device period.
-Equal-frame messages preserve route/event insertion order. Overflow is counted.
-Timeline origin is captured with each stream event before a slot can be freed
-or reused, carried through the FX bus and hardware queue, and retained for
-mute-retriggered notes. Live/device and generated plug-in notes keep device time
-across boundaries on reset-off ports.
-Route and source mute automation is evaluated on the tapped stream's compensated
-clock, including its source shift and master playrate trajectory. Channel post-FX
-and post-fader routes read the chain's final MIDI bus (ADR-0068), including
-plug-in note output; pre-FX routes read the original stream. The bus keeps the
-chain's input clock, so its tap latency cancels against delivery compensation.
-New or re-timed post-FX routes restart the bus's held notes, including plug-in
-voices, rather than the pre-FX pool. Rack Note Out events already include their latency.
+frames). Negative minimum delay adds prepared audio lead to all MIDI delays and a
+final audio delay; lead is limited to one second and reported by `midi_lead_frames`.
+Engine output latency, heard timing and recording account for it. History is
+allocated on the owner thread only when publishing a plan with non-zero lead, and
+runs only during non-zero lead or a tap crossfade. It continues across stop, locate,
+loop wrap and lead-unchanged edits while lead is needed. The first negative-offset
+route after an inactive history primes silence once. On return to zero lead,
+owner-thread reclamation waits for the final crossfade acknowledgment and retirement
+of every plan that could use it.
+
+Boundaries drop only queued timeline-origin note-ons, retaining delayed live onsets,
+releases, other messages and mute markers on reset-off ports; reset-on routes
+invalidate their queues through the route generation. A lead change crossfades fixed
+old/new integer-delay taps over 5 ms without clearing history or changing their
+playback rate. Rapid edits finish the active fade, then fade to the latest target.
+The initial plan primes its full lead normally.
+
+No hardware delay may exceed ten seconds. Limits: 256 routes, 65,536 pending
+messages, 16 ports, and the existing 1,024 messages per device period. Equal-frame
+messages preserve route/event insertion order. Overflow is counted. Timeline origin
+is captured with each stream event before a slot can be freed or reused, carried
+through the FX bus and hardware queue, and retained for mute-retriggered notes.
+Live/device and generated plug-in notes keep device time across boundaries on
+reset-off ports. Route and source mute automation is evaluated on the tapped
+stream's compensated clock, including its source shift and master playrate
+trajectory. Channel post-FX and post-fader routes read the chain's final MIDI bus
+(ADR-0068), including plug-in note output; pre-FX routes read the original stream.
+The bus keeps the chain's input clock, so its tap latency cancels against delivery
+compensation. New or re-timed post-FX routes restart the bus's held notes, including
+plug-in voices, rather than the pre-FX pool. Rack Note Out events already include
+their latency.
 
 Port disable gates the next callback and releases notes before the render-ahead
 horizon; enabling and timing changes adopt with their prepared plan.
