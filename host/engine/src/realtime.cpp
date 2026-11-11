@@ -509,6 +509,7 @@ void Engine::stop() {
     rateClockSequence_.store(0);
     for (auto& word : rateClockWords_) word.store(0);
     plans_.clear();  // nothing runs a plan now
+    hardwareMidi_->releaseHistory(true);
     callbackGen_.store(0);
     workers_.reset();
     ring_.reset();  // no callbacks after backend_->stop()
@@ -678,6 +679,7 @@ Status Engine::load(const model::Session& session, const std::filesystem::path& 
     }
     SUPPLE_TRY(detail::prepareHardwareMidi(*plan, *backend_, midiInputsPreferences_,
                                            midiOutputsPreferences_));
+    if (plan->hardwareLead) hardwareMidi_->ensureHistory();
     plan->rateBackendLatency += plan->hardwareLead;
     plan->rateDeviceMargin += plan->hardwareLead;
     midiSettingsDirty_ = false;
@@ -1022,6 +1024,8 @@ void Engine::collectPlans() {
             }
     }
     std::erase_if(plans_, retired);
+    if (std::none_of(plans_.begin(), plans_.end(), [](const auto& p) { return p->hardwareLead; }))
+        (void)hardwareMidi_->releaseHistory();
 }
 
 std::vector<model::Id> Engine::takeDirtyStates() { return std::exchange(dirtyStates_, {}); }

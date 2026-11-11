@@ -132,11 +132,28 @@ Status prepareHardwareMidi(Plan& plan, Backend& backend, const MidiPortPreferenc
 }
 HardwareMidiRuntime::HardwareMidiRuntime() = default;
 void HardwareMidiRuntime::prepare(double rate, std::uint32_t channels) {
-    audioDelay_.assign(
-        channels, std::vector<float>(
-                      static_cast<std::size_t>(std::ceil(rate * kHardwareMidiLeadSeconds)) + 1));
+    historyRate_ = rate;
+    historyChannels_ = channels;
     fadeFrames_ = static_cast<std::uint32_t>(std::max(1., std::round(rate * .005)));
+}
+void HardwareMidiRuntime::ensureHistory() {
+    if (historyReady_.load(std::memory_order_acquire)) return;
+    audioDelay_.assign(
+        historyChannels_,
+        std::vector<float>(
+            static_cast<std::size_t>(std::ceil(historyRate_ * kHardwareMidiLeadSeconds)) + 1));
     historyReady_.store(true, std::memory_order_release);
+}
+bool HardwareMidiRuntime::releaseHistory(bool stopped) {
+    if (!stopped && historyBusy_.load(std::memory_order_acquire)) return false;
+    historyReady_.store(false, std::memory_order_release);
+    // No retained plan can reactivate the buffer, and audio has acknowledged
+    // its zero-lead state. Allocation and reclamation stay on the owner thread.
+    std::vector<std::vector<float>>().swap(audioDelay_);
+    return true;
+}
+std::size_t HardwareMidiRuntime::historySamples() const {
+    return audioDelay_.empty() ? 0 : audioDelay_.size() * audioDelay_.front().size();
 }
 std::uint64_t HardwareMidiRuntime::dropped(bool output, std::size_t port) const {
     return port < 16
@@ -205,14 +222,19 @@ void HardwareMidiRuntime::adopt(Plan& plan, std::uint64_t epoch, bool playing) {
                        [](const auto& a, const auto& b) { return later(a, b); });
     }
     if (changed) {
-        if (!plan_)
+        if (!plan_ || (!lead_ && plan.hardwareLead && !fadeLeft_)) {
+            // The first lead after an inactive history primes once. No audio
+            // work or pre-roll allocation is needed for zero-lead projects.
             readLead_ = plan.hardwareLead;
-        else if (readLead_ != plan.hardwareLead && !fadeLeft_) {
+            audioCursor_ = 0;
+            audioFilled_ = 0;
+        } else if (readLead_ != plan.hardwareLead && !fadeLeft_) {
             fadeTarget_ = plan.hardwareLead;
             fadeLeft_ = fadeFrames_;
         }
         lead_ = plan.hardwareLead;
         leadReported_.store(lead_, std::memory_order_relaxed);
+        historyBusy_.store(lead_ || fadeLeft_, std::memory_order_release);
         for (auto& state : routes_)
             if (state.active) {
                 auto found = std::find_if(
@@ -500,7 +522,8 @@ void HardwareMidiRuntime::finish(float* const* out, std::uint32_t channels, std:
                 }
         count_ = 0;
     }
-    if (historyReady_.load(std::memory_order_acquire) && out && !audioDelay_.empty()) {
+    if ((lead_ || fadeLeft_) && historyReady_.load(std::memory_order_acquire) && out &&
+        !audioDelay_.empty()) {
         const auto capacity = audioDelay_.front().size();
         for (std::uint32_t f = 0; f < frames; ++f) {
             const double mix = fadeLeft_ ? double(fadeFrames_ - fadeLeft_ + 1) / fadeFrames_ : 0;
@@ -532,6 +555,7 @@ void HardwareMidiRuntime::finish(float* const* out, std::uint32_t channels, std:
             }
         }
     }
+    historyBusy_.store(lead_ || fadeLeft_, std::memory_order_release);
     frame_ += frames;
 }
 std::span<const MidiInputEvent> HardwareMidiRuntime::input(std::span<const MidiInputEvent> raw,

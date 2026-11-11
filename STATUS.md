@@ -308,8 +308,10 @@ instructions are in `docs/guides/installing.md`.
   named outputs with tap, mute, channel filter/remap and PDC/port offset timing.
   Post-FX/post-fader taps and held-note recovery use the final FX chain MIDI bus,
   including plug-in output; pre-FX taps keep the original stream.
-  A continuous prepared audio history supplies negative-offset lead (at most
-  one second), including monitoring. Boundaries preserve its tail; lead changes
+  Owner-prepared audio history supplies negative-offset lead (at most one
+  second), including monitoring. Zero-lead plans skip its allocation/processing;
+  the first negative-offset route primes silence once. Boundaries preserve its
+  tail while lead is needed; lead changes
   use a 5 ms crossfade between fixed delay taps. Reset-off ports retain delayed releases across
   stop/locate while stale queued onsets are dropped. Port status and the offset dialog expose the lead.
   The Hardware MIDI tab edits existing input assignments and hardware sends;

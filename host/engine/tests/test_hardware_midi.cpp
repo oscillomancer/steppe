@@ -503,6 +503,7 @@ TEST_CASE("hardware MIDI: negative lead preserves the audio tail across a seek")
 TEST_CASE("hardware MIDI: prepared audio history survives stop, wrap and lead changes") {
     auto runtime = std::make_unique<detail::HardwareMidiRuntime>();
     runtime->prepare(48000, 1);
+    runtime->ensureHistory();
     DummyBackend backend({});
     REQUIRE(backend.start({.blockSize = 64}, [](auto, auto, auto) {}));
     detail::Plan plan;
@@ -819,6 +820,7 @@ TEST_CASE("hardware MIDI: startup skips malformed preference records and reports
 TEST_CASE("hardware MIDI: lead changes crossfade two fixed history taps") {
     auto runtime = std::make_unique<detail::HardwareMidiRuntime>();
     runtime->prepare(48000, 1);
+    runtime->ensureHistory();
     DummyBackend backend({});
     REQUIRE(backend.start({.blockSize = 64}, [](auto, auto, auto) {}));
     detail::Plan plan;
@@ -850,5 +852,45 @@ TEST_CASE("hardware MIDI: lead changes crossfade two fixed history taps") {
             CHECK(signal[f] == doctest::Approx(expected).epsilon(.000001));
         }
     }
+    backend.stop();
+}
+
+TEST_CASE("hardware MIDI: zero-lead plans skip history allocation and processing") {
+    auto runtime = std::make_unique<detail::HardwareMidiRuntime>();
+    runtime->prepare(48000, 1);
+    CHECK(runtime->historySamples() == 0);
+    DummyBackend backend({});
+    REQUIRE(backend.start({.blockSize = 64}, [](auto, auto, auto) {}));
+    detail::Plan plan;
+    plan.generation = 1;
+    std::array<float, 64> signal;
+    float* out[] = {signal.data()};
+    auto cycle = [&] {
+        signal.fill(1);
+        runtime->begin(backend, 64);
+        runtime->collect(plan, 0, 64, 0, true, 1);
+        runtime->finish(out, 1, 64, false);
+    };
+    for (int i = 0; i < 100; ++i) cycle();
+    CHECK(runtime->historySamples() == 0);
+    for (float x : signal) CHECK(x == 1);
+    runtime->ensureHistory();  // owner prepares before publishing the first negative-offset plan
+    CHECK(runtime->historySamples() == 48001);
+    plan.hardwareLead = 960;
+    ++plan.generation;
+    cycle();
+    for (float x : signal) CHECK(x == 0);  // prime once; zero-lead history was never running
+    CHECK_FALSE(runtime->releaseHistory());
+    for (int i = 0; i < 100; ++i) cycle();
+    for (float x : signal) CHECK(x == 1);
+    plan.hardwareLead = 0;
+    ++plan.generation;
+    cycle();
+    CHECK_FALSE(runtime->releaseHistory());  // crossfade still uses the history
+    for (int i = 0; i < 8; ++i) cycle();
+    REQUIRE(runtime->releaseHistory());  // all retained plans are zero-lead in this probe
+    CHECK(runtime->historySamples() == 0);
+    cycle();
+    for (float x : signal) CHECK(x == 1);
     backend.stop();
 }

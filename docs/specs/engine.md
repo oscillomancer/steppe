@@ -2746,8 +2746,12 @@ backend.midiOutputLatency[port] + offset_ms * sampleRate / 1000` (rounded to
 frames). Negative minimum delay adds prepared audio lead to all MIDI delays
 and a final audio delay; lead is limited to one second and reported by
 `midi_lead_frames`. Engine output latency, heard timing and recording account
-for it. The prepared history runs continuously across stop, locate, loop wrap
-and lead-unchanged edits. Boundaries drop queued pre-boundary note-ons, retaining
+for it. History is allocated on the owner thread only when publishing a plan
+with non-zero lead, and runs only during non-zero lead or a tap crossfade.
+It continues across stop, locate, loop wrap and lead-unchanged edits while lead
+is needed. The first negative-offset route after an inactive history primes
+silence once. On return to zero lead, owner-thread reclamation waits for the
+final crossfade acknowledgment and retirement of every plan that could use it. Boundaries drop queued pre-boundary note-ons, retaining
 releases, other messages and mute markers on reset-off ports; reset-on routes
 invalidate their queues through the route generation. A lead change
 crossfades fixed old/new integer-delay taps over 5 ms without clearing history

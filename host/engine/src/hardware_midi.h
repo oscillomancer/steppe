@@ -20,6 +20,11 @@ class HardwareMidiRuntime {
   public:
     HardwareMidiRuntime();
     void prepare(double rate, std::uint32_t channels);
+    void ensureHistory();  // control thread, before publishing a non-zero-lead plan
+    // Control thread, only after every retained plan has zero lead, or after
+    // the backend stopped. Audio acknowledges completion of the final fade.
+    bool releaseHistory(bool stopped = false);
+    std::size_t historySamples() const;  // control-thread allocation diagnostic
     void begin(Backend&, std::uint32_t frames) SUPPLE_RT;
     void collect(Plan&, std::int64_t pos, std::uint32_t frames, std::uint32_t offset, bool playing,
                  std::uint64_t epoch) SUPPLE_RT;
@@ -64,7 +69,9 @@ class HardwareMidiRuntime {
     std::array<MidiInputEvent, kMaxMidiInputEvents> inputBlock_{};
     std::array<std::atomic<std::uint64_t>, 16> outputDrops_{}, inputDrops_{};
     std::vector<std::vector<float>> audioDelay_;
-    std::atomic<bool> historyReady_{false};
+    std::atomic<bool> historyReady_{false}, historyBusy_{false};
+    double historyRate_ = 0;
+    std::uint32_t historyChannels_ = 0;
     std::uint32_t readLead_ = 0, fadeTarget_ = 0;
     std::uint32_t fadeFrames_ = 1, fadeLeft_ = 0;
     std::size_t audioCursor_ = 0;

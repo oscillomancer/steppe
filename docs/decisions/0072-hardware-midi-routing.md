@@ -38,6 +38,14 @@ changes use a 5 ms linear crossfade between fixed old/new integer taps, with
 both taps advancing at the device rate. An edit during a fade is taken after
 that fade completes. No read-pointer varispeed or history reset is involved.
 
+2026-11-11 suggestion S2 supersedes the always-running-history note: history
+allocation and processing are conditional on non-zero lead or an active tap
+crossfade. The owner allocates before publishing a non-zero-lead plan and
+reclaims after all potentially using plans retire and audio acknowledges the
+final zero-lead fade. Zero-lead callbacks bypass history. The first negative
+offset after an inactive history primes silence once, then boundaries preserve
+that history while lead is needed.
+
 ## Decision
 
 Extend the unreleased project schema 2.10 with MIDI routes whose destination
