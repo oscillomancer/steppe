@@ -2024,3 +2024,35 @@ TEST_CASE("routing matrix: wildcard input removal is atomic and replacements are
     matrix.sync();
     f.snapshot("routing-hardware-all-inputs.png", &panel.root());
 }
+
+TEST_CASE("routing matrix: output offset previews the prepared shared audio lead") {
+    Fixture f;
+    if (!f.ok) return;
+    engine::DummyBackend backend({.midiOutputPorts = {"Synth"}});
+    struct Stop {
+        engine::EngineApp& app;
+        ~Stop() { app.stopEngine(); }
+    } stop{*f.app};
+    REQUIRE(f.app->startEngine(backend, {.blockSize = 64, .midiOutputs = true},
+                               {.anticipative = false, .workers = 0}));
+    const auto source = f.exec("track.add", R"({"name":"Hardware notes"})")["track"].asString();
+    f.exec("route.add", R"({"from":")" + source + R"(","to_midi":"Synth","midi":{}})");
+    gui::FloatingPanel panel(*f.platform, *f.window, *f.root, SUPPLE_GUI_FONTS_DIR, "Panel", 1000,
+                             560, 800, 360);
+    gui::RoutingMatrix matrix(panel, *f.actions, *f.dispatcher, *f.app);
+    matrix.setHardwareMidiMode();
+    matrix.open();
+    panel.root().frame(false);
+    auto menu = matrix.midiPortMenu(true, "Synth");
+    menu[1].run();
+    panel.root().frame(false);
+    auto* field = static_cast<ui::TextField*>(panel.root().find("routing.port.offset.value"));
+    REQUIRE(field);
+    panel.root().focus(field);
+    field->selectAll();
+    panel.root().text("-20");
+    auto* lead = panel.root().find("routing.port.offset.lead");
+    REQUIRE(lead);
+    CHECK(lead->valueText() == "adds 20.0 ms latency to all audio");
+    f.snapshot("routing-hardware-offset-lead.png", &panel.root());
+}
