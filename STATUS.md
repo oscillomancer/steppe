@@ -138,7 +138,7 @@ instructions are in `docs/guides/installing.md`.
   latency and the offset), across tempo changes, playrate, loop wraps and
   locates, in both executors; nothing during a count-in; not echoed to the
   sync master's device. `midi.outputs.get`/`midi.outputs.set`,
-  `engine.status.midi_outputs`; no GUI yet
+  `engine.status.midi_outputs`, saved in the preferences; no GUI yet
   (Phase 2's Hardware MIDI tab). Tested on the dummy device's captured MIDI.
 
 - **Session and history** (`specs/session-model.md`, ADR-0008): immutable

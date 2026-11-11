@@ -633,6 +633,15 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "%s\n", message.c_str());
     };
     syncDialog.onTimecode = [&] { timecodeDialog.open(); };
+    // MIDI clock and MTC output (ADR-0072): the saved settings reach the
+    // engine, and every change (midi.outputs.set) is saved.
+    if (auto applied = (*app)->setMidiOutputSettings(prefs.midiOutputs); !applied)
+        std::fprintf(stderr, "midi outputs: %s\n", applied.error().toString().c_str());
+    auto saveMidiOutputs = [&] {
+        if ((*app)->midiOutputSettings() == preferences.preferences().midiOutputs) return;
+        if (auto saved = preferences.setMidiOutputs((*app)->midiOutputSettings()); !saved)
+            std::fprintf(stderr, "midi outputs: %s\n", saved.error().toString().c_str());
+    };
     appActions.addUi("ui.sync.settings", "Transport: sync settings…", [&] { syncDialog.open(); });
     renderDialog.onStatus = [&](const std::string& message) { shell.setStatus(message); };
     renderDialog.openFolderWhenDone = [&] { return preferences.preferences().renderOpenFolder; };
@@ -1152,6 +1161,7 @@ int main(int argc, char** argv) {
             if (audioDevice.isOpen()) audioDevice.refresh();
             if (timecodeDialog.isOpen()) timecodeDialog.refresh();
             syncDialog.refresh();
+            saveMidiOutputs();
             if (shell.arrange()->poll(event)) root.requestAnimationFrame();
         });
         return next;

@@ -954,5 +954,26 @@ shown. Source preparation finishes before the new timing becomes audible.
 frames, audio output latency minus MIDI output latency). A busy device is
 skipped while audio keeps running; close the application using it and restart
 the engine to retry. Device topology changes are advisory and require an
-explicit restart to adopt the new set. Hardware MIDI routing and clock/MTC
-output controls are not yet available; opening outputs alone sends no music.
+explicit restart to adopt the new set. Hardware MIDI routing is not yet
+available; opening outputs alone sends no music.
+
+### MIDI clock and MTC to other devices
+
+A drum machine, sequencer or video system can follow Steppe over a MIDI
+output. There is no window for it yet; an agent sets it with
+`midi.outputs.set`, one output at a time, for example
+`{"port": "Interface", "clock": true, "transport": true, "spp": true}`:
+`clock` sends MIDI clock while playing, `transport` Start, Continue and
+Stop, `spp` the song position (so a device starts mid-song in the right
+place), `mtc` MIDI time code at the project's timecode, and
+`clock_while_stopped` keeps the clock running at the tempo while stopped.
+`offset_ms` moves that output's MIDI later (or earlier, negative) to suit
+the device, and `enabled: false` silences the output. The port is the
+output's name exactly as `midi.outputs.get` lists it. Clock and MTC are
+off until you turn them on, and the settings are kept with your
+preferences, also for a device that is not connected now.
+The messages are timed with the audio you hear, so plug-in latency does
+not put them early; nothing is sent during a count-in, and an output on
+the device Steppe follows (Transport sync) does not get its own clock
+back. `midi.outputs.get` and `engine.status` show what each output sends
+and how many messages went out.

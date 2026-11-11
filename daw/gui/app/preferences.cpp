@@ -14,7 +14,7 @@
 namespace supple::gui {
 namespace {
 
-constexpr const char* kSchema = "supple.preferences/1.7";
+constexpr const char* kSchema = "supple.preferences/1.8";
 
 Error threadLimitError() {
     return Error("preferences.audio_threads", "audio processing thread limit is out of range",
@@ -77,7 +77,8 @@ Result<Preferences> Preferences::load(const std::filesystem::path& file) {
          schema->asString() != "supple.preferences/1.3" &&
          schema->asString() != "supple.preferences/1.4" &&
          schema->asString() != "supple.preferences/1.5" &&
-         schema->asString() != "supple.preferences/1.6"))
+         schema->asString() != "supple.preferences/1.6" &&
+         schema->asString() != "supple.preferences/1.7"))
         return Error("preferences.schema", file.string() + " is not a " + kSchema + " document",
                      "/schema");
     if (const json::Value* m = doc->find("default_monitor")) {
@@ -142,6 +143,16 @@ Result<Preferences> Preferences::load(const std::filesystem::path& file) {
         }
         out.sync = std::move(*sync);
     }
+    if (const auto* v = doc->find("midi_outputs")) {  // 1.8, ADR-0072
+        auto outputs = engine::parseMidiOutputList(*v);
+        if (!outputs) {
+            Error e = std::move(outputs).error();
+            e.code = "preferences.midi_outputs";
+            e.path = "/midi_outputs" + e.path;
+            return e;
+        }
+        out.midiOutputs = std::move(*outputs);
+    }
     return out;
 }
 
@@ -158,6 +169,7 @@ Status Preferences::save(const std::filesystem::path& file) const {
     doc["render_open_folder"] = renderOpenFolder;
     doc["audio"] = audioDeviceJson(audio);
     doc["sync"] = engine::syncSettingsJson(sync);
+    doc["midi_outputs"] = engine::midiOutputListJson(midiOutputs);
     std::error_code ec;
     std::filesystem::create_directories(file.parent_path(), ec);
     return writeFileAtomic(file, json::writeCanonical(doc) + "\n");
@@ -426,6 +438,15 @@ Status PreferencesDialog::setSync(const engine::SyncSettings& sync) {
     if (sync == prefs_.sync) return {};
     auto next = prefs_;
     next.sync = sync;
+    if (!file_.empty()) SUPPLE_TRY(next.save(file_));
+    prefs_ = next;
+    return {};
+}
+
+Status PreferencesDialog::setMidiOutputs(const std::vector<engine::MidiOutputSettings>& outputs) {
+    if (outputs == prefs_.midiOutputs) return {};
+    auto next = prefs_;
+    next.midiOutputs = outputs;
     if (!file_.empty()) SUPPLE_TRY(next.save(file_));
     prefs_ = next;
     return {};
