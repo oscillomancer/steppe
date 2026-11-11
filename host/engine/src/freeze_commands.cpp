@@ -370,10 +370,11 @@ void registerFreezeCommands(cmd::Registry& registry) {
             {
                 const model::Session s = app.view();
                 const model::Track& t = *s.tracks.find(a.track);
-                const bool postSends = std::any_of(s.routes.begin(), s.routes.end(), [&](auto& r) {
-                    return r.value->midi && r.value->from.track == a.track &&
-                           r.value->tap != model::Tap::PreFx;
-                });
+                const bool postSends = t.chainMidi == model::ChainMidi::Bus &&
+                                       std::any_of(s.routes.begin(), s.routes.end(), [&](auto& r) {
+                                           return r.value->midi && r.value->from.track == a.track &&
+                                                  r.value->tap != model::Tap::PreFx;
+                                       });
                 for (model::Id fx : t.chain)
                     if (auto notes = postSends ? app.fxOutputsNotes(fx, *s.fx.find(fx))
                                                : Result<bool>(false);

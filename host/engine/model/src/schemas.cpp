@@ -354,6 +354,9 @@ Schema<TrackTimebase> trackTimebaseSchema() {
                               {TrackTimebase::Beats, "beats"},
                               {TrackTimebase::BeatsPosition, "beats_position"}});
 }
+Schema<ChainMidi> chainMidiSchema() {
+    return en<ChainMidi>({{ChainMidi::Bus, "bus"}, {ChainMidi::Instrument, "instrument"}});
+}
 Schema<ItemTimebase> itemTimebaseSchema() {
     return en<ItemTimebase>({{ItemTimebase::Track, "track"},
                              {ItemTimebase::Time, "time"},
@@ -589,6 +592,8 @@ const Schema<Track>& schemaOf<Track>() {
         dflt(b, d.timebase);
         b.field("chain", &Track::chain, ids());
         dflt(b, d.chain);
+        b.field("chain_midi", &Track::chainMidi, chainMidiSchema());
+        dflt(b, d.chainMidi);
         b.field("input_chain", &Track::inputChain, ids());
         dflt(b, d.inputChain);
         b.field("locked", &Track::locked, boolean());
@@ -1293,6 +1298,18 @@ void migrateNotesSends(json::Value& doc) {
         if (fed.contains(track)) m.value["source_sends"] = false;
     }
 }
+
+// Before 2.10 only a chain's first plug-in with a note input heard the
+// track's MIDI, and plug-ins' note output went nowhere. A chain of one
+// plug-in sounds the same on the bus; a longer one keeps the old behaviour.
+void migrateChainMidi(json::Value& doc) {
+    auto* tracks = doc.asObject().find("tracks");
+    if (!tracks || !tracks->isObject()) return;
+    for (auto& t : tracks->asObject())
+        if (const auto* chain = t.value.find("chain");
+            t.value.isObject() && chain && chain->isArray() && chain->size() >= 2)
+            t.value["chain_midi"] = "instrument";
+}
 }  // namespace
 
 Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Warning>* warnings) {
@@ -1334,6 +1351,8 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
     // the MIDI routed into that track (Note Out routes, the only kind then).
     // Where such a route exists, the module keeps that sound (ADR-0067).
     if (version->major == 1 || version->minor < 10) migrateNotesSends(doc);
+    // Before 2.10 a chain did not carry MIDI past its instrument (ADR-0068).
+    if (version->major == 1 || version->minor < 10) migrateChainMidi(doc);
     // Before 2.4 a master's hardware output could be written as a route to
     // hw_channels, which nothing played (ADR-0056): it becomes the master's
     // hw_output (its first such route), and the route goes.

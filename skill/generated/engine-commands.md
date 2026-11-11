@@ -15643,7 +15643,7 @@ Result:
 
 Set track fields: name, type, volume, pan, mute, solo, polarity, mono, arming.
 
-Only the given fields change. solo: off | on | in_place | defeat. armed + record_input (device input channels, 1-based) prepare a track for transport.record; record_midi records MIDI instead: hardware audio and MIDI replace each other. A rack's Out (record_rack) keeps a MIDI input beside it, which plays its Notes; recording then takes MIDI. null clears each one (record_input: null takes off hardware audio, record_rack: null a rack's Out), leaving the others. A device name is a substring of the MIDI port ("*" = every device), with midi_channel 1-16 (0 = all). monitor: off | on | auto (auto: while armed) — a monitored track hears its input live (an instrument plays the keyboard), also while stopped. record_mode: input (new items), midi_overdub (merge into the MIDI item under the start, as a new take), midi_replace. color: red | orange | yellow | green | teal | blue | violet | grey | "#rrggbb" ("" clears it), shown as a stripe on the track. A master takes armed alone: transport.record then records its output (after its fader, before its own items) as an item on the master; lane_mute silences a master's items.
+Only the given fields change. solo: off | on | in_place | defeat. armed + record_input (device input channels, 1-based) prepare a track for transport.record; record_midi records MIDI instead: hardware audio and MIDI replace each other. A rack's Out (record_rack) keeps a MIDI input beside it, which plays its Notes; recording then takes MIDI. null clears each one (record_input: null takes off hardware audio, record_rack: null a rack's Out), leaving the others. A device name is a substring of the MIDI port ("*" = every device), with midi_channel 1-16 (0 = all). monitor: off | on | auto (auto: while armed) — a monitored track hears its input live (an instrument plays the keyboard), also while stopped. record_mode: input (new items), midi_overdub (merge into the MIDI item under the start, as a new take), midi_replace. color: red | orange | yellow | green | teal | blue | violet | grey | "#rrggbb" ("" clears it), shown as a stripe on the track. A master takes armed alone: transport.record then records its output (after its fader, before its own items) as an item on the master; lane_mute silences a master's items. chain_midi: bus (every plug-in with a note input hears the chain's MIDI, a note-output plug-in feeds those after it and the post-FX sends) or instrument (only the first such plug-in hears the track's MIDI, as before 2.10).
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -15680,6 +15680,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | `channels` | integer |  | 1.0..128.0 |  | 1-2: the strip's main pair; up to 128 adds auxiliary channels 3-128 for routes and plug-in pins (a detector on 3/4, a multi-out instrument's outputs), outside the fader, pan and parent send |
 | `hw_output` | array |  |  |  | Masters: the device outputs the main pair plays to: [l, r], [mono] or [] for none (engine.inputs lists them). Default: tr_0 [1, 2], other masters [] |
 | `lane_mute` | boolean |  |  |  | Masters: silence the master's own items (its prints) and nothing else |
+| `chain_midi` | string |  |  |  | What the FX chain does with MIDI: bus (default; plug-ins hear and feed it in order) or instrument (only the first plug-in with a note input hears the track's MIDI; plug-ins' note output goes nowhere) |
 
 ### Result
 
@@ -15887,6 +15888,23 @@ Result:
 {
   "track": "tr_0",
   "lane_mute": true
+}
+
+```
+
+Result:
+
+```json
+{}
+
+```
+
+**Only the instrument hears the track's MIDI, as before 2.10** (`song`)
+
+```json
+{
+  "track": "tr_1",
+  "chain_midi": "instrument"
 }
 
 ```

@@ -16,6 +16,7 @@
 #include "plan.h"
 #include "rack_runtime.h"
 #include "supple/model/groups.h"
+#include "supple/model/schemas.h"
 #include "supple/params/params.h"
 
 using namespace supple;
@@ -2276,9 +2277,10 @@ void addNotes(model::EditTxn& t, Id track, std::vector<midi::Note> notes, int ti
 // One channel playing `notes` through `chain`, on a linear console.
 model::Session busChain(std::vector<const char*> chain, std::vector<midi::Note> notes,
                         model::MidiOutputMode mode = model::MidiOutputMode::Replace,
-                        bool bypass = false) {
+                        bool bypass = false, model::ChainMidi chainMidi = model::ChainMidi::Bus) {
     model::EditTxn t(model::Session::create({.console9 = false}), 1);
     const Id track = addChannel(t);
+    t.modify<model::Track>(track, [&](auto& tr) { tr.chainMidi = chainMidi; });
     for (const char* plugin : chain) {
         const Id fx = addFx(t, track, plugin);
         if (plugin == std::string_view(kEcho))
@@ -2323,6 +2325,49 @@ TEST_CASE("MIDI bus: a note-output plug-in replaces or merges what the plug-ins 
             renderLeft(busChain({kEcho, kSine}, busNotes(), model::MidiOutputMode::Replace, true),
                        1.0, block) == plain));
     }
+}
+
+TEST_CASE("MIDI bus: a 2.9 project keeps its chains' MIDI behaviour (chain_midi: instrument)" *
+          doctest::description("rt")) {
+    // A synth then a second plug-in with a note input (here another synth,
+    // which adds its voices to what comes in): before 2.10 the second heard
+    // nothing. On the bus it would play the notes too.
+    model::EditTxn t(model::Session::create({.console9 = false}), 1);
+    const Id layered = addChannel(t), single = addChannel(t);
+    addFx(t, layered, kSine);
+    addFx(t, layered, kSine);
+    addFx(t, single, kSine);
+    addNotes(t, layered, busNotes());
+    addNotes(t, single, busNotes());
+    const auto current = commit(t);
+    REQUIRE(maxDiff(renderLeft(current, 1.0, 512, layered), renderLeft(current, 1.0, 512, single)) >
+            0.01);  // the bus
+    auto doc = model::projectToJson(current);
+    doc["schema"] = "supple.project/2.9";
+    std::vector<supple::schema::Warning> warnings;
+    auto old = model::projectFromJson(doc, &warnings);
+    REQUIRE_MESSAGE(old, (old ? std::string() : old.error().toString()));
+    CHECK(old->tracks.find(layered)->chainMidi == model::ChainMidi::Instrument);
+    CHECK(old->tracks.find(single)->chainMidi == model::ChainMidi::Bus);  // cannot differ
+    // The second synth hears nothing: the chain plays the first one alone.
+    const auto first = renderLeft(current, 1.0, 512, single);
+    CHECK(bool(renderLeft(*old, 1.0, 512, layered) == first));
+    CHECK(bool(renderLeft(*old, 1.0, 512, single) == first));
+    // Saved and reopened, it stays so; the default is not written.
+    const auto saved = model::serializeProject(*old);
+    auto parsed = json::parse(saved);
+    REQUIRE(parsed);
+    CHECK((*parsed)["tracks"][layered.str()]["chain_midi"] == json::Value("instrument"));
+    CHECK((*parsed)["tracks"][single.str()].find("chain_midi") == nullptr);
+    auto reopened = model::projectFromJson(*parsed);
+    REQUIRE(reopened);
+    CHECK(reopened->tracks.find(layered)->chainMidi == model::ChainMidi::Instrument);
+    CHECK(reopened->tracks.find(single)->chainMidi == model::ChainMidi::Bus);
+    CHECK(bool(renderLeft(*reopened, 1.0, 512, layered) == first));
+    // A 2.10 file is read as written: two plug-ins without the field are on the bus.
+    auto fresh = model::projectFromJson(model::projectToJson(current));
+    REQUIRE(fresh);
+    CHECK(fresh->tracks.find(layered)->chainMidi == model::ChainMidi::Bus);
 }
 
 TEST_CASE("MIDI bus: post-FX sends carry the bus after the chain, compensated" *
@@ -2379,6 +2424,7 @@ TEST_CASE("MIDI bus: held notes survive plan swaps; a removed or bypassed plug-i
     SUBCASE("removed") { change = "remove"; }
     SUBCASE("bypassed") { change = "bypass"; }
     SUBCASE("merge") { change = "merge"; }
+    SUBCASE("instrument mode") { change = "instrument"; }
     SUBCASE("removed between instruments") { change = "layered"; }
     model::EditTxn t(model::Session::create({.console9 = false}), 1);
     const Id source = addChannel(t), target = addChannel(t);
@@ -2443,6 +2489,9 @@ TEST_CASE("MIDI bus: held notes survive plan swaps; a removed or bypassed plug-i
     if (change == "merge")
         edit.modify<model::FxInstance>(
             echo, [](auto& f) { f.midiOutput = model::MidiOutputMode::Merge; });
+    if (change == "instrument")  // the bus goes: only the echo (the note target) hears
+        edit.modify<model::Track>(source,
+                                  [](auto& tr) { tr.chainMidi = model::ChainMidi::Instrument; });
     session = commit(edit);
     auto next = d::compile(session, pool, 0, 512);
     REQUIRE(next);

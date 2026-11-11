@@ -449,6 +449,8 @@ void registerTemplateCommands(cmd::Registry& registry) {
             if (strip.panLeft != plain.panLeft) doc.track["pan_left"] = strip.panLeft;
             if (strip.panRight != plain.panRight) doc.track["pan_right"] = strip.panRight;
             if (strip.panLaw) doc.track["pan_law"] = model::panLawSchema().encode(*strip.panLaw);
+            if (strip.chainMidi != plain.chainMidi)
+                doc.track["chain_midi"] = model::chainMidiSchema().encode(strip.chainMidi);
             static constexpr const char* kMonitor[] = {"off", "on", "auto"};
             doc.track["monitor"] = kMonitor[static_cast<std::size_t>(strip.record.monitor) % 3];
             auto main = encodeEffects(app, s, strip.chain);
@@ -523,7 +525,7 @@ void registerTemplateCommands(cmd::Registry& registry) {
             json::Value set = json::Value::object();
             set["track"] = track;
             for (const char* key : {"color", "notes", "volume_db", "pan", "pan_mode", "width",
-                                    "pan_left", "pan_right", "pan_law"})
+                                    "pan_left", "pan_right", "pan_law", "chain_midi"})
                 if (const json::Value* v = field(key); v && !v->isNull()) set[key] = *v;
             const bool channel = !type || !type->isString() || type->asString() == "channel";
             if (const json::Value* v = field("monitor"); channel && v && v->isString())

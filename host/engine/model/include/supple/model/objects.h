@@ -159,6 +159,12 @@ struct ControlLearn : ControlBinding {
     bool operator==(const ControlLearn&) const = default;
 };
 
+// What a track's FX chain does with its MIDI (ADR-0068). bus: the chain is a
+// MIDI bus (every plug-in with a note input hears it, note-output plug-ins
+// feed it); instrument: as before 2.10, only the first plug-in with a note
+// input hears the track's MIDI and plug-ins' note output goes nowhere.
+enum class ChainMidi : std::uint8_t { Bus, Instrument };
+
 struct Track {
     StripType type = StripType::Channel;
     std::string name, color, notes;
@@ -193,6 +199,7 @@ struct Track {
     RecordSettings record;
     TrackTimebase timebase = TrackTimebase::Project;
     std::vector<Id> chain, inputChain;
+    ChainMidi chainMidi = ChainMidi::Bus;
     // UI intent (kept in the model, ignored by merges' conflict checks).
     bool locked = false, hiddenTcp = false, hiddenMixer = false;
     std::optional<TrackFreeze> freeze;

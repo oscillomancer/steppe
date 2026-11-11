@@ -10,7 +10,9 @@
 // busBase + one of its kBusVoices slots. Whatever a stage, or the post-FX
 // stream, holds of a part that no longer reaches it (a note-output plug-in
 // bypassed, removed or switched to replace ahead of it) ends at the start of
-// the block. Nothing here allocates: every buffer is sized in prepareRackMidi.
+// the block. A track whose chain_midi is instrument has no bus: only the note
+// target hears its MIDI, as before 2.10, and post-FX equals pre-FX. Nothing
+// here allocates: every buffer is sized in prepareRackMidi.
 #include <algorithm>
 
 #include "rack_runtime.h"
@@ -90,6 +92,7 @@ bool beginMidiBus(Node& node, const void* self) SUPPLE_RT {
             }
             if (voice.origin.item == kBusNoteOrigin) {
                 voice.release =
+                    !node.midiBusOn ||
                     !midiBusReaches(node, partOf(node, voice.sourceId - kBusNoteBase), k);
             } else if (isTarget && !target) {
                 // The pre-FX stream no longer reaches the note target: what it
@@ -131,7 +134,7 @@ void fillMidiBus(Node& node) SUPPLE_RT {
 }
 
 void feedMidiBus(Node& node, Stage& st, std::size_t k) SUPPLE_RT {
-    if (!accepts(st)) return;
+    if (!node.midiBusOn || !accepts(st)) return;  // instrument mode: the target alone
     const bool isTarget = static_cast<int>(k) == node.noteTarget;
     const std::size_t before = st.blockEvents.size();
     for (const BusEvent& b : node.midiBus) {

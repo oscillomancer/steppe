@@ -136,6 +136,7 @@ Fields:
 | `record` | `{armed, input: audio route id or null, midi_input?: MIDI route id, monitor: off|on|auto, mode: input|output|midi_overdub|midi_replace}` | channels; on masters only `armed` (it records the master's output, ADR-0057). `output` still loads from project files, but an armed output-mode channel prevents recording with `record.output_unsupported` before any file is created; use input mode instead |
 | `timebase` | enum or `project` | default for its items (channels) |
 | `chain`, `input_chain` | [fx id] | §1.7; `input_chain` on channels only |
+| `chain_midi` | `bus` \| `instrument` | what the chain does with MIDI (ADR-0068), default `bus`: every plug-in with a note input hears the chain's MIDI bus and note-output plug-ins feed it; `instrument`: only the chain's first plug-in with a note input hears the track's MIDI, as before 2.10. Kept by track templates and `track.duplicate`; part of the freeze hash, omitted at its default |
 | `lanes` | `{mode: none|fixed|comp, lanes: [ln id], comp: …}` | channels only |
 | `locked`, `hidden_tcp`, `hidden_mixer`, `folder_compact` | bool / enum | UI state kept in the model because it is user intent, but tagged `ui: true` so diffs/merges can ignore it |
 | `learn` | [binding] | MIDI learn on the strip's own controls (ADR-0058), one per control, sorted by `param`, omitted when empty: `{param, midi, mode, soft_takeover}` with `midi` and `mode` as an effect's (§1.7). `param`: `volume`, `pan`, `width`, `pan_left`, `pan_right`, `pan_boost` (these four on channels/busses), `mute`, `solo`, `phase_invert`, `mono`, `armed` (channels, masters), `monitor` (channels) or `lane_mute` (masters). Copied with `track.duplicate`, not kept by track templates; ignored by the freeze hash |
@@ -154,8 +155,9 @@ Track templates (`supple.track-template/1.0`) persist the strip's `channels`
 in their `track` object and pass it to `track.add` when loaded. The optional
 field defaults to stereo (2) for older templates. Its strip-type bounds match
 `track.add`; FX pins retain their saved channel assignments. The strip's
-`pan_mode`, `width`, `pan_left`, `pan_right` and `pan_law` (ADR-0066) are
-written when they differ from their defaults and set on load.
+`pan_mode`, `width`, `pan_left`, `pan_right` and `pan_law` (ADR-0066), and
+`chain_midi` (ADR-0068), are written when they differ from their defaults and
+set on load.
 
 Presets and templates live in the user's configuration folder: FX chain
 presets (`supple.fx-chain/1.0`) in `<config>/<slug>/chains`, a plugin's own
@@ -1113,8 +1115,13 @@ selection, and since a Notes module did not hear the MIDI routed into its
 source track before 2.10, the loader sets `source_sends: false` on each
 Notes module of an older file whose source track (its `source`, else its
 rack's channel) receives a MIDI route from a track or module. FX instances
-add optional `midi_output` (default `replace`, ADR-0068). Older builds cannot
-use the new endpoints, source-off setting or `midi_output`.
+add optional `midi_output` (default `replace`, ADR-0068), and tracks optional
+`chain_midi` (default `bus`). Before 2.10 only a chain's first plug-in with a
+note input heard the track's MIDI; which plug-ins take notes is not in the
+file, so the loader writes `chain_midi: instrument` on every track of an older
+file whose `chain` has two or more plug-ins (a chain of one sounds the same on
+the bus). Older builds cannot use the new endpoints, source-off setting,
+`midi_output` or `chain_midi`.
 
 ### Pan modes and laws (schema 2.9, ADR-0066)
 

@@ -4,7 +4,8 @@
 ADR-0017 (VST3 event buses) and ADR-0067 (the post-FX MIDI stream).
 Contracts: `docs/specs/sandbox.md` §1 and its implementation notes,
 `host/clap-host/include/supple/host/clap_host.h`, `docs/specs/engine.md`
-(MIDI sends and the MIDI bus) and `docs/specs/session-model.md` (`midi_output`).
+(MIDI sends and the MIDI bus) and `docs/specs/session-model.md` (`midi_output`,
+`chain_midi`).
 
 ## Context
 
@@ -126,6 +127,18 @@ so the events must come out the same in all three.
     being omitted at its default, leaves existing hashes unchanged.
 13. **Scope.** Take chains, input FX and rack plugin modules keep their
     own note routing; their plug-ins' note output is not on a bus.
+14. **Old projects keep their sound.** A track's `chain_midi` chooses the
+    bus (`bus`, the default) or the behaviour before 2.10 (`instrument`):
+    only the note target hears the track's MIDI, no other plug-in hears
+    anything, plug-ins' note output goes nowhere and the post-FX stream is
+    the pre-FX stream. Which plug-ins take notes is known only once they
+    load, so the loader cannot tell which old chains the bus would change:
+    for files older than 2.10 it writes `instrument` on every track whose
+    chain has two or more plug-ins (a chain of one sounds the same either
+    way). `track.set` and the FX window change it; track templates keep it;
+    it is in the freeze hash, omitted at its default. Switching to
+    `instrument` mid-note ends what the bus's other listeners and the
+    post-FX stream held, as a removed note-output plug-in does.
 
 ## Consequences
 
@@ -135,7 +148,9 @@ so the events must come out the same in all three.
   executors. Plug-ins without audio ports, refused before (`engine.layout`),
   now load in a chain.
 - A plug-in with an input note port after the note target (a MIDI-triggered
-  gate after a synth) now hears the bus, where it heard nothing before.
+  gate after a synth) now hears the bus, where it heard nothing before, in
+  new chains; older projects' longer chains open with `chain_midi:
+  instrument` and sound as they did, and the user turns the bus on.
 - Freezing a channel whose plug-ins generate notes changes what its post-FX
   sends play; the warning says so. Recording the MIDI at freeze time is left
   for later.

@@ -737,6 +737,7 @@ struct TrackSetArgs {
     std::optional<std::int64_t> channels;
     std::optional<std::vector<std::int64_t>> hwOutput;
     std::optional<bool> laneMute;
+    std::optional<model::ChainMidi> chainMidi;
 };
 struct TrackEntry {
     bool frozen = false;
@@ -1655,7 +1656,10 @@ void registerEngineCommands(cmd::Registry& registry) {
             "midi_replace. color: red | orange | yellow | green | teal | blue | violet | grey | "
             "\"#rrggbb\" (\"\" clears it), shown as a stripe on the track. A master takes "
             "armed alone: transport.record then records its output (after its fader, before "
-            "its own items) as an item on the master; lane_mute silences a master's items.";
+            "its own items) as an item on the master; lane_mute silences a master's items. "
+            "chain_midi: bus (every plug-in with a note input hears the chain's MIDI, a "
+            "note-output plug-in feeds those after it and the post-FX sends) or instrument "
+            "(only the first such plug-in hears the track's MIDI, as before 2.10).";
         c.tags = {"track", "mixer"};
         c.args =
             schema::object<TrackSetArgs>("track_set_args")
@@ -1751,6 +1755,11 @@ void registerEngineCommands(cmd::Registry& registry) {
                 .field("lane_mute", &TrackSetArgs::laneMute,
                        schema::boolean().doc("Masters: silence the master's own items (its "
                                              "prints) and nothing else"))
+                .field("chain_midi", &TrackSetArgs::chainMidi,
+                       model::chainMidiSchema().doc(
+                           "What the FX chain does with MIDI: bus (default; plug-ins hear and "
+                           "feed it in order) or instrument (only the first plug-in with a note "
+                           "input hears the track's MIDI; plug-ins' note output goes nowhere)"))
                 .build();
         c.result = emptySchema();
         c.examples = {
@@ -1776,7 +1785,9 @@ void registerEngineCommands(cmd::Registry& registry) {
             {"Arm the main master to print the mix", obj(R"({"track": "tr_0", "armed": true})"),
              obj("{}"), "song"},
             {"Hear the live mix without the print", obj(R"({"track": "tr_0", "lane_mute": true})"),
-             obj("{}"), "song"}};
+             obj("{}"), "song"},
+            {"Only the instrument hears the track's MIDI, as before 2.10",
+             obj(R"({"track": "tr_1", "chain_midi": "instrument"})"), obj("{}"), "song"}};
         c.run = [](const TrackSetArgs& a, Context& ctx) -> Result<Empty> {
             EngineApp& app = A(ctx);
             const model::Session s = app.view();
@@ -2030,6 +2041,7 @@ void registerEngineCommands(cmd::Registry& registry) {
                 if (a.hwOutput)
                     t.hwOutput = std::vector<int>(a.hwOutput->begin(), a.hwOutput->end());
                 if (a.laneMute) t.laneMute = *a.laneMute;
+                if (a.chainMidi) t.chainMidi = *a.chainMidi;
                 if (a.solo)
                     t.solo = *a.solo == "on"         ? model::Solo::On
                              : *a.solo == "in_place" ? model::Solo::InPlace

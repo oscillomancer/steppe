@@ -374,6 +374,16 @@ without audio, only notes, sit in the chain like any other. A frozen
 channel's sends play its own MIDI again, since its plug-ins no longer run;
 freezing warns about it.
 
+Every plug-in in the chain that takes notes hears them, a second instrument
+or a MIDI-triggered gate after the first one included. To keep the older
+behaviour, where only the first such plug-in hears the channel's MIDI and
+nothing a plug-in sends goes anywhere, click **MIDI: through the chain** beside
+the chain's heading (shown when a plug-in there sends notes, or two or more
+take them) and
+choose **Only the instrument hears MIDI**. Projects saved before this version
+open that way on every channel with two or more plug-ins, so they sound as
+they did; switch it back to hear the new routing.
+
 **View > Routing matrix**, or a strip's **out** button, opens a grid of what
 feeds what: a row per strip (and per output pair of a multi-out instrument),
 a column per destination. A square with a dot is a send; a crossed-out square

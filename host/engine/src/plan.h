@@ -697,9 +697,8 @@ struct Node {
     // routed voices (from midiRoutedBase, a range per incoming send). Held
     // notes take slots of a pool sized by how many can sound at once
     // (prepareRackMidi), so budgets and adoption scale with held voices, not
-    // with the notes in the timeline. The streams a send taps carry slot ids.
-    // Post-FX is an explicit seam for plug-in note output; currently it
-    // equals pre-FX.
+    // with the notes in the timeline. The streams a send taps carry slot ids;
+    // post-FX is the chain's MIDI bus after the chain (ADR-0068).
     Stage midiStage;
     std::vector<host::Event> midiPreFx, midiPostFx, midiSortScratch;
     std::vector<std::int32_t> midiInstrument;  // parallel to midiPreFx: the note target's id
@@ -709,6 +708,9 @@ struct Node {
     // kBusVoices per note-output stage), and the post-FX held state.
     std::vector<BusEvent> midiBus, midiBusNext, midiBusGen;
     std::vector<int> midiBusStages;
+    // Off (chain_midi: instrument): only the note target hears the track's
+    // MIDI, no stage is on the bus, and post-FX equals pre-FX.
+    bool midiBusOn = true;
     std::int32_t midiBusVoices = 0;
     std::vector<PostVoice> midiPostHeld, midiPostBefore;
     std::vector<std::pair<std::int32_t, std::int32_t>> midiBusRemap;  // adoption: old -> new id

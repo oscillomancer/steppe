@@ -372,6 +372,7 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
             return st;
         };
         n.auxCount = std::clamp(t.channels - 2, 0, model::kMaxTrackChannels - 2);
+        n.midiBusOn = t.chainMidi == model::ChainMidi::Bus;
         n.freeze = t.freeze;
         if (n.freeze) continue;  // Original objects remain in the model, not this plan.
         const int channels = 2 + n.auxCount;
@@ -1072,7 +1073,7 @@ Status prepare(Plan& p, const Session& s) {
             SUPPLE_TRY(prepareStage(st));
             if (n.noteTarget < 0 && st.instance && st.instance->acceptsNotes())
                 n.noteTarget = stageIndex;
-            if (st.instance && st.instance->outputsNotes()) {
+            if (n.midiBusOn && st.instance && st.instance->outputsNotes()) {
                 st.busPart = static_cast<int>(n.midiBusStages.size());
                 n.midiBusStages.push_back(stageIndex);
             }

@@ -6829,9 +6829,12 @@ TEST_CASE("MIDI bus: plug-in note output nulls offline in both executors and all
           doctest::description("rt")) {
     // The source's echo plays its sine a fifth up, then a latent plug-in;
     // a post-fader send carries the echo's notes to a channel's sine and to
-    // a rack whose Notes plays a sine module (ADR-0068).
-    for (auto mode : {model::MidiOutputMode::Replace, model::MidiOutputMode::Merge}) {
-        CAPTURE(int(mode));
+    // a rack whose Notes plays a sine module (ADR-0068). Variants: replace,
+    // merge, and the source's chain without a bus (chain_midi: instrument).
+    for (int variant : {0, 1, 2}) {
+        CAPTURE(variant);
+        const auto mode =
+            variant == 1 ? model::MidiOutputMode::Merge : model::MidiOutputMode::Replace;
         const auto base = synthSession(-18.0, "com.suppleaudio.test.gain", 1);
         const auto source = base.tracks.find(kMaster)->children.front();
         model::EditTxn t(base, 2);
@@ -6839,8 +6842,10 @@ TEST_CASE("MIDI bus: plug-in note output nulls offline in both executors and all
         echo.plugin.id = "com.suppleaudio.test.note-echo";
         echo.midiOutput = mode;
         const auto echoId = t.create(echo);
-        t.modify<model::Track>(source,
-                               [&](auto& tr) { tr.chain.insert(tr.chain.begin(), echoId); });
+        t.modify<model::Track>(source, [&](auto& tr) {
+            tr.chain.insert(tr.chain.begin(), echoId);
+            if (variant == 2) tr.chainMidi = model::ChainMidi::Instrument;
+        });
         auto addTrack = [&] {
             model::Track track;
             track.parent = kMaster;

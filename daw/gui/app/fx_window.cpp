@@ -765,8 +765,15 @@ bool FxWindow::outputsNotes(model::Id fx) {
     if (cached.plugin == model->plugin.id && cached.live == live && !cached.plugin.empty())
         return cached.value;
     auto notes = app_.fxOutputsNotes(fx, *model);
-    cached = {model->plugin.id, live, notes && *notes};
+    auto accepts = app_.fxAcceptsNotes(fx, *model);
+    cached = {model->plugin.id, live, notes && *notes, accepts && *accepts};
     return cached.value;
+}
+
+bool FxWindow::acceptsNotes(model::Id fx) {
+    (void)outputsNotes(fx);  // fills the cache
+    const auto cached = notesOut_.find(fx.str());
+    return cached != notesOut_.end() && cached->second.accepts;
 }
 
 void FxWindow::openMidiOutputMenu(model::Id fx, const ui::Rect& anchor) {
@@ -787,6 +794,26 @@ void FxWindow::openMidiOutputMenu(model::Id fx, const ui::Rect& anchor) {
     root().openPopup(
         ui::makeMenu("fx.midiout.menu", std::move(items), [this] { root().closePopup(); }), anchor,
         ui::Placement::Below);
+}
+
+void FxWindow::openChainMidiMenu(const ui::Rect& anchor) {
+    const model::Track* track = app_.head().tracks.find(track_);
+    if (!track) return;
+    auto set = [this](const char* mode) {
+        json::Value args = json::Value::object();
+        args["track"] = track_.str();
+        args["chain_midi"] = mode;
+        if (dispatch("track.set", std::move(args))) refresh();
+    };
+    const bool instrument = track->chainMidi == model::ChainMidi::Instrument;
+    std::vector<ui::MenuItem> items;
+    items.push_back({"MIDI through the chain: each plug-in hears it", "", [set] { set("bus"); },
+                     true, false, !instrument});
+    items.push_back({"Only the instrument hears MIDI (before 2.10)", "",
+                     [set] { set("instrument"); }, true, false, instrument});
+    root().openPopup(
+        ui::makeMenu("fx.chainmidi.menu", std::move(items), [this] { root().closePopup(); }),
+        anchor, ui::Placement::Below);
 }
 
 Status FxWindow::dispatch(const char* command, json::Value args) {
@@ -1122,7 +1149,34 @@ void FxWindow::buildChain(ui::Node& body) {
     for (std::size_t i = 0; i < track->inputChain.size(); ++i)
         buildRow(body, track->inputChain[i], i, true);
     body.emplace<EmptyInputSpace>([this] { openBrowser(true); });
-    body.emplace<ui::Label>("fx.section.chain", "Chain", ui::Font::UiBold, "caption", "ink-quiet");
+    // What the chain does with the track's MIDI (ADR-0068): shown where it
+    // matters (a plug-in that sends notes, or two that take them) or where
+    // the mode is already set.
+    const bool instrumentOnly = track->chainMidi == model::ChainMidi::Instrument;
+    bool matters = false;
+    if (track->chain.size() >= 2) {
+        int accepting = 0;
+        for (model::Id fx : track->chain) {
+            matters |= outputsNotes(fx);
+            accepting += acceptsNotes(fx) ? 1 : 0;
+        }
+        matters |= accepting >= 2;
+    }
+    if (matters || instrumentOnly) {
+        auto& chainHeader = body.emplace<ui::Node>("fx.chain.header");
+        chainHeader.layout.dir = ui::Layout::Dir::Row;
+        chainHeader.layout.height = ui::SizeRule::fixed(22);
+        chainHeader.layout.gap = 6;
+        chainHeader.layout.align = ui::Layout::Align::Center;
+        chainHeader.emplace<ui::Label>("fx.section.chain", "Chain", ui::Font::UiBold, "caption",
+                                       "ink-quiet");
+        auto& midi = chainHeader.emplace<ui::Button>(
+            "fx.chain.midi", instrumentOnly ? "MIDI: instrument only" : "MIDI: through the chain");
+        midi.onClick = [this, at = &midi] { openChainMidiMenu(at->bounds()); };
+    } else {
+        body.emplace<ui::Label>("fx.section.chain", "Chain", ui::Font::UiBold, "caption",
+                                "ink-quiet");
+    }
     if (track->chain.empty())
         body.emplace<ui::Label>("fx.empty", "No effects yet — use “Add plugin…”.", ui::Font::Ui,
                                 "small", "ink-quiet");

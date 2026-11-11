@@ -207,6 +207,13 @@ Result<bool> EngineApp::fxOutputsNotes(model::Id id, const model::FxInstance& fx
     return (*in)->outputsNotes();
 }
 
+Result<bool> EngineApp::fxAcceptsNotes(model::Id id, const model::FxInstance& fx) {
+    if (const host::Instance* live = instanceOf(id)) return live->acceptsNotes();
+    auto in = scratch(fx);
+    if (!in) return std::move(in).error();
+    return (*in)->acceptsNotes();
+}
+
 Result<std::vector<host::AudioPortInfo>> EngineApp::fxAuxOutputs(const model::FxInstance& fx) {
     auto in = scratch(fx);
     if (!in) return std::move(in).error();

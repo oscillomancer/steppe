@@ -2682,7 +2682,11 @@ marking a take's own notes and controllers (`midiChain`) so no plug-in of
 the track hears them; sends still do. Before each stage, `feedMidiBus`
 gives a note-accepting stage the bus, notes under `kBusNoteBase` + their
 bus id (the note target skips the pre-FX part, which it already heard under
-its own ids), merged by time with its automation and releases. After each
+its own ids), merged by time with its automation and releases. A track whose
+`chain_midi` is `instrument` (`Node::midiBusOn` false) has no note-output
+stages on the bus and feeds no stage: only the note target hears the
+track's MIDI, and post-FX equals pre-FX, as before 2.10. A plug-in with
+note ports and no audio ports runs in either mode, the audio passing it. After each
 stage, `stageMidiBus` turns a note-output stage's output into bus events:
 notes (and MIDI 1.0 note messages) take its voice slots, keyed by the
 plug-in's `(port, channel, key, note id)`, with an end before an onset on a
@@ -2698,8 +2702,9 @@ Bus ids are the pre-FX slots, then `kBusVoices` (256) per note-output
 stage. Adoption (`carryBus`) keeps a continuing stage's held notes and maps
 their old bus ids to new ones (same instance and FX id), maps pre-FX ids
 by the pool's remap, carries `midiPostHeld`, remaps listening stages'
-bus notes (else they end) and lets post-FX sends carry their voices by the
-same map. A seek ends the pre-FX part's post-FX notes and what other stages
+bus notes (else they end, at the start of the next block, also on a
+listener other than the note target) and lets post-FX sends carry their
+voices by the same map. A seek ends the pre-FX part's post-FX notes and what other stages
 than the note target hold of it.
 
 A note-output stage's sink holds `kBusOutputEvents` (1024, the bridge

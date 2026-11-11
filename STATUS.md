@@ -284,7 +284,9 @@ instructions are in `docs/guides/installing.md`.
   and event buses. A track's FX chain is a MIDI bus: a note-output plug-in
   replaces (or, `midi_output: merge`, merges into) what the plug-ins after it
   and the post-FX MIDI sends hear; plug-ins with only note ports run in a
-  chain. Offline and both real-time executors agree in every isolation. Take
+  chain. A track's `chain_midi: instrument` keeps the behaviour before 2.10
+  (only the first plug-in with a note input hears the track's MIDI); older
+  files open with it on every chain of two or more plug-ins. Offline and both real-time executors agree in every isolation. Take
   chains, input FX and rack plugin modules keep their own note routing; a
   frozen channel's post-FX sends carry its timeline MIDI (`track.freeze`
   warns). SysEx and per-note expressions other than pressure are dropped and

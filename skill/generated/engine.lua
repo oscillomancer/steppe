@@ -1817,6 +1817,7 @@ q = nil
 ---@field channels? integer 1-2: the strip's main pair; up to 128 adds auxiliary channels 3-128 for routes and plug-in pins (a detector on 3/4, a multi-out instrument's outputs), outside the fader, pan and parent send
 ---@field hw_output? integer[] Masters: the device outputs the main pair plays to: [l, r], [mono] or [] for none (engine.inputs lists them). Default: tr_0 [1, 2], other masters []
 ---@field lane_mute? boolean Masters: silence the master's own items (its prints) and nothing else
+---@field chain_midi? "bus"|"instrument" What the FX chain does with MIDI: bus (default; plug-ins hear and feed it in order) or instrument (only the first plug-in with a note input hears the track's MIDI; plug-ins' note output goes nowhere)
 
 ---@class Steppe.track_set_result
 ---@field warnings? table[]
