@@ -476,6 +476,41 @@ inline constexpr std::int32_t kRoutedNoteBase = 1 << 30;
 // with its own instrument plays it).
 inline constexpr std::int32_t kNotTargetNote = INT32_MIN;
 
+// The FX chain as a MIDI bus (ADR-0068). The bus carries notes by bus id:
+// a pre-FX slot (Node::midiHeld), or a note-output stage's busBase + one of
+// its kBusVoices voice slots. A stage hears a bus note under the id
+// kBusNoteBase + its bus id, its voice marked with kBusNoteOrigin;
+// adoption remaps the bus id (carryRackMidi).
+inline constexpr std::uint64_t kBusNoteOrigin = UINT64_MAX - 1;
+inline constexpr std::int32_t kBusNoteBase = kRoutedNoteBase + (1 << 29);
+inline constexpr std::size_t kBusVoices = 256;  // held notes per note-output plug-in
+// A note-output plug-in's output sink: the bridge arena's room, so every
+// isolation accepts and refuses the same pushes (ADR-0068 §5).
+inline constexpr std::size_t kBusOutputEvents = 1024;
+// The most bus events a note-output stage adds in one block: each output
+// event (a note on ending a held note first), and releases of every voice.
+inline constexpr std::size_t kBusStageEvents = 2 * kBusOutputEvents + 2 * kBusVoices;
+// One held note of a note-output plug-in, by the plug-in's own address.
+struct BusVoice {
+    bool high = false;
+    std::int16_t port = 0, channel = 0, key = 0;
+    std::int32_t noteId = -1;
+};
+// A bus event and where it came from: part -1 is the pre-FX stream, else the
+// ordinal of the note-output stage that sent it. `stages`: the chain hears
+// it (not a take's own note or controller).
+struct BusEvent {
+    host::Event event;
+    std::int16_t part = -1;
+    bool stages = true;
+};
+// The post-FX stream's held notes, by bus id (sends restart and carry them).
+struct PostVoice {
+    bool high = false;
+    std::int16_t channel = 0, key = 0;
+    std::uint8_t velocity = 96;
+};
+
 // One held note of a track's MIDI stream (ADR-0067). The input is what it
 // came in as: an item note's compiled id, a live key or a routed voice
 // (Node::midiInput). An orphan lost its input at adoption (an edited note, a
@@ -496,7 +531,15 @@ struct MidiRoutedInput {
 };
 
 struct Stage {
-    int rackMidiBase = -1;               // kRoutedNoteBase on a track's note target
+    int rackMidiBase = -1;  // kRoutedNoteBase on a track's note target
+    // The MIDI bus (ADR-0068): a note-output stage's ordinal among them
+    // (-1: none), its first bus id, its held output notes, and whether it is
+    // on the bus this block (running, not bypassed: else the bus passes).
+    int busPart = -1;
+    bool busMerge = false, busLive = false;
+    bool midiOnly = false;  // no audio ports: it runs for its notes, audio passes
+    std::int32_t busBase = 0;
+    std::vector<BusVoice> busHeld;
     host::Instance* instance = nullptr;  // null: placeholder (pass-through)
     Id fx;
     std::vector<ParamLane> lanes;
@@ -655,12 +698,25 @@ struct Node {
     // routed voices (from midiRoutedBase, a range per incoming send). Held
     // notes take slots of a pool sized by how many can sound at once
     // (prepareRackMidi), so budgets and adoption scale with held voices, not
-    // with the notes in the timeline. The streams a send taps carry slot ids.
-    // Post-FX is an explicit seam for plug-in note output; currently it
-    // equals pre-FX.
+    // with the notes in the timeline. The streams a send taps carry slot ids;
+    // post-FX is the chain's MIDI bus after the chain (ADR-0068).
     Stage midiStage;
     std::vector<host::Event> midiPreFx, midiPostFx, midiSortScratch;
     std::vector<std::int32_t> midiInstrument;  // parallel to midiPreFx: the note target's id
+    std::vector<std::uint8_t> midiChain;       // parallel to midiPreFx: the chain hears it
+    // The chain's MIDI bus (ADR-0068): this block's events between stages,
+    // the note-output stages in chain order, the bus ids (pre-FX slots, then
+    // kBusVoices per note-output stage), and the post-FX held state.
+    std::vector<BusEvent> midiBus, midiBusNext, midiBusGen;
+    std::vector<int> midiBusStages;
+    // Off (chain_midi: instrument): only the note target hears the track's
+    // MIDI, no stage is on the bus, and post-FX equals pre-FX.
+    bool midiBusOn = true;
+    std::int32_t midiBusVoices = 0;
+    std::vector<PostVoice> midiPostHeld, midiPostBefore;
+    std::vector<std::pair<std::int32_t, std::int32_t>> midiBusRemap;  // adoption: old -> new id
+    std::int32_t midiOldPool = 0;                      // adoption: the old plan's pre-FX pool
+    std::size_t midiPostRate = 0, midiPostWindow = 0;  // midiEventRate/Window, post-FX
     MidiOrder midiOrder;
     std::vector<MidiSlot> midiHeld, midiBefore;  // the pool; its state at the block's start
     std::vector<std::int32_t> midiFree;          // free slots, a stack

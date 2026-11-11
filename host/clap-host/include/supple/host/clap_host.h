@@ -185,25 +185,50 @@ struct ProcessBlock {
 // a live user event. NoteEnd uses the input-note (port, channel, key, noteId)
 // address, including -1 wildcards. ParamValue retains its target address too.
 // VST3 parameter outputs are normalized, have zero flags and no note address.
+//
+// Note and MIDI output (ADR-0068; process() only, never params.flush):
+// NoteOn, NoteOff and NoteChoke carry the plug-in's output note address
+// (port: its output note port or event bus; channel 0..15 and key 0..127, or
+// -1 wildcards on an off or a choke) and noteId; on and off carry the velocity
+// 0..1 in `value`. Midi carries one MIDI 1.0 short message in `midi` (status
+// first, unused data bytes zero) on `port`: CC, pressure, pitch bend, program
+// change, a note given as MIDI, system common and real-time. Their times are
+// within the block (0..frames-1). midiOutput() tells these four kinds apart.
 struct OutputEvent {
-    enum class Kind : std::uint8_t { ParamValue, GestureBegin, GestureEnd, NoteEnd };
+    enum class Kind : std::uint8_t {
+        ParamValue,
+        GestureBegin,
+        GestureEnd,
+        NoteEnd,
+        NoteOn,
+        NoteOff,
+        NoteChoke,
+        Midi
+    };
     static constexpr std::uint32_t IsLive = CLAP_EVENT_IS_LIVE, DontRecord = CLAP_EVENT_DONT_RECORD;
     Kind kind = Kind::ParamValue;
+    std::uint8_t midi[3] = {0, 0, 0};  // Kind::Midi
     std::uint32_t time = 0;
     std::uint32_t paramId = CLAP_INVALID_ID;
-    double value = 0;
+    double value = 0;  // a parameter value, or a note's velocity
     std::int32_t noteId = -1;
     std::uint32_t flags = 0;
     std::int16_t port = -1, channel = -1, key = -1;
+    bool midiOutput() const { return kind >= Kind::NoteOn; }
 };
 
 // Caller-owned, preallocated sink for output events (the audio thread never
-// allocates): events beyond storage.size() are dropped and counted.
+// allocates): events beyond storage.size() are dropped and counted. Each
+// process() call sorts the events it appended by time, stably (same-time
+// events keep the order the plug-in emitted them in). `unsupported` counts
+// note/MIDI output with no OutputEvent form: SysEx, MIDI 2.0 messages and
+// note expressions without a MIDI 1.0 equivalent, malformed notes and MIDI.
 struct OutputEvents {
     std::span<OutputEvent> storage;
     std::size_t count = 0;
     std::size_t dropped = 0;
-    void clear() { count = dropped = 0; }
+    std::size_t unsupported = 0;
+    void clear() { count = dropped = unsupported = 0; }
 };
 
 class Library;         // a loaded .clap binary (shared by its instances)
@@ -261,6 +286,10 @@ class Instance {
     std::uint32_t audioInputChannels() const { return inChannels_; }
     std::uint32_t audioOutputChannels() const { return outChannels_; }
     bool acceptsNotes() const { return acceptsNotes_; }
+    // The plug-in declares note output (ADR-0068): a CLAP output note port
+    // (note-ports, is_input false) or a VST3 event output bus. Its process()
+    // then may append NoteOn/NoteOff/NoteChoke/Midi output events.
+    bool outputsNotes() const { return outputsNotes_; }
     // The sidechain (key) input: a CLAP plug-in's first non-main input port, a
     // VST3's first auxiliary input bus; 0 when it has none (ADR-0018).
     std::uint32_t sidechainChannels() const { return keyChannels_; }
@@ -361,7 +390,7 @@ class Instance {
     // one compare-exchange; false if another token holds it.
     bool claimOwner(const void* owner) SUPPLE_RT;
     // Returns false on CLAP_PROCESS_ERROR, or when not processing. Output
-    // events are appended to `out` (may be null). Queued setParam() changes
+    // events are appended to `out` (may be null) and sorted by time. Queued setParam() changes
     // are delivered first, at time 0, as far as the event arena has room
     // after the block's own events (the rest wait for the next block); block
     // events beyond the arena are dropped and counted (Notifications).
@@ -421,7 +450,8 @@ class Instance {
     // Main thread: drains CLAP flush outputs, including active-but-stopped
     // audio-thread flushes. FIFO, at most kCapacity events; overflow drops the
     // newest event and is counted since the previous drain. Flush times are 0.
-    // Bridged instances drain over the control channel; bridge failure is
+    // Note and MIDI output in a flush has no block to belong to: it is dropped
+    // and counted in `dropped`. Bridged instances drain over the control channel; bridge failure is
     // observable through failed(). VST3 has no CLAP flush outputs.
     IdleOutputs takeIdleOutputs();
 
@@ -479,6 +509,7 @@ class Instance {
   private:
     Instance() = default;
     friend struct HostCallbacks;
+    bool processBackend(const ProcessBlock& block, OutputEvents* out) SUPPLE_RT;
 
     PluginInfo info_;
     std::shared_ptr<Library> library_;
@@ -501,7 +532,7 @@ class Instance {
     std::optional<EditorFrame> closedFrame_;
     std::uint32_t inChannels_ = 0, outChannels_ = 0, keyChannels_ = 0;
     std::vector<AudioPortInfo> auxOutPorts_;
-    bool acceptsNotes_ = false, keyActive_ = false;
+    bool acceptsNotes_ = false, outputsNotes_ = false, keyActive_ = false;
     bool active_ = false;
     std::atomic<bool> processing_{false};  // written on the audio thread
     std::uint32_t maxFrames_ = 0;

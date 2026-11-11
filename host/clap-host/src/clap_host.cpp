@@ -5,6 +5,7 @@
 #include "bridge_client.h"
 #include "editor_platform.h"
 #include "main_thread_wake.h"
+#include "midi_output.h"
 #include "pending_edits.h"
 #include "scan.h"
 #include "vst3_host.h"
@@ -170,6 +171,7 @@ struct Instance::HostState {
     std::vector<ClapEvent> events;
     std::uint32_t eventCount = 0;
     OutputEvents* outSink = nullptr;
+    std::uint32_t blockFrames = 0;  // of the block being processed, for output times
     // Only one flush producer runs at a time. Inactive flushes produce on
     // main; activation/deactivation hand production to/from the audio thread.
     // The main thread is always the consumer; it never resets the ring.
@@ -419,9 +421,87 @@ struct HostCallbacks {
                 out.key = n->key;
                 break;
             }
+            // Note and MIDI output (ADR-0068).
+            case CLAP_EVENT_NOTE_ON:
+            case CLAP_EVENT_NOTE_OFF:
+            case CLAP_EVENT_NOTE_CHOKE:
+            case CLAP_EVENT_NOTE_EXPRESSION:
+            case CLAP_EVENT_MIDI:
+            case CLAP_EVENT_MIDI2:
+            case CLAP_EVENT_MIDI_SYSEX:
+                return noteOutput(s, e, out);
             default:
                 return true;
         }
+        return push(s, out);
+    }
+
+    // A note or MIDI event from the plug-in, as an OutputEvent where it has
+    // one; the rest is counted in OutputEvents::unsupported.
+    static bool noteOutput(Instance::HostState* s, const clap_event_header_t* e,
+                           OutputEvent& out) SUPPLE_RT {
+        if (s->idleFlush) {  // no block to place it in
+            s->idleDropped.fetch_add(1, std::memory_order_relaxed);
+            s->notifyMain();
+            return true;
+        }
+        bool mapped = false;
+        switch (e->type) {
+            case CLAP_EVENT_NOTE_ON:
+            case CLAP_EVENT_NOTE_OFF:
+            case CLAP_EVENT_NOTE_CHOKE: {
+                if (e->size < sizeof(clap_event_note_t)) return false;
+                const auto* n = reinterpret_cast<const clap_event_note_t*>(e);
+                const auto kind = e->type == CLAP_EVENT_NOTE_ON    ? OutputEvent::Kind::NoteOn
+                                  : e->type == CLAP_EVENT_NOTE_OFF ? OutputEvent::Kind::NoteOff
+                                                                   : OutputEvent::Kind::NoteChoke;
+                mapped = midiout::note(kind, n->port_index, n->channel, n->key, n->note_id,
+                                       n->velocity, out);
+                break;
+            }
+            case CLAP_EVENT_NOTE_EXPRESSION: {
+                // Pressure on one key is poly pressure; MIDI 1.0 has no other
+                // per-note expression (tuning, volume, pan, vibrato, ...).
+                if (e->size < sizeof(clap_event_note_expression_t)) return false;
+                const auto* x = reinterpret_cast<const clap_event_note_expression_t*>(e);
+                std::uint8_t amount = 0;
+                mapped = x->expression_id == CLAP_NOTE_EXPRESSION_PRESSURE && x->port_index >= 0 &&
+                         x->channel >= 0 && x->channel < 16 && x->key >= 0 && x->key < 128 &&
+                         midiout::seven(x->value, amount) &&
+                         midiout::shortMessage(static_cast<std::uint8_t>(0xa0 | x->channel),
+                                               static_cast<std::uint8_t>(x->key), amount, out);
+                out.port = x->port_index;
+                out.noteId = x->note_id;
+                break;
+            }
+            case CLAP_EVENT_MIDI: {
+                if (e->size < sizeof(clap_event_midi_t)) return false;
+                const auto* m = reinterpret_cast<const clap_event_midi_t*>(e);
+                mapped = m->port_index <= 0x7fff &&
+                         midiout::shortMessage(m->data[0], m->data[1], m->data[2], out);
+                out.port = static_cast<std::int16_t>(m->port_index);
+                break;
+            }
+            case CLAP_EVENT_MIDI2: {
+                if (e->size < sizeof(clap_event_midi2_t)) return false;
+                const auto* m = reinterpret_cast<const clap_event_midi2_t*>(e);
+                mapped = m->port_index <= 0x7fff && midiout::fromUmp(m->data, out);
+                out.port = static_cast<std::int16_t>(m->port_index);
+                break;
+            }
+            default:  // SysEx: out of scope
+                break;
+        }
+        if (!mapped) {
+            ++s->outSink->unsupported;
+            return true;
+        }
+        out.time = midiout::blockTime(e->time, s->blockFrames);
+        return push(s, out);
+    }
+
+    static bool push(Instance::HostState* s, const OutputEvent& out) SUPPLE_RT {
+        OutputEvents* sink = s->outSink;
         if (s->idleFlush) {
             if (s->idleOutputs.push(out)) {
                 s->notifyMain();
@@ -656,6 +736,7 @@ Result<std::unique_ptr<Instance>> Instance::create(const PluginInfo& info,
         self->keyChannels_ = ports.keyChannels;
         self->auxOutPorts_ = ports.auxOutputs;
         self->acceptsNotes_ = ports.acceptsNotes;
+        self->outputsNotes_ = ports.outputsNotes;
         self->remoteEditor_ = ports.editor;
         self->hostState_ = std::make_unique<HostState>();
         self->remote_ = std::move(*remote);
@@ -673,6 +754,7 @@ Result<std::unique_ptr<Instance>> Instance::create(const PluginInfo& info,
         self->keyChannels_ = (*backing)->sidechainChannels();
         self->auxOutPorts_ = (*backing)->auxOutputPorts();
         self->acceptsNotes_ = (*backing)->acceptsNotes();
+        self->outputsNotes_ = (*backing)->outputsNotes();
         self->vst3_ = std::move(*backing);
         return self;
     }
@@ -828,6 +910,7 @@ Result<std::unique_ptr<Instance>> Instance::create(const PluginInfo& info,
                 h.preferMidiNotes = !(np.supported_dialects & CLAP_NOTE_DIALECT_CLAP) &&
                                     (np.supported_dialects & CLAP_NOTE_DIALECT_MIDI);
         }
+        self->outputsNotes_ = notes->count(self->plugin_, false) > 0;
     }
     return self;
 }
@@ -1231,6 +1314,14 @@ void Instance::reset() SUPPLE_RT {
 
 bool Instance::process(const ProcessBlock& b, OutputEvents* out) SUPPLE_RT {
     if (b.frames == 0 || b.frames > maxFrames_) return false;
+    const std::size_t first = out ? out->count : 0;
+    const bool ok = processBackend(b, out);
+    // One order for every backing and isolation: by time, stably (ADR-0068).
+    if (out) midiout::sortByTime(out->storage.subspan(first, out->count - first));
+    return ok;
+}
+
+bool Instance::processBackend(const ProcessBlock& b, OutputEvents* out) SUPPLE_RT {
     if (vst3_) return active_ && processing_ && vst3_->process(b, out);
     if (remote_) return active_ && processing_ && remote_->process(b, out);
     if (!active_ || !processing_) return false;
@@ -1410,6 +1501,7 @@ bool Instance::process(const ProcessBlock& b, OutputEvents* out) SUPPLE_RT {
     p.in_events = &h.inEvents;
     p.out_events = &h.outEvents;
     h.outSink = out;
+    h.blockFrames = b.frames;
     const clap_process_status status = plugin_->process(plugin_, &p);
     h.outSink = nullptr;
     h.eventCount = 0;

@@ -290,6 +290,17 @@ void resetTrackMidi(Node& node) SUPPLE_RT;
 void addRackMidi(Plan& p, Node& target, std::int64_t pos, std::uint32_t frames,
                  bool playing) SUPPLE_RT;
 void carryRackMidi(Plan& to, Plan& from, int toClass, int fromClass) SUPPLE_RT;
+// The FX chain as a MIDI bus (ADR-0068), in processNode: beginMidiBus before
+// the note target's releases (which note-output stages run; releases of what
+// no longer reaches a stage; false: the pre-FX stream does not reach the
+// note target), fillMidiBus after finishTrackMidi, feedMidiBus before and
+// stageMidiBus after each stage, finishMidiBus (midiPostFx) after the chain.
+bool midiBusReaches(const Node& node, int part, std::size_t at) SUPPLE_RT;
+bool beginMidiBus(Node& node, const void* self) SUPPLE_RT;
+void fillMidiBus(Node& node) SUPPLE_RT;
+void feedMidiBus(Node& node, Stage& st, std::size_t k) SUPPLE_RT;
+void stageMidiBus(Node& node, Stage& st) SUPPLE_RT;
+void finishMidiBus(Node& node) SUPPLE_RT;
 // One block of a rack node (processNode's for racks).
 bool processRack(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames,
                  const host::Transport& transport, const void* self) SUPPLE_RT;

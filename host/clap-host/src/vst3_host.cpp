@@ -3,6 +3,7 @@
 #include "vst3_host.h"
 #include "editor_platform.h"
 #include "main_thread_wake.h"
+#include "midi_output.h"
 #include "pending_edits.h"
 #include "platform.h"
 #include "unicode.h"
@@ -364,6 +365,23 @@ std::uint32_t read32(std::span<const std::uint8_t> b, std::size_t at) {
 }
 }  // namespace
 
+// The plug-in's output event list: the SDK list, counting the events it
+// refused for want of room (OutputEvents::dropped).
+class OutputEventList final : public vst::EventList {
+  public:
+    using vst::EventList::EventList;
+    Steinberg::tresult PLUGIN_API addEvent(vst::Event& e) override {
+        const auto result = vst::EventList::addEvent(e);
+        if (result != kResultOk) ++refused;
+        return result;
+    }
+    void reset() {
+        clear();
+        refused = 0;
+    }
+    std::uint32_t refused = 0;
+};
+
 struct Vst3Instance::State {
     std::shared_ptr<VST3::Hosting::Module> module;
     // Not reference counted (the SDK's HostApplication ignores addRef/release):
@@ -407,13 +425,13 @@ struct Vst3Instance::State {
     };
     std::array<Note, kMaxEvents> sounding{};
     bool releaseAll = false;
-    bool notes = false, active = false;
+    bool notes = false, noteOutputs = false, active = false;
     bool separateController = false;
     std::array<std::array<vst::ParamID, 130>, 16> midiParams{};
     double rate = 0;
     FixedChanges inputChanges, outputChanges;
     vst::EventList inputEvents{static_cast<Steinberg::int32>(kMaxEvents)};
-    vst::EventList outputEvents{static_cast<Steinberg::int32>(kMaxEvents)};
+    OutputEventList outputEvents{static_cast<Steinberg::int32>(kMaxEvents)};
     PendingEdits changes;
     std::atomic<std::uint32_t> dropped{0};
     std::atomic<bool> latencyChanged{false};
@@ -519,6 +537,7 @@ Result<std::unique_ptr<Vst3Instance>> Vst3Instance::create(const PluginInfo& inf
     s.inputs = s.inBusChannels.empty() ? 0 : s.inBusChannels[0];
     s.outputs = s.outBusChannels.empty() ? 0 : s.outBusChannels[0];
     s.notes = s.component->getBusCount(vst::kEvent, vst::kInput) > 0;
+    s.noteOutputs = s.component->getBusCount(vst::kEvent, vst::kOutput) > 0;
     if (s.controller) {
         const auto count = s.controller->getParameterCount();
         for (Steinberg::int32 i = 0; i < count; ++i) {
@@ -546,6 +565,7 @@ Result<std::unique_ptr<Vst3Instance>> Vst3Instance::create(const PluginInfo& inf
 std::uint32_t Vst3Instance::inputChannels() const { return state_->inputs; }
 std::uint32_t Vst3Instance::outputChannels() const { return state_->outputs; }
 bool Vst3Instance::acceptsNotes() const { return state_->notes; }
+bool Vst3Instance::outputsNotes() const { return state_->noteOutputs; }
 std::vector<AudioPortInfo> Vst3Instance::auxOutputPorts() const {
     const auto& s = *state_;
     std::vector<AudioPortInfo> out;
@@ -654,6 +674,7 @@ Status Vst3Instance::activate(double rate, std::uint32_t maxFrames, bool sidecha
     s.keyPointers.assign(s.keyBus >= 0 ? s.inBusChannels[static_cast<std::size_t>(s.keyBus)] : 0,
                          nullptr);
     if (s.notes) s.component->activateBus(vst::kEvent, vst::kInput, 0, true);
+    if (s.noteOutputs) s.component->activateBus(vst::kEvent, vst::kOutput, 0, true);
     vst::ProcessSetup setup{vst::kRealtime, vst::kSample32,
                             static_cast<Steinberg::int32>(maxFrames), rate};
     if (s.processor->setupProcessing(setup) != kResultOk ||
@@ -823,12 +844,106 @@ void Vst3Instance::reset() SUPPLE_RT {
 }
 void Vst3Instance::flushParams() SUPPLE_RT {}
 
+namespace {
+// One legacy MIDI CC output event as a MIDI 1.0 short message.
+bool legacyMidi(const vst::LegacyMIDICCOutEvent& cc, OutputEvent& out) SUPPLE_RT {
+    if (cc.channel < 0 || cc.channel > 15 || cc.value < 0 || cc.value2 < 0) return false;
+    const auto channel = static_cast<std::uint8_t>(cc.channel);
+    const auto value = static_cast<std::uint8_t>(cc.value),
+               value2 = static_cast<std::uint8_t>(cc.value2);
+    auto message = [&](std::uint8_t status, std::uint8_t d1 = 0, std::uint8_t d2 = 0) {
+        return midiout::shortMessage(status, d1, d2, out);
+    };
+    if (cc.controlNumber < 128) return message(0xb0 | channel, cc.controlNumber, value);
+    switch (cc.controlNumber) {
+        case vst::kAfterTouch:
+            return message(0xd0 | channel, value);
+        case vst::kPitchBend:
+            return message(0xe0 | channel, value, value2);  // LSB, MSB
+        case vst::kCtrlProgramChange:
+            return message(0xc0 | channel, value);
+        case vst::kCtrlPolyPressure:
+            return message(0xa0 | channel, value, value2);  // key, pressure
+        case vst::kCtrlQuarterFrame:
+            return message(0xf1, value);
+        case vst::kSystemSongSelect:
+            return message(0xf3, value);
+        case vst::kSystemSongPointer:
+            return message(0xf2, value, value2);  // LSB, MSB
+        case vst::kSystemTuneRequest:
+            return message(0xf6);
+        case vst::kSystemMidiClockStart:
+            return message(0xfa);
+        case vst::kSystemMidiClockContinue:
+            return message(0xfb);
+        case vst::kSystemMidiClockStop:
+            return message(0xfc);
+        case vst::kSystemActiveSensing:
+            return message(0xfe);
+        default:  // kSystemCableSelect and unknown numbers: no MIDI 1.0 message
+            return false;
+    }
+}
+
+// The plug-in's note and MIDI output (ADR-0068): note on/off, poly pressure
+// and legacy MIDI CC output. Note expressions, data (SysEx), chord and scale
+// events have no MIDI 1.0 short message and are counted as unsupported.
+void collectNoteOutput(OutputEventList& list, std::uint32_t frames, OutputEvents& out) SUPPLE_RT {
+    out.dropped += list.refused;
+    const auto count = list.getEventCount();
+    for (Steinberg::int32 i = 0; i < count; ++i) {
+        vst::Event e{};
+        if (list.getEvent(i, e) != kResultOk) continue;
+        OutputEvent event{};
+        bool mapped = false;
+        switch (e.type) {
+            case vst::Event::kNoteOnEvent:
+                mapped = midiout::note(OutputEvent::Kind::NoteOn, e.busIndex, e.noteOn.channel,
+                                       e.noteOn.pitch, e.noteOn.noteId,
+                                       static_cast<double>(e.noteOn.velocity), event);
+                break;
+            case vst::Event::kNoteOffEvent:
+                mapped = midiout::note(OutputEvent::Kind::NoteOff, e.busIndex, e.noteOff.channel,
+                                       e.noteOff.pitch, e.noteOff.noteId,
+                                       static_cast<double>(e.noteOff.velocity), event);
+                break;
+            case vst::Event::kPolyPressureEvent: {
+                const auto& p = e.polyPressure;
+                std::uint8_t amount = 0;
+                mapped = p.channel >= 0 && p.channel < 16 && p.pitch >= 0 && p.pitch < 128 &&
+                         midiout::seven(static_cast<double>(p.pressure), amount) &&
+                         midiout::shortMessage(static_cast<std::uint8_t>(0xa0 | p.channel),
+                                               static_cast<std::uint8_t>(p.pitch), amount, event);
+                event.noteId = p.noteId;
+                break;
+            }
+            case vst::Event::kLegacyMIDICCOutEvent:
+                mapped = legacyMidi(e.midiCCOut, event);
+                break;
+            default:
+                break;
+        }
+        if (!mapped || e.busIndex < 0 || e.busIndex > 0x7fff) {
+            ++out.unsupported;
+            continue;
+        }
+        event.port = static_cast<std::int16_t>(e.busIndex);
+        event.time = midiout::blockTime(e.sampleOffset, frames);
+        if (out.count == out.storage.size()) {
+            ++out.dropped;
+            continue;
+        }
+        out.storage[out.count++] = event;
+    }
+}
+}  // namespace
+
 bool Vst3Instance::process(const ProcessBlock& block, OutputEvents* out) SUPPLE_RT {
     auto& s = *state_;
     s.inputChanges.clear();
     s.outputChanges.clear();
     s.inputEvents.clear();
-    s.outputEvents.clear();
+    s.outputEvents.reset();
     auto addNormalized = [&](std::uint32_t id, double value, std::uint32_t time) {
         Steinberg::int32 queueIndex = 0;
         auto* q = s.inputChanges.addParameterData(id, queueIndex);
@@ -1042,11 +1157,14 @@ bool Vst3Instance::process(const ProcessBlock& block, OutputEvents* out) SUPPLE_
                 // The normalized value, as the plug-in reported it: a
                 // main-thread consumer converts with Instance::plainParam()
                 // when paramsNormalized() (nothing consumes these yet).
-                out->storage[out->count++] = {OutputEvent::Kind::ParamValue,
-                                              static_cast<std::uint32_t>(offset),
-                                              q->getParameterId(), value, -1};
+                out->storage[out->count++] = {.kind = OutputEvent::Kind::ParamValue,
+                                              .time = static_cast<std::uint32_t>(offset),
+                                              .paramId = q->getParameterId(),
+                                              .value = value,
+                                              .noteId = -1};
             }
         }
+        collectNoteOutput(s.outputEvents, block.frames, *out);
     }
     return ok;
 }

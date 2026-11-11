@@ -13,6 +13,10 @@ transport boundaries and lead-unchanged edits. Lead changes use a 5 ms read-dela
 ramp. Per-port lead_ms and the offset dialog disclose the shared monitoring
 latency. These corrections supersede the original tail-clearing description.
 
+2026-11-11 integration note: ADR-0068's final chain bus supplies channel
+post-FX/post-fader hardware routes. Adoption restarts its held bus voices,
+including plug-in notes; pre-FX hardware routes retain the pre-FX stream.
+
 ## Decision
 
 Extend the unreleased project schema 2.10 with MIDI routes whose destination

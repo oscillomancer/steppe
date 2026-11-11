@@ -501,6 +501,7 @@ q = nil
 ---@field problems? any Current plugin problems: code, message, scope, line when known, hint, silent; scope host when unreadable
 ---@field sidechain_channels? integer The plug-in's key input: route.add {fx} feeds it
 ---@field latency_samples? integer The instance's reported latency, in samples
+---@field outputs_notes? boolean The loaded plug-in sends notes or MIDI: fx.set midi_output chooses replace or merge
 ---@field params_total? integer Plain parameters matching; at most 512 are listed.
 ---@field warnings? table[]
 
@@ -656,6 +657,7 @@ q = nil
 ---@field label? string
 ---@field isolation? "inherit"|"in_process"|"shared_bridge"|"dedicated"
 ---@field pins? table
+---@field midi_output? "replace"|"merge"
 
 ---@class Steppe.fx_set_result
 ---@field warnings? table[]
@@ -1840,6 +1842,7 @@ q = nil
 ---@field channels? integer 1-2: the strip's main pair; up to 128 adds auxiliary channels 3-128 for routes and plug-in pins (a detector on 3/4, a multi-out instrument's outputs), outside the fader, pan and parent send
 ---@field hw_output? integer[] Masters: the device outputs the main pair plays to: [l, r], [mono] or [] for none (engine.inputs lists them). Default: tr_0 [1, 2], other masters []
 ---@field lane_mute? boolean Masters: silence the master's own items (its prints) and nothing else
+---@field chain_midi? "bus"|"instrument" What the FX chain does with MIDI: bus (default; plug-ins hear and feed it in order) or instrument (only the first plug-in with a note input hears the track's MIDI; plug-ins' note output goes nowhere)
 
 ---@class Steppe.track_set_result
 ---@field warnings? table[]
@@ -2150,7 +2153,7 @@ q = nil
 ---@field move fun(args: Steppe.fx_move_args): Steppe.fx_move_result Move a plugin within a track chain or to another track.
 ---@field remove fun(args: Steppe.fx_remove_args): Steppe.fx_remove_result Remove a plugin instance (and its envelopes).
 ---@field restart fun(args: Steppe.fx_restart_args): Steppe.fx_restart_result Re-create a plugin instance from its saved patch/state (after a crash).
----@field set fun(args: Steppe.fx_set_args): Steppe.fx_set_result Set instance options: bypass, offline, wet (%), label, isolation, pins.
+---@field set fun(args: Steppe.fx_set_args): Steppe.fx_set_result Set instance options: bypass, offline, wet, label, isolation, pins, MIDI.
 
 ---@class Steppe.fx.chain
 ---@field delete fun(args: Steppe.fx_chain_delete_args): Steppe.fx_chain_delete_result Delete a saved FX chain preset by name.

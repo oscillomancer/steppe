@@ -82,3 +82,4 @@ current state.
 | [0064](0064-rack-latency.md) | Bounded rack latency reaches PDC | Accepted |
 | [0065](0065-independent-record-inputs.md) | A rack's channel keeps its MIDI input beside its audio | Accepted |
 | [0066](0066-pan-modes-and-laws.md) | Pan modes, selectable pan laws and unity Console 9 staging | Accepted |
+| [0068](0068-plugin-midi-output.md) | Plug-in note and MIDI output | Accepted |

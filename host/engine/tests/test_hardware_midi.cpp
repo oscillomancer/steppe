@@ -606,3 +606,124 @@ TEST_CASE("hardware MIDI: scalar playrate edits retain an existing rate plan") {
     CHECK(engine.planGeneration() == generation);
     engine.stop();
 }
+
+TEST_CASE("hardware MIDI: plug-in bus output reaches compensated taps and keeps fast mix edits") {
+    for (bool anticipative : {false, true})
+        for (auto tap : {model::Tap::PreFx, model::Tap::PreFader, model::Tap::PostFader})
+            for (int variant : {0, 1, 2, 3}) {
+                CAPTURE(anticipative);
+                CAPTURE(int(tap));
+                CAPTURE(variant);
+                Session base(tap);
+                model::EditTxn setup(base.value, 2);
+                model::FxInstance echo;
+                echo.plugin.id = "com.suppleaudio.test.note-echo";
+                echo.midiOutput =
+                    variant == 1 ? model::MidiOutputMode::Merge : model::MidiOutputMode::Replace;
+                echo.bypass = variant == 2;
+                const auto fx = setup.create(echo);
+                setup.modify<model::Track>(base.track, [&](auto& t) {
+                    t.chain.insert(t.chain.begin(), fx);
+                    if (variant == 3) t.chainMidi = model::ChainMidi::Instrument;
+                });
+                auto session = setup.commit().value();
+                auto pool = hardwarePool();
+                MediaCache media;
+                DummyBackend backend({.midiOutputPorts = {"Synth"}});
+                Engine engine(pool, media,
+                              {.anticipative = anticipative,
+                               .renderBlock = 64,
+                               .renderAheadMs = 10,
+                               .workers = 0});
+                REQUIRE(engine.start(backend, {.blockSize = 64, .midiOutputs = true}));
+                REQUIRE(engine.load(session));
+                engine.play();
+                run(engine, backend, anticipative, 8);
+                const bool generated = tap != model::Tap::PreFx && variant < 2;
+                const std::vector<int> expected =
+                    generated ? (variant == 1 ? std::vector<int>{60, 67} : std::vector<int>{67})
+                              : std::vector<int>{60};
+                auto keys = [&](std::uint8_t status) {
+                    std::vector<int> result;
+                    for (const auto& e : backend.midiCapture())
+                        if (e.event.bytes[0] == status) result.push_back(e.event.bytes[1]);
+                    std::sort(result.begin(), result.end());
+                    return result;
+                };
+                CHECK(keys(0x94) == expected);  // channel filter 3, remap to 5
+                for (const auto frame : events(backend, 0x94))
+                    CHECK(frame == engine.outputLatency());
+                if (generated) {
+                    const auto& capture = backend.midiCapture();
+                    CHECK(std::any_of(capture.begin(), capture.end(), [&](const auto& e) {
+                        return e.event.bytes[0] == 0xb4 && e.event.bytes[1] == 74 &&
+                               e.event.bytes[2] == 100 && e.frame == engine.outputLatency();
+                    }));
+                }
+                const auto generation = engine.planGeneration();
+                auto apply = [&](auto change) {
+                    model::EditTxn edit(session, session.version + 1);
+                    change(edit);
+                    session = edit.commit().value();
+                    REQUIRE(engine.load(session));
+                    CHECK(engine.planGeneration() == generation);
+                    run(engine, backend, anticipative, 8);
+                };
+                apply([&](auto& e) {
+                    e.template modify<model::Track>(base.track, [](auto& t) { t.volumeDb = -6; });
+                });
+                apply([&](auto& e) {
+                    e.template modify<model::Route>(base.route, [](auto& r) { r.mute = true; });
+                });
+                CHECK(keys(0x84) == expected);
+                apply([&](auto& e) {
+                    e.template modify<model::Route>(base.route, [](auto& r) { r.mute = false; });
+                });
+                auto restarted = expected;
+                restarted.insert(restarted.end(), expected.begin(), expected.end());
+                std::sort(restarted.begin(), restarted.end());
+                CHECK(keys(0x94) == restarted);
+                engine.stop();
+                CHECK(keys(0x84) == restarted);
+            }
+}
+
+TEST_CASE("hardware MIDI: adopting a post-FX route restarts the bus's held output") {
+    for (bool anticipative : {false, true})
+        for (auto tap : {model::Tap::PreFader, model::Tap::PostFader}) {
+            CAPTURE(anticipative);
+            CAPTURE(int(tap));
+            Session base(model::Tap::PreFx);
+            model::EditTxn setup(base.value, 2);
+            model::FxInstance echo;
+            echo.plugin.id = "com.suppleaudio.test.note-echo";
+            const auto fx = setup.create(echo);
+            setup.modify<model::Track>(base.track,
+                                       [&](auto& t) { t.chain.insert(t.chain.begin(), fx); });
+            const auto session = setup.commit().value();
+            auto pool = hardwarePool();
+            MediaCache media;
+            DummyBackend backend({.midiOutputPorts = {"Synth"}});
+            Engine engine(pool, media,
+                          {.anticipative = anticipative,
+                           .renderBlock = 64,
+                           .renderAheadMs = 10,
+                           .workers = 0});
+            REQUIRE(engine.start(backend, {.blockSize = 64, .midiOutputs = true}));
+            REQUIRE(engine.load(session));
+            engine.play();
+            run(engine, backend, anticipative, 8);
+            REQUIRE(events(backend, 0x94).size() == 1);
+            model::EditTxn change(session, 3);
+            change.modify<model::Route>(base.route, [&](auto& r) { r.tap = tap; });
+            REQUIRE(engine.load(change.commit().value()));
+            REQUIRE(engine.awaitPlan());
+            // Consume the old render-ahead horizon before inspecting the new route.
+            run(engine, backend, anticipative, 100);
+            std::vector<int> keys;
+            for (const auto& e : backend.midiCapture())
+                if (e.event.bytes[0] == 0x94) keys.push_back(e.event.bytes[1]);
+            CHECK(keys == std::vector<int>{60, 67});
+            engine.stop();
+        }
+}

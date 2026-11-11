@@ -204,14 +204,18 @@ struct BridgeInstance {
                         std::span<const Event>(events, std::min(hdr->eventCount, kMaxEvents));
                     b.transport = hdr->hasTransport ? &hdr->transport : nullptr;
                     b.steadyTime = hdr->steadyTime;
-                    OutputEvents sink{std::span<OutputEvent>(outEvents, kMaxOutEvents)};
+                    // The host sink's room, so overflow happens where it would
+                    // in process: the same events kept, dropped and counted.
+                    OutputEvents sink{std::span<OutputEvent>(
+                        outEvents, std::min(hdr->outEventCapacity, kMaxOutEvents))};
                     {
                         // The engine's environment for every node (ADR-0025).
                         dsp::DenormalGuard denormals;
-                        result = instance->process(b, &sink) ? 1 : 0;
+                        result = instance->process(b, hdr->outSink ? &sink : nullptr) ? 1 : 0;
                     }
                     hdr->outEventCount = static_cast<std::uint32_t>(sink.count);
                     hdr->outEventsDropped = static_cast<std::uint32_t>(sink.dropped);
+                    hdr->outEventsUnsupported = static_cast<std::uint32_t>(sink.unsupported);
                     break;
                 }
                 case Cmd::StartProcessing: {
@@ -412,6 +416,7 @@ struct Bridge {
             w.u8(slot->instance->info().semantic ? 1 : 0);
             w.u32(slot->instance->sidechainChannels());
             w.u8(slot->instance->hasEditor() ? 1 : 0);
+            w.u8(slot->instance->outputsNotes() ? 1 : 0);
             const auto& aux = slot->instance->auxOutputPorts();
             const auto ports = std::min<std::size_t>(aux.size(), kMaxAuxPorts);
             w.u32(static_cast<std::uint32_t>(ports));

@@ -92,8 +92,8 @@ Status prepareHardwareMidi(Plan& plan, Backend& backend, const MidiPortPreferenc
                 ? node.rack->notesOut[static_cast<std::size_t>(route.rackNotes)].latency
             : route.tap == model::Tap::PreFx ? 0
                                              : node.latChain;
-        // Channel post-FX streams currently retain pre-FX timestamps (ADR-0067).
-        // Their tapped latency is added at delivery, cancelling its subtraction
+        // The channel's post-FX bus retains the chain's input clock (ADR-0068).
+        // Its tapped latency is added at delivery, cancelling its subtraction
         // here. Rack Note Out timestamps already include its prepared latency.
         const auto eventClockLatency = route.rackNotes >= 0 ? tapped : 0;
         route.delay = plan.outputLatency - node.timelineShift - eventClockLatency +
@@ -358,23 +358,38 @@ void HardwareMidiRuntime::collect(Plan& plan, std::int64_t pos, std::uint32_t fr
                                             {static_cast<std::uint8_t>(0x90 | held.channel),
                                              static_cast<std::uint8_t>(held.key),
                                              static_cast<std::uint8_t>(held.velocity)}}));
-            } else
-                for (std::size_t voice = 0; voice < source.midiBefore.size(); ++voice) {
-                    const auto& held = source.midiBefore[voice];
-                    if (!held.high || held.orphan ||
-                        (!playing && held.kind == MidiSlot::Kind::Timeline))
-                        continue;
+            } else {
+                auto restart = [&](const auto& held, std::size_t voice) {
                     if (std::any_of(stream.begin(), stream.end(), [&](const auto& e) {
                             return e.time == 0 && e.noteId == static_cast<int>(voice);
                         }))
-                        continue;
+                        return;
                     logical(filter({0,
                                     0,
                                     3,
                                     {static_cast<std::uint8_t>(0x90 | held.channel),
                                      static_cast<std::uint8_t>(held.key),
                                      static_cast<std::uint8_t>(held.velocity)}}));
+                };
+                if (route.tap == model::Tap::PreFx) {
+                    for (std::size_t voice = 0; voice < source.midiBefore.size(); ++voice) {
+                        const auto& held = source.midiBefore[voice];
+                        if (held.high && !held.orphan &&
+                            (playing || held.kind != MidiSlot::Kind::Timeline))
+                            restart(held, voice);
+                    }
+                } else {
+                    // Post-FX taps recover the bus's held voices, including
+                    // plug-in output; pre-FX slots may have been replaced.
+                    for (std::size_t voice = 0; voice < source.midiPostBefore.size(); ++voice) {
+                        const auto& held = source.midiPostBefore[voice];
+                        const bool timeline =
+                            voice < source.midiBefore.size() &&
+                            source.midiBefore[voice].kind == MidiSlot::Kind::Timeline;
+                        if (held.high && (playing || !timeline)) restart(held, voice);
+                    }
                 }
+            }
         }
         std::size_t next = 0;
         for (std::uint32_t f = 0; f < frames; ++f) {

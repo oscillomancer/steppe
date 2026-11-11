@@ -276,12 +276,27 @@ instructions are in `docs/guides/installing.md`.
   CLAP descriptor dispatch ignores registrations removed by an earlier
   callback in the same readiness snapshot, as VST3 dispatch already does;
   the Linux regression passes and macOS validation is pending.
+  Plug-ins' note and MIDI output (ADR-0068) reaches the host
+  library's output sink from CLAP (notes, MIDI 1.0, MIDI 2.0 where one short
+  message expresses it, pressure expressions) and VST3 (notes, poly pressure,
+  legacy MIDI CC output), sorted by time and identical in process and in
+  shared or dedicated bridges, and `outputsNotes()` reports output note ports
+  and event buses. A track's FX chain is a MIDI bus: a note-output plug-in
+  replaces (or, `midi_output: merge`, merges into) what the plug-ins after it
+  and the post-FX MIDI sends hear; plug-ins with only note ports run in a
+  chain. A track's `chain_midi: instrument` keeps the behaviour before 2.10
+  (only the first plug-in with a note input hears the track's MIDI); older
+  files open with it on every chain of two or more plug-ins. Offline and both real-time executors agree in every isolation. Take
+  chains, input FX and rack plugin modules keep their own note routing; a
+  frozen channel's post-FX sends carry its timeline MIDI (`track.freeze`
+  warns). SysEx and per-note expressions other than pressure are dropped and
+  counted. Linux tests pass; native macOS/Windows CI is pending.
 - **MIDI sends** (ADR-0067): channel/Note Out to channel/Notes routing, channel
   filters/remapping, tap and mute controls, relay channels without instruments,
   PDC and MIDI recording. The routing window's saved Audio/MIDI mode exposes
   Note Out and Notes endpoints. Notes supports Source None; Note Out displays
-  MIDI channel. Prepared pre/post-FX streams are separate; post-FX currently
-  equals pre-FX pending plug-in MIDI output. Held notes take slots of a pool
+  MIDI channel. Post-FX taps read the FX chain's MIDI bus after the chain
+  (ADR-0068). Held notes take slots of a pool
   sized by the notes that can sound at once, so plan edits during playback
   cost the held voices, not the notes in the timeline; an edit to a send
   upstream releases and retriggers its notes downstream. Frozen channels send
@@ -291,6 +306,8 @@ instructions are in `docs/guides/installing.md`.
   track, so they sound as before. Native macOS/Windows CI and coordinator review remain pending.
 - **Hardware MIDI routing** (ADR-0072, schema 2.10): connects channel/Note Out MIDI to
   named outputs with tap, mute, channel filter/remap and PDC/port offset timing.
+  Post-FX/post-fader taps and held-note recovery use the final FX chain MIDI bus,
+  including plug-in output; pre-FX taps keep the original stream.
   A continuous prepared audio history supplies negative-offset lead (at most
   one second), including monitoring. Boundaries preserve its tail; lead changes
   use a 5 ms read-delay ramp. Port status and the offset dialog expose the lead.
