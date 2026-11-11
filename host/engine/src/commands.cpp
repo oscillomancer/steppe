@@ -40,6 +40,8 @@ void registerConsolidateCommands(cmd::Registry& registry);
 void registerExportCommands(cmd::Registry& registry);
 void registerMixCommands(cmd::Registry& registry);
 void registerHealCommands(cmd::Registry& registry);
+void registerSyncCommands(cmd::Registry& registry);
+schema::Schema<SyncReport> syncStatusSchema();
 void registerLearnCommands(cmd::Registry& registry);
 void registerControlLearnCommands(cmd::Registry& registry);
 void registerDspCommands(cmd::Registry& registry);
@@ -357,6 +359,7 @@ schema::Schema<EngineStatus> engineStatusSchema() {
         .field("dropped", &EngineStatus::dropped, schema::integer())
         .field("voice_dropped", &EngineStatus::voiceDropped, schema::integer())
         .field("failed_errors", &EngineStatus::failedErrors, schema::any())
+        .field("sync", &EngineStatus::sync, syncStatusSchema())
         .build();
 }
 
@@ -981,6 +984,7 @@ void registerEngineCommands(cmd::Registry& registry) {
     registerExportCommands(registry);
     registerMixCommands(registry);
     registerHealCommands(registry);
+    registerSyncCommands(registry);
     registerLearnCommands(registry);
     registerControlLearnCommands(registry);
     registerDspCommands(registry);
@@ -4206,7 +4210,7 @@ void registerEngineCommands(cmd::Registry& registry) {
                      "memory_lock": {"requested": false, "active": false},
                      "cpu_idle_latency": {"requested": false, "active": false},
                      "meter_drops": {"renderer": 0, "callback": 0}, "failed_fx": [],
-                     "dropped": 0, "voice_dropped": 0, "failed_errors": []})"),
+                     "dropped": 0, "voice_dropped": 0, "failed_errors": [], "sync": "<any>"})"),
              "empty"}};
         c.run = [](const EngineStartArgs& a, Context& ctx) -> Result<EngineStatus> {
             EngineApp& app = A(ctx);
@@ -4321,6 +4325,7 @@ void registerEngineCommands(cmd::Registry& registry) {
             "away; engine.stop and engine.start again. midi_devices_changed is advisory: "
             "MIDI topology changed but audio keeps running. midi_devices_message asks for an "
             "explicit engine restart to pick up the new set; existing port names stay fixed. "
+            "sync: external sync (sync.get has the same status with the settings). "
             "midi_dropped: native MIDI messages/packets rejected or lost to bounded queues "
             "(zero for other backends). midi_warnings lists inputs skipped at start, with "
             "device, numeric os_error, message and corrective hint. meter_drops: entries a full "
@@ -4363,7 +4368,7 @@ void registerEngineCommands(cmd::Registry& registry) {
                      "memory_lock": {"requested": false, "active": false},
                      "cpu_idle_latency": {"requested": false, "active": false},
                      "meter_drops": {"renderer": 0, "callback": 0}, "failed_fx": [],
-                     "dropped": 0, "voice_dropped": 0, "failed_errors": []})"),
+                     "dropped": 0, "voice_dropped": 0, "failed_errors": [], "sync": "<any>"})"),
                        "empty"}};
         c.run = [](const NoArgs&, Context& ctx) -> Result<EngineStatus> {
             return A(ctx).engineStatus();

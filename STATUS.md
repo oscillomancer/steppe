@@ -117,10 +117,18 @@ instructions are in `docs/guides/installing.md`.
   with a receiver (either direction, rate detection), LTC encode and decode
   over libltc, and the chase tracker that turns any of them into a master
   playrate with relocation and lock. Unit-tested under RealtimeSanitizer;
-  not yet wired to the engine (see Known limits).
+  the engine uses it for sync input and LTC output (below); clock and MTC
+  output are not wired yet.
 - **Project timecode** (ADR-0071, schema 2.11): `project.timecode {rate,
   start}` (30 fps from 00:00:00:00 by default and for older projects),
   through `project.set`/`project.get` and Project > Timecode….
+- **External sync and LTC output** (ADR-0071): MIDI clock with Song
+  Position (Start, Continue, Stop, follow tempo or transport only), MTC and
+  LTC on an input channel drive the transport and a live chase rate (pitch
+  preserved, never saved; offline renders unaffected; recording works while
+  slaved); LTC of the transport on a chosen output. `sync.get`/`sync.set`
+  and `engine.status.sync`. Devices deliver sync messages beside channel
+  messages on JACK, CoreMIDI and WinMM. Tested with scripted dummy devices.
 
 - **Session and history** (`specs/session-model.md`, ADR-0008): immutable
   versions with stable ids, per-branch undo, branches with object-level diff
@@ -868,12 +876,17 @@ Library boundaries:
   on Linux, and native macOS/Windows CI has not run on it.
 
 Engine and hosting:
-- Sync (ADR-0070): `libs/sync` is not called by the engine yet, so the app
-  sends no MIDI clock, MTC or LTC and cannot follow an external master; no
-  commands, project fields or GUI exist for them. Without a set project
-  rate, 23.976 and 29.97 non-drop MTC or LTC sources read 0.1% off for their
-  first two seconds. Native macOS/Windows CI has not run on the library or
-  the vendored libltc.
+- Sync (ADR-0070, ADR-0071): the app sends no MIDI clock or MTC yet. Sync
+  input and LTC output are tested only with scripted dummy devices: real
+  interfaces' timing, WinMM's millisecond timestamps, LTC over analogue
+  lines and the CoreMIDI/WinMM sync paths (written blind on Linux) need
+  device trials and native macOS/Windows CI, which has not run on any of it.
+  While following a source the whole graph runs in the callback (no
+  render-ahead); a chasing source (MTC, LTC, MIDI clock with follow tempo)
+  plays audio clips through the stretcher, close to but not the same as
+  unsynced playback even when locked; Steppe stops when the master plays
+  backwards; recorded takes drift from the timeline by the chase rate's
+  distance from 1.
 - Pan modes (ADR-0066): `pan` automation does nothing in dual mode.
   Projects from before ADR-0066 play louder (about 3.5 dB for a channel into
   a master, plus about 6.5 dB per buss on the way); there is no migration.
@@ -963,8 +976,8 @@ Engine and hosting:
   non-restart topology advisories
   (ADR-0042). Device-free timing/overflow/lifecycle tests cover the shared path;
   physical MIDI timing/disconnect behavior needs SUPPLE_MIDI_DEVICE_TEST=1 trials.
-  SysEx other than MTC's full frame is discarded (sync messages are kept
-  for ADR-0071's sync input); WinMM timestamps have millisecond resolution. WinMM names
+  SysEx other than MTC's full frame is discarded; WinMM timestamps have
+  millisecond resolution. WinMM names
   do not distinguish two identical devices, or a replacement from the original;
   this will be addressed with Windows MIDI Services once its App SDK is released
   for production (ADR-0042).

@@ -80,6 +80,11 @@ class Recorder {
   public:
     Recorder(std::vector<RecordTarget> targets, double rate, std::int64_t latency);
     ~Recorder();
+    // While slaved (ADR-0071) the timeline moves at the chase rate, not one
+    // frame per frame: a position within a block of the expected one is the
+    // same run (the take drifts by the chase rate's distance from 1); only a
+    // larger jump (a locate, a loop wrap) starts a new one. Before capture.
+    void setDriftTolerant(bool on) { driftTolerant_ = on; }
     Status open();  // creates the files and starts the writer thread
     // Audio thread: `pos` is the timeline sample of this callback's output.
     // A track listed in `processed` records that signal, its first `latency`
@@ -153,6 +158,7 @@ class Recorder {
     // frames captured so far, and the runs after the first (preallocated;
     // read by finish() after capture has stopped).
     std::int64_t expected_ = 0, captured_ = 0;
+    bool driftTolerant_ = false;
     bool runsFull_ = false;
     static constexpr std::size_t kMaxSegments = 4096;
     std::array<RecordedSegment, kMaxSegments> segments_{};

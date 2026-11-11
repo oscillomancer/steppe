@@ -101,6 +101,44 @@ struct EngineWorkgroup {
     std::string message, hint;
 };
 
+// External sync (ADR-0071): how this machine is wired, not project state.
+// The GUI saves it with its preferences; sync.set changes it.
+struct SyncSettings {
+    std::string source = "off";   // off | midi_clock | mtc | ltc
+    std::string midiInput;        // midi_clock, mtc: a MIDI input port's name
+    int ltcInput = 1;             // ltc: the device input channel (1-based)
+    bool followTempo = true;      // midi_clock: chase its tempo; off: Start/Stop/Song Position only
+    double offsetMs = 0.0;        // positive: Steppe plays that much behind the master
+    std::string onLoss = "stop";  // stop | freewheel
+    int freewheelFrames = 25;     // freewheel: timecode frames before stopping (1..300)
+    bool ltcOutput = false;       // write LTC of the transport to a device output
+    int ltcOutputChannel = 3;     // its device output channel (1-based)
+    double ltcLevelDb = -18.0;    // peak level of the LTC, dBFS (-60..0)
+    bool operator==(const SyncSettings&) const = default;
+};
+// Validates every member (code sync.settings, path /<field>, with a hint).
+Status validateSyncSettings(const SyncSettings& settings);
+// JSON as sync.get returns it and preferences.json saves it. Absent members
+// keep `base`'s values.
+Result<SyncSettings> parseSyncSettings(const json::Value& value, SyncSettings base = {});
+json::Value syncSettingsJson(const SyncSettings& settings);
+
+// What sync is doing (engine.status, sync.get).
+struct SyncReport {
+    std::string source = "off";
+    std::string input;  // the MIDI port or input channel it listens to ("" when none)
+    bool present = false, running = false, locked = false;
+    std::string state = "idle";  // the chase: idle | acquiring | relocating | chasing | locked
+    double bpm = 0.0;            // midi_clock: the master's tempo
+    std::string timecode;        // mtc, ltc: the latest timecode ("" before one)
+    std::string rate;            // mtc, ltc: the frame rate heard
+    double chaseRate = 1.0;      // the live playrate the chase applies (times the saved rate)
+    double errorMs = 0.0;        // master minus heard position
+    double locateMs = 50.0;      // a locate's measured time, which starts and relocates lead by
+    bool ltcOutput = false;      // LTC is being written to its output
+    std::vector<std::string> warnings;
+};
+
 // The real-time engine as engine.status reports it.
 struct EngineStatus {
     bool preparingAudio = false;
@@ -129,6 +167,7 @@ struct EngineStatus {
     std::vector<std::string> failedFx;           // isolated instances whose bridge crashed or hung
     std::int64_t dropped = 0, voiceDropped = 0;  // plug-in output/voice transport
     json::Value failedErrors = json::Value::array();
+    SyncReport sync;  // external sync (ADR-0071)
 };
 
 struct RecordingWarning {
@@ -474,6 +513,12 @@ class EngineApp : public cmd::Host {
     const MetronomeSettings& metronome() const { return metronome_; }
     void setMetronome(const MetronomeSettings& m);  // reaches the engine now and on every start
     const TransportRange& punch() const { return punch_; }
+    // External sync (ADR-0071): the settings reach the engine now and on
+    // every start; tick() turns what the engine hears into transport changes
+    // and the live chase rate.
+    const SyncSettings& syncSettings() const { return syncSettings_; }
+    Status setSyncSettings(const SyncSettings& settings);
+    SyncReport syncReport();
 
     // --- main-thread service (event/deadline driven) --------------------------------
     // Frees retired plans, emits fx.failed (so subscribers see failures without
@@ -751,6 +796,14 @@ class EngineApp : public cmd::Host {
     Status finishAutomationPass(double stopSeconds);
     TransportRange loop_, punch_;  // kept across engine restarts (not in the session)
     MetronomeSettings metronome_;
+    // External sync (ADR-0071, sync_commands.cpp).
+    SyncSettings syncSettings_;
+    SyncConfig syncConfigFor(std::vector<std::string>* warnings) const;
+    void applySync();                // the settings and the project's timecode to the engine
+    void serviceSync();              // tick(): the engine's sync status to the transport
+    SyncStatus syncSeen_;            // what serviceSync last acted on
+    double syncSeekSeconds_ = 0.05;  // how long a seek takes to be heard (measured)
+    std::vector<std::string> syncWarnings_;
     std::vector<std::filesystem::path> recordingFiles_;  // while recording
     bool recordingMasters_ = false;  // armed masters record their output (ADR-0057)
     std::set<model::Id> reportedFailures_;

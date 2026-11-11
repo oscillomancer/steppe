@@ -35,12 +35,14 @@
 #include "supple/base/spsc.h"
 #include "supple/base/thread.h"
 #include "supple/engine/offline.h"
+#include "supple/engine/sync.h"
 
 namespace supple::engine {
 
 namespace detail {
 struct Plan;
 struct ChunkRing;
+class SyncRuntime;
 class Workers;
 class LiveWorkers;
 class Recorder;
@@ -491,6 +493,20 @@ class Engine {
     }
     TransportState transport() const;
     double effectivePlayrate() const { return effectivePlayrate_.load(std::memory_order_relaxed); }
+
+    // --- external sync (ADR-0071) ----------------------------------------------------
+    // Main thread. The configuration the callback runs (now if running, else
+    // from start()); a change of listens() or chases() recompiles the plan
+    // (a sync plan has every node live, and the rate path on with pitch
+    // preserved when it chases).
+    Status setSync(const SyncConfig& config);
+    const SyncConfig& syncConfig() const { return syncConfig_; }
+    // What the callback last reported; the default while stopped or off.
+    SyncStatus syncStatus() const;
+    // The chase scale: the live playrate is the saved rate times it, through
+    // the scalar control path (ADR-0046) on a sync plan. Never saved.
+    void setSyncRate(double scale);
+    double syncRate() const { return syncScale_; }
     // Main thread: waits (bounded) until the renderer has acted on every
     // transport request, so transport() reports the new state. With the
     // renderer in the callback: two audio cycles (none for a manual backend).
@@ -584,6 +600,26 @@ class Engine {
   private:
     friend struct EngineTestAccess;  // defined by the tests alone
     void cycle(const float* const* in, float* const* out, std::uint32_t frames) SUPPLE_RT;
+    // cycle() after its bookkeeping: count-in, then the transport's work.
+    void cycleTransport(const float* const* in, float* const* out, std::uint32_t frames) SUPPLE_RT;
+    // External sync (ADR-0071): the runtime the main thread published, the
+    // one the callback adopted, every one the main thread still owns.
+    void runSync(const float* const* in, float* const* out, std::uint32_t frames,
+                 double timelineBefore, std::uint64_t epochBefore, bool playingBefore) SUPPLE_RT;
+    void publishSyncStatus(const SyncStatus& status) SUPPLE_RT;
+    Status startSync();  // main thread: a runtime for the running device
+    SyncConfig syncConfig_;
+    double syncScale_ = 1.0;
+    std::vector<std::unique_ptr<detail::SyncRuntime>> syncRuntimes_;
+    std::atomic<detail::SyncRuntime*> syncNext_{nullptr}, syncAdopted_{nullptr};
+    detail::SyncRuntime* syncRt_ = nullptr;  // audio thread
+    std::int64_t syncDevice_ = 0;            // audio thread: device frames since start
+    bool syncPlayed_ = false;                // audio thread: the previous cycle played
+    std::atomic<std::int64_t> syncOutputLatency_{0}, syncInputLatency_{0}, syncPlanLatency_{0};
+    static constexpr std::size_t kSyncWords = (sizeof(SyncStatus) + 7) / 8;
+    std::array<std::atomic<std::uint64_t>, kSyncWords> syncWords_{};
+    std::atomic<std::uint64_t> syncSeq_{0};
+    std::uint32_t syncRuntimeIds_ = 0;  // main thread
     // One part of a device cycle (a count-in splits a cycle where it ends):
     // `midiBase` is where the part starts in the cycle's device MIDI.
     void cycleBody(const float* const* in, float* const* out, std::uint32_t frames,

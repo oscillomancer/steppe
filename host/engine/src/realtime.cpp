@@ -12,15 +12,19 @@
 #include <numbers>
 #include <set>
 #include <system_error>
+#include <type_traits>
 
 #include "supple/base/thread.h"
 #include "supple/host/clap_host.h"
 
+#include <cstring>
 #include "live_workers.h"
 #include "meters.h"
+
 #include "plan.h"
 #include "rack_runtime.h"
 #include "recording.h"
+#include "sync_runtime.h"
 #include "workers.h"
 
 namespace supple::engine {
@@ -239,6 +243,9 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
     outputWakeSerial_.fetch_add(1);
     outputWakeSeen_ = 0;
     midiSource_ = &backend;  // before any callback (backend_ is set after start returns)
+    syncDevice_ = 0;
+    syncRt_ = nullptr;
+    syncSeq_.store(0, std::memory_order_relaxed);
     auto started = backend.start(config, [this](const float* const* in, float* const* out,
                                                 std::uint32_t n) { cycle(in, out, n); });
     if (!started) {
@@ -248,6 +255,9 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
     config_ = backend.config();  // what the device granted (e.g. its rate)
     backend_ = &backend;
     startWarnings_.clear();
+    syncInputLatency_.store(backend.status().inputLatency, std::memory_order_relaxed);
+    if (auto synced = startSync(); !synced)
+        startWarnings_.push_back("sync: " + synced.error().toString());
     scheduling_ = {};
     const unsigned requested = options_.workers < 0
                                    ? detail::Workers::defaultHelpers()
@@ -430,6 +440,10 @@ void Engine::stop() {
     backend_ = nullptr;
     plan_ = nullptr;
     livePlan_ = nullptr;
+    syncRt_ = nullptr;  // no callback runs now
+    syncNext_.store(nullptr);
+    syncAdopted_.store(nullptr);
+    syncRuntimes_.clear();
     handPlan_.store(nullptr);
     detail::Plan* discarded = nullptr;
     while (planHandoffs_.pop(discarded)) {
@@ -514,12 +528,17 @@ Status Engine::load(const model::Session& session, const std::filesystem::path& 
             if (n.live) keepLive.push_back(n.id);
     std::sort(keepLive.begin(), keepLive.end());
     auto build = [&]() -> Result<std::unique_ptr<detail::Plan>> {
+        // External sync input compiles the sync plan; anticipative engines
+        // run it all live (a callback-only engine already does), and the rate
+        // path is on when a chase can change the rate.
+        const detail::SyncOverrides overrides{syncScale_, options_.anticipative,
+                                              syncConfig_.chases()};
         auto compiled = detail::compile(
             session, plugins_, 0.0,
             options_.anticipative ? std::max(options_.renderBlock, config_.blockSize)
                                   : config_.blockSize,
             config_.sampleRate,  // the device's rate, whatever the project's
-            &keepLive, recordingMasters_);
+            &keepLive, recordingMasters_, syncConfig_.listens() ? &overrides : nullptr);
         if (!compiled) return std::move(compiled).error();
         auto built = std::make_unique<detail::Plan>(std::move(*compiled));
         built->projectDir = projectDir;
@@ -625,6 +644,9 @@ Status Engine::load(const model::Session& session, const std::filesystem::path& 
             {plan->nodes[tap.node].id, {from.l.data(), from.r.data()}, 0});
     }
     outputLatency_ = static_cast<std::uint32_t>(plan->outputLatency);
+    syncOutputLatency_.store(plan->outputLatency + backend_->status().outputLatency,
+                             std::memory_order_relaxed);
+    syncPlanLatency_.store(plan->outputLatency, std::memory_order_relaxed);
     warnings_ = plan->warnings;
     for (const detail::OutputTap& o : plan->outputs)  // ADR-0056
         if (std::max(o.left, o.right) >= static_cast<int>(deviceOutputs_))
@@ -1008,6 +1030,12 @@ std::optional<RackLatencyInfo> Engine::rackLatencies(model::Id id, std::uint64_t
 }
 
 void Engine::service() {
+    // Sync runtimes the callback has moved past (ADR-0071).
+    if (const auto* adopted = syncAdopted_.load(std::memory_order_acquire)) {
+        const auto at = std::find_if(syncRuntimes_.begin(), syncRuntimes_.end(),
+                                     [&](const auto& rt) { return rt.get() == adopted; });
+        if (at != syncRuntimes_.end()) syncRuntimes_.erase(syncRuntimes_.begin(), at);
+    }
     bool reload = false;
     bool scalarLate = false;
     for (const auto& p : plans_)
@@ -1313,6 +1341,21 @@ void Engine::cycle(const float* const* in, float* const* out, std::uint32_t fram
         return;
     }
     pushControlMidi();
+    // External sync (ADR-0071): the runtime the main thread published, and
+    // the transport as the previous cycle left it.
+    if (auto* next = syncNext_.load(std::memory_order_acquire); next != syncRt_) {
+        syncRt_ = next;
+        syncAdopted_.store(next, std::memory_order_release);
+    }
+    const double timelineBefore = rtTimeline_.load(std::memory_order_relaxed);
+    const auto epochBefore = timelineEpoch_.load(std::memory_order_acquire);
+    cycleTransport(in, out, frames);
+    runSync(in, out, frames, timelineBefore, epochBefore, syncPlayed_);
+    syncDevice_ += frames;
+}
+
+void Engine::cycleTransport(const float* const* in, float* const* out,
+                            std::uint32_t frames) SUPPLE_RT {
     // The play request first, then a count-in request (playCountIn stores them
     // in the other order), so this cycle cannot play past a count it missed.
     want_ = wantPlaying_.load(std::memory_order_acquire);
@@ -1345,6 +1388,119 @@ void Engine::cycle(const float* const* in, float* const* out, std::uint32_t fram
         return;
     }
     cycleBody(in, out, frames, 0);
+}
+
+// External sync (ADR-0071): after the transport's work, so the LTC output
+// replaces its channel after the masters are written, and the tracker sees
+// the timeline this cycle played.
+void Engine::runSync(const float* const* in, float* const* out, std::uint32_t frames,
+                     double timelineBefore, std::uint64_t epochBefore,
+                     bool playingBefore) SUPPLE_RT {
+    detail::SyncRuntime* rt = syncRt_;
+    if (!rt) return;
+    const double rate = config_.sampleRate;
+    const double after = rtTimeline_.load(std::memory_order_relaxed);
+    const auto epochAfter = timelineEpoch_.load(std::memory_order_acquire);
+    // The timeline is published only for a cycle that played.
+    const bool playing = want_ && !counting_.load(std::memory_order_relaxed) &&
+                         epochAfter == rtEpoch_ &&
+                         (after != timelineBefore || epochAfter != epochBefore);
+    double before = timelineBefore;
+    // A loop wrap inside the cycle: the timeline ran from `before` to the
+    // loop's end, then from its start to `after`.
+    const bool wrapped = playing && playingBefore && epochAfter == epochBefore && after < before &&
+                         loopC_.active() && before <= static_cast<double>(loopC_.end) &&
+                         after >= static_cast<double>(loopC_.start);
+    if (!wrapped && (!playingBefore || epochAfter != epochBefore || !(after >= before)))
+        before = after - static_cast<double>(frames);  // a start or seek
+    detail::SyncCycle c;
+    c.in = in;
+    c.inputs = deviceInputs_;
+    c.out = out;
+    c.outputs = deviceOutputs_;
+    c.frames = frames;
+    if (midiSource_) c.midi = midiSource_->syncMidi();
+    c.device = syncDevice_;
+    c.playing = playing;
+    c.timelineStart = playing ? before / rate : after / rate;
+    c.timelineEnd = after / rate;
+    c.wrapped = wrapped;
+    c.loopStart = static_cast<double>(loopC_.start) / rate;
+    c.loopEnd = static_cast<double>(loopC_.end) / rate;
+    c.planLatency = syncPlanLatency_.load(std::memory_order_relaxed);
+    c.outputLatency = syncOutputLatency_.load(std::memory_order_relaxed);
+    c.inputLatency = syncInputLatency_.load(std::memory_order_relaxed);
+    const detail::Plan* p = ring_ ? livePlan_ : plan_;
+    c.timeMap = p ? p->timeMap.get() : nullptr;
+    syncPlayed_ = playing;
+    if (rt->process(c)) notifyMain();
+    publishSyncStatus(rt->status());
+}
+
+// The status travels as words; copying it bytewise is sound.
+static_assert(std::is_trivially_copyable_v<SyncStatus>);
+
+void Engine::publishSyncStatus(const SyncStatus& status) SUPPLE_RT {
+    std::array<std::uint64_t, kSyncWords> words{};
+    std::memcpy(words.data(), &status, sizeof status);
+    const auto seq = syncSeq_.load(std::memory_order_relaxed);
+    syncSeq_.store(seq + 1, std::memory_order_relaxed);
+    std::atomic_thread_fence(std::memory_order_release);
+    for (std::size_t i = 0; i < words.size(); ++i)
+        syncWords_[i].store(words[i], std::memory_order_relaxed);
+    syncSeq_.store(seq + 2, std::memory_order_release);
+}
+
+SyncStatus Engine::syncStatus() const {
+    SyncStatus status;
+    if (!backend_ || !syncAdopted_.load(std::memory_order_acquire)) return status;
+    std::array<std::uint64_t, kSyncWords> words{};
+    for (;;) {
+        const auto seq = syncSeq_.load(std::memory_order_acquire);
+        if (seq & 1) {
+            std::this_thread::yield();
+            continue;
+        }
+        for (std::size_t i = 0; i < words.size(); ++i)
+            words[i] = syncWords_[i].load(std::memory_order_relaxed);
+        std::atomic_thread_fence(std::memory_order_acquire);
+        if (seq == syncSeq_.load(std::memory_order_relaxed)) break;
+    }
+    if (syncSeq_.load(std::memory_order_acquire) == 0) return status;
+    std::memcpy(static_cast<void*>(&status), words.data(), sizeof status);
+    return status;
+}
+
+Status Engine::startSync() {
+    // Always a runtime, "off" included: the callback adopts in publication
+    // order, so service() frees those before the adopted one.
+    auto rt = detail::SyncRuntime::create(syncConfig_, config_.sampleRate, ++syncRuntimeIds_);
+    if (!rt) return std::move(rt).error();
+    syncNext_.store(rt->get(), std::memory_order_release);
+    syncRuntimes_.push_back(std::move(*rt));
+    return {};
+}
+
+Status Engine::setSync(const SyncConfig& config) {
+    if (config == syncConfig_) return {};
+    // The plan changes when listening starts or stops, or the rate path does.
+    const bool planChanged =
+        config.listens() != syncConfig_.listens() || config.chases() != syncConfig_.chases();
+    const bool sameRuntime = config.sameRuntime(syncConfig_);
+    syncConfig_ = config;
+    if (!config.chases()) syncScale_ = 1.0;
+    if (!backend_) return {};
+    if (sameRuntime && !syncRuntimes_.empty() &&
+        syncRuntimes_.back().get() == syncNext_.load(std::memory_order_acquire))
+        syncRuntimes_.back()->adjust(config);  // the receivers keep what they know
+    else
+        SUPPLE_TRY(startSync());
+    if (planChanged && latest_) {
+        const auto dir = plans_.empty() ? std::filesystem::path{} : plans_.back()->projectDir;
+        const auto session = latest_;
+        SUPPLE_TRY(load(*session, dir));
+    }
+    return {};
 }
 
 // Each callback's device control messages, once, for MIDI learn (ADR-0027).
@@ -1799,7 +1955,10 @@ Status Engine::startRecording(std::vector<RecordTarget> targets) {
         return Error("record.running", "already recording", {},
                      "stop the current recording with transport.stop before starting another");
     if (latest_) SUPPLE_TRY(model::validateRecordingPlayrate(*latest_));
-    if (rateScheduling_.load(std::memory_order_acquire)) {
+    // While slaved the chase rate stays close to 1 and is not part of the
+    // project: recording goes ahead (ADR-0071). Only the saved rate counts.
+    const auto* slaved = latestPlan_.load(std::memory_order_acquire);
+    if (rateScheduling_.load(std::memory_order_acquire) && !(slaved && slaved->syncRate)) {
         if (!wantPlaying_.load(std::memory_order_acquire)) {
             SUPPLE_TRY(prepareSeek(transport().seconds));
             if (backend_->ownsThread()) awaitTransport();
@@ -1876,6 +2035,7 @@ Status Engine::startRecording(std::vector<RecordTarget> targets) {
     const std::int64_t latency =
         static_cast<std::int64_t>(outputLatency_) + b.outputLatency + b.inputLatency;
     auto rec = std::make_unique<detail::Recorder>(std::move(targets), config_.sampleRate, latency);
+    rec->setDriftTolerant(slaved && slaved->syncRate);
     SUPPLE_TRY(rec->open());
     recorderOwned_ = std::move(rec);
     recorder_.store(recorderOwned_.get(), std::memory_order_release);

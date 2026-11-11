@@ -3228,7 +3228,75 @@ Kind: `action`. Exposure: `mcp-tool`.
     "voice_dropped": {
       "type": "integer"
     },
-    "failed_errors": {}
+    "failed_errors": {},
+    "sync": {
+      "type": "object",
+      "title": "sync_status",
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "input": {
+          "type": "string"
+        },
+        "present": {
+          "type": "boolean"
+        },
+        "running": {
+          "type": "boolean"
+        },
+        "locked": {
+          "type": "boolean"
+        },
+        "state": {
+          "type": "string"
+        },
+        "bpm": {
+          "type": "number"
+        },
+        "timecode": {
+          "type": "string"
+        },
+        "rate": {
+          "type": "string"
+        },
+        "chase_rate": {
+          "type": "number"
+        },
+        "error_ms": {
+          "type": "number"
+        },
+        "locate_ms": {
+          "type": "number"
+        },
+        "ltc_output": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "source",
+        "input",
+        "present",
+        "running",
+        "locked",
+        "state",
+        "bpm",
+        "timecode",
+        "rate",
+        "chase_rate",
+        "error_ms",
+        "locate_ms",
+        "ltc_output",
+        "warnings"
+      ],
+      "additionalProperties": false
+    }
   },
   "required": [
     "running",
@@ -3262,7 +3330,8 @@ Kind: `action`. Exposure: `mcp-tool`.
     "failed_fx",
     "dropped",
     "voice_dropped",
-    "failed_errors"
+    "failed_errors",
+    "sync"
   ],
   "additionalProperties": false
 }
@@ -3352,7 +3421,8 @@ Result:
   "failed_fx": [],
   "dropped": 0,
   "voice_dropped": 0,
-  "failed_errors": []
+  "failed_errors": [],
+  "sync": "<any>"
 }
 
 ```
@@ -3361,7 +3431,7 @@ Result:
 
 Real-time engine state: backend, rate, block, device period, latency, xruns.
 
-preparing_audio: source preparation is pending; the previous ready plan stays audible. prepared_version is the last compiled version, preparation_version the pending target (zero when idle); preparation_error explains a failed preparation. plan_latency: the session's plugin delay in frames; device_latency: frames from the engine's outputs to the device. restart_needed: the device changed rate or went away; engine.stop and engine.start again. midi_devices_changed is advisory: MIDI topology changed but audio keeps running. midi_devices_message asks for an explicit engine restart to pick up the new set; existing port names stay fixed. midi_dropped: native MIDI messages/packets rejected or lost to bounded queues (zero for other backends). midi_warnings lists inputs skipped at start, with device, numeric os_error, message and corrective hint. meter_drops: entries a full ring dropped (the renderer's, the audio callback's) — a strip's peak/RMS missed a block, never audio. dropped/voice_dropped count lost plug-in output/voice records. memory_lock reports requested/active and an optional OS error with errno and a corrective hint, including while stopped. Bridges are excluded. cpu_idle_latency reports the owned 20 microsecond request with the same status/error fields; it affects system idle while held and leaves CPU frequency policy unchanged. live_helpers is the enabled live helper capacity. scheduling: each thread class's policy (none, normal, fifo, rr, high) and priority as applied at start: the device callback, live helpers, renderer and background helpers (real-time below a real-time callback when permitted). workgroup: whether the live helpers joined the device's audio workgroup (macOS CoreAudio; state none, ready, joined, partial or failed, with the helper counts and the last refusal's OS error, message and hint). warnings includes scheduling fallbacks and plan warnings with corrective actions. failed_errors adds structured code, message, path and hint to each failure. failed_fx: isolated plugins whose process crashed or hung (silent now; fx.restart re-creates them).
+preparing_audio: source preparation is pending; the previous ready plan stays audible. prepared_version is the last compiled version, preparation_version the pending target (zero when idle); preparation_error explains a failed preparation. plan_latency: the session's plugin delay in frames; device_latency: frames from the engine's outputs to the device. restart_needed: the device changed rate or went away; engine.stop and engine.start again. midi_devices_changed is advisory: MIDI topology changed but audio keeps running. midi_devices_message asks for an explicit engine restart to pick up the new set; existing port names stay fixed. sync: external sync (sync.get has the same status with the settings). midi_dropped: native MIDI messages/packets rejected or lost to bounded queues (zero for other backends). midi_warnings lists inputs skipped at start, with device, numeric os_error, message and corrective hint. meter_drops: entries a full ring dropped (the renderer's, the audio callback's) — a strip's peak/RMS missed a block, never audio. dropped/voice_dropped count lost plug-in output/voice records. memory_lock reports requested/active and an optional OS error with errno and a corrective hint, including while stopped. Bridges are excluded. cpu_idle_latency reports the owned 20 microsecond request with the same status/error fields; it affects system idle while held and leaves CPU frequency policy unchanged. live_helpers is the enabled live helper capacity. scheduling: each thread class's policy (none, normal, fifo, rr, high) and priority as applied at start: the device callback, live helpers, renderer and background helpers (real-time below a real-time callback when permitted). workgroup: whether the live helpers joined the device's audio workgroup (macOS CoreAudio; state none, ready, joined, partial or failed, with the helper counts and the last refusal's OS error, message and hint). warnings includes scheduling fallbacks and plan warnings with corrective actions. failed_errors adds structured code, message, path and hint to each failure. failed_fx: isolated plugins whose process crashed or hung (silent now; fx.restart re-creates them).
 
 Kind: `query`. Exposure: `mcp-tool`.
 
@@ -3678,7 +3748,75 @@ Kind: `query`. Exposure: `mcp-tool`.
     "voice_dropped": {
       "type": "integer"
     },
-    "failed_errors": {}
+    "failed_errors": {},
+    "sync": {
+      "type": "object",
+      "title": "sync_status",
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "input": {
+          "type": "string"
+        },
+        "present": {
+          "type": "boolean"
+        },
+        "running": {
+          "type": "boolean"
+        },
+        "locked": {
+          "type": "boolean"
+        },
+        "state": {
+          "type": "string"
+        },
+        "bpm": {
+          "type": "number"
+        },
+        "timecode": {
+          "type": "string"
+        },
+        "rate": {
+          "type": "string"
+        },
+        "chase_rate": {
+          "type": "number"
+        },
+        "error_ms": {
+          "type": "number"
+        },
+        "locate_ms": {
+          "type": "number"
+        },
+        "ltc_output": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "source",
+        "input",
+        "present",
+        "running",
+        "locked",
+        "state",
+        "bpm",
+        "timecode",
+        "rate",
+        "chase_rate",
+        "error_ms",
+        "locate_ms",
+        "ltc_output",
+        "warnings"
+      ],
+      "additionalProperties": false
+    }
   },
   "required": [
     "running",
@@ -3712,7 +3850,8 @@ Kind: `query`. Exposure: `mcp-tool`.
     "failed_fx",
     "dropped",
     "voice_dropped",
-    "failed_errors"
+    "failed_errors",
+    "sync"
   ],
   "additionalProperties": false
 }
@@ -3796,7 +3935,8 @@ Result:
   "failed_fx": [],
   "dropped": 0,
   "voice_dropped": 0,
-  "failed_errors": []
+  "failed_errors": [],
+  "sync": "<any>"
 }
 
 ```
@@ -13846,6 +13986,283 @@ Result:
 ```json
 {
   "text": "<any>"
+}
+
+```
+
+## `sync.get@1`
+
+Show external sync settings and what the engine hears from the master.
+
+source: off, midi_clock, mtc or ltc. midi_input: the MIDI input port the master's clock or MTC arrives on (its name, or a part of it). ltc_input: the device input channel carrying LTC (1-based). follow_tempo (midi_clock): chase the master's tempo with the live playrate (pitch preserved); off follows Start, Continue, Stop and Song Position only. offset_ms: positive plays Steppe that much behind the master. on_loss: stop, or freewheel for freewheel_frames timecode frames, when the signal stops. ltc_output: write LTC of the transport (the project's timecode) to ltc_output_channel, replacing whatever a master plays there, at ltc_level_db. status: present (the signal arrives), running, locked, state (idle, acquiring, relocating, chasing, locked), the master's bpm (midi_clock) or timecode and rate (mtc, ltc), chase_rate (the live playrate the chase applies on top of the saved one) and error_ms.
+
+Kind: `query`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "sync_info",
+  "properties": {
+    "settings": {},
+    "status": {
+      "type": "object",
+      "title": "sync_status",
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "input": {
+          "type": "string"
+        },
+        "present": {
+          "type": "boolean"
+        },
+        "running": {
+          "type": "boolean"
+        },
+        "locked": {
+          "type": "boolean"
+        },
+        "state": {
+          "type": "string"
+        },
+        "bpm": {
+          "type": "number"
+        },
+        "timecode": {
+          "type": "string"
+        },
+        "rate": {
+          "type": "string"
+        },
+        "chase_rate": {
+          "type": "number"
+        },
+        "error_ms": {
+          "type": "number"
+        },
+        "locate_ms": {
+          "type": "number"
+        },
+        "ltc_output": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "source",
+        "input",
+        "present",
+        "running",
+        "locked",
+        "state",
+        "bpm",
+        "timecode",
+        "rate",
+        "chase_rate",
+        "error_ms",
+        "locate_ms",
+        "ltc_output",
+        "warnings"
+      ],
+      "additionalProperties": false
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["settings", "status"],
+  "additionalProperties": false
+}
+
+```
+
+### Examples
+
+**Off** (`empty`)
+
+```json
+{}
+
+```
+
+Result:
+
+```json
+{
+  "settings": {
+    "source": "off",
+    "midi_input": "",
+    "ltc_input": 1,
+    "follow_tempo": true,
+    "offset_ms": 0.0,
+    "on_loss": "stop",
+    "freewheel_frames": 25,
+    "ltc_output": false,
+    "ltc_output_channel": 3,
+    "ltc_level_db": -18.0
+  },
+  "status": "<any>"
+}
+
+```
+
+## `sync.set@1`
+
+Set external sync (MIDI clock, MTC, LTC) and LTC output; returns them.
+
+source: off, midi_clock, mtc or ltc. midi_input: the MIDI input port the master's clock or MTC arrives on (its name, or a part of it). ltc_input: the device input channel carrying LTC (1-based). follow_tempo (midi_clock): chase the master's tempo with the live playrate (pitch preserved); off follows Start, Continue, Stop and Song Position only. offset_ms: positive plays Steppe that much behind the master. on_loss: stop, or freewheel for freewheel_frames timecode frames, when the signal stops. ltc_output: write LTC of the transport (the project's timecode) to ltc_output_channel, replacing whatever a master plays there, at ltc_level_db. Omitted members keep their values. Machine settings: not an undo step, not saved in the project (the app keeps them with its preferences).
+
+Kind: `action`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `source` | string |  |  |  |  |
+| `midi_input` | string |  |  |  |  |
+| `ltc_input` | integer |  | 1..64 |  |  |
+| `follow_tempo` | boolean |  |  |  |  |
+| `offset_ms` | number |  | -10000..10000 |  |  |
+| `on_loss` | string |  |  |  |  |
+| `freewheel_frames` | integer |  | 1..300 |  |  |
+| `ltc_output` | boolean |  |  |  |  |
+| `ltc_output_channel` | integer |  | 1..64 |  |  |
+| `ltc_level_db` | number |  | -60..0 |  |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "sync_info",
+  "properties": {
+    "settings": {},
+    "status": {
+      "type": "object",
+      "title": "sync_status",
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "input": {
+          "type": "string"
+        },
+        "present": {
+          "type": "boolean"
+        },
+        "running": {
+          "type": "boolean"
+        },
+        "locked": {
+          "type": "boolean"
+        },
+        "state": {
+          "type": "string"
+        },
+        "bpm": {
+          "type": "number"
+        },
+        "timecode": {
+          "type": "string"
+        },
+        "rate": {
+          "type": "string"
+        },
+        "chase_rate": {
+          "type": "number"
+        },
+        "error_ms": {
+          "type": "number"
+        },
+        "locate_ms": {
+          "type": "number"
+        },
+        "ltc_output": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "source",
+        "input",
+        "present",
+        "running",
+        "locked",
+        "state",
+        "bpm",
+        "timecode",
+        "rate",
+        "chase_rate",
+        "error_ms",
+        "locate_ms",
+        "ltc_output",
+        "warnings"
+      ],
+      "additionalProperties": false
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["settings", "status"],
+  "additionalProperties": false
+}
+
+```
+
+### Examples
+
+**Chase MTC from a MIDI interface** (`empty`)
+
+```json
+{
+  "source": "mtc",
+  "midi_input": "Interface"
+}
+
+```
+
+Result:
+
+```json
+{
+  "settings": {
+    "source": "mtc",
+    "midi_input": "Interface",
+    "ltc_input": 1,
+    "follow_tempo": true,
+    "offset_ms": 0.0,
+    "on_loss": "stop",
+    "freewheel_frames": 25,
+    "ltc_output": false,
+    "ltc_output_channel": 3,
+    "ltc_level_db": -18.0
+  },
+  "status": "<any>"
 }
 
 ```

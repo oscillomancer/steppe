@@ -1885,13 +1885,9 @@ logging on receive/audio paths. `Backend::midiDropped()` defaults to zero;
 PortAudio exposes rejected messages and ring/period overflow through it and
 `engine.status.midi_dropped`. Sync messages (Clock, Start, Continue, Stop,
 Song Position, MTC quarter frames and the MTC full-frame SysEx) go to
-`Backend::syncMidi()` instead (ADR-0071): JACK classifies its events, the
-native buffer keeps a 512-entry sync queue per port, CoreMIDI routes UMP
-type 1 and reassembles SysEx7 into the full frame, WinMM routes MIM_DATA's
-system messages and reads the full frame from a long buffer; at most 512
-per callback, sorted by frame, ten bytes each. `midiInput()` is
-unchanged. Other system messages and SysEx are dropped and counted per
-reported packet/buffer; driver-unreported SysEx loss cannot be counted.
+`Backend::syncMidi()` instead (§ External sync); other system messages and
+SysEx are dropped and counted per reported packet/buffer; driver-unreported
+SysEx loss cannot be counted.
 Two fixed WinMM long buffers are recycled on the monitor, never inside its
 MIDI callback. Short-message reception does not depend on recycling them.
 
@@ -1925,6 +1921,104 @@ queue destruction. Linux keeps JACK and builds only device-free shared logic.
 Real-device tests require SUPPLE_MIDI_DEVICE_TEST exactly 1; they use fake
 audio and never open an audio device. Native SDK tests do not establish physical
 input timing, disconnect reliability or performance on every driver.
+
+### External sync (ADR-0071)
+
+**Device input.** `Backend::syncMidi()` holds each callback's sync
+messages from every MIDI port, sorted by frame: F8, FA, FB, FC, F2 lsb
+msb, F1 dd and F0 7F id 01 01 hh mm ss ff F7 (`SyncMidiEvent`, up to ten
+bytes, at most `kMaxSyncMidiEvents` = 512; more are counted in
+`midi_dropped`). `syncMidiSize()` classifies them. JACK takes them from its
+events; the native buffer keeps a 512-entry queue per port (`pushSync`,
+`syncChunk`) beside the channel queues; CoreMIDI sends UMP type 1 through
+`push` and reassembles SysEx7 (start/continue/end or complete) into the
+full frame, keeping no other SysEx; WinMM's MIM_DATA system messages go
+through `push` and a ten-byte full frame in a long buffer through
+`pushSync`. `midiInput()` is unchanged. The dummy backend's `sync` option
+scripts them for tests.
+
+**Settings and status.** `EngineApp` holds `SyncSettings` (`sync.get`,
+`sync.set`; ADR-0071 §2) and resolves them for the engine: the MIDI port by
+exact name, else the first containing it (case-insensitive); the input and
+output channels against the device; the project's timecode; the freewheel
+time from its frames. Unresolvable members become warnings in
+`engine.status.sync.warnings` and `sync.set`'s warnings, as does an LTC
+output channel a master's `hw_output` plays to. An LTC output channel the
+device lacks uses its last output instead, with a warning; the setting is
+kept. `engine.status.sync`:
+`{source, input, present, running, locked, state, bpm, timecode, rate,
+chase_rate, error_ms, locate_ms, ltc_output, warnings}`.
+
+**The callback.** `Engine::setSync(SyncConfig)` builds a `SyncRuntime` on
+the main thread (libltc's decoder and encoder are allocated there) and
+publishes it; the callback adopts the newest at the start of a cycle, and
+`service()` frees those before the adopted one. After each cycle's
+transport work (`cycleTransport`, count-in included) `runSync` gives the
+runtime the cycle's sync messages, inputs and outputs, its device frames
+(counted from start), the timeline it played (start and end, from the
+rate clock), the plan's and the device's output latency and the device's
+input latency, and the plan's time map. The runtime feeds the configured
+port's messages to the clock or MTC receiver (ADR-0070 §3-4), or the
+configured input channel to the LTC decoder at device frame − input
+latency; gives the tracker each observation and the receivers' jumps; and,
+while the source runs, updates the tracker with the heard local position
+(processed timeline − output latency × speed) in the source's units: beats
+for MIDI clock (the plan's time map; nominal speed bpm/60 there), timecode
+seconds (timeline + project start + offset; nominal 1) for MTC and LTC. A
+loss is final when nothing was observed for the freewheel time (0: at the
+receiver's timeout); the tracker then resets. The chase rate is the
+tracker's while the transport plays and the source runs (MIDI clock only
+with follow tempo), held through a freewheel, else 1. The first clock after
+Start or Continue has no tempo yet: its position is counted on at the
+project's tempo. LTC output renders into its output channel after the
+masters, labelled with what leaves with it: the runtime keeps the timeline
+each cycle processed as spans (device frame, start, seconds per frame; two
+at a loop wrap, split where the loop's end was reached; a ring of 4096) and
+writes output frame d from the span covering d − the plan's latency, so LTC
+names the audio it is heard with (the device's own latency delays both).
+Frames before the oldest span, or processed while stopped, are silent; a
+start, locate or wrap (a step of more than a frame) starts the encoder
+again at the next frame boundary; stopped, it is silent at once. The status is published
+under a sequence lock (`Engine::syncStatus()`); the main thread is woken on
+a change of presence, running, lock, a start, stop, jump, relocate request,
+final loss, or a chase rate change (at most every 10 ms). Everything here
+is `SUPPLE_RT`.
+
+**The main thread.** `EngineApp::tick` re-resolves the settings (a no-op
+when unchanged) and acts on the status (ADR-0071 §4): MIDI clock: Stop
+pauses; running after Start/Continue (the first clock) seeks to its beat
+plus (the measured seek time + the heard latency) × tempo / 60 (the
+master's tempo, the project's before a second clock), − offset, and plays;
+a Song Position change while stopped seeks there;
+with follow tempo a relocate request seeks to the prediction. MTC/LTC:
+running while stopped seeks to the prediction (timecode − start − offset at
+the heard time) plus the measured seek time × the master's speed, and
+plays; a relocate request seeks likewise; running backwards pauses; a jump
+(full frame) while stopped seeks. A final loss pauses. Then
+`Engine::setSyncRate(chase rate)` while playing, 1 otherwise.
+
+**The sync plan and the chase scale.** While `SyncConfig::listens()` (an
+input source) `load()` compiles with `SyncOverrides`: the plan is
+`syncPlan`, and on an anticipative engine every node is live. When
+`SyncConfig::chases()` too (MTC, LTC, or MIDI clock with follow tempo) it
+is also `syncRate`: `rateEnabled`, `masterPlayrate.preservePitch`, clips'
+stretch converters even at 1.0, `masterPlayrate.rate` = saved × scale.
+Stretch at 1.0 is not a null: a chasing session's audio clips differ from
+unsynced playback even when locked (a 441 Hz sine by about −25 dB of its
+level in the tests); MIDI clock without follow tempo and LTC output alone
+play the same samples as without sync. LTC output alone compiles no sync
+plan. A change of `listens()` or `chases()` reloads; `setSync` resets the
+scale to 1 when nothing chases. `setSyncRate(scale)` (0.25..4) publishes saved × scale as a scalar
+control through `loadScalarRate` (ADR-0046: ramp, 150 ms low-pass, both
+executors); on a plan without renderer nodes the control lands after the
+consumed position plus headroom, not the render-ahead. The saved rate and
+`transport.playrate.get`'s `requested_rate` never change; `setSyncRate` does
+nothing on a plan that is not `syncRate`. `startRecording`
+skips the queued-trajectory check on `syncRate` plans (the saved-rate check
+stays), and its recorder is drift-tolerant there: a block whose timeline
+position is within a block of the expected one continues the run (the take
+drifts by the chase rate's distance from 1), only a larger jump starts a new
+run. Offline renders compile without overrides.
 
 ### Master playrate (ADR-0045)
 

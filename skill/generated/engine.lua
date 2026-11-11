@@ -330,6 +330,7 @@ q = nil
 ---@field dropped integer
 ---@field voice_dropped integer
 ---@field failed_errors any
+---@field sync table
 
 ---@class Steppe.engine_status_result
 ---@field running boolean
@@ -364,6 +365,7 @@ q = nil
 ---@field dropped integer
 ---@field voice_dropped integer
 ---@field failed_errors any
+---@field sync table
 
 ---@class Steppe.engine_stop_result
 ---@field warnings? table[]
@@ -1573,6 +1575,28 @@ q = nil
 ---@field text string
 ---@field warnings? table[]
 
+---@class Steppe.sync_get_result
+---@field settings any
+---@field status table
+---@field warnings? table[]
+
+---@class Steppe.sync_set_args
+---@field source? "off"|"midi_clock"|"mtc"|"ltc"
+---@field midi_input? string
+---@field ltc_input? integer
+---@field follow_tempo? boolean
+---@field offset_ms? number
+---@field on_loss? "stop"|"freewheel"
+---@field freewheel_frames? integer
+---@field ltc_output? boolean
+---@field ltc_output_channel? integer
+---@field ltc_level_db? number
+
+---@class Steppe.sync_set_result
+---@field settings any
+---@field status table
+---@field warnings? table[]
+
 ---@class Steppe.take_activate_args
 ---@field item string
 ---@field take? string
@@ -2321,6 +2345,10 @@ q = nil
 ---@class Steppe.session
 ---@field describe fun(): Steppe.session_describe_result Describe the whole session in compact text (tracks, items, fx, routes).
 
+---@class Steppe.sync
+---@field get fun(): Steppe.sync_get_result Show external sync settings and what the engine hears from the master.
+---@field set fun(args?: Steppe.sync_set_args): Steppe.sync_set_result Set external sync (MIDI clock, MTC, LTC) and LTC output; returns them.
+
 ---@class Steppe.take
 ---@field activate fun(args: Steppe.take_activate_args): Steppe.take_activate_result Choose the take heard from an item.
 ---@field add fun(args: Steppe.take_add_args): Steppe.take_add_result Add a take to an item, optionally copied from another take of that item.
@@ -2429,6 +2457,7 @@ q = nil
 ---@field route Steppe.route Commands named route.*
 ---@field script Steppe.script Commands named script.*
 ---@field session Steppe.session Commands named session.*
+---@field sync Steppe.sync Commands named sync.*
 ---@field take Steppe.take Commands named take.*
 ---@field tempo Steppe.tempo Commands named tempo.*
 ---@field time Steppe.time Commands named time.*

@@ -285,7 +285,7 @@ Result<ResolvedLane> paramLane(host::Instance& in, const std::string& param,
 
 Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, std::uint32_t block,
                      double rate, const std::vector<model::Id>* keepLive,
-                     std::span<const RecordingMaster> recording) {
+                     std::span<const RecordingMaster> recording, const SyncOverrides* sync) {
     SUPPLE_TRY(model::validateFrozenState(s));
     Plan p;
     p.sessionVersion = s.version;
@@ -642,6 +642,15 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
     }
     p.masterPlayrate = s.project->playrate;
     p.rateEnabled = p.masterPlayrate.rate != 1 || model::activePlayrateEnvelope(s).has_value();
+    if (sync) p.syncPlan = true;
+    if (sync && sync->rate) {
+        // External sync chases with the live rate, pitch preserved (ADR-0071).
+        p.syncRate = true;
+        p.rateEnabled = true;
+        p.masterPlayrate.preservePitch = true;
+        p.masterPlayrate.rate = std::clamp(p.masterPlayrate.rate * sync->rateScale,
+                                           model::kMinPlayrate, model::kMaxPlayrate);
+    }
     // Envelopes on mixer targets and plugin parameters.
     const std::int64_t origin = time::samplesAt(startSeconds, p.rate);
     for (const auto& e : s.envelopes) {
@@ -758,6 +767,11 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
             n.live = p.heldLive = true;
         p.anyLive = p.anyLive || n.live;
     }
+    // External sync runs the whole graph in the callback, as monitoring
+    // does for what it reaches, so transport and rate changes are heard after
+    // the device's latency rather than the render-ahead (ADR-0071).
+    if (sync && sync->allLive)
+        for (Node& n : p.nodes) n.live = p.anyLive = true;
     // The master is the output: live whenever anything is (even a monitored
     // track that feeds nothing).
     if (p.anyLive) {
@@ -1554,7 +1568,7 @@ Status prepare(Plan& p, const Session& s) {
                 clip.rateState = std::make_unique<RateClipState>(
                     table, clip.data->channelCount(), p.rate,
                     p.masterPlayrate.preservePitch &&
-                        (p.masterPlayrate.rate != 1 || !points.empty()));
+                        (p.masterPlayrate.rate != 1 || !points.empty() || p.syncRate));
         }
         for (auto& edge : p.edges) {
             // Source-owned send envelopes use the source's executor clock;
