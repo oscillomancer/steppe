@@ -727,3 +727,40 @@ TEST_CASE("hardware MIDI: adopting a post-FX route restarts the bus's held outpu
             engine.stop();
         }
 }
+
+TEST_CASE("hardware MIDI: reset-off boundaries preserve delayed releases and drop stale onsets") {
+    for (bool anticipative : {false, true})
+        for (bool locate : {false, true})
+            for (bool beforeOnset : {false, true}) {
+                CAPTURE(anticipative);
+                CAPTURE(locate);
+                CAPTURE(beforeOnset);
+                Session base;
+                auto pool = hardwarePool();
+                MediaCache media;
+                DummyBackend backend({.midiOutputPorts = {"Synth"}});
+                Engine engine(pool, media,
+                              {.anticipative = anticipative,
+                               .renderBlock = 64,
+                               .renderAheadMs = 10,
+                               .workers = 0});
+                REQUIRE(engine.start(backend, {.blockSize = 64, .midiOutputs = true}));
+                engine.setMidiPreferences({}, outputSettings(100, true, false));
+                REQUIRE(engine.load(base.value));
+                engine.play();
+                run(engine, backend, anticipative, beforeOnset ? 8 : 383);
+                CHECK(events(backend, 0x94).size() == (beforeOnset ? 0 : 1));
+                CHECK(events(backend, 0x84).empty());
+                if (locate)
+                    engine.seek(1);  // beyond this note: no fresh onset after the locate
+                else
+                    engine.pause();
+                run(engine, backend, anticipative, 400);
+                CHECK(events(backend, 0x94).size() == (beforeOnset ? 0 : 1));
+                CHECK(events(backend, 0x84).size() == (beforeOnset ? 0 : 1));
+                for (const auto& e : backend.midiCapture())
+                    CHECK_FALSE(e.event.bytes[0] == 0xb4 && e.event.bytes[1] == 123);
+                engine.stop();
+                CHECK(events(backend, 0x84).size() == (beforeOnset ? 0 : 1));
+            }
+}

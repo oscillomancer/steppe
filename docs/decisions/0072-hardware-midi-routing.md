@@ -17,6 +17,10 @@ latency. These corrections supersede the original tail-clearing description.
 post-FX/post-fader hardware routes. Adoption restarts its held bus voices,
 including plug-in notes; pre-FX hardware routes retain the pre-FX stream.
 
+2026-11-11 re-review correction A: transport boundaries discard queued onsets,
+but reset-off ports retain delayed note-offs and mute markers. Reset-on routes
+invalidate old events by generation and release their written notes.
+
 ## Decision
 
 Extend the unreleased project schema 2.10 with MIDI routes whose destination

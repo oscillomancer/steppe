@@ -190,7 +190,20 @@ bool HardwareMidiRuntime::release(RouteState& state, std::uint32_t at) {
 void HardwareMidiRuntime::adopt(Plan& plan, std::uint64_t epoch, bool playing) {
     const bool boundary = epoch != epoch_ || (playing_ && !playing);
     const bool changed = plan_ != &plan || planGeneration_ != plan.generation;
-    if (boundary) count_ = 0;  // Audio history and physical input-offset time keep running.
+    if (boundary) {
+        // Reset-off ports still owe their delayed releases and mute markers.
+        // Stale onsets must not start after a stop or locate. Reset-on routes
+        // discard the rest through their generation change below.
+        std::size_t keep = 0;
+        for (std::size_t i = 0; i < count_; ++i) {
+            const auto& event = queue_[i].event;
+            const bool onset = event.size && (event.bytes[0] & 0xf0) == 0x90 && event.bytes[2];
+            if (!onset) queue_[keep++] = queue_[i];
+        }
+        count_ = keep;
+        std::make_heap(queue_.begin(), queue_.begin() + static_cast<std::ptrdiff_t>(count_),
+                       [](const auto& a, const auto& b) { return later(a, b); });
+    }
     if (changed) {
         if (!plan_)
             readLead_ = plan.hardwareLead;

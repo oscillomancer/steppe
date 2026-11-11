@@ -2747,7 +2747,9 @@ frames). Negative minimum delay adds prepared audio lead to all MIDI delays
 and a final audio delay; lead is limited to one second and reported by
 `midi_lead_frames`. Engine output latency, heard timing and recording account
 for it. The prepared history runs continuously across stop, locate, loop wrap
-and lead-unchanged edits. Route MIDI queues clear at boundaries. A lead change
+and lead-unchanged edits. Boundaries drop queued pre-boundary note-ons, retaining
+releases, other messages and mute markers on reset-off ports; reset-on routes
+invalidate their queues through the route generation. A lead change
 slews the fractional read delay over 5 ms without clearing history; the initial
 plan primes its full lead normally. No hardware delay may exceed ten seconds. Limits: 256 routes, 65,536
 pending messages, 16 ports, and the existing 1,024 messages per device period.
