@@ -815,3 +815,40 @@ TEST_CASE("hardware MIDI: startup skips malformed preference records and reports
     app->reset();
     std::filesystem::remove_all(dir);
 }
+
+TEST_CASE("hardware MIDI: lead changes crossfade two fixed history taps") {
+    auto runtime = std::make_unique<detail::HardwareMidiRuntime>();
+    runtime->prepare(48000, 1);
+    DummyBackend backend({});
+    REQUIRE(backend.start({.blockSize = 64}, [](auto, auto, auto) {}));
+    detail::Plan plan;
+    plan.hardwareLead = 64;
+    plan.generation = 1;
+    std::array<float, 64> signal;
+    float* out[] = {signal.data()};
+    std::uint32_t frame = 0;
+    auto sample = [](std::uint32_t f) { return float((f * 17) % 101) / 101; };
+    auto cycle = [&] {
+        for (std::uint32_t f = 0; f < 64; ++f) signal[f] = sample(frame + f);
+        runtime->begin(backend, 64);
+        runtime->collect(plan, 0, 64, 0, true, 1);
+        runtime->finish(out, 1, 64, false);
+        frame += 64;
+    };
+    for (int i = 0; i < 32; ++i) cycle();
+    plan.hardwareLead = 128;
+    ++plan.generation;
+    const auto start = frame;
+    for (int i = 0; i < 5; ++i) {
+        const auto first = frame;
+        cycle();
+        for (std::uint32_t f = 0; f < 64; ++f) {
+            const auto at = first + f;
+            const double mix = std::min(1., double(at - start + 1) / 240.);
+            const float expected = static_cast<float>((1 - mix) * double(sample(at - 64)) +
+                                                      mix * double(sample(at - 128)));
+            CHECK(signal[f] == doctest::Approx(expected).epsilon(.000001));
+        }
+    }
+    backend.stop();
+}

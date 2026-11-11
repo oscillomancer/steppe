@@ -378,7 +378,7 @@ Output alignment can add up to one second of audio latency to make an advance
 possible; this also delays live input monitoring on every channel. The timing
 offset dialog previews the shared added latency; per-port `lead_ms` and engine
 status report it. Transport changes keep the audio history running, and changing
-the lead uses a 5 ms delay ramp. Separate device MIDI channels avoid shared
+the lead uses a 5 ms crossfade between delay taps. Separate device MIDI channels avoid shared
 sustain/controller resets between routes.
 
 **Add plugin…** puts a note effect (an arpeggiator, a chord or MIDI effect)

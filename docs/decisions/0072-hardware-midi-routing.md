@@ -33,6 +33,11 @@ at startup with structured port-status warnings; valid records still load.
 Command edits continue to validate strictly. The GUI uses the same tolerant
 startup loader; the engine retains and reports the warnings.
 
+2026-11-11 suggestion S1 supersedes the earlier read-delay-ramp note: lead
+changes use a 5 ms linear crossfade between fixed old/new integer taps, with
+both taps advancing at the device rate. An edit during a fade is taken after
+that fade completes. No read-pointer varispeed or history reset is involved.
+
 ## Decision
 
 Extend the unreleased project schema 2.10 with MIDI routes whose destination

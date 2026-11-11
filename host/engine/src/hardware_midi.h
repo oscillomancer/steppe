@@ -65,8 +65,8 @@ class HardwareMidiRuntime {
     std::array<std::atomic<std::uint64_t>, 16> outputDrops_{}, inputDrops_{};
     std::vector<std::vector<float>> audioDelay_;
     std::atomic<bool> historyReady_{false};
-    double readLead_ = 0;
-    std::uint32_t rampFrames_ = 1, rampLeft_ = 0;
+    std::uint32_t readLead_ = 0, fadeTarget_ = 0;
+    std::uint32_t fadeFrames_ = 1, fadeLeft_ = 0;
     std::size_t audioCursor_ = 0;
     std::uint32_t audioFilled_ = 0;
     std::size_t wrote_ = 0;

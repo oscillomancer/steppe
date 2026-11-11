@@ -2750,8 +2750,9 @@ for it. The prepared history runs continuously across stop, locate, loop wrap
 and lead-unchanged edits. Boundaries drop queued pre-boundary note-ons, retaining
 releases, other messages and mute markers on reset-off ports; reset-on routes
 invalidate their queues through the route generation. A lead change
-slews the fractional read delay over 5 ms without clearing history; the initial
-plan primes its full lead normally. No hardware delay may exceed ten seconds. Limits: 256 routes, 65,536
+crossfades fixed old/new integer-delay taps over 5 ms without clearing history
+or changing their playback rate. Rapid edits finish the active fade, then fade
+to the latest target. The initial plan primes its full lead normally. No hardware delay may exceed ten seconds. Limits: 256 routes, 65,536
 pending messages, 16 ports, and the existing 1,024 messages per device period.
 Equal-frame messages preserve route/event insertion order. Overflow is counted.
 Route and source mute automation is evaluated on the tapped stream's compensated

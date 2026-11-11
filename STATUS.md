@@ -310,7 +310,7 @@ instructions are in `docs/guides/installing.md`.
   including plug-in output; pre-FX taps keep the original stream.
   A continuous prepared audio history supplies negative-offset lead (at most
   one second), including monitoring. Boundaries preserve its tail; lead changes
-  use a 5 ms read-delay ramp. Reset-off ports retain delayed releases across
+  use a 5 ms crossfade between fixed delay taps. Reset-off ports retain delayed releases across
   stop/locate while stale queued onsets are dropped. Port status and the offset dialog expose the lead.
   The Hardware MIDI tab edits existing input assignments and hardware sends;
   header menus edit machine port preferences. Mix and scalar-rate shortcuts

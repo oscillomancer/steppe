@@ -135,7 +135,7 @@ void HardwareMidiRuntime::prepare(double rate, std::uint32_t channels) {
     audioDelay_.assign(
         channels, std::vector<float>(
                       static_cast<std::size_t>(std::ceil(rate * kHardwareMidiLeadSeconds)) + 1));
-    rampFrames_ = static_cast<std::uint32_t>(std::max(1., std::round(rate * .005)));
+    fadeFrames_ = static_cast<std::uint32_t>(std::max(1., std::round(rate * .005)));
     historyReady_.store(true, std::memory_order_release);
 }
 std::uint64_t HardwareMidiRuntime::dropped(bool output, std::size_t port) const {
@@ -207,8 +207,10 @@ void HardwareMidiRuntime::adopt(Plan& plan, std::uint64_t epoch, bool playing) {
     if (changed) {
         if (!plan_)
             readLead_ = plan.hardwareLead;
-        else if (lead_ != plan.hardwareLead)
-            rampLeft_ = rampFrames_;
+        else if (readLead_ != plan.hardwareLead && !fadeLeft_) {
+            fadeTarget_ = plan.hardwareLead;
+            fadeLeft_ = fadeFrames_;
+        }
         lead_ = plan.hardwareLead;
         leadReported_.store(lead_, std::memory_order_relaxed);
         for (auto& state : routes_)
@@ -501,8 +503,7 @@ void HardwareMidiRuntime::finish(float* const* out, std::uint32_t channels, std:
     if (historyReady_.load(std::memory_order_acquire) && out && !audioDelay_.empty()) {
         const auto capacity = audioDelay_.front().size();
         for (std::uint32_t f = 0; f < frames; ++f) {
-            const auto low = static_cast<std::uint32_t>(readLead_);
-            const double fraction = readLead_ - low;
+            const double mix = fadeLeft_ ? double(fadeFrames_ - fadeLeft_ + 1) / fadeFrames_ : 0;
             for (std::uint32_t c = 0; c < channels && c < audioDelay_.size(); ++c) {
                 auto& history = audioDelay_[c];
                 history[audioCursor_] = out[c][f];
@@ -511,16 +512,23 @@ void HardwareMidiRuntime::finish(float* const* out, std::uint32_t channels, std:
                                ? history[(audioCursor_ + capacity - delay) % capacity]
                                : 0.0f;
                 };
-                const auto a = tap(low);
-                out[c][f] = fraction == 0 ? a
-                                          : static_cast<float>((1 - fraction) * double(a) +
-                                                               fraction * double(tap(low + 1)));
+                const auto a = tap(readLead_);
+                const auto b = fadeLeft_ ? tap(fadeTarget_) : a;
+                out[c][f] = mix == 0 ? a
+                            : mix == 1
+                                ? b
+                                : static_cast<float>((1 - mix) * double(a) + mix * double(b));
             }
             audioCursor_ = (audioCursor_ + 1) % capacity;
             if (audioFilled_ < capacity - 1) ++audioFilled_;
-            if (rampLeft_) {
-                readLead_ += (double(lead_) - readLead_) / rampLeft_;
-                if (!--rampLeft_) readLead_ = lead_;
+            if (fadeLeft_ && !--fadeLeft_) {
+                readLead_ = fadeTarget_;
+                // Finish an in-flight fade before taking the latest target:
+                // rapid edits never move either tap or cut a fade midway.
+                if (readLead_ != lead_) {
+                    fadeTarget_ = lead_;
+                    fadeLeft_ = fadeFrames_;
+                }
             }
         }
     }
