@@ -2751,14 +2751,18 @@ with non-zero lead, and runs only during non-zero lead or a tap crossfade.
 It continues across stop, locate, loop wrap and lead-unchanged edits while lead
 is needed. The first negative-offset route after an inactive history primes
 silence once. On return to zero lead, owner-thread reclamation waits for the
-final crossfade acknowledgment and retirement of every plan that could use it. Boundaries drop queued pre-boundary note-ons, retaining
-releases, other messages and mute markers on reset-off ports; reset-on routes
+final crossfade acknowledgment and retirement of every plan that could use it. Boundaries drop only queued timeline-origin note-ons, retaining delayed live
+onsets, releases, other messages and mute markers on reset-off ports; reset-on routes
 invalidate their queues through the route generation. A lead change
 crossfades fixed old/new integer-delay taps over 5 ms without clearing history
 or changing their playback rate. Rapid edits finish the active fade, then fade
 to the latest target. The initial plan primes its full lead normally. No hardware delay may exceed ten seconds. Limits: 256 routes, 65,536
 pending messages, 16 ports, and the existing 1,024 messages per device period.
 Equal-frame messages preserve route/event insertion order. Overflow is counted.
+Timeline origin is captured with each stream event before a slot can be freed
+or reused, carried through the FX bus and hardware queue, and retained for
+mute-retriggered notes. Live/device and generated plug-in notes keep device time
+across boundaries on reset-off ports.
 Route and source mute automation is evaluated on the tapped stream's compensated
 clock, including its source shift and master playrate trajectory. Channel post-FX
 and post-fader routes read the chain's final MIDI bus (ADR-0068), including

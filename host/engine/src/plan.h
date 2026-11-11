@@ -503,6 +503,7 @@ struct BusEvent {
     host::Event event;
     std::int16_t part = -1;
     bool stages = true;
+    bool timeline = false;  // origin captured before a pre-FX slot can be reused
 };
 // The post-FX stream's held notes, by bus id (sends restart and carry them).
 struct PostVoice {
@@ -702,6 +703,7 @@ struct Node {
     // post-FX is the chain's MIDI bus after the chain (ADR-0068).
     Stage midiStage;
     std::vector<host::Event> midiPreFx, midiPostFx, midiSortScratch;
+    std::vector<std::uint8_t> midiPreTimeline, midiPostTimeline;  // parallel event origins
     std::vector<std::int32_t> midiInstrument;  // parallel to midiPreFx: the note target's id
     std::vector<std::uint8_t> midiChain;       // parallel to midiPreFx: the chain hears it
     // The chain's MIDI bus (ADR-0068): this block's events between stages,

@@ -44,7 +44,7 @@ class HardwareMidiRuntime {
         model::Tap tap = model::Tap::PostFader;
         int from = 0, to = 0;
         std::uint16_t channels = 0;
-        std::array<std::uint16_t, 2048> held{}, logical{};
+        std::array<std::uint16_t, 2048> held{}, logical{}, logicalTimeline{};
         std::array<std::uint8_t, 2048> velocity{};
     };
     struct Pending {
@@ -53,6 +53,7 @@ class HardwareMidiRuntime {
         std::uint32_t generation = 0;
         std::uint16_t slot = 0;
         MidiOutputEvent event;
+        bool timeline = false;
     };
     struct InputPending {
         std::int64_t at = 0;
@@ -86,8 +87,8 @@ class HardwareMidiRuntime {
     Plan* plan_ = nullptr;  // identity only; a failed block may outlive this plan
     std::uint64_t planGeneration_ = 0;
     void adopt(Plan&, std::uint64_t epoch, bool playing) SUPPLE_RT;
-    void schedule(std::size_t slot, MidiOutputEvent event, std::int64_t delay,
-                  std::uint32_t offset) SUPPLE_RT;
+    void schedule(std::size_t slot, MidiOutputEvent event, std::int64_t delay, std::uint32_t offset,
+                  bool timeline = false) SUPPLE_RT;
     bool release(RouteState&, std::uint32_t at = 0) SUPPLE_RT;
     bool write(RouteState&, const MidiOutputEvent&) SUPPLE_RT;
 };

@@ -209,13 +209,14 @@ void HardwareMidiRuntime::adopt(Plan& plan, std::uint64_t epoch, bool playing) {
     const bool changed = plan_ != &plan || planGeneration_ != plan.generation;
     if (boundary) {
         // Reset-off ports still owe their delayed releases and mute markers.
-        // Stale onsets must not start after a stop or locate. Reset-on routes
+        // Stale timeline onsets must not start after a stop or locate. Live
+        // onsets keep their device clock. Reset-on routes
         // discard the rest through their generation change below.
         std::size_t keep = 0;
         for (std::size_t i = 0; i < count_; ++i) {
             const auto& event = queue_[i].event;
             const bool onset = event.size && (event.bytes[0] & 0xf0) == 0x90 && event.bytes[2];
-            if (!onset) queue_[keep++] = queue_[i];
+            if (!onset || !queue_[i].timeline) queue_[keep++] = queue_[i];
         }
         count_ = keep;
         std::make_heap(queue_.begin(), queue_.begin() + static_cast<std::ptrdiff_t>(count_),
@@ -335,14 +336,14 @@ void HardwareMidiRuntime::adopt(Plan& plan, std::uint64_t epoch, bool playing) {
     playing_ = playing;
 }
 void HardwareMidiRuntime::schedule(std::size_t slot, MidiOutputEvent event, std::int64_t delay,
-                                   std::uint32_t offset) {
+                                   std::uint32_t offset, bool timeline) {
     auto& state = routes_[slot];
     if (count_ == queue_.size()) {
         outputDrops_[static_cast<std::size_t>(state.port)].fetch_add(1, std::memory_order_relaxed);
         return;
     }
     queue_[count_++] = {frame_ + offset + event.frame + delay, order_++, state.generation,
-                        static_cast<std::uint16_t>(slot), event};
+                        static_cast<std::uint16_t>(slot),      event,    timeline};
     std::push_heap(queue_.begin(), queue_.begin() + static_cast<std::ptrdiff_t>(count_),
                    [](const auto& a, const auto& b) { return later(a, b); });
 }
@@ -369,18 +370,24 @@ void HardwareMidiRuntime::collect(Plan& plan, std::int64_t pos, std::uint32_t fr
             }
             return event;
         };
-        auto logical = [&](const MidiOutputEvent& event) {
+        auto logical = [&](const MidiOutputEvent& event, bool timeline = false) {
             if (!event.size) return;
             const auto key = std::size_t(event.bytes[0] & 15) * 128 + event.bytes[1];
             if ((event.bytes[0] & 0xf0) == 0x90 && event.bytes[2]) {
-                if (state->logical[key] < 65535) ++state->logical[key];
+                if (state->logical[key] < 65535) {
+                    ++state->logical[key];
+                    if (timeline) ++state->logicalTimeline[key];
+                }
                 state->velocity[key] = event.bytes[2];
             } else if ((event.bytes[0] & 0xf0) == 0x80 ||
                        ((event.bytes[0] & 0xf0) == 0x90 && !event.bytes[2])) {
                 if (state->logical[key]) --state->logical[key];
+                if (timeline && state->logicalTimeline[key]) --state->logicalTimeline[key];
             }
         };
         const auto& stream = route.tap == model::Tap::PreFx ? source.midiPreFx : source.midiPostFx;
+        const auto& origins =
+            route.tap == model::Tap::PreFx ? source.midiPreTimeline : source.midiPostTimeline;
         const auto* rack = source.rack && route.rackNotes >= 0
                                ? &source.rack->notesOut[static_cast<std::size_t>(route.rackNotes)]
                                : nullptr;
@@ -396,7 +403,7 @@ void HardwareMidiRuntime::collect(Plan& plan, std::int64_t pos, std::uint32_t fr
                                              static_cast<std::uint8_t>(held.key),
                                              static_cast<std::uint8_t>(held.velocity)}}));
             } else {
-                auto restart = [&](const auto& held, std::size_t voice) {
+                auto restart = [&](const auto& held, std::size_t voice, bool timeline) {
                     if (std::any_of(stream.begin(), stream.end(), [&](const auto& e) {
                             return e.time == 0 && e.noteId == static_cast<int>(voice);
                         }))
@@ -406,14 +413,15 @@ void HardwareMidiRuntime::collect(Plan& plan, std::int64_t pos, std::uint32_t fr
                                     3,
                                     {static_cast<std::uint8_t>(0x90 | held.channel),
                                      static_cast<std::uint8_t>(held.key),
-                                     static_cast<std::uint8_t>(held.velocity)}}));
+                                     static_cast<std::uint8_t>(held.velocity)}}),
+                            timeline);
                 };
                 if (route.tap == model::Tap::PreFx) {
                     for (std::size_t voice = 0; voice < source.midiBefore.size(); ++voice) {
                         const auto& held = source.midiBefore[voice];
                         if (held.high && !held.orphan &&
                             (playing || held.kind != MidiSlot::Kind::Timeline))
-                            restart(held, voice);
+                            restart(held, voice, held.kind == MidiSlot::Kind::Timeline);
                     }
                 } else {
                     // Post-FX taps recover the bus's held voices, including
@@ -423,7 +431,7 @@ void HardwareMidiRuntime::collect(Plan& plan, std::int64_t pos, std::uint32_t fr
                         const bool timeline =
                             voice < source.midiBefore.size() &&
                             source.midiBefore[voice].kind == MidiSlot::Kind::Timeline;
-                        if (held.high && (playing || !timeline)) restart(held, voice);
+                        if (held.high && (playing || !timeline)) restart(held, voice, timeline);
                     }
                 }
             }
@@ -447,7 +455,7 @@ void HardwareMidiRuntime::collect(Plan& plan, std::int64_t pos, std::uint32_t fr
                                   3,
                                   {static_cast<std::uint8_t>(0x90 | (key / 128)),
                                    static_cast<std::uint8_t>(key % 128), state->velocity[key]}},
-                                 route.delay, offset);
+                                 route.delay, offset, n < state->logicalTimeline[key]);
             state->started = true;
             state->muted = silent;
             if (rack) {
@@ -460,6 +468,7 @@ void HardwareMidiRuntime::collect(Plan& plan, std::int64_t pos, std::uint32_t fr
                 }
             } else
                 while (next < stream.size() && stream[next].time == f) {
+                    const bool timeline = next < origins.size() && origins[next] != 0;
                     const auto& e = stream[next++];
                     auto event = filter(convert(e));
                     const auto status = event.bytes[0] & 0xf0;
@@ -470,8 +479,8 @@ void HardwareMidiRuntime::collect(Plan& plan, std::int64_t pos, std::uint32_t fr
                         const auto& before = source.midiBefore[static_cast<std::size_t>(e.noteId)];
                         if (before.high && before.kind == MidiSlot::Kind::Timeline) continue;
                     }
-                    logical(event);
-                    if (!silent && event.size) schedule(slot, event, route.delay, offset);
+                    logical(event, timeline);
+                    if (!silent && event.size) schedule(slot, event, route.delay, offset, timeline);
                 }
         }
     }

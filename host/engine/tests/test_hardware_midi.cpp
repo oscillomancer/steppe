@@ -908,3 +908,70 @@ TEST_CASE("hardware MIDI: zero-lead plans skip history allocation and processing
     for (float x : signal) CHECK(x == 1);
     backend.stop();
 }
+
+TEST_CASE("hardware MIDI: delayed live onsets survive reset-off boundaries") {
+    for (bool anticipative : {false, true})
+        for (auto tap : {model::Tap::PreFx, model::Tap::PreFader, model::Tap::PostFader})
+            for (bool reset : {false, true})
+                for (bool shortNote : {false, true})
+                    for (int boundary : {0, 1, 2}) {
+                        CAPTURE(anticipative);
+                        CAPTURE(int(tap));
+                        CAPTURE(reset);
+                        CAPTURE(shortNote);
+                        CAPTURE(boundary);
+                        Session base(tap, false, false);
+                        model::EditTxn edit(base.value, 2);
+                        model::Route input;
+                        input.from.midiDevice = "Keyboard";
+                        input.to.track = base.track;
+                        input.midi = model::MidiRouting{0, 3};
+                        const auto id = edit.create(input);
+                        edit.modify<model::Track>(base.track, [&](auto& t) {
+                            t.record.armed = true;
+                            t.record.monitor = model::Monitor::On;
+                            t.record.input = t.record.midiInput = id;
+                        });
+                        const auto session = edit.commit().value();
+                        auto pool = hardwarePool();
+                        MediaCache media;
+                        DummyBackend backend(
+                            {.midiOutputPorts = {"Synth"},
+                             .midiPorts = {"Keyboard"},
+                             .midi = [shortNote](auto& events, unsigned, std::int64_t frame) {
+                                 if (frame == 256) {
+                                     events.push_back({7, 0, 3, {0x90, 61, 100}});
+                                     if (shortNote) events.push_back({9, 0, 3, {0x80, 61, 0}});
+                                 }
+                                 if (!shortNote && frame == 1024)
+                                     events.push_back({9, 0, 3, {0x80, 61, 0}});
+                             }});
+                        Engine engine(pool, media,
+                                      {.anticipative = anticipative,
+                                       .renderBlock = 64,
+                                       .renderAheadMs = 10,
+                                       .workers = 0});
+                        REQUIRE(engine.start(
+                            backend, {.blockSize = 64, .midiInputs = true, .midiOutputs = true}));
+                        engine.setMidiPreferences({}, outputSettings(100, true, reset));
+                        REQUIRE(engine.load(session));
+                        engine.play();
+                        run(engine, backend, anticipative, 6);
+                        CHECK(events(backend, 0x94).empty());
+                        if (boundary == 1) engine.pause();
+                        if (boundary == 2) engine.seek(1.5);
+                        run(engine, backend, anticipative, 100);
+                        std::vector<std::int64_t> on, off;
+                        for (const auto& e : backend.midiCapture()) {
+                            if (e.event.bytes[1] != 61) continue;
+                            if (e.event.bytes[0] == 0x94) on.push_back(e.frame);
+                            if (e.event.bytes[0] == 0x84) off.push_back(e.frame);
+                        }
+                        if (boundary == 0 || !reset) {
+                            CHECK(on == std::vector<std::int64_t>{5063});
+                            CHECK(off == std::vector<std::int64_t>{shortNote ? 5065 : 5833});
+                        } else
+                            CHECK(on.empty());
+                        engine.stop();
+                    }
+}

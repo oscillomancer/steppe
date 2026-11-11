@@ -313,7 +313,8 @@ instructions are in `docs/guides/installing.md`.
   the first negative-offset route primes silence once. Boundaries preserve its
   tail while lead is needed; lead changes
   use a 5 ms crossfade between fixed delay taps. Reset-off ports retain delayed releases across
-  stop/locate while stale queued onsets are dropped. Stopped live input
+  stop/locate while only stale timeline onsets are dropped; delayed live notes
+  keep their device clock. Stopped live input
   monitoring also works with reset disabled. Port status and the offset dialog expose the lead.
   The Hardware MIDI tab edits existing input assignments and hardware sends;
   header menus edit machine port preferences. Mix and scalar-rate shortcuts

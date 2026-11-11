@@ -46,6 +46,12 @@ final zero-lead fade. Zero-lead callbacks bypass history. The first negative
 offset after an inactive history primes silence once, then boundaries preserve
 that history while lead is needed.
 
+2026-11-11 confirmation corrections F/E: stopped reset-off outputs suppress
+only releases of pre-block high timeline slots; live onsets always pass.
+Queued events carry their timeline origin, captured before slot reuse and
+preserved through the bus. Boundaries discard timeline-origin onsets only;
+delayed live onsets and releases retain device time on reset-off outputs.
+
 ## Decision
 
 Extend the unreleased project schema 2.10 with MIDI routes whose destination
