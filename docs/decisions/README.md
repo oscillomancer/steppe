@@ -83,3 +83,4 @@ current state.
 | [0065](0065-independent-record-inputs.md) | A rack's channel keeps its MIDI input beside its audio | Accepted |
 | [0066](0066-pan-modes-and-laws.md) | Pan modes, selectable pan laws and unity Console 9 staging | Accepted |
 | [0070](0070-timecode-and-sync.md) | Timecode and sync: MIDI clock, MTC, LTC and the chase tracker | Accepted |
+| [0071](0071-external-sync.md) | External sync input, LTC output and the project timecode | Proposed |

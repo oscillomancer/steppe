@@ -71,6 +71,7 @@
 #include "supple/rpc/model_loop.h"
 #include "supple/rpc/protocol.h"
 #include "supple/ui/root.h"
+#include "timecode_dialog.h"
 #include "ui_persistence.h"
 
 namespace fs = std::filesystem;
@@ -615,6 +616,11 @@ int main(int argc, char** argv) {
     preferences.onAudioDevice = [&] { audioDevice.open(); };
     preferences.audioSummary = [&] { return audioDevice.summary(); };
     appActions.addUi("ui.audio.device", "Edit: audio device…", [&] { audioDevice.open(); });
+    gui::TimecodeDialog timecodeDialog(root, dispatcher, **app);
+    timecodeDialog.onError = [](const std::string& message) {
+        std::fprintf(stderr, "%s\n", message.c_str());
+    };
+    appActions.addUi("ui.project.timecode", "Project: timecode…", [&] { timecodeDialog.open(); });
     renderDialog.onStatus = [&](const std::string& message) { shell.setStatus(message); };
     renderDialog.openFolderWhenDone = [&] { return preferences.preferences().renderOpenFolder; };
     renderDialog.setOpenFolderWhenDone = [&](bool on) {
@@ -1131,6 +1137,7 @@ int main(int argc, char** argv) {
             audioEdit.poll();
             if (preferences.isOpen()) preferences.refresh();
             if (audioDevice.isOpen()) audioDevice.refresh();
+            if (timecodeDialog.isOpen()) timecodeDialog.refresh();
             if (shell.arrange()->poll(event)) root.requestAnimationFrame();
         });
         return next;

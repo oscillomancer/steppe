@@ -83,7 +83,7 @@ target_include_directories(gui-persistence PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/ap
 add_library(gui-app STATIC app/shell.cpp app/generate.cpp app/app_actions.cpp app/actions_list.cpp app/chrome.cpp
   app/plugin_windows.cpp app/floating_panel.cpp app/screensets.cpp app/file_actions.cpp app/midi_editor.cpp app/routing_matrix.cpp app/strip_learn.cpp app/pan_menu.cpp app/mixer.cpp
   app/fx_params.cpp app/plugin_browser.cpp app/fx_window.cpp app/render_dialog.cpp app/history_panel.cpp app/transport_bar.cpp app/plugin_scales.cpp
-  app/midi_event_list.cpp app/appearance.cpp app/track_menu.cpp app/mouse_dialog.cpp app/selection_edit.cpp app/preferences.cpp app/audio_device.cpp
+  app/midi_event_list.cpp app/appearance.cpp app/track_menu.cpp app/mouse_dialog.cpp app/selection_edit.cpp app/preferences.cpp app/audio_device.cpp app/timecode_dialog.cpp
   app/control_map.cpp app/learn_dialog.cpp app/help_actions.cpp app/help_support.cpp
   app/rack_controls.cpp app/rack_device.cpp app/rack_engine.cpp app/rack_face.cpp app/rack_labels.cpp app/rack_plugin_params.cpp app/rack_scene.cpp app/rack_space.cpp
   app/rack_window.cpp)
@@ -157,7 +157,7 @@ if(SUPPLE_BUILD_TESTS)
   # the slower CI runners.
   set(gui_app_sources tests/test_app.cpp tests/test_help.cpp tests/test_plugin_windows.cpp tests/test_gestures.cpp
                       tests/test_midi_editor.cpp tests/test_fx_render.cpp tests/test_ruler.cpp tests/test_tcp_sends.cpp
-                      tests/test_mixer.cpp tests/test_racks.cpp)
+                      tests/test_mixer.cpp tests/test_racks.cpp tests/test_sync.cpp)
   supple_add_tests(gui-app SOURCES ${gui_app_sources} DEPS supple::script-compiler LABELS gui tsan-skip SPLIT)
   target_compile_definitions(gui-app.tests PRIVATE SUPPLE_GUI_FONTS_DIR="${PROJECT_SOURCE_DIR}/assets/fonts"
                              SUPPLE_CLAP_DIR="${CMAKE_BINARY_DIR}/plugins/clap"

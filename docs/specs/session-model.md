@@ -68,6 +68,14 @@ laws but runs the stages linear, ADR-0019 §6); `pan_law` (`{db, boost}`:
 omitted when false; the law of every channel and buss without its own,
 ADR-0066); `masters` (ordered master ids, tr_0 first). *(The pre-2.0
 `pan_law` number was dropped with ADR-0019; 2.9 brings back the object.)*
+`timecode` (`{rate, start}`, ADR-0071): `rate` one of `"23.976"`, `"24"`,
+`"25"`, `"29.97df"` (drop-frame), `"29.97"` (non-drop) or `"30"`, default
+`"30"`; `start` the timecode label at project time 0, `HH:MM:SS:FF` with `;`
+before the frames in drop-frame, valid at the rate, default
+`"00:00:00:00"`. Each member is omitted at its default and the object when
+both are. MTC and LTC sync and LTC output read timecode through it:
+timecode seconds = timeline seconds + the start's seconds (a label's frame
+count / fps, real time). `project.get` reports it with defaults filled in.
 
 Master playrate (ADR-0045) is `playrate: {rate, preserve_pitch}`: a finite
 ratio 0.25..4.0 (default 1.0) and bool (default false). Missing settings in
@@ -507,7 +515,7 @@ routes: sd_1 tr_2 → tr_6 ch 1/2→3/4 pre-fader −6 dB (sidechain)
 markers: mk_1 "Verse" bar 1 · regions: rg_1 "Chorus" bars 9–17
 ```
 
-## 5. Project file (`supple.project/2.9`)
+## 5. Project file (`supple.project/2.11`)
 
 ### 5.1 Shape
 
@@ -1084,9 +1092,21 @@ routes (§1.8) and VCAs. A 2.5 file loads unchanged; an older application openin
 file ignores `learn` with a warning, and its controllers move nothing on strips, sends or
 VCAs.
 
+### Project timecode (schema 2.11, ADR-0071)
+
+Writers emit `supple.project/2.11`. The 2.11 change adds `project.timecode`
+(§1.2), omitted at its default (30 fps from 00:00:00:00), so a project that
+does not set it saves the same bytes as before apart from its schema. A 2.9
+(or older) file loads unchanged with the default: 30 fps is MTC's own code 3
+and the common default of other DAWs, an integer rate without drop-frame
+labels, and from 00:00:00:00 timecode equals project time, so nothing an old
+project shows moves. There is nothing to migrate. An older application
+opening a 2.11 file ignores `timecode` with a warning. (2.10 is the MIDI
+sends change, ADR-0067, which merges first.)
+
 ### Pan modes and laws (schema 2.9, ADR-0066)
 
-Writers emit `supple.project/2.9`. The 2.9 change adds `project.pan_law` and
+Writers emitted `supple.project/2.9`. The 2.9 change adds `project.pan_law` and
 the channels' and busses' `pan_mode`, `width`, `pan_left`, `pan_right` and
 `pan_law` (§1.2, §1.4), each omitted at its default, so a project that uses
 none of them saves the same bytes as before apart from its schema. A 2.8 file

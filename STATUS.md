@@ -118,6 +118,9 @@ instructions are in `docs/guides/installing.md`.
   over libltc, and the chase tracker that turns any of them into a master
   playrate with relocation and lock. Unit-tested under RealtimeSanitizer;
   not yet wired to the engine (see Known limits).
+- **Project timecode** (ADR-0071, schema 2.11): `project.timecode {rate,
+  start}` (30 fps from 00:00:00:00 by default and for older projects),
+  through `project.set`/`project.get` and Project > Timecode….
 
 - **Session and history** (`specs/session-model.md`, ADR-0008): immutable
   versions with stable ids, per-branch undo, branches with object-level diff

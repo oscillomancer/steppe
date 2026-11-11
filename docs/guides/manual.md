@@ -186,6 +186,16 @@ projects (see *Rendering*).
 
 Uninstalling Steppe leaves these folders and your projects in place.
 
+### Project timecode
+
+**Project > Timecode…** sets the project's timecode: its frame rate (23.976,
+24, 25, 29.97 drop-frame, 29.97 non-drop or 30 fps) and its start, the
+timecode at the project's first beat (01:00:00:00 is common for picture
+work). New and older projects use 30 fps from 00:00:00:00. Type the start
+as HH:MM:SS:FF (with `;` before the frames in drop-frame) and press Enter.
+The setting is saved with the project and undoable, and timecode sync and
+LTC output use it.
+
 ## Rendering
 
 **File > Render…** opens the render dialog; **File > Mix** renders the mix

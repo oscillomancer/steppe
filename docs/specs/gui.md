@@ -1493,6 +1493,18 @@ a new channel). It follows rack.md §8.
   channel's right-click menu offers Show rack (when it has one) and Add rack
   (Add another rack).
 
+### 4.13 Project timecode and sync (ADR-0071)
+
+**Project > Timecode…** (`ui.project.timecode`) opens a small dialog
+(`timecode`): **Frame rate** (`timecode.rate.set`, a dropdown: 23.976,
+24, 25, 29.97 drop-frame, 29.97 non-drop, 30 fps) and **Start**
+(`timecode.start.set`, a text field, `HH:MM:SS:FF`, `;` before the frames
+in drop-frame), the timecode at project time 0. A rate choice, and a start
+on Enter or when the field loses focus, is one `project.set {timecode}`
+each (undoable). A refused value shows its message and hint on the
+dialog's status line (`timecode.status`) and changes nothing; the controls
+follow the project (an undo, an agent's edit) while the dialog is open.
+
 ## 5. Agent panel (removed)
 
 The app has no built-in agent (ADR-0043). Agents drive it from an external
@@ -1589,7 +1601,7 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   toolbar (after the nearest default before it that the list holds), and one
   the user removed stays removed. A file from before `known` is taken to
   know every default but those added since (View → Racks and the toolbar's
-  Racks, `ui.rack`; the Project menu's pan law entries).
+  Racks, `ui.rack`; the Project menu's pan law entries and **Timecode…**).
   An action may carry an `enabled` predicate over the selection context; its
   menu entry is greyed while that is false (the predicate is checked when the
   menu opens). It may also carry a `checked` predicate, which ticks its entry
@@ -1598,7 +1610,8 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   the project's pan law (`project.pan_law:0`, `:-2.5`, `:-3`, `:-4.5`, `:-6`,
   the current one ticked; each keeps the boost) and **Gain compensation
   (boost pans)** (`project.pan_law.boost`, a toggle), each one
-  `project.set {pan_law}` (ADR-0066). The Item menu's entries are built when it opens
+  `project.set {pan_law}` (ADR-0066), then a separator and **Timecode…**
+  (`ui.project.timecode`): the project timecode dialog (§4.13). The Item menu's entries are built when it opens
   (`itemBarMenu`, § Menus under arrange items); action ids a user adds to it
   follow them after a separator. Loading a `menus.json` drops the item ids
   older defaults listed there (and `ui.midi.new`) from its Item list, as the

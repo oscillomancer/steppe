@@ -9983,6 +9983,21 @@ Kind: `query`. Exposure: `mcp-tool`.
     "meter": {
       "type": "string"
     },
+    "timecode": {
+      "type": "object",
+      "title": "project_timecode",
+      "properties": {
+        "rate": {
+          "type": "string"
+        },
+        "start": {
+          "type": "string"
+        }
+      },
+      "required": ["rate", "start"],
+      "additionalProperties": false,
+      "description": "The timecode frame rate and the label at project time 0"
+    },
     "version": {
       "type": "integer"
     },
@@ -10009,6 +10024,7 @@ Kind: `query`. Exposure: `mcp-tool`.
     "sample_rate",
     "tempo",
     "meter",
+    "timecode",
     "version",
     "generation",
     "recoverable",
@@ -10038,6 +10054,10 @@ Result:
   "sample_rate": 48000.0,
   "tempo": 120.0,
   "meter": "4/4",
+  "timecode": {
+    "rate": "30",
+    "start": "00:00:00:00"
+  },
   "version": 0,
   "recoverable": 0,
   "generation": "<any>",
@@ -10086,6 +10106,21 @@ Kind: `action`. Exposure: `mcp-exec`.
     "meter": {
       "type": "string"
     },
+    "timecode": {
+      "type": "object",
+      "title": "project_timecode",
+      "properties": {
+        "rate": {
+          "type": "string"
+        },
+        "start": {
+          "type": "string"
+        }
+      },
+      "required": ["rate", "start"],
+      "additionalProperties": false,
+      "description": "The timecode frame rate and the label at project time 0"
+    },
     "version": {
       "type": "integer"
     },
@@ -10112,6 +10147,7 @@ Kind: `action`. Exposure: `mcp-exec`.
     "sample_rate",
     "tempo",
     "meter",
+    "timecode",
     "version",
     "generation",
     "recoverable",
@@ -10143,6 +10179,7 @@ Result:
   "sample_rate": 48000.0,
   "tempo": "<any>",
   "meter": "<any>",
+  "timecode": "<any>",
   "version": 0,
   "recoverable": 0,
   "generation": "<any>",
@@ -10190,6 +10227,21 @@ Kind: `action`. Exposure: `mcp-tool`.
     "meter": {
       "type": "string"
     },
+    "timecode": {
+      "type": "object",
+      "title": "project_timecode",
+      "properties": {
+        "rate": {
+          "type": "string"
+        },
+        "start": {
+          "type": "string"
+        }
+      },
+      "required": ["rate", "start"],
+      "additionalProperties": false,
+      "description": "The timecode frame rate and the label at project time 0"
+    },
     "version": {
       "type": "integer"
     },
@@ -10216,6 +10268,7 @@ Kind: `action`. Exposure: `mcp-tool`.
     "sample_rate",
     "tempo",
     "meter",
+    "timecode",
     "version",
     "generation",
     "recoverable",
@@ -10252,6 +10305,7 @@ Result:
   "sample_rate": "<any>",
   "tempo": "<any>",
   "meter": "<any>",
+  "timecode": "<any>",
   "version": "<any>",
   "recoverable": 0,
   "generation": "<any>",
@@ -10554,9 +10608,9 @@ Result:
 
 ## `project.set@1`
 
-Set project name, title, author, notes, Console 9, pan law or timebase.
+Set project name, notes, Console 9, pan law, timebase or timecode.
 
-timebase: what items follow when the tempo changes, for items and tracks that inherit it — beats (default), time or beats_position; they keep their place now.
+timebase: what items follow when the tempo changes, for items and tracks that inherit it — beats (default), time or beats_position; they keep their place now. timecode: the frame rate (23.976, 24, 25, 29.97df, 29.97 or 30; default 30) and start, the timecode at project time 0 (default 00:00:00:00), which MTC and LTC sync and output use; either member alone keeps the other.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -10573,6 +10627,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | `history_budget_bytes` | integer |  | 1.0.. |  | Estimated retained history byte budget; default 1 GiB. Leases and branch boundaries may exceed it. |
 | `render` | object |  |  |  | Render settings (session-model §1.10); every member optional |
 | `timebase` | string |  |  |  |  |
+| `timecode` | object |  |  |  |  |
 
 ### Result
 
@@ -10600,6 +10655,25 @@ Kind: `edit`. Exposure: `mcp-tool`.
 ```json
 {
   "name": "Demo"
+}
+
+```
+
+Result:
+
+```json
+{}
+
+```
+
+**EBU timecode starting at one hour** (`empty`)
+
+```json
+{
+  "timecode": {
+    "rate": "25",
+    "start": "01:00:00:00"
+  }
 }
 
 ```

@@ -7499,6 +7499,21 @@
         "meter": {
           "type": "string"
         },
+        "timecode": {
+          "type": "object",
+          "title": "project_timecode",
+          "properties": {
+            "rate": {
+              "type": "string"
+            },
+            "start": {
+              "type": "string"
+            }
+          },
+          "required": ["rate", "start"],
+          "additionalProperties": false,
+          "description": "The timecode frame rate and the label at project time 0"
+        },
         "version": {
           "type": "integer"
         },
@@ -7525,6 +7540,7 @@
         "sample_rate",
         "tempo",
         "meter",
+        "timecode",
         "version",
         "generation",
         "recoverable",
@@ -7574,6 +7590,21 @@
         "meter": {
           "type": "string"
         },
+        "timecode": {
+          "type": "object",
+          "title": "project_timecode",
+          "properties": {
+            "rate": {
+              "type": "string"
+            },
+            "start": {
+              "type": "string"
+            }
+          },
+          "required": ["rate", "start"],
+          "additionalProperties": false,
+          "description": "The timecode frame rate and the label at project time 0"
+        },
         "version": {
           "type": "integer"
         },
@@ -7600,6 +7631,7 @@
         "sample_rate",
         "tempo",
         "meter",
+        "timecode",
         "version",
         "generation",
         "recoverable",
@@ -7814,8 +7846,8 @@
   },
   {
     "name": "project_set",
-    "title": "Set project name, title, author, notes, Console 9, pan law or timebase.",
-    "description": "Set project name, title, author, notes, Console 9, pan law or timebase. timebase: what items follow when the tempo changes, for items and tracks that inherit it — beats (default), time or beats_position; they keep their place now. See describe for errors and examples.",
+    "title": "Set project name, notes, Console 9, pan law, timebase or timecode.",
+    "description": "Set project name, notes, Console 9, pan law, timebase or timecode. timebase: what items follow when the tempo changes, for items and tracks that inherit it — beats (default), time or beats_position; they keep their place now. timecode: the frame rate (23.976, 24, 25, 29.97df, 29.97 or 30; default 30) and start, the timecode at project time 0 (default 00:00:00:00), which MTC and LTC sync and output use; either member alone keeps the other. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "project_set_args",
@@ -8196,6 +8228,21 @@
         "timebase": {
           "type": "string",
           "enum": ["time", "beats", "beats_position"]
+        },
+        "timecode": {
+          "type": "object",
+          "title": "timecode_args",
+          "properties": {
+            "rate": {
+              "type": "string",
+              "enum": ["23.976", "24", "25", "29.97df", "29.97", "30"]
+            },
+            "start": {
+              "type": "string",
+              "description": "HH:MM:SS:FF, \";\" before the frames in drop-frame"
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false

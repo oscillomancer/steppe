@@ -84,6 +84,7 @@ struct TimecodeMapping {
     double timelineSeconds(double frames) const SUPPLE_RT;
     // The label playing at a timeline position, wrapped to 24 hours.
     Timecode labelAt(double timelineSeconds) const SUPPLE_RT;
+    friend bool operator==(const TimecodeMapping&, const TimecodeMapping&) = default;
 };
 
 // "HH:MM:SS:FF"; drop-frame uses ';' before the frames ("01:00:00;00").

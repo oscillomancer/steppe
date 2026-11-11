@@ -1041,6 +1041,7 @@ q = nil
 ---@field sample_rate number
 ---@field tempo number
 ---@field meter string
+---@field timecode table The timecode frame rate and the label at project time 0
 ---@field version integer
 ---@field generation integer
 ---@field recoverable integer
@@ -1058,6 +1059,7 @@ q = nil
 ---@field sample_rate number
 ---@field tempo number
 ---@field meter string
+---@field timecode table The timecode frame rate and the label at project time 0
 ---@field version integer
 ---@field generation integer
 ---@field recoverable integer
@@ -1074,6 +1076,7 @@ q = nil
 ---@field sample_rate number
 ---@field tempo number
 ---@field meter string
+---@field timecode table The timecode frame rate and the label at project time 0
 ---@field version integer
 ---@field generation integer
 ---@field recoverable integer
@@ -1109,6 +1112,7 @@ q = nil
 ---@field history_budget_bytes? integer Estimated retained history byte budget; default 1 GiB. Leases and branch boundaries may exceed it.
 ---@field render? table Render settings (session-model §1.10); every member optional
 ---@field timebase? "time"|"beats"|"beats_position"
+---@field timecode? table
 
 ---@class Steppe.project_set_result
 ---@field warnings? table[]
@@ -2240,7 +2244,7 @@ q = nil
 ---@field recover fun(args?: Steppe.project_recover_args): Steppe.project_recover_result Put recordings a crash left out back into the project (one undo step).
 ---@field recoverable fun(): Steppe.project_recoverable_result List recordings a crash left out of the project.
 ---@field save fun(args?: Steppe.project_save_args): Steppe.project_save_result Save the project (canonical JSON) to its file or a new path.
----@field set fun(args?: Steppe.project_set_args): Steppe.project_set_result Set project name, title, author, notes, Console 9, pan law or timebase.
+---@field set fun(args?: Steppe.project_set_args): Steppe.project_set_result Set project name, notes, Console 9, pan law, timebase or timecode.
 
 ---@class Steppe.project.template
 ---@field delete fun(args: Steppe.project_template_delete_args): Steppe.project_template_delete_result Delete a saved project template by name.

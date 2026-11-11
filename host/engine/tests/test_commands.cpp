@@ -139,6 +139,51 @@ TEST_CASE("invalid project, tempo, marker and normalization calls explain how to
     }
 }
 
+TEST_CASE("project.set timecode: rate and start, alone or together, undoable (ADR-0071)") {
+    Workdir dir;
+    auto app = makeApp(dir.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *app);
+    auto info = run(bus, "project.get", "{}");
+    CHECK(info["timecode"]["rate"].asString() == "30");
+    CHECK(info["timecode"]["start"].asString() == "00:00:00:00");
+    run(bus, "project.set", R"({"timecode": {"rate": "25", "start": "01:00:00:00"}})");
+    CHECK(app->head().project->timecode.rate == sync::FrameRate::Fps25);
+    CHECK(app->head().project->timecode.start == sync::Timecode{1, 0, 0, 0});
+    // The rate alone keeps a start that is still a label at it.
+    run(bus, "project.set", R"({"timecode": {"rate": "29.97df"}})");
+    info = run(bus, "project.get", "{}");
+    CHECK(info["timecode"]["start"].asString() == "01:00:00;00");
+    // A start the rate skips, or does not have, is refused with its path and
+    // a hint; so is a rate the start does not survive.
+    for (const auto& [args, path] : std::vector<std::pair<const char*, const char*>>{
+             {R"({"timecode": {"start": "00:01:00;00"}})", "/args/timecode/start"},
+             {R"({"timecode": {"start": "1 hour"}})", "/args/timecode/start"},
+             {R"({"timecode": {"rate": "29.97 df"}})", "/args/timecode/rate"}}) {
+        auto refused = bus.execute({"project.set", j(args), kOrigin});
+        REQUIRE_FALSE(refused);
+        INFO(args, refused.error().toString());
+        const Error& e =
+            refused.error().details.empty() ? refused.error() : refused.error().details.front();
+        CHECK(e.path == path);
+        CHECK_FALSE(e.hint.empty());
+    }
+    run(bus, "project.set", R"({"timecode": {"start": "00:00:59;29"}})");
+    auto rate = bus.execute({"project.set", j(R"({"timecode": {"rate": "24"}})"), kOrigin});
+    REQUIRE_FALSE(rate);
+    CHECK(rate.error().code == "timecode.start");
+    CHECK(rate.error().hint.find("\"rate\": \"24\"") != std::string::npos);
+    // Saved with the project, and one undo step each.
+    run(bus, "history.undo", "{}");
+    CHECK(app->head().project->timecode.start == sync::Timecode{1, 0, 0, 0});
+    const fs::path file = dir.path / "tc.json";
+    run(bus, "project.save", R"({"path": ")" + file.generic_string() + R"("})");
+    auto reopened = model::parseProject(readTextFile(file).value());
+    REQUIRE(reopened);
+    CHECK(reopened->project->timecode == app->head().project->timecode);
+}
+
 TEST_CASE("auxiliary channels over the bus: channels, routes to 3/4, key pins (ADR-0020)") {
     Workdir dir;
     auto app = makeApp(dir.path);
