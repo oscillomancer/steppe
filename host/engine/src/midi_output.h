@@ -5,10 +5,14 @@
 namespace supple::engine::detail {
 inline constexpr std::size_t kMidiOutputPorts = 16;
 inline constexpr std::size_t kMidiOutputQueueSize = 2048;
+// Shared by ordered closing notes and a future final transport Stop. Keep the
+// native port/client alive for the remaining scheduled delay, at most 250 ms.
+inline constexpr double kMidiOutputCloseWaitSeconds = .250;
+double midiOutputCloseDeadline(double now, double lastScheduled);
 struct TimedMidiOutput {
     double seconds = 0;  // sink clock; first byte's requested departure time
     MidiOutputEvent event;
-    bool closing = false;  // final callback: submit releases at sink now
+    bool closing = false;  // final callback: ordered native releases; WinMM sends now
 };
 struct MidiOutputUmp {
     std::array<std::uint32_t, 4> words{};
@@ -55,6 +59,7 @@ class MidiOutputSender {
     MidiSink& sink_;
     std::array<SpscRing<TimedMidiOutput, kMidiOutputQueueSize>, kMidiOutputPorts> queues_;
     std::array<double, kMidiOutputPorts> lastDue_{};  // producer only
+    double lastSent_ = 0;                             // consumer only; stop reads after joining
     void drop(std::size_t port) {
         dropped_.fetch_add(1, std::memory_order_relaxed);
         if (port < portDrops_.size()) portDrops_[port].fetch_add(1, std::memory_order_relaxed);

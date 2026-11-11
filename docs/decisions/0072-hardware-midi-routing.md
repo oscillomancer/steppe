@@ -21,6 +21,13 @@ including plug-in notes; pre-FX hardware routes retain the pre-FX stream.
 but reset-off ports retain delayed note-offs and mute markers. Reset-on routes
 invalidate old events by generation and release their written notes.
 
+2026-11-11 re-review correction B supersedes the earlier closing-at-now note:
+CoreMIDI releases follow accepted timestamps at max(now, lastDue[port]). After
+joining the sender, shutdown retains the port/client for the remaining latest
+scheduled delay, capped at 250 ms. The common sender deadline/bound can also
+serve a final clock Stop. Delays beyond the cap remain a native-test limit.
+WinMM remains immediate and JACK remains in-period; no endpoint flush.
+
 ## Decision
 
 Extend the unreleased project schema 2.10 with MIDI routes whose destination

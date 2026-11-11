@@ -91,7 +91,8 @@ class CoreMidiSink final : public MidiSink {
     void stop() override {
         // CoreMIDI owns accepted scheduled events. Never flush an endpoint:
         // that would cancel other clients' traffic too. Engine releases its
-        // held notes before close; accepted events drain in timestamp order.
+        // held notes before close. The sender has waited for ordered closing
+        // timestamps, capped by kMidiOutputCloseWaitSeconds (250 ms).
         if (output_) MIDIPortDispose(output_);
         output_ = 0;
         if (acquired_) client_->release();

@@ -86,6 +86,9 @@ MidiOutputUmp midiOutputUmp(const MidiOutputEvent& e) {
     }
     return result;
 }
+double midiOutputCloseDeadline(double now, double lastScheduled) {
+    return now + std::clamp(lastScheduled - now, 0.0, kMidiOutputCloseWaitSeconds);
+}
 void MidiSink::waitUntil(double seconds) {
     const double delay = std::clamp(seconds - now(), 0.0, .001);
     if (delay > 0) std::this_thread::sleep_for(std::chrono::duration<double>(delay));
@@ -95,6 +98,7 @@ Status MidiOutputSender::start() {
         return Error("backend.midi", "MIDI sender is already running", "/midi_outputs",
                      "stop before restarting the sender");
     lastDue_.fill(0);
+    lastSent_ = 0;
     dropped_.store(0);
     for (auto& dropped : portDrops_) dropped.store(0);
     quit_.store(false);
@@ -123,11 +127,20 @@ void MidiOutputSender::stop() {
                 (status == 0xb0 && (event.event.bytes[1] == 64 || event.event.bytes[1] == 123) &&
                  !event.event.bytes[2]);
             if (release) {
-                event.seconds = sink_.now();
-                if (!sink_.send(event)) drop(event.event.port);
+                event.seconds = sink_.timestamped()
+                                    ? std::max(sink_.now(), lastDue_[event.event.port])
+                                    : sink_.now();
+                if (sink_.send(event))
+                    lastSent_ = std::max(lastSent_, event.seconds);
+                else
+                    drop(event.event.port);
             } else
                 drop(event.event.port);
         }
+    if (sink_.timestamped()) {
+        const double deadline = midiOutputCloseDeadline(sink_.now(), lastSent_);
+        while (sink_.now() < deadline) sink_.waitUntil(deadline);
+    }
 }
 bool MidiOutputSender::push(const TimedMidiOutput& event) {
     const auto port = event.event.port;
@@ -142,7 +155,7 @@ bool MidiOutputSender::push(const TimedMidiOutput& event) {
         (status == 0xb0 && (event.event.bytes[1] == 64 || event.event.bytes[1] == 123) &&
          !event.event.bytes[2]);
     if (queued.closing)
-        queued.seconds = sink_.now();
+        queued.seconds = sink_.timestamped() ? std::max(sink_.now(), lastDue_[port]) : sink_.now();
     else if (release)
         queued.seconds = std::max(queued.seconds, lastDue_[port]);
     if ((!queued.closing && queued.seconds < lastDue_[port]) || !queues_[port].push(queued)) {
@@ -167,8 +180,11 @@ double MidiOutputSender::dispatch() {
         if (selected == queues_.size()) return sink_.now() + .001;
         if (!sink_.timestamped() && !next.closing && next.seconds > sink_.now())
             return next.seconds;
-        if (next.closing) next.seconds = sink_.now();
-        if (!sink_.send(next)) drop(next.event.port);
+        if (next.closing) next.seconds = std::max(next.seconds, sink_.now());
+        if (sink_.send(next))
+            lastSent_ = std::max(lastSent_, next.seconds);
+        else
+            drop(next.event.port);
         queues_[selected].consume();
     }
     return sink_.now();

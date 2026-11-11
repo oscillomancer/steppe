@@ -2769,8 +2769,14 @@ reset is on, and engine shutdown. Releases include sustain-off; boundary and
 shutdown resets add all-notes-off on used channels. These controllers share
 hardware channel state. `reset_on_stop: false` retains timeline notes across
 transport stops/locates; engine shutdown always releases. CoreMIDI shutdown
-submits closing releases at sink now before disposing its port/client, without
-endpoint-wide flush. Previously accepted events drain normally.
+stamps closing releases at `max(now, lastDue[port])`, after accepted events,
+then retains its port/client until the latest submitted timestamp, capped at
+250 ms from sender stop (`kMidiOutputCloseWaitSeconds` and
+`midiOutputCloseDeadline`, shared with a future final clock Stop). The wait is
+on the control thread and covers the remaining scheduled plan/device delay.
+Longer horizons can outlast that cap and require native validation. No
+endpoint-wide flush is used. WinMM still drops future onsets and sends releases
+immediately; JACK still writes its final period.
 
 `midi.outputs.get` and `midi.inputs.get` return `{ports: [...]}` with name,
 index (-1 absent), enabled, offset_ms, latency_ms, dropped and structured warnings;

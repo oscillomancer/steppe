@@ -7,6 +7,7 @@ using namespace supple::engine;
 namespace {
 struct Sink : detail::MidiSink {
     double clock = 10;
+    std::vector<double> waits;
     std::vector<detail::TimedMidiOutput> sent;
     bool fail = false, timestamps = false;
     Sink() { names = {"Synth", "Clock"}; }
@@ -17,6 +18,10 @@ struct Sink : detail::MidiSink {
     bool send(const detail::TimedMidiOutput& e) override {
         sent.push_back(e);
         return !fail;
+    }
+    void waitUntil(double deadline) override {
+        waits.push_back(deadline);
+        clock = std::max(clock, deadline);
     }
     bool changed() override { return false; }
 };
@@ -144,7 +149,7 @@ TEST_CASE("native output shutdown sends releases now without endpoint flush") {
     CHECK(sender->dropped() == 1);
 }
 
-TEST_CASE("timestamped closing releases bypass future due times before sender shutdown") {
+TEST_CASE("timestamped closing releases follow accepted events and wait before disposal") {
     Sink sink;
     sink.timestamps = true;
     auto sender = std::make_unique<detail::MidiOutputSender>(sink);
@@ -154,10 +159,30 @@ TEST_CASE("timestamped closing releases bypass future due times before sender sh
     sender->dispatch();
     REQUIRE(sink.sent.size() == 2);
     CHECK(sink.sent[0].seconds == 20);
-    CHECK(sink.sent[1].seconds == 10);
+    CHECK(sink.sent[1].seconds == 20);
     sink.clock = 11;
     REQUIRE(sender->push({21, {0, 0, 3, {0xb0, 64, 0}}, true}));
     sender->stop();
     REQUIRE(sink.sent.size() == 3);
-    CHECK(sink.sent[2].seconds == 11);
+    CHECK(sink.sent[2].seconds == 20);
+    REQUIRE(sink.waits.size() == 1);
+    CHECK(sink.waits[0] == doctest::Approx(11.25));
+}
+
+TEST_CASE("timestamped native close waits the remaining plan delay up to the shared bound") {
+    for (double delay : {.05, 1.}) {
+        Sink sink;
+        sink.timestamps = true;
+        auto sender = std::make_unique<detail::MidiOutputSender>(sink);
+        REQUIRE(sender->push({10 + delay, {0, 0, 3, {0x90, 60, 100}}}));
+        sender->dispatch();
+        REQUIRE(sender->push({10, {0, 0, 3, {0x80, 60, 0}}, true}));
+        sender->stop();
+        REQUIRE(sink.sent.size() == 2);
+        CHECK(sink.sent[1].seconds == doctest::Approx(10 + delay));
+        CHECK(sink.clock ==
+              doctest::Approx(10 + std::min(delay, detail::kMidiOutputCloseWaitSeconds)));
+        sink.stop();  // port disposal follows sender's bounded wait
+    }
+    CHECK(detail::midiOutputCloseDeadline(10, 9) == 10);
 }

@@ -315,8 +315,9 @@ instructions are in `docs/guides/installing.md`.
   The Hardware MIDI tab edits existing input assignments and hardware sends;
   header menus edit machine port preferences. Mix and scalar-rate shortcuts
   remain active with hardware routes; mute and VCA gate values use mix slots. CoreMIDI no longer flushes shared
-  endpoints at shutdown; closing note-offs are submitted at native sink now
-  before port/client disposal.
+  endpoints at shutdown; CoreMIDI closing releases follow accepted timestamps
+  before a shared, at-most-250 ms disposal wait. Longer scheduled horizons remain
+  a native-validation limit; WinMM releases remain immediate.
   Device-free tests cover both executors, audio nulls, lifecycle, persistence and
   GUI interactions. Native macOS/Windows CI, physical timing/disconnect testing
   and cross-client shutdown validation remain pending. Native input loss without
