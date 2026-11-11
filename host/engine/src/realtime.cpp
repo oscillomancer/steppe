@@ -20,6 +20,7 @@
 
 #include <cstring>
 #include "hardware_midi.h"
+#include "midi_output.h"
 #include "live_workers.h"
 #include "meters.h"
 
@@ -480,9 +481,10 @@ void Engine::sayFarewell() SUPPLE_RT {
 void Engine::stop() {
     if (!backend_) return;
     // A MIDI output's slave is playing: Stop goes out in a running cycle,
-    // where every backend delivers it, then has the device's latency to
-    // leave. A device that runs no more cycles gets it in the final
-    // callback, when the backend still takes MIDI there (ADR-0073 §9).
+    // then has the device's latency to leave (bounded like the native
+    // sender's close). The next, silenced cycle releases routed notes, so
+    // each port gets its Stop before the note-offs; the final callback is
+    // the fallback for a device that runs no more cycles (ADR-0073 §9).
     if (syncTransportRunning_.load(std::memory_order_acquire)) {
         const auto acked = syncFarewells_.load(std::memory_order_acquire);
         syncFarewell_.store(true, std::memory_order_release);
@@ -498,7 +500,8 @@ void Engine::stop() {
                 static_cast<double>(syncOutputLatency_.load(std::memory_order_relaxed)) /
                     config_.sampleRate +
                 0.005;
-            std::this_thread::sleep_for(std::chrono::duration<double>(std::min(leave, 0.25)));
+            std::this_thread::sleep_for(std::chrono::duration<double>(
+                std::min(leave, detail::kMidiOutputCloseWaitSeconds)));
         }
     }
     // Silence from the next cycle on, then stop the backend: its final

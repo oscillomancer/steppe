@@ -86,6 +86,12 @@ MidiOutputUmp midiOutputUmp(const MidiOutputEvent& e) {
     }
     return result;
 }
+bool closingMessage(const MidiOutputEvent& e) {
+    const auto status = e.bytes[0] & 0xf0;
+    return status == 0x80 || (status == 0x90 && !e.bytes[2]) ||
+           (status == 0xb0 && (e.bytes[1] == 64 || e.bytes[1] == 123) && !e.bytes[2]) ||
+           (e.size == 1 && e.bytes[0] == 0xfc);  // a clock slave's Stop (ADR-0073 §9)
+}
 double midiOutputCloseDeadline(double now, double lastScheduled) {
     return now + std::clamp(lastScheduled - now, 0.0, kMidiOutputCloseWaitSeconds);
 }
@@ -121,12 +127,7 @@ void MidiOutputSender::stop() {
     TimedMidiOutput event;
     for (auto& queue : queues_)
         while (queue.pop(event)) {
-            const auto status = event.event.bytes[0] & 0xf0;
-            const bool release =
-                status == 0x80 || (status == 0x90 && !event.event.bytes[2]) ||
-                (status == 0xb0 && (event.event.bytes[1] == 64 || event.event.bytes[1] == 123) &&
-                 !event.event.bytes[2]);
-            if (release) {
+            if (closingMessage(event.event)) {
                 event.seconds = sink_.timestamped()
                                     ? std::max(sink_.now(), lastDue_[event.event.port])
                                     : sink_.now();
@@ -154,11 +155,7 @@ bool MidiOutputSender::push(const TimedMidiOutput& event) {
         return false;
     }
     auto queued = event;
-    const auto status = event.event.bytes[0] & 0xf0;
-    const bool release =
-        status == 0x80 || (status == 0x90 && !event.event.bytes[2]) ||
-        (status == 0xb0 && (event.event.bytes[1] == 64 || event.event.bytes[1] == 123) &&
-         !event.event.bytes[2]);
+    const bool release = closingMessage(event.event);
     if (queued.closing)
         queued.seconds = sink_.timestamped() ? std::max(sink_.now(), lastDue_[port]) : sink_.now();
     else if (release)

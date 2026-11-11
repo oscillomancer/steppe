@@ -126,14 +126,24 @@ output port, which Phase 2's hardware MIDI routing extends.
    when its kinds change or the port is disabled, when the sync settings
    rebuild the runtime (the callback adopts the new one after the old one's
    Stop; a new runtime still sending transport then starts with Song
-   Position and Continue), and when the engine stops. For an engine stop
-   the main thread asks the callback for the Stop and waits (at most four
-   periods or 50 ms) for a running cycle to send it, where every backend
-   delivers MIDI, then the device's output latency (at most 250 ms) for it
-   to leave, before stopping the backend. A device that runs no more cycles
-   (it went away) gets it in the final zero-frame callback, which only the
-   dummy backend takes MIDI in; JACK and native outputs refuse it there
-   (counted as dropped), so a slave on a vanished device is not stopped.
+   Position and Continue), and when the engine stops. An engine stop has
+   one path for the clock and for routed notes (ADR-0072): the main thread
+   asks the callback for the Stop and waits (at most four periods or
+   50 ms) for a running cycle to send it, then the device's output latency
+   (at most `kMidiOutputCloseWaitSeconds`, 250 ms) for it to leave; the
+   next running cycle, silenced for shutdown, releases the routed notes
+   still held, so on each port the Stop comes before the note-offs. The
+   backend's final zero-frame callback is the fallback for a device that
+   ran no more cycles: it sends the Stop and the releases too, and every
+   backend now delivers it (JACK writes it in a real period; PortAudio
+   hands it to the native sender as closing, stamped after everything the
+   port accepted; the dummy backend captures it). The native sender's
+   shutdown keeps a pending Stop with the releases (CoreMIDI: stamped
+   `max(now, lastDue)`; WinMM: now) and drops the rest, and CoreMIDI keeps
+   its port open for the remaining scheduled delay, at most 250 ms, before
+   disposing it. A slave is left playing only when its device is gone with
+   no callback to carry the Stop (a JACK server that went away, an
+   unplugged MIDI device).
 
 ## Consequences
 

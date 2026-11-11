@@ -1137,6 +1137,10 @@ TEST_CASE("midi clock output: engine stop sends Stop from a running cycle") {
         REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
     };
     run("midi.outputs.set", R"({"port": "Synth", "clock": true, "transport": true})");
+    // A note held on the same port through hardware MIDI routing (ADR-0072).
+    run("track.add", R"({"name": "Keys"})");
+    run("item.add", R"({"track": "tr_1", "notation": "voice a; 1: C4:w"})");
+    run("route.add", R"({"from": "tr_1", "to_midi": "Synth", "midi": {}})");
     run("transport.play", "{}");
     for (int i = 0; i < 300 && !app->engine()->syncConfig().outputs[0].transport; ++i) {
         app->tick();
@@ -1147,10 +1151,26 @@ TEST_CASE("midi clock output: engine stop sends Stop from a running cycle") {
     app->stopEngine();
     const auto& sent = backend.midiCapture();
     REQUIRE_FALSE(sent.empty());
-    CHECK(sent.back().event.bytes[0] == 0xFC);  // the last message: Stop
+    // One stop path (ADR-0073 §9): running cycles carry the slave's Stop,
+    // then the held note's release, in that order on the port.
     int stops = 0;
-    for (const auto& m : sent) stops += m.event.bytes[0] == 0xFC;
+    std::size_t stopAt = sent.size(), offAt = sent.size(), onAt = sent.size();
+    for (std::size_t i = 0; i < sent.size(); ++i) {
+        const auto status = sent[i].event.bytes[0];
+        stops += status == 0xFC;
+        if (status == 0xFC) stopAt = i;
+        if ((status & 0xf0) == 0x90 && sent[i].event.bytes[2]) onAt = std::min(onAt, i);
+        if ((status & 0xf0) == 0x80) offAt = i;
+    }
     CHECK(stops == 1);
+    REQUIRE(onAt < sent.size());
+    REQUIRE(stopAt < sent.size());
+    REQUIRE(offAt < sent.size());
+    CHECK(onAt < stopAt);
+    CHECK(stopAt < offAt);
+    CHECK(sent[stopAt].frame <= sent[offAt].frame);
+    for (std::size_t i = stopAt + 1; i < sent.size(); ++i)  // no clock after Stop
+        CHECK(sent[i].event.bytes[0] != 0xF8);
     bus.reset();
     app.reset();
     fs::remove_all(dir);

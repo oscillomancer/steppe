@@ -2148,10 +2148,18 @@ runtime's MIDI output. The callback calls it on the old runtime as it
 adopts a new one, and on request: `Engine::stop()`, when the callback last
 published `syncTransportRunning_`, sets `syncFarewell_` and waits for
 `syncFarewells_` to count it (at most max(50 ms, 4 periods)), then the
-plan's and device's latency (at most 250 ms), before `Backend::stop()`.
-The final zero-frame callback calls it too, for a device that ran no more
-cycles; the dummy backend opens a one-frame MIDI window for that callback
-and captures it, JACK and PortAudio refuse writes there.
+plan's and device's latency (at most `detail::kMidiOutputCloseWaitSeconds`,
+250 ms), before it sets `shutdownRequested_`. The next running cycle is
+silent and calls `HardwareMidiRuntime::finish(closing)`, which releases the
+routed notes still held: one shutdown path, the Stop before the note-offs
+on each port. `Backend::stop()`'s final zero-frame callback calls both
+again as the fallback for a device that ran no more cycles; every backend
+delivers its MIDI (JACK in a real period, PortAudio to the native sender
+as closing, the dummy backend into its capture). The sender's `stop()`
+keeps `closingMessage()`s from its queues (note-offs, CC64/CC123 at zero
+and FC), stamped `max(now, lastDue[port])` on CoreMIDI and now on WinMM,
+drops the rest, and on CoreMIDI waits for the latest stamp (at most
+250 ms) before the port is disposed.
 
 **Status.** `midi.outputs.get` returns `{ports}`, and
 `engine.status.midi_outputs` the same list (`EngineApp::midiPortsState`):
