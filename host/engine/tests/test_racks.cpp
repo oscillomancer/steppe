@@ -2225,3 +2225,244 @@ TEST_CASE("MIDI sends: a relay chain's reservations grow by each hop, not twice"
     CHECK(received == sent);
     for (Id id : chain) CHECK(node(id).midiDropped == 0);
 }
+
+// --- The FX chain as a MIDI bus (ADR-0068) -------------------------------------------------
+
+namespace {
+constexpr const char* kEcho = "com.suppleaudio.test.note-echo";  // notes out a fifth up
+constexpr const char* kSine = "com.suppleaudio.test.sine";
+constexpr const char* kGain = "com.suppleaudio.test.gain";
+
+std::vector<midi::Note> busNotes(int up = 0) {
+    std::vector<midi::Note> notes;
+    for (auto [start, length, key, velocity] : {std::tuple{17, 263, 60, 96},
+                                                {341, 319, 67, 64},
+                                                {813, 411, 72, 127},
+                                                {1500, 217, 48, 31}})
+        notes.push_back({start, length, 0, static_cast<std::uint8_t>(key + up),
+                         static_cast<std::uint8_t>(velocity), 0});
+    return notes;
+}
+
+Id addFx(model::EditTxn& t, Id track, const char* plugin, bool latency = false) {
+    model::FxInstance fx;
+    fx.plugin.id = plugin;
+    if (latency)
+        fx.patch =
+            json::parse(R"({"schema":"supple.test-gain-patch/1.0","params":{"latency":"short"}})")
+                .value();
+    const Id id = t.create(fx);
+    t.modify<model::Track>(track, [&](auto& tr) { tr.chain.push_back(id); });
+    return id;
+}
+
+void addNotes(model::EditTxn& t, Id track, std::vector<midi::Note> notes, int ticks = 1920) {
+    model::MidiSource src;
+    src.sequence.ppq = 960;
+    src.sequence.length = ticks;
+    src.sequence.notes = std::move(notes);
+    model::Take take;
+    take.source = t.create(src);
+    const auto tk = t.create(take);
+    model::Item item;
+    item.track = track;
+    item.length = ticks / 960.0;
+    item.takes = {tk};
+    item.activeTake = tk;
+    t.create(item);
+}
+
+// One channel playing `notes` through `chain`, on a linear console.
+model::Session busChain(std::vector<const char*> chain, std::vector<midi::Note> notes,
+                        model::MidiOutputMode mode = model::MidiOutputMode::Replace,
+                        bool bypass = false) {
+    model::EditTxn t(model::Session::create({.console9 = false}), 1);
+    const Id track = addChannel(t);
+    for (const char* plugin : chain) {
+        const Id fx = addFx(t, track, plugin);
+        if (plugin == std::string_view(kEcho))
+            t.modify<model::FxInstance>(fx, [&](auto& f) {
+                f.midiOutput = mode;
+                f.bypass = bypass;
+            });
+    }
+    addNotes(t, track, std::move(notes));
+    return commit(t);
+}
+
+double maxDiff(const std::vector<float>& a, const std::vector<float>& b) {
+    REQUIRE(a.size() == b.size());
+    double most = 0;
+    for (std::size_t i = 0; i < a.size(); ++i)
+        most = std::max(most, double(std::fabs(a[i] - b[i])));
+    return most;
+}
+}  // namespace
+
+TEST_CASE("MIDI bus: a note-output plug-in replaces or merges what the plug-ins after it hear" *
+          doctest::description("rt")) {
+    const auto plain = renderLeft(busChain({kSine}, busNotes()), 1.0);
+    const auto fifth = renderLeft(busChain({kSine}, busNotes(7)), 1.0);
+    auto both = busNotes();
+    for (const auto& n : busNotes(7)) both.push_back(n);
+    const auto merged = renderLeft(busChain({kSine}, both), 1.0);
+    REQUIRE(maxDiff(plain, fifth) > 0.01);
+    for (std::uint32_t block : {37u, 512u}) {
+        CAPTURE(block);
+        // Replace (the default): the sine hears only the echo's notes.
+        CHECK(bool(renderLeft(busChain({kEcho, kSine}, busNotes()), 1.0, block) == fifth));
+        // A plug-in without note output passes the bus on.
+        CHECK(bool(renderLeft(busChain({kEcho, kGain, kSine}, busNotes()), 1.0, block) == fifth));
+        // Merge: what reached the echo and its output.
+        CHECK(maxDiff(renderLeft(busChain({kEcho, kSine}, busNotes(), model::MidiOutputMode::Merge),
+                                 1.0, block),
+                      merged) < 1e-6);
+        // Bypassed, the echo passes the bus as it passes audio.
+        CHECK(bool(
+            renderLeft(busChain({kEcho, kSine}, busNotes(), model::MidiOutputMode::Replace, true),
+                       1.0, block) == plain));
+    }
+}
+
+TEST_CASE("MIDI bus: post-FX sends carry the bus after the chain, compensated" *
+          doctest::description("rt")) {
+    // A send's destination hears the echo's notes from a post-FX tap and
+    // the timeline's from pre-FX; behind a latent plug-in, at its latency.
+    for (bool latency : {false, true})
+        for (auto tap : {model::Tap::PostFader, model::Tap::PreFader, model::Tap::PreFx})
+            for (bool notesDestination : {false, true}) {
+                CAPTURE(latency);
+                CAPTURE(int(tap));
+                CAPTURE(notesDestination);
+                auto scene = [&](bool echo, int up) {
+                    model::EditTxn t(model::Session::create({.console9 = false}), 1);
+                    const Id source = addChannel(t), target = addChannel(t);
+                    if (echo) addFx(t, source, kEcho);
+                    addFx(t, source, kGain, latency);
+                    addNotes(t, source, busNotes(up));
+                    model::Route route;
+                    route.from.track = source;
+                    route.midi = model::MidiRouting{};
+                    route.tap = tap;
+                    if (notesDestination) {
+                        const auto rack = t.create(model::Rack{target, ""});
+                        const auto notes = addModule(t, rack, model::kNotesModule);
+                        const auto synth = addPlugin(t, rack, kSine);
+                        const auto out = addModule(t, rack, model::kOutModule);
+                        cable(t, notes, "pitch", synth, "pitch");
+                        cable(t, notes, "gate", synth, "gate");
+                        cable(t, notes, "velocity", synth, "velocity");
+                        cable(t, synth, "out_l", out, "l");
+                        listen(t, out, target);
+                        route.to.module = notes;
+                    } else {
+                        addFx(t, target, kSine);
+                        route.to.track = target;
+                    }
+                    t.create(route);
+                    return commit(t);
+                };
+                const bool post = tap != model::Tap::PreFx;
+                const auto expected = renderLeft(scene(false, post ? 7 : 0), 1.0, 512);
+                REQUIRE(maxDiff(expected, renderLeft(scene(false, post ? 0 : 7), 1.0)) > 0.01);
+                CHECK(bool(renderLeft(scene(true, 0), 1.0, 37) == expected));
+                CHECK(bool(renderLeft(scene(true, 0), 1.0, 512) == expected));
+            }
+}
+
+TEST_CASE("MIDI bus: held notes survive plan swaps; a removed or bypassed plug-in's end" *
+          doctest::description("rt")) {
+    namespace d = supple::engine::detail;
+    std::string change;
+    SUBCASE("unchanged") { change = "rename"; }
+    SUBCASE("removed") { change = "remove"; }
+    SUBCASE("bypassed") { change = "bypass"; }
+    SUBCASE("merge") { change = "merge"; }
+    model::EditTxn t(model::Session::create({.console9 = false}), 1);
+    const Id source = addChannel(t), target = addChannel(t);
+    const Id echo = addFx(t, source, kEcho);
+    addFx(t, source, kSine);
+    addFx(t, target, kSine);
+    addNotes(t, source, {{0, 3840, 0, 60, 100, 0}}, 3840);  // held for two seconds
+    model::Route route;
+    route.from.track = source;
+    route.to.track = target;
+    route.midi = model::MidiRouting{};
+    t.create(route);
+    auto session = commit(t);
+    auto pool = makePool();
+    auto compiled = d::compile(session, pool, 0, 512);
+    REQUIRE(compiled);
+    auto plan = std::move(*compiled);
+    REQUIRE(d::prepare(plan, session));
+    std::vector<host::Instance*> started;
+    auto start = [&](d::Plan& p) {
+        for (auto* instance : p.instances)
+            if (!instance->processing()) {
+                REQUIRE(instance->startProcessing());
+                started.push_back(instance);
+            }
+    };
+    auto node = [&](Id id) -> d::Node& {
+        const auto n = std::find_if(plan.nodes.begin(), plan.nodes.end(),
+                                    [&](const auto& x) { return x.id == id; });
+        REQUIRE(n != plan.nodes.end());
+        return *n;
+    };
+    // The keys an instrument (its chain's last stage) holds.
+    auto keys = [&](Id id) {
+        std::vector<int> out;
+        for (const auto& v : node(id).chain.back().voices) out.push_back(v.key);
+        return out;
+    };
+    auto peak = [&](Id id) {  // the last block's, before the fader
+        float most = 0;
+        for (std::size_t i = 0; i < 512; ++i)
+            most = std::max(most, std::fabs(node(id).preFader.l[i]));
+        return most;
+    };
+    start(plan);
+    std::int64_t pos = 0;
+    for (int b = 0; b < 4; ++b, pos += 512) REQUIRE(d::processBlock(plan, pos, 512));
+    REQUIRE(keys(source) == std::vector<int>{67});
+    REQUIRE(keys(target) == std::vector<int>{67});
+    const auto heldId = node(source).chain.back().voices.front().noteId;
+    model::EditTxn edit(session, 2);
+    if (change == "rename")
+        edit.modify<model::Track>(source, [](auto& tr) { tr.name = "Renamed"; });
+    if (change == "remove") {
+        edit.modify<model::Track>(source, [&](auto& tr) {
+            tr.chain.erase(std::find(tr.chain.begin(), tr.chain.end(), echo));
+        });
+        edit.remove<model::FxInstance>(echo);
+    }
+    if (change == "bypass") edit.modify<model::FxInstance>(echo, [](auto& f) { f.bypass = true; });
+    if (change == "merge")
+        edit.modify<model::FxInstance>(
+            echo, [](auto& f) { f.midiOutput = model::MidiOutputMode::Merge; });
+    session = commit(edit);
+    auto next = d::compile(session, pool, 0, 512);
+    REQUIRE(next);
+    REQUIRE(d::prepare(*next, session));
+    start(*next);
+    d::carryMix(plan, *next, -1);
+    d::locate(*next, pos, false);
+    plan = std::move(*next);
+    for (int b = 0; b < 4; ++b, pos += 512) REQUIRE(d::processBlock(plan, pos, 512));
+    if (change == "rename" || change == "merge") {
+        // Carried: still sounding, under the same id, never retriggered.
+        CHECK(keys(source) == std::vector<int>{67});
+        CHECK(node(source).chain.back().voices.front().noteId == heldId);
+        CHECK(keys(target) == std::vector<int>{67});
+        CHECK(peak(source) > 0.01f);
+        CHECK(peak(target) > 0.01f);
+    } else {
+        // Its notes end, here and downstream: nothing hangs.
+        CHECK(keys(source).empty());
+        CHECK(keys(target).empty());
+        CHECK(peak(source) == 0.0f);
+        CHECK(peak(target) == 0.0f);
+        for (const auto& v : node(source).midiPostHeld) CHECK_FALSE(v.high);
+    }
+    for (auto* instance : started) instance->stopProcessing();
+}

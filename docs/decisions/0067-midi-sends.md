@@ -3,6 +3,9 @@
 **Status:** Accepted, 2026-11-10. Amends ADR-0062; builds on ADR-0064,
 ADR-0065 and ADR-0058.
 
+*2026-11-11: the post-FX seam is now filled: ADR-0068 makes the FX chain a
+MIDI bus, so post-FX sends carry note-output plug-ins' notes.*
+
 ## Context
 
 The maintainer needs to send a channel's MIDI to other instruments and rack

@@ -2609,8 +2609,8 @@ Every channel has prepared `midiPreFx` and `midiPostFx` event buffers,
 independent of its instrument. Timeline events (including loops and master
 playrate), monitored device events and incoming routes merge at exact frames
 before feeding its instrument. MIDI routes can form A → B → C chains through
-channels without instruments. Post-FX currently copies pre-FX, leaving one
-explicit replacement/merge seam for plug-in MIDI output. A frozen channel's
+channels without instruments. Post-FX is the chain's MIDI bus after the
+chain (below; ADR-0068). A frozen channel's
 pre/post-FX MIDI is its timeline MIDI; no MIDI is recovered from its audio
 print. Outgoing MIDI send changes do not invalidate the audio freeze hash;
 incoming external MIDI remains unsupported for freeze.
@@ -2662,3 +2662,54 @@ would put a voice's release before its own onset (late events or playrate
 compression), the frame retains input chronology. Prepared sorting scratch
 keeps both channel and Notes event ordering allocation-free. All-notes-off
 releases stay at their controller, before a same-frame reattack.
+
+### The FX chain's MIDI bus (ADR-0068)
+
+A track's chain carries a MIDI bus (`midi_bus.cpp`). Per block, before the
+note target's releases, `beginMidiBus` decides which note-output stages are
+on the bus: running in this executor, processing and not bypassed (a stage
+that then fails outputs nothing but stays on the bus). Part −1 is the
+pre-FX stream; part *q* is the *q*th note-output stage. A part reaches
+stage *k* when it comes before *k*, is on the bus, and no replacing stage on
+the bus lies between it and *k*; the pre-FX part reaches *k* when no
+replacing stage on the bus lies before *k*. What a stage holds of a part
+that no longer reaches it ends at the start of its block (the note target's
+with its own releases); if the pre-FX part no longer reaches the note
+target, its pre-FX voices end and it no longer hears that part.
+
+After `finishTrackMidi`, `fillMidiBus` copies `midiPreFx` onto the bus,
+marking a take's own notes and controllers (`midiChain`) so no plug-in of
+the track hears them; sends still do. Before each stage, `feedMidiBus`
+gives a note-accepting stage the bus, notes under `kBusNoteBase` + their
+bus id (the note target skips the pre-FX part, which it already heard under
+its own ids), merged by time with its automation and releases. After each
+stage, `stageMidiBus` turns a note-output stage's output into bus events:
+notes (and MIDI 1.0 note messages) take its voice slots, keyed by the
+plug-in's `(port, channel, key, note id)`, with an end before an onset on a
+held address and CLAP wildcard ends; all-notes-off ends that channel; other
+MIDI passes. Replace makes that the bus; merge interleaves it after the
+bus's own events at each frame. `finishMidiBus` writes `midiPostFx`: first
+the releases of post-FX voices of parts no longer reaching the end, then
+the bus; `midiPostHeld` follows it, and post-FX send restarts read its
+block-start copy. Every listening stage tracks its voices (`trackVoices`),
+bus notes marked `kBusNoteOrigin`.
+
+Bus ids are the pre-FX slots, then `kBusVoices` (256) per note-output
+stage. Adoption (`carryBus`) keeps a continuing stage's held notes and maps
+their old bus ids to new ones (same instance and FX id), maps pre-FX ids
+by the pool's remap, carries `midiPostHeld`, remaps listening stages'
+bus notes (else they end) and lets post-FX sends carry their voices by the
+same map. A seek ends the pre-FX part's post-FX notes and what other stages
+than the note target hold of it.
+
+A note-output stage's sink holds `kBusOutputEvents` (1024, the bridge
+arena's room). Bounds: a stage adds 256 voices and `kBusStageEvents`
+(2 × 1024 + 2 × 256) events per block to the bus; `midiPostWindow` and
+`midiPostRate` add two blocks and one of that per stage, plus a release per
+bus voice; post-FX taps size their queues and voices from them. A
+listening stage reserves what can reach it: the pre-FX part unless it is
+the note target, and the stages ahead of it; a chain without note-output
+stages reserves what it did before. A stage with note ports and no audio
+ports (`midiOnly`) runs with no audio buffers; the audio passes it through
+its compensation delay, and it is never oversampled. Bus notes keep the
+chain's input time; post-FX taps add `latChain`.

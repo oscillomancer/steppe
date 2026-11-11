@@ -489,6 +489,7 @@ q = nil
 ---@field problems? any Current plugin problems: code, message, scope, line when known, hint, silent; scope host when unreadable
 ---@field sidechain_channels? integer The plug-in's key input: route.add {fx} feeds it
 ---@field latency_samples? integer The instance's reported latency, in samples
+---@field outputs_notes? boolean The loaded plug-in sends notes or MIDI: fx.set midi_output chooses replace or merge
 ---@field params_total? integer Plain parameters matching; at most 512 are listed.
 ---@field warnings? table[]
 
@@ -644,6 +645,7 @@ q = nil
 ---@field label? string
 ---@field isolation? "inherit"|"in_process"|"shared_bridge"|"dedicated"
 ---@field pins? table
+---@field midi_output? "replace"|"merge"
 
 ---@class Steppe.fx_set_result
 ---@field warnings? table[]
@@ -2125,7 +2127,7 @@ q = nil
 ---@field move fun(args: Steppe.fx_move_args): Steppe.fx_move_result Move a plugin within a track chain or to another track.
 ---@field remove fun(args: Steppe.fx_remove_args): Steppe.fx_remove_result Remove a plugin instance (and its envelopes).
 ---@field restart fun(args: Steppe.fx_restart_args): Steppe.fx_restart_result Re-create a plugin instance from its saved patch/state (after a crash).
----@field set fun(args: Steppe.fx_set_args): Steppe.fx_set_result Set instance options: bypass, offline, wet (%), label, isolation, pins.
+---@field set fun(args: Steppe.fx_set_args): Steppe.fx_set_result Set instance options: bypass, offline, wet, label, isolation, pins, MIDI.
 
 ---@class Steppe.fx.chain
 ---@field delete fun(args: Steppe.fx_chain_delete_args): Steppe.fx_chain_delete_result Delete a saved FX chain preset by name.

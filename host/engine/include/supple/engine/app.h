@@ -247,6 +247,8 @@ class EngineApp : public cmd::Host {
     // The plugin's CLAP parameters (from a scratch instance).
     Result<std::vector<host::ParamInfo>> fxParams(const model::FxInstance& fx);
     Result<std::uint32_t> fxSidechainChannels(const model::FxInstance& fx);  // 0: no key input
+    // It sends notes or MIDI (ADR-0068): the live instance's answer, else a scratch's.
+    Result<bool> fxOutputsNotes(model::Id id, const model::FxInstance& fx);
     // The plug-in's output ports past the main one (a multi-out instrument's),
     // ADR-0021.
     Result<std::vector<host::AudioPortInfo>> fxAuxOutputs(const model::FxInstance& fx);

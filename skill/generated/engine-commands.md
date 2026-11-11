@@ -4849,6 +4849,10 @@ Kind: `query`. Exposure: `mcp-tool`.
       "type": "integer",
       "description": "The instance's reported latency, in samples"
     },
+    "outputs_notes": {
+      "type": "boolean",
+      "description": "The loaded plug-in sends notes or MIDI: fx.set midi_output chooses replace or merge"
+    },
     "params_total": {
       "type": "integer",
       "description": "Plain parameters matching; at most 512 are listed."
@@ -5953,9 +5957,9 @@ Result:
 
 ## `fx.set@1`
 
-Set instance options: bypass, offline, wet (%), label, isolation, pins.
+Set instance options: bypass, offline, wet, label, isolation, pins, MIDI.
 
-isolation: in_process, dedicated (the plugin runs in a process of its own: a crash silences only it), shared_bridge (one process for all such plugins), inherit (the project default: in_process). pins: which of the track's channels (1-based; track.set channels adds 3-128) the plugin reads ({in: [l, r]}), writes ({out: [l, r]}) and keys from ({key: [3, 4]}: a detector on 3/4, for a plugin with a sidechain input); {} restores 1/2 in and out. out past its first two entries: a track channel for each of the plugin's auxiliary output channels in order (0: unconnected); fx.add sets them for a multi-out instrument.
+isolation: in_process, dedicated (the plugin runs in a process of its own: a crash silences only it), shared_bridge (one process for all such plugins), inherit (the project default: in_process). pins: which of the track's channels (1-based; track.set channels adds 3-128) the plugin reads ({in: [l, r]}), writes ({out: [l, r]}) and keys from ({key: [3, 4]}: a detector on 3/4, for a plugin with a sidechain input); {} restores 1/2 in and out. out past its first two entries: a track channel for each of the plugin's auxiliary output channels in order (0: unconnected); fx.add sets them for a multi-out instrument. midi_output, for a plug-in with note output (fx.describe outputs_notes): replace (default) gives the plug-ins after it, and the track's post-FX MIDI sends, only its output; merge adds its output to the MIDI that reached it.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -5970,6 +5974,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | `label` | string |  |  |  |  |
 | `isolation` | string |  |  |  |  |
 | `pins` | object |  |  |  |  |
+| `midi_output` | string |  |  |  |  |
 
 ### Result
 

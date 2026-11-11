@@ -306,6 +306,9 @@ struct MidiSource {
 
 enum class Isolation : std::uint8_t { Inherit, InProcess, SharedBridge, Dedicated };
 enum class PdcMode : std::uint8_t { Compensate, Ignore };
+// A note-output plug-in's place on its track's MIDI bus (ADR-0068): its
+// output replaces what reached it, or is merged with it.
+enum class MidiOutputMode : std::uint8_t { Replace, Merge };
 
 struct PluginRef {
     std::string format = "clap";  // clap | vst3 | lv2 | container
@@ -343,6 +346,7 @@ struct FxInstance {
     bool parallel = false;
     PdcMode pdc = PdcMode::Compensate;
     bool autoBypassOnSilence = false;
+    MidiOutputMode midiOutput = MidiOutputMode::Replace;  // plug-ins with note output
     // State: the canonical patch (semantic plugins) or a blob reference plus
     // the last known CLAP values (display/diff only; the blob is authoritative).
     std::optional<json::Value> patch;

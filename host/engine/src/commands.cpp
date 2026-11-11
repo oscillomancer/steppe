@@ -820,6 +820,7 @@ struct FxSetArgs {
     std::optional<std::string> label;
     std::optional<model::Isolation> isolation;
     std::optional<model::PinMap> pins;
+    std::optional<model::MidiOutputMode> midiOutput;
 };
 struct FxPatchArgs {
     std::string fx;
@@ -847,6 +848,7 @@ struct FxDescription {
     std::optional<std::int64_t> paramsTotal;
     std::optional<std::int64_t> sidechainChannels;  // a key input (ADR-0018)
     std::optional<std::int64_t> latencySamples;     // the instance's reported latency
+    std::optional<bool> outputsNotes;               // note output ports (ADR-0068)
 };
 constexpr std::size_t kMaxListedParams = 512;
 
@@ -2757,7 +2759,7 @@ void registerEngineCommands(cmd::Registry& registry) {
         c.name = "fx.set";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpTool;
-        c.summary = "Set instance options: bypass, offline, wet (%), label, isolation, pins.";
+        c.summary = "Set instance options: bypass, offline, wet, label, isolation, pins, MIDI.";
         c.description =
             "isolation: in_process, dedicated (the plugin runs in a process of its own: a "
             "crash silences only it), shared_bridge (one process for all such plugins), "
@@ -2766,7 +2768,10 @@ void registerEngineCommands(cmd::Registry& registry) {
             "({out: [l, r]}) and keys from ({key: [3, 4]}: a detector on 3/4, for a plugin "
             "with a sidechain input); {} restores 1/2 in and out. out past its first two "
             "entries: a track channel for each of the plugin's auxiliary output channels in "
-            "order (0: unconnected); fx.add sets them for a multi-out instrument.";
+            "order (0: unconnected); fx.add sets them for a multi-out instrument. midi_output, "
+            "for a plug-in with note output (fx.describe outputs_notes): replace (default) "
+            "gives the plug-ins after it, and the track's post-FX MIDI sends, only its output; "
+            "merge adds its output to the MIDI that reached it.";
         c.tags = {"fx"};
         c.args = schema::object<FxSetArgs>("fx_set_args")
                      .field("fx", &FxSetArgs::fx, idArg("fx", "Plugin instance"))
@@ -2782,6 +2787,10 @@ void registerEngineCommands(cmd::Registry& registry) {
                                  {model::Isolation::SharedBridge, "shared_bridge"},
                                  {model::Isolation::Dedicated, "dedicated"}}))
                      .field("pins", &FxSetArgs::pins, model::pinMapSchema())
+                     .field("midi_output", &FxSetArgs::midiOutput,
+                            schema::enumeration<model::MidiOutputMode>(
+                                {{model::MidiOutputMode::Replace, "replace"},
+                                 {model::MidiOutputMode::Merge, "merge"}}))
                      .build();
         c.result = emptySchema();
         c.examples = {
@@ -2828,6 +2837,7 @@ void registerEngineCommands(cmd::Registry& registry) {
                 if (a.label) f.label = *a.label;
                 if (a.isolation) f.isolation = *a.isolation;
                 if (a.pins) f.pins = *a.pins;
+                if (a.midiOutput) f.midiOutput = *a.midiOutput;
             });
             return Empty{};
         };
@@ -3029,6 +3039,9 @@ void registerEngineCommands(cmd::Registry& registry) {
                        schema::integer().doc("The plug-in's key input: route.add {fx} feeds it"))
                 .field("latency_samples", &FxDescription::latencySamples,
                        schema::integer().doc("The instance's reported latency, in samples"))
+                .field("outputs_notes", &FxDescription::outputsNotes,
+                       schema::boolean().doc("The loaded plug-in sends notes or MIDI: fx.set "
+                                             "midi_output chooses replace or merge"))
                 .field("params_total", &FxDescription::paramsTotal,
                        schema::integer().doc("Plain parameters matching; at most " +
                                              std::to_string(kMaxListedParams) + " are listed."))
@@ -3076,6 +3089,7 @@ void registerEngineCommands(cmd::Registry& registry) {
             r.description = *d;
             if (auto key = app.fxSidechainChannels(fx); key && *key > 0) r.sidechainChannels = *key;
             if (auto latency = app.fxLatencySamples(*id, fx)) r.latencySamples = *latency;
+            if (auto notes = app.fxOutputsNotes(*id, fx); notes && *notes) r.outputsNotes = true;
             if (a.full) {
                 auto schema = app.fxSchema(fx);
                 if (!schema && live) schema = live->semanticSchema();

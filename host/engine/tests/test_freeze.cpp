@@ -550,3 +550,39 @@ TEST_CASE("MIDI sends: frozen channels keep sending timeline MIDI at every tap" 
         CHECK(model::freezeDependencyHash(f.app->head(), track) == hash);
     }
 }
+
+TEST_CASE("MIDI bus: a frozen channel's post-FX sends carry its timeline MIDI" *
+          doctest::description("rt")) {
+    // Its echo sends a fifth up while it plays; frozen, the chain no longer
+    // runs, and the freeze says so (ADR-0068).
+    Fixture f;
+    f.run("track.add", R"({"name":"MIDI receiver"})");
+    f.run("fx.add", R"({"track":"tr_2","plugin":"com.suppleaudio.test.sine"})");
+    f.run("item.add", R"({"track":"tr_1","notation":"voice a; 1: C4:q r:*"})");
+    f.run("route.add", R"({"from":"tr_1","to":"tr_2","midi":{}})");
+    OfflineSettings settings;
+    settings.track = model::Id{model::Kind::Track, 2};
+    settings.endSeconds = .5;
+    settings.threads = 1;
+    const auto timeline = f.app->renderSession(f.app->head(), settings);
+    REQUIRE(timeline);
+    f.run("fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.note-echo"})");
+    const auto echoed = f.app->renderSession(f.app->head(), settings);
+    REQUIRE(echoed);
+    CHECK_FALSE(bool(echoed->audio.channels == timeline->audio.channels));
+    // midi_output is part of the sound a freeze captures.
+    const auto replace = model::freezeDependencyHash(f.app->head(), track);
+    f.run("fx.set", R"({"fx":"fx_2","midi_output":"merge"})");
+    CHECK(model::freezeDependencyHash(f.app->head(), track) != replace);
+    f.run("fx.set", R"({"fx":"fx_2","midi_output":"replace"})");
+    CHECK(model::freezeDependencyHash(f.app->head(), track) == replace);
+    const auto frozen = f.run("track.freeze", R"({"track":"tr_1"})");
+    REQUIRE(frozen.find("warnings"));
+    CHECK(frozen.find("warnings")->at(0).find("code")->asString() == "freeze.midi_output");
+    REQUIRE(f.app->head().tracks.find(track)->freeze);
+    const auto played = f.app->renderSession(f.app->head(), settings);
+    REQUIRE(played);
+    CHECK(bool(played->audio.channels == timeline->audio.channels));
+    CHECK(f.call("fx.set", R"({"fx":"fx_2","midi_output":"merge"})").error().code ==
+          "track.frozen");
+}

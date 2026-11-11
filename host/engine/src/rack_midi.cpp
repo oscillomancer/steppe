@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <tuple>
 #include "rack_runtime.h"
 
@@ -82,6 +83,14 @@ MidiSlot::Kind inputKind(const Node& node, std::int32_t input) SUPPLE_RT {
 int remapSlot(const Node& node, int slot) SUPPLE_RT {
     for (const auto& [from, to] : node.midiRemap)
         if (from == slot) return to;
+    return -1;
+}
+// A bus id's id in the new plan (ADR-0068): a pre-FX slot by the pool's
+// remap, a note-output plug-in's voice by its instance (-1: gone).
+int remapBus(const Node& node, int id) SUPPLE_RT {
+    if (id < node.midiOldPool) return remapSlot(node, id);
+    for (const auto& [from, to] : node.midiBusRemap)
+        if (from == id) return to;
     return -1;
 }
 void freeSlot(Node& node, int slot) SUPPLE_RT {
@@ -243,7 +252,12 @@ Status prepareRackMidi(Plan& p) {
             if (!edge.midi) continue;
             const auto& source = p.nodes[edge.from];
             const bool notesOut = edge.rackNotes >= 0;
-            const std::size_t voices = notesOut ? rack::kChannels : source.midiHeld.size();
+            // A post-FX tap reads the bus after the chain: its ids reach past
+            // the pre-FX pool to the note-output plug-ins' voices.
+            const bool post = !notesOut && edge.tap != model::Tap::PreFx;
+            const std::size_t voices = notesOut ? rack::kChannels
+                                       : post   ? static_cast<std::size_t>(source.midiBusVoices)
+                                                : source.midiHeld.size();
             // What the source sends in `block` frames. A delay only shifts
             // the stream, so a block here takes one such window of a track's
             // (its midiWindow), whatever the PDC: a relay chain grows by each
@@ -251,9 +265,12 @@ Status prepareRackMidi(Plan& p) {
             // is per frame; two of its blocks keep the original margin.
             const std::size_t perBlock =
                 notesOut ? static_cast<std::size_t>(rack::kChannels) * (p.block + 2)
+                : post   ? source.midiPostWindow
                          : source.midiWindow;
             const std::size_t due = notesOut ? 2 * perBlock : perBlock;
-            const std::size_t perFrame = notesOut ? rack::kChannels : source.midiEventRate;
+            const std::size_t perFrame = notesOut ? rack::kChannels
+                                         : post   ? source.midiPostRate
+                                                  : source.midiEventRate;
             const std::uint64_t queued =
                 2 * static_cast<std::uint64_t>(perBlock) +
                 static_cast<std::uint64_t>(
@@ -323,6 +340,51 @@ Status prepareRackMidi(Plan& p) {
             stage.voices.reserve(stage.voices.capacity() + routedVoices);
             stage.pendingVoices.reserve(stage.voices.capacity());
         }
+        // The chain's MIDI bus (ADR-0068): bus ids are the pre-FX slots, then
+        // kBusVoices for each note-output stage. A block's bus holds the
+        // pre-FX stream and each such stage's output; the post-FX stream adds
+        // a release per bus voice no longer reaching it.
+        const std::size_t parts = node.midiBusStages.size();
+        const std::size_t busVoices = pool + parts * kBusVoices;
+        const std::size_t bus = capacity + parts * kBusStageEvents;
+        SUPPLE_TRY(budget(bus + busVoices, "/tracks/" + node.id.str()));
+        node.midiBusVoices = static_cast<std::int32_t>(busVoices);
+        for (std::size_t k = 0; k < parts; ++k) {
+            auto& stage = node.chain[static_cast<std::size_t>(node.midiBusStages[k])];
+            stage.busBase = static_cast<std::int32_t>(pool + k * kBusVoices);
+            stage.busHeld.assign(kBusVoices, {});
+        }
+        node.midiChain.reserve(capacity);
+        node.midiBus.reserve(bus);
+        node.midiBusNext.reserve(bus);
+        node.midiBusGen.reserve(parts ? kBusStageEvents : 0);
+        node.midiPostFx.reserve(bus + busVoices);
+        node.midiPostHeld.assign(busVoices, {});
+        node.midiPostBefore.assign(node.midiSends ? busVoices : 0, {});
+        node.midiBusRemap.reserve(parts * kBusVoices);
+        // Without note-output plug-ins post-FX is pre-FX. With them, a window
+        // of `block` frames may hold two blocks of their output, and the
+        // releases of what no longer reaches the end.
+        node.midiPostWindow =
+            node.midiWindow + (parts ? 2 * parts * kBusStageEvents + busVoices : 0);
+        node.midiPostRate = node.midiEventRate + (parts ? parts * kBusStageEvents + busVoices : 0);
+        std::size_t ahead = 0;  // note-output stages before this one
+        for (std::size_t k = 0; k < node.chain.size(); ++k) {
+            auto& stage = node.chain[k];
+            const bool accepts = stage.instance && stage.instance->acceptsNotes();
+            // What of the bus it can hear beyond the note target's own
+            // pre-FX notes: pre-FX notes by bus id, and the output of the
+            // note-output stages ahead; releases of each such voice.
+            const bool target = static_cast<int>(k) == node.noteTarget;
+            const std::size_t voices = (target ? 0 : pool) + ahead * kBusVoices;
+            const std::size_t events = (target ? 0 : capacity) + ahead * kBusStageEvents;
+            if (accepts && voices + events > 0) {
+                stage.blockEvents.reserve(stage.blockEvents.capacity() + events + voices);
+                stage.voices.reserve(stage.voices.capacity() + voices);
+                stage.pendingVoices.reserve(stage.voices.capacity());
+            }
+            if (stage.busPart >= 0) ++ahead;
+        }
     }
     return {};
 }
@@ -331,8 +393,10 @@ void beginTrackMidi(Node& node, bool playing, bool hearDevice) SUPPLE_RT {
     auto& events = node.midiStage.blockEvents;
     events.clear();
     node.midiStage.voices.clear();
-    if (node.midiSends)
+    if (node.midiSends) {
         std::copy(node.midiHeld.begin(), node.midiHeld.end(), node.midiBefore.begin());
+        std::copy(node.midiPostHeld.begin(), node.midiPostHeld.end(), node.midiPostBefore.begin());
+    }
     const bool endTimeline = !playing || node.midiReleaseTimeline;
     for (const auto& v : node.midiHeld) {
         if (!v.high || v.orphan) continue;
@@ -365,13 +429,18 @@ void finishTrackMidi(Node& node) SUPPLE_RT {
     auto& ids = node.midiInstrument;
     out.clear();
     ids.clear();
-    auto emit = [&](const host::Event& e, std::int32_t instrument) {
+    node.midiChain.clear();
+    // `chain`: the track's plug-ins hear it (ADR-0068), unlike a note or
+    // controller of a take with its own instrument.
+    auto emit = [&](const host::Event& e, std::int32_t instrument, std::optional<bool> chain = {}) {
         if (out.size() == out.capacity()) {
             ++node.midiDropped;
             return;
         }
         out.push_back(e);
         ids.push_back(instrument);
+        node.midiChain.push_back(
+            chain.value_or(instrument != -2 && instrument != kNotTargetNote) ? 1 : 0);
     };
     // The note target's id: an item note's compiled id (unless a take with
     // its own instrument plays it), tuple addressing for a key, a routed
@@ -398,9 +467,10 @@ void finishTrackMidi(Node& node) SUPPLE_RT {
         auto off = message(static_cast<std::uint8_t>(0x80 | v.channel), v.key, 0, slot, time);
         // An orphan item note or key is the note target's own to end (its
         // carry, releaseLive); a routed one it hears end here.
-        emit(off, v.orphan && v.kind != MidiSlot::Kind::Routed
-                      ? kNotTargetNote
-                      : instrumentId(v.kind, v.input, slot));
+        emit(off,
+             v.orphan && v.kind != MidiSlot::Kind::Routed ? kNotTargetNote
+                                                          : instrumentId(v.kind, v.input, slot),
+             v.orphan ? std::optional<bool>(true) : std::nullopt);
         if (v.orphan && v.kind == MidiSlot::Kind::Routed) {
             RoutedMidiEvent midi;  // what recording heard begin ends with it
             midi.frame = time;
@@ -480,7 +550,6 @@ void finishTrackMidi(Node& node) SUPPLE_RT {
         emit(off, instrumentId(kind, input, slot));
         freeSlot(node, slot);
     }
-    node.midiPostFx.assign(out.begin(), out.end());
 }
 
 void resetTrackMidi(Node& node) SUPPLE_RT {
@@ -492,6 +561,17 @@ void resetTrackMidi(Node& node) SUPPLE_RT {
         v = {};
     }
     refillFree(node);
+    // The pre-FX part of the bus ends with it (ADR-0068): its post-FX notes
+    // (sends see the new epoch) and what other plug-ins than the note target
+    // (whose own releases follow the seek) hold of it.
+    const auto pool = node.midiHeld.size();
+    for (std::size_t id = 0; id < pool && id < node.midiPostHeld.size(); ++id)
+        node.midiPostHeld[id].high = false;
+    for (Stage& st : node.chain)
+        for (auto& voice : st.voices)
+            if (voice.origin.item == kBusNoteOrigin &&
+                static_cast<std::size_t>(voice.sourceId - kBusNoteBase) < pool)
+                voice.release = true;
 }
 
 void addRackMidi(Plan& p, Node& target, std::int64_t pos, std::uint32_t frames,
@@ -541,10 +621,8 @@ void addRackMidi(Plan& p, Node& target, std::int64_t pos, std::uint32_t frames,
                                       v.velocity, c),
                               c);
                 }
-            } else {
-                // Post-FX equals pre-FX: both taps start from the pre-FX voices.
-                const auto& stream =
-                    edge.tap == model::Tap::PreFx ? source.midiPreFx : source.midiPostFx;
+            } else if (edge.tap == model::Tap::PreFx) {
+                const auto& stream = source.midiPreFx;
                 for (std::size_t c = 0; c < source.midiBefore.size(); ++c) {
                     const auto& v = source.midiBefore[c];
                     if (!v.high || v.orphan) continue;
@@ -553,9 +631,23 @@ void addRackMidi(Plan& p, Node& target, std::int64_t pos, std::uint32_t frames,
                             return e.noteId == static_cast<int>(c) && e.time == 0;
                         });
                     if (!starts)
-                        queue(target, edge,
-                              pos + edge.delay.length +
-                                  (edge.tap == model::Tap::PreFx ? 0 : source.latChain),
+                        queue(target, edge, pos + edge.delay.length,
+                              message(static_cast<std::uint8_t>(0x90 | v.channel), v.key,
+                                      v.velocity, static_cast<int>(c)),
+                              static_cast<int>(c));
+                }
+            } else {
+                // Post-FX: the bus after the chain (ADR-0068), its own held notes.
+                const auto& stream = source.midiPostFx;
+                for (std::size_t c = 0; c < source.midiPostBefore.size(); ++c) {
+                    const auto& v = source.midiPostBefore[c];
+                    if (!v.high) continue;
+                    const bool starts =
+                        std::any_of(stream.begin(), stream.end(), [&](const auto& e) {
+                            return e.noteId == static_cast<int>(c) && e.time == 0;
+                        });
+                    if (!starts)
+                        queue(target, edge, pos + edge.delay.length + source.latChain,
                               message(static_cast<std::uint8_t>(0x90 | v.channel), v.key,
                                       v.velocity, static_cast<int>(c)),
                               static_cast<int>(c));
@@ -676,6 +768,45 @@ void carryPool(Node& node, const Node& old) SUPPLE_RT {
     }
 }
 
+// The chain's MIDI bus (ADR-0068): a note-output plug-in that continues (the
+// same instance) keeps its held notes and their ids; the post-FX held state
+// and every stage's bus notes follow their ids. A bus note whose id is gone
+// (its plug-in removed or re-created) ends at the next block's start.
+void carryBus(Node& node, const Node& old) SUPPLE_RT {
+    node.midiOldPool = static_cast<std::int32_t>(old.midiHeld.size());
+    for (const int index : node.midiBusStages) {
+        Stage& st = node.chain[static_cast<std::size_t>(index)];
+        for (const int was : old.midiBusStages) {
+            const Stage& os = old.chain[static_cast<std::size_t>(was)];
+            if (!st.instance || os.instance != st.instance || os.fx != st.fx ||
+                os.busHeld.size() != st.busHeld.size())
+                continue;
+            for (std::size_t g = 0; g < os.busHeld.size(); ++g) {
+                st.busHeld[g] = os.busHeld[g];
+                if (os.busHeld[g].high && node.midiBusRemap.size() < node.midiBusRemap.capacity())
+                    node.midiBusRemap.emplace_back(os.busBase + static_cast<std::int32_t>(g),
+                                                   st.busBase + static_cast<std::int32_t>(g));
+            }
+            break;
+        }
+    }
+    for (std::size_t id = 0; id < old.midiPostHeld.size(); ++id) {
+        if (!old.midiPostHeld[id].high) continue;
+        const int to = remapBus(node, static_cast<int>(id));
+        if (to >= 0 && static_cast<std::size_t>(to) < node.midiPostHeld.size())
+            node.midiPostHeld[static_cast<std::size_t>(to)] = old.midiPostHeld[id];
+    }
+    for (Stage& st : node.chain)
+        for (auto& voice : st.voices) {
+            if (voice.origin.item != kBusNoteOrigin || voice.release) continue;
+            const int to = remapBus(node, voice.sourceId - kBusNoteBase);
+            if (to < 0)
+                voice.release = true;
+            else
+                voice.sourceId = kBusNoteBase + to;
+        }
+}
+
 // A send that continues unchanged (same route, tap, channels, delay and
 // ends): its voices, queue and the target slots they hold.
 bool sameSend(const Plan& to, const Edge& edge, const Plan& from, const Edge& old) SUPPLE_RT {
@@ -709,7 +840,10 @@ void carryEdge(Plan& to, Edge& edge, const Plan& from, const Edge& old) SUPPLE_R
     const auto& source = to.nodes[edge.from];
     auto& target = to.nodes[edge.to];
     const auto& oldTarget = from.nodes[old.to];
-    const auto voice = [&](int v) { return v < 0 || source.rack ? v : remapSlot(source, v); };
+    const bool post = !source.rack && edge.tap != model::Tap::PreFx;
+    const auto voice = [&](int v) {
+        return v < 0 || source.rack ? v : post ? remapBus(source, v) : remapSlot(source, v);
+    };
     edge.midiNextVoice = old.midiNextVoice;
     edge.midiAddresses.clear();
     for (std::size_t i = 0; i < old.midiVoices.size(); ++i) {
@@ -773,8 +907,13 @@ void carryRackMidi(Plan& to, Plan& from, int toClass, int fromClass) SUPPLE_RT {
     for (auto& node : to.nodes) {
         if (toClass >= 0 && node.live != bool(toClass)) continue;
         node.midiRemap.clear();
+        node.midiBusRemap.clear();
+        node.midiOldPool = 0;
         if (node.rack) continue;
-        if (const Node* old = continued(from, node, fromClass)) carryPool(node, *old);
+        if (const Node* old = continued(from, node, fromClass)) {
+            carryPool(node, *old);
+            carryBus(node, *old);
+        }
     }
     for (auto& node : to.nodes) {
         if (toClass >= 0 && node.live != bool(toClass)) continue;

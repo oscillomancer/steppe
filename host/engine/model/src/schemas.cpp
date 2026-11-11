@@ -867,6 +867,10 @@ const Schema<FxInstance>& schemaOf<FxInstance>() {
         dflt(b, d.pdc);
         b.field("auto_bypass_on_silence", &FxInstance::autoBypassOnSilence, boolean());
         dflt(b, d.autoBypassOnSilence);
+        b.field("midi_output", &FxInstance::midiOutput,
+                en<MidiOutputMode>(
+                    {{MidiOutputMode::Replace, "replace"}, {MidiOutputMode::Merge, "merge"}}));
+        dflt(b, d.midiOutput);
         b.field("patch", &FxInstance::patch, jsonObject());
         b.field("state", &FxInstance::state, str());
         b.field("params", &FxInstance::params, paramValuesSchema());

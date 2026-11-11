@@ -1,9 +1,10 @@
 # ADR-0068: Plug-in note and MIDI output
 
-**Status:** Proposed, 2026-11-10 (draft; the number is assigned at merge).
-Amends ADR-0013 (the bridge's data plane) and ADR-0017 (VST3 event buses).
-Contracts: `docs/specs/sandbox.md` §1 and its implementation notes, and
-`host/clap-host/include/supple/host/clap_host.h`.
+**Status:** Accepted, 2026-11-11. Amends ADR-0013 (the bridge's data plane),
+ADR-0017 (VST3 event buses) and ADR-0067 (the post-FX MIDI stream).
+Contracts: `docs/specs/sandbox.md` §1 and its implementation notes,
+`host/clap-host/include/supple/host/clap_host.h`, `docs/specs/engine.md`
+(MIDI sends and the MIDI bus) and `docs/specs/session-model.md` (`midi_output`).
 
 ## Context
 
@@ -75,13 +76,69 @@ so the events must come out the same in all three.
    note and MIDI output there is dropped and counted in the idle drain's
    `dropped`. The engine does not publish note or MIDI output to the
    main-thread parameter-output queue; it stays on the audio path for the
-   FX chain's MIDI bus (the next stage of this work).
+   FX chain's MIDI bus.
+
+### The FX chain as a MIDI bus
+
+8. **The bus.** A track's chain carries a MIDI bus that starts as its pre-FX
+   stream (ADR-0067). Each plug-in with an input note port hears the bus at
+   its place; the first one (the note target) hears the pre-FX part under
+   its existing ids, exactly as before. A plug-in with output note ports,
+   while it runs and is not bypassed, replaces the bus with its output for
+   the plug-ins after it (`midi_output: replace`, the default) or merges its
+   output in (`merge`, the bus first at a shared frame). Every other
+   plug-in, and a bypassed, offline or failed one, passes the bus on. The
+   post-FX stream (`midiPostFx`, read by pre- and post-fader sends and,
+   later, hardware MIDI outputs) is the bus after the chain: the one post-FX
+   source. A plug-in's MIDI 1.0 note messages become notes on the bus, so
+   they are held, carried and released like any other; other MIDI passes as
+   MIDI. A plug-in with note ports and no audio ports (a typical
+   arpeggiator) is allowed in the chain: it runs for its notes and the
+   audio passes it, delayed by its latency.
+9. **Identity.** Notes travel by bus id: a pre-FX slot (ADR-0067), or a
+   note-output plug-in's base plus one of its 256 voice slots, keyed by the
+   plug-in's own `(port, channel, key, note id)`. An onset on an address it
+   still holds ends the held note first; an end matches CLAP's wildcards; a
+   full pool drops and counts the onset (`voice_dropped`). Adoption carries
+   a plug-in's held notes while its instance continues (same FX id and
+   instance); the post-FX held state and every listening plug-in's notes
+   follow their bus ids. What a stage, or the post-FX stream, holds of a
+   part that no longer reaches it (the plug-in removed, re-created,
+   bypassed, or a replacing plug-in now ahead of it) ends at the start of
+   the next block, downstream through sends too. Nothing is retriggered
+   when a part reaches a stage again: its next onsets play.
+10. **Latency.** The bus keeps the chain's input time: a plug-in's notes
+    are placed at the frame it emits them, whatever latency the plug-ins
+    ahead of it have, and post-FX taps add the whole chain's latency, as
+    for audio. MIDI that a plug-in derives from the audio it hears is
+    therefore late by the latency ahead of it; most note plug-ins work on
+    the notes they hear and have none.
+11. **Budgets.** A note-output plug-in's output sink holds 1024 events (the
+    bridge arena's room, so every isolation accepts and refuses the same
+    pushes); it is still shared with its parameter output. Each such
+    plug-in adds 256 voices and 2 × 1024 + 2 × 256 events per block to its
+    track's bus and post-FX bounds; listeners reserve only what can reach
+    them, so a chain without note-output plug-ins prepares as before.
+12. **Freeze.** A frozen channel's chain does not run, so its post-FX sends
+    carry its timeline MIDI, as before this decision; `track.freeze` warns
+    (`freeze.midi_output`) when a note-output plug-in feeds post-FX sends.
+    `midi_output` is part of the freeze hash (as every FX field is) and,
+    being omitted at its default, leaves existing hashes unchanged.
+13. **Scope.** Take chains, input FX and rack plugin modules keep their
+    own note routing; their plug-ins' note output is not on a bus.
 
 ## Consequences
 
-- Plug-in note and MIDI output is available to the engine's plan with no
-  allocation on the audio thread; until the engine consumes it, a stage's
-  output sink (256 events) is shared between parameter and MIDI output.
+- Arpeggiators, chord and MIDI effect plug-ins work on a channel: the
+  instrument after them, and the channel's post-FX MIDI sends, hear their
+  output, identically in process, in a bridge, offline and in both real-time
+  executors. Plug-ins without audio ports, refused before (`engine.layout`),
+  now load in a chain.
+- A plug-in with an input note port after the note target (a MIDI-triggered
+  gate after a synth) now hears the bus, where it heard nothing before.
+- Freezing a channel whose plug-ins generate notes changes what its post-FX
+  sends play; the warning says so. Recording the MIDI at freeze time is left
+  for later.
 - A host sink larger than 1024 events behaves differently bridged (the arena
   caps it); no caller uses one.
 - MIDI 2.0 resolution and per-note expressions beyond pressure are lost.

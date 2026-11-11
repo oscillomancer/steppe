@@ -233,7 +233,11 @@ of a multi-out plug-in, in order (0: unconnected; `fx.add` sets them for an
 instrument, growing the track, ADR-0021),
 `parallel` (bool: run in
 parallel with the previous instance in the chain, outputs summed), `pdc`
-(`compensate|ignore`), `auto_bypass_on_silence` (bool), `container` (for
+(`compensate|ignore`), `auto_bypass_on_silence` (bool), `midi_output`
+(`replace|merge`, default `replace`, omitted at its default; for a plug-in
+with output note ports in a track's chain: whether its output replaces the
+MIDI bus for the plug-ins after it and the post-FX sends, or is merged with
+what it hears, ADR-0068), `container` (for
 `plugin.format == "container"`: a nested `chain` array plus its own pins),
 **state**: for plugins with the semantic extension, `patch` (canonical patch
 JSON, diffable); otherwise `state` = blob ref (content hash) plus `params`
@@ -294,7 +298,8 @@ remain unchanged. Audio controls (volume, pan, phase inversion, mono and
 channel maps) are refused (`route.midi`).
 A send's `pre_fx` tap reads the source channel's timeline, monitored device
 input and incoming MIDI routes; `pre_fader` and `post_fader` read its post-FX
-MIDI. Until plug-in MIDI output lands, post-FX equals pre-FX. Post-fader also
+MIDI: the FX chain's MIDI bus after the chain, where a note-output plug-in
+replaces or merges what it hears (ADR-0068). Post-fader also
 follows source-strip mute. Route mute releases delivered notes; unmute starts
 notes still held. `from_channel` filters and `to_channel` remaps, 0 meaning
 all/original. MIDI sends learn `mute` only (ADR-0058).
@@ -1107,7 +1112,9 @@ files retain their meaning: absent `source_off` uses the existing Home/track
 selection, and since a Notes module did not hear the MIDI routed into its
 source track before 2.10, the loader sets `source_sends: false` on each
 Notes module of an older file whose source track (its `source`, else its
-rack's channel) receives a MIDI route from a track or module. Older builds cannot use the new endpoints or source-off setting.
+rack's channel) receives a MIDI route from a track or module. FX instances
+add optional `midi_output` (default `replace`, ADR-0068). Older builds cannot
+use the new endpoints, source-off setting or `midi_output`.
 
 ### Pan modes and laws (schema 2.9, ADR-0066)
 

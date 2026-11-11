@@ -274,6 +274,39 @@ TEST_CASE("FX descriptions reset shared scratch instances") {
     CHECK(run(bus, "fx.describe", R"({"fx":"fx_2"})")["description"] == defaults);
 }
 
+TEST_CASE("MIDI bus: fx.set chooses a note-output plug-in's replace or merge") {
+    Workdir dir;
+    auto app = makeApp(dir.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *app);
+    run(bus, "track.add", R"({"name":"Arp"})");
+    run(bus, "fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.note-echo"})");
+    run(bus, "fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.sine"})");
+    const auto echo = run(bus, "fx.describe", R"({"fx":"fx_1"})");
+    REQUIRE(echo.find("outputs_notes"));
+    CHECK(*echo.find("outputs_notes") == json::Value(true));
+    CHECK_FALSE(run(bus, "fx.describe", R"({"fx":"fx_2"})").find("outputs_notes"));
+    const auto id = *model::Id::parse("fx_1");
+    CHECK(app->head().fx.find(id)->midiOutput == model::MidiOutputMode::Replace);
+    const auto before = model::serializeProject(app->head());
+    CHECK(before.find("midi_output") == std::string::npos);  // the default is not saved
+    run(bus, "fx.set", R"({"fx":"fx_1","midi_output":"merge"})");
+    CHECK(app->head().fx.find(id)->midiOutput == model::MidiOutputMode::Merge);
+    const auto saved = model::serializeProject(app->head());
+    CHECK(saved.find("\"midi_output\": \"merge\"") != std::string::npos);
+    auto reopened = model::parseProject(saved);
+    REQUIRE(reopened);
+    CHECK(reopened->fx.find(id)->midiOutput == model::MidiOutputMode::Merge);
+    CHECK(model::serializeProject(*reopened) == saved);
+    const auto refused =
+        bus.execute({"fx.set", j(R"({"fx":"fx_1","midi_output":"both"})"), kOrigin});
+    REQUIRE_FALSE(refused);
+    CHECK_FALSE(refused.error().hint.empty());
+    run(bus, "history.undo", "{}");
+    CHECK(app->head().fx.find(id)->midiOutput == model::MidiOutputMode::Replace);
+}
+
 TEST_CASE("route sends through a gain bus, rejects cycles and replays in a branch merge") {
     Workdir dir;
     auto app = makeApp(dir.path);
