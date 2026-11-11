@@ -1033,3 +1033,58 @@ TEST_CASE("hardware MIDI: unrelated preference writes retain malformed raw recor
     app->reset();
     std::filesystem::remove_all(dir);
 }
+
+TEST_CASE("hardware MIDI: a stopped live release may reuse a pre-block timeline slot") {
+    for (bool anticipative : {false, true})
+        for (auto tap : {model::Tap::PreFx, model::Tap::PreFader, model::Tap::PostFader})
+            for (double offset : {0., 100.}) {
+                CAPTURE(anticipative);
+                CAPTURE(int(tap));
+                CAPTURE(offset);
+                Session base(tap, false, false);
+                model::EditTxn edit(base.value, 2);
+                model::Route input;
+                input.from.midiDevice = "Keyboard";
+                input.to.track = base.track;
+                input.midi = model::MidiRouting{0, 3};
+                const auto id = edit.create(input);
+                edit.modify<model::Track>(base.track, [&](auto& t) {
+                    t.record.armed = true;
+                    t.record.monitor = model::Monitor::On;
+                    t.record.input = t.record.midiInput = id;
+                });
+                auto pool = hardwarePool();
+                MediaCache media;
+                DummyBackend backend({.midiOutputPorts = {"Synth"},
+                                      .midiPorts = {"Keyboard"},
+                                      .midi = [](auto& events, unsigned, std::int64_t frame) {
+                                          if (frame == 256) {
+                                              events.push_back({7, 0, 3, {0x90, 61, 100}});
+                                              events.push_back({9, 0, 3, {0x80, 61, 0}});
+                                          }
+                                      }});
+                Engine engine(pool, media,
+                              {.anticipative = anticipative,
+                               .renderBlock = 64,
+                               .renderAheadMs = 10,
+                               .workers = 0});
+                REQUIRE(engine.start(backend,
+                                     {.blockSize = 64, .midiInputs = true, .midiOutputs = true}));
+                engine.setMidiPreferences({}, outputSettings(offset, true, false));
+                REQUIRE(engine.load(edit.commit().value()));
+                engine.play();
+                run(engine, backend, anticipative, 4);  // timeline key 60 occupies the slot
+                engine.pause();
+                run(engine, backend, anticipative, 100);
+                std::vector<std::int64_t> on, off;
+                for (const auto& e : backend.midiCapture()) {
+                    if (e.event.bytes[1] != 61) continue;
+                    if (e.event.bytes[0] == 0x94) on.push_back(e.frame);
+                    if (e.event.bytes[0] == 0x84) off.push_back(e.frame);
+                }
+                const auto delay = time::samplesAt(offset / 1000., 48000);
+                CHECK(on == std::vector<std::int64_t>{263 + delay});
+                CHECK(off == std::vector<std::int64_t>{265 + delay});
+                engine.stop();
+            }
+}

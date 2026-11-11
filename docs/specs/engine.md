@@ -2782,8 +2782,9 @@ reset is on, and engine shutdown. Releases include sustain-off; boundary and
 shutdown resets add all-notes-off on used channels. These controllers share
 hardware channel state. `reset_on_stop: false` retains timeline notes across
 transport stops/locates; engine shutdown always releases. While stopped, this
-preference suppresses only releases of high timeline slots held before the
-block. Live onsets always pass, including on a newly allocated/reused slot.
+preference suppresses only timeline-origin releases whose pre-block slot was
+high and Timeline. Live onsets and releases pass even when a slot is newly
+allocated or reused from a timeline note.
 CoreMIDI shutdown
 stamps closing releases at `max(now, lastDue[port])`, after accepted events,
 then retains its port/client until the latest submitted timestamp, capped at

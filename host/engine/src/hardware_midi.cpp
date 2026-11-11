@@ -474,7 +474,7 @@ void HardwareMidiRuntime::collect(Plan& plan, std::int64_t pos, std::uint32_t fr
                     const auto status = event.bytes[0] & 0xf0;
                     const bool release =
                         event.size && (status == 0x80 || (status == 0x90 && !event.bytes[2]));
-                    if (!playing && !state->reset && release && e.noteId >= 0 &&
+                    if (!playing && !state->reset && release && timeline && e.noteId >= 0 &&
                         static_cast<std::size_t>(e.noteId) < source.midiBefore.size()) {
                         const auto& before = source.midiBefore[static_cast<std::size_t>(e.noteId)];
                         if (before.high && before.kind == MidiSlot::Kind::Timeline) continue;
