@@ -1023,8 +1023,9 @@ are available, including empty channels that can receive MIDI. Notes module
 columns remain in MIDI mode. MIDI colours and MIDI controls apply. Input to
 channel cells edit `track.set {record_midi: name}`; Remove clears that existing
 assignment. Wildcard (*) cells have an outlined asterisk; they represent one
-shared input assignment. Removing a single wildcard cell refuses with a status
-message; select every cell of that assignment (or its column) to clear it.
+shared input assignment. Removing only part of a wildcard assignment refuses
+with a status message; select every cell (or its column) to clear it. On a
+machine with one input, selecting its sole wildcard cell is the whole assignment.
 Replacing an input reports "replaces <old input>" in the status line.
 One MIDI input assignment per channel is retained. Hardware input
 to output cells are blocked; route through a channel. Missing ports named in

@@ -2056,3 +2056,26 @@ TEST_CASE("routing matrix: output offset previews the prepared shared audio lead
     CHECK(lead->valueText() == "adds 20.0 ms latency to all audio");
     f.snapshot("routing-hardware-offset-lead.png", &panel.root());
 }
+
+TEST_CASE("routing matrix: a single wildcard input cell can be removed") {
+    Fixture f;
+    if (!f.ok) return;
+    REQUIRE(f.app->setMidiPreferences({{"Keyboard", json::Value::object()}}, {}, false));
+    const auto channel = f.exec("track.add", R"({"name":"Single input"})")["track"].asString();
+    f.exec("track.set", R"({"track":")" + channel + R"(","record_midi":"*"})");
+    gui::FloatingPanel panel(*f.platform, *f.window, *f.root, SUPPLE_GUI_FONTS_DIR, "Panel", 1000,
+                             560, 800, 360);
+    gui::RoutingMatrix matrix(panel, *f.actions, *f.dispatcher, *f.app);
+    matrix.setHardwareMidiMode();
+    matrix.open();
+    panel.root().frame(false);
+    const auto& model = matrix.model();
+    std::size_t col = 0;
+    for (std::size_t i = 0; i < model.destinations.size(); ++i)
+        if (model.destinations[i].id == channel) col = i;
+    REQUIRE(model.sendsAt(0, col).size() == 1);
+    CHECK(model.sendsAt(0, col)[0]->allInputs);
+    REQUIRE(matrix.clickCell(0, col));
+    REQUIRE(matrix.removeSelected());
+    CHECK(model.sendsAt(0, col).empty());
+}

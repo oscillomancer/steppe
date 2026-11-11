@@ -1083,7 +1083,7 @@ Status RoutingMatrix::addSelected() {
 Status RoutingMatrix::removeSelected() {
     for (const auto& id : selectedSends())
         if (const auto* send = sendById(id); send && send->allInputs) {
-            bool whole = selection_.size() > 1;
+            bool whole = true;
             for (std::size_t row = 0; row < model_.sources.size(); ++row)
                 for (std::size_t col = 0; col < model_.destinations.size(); ++col)
                     for (const auto* cell : model_.sendsAt(row, col))
