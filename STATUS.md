@@ -901,6 +901,8 @@ Engine and hosting:
   slower than the audio, or a large negative offset) is predicted ahead:
   starts, stops and locates reach it late by up to that delay. The
   same-device test against echoing to the sync master compares port names.
+  A slave on a device that vanished is not sent its final Stop (JACK and
+  native outputs take no MIDI in the final callback).
   MIDI clock and MTC output have no GUI yet.
 - Pan modes (ADR-0066): `pan` automation does nothing in dual mode.
   Projects from before ADR-0066 play louder (about 3.5 dB for a channel into

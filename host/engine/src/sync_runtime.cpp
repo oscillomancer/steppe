@@ -400,8 +400,38 @@ void SyncRuntime::emit(std::size_t index, const SyncOutput& out, const Piece& pi
     p.expected = piece.start + piece.slope * static_cast<double>(piece.frames);
 }
 
+bool SyncRuntime::transportRunning() const SUPPLE_RT {
+    if (leaving_) return false;
+    for (std::size_t i = 0; i < ports_.size(); ++i)
+        if (config_.outputs[i].transport && ports_[i].clock.running()) return true;
+    return false;
+}
+
+void SyncRuntime::farewell(Backend* out, std::atomic<std::uint64_t>* sent,
+                           std::atomic<std::uint64_t>* dropped) SUPPLE_RT {
+    if (leaving_) return;
+    leaving_ = true;
+    sync::EventBuffer scratch(eventStorage_);
+    for (std::size_t i = 0; i < ports_.size(); ++i) {
+        Port& p = ports_[i];
+        const bool stop = config_.outputs[i].transport && p.clock.running();
+        p.clock.stop(0.0, scratch);  // quarter frames simply end; MTC sends nothing
+        p.mtc.stop();
+        if (!stop || !out) continue;
+        MidiOutputEvent m;
+        m.port = static_cast<std::uint16_t>(i);
+        m.size = 1;
+        m.bytes[0] = 0xFC;
+        if (out->writeMidi(m)) {
+            if (sent) sent[i].fetch_add(1, std::memory_order_relaxed);
+        } else if (dropped) {
+            dropped[i].fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+}
+
 void SyncRuntime::writeMidi(const SyncCycle& c) SUPPLE_RT {
-    if (ports_.empty() || !c.midiOut) return;
+    if (ports_.empty() || !c.midiOut || leaving_) return;
     const auto n = static_cast<std::int64_t>(c.frames);
     for (std::size_t i = 0; i < kMaxSyncOutputs; ++i) {
         const SyncOutput& out = config_.outputs[i];

@@ -12,6 +12,7 @@
 #include <numbers>
 #include <set>
 #include <system_error>
+#include <thread>
 #include <type_traits>
 
 #include "supple/base/thread.h"
@@ -137,7 +138,9 @@ Status DummyBackend::start(const BackendConfig& config, Callback callback) {
                     std::this_thread::sleep_until(next);
                 }
             }
+            midiOutput_.begin(1, config_.midiOutputs ? options_.midiOutputPorts.size() : 0);
             callback_(nullptr, outPtrs_.data(), 0);  // the final callback (Backend::stop contract)
+            captureMidi();
         });
     }
     return okStatus();
@@ -148,7 +151,11 @@ void DummyBackend::stop() {
     if (thread_.joinable()) {
         thread_.join();
     } else if (wasRunning && callback_) {
-        callback_(nullptr, outPtrs_.data(), 0);  // Manual: the caller is the audio thread
+        // Manual: the caller is the audio thread. The final callback may
+        // still write MIDI (a sync runtime's farewell): one frame, captured.
+        midiOutput_.begin(1, config_.midiOutputs ? options_.midiOutputPorts.size() : 0);
+        callback_(nullptr, outPtrs_.data(), 0);
+        captureMidi();
     }
 }
 
@@ -182,12 +189,7 @@ void DummyBackend::cycle() {
     }
     midiOutput_.begin(config_.blockSize, config_.midiOutputs ? options_.midiOutputPorts.size() : 0);
     callback_(inPtrs_.empty() ? nullptr : inPtrs_.data(), out, config_.blockSize);
-    for (const auto& event : midiOutput_.sorted()) {
-        if (midiCapture_.size() == midiCapture_.capacity())
-            midiOutput_.drop();
-        else
-            midiCapture_.push_back({inputFrame_ + event.frame, event});
-    }
+    captureMidi();
     inputFrame_ += config_.blockSize;
     const auto room = std::min<std::int64_t>(config_.blockSize, options_.captureFrames - captured_);
     if (room > 0) {
@@ -196,6 +198,15 @@ void DummyBackend::cycle() {
         captured_ += room;
     }
     cycles_.fetch_add(1);
+}
+
+void DummyBackend::captureMidi() {
+    for (const auto& event : midiOutput_.sorted()) {
+        if (midiCapture_.size() == midiCapture_.capacity())
+            midiOutput_.drop();
+        else
+            midiCapture_.push_back({inputFrame_ + event.frame, event});
+    }
 }
 
 std::vector<std::string> DummyBackend::midiOutputPorts() const {
@@ -428,8 +439,36 @@ void Engine::scheduleBackground() {
     host::setBridgeAudioPolicy(scheduling_.renderer);
 }
 
+void Engine::sayFarewell() SUPPLE_RT {
+    if (!syncRt_) return;
+    syncRt_->farewell(midiSource_, syncOutSent_.data(), syncOutDropped_.data());
+    syncTransportRunning_.store(false, std::memory_order_relaxed);
+}
+
 void Engine::stop() {
     if (!backend_) return;
+    // A MIDI output's slave is playing: Stop goes out in a running cycle,
+    // where every backend delivers it, then has the device's latency to
+    // leave. A device that runs no more cycles gets it in the final
+    // callback, when the backend still takes MIDI there (ADR-0072 §9).
+    if (syncTransportRunning_.load(std::memory_order_acquire)) {
+        const auto acked = syncFarewells_.load(std::memory_order_acquire);
+        syncFarewell_.store(true, std::memory_order_release);
+        const double period = config_.sampleRate > 0 ? config_.blockSize / config_.sampleRate : 0;
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                  std::chrono::duration<double>(std::max(0.05, 4 * period)));
+        while (syncFarewells_.load(std::memory_order_acquire) == acked &&
+               std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        if (syncFarewells_.load(std::memory_order_acquire) != acked && config_.sampleRate > 0) {
+            const double leave =
+                static_cast<double>(syncOutputLatency_.load(std::memory_order_relaxed)) /
+                    config_.sampleRate +
+                0.005;
+            std::this_thread::sleep_for(std::chrono::duration<double>(std::min(leave, 0.25)));
+        }
+    }
     // Silence from the next cycle on, then stop the backend: its final
     // zero-frame callback stops every plugin on the audio thread.
     shutdownRequested_.store(true, std::memory_order_release);
@@ -1343,6 +1382,8 @@ void Engine::cycle(const float* const* in, float* const* out, std::uint32_t fram
         }
     } inCycle(*this);
     if (frames == 0) {  // the backend's final callback: stop every plugin here
+        sayFarewell();  // if no running cycle sent it
+        syncFarewell_.store(false, std::memory_order_relaxed);
         // Anticipative: the renderer stopped its share as it ended; the live
         // share is this thread's.
         for (host::Instance* inst : liveProcessing_) {
@@ -1366,8 +1407,14 @@ void Engine::cycle(const float* const* in, float* const* out, std::uint32_t fram
     // External sync (ADR-0071): the runtime the main thread published, and
     // the transport as the previous cycle left it.
     if (auto* next = syncNext_.load(std::memory_order_acquire); next != syncRt_) {
+        sayFarewell();  // the old runtime stops its slaves before it is dropped
         syncRt_ = next;
         syncAdopted_.store(next, std::memory_order_release);
+    }
+    if (syncFarewell_.load(std::memory_order_acquire)) {  // the engine stops
+        sayFarewell();
+        syncFarewell_.store(false, std::memory_order_relaxed);
+        syncFarewells_.fetch_add(1, std::memory_order_release);
     }
     const double timelineBefore = rtTimeline_.load(std::memory_order_relaxed);
     const auto epochBefore = timelineEpoch_.load(std::memory_order_acquire);
@@ -1460,6 +1507,7 @@ void Engine::runSync(const float* const* in, float* const* out, std::uint32_t fr
     c.outDropped = syncOutDropped_.data();
     syncPlayed_ = playing;
     if (rt->process(c)) notifyMain();
+    syncTransportRunning_.store(rt->transportRunning(), std::memory_order_release);
     publishSyncStatus(rt->status());
 }
 

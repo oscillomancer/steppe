@@ -2134,6 +2134,17 @@ clock; F2 spp; FA, FB, FC transport; F1 and the full frame mtc), to
 optional free clock goes out until the timeline moves. Offline renders
 send nothing.
 
+**Leaving.** `SyncRuntime::farewell()` writes Stop (FC) at frame 0 on each
+port whose transport is running, stops the generators and ends the
+runtime's MIDI output. The callback calls it on the old runtime as it
+adopts a new one, and on request: `Engine::stop()`, when the callback last
+published `syncTransportRunning_`, sets `syncFarewell_` and waits for
+`syncFarewells_` to count it (at most max(50 ms, 4 periods)), then the
+plan's and device's latency (at most 250 ms), before `Backend::stop()`.
+The final zero-frame callback calls it too, for a device that ran no more
+cycles; the dummy backend opens a one-frame MIDI window for that callback
+and captures it, JACK and PortAudio refuse writes there.
+
 **Status.** `midi.outputs.get` returns `{ports}`, and
 `engine.status.midi_outputs` the same list: each output of the running
 device in order, at the defaults when it has no record, then each record

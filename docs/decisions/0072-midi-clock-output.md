@@ -112,6 +112,21 @@ output port, which Phase 2's hardware MIDI routing extends.
    since the engine started. Phase 2 adds its routed counts to `dropped`
    and `warnings`.
 
+9. **No slave is left playing.** A runtime that leaves while a port's
+   transport runs sends that port Stop first, at frame 0 of the callback
+   (MTC sends nothing; its quarter frames just end), and nothing after:
+   when its kinds change or the port is disabled, when the sync settings
+   rebuild the runtime (the callback adopts the new one after the old one's
+   Stop; a new runtime still sending transport then starts with Song
+   Position and Continue), and when the engine stops. For an engine stop
+   the main thread asks the callback for the Stop and waits (at most four
+   periods or 50 ms) for a running cycle to send it, where every backend
+   delivers MIDI, then the device's output latency (at most 250 ms) for it
+   to leave, before stopping the backend. A device that runs no more cycles
+   (it went away) gets it in the final zero-frame callback, which only the
+   dummy backend takes MIDI in; JACK and native outputs refuse it there
+   (counted as dropped), so a slave on a vanished device is not stopped.
+
 ## Consequences
 
 - External devices follow Steppe sample-accurately at the device: clocks

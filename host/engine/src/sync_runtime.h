@@ -63,6 +63,13 @@ class SyncRuntime {
     // Returns true when something the main thread acts on changed (a start or
     // stop, a jump, a relocate request, a loss, a new chase rate).
     bool process(const SyncCycle& cycle) SUPPLE_RT;
+    // The runtime is leaving (replaced, or the engine stops): Stop at frame 0
+    // of the current callback on every port whose transport runs, so no
+    // slave is left playing; it sends nothing after (ADR-0072 §9).
+    void farewell(Backend* out, std::atomic<std::uint64_t>* sent,
+                  std::atomic<std::uint64_t>* dropped) SUPPLE_RT;
+    // A port's transport is running (Stop would go out at a farewell).
+    bool transportRunning() const SUPPLE_RT;
     const SyncStatus& status() const SUPPLE_RT { return status_; }
 
   private:
@@ -140,6 +147,7 @@ class SyncRuntime {
     std::vector<Port> ports_;
     std::array<std::atomic<std::int64_t>, kMaxSyncOutputs> delays_{};
     std::vector<sync::MidiEvent> eventStorage_;
+    bool leaving_ = false;  // after farewell(): no more MIDI output
     double notifiedRate_ = 1.0;
     std::int64_t notifiedAt_ = 0;
 };

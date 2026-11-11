@@ -410,6 +410,7 @@ class DummyBackend : public Backend {
   private:
     detail::MidiOutputCycle midiOutput_;
     std::vector<CapturedMidi> midiCapture_;
+    void captureMidi();                 // this callback's MIDI output, into midiCapture_
     std::vector<MidiInputEvent> midi_;  // this cycle's (capacity reserved)
     std::vector<SyncMidiEvent> sync_;   // likewise
     void cycle();
@@ -696,6 +697,11 @@ class Engine {
     bool syncPlayed_ = false;                // audio thread: the previous cycle played
     std::atomic<std::int64_t> syncOutputLatency_{0}, syncInputLatency_{0}, syncPlanLatency_{0};
     std::array<std::atomic<std::uint64_t>, kMaxSyncOutputs> syncOutSent_{}, syncOutDropped_{};
+    // Engine stop: the main thread asks the callback for the runtime's
+    // farewell (Stop to running slaves) and waits for it (ADR-0072 §9).
+    std::atomic<bool> syncFarewell_{false}, syncTransportRunning_{false};
+    std::atomic<std::uint32_t> syncFarewells_{0};
+    void sayFarewell() SUPPLE_RT;  // audio thread: the current runtime's
     static constexpr std::size_t kSyncWords = (sizeof(SyncStatus) + 7) / 8;
     std::array<std::atomic<std::uint64_t>, kSyncWords> syncWords_{};
     std::atomic<std::uint64_t> syncSeq_{0};

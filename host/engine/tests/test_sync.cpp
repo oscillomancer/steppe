@@ -1021,3 +1021,93 @@ TEST_CASE("midi outputs: get, set, validation, engine.status and the JSON round 
     REQUIRE_FALSE(wrong);
     CHECK(wrong.error().path == "/A/offset_ms");
 }
+
+TEST_CASE("midi clock output: no slave is left playing") {
+    Rig rig(false, 2, 0);
+    rig.run("midi.outputs.set", R"({"port": "Synth", "clock": true, "transport": true})");
+    rig.run("midi.outputs.set", R"({"port": "Clock Out", "clock": true, "transport": true})");
+    rig.run("transport.play", "{}");
+    rig.seconds(0.3);
+    // Transport switched off while playing: Stop at once, nothing after.
+    const std::int64_t off = rig.device;
+    rig.run("midi.outputs.set", R"({"port": "Synth", "transport": false, "clock": false})");
+    rig.seconds(0.2);
+    auto synth = sentTo(rig, 0);
+    const auto* stop = first(synth, 0xFC, off);
+    REQUIRE(stop);
+    CHECK(stop->frame - off <= 2 * std::int64_t(kBlock));
+    CHECK(synth.back().frame == stop->frame);
+    // A sync rebuild: the old runtime stops Clock Out, the new one continues it.
+    const std::int64_t rebuilt = rig.device;
+    rig.run("sync.set", R"({"source": "mtc", "midi_input": "Desk"})");
+    rig.seconds(0.2);
+    auto out = sentTo(rig, 1);
+    const auto* stop2 = first(out, 0xFC, rebuilt);
+    const auto* cont = first(out, 0xFB, rebuilt);
+    REQUIRE(stop2);
+    REQUIRE(cont);
+    CHECK(stop2->frame <= cont->frame);
+    rig.run("sync.set", R"({"source": "off"})");
+    rig.seconds(0.1);
+    // Disabled while playing: Stop.
+    const std::int64_t disabled = rig.device;
+    rig.run("midi.outputs.set", R"({"port": "Clock Out", "enabled": false})");
+    rig.seconds(0.1);
+    out = sentTo(rig, 1);
+    REQUIRE(first(out, 0xFC, disabled));
+    CHECK(out.back().event.bytes[0] == 0xFC);
+    // The engine stops while a slave plays: the final callback sends Stop.
+    rig.run("midi.outputs.set", R"({"port": "Clock Out", "enabled": true})");
+    rig.seconds(0.1);
+    const std::int64_t stopped = rig.device;
+    rig.app->stopEngine();
+    out = sentTo(rig, 1);
+    REQUIRE_FALSE(out.empty());
+    CHECK(out.back().event.bytes[0] == 0xFC);
+    CHECK(out.back().frame >= stopped);
+}
+
+TEST_CASE("midi clock output: engine stop sends Stop from a running cycle") {
+    const fs::path dir =
+        fs::temp_directory_path() / ("supple-sync-stop-" + std::to_string(::getpid()));
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    AppOptions options;
+    options.workdir = dir;
+    auto created = EngineApp::create(options, {.console9 = false});
+    REQUIRE(created);
+    auto app = std::move(*created);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    auto bus = std::make_unique<cmd::Dispatcher>(registry, *app);
+    DummyBackend::Options o;
+    o.mode = DummyBackend::Mode::Thread;
+    o.paced = true;
+    o.midiOutputPorts = {"Synth"};
+    DummyBackend backend(o);
+    REQUIRE(app->startEngine(backend,
+                             {.sampleRate = kRate, .blockSize = kBlock, .midiOutputs = true}, {})
+                .ok());
+    auto run = [&](const char* name, const char* args) {
+        auto r = bus->execute({name, json::parse(args).value(), kOrigin});
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+    };
+    run("midi.outputs.set", R"({"port": "Synth", "clock": true, "transport": true})");
+    run("transport.play", "{}");
+    for (int i = 0; i < 300 && !app->engine()->syncConfig().outputs[0].transport; ++i) {
+        app->tick();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    app->tick();
+    app->stopEngine();
+    const auto& sent = backend.midiCapture();
+    REQUIRE_FALSE(sent.empty());
+    CHECK(sent.back().event.bytes[0] == 0xFC);  // the last message: Stop
+    int stops = 0;
+    for (const auto& m : sent) stops += m.event.bytes[0] == 0xFC;
+    CHECK(stops == 1);
+    bus.reset();
+    app.reset();
+    fs::remove_all(dir);
+}
