@@ -78,6 +78,8 @@ TEST_CASE("native output scheduler uses fake due times and preserves port order"
     REQUIRE(sender->push({13, {0, 0, 1, {0xf8}}}));
     sender->dispatch();
     CHECK(sender->dropped() == 2);
+    CHECK(sender->dropped(0) == 2);
+    CHECK(sender->dropped(1) == 0);
 }
 TEST_CASE("native output queue overflow and shutdown discard pending output") {
     Sink sink;
@@ -107,6 +109,7 @@ TEST_CASE("dummy MIDI output capture retains absolute frames and bounded losses"
     CHECK(backend.midiCapture()[1].frame == 63);
     CHECK(backend.midiCapture()[2].frame == 64);
     CHECK(backend.midiOutDropped() == 1);
+    CHECK(backend.midiOutAsyncDropped(0) == 1);
 }
 
 TEST_CASE("CoreMIDI wire encoding supports system, channel voice and full-frame SysEx7 UMPs") {

@@ -4152,7 +4152,7 @@ void registerEngineCommands(cmd::Registry& registry) {
         c.examples = {
             {"Without a device", obj(R"({"backend": "dummy", "block": 128})"),
              obj(R"({"running": true, "backend": "dummy", "sample_rate": 48000.0, "block": 128,
-                     "period": 128, "plan_latency": 0, "device_latency": 0, "xruns": 0, "midi_dropped": 0, "midi_warnings": [], "midi_out_dropped": 0, "midi_output_warnings": [], "midi_output_latency": [],
+                     "period": 128, "plan_latency": 0, "device_latency": 0, "xruns": 0, "midi_dropped": 0, "midi_warnings": [], "midi_out_dropped": 0, "midi_output_warnings": [], "midi_output_latency": [], "midi_inputs": [], "midi_outputs": [], "midi_lead_frames": 0,
                      "midi_devices_changed": false, "midi_devices_message": "",
                      "preparing_audio": false, "preparation_error": "",
                      "prepared_version": "<any>", "preparation_version": 0,
@@ -4320,7 +4320,7 @@ void registerEngineCommands(cmd::Registry& registry) {
         c.result = engineStatusSchema();
         c.examples = {{"Not running", obj("{}"),
                        obj(R"({"running": false, "backend": "", "sample_rate": 0.0, "block": 0,
-                     "period": 0, "plan_latency": 0, "device_latency": 0, "xruns": 0, "midi_dropped": 0, "midi_warnings": [], "midi_out_dropped": 0, "midi_output_warnings": [], "midi_output_latency": [],
+                     "period": 0, "plan_latency": 0, "device_latency": 0, "xruns": 0, "midi_dropped": 0, "midi_warnings": [], "midi_out_dropped": 0, "midi_output_warnings": [], "midi_output_latency": [], "midi_inputs": [], "midi_outputs": [], "midi_lead_frames": 0,
                      "midi_devices_changed": false, "midi_devices_message": "",
                      "preparing_audio": false, "preparation_error": "",
                      "prepared_version": 0, "preparation_version": 0,

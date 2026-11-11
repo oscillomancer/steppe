@@ -87,6 +87,14 @@ json::Value EngineApp::midiPortsState(bool output) const {
         (void)settings;
         if (std::find(all.begin(), all.end(), name) == all.end()) all.push_back(name);
     }
+    // A refused/busy port remains an addressable header with its startup
+    // warning, even though the backend could not give it an open index.
+    for (const auto& warning : warnings) {
+        if (!warning.device.empty() && warning.device != "MIDI inputs" &&
+            warning.device != "MIDI outputs" &&
+            std::find(all.begin(), all.end(), warning.device) == all.end())
+            all.push_back(warning.device);
+    }
     for (const auto& route : view().routes) {
         const auto& device = output ? route.value->to.midiDevice : route.value->from.midiDevice;
         if (!output && device &&
@@ -183,12 +191,12 @@ void registerMidiPortCommands(cmd::Registry& registry) {
             "delay. Outputs reset_on_stop defaults true. Applying settings releases "
             "disabled/changed output routes; inputs retain the existing channel input mechanism. "
             "Returns the updated ports list.";
-        auto args = schema::object<PortEdit>("midi_port_edit");
-        args.field("port", &PortEdit::port, schema::string().minLength(1));
-        args.field("enabled", &PortEdit::enabled, schema::boolean());
-        args.field("offset_ms", &PortEdit::offset, schema::number().range(-1000, 1000));
-        if (output) args.field("reset_on_stop", &PortEdit::reset, schema::boolean());
-        set.args = args.build();
+        auto fields = schema::object<PortEdit>("midi_port_edit");
+        fields.field("port", &PortEdit::port, schema::string().minLength(1));
+        fields.field("enabled", &PortEdit::enabled, schema::boolean());
+        fields.field("offset_ms", &PortEdit::offset, schema::number().range(-1000, 1000));
+        if (output) fields.field("reset_on_stop", &PortEdit::reset, schema::boolean());
+        set.args = fields.build();
         set.result = schema::any();
         set.tags = {"midi", "engine"};
         set.examples = {{"Disable an absent port",

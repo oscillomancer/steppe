@@ -6,7 +6,7 @@ namespace supple::engine::detail {
 inline constexpr std::size_t kHardwareMidiRoutes = 256, kHardwareMidiQueue = 65536;
 inline constexpr double kHardwareMidiLeadSeconds = 1.0;
 struct HardwareRoute {
-    Id id;
+    Id id, sourceId, noteOutId;
     std::size_t source = 0;
     std::string device;
     model::Tap tap = model::Tap::PostFader;
@@ -32,6 +32,7 @@ class HardwareMidiRuntime {
   private:
     struct RouteState {
         std::uint32_t id = 0, generation = 0;
+        Id sourceId, noteOutId;
         bool active = false, reset = true, muted = false, started = false, release = false;
         int port = -1;
         std::int64_t delay = 0;
@@ -54,6 +55,8 @@ class HardwareMidiRuntime {
         MidiInputEvent event;
     };
     std::array<RouteState, kHardwareMidiRoutes> routes_{};
+    std::array<MidiPortSettings, 16>
+        outputControls_{};  // newest publication; disable bypasses render horizon
     std::array<Pending, kHardwareMidiQueue> queue_{};
     std::size_t count_ = 0;
     std::array<InputPending, kHardwareMidiQueue> inputQueue_{};
@@ -70,7 +73,8 @@ class HardwareMidiRuntime {
     std::uint64_t order_ = 0, epoch_ = 0;
     bool playing_ = false;
     Backend* backend_ = nullptr;
-    Plan* plan_ = nullptr;
+    Plan* plan_ = nullptr;  // identity only; a failed block may outlive this plan
+    std::uint64_t planGeneration_ = 0;
     void adopt(Plan&, std::uint64_t epoch, bool playing) SUPPLE_RT;
     void schedule(std::size_t slot, MidiOutputEvent event, std::int64_t delay,
                   std::uint32_t offset) SUPPLE_RT;

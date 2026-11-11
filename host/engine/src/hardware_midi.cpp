@@ -66,6 +66,9 @@ Status prepareHardwareMidi(Plan& plan, Backend& backend, const MidiPortPreferenc
     for (auto& pointer : plan.hardwareMidi) {
         auto& route = *pointer;
         const auto& node = plan.nodes[route.source];
+        route.sourceId = node.id;
+        if (route.rackNotes >= 0)
+            route.noteOutId = node.rack->notesOut[static_cast<std::size_t>(route.rackNotes)].id;
         for (std::size_t p = 0; p < ports.size() && p < 16; ++p)
             if (sameName(ports[p], route.device)) {
                 if (route.port >= 0)
@@ -97,8 +100,15 @@ Status prepareHardwareMidi(Plan& plan, Backend& backend, const MidiPortPreferenc
                       (p < latency.size() ? latency[p] : 0) +
                       time::samplesAt(plan.midiOutputsSettings[p].offsetMs / 1000., plan.rate);
         lead = std::max(lead, -route.delay);
+        // Evaluate gates on the stream's clock, before its device delay. Node
+        // curves already carry the fader shift; channel streams precede it.
+        route.muteCurve.shift(node.timelineShift + eventClockLatency);
+        route.muteCurve.timeline =
+            plan.rateEnabled ? plan.timelines[node.live ? 1 : 0].get() : nullptr;
         route.sourceMute = node.autoMute;
+        route.sourceMute.shift(eventClockLatency - node.latChain);
         route.vcas = node.vcas;
+        route.vcas.shift(eventClockLatency - node.latChain);
         for (auto& v : route.vcas.values) {
             v.volume.points.clear();
             v.volumeDb = 0;
@@ -177,7 +187,7 @@ bool HardwareMidiRuntime::release(RouteState& state, std::uint32_t at) {
 }
 void HardwareMidiRuntime::adopt(Plan& plan, std::uint64_t epoch, bool playing) {
     const bool boundary = epoch != epoch_ || (playing_ && !playing);
-    const bool changed = plan_ != &plan;
+    const bool changed = plan_ != &plan || planGeneration_ != plan.generation;
     if (boundary) {
         audioFilled_ = 0;
         audioCursor_ = 0;
@@ -193,7 +203,8 @@ void HardwareMidiRuntime::adopt(Plan& plan, std::uint64_t epoch, bool playing) {
             if (state.active) {
                 auto found = std::find_if(
                     plan.hardwareMidi.begin(), plan.hardwareMidi.end(), [&](const auto& r) {
-                        return r->id.n == state.id && r->port == state.port &&
+                        return r->id.n == state.id && r->sourceId == state.sourceId &&
+                               r->noteOutId == state.noteOutId && r->port == state.port &&
                                r->delay == state.delay && r->tap == state.tap &&
                                r->fromChannel == state.from && r->toChannel == state.to &&
                                r->port >= 0;
@@ -204,12 +215,21 @@ void HardwareMidiRuntime::adopt(Plan& plan, std::uint64_t epoch, bool playing) {
                 }
             }
         plan_ = &plan;
+        planGeneration_ = plan.generation;
     }
     std::array<std::uint16_t, 16> resetChannels{};
-    for (const auto& state : routes_)
+    for (auto& state : routes_)
         if (state.active && state.port >= 0 &&
-            !plan.midiOutputsSettings[static_cast<std::size_t>(state.port)].enabled)
+            !outputControls_[static_cast<std::size_t>(state.port)].enabled) {
             resetChannels[static_cast<std::size_t>(state.port)] |= state.channels;
+            if (!state.release) {
+                state.release = true;
+                ++state.generation;
+            }
+        }
+    for (auto& state : routes_)
+        if (state.active)
+            state.reset = outputControls_[static_cast<std::size_t>(state.port)].resetOnStop;
     for (auto& state : routes_)
         if (state.active && boundary && state.reset) {
             state.release = true;
@@ -234,7 +254,7 @@ void HardwareMidiRuntime::adopt(Plan& plan, std::uint64_t epoch, bool playing) {
                         outputDrops_[p].fetch_add(1, std::memory_order_relaxed);
             }
     for (const auto& r : plan.hardwareMidi) {
-        if (r->port < 0) continue;
+        if (r->port < 0 || !outputControls_[static_cast<std::size_t>(r->port)].enabled) continue;
         auto found = std::find_if(routes_.begin(), routes_.end(), [&](const auto& s) {
             return s.active && !s.release && s.id == r->id.n;
         });
@@ -251,15 +271,17 @@ void HardwareMidiRuntime::adopt(Plan& plan, std::uint64_t epoch, bool playing) {
             found->generation = generation;
             found->active = true;
             found->id = r->id.n;
+            found->sourceId = r->sourceId;
+            found->noteOutId = r->noteOutId;
             found->port = r->port;
             found->delay = r->delay;
             found->tap = r->tap;
             found->from = r->fromChannel;
             found->to = r->toChannel;
             found->started =
-                boundary && plan.midiOutputsSettings[static_cast<std::size_t>(r->port)].resetOnStop;
+                boundary && outputControls_[static_cast<std::size_t>(r->port)].resetOnStop;
         }
-        found->reset = plan.midiOutputsSettings[static_cast<std::size_t>(r->port)].resetOnStop;
+        found->reset = outputControls_[static_cast<std::size_t>(r->port)].resetOnStop;
     }
     if (changed) {
         std::size_t keep = 0;
@@ -294,7 +316,8 @@ void HardwareMidiRuntime::collect(Plan& plan, std::int64_t pos, std::uint32_t fr
     if (!frames) return;
     for (auto& pointer : plan.hardwareMidi) {
         auto& route = *pointer;
-        if (route.port < 0) continue;
+        if (route.port < 0 || !outputControls_[static_cast<std::size_t>(route.port)].enabled)
+            continue;
         auto state = std::find_if(routes_.begin(), routes_.end(), [&](const auto& s) {
             return s.active && !s.release && s.id == route.id.n;
         });
@@ -401,6 +424,19 @@ void HardwareMidiRuntime::collect(Plan& plan, std::int64_t pos, std::uint32_t fr
 }
 void HardwareMidiRuntime::finish(float* const* out, std::uint32_t channels, std::uint32_t frames,
                                  bool closing) {
+    // A failed audio block still reaches finish: disabling a MIDI port must
+    // not depend on successful plug-in processing or a plan handoff.
+    for (auto& state : routes_)
+        if (state.active && !outputControls_[static_cast<std::size_t>(state.port)].enabled) {
+            if (!state.release) {
+                state.release = true;
+                ++state.generation;
+            }
+            if (release(state)) {
+                state.active = false;
+                state.release = false;
+            }
+        }
     if (closing) count_ = 0;
     while (count_ && queue_[0].at < frame_ + frames) {
         std::pop_heap(queue_.begin(), queue_.begin() + static_cast<std::ptrdiff_t>(count_),
@@ -451,6 +487,7 @@ void HardwareMidiRuntime::finish(float* const* out, std::uint32_t channels, std:
 }
 std::span<const MidiInputEvent> HardwareMidiRuntime::input(std::span<const MidiInputEvent> raw,
                                                            const Plan* plan) {
+    if (plan) outputControls_ = plan->midiOutputsSettings;
     for (const auto& e : raw) {
         const auto settings =
             plan && e.port < 16 ? plan->midiInputsSettings[e.port] : MidiPortSettings{};

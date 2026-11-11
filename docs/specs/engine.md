@@ -2748,7 +2748,13 @@ and a final audio delay; lead is limited to one second and reported by
 for it. No hardware delay may exceed ten seconds. Limits: 256 routes, 65,536
 pending messages, 16 ports, and the existing 1,024 messages per device period.
 Equal-frame messages preserve route/event insertion order. Overflow is counted.
+Route and source mute automation is evaluated on the tapped stream's compensated
+clock, including its source shift and master playrate trajectory. Channel post-FX
+streams currently retain pre-FX timestamps; their tap latency cancels against
+the delivery compensation. Rack Note Out events already include their latency.
 
+Port disable gates the next callback and releases notes before the render-ahead
+horizon; enabling and timing changes adopt with their prepared plan.
 Held notes release on removal, mute, disabling/re-timing, stop/locate when
 reset is on, and engine shutdown. Releases include sustain-off; boundary and
 shutdown resets add all-notes-off on used channels. These controllers share

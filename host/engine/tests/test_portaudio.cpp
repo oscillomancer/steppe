@@ -1149,6 +1149,11 @@ TEST_CASE("MIDI hardware output listing, warning and latency survive the command
     CHECK((*status)["midi_output_latency"].asArray()[1] == -96);
     REQUIRE((*status)["midi_output_warnings"].asArray().size() == 1);
     CHECK((*status)["midi_output_warnings"].asArray()[0]["device"] == "Busy synth");
+    const auto& outputPorts = (*status)["midi_outputs"].asArray();
+    REQUIRE(outputPorts.size() == 3);
+    CHECK(*outputPorts[2].find("name") == "Busy synth");
+    CHECK(outputPorts[2].find("index")->asInt() == -1);
+    CHECK(outputPorts[2].find("warnings")->asArray()[0].find("os_error")->asInt() == 5);
     auto ports = dispatcher.execute(
         {"engine.inputs", json::Value::object(), {cmd::Origin::Type::Test, "midi-output", ""}});
     REQUIRE(ports);

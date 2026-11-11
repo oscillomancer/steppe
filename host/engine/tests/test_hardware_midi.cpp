@@ -140,7 +140,7 @@ TEST_CASE(
 }
 TEST_CASE("hardware MIDI: mute, route removal, disable, stop, locate and missing ports") {
     for (bool anticipative : {false, true})
-        for (int action = 0; action < 5; ++action) {
+        for (int action = 0; action < 6; ++action) {
             CAPTURE(anticipative);
             CAPTURE(action);
             Session session;
@@ -165,6 +165,8 @@ TEST_CASE("hardware MIDI: mute, route removal, disable, stop, locate and missing
             if (action == 1) {
                 engine.setMidiPreferences({}, outputSettings(0, false));
                 REQUIRE(engine.load(session.value));
+                backend.run(1);  // disable gates the next callback, before the render horizon
+                CHECK_FALSE(events(backend, 0x84).empty());
             }
             if (action == 2) engine.pause();
             if (action == 3) engine.seek(1.0);
@@ -173,7 +175,20 @@ TEST_CASE("hardware MIDI: mute, route removal, disable, stop, locate and missing
                 edit.modify<model::Route>(session.route, [](auto& r) { r.mute = true; });
                 REQUIRE(engine.load(edit.commit().value()));
             }
-            if (anticipative && (action == 0 || action == 1 || action == 4))
+            if (action == 5) {
+                model::EditTxn edit(session.value, 2);
+                auto other = *session.value.tracks.find(session.track);
+                other.chain.clear();
+                other.name = "Other source";
+                for (const auto fx : session.value.tracks.find(session.track)->chain)
+                    other.chain.push_back(edit.create(*session.value.fx.find(fx)));
+                const auto source = edit.create(other);
+                edit.modify<model::Track>(model::kMaster,
+                                          [&](auto& m) { m.children.push_back(source); });
+                edit.modify<model::Route>(session.route, [&](auto& r) { r.from.track = source; });
+                REQUIRE(engine.load(edit.commit().value()));
+            }
+            if (anticipative && (action == 0 || action == 1 || action == 4 || action == 5))
                 REQUIRE(engine.awaitPlan());
             run(engine, backend, anticipative, 100);
             CHECK_FALSE(events(backend, 0x84).empty());
@@ -350,4 +365,50 @@ TEST_CASE("hardware MIDI: rack Note Out reaches a named output in both executors
         engine.stop();
         CHECK_FALSE(events(backend, 0x84).empty());
     }
+}
+
+TEST_CASE("hardware MIDI: route and source mute automation follow compensated MIDI time") {
+    for (bool anticipative : {false, true})
+        for (bool sourceMute : {false, true}) {
+            Session base;
+            model::EditTxn edit(base.value, 2);
+            // A slower sibling pads this source's input by 64 frames.
+            model::Track slow;
+            slow.parent = model::kMaster;
+            const auto sibling = edit.create(slow);
+            edit.modify<model::Track>(model::kMaster,
+                                      [&](auto& master) { master.children.push_back(sibling); });
+            for (const auto& fx : base.value.fx)
+                if (fx.value->plugin.id == "com.suppleaudio.test.gain")
+                    for (int i = 0; i < 2; ++i) {
+                        const auto id = edit.create(*fx.value);
+                        edit.modify<model::Track>(sibling, [&](auto& t) { t.chain.push_back(id); });
+                    }
+            model::Envelope lane;
+            lane.target = {sourceMute ? base.track : base.route, "mute"};
+            lane.timebase = model::Timebase::Time;
+            lane.points = {{0, 0, model::PointShape::Square, 0},
+                           {96. / 48000, 1, model::PointShape::Square, 0}};
+            edit.create(lane);
+            const auto s = edit.commit();
+            REQUIRE(s);
+            auto pool = hardwarePool();
+            MediaCache media;
+            DummyBackend backend({.midiOutputPorts = {"Synth"}});
+            Engine engine(pool, media,
+                          {.anticipative = anticipative,
+                           .renderBlock = 64,
+                           .renderAheadMs = 10,
+                           .workers = 0});
+            REQUIRE(engine.start(backend, {.blockSize = 64, .midiOutputs = true}));
+            REQUIRE(engine.load(*s));
+            engine.play();
+            run(engine, backend, anticipative, 30);
+            REQUIRE(events(backend, 0x94).size() == 1);
+            CHECK(events(backend, 0x94)[0] == engine.outputLatency());
+            const auto offs = events(backend, 0x84);
+            REQUIRE(offs.size() == 1);
+            CHECK(offs[0] == engine.outputLatency() + 96);
+            engine.stop();
+        }
 }
