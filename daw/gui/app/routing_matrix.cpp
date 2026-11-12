@@ -1443,15 +1443,17 @@ void RoutingMatrix::refresh() {
     phase_->setText(allInverted ? "ø on" : "ø");
 }
 
-void RoutingMatrix::setMidiMode(bool midi) {
-    if (audioMode_) audioMode_->setOn(!midi);
-    if (midiModeButton_) midiModeButton_->setOn(midi);
-    if (midiMode_ == midi && !hardwareMidiMode_ && !hardwareAudioMode_) return;
-    hardwareAudioMode_ = false;
-    if (hardwareAudioButton_) hardwareAudioButton_->setOn(false);
-    hardwareMidiMode_ = false;
-    if (hardwareModeButton_) hardwareModeButton_->setOn(false);
+void RoutingMatrix::setMode(bool midi, bool hardwareMidi, bool hardwareAudio) {
+    const bool changed = midiMode_ != midi || hardwareMidiMode_ != hardwareMidi ||
+                         hardwareAudioMode_ != hardwareAudio;
     midiMode_ = midi;
+    hardwareMidiMode_ = hardwareMidi;
+    hardwareAudioMode_ = hardwareAudio;
+    if (audioMode_) audioMode_->setOn(!midi && !hardwareAudio);
+    if (midiModeButton_) midiModeButton_->setOn(midi && !hardwareMidi);
+    if (hardwareModeButton_) hardwareModeButton_->setOn(hardwareMidi);
+    if (hardwareAudioButton_) hardwareAudioButton_->setOn(hardwareAudio);
+    if (!changed) return;
     selection_.clear();
     anchor_.reset();
     anchorRow_.reset();
@@ -1461,15 +1463,9 @@ void RoutingMatrix::setMidiMode(bool midi) {
     }
 }
 
-void RoutingMatrix::setHardwareMidiMode() {
-    setMidiMode(true);
-    hardwareMidiMode_ = true;
-    if (hardwareModeButton_) hardwareModeButton_->setOn(true);
-    if (midiModeButton_) midiModeButton_->setOn(false);
-    selection_.clear();
-    anchor_.reset();
-    if (isOpen()) (void)reload();
-}
+void RoutingMatrix::setMidiMode(bool midi) { setMode(midi, false, false); }
+
+void RoutingMatrix::setHardwareMidiMode() { setMode(true, true, false); }
 
 std::vector<ui::MenuItem> RoutingMatrix::midiPortMenu(bool output, const std::string& port) {
     const auto settings = engine::midiPortSettings(

@@ -148,6 +148,7 @@ class RoutingMatrix {
     std::string inputReplacement(const MatrixModel::Source&, const MatrixModel::Destination&) const;
     std::string statusMessage_;
     void midiChannelMenu(bool from);
+    void setMode(bool midi, bool hardwareMidi, bool hardwareAudio);
     Status reload();
     Status adoptModel(MatrixModel next);
     Status reloadHardwareAudio();

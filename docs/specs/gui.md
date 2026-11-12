@@ -961,7 +961,8 @@ close this panel without quitting the app.
 
 
 The header switches **Audio | MIDI | Hardware MIDI | Hardware Audio** (ADR-0067/0072), four latching tabs with the
-active mode lit in the accent colour; the mode persists in the
+active mode lit in the accent colour. A mode change reloads the model once;
+clicking the active tab keeps its selection. The mode persists in the
 `windows.routing.mode` UI sidecar field. Audio mode is the existing grid; MIDI
 routes do not appear in it. In Audio mode (`reaper-ux.md` addendum 2), sources (strips in hierarchy, hardware
 inputs, MIDI inputs) × destinations (parent, strips, plugin keys, racks' In

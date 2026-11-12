@@ -2293,6 +2293,13 @@ TEST_CASE("Hardware Audio: assignments replace inputs, edit masters and warn abo
     REQUIRE(panel.root().click("routing.mode.hardware_audio"));
     CHECK(matrix.hardwareAudioMode());
     CHECK_FALSE(matrix.hardwareMidiMode());
+    REQUIRE(matrix.clickCell(audioRow(matrix, "audio_in:1"), audioCol(matrix, channel)));
+    REQUIRE(panel.root().click("routing.mode.hardware_audio"));
+    CHECK(matrix.selectedCells() == 1);
+    CHECK(static_cast<ui::Toggle*>(panel.root().find("routing.mode.hardware_audio"))->on());
+    REQUIRE(panel.root().click("routing.mode.audio"));
+    CHECK_FALSE(matrix.hardwareAudioMode());
+    CHECK(matrix.selectedCells() == 0);
 }
 
 TEST_CASE("Hardware Audio: per-signal and whole-tab split edit only representable sides") {

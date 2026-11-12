@@ -39,15 +39,7 @@ bool contains(const std::vector<int>& channels, int channel) {
 }
 }  // namespace
 
-void RoutingMatrix::setHardwareAudioMode() {
-    setMidiMode(false);
-    hardwareAudioMode_ = true;
-    selection_.clear();
-    anchor_.reset();
-    anchorRow_.reset();
-    anchorCol_.reset();
-    if (isOpen()) (void)reload();
-}
+void RoutingMatrix::setHardwareAudioMode() { setMode(false, false, true); }
 
 json::Value RoutingMatrix::saveAudioSplits() const {
     auto value = json::Value::array();
