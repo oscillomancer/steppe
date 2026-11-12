@@ -48,7 +48,17 @@ class WinMidiSource final : public MidiSource {
                 static_cast<std::uint32_t>(data));
         } else if (message == MIM_LONGDATA || message == MIM_LONGERROR) {
             auto* header = reinterpret_cast<MIDIHDR*>(data);
-            if (header->dwBytesRecorded) self.buffer_->drop();
+            // An MTC full frame is the one SysEx kept (ADR-0071); the rest,
+            // and anything incomplete, are counted drops.
+            const auto* bytes = reinterpret_cast<const std::uint8_t*>(header->lpData);
+            const auto size = static_cast<std::size_t>(header->dwBytesRecorded);
+            if (message == MIM_LONGDATA && size == 10 && syncMidiSize(bytes, size) == 10)
+                self.buffer_->pushSync(
+                    port.index,
+                    winMidiSeconds(static_cast<std::uint32_t>(stamp), port.anchor, self.now()),
+                    bytes, size);
+            else if (size)
+                self.buffer_->drop();
             for (auto& item : port.longBuffers)
                 if (&item.header == header) item.ready.store(true, std::memory_order_release);
         } else if (message == MIM_ERROR) {

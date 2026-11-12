@@ -77,12 +77,17 @@ class JackBackend : public Backend {
     Stats stats() const;
     BackendStatus status() const override;
     std::span<const MidiInputEvent> midiInput() const override;
+    std::span<const SyncMidiEvent> syncMidi() const override;
     std::vector<std::string> midiPorts() const override;
     bool writeMidi(const MidiOutputEvent&) SUPPLE_RT override;
+    std::size_t midiOutputUsed() const SUPPLE_RT override;
     std::vector<std::string> midiOutputPorts() const override;
     std::vector<std::int64_t> midiOutputLatency() const override;
     std::vector<MidiInputWarning> midiOutputWarnings() const override;
     std::uint64_t midiOutDropped() const override;
+    // Input messages refused: not a channel or sync message, or past a
+    // period's bound (kMaxMidiInputEvents, kMaxSyncMidiEvents).
+    std::uint64_t midiDropped() const override;
     std::uint64_t midiOutAsyncDropped(std::size_t port) const override;
     std::vector<std::string> inputNames() const override;
     std::vector<std::string> outputNames() const override;

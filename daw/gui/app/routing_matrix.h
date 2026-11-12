@@ -87,7 +87,8 @@ class RoutingMatrix {
     bool midiMode() const { return midiMode_; }
     void setHardwareMidiMode();
     bool hardwareMidiMode() const { return hardwareMidiMode_; }
-    // Shared port-menu seam: clock output extends this function in Phase 3.
+    // A hardware port header's right-click menu: Enabled; for outputs the
+    // clock members (ADR-0073) and Reset notes on stop; Timing offset….
     std::vector<ui::MenuItem> midiPortMenu(bool output, const std::string& port);
     void sync();  // reload when the session changed while open
 

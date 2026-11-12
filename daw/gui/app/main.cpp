@@ -71,6 +71,8 @@
 #include "supple/rpc/model_loop.h"
 #include "supple/rpc/protocol.h"
 #include "supple/ui/root.h"
+#include "sync_dialog.h"
+#include "timecode_dialog.h"
 #include "ui_persistence.h"
 
 namespace fs = std::filesystem;
@@ -624,6 +626,23 @@ int main(int argc, char** argv) {
     preferences.onAudioDevice = [&] { audioDevice.open(); };
     preferences.audioSummary = [&] { return audioDevice.summary(); };
     appActions.addUi("ui.audio.device", "Edit: audio device…", [&] { audioDevice.open(); });
+    gui::TimecodeDialog timecodeDialog(root, dispatcher, **app);
+    timecodeDialog.onError = [](const std::string& message) {
+        std::fprintf(stderr, "%s\n", message.c_str());
+    };
+    appActions.addUi("ui.project.timecode", "Project: timecode…", [&] { timecodeDialog.open(); });
+    // External sync (ADR-0071): the saved wiring reaches the engine, and the
+    // dialog saves every change, an agent's sync.set included.
+    if (auto applied = (*app)->setSyncSettings(prefs.sync); !applied)
+        std::fprintf(stderr, "sync: %s\n", applied.error().toString().c_str());
+    gui::SyncDialog syncDialog(root, dispatcher, **app, [&](const engine::SyncSettings& s) {
+        return preferences.setSync(s);
+    });
+    syncDialog.onError = [](const std::string& message) {
+        std::fprintf(stderr, "%s\n", message.c_str());
+    };
+    syncDialog.onTimecode = [&] { timecodeDialog.open(); };
+    appActions.addUi("ui.sync.settings", "Transport: sync settings…", [&] { syncDialog.open(); });
     renderDialog.onStatus = [&](const std::string& message) { shell.setStatus(message); };
     renderDialog.openFolderWhenDone = [&] { return preferences.preferences().renderOpenFolder; };
     renderDialog.setOpenFolderWhenDone = [&](bool on) {
@@ -1148,6 +1167,8 @@ int main(int argc, char** argv) {
             audioEdit.poll();
             if (preferences.isOpen()) preferences.refresh();
             if (audioDevice.isOpen()) audioDevice.refresh();
+            if (timecodeDialog.isOpen()) timecodeDialog.refresh();
+            syncDialog.refresh();
             if (shell.arrange()->poll(event)) root.requestAnimationFrame();
         });
         return next;

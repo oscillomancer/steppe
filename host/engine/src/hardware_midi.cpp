@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include "midi_output.h"
 #include "rack_runtime.h"
 namespace supple::engine::detail {
 namespace {
@@ -41,6 +42,17 @@ MidiOutputEvent convert(const host::Event& event) SUPPLE_RT {
     return result;
 }
 }  // namespace
+std::int64_t hardwareMidiLead(const Plan& plan, std::size_t port, double offsetMs) {
+    std::int64_t lead = 0;
+    for (std::size_t p = 0; p < plan.hardwareLeadBase.size(); ++p)
+        if (const auto& base = plan.hardwareLeadBase[p])
+            lead = std::max(
+                lead,
+                -(*base + time::samplesAt(
+                              (p == port ? offsetMs : plan.midiOutputsSettings[p].offsetMs) / 1000.,
+                              plan.rate)));
+    return lead;
+}
 Status prepareHardwareMidi(Plan& plan, Backend& backend, const MidiPortPreferences& inputs,
                            const MidiPortPreferences& outputs) {
     const auto ports = backend.midiOutputPorts(), sources = backend.midiPorts();
@@ -62,7 +74,15 @@ Status prepareHardwareMidi(Plan& plan, Backend& backend, const MidiPortPreferenc
     if (plan.hardwareMidi.size() > kHardwareMidiRoutes)
         return Error("engine.midi_budget", "too many hardware MIDI routes", "/routes",
                      "use at most 256 hardware MIDI routes");
-    std::int64_t lead = 0;
+    plan.hardwareLeadBase.fill(std::nullopt);
+    // The port's delay before its offset: the lead is derived from the
+    // earliest of them, whatever offset is asked about.
+    auto contribute = [&](std::size_t p, std::int64_t delay) {
+        const auto base =
+            delay - time::samplesAt(plan.midiOutputsSettings[p].offsetMs / 1000., plan.rate);
+        auto& slot = plan.hardwareLeadBase[p];
+        slot = slot ? std::min(*slot, base) : base;
+    };
     for (auto& pointer : plan.hardwareMidi) {
         auto& route = *pointer;
         const auto& node = plan.nodes[route.source];
@@ -99,7 +119,7 @@ Status prepareHardwareMidi(Plan& plan, Backend& backend, const MidiPortPreferenc
         route.delay = plan.outputLatency - node.timelineShift - eventClockLatency +
                       (p < latency.size() ? latency[p] : 0) +
                       time::samplesAt(plan.midiOutputsSettings[p].offsetMs / 1000., plan.rate);
-        lead = std::max(lead, -route.delay);
+        contribute(p, route.delay);
         // Evaluate gates on the stream's clock, before its device delay. Node
         // curves already carry the fader shift; channel streams precede it.
         route.muteCurve.shift(node.timelineShift + eventClockLatency);
@@ -114,6 +134,18 @@ Status prepareHardwareMidi(Plan& plan, Backend& backend, const MidiPortPreferenc
             v.volumeDb = 0;
         }
     }
+    // Clock, Song Position and MTC leave after the plan's latency, the
+    // port's latency and its offset (ADR-0073): a port that sends them
+    // earlier than the audio is heard needs the same lead as a routed one.
+    for (std::size_t p = 0; p < ports.size() && p < 16; ++p) {
+        const auto& settings = plan.midiOutputsSettings[p];
+        if (!settings.enabled ||
+            !(settings.clock || settings.transport || settings.spp || settings.mtc))
+            continue;
+        contribute(p, plan.outputLatency + (p < latency.size() ? latency[p] : 0) +
+                          time::samplesAt(settings.offsetMs / 1000., plan.rate));
+    }
+    const std::int64_t lead = hardwareMidiLead(plan);
     if (lead > static_cast<std::int64_t>(plan.rate * kHardwareMidiLeadSeconds))
         return Error("engine.midi_lead", "MIDI advance exceeds one second of prepared audio lead",
                      "/midi_outputs",
@@ -163,7 +195,6 @@ std::uint64_t HardwareMidiRuntime::dropped(bool output, std::size_t port) const 
 void HardwareMidiRuntime::begin(Backend& backend, std::uint32_t frames) SUPPLE_RT {
     backend_ = &backend;
     frames_ = frames;
-    wrote_ = 0;
 }
 bool HardwareMidiRuntime::write(RouteState& state, const MidiOutputEvent& value) SUPPLE_RT {
     auto event = value;
@@ -172,7 +203,6 @@ bool HardwareMidiRuntime::write(RouteState& state, const MidiOutputEvent& value)
         outputDrops_[event.port].fetch_add(1, std::memory_order_relaxed);
         return false;
     }
-    ++wrote_;
     if (event.bytes[0] < 0xf0)
         state.channels |= static_cast<std::uint16_t>(1u << (event.bytes[0] & 15));
     const auto key = std::size_t(event.bytes[0] & 15) * 128 + event.bytes[1];
@@ -187,8 +217,10 @@ bool HardwareMidiRuntime::write(RouteState& state, const MidiOutputEvent& value)
 bool HardwareMidiRuntime::release(RouteState& state, std::uint32_t at) SUPPLE_RT {
     for (std::size_t key = 0; key < state.held.size(); ++key)
         while (state.held[key]) {
-            if (wrote_ >= kMaxMidiOutputEvents - 512)
-                return false;  // reserve bounded whole-port panic capacity
+            // The period's buffer, clock and MTC included, keeps the reserve
+            // for whole-port resets.
+            if (backend_->midiOutputUsed() >= kMaxMidiOutputEvents - kMidiReleaseReserve)
+                return false;
             if (!write(state, {at,
                                0,
                                3,
@@ -198,7 +230,8 @@ bool HardwareMidiRuntime::release(RouteState& state, std::uint32_t at) SUPPLE_RT
         }
     for (unsigned channel = 0; channel < 16; ++channel)
         if (state.channels & (1u << channel)) {
-            if (wrote_ >= kMaxMidiOutputEvents - 512) return false;
+            if (backend_->midiOutputUsed() >= kMaxMidiOutputEvents - kMidiReleaseReserve)
+                return false;
             if (!write(state, {at, 0, 3, {static_cast<std::uint8_t>(0xb0 | channel), 64, 0}}))
                 return false;
         }
@@ -510,9 +543,17 @@ void HardwareMidiRuntime::finish(float* const* out, std::uint32_t channels, std:
         if (!state.active || state.release || state.generation != pending.generation) continue;
         pending.event.frame =
             static_cast<std::uint32_t>(std::max<std::int64_t>(0, pending.at - frame_));
-        if (pending.event.size)
-            (void)write(state, pending.event);
-        else if (!release(state, pending.event.frame))
+        if (pending.event.size) {
+            // Onsets and other ordinary messages leave the period's release
+            // reserve to note-offs and resets, as clock and MTC do; a
+            // release may use it.
+            if (!closingMessage(pending.event) &&
+                backend_->midiOutputUsed() >= kMaxMidiOutputEvents - kMidiReleaseReserve)
+                outputDrops_[static_cast<std::size_t>(state.port)].fetch_add(
+                    1, std::memory_order_relaxed);
+            else
+                (void)write(state, pending.event);
+        } else if (!release(state, pending.event.frame))
             state.release = true;
     }
     if (closing) {

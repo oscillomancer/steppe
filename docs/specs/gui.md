@@ -328,6 +328,7 @@ field's range. The toolkit has no input timestamps, so taps use a steady
 clock at button activation. Tap returns focus to the field; Set or Enter
 applies the value through `tempo.set`, preserving the other tempo points
 and ramps. Cancel discards it; reopening starts a fresh tap sequence.
+A right click on the tempo button opens the sync menu (§4.13).
 
 The transport's time-map controls appear as meter, tempo, a small playrate
 knob and a two-line Rate readout (ADR-0045). Unity is at the knob's top/center
@@ -1033,13 +1034,19 @@ projects/preferences remain visible with warnings in port status. Hardware input
 and output headers use teal socket marks; separators divide input rows from
 channel rows and channel columns from output columns.
 
-Right-click an input row or output column header for Enabled, Timing offset…
-(signed milliseconds, -1000..1000), and, on outputs, Reset notes on stop. The output offset dialog previews
-"adds N ms latency to all audio" as the offset is edited.
-The latter controls stop/locate releases and defaults on. Settings apply
-immediately and save in the machine preferences; `midiPortMenu` builds this
-menu for the clock extension. Output descriptors with `clock: true` draw a
-clock mark. The dummy fixture flag `--dummy-midi --audio dummy` declares
+Right-click an input row or output column header (`midiPortMenu`) for
+Enabled, then on outputs, after a rule, the clock output items (ADR-0073):
+Send clock, Send transport, Song Position Pointer, MTC and Clock while
+stopped (greyed until Send clock is on); after another rule Reset notes on
+stop; last Timing offset… (signed milliseconds, -1000..1000; inputs have
+Enabled and Timing offset… only). Checked items show the record's values,
+and each item is one `midi.inputs.set`/`midi.outputs.set`. The output
+offset dialog previews "adds N ms latency to all audio" as the offset is
+edited. Reset notes on stop controls stop/locate releases and defaults on.
+Settings apply immediately and the engine saves them in the machine
+preferences. An output column whose descriptor has `clock: true` (it sends
+clock now: set, enabled, connected and not the sync master's device;
+`route.matrix`) draws a small clock before its name. The dummy fixture flag `--dummy-midi --audio dummy` declares
 Keyboard/Pads inputs and Hardware synth/Drum machine outputs for offscreen
 render checks, without opening devices.
 
@@ -1546,6 +1553,55 @@ a new channel). It follows rack.md §8.
   channel's right-click menu offers Show rack (when it has one) and Add rack
   (Add another rack).
 
+### 4.13 Project timecode and sync (ADR-0071)
+
+**Project > Timecode…** (`ui.project.timecode`) opens a small dialog
+(`timecode`): **Frame rate** (`timecode.rate.set`, a dropdown: 23.976,
+24, 25, 29.97 drop-frame, 29.97 non-drop, 30 fps) and **Start**
+(`timecode.start.set`, a text field, `HH:MM:SS:FF`, `;` before the frames
+in drop-frame), the timecode at project time 0. A rate choice, and a start
+on Enter or when the field loses focus, is one `project.set {timecode}`
+each (undoable). A refused value shows its message and hint on the
+dialog's status line (`timecode.status`) and changes nothing; the controls
+follow the project (an undo, an agent's edit) while the dialog is open.
+
+**The tempo button's right click** (`transport.sync.menu`): **External
+sync: Off**, **MIDI clock**, **MTC** and **LTC** (the current source
+checked; each the action `sync.source:off|midi_clock|mtc|ltc`, one
+`sync.set {source}`), a separator, and **Sync
+settings…** (`ui.sync.settings`, also in the Transport menu, which the
+defaults list after its seek entries; layouts saved before it get it).
+While a source is on the button reads **EXT** and the tempo heard (the
+master's for MIDI clock; the project's at the playhead times the playrate
+heard for timecode), tinted green (`meter`) when locked and running, in the
+accent while the signal arrives but is not locked, red (`armed`) when none
+arrives; the transport bar then refreshes at 4 Hz while stopped too.
+
+**Sync settings…** (`sync`): **Follow** (`sync.source.set`: Off, MIDI
+clock, MIDI Time Code (MTC), SMPTE LTC (audio)); for MIDI clock and MTC
+**MIDI input** (`sync.midi.set`: the engine's ports, or the saved name
+marked not connected); for LTC **LTC input** (`sync.ltc_input.set`: the
+device's input channels); for MIDI clock **Tempo** (`sync.follow.set`, a
+checkbox: follow the master's tempo, pitch preserved); with any source
+**Offset (ms)** (`sync.offset.set`, a field committed on Enter or blur)
+and **When the signal stops** (`sync.loss.set`: Stop, or keep playing for
+10, 25, 50 or 100 frames); **LTC output** (`sync.ltc_out.set` Send LTC,
+the channel `sync.ltc_out.channel`, the level `sync.ltc_out.level` −24 to
+−6 dBFS; a saved channel the device lacks reads "Output N (not on this
+device: LTC uses output M)", M the device's last, which the engine uses
+meanwhile); **Project timecode** (the rate and start, and Change…, which
+opens Project > Timecode…); three status lines (`sync.status.*`: waiting
+for a signal on its input, or running/locked with the master's tempo or
+timecode, the chase rate and the error; LTC output on; the warnings). Each
+control is one `sync.set`; rows follow the source. Every change, an agent's
+`sync.set` included, is saved as `preferences.json`'s `sync` (1.7), which
+the app applies at start. The MIDI outputs' clock and MTC settings
+(ADR-0073) are members of the MIDI port records, `midi_outputs` (1.8,
+`{"<port>": {enabled, offset_ms, reset_on_stop, clock, transport, spp,
+mtc, clock_while_stopped}}`), which the engine writes on every
+`midi.outputs.set` and reads at start; a GUI save keeps them as they are
+on disk.
+
 ## 5. Agent panel (removed)
 
 The app has no built-in agent (ADR-0043). Agents drive it from an external
@@ -1642,7 +1698,7 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   toolbar (after the nearest default before it that the list holds), and one
   the user removed stays removed. A file from before `known` is taken to
   know every default but those added since (View → Racks and the toolbar's
-  Racks, `ui.rack`; the Project menu's pan law entries).
+  Racks, `ui.rack`; the Project menu's pan law entries and **Timecode…**).
   An action may carry an `enabled` predicate over the selection context; its
   menu entry is greyed while that is false (the predicate is checked when the
   menu opens). It may also carry a `checked` predicate, which ticks its entry
@@ -1651,7 +1707,8 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   the project's pan law (`project.pan_law:0`, `:-2.5`, `:-3`, `:-4.5`, `:-6`,
   the current one ticked; each keeps the boost) and **Gain compensation
   (boost pans)** (`project.pan_law.boost`, a toggle), each one
-  `project.set {pan_law}` (ADR-0066). The Item menu's entries are built when it opens
+  `project.set {pan_law}` (ADR-0066), then a separator and **Timecode…**
+  (`ui.project.timecode`): the project timecode dialog (§4.13). The Item menu's entries are built when it opens
   (`itemBarMenu`, § Menus under arrange items); action ids a user adds to it
   follow them after a separator. Loading a `menus.json` drops the item ids
   older defaults listed there (and `ui.midi.new`) from its Item list, as the

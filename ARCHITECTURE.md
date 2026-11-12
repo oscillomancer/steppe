@@ -55,6 +55,7 @@ such as opening dialogs are not all engine commands.
 | patch | `libs/core-patch` | patch/preset documents: schema, validate, merge, canonical form, prose describe | ADR-0009, `docs/specs/core-patch.md` |
 | music | `libs/midi`, `libs/notation` | MIDI model + SMF I/O; the text notation compiler/decompiler | `docs/specs/notation.md` |
 | time | `libs/timeline` | tempo and meter maps, ramps, bar/beat conversion | `docs/specs/session-model.md` |
+| sync | `libs/sync` (vendored libltc, LGPL, DAW-only) | timecode; MIDI clock/SPP and MTC generators and receivers; LTC encode/decode; the chase tracker that turns external positions into a master playrate | ADR-0070, `docs/specs/sync.md` |
 | audio | `libs/audio-file`, `libs/core-dsp` | file I/O, resampling; shared DSP blocks | — |
 | audio | `libs/console9` | Console 9 encode/decode, fader/pan, deterministic dither; reference null test | ADR-0019 |
 | perception | `libs/core-analysis` | loudness (BS.1770/R128), spectral, harmonic, envelope, stereo, comparison, masking; compact reports | `docs/specs/core-analysis.md` |

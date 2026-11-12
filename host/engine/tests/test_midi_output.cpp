@@ -186,3 +186,44 @@ TEST_CASE("timestamped native close waits the remaining plan delay up to the sha
     }
     CHECK(detail::midiOutputCloseDeadline(10, 9) == 10);
 }
+
+TEST_CASE("shutdown keeps a clock slave's pending Stop, ordered with the note releases") {
+    for (bool timestamps : {false, true}) {
+        CAPTURE(timestamps);
+        Sink sink;
+        sink.timestamps = timestamps;
+        auto sender = std::make_unique<detail::MidiOutputSender>(sink);
+        // A note on Synth and a clock on Clock, both still in the future
+        // when the engine stops; then the running cycle's Stop for Clock.
+        REQUIRE(sender->push({10.1, {0, 0, 3, {0x90, 60, 100}}}));
+        REQUIRE(sender->push({10.1, {0, 1, 1, {0xf8}}}));
+        if (timestamps) sender->dispatch();  // a timestamped sink has them scheduled
+        // Stamped earlier than the clock already accepted on its port: kept,
+        // and moved behind it rather than refused.
+        REQUIRE(sender->push({10.05, {0, 1, 1, {0xfc}}}));
+        // The final callback's release of the held note.
+        REQUIRE(sender->push({10, {0, 0, 3, {0x80, 60, 0}}, true}));
+        sender->stop();
+        auto at = [&](std::uint16_t port, std::uint8_t status) {
+            for (std::size_t i = 0; i < sink.sent.size(); ++i)
+                if (sink.sent[i].event.port == port && sink.sent[i].event.bytes[0] == status)
+                    return static_cast<int>(i);
+            return -1;
+        };
+        const int stop = at(1, 0xfc), off = at(0, 0x80);
+        REQUIRE(stop >= 0);
+        REQUIRE(off >= 0);
+        if (timestamps) {
+            // Every stamp on a port follows what it carried before.
+            CHECK(sink.sent[static_cast<std::size_t>(stop)].seconds >= 10.1);
+            CHECK(sink.sent[static_cast<std::size_t>(off)].seconds >= 10.1);
+            CHECK(sink.clock == doctest::Approx(10.1));  // waited for the latest stamp (bounded)
+        } else {
+            // WinMM: the future note-on and clock tick never leave; the Stop
+            // and the release go now.
+            CHECK(at(0, 0x90) < 0);
+            CHECK(at(1, 0xf8) < 0);
+            CHECK(sink.sent[static_cast<std::size_t>(stop)].seconds == 10);
+        }
+    }
+}

@@ -285,8 +285,9 @@ Status configureRateTransition(Plan& p, Plan* previous, PlayrateTimeline& old,
             // Prepared fallback for newly added/replaced sources. Existing sources
             // transfer their running converter at the executor's adoption boundary.
             static const auto table = std::make_shared<const TapeTable>();
-            const bool mode = previous && previous->masterPlayrate.preservePitch &&
-                              (previous->masterPlayrate.rate != 1 || !old.points().empty());
+            const bool mode =
+                previous && previous->masterPlayrate.preservePitch &&
+                (previous->masterPlayrate.rate != 1 || !old.points().empty() || previous->syncRate);
             clip.rateState->previous =
                 std::make_unique<RateClipState>(table, clip.data->channelCount(), p.rate, mode);
         }

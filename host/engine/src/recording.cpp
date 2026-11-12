@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <map>
 #include <tuple>
 
@@ -188,7 +189,8 @@ void Recorder::capture(const float* const* in, std::uint32_t inChannels, std::ui
         // What the performer heard at `pos` reaches us a round trip later.
         start_.store(pos - latency_, std::memory_order_relaxed);
         started_.store(true, std::memory_order_release);
-    } else if (pos != expected_) {  // a loop wrap: a new run on the timeline
+    } else if (pos != expected_ &&  // a loop wrap: a new run on the timeline
+               !(driftTolerant_ && std::abs(pos - expected_) < static_cast<std::int64_t>(frames))) {
         const std::size_t n = segmentCount_.load(std::memory_order_relaxed);
         if (n < kMaxSegments) {
             segments_[n] = {captured_, pos};

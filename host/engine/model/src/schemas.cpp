@@ -348,6 +348,97 @@ auto timebaseS() {
 }  // namespace
 
 Schema<Timebase> timebaseSchema() { return timebaseS(); }
+
+Schema<sync::FrameRate> frameRateSchema() {
+    using sync::FrameRate;
+    std::vector<std::pair<FrameRate, std::string>> names;
+    for (FrameRate r : {FrameRate::Fps23976, FrameRate::Fps24, FrameRate::Fps25,
+                        FrameRate::Fps2997Drop, FrameRate::Fps2997, FrameRate::Fps30})
+        names.emplace_back(r, std::string(sync::rateName(r)));
+    json::Value spec = json::Value::object();
+    spec["type"] = "string";
+    spec["enum"] = json::Value::array();
+    for (const auto& [rate, name] : names) spec["enum"].asArray().push_back(name);
+    return Schema<FrameRate>(
+        "frame_rate",
+        [names](const json::Value& v, FrameRate& out, schema::DecodeCtx& c, const std::string& p) {
+            if (v.isString())
+                for (const auto& [rate, name] : names)
+                    if (v.asString() == name) {
+                        out = rate;
+                        return true;
+                    }
+            c.error("timecode.rate",
+                    "a timecode frame rate is one of 23.976, 24, 25, 29.97df, "
+                    "29.97 or 30",
+                    p, "use \"29.97df\" for drop-frame and \"29.97\" for non-drop, as a string");
+            return false;
+        },
+        [](const FrameRate& r) { return json::Value(std::string(sync::rateName(r))); }, spec);
+}
+
+Schema<sync::TimecodeMapping> timecodeSchema() {
+    const auto rates = frameRateSchema();
+    json::Value spec = json::Value::object();
+    spec["type"] = "object";
+    spec["properties"] = json::Value::object();
+    spec["properties"]["rate"] = rates.jsonSchema();
+    spec["properties"]["start"] = json::Value::object();
+    spec["properties"]["start"]["type"] = "string";
+    spec["properties"]["start"]["description"] =
+        "the timecode at project time 0, HH:MM:SS:FF (\";\" before the frames in drop-frame)";
+    spec["additionalProperties"] = false;
+    return Schema<sync::TimecodeMapping>(
+        "timecode",
+        [rates](const json::Value& v, sync::TimecodeMapping& out, schema::DecodeCtx& c,
+                const std::string& p) {
+            if (!v.isObject()) {
+                c.error("schema.type", "timecode must be an object", p,
+                        "e.g. {\"rate\": \"25\", \"start\": \"01:00:00:00\"}");
+                return false;
+            }
+            sync::TimecodeMapping m{sync::FrameRate::Fps30, {}};
+            for (const auto& entry : v.asObject()) {
+                if (entry.key == "rate" || entry.key == "start") continue;
+                const auto at = json::pointerJoin(p, entry.key);
+                if (c.options.unknownMembers == schema::UnknownMembers::Ignore) {
+                    if (c.warnings)
+                        c.warnings->push_back(
+                            {"schema.unknown_member", "ignored unknown member", at});
+                    continue;
+                }
+                c.error("schema.unknown_member", "unknown member \"" + entry.key + "\"", at,
+                        "valid members: rate, start");
+                return false;
+            }
+            if (const auto* r = v.find("rate"))
+                if (!rates.decodeInto(*r, m.rate, c, json::pointerJoin(p, "rate"))) return false;
+            if (const auto* s = v.find("start")) {
+                if (!s->isString()) {
+                    c.error("schema.type", "start must be a timecode string",
+                            json::pointerJoin(p, "start"), "e.g. \"01:00:00:00\"");
+                    return false;
+                }
+                auto label = sync::parse(s->asString(), m.rate);
+                if (!label) {
+                    c.error("timecode.start", label.error().message, json::pointerJoin(p, "start"),
+                            label.error().hint);
+                    return false;
+                }
+                m.start = *label;
+            }
+            out = m;
+            return true;
+        },
+        [rates](const sync::TimecodeMapping& m) {
+            json::Value o = json::Value::object();
+            const sync::TimecodeMapping d{sync::FrameRate::Fps30, {}};
+            if (m.rate != d.rate) o["rate"] = rates.encode(m.rate);
+            if (!(m.start == d.start)) o["start"] = sync::format(m.start, m.rate);
+            return o;
+        },
+        spec);
+}
 Schema<TrackTimebase> trackTimebaseSchema() {
     return en<TrackTimebase>({{TrackTimebase::Project, "project"},
                               {TrackTimebase::Time, "time"},
@@ -429,6 +520,8 @@ const Schema<Project>& schemaOf<Project>() {
         dflt(b, d.panLaw);
         b.field("playrate", &Project::playrate, schemaOf<Playrate>());
         dflt(b, d.playrate);
+        b.field("timecode", &Project::timecode, timecodeSchema());
+        dflt(b, d.timecode);
         b.field("masters", &Project::masters, ids());
         dflt(b, d.masters);
         b.field("seed", &Project::seed, schema::integerOf<std::uint64_t>());
@@ -1344,7 +1437,7 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
         auto migrated = migrateProject1(std::move(doc), warnings);
         if (!migrated) return std::move(migrated).error();
         doc = std::move(*migrated);
-    } else if (version->minor > 10 && warnings)
+    } else if (version->minor > 11 && warnings)
         warnings->push_back(
             {"project.newer_minor", "loading a newer project minor version", "/schema"});
     // Before 2.10 a Notes module heard only its source track's own MIDI, never

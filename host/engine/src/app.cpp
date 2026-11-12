@@ -86,6 +86,8 @@ Result<std::unique_ptr<EngineApp>> EngineApp::create(AppOptions options, model::
             "engine.workdir", "cannot create " + options.workdir.string(), {},
             "pass a writable workdir and ensure its parent directory exists and has space");
     auto app = std::unique_ptr<EngineApp>(new EngineApp(std::move(options)));
+    if (const auto& fixed = app->options_.syncLocateSeconds)  // ADR-0071 §4
+        app->syncSeekSeconds_ = std::clamp(*fixed, 0.0, 0.5);
     if (!app->options_.midiPreferencesFile.empty()) {
         std::error_code existsError;
         if (fs::exists(app->options_.midiPreferencesFile, existsError)) {
@@ -1088,6 +1090,7 @@ Status EngineApp::startEngine(Backend& backend, const BackendConfig& config,
     if (loop_.enabled || loop_.end > loop_.start)
         engine_->setLoop(loop_.start, loop_.end, loop_.enabled);
     engine_->setMetronome(metronome_.enabled, metronome_.volumeDb);
+    applySync();  // before the first plan: a sync plan from the start (ADR-0071)
     auto loaded = engine_->load(head(), projectDir());
     if (!loaded) {
         haltEngine();
@@ -1242,6 +1245,7 @@ void EngineApp::tick() {
     }
     if (engine_) {
         engine_->service();
+        serviceSync();                  // what the sync master did, to the transport (ADR-0071)
         if (!txn_) updateWriteHolds();  // a touch hold's release time passed
         consumePluginOutputs();
         pollControl();
@@ -1612,6 +1616,7 @@ EngineStatus EngineApp::engineStatus() {
         failure["error"] = pluginErrorJson(error);
         st.failedErrors.asArray().push_back(std::move(failure));
     }
+    st.sync = syncReport();
     if (!engine_ || !backend_) return st;
     const BackendStatus b = backend_->status();
     st.running = true;

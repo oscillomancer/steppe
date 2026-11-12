@@ -8,14 +8,26 @@
 #include "supple/json/value.h"
 namespace supple::engine {
 // Shared current machine-preferences schema for engine and GUI writers.
-inline constexpr char kPreferencesSchema[] = "supple.preferences/1.6";
+inline constexpr char kPreferencesSchema[] = "supple.preferences/1.8";
 // Machine preferences, keyed by the backend's immutable port name. The JSON
-// record is retained so subsequent clock/sync fields survive common edits.
+// record is retained, so members a later version adds survive edits. One
+// record per port carries everything it does: routing (ADR-0072) owns
+// enabled, offset_ms and reset_on_stop (offset_ms also moves clock and MTC);
+// clock output (ADR-0073) adds clock, transport, spp, mtc and
+// clock_while_stopped, all outputs only.
 struct MidiPortSettings {
     bool enabled = true;
     double offsetMs = 0;
     bool resetOnStop = true;
+    bool clock = false;              // MIDI clock (F8), 24 per quarter note
+    bool transport = false;          // Start, Continue, Stop
+    bool spp = false;                // Song Position Pointer before Continue and on locates
+    bool mtc = false;                // MIDI time code at the project's timecode
+    bool clockWhileStopped = false;  // keep clocking at the tempo while stopped
+    bool operator==(const MidiPortSettings&) const = default;
 };
+// Whether a record is at every default (and has no other member): it can go.
+bool midiPortRecordIdle(const json::Value& record);
 using MidiPortPreferences = std::map<std::string, json::Value, std::less<>>;
 MidiPortSettings midiPortSettings(const MidiPortPreferences&, std::string_view name);
 Result<MidiPortPreferences> parseMidiPortPreferences(const json::Value&, bool output);

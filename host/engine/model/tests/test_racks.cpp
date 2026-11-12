@@ -76,7 +76,7 @@ Patch patch() {
 TEST_CASE("racks: a patch saves, reopens and serializes the same") {
     Patch p = patch();
     const std::string bytes = serializeProject(p.s);
-    CHECK(bytes.find("\"supple.project/2.10\"") != std::string::npos);
+    CHECK(bytes.find("\"supple.project/2.11\"") != std::string::npos);
     CHECK(bytes.find("\"mo_2.saw\"") != std::string::npos);
     auto loaded = parseProject(bytes);
     REQUIRE_MESSAGE(loaded, (loaded ? "" : loaded.error().message));
@@ -265,7 +265,7 @@ TEST_CASE("MIDI sends: channel endpoints, Notes source off and old projects roun
     auto s = t.commit();
     REQUIRE(s);
     const auto bytes = serializeProject(*s);
-    CHECK(bytes.find("supple.project/2.10") != std::string::npos);
+    CHECK(bytes.find("supple.project/2.11") != std::string::npos);
     auto reopened = parseProject(bytes);
     REQUIRE(reopened);
     CHECK(reopened->modules.find(p.notes)->sourceOff);
