@@ -37,12 +37,17 @@ constexpr std::uint32_t kBlock = 256;
 const cmd::Origin kOrigin{cmd::Origin::Type::Test, "sync", ""};
 
 // A dummy device whose period's MIDI buffer also holds `busy` events from
-// other writers, for the shared release reserve.
+// other writers, for the shared release reserve, or is `full` and refuses
+// every write.
 struct BusyBackend : DummyBackend {
     using DummyBackend::DummyBackend;
     std::size_t busy = 0;
+    bool full = false;
     std::size_t midiOutputUsed() const SUPPLE_RT override {
         return DummyBackend::midiOutputUsed() + busy;
+    }
+    bool writeMidi(const MidiOutputEvent& event) SUPPLE_RT override {
+        return !full && DummyBackend::writeMidi(event);
     }
 };
 
@@ -1164,6 +1169,67 @@ TEST_CASE("midi clock output: clock and MTC leave the period's release reserve t
     }
     CHECK(reset);
     CHECK_FALSE(off);
+}
+
+TEST_CASE("midi clock output: a Stop takes the reserve, and a refused one is owed") {
+    for (bool ahead : {false, true}) {
+        CAPTURE(ahead);
+        Rig rig(ahead);
+        rig.run("midi.outputs.set", R"({"port": "Synth", "clock": true, "transport": true})");
+        auto stops = [&](std::int64_t from) {
+            const auto sent = sentTo(rig, 0);
+            return std::count_if(sent.begin(), sent.end(),
+                                 [&](const auto& m) { return m.frame >= from && is(m, 0xFC); });
+        };
+        rig.run("transport.play", "{}");
+        rig.seconds(0.15);
+        REQUIRE(first(sentTo(rig, 0), 0xFA));
+        // Other writers fill the ordinary part of the period: clock stops
+        // going out, but the Stop is a reset and takes the reserve.
+        rig.backend->busy = kMaxMidiOutputEvents - kMidiReleaseReserve;
+        std::int64_t paused = rig.device;
+        rig.run("transport.pause", "{}");
+        rig.seconds(0.15);
+        CHECK(stops(paused) == 1);
+        rig.backend->busy = 0;
+        // The device refuses everything as the transport stops: the Stop is
+        // owed, and goes once the device takes MIDI again, once.
+        rig.run("transport.play", "{}");
+        rig.seconds(0.15);
+        rig.backend->full = true;
+        paused = rig.device;
+        rig.run("transport.pause", "{}");
+        rig.seconds(0.15);
+        CHECK(stops(paused) == 0);
+        const std::int64_t cleared = rig.device;
+        rig.backend->full = false;
+        rig.seconds(0.15);
+        CHECK(stops(paused) == 1);
+        const auto* owed = first(sentTo(rig, 0), 0xFC, paused);
+        REQUIRE(owed);
+        CHECK(owed->frame < cleared + std::int64_t(kBlock));
+        // Nothing more at engine stop: the slave already stopped.
+        rig.app->stopEngine();
+        CHECK(stops(paused) == 1);
+    }
+}
+
+TEST_CASE("midi clock output: a Stop still owed when the engine stops is sent then") {
+    for (bool ahead : {false, true}) {
+        CAPTURE(ahead);
+        Rig rig(ahead);
+        rig.run("midi.outputs.set", R"({"port": "Synth", "clock": true, "transport": true})");
+        rig.run("transport.play", "{}");
+        rig.seconds(0.15);
+        rig.backend->full = true;
+        const std::int64_t paused = rig.device;
+        rig.run("transport.pause", "{}");
+        rig.seconds(0.15);
+        rig.backend->full = false;
+        rig.app->stopEngine();
+        const auto* stop = first(sentTo(rig, 0), 0xFC, paused);
+        REQUIRE(stop);
+    }
 }
 
 TEST_CASE("midi outputs: the engine writes the clock members and raises an older schema") {

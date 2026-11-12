@@ -414,7 +414,7 @@ void SyncRuntime::farewell(Backend* out, std::atomic<std::uint64_t>* sent,
     sync::EventBuffer scratch(eventStorage_);
     for (std::size_t i = 0; i < ports_.size(); ++i) {
         Port& p = ports_[i];
-        const bool stop = config_.outputs[i].transport && p.clock.running();
+        const bool stop = config_.outputs[i].transport && (p.clock.running() || p.slaveRunning);
         p.clock.stop(0.0, scratch);  // quarter frames simply end; MTC sends nothing
         p.mtc.stop();
         if (!stop || !out) continue;
@@ -423,6 +423,7 @@ void SyncRuntime::farewell(Backend* out, std::atomic<std::uint64_t>* sent,
         m.size = 1;
         m.bytes[0] = 0xFC;
         if (out->writeMidi(m)) {
+            p.slaveRunning = false;
             if (sent) sent[i].fetch_add(1, std::memory_order_relaxed);
         } else if (dropped) {
             dropped[i].fetch_add(1, std::memory_order_relaxed);
@@ -442,11 +443,23 @@ void SyncRuntime::writeMidi(const SyncCycle& c) SUPPLE_RT {
         const std::int64_t delay =
             std::max<std::int64_t>(c.planLatency, 0) + delays_[i].load(std::memory_order_relaxed);
         sync::EventBuffer events(eventStorage_);
-        std::uint64_t dropped = 0;
+        std::uint64_t dropped = 0, sent = 0;
+        Port& p = ports_[i];
+        // A Stop the device refused in an earlier period (or one the event
+        // buffer had no room for) is owed: first, before anything new.
+        if (out.transport && p.slaveRunning && !p.clock.running()) {
+            MidiOutputEvent m;
+            m.port = static_cast<std::uint16_t>(i);
+            m.size = 1;
+            m.bytes[0] = 0xFC;
+            if (c.midiOut->writeMidi(m)) {
+                p.slaveRunning = false;
+                ++sent;
+            }
+        }
         pieces(c.device - delay, c.device + n - delay,
                [&](const Piece& piece) { emit(i, out, piece, delay, c.timeMap, events); });
         if (events.overflowed()) ++dropped;
-        std::uint64_t sent = 0;
         for (const sync::MidiEvent& e : events.events()) {
             const std::uint8_t status = e.bytes[0];
             const bool keep = status == 0xF8   ? out.clock
@@ -463,12 +476,17 @@ void SyncRuntime::writeMidi(const SyncCycle& c) SUPPLE_RT {
             m.size = e.size;
             std::copy_n(e.bytes.begin(), e.size, m.bytes);
             // Clock and MTC share the period's buffer with routed MIDI and
-            // leave its release reserve to note-offs and resets.
-            if (c.midiOut->midiOutputUsed() < kMaxMidiOutputEvents - kMidiReleaseReserve &&
-                c.midiOut->writeMidi(m))
+            // leave its release reserve to note-offs and resets; a Stop is
+            // one of those and may use it.
+            const bool stop = status == 0xFC;
+            if ((stop ||
+                 c.midiOut->midiOutputUsed() < kMaxMidiOutputEvents - kMidiReleaseReserve) &&
+                c.midiOut->writeMidi(m)) {
                 ++sent;
-            else
+                if (stop || status == 0xFA || status == 0xFB) p.slaveRunning = !stop;
+            } else {
                 ++dropped;
+            }
         }
         if (c.outSent) c.outSent[i].fetch_add(sent, std::memory_order_relaxed);
         if (c.outDropped && dropped) c.outDropped[i].fetch_add(dropped, std::memory_order_relaxed);

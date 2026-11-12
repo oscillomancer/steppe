@@ -145,9 +145,13 @@ output port, which Phase 2's hardware MIDI routing extends.
    shutdown keeps a pending Stop with the releases (CoreMIDI: stamped
    `max(now, lastDue)`; WinMM: now) and drops the rest, and CoreMIDI keeps
    its port open for the remaining scheduled delay, at most 250 ms, before
-   disposing it. A slave is left playing only when its device is gone with
-   no callback to carry the Stop (a JACK server that went away, an
-   unplugged MIDI device).
+   disposing it. A Stop may use the period's release reserve, and one the
+   device refuses is owed: the runtime keeps what it last sent each slave
+   (Start or Continue, or Stop), not the generator's state, and sends an
+   owed Stop at frame 0 of each later period until the device takes it,
+   or in its farewell. A slave is left playing only when its device is
+   gone with no callback to carry the Stop (a JACK server that went away,
+   an unplugged MIDI device).
 
 10. **The audio lead covers clock ports (ADR-0072).** ADR-0072 delays all
     audio by the hardware MIDI lead, the most any routed port's MIDI must

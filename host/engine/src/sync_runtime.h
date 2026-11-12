@@ -141,6 +141,9 @@ class SyncRuntime {
         bool playing = false;       // the latest piece played
         double expected = 0.0;      // timeline seconds the next piece continues from
         double lastClock = -1e300;  // output frame of the latest F8 sent
+        // The slave was last sent Start or Continue, not yet Stop: what was
+        // written, not the generator's state, so a refused Stop is owed.
+        bool slaveRunning = false;
     };
     void emit(std::size_t port, const SyncOutput& out, const Piece& piece, std::int64_t delay,
               const time::TimeMap* map, sync::EventBuffer& events) SUPPLE_RT;

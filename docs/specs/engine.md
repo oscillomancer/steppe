@@ -2150,15 +2150,19 @@ inverse. Events go through a 2048-entry buffer, filtered by kind (F8
 clock; F2 spp; FA, FB, FC transport; F1 and the full frame mtc), to
 `writeMidi` at `ceil(frame) − c`, while the period's buffer is short of
 the release reserve (`kMaxMidiOutputEvents` − `kMidiReleaseReserve`, every
-writer counted); refusals and a full buffer count in
+writer counted). A Stop may use the reserve; `Port::slaveRunning` is what
+was last written to the slave (Start or Continue, or Stop), and while it
+says running after the generator stopped, the Stop is owed and goes at
+frame 0 of each later period until the device takes it. Refusals and a
+full buffer count in
 `Engine::syncOutputDropped(i)`, sent messages in `syncOutputSent(i)`
 (reset at start). Count-in cycles do not play, so nothing but the
 optional free clock goes out until the timeline moves. Offline renders
 send nothing.
 
 **Leaving.** `SyncRuntime::farewell()` writes Stop (FC) at frame 0 on each
-port whose transport is running, stops the generators and ends the
-runtime's MIDI output. The callback calls it on the old runtime as it
+port whose transport is running or owed a Stop, stops the generators and
+ends the runtime's MIDI output. The callback calls it on the old runtime as it
 adopts a new one, and on request: `Engine::stop()`, when the callback last
 published `syncTransportRunning_`, sets `syncFarewell_` and waits for
 `syncFarewells_` to count it (at most max(50 ms, 4 periods)), then the
