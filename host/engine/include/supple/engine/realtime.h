@@ -614,7 +614,8 @@ class Engine {
     // render-ahead amount), or the transport is paused. False on timeout.
     bool awaitRendered(std::int64_t frames, double timeoutSeconds = 10.0);
     // Main thread (tests, tools): waits until the renderer has adopted the
-    // newest plan (anticipative; immediately true otherwise).
+    // newest plan and queued it for the callback, whose next cycle adopts it
+    // (anticipative; immediately true otherwise, where the next cycle does).
     bool awaitPlan(double timeoutSeconds = 10.0);
     // Audio cycles that found no rendered audio while playing (after the
     // pre-roll of a start or seek).

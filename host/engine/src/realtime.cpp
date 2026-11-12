@@ -2373,8 +2373,10 @@ void Engine::publishRendererPlan(detail::Plan& next, std::uint64_t epoch,
         next.handEpoch = epoch;
     }
     if (queuedRate) ratePlanRequests_.consume();
-    stoppedGen_.store(next.generation, std::memory_order_release);
+    // Queued for the callback before the adoption is reported, so a caller
+    // of awaitPlan() knows the callback's next cycle takes it.
     planHandoffs_.push(&next);  // space checked before adoption
+    stoppedGen_.store(next.generation, std::memory_order_release);
     handPlan_.store(&next, std::memory_order_release);
     notifyMain();
 }

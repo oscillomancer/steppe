@@ -392,6 +392,11 @@ TEST_CASE("midi clock: Start leads by the locate time, which sync.get reports") 
             Rig rig(ahead, 2, 0, {0, 0}, locate);
             rig.run("sync.set",
                     R"({"source": "midi_clock", "midi_input": "Clock In", "follow_tempo": false})");
+            // A stopped manual device does not wait for the renderer: without
+            // this the clock could arrive before the callback has the plan's
+            // time map, and the first clock's position would not be carried
+            // on to the end of its period.
+            REQUIRE(rig.app->engine()->awaitPlan());
             const json::Value got = rig.run("sync.get", "{}");
             CHECK(got.find("status")->find("locate_ms")->asDouble() ==
                   doctest::Approx(locate * 1000.0));
