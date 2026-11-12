@@ -668,11 +668,11 @@ std::vector<std::string> JackBackend::midiPorts() const {
     return impl_ ? impl_->midiNames : std::vector<std::string>{};
 }
 
-bool JackBackend::writeMidi(const MidiOutputEvent& event) {
+bool JackBackend::writeMidi(const MidiOutputEvent& event) SUPPLE_RT {
     auto* self = active_.load(std::memory_order_acquire);
     return self && self->midiOut.write(event);
 }
-std::size_t JackBackend::midiOutputUsed() const {
+std::size_t JackBackend::midiOutputUsed() const SUPPLE_RT {
     auto* self = active_.load(std::memory_order_acquire);
     return self ? self->midiOut.size() : 0;
 }
