@@ -345,23 +345,10 @@ std::string Shell::inputText(const model::Id& track, const std::string& channels
         }
         if (audio.empty()) audio = "in " + channels;
     }
-    // The MIDI input, its own selection beside the audio one (ADR-0065;
-    // record.midi_input, or a legacy MIDI-only record.input).
-    std::string midi;
+    if (!audio.empty()) return audio;
     if (const model::Route* r = model::midiInputRoute(s, track))
-        midi = *r->from.midiDevice == "*" ? std::string("midi *") : *r->from.midiDevice;
-    if (audio.empty()) return midi.empty() ? std::string("in \u2014") : midi;
-    if (midi.empty()) return audio;
-    // Both, in the room of one button: a rack with one Out by its name alone,
-    // so "Synth + midi" fits where "Synth » Out 1 + midi *" would not.
-    if (const model::Route* r = s.routes.find(*tr->record.input); r && r->from.module) {
-        const model::Id rack = s.modules.find(*r->from.module)->rack;
-        int outs = 0;
-        for (const auto& e : s.modules)
-            outs += e.value->rack == rack && e.value->type == model::kOutModule;
-        if (outs == 1) audio = model::rackLabel(s, rack);
-    }
-    return audio + " + " + (midi == "midi *" ? std::string("midi") : midi);
+        return *r->from.midiDevice == "*" ? std::string("midi *") : *r->from.midiDevice;
+    return "in \u2014";
 }
 
 std::string Shell::inputLabel(const model::Id& track) const {
@@ -575,8 +562,7 @@ void Shell::openInputMenu(const model::Id& track, const ui::Rect& anchor) {
     const json::Value& list = inputs(/*force=*/true);
     const model::Session& s = app_.head();
     const model::Track* tr = s.tracks.find(track);
-    // Audio (record.input) and MIDI (record.midi_input) are separate
-    // selections (ADR-0065): each keeps its check when the other changes.
+    // One input selection: audio, MIDI or a rack Out (ADR-0074).
     std::vector<int> current;
     std::string midiDevice;
     if (tr && tr->record.input)
@@ -587,21 +573,18 @@ void Shell::openInputMenu(const model::Id& track, const ui::Rect& anchor) {
         args["track"] = track.str();
         commit("track.set", std::move(args), {});
     };
-    // Each selection can be taken off alone, back to the channel's blank
-    // input: hardware audio, the MIDI device (and a rack's Out, below).
-    auto none = [&pick](const char* label, const char* shortcut, const char* field, bool checked) {
-        ui::MenuItem m;
-        m.label = label;
-        m.shortcut = shortcut;
-        m.checked = checked;
-        m.run = [pick, field] {
-            json::Value args = json::Value::object();
-            args[field] = json::Value();  // null: takes it off, the others stay
-            pick(std::move(args));
-        };
-        return m;
-    };
     std::vector<ui::MenuItem> items;
+    ui::MenuItem none;
+    none.label = "No input";
+    none.checked = tr && !tr->record.input && !tr->record.midiInput;
+    none.run = [pick] {
+        auto args = json::Value::object();
+        for (const char* field : {"record_input", "record_midi", "record_rack"})
+            args[field] = json::Value();
+        pick(std::move(args));
+    };
+    items.push_back(std::move(none));
+    items.push_back({"", "", {}, true, true});
     const json::Value* running = list.find("running");
     if (!running || !running->asBool()) {
         // The device only reports its ports while the engine holds it open
@@ -609,14 +592,9 @@ void Shell::openInputMenu(const model::Id& track, const ui::Rect& anchor) {
         // is chosen can still be taken off.
         items.push_back(
             {"engine stopped \u2014 start the engine to list its inputs", "", {}, false});
-        if (!current.empty()) items.push_back(none("no audio input", "in", "record_input", false));
-        if (!midiDevice.empty())
-            items.push_back(none("no MIDI input", "midi", "record_midi", false));
     } else {
         const json::Value* audio = list.find("audio");
         const std::size_t count = audio && audio->isArray() ? audio->size() : 0;
-        if (count || !current.empty())
-            items.push_back(none("no audio input", "in", "record_input", current.empty()));
         for (std::size_t i = 0; i < count; ++i) {
             const json::Value& e = audio->at(i);
             const json::Value* c = e.find("channel");
@@ -668,7 +646,6 @@ void Shell::openInputMenu(const model::Id& track, const ui::Rect& anchor) {
         const std::size_t devices = midi && midi->isArray() ? midi->size() : 0;
         if (devices || !midiDevice.empty()) {
             items.push_back({"", "", {}, true, true});  // separator
-            items.push_back(none("no MIDI input", "midi", "record_midi", midiDevice.empty()));
             ui::MenuItem any;
             any.label = "any MIDI device";
             any.shortcut = "midi";
@@ -695,7 +672,7 @@ void Shell::openInputMenu(const model::Id& track, const ui::Rect& anchor) {
                 items.push_back(std::move(m));
             }
         }
-        if (items.empty())
+        if (count == 0 && devices == 0)
             items.push_back({"the device reports no inputs", "", {}, false, false, false});
     }
     // Racks' Out modules feed channels as an input does (ADR-0062), listed
@@ -725,8 +702,6 @@ void Shell::openInputMenu(const model::Id& track, const ui::Rect& anchor) {
         std::sort(racks.begin(), racks.end(),
                   [](const ui::MenuItem& a, const ui::MenuItem& b) { return a.label < b.label; });
         if (!items.empty()) items.push_back({"", "", {}, true, true});
-        if (!racks.empty() || currentOut)
-            items.push_back(none("no rack input", "rack", "record_rack", !currentOut));
         for (auto& m : racks) items.push_back(std::move(m));
         const actions::Action* add = actions_ ? actions_->registry().find("ui.rack.add") : nullptr;
         items.push_back({"New rack on this channel", "",

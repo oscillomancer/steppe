@@ -284,14 +284,15 @@ rendered).
 Folder/master sends are the tracks' `parent_send`, not routes. Record inputs
 are routes from `hw_input`/`midi_input`, or from a rack's Out module,
 referenced by `track.record.input` for audio and `track.record.midi_input`
-for MIDI. Hardware audio and MIDI replace each other, as before; a rack's
-Out is the only audio input that keeps a MIDI input beside it. A MIDI-only
-channel keeps `record.input` as an alias of its `midi_input`, and a MIDI
-`record.input` must be that alias. Old projects with MIDI only in
-`record.input` still load and play it without migration. A channel with a
-rack Out and a MIDI input records MIDI; without the MIDI input it records
-the Out's audio. To record both in one pass, arm a second channel whose
-`record.input` is a route from the same Out (ADR-0065).
+for MIDI. A track has one input: hardware audio, hardware MIDI or a rack Out
+(ADR-0074). `track.set` of one kind replaces the others. A MIDI-only channel
+may keep `record.input` as an alias of the same `midi_input` route; two distinct
+input references fail with `model.invariant` at the record input path and an
+actionable hint; conflicting command arguments use `track.record_input`.
+A rack-fed channel records audio; incoming MIDI sends do not change that
+recording choice. To play and record a keyboard alongside it,
+choose MIDI on a separate channel and send it into the rack's Notes module;
+arm that MIDI channel to record notes and the rack channel to record audio.
 A non-null `midi` makes a route MIDI-only (ADR-0067). Sources are channel
 strips or rack Note Out modules; destinations are channel strips, rack Notes
 modules or named hardware MIDI outputs (`to.midi_device`, ADR-0072). Busses, masters, keys and In modules are refused (`route.endpoint`).
@@ -321,7 +322,7 @@ returns MIDI endpoints; its default `audio` mode excludes MIDI sends.
 Hardware output routes use `route.add/set {to_midi: name, midi: {}}`; they have
 no destination track/fx/module and cannot introduce a graph cycle. Port names
 match case-insensitively at engine preparation. Missing ports warn; routes
-still save/reopen canonically in schema 2.10. Per-port machine settings are
+still save/reopen canonically in schema 2.11. Per-port machine settings are
 separate app preferences. `route.list` includes `from_midi` and `to_midi`;
 `route.matrix {mode: "hardware_midi"}` includes physical endpoints.
 Cycles are rejected at edit time (`route.cycle`, naming the cycle).
@@ -534,7 +535,7 @@ routes: sd_1 tr_2 → tr_6 ch 1/2→3/4 pre-fader −6 dB (sidechain)
 markers: mk_1 "Verse" bar 1 · regions: rg_1 "Chorus" bars 9–17
 ```
 
-## 5. Project file (`supple.project/2.10`)
+## 5. Project file (`supple.project/2.11`)
 
 ### 5.1 Shape
 
@@ -1113,7 +1114,7 @@ VCAs.
 
 ### MIDI sends (schema 2.10, ADR-0067)
 
-Writers emit `supple.project/2.10`. Notes modules add optional `source_off`
+The 2.10 change added optional Notes `source_off`
 (default false) and `source_sends` (default true); non-null route `midi`
 admits channel sources and Notes module destinations. Existing 1.x and 2.x
 files retain their meaning: absent `source_off` uses the existing Home/track
@@ -1142,22 +1143,21 @@ warnings and pans with its own law. New MIDI bindings do not move its
 controls; builds without the new envelope targets refuse projects using
 those targets. Existing files still load in this build.
 
-### Independent audio and MIDI inputs (schema 2.8)
+### One input per track (schema 2.11, ADR-0074)
 
-The 2.8 change added the optional `record.midi_input`, a route from a MIDI
-device into the same channel. Existing 1.x and 2.x files
-remain readable: without `midi_input` the legacy MIDI `record.input` is
-used. Both references are validated, copied and remapped like other route
-IDs.
+Schema 2.11 makes hardware audio, MIDI and rack inputs mutually exclusive.
+Older projects with distinct `record.input` and `record.midi_input` keep the
+rack input if present, otherwise MIDI when the main `chain` is nonempty,
+otherwise audio. The saved model has no note-input capability metadata; a
+nonempty main chain is the agreed migration signal for an instrument. A
+`project.input_conflict` load warning names the track, retained input kind
+and dropped route. The dropped route, its envelopes and automation items are
+removed. A MIDI-only alias is one input and loads unchanged. Current files
+with conflicting inputs fail validation rather than being repaired.
 
-Loading a 2.8 or older file repairs one state that earlier builds wrote:
-a rack's home channel whose `record.input` is a MIDI route (and has no
-`midi_input`), whose rack has exactly one Out module with no route. The
-MIDI route becomes `midi_input` and a new route from that Out becomes
-`record.input`, with a `project.rack_input_repaired` warning naming the
-channel. When the repaired project would not validate, the file loads
-unchanged with `project.rack_input_unrepaired`; choose the Out as the
-channel's input again.
+The 2.8–2.10 independent-input behavior (ADR-0065), including repair of a
+keyboard selection into a rack-plus-keyboard pair, is superseded. A legacy
+MIDI-only input remains selected; the loader does not recreate a second input.
 
 ### Modular racks (schema 2.7, ADR-0062)
 

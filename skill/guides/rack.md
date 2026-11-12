@@ -649,13 +649,12 @@ A send into an In carries the tap at the route's level and pan, unencoded,
 with the console on or off. A following send pans with its strip's mode and
 law: under the default 0 dB law a centred send is at unity.
 
-A rack channel can keep its audio Out and a keyboard input together:
-`track.set {track: "tr_1", record_midi: "*", armed: true, monitor: "on"}`.
-Its default Notes source follows that channel. Selecting MIDI keeps the rack
-Out, and selecting the rack keeps MIDI (on other channels hardware audio and
-MIDI replace each other). With a MIDI input it records MIDI; without one,
-the rack Out's audio. To record both in one pass, arm a second channel with
-`record_rack` set to the same Out. Arming or changing
+A channel has one input: hardware audio, MIDI or rack Out. Selecting one
+with `track.set` replaces the others; `rack.add` selects its new Out.
+To play the rack from a keyboard, select `record_midi` on a separate channel,
+arm and monitor it, then `route.add {from: "tr_2", to: "mo_2", midi: {}}`
+into the rack's Notes. Arm the MIDI channel to record notes and the rack
+channel to record its Out audio. Arming or changing
 monitoring mid-song leaves timeline notes sounding. To clear a Notes
 module's own settings use `module.set {module: "mo_2", device: null,
 source: null}`; `device: ""` listens to every input, like `"*"`.
@@ -676,4 +675,4 @@ track source while keeping its device and explicit MIDI sends. Null restores
 Home. Note Out's MIDI channel knob (`channel`) selects a MIDI channel, not a
 track. The routing window's MIDI mode exposes both Notes and Note Out modules.
 Frozen channels keep sending timeline MIDI at both taps; the frozen audio
-print produces no MIDI. MIDI overdub/replace records delivered sends.
+print produces no MIDI. MIDI overdub/replace records delivered sends when no audio input is selected.

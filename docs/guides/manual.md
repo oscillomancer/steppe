@@ -363,7 +363,8 @@ its destination in the MIDI routing matrix.
 Hardware MIDI routing is the routing window's third tab, **Hardware MIDI**.
 Inputs and channels/Note Outs are rows; channels and device outputs are columns.
 Double-click to connect, select and Remove to disconnect. Connecting an input
-sets the channel's existing MIDI input; a channel has one such input assignment.
+selects the channel's MIDI input, replacing hardware audio or a rack Out;
+a channel has one input at a time.
 Route an input through a channel to reach a device output. Taps, mute and MIDI
 channel controls work as in the MIDI tab. Device connections save by name and
 warn if missing on reopen.
@@ -552,21 +553,19 @@ the parameter, and drag it up or down to change the amount. Only CLAP
 plug-ins take modulation, third-party ones too, when their parameters accept
 it; a VST3 plug-in's list says so.
 
-Selecting a MIDI input on the rack's channel keeps its audio Out connected:
-the channel's input menu checks its audio input (an input, a pair or a
-rack's Out) and its MIDI input (**no MIDI input**, any device or one)
-separately, and its input button shows both, such as **Bells + Keystation**.
-**no audio input** and **no rack input** take off a hardware input or a
-rack's Out the same way, so a channel's input can go back to empty.
-Arm the channel and turn monitoring On to play it from the keyboard (Auto
-listens while stopped or recording). A new rack channel starts with the
-monitor mode set in Preferences, like any new channel. Arming or changing
-monitoring while the song plays keeps the rack's notes from the timeline
-sounding; notes you hold on the keyboard end when the keyboard stops being
-heard. On other channels a hardware input and a MIDI input still replace
-each other. A rack channel with a keyboard input records the notes you
-play; without one it records the rack's sound as a WAV take. To record
-both at once, arm a second channel whose input is the rack's Out.
+A track has one input: audio, MIDI or rack. Choosing one replaces the previous
+input. The input menu starts with **No input**, which clears any selection;
+audio inputs, MIDI devices and rack Outs follow in separate sections.
+
+To play a rack from a keyboard, select the keyboard on another channel,
+arm it and turn monitoring On (Auto listens while stopped or recording).
+In the routing window's MIDI tab, send that channel to the rack's Notes
+module. Keep the rack's Out selected on its audio channel. Arm the MIDI
+channel to record notes; arm the rack channel to record the sound as WAV;
+arm both to record both in the same pass. A new channel starts with the
+monitor mode set in Preferences. Arming or changing monitoring while the
+song plays keeps timeline notes sounding; held keyboard notes end when
+that keyboard stops being heard.
 Deleting a rack's channel deletes the rack too, unless another channel
 still hears it (its input is the rack's Out, or a Note Out plays into it):
 the rack then moves to that channel and keeps its name.
@@ -574,10 +573,9 @@ the rack then moves to that channel and keeps its name.
 to every MIDI input, like `"*"`), and `source: null` returns Notes to its
 rack's home channel.
 
-Projects saved by earlier builds after choosing a keyboard on a rack's
-channel had lost the rack's connection to its channel. Opening one
-reconnects it when the rack has a single Out, and says so in a warning;
-otherwise choose the rack's Out in the channel's input menu again.
+Older files with multiple inputs keep the rack input first; otherwise MIDI
+when the track has a main FX chain, otherwise audio. A load warning names
+each affected track and the dropped input. MIDI-only selections stay MIDI.
 
 Your own modules live in the library folder, and the project you save
 keeps a copy of each one it uses beside it (in `modules`), as it keeps its
@@ -764,7 +762,8 @@ recordings and other session edits are lost when the process exits.
 MIDI sends, including a rack's Note Out routes, can be recorded by their destination channel. Arm
 it in MIDI replace or MIDI overdub mode, then record; loop and punch apply
 as for device MIDI. The channel needs no instrument or device input, and a
-selected MIDI device can record alongside the rack's notes.
+selected MIDI device can record alongside the rack's notes. A selected audio
+or rack Out input records audio instead of those incoming MIDI sends.
 
 An armed channel whose input is a rack Out records stereo audio through its
 input FX, before its own items, inserts and fader. It uses ordinary audio

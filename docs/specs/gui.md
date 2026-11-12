@@ -1027,7 +1027,8 @@ shared input assignment. Removing only part of a wildcard assignment refuses
 with a status message; select every cell (or its column) to clear it. On a
 machine with one input, selecting its sole wildcard cell is the whole assignment.
 Replacing an input reports "replaces <old input>" in the status line.
-One MIDI input assignment per channel is retained. Hardware input
+A channel has one input of any kind; choosing a hardware MIDI cell replaces
+its hardware audio or rack Out and reports that replacement. Hardware input
 to output cells are blocked; route through a channel. Missing ports named in
 projects/preferences remain visible with warnings in port status. Hardware input
 and output headers use teal socket marks.
@@ -1526,22 +1527,15 @@ a new channel). It follows rack.md §8.
   ("<rack> » <Out>", with the home channel's colour) after the device's
   inputs, and New rack on this channel; picking one is `track.set
   {record_rack}`, and the strip's input button names it the same way.
-  The menu holds two selections, each with its own check (ADR-0065): the
-  audio input (`record.input`: a channel, a stereo pair or a rack's Out)
-  and the MIDI input (`record.midi_input`, or a legacy MIDI-only
-  `record.input`: "no MIDI input", which is `track.set {record_midi:
-  null}`, "any MIDI device" or a device). "no audio input" leads the
-  device's inputs (`record_input: null`, checked without hardware audio)
-  and "no rack input" the racks' Outs (`record_rack: null`, listed when
-  there is a rack); each takes off only its own kind, so the three
-  together return the channel to its blank input. While the engine is
-  stopped, the device's list is not shown, but "no audio input" and "no
-  MIDI input" are, when there is one to take off. On a rack's channel picking one
-  keeps the other, so it hears the rack and plays from the keyboard;
-  elsewhere hardware audio and a MIDI device replace each other. The input
-  button (TCP and mixer) names both, "<audio> + <MIDI>": a rack with one
-  Out by its label alone ("Bells + Keystation"), any device as "midi"; MIDI
-  alone names the device ("midi *" for any). A
+  The menu has one **No input** item at the top in its own section, followed
+  by hardware audio, MIDI devices and rack Outs in separate sections.
+  Choosing any input replaces the other kinds (ADR-0074); No input sends
+  all three clear fields in one `track.set` edit. Only the selected input
+  is checked. While the engine is stopped, No input and rack choices remain
+  available, with a disabled notice instead of device ports. The TCP and
+  mixer input buttons name the one selected input. To play a rack with a
+  keyboard, choose the keyboard on another channel and send it to Notes.
+  A
   channel's right-click menu offers Show rack (when it has one) and Add rack
   (Add another rack).
 

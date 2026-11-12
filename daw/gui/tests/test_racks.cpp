@@ -1596,15 +1596,16 @@ TEST_CASE("rack window: a Notes module's menu picks its MIDI input and the track
     CHECK(input->shortcut == "none");
     CHECK(plays->shortcut == "home");
     CHECK(play() < 1e-4f);  // nothing selected anywhere: silent
-    // The channel's own MIDI input, armed and monitoring: the keyboard plays
-    // the rack, which still sounds on the channel (ADR-0065).
+    // A separate MIDI channel sends to Notes; the rack keeps its Out input.
+    f.exec("route.add",
+           R"({"from":")" + part.str() + R"(","to":")" + notes.str() + R"(","midi":{}})");
     f.exec("track.set",
-           R"({"track":")" + home.str() + R"(","record_midi":"Keys","armed":true,"monitor":"on"})");
+           R"({"track":")" + part.str() + R"(","record_midi":"Keys","armed":true,"monitor":"on"})");
     f.frame();
     CHECK(play() > 0.01f);
     REQUIRE(f.app->head().tracks.find(home)->record.input);
     // Unarmed, the channel's input is not heard; the module's own device is.
-    f.exec("track.set", R"({"track":")" + home.str() + R"(","armed":false})");
+    f.exec("track.set", R"({"track":")" + part.str() + R"(","armed":false})");
     f.frame();
     CHECK(play() < 1e-4f);
     REQUIRE(openMenu());

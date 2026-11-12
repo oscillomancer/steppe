@@ -93,7 +93,7 @@ struct RecordSettings {
     std::optional<Id> input;  // audio input, or a legacy MIDI-only input
     Monitor monitor = Monitor::Off;
     RecordMode mode = RecordMode::Input;
-    std::optional<Id> midiInput;  // independent route from midi_input
+    std::optional<Id> midiInput;  // sole MIDI input; input may alias this route
     bool operator==(const RecordSettings&) const = default;
 };
 

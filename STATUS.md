@@ -353,14 +353,14 @@ instructions are in `docs/guides/installing.md`.
   filtering/remapping, fan-out, compensation and exact RT/offline timing.
   Armed MIDI destinations record these routes, with or without an instrument,
   alongside device MIDI, using the recorder's loop, punch and overdub rules.
-  A rack channel keeps its Out and a keyboard input together (project
-  schema 2.8, legacy MIDI inputs still load; projects that lost the Out to
-  a keyboard selection are reconnected on load when unambiguous). Elsewhere
-  hardware audio and MIDI still replace each other. Notes on the home track
-  follows its armed monitoring and MIDI channel map in both executors;
-  arming, monitor or device changes end only the keyboard's notes, also when
-  the rack enters the live region mid-song. A rack channel with a keyboard
-  records MIDI; a second channel with the rack's Out as input records its
+  A channel has one input: hardware audio, MIDI or rack Out (schema 2.11,
+  ADR-0074). Choosing one replaces the others, including `rack.add`; the input
+  menu has one No input choice. Feed Notes with a MIDI send from a separate
+  keyboard channel, arming that channel for MIDI and the rack channel for
+  audio. Older conflicting inputs retain rack first, else MIDI with a main
+  FX chain, else audio, with a load warning naming the track. MIDI-only
+  aliases remain readable. Notes monitoring and live-region handoff preserve
+  held timeline notes. Separate armed channels can record notes and rack
   audio in the same pass. Removing a rack's channel moves the rack home to
   a channel that still hears its Out or Note Out, if any. The GUI's input
   menu checks both selections and its button names both. Notes

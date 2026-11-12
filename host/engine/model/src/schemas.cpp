@@ -1344,7 +1344,7 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
         auto migrated = migrateProject1(std::move(doc), warnings);
         if (!migrated) return std::move(migrated).error();
         doc = std::move(*migrated);
-    } else if (version->minor > 10 && warnings)
+    } else if (version->minor > 11 && warnings)
         warnings->push_back(
             {"project.newer_minor", "loading a newer project minor version", "/schema"});
     // Before 2.10 a Notes module heard only its source track's own MIDI, never
@@ -1649,56 +1649,44 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
                 break;
             }
     }
-    // Before independent inputs (ADR-0065), choosing a keyboard on a rack's
-    // home channel turned its Out route into the MIDI one, silencing the
-    // rack. Where that is unambiguous (the rack's one Out has no route), the
-    // MIDI route moves to midi_input and the Out feeds its channel again.
-    struct Repair {
-        Id track, midi, out;
-    };
-    std::vector<Repair> repairs;
-    if (version->major == 1 || version->minor <= 8)
-        for (const auto& rk : s.racks) {
-            const Track* home = s.tracks.find(rk.value->track);
-            if (!home || home->type != StripType::Channel || home->record.midiInput ||
-                !home->record.input)
+    // Schema 2.11 restores one input per track (ADR-0074). A MIDI-only
+    // record.input alias is one input; distinct references must be resolved.
+    if (version->major == 1 || version->minor < 11) {
+        EditTxn migrated(s, 0);
+        bool changed = false;
+        for (const auto& entry : s.tracks) {
+            const auto& track = *entry.value;
+            if (!track.record.input || !track.record.midiInput ||
+                track.record.input == track.record.midiInput)
                 continue;
-            const Route* midiRoute = s.routes.find(*home->record.input);
-            if (!midiRoute || !midiRoute->from.midiDevice || midiRoute->to.track != rk.value->track)
-                continue;
-            std::vector<Id> outs;
-            for (const auto& m : s.modules)
-                if (m.value->rack == rk.id && m.value->type == kOutModule) outs.push_back(m.id);
-            if (outs.size() != 1) continue;
-            const bool routed = std::any_of(s.routes.begin(), s.routes.end(), [&](const auto& r) {
-                return r.value->from.module == outs.front();
+            const auto* audio = s.routes.find(*track.record.input);
+            const auto* midi = s.routes.find(*track.record.midiInput);
+            if (!audio || !midi) continue;  // retain reference errors for validation
+            const bool keepMidi = !audio->from.module && !track.chain.empty();
+            const Id keep = keepMidi ? *track.record.midiInput : *track.record.input;
+            const Id drop = keepMidi ? *track.record.input : *track.record.midiInput;
+            migrated.modify<Track>(entry.id, [&](Track& t) {
+                t.record.input = keep;
+                t.record.midiInput = keepMidi ? std::optional<Id>(keep) : std::nullopt;
             });
-            if (!routed) repairs.push_back({rk.value->track, *home->record.input, outs.front()});
+            for (const auto& env : s.envelopes)
+                if (env.value->target.object == drop) {
+                    for (const auto& item : s.autoItems)
+                        if (item.value->envelope == env.id)
+                            migrated.remove<AutomationItem>(item.id);
+                    migrated.remove<Envelope>(env.id);
+                }
+            migrated.remove<Route>(drop);
+            warn("project.input_conflict",
+                 "track " + track.name + " (" + entry.id.str() + "): kept " +
+                     (keepMidi             ? "MIDI input"
+                      : audio->from.module ? "rack input"
+                                           : "audio input") +
+                     "; dropped input " + drop.str(),
+                 "/tracks/" + entry.id.str() + "/record");
+            changed = true;
         }
-    if (!repairs.empty()) {
-        EditTxn fixed(s, 0);
-        for (const Repair& r : repairs) {
-            Route route;
-            route.from.module = r.out;
-            route.to.track = r.track;
-            const Id made = fixed.create(route);
-            fixed.modify<Track>(r.track, [&](Track& t) {
-                t.record.midiInput = r.midi;
-                t.record.input = made;
-            });
-        }
-        if (auto repaired = fixed.commit()) {
-            for (const Repair& r : repairs)
-                warn("project.rack_input_repaired",
-                     "reconnected " + r.out.str() + " as the channel's input; its MIDI input " +
-                         r.midi.str() + " stays beside it",
-                     "/tracks/" + r.track.str() + "/record");
-            return repaired;
-        }
-        for (const Repair& r : repairs)
-            warn("project.rack_input_unrepaired",
-                 r.out.str() + " has no route to its channel; choose it as the input again",
-                 "/tracks/" + r.track.str() + "/record");
+        if (changed) return migrated.commit();
     }
     // Derive the time map and validate everything through a no-op transaction.
     EditTxn txn(s, 0);

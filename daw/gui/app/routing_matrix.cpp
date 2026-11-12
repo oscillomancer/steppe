@@ -989,10 +989,20 @@ std::string RoutingMatrix::inputReplacement(const MatrixModel::Source& source,
     const auto id = model::Id::parse(dest.id);
     if (!id) return {};
     const auto session = app_.view();
-    const auto* input = model::midiInputRoute(session, *id);
-    if (!input || !input->from.midiDevice || *input->from.midiDevice == source.name) return {};
-    return dest.name + ": replaces " +
-           (input->from.midiDevice->empty() ? "*" : *input->from.midiDevice);
+    const auto* track = session.tracks.find(*id);
+    if (!track) return {};
+    const auto selected = track->record.input ? track->record.input : track->record.midiInput;
+    const auto* input = selected ? session.routes.find(*selected) : nullptr;
+    if (!input) return {};
+    std::string previous;
+    if (input->from.midiDevice) {
+        if (*input->from.midiDevice == source.name) return {};
+        previous = input->from.midiDevice->empty() ? "*" : *input->from.midiDevice;
+    } else if (input->from.module)
+        previous = model::moduleLabel(session, *input->from.module);
+    else if (input->from.hwChannels)
+        previous = "audio input";
+    return previous.empty() ? "" : dest.name + ": replaces " + previous;
 }
 Status RoutingMatrix::doubleClickCell(std::size_t row, std::size_t col) {
     if (row >= model_.sources.size() || col >= model_.destinations.size())
