@@ -1008,7 +1008,7 @@ A rack's Out and a channel's hardware or MIDI input are record inputs;
 Audio mode leaves those and all MIDI sends out of its send count.
 
 MIDI mode lists channels in hierarchy order, then their racks' Note Out
-modules indented below them. Columns are channels, each followed by its
+modules indented below them with teal rack markers. Columns are channels, each followed by its
 racks' Notes modules. Busses, masters, plug-in keys and In modules are absent.
 MIDI sends use the `midi-send` theme token (teal), distinct from strip send
 colours. The usual selection, double-click and Add/Remove gestures apply. The controls show pre-FX, post-FX

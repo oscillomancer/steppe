@@ -155,7 +155,10 @@ class Grid : public ui::Node {
         const float gx = b.x + kLabelW - scrollX_, gy = b.y + kHeaderH - scrollY_;
         const ui::Rect cells{b.x + kLabelW, b.y + kHeaderH, b.w - kLabelW, b.h - kHeaderH};
         auto typeColor = [&](const std::string& type) {
-            return t.color(type == "master" ? "master" : type == "buss" ? "buss" : "channel");
+            return t.color(type == "note_out" ? "track-teal"
+                           : type == "master" ? "master"
+                           : type == "buss"   ? "buss"
+                                              : "channel");
         };
         // Column headers: rotated names.
         c.save();
