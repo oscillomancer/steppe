@@ -344,6 +344,10 @@ and nothing else (`route.rack_send` refuses a tap, pan, mono, polarity or
 channel map, a `pan` envelope and other learned controls). It is never
 encoded: the destination adds it after its decode. It follows the mute and
 solo of its rack's home channel. An Out may feed its channel and send.
+A buss or master that takes a rack send cannot become a channel
+(`track.strip_type`, naming the send to remove first), and `route.set`
+does not turn a channel's input route into a send (`route.in_use`; add one
+with `route.add`).
 
 ### 1.9 Envelopes and automation items
 

@@ -2903,6 +2903,19 @@ TEST_CASE("rack sends: commands send an Out to a buss, refuse the rest, and reop
     const auto send = run(bus, "route.add", json::writeCompact(args))["id"].asString();
     // A channel takes the Out as its input, not as a send.
     refused("route.add", from("tr_3"), "route.strip_type", "record_rack");
+    // A buss taking a rack send stays a summing strip: the refusal names the send.
+    refused("track.set", j(R"({"track":"tr_2","type":"channel"})"), "track.strip_type",
+            "remove rack send " + send);
+    // The channel's input route is not turned into a send.
+    const auto input = app->head().tracks.find(*model::Id::parse("tr_1"))->record.input;
+    REQUIRE(input);
+    auto convert = json::Value::object();
+    convert["route"] = input->str();
+    convert["to"] = "tr_2";
+    refused("route.set", convert, "route.in_use", "keep " + input->str() + " as tr_1's input");
+    convert.asObject().erase("to");
+    convert["volume_db"] = -6.0;
+    refused("route.set", convert, "route.in_use", "route.add");
     refused("route.add", from(in.c_str()), "route.endpoint");
     for (const char* key : {"pan", "tap", "mono", "phase_invert", "channels"}) {
         CAPTURE(key);

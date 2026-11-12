@@ -682,7 +682,17 @@ Result<model::Route> buildRoute(const RouteArgs& a, const model::Session& s, Eng
     }
     if (!r.midi && r.from.module && !r.to.midiDevice) {
         // A rack send (ADR-0075): a rack's Out into a buss or master, after
-        // its decode, at the route's level and mute.
+        // its decode, at the route's level and mute. A channel's input route
+        // stays its input: route.set does not turn it into a send.
+        if (ignored)
+            for (const auto& t : s.tracks)
+                if (t.value->record.input == *ignored)
+                    return Error("route.in_use",
+                                 ignored->str() + " is " + t.id.str() + "'s input, not a send",
+                                 a.to ? "/to" : "/route",
+                                 "keep " + ignored->str() + " as " + t.id.str() +
+                                     "'s input; add a rack send with route.add {from: {module: \"" +
+                                     r.from.module->str() + "\"}, to}");
         const auto* module = s.modules.find(*r.from.module);
         if (module->type != model::kOutModule)
             return Error("route.endpoint", r.from.module->str() + " is not an Out module", "/from",
@@ -926,7 +936,9 @@ void registerExtraCommands(cmd::Registry& registry) {
                     {"route.midi", "audio controls do not apply to MIDI routes",
                      "use mute and MIDI channel routing"},
                     {"route.rack_send", "a rack send has level and mute only",
-                     "pan, polarity and channel routing belong in the rack or on the buss"}};
+                     "pan, polarity and channel routing belong in the rack or on the buss"},
+                    {"route.in_use", "sd_1 is tr_1's input, not a send",
+                     "keep sd_1 as tr_1's input; add a rack send with route.add"}};
         c.run = [](const RouteSetArgs& a, Context& ctx) -> Result<Empty> {
             const auto s = app(ctx).view();
             auto id = require<model::Route>(s, a.route, "/route");

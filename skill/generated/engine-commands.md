@@ -14109,6 +14109,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 - `route.endpoint`: MIDI sends need channel or note-module endpoints Hint: send channel/Note Out MIDI to a channel or Notes module
 - `route.midi`: audio controls do not apply to MIDI routes Hint: use mute and MIDI channel routing
 - `route.rack_send`: a rack send has level and mute only Hint: pan, polarity and channel routing belong in the rack or on the buss
+- `route.in_use`: sd_1 is tr_1's input, not a send Hint: keep sd_1 as tr_1's input; add a rack send with route.add
 
 ### Examples
 

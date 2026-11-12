@@ -1934,6 +1934,18 @@ void registerEngineCommands(cmd::Registry& registry) {
                 if (*id == model::kMaster)
                     return Error("track.strip_type", "tr_0 cannot be retyped", "/type",
                                  "keep the main master; add another strip instead");
+                // A channel cannot take a rack send (ADR-0075): name the route.
+                if (*a.type == model::StripType::Channel)
+                    for (const auto& r : s.routes)
+                        if (r.value->to.track == *id && model::rackSendHome(s, *r.value))
+                            return Error(
+                                "track.strip_type",
+                                "rack send " + r.id.str() + " reaches this " +
+                                    std::string(model::stripTypeName(s.tracks.find(*id)->type)) +
+                                    "; a channel cannot take one",
+                                "/type",
+                                "remove rack send " + r.id.str() +
+                                    " (route.remove) before retyping");
                 model::EditTxn& txn = app.txn();
                 const auto& old = *s.tracks.find(*id);
                 if (*a.type == model::StripType::Master) {
