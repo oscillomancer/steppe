@@ -1742,6 +1742,36 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
                 break;
             }
     }
+    auto inputText = [&](Id id) {
+        const auto* r = s.routes.find(id);
+        std::string text = "input";
+        if (r && r->from.midiDevice)
+            text = "MIDI input " + (r->from.midiDevice->empty() ? "*" : *r->from.midiDevice);
+        else if (r && r->from.module)
+            text = "rack input " + r->from.module->str();
+        else if (r && r->from.hwChannels) {
+            text = "audio input";
+            for (int channel : *r->from.hwChannels) text += " " + std::to_string(channel);
+        }
+        return text + " (" + id.str() + ")";
+    };
+    auto removeInput = [&](EditTxn& tx, Id id) {
+        for (const auto& env : s.envelopes)
+            if (env.value->target.object == id) {
+                for (const auto& item : s.autoItems)
+                    if (item.value->envelope == env.id) tx.remove<AutomationItem>(item.id);
+                tx.remove<Envelope>(env.id);
+            }
+        tx.remove<Route>(id);
+    };
+    auto inputWarning = [&](Id track, const std::string& kept, const std::string& dropped) {
+        const auto* t = s.tracks.find(track);
+        warn("project.input_conflict",
+             "track " + (t ? t->name : "") + " (" + track.str() + "): kept " + kept + "; dropped " +
+                 dropped +
+                 ". Use another channel for the dropped input; send MIDI to the rack's Notes.",
+             "/tracks/" + track.str() + "/record");
+    };
     // Schema 2.12 restores one input per track (ADR-0074). A MIDI-only
     // record.input alias is one input; distinct references must be resolved.
     if (version->major == 1 || version->minor < 12) {
@@ -1762,24 +1792,71 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
                 t.record.input = keep;
                 t.record.midiInput = keepMidi ? std::optional<Id>(keep) : std::nullopt;
             });
-            for (const auto& env : s.envelopes)
-                if (env.value->target.object == drop) {
-                    for (const auto& item : s.autoItems)
-                        if (item.value->envelope == env.id)
-                            migrated.remove<AutomationItem>(item.id);
-                    migrated.remove<Envelope>(env.id);
-                }
-            migrated.remove<Route>(drop);
-            warn("project.input_conflict",
-                 "track " + track.name + " (" + entry.id.str() + "): kept " +
-                     (keepMidi             ? "MIDI input"
-                      : audio->from.module ? "rack input"
-                                           : "audio input") +
-                     "; dropped input " + drop.str(),
-                 "/tracks/" + entry.id.str() + "/record");
+            const auto dropped = inputText(drop);
+            removeInput(migrated, drop);
+            inputWarning(entry.id,
+                         keepMidi             ? "MIDI input"
+                         : audio->from.module ? "rack input"
+                                              : "audio input",
+                         dropped);
             changed = true;
         }
-        if (changed) return migrated.commit();
+        if (changed) {
+            auto normalized = migrated.commit();
+            if (!normalized) return std::move(normalized).error();
+            s = std::move(*normalized);
+        }
+    }
+    // Before ADR-0065, selecting a keyboard could replace the rack Out's
+    // route. Keep the <=2.8 detector, but restore only the rack input so
+    // loading directly agrees with loading a 2.10 resave of that repair.
+    if (version->major == 1 || version->minor <= 8) {
+        struct Repair {
+            Id track, midi, out;
+        };
+        std::map<Id, std::vector<Repair>> candidates;
+        for (const auto& rk : s.racks) {
+            const auto* home = s.tracks.find(rk.value->track);
+            if (!home || home->type != StripType::Channel || home->record.midiInput ||
+                !home->record.input)
+                continue;
+            const auto* midi = s.routes.find(*home->record.input);
+            if (!midi || !midi->from.midiDevice || midi->to.track != rk.value->track) continue;
+            std::vector<Id> outs;
+            for (const auto& m : s.modules)
+                if (m.value->rack == rk.id && m.value->type == kOutModule) outs.push_back(m.id);
+            if (outs.size() != 1) continue;
+            const bool routed = std::any_of(s.routes.begin(), s.routes.end(), [&](const auto& r) {
+                return r.value->from.module == outs.front();
+            });
+            if (!routed)
+                candidates[rk.value->track].push_back(
+                    {rk.value->track, *home->record.input, outs.front()});
+        }
+        for (const auto& [track, repairs] : candidates) {
+            if (repairs.size() != 1) continue;
+            const auto& r = repairs.front();
+            const auto dropped = inputText(r.midi);
+            EditTxn tx(s, 0);
+            Route out;
+            out.from.module = r.out;
+            out.to.track = track;
+            const Id route = tx.create(out);
+            tx.modify<Track>(track, [&](auto& t) {
+                t.record.input = route;
+                t.record.midiInput.reset();
+            });
+            removeInput(tx, r.midi);
+            auto restored = tx.commit();
+            if (restored) {
+                s = std::move(*restored);
+                inputWarning(track, "rack input " + r.out.str(), dropped);
+            } else
+                warn("project.rack_input_unrepaired",
+                     "track " + track.str() + ": could not reconnect " + r.out.str() + "; kept " +
+                         dropped + ". Choose another rack Out or remove the feedback path.",
+                     "/tracks/" + track.str() + "/record");
+        }
     }
     // Derive the time map and validate everything through a no-op transaction.
     EditTxn txn(s, 0);

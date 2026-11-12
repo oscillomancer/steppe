@@ -545,6 +545,11 @@ TEST_CASE(
                 REQUIRE(warnings.size() == 1);
                 CHECK(warnings.front().code == "project.input_conflict");
                 CHECK(warnings.front().message.find("Voice") != std::string::npos);
+                CHECK(warnings.front().message.find(keepMidi ? "dropped audio input 1 2"
+                                                             : "dropped MIDI input Keyboard") !=
+                      std::string::npos);
+                CHECK(warnings.front().message.find("another channel") != std::string::npos);
+                CHECK(warnings.front().message.find("Notes") != std::string::npos);
                 CHECK(warnings.front().message.find(p.channel.str()) != std::string::npos);
                 const auto bytes = serializeProject(*loaded);
                 warnings.clear();

@@ -1128,13 +1128,20 @@ rack input if present, otherwise MIDI when the main `chain` is nonempty,
 otherwise audio. The saved model has no note-input capability metadata; a
 nonempty main chain is the agreed migration signal for an instrument. A
 `project.input_conflict` load warning names the track, retained input kind
-and dropped route. The dropped route, its envelopes and automation items are
+and dropped kind, device/channels and route, with recovery advice to use another
+channel and send MIDI to Notes. The dropped route, its envelopes and automation items are
 removed. A MIDI-only alias is one input and loads unchanged. Current files
 with conflicting inputs fail validation rather than being repaired.
 
 The 2.8–2.11 independent-input behavior (ADR-0065), including repair of a
 keyboard selection into a rack-plus-keyboard pair, is superseded. A legacy
-MIDI-only input remains selected; the loader does not recreate a second input.
+MIDI-only inputs otherwise remain selected. Loading a 2.8 or older file still
+detects the earlier lost-Out state: a rack's home channel has MIDI only in
+`record.input`, and its rack has exactly one unrouted Out. It reconnects that
+Out, removes the MIDI route and emits `project.input_conflict`, producing the
+same rack-only state as a 2.10 resave of the earlier repair. Ambiguous cases
+are left alone; if reconnection would be invalid (for example feedback), the
+MIDI input stays with `project.rack_input_unrepaired` recovery advice.
 
 ### Project timecode (schema 2.11, ADR-0071)
 

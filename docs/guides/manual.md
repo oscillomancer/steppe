@@ -632,7 +632,11 @@ rack's home channel.
 
 Older files with multiple inputs keep the rack input first; otherwise MIDI
 when the track has a main FX chain, otherwise audio. A load warning names
-each affected track and the dropped input. MIDI-only selections stay MIDI.
+each affected track and the dropped input, with recovery advice. Files from
+2.8 or earlier whose keyboard selection had disconnected an unambiguous rack
+Out reconnect that Out and drop the MIDI input, with the same warning. Other
+MIDI-only selections stay MIDI; ambiguous reconnections are left alone, and
+ones that would create feedback warn instead of making the file invalid.
 
 Your own modules live in the library folder, and the project you save
 keeps a copy of each one it uses beside it (in `modules`), as it keeps its

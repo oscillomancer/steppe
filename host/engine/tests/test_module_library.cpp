@@ -2120,18 +2120,47 @@ TEST_CASE("rack inputs: hardware audio and MIDI replace each other on a channel"
     }
 }
 
-TEST_CASE("rack inputs: old MIDI selection is not silently replaced by a rack") {
-    Fixture f;
-    f.run("rack.add");
-    f.run("track.set", R"({"track":"tr_1","record_midi":"*"})");
-    auto doc = model::projectToJson(f.app->head());
-    doc["schema"] = "supple.project/2.7";
-    doc["tracks"]["tr_1"]["record"].asObject().erase("midi_input");
-    std::vector<schema::Warning> warnings;
-    auto loaded = model::projectFromJson(doc, &warnings);
-    REQUIRE(loaded);
-    REQUIRE(model::midiInputRoute(*loaded, {model::Kind::Track, 1}));
-    CHECK(warnings.empty());
+TEST_CASE("rack inputs: pre-2.9 lost-Out repair agrees with a 2.10 resave") {
+    for (const char* format : {"supple.project/2.7", "supple.project/2.8"}) {
+        Fixture f;
+        f.run("project.set", R"({"console9":false})");
+        f.run("rack.add", R"({"name":"Legacy voice"})");
+        f.run("module.add", R"({"rack":"rk_1","type":"com.suppleaudio.rack.vco"})");
+        f.run("cable.add", R"({"from":"mo_2.sine","to":"mo_1.l"})");
+        const model::Id track{model::Kind::Track, 1};
+        auto old = model::projectToJson(f.app->head());
+        old["schema"] = format;
+        const auto midi = *f.app->head().tracks.find(track)->record.input;
+        old["routes"][midi.str()]["from"] = *json::parse(R"({"midi_device":"*"})");
+        old["routes"][midi.str()]["midi"] = *json::parse(R"({"from_channel":0,"to_channel":0})");
+        std::vector<schema::Warning> warnings;
+        auto direct = model::projectFromJson(old, &warnings);
+        REQUIRE_MESSAGE(direct, (direct ? "" : direct.error().toString()));
+        CHECK_FALSE(model::midiInputRoute(*direct, track));
+        CHECK_FALSE(direct->routes.contains(midi));
+        REQUIRE(warnings.size() == 1);
+        CHECK(warnings.front().code == "project.input_conflict");
+        CHECK(warnings.front().message.find("MIDI input *") != std::string::npos);
+        CHECK(warnings.front().message.find("Notes") != std::string::npos);
+        auto resaved = old;
+        resaved["schema"] = "supple.project/2.10";
+        model::Route out;
+        out.from.module = model::Id{model::Kind::Module, 1};
+        out.to.track = track;
+        const model::Id route{model::Kind::Route, f.app->head().next[model::Kind::Route]};
+        resaved["routes"][route.str()] = model::toJson(out);
+        resaved["project"]["next_ids"]["sd"] = static_cast<std::int64_t>(route.n + 1);
+        resaved["tracks"][track.str()]["record"]["input"] = route.str();
+        resaved["tracks"][track.str()]["record"]["midi_input"] = midi.str();
+        auto indirect = model::projectFromJson(resaved);
+        REQUIRE(indirect);
+        CHECK(model::serializeProject(*direct) == model::serializeProject(*indirect));
+        const auto expected = f.app->renderSession(f.app->head(), {.endSeconds = .05});
+        const auto actual = f.app->renderSession(*direct, {.endSeconds = .05});
+        REQUIRE(expected);
+        REQUIRE(actual);
+        CHECK(actual->audio.channels == expected->audio.channels);
+    }
 }
 
 TEST_CASE("rack inputs: a channel records the input it was switched to") {
@@ -2470,4 +2499,42 @@ TEST_CASE("rack inputs: explicit MIDI record modes record sends beside audio or 
             CHECK(f.app->head().media.size() == (isMidi ? 0 : 1));
             CHECK(f.app->head().midi.size() == midiBefore + (isMidi ? 1 : 0));
         }
+}
+
+TEST_CASE("rack inputs: lost-Out repair leaves ambiguous and cyclic reconnections valid") {
+    for (bool ambiguous : {false, true}) {
+        Fixture f;
+        f.run("rack.add");
+        f.run("module.add",
+              ambiguous ? R"({"rack":"rk_1","type":"out"})" : R"({"rack":"rk_1","type":"in"})");
+        const model::Id track{model::Kind::Track, 1};
+        const auto midi = *f.app->head().tracks.find(track)->record.input;
+        auto old = model::projectToJson(f.app->head());
+        old["schema"] = "supple.project/2.8";
+        old["routes"][midi.str()]["from"] = *json::parse(R"({"midi_device":"Keys"})");
+        old["routes"][midi.str()]["midi"] = *json::parse(R"({"from_channel":0,"to_channel":0})");
+        if (!ambiguous) {
+            model::Route feedback;
+            feedback.from.track = track;
+            feedback.to.module = model::Id{model::Kind::Module, 2};
+            const model::Id route{model::Kind::Route, f.app->head().next[model::Kind::Route]};
+            old["routes"][route.str()] = model::toJson(feedback);
+            old["project"]["next_ids"]["sd"] = static_cast<std::int64_t>(route.n + 1);
+        }
+        std::vector<schema::Warning> warnings;
+        auto loaded = model::projectFromJson(old, &warnings);
+        REQUIRE_MESSAGE(loaded, (loaded ? "" : loaded.error().toString()));
+        CHECK(model::midiInputRoute(*loaded, track));
+        CHECK(loaded->tracks.find(track)->record.input == midi);
+        if (ambiguous)
+            CHECK(warnings.empty());
+        else {
+            REQUIRE(warnings.size() == 1);
+            CHECK(warnings.front().code == "project.rack_input_unrepaired");
+        }
+        const auto bytes = model::serializeProject(*loaded);
+        auto reopened = model::parseProject(bytes);
+        REQUIRE(reopened);
+        CHECK(model::serializeProject(*reopened) == bytes);
+    }
 }
