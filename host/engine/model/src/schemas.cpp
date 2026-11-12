@@ -1825,7 +1825,21 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
             std::vector<Id> outs;
             for (const auto& m : s.modules)
                 if (m.value->rack == rk.id && m.value->type == kOutModule) outs.push_back(m.id);
-            if (outs.size() != 1) continue;
+            if (outs.size() != 1) {
+                const auto unrouted = std::count_if(outs.begin(), outs.end(), [&](Id out) {
+                    return std::none_of(s.routes.begin(), s.routes.end(),
+                                        [&](const auto& r) { return r.value->from.module == out; });
+                });
+                if (unrouted >= 2)
+                    warn("project.rack_input_unrepaired",
+                         "track " + home->name + " (" + rk.value->track.str() + "): rack " +
+                             rk.id.str() + " has multiple unrouted Outs; kept " +
+                             inputText(*home->record.input) +
+                             ". Choose the intended Out in the channel's input menu to reconnect "
+                             "the rack.",
+                         "/tracks/" + rk.value->track.str() + "/record");
+                continue;
+            }
             const bool routed = std::any_of(s.routes.begin(), s.routes.end(), [&](const auto& r) {
                 return r.value->from.module == outs.front();
             });

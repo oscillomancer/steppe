@@ -560,3 +560,49 @@ TEST_CASE(
             }
         }
 }
+
+TEST_CASE("track inputs: old files warn when multiple rack Outs are unrouted") {
+    for (int count : {2, 3}) {
+        Patch p = patch();
+        EditTxn tx(p.s, 2);
+        tx.modify<Track>(p.channel, [](auto& track) { track.name = "Ambiguous voice"; });
+        for (int i = 1; i < count; ++i) {
+            RackModule out;
+            out.rack = p.rack;
+            out.type = std::string(kOutModule);
+            tx.create(out);
+        }
+        auto base = tx.commit();
+        REQUIRE(base);
+        const auto input = *base->tracks.find(p.channel)->record.input;
+        auto midi = *base->routes.find(input);
+        midi.from = RouteEnd{};
+        midi.from.midiDevice = "Keyboard";
+        midi.midi = MidiRouting{};
+        auto doc = projectToJson(*base);
+        doc["routes"][input.str()] = toJson(midi);
+        for (const char* format : {"supple.project/2.7", "supple.project/2.8"}) {
+            doc["schema"] = format;
+            std::vector<schema::Warning> warnings;
+            auto loaded = projectFromJson(doc, &warnings);
+            REQUIRE_MESSAGE(loaded, (loaded ? "" : loaded.error().toString()));
+            CHECK(loaded->tracks.find(p.channel)->record.input == input);
+            REQUIRE(midiInputRoute(*loaded, p.channel));
+            CHECK(midiInputRoute(*loaded, p.channel)->from.midiDevice == "Keyboard");
+            CHECK(loaded->routes.size() == base->routes.size());
+            REQUIRE(warnings.size() == 1);
+            CHECK(warnings.front().code == "project.rack_input_unrepaired");
+            CHECK(warnings.front().path == "/tracks/" + p.channel.str() + "/record");
+            CHECK(warnings.front().message.find("Ambiguous voice") != std::string::npos);
+            CHECK(warnings.front().message.find("Keyboard") != std::string::npos);
+            CHECK(warnings.front().message.find("Choose") != std::string::npos);
+            CHECK(warnings.front().message.find("Out") != std::string::npos);
+            const auto saved = serializeProject(*loaded);
+            warnings.clear();
+            auto reopened = parseProject(saved, &warnings);
+            REQUIRE(reopened);
+            CHECK(warnings.empty());
+            CHECK(serializeProject(*reopened) == saved);
+        }
+    }
+}

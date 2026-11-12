@@ -27,8 +27,8 @@ routes take their envelopes and automation items with them. Warnings name the
 dropped kind/device and suggest another channel with a MIDI send to Notes.
 The <=2.8 lost-Out detector reconnects an unambiguous rack Out and drops the
 MIDI route, giving the same rack-only result as a 2.10 resave of the earlier
-repair. Ambiguous or invalid reconnections retain MIDI; invalid ones warn
-with recovery advice. No loader creates a rack-plus-keyboard pair.
+repair. Ambiguous or invalid reconnections retain MIDI. Multiple unrouted
+Outs and invalid reconnections warn with recovery advice. No loader creates a rack-plus-keyboard pair.
 
 Recording, monitoring, routing cells and agent edits use this same selection.
 Internal MIDI sends remain independent routes rather than extra hardware

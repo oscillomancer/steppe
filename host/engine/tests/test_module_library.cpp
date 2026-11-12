@@ -2526,11 +2526,11 @@ TEST_CASE("rack inputs: lost-Out repair leaves ambiguous and cyclic reconnection
         REQUIRE_MESSAGE(loaded, (loaded ? "" : loaded.error().toString()));
         CHECK(model::midiInputRoute(*loaded, track));
         CHECK(loaded->tracks.find(track)->record.input == midi);
-        if (ambiguous)
-            CHECK(warnings.empty());
-        else {
-            REQUIRE(warnings.size() == 1);
-            CHECK(warnings.front().code == "project.rack_input_unrepaired");
+        REQUIRE(warnings.size() == 1);
+        CHECK(warnings.front().code == "project.rack_input_unrepaired");
+        if (ambiguous) {
+            CHECK(warnings.front().message.find("Choose") != std::string::npos);
+            CHECK(warnings.front().message.find("Out") != std::string::npos);
         }
         const auto bytes = model::serializeProject(*loaded);
         auto reopened = model::parseProject(bytes);

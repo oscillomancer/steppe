@@ -1139,9 +1139,10 @@ MIDI-only inputs otherwise remain selected. Loading a 2.8 or older file still
 detects the earlier lost-Out state: a rack's home channel has MIDI only in
 `record.input`, and its rack has exactly one unrouted Out. It reconnects that
 Out, removes the MIDI route and emits `project.input_conflict`, producing the
-same rack-only state as a 2.10 resave of the earlier repair. Ambiguous cases
-are left alone; if reconnection would be invalid (for example feedback), the
-MIDI input stays with `project.rack_input_unrepaired` recovery advice.
+same rack-only state as a 2.10 resave of the earlier repair. With two or more
+unrouted Outs, the MIDI input stays and `project.rack_input_unrepaired` asks
+the caller to choose the intended Out. Invalid reconnections (for example
+feedback) likewise retain MIDI with recovery advice.
 
 ### Project timecode (schema 2.11, ADR-0071)
 

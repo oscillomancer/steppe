@@ -638,8 +638,9 @@ when the track has a main FX chain, otherwise audio. A load warning names
 each affected track and the dropped input, with recovery advice. Files from
 2.8 or earlier whose keyboard selection had disconnected an unambiguous rack
 Out reconnect that Out and drop the MIDI input, with the same warning. Other
-MIDI-only selections stay MIDI; ambiguous reconnections are left alone, and
-ones that would create feedback warn instead of making the file invalid.
+MIDI-only selections stay MIDI. When multiple rack Outs are unrouted, a
+warning asks you to choose the intended Out in the channel's input menu.
+Reconnections that would create feedback also retain MIDI with a warning.
 
 Your own modules live in the library folder, and the project you save
 keeps a copy of each one it uses beside it (in `modules`), as it keeps its
