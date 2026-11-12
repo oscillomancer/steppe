@@ -2542,6 +2542,9 @@ buffers, then the ordinary fader/pan/mute, Console 9, sends and parent routing r
 The captured latency remains in the normal solve, including live automation
 alignment. No cache work, allocation, locks or files occur in the callback.
 Frozen FX ignore MIDI parameter moves and queued editor output.
+The racks on a frozen channel keep running (their Out modules may also feed
+rack sends, ADR-0075), so their plug-ins are not frozen FX and are not pruned;
+the freeze locks them instead (rack.md §6).
 Original live instances are pruned only after both executor epochs release the
 old plans. Dedicated bridges exit; a shared bridge removes the frozen instances and
 keeps its process for unrelated instances and later reuse. A frozen FX description reads stored state without creating a plugin.

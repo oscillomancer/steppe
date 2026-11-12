@@ -78,8 +78,19 @@ In module are linear too (rack.md §2.4).
 7. **Freeze.** Freezing the home channel prints what the channel hears,
    its rack included; it never covered the rack's other outputs. A rack
    send is not part of the print: the rack keeps running and its sends keep
-   sounding live from it, following the home channel's mute. Busses and
-   masters do not freeze.
+   sounding live from it, following the home channel's mute. So that the
+   print stays what the rack plays, a frozen home locks its racks: their
+   modules, cables, plug-in modules' plug-ins (parameters and state), and
+   the envelopes and automation items on them are dependencies of the
+   freeze, and commands that would change them (`module.add`, `.set` of
+   parameters, `.remove`, `cable.*`, `env.*`, `fx.param.set`, `rack.set
+   track`, `rack.remove`) fail with `track.frozen` and a hint to unfreeze.
+   A module's position, label and learn bindings and a cable's colour stay
+   editable, as do the rack sends themselves (level, mute, envelopes). The
+   rack is locked, not owned: its plug-ins keep their instances, and
+   freezing does not reduce the rack's CPU, since the rack still runs for
+   its sends (and for its other channels). Busses and masters do not
+   freeze.
 8. **Removal.** Removing an Out or its rack removes its rack sends.
    Removing the home channel moves the rack to another channel that hears
    it, as before; a buss that only takes rack sends is not a home, so a

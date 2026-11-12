@@ -105,7 +105,10 @@ belong in the rack. It joins the buss after the buss's Console 9 decode,
 unencoded, so it does not get a channel's summing character (route the Out
 into a channel and send from there for that). Muting or soloing the rack's
 channel mutes or solos its rack sends too; its fader does not move them.
-Freezing the channel leaves its rack sends playing live. Agents use
+Freezing the channel leaves its rack sends playing live, so the rack still
+uses its CPU, and locks the rack until you unfreeze: you can still move its
+modules, rename them and change the sends, but not its knobs, cables or
+plug-ins. Agents use
 `route.add {from: {module: "mo_3"}, to: "tr_5"}`.
 
 ### Printing a mix onto its master

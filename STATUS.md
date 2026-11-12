@@ -365,7 +365,8 @@ instructions are in `docs/guides/installing.md`.
   Out modules are channel inputs and send to busses and masters (rack
   sends, ADR-0075, schema 2.13: level and mute only, added after the
   destination's Console 9 decode, following the home channel's mute and
-  solo; rows of the routing matrix under their channel; native macOS and
+  solo; rows of the routing matrix under their channel; freezing the home
+  locks its racks, which keep running for their sends; native macOS and
   Windows CI pending), In modules take sends (columns of the
   routing matrix, after their rack's channel), Notes modules play
   a track's MIDI or a live input, Transport gives the song's clock, plugin

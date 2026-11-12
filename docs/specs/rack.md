@@ -585,7 +585,16 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   to it; liveness propagates to what it feeds.
 - **Freeze.** Freezing a rack's home channel prints what the channel hears.
   Rack sends are not in the print: the rack keeps running for them
-  (ADR-0075).
+  (ADR-0075), so freezing does not reduce the rack's CPU. While the home is
+  frozen its racks are locked: their modules, cables, plug-in modules'
+  plug-ins and the envelopes and automation items on them are part of the
+  freeze's dependency hash (`model::freezeDependencyHash`), and edits to
+  them (module parameters, adding or removing modules and cables,
+  `fx.param.set` and plug-in state, `rack.set track`, `rack.remove`) fail
+  with `track.frozen`. Positions, labels, learn bindings and cable colours
+  stay editable, and so do the rack sends. The rack's plug-ins are not
+  owned by the freeze (`model::frozenOwner`), so they keep their instances;
+  `model::frozenRackHome` names the frozen home of a rack object.
 - **Parameters.** Knob edits on a running rack go to atomic slots (no
   compile). Envelopes on module parameters compile to curves the schedule
   samples at each grid interval's start and holds across host block fragments;

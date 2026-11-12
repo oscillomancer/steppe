@@ -586,3 +586,60 @@ TEST_CASE("MIDI bus: a frozen channel's post-FX sends carry its timeline MIDI" *
     CHECK(f.call("fx.set", R"({"fx":"fx_2","midi_output":"merge"})").error().code ==
           "track.frozen");
 }
+
+TEST_CASE("freeze: a frozen home locks its racks, whose sends keep playing (ADR-0075)") {
+    Fixture f;
+    // A rack on the frozen channel: VCA into its Out, a plug-in in the
+    // patch, an envelope on a knob, and a rack send to a buss.
+    const auto added = f.run("rack.add", R"({"track":"tr_1"})");
+    const std::string rack = added.find("rack")->asString(), out = added.find("out")->asString();
+    const auto module = [&](std::string body) {
+        return f.run("module.add", "{\"rack\":\"" + rack + "\"," + body + "}")["module"].asString();
+    };
+    const std::string vca = module(R"("type":"vca")");
+    const std::string plugin = module(R"("plugin":"com.suppleaudio.test.gain")");
+    f.run("cable.add", "{\"from\":\"" + vca + ".out\",\"to\":\"" + plugin + ".in_l\"}");
+    f.run("cable.add", "{\"from\":\"" + plugin + ".out_l\",\"to\":\"" + out + ".l\"}");
+    f.run("env.add", "{\"module\":\"" + vca + "\",\"param\":\"level\"}");
+    const auto buss = f.run("track.add", R"({"type":"buss","name":"Verb"})")["track"].asString();
+    const auto send =
+        f.run("route.add", "{\"from\":{\"module\":\"" + out + "\"},\"to\":\"" + buss + "\"}")["id"]
+            .asString();
+    // A second channel hears the Out too, so it could become the rack's home.
+    const auto second = f.run("track.add", R"({"name":"Second"})")["track"].asString();
+    f.run("track.set", "{\"track\":\"" + second + "\",\"record_rack\":\"" + out + "\"}");
+    const auto* pluginModule = f.app->head().modules.find(*model::Id::parse(plugin));
+    REQUIRE(pluginModule);
+    REQUIRE(pluginModule->fx);
+    const std::string fx = pluginModule->fx->str();
+    f.run("track.freeze", R"({"track":"tr_1"})");
+    REQUIRE(f.app->head().tracks.find(track)->freeze);
+    CHECK(model::frozenRackHome(f.app->head(), *model::Id::parse(vca)) == track);
+    CHECK(model::frozenRackHome(f.app->head(), *pluginModule->fx) == track);
+    // The rack is not the freeze's: its plug-in keeps its instance.
+    CHECK_FALSE(model::frozenOwner(f.app->head(), *pluginModule->fx));
+    auto refused = [&](const std::string& name, const std::string& args) {
+        CAPTURE(name);
+        CAPTURE(args);
+        const auto version = f.app->head().version;
+        auto r = f.call(name, args);
+        REQUIRE_FALSE(r);
+        CHECK(r.error().code == "track.frozen");
+        CHECK(r.error().hint.find("track.unfreeze") != std::string::npos);
+        CHECK(f.app->head().version == version);
+    };
+    refused("module.set", "{\"module\":\"" + vca + "\",\"params\":{\"level\":-6}}");
+    refused("module.add", "{\"rack\":\"" + rack + "\",\"type\":\"vca\"}");
+    refused("module.remove", "{\"module\":\"" + vca + "\"}");
+    refused("cable.remove", R"({"cable":"cb_1"})");
+    refused("env.points.set", R"({"env":"en_1","points":[{"beat":0,"value":-12}]})");
+    refused("fx.param.set", "{\"fx\":\"" + fx + "\",\"values\":{\"gain\":-6}}");
+    refused("rack.set", "{\"rack\":\"" + rack + "\",\"track\":\"" + second + "\"}");
+    refused("rack.remove", "{\"rack\":\"" + rack + "\"}");
+    // Its layout and its sends stay editable.
+    f.run("module.set", "{\"module\":\"" + vca + "\",\"x\":400,\"y\":120,\"label\":\"Amp\"}");
+    f.run("route.set", "{\"route\":\"" + send + "\",\"volume_db\":-12}");
+    // Unfrozen, the rack edits again.
+    f.run("track.unfreeze", R"({"track":"tr_1"})");
+    f.run("module.set", "{\"module\":\"" + vca + "\",\"params\":{\"level\":-6}}");
+}

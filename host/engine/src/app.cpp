@@ -258,6 +258,8 @@ Status restoreFx(host::Instance& instance, const model::FxInstance& fx, const mo
 Result<json::Value> EngineApp::setPlainParams(model::Id id, const json::Value& values) {
     if (const auto owner = model::frozenOwner(view(), id))
         return model::frozenError(view(), *owner, "/fx");
+    if (const auto home = model::frozenRackHome(view(), id))  // a frozen home's rack (ADR-0075)
+        return model::frozenError(view(), *home, "/fx");
     if (!values.isObject())
         return Error("fx.params", "values must be an object", "/values",
                      "map parameter names or ids to numbers or plugin text");
@@ -1492,7 +1494,9 @@ fs::path EngineApp::newerAutosave(const fs::path& project) const {
 }
 
 bool EngineApp::captureFxState(model::Id id, Error* failure) {
-    if (txn_ || !pool_ || model::frozenOwner(head(), id)) return false;
+    // A frozen home locks its racks' plug-ins (ADR-0075): their state stays.
+    if (txn_ || !pool_ || model::frozenOwner(head(), id) || model::frozenRackHome(head(), id))
+        return false;
     const model::FxInstance* fx = head().fx.find(id);
     host::Instance* instance = pool_->find(id);
     // Semantic plug-ins keep their patch in the model already.
