@@ -835,7 +835,7 @@ void Shell::commit(std::string_view command, json::Value args, std::string gestu
             args.find("record_input") || args.find("record_midi") || args.find("record_rack");
         if (auto r = selectionEdit_.set(std::move(args), gesture); !r) {
             if (onError) onError(r.error().message);
-        } else if (input)
+        } else if (input && !selectionEdit_.inputReplacement().empty())
             setStatus(selectionEdit_.inputReplacement());
         return;
     }

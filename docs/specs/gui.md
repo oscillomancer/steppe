@@ -1541,8 +1541,8 @@ a new channel). It follows rack.md §8.
   all three clear fields in one `track.set` edit. In a mixed strip selection,
   input changes apply to channels only. Choosing hardware audio or MIDI for
   multiple selected channels reports the names of channels whose rack Outs
-  were replaced in the status line. Only the selected input
-  is checked. While the engine is stopped, No input and rack choices remain
+  were replaced in the status line. Single-track input choices preserve an
+  earlier status note. Only the selected input is checked. While the engine is stopped, No input and rack choices remain
   available, with a disabled notice instead of device ports. The TCP and
   mixer input buttons name the one selected input. To play a rack with a
   keyboard, choose the keyboard on another channel and send it to Notes.

@@ -3203,3 +3203,51 @@ TEST_CASE("input menu: replacing selected rack Outs reports the affected channel
     }
     a.root->setContent(std::make_unique<ui::Node>("detached"));
 }
+
+TEST_CASE("input menu: single-track changes preserve an earlier status note") {
+    App a;
+    if (!a.ok) return;
+    const cmd::Origin origin{cmd::Origin::Type::Test, "inputs", {}};
+    auto call = [&](const char* command, const std::string& text) {
+        auto r = a.dispatcher->execute({command, *json::parse(text), origin});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    const auto channel = call("track.add", R"({"name":"Keys"})")["track"].asString();
+    const auto rack = call("rack.add", R"({"name":"Voice"})");
+    const auto out = *model::Id::parse(rack.find("out")->asString());
+    const auto id = *model::Id::parse(channel);
+    const auto outLabel = "Voice \u00bb " + model::moduleLabel(a.app->head(), out);
+    a.ui.selectedTracks = {channel};
+    auto inputs = [] {
+        return *json::parse(
+            R"({"running":true,"audio":[{"channel":1,"port":"Mic"}],"midi":["Keyboard"]})");
+    };
+    peaks::PeakService peaks(peaks::defaultCacheDir(gui::test::slug()),
+                             [](std::function<void()> f) { f(); });
+    gui::MeterFeed meters;
+    gui::Shell shell(*a.app, *a.dispatcher, a.ui, "", peaks, meters, inputs);
+    a.root->setContent(shell.build(*a.root, *a.actions));
+    for (const auto& label :
+         {std::string("Keyboard"), std::string("Mic"), outLabel, std::string("No input")}) {
+        shell.sync();
+        a.root->frame(false);
+        shell.setStatus("Render completed");
+        shell.openInputMenu(id, {100, 100, 20, 20});
+        a.root->frame(false);
+        auto* menu = a.root->find("tcp.input." + channel);
+        REQUIRE(menu);
+        const auto items = ui::menuItems(*menu);
+        const auto at = std::find_if(items.begin(), items.end(),
+                                     [&](const auto& item) { return item.label == label; });
+        REQUIRE(at != items.end());
+        const auto choose = at->run;
+        a.root->closePopups();
+        choose();
+        shell.sync();
+        a.root->frame(false);
+        CHECK(a.root->find("status")->valueText().find("Render completed") != std::string::npos);
+        CHECK(shell.inputLabel(id) == (label == "No input" ? "in \u2014" : label));
+    }
+    a.root->setContent(std::make_unique<ui::Node>("detached"));
+}
