@@ -66,8 +66,11 @@ pans arrive through its mix slots (ADR-0060, §1.6) without a new plan.
   its C9 Buss decode, before auxiliary links and the pre-FX tap, through
   its compensation delay. The checker requires a rack send's destination to
   decode and an Out edge into a channel not to. A rack send's edge belongs
-  to the rack's executor (`syncMix` reads the home's mute from its slot);
-  across the frontier the ring carries its output.
+  to the rack's executor (`syncMix` reads the home's mute from its slot),
+  and so do its automation cursors: a loop wrap or locate resets them
+  through the rack node's `out` edges, never the destination's `in` (the
+  destination may be live while the rack renders ahead); across the
+  frontier the ring carries its output.
 - **ItemPlayer** (inside a TrackNode): per active item on the track's lanes,
   per take: source reader (audio: disk-streamed decoded+resampled blocks
   from the media cache; MIDI: event generator from the source with playrate

@@ -2605,6 +2605,33 @@ struct RackSend {
     }
 };
 
+// An armed, monitored channel under `buss`: the buss plays live, on the
+// callback, while what feeds it otherwise renders ahead.
+void liveBuss(model::EditTxn& t, Id buss) {
+    model::Track mon;
+    mon.parent = buss;
+    const Id m = t.create(mon);
+    t.modify<model::Track>(buss, [&](model::Track& b) { b.children.push_back(m); });
+    model::Route in;
+    in.from.hwChannels = std::vector<int>{1, 2};
+    in.to.track = m;
+    const Id input = t.create(in);
+    t.modify<model::Track>(m, [&](model::Track& x) {
+        x.record.input = input;
+        x.record.armed = true;
+        x.record.monitor = model::Monitor::On;
+    });
+}
+
+// A volume envelope on the rack send: -20 dB at 0 s to +3 dB at 1.5 s.
+void automateSend(model::EditTxn& t, Id send) {
+    model::Envelope env;
+    env.target = {send, "volume"};
+    env.timebase = model::Timebase::Time;
+    env.points = {{0.0, -20.0}, {1.5, 3.0}};
+    t.create(env);
+}
+
 audio::AudioData renderTap(const model::Session& s, double seconds, std::uint32_t block,
                            std::optional<Id> track = std::nullopt,
                            model::Tap tap = model::Tap::PostFader) {
@@ -2757,29 +2784,10 @@ TEST_CASE("rack sends: real-time output equals the offline render" * doctest::de
     const RackSend r(latency);
     auto s = r.with([&](model::EditTxn& t) {
         // The send's level moves, so its automation must line up too.
-        model::Envelope env;
-        env.target = {r.send, "volume"};
-        env.timebase = model::Timebase::Time;
-        env.points = {{0.0, -20.0}, {1.5, 3.0}};
-        t.create(env);
+        automateSend(t, r.send);
         if (live == 1)  // a Notes device input puts the rack on the callback
             t.modify<model::RackModule>(r.notes, [](model::RackModule& m) { m.device = ""; });
-        if (live == 2) {
-            // An armed, monitored channel under the buss: the buss is live.
-            model::Track mon;
-            mon.parent = r.buss;
-            const Id m = t.create(mon);
-            t.modify<model::Track>(r.buss, [&](model::Track& b) { b.children.push_back(m); });
-            model::Route in;
-            in.from.hwChannels = std::vector<int>{1, 2};
-            in.to.track = m;
-            const Id input = t.create(in);
-            t.modify<model::Track>(m, [&](model::Track& x) {
-                x.record.input = input;
-                x.record.armed = true;
-                x.record.monitor = model::Monitor::On;
-            });
-        }
+        if (live == 2) liveBuss(t, r.buss);
     });
     {
         auto pool = makePool();
@@ -2823,5 +2831,108 @@ TEST_CASE("rack sends: real-time output equals the offline render" * doctest::de
             }
         CHECK(peak > 0.1);
         CHECK(worst == 0.0);
+    }
+}
+
+TEST_CASE("rack sends: the rack's executor owns its sends' automation cursors (ADR-0075)") {
+    // The buss is live, the rack renders ahead: a live-class wrap or locate
+    // (the callback's) must leave the send's cursors to the rack's executor,
+    // which resets them through the rack node's `out` edges. Otherwise both
+    // threads write them (a data race, though Automation::at rescans).
+    const RackSend r(false);
+    const auto s = r.with([&](model::EditTxn& t) {
+        model::Envelope env;
+        env.target = {r.send, "volume"};
+        env.timebase = model::Timebase::Time;
+        env.points = {{0.0, -20.0}, {0.05, -10.0}, {0.1, -6.0}, {0.15, 0.0}, {1.5, 3.0}};
+        t.create(env);
+        env.target = {r.send, "mute"};
+        env.points = {{0.0, 0.0}, {0.05, 0.0}, {0.1, 0.0}, {1.5, 0.0}};
+        t.create(env);
+        liveBuss(t, r.buss);
+    });
+    auto pool = makePool();
+    MediaCache media;
+    auto plan = supple::engine::detail::compile(s, pool, 0, 128);
+    REQUIRE(plan);
+    plan->media = &media;
+    REQUIRE(supple::engine::detail::prepare(*plan, s));
+    const supple::engine::detail::Edge* send = nullptr;
+    for (const auto& e : plan->edges)
+        if (e.rackSend) send = &e;
+    REQUIRE(send);
+    REQUIRE(send->autoVolume.active());
+    REQUIRE(send->autoMute.active());
+    CHECK(plan->nodes[send->to].live);
+    CHECK_FALSE(plan->nodes[send->from].live);
+    for (std::int64_t pos = 0; pos < 48000 / 4; pos += 128)
+        REQUIRE(supple::engine::detail::processBlock(*plan, pos, 128));
+    const auto volume = send->autoVolume.cursor, mute = send->autoMute.cursor;
+    REQUIRE(volume > 0);
+    REQUIRE(mute > 0);
+    supple::engine::detail::wrapTo(*plan, 0, 1);  // the callback's loop wrap
+    CHECK(send->autoVolume.cursor == volume);
+    CHECK(send->autoMute.cursor == mute);
+    supple::engine::detail::locateClass(*plan, 0, true);  // the callback's seek
+    CHECK(send->autoVolume.cursor == volume);
+    CHECK(send->autoMute.cursor == mute);
+    supple::engine::detail::wrapTo(*plan, 0, 0);  // the renderer's: the owner resets them
+    CHECK(send->autoVolume.cursor == 0);
+    CHECK(send->autoMute.cursor == 0);
+}
+
+TEST_CASE("rack sends: a loop wrap and a seek leave the rack's executor its send's automation" *
+          doctest::description("rt")) {
+    // The buss plays live, the rack renders ahead; the send is automated.
+    // Wrapping or seeking the live class must not touch the send's curves:
+    // the rack's executor reads them (ADR-0075; run under tsan).
+    const RackSend r(false);
+    const auto s = r.with([&](model::EditTxn& t) {
+        automateSend(t, r.send);
+        liveBuss(t, r.buss);
+    });
+    constexpr std::uint32_t kBlock = 128;
+    constexpr std::int64_t kCycles = 48000 * 3 / kBlock;
+    std::vector<float> reference;
+    for (const EngineOptions& options :
+         {EngineOptions{.anticipative = false, .workers = 0}, EngineOptions{.workers = 0},
+          EngineOptions{.workers = 2}}) {
+        INFO("anticipative " << options.anticipative << ", workers " << options.workers);
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend(
+            {.mode = DummyBackend::Mode::Manual, .captureFrames = kCycles * kBlock + 64 * kBlock});
+        Engine engine(pool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
+        REQUIRE(engine.load(s));
+        engine.setLoop(0.25, 0.75, true);
+        engine.play();
+        for (std::int64_t cycles = kCycles; cycles > 0;) {
+            if (options.anticipative) REQUIRE(engine.awaitRendered(4096));
+            const std::int64_t n = std::min<std::int64_t>(cycles, 4096 / kBlock);
+            backend.run(n);
+            cycles -= n;
+        }
+        engine.stop();
+        CHECK(engine.processErrors() == 0);
+        const auto& cap = backend.capture().channels[0];
+        const std::uint32_t L = engine.outputLatency();
+        std::vector<float> heard(cap.begin() + L, cap.begin() + L + 48000 * 2);
+        double peak = 0;
+        for (float x : heard) peak = std::max(peak, std::fabs(double(x)));
+        CHECK(peak > 0.05);
+        if (reference.empty())
+            reference = std::move(heard);
+        else
+            CHECK(heard == reference);  // several wraps, identical in both executors
+        // A seek while playing takes the same path (locateNode).
+        engine.play();
+        engine.seek(0.5);
+        for (int i = 0; i < 64; ++i) {
+            if (options.anticipative) REQUIRE(engine.awaitRendered(kBlock));
+            backend.run(1);
+        }
+        engine.stop();
+        CHECK(engine.processErrors() == 0);
     }
 }

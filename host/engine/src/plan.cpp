@@ -3387,7 +3387,9 @@ void locateNode(Plan& p, Node& n, std::int64_t pos, bool restartConsole) SUPPLE_
     for (std::size_t ei : n.in) {
         Edge& e = p.edges[ei];
         locateEdge(e, restartConsole);
-        if (!e.encode)
+        // A rack send's controls belong to the rack's executor, which resets
+        // them through its `out` edges (ADR-0075).
+        if (!e.encode && !e.rackSend)
             for (Automation* a : {&e.autoVolume, &e.autoPan, &e.autoMute, &e.stripWidth,
                                   &e.stripPanLeft, &e.stripPanRight, &e.stripPanBoost, &e.stripPan})
                 a->cursor = 0;
@@ -3496,7 +3498,7 @@ void wrapTo(Plan& p, std::int64_t pos, int liveClass) SUPPLE_RT {
                 ln.lastSent = std::numeric_limits<double>::quiet_NaN();  // the loop start's value
             }
         for (std::size_t ei : n.in)
-            if (!p.edges[ei].encode)
+            if (!p.edges[ei].encode && !p.edges[ei].rackSend)  // the rack's (ADR-0075)
                 for (Automation* a : {&p.edges[ei].autoVolume, &p.edges[ei].autoPan,
                                       &p.edges[ei].autoMute, &p.edges[ei].stripWidth,
                                       &p.edges[ei].stripPanLeft, &p.edges[ei].stripPanRight,
