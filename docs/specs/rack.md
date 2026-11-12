@@ -590,9 +590,10 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   plug-ins and the envelopes and automation items on them are part of the
   freeze's dependency hash (`model::freezeDependencyHash`), and edits to
   them (module parameters, adding or removing modules and cables,
-  `fx.param.set` and plug-in state, `rack.set track`, `rack.remove`) fail
-  with `track.frozen`. Positions, labels, learn bindings and cable colours
-  stay editable, and so do the rack sends. The rack's plug-ins are not
+  `fx.param.set` and plug-in state, learn bindings on modules and their
+  plug-ins, `rack.set track`, `rack.remove`) fail with `track.frozen`.
+  Positions, labels and cable colours stay editable, and so do the rack
+  sends, their learn bindings included. The rack's plug-ins are not
   owned by the freeze (`model::frozenOwner`), so they keep their instances;
   `model::frozenRackHome` names the frozen home of a rack object.
 - **Parameters.** Knob edits on a running rack go to atomic slots (no

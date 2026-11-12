@@ -125,11 +125,12 @@ std::string freezeDependencyHash(const Session& s, Id track) {
     append(objects, s.midi, ids, remap);
     append(objects, s.envelopes, ids, remap);
     append(objects, s.autoItems, ids, remap);
-    // A rack's layout, labels and controllers are not its sound.
+    // A rack's layout and labels are not its sound. Its learn bindings are:
+    // a controller turns its knobs, which play through its sends.
     for (const auto& e : s.modules)
         if (ids.count(e.id)) {
             auto module = toJson(*e.value);
-            for (const char* key : {"x", "y", "label", "learn"}) module.asObject().erase(key);
+            for (const char* key : {"x", "y", "label"}) module.asObject().erase(key);
             objects.push_back(remapIds(module, schemaOf<RackModule>().jsonSchema(), remap));
         }
     for (const auto& e : s.cables)

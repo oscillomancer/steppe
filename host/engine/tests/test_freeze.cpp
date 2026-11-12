@@ -643,3 +643,53 @@ TEST_CASE("freeze: a frozen home locks its racks, whose sends keep playing (ADR-
     f.run("track.unfreeze", R"({"track":"tr_1"})");
     f.run("module.set", "{\"module\":\"" + vca + "\",\"params\":{\"level\":-6}}");
 }
+
+TEST_CASE("freeze: a frozen home locks its racks' learn bindings (ADR-0075)") {
+    Fixture f;
+    // A rack on the frozen channel with a VCA and a plug-in into its Out,
+    // a controller on each, and a rack send to a buss.
+    const auto added = f.run("rack.add", R"({"track":"tr_1"})");
+    const std::string rack = added.find("rack")->asString(), out = added.find("out")->asString();
+    const auto module = [&](std::string body) {
+        return f.run("module.add", "{\"rack\":\"" + rack + "\"," + body + "}")["module"].asString();
+    };
+    const std::string vca = module(R"("type":"vca")");
+    const std::string plugin = module(R"("plugin":"com.suppleaudio.test.gain")");
+    f.run("cable.add", "{\"from\":\"" + vca + ".out\",\"to\":\"" + plugin + ".in_l\"}");
+    f.run("cable.add", "{\"from\":\"" + plugin + ".out_l\",\"to\":\"" + out + ".l\"}");
+    const auto* pluginModule = f.app->head().modules.find(*model::Id::parse(plugin));
+    REQUIRE(pluginModule);
+    REQUIRE(pluginModule->fx);
+    const std::string fx = pluginModule->fx->str();
+    const auto buss = f.run("track.add", R"({"type":"buss","name":"Verb"})")["track"].asString();
+    const auto send =
+        f.run("route.add", "{\"from\":{\"module\":\"" + out + "\"},\"to\":\"" + buss + "\"}")["id"]
+            .asString();
+    const std::string cc21 = R"("midi":{"kind":"cc","channel":1,"number":21})";
+    const std::string cc22 = R"("midi":{"kind":"cc","channel":1,"number":22})";
+    f.run("module.learn.set", "{\"module\":\"" + vca + "\",\"param\":\"level\"," + cc21 + "}");
+    f.run("fx.learn.set", "{\"fx\":\"" + fx + "\",\"param\":\"gain\"," + cc21 + "}");
+    f.run("track.freeze", R"({"track":"tr_1"})");
+    REQUIRE(f.app->head().tracks.find(track)->freeze);
+    auto refused = [&](const std::string& name, const std::string& args) {
+        CAPTURE(name);
+        CAPTURE(args);
+        const auto version = f.app->head().version;
+        auto r = f.call(name, args);
+        REQUIRE_FALSE(r);
+        CHECK(r.error().code == "track.frozen");
+        CHECK(r.error().hint.find("track.unfreeze") != std::string::npos);
+        CHECK(f.app->head().version == version);
+    };
+    // A controller turns the rack's knobs, which play through its sends.
+    refused("module.learn.set", "{\"module\":\"" + vca + "\",\"param\":\"level\"," + cc22 + "}");
+    refused("module.learn.remove", "{\"module\":\"" + vca + "\",\"param\":\"level\"}");
+    refused("fx.learn.set", "{\"fx\":\"" + fx + "\",\"param\":\"gain\"," + cc22 + "}");
+    refused("fx.learn.remove", "{\"fx\":\"" + fx + "\",\"param\":\"gain\"}");
+    // The send's own controller is a mix control, and stays editable.
+    f.run("route.learn.set", "{\"route\":\"" + send + "\",\"param\":\"volume\"," + cc22 + "}");
+    // Unfrozen, the rack's controllers edit again.
+    f.run("track.unfreeze", R"({"track":"tr_1"})");
+    f.run("module.learn.set", "{\"module\":\"" + vca + "\",\"param\":\"level\"," + cc22 + "}");
+    f.run("module.learn.remove", "{\"module\":\"" + vca + "\",\"param\":\"level\"}");
+}

@@ -113,8 +113,8 @@ the sends follow that channel. Removing a rack's only channel removes the
 rack and its sends; for agents, `track.remove` names them in a warning.
 Freezing the channel leaves its rack sends playing live, so the rack still
 uses its CPU, and locks the rack until you unfreeze: you can still move its
-modules, rename them and change the sends, but not its knobs, cables or
-plug-ins. Agents use
+modules, rename them and change the sends, but not its knobs, cables,
+plug-ins or MIDI learn bindings. Agents use
 `route.add {from: {module: "mo_3"}, to: "tr_5"}`.
 
 ### Printing a mix onto its master

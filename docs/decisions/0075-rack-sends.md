@@ -87,14 +87,16 @@ In module are linear too (rack.md §2.4).
    modules, cables, plug-in modules' plug-ins (parameters and state), and
    the envelopes and automation items on them are dependencies of the
    freeze, and commands that would change them (`module.add`, `.set` of
-   parameters, `.remove`, `cable.*`, `env.*`, `fx.param.set`, `rack.set
-   track`, `rack.remove`) fail with `track.frozen` and a hint to unfreeze.
-   A module's position, label and learn bindings and a cable's colour stay
-   editable, as do the rack sends themselves (level, mute, envelopes). The
-   rack is locked, not owned: its plug-ins keep their instances, and
-   freezing does not reduce the rack's CPU, since the rack still runs for
-   its sends (and for its other channels). Busses and masters do not
-   freeze.
+   parameters, `.remove`, `cable.*`, `env.*`, `fx.param.set`,
+   `module.learn.*` and `fx.learn.*`, `rack.set track`, `rack.remove`) fail
+   with `track.frozen` and a hint to unfreeze. Learn bindings are locked
+   because a controller turns the rack's knobs, which play through its
+   sends. A module's position and label and a cable's colour stay
+   editable, as do the rack sends themselves (level, mute, envelopes,
+   controllers). The rack is locked, not owned: its plug-ins keep their
+   instances, and freezing does not reduce the rack's CPU, since the rack
+   still runs for its sends (and for its other channels). Busses and
+   masters do not freeze.
 8. **Removal.** Removing an Out or its rack removes its rack sends.
    Removing the home channel moves the rack to another channel that hears
    it, as before; a buss that only takes rack sends is not a home, so a
@@ -146,7 +148,8 @@ round trip, home, learn and cycle refusal. A live-class loop wrap or locate
 leaves a rack send's automation cursors to the rack's executor (a plan-level
 test; loop wraps and seeks also play identically in both executors); a write pass holds a send's level; a home mute and a send level
 are mix edits beside a hardware MIDI route. `test_freeze.cpp`: a frozen
-home refuses rack edits and keeps the rack's plug-ins. `test_commands.cpp`:
+home refuses rack edits, including learn bindings, and keeps the rack's
+plug-ins. `test_commands.cpp`:
 route.add, route.set, env.add, route.learn.set and track.set refusals with
 hints, the routing matrix rows, rack.list, save and reopen, removal with
 the home channel and its warning.
