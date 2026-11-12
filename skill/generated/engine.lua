@@ -1864,8 +1864,8 @@ q = nil
 ---@field mono? boolean Sum the main pair to mono (after the FX chain, before the fader and pan): a mono check on the master
 ---@field solo? string
 ---@field armed? boolean
----@field record_input? any
----@field record_midi? any
+---@field record_input? any Hardware audio input; replaces MIDI or rack input. null clears hardware audio only
+---@field record_midi? any MIDI device; replaces hardware audio or rack input. null clears MIDI only
 ---@field record_rack? any
 ---@field midi_channel? integer
 ---@field record_mode? "input"|"midi_overdub"|"midi_replace"
@@ -2429,7 +2429,7 @@ q = nil
 ---@field list fun(args?: Steppe.track_list_args): Steppe.track_list_result List tracks in tree order with their level, mute/solo, fx and items.
 ---@field move fun(args: Steppe.track_move_args): Steppe.track_move_result Move a track under another track or reorder it among its siblings.
 ---@field remove fun(args: Steppe.track_remove_args): Steppe.track_remove_result Remove a track with its items, fx, routes and envelopes (not a folder).
----@field set fun(args: Steppe.track_set_args): Steppe.track_set_result Set track fields: name, type, volume, pan, mute, solo, polarity, mono, arming.
+---@field set fun(args: Steppe.track_set_args): Steppe.track_set_result Set track fields; choosing audio, MIDI or rack input replaces the others.
 ---@field unfreeze fun(args: Steppe.track_unfreeze_args): table Restore a frozen channel's original items and plugin state.
 
 ---@class Steppe.track.freeze

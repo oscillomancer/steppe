@@ -1287,8 +1287,8 @@ bool RackSpace::onPointer(const ui::PointerEvent& e) {
     }
     if (e.type == T::Wheel) {
         // Over a display that hears the pointer, the wheel is the module's
-        // (one undo step a burst); Ctrl+wheel still zooms.
-        if (!(e.mods & ui::kCtrl) && drag_.kind == Drag::Kind::None)
+        // (one undo step a burst); Ctrl+wheel scrolls the space.
+        if (e.wheelY != 0 && !(e.mods & ui::kCtrl) && drag_.kind == Drag::Kind::None)
             if (const Hit h = hitAt(sp); h.kind == Hit::Kind::Display) {
                 const model::Id id = scene_.modules[h.module].id;
                 const auto now = std::chrono::steady_clock::now();
@@ -1301,8 +1301,11 @@ bool RackSpace::onPointer(const ui::PointerEvent& e) {
                             wheelGesture_);
                 return true;
             }
-        if (e.mods & ui::kCtrl) {
+        if (!(e.mods & (ui::kCtrl | ui::kShift))) {
             zoomAt(e.pos, std::pow(1.15, static_cast<double>(e.wheelY)));
+            View v = view_;
+            v.x += D(e.wheelX) * 40 / view_.zoom;
+            setView(v);
         } else {
             View v = view_;
             const double step = 40 / view_.zoom;

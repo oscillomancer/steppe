@@ -89,11 +89,11 @@ Both ends are in the same rack. At most one cable joins the same two ends.
 `RouteEnd` gains `module`:
 
 - **From an Out module** to a channel: the channel's record input
-  (`track.record.input`), independent of the channel's MIDI input
-  (`track.record.midi_input`). Selecting a keyboard keeps this Out route, and
-  adding a rack keeps the channel's keyboard (ADR-0065). The channel always
+  (`track.record.input`). Selecting it or adding a rack replaces any hardware
+  audio or MIDI input; selecting a keyboard replaces the Out (ADR-0074).
+  Send MIDI into Notes from a separate channel to play the rack. The channel always
   hears it, armed or not, before its items and inserts (as timeline material, not as monitored input).
-  When armed without a MIDI input it records stereo, through its input FX,
+  When armed it records stereo, through its input FX,
   using the ordinary audio recorder's loop/punch, takes, recovery and undo rules.
   `"from": {"module": "mo_3"}`.
 - **From an Out module** to a buss or master: a **rack send** (ADR-0075),
@@ -513,7 +513,7 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   null until their own plan is prepared.
   Parallel paths summed inside a patch stay unaligned: insert a Delay
   module explicitly when that patch needs alignment.
-- **Live Notes.** Notes follows its source channel's independent MIDI input,
+- **Live Notes.** Notes follows its source channel's selected MIDI input,
   with the same device/channel selection and armed monitoring as an instrument.
   `monitor: on` listens while stopped or playing; `auto` while stopped or
   recording. An explicit Notes `device` also listens regardless of the arm.
@@ -574,10 +574,10 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   identity and the retained route namespaces/addresses; source changes end
   only that track feed, removed routes end only their notes, and a plan edit
   can rebind event slots while preserving held route addresses.
-- **Recording Out.** An armed channel with an Out as its `record.input`
-  records that stereo signal after input FX, before items and track inserts.
-  With a MIDI input selected as well it records MIDI instead; to record
-  both in one pass, arm a second channel with the same Out as its input.
+- **Recording Out.** In input record mode, an armed channel with an Out as
+  its `record.input` records that stereo signal after input FX, before items and track inserts.
+  To record notes as well, arm a separate MIDI channel that sends to Notes;
+  the rack-fed audio channel retains its sole Out input (ADR-0074).
   The channel runs live; its source rack may render ahead through the audio
   frontier. The recorder places the samples by the channel's input timeline
   and input-FX latency, with its usual padding and take rules (engine.md §4).
@@ -850,9 +850,11 @@ rack). Racks are tabs along its top, with `+` for a new rack (on the
 selected channel, or a new one).
 
 - **The space.** A plain background, nothing else, until modules are
-  added. Middle-drag or Space-drag pans, Ctrl+wheel zooms at the pointer
-  (10 %–400 %), the wheel scrolls. Per-rack view (offset, zoom) in the UI
-  sidecar.
+  added. Middle-drag or Space-drag pans; the wheel zooms at the pointer
+  (10 %–400 %), Ctrl+wheel (Cmd+wheel on macOS) scrolls vertically and
+  Shift+wheel scrolls across.
+  A sideways wheel pans horizontally. Interactive displays keep vertical
+  wheel editing. Per-rack view (offset, zoom) is in the UI sidecar.
 - **Modules** are panels placed anywhere, dragged freely by their body
   (not their controls); several are selected with a marquee or Ctrl+click
   and moved together. Right-click: rename, bypass, presets, duplicate,

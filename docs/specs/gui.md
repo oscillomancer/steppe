@@ -1020,7 +1020,7 @@ solo its sends follow ("Pad » Out 1 → Verb: -6.0 dB; follows Pad's mute
 and solo — click to select"), and leaves out the tap.
 
 MIDI mode lists channels in hierarchy order, then their racks' Note Out
-modules indented below them. Columns are channels, each followed by its
+modules indented below them with teal rack markers. Columns are channels, each followed by its
 racks' Notes modules. Busses, masters, plug-in keys and In modules are absent.
 MIDI sends use the `midi-send` theme token (teal), distinct from strip send
 colours. The usual selection, double-click and Add/Remove gestures apply. The controls show pre-FX, post-FX
@@ -1039,11 +1039,11 @@ shared input assignment. Removing only part of a wildcard assignment refuses
 with a status message; select every cell (or its column) to clear it. On a
 machine with one input, selecting its sole wildcard cell is the whole assignment.
 Replacing an input reports "replaces <old input>" in the status line.
-One MIDI input assignment per channel is retained. Hardware input
+A channel has one input of any kind; choosing a hardware MIDI cell replaces
+its hardware audio or rack Out and reports that replacement. Hardware input
 to output cells are blocked; route through a channel. Missing ports named in
 projects/preferences remain visible with warnings in port status. Hardware input
-and output headers use teal socket marks; separators divide input rows from
-channel rows and channel columns from output columns.
+and output headers use teal socket marks.
 
 Right-click an input row or output column header (`midiPortMenu`) for
 Enabled, then on outputs, after a rule, the clock output items (ADR-0073):
@@ -1319,8 +1319,9 @@ a new channel). It follows rack.md §8.
   browser (shown if hidden) on its Modules or its Patches view with the
   search focused; the line goes with the first other module. Middle-drag
   or Space-drag pans (Space alone, released without a drag, still plays and
-  stops), Ctrl+wheel zooms at the pointer from 10 to 400 %, the wheel
-  scrolls (Shift: across), Ctrl+= and Ctrl+- zoom, Ctrl+0 is 100 %, Home
+  stops), the wheel zooms at the pointer from 10 to 400 %, Ctrl+wheel
+  scrolls vertically (Cmd+wheel on macOS) and Shift+wheel scrolls across; a sideways wheel pans
+  horizontally. Ctrl+= and Ctrl+- zoom, Ctrl+0 is 100 %, Home
   shows everything (at most 100 %, as far out as it takes) and Shift+Home
   fills the view with the selection (at most 150 %). Below 55 % the faces'
   small words go and each module's name is drawn over it at 10.5 points on
@@ -1530,11 +1531,11 @@ a new channel). It follows rack.md §8.
   and its leaving; the wheel. Its knob edits (`Param::edit`) are
   `module.set`, one undo step a press or a burst of the wheel; on a hover
   they do nothing. There a press does not move the module, and the wheel is
-  the module's; Ctrl+wheel still zooms, the right button still opens the
+  the module's; Ctrl+wheel scrolls the space, the right button still opens the
   module's menu and the middle one still pans. A module without `pointer()`
   is dragged by its displays as by the rest of its body.
 - **Status bar.** The rack's label, its module and cable counts and the
-  selection's size, then any capture or notice. With the transport
+  selection's size, then the wheel navigation hint and any capture or notice. With the transport
   stopped, a rack holding a Transport module or a module whose type is
   tagged `sequencer` or `clock` (they play the song's beats with nothing in
   their clock input) adds "Stopped: press play to start the patch"; it
@@ -1545,22 +1546,18 @@ a new channel). It follows rack.md §8.
   ("<rack> » <Out>", with the home channel's colour) after the device's
   inputs, and New rack on this channel; picking one is `track.set
   {record_rack}`, and the strip's input button names it the same way.
-  The menu holds two selections, each with its own check (ADR-0065): the
-  audio input (`record.input`: a channel, a stereo pair or a rack's Out)
-  and the MIDI input (`record.midi_input`, or a legacy MIDI-only
-  `record.input`: "no MIDI input", which is `track.set {record_midi:
-  null}`, "any MIDI device" or a device). "no audio input" leads the
-  device's inputs (`record_input: null`, checked without hardware audio)
-  and "no rack input" the racks' Outs (`record_rack: null`, listed when
-  there is a rack); each takes off only its own kind, so the three
-  together return the channel to its blank input. While the engine is
-  stopped, the device's list is not shown, but "no audio input" and "no
-  MIDI input" are, when there is one to take off. On a rack's channel picking one
-  keeps the other, so it hears the rack and plays from the keyboard;
-  elsewhere hardware audio and a MIDI device replace each other. The input
-  button (TCP and mixer) names both, "<audio> + <MIDI>": a rack with one
-  Out by its label alone ("Bells + Keystation"), any device as "midi"; MIDI
-  alone names the device ("midi *" for any). A
+  The menu has one **No input** item at the top in its own section, followed
+  by hardware audio, MIDI devices and rack Outs in separate sections.
+  Choosing any input replaces the other kinds (ADR-0074); No input sends
+  all three clear fields in one `track.set` edit. In a mixed strip selection,
+  input changes apply to channels only. Choosing hardware audio or MIDI for
+  multiple selected channels reports the names of channels whose rack Outs
+  were replaced in the status line. Single-track input choices preserve an
+  earlier status note. Only the selected input is checked. While the engine is stopped, No input and rack choices remain
+  available, with a disabled notice instead of device ports. The TCP and
+  mixer input buttons name the one selected input. To play a rack with a
+  keyboard, choose the keyboard on another channel and send it to Notes.
+  A
   channel's right-click menu offers Show rack (when it has one) and Add rack
   (Add another rack).
 

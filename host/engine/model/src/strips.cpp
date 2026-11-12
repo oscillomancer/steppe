@@ -179,6 +179,13 @@ Status validateStripRules(const Session& s) {
                     "track.hw_output", "hw_output is two different channels, one channel or none",
                     path + "/hw_output", "e.g. [3, 4] for a pair, [5] for mono, [] for none");
         }
+        // A MIDI-only input may retain its legacy alias in record.input;
+        // two distinct routes would be two inputs (ADR-0074).
+        if (t.record.input && t.record.midiInput && t.record.input != t.record.midiInput)
+            return Error("track.record_input", "a track has one input: audio, MIDI or rack",
+                         path + "/record/input",
+                         "choose one input with track.set {record_input, record_midi or "
+                         "record_rack}; route MIDI to a rack's Notes from another channel");
         if (t.record.midiInput) {
             const auto* route = s.routes.find(*t.record.midiInput);
             if (!route || !route->from.midiDevice || route->to.track != e.id)
@@ -194,11 +201,6 @@ Status validateStripRules(const Session& s) {
                     "a record input must enter this channel from hardware, MIDI or a rack",
                     path + "/record/input",
                     "choose a hardware, MIDI or rack Out input route into this channel");
-            // A MIDI record.input is the legacy alias of the one MIDI input.
-            if (r->from.midiDevice && t.record.midiInput && *t.record.midiInput != *t.record.input)
-                return trackError("a MIDI record input must be the channel's midi_input",
-                                  path + "/record/input",
-                                  "set record.input to the midi_input route, or to an audio input");
         }
     }
     for (const auto& e : s.items) {

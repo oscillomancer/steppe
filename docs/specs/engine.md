@@ -1375,14 +1375,16 @@ harness. See the tooling README for schemas, limits and invocation details.
 - **Loop and punch** (ADR-0015): see the ADR's implementation notes.
 - **MIDI input** (ADR-0016, ADR-0065): `record.midi_input` names a
   channel's MIDI route; old MIDI-only `record.input` remains readable.
-  Hardware audio and MIDI replace each other (`record_input` turns the MIDI
-  route into audio, `record_midi` the hardware route into MIDI);
-  `record_midi: null` clears MIDI alone, `record_input: null` hardware
-  audio alone and `record_rack: null` a rack's Out alone (each leaves an
-  input of another kind; all three leave the channel with no input). A
-  rack Out keeps a MIDI input beside it, and such a channel records MIDI;
-  without the MIDI input it records the Out's audio as a WAV take. A second armed channel with the same Out
-  as its input records the audio in the same pass. A rack's Notes
+  Hardware audio, MIDI and rack Out inputs replace each other (ADR-0074).
+  In input record mode a selected audio or rack input records audio. MIDI
+  overdub/replace records delivered MIDI sends instead, independently of the
+  selected input.
+  `record_midi: null` clears MIDI alone, `record_input: null` hardware audio
+  alone and `record_rack: null` a rack Out alone. Clearing all three leaves
+  no input. A rack-fed channel records its audio as a WAV take. Feed Notes
+  through a MIDI send from a separate monitored MIDI channel; arm that
+  channel to record notes, or both channels to capture notes and rack audio
+  in one pass. A rack's Notes
   module follows its source channel's armed monitoring and channel map, in
   both executors. Explicit Notes devices still listen always. A live-input
   change ends only the notes and controllers live events opened (a

@@ -8798,7 +8798,7 @@
   {
     "name": "rack_add",
     "title": "Add a modular rack on a channel, its Out the input.",
-    "description": "Add a modular rack on a channel, its Out the input. A rack is a patching space homed on a channel (track, or a new channel named after name). It starts with an Out module, made the channel's input: what the patch sends to Out plays on the channel, before its inserts and Console 9 stage. The channel's MIDI items play into Notes modules. Add modules with module.add and connect them with cable.add. See describe for errors and examples.",
+    "description": "Add a modular rack on a channel, its Out the input. A rack is a patching space homed on a channel (track, or a new channel named after name). It starts with an Out module, replacing the channel's previous audio, MIDI or rack input: what the patch sends to Out plays on the channel, before its inserts and Console 9 stage. The channel's MIDI items play into Notes modules. Add modules with module.add and connect them with cable.add. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "rack_add_args",
@@ -14347,8 +14347,8 @@
   },
   {
     "name": "track_set",
-    "title": "Set track fields: name, type, volume, pan, mute, solo, polarity, mono, arming.",
-    "description": "Set track fields: name, type, volume, pan, mute, solo, polarity, mono, arming. Only the given fields change. solo: off | on | in_place | defeat. armed + record_input (device input channels, 1-based) prepare a track for transport.record; record_midi records MIDI instead: hardware audio and MIDI replace each other. A rack's Out (record_rack) keeps a MIDI input beside it, which plays its Notes; recording then takes MIDI. null clears each one (record_input: null takes off hardware audio, record_rack: null a rack's Out), leaving the others. A device name is a substring of the MIDI port (\"*\" = every device), with midi_channel 1-16 (0 = all). monitor: off | on | auto (auto: while armed) — a monitored track hears its input live (an instrument plays the keyboard), also while stopped. record_mode: input (new items), midi_overdub (merge into the MIDI item under the start, as a new take), midi_replace. color: red | orange | yellow | green | teal | blue | violet | grey | \"#rrggbb\" (\"\" clears it), shown as a stripe on the track. A master takes armed alone: transport.record then records its output (after its fader, before its own items) as an item on the master; lane_mute silences a master's items. chain_midi: bus (every plug-in with a note input hears the chain's MIDI, a note-output plug-in feeds those after it and the post-FX sends) or instrument (only the first such plug-in hears the track's MIDI, as before 2.10). See describe for errors and examples.",
+    "title": "Set track fields; choosing audio, MIDI or rack input replaces the others.",
+    "description": "Set track fields; choosing audio, MIDI or rack input replaces the others. Only the given fields change. solo: off | on | in_place | defeat. armed + record_input (device input channels, 1-based) prepare a track for transport.record; record_midi records MIDI instead: hardware audio and MIDI or a rack Out (record_rack) replace each other: a track has one input. Choosing one clears the other kinds. null clears only the named kind; set all three to null for no input. Feed a rack's Notes through MIDI sends from another channel. A device name is a substring of the MIDI port (\"*\" = every device), with midi_channel 1-16 (0 = all). monitor: off | on | auto (auto: while armed) — a monitored track hears its input live (an instrument plays the keyboard), also while stopped. record_mode: input (new items), midi_overdub (merge into the MIDI item under the start, as a new take), midi_replace. color: red | orange | yellow | green | teal | blue | violet | grey | \"#rrggbb\" (\"\" clears it), shown as a stripe on the track. A master takes armed alone: transport.record then records its output (after its fader, before its own items) as an item on the master; lane_mute silences a master's items. chain_midi: bus (every plug-in with a note input hears the chain's MIDI, a note-output plug-in feeds those after it and the post-FX sends) or instrument (only the first such plug-in hears the track's MIDI, as before 2.10). See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "track_set_args",
@@ -14526,7 +14526,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "Hardware audio input; replaces MIDI or rack input. null clears hardware audio only"
         },
         "record_midi": {
           "anyOf": [
@@ -14536,14 +14537,15 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "MIDI device; replaces hardware audio or rack input. null clears MIDI only"
         },
         "record_rack": {
           "anyOf": [
             {
               "type": "string",
               "pattern": "^mo_[0-9]+$",
-              "description": "A rack's Out module as the channel's input: the rack plays on the channel, before its inserts (rack.list lists them); null takes a rack's Out off the input"
+              "description": "A rack's Out module as the channel's input: the rack plays on the channel, replacing hardware audio or MIDI (rack.list lists them); null takes a rack's Out off the input"
             },
             {
               "type": "null"

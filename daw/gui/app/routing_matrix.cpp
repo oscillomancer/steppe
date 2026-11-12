@@ -160,10 +160,11 @@ class Grid : public ui::Node {
         const float gx = b.x + kLabelW - scrollX_, gy = b.y + kHeaderH - scrollY_;
         const ui::Rect cells{b.x + kLabelW, b.y + kHeaderH, b.w - kLabelW, b.h - kHeaderH};
         auto typeColor = [&](const std::string& type) {
-            return t.color(type == "master"     ? "master"
-                           : type == "buss"     ? "buss"
-                           : type == "rack_out" ? "track-teal"  // a rack's Out (ADR-0075)
-                                                : "channel");
+            // A rack's Out and Note Out rows are teal (ADR-0075, gui.md §4.6).
+            return t.color(type == "note_out" || type == "rack_out" ? "track-teal"
+                           : type == "master"                       ? "master"
+                           : type == "buss"                         ? "buss"
+                                                                    : "channel");
         };
         // Column headers: rotated names.
         c.save();
@@ -274,20 +275,6 @@ class Grid : public ui::Node {
             }
         }
         c.restore();
-        // Physical endpoint groups have a boundary across both labels and cells.
-        for (std::size_t row = 1; row < m_.sources.size(); ++row)
-            if (m_.sources[row - 1].type == "midi_input" && m_.sources[row].type != "midi_input") {
-                const float y = gy + static_cast<float>(row) * kCell;
-                if (y >= cells.y && y <= cells.bottom())
-                    c.line({b.x, y}, {b.right(), y}, t.color("ink-quiet"), 2);
-            }
-        for (std::size_t col = 1; col < m_.destinations.size(); ++col)
-            if (m_.destinations[col].kind == "midi_output" &&
-                m_.destinations[col - 1].kind != "midi_output") {
-                const float x = gx + static_cast<float>(col) * kCell;
-                if (x >= cells.x && x <= cells.right())
-                    c.line({x, b.y}, {x, b.bottom()}, t.color("ink-quiet"), 2);
-            }
         c.fillRect({cells.x - 1, b.y, 1, b.h}, t.color("rule"));
         c.fillRect({b.x, cells.y - 1, b.w, 1}, t.color("rule"));
     }
@@ -1024,10 +1011,20 @@ std::string RoutingMatrix::inputReplacement(const MatrixModel::Source& source,
     const auto id = model::Id::parse(dest.id);
     if (!id) return {};
     const auto session = app_.view();
-    const auto* input = model::midiInputRoute(session, *id);
-    if (!input || !input->from.midiDevice || *input->from.midiDevice == source.name) return {};
-    return dest.name + ": replaces " +
-           (input->from.midiDevice->empty() ? "*" : *input->from.midiDevice);
+    const auto* track = session.tracks.find(*id);
+    if (!track) return {};
+    const auto selected = track->record.input ? track->record.input : track->record.midiInput;
+    const auto* input = selected ? session.routes.find(*selected) : nullptr;
+    if (!input) return {};
+    std::string previous;
+    if (input->from.midiDevice) {
+        if (*input->from.midiDevice == source.name) return {};
+        previous = input->from.midiDevice->empty() ? "*" : *input->from.midiDevice;
+    } else if (input->from.module)
+        previous = model::moduleLabel(session, *input->from.module);
+    else if (input->from.hwChannels)
+        previous = "audio input";
+    return previous.empty() ? "" : dest.name + ": replaces " + previous;
 }
 Status RoutingMatrix::doubleClickCell(std::size_t row, std::size_t col) {
     if (row >= model_.sources.size() || col >= model_.destinations.size())

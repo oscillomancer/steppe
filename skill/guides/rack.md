@@ -189,7 +189,7 @@ feedback FM, Karplus-like loops and self-patched chaos.
 |---|---|
 | `out` | Audio to the DAW. Each Out is a channel's input: `rack.add` makes one its channel's; `track.set {track, record_rack: "mo_N"}` gives another channel another Out (the input menu lists them by label), so one rack can play several channels. An Out also sends to a buss or master: `route.add {from: {module: "mo_N"}, to: "tr_5", volume_db: -6}` (a rack send: level and mute only, added after the buss's Console 9 decode, muted and soloed with the rack's channel: muting the channel silences the send too, so pull its fader down to hear only the send). Freezing the channel leaves the rack running for its sends and locks it until `track.unfreeze`. |
 | `in` | Audio from the DAW: send tracks to it with `route.add {from: "tr_2", to: "mo_7"}` (the In's id). A rack with an In and an Out is an effect. |
-| `notes` | The rack channel's MIDI (its items and, when it monitors, live input) as `pitch`, `gate`, `velocity`, `pressure` per voice, plus `bend` and `modwheel`. `source` plays another track's MIDI; `device` a MIDI input always. |
+| `notes` | MIDI from its source track (Home by default) and explicit MIDI sends as `pitch`, `gate`, `velocity`, `pressure` per voice, plus `bend` and `modwheel`. `source` can play a separate keyboard channel; alternatively send that channel to Notes. A rack-fed home channel has no hardware MIDI input. `device` listens to a MIDI input always. |
 | `transport` | The song's clock: `clock` at `division` (1/16), `bar` and `beat` triggers, their phases, `playing`, `reset`. Sequencers stay in time with the song through it (or follow the song themselves when nothing drives their clock). |
 | `plugin` | A plug-in: `module.add {rack, plugin}`. Instruments play from `pitch` and `gate` (a voice per gate channel: key round(60 + 12 × pitch)). Audio in on `in_l`, `in_r`; out on `out_l`, `out_r`. Its knobs are its plug-in's: `fx.set`, `fx.patch.merge` on its `fx`; a cable into `"synth.cutoff"` (in `rack.patch`) or `fx_N.cutoff` modulates one. |
 
@@ -649,13 +649,12 @@ A send into an In carries the tap at the route's level and pan, unencoded,
 with the console on or off. A following send pans with its strip's mode and
 law: under the default 0 dB law a centred send is at unity.
 
-A rack channel can keep its audio Out and a keyboard input together:
-`track.set {track: "tr_1", record_midi: "*", armed: true, monitor: "on"}`.
-Its default Notes source follows that channel. Selecting MIDI keeps the rack
-Out, and selecting the rack keeps MIDI (on other channels hardware audio and
-MIDI replace each other). With a MIDI input it records MIDI; without one,
-the rack Out's audio. To record both in one pass, arm a second channel with
-`record_rack` set to the same Out. Arming or changing
+A channel has one input: hardware audio, MIDI or rack Out. Selecting one
+with `track.set` replaces the others; `rack.add` selects its new Out.
+To play the rack from a keyboard, select `record_midi` on a separate channel,
+arm and monitor it, then `route.add {from: "tr_2", to: "mo_2", midi: {}}`
+into the rack's Notes. Arm the MIDI channel to record notes and the rack
+channel to record its Out audio. Arming or changing
 monitoring mid-song leaves timeline notes sounding. To clear a Notes
 module's own settings use `module.set {module: "mo_2", device: null,
 source: null}`; `device: ""` listens to every input, like `"*"`.
@@ -676,4 +675,4 @@ track source while keeping its device and explicit MIDI sends. Null restores
 Home. Note Out's MIDI channel knob (`channel`) selects a MIDI channel, not a
 track. The routing window's MIDI mode exposes both Notes and Note Out modules.
 Frozen channels keep sending timeline MIDI at both taps; the frozen audio
-print produces no MIDI. MIDI overdub/replace records delivered sends.
+print produces no MIDI. MIDI overdub/replace records delivered sends, even with an audio or rack input selected.

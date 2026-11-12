@@ -1715,7 +1715,7 @@ Result<TransportInfo> EngineApp::transport(std::string_view action, std::optiona
             const model::Route* in =
                 output || !tr.record.input ? nullptr : s.routes.find(*tr.record.input);
             const auto* midi = output ? nullptr : model::midiInputRoute(s, e.id);
-            // A rack channel with a MIDI input records MIDI, else its Out's audio (ADR-0065).
+            // Explicit MIDI record modes capture sends independently of the selected input.
             if (routed || midi) {  // MIDI (ADR-0016): events, no file
                 RecordTarget t;
                 t.track = e.id;

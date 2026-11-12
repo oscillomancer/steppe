@@ -2293,14 +2293,12 @@ TEST_CASE("track.set: null takes off hardware audio or a rack's Out, each alone"
     set(mic, R"("record_input":null)");  // nothing to take off
     CHECK(routes() == withMic - 1);
 
-    // Synth: its rack's Out and a keyboard. Hardware audio's null leaves both;
-    // the rack's takes off the Out, keeping the keyboard.
+    // A keyboard replaces Synth's rack Out; null for another kind leaves it.
     set(synth, R"("record_midi":"*")");
     REQUIRE(track(synth).record.midiInput);
     set(synth, R"("record_input":null)");
     REQUIRE(track(synth).record.input);
-    CHECK(app->head().routes.find(*track(synth).record.input)->from.module ==
-          model::Id::parse(out));
+    CHECK(model::midiInputRoute(app->head(), *model::Id::parse(synth)));
     set(synth, R"("record_rack":null)");
     const model::Track after = track(synth);
     REQUIRE(after.record.midiInput);

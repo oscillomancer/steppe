@@ -540,3 +540,150 @@ TEST_CASE("MIDI sends: model rejects invalid endpoints, audio controls, learn an
         CHECK_FALSE(valid(send));
     }
 }
+
+TEST_CASE(
+    "track inputs: current conflicts fail; old files retain rack, then instrument MIDI, then "
+    "audio") {
+    for (bool rackInput : {false, true})
+        for (bool mainChain : {false, true}) {
+            CAPTURE(rackInput);
+            CAPTURE(mainChain);
+            Patch p = patch();
+            EditTxn tx(p.s, 2);
+            tx.modify<Track>(p.channel, [](auto& t) { t.name = "Voice"; });
+            const Id input = *p.s.tracks.find(p.channel)->record.input;
+            if (!rackInput)
+                tx.modify<Route>(input, [](auto& r) {
+                    r.from = RouteEnd{};
+                    r.from.hwChannels = std::vector<int>{1, 2};
+                });
+            if (mainChain) {
+                FxInstance fx;
+                fx.plugin.id = "com.example.instrument";
+                const Id id = tx.create(fx);
+                tx.modify<Track>(p.channel, [&](auto& t) { t.chain.push_back(id); });
+            }
+            auto base = tx.commit();
+            REQUIRE(base);
+            EditTxn invalid(*base, 3);
+            Route midi;
+            midi.from.midiDevice = "Keyboard";
+            midi.to.track = p.channel;
+            midi.midi = MidiRouting{};
+            const Id midiId = invalid.create(midi);
+            invalid.modify<Track>(p.channel, [&](auto& t) { t.record.midiInput = midiId; });
+            auto refused = invalid.commit();
+            REQUIRE_FALSE(refused);
+            CHECK(refused.error().code == "model.invariant");
+            CHECK(refused.error().path == "/tracks/" + p.channel.str() + "/record/input");
+            CHECK_FALSE(refused.error().hint.empty());
+            auto doc = projectToJson(*base);
+            doc["tracks"][p.channel.str()]["record"]["midi_input"] = midiId.str();
+            doc["routes"][midiId.str()] = toJson(midi);
+            doc["project"]["next_ids"]["sd"] = static_cast<std::int64_t>(midiId.n + 1);
+            // From 2.12 (ADR-0074) a conflict is invalid, not migrated; 2.13
+            // (rack sends, ADR-0075) keeps that rule.
+            for (const char* version : {"supple.project/2.12", "supple.project/2.13"}) {
+                doc["schema"] = version;
+                CHECK_FALSE(projectFromJson(doc));
+            }
+            const bool midiWins = !rackInput && mainChain;
+            const Id dropped = midiWins ? input : midiId;
+            Envelope env;
+            env.target.object = dropped;
+            env.target.param = "mute";
+            const Id envId{Kind::Envelope, base->next[Kind::Envelope]};
+            doc["envelopes"][envId.str()] = toJson(env);
+            doc["project"]["next_ids"]["en"] = static_cast<std::int64_t>(envId.n + 1);
+            AutomationItem automation;
+            automation.envelope = envId;
+            automation.length = 1;
+            const Id autoId{Kind::AutoItem, base->next[Kind::AutoItem]};
+            doc["automation_items"][autoId.str()] = toJson(automation);
+            doc["project"]["next_ids"]["ai"] = static_cast<std::int64_t>(autoId.n + 1);
+            for (const char* version :
+                 {"supple.project/2.8", "supple.project/2.10", "supple.project/2.11"}) {
+                doc["schema"] = version;
+                const bool timecode = std::string_view(version) == "supple.project/2.11";
+                if (timecode)
+                    doc["project"]["timecode"] =
+                        *json::parse(R"({"rate":"25","start":"01:00:00:00"})");
+                else
+                    doc["project"].asObject().erase("timecode");
+                std::vector<schema::Warning> warnings;
+                auto loaded = projectFromJson(doc, &warnings);
+                REQUIRE_MESSAGE(loaded, (loaded ? "" : loaded.error().toString()));
+                if (timecode)
+                    CHECK(loaded->project->timecode ==
+                          sync::TimecodeMapping{sync::FrameRate::Fps25, {1, 0, 0, 0}});
+                const bool keepMidi = !rackInput && mainChain;
+                const auto& record = loaded->tracks.find(p.channel)->record;
+                CHECK(record.input == (keepMidi ? midiId : input));
+                CHECK(bool(record.midiInput) == keepMidi);
+                CHECK_FALSE(loaded->routes.contains(keepMidi ? input : midiId));
+                CHECK_FALSE(loaded->envelopes.contains(envId));
+                CHECK_FALSE(loaded->autoItems.contains(autoId));
+                REQUIRE(warnings.size() == 1);
+                CHECK(warnings.front().code == "project.input_conflict");
+                CHECK(warnings.front().message.find("Voice") != std::string::npos);
+                CHECK(warnings.front().message.find(keepMidi ? "dropped audio input 1 2"
+                                                             : "dropped MIDI input Keyboard") !=
+                      std::string::npos);
+                CHECK(warnings.front().message.find("another channel") != std::string::npos);
+                CHECK(warnings.front().message.find("Notes") != std::string::npos);
+                CHECK(warnings.front().message.find(p.channel.str()) != std::string::npos);
+                const auto bytes = serializeProject(*loaded);
+                warnings.clear();
+                auto again = parseProject(bytes, &warnings);
+                REQUIRE(again);
+                CHECK(warnings.empty());
+                CHECK(serializeProject(*again) == bytes);
+            }
+        }
+}
+
+TEST_CASE("track inputs: old files warn when multiple rack Outs are unrouted") {
+    for (int count : {2, 3}) {
+        Patch p = patch();
+        EditTxn tx(p.s, 2);
+        tx.modify<Track>(p.channel, [](auto& track) { track.name = "Ambiguous voice"; });
+        for (int i = 1; i < count; ++i) {
+            RackModule out;
+            out.rack = p.rack;
+            out.type = std::string(kOutModule);
+            tx.create(out);
+        }
+        auto base = tx.commit();
+        REQUIRE(base);
+        const auto input = *base->tracks.find(p.channel)->record.input;
+        auto midi = *base->routes.find(input);
+        midi.from = RouteEnd{};
+        midi.from.midiDevice = "Keyboard";
+        midi.midi = MidiRouting{};
+        auto doc = projectToJson(*base);
+        doc["routes"][input.str()] = toJson(midi);
+        for (const char* format : {"supple.project/2.7", "supple.project/2.8"}) {
+            doc["schema"] = format;
+            std::vector<schema::Warning> warnings;
+            auto loaded = projectFromJson(doc, &warnings);
+            REQUIRE_MESSAGE(loaded, (loaded ? "" : loaded.error().toString()));
+            CHECK(loaded->tracks.find(p.channel)->record.input == input);
+            REQUIRE(midiInputRoute(*loaded, p.channel));
+            CHECK(midiInputRoute(*loaded, p.channel)->from.midiDevice == "Keyboard");
+            CHECK(loaded->routes.size() == base->routes.size());
+            REQUIRE(warnings.size() == 1);
+            CHECK(warnings.front().code == "project.rack_input_unrepaired");
+            CHECK(warnings.front().path == "/tracks/" + p.channel.str() + "/record");
+            CHECK(warnings.front().message.find("Ambiguous voice") != std::string::npos);
+            CHECK(warnings.front().message.find("Keyboard") != std::string::npos);
+            CHECK(warnings.front().message.find("Choose") != std::string::npos);
+            CHECK(warnings.front().message.find("Out") != std::string::npos);
+            const auto saved = serializeProject(*loaded);
+            warnings.clear();
+            auto reopened = parseProject(saved, &warnings);
+            REQUIRE(reopened);
+            CHECK(warnings.empty());
+            CHECK(serializeProject(*reopened) == saved);
+        }
+    }
+}

@@ -870,6 +870,11 @@ std::string RackWindow::status() const {
         std::to_string(s.cables.size()) + (s.cables.size() == 1 ? " cable" : " cables");
     if (!space_->selection().empty())
         out += "  ·  " + std::to_string(space_->selection().size()) + " selected";
+#if defined(__APPLE__)
+    out += "  ·  Wheel: zoom; Cmd+wheel: scroll; Shift+wheel: across";
+#else
+    out += "  ·  Wheel: zoom; Ctrl+wheel: scroll; Shift+wheel: across";
+#endif
     if (capture_) out += "  ·  " + capture_->progress;
     if (waitsForPlay()) out += "  ·  Stopped: press play to start the patch";
     if (!notice_.empty() && app_.head().version == noticeVersion_) out += "  ·  " + notice_;
