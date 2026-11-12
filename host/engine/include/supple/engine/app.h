@@ -546,6 +546,8 @@ class EngineApp : public cmd::Host {
     // and the live chase rate.
     const SyncSettings& syncSettings() const { return syncSettings_; }
     Status setSyncSettings(const SyncSettings& settings);
+    // Owner-thread device resolution shared with GUI: 1-based, zero if inactive.
+    int resolvedLtcOutputChannel() const;
     SyncReport syncReport();
 
     // --- main-thread service (event/deadline driven) --------------------------------

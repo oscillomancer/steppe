@@ -163,6 +163,11 @@ Status EngineApp::setSyncSettings(const SyncSettings& settings) {
     return {};
 }
 
+int EngineApp::resolvedLtcOutputChannel() const {
+    if (!engine_ || !syncSettings_.ltcOutput) return 0;
+    return std::min(syncSettings_.ltcOutputChannel, static_cast<int>(engine_->config().outputs));
+}
+
 SyncConfig EngineApp::syncConfigFor(std::vector<std::string>* warnings) const {
     SyncConfig c;
     const SyncSettings& s = syncSettings_;
@@ -215,10 +220,7 @@ SyncConfig EngineApp::syncConfigFor(std::vector<std::string>* warnings) const {
     if (s.ltcOutput) {
         // The stored channel, else the device's last output (the setting is
         // kept for a device that has it).
-        if (static_cast<std::uint32_t>(s.ltcOutputChannel) <= device.outputs)
-            c.ltcOutput = s.ltcOutputChannel - 1;
-        else if (device.outputs > 0)
-            c.ltcOutput = static_cast<int>(device.outputs) - 1;
+        c.ltcOutput = resolvedLtcOutputChannel() - 1;
         if (warnings && c.ltcOutput < 0)
             warnings->push_back("sync: the device has no outputs, so LTC output is not written");
         else if (warnings && c.ltcOutput != s.ltcOutputChannel - 1)

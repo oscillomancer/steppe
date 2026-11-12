@@ -1060,8 +1060,9 @@ running device remain visible as unavailable. Input-to-channel cells edit
 with replacement text on hover and after editing. Only master-to-device cells
 edit `track.set {hw_output}` (ADR-0056); channels and busses have no direct
 hardware outputs. All other cells are disabled with a reason on hover.
-LTC's output is labelled `[LTC]`; an overlapping master assignment has a warning
-cell (`!`) and its hover explains the overlap. Sync/device changes refresh this
+The engine's resolved LTC output is labelled `[LTC]` (a missing configured
+channel resolves to the device's last output). A master assignment there has a
+warning cell (`!`): "LTC replaces <master>'s audio on output N". Sync/device changes refresh this
 view even without a project edit. Send controls are hidden: these assignments
 have no independent tap, gain, mute or pan.
 

@@ -2272,7 +2272,7 @@ TEST_CASE("Hardware Audio: assignments replace inputs, edit masters and warn abo
     CHECK(matrix.model().destinations[output].name.find("[LTC]") != std::string::npos);
     const auto sends = matrix.model().sendsAt(audioRow(matrix, "tr_0"), output);
     REQUIRE(sends.size() == 1);
-    CHECK(sends.front()->warning.find("LTC occupies") != std::string::npos);
+    CHECK(sends.front()->warning.find("LTC replaces Master's audio") != std::string::npos);
     f.snapshot("routing-hardware-audio.png", &panel.root());
     REQUIRE(matrix.clickCell(audioRow(matrix, "tr_0"), output));
     REQUIRE(panel.root().click("routing.remove"));
@@ -2490,4 +2490,29 @@ TEST_CASE("Hardware Audio: mono signals and odd device channels stay joined") {
     CHECK(matrix.model().destinations[audioCol(matrix, mono)].width == 1);
     REQUIRE(matrix.doubleClickCell(audioRow(matrix, "audio_in:3"), audioCol(matrix, mono)));
     CHECK(audioInput(f, mono) == std::vector<int>{3});
+}
+
+TEST_CASE("Hardware Audio: LTC resolves the unavailable default to output two") {
+    Fixture f;
+    REQUIRE(f.ok);
+    AudioGridDevice backend;
+    StopGridDevice stop{*f.app};
+    REQUIRE(f.app->startEngine(backend, {.blockSize = 64, .inputs = 2, .outputs = 2},
+                               {.anticipative = false, .workers = 0}));
+    gui::FloatingPanel panel(*f.platform, *f.window, *f.root, SUPPLE_GUI_FONTS_DIR, "Routing", 1000,
+                             560, 800, 360);
+    gui::RoutingMatrix matrix(panel, *f.actions, *f.dispatcher, *f.app);
+    matrix.setHardwareAudioMode();
+    matrix.open();
+    f.exec("sync.set", R"({"ltc_output":true,"ltc_output_channel":3})");
+    matrix.sync();
+    CHECK(f.app->resolvedLtcOutputChannel() == 2);
+    const auto col = audioCol(matrix, "audio_out:1");
+    CHECK(matrix.model().destinations[col].name.find("[LTC]") != std::string::npos);
+    CHECK(std::none_of(matrix.model().destinations.begin(), matrix.model().destinations.end(),
+                       [](const auto& d) { return d.signal == "audio_out:3"; }));
+    const auto sends = matrix.model().sendsAt(audioRow(matrix, "tr_0"), col);
+    REQUIRE(sends.size() == 1);
+    CHECK(sends.front()->warning == "LTC replaces Master's audio on output 2");
+    f.snapshot("routing-hardware-audio-ltc-fallback.png", &panel.root());
 }

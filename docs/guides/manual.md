@@ -430,7 +430,9 @@ select connected cells and Remove (or Delete) to disconnect. Choosing an audio
 input replaces the channel's MIDI or rack input, as the status line explains.
 Channels and busses reach hardware through a master. Device channel names appear
 when available; saved channels outside the current device say unavailable.
-An output used by LTC is labelled `[LTC]`; a master's overlap has a `!` warning.
+The actual output used by LTC is labelled `[LTC]`; if the configured channel
+is absent, LTC uses the device's last output. A `!` cell warns "LTC replaces
+<master>'s audio on output N".
 
 Right-click a stereo input, output, channel or master header and choose
 **Split into L/R** to see and assign its sides, or **Join** to put it back.

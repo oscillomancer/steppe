@@ -109,10 +109,9 @@ void RoutingMatrix::splitAllAudio(bool split) {
 
 bool RoutingMatrix::hardwareAudioChanged() const {
     const auto* backend = app_.backend();
-    const auto& sync = app_.syncSettings();
     return audioBackend_ != backend || audioInputs_ != (backend ? backend->config().inputs : 0) ||
            audioOutputs_ != (backend ? backend->config().outputs : 0) ||
-           ltcOutput_ != (sync.ltcOutput ? sync.ltcOutputChannel : 0);
+           ltcOutput_ != app_.resolvedLtcOutputChannel();
 }
 
 Status RoutingMatrix::reloadHardwareAudio() {
@@ -125,8 +124,7 @@ Status RoutingMatrix::reloadHardwareAudio() {
     const auto session = app_.view();
     MatrixModel next;
     next.hardwareAudio = true;
-    const auto& sync = app_.syncSettings();
-    const int ltc = sync.ltcOutput ? sync.ltcOutputChannel : 0;
+    const int ltc = app_.resolvedLtcOutputChannel();
     std::map<std::string, std::vector<int>> inputs, outputs;
     int inputCount = 0, outputCount = ltc;
     std::array<std::string, 64> inputNames{}, outputNames{};
@@ -277,7 +275,8 @@ Status RoutingMatrix::reloadHardwareAudio() {
                 send.from = s.id;
                 send.to = d.id;
                 if (warning)
-                    send.warning = "LTC occupies this output; the master's audio overlaps it";
+                    send.warning =
+                        "LTC replaces " + s.name + "'s audio on output " + std::to_string(ltc);
                 next.sends.push_back(std::move(send));
             }
         }
