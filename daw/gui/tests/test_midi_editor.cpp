@@ -21,6 +21,7 @@
 #include "mixer.h"
 #include "routing_matrix.h"
 #include "supple/base/fader.h"
+#include "supple/engine/realtime.h"
 #include "supple/gui/png.h"
 #include "supple/gui/window.h"
 #include "supple/ui/controls.h"
@@ -2262,6 +2263,666 @@ TEST_CASE("routing matrix: a single wildcard input cell can be removed") {
     REQUIRE(matrix.clickCell(0, col));
     REQUIRE(matrix.removeSelected());
     CHECK(model.sendsAt(0, col).empty());
+}
+
+namespace {
+struct AudioGridDevice : engine::DummyBackend {
+    AudioGridDevice() : DummyBackend({.mode = Mode::Manual}) {}
+    std::vector<std::string> inputNames() const override { return {"Mic left", "Mic right"}; }
+    std::vector<std::string> outputNames() const override {
+        return {"Monitor left", "Monitor right"};
+    }
+};
+struct StopGridDevice {
+    engine::EngineApp& app;
+    ~StopGridDevice() { app.stopEngine(); }
+};
+std::size_t audioRow(const gui::RoutingMatrix& matrix, const std::string& signal, int side = 0) {
+    const auto& rows = matrix.model().sources;
+    for (std::size_t i = 0; i < rows.size(); ++i)
+        if (rows[i].signal == signal && rows[i].side == side) return i;
+    FAIL("missing audio row " << signal << " side " << side);
+    return 0;
+}
+std::size_t audioCol(const gui::RoutingMatrix& matrix, const std::string& signal, int side = 0) {
+    const auto& cols = matrix.model().destinations;
+    for (std::size_t i = 0; i < cols.size(); ++i)
+        if (cols[i].signal == signal && cols[i].side == side) return i;
+    FAIL("missing audio column " << signal << " side " << side);
+    return 0;
+}
+std::vector<int> audioInput(const Fixture& f, const std::string& channel) {
+    const auto& session = f.app->head();
+    const auto* track = session.tracks.find(*model::Id::parse(channel));
+    if (!track || !track->record.input) return {};
+    const auto* route = session.routes.find(*track->record.input);
+    return route && route->from.hwChannels ? *route->from.hwChannels : std::vector<int>{};
+}
+std::vector<int> audioOutput(const Fixture& f, const std::string& master = "tr_0") {
+    const auto id = *model::Id::parse(master);
+    return model::hardwareOutputs(*f.app->head().tracks.find(id), id);
+}
+}  // namespace
+
+TEST_CASE("Hardware Audio: assignments replace inputs, edit masters and warn about LTC") {
+    Fixture f;
+    REQUIRE(f.ok);
+    AudioGridDevice backend;
+    StopGridDevice stop{*f.app};
+    REQUIRE(f.app->startEngine(backend, {.blockSize = 64, .inputs = 4, .outputs = 4},
+                               {.anticipative = false, .workers = 0}));
+    const auto channel = f.exec("track.add", R"({"name":"Vocal input"})")["track"].asString();
+    const auto bus = f.exec("track.add", R"({"name":"Bus","type":"buss"})")["track"].asString();
+    f.exec("track.set", R"({"track":")" + channel + R"(","record_midi":"Keyboard"})");
+    gui::FloatingPanel panel(*f.platform, *f.window, *f.root, SUPPLE_GUI_FONTS_DIR, "Routing", 1000,
+                             560, 800, 360);
+    gui::RoutingMatrix matrix(panel, *f.actions, *f.dispatcher, *f.app);
+    REQUIRE(f.actions->run("ui.routing.hardware_audio"));
+    panel.root().frame(false);
+    REQUIRE(matrix.hardwareAudioMode());
+    CHECK_FALSE(matrix.hardwareMidiMode());
+    CHECK_FALSE(matrix.midiMode());
+    CHECK_FALSE(matrix.volumeControl()->visible);
+    const auto in = audioRow(matrix, "audio_in:1");
+    const auto col = audioCol(matrix, channel);
+    CHECK(matrix.model().sources[in].name.find("Mic left") != std::string::npos);
+    CHECK(matrix.model().destinations[audioCol(matrix, "audio_out:1")].name.find("Monitor left") !=
+          std::string::npos);
+    const auto gridBounds = matrix.grid()->bounds();
+    ui::PointerEvent hover;
+    hover.type = ui::PointerEvent::Type::Move;
+    hover.pos = {gridBounds.x + 190 + static_cast<float>(col) * 22 + 11,
+                 gridBounds.y + 112 + static_cast<float>(in) * 22 + 11};
+    panel.root().pointer(hover);
+    CHECK(panel.root().find("routing.status")->valueText().find("replaces MIDI input Keyboard") !=
+          std::string::npos);
+    REQUIRE(matrix.doubleClickCell(in, col));
+    CHECK(audioInput(f, channel) == std::vector<int>{1, 2});
+    CHECK_FALSE(model::midiInputRoute(f.app->head(), *model::Id::parse(channel)));
+    CHECK(matrix.status().find("replaces MIDI input Keyboard") != std::string::npos);
+    REQUIRE(matrix.clickCell(in, col));
+    CHECK(panel.root().find("routing.send")->valueText() == "1 cell selected");
+    REQUIRE(matrix.removeSelected());
+    CHECK(audioInput(f, channel).empty());
+    // A rack Out is replaced through the same existing track.set path.
+    const auto rack = f.exec("rack.add", R"({"track":")" + channel + R"("})")["rack"].asString();
+    const auto module =
+        f.exec("module.add",
+               R"({"rack":")" + rack + R"(","type":"out","label":"Record return"})")["module"]
+            .asString();
+    f.exec("track.set", R"({"track":")" + channel + R"(","record_rack":")" + module + R"("})");
+    matrix.sync();
+    REQUIRE(matrix.doubleClickCell(in, col));
+    CHECK(audioInput(f, channel) == std::vector<int>{1, 2});
+    CHECK(matrix.status().find("replaces Record return") != std::string::npos);
+    CHECK(matrix.status().find(module) == std::string::npos);
+    const auto output = audioCol(matrix, "audio_out:3");
+    REQUIRE(matrix.doubleClickCell(audioRow(matrix, "tr_0"), output));
+    CHECK(audioOutput(f) == std::vector<int>{3, 4});
+    CHECK(std::none_of(
+        matrix.model().sources.begin(), matrix.model().sources.end(),
+        [&](const auto& source) { return source.signal == channel || source.signal == bus; }));
+    CHECK(std::all_of(matrix.model().sources.begin(), matrix.model().sources.end(),
+                      [](const auto& source) {
+                          return source.type == "audio_input" || source.type == "master";
+                      }));
+    CHECK_FALSE(matrix.doubleClickCell(in, output));
+    f.exec("sync.set", R"({"ltc_output":true,"ltc_output_channel":3})");
+    matrix.sync();
+    CHECK(matrix.model().destinations[output].name.find("[LTC]") != std::string::npos);
+    const auto sends = matrix.model().sendsAt(audioRow(matrix, "tr_0"), output);
+    REQUIRE(sends.size() == 1);
+    CHECK(sends.front()->warning.find("LTC replaces Master's audio") != std::string::npos);
+    f.snapshot("routing-hardware-audio.png", &panel.root());
+    REQUIRE(matrix.clickCell(audioRow(matrix, "tr_0"), output));
+    REQUIRE(panel.root().click("routing.remove"));
+    CHECK(audioOutput(f).empty());
+    matrix.close();
+    matrix.open();
+    CHECK(matrix.hardwareAudioMode());
+    panel.root().frame(false);
+    REQUIRE(panel.root().click("routing.mode.hardware"));
+    CHECK_FALSE(matrix.hardwareAudioMode());
+    CHECK(matrix.hardwareMidiMode());
+    REQUIRE(panel.root().click("routing.mode.hardware_audio"));
+    CHECK(matrix.hardwareAudioMode());
+    CHECK_FALSE(matrix.hardwareMidiMode());
+    REQUIRE(matrix.clickCell(audioRow(matrix, "audio_in:1"), audioCol(matrix, channel)));
+    REQUIRE(panel.root().click("routing.mode.hardware_audio"));
+    CHECK(matrix.selectedCells() == 1);
+    CHECK(static_cast<ui::Toggle*>(panel.root().find("routing.mode.hardware_audio"))->on());
+    REQUIRE(panel.root().click("routing.mode.audio"));
+    CHECK_FALSE(matrix.hardwareAudioMode());
+    CHECK(matrix.selectedCells() == 0);
+}
+
+TEST_CASE("Hardware Audio: per-signal and whole-tab split edit only representable sides") {
+    Fixture f;
+    REQUIRE(f.ok);
+    AudioGridDevice backend;
+    StopGridDevice stop{*f.app};
+    REQUIRE(f.app->startEngine(backend, {.blockSize = 64, .inputs = 4, .outputs = 4},
+                               {.anticipative = false, .workers = 0}));
+    const auto channel = f.exec("track.add", R"({"name":"Stereo input"})")["track"].asString();
+    gui::FloatingPanel panel(*f.platform, *f.window, *f.root, SUPPLE_GUI_FONTS_DIR, "Routing", 1000,
+                             560, 800, 360);
+    gui::RoutingMatrix matrix(panel, *f.actions, *f.dispatcher, *f.app);
+    matrix.setHardwareAudioMode();
+    matrix.open();
+    panel.root().frame(false);
+    const auto version = f.app->head().version;
+    // Exercise the row-header right-click path as well as the menu seam.
+    ui::PointerEvent context;
+    context.type = ui::PointerEvent::Type::Down;
+    context.button = 3;
+    const auto gridBounds = matrix.grid()->bounds();
+    context.pos = {gridBounds.x + 30, gridBounds.y + 112 + 11};
+    panel.root().pointer(context);
+    REQUIRE(panel.root().find("routing.audio.signal"));
+    context.type = ui::PointerEvent::Type::Up;
+    panel.root().pointer(context);
+    panel.root().closePopup();
+    auto menu = matrix.audioSignalMenu(true, audioRow(matrix, "audio_in:1"));
+    REQUIRE(menu.size() == 1);
+    CHECK(menu[0].label == "Split into L/R");
+    menu[0].run();
+    CHECK(f.app->head().version == version);
+    const auto leftInput = audioRow(matrix, "audio_in:1", 1);
+    REQUIRE(matrix.doubleClickCell(leftInput, audioCol(matrix, channel)));
+    CHECK(audioInput(f, channel) == std::vector<int>{1});
+    menu = matrix.audioSignalMenu(true, leftInput);
+    CHECK(menu[0].label == "Join");
+    menu[0].run();
+    CHECK(audioInput(f, channel) == std::vector<int>{1});
+    REQUIRE(matrix.doubleClickCell(audioRow(matrix, "audio_in:3"), audioCol(matrix, channel)));
+    CHECK(audioInput(f, channel) == std::vector<int>{3, 4});
+    panel.root().frame(false);
+    REQUIRE(panel.root().click("routing.audio.split"));
+    CHECK(matrix.model().destinations[audioCol(matrix, channel, 1)].side == 1);
+    REQUIRE(
+        matrix.doubleClickCell(audioRow(matrix, "audio_in:1", 1), audioCol(matrix, channel, 2)));
+    CHECK(audioInput(f, channel) == std::vector<int>{3, 1});
+    // The master retains R=2 while L moves to hardware output 3.
+    REQUIRE(
+        matrix.doubleClickCell(audioRow(matrix, "tr_0", 1), audioCol(matrix, "audio_out:3", 1)));
+    CHECK(audioOutput(f) == std::vector<int>{3, 2});
+    f.exec("history.undo", "{}");
+    CHECK(audioOutput(f) == std::vector<int>{1, 2});
+    f.exec("history.redo", "{}");
+    matrix.sync();
+    CHECK(audioOutput(f) == std::vector<int>{3, 2});
+    panel.root().frame(false);
+    f.snapshot("routing-hardware-audio-split.png", &panel.root());
+    REQUIRE(matrix.clickCell(audioRow(matrix, "tr_0", 1), audioCol(matrix, "audio_out:3", 1)));
+    auto partial = matrix.removeSelected();
+    REQUIRE_FALSE(partial);
+    CHECK_FALSE(partial.error().hint.empty());
+    CHECK(audioOutput(f) == std::vector<int>{3, 2});
+    CHECK_FALSE(
+        matrix.doubleClickCell(audioRow(matrix, "tr_0", 1), audioCol(matrix, "audio_out:1", 2)));
+    // Removing the entire split assignment remains one undoable track edit.
+    matrix.clickRow(audioRow(matrix, "tr_0", 1));
+    matrix.clickRow(audioRow(matrix, "tr_0", 2), ui::kCtrl);
+    REQUIRE(matrix.removeSelected());
+    CHECK(audioOutput(f).empty());
+    const auto denied =
+        matrix.doubleClickCell(audioRow(matrix, "tr_0", 1), audioCol(matrix, "audio_out:3", 1));
+    REQUIRE_FALSE(denied);
+    CHECK_FALSE(denied.error().hint.empty());
+    const auto splits = matrix.saveAudioSplits();
+    matrix.loadAudioSplits(json::Value());
+    CHECK(matrix.model().sources[audioRow(matrix, "tr_0")].side == 0);
+    matrix.loadAudioSplits(splits);
+    CHECK(matrix.model().sources[audioRow(matrix, "tr_0", 1)].side == 1);
+    panel.root().frame(false);
+    REQUIRE(panel.root().click("routing.audio.split"));
+    CHECK(matrix.saveAudioSplits().asArray().empty());
+    REQUIRE(matrix.doubleClickCell(audioRow(matrix, "tr_0"), audioCol(matrix, "audio_out:1")));
+    // Joined master -> one output is the existing mono sum, not left-only.
+    menu = matrix.audioSignalMenu(false, audioCol(matrix, "audio_out:3"));
+    menu[0].run();
+    REQUIRE(matrix.doubleClickCell(audioRow(matrix, "tr_0"), audioCol(matrix, "audio_out:3", 1)));
+    CHECK(audioOutput(f) == std::vector<int>{3});
+}
+
+TEST_CASE("Hardware Audio: conflicting selections refuse atomically, input sides need a pair") {
+    Fixture f;
+    REQUIRE(f.ok);
+    AudioGridDevice backend;
+    StopGridDevice stop{*f.app};
+    REQUIRE(f.app->startEngine(backend, {.blockSize = 64, .inputs = 4, .outputs = 4},
+                               {.anticipative = false, .workers = 0}));
+    const auto channel = f.exec("track.add", R"({"name":"Unassigned input"})")["track"].asString();
+    gui::FloatingPanel panel(*f.platform, *f.window, *f.root, SUPPLE_GUI_FONTS_DIR, "Routing", 1000,
+                             560, 800, 360);
+    gui::RoutingMatrix matrix(panel, *f.actions, *f.dispatcher, *f.app);
+    matrix.setHardwareAudioMode();
+    matrix.open();
+    const auto version = f.app->head().version;
+    REQUIRE(matrix.clickCell(audioRow(matrix, "audio_in:1"), audioCol(matrix, channel)));
+    REQUIRE(matrix.clickCell(audioRow(matrix, "audio_in:3"), audioCol(matrix, channel), ui::kCtrl));
+    CHECK_FALSE(matrix.addSelected());
+    CHECK(audioInput(f, channel).empty());
+    CHECK(f.app->head().version == version);
+    matrix.splitAllAudio(true);
+    auto denied =
+        matrix.doubleClickCell(audioRow(matrix, "audio_in:1", 1), audioCol(matrix, channel, 1));
+    REQUIRE_FALSE(denied);
+    CHECK(denied.error().message.find("assign an input first") != std::string::npos);
+    CHECK(audioInput(f, channel).empty());
+    // External commands can clear the map before the next GUI sync. A
+    // formerly usable split cell must refuse rather than index an empty map.
+    f.exec("track.set", R"({"track":")" + channel + R"(","record_input":[1,2]})");
+    matrix.sync();
+    f.exec("track.set", R"({"track":")" + channel + R"(","record_input":null})");
+    denied =
+        matrix.doubleClickCell(audioRow(matrix, "audio_in:3", 1), audioCol(matrix, channel, 1));
+    REQUIRE_FALSE(denied);
+    CHECK_FALSE(denied.error().hint.empty());
+    CHECK(audioInput(f, channel).empty());
+    matrix.sync();
+    f.exec("track.set", R"({"track":"tr_0","hw_output":[]})");
+    denied =
+        matrix.doubleClickCell(audioRow(matrix, "tr_0", 1), audioCol(matrix, "audio_out:3", 1));
+    REQUIRE_FALSE(denied);
+    CHECK_FALSE(denied.error().hint.empty());
+    CHECK(audioOutput(f).empty());
+}
+
+TEST_CASE("Hardware Audio: a 64-channel device stays addressable and refreshes on stop") {
+    Fixture f;
+    REQUIRE(f.ok);
+    AudioGridDevice backend;
+    StopGridDevice stop{*f.app};
+    REQUIRE(f.app->startEngine(backend, {.blockSize = 64, .inputs = 64, .outputs = 64},
+                               {.anticipative = false, .workers = 0}));
+    const auto channel = f.exec("track.add", R"({"name":"Last pair"})")["track"].asString();
+    gui::FloatingPanel panel(*f.platform, *f.window, *f.root, SUPPLE_GUI_FONTS_DIR, "Routing", 1000,
+                             560, 800, 360);
+    gui::RoutingMatrix matrix(panel, *f.actions, *f.dispatcher, *f.app);
+    matrix.setHardwareAudioMode();
+    matrix.open();
+    CHECK(audioRow(matrix, "audio_in:63") < matrix.model().sources.size());
+    CHECK(audioCol(matrix, "audio_out:63") < matrix.model().destinations.size());
+    REQUIRE(matrix.doubleClickCell(audioRow(matrix, "audio_in:63"), audioCol(matrix, channel)));
+    CHECK(audioInput(f, channel) == std::vector<int>{63, 64});
+    REQUIRE(matrix.doubleClickCell(audioRow(matrix, "tr_0"), audioCol(matrix, "audio_out:63")));
+    CHECK(audioOutput(f) == std::vector<int>{63, 64});
+    matrix.splitAllAudio(true);
+    CHECK(matrix.model().sources[audioRow(matrix, "audio_in:63", 2)].deviceChannels ==
+          std::vector<int>{64});
+    CHECK(matrix.model().destinations[audioCol(matrix, "audio_out:63", 2)].deviceChannels ==
+          std::vector<int>{64});
+    REQUIRE(matrix.clickCell(audioRow(matrix, "audio_in:63", 1), audioCol(matrix, channel, 1)));
+    REQUIRE(matrix.clickCell(audioRow(matrix, "audio_in:63", 2), audioCol(matrix, channel, 2),
+                             ui::kCtrl));
+    CHECK(matrix.selectedCells() == 2);
+    CHECK(panel.root().find("routing.send")->valueText() == "2 cells selected");
+    REQUIRE(matrix.clickCell(audioRow(matrix, "audio_in:1", 1), audioCol(matrix, channel, 1)));
+    REQUIRE(matrix.clickCell(audioRow(matrix, "audio_in:1", 2), audioCol(matrix, channel, 2),
+                             ui::kCtrl));
+    REQUIRE(matrix.addSelected());
+    CHECK(audioInput(f, channel) == std::vector<int>{1, 2});
+    f.exec("history.undo", "{}");
+    matrix.sync();
+    CHECK(audioInput(f, channel) == std::vector<int>{63, 64});
+    panel.root().frame(false);
+    f.snapshot("routing-hardware-audio-64.png", &panel.root());
+    f.app->stopEngine();
+    matrix.sync();
+    CHECK(matrix.model().sources[audioRow(matrix, "audio_in:63", 2)].name.find("engine stopped") !=
+          std::string::npos);
+    REQUIRE(f.app->startEngine(backend, {.blockSize = 64, .inputs = 2, .outputs = 2},
+                               {.anticipative = false, .workers = 0}));
+    matrix.sync();
+    CHECK(matrix.model().sources[audioRow(matrix, "audio_in:63", 2)].name.find("unavailable") !=
+          std::string::npos);
+    matrix.selectAll();
+    REQUIRE(matrix.removeSelected());
+    CHECK(audioInput(f, channel).empty());
+    CHECK(audioOutput(f).empty());
+    f.exec("history.undo", "{}");
+    CHECK(audioInput(f, channel) == std::vector<int>{63, 64});
+    CHECK(audioOutput(f) == std::vector<int>{63, 64});
+    matrix.loadAudioSplits(json::Value::object());
+    CHECK(matrix.saveAudioSplits().asArray().empty());
+}
+
+TEST_CASE("Hardware Audio: mono signals and odd device channels stay joined") {
+    Fixture f;
+    REQUIRE(f.ok);
+    AudioGridDevice backend;
+    StopGridDevice stop{*f.app};
+    REQUIRE(f.app->startEngine(backend, {.blockSize = 64, .inputs = 3, .outputs = 3},
+                               {.anticipative = false, .workers = 0}));
+    const auto mono = f.exec("track.add", R"({"name":"Mono","channels":1})")["track"].asString();
+    gui::FloatingPanel panel(*f.platform, *f.window, *f.root, SUPPLE_GUI_FONTS_DIR, "Routing", 1000,
+                             560, 800, 360);
+    gui::RoutingMatrix matrix(panel, *f.actions, *f.dispatcher, *f.app);
+    matrix.setHardwareAudioMode();
+    matrix.open();
+    CHECK_FALSE(matrix.audioSignalMenu(false, audioCol(matrix, mono))[0].enabled);
+    CHECK_FALSE(matrix.audioSignalMenu(true, audioRow(matrix, "audio_in:3"))[0].enabled);
+    CHECK_FALSE(matrix.audioSignalMenu(false, audioCol(matrix, "audio_out:3"))[0].enabled);
+    matrix.splitAllAudio(true);
+    CHECK(matrix.model().destinations[audioCol(matrix, mono)].width == 1);
+    REQUIRE(matrix.doubleClickCell(audioRow(matrix, "audio_in:3"), audioCol(matrix, mono)));
+    CHECK(audioInput(f, mono) == std::vector<int>{3});
+}
+
+TEST_CASE("Hardware Audio: LTC resolves the unavailable default to output two") {
+    Fixture f;
+    REQUIRE(f.ok);
+    AudioGridDevice backend;
+    StopGridDevice stop{*f.app};
+    REQUIRE(f.app->startEngine(backend, {.blockSize = 64, .inputs = 2, .outputs = 2},
+                               {.anticipative = false, .workers = 0}));
+    gui::FloatingPanel panel(*f.platform, *f.window, *f.root, SUPPLE_GUI_FONTS_DIR, "Routing", 1000,
+                             560, 800, 360);
+    gui::RoutingMatrix matrix(panel, *f.actions, *f.dispatcher, *f.app);
+    matrix.setHardwareAudioMode();
+    matrix.open();
+    f.exec("sync.set", R"({"ltc_output":true,"ltc_output_channel":3})");
+    matrix.sync();
+    CHECK(f.app->resolvedLtcOutputChannel() == 2);
+    const auto col = audioCol(matrix, "audio_out:1");
+    CHECK(matrix.model().destinations[col].name.starts_with("[LTC] "));
+    CHECK(std::none_of(matrix.model().destinations.begin(), matrix.model().destinations.end(),
+                       [](const auto& d) { return d.signal == "audio_out:3"; }));
+    const auto sends = matrix.model().sendsAt(audioRow(matrix, "tr_0"), col);
+    REQUIRE(sends.size() == 1);
+    CHECK(sends.front()->warning == "LTC replaces Master's audio on output 2");
+    panel.root().frame(false);
+    const auto b = matrix.grid()->bounds();
+    ui::PointerEvent hover;
+    hover.type = ui::PointerEvent::Type::Move;
+    hover.pos = {b.x + 190 + static_cast<float>(col) * 22 + 11,
+                 b.y + 112 + static_cast<float>(audioRow(matrix, "tr_0")) * 22 + 11};
+    panel.root().pointer(hover);
+    CHECK(panel.root()
+              .find("routing.status")
+              ->valueText()
+              .find("LTC replaces Master's audio on output 2") != std::string::npos);
+    f.snapshot("routing-hardware-audio-ltc-fallback.png", &panel.root());
+    matrix.splitAllAudio(true);
+    CHECK_FALSE(
+        matrix.model().destinations[audioCol(matrix, "audio_out:1", 1)].name.starts_with("[LTC] "));
+    CHECK(
+        matrix.model().destinations[audioCol(matrix, "audio_out:1", 2)].name.starts_with("[LTC] "));
+    const auto split =
+        matrix.model().sendsAt(audioRow(matrix, "tr_0", 2), audioCol(matrix, "audio_out:1", 2));
+    REQUIRE(split.size() == 1);
+    CHECK(split.front()->warning == "LTC replaces Master's audio on output 2");
+}
+
+TEST_CASE("Hardware Audio: swap sides atomically and refuse mixed blocked selections") {
+    Fixture f;
+    REQUIRE(f.ok);
+    AudioGridDevice backend;
+    StopGridDevice stop{*f.app};
+    REQUIRE(f.app->startEngine(backend, {.blockSize = 64, .inputs = 2, .outputs = 4},
+                               {.anticipative = false, .workers = 0}));
+    gui::FloatingPanel panel(*f.platform, *f.window, *f.root, SUPPLE_GUI_FONTS_DIR, "Routing", 1000,
+                             560, 800, 360);
+    gui::RoutingMatrix matrix(panel, *f.actions, *f.dispatcher, *f.app);
+    matrix.setHardwareAudioMode();
+    matrix.open();
+    matrix.splitAllAudio(true);
+    const auto l = audioRow(matrix, "tr_0", 1), r = audioRow(matrix, "tr_0", 2);
+    REQUIRE(matrix.model().blocked(l, audioCol(matrix, "audio_out:1", 2)).empty());
+    REQUIRE(matrix.clickCell(l, audioCol(matrix, "audio_out:1", 2)));
+    REQUIRE(matrix.clickCell(r, audioCol(matrix, "audio_out:1", 1), ui::kCtrl));
+    REQUIRE(matrix.addSelected());
+    CHECK(audioOutput(f) == std::vector<int>{2, 1});
+    f.exec("history.undo", "{}");
+    matrix.sync();
+    CHECK(audioOutput(f) == std::vector<int>{1, 2});
+    const auto version = f.app->head().version;
+    REQUIRE(matrix.clickCell(l, audioCol(matrix, "audio_out:3", 1)));
+    REQUIRE(matrix.clickCell(audioRow(matrix, "audio_in:1", 1), audioCol(matrix, "audio_out:3", 1),
+                             ui::kCtrl));
+    auto denied = matrix.addSelected();
+    REQUIRE_FALSE(denied);
+    CHECK(denied.error().message.find("Input 1") != std::string::npos);
+    CHECK_FALSE(denied.error().hint.empty());
+    CHECK(audioOutput(f) == std::vector<int>{1, 2});
+    CHECK(f.app->head().version == version);
+}
+
+TEST_CASE("Hardware Audio: joined mono cells identify mono and double-click restores the pair") {
+    Fixture f;
+    REQUIRE(f.ok);
+    AudioGridDevice backend;
+    StopGridDevice stop{*f.app};
+    REQUIRE(f.app->startEngine(backend, {.blockSize = 64, .inputs = 2, .outputs = 6},
+                               {.anticipative = false, .workers = 0}));
+    const auto channel = f.exec("track.add", R"({"name":"Mono input"})")["track"].asString();
+    f.exec("track.set", R"({"track":")" + channel + R"(","record_input":[1]})");
+    f.exec("track.set", R"({"track":"tr_0","hw_output":[5]})");
+    gui::FloatingPanel panel(*f.platform, *f.window, *f.root, SUPPLE_GUI_FONTS_DIR, "Routing", 1000,
+                             560, 800, 360);
+    gui::RoutingMatrix matrix(panel, *f.actions, *f.dispatcher, *f.app);
+    matrix.setHardwareAudioMode();
+    matrix.open();
+    panel.root().frame(false);
+    auto hover = [&](std::size_t row, std::size_t col) {
+        const auto b = matrix.grid()->bounds();
+        ui::PointerEvent e;
+        e.type = ui::PointerEvent::Type::Move;
+        e.pos = {b.x + 190 + static_cast<float>(col) * 22 + 11,
+                 b.y + 112 + static_cast<float>(row) * 22 + 11};
+        panel.root().pointer(e);
+        return panel.root().find("routing.status")->valueText();
+    };
+    const auto input = audioRow(matrix, "audio_in:1"), col = audioCol(matrix, channel);
+    const auto master = audioRow(matrix, "tr_0"), output = audioCol(matrix, "audio_out:5");
+    CHECK(matrix.model().sendsAt(input, col).front()->mono);
+    CHECK(matrix.model().sendsAt(master, output).front()->mono);
+    CHECK(hover(input, col).find("mono: input 1 to both sides") != std::string::npos);
+    CHECK(hover(master, output).find("mono: (L+R)/2 to output 5") != std::string::npos);
+    f.snapshot("routing-hardware-audio-mono.png", &panel.root());
+    REQUIRE(matrix.doubleClickCell(input, col));
+    CHECK(audioInput(f, channel) == std::vector<int>{1, 2});
+    CHECK_FALSE(matrix.model().sendsAt(input, col).front()->mono);
+    REQUIRE(matrix.doubleClickCell(master, output));
+    CHECK(audioOutput(f) == std::vector<int>{5, 6});
+    CHECK_FALSE(matrix.model().sendsAt(master, output).front()->mono);
+    f.exec("history.undo", "{}");
+    CHECK(audioOutput(f) == std::vector<int>{5});
+}
+
+TEST_CASE(
+    "Hardware Audio: widen mono record inputs for side edits but preserve mono master refusal") {
+    Fixture f;
+    REQUIRE(f.ok);
+    AudioGridDevice backend;
+    StopGridDevice stop{*f.app};
+    REQUIRE(f.app->startEngine(backend, {.blockSize = 64, .inputs = 4, .outputs = 4},
+                               {.anticipative = false, .workers = 0}));
+    const auto channel = f.exec("track.add", R"({"name":"Mono input"})")["track"].asString();
+    f.exec("track.set", R"({"track":")" + channel + R"(","record_input":[1]})");
+    f.exec("track.set", R"({"track":"tr_0","hw_output":[1]})");
+    gui::FloatingPanel panel(*f.platform, *f.window, *f.root, SUPPLE_GUI_FONTS_DIR, "Routing", 1000,
+                             560, 800, 360);
+    gui::RoutingMatrix matrix(panel, *f.actions, *f.dispatcher, *f.app);
+    matrix.setHardwareAudioMode();
+    matrix.open();
+    matrix.splitAllAudio(true);
+    REQUIRE(
+        matrix.doubleClickCell(audioRow(matrix, "audio_in:3", 1), audioCol(matrix, channel, 1)));
+    CHECK(audioInput(f, channel) == std::vector<int>{3, 1});
+    f.exec("track.set", R"({"track":")" + channel + R"(","record_input":[1]})");
+    matrix.sync();
+    REQUIRE(
+        matrix.doubleClickCell(audioRow(matrix, "audio_in:3", 2), audioCol(matrix, channel, 2)));
+    CHECK(audioInput(f, channel) == std::vector<int>{1, 4});
+    auto denied =
+        matrix.doubleClickCell(audioRow(matrix, "tr_0", 1), audioCol(matrix, "audio_out:3", 1));
+    REQUIRE_FALSE(denied);
+    CHECK_FALSE(denied.error().hint.empty());
+    CHECK(audioOutput(f) == std::vector<int>{1});
+}
+
+TEST_CASE("Hardware Audio: save keeps project device splits and drops deleted track IDs") {
+    Fixture f;
+    REQUIRE(f.ok);
+    const auto channel = f.exec("track.add", R"({"name":"Transient"})")["track"].asString();
+    gui::FloatingPanel panel(*f.platform, *f.window, *f.root, SUPPLE_GUI_FONTS_DIR, "Routing", 1000,
+                             560, 800, 360);
+    gui::RoutingMatrix matrix(panel, *f.actions, *f.dispatcher, *f.app);
+    auto splits = json::Value::array();
+    for (const auto& signal :
+         {std::string("audio_in:1"), std::string("audio_out:1"), channel, std::string("tr_99999")})
+        splits.push_back(signal);
+    matrix.loadAudioSplits(splits);
+    CHECK(matrix.saveAudioSplits().size() == 3);
+    f.exec("track.remove", R"({"track":")" + channel + R"("})");
+    const auto version = f.app->head().version;
+    auto saved = matrix.saveAudioSplits();
+    REQUIRE(saved.size() == 2);
+    CHECK(saved.asArray()[0].asString() == "audio_in:1");
+    CHECK(saved.asArray()[1].asString() == "audio_out:1");
+    CHECK(f.app->head().version == version);
+}
+
+TEST_CASE("Hardware Audio: split button eligibility requires a stereo signal") {
+    gui::MatrixModel model;
+    CHECK_FALSE(model.hasStereoSignals());
+    gui::MatrixModel::Source input;
+    input.width = 1;
+    gui::MatrixModel::Destination output;
+    output.width = 1;
+    model.sources.push_back(input);
+    model.destinations.push_back(output);
+    CHECK_FALSE(model.hasStereoSignals());
+    model.destinations.front().width = 2;
+    CHECK(model.hasStereoSignals());
+    model.destinations.front().side = 1;
+    CHECK(model.hasStereoSignals());  // Split stereo still needs Join all.
+}
+
+TEST_CASE("Hardware Audio: stale deleted targets refuse the whole selection") {
+    Fixture f;
+    REQUIRE(f.ok);
+    AudioGridDevice backend;
+    StopGridDevice stop{*f.app};
+    REQUIRE(f.app->startEngine(backend, {.blockSize = 64, .inputs = 2, .outputs = 4},
+                               {.anticipative = false, .workers = 0}));
+    const auto channel = f.exec("track.add", R"({"name":"Removed input"})")["track"].asString();
+    gui::FloatingPanel panel(*f.platform, *f.window, *f.root, SUPPLE_GUI_FONTS_DIR, "Routing", 1000,
+                             560, 800, 360);
+    gui::RoutingMatrix matrix(panel, *f.actions, *f.dispatcher, *f.app);
+    matrix.setHardwareAudioMode();
+    matrix.open();
+    REQUIRE(matrix.clickCell(audioRow(matrix, "tr_0"), audioCol(matrix, "audio_out:3")));
+    REQUIRE(matrix.clickCell(audioRow(matrix, "audio_in:1"), audioCol(matrix, channel), ui::kCtrl));
+    f.exec("track.remove", R"({"track":")" + channel + R"("})");
+    const auto version = f.app->head().version;
+    auto denied = matrix.addSelected();
+    REQUIRE_FALSE(denied);
+    CHECK(denied.error().message.find("Removed input") != std::string::npos);
+    CHECK(audioOutput(f) == std::vector<int>{1, 2});
+    CHECK(f.app->head().version == version);
+}
+
+TEST_CASE("Hardware Audio: lit multi-channel input cells preserve the complete recording map") {
+    Fixture f;
+    REQUIRE(f.ok);
+    AudioGridDevice backend;
+    StopGridDevice stop{*f.app};
+    REQUIRE(f.app->startEngine(backend, {.blockSize = 64, .inputs = 6, .outputs = 2},
+                               {.anticipative = false, .workers = 0}));
+    const auto channel =
+        f.exec("track.add", R"({"name":"Four inputs","channels":4})")["track"].asString();
+    f.exec("track.set", R"({"track":")" + channel + R"(","record_input":[1,2,3,4]})");
+    gui::FloatingPanel panel(*f.platform, *f.window, *f.root, SUPPLE_GUI_FONTS_DIR, "Routing", 1000,
+                             560, 800, 360);
+    gui::RoutingMatrix matrix(panel, *f.actions, *f.dispatcher, *f.app);
+    matrix.setHardwareAudioMode();
+    matrix.open();
+    panel.root().frame(false);
+    auto check = [&](const std::vector<int>& expected, const std::string& description) {
+        const auto row = audioRow(matrix, "audio_in:1"), col = audioCol(matrix, channel);
+        REQUIRE(matrix.model().sendsAt(row, col).size() == 1);
+        const auto b = matrix.grid()->bounds();
+        ui::PointerEvent e;
+        e.type = ui::PointerEvent::Type::Move;
+        e.pos = {b.x + 190 + static_cast<float>(col) * 22 + 11,
+                 b.y + 112 + static_cast<float>(row) * 22 + 11};
+        panel.root().pointer(e);
+        const auto hover = panel.root().find("routing.status")->valueText();
+        CHECK(hover.find(description) != std::string::npos);
+        CHECK(hover.find("assign the pair") == std::string::npos);
+        CHECK(hover.find("replaces") == std::string::npos);
+        const auto version = f.app->head().version;
+        REQUIRE(matrix.doubleClickCell(row, col));
+        CHECK(audioInput(f, channel) == expected);
+        CHECK(f.app->head().version == version);
+    };
+    check({1, 2, 3, 4}, "4-channel input 1, 2, 3, 4");
+    f.exec("track.set", R"({"track":")" + channel + R"(","record_input":[1,3,2,4]})");
+    matrix.sync();
+    panel.root().frame(false);
+    check({1, 3, 2, 4}, "4-channel input 1, 3, 2, 4");
+    f.snapshot("routing-hardware-audio-multichannel.png", &panel.root());
+
+    // A command may widen the input after the cached cell offered a pair replacement.
+    f.exec("track.set", R"({"track":")" + channel + R"(","record_input":[1]})");
+    matrix.sync();
+    const auto row = audioRow(matrix, "audio_in:1"), col = audioCol(matrix, channel);
+    REQUIRE_FALSE(matrix.model().sendsAt(row, col).front()->matchesCell);
+    f.exec("track.set", R"({"track":")" + channel + R"(","record_input":[1,2,3,4]})");
+    const auto version = f.app->head().version;
+    const auto denied = matrix.doubleClickCell(row, col);
+    REQUIRE_FALSE(denied);
+    CHECK(denied.error().message.find("multi-channel") != std::string::npos);
+    CHECK(audioInput(f, channel) == std::vector<int>{1, 2, 3, 4});
+    CHECK(f.app->head().version == version);
+}
+
+TEST_CASE("routing matrix: every tab opens with grid focus and immediate keyboard selection") {
+    for (int mode = 0; mode < 4; ++mode) {
+        CAPTURE(mode);
+        Fixture f;
+        REQUIRE(f.ok);
+        gui::FloatingPanel panel(*f.platform, *f.window, *f.root, SUPPLE_GUI_FONTS_DIR, "Routing",
+                                 1000, 560, 800, 360);
+        gui::RoutingMatrix matrix(panel, *f.actions, *f.dispatcher, *f.app);
+        if (mode == 0) {
+            const auto bus =
+                f.exec("track.add", R"({"name":"Bus","type":"buss"})")["track"].asString();
+            f.exec("route.add", R"({"from":"tr_1","to":")" + bus + R"("})");
+        } else if (mode == 1) {
+            const auto target =
+                f.exec("track.add", R"({"name":"MIDI target"})")["track"].asString();
+            f.exec("route.add", R"({"from":"tr_1","to":")" + target + R"(","midi":{}})");
+            matrix.setMidiMode(true);
+        } else if (mode == 2) {
+            REQUIRE(f.app->setMidiPreferences({{"Keyboard", json::Value::object()}},
+                                              {{"Synth", json::Value::object()}}, false));
+            f.exec("track.set", R"({"track":"tr_1","record_midi":"Keyboard"})");
+            f.exec("route.add", R"({"from":"tr_1","to_midi":"Synth","midi":{}})");
+            matrix.setHardwareMidiMode();
+        } else {
+            f.exec("track.set", R"({"track":"tr_1","record_input":[1,2]})");
+            matrix.setHardwareAudioMode();
+        }
+        matrix.open();
+        panel.root().frame(false);
+        REQUIRE(panel.root().focused() == matrix.grid());
+        REQUIRE_FALSE(matrix.model().sends.empty());
+        panel.root().key(SDLK_A, ui::kCtrl);
+        CHECK(matrix.selectedCells() ==
+              matrix.model().sources.size() * matrix.model().destinations.size());
+        panel.root().key(SDLK_DELETE);
+        CHECK(matrix.model().sends.empty());
+        CHECK(matrix.midiMode() == (mode == 1 || mode == 2));
+        CHECK(matrix.hardwareMidiMode() == (mode == 2));
+        CHECK(matrix.hardwareAudioMode() == (mode == 3));
+        matrix.close();
+        matrix.open();
+        CHECK(panel.root().focused() == matrix.grid());
+    }
 }
 
 TEST_CASE("routing matrix: hardware MIDI replaces audio and rack inputs") {

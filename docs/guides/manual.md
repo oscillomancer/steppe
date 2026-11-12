@@ -416,7 +416,7 @@ masters are skipped for these extra controls.
 
 ## Routing
 
-The routing window's **Audio | MIDI | Hardware MIDI** buttons select the kind of send.
+The routing window's **Audio | MIDI | Hardware MIDI | Hardware Audio** buttons select the connections to edit.
 MIDI mode shows channels and rack Note Outs down the left, channels and
 Notes modules across the top. Double-click an empty cell to connect them
 (double-clicking a send only selects it), or select cells and use Add/Remove
@@ -444,6 +444,36 @@ a channel has one input at a time.
 Route an input through a channel to reach a device output. Taps, mute and MIDI
 channel controls work as in the MIDI tab. Device connections save by name and
 warn if missing on reopen.
+
+The fourth tab, **Hardware Audio**, connects device inputs to channel record
+inputs and masters to device outputs. Double-click an empty cell to assign it;
+select connected cells and Remove (or Delete) to disconnect. Choosing an audio
+input replaces the channel's MIDI or rack input, as the status line explains.
+Channels and busses reach hardware through a master. Device channel names appear
+when available; saved channels outside the current device say unavailable.
+When the engine is stopped, stored channels say "engine stopped".
+The actual output used by LTC is labelled `[LTC]`; if the configured channel
+is absent, LTC uses the device's last output. A `!` cell warns
+`LTC replaces <master>'s audio on output N`.
+
+Right-click a stereo input, output, channel or master header and choose
+**Split into L/R** to see and assign its sides, or **Join** to put it back.
+**Split all into L/R / Join all** changes the whole tab. The view saves with the
+project's window layout and does not change any sound by itself. A single
+input channel chosen for a joined channel is mono; a single output chosen for
+a joined master plays the mono sum. An outlined **M** marks a mono assignment;
+hover names the input/output channel and its mono behaviour. Double-click its
+joined pair cell to assign the complete stereo pair. An input with more than
+two channels shows its whole map on hover; double-clicking a lit cell keeps
+that map, including the extra recording channels. To change just L or R,
+split both the signal and the device pair and choose the new channel. A master
+needs an existing stereo pair; a record input can start mono or stereo. The
+other side stays assigned. Changing one side of a mono record input keeps the
+other side on its original mono input. Isolating or removing just one side
+without the other is not supported by these assignments; disabled cells and
+the status line explain why. To remove a split assignment, select all its
+connected cells, or join its signals first. Gain, pan and tap remain on the
+channel or master; this tab has no separate send controls.
 
 Right-click a hardware input row or output column header for **Enabled** and
 **Timing offset…**; outputs also have the clock items described in "MIDI

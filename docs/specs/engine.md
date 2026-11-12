@@ -1966,7 +1966,9 @@ output channels against the device; the project's timecode; the freewheel
 time from its frames. Unresolvable members become warnings in
 `engine.status.sync.warnings` and `sync.set`'s warnings, as does an LTC
 output channel a master's `hw_output` plays to. An LTC output channel the
-device lacks uses its last output instead, with a warning; the setting is
+device lacks uses its last output instead, with a warning. The owner-thread
+`EngineApp::resolvedLtcOutputChannel()` shares that resolution with the GUI
+(1-based, zero when LTC is off or no engine/output is available); the setting is
 kept. `engine.status.sync`:
 `{source, input, present, running, locked, state, bpm, timecode, rate,
 chase_rate, error_ms, locate_ms, ltc_output, warnings}`.
