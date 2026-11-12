@@ -2261,7 +2261,8 @@ TEST_CASE("Hardware Audio: assignments replace inputs, edit masters and warn abo
     matrix.sync();
     REQUIRE(matrix.doubleClickCell(in, col));
     CHECK(audioInput(f, channel) == std::vector<int>{1, 2});
-    CHECK(matrix.status().find("replaces rack input") != std::string::npos);
+    CHECK(matrix.status().find("replaces Out 1") != std::string::npos);
+    CHECK(matrix.status().find(module) == std::string::npos);
     const auto output = audioCol(matrix, "audio_out:3");
     REQUIRE(matrix.doubleClickCell(audioRow(matrix, "tr_0"), output));
     CHECK(audioOutput(f) == std::vector<int>{3, 4});

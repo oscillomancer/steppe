@@ -1094,7 +1094,8 @@ std::string RoutingMatrix::inputReplacement(const MatrixModel::Source& source,
         if (track->record.input)
             if (const auto* input = session.routes.find(*track->record.input)) {
                 if (input->from.module)
-                    return dest.name + ": replaces rack input " + input->from.module->str();
+                    return dest.name + ": replaces " +
+                           model::moduleLabel(session, *input->from.module);
                 if (input->from.hwChannels && *input->from.hwChannels != source.deviceChannels &&
                     !dest.side)
                     return dest.name + ": replaces the current audio input";
