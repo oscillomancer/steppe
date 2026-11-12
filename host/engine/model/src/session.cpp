@@ -31,6 +31,15 @@ std::vector<Id> midiFollowers(const Session& s, Id track, std::optional<Id> sour
     return out;
 }
 
+std::optional<Id> rackSendHome(const Session& s, const Route& r) {
+    if (r.midi || !r.from.module || !r.to.track) return std::nullopt;
+    const auto* to = s.tracks.find(*r.to.track);
+    const auto* module = s.modules.find(*r.from.module);
+    const auto* rack = module ? s.racks.find(module->rack) : nullptr;
+    if (!to || to->type == StripType::Channel || !rack) return std::nullopt;
+    return rack->track;
+}
+
 const Route* midiInputRoute(const Session& s, Id track) {
     const auto* t = s.tracks.find(track);
     if (!t) return nullptr;
@@ -462,14 +471,23 @@ struct Checker {
                     if (learn.param != "mute")
                         fail(at("routes", e.id, "learn"), "MIDI sends can learn mute only");
             } else if (r.from.module && r.to.track) {
+                // A channel takes an Out as its input; a buss or master takes
+                // it as a rack send, level and mute only (ADR-0075).
                 const Track* t = s.tracks.find(*r.to.track);
-                if (t && t->type != StripType::Channel)
-                    fail(at("routes", e.id, "to"), "an Out module feeds channels only");
-                else if (t && t->record.input != e.id)
+                if (t && t->type == StripType::Channel && t->record.input != e.id)
                     fail(at("routes", e.id, "to"),
                          "a route from an Out module is its channel's record input");
+                if (t && t->type != StripType::Channel &&
+                    (r.tap != Tap::PostFader || r.pan.percent || r.mono || r.phaseInvert ||
+                     !r.channels.from.empty() || !r.channels.to.empty()))
+                    fail(at("routes", e.id), "a rack send has level and mute only");
+                if (t && t->type != StripType::Channel)
+                    for (const auto& learn : r.learn)
+                        if (learn.param != "volume" && learn.param != "mute")
+                            fail(at("routes", e.id, "learn"),
+                                 "a rack send can learn level and mute only");
             } else if (r.from.module && !r.to.track) {
-                fail(at("routes", e.id, "to"), "an Out module feeds a channel");
+                fail(at("routes", e.id, "to"), "an Out module feeds a channel, buss or master");
             }
             if (r.to.module && !r.midi && !r.from.track)
                 fail(at("routes", e.id, "from"), "an In module takes a send from a track");

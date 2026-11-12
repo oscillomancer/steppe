@@ -70,7 +70,7 @@ TEST_CASE("audio warp schema 2.2 round trip keeps object markers hits and typed 
     auto session = tx.commit();
     REQUIRE(session);
     const auto saved = serializeProject(*session);
-    CHECK(saved.find("supple.project/2.10") != std::string::npos);
+    CHECK(saved.find("supple.project/2.13") != std::string::npos);
     CHECK(saved.find("source_pos") != std::string::npos);
     auto reopened = parseProject(saved);
     REQUIRE(reopened);
