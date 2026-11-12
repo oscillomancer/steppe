@@ -484,6 +484,15 @@ TEST_CASE(
     CHECK(space.view().x == doctest::Approx(shifted.x - 40 / shifted.zoom));
     CHECK(space.view().y == shifted.y);
     f.snapshot("rack-wheel-navigation.png");
+    // A plain sideways wheel pans without changing zoom or vertical position.
+    const auto sideways = space.view();
+    wheel.mods = 0;
+    wheel.wheelY = 0;
+    wheel.wheelX = 2;
+    f.r().pointer(wheel);
+    CHECK(space.view().x == doctest::Approx(sideways.x + 80 / sideways.zoom));
+    CHECK(space.view().y == sideways.y);
+    CHECK(space.view().zoom == sideways.zoom);
     // Middle-drag pans.
     const auto v = space.view();
     f.drag(at, {at.x - 40, at.y}, 2);
