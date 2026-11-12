@@ -563,6 +563,10 @@ Result<EnvDomain> envDomain(EngineApp& app, const model::Session& s, const model
         return Error("env.param", type->type->id() + " has no knob \"" + t.param + "\"", path,
                      keys.empty() ? "it has no knobs" : "knobs: " + keys);
     }
+    if (t.object.kind == model::Kind::Route && t.param == "pan")
+        if (const auto* route = s.routes.find(t.object); route && model::rackSendHome(s, *route))
+            return Error("route.rack_send", "a rack send has level and mute only", path,
+                         "automate volume or mute; pan in the rack or on the buss");
     if (t.object.kind != model::Kind::Fx) {
         d.mixer = mixerUnit(t.object.kind, t.param);
         if (!d.mixer)

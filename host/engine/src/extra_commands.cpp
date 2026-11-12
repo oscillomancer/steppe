@@ -680,6 +680,44 @@ Result<model::Route> buildRoute(const RouteArgs& a, const model::Session& s, Eng
         if (a.mute) r.mute = *a.mute;
         return r;
     }
+    if (!r.midi && r.from.module && !r.to.midiDevice) {
+        // A rack send (ADR-0075): a rack's Out into a buss or master, after
+        // its decode, at the route's level and mute.
+        const auto* module = s.modules.find(*r.from.module);
+        if (module->type != model::kOutModule)
+            return Error("route.endpoint", r.from.module->str() + " is not an Out module", "/from",
+                         "audio leaves a rack from an Out module; Note Out sends MIDI (midi: {})");
+        const auto* target = r.to.track ? s.tracks.find(*r.to.track) : nullptr;
+        if (!target)
+            return Error("route.endpoint", "a rack's Out sends to a buss or master", "/to",
+                         "give to: a buss or master (track.list)");
+        if (target->type == model::StripType::Channel)
+            return Error("route.strip_type", "a rack's Out feeds a channel as its input", "/to",
+                         "use track.set {track, record_rack: \"" + r.from.module->str() +
+                             "\"}, or send to a buss or master");
+        if (a.tap || a.pan || a.mono || a.phaseInvert || a.channels)
+            return Error("route.rack_send", "a rack send has level and mute only",
+                         a.tap    ? "/tap"
+                         : a.pan  ? "/pan"
+                         : a.mono ? "/mono"
+                                  : (a.phaseInvert ? "/phase_invert" : "/channels"),
+                         "pan, polarity and channel routing belong in the rack or on the buss");
+        if (std::any_of(r.learn.begin(), r.learn.end(),
+                        [](const auto& l) { return l.param != "volume" && l.param != "mute"; }))
+            return Error("route.rack_send", "a rack send can learn level and mute only", "/from",
+                         "remove the route's other route.learn bindings first");
+        if (auto cycle = routeCycle(s, module->rack, *r.to.track, ignored))
+            return Error("route.cycle", "route creates a cycle: " + cycleText(s, *cycle, true),
+                         "/to", "choose a destination that does not feed the rack");
+        // A route converted from a strip send keeps no strip controls.
+        r.tap = model::Tap::PostFader;
+        r.pan = {};
+        r.mono = r.phaseInvert = false;
+        r.channels = {};
+        if (a.volumeDb) r.volumeDb = *a.volumeDb;
+        if (a.mute) r.mute = *a.mute;
+        return r;
+    }
     if (r.midi || r.from.module || r.to.midiDevice) {
         const auto* module = r.from.module ? s.modules.find(*r.from.module) : nullptr;
         const auto* source = r.from.track ? s.tracks.find(*r.from.track) : nullptr;
@@ -834,7 +872,10 @@ void registerExtraCommands(cmd::Registry& registry) {
             "destinations, midi: {} "
             "(all channels unchanged); from_channel filters and to_channel remaps, 0..16 "
             "with 0 meaning all/original. to_midi selects a hardware MIDI output by exact name "
-            "instead of to. Missing outputs warn while audio keeps playing.";
+            "instead of to. Missing outputs warn while audio keeps playing. A rack's Out module "
+            "(from: mo_N) sends audio to a buss or master: a rack send, added after the "
+            "destination's Console 9 decode, never encoded, with level and mute only; it "
+            "follows the mute and solo of the rack's home channel (ADR-0075).";
         c.tags = {"route", "mix"};
         c.args = routeArgsSchema<RouteArgs>("route_add_args");
         c.result = idResultSchema();
@@ -843,7 +884,9 @@ void registerExtraCommands(cmd::Registry& registry) {
                     {"route.endpoint", "MIDI sends need channel or note-module endpoints",
                      "use from: {module: mo_N}, to: {track: tr_N}, midi: {}"},
                     {"route.midi", "MIDI routing or audio controls do not apply to these endpoints",
-                     "use channel/Note Out to channel/Notes for MIDI; omit audio controls"}};
+                     "use channel/Note Out to channel/Notes for MIDI; omit audio controls"},
+                    {"route.rack_send", "a rack send has level and mute only",
+                     "pan, polarity and channel routing belong in the rack or on the buss"}};
         c.examples = {
             {"Send a track to the master", j(R"({"from":"tr_1","to":"tr_0","volume_db":"-6 dB"})"),
              j(R"({"id":"sd_1"})"), "song"},
@@ -852,7 +895,10 @@ void registerExtraCommands(cmd::Registry& registry) {
              "song_with_keymix"},
             {"Play a channel's instrument from Note Out",
              j(R"({"from":{"module":"mo_4"},"to":{"track":"tr_2"},"midi":{}})"),
-             j(R"({"id":"sd_2"})"), "song_with_note_out"}};
+             j(R"({"id":"sd_2"})"), "song_with_note_out"},
+            {"Send a rack's Out to a buss",
+             j(R"({"from":{"module":"mo_1"},"to":"tr_2","volume_db":"-6 dB"})"),
+             j(R"({"id":"sd_2"})"), "song_with_rack_buss"}};
         c.run = [](const RouteArgs& a, Context& ctx) -> Result<IdResult> {
             auto r = buildRoute(a, app(ctx).view(), app(ctx));
             if (!r) return std::move(r).error();
@@ -878,7 +924,9 @@ void registerExtraCommands(cmd::Registry& registry) {
                     {"route.endpoint", "MIDI sends need channel or note-module endpoints",
                      "send channel/Note Out MIDI to a channel or Notes module"},
                     {"route.midi", "audio controls do not apply to MIDI routes",
-                     "use mute and MIDI channel routing"}};
+                     "use mute and MIDI channel routing"},
+                    {"route.rack_send", "a rack send has level and mute only",
+                     "pan, polarity and channel routing belong in the rack or on the buss"}};
         c.run = [](const RouteSetArgs& a, Context& ctx) -> Result<Empty> {
             const auto s = app(ctx).view();
             auto id = require<model::Route>(s, a.route, "/route");
@@ -1063,7 +1111,10 @@ void registerExtraCommands(cmd::Registry& registry) {
             "(depth, parent, parent_send). destinations: strips "
             "(kind track), plug-in keys (kind key: fx with a sidechain input) and racks' In "
             "modules (kind module: mo_N, named \"<rack> \u00bb <In>\", with rack and home "
-            "track), each strip's keys and In modules after it. A pair is blocked when the "
+            "track), each strip's keys and In modules after it. Each channel's rack Out "
+            "modules follow it among sources (type rack_out, named \"<rack> \u00bb <Out>\", "
+            "with rack and home track): they send only to busses and masters (their rule), "
+            "added after the decode, never encoded (ADR-0075). A pair is blocked when the "
             "source's rule applies (masters feed only keys), the destination's rule applies "
             "(channels take only hardware audio), it is the same strip, or it is listed in "
             "cycles (the destination already feeds the source; for an In module, its rack's Outs "
@@ -1152,6 +1203,27 @@ void registerExtraCommands(cmd::Registry& registry) {
                         "route.strip_type", "masters are terminal (they may feed plug-in keys)",
                         "masters feed hardware outputs and renders; use a buss to group");
                 sources.push_back(src);
+                // A rack's Out modules under its home channel: rack sends to
+                // busses and masters (ADR-0075).
+                if (!midiMode)
+                    for (const auto& module : s.modules) {
+                        const auto* rack = s.racks.find(module.value->rack);
+                        if (!rack || rack->track != id || module.value->type != model::kOutModule)
+                            continue;
+                        auto row = json::Value::object();
+                        row["id"] = module.id.str();
+                        row["name"] = model::rackLabel(s, module.value->rack) + " \u00bb " +
+                                      model::moduleLabel(s, module.id);
+                        row["type"] = "rack_out";
+                        row["rack"] = module.value->rack.str();
+                        row["track"] = id.str();
+                        row["depth"] = depth + 1;
+                        row["channels"] = 2;
+                        row["rule"] =
+                            rule("route.strip_type", "a rack's Out sends to busses and masters",
+                                 "a channel takes it as its input (track.set record_rack)");
+                        sources.push_back(std::move(row));
+                    }
                 if (midiMode)
                     for (const auto& module : s.modules) {
                         const auto* rack = s.racks.find(module.value->rack);
@@ -1213,8 +1285,9 @@ void registerExtraCommands(cmd::Registry& registry) {
             json::Value sends = json::Value::array();
             for (const auto& e : s.routes) {
                 const model::Route& r = *e.value;
+                const bool rackSend = !midiMode && model::rackSendHome(s, r).has_value();
                 if (bool(r.midi) != midiMode ||
-                    (!r.from.track && !(midiMode && r.from.module) &&
+                    (!r.from.track && !(midiMode && r.from.module) && !rackSend &&
                      !(hardwareMode && r.from.midiDevice)) ||
                     (!hardwareMode && r.to.midiDevice))
                     continue;

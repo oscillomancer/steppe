@@ -11382,7 +11382,7 @@ Kind: `edit`. Exposure: `internal`.
 
 A rack's modules, cables, Out modules and problems.
 
-Modules with their type, label, place and size and the knobs that differ from their defaults (detail full: also their input, output and knob keys); cables with feedback (true: it closes a loop and carries the previous frame); Out modules and the channels they feed; latency_samples for each Out and the rack node, and note_outs with their latencies (ADR-0064); problems (missing types, cables that do not fit). Brief/default latency reads prepared values without creating plug-ins; unprepared latency is null. detail full may probe unprepared plug-ins.
+Modules with their type, label, place and size and the knobs that differ from their defaults (detail full: also their input, output and knob keys); cables with feedback (true: it closes a loop and carries the previous frame); Out modules and the channels they feed (sends: their rack sends to busses and masters, ADR-0075, {route, to}); latency_samples for each Out and the rack node, and note_outs with their latencies (ADR-0064); problems (missing types, cables that do not fit). Brief/default latency reads prepared values without creating plug-ins; unprepared latency is null. detail full may probe unprepared plug-ins.
 
 Kind: `query`. Exposure: `mcp-tool`.
 
@@ -11498,7 +11498,7 @@ Result:
 
 List racks: home channels, module counts, Outs.
 
-
+Each Out lists the channels it is the input of (channels) and, when it has any, its rack sends to busses and masters (sends: {route, to}, ADR-0075).
 
 Kind: `query`. Exposure: `mcp-tool`.
 
@@ -13240,7 +13240,7 @@ Result:
 
 Send audio between strips, or MIDI between channels and rack modules.
 
-The destination must not feed the source. Master accepts routes. With fx instead of to, the send feeds that plug-in's sidechain (key) input — e.g. a kick keying a compressor on the bass; it is delay-compensated, and soloing the keyed track does not stop the key. MIDI sends use channel or Note Out sources and channel or Notes destinations, midi: {} (all channels unchanged); from_channel filters and to_channel remaps, 0..16 with 0 meaning all/original. to_midi selects a hardware MIDI output by exact name instead of to. Missing outputs warn while audio keeps playing.
+The destination must not feed the source. Master accepts routes. With fx instead of to, the send feeds that plug-in's sidechain (key) input — e.g. a kick keying a compressor on the bass; it is delay-compensated, and soloing the keyed track does not stop the key. MIDI sends use channel or Note Out sources and channel or Notes destinations, midi: {} (all channels unchanged); from_channel filters and to_channel remaps, 0..16 with 0 meaning all/original. to_midi selects a hardware MIDI output by exact name instead of to. Missing outputs warn while audio keeps playing. A rack's Out module (from: mo_N) sends audio to a buss or master: a rack send, added after the destination's Console 9 decode, never encoded, with level and mute only; it follows the mute and solo of the rack's home channel (ADR-0075).
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -13290,6 +13290,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 - `route.no_sidechain`: the plug-in has no key input Hint: pick another plug-in
 - `route.endpoint`: MIDI sends need channel or note-module endpoints Hint: use from: {module: mo_N}, to: {track: tr_N}, midi: {}
 - `route.midi`: MIDI routing or audio controls do not apply to these endpoints Hint: use channel/Note Out to channel/Notes for MIDI; omit audio controls
+- `route.rack_send`: a rack send has level and mute only Hint: pan, polarity and channel routing belong in the rack or on the buss
 
 ### Examples
 
@@ -13344,6 +13345,28 @@ Result:
     "track": "tr_2"
   },
   "midi": {}
+}
+
+```
+
+Result:
+
+```json
+{
+  "id": "sd_2"
+}
+
+```
+
+**Send a rack's Out to a buss** (`song_with_rack_buss`)
+
+```json
+{
+  "from": {
+    "module": "mo_1"
+  },
+  "to": "tr_2",
+  "volume_db": "-6 dB"
 }
 
 ```
@@ -13727,7 +13750,7 @@ Result:
 
 Read audio or MIDI endpoints, existing sends and blocked pairs.
 
-mode: audio (default), midi or hardware_midi (channels/Note Out and hardware inputs to channels/hardware outputs). MIDI sources are channels and Note Out; destinations are channels and Notes, with no audio controls. Audio sources: strips in tree order (depth, parent, parent_send). destinations: strips (kind track), plug-in keys (kind key: fx with a sidechain input) and racks' In modules (kind module: mo_N, named "<rack> » <In>", with rack and home track), each strip's keys and In modules after it. A pair is blocked when the source's rule applies (masters feed only keys), the destination's rule applies (channels take only hardware audio), it is the same strip, or it is listed in cycles (the destination already feeds the source; for an In module, its rack's Outs reach the source; path names its ids, names the same by name). sends: existing routes per pair (to: a strip, an fx or an In module). Otherwise route.add accepts the pair (an In module: route.add {from, to: mo_N}). A source's channels past 2 are auxiliary (ADR-0020); channel_names names those a multi-out plug-in writes ({"3": "Kick"}), and route.add {channels: {from: [3, 4], to: [1, 2]}} sends that pair.
+mode: audio (default), midi or hardware_midi (channels/Note Out and hardware inputs to channels/hardware outputs). MIDI sources are channels and Note Out; destinations are channels and Notes, with no audio controls. Audio sources: strips in tree order (depth, parent, parent_send). destinations: strips (kind track), plug-in keys (kind key: fx with a sidechain input) and racks' In modules (kind module: mo_N, named "<rack> » <In>", with rack and home track), each strip's keys and In modules after it. Each channel's rack Out modules follow it among sources (type rack_out, named "<rack> » <Out>", with rack and home track): they send only to busses and masters (their rule), added after the decode, never encoded (ADR-0075). A pair is blocked when the source's rule applies (masters feed only keys), the destination's rule applies (channels take only hardware audio), it is the same strip, or it is listed in cycles (the destination already feeds the source; for an In module, its rack's Outs reach the source; path names its ids, names the same by name). sends: existing routes per pair (to: a strip, an fx or an In module). Otherwise route.add accepts the pair (an In module: route.add {from, to: mo_N}). A source's channels past 2 are auxiliary (ADR-0020); channel_names names those a multi-out plug-in writes ({"3": "Kick"}), and route.add {channels: {from: [3, 4], to: [1, 2]}} sends that pair.
 
 Kind: `query`. Exposure: `mcp-tool`.
 
@@ -13866,6 +13889,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 - `route.channels`: the map pairs channels the strips do not have Hint: pair 1 and 2: {from: [1, 2], to: [2, 1]}
 - `route.endpoint`: MIDI sends need channel or note-module endpoints Hint: send channel/Note Out MIDI to a channel or Notes module
 - `route.midi`: audio controls do not apply to MIDI routes Hint: use mute and MIDI channel routing
+- `route.rack_send`: a rack send has level and mute only Hint: pan, polarity and channel routing belong in the rack or on the buss
 
 ### Examples
 

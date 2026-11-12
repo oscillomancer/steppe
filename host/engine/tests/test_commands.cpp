@@ -2823,6 +2823,125 @@ TEST_CASE("plugin.scan in the background returns at once and installs the catalo
     CHECK(run(bus, "plugin.list", "{}")["plugins"].size() == before);
 }
 
+TEST_CASE("rack sends: commands send an Out to a buss, refuse the rest, and reopen") {
+    Workdir dir;
+    auto app = makeApp(dir.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *app);
+    run(bus, "track.add", R"({"name":"Pad"})");                 // tr_1
+    run(bus, "track.add", R"({"name":"Verb","type":"buss"})");  // tr_2
+    run(bus, "track.add", R"({"name":"Other"})");               // tr_3
+    const auto added = run(bus, "rack.add", R"({"track":"tr_1"})");
+    const auto rack = added.find("rack")->asString(), out = added.find("out")->asString();
+    const auto in =
+        run(bus, "module.add", "{\"rack\":\"" + rack + "\",\"type\":\"in\"}")["module"].asString();
+    auto refused = [&](const char* command, json::Value args, const char* code,
+                       std::string_view hint = {}) {
+        const auto version = app->head().version;
+        const auto result = bus.execute({command, std::move(args), kOrigin});
+        REQUIRE_FALSE(result);
+        CHECK(result.error().code == code);
+        CHECK_FALSE(result.error().hint.empty());
+        CHECK_MESSAGE(result.error().hint.find(hint) != std::string::npos, result.error().hint);
+        CHECK(app->head().version == version);
+    };
+    auto from = [&](const char* to) {
+        auto args = json::Value::object();
+        args["from"] = json::Value::object();
+        args["from"]["module"] = out;
+        args["to"] = to;
+        return args;
+    };
+    auto args = from("tr_2");
+    args["volume_db"] = -6.0;
+    const auto send = run(bus, "route.add", json::writeCompact(args))["id"].asString();
+    // A channel takes the Out as its input, not as a send.
+    refused("route.add", from("tr_3"), "route.strip_type", "record_rack");
+    refused("route.add", from(in.c_str()), "route.endpoint");
+    for (const char* key : {"pan", "tap", "mono", "phase_invert", "channels"}) {
+        CAPTURE(key);
+        auto bad = from("tr_0");
+        bad[key] = std::string_view(key) == "pan"        ? json::Value(30.0)
+                   : std::string_view(key) == "tap"      ? json::Value("pre_fader")
+                   : std::string_view(key) == "channels" ? j(R"({"from":[1,2],"to":[2,1]})")
+                                                         : json::Value(true);
+        refused("route.add", bad, "route.rack_send");
+    }
+    // The buss feeding the rack's In would hear itself through the rack.
+    auto loop = json::Value::object();
+    loop["from"] = "tr_2";
+    loop["to"] = in;
+    refused("route.add", loop, "route.cycle");
+    auto set = json::Value::object();
+    set["route"] = send;
+    set["mute"] = true;
+    REQUIRE(bus.execute({"route.set", set, kOrigin}));
+    set.asObject().erase("mute");
+    set["tap"] = "pre_fx";
+    refused("route.set", set, "route.rack_send");
+    auto env = json::Value::object();
+    env["route"] = send;
+    env["param"] = "pan";
+    refused("env.add", env, "route.rack_send");
+    env["param"] = "volume";
+    REQUIRE(bus.execute({"env.add", env, kOrigin}));
+    auto learn = j(R"({"param":"pan","midi":{"kind":"cc","channel":1,"number":7}})");
+    learn["route"] = send;
+    refused("route.learn.set", learn, "route.rack_send");
+    learn["param"] = "volume";
+    REQUIRE(bus.execute({"route.learn.set", learn, kOrigin}));
+    // The routing matrix: the Out under its channel, its send listed.
+    const auto matrix = run(bus, "route.matrix", "{}");
+    const auto& sources = matrix.find("sources")->asArray();
+    std::size_t row = sources.size(), home = sources.size();
+    for (std::size_t i = 0; i < sources.size(); ++i) {
+        if (sources[i].find("id")->asString() == "tr_1") home = i;
+        if (sources[i].find("id")->asString() == out) row = i;
+    }
+    REQUIRE(row < sources.size());
+    CHECK(row == home + 1);
+    CHECK(sources[row].find("type")->asString() == "rack_out");
+    CHECK(sources[row].find("rack")->asString() == rack);
+    CHECK(sources[row].find("track")->asString() == "tr_1");
+    CHECK(sources[row].find("rule")->find("code")->asString() == "route.strip_type");
+    bool listed = false;
+    for (const auto& x : matrix.find("sends")->asArray())
+        listed = listed || (x.find("from")->asString() == out &&
+                            x.find("to")->asString() == "tr_2" && x.find("id")->asString() == send);
+    CHECK(listed);
+    bool cycle = false;
+    for (const auto& x : matrix.find("cycles")->asArray())
+        cycle = cycle || (x.find("from")->asString() == "tr_2" && x.find("to")->asString() == in);
+    CHECK(cycle);
+    CHECK(run(bus, "route.matrix", R"({"mode":"midi"})").find("sources")->size() == 2);
+    // rack.list: the Out's channel and its send.
+    const auto racks = run(bus, "rack.list", "{}");
+    const auto& o = racks.find("racks")->at(0).find("outs")->at(0);
+    CHECK(o.find("channels")->size() == 1);
+    REQUIRE(o.find("sends"));
+    CHECK(o.find("sends")->at(0).find("route")->asString() == send);
+    CHECK(o.find("sends")->at(0).find("to")->asString() == "tr_2");
+    // Saved and reopened, the same.
+    const auto project = dir.path / "rack-send.json";
+    auto path = json::Value::object();
+    path["path"] = project.string();
+    REQUIRE(bus.execute({"project.save", path, kOrigin}));
+    const auto canonical = model::serializeProject(app->head());
+    run(bus, "project.new", "{}");
+    REQUIRE(bus.execute({"project.open", path, kOrigin}));
+    CHECK(model::serializeProject(app->head()) == canonical);
+    const auto* route = app->head().routes.find(*model::Id::parse(send));
+    REQUIRE(route);
+    CHECK(route->volumeDb == -6);
+    CHECK(route->mute);
+    CHECK(route->learn.size() == 1);
+    // Removing the home channel removes the rack (a buss is no home) and its send.
+    run(bus, "track.remove", R"({"track":"tr_1"})");
+    CHECK(app->head().racks.empty());
+    CHECK_FALSE(app->head().routes.find(*model::Id::parse(send)));
+}
+
 TEST_CASE("MIDI sends: commands validate endpoints, controls, cycles and mute-only learn") {
     Workdir dir;
     auto app = makeApp(dir.path);
