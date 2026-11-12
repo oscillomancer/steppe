@@ -430,7 +430,7 @@ TEST_CASE("rack window: the light theme") {
 }
 
 TEST_CASE(
-    "rack window: a drag moves the selection, one undo step; ctrl+wheel zooms at the pointer") {
+    "rack window: a drag moves the selection, one undo step; the wheel zooms at the pointer") {
     Fixture f;
     if (!f.ok) return;
     Patch p(f);
@@ -463,7 +463,6 @@ TEST_CASE(
     ui::PointerEvent wheel;
     wheel.type = ui::PointerEvent::Type::Wheel;
     wheel.pos = at;
-    wheel.mods = ui::kCtrl;
     wheel.wheelY = 3;
     f.r().pointer(wheel);
     CHECK(space.view().zoom > zoom);
@@ -471,6 +470,20 @@ TEST_CASE(
     CHECK(space.toSpace(at).y == doctest::Approx(static_cast<double>(under.y)).epsilon(0.001));
     for (int k = 0; k < 40; ++k) f.r().pointer(wheel);
     CHECK(space.view().zoom == doctest::Approx(gui::RackSpace::kMaxZoom));
+    // Ctrl scrolls vertically; Shift scrolls horizontally without zooming.
+    const auto scrolled = space.view();
+    wheel.mods = ui::kCtrl;
+    wheel.wheelY = 1;
+    f.r().pointer(wheel);
+    CHECK(space.view().zoom == scrolled.zoom);
+    CHECK(space.view().y == doctest::Approx(scrolled.y - 40 / scrolled.zoom));
+    const auto shifted = space.view();
+    wheel.mods = ui::kShift;
+    f.r().pointer(wheel);
+    CHECK(space.view().zoom == shifted.zoom);
+    CHECK(space.view().x == doctest::Approx(shifted.x - 40 / shifted.zoom));
+    CHECK(space.view().y == shifted.y);
+    f.snapshot("rack-wheel-navigation.png");
     // Middle-drag pans.
     const auto v = space.view();
     f.drag(at, {at.x - 40, at.y}, 2);
@@ -684,7 +697,7 @@ TEST_CASE("rack window: a display hears the pointer; its edits are one undo step
     f.exec("history.undo", "{}");
     f.frame();
     CHECK(time() == doctest::Approx(20));
-    // The wheel over it, one step; Ctrl+wheel still zooms the space.
+    // The wheel over it, one step; Ctrl+wheel scrolls the space.
     ui::PointerEvent wheel;
     wheel.type = ui::PointerEvent::Type::Wheel;
     wheel.pos = at(70, 60);
@@ -692,10 +705,11 @@ TEST_CASE("rack window: a display hears the pointer; its edits are one undo step
     f.r().pointer(wheel);
     f.frame();
     CHECK(time() == doctest::Approx(30));
-    const double zoom = space.view().zoom;
+    const auto beforeScroll = space.view();
     wheel.mods = ui::kCtrl;
     f.r().pointer(wheel);
-    CHECK(space.view().zoom > zoom);
+    CHECK(space.view().zoom == beforeScroll.zoom);
+    CHECK(space.view().y == doctest::Approx(beforeScroll.y - 40 / beforeScroll.zoom));
     CHECK(time() == doctest::Approx(30));
     // Elsewhere on the module, a drag still moves it.
     f.drag(at(75, 10), at(95, 10));

@@ -1300,8 +1300,8 @@ a new channel). It follows rack.md §8.
   browser (shown if hidden) on its Modules or its Patches view with the
   search focused; the line goes with the first other module. Middle-drag
   or Space-drag pans (Space alone, released without a drag, still plays and
-  stops), Ctrl+wheel zooms at the pointer from 10 to 400 %, the wheel
-  scrolls (Shift: across), Ctrl+= and Ctrl+- zoom, Ctrl+0 is 100 %, Home
+  stops), the wheel zooms at the pointer from 10 to 400 %, Ctrl+wheel
+  scrolls vertically and Shift+wheel scrolls across, Ctrl+= and Ctrl+- zoom, Ctrl+0 is 100 %, Home
   shows everything (at most 100 %, as far out as it takes) and Shift+Home
   fills the view with the selection (at most 150 %). Below 55 % the faces'
   small words go and each module's name is drawn over it at 10.5 points on
@@ -1511,11 +1511,11 @@ a new channel). It follows rack.md §8.
   and its leaving; the wheel. Its knob edits (`Param::edit`) are
   `module.set`, one undo step a press or a burst of the wheel; on a hover
   they do nothing. There a press does not move the module, and the wheel is
-  the module's; Ctrl+wheel still zooms, the right button still opens the
+  the module's; Ctrl+wheel scrolls the space, the right button still opens the
   module's menu and the middle one still pans. A module without `pointer()`
   is dragged by its displays as by the rest of its body.
 - **Status bar.** The rack's label, its module and cable counts and the
-  selection's size, then any capture or notice. With the transport
+  selection's size, then the wheel navigation hint and any capture or notice. With the transport
   stopped, a rack holding a Transport module or a module whose type is
   tagged `sequencer` or `clock` (they play the song's beats with nothing in
   their clock input) adds "Stopped: press play to start the patch"; it

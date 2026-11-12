@@ -475,7 +475,8 @@ instructions are in `docs/guides/installing.md`.
   modifiers.
 - **Rack window** (ADR-0062, gui.md §4.12): a separate window with a tab per
   rack (`+` adds one), a plain pannable, zoomable space (10-400 %, each
-  rack's view in the UI sidecar), modules drawn from their faces with knobs,
+  rack's view in the UI sidecar; wheel zooms, Ctrl+wheel scrolls vertically,
+  Shift+wheel scrolls across; displays retain wheel editing), modules drawn from their faces with knobs,
   toggles, choices and jacks in signal colours, hanging cables, selection,
   marquee and group moves, knob drags, cables drawn jack to jack or onto a
   knob, modulation rings, telemetry glow, a searchable module browser
