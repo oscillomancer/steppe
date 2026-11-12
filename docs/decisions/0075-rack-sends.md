@@ -65,7 +65,11 @@ In module are linear too (rack.md §2.4).
    not after any fader). Solo treats the send as the home channel's send:
    a silenced home silences it, soloing the destination keeps the home
    (and so the send) audible, soloing the home keeps the destination. An
-   isolated analysis tap ignores solo, as it does for strips.
+   isolated analysis tap ignores solo, as it does for strips. The home is
+   the rack's `track`, whichever channel that is: after `rack.set track` or
+   a rehoming (§8) the sends follow the new home's mute and solo, even when
+   it only hears the rack's Note Out; the routing window shows the home on
+   each Out row.
 5. **Latency.** The rack node's latency is that of its slowest routed Out,
    rack sends included (ADR-0064), and each rack send's edge delay aligns it
    with the destination's other inputs, as for an Out into a channel. Its

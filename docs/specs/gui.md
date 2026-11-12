@@ -1014,7 +1014,10 @@ the destination's decode); channels, keys and In modules are disabled with
 "a rack's Out sends to busses and masters", and a buss that feeds the rack is
 listed as a cycle. A rack send counts and selects as any send, but has level
 and mute only: with one selected, the tap, pan, channels and polarity
-controls are disabled. Its being its channel's input is not drawn.
+controls are disabled. Its being its channel's input is not drawn. The
+status line over an Out row's cell names the rack's home, whose mute and
+solo its sends follow ("Pad » Out 1 → Verb: -6.0 dB; follows Pad's mute
+and solo — click to select"), and leaves out the tap.
 
 MIDI mode lists channels in hierarchy order, then their racks' Note Out
 modules indented below them. Columns are channels, each followed by its

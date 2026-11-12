@@ -43,6 +43,7 @@ struct MatrixModel {
         // rows follow the strip's with the outputs' names.
         int pair = 1, width = 2;
         std::string strip;  // the strip's name, for an auxiliary row
+        std::string track;  // a rack Out's home channel (ADR-0075)
     };
     struct Destination {
         // kind: track | key | module (a rack's In); track: a key's strip, an
@@ -124,6 +125,8 @@ class RoutingMatrix {
     ui::PanControl* panControl() const { return pan_; }
     static std::string channelsText(const MatrixModel::Send& x);
     std::string status() const;
+    // The status line's text while the pointer is over a cell.
+    std::string hoverText(std::size_t row, std::size_t col) const;
 
   private:
     std::string inputReplacement(const MatrixModel::Source&, const MatrixModel::Destination&) const;

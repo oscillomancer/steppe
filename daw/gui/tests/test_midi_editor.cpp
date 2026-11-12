@@ -998,6 +998,10 @@ TEST_CASE("routing matrix: a rack's Out rows send to busses and masters only (AD
     CHECK(m.blocked(o, col("tr_0")).empty());
     CHECK(m.blocked(o, col(keys)) == "a rack's Out sends to busses and masters");
     CHECK_FALSE(m.blocked(o, col(synth)).empty());
+    // The hover text names the home whose mute and solo a send follows.
+    CHECK(m.sources[o].track == synth);
+    CHECK(matrix.hoverText(o, col(verb)) ==
+          "Synth » Out 1 → Verb: double-click to send; follows Synth's mute and solo");
     // Its being the channel's input is not a send.
     CHECK(m.sends.empty());
     CHECK_FALSE(matrix.doubleClickCell(o, col(keys)));
@@ -1017,6 +1021,9 @@ TEST_CASE("routing matrix: a rack's Out rows send to busses and masters only (AD
     REQUIRE(matrix.volumeControl());
     matrix.volumeControl()->onChange(-6.0, ui::Gesture::Set);
     CHECK(f.app->head().routes.find(*model::Id::parse(send))->volumeDb == doctest::Approx(-6.0));
+    CHECK(matrix.hoverText(o, col(verb))
+              .ends_with("; follows Synth's mute and solo — click to select"));
+    CHECK(matrix.hoverText(o, col(verb)).find("post_fader") == std::string::npos);
     CHECK(matrix.volumeControl()->enabled);
     CHECK_FALSE(matrix.panControl()->enabled);
     for (const char* id : {"routing.tap.post", "routing.tap.pre", "routing.tap.prefx",

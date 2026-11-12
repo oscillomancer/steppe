@@ -434,6 +434,7 @@ Status RoutingMatrix::reload() {
         src.depth = static_cast<int>(s.find("depth")->asInt());
         if (const auto* ps = s.find("parent_send")) src.parentSend = ps->asBool();
         if (const auto* rule = s.find("rule")) src.rule = str(*rule, "message");
+        if (src.type == "rack_out") src.track = str(s, "track");
         const int channels = s.find("channels") ? static_cast<int>(s.find("channels")->asInt()) : 2;
         const json::Value* names = s.find("channel_names");
         // A row per auxiliary pair under the strip's own (ADR-0021).
@@ -612,27 +613,7 @@ void RoutingMatrix::open(std::optional<ui::Rect> anchor) {
             status_->setText(status());
             return;
         }
-        const auto& s = model_.sources[cell->first];
-        const auto& d = model_.destinations[cell->second];
-        const std::string from =
-            s.pair != 1 ? s.strip + " " + s.name : (s.name.empty() ? s.id : s.name);
-        const std::string pair = from + " → " + (d.name.empty() ? d.id : d.name);
-        const auto sends = model_.sendsAt(cell->first, cell->second);
-        if (!sends.empty() && sends.front()->allInputs)
-            status_->setText(pair + ": All inputs (*) — one shared assignment");
-        else if (!sends.empty())
-            status_->setText(pair + ": " + dbText(sends.front()->volumeDb) + ", " +
-                             sends.front()->tap + (sends.front()->mute ? ", muted" : "") +
-                             " — click to select");
-        else if (const std::string why = model_.blocked(cell->first, cell->second); !why.empty())
-            status_->setText(pair + ": not allowed — " + why);
-        else if (parentCell(cell->first, cell->second))
-            status_->setText(pair + (s.parentSend
-                                         ? ": the parent send, on — double-click to turn it off"
-                                         : ": the parent send, off — double-click to turn it on"));
-        else
-            status_->setText(pair + ": double-click to send" +
-                             (inputReplacement(s, d).empty() ? "" : "; " + inputReplacement(s, d)));
+        status_->setText(hoverText(cell->first, cell->second));
     };
     auto& grid = panel->emplace<Grid>(model_, std::move(hooks));
     grid_ = &grid;
@@ -831,6 +812,36 @@ std::string RoutingMatrix::channelsText(const MatrixModel::Send& x) {
         return std::to_string(x.mapFrom[0]) + "\u2192" + std::to_string(x.mapTo[0]) + "/" +
                std::to_string(x.mapTo[1]);
     return "Custom map";
+}
+
+std::string RoutingMatrix::hoverText(std::size_t row, std::size_t col) const {
+    const auto& s = model_.sources[row];
+    const auto& d = model_.destinations[col];
+    const std::string from =
+        s.pair != 1 ? s.strip + " " + s.name : (s.name.empty() ? s.id : s.name);
+    const std::string pair = from + " → " + (d.name.empty() ? d.id : d.name);
+    // A rack send follows its home channel's mute and solo (ADR-0075).
+    std::string home;
+    if (s.type == "rack_out" && !s.track.empty()) {
+        home = s.track;
+        for (const auto& x : model_.sources)
+            if (x.id == s.track && x.pair == 1 && !x.name.empty()) home = x.name;
+        home = "; follows " + home + "'s mute and solo";
+    }
+    const auto sends = model_.sendsAt(row, col);
+    if (!sends.empty() && sends.front()->allInputs)
+        return pair + ": All inputs (*) — one shared assignment";
+    if (!sends.empty())
+        return pair + ": " + dbText(sends.front()->volumeDb) +
+               (home.empty() ? ", " + sends.front()->tap : std::string()) +
+               (sends.front()->mute ? ", muted" : "") + home + " — click to select";
+    if (const std::string why = model_.blocked(row, col); !why.empty())
+        return pair + ": not allowed — " + why;
+    if (parentCell(row, col))
+        return pair + (s.parentSend ? ": the parent send, on — double-click to turn it off"
+                                    : ": the parent send, off — double-click to turn it on");
+    return pair + ": double-click to send" + home +
+           (inputReplacement(s, d).empty() ? "" : "; " + inputReplacement(s, d));
 }
 
 std::string RoutingMatrix::status() const {
