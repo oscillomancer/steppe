@@ -2540,6 +2540,11 @@ TEST_CASE("Hardware Audio: LTC resolves the unavailable default to output two") 
     REQUIRE(sends.size() == 1);
     CHECK(sends.front()->warning == "LTC replaces Master's audio on output 2");
     f.snapshot("routing-hardware-audio-ltc-fallback.png", &panel.root());
+    matrix.splitAllAudio(true);
+    const auto split =
+        matrix.model().sendsAt(audioRow(matrix, "tr_0", 2), audioCol(matrix, "audio_out:1", 2));
+    REQUIRE(split.size() == 1);
+    CHECK(split.front()->warning == "LTC replaces Master's audio on output 2");
 }
 
 TEST_CASE("Hardware Audio: swap sides atomically and refuse mixed blocked selections") {

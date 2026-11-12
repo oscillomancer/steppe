@@ -282,8 +282,9 @@ Status RoutingMatrix::reloadHardwareAudio() {
                 if (!(input ? d.side : s.side) && requested.size() == 2)
                     send.matchesCell = channels == requested;
                 if (warning)
-                    send.warning =
-                        "LTC replaces " + s.name + "'s audio on output " + std::to_string(ltc);
+                    send.warning = "LTC replaces " +
+                                   model::trackLabel(session, *model::Id::parse(s.signal)) +
+                                   "'s audio on output " + std::to_string(ltc);
                 next.sends.push_back(std::move(send));
             }
         }
