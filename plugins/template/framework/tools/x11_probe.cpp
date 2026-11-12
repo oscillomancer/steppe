@@ -141,9 +141,15 @@ bool capture(Display* d, Window parent, const char* path) {
 }
 // A first frame at a new size can be slow to draw under software rendering
 // on a loaded machine: wait for it, up to a generous deadline, rather than
-// decide by a fixed time.
+// decide by a fixed time. Another program's window may lie over the parent
+// (probes of several products run at once on one test display): where it
+// does, the server reads back that window's pixels, not the editor's. The
+// parent keeps a backing store, so its own pixels are kept even when
+// covered, and is raised before each look for servers without one.
 bool captureDrawn(Display* d, Host& host, Window parent, const char* path) {
     for (int attempt = 0; attempt < 100; ++attempt) {
+        XRaiseWindow(d, parent);
+        XSync(d, False);
         if (capture(d, parent, path)) return true;
         pump(d, host, 5);
     }
@@ -215,6 +221,9 @@ int main(int argc, char** argv) {
     for (int cycle = 0; cycle < 3; ++cycle) {
         Window parent = XCreateSimpleWindow(display, DefaultRootWindow(display), 40, 40, 1100, 720, 0, 0, 0);
         XStoreName(display, parent, "CLAP Linux host verification");
+        XSetWindowAttributes kept{};
+        kept.backing_store = Always;
+        XChangeWindowAttributes(display, parent, CWBackingStore, &kept);
         XMapWindow(display, parent);
         XSync(display, False);
         check(host.gui->create(host.plugin, CLAP_WINDOW_API_X11, false), "create/reopen editor");

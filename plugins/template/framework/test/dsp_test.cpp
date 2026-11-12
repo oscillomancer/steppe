@@ -1482,6 +1482,21 @@ TEST(resampling_each_channel_is_the_same_alone_or_together) {
     }
 }
 
+#ifdef __linux__
+// /dev/full takes the file and refuses every byte, as a full disk does. A
+// file small enough to sit in the write buffer fails only when it is
+// flushed: saving must say so rather than leave a short file behind as if
+// it were whole.
+TEST(wav_save_reports_a_full_disk) {
+    AudioData a;
+    a.sampleRate = 48000.0;
+    a.channel = {std::vector<float>(100, 0.25f)};
+    std::string error;
+    CHECK(!saveWavFile("/dev/full", a, &error));
+    CHECK(error.find("disk took only part") != std::string::npos);
+}
+#endif
+
 TEST(disk_stream_plays_the_file_from_disk_and_restarts) {
     const std::filesystem::path dir = scratchFolder("stream");
     AudioData a;
@@ -1492,10 +1507,16 @@ TEST(disk_stream_plays_the_file_from_disk_and_restarts) {
         a.channel[1][n] = -a.channel[0][n];
     }
     const std::string path = (dir / "long.wav").string();
-    CHECK(saveWavFile(path, a));
     DiskStream s;
-    CHECK(s.open(path, 0.25));
-    CHECK(s.channels() == 2 && s.frames() == 100000);
+    // Without the whole file (a full disk) the loops below would wait for
+    // frames that never come.
+    std::string error;
+    if (!saveWavFile(path, a, &error) || !s.open(path, 0.25) || s.frames() != 100000) {
+        CHECK_MSG(false, "cannot write and reopen %s: %s", path.c_str(), error.c_str());
+        std::filesystem::remove_all(dir.parent_path());
+        return;
+    }
+    CHECK(s.channels() == 2);
     std::vector<double> left(512), right(512);
     double* out[2] = {left.data(), right.data()};
     auto playAll = [&](size_t upTo) {
@@ -1524,15 +1545,19 @@ TEST(disk_stream_plays_the_file_from_disk_and_restarts) {
     Worker w;
     s.restart();
     const int id = w.repeat([&s] { s.service(); }, 1.0);
-    size_t at = 0;
+    size_t at = 0, idle = 0;
     bool exact = true;
-    while (at < 100000) {
+    // An empty read waits for the worker to catch up; one that never does
+    // (about ten seconds without a frame) fails here instead of hanging.
+    while (at < 100000 && idle < 50000) {
         const int n = s.read(out, 2, 256);
         for (int i = 0; i < n; ++i) exact = exact && left[static_cast<size_t>(i)] == a.channel[0][at + static_cast<size_t>(i)];
         at += static_cast<size_t>(n);
+        idle = n > 0 ? 0 : idle + 1;
         std::this_thread::sleep_for(std::chrono::microseconds(200));
     }
     w.cancel(id);
+    CHECK_MSG(at == 100000, "the stream stopped at frame %zu of 100000", at);
     CHECK(exact);
     s.close();
     std::filesystem::remove_all(dir.parent_path());

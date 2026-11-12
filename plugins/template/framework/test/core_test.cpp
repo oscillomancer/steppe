@@ -2267,6 +2267,12 @@ TEST(file_defaults_load_and_same_session_activation_waits) {
     bool loaded = false;
     slots.deliverAll([&](size_t, const int* p) { loaded = p && *p == 42; });
     CHECK(loaded);
+    // A file that could not be made (a full disk) is never loaded, and the
+    // wait below would never end.
+    if (!files::exists(path)) {
+        CHECK_MSG(false, "cannot make %s", path.c_str());
+        return;
+    }
     SlowFileProbe::started = false;
     SlowFileProbe::finish = false;
     slots.request(0, path, false);

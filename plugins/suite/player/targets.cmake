@@ -62,7 +62,8 @@ if (SUPPLE_BUILD_TESTS AND COMMAND supple_test)
         set_tests_properties(processor-tests PROPERTIES ENVIRONMENT "SUPPLE_SCRIPT_LIBRARY=${player_library}")
     endif()
     foreach(test host-smoke-2ch host-smoke-1ch vst3-unload exports-clap exports-vst3 x11-embedding
-                 mac-embedding win32-embedding win32-embedding-no-host-timer win32-module-ownership)
+                 x11-embedding-overlapped mac-embedding win32-embedding win32-embedding-no-host-timer
+                 win32-module-ownership)
         if (TEST ${test})
             set_tests_properties(${test} PROPERTIES ENVIRONMENT "SUPPLE_SCRIPT_LIBRARY=${player_smoke}")
         endif()

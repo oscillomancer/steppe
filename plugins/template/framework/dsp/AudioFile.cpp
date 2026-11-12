@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 
 #include "core/Files.h"
 #include "dr_flac.h"
@@ -33,6 +34,27 @@ std::wstring wide(const std::string& s) {
 void fail(std::string* error, const std::string& message) {
     if (error) *error = message;
 }
+
+// dr_wav's own file writer ignores a failed header rewrite and a failed
+// close, which is where a full disk shows on a buffered file; this one
+// remembers every failure.
+struct WavSink {
+    std::FILE* file = nullptr;
+    bool failed = false;
+    static size_t write(void* user, const void* data, size_t bytes) {
+        auto& sink = *static_cast<WavSink*>(user);
+        const size_t written = std::fwrite(data, 1, bytes, sink.file);
+        if (written != bytes) sink.failed = true;
+        return written;
+    }
+    static drwav_bool32 seek(void* user, int offset, drwav_seek_origin origin) {
+        auto& sink = *static_cast<WavSink*>(user);
+        const int whence = origin == DRWAV_SEEK_CUR ? SEEK_CUR : origin == DRWAV_SEEK_END ? SEEK_END : SEEK_SET;
+        if (std::fseek(sink.file, offset, whence) == 0) return DRWAV_TRUE;
+        sink.failed = true;
+        return DRWAV_FALSE;
+    }
+};
 
 }  // namespace
 
@@ -166,13 +188,15 @@ bool saveWavFile(const std::string& path, const AudioData& audio, std::string* e
     format.channels = static_cast<drwav_uint32>(audio.channels());
     format.sampleRate = static_cast<drwav_uint32>(std::round(audio.sampleRate));
     format.bitsPerSample = 32;
-    drwav wav;
+    WavSink sink;
 #ifdef _WIN32
-    const bool opened = drwav_init_file_write_w(&wav, wide(path).c_str(), &format, nullptr) == DRWAV_TRUE;
+    sink.file = _wfopen(wide(path).c_str(), L"wb");
 #else
-    const bool opened = drwav_init_file_write(&wav, path.c_str(), &format, nullptr) == DRWAV_TRUE;
+    sink.file = std::fopen(path.c_str(), "wb");
 #endif
-    if (!opened) {
+    drwav wav;
+    if (!sink.file || drwav_init_write(&wav, &format, WavSink::write, WavSink::seek, &sink, nullptr) != DRWAV_TRUE) {
+        if (sink.file) std::fclose(sink.file);
         fail(error, "cannot write " + path);
         return false;
     }
@@ -181,8 +205,10 @@ bool saveWavFile(const std::string& path, const AudioData& audio, std::string* e
     for (size_t i = 0; i < frames; ++i)
         for (size_t c = 0; c < audio.channel.size(); ++c) interleaved[i * audio.channel.size() + c] = audio.channel[c][i];
     const drwav_uint64 written = drwav_write_pcm_frames(&wav, frames, interleaved.data());
-    drwav_uninit(&wav);
-    if (written != frames) {
+    const bool finished = drwav_uninit(&wav) == DRWAV_SUCCESS;
+    const bool flushed = std::fflush(sink.file) == 0;
+    const bool closed = std::fclose(sink.file) == 0;
+    if (written != frames || !finished || !flushed || !closed || sink.failed) {
         fail(error, "the disk took only part of " + path);
         return false;
     }

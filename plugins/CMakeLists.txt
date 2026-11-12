@@ -117,12 +117,12 @@ if(SUPPLE_BUILD_PLUGINS)
     if(SUPPLE_BUILD_TESTS)
       # The embedding probes open a real editor in a window at a fixed spot
       # on the screen and read its pixels back. Every product's suite shares
-      # one screen (one Xvfb on Linux CI, the desktop elsewhere), and a probe
-      # whose window lies under another probe's reads that window instead of
-      # its own editor, until its deadline passes. They run as
-      # plugin.<name>.embedding, one product at a time, beside the rest of the
-      # suite, which runs in parallel as before.
-      set(on_screen "^(x11-embedding|win32-embedding|win32-embedding-no-host-timer|mac-embedding)$")
+      # one screen (one Xvfb on Linux CI, the desktop elsewhere). The X11
+      # probe reads its own window even when covered (framework 1.33.5);
+      # the others may need theirs in front. They run as
+      # plugin.<name>.embedding, one product at a time, beside the rest of
+      # the suite, which runs in parallel as before.
+      set(on_screen "^(x11-embedding|x11-embedding-overlapped|win32-embedding|win32-embedding-no-host-timer|mac-embedding)$")
       add_test(NAME plugin.${name}.ctest
         COMMAND ${CMAKE_CTEST_COMMAND} --test-dir "${plugin_build}" --output-on-failure -E "${on_screen}")
       add_test(NAME plugin.${name}.embedding

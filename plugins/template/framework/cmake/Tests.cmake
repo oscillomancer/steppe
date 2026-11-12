@@ -280,6 +280,11 @@ if (SUPPLE_BUILD_PLUGIN)
             add_test(NAME x11-embedding
                 COMMAND x11-probe $<TARGET_FILE:product-plugin_clap> ${CMAKE_BINARY_DIR}/x11-probe.ppm)
             set_tests_properties(x11-embedding PROPERTIES SKIP_RETURN_CODE 77 RUN_SERIAL TRUE)
+            # Six at once, their windows on top of each other.
+            add_test(NAME x11-embedding-overlapped
+                COMMAND bash ${SUPPLE_FRAMEWORK}/test/x11_overlap_test.sh $<TARGET_FILE:x11-probe>
+                        $<TARGET_FILE:product-plugin_clap> ${CMAKE_BINARY_DIR}/x11-overlap)
+            set_tests_properties(x11-embedding-overlapped PROPERTIES SKIP_RETURN_CODE 77 RUN_SERIAL TRUE)
         endif()
     endif()
 

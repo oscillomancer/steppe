@@ -4,6 +4,26 @@ The framework is versioned on its own (`framework/VERSION.txt`) so a product can
 tell which one it carries. Each entry says what a product must do, if
 anything, after `framework/tools/update_framework.cmake` brings it in.
 
+## 1.33.5
+
+What a product must do: nothing.
+
+- **A full disk fails a WAV save.** `saveWavFile` writes through its own
+  file and checks every write, the header's rewrite, the flush and the
+  close. dr_wav's file writer ignored the last three, where a full disk or
+  quota shows on a buffered file, so a short file could be reported saved.
+- **Tests that wrote a file stop when the disk will not take it.** The disk
+  stream test, and the file-slot test that waits for a load to start, fail
+  with the reason instead of waiting forever for a file that was never
+  written; the stream's worker loop also gives up after ten seconds without
+  a frame.
+- **The X11 probe reads its own editor under other windows.** Probes of
+  several products sharing one test display put their windows in the same
+  place, and a covered parent read back the window over it until that probe
+  finished, so the last of several ran out of time. The parent keeps a
+  backing store and is raised before each look; `x11-embedding-overlapped`
+  runs six probes at once.
+
 ## 1.33.4
 
 What a product must do: nothing.

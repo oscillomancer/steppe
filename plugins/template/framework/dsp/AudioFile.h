@@ -48,7 +48,10 @@ inline constexpr const char* kAudioFileExtensions[] = {"wav", "wave", "aif", "ai
 // when it cannot: missing, unreadable, or a format it does not know.
 bool loadAudioFile(const std::string& path, AudioData& out, std::string* error = nullptr, double maxSeconds = 0.0);
 
-// 32-bit float WAV, for tests and exports.
+// 32-bit float WAV, for tests and exports. False, with a reason in `error`,
+// when the file cannot be made or the disk does not take all of it (full,
+// over quota): a buffered write's failure shows only when the header is
+// finished and the file closed, and those are checked too.
 bool saveWavFile(const std::string& path, const AudioData& audio, std::string* error = nullptr);
 
 // The same audio at another rate: windowed sinc, flat to 0.45 of the lower
