@@ -51,7 +51,13 @@ void RoutingMatrix::setHardwareAudioMode() {
 
 json::Value RoutingMatrix::saveAudioSplits() const {
     auto value = json::Value::array();
-    for (const auto& signal : audioSplits_) value.push_back(signal);
+    for (const auto& signal : audioSplits_) {
+        if (signal.starts_with("tr_")) {
+            const auto id = model::Id::parse(signal);
+            if (!id || !app_.head().tracks.find(*id)) continue;
+        }
+        value.push_back(signal);
+    }
     return value;
 }
 

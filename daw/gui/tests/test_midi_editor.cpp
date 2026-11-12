@@ -2636,3 +2636,25 @@ TEST_CASE(
     CHECK_FALSE(denied.error().hint.empty());
     CHECK(audioOutput(f) == std::vector<int>{1});
 }
+
+TEST_CASE("Hardware Audio: save keeps project device splits and drops deleted track IDs") {
+    Fixture f;
+    REQUIRE(f.ok);
+    const auto channel = f.exec("track.add", R"({"name":"Transient"})")["track"].asString();
+    gui::FloatingPanel panel(*f.platform, *f.window, *f.root, SUPPLE_GUI_FONTS_DIR, "Routing", 1000,
+                             560, 800, 360);
+    gui::RoutingMatrix matrix(panel, *f.actions, *f.dispatcher, *f.app);
+    auto splits = json::Value::array();
+    for (const auto& signal :
+         {std::string("audio_in:1"), std::string("audio_out:1"), channel, std::string("tr_99999")})
+        splits.push_back(signal);
+    matrix.loadAudioSplits(splits);
+    CHECK(matrix.saveAudioSplits().size() == 3);
+    f.exec("track.remove", R"({"track":")" + channel + R"("})");
+    const auto version = f.app->head().version;
+    auto saved = matrix.saveAudioSplits();
+    REQUIRE(saved.size() == 2);
+    CHECK(saved.asArray()[0].asString() == "audio_in:1");
+    CHECK(saved.asArray()[1].asString() == "audio_out:1");
+    CHECK(f.app->head().version == version);
+}

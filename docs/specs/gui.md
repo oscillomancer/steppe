@@ -1074,7 +1074,10 @@ Splitting is presentation only and never changes assignments. Split signals
 are saved as a sorted set of identities in `windows.routing.audio_splits` in
 the per-project UI sidecar, alongside mode and geometry; they reset on project
 replacement. This keeps the view with the project's channels without adding
-engine or project-model state. Device pairs use numbered identities.
+engine or project-model state. Device pairs use numbered identities; their split
+choices also live per project, so switching projects can show a different split
+view of the same machine. Deleted track identities are pruned when saving the
+sidecar; device-pair choices remain available across device changes.
 
 A single device-input row assigned to a joined channel selects a mono input
 (feeds both sides); an output channel assigned from a joined master selects
