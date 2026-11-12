@@ -1064,15 +1064,15 @@ edit `track.set {hw_output}` (ADR-0056); channels and busses have no direct
 hardware outputs. All other cells are disabled with a reason on hover.
 The engine's resolved LTC output is labelled `[LTC]` (a missing configured
 channel resolves to the device's last output). A master assignment there has a
-warning cell (`!`): "LTC replaces <master>'s audio on output N". Sync/device changes refresh this
-view even without a project edit. Send controls are hidden: these assignments
+warning cell (`!`): "LTC replaces <master>'s audio on output N". Sync/device
+changes refresh this view even without a project edit. Send controls are hidden: these assignments
 have no independent tap, gain, mute or pan.
 
 Right-click a stereo signal's row or column header for **Split into L/R** or
-**Join**. Channels split their input columns; masters split their output rows. Channel
-and buss rows are omitted because they cannot feed hardware outputs. The
-**Split all into L/R / Join all** button applies to every visible stereo signal; it is disabled when the view
-contains no stereo signal.
+**Join**. Channels split their input columns; masters split their output rows.
+Channel and buss rows are omitted because they cannot feed hardware outputs. The
+**Split all into L/R / Join all** applies to every visible stereo signal. The
+button is disabled when the view contains no stereo signal.
 Splitting is presentation only and never changes assignments. Split signals
 are saved as a sorted set of identities in `windows.routing.audio_splits` in
 the per-project UI sidecar, alongside mode and geometry; they reset on project
@@ -1087,14 +1087,15 @@ A single device-input row assigned to a joined channel selects a mono input
 mono `(L+R)/2`. Mono assignments use an outlined **M**, including in the
 joined view; hover says "mono: input N to both sides" or "mono: (L+R)/2 to
 output N". Double-clicking a joined pair cell whose assignment differs from
-that pair assigns the complete pair. A split channel/master side can replace that side of an existing
-stereo assignment while retaining the other side, including non-adjacent output
+that pair assigns the complete pair. A split channel/master side can replace
+that side of an existing stereo assignment while retaining the other side, including non-adjacent output
 pairs. A mono record input `[c]` widens to `[c,c]` before replacing a side,
-so its untouched side keeps hearing the same input. Split sides need a single device channel, so split the device pair first.
+so its untouched side keeps hearing the same input. Split sides need a single
+device channel, so split the device pair first.
 The existing model cannot leave an unassigned gap in a stereo input, silence
-one master side, or duplicate a master's hardware output channel. Such cells
-are disabled with an explanation; assign a stereo pair before changing one
-master side; a record-input side needs an existing mono or stereo input.
+one master side, or duplicate a master's hardware output channel. Incompatible
+cells are disabled with an explanation; duplicate outputs are refused on the
+complete edited map. Assign a stereo pair before changing one master side; a record-input side needs an existing mono or stereo input.
 A record input or master output remains one assignment: removing only
 some of its connected split cells refuses with a hint to select all connected
 cells or join the signals. Add/Remove and multi-cell edits remain one undo step;
