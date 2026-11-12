@@ -273,6 +273,10 @@ Result<Id> target(const model::Session& s, model::Kind kind, const std::string& 
 Status checkStrip(const model::Session& s, Id id, std::string_view param) {
     if (id.kind == model::Kind::Route && s.routes.find(id)->midi && param != "mute")
         return Error("route.midi", "MIDI sends can learn mute only", "/param", "use param: mute");
+    if (id.kind == model::Kind::Route && param != "volume" && param != "mute" &&
+        model::rackSendHome(s, *s.routes.find(id)))
+        return Error("route.rack_send", "a rack send can learn level and mute only", "/param",
+                     "use param: volume or mute");
     if (id.kind != model::Kind::Track) return {};
     const model::Track& t = *s.tracks.find(id);
     const bool ok =

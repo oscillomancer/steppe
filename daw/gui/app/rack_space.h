@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 // The rack window's space (docs/specs/rack.md §8): a plain background where
 // modules sit anywhere, drawn from a RackScene. Middle-drag or Space-drag
-// pans, Ctrl+wheel zooms at the pointer (10-400 %), the wheel scrolls.
+// pans, the wheel zooms at the pointer (10-400 %), Ctrl+wheel scrolls.
 // Modules are dragged by their body, selected by a click, Ctrl+click or a
 // marquee, and move together. Jacks are circles in their signal's colour,
 // lit by level; a drag from one draws a cable to a jack of the other

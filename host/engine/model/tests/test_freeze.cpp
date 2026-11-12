@@ -28,7 +28,7 @@ Session frozenSession() {
 TEST_CASE("freeze model: canonical round trip and older files") {
     auto s = frozenSession();
     auto text = serializeProject(s);
-    CHECK(text.find("supple.project/2.11") != std::string::npos);
+    CHECK(text.find("supple.project/2.13") != std::string::npos);
     auto loaded = parseProject(text);
     REQUIRE(loaded);
     CHECK(serializeProject(*loaded) == text);

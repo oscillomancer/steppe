@@ -254,6 +254,10 @@ bool sendsTo(const Session& s, Id from, Id to);
 // hears its own rack's Note Out through its source track (ADR-0067), so the
 // Notes modules of a source rack are left out.
 std::vector<Id> midiFollowers(const Session& session, Id track, std::optional<Id> source = {});
+// A rack send (ADR-0075): an audio route from an Out module to a buss or
+// master. Its rack's home channel, whose mute and solo it follows; nullopt
+// for any other route (an Out as a channel's input is not a send).
+std::optional<Id> rackSendHome(const Session& s, const Route& r);
 // The independent MIDI input, falling back to the legacy record.input route.
 const Route* midiInputRoute(const Session& s, Id track);
 

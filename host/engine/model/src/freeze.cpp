@@ -34,6 +34,27 @@ std::set<Id> dependencies(const Session& s, Id track) {
         if (ids.count(item.value->envelope)) ids.insert(item.id);
     return ids;
 }
+// What a channel's racks sound like (ADR-0075): their modules, cables,
+// plugin modules' plug-ins, and the envelopes and automation items on them.
+std::set<Id> rackDependencies(const Session& s, Id track) {
+    std::set<Id> racks, ids;
+    for (const auto& r : s.racks)
+        if (r.value->track == track) racks.insert(r.id);
+    if (racks.empty()) return ids;
+    for (const auto& m : s.modules)
+        if (racks.count(m.value->rack)) {
+            ids.insert(m.id);
+            if (m.value->fx) ids.insert(*m.value->fx);
+        }
+    for (const auto& c : s.cables)
+        if (const auto rack = rackOfEnd(s, c.value->from); rack && racks.count(*rack))
+            ids.insert(c.id);
+    for (const auto& env : s.envelopes)
+        if (ids.count(env.value->target.object)) ids.insert(env.id);
+    for (const auto& item : s.autoItems)
+        if (ids.count(item.value->envelope)) ids.insert(item.id);
+    return ids;
+}
 template <class T>
 void append(json::Value& values, const IdMap<T>& objects, const std::set<Id>& ids,
             const std::map<Id, Id>& remap) {
@@ -61,6 +82,9 @@ json::Value timing(const Session& s) {
 
 std::string freezeDependencyHash(const Session& s, Id track) {
     auto ids = dependencies(s, track);
+    // The racks homed here are locked too, though not owned (ADR-0075).
+    const auto rack = rackDependencies(s, track);
+    ids.insert(rack.begin(), rack.end());
     std::map<Id, Id> remap;
     Counters counters;
     for (Id id : ids) remap[id] = Id{id.kind, ++counters[id.kind]};
@@ -101,6 +125,20 @@ std::string freezeDependencyHash(const Session& s, Id track) {
     append(objects, s.midi, ids, remap);
     append(objects, s.envelopes, ids, remap);
     append(objects, s.autoItems, ids, remap);
+    // A rack's layout and labels are not its sound. Its learn bindings are:
+    // a controller turns its knobs, which play through its sends.
+    for (const auto& e : s.modules)
+        if (ids.count(e.id)) {
+            auto module = toJson(*e.value);
+            for (const char* key : {"x", "y", "label"}) module.asObject().erase(key);
+            objects.push_back(remapIds(module, schemaOf<RackModule>().jsonSchema(), remap));
+        }
+    for (const auto& e : s.cables)
+        if (ids.count(e.id)) {
+            auto cable = toJson(*e.value);
+            cable.asObject().erase("color");
+            objects.push_back(remapIds(cable, schemaOf<Cable>().jsonSchema(), remap));
+        }
     value["objects"] = std::move(objects);
     return "sha256:" + sha256Hex(json::writeCompact(value));
 }
@@ -115,6 +153,12 @@ std::vector<Id> freezeFxIds(const Session& s, Id track) {
 std::optional<Id> frozenOwner(const Session& s, Id object) {
     for (const auto& e : s.tracks)
         if (e.value->freeze && dependencies(s, e.id).count(object)) return e.id;
+    return std::nullopt;
+}
+
+std::optional<Id> frozenRackHome(const Session& s, Id object) {
+    for (const auto& e : s.tracks)
+        if (e.value->freeze && rackDependencies(s, e.id).count(object)) return e.id;
     return std::nullopt;
 }
 

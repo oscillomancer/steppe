@@ -85,9 +85,14 @@ std::string MatrixModel::blocked(std::size_t row, std::size_t col) const {
     }
     if (s.type == "midi_input" && d.kind != "track")
         return "connect a hardware input through a channel";
+    // A rack's Out sends only to busses and masters (ADR-0075).
+    if (s.type == "rack_out" && (d.kind != "track" || d.type == "channel"))
+        return s.rule.empty() ? "a rack's Out sends to busses and masters" : s.rule;
     if (s.pair != 1 && d.kind == "key")
         return "a key takes a strip's main pair; the plug-in's pins can read others";
-    if (d.kind == "track") {
+    if (s.type == "rack_out") {
+        // a buss or master: open unless it feeds back (below)
+    } else if (d.kind == "track") {
         if (s.id == d.id) return "a strip cannot send to itself";
         if (!s.rule.empty()) return s.rule;
         if (!d.rule.empty()) return d.rule;
@@ -176,7 +181,11 @@ class Grid : public ui::Node {
         const float gx = b.x + kLabelW - scrollX_, gy = b.y + kHeaderH - scrollY_;
         const ui::Rect cells{b.x + kLabelW, b.y + kHeaderH, b.w - kLabelW, b.h - kHeaderH};
         auto typeColor = [&](const std::string& type) {
-            return t.color(type == "master" ? "master" : type == "buss" ? "buss" : "channel");
+            // A rack's Out and Note Out rows are teal (ADR-0075, gui.md §4.6).
+            return t.color(type == "note_out" || type == "rack_out" ? "track-teal"
+                           : type == "master"                       ? "master"
+                           : type == "buss"                         ? "buss"
+                                                                    : "channel");
         };
         // Column headers: rotated names.
         c.save();
@@ -299,20 +308,6 @@ class Grid : public ui::Node {
             }
         }
         c.restore();
-        // Physical endpoint groups have a boundary across both labels and cells.
-        for (std::size_t row = 1; row < m_.sources.size(); ++row)
-            if (m_.sources[row - 1].type == "midi_input" && m_.sources[row].type != "midi_input") {
-                const float y = gy + static_cast<float>(row) * kCell;
-                if (y >= cells.y && y <= cells.bottom())
-                    c.line({b.x, y}, {b.right(), y}, t.color("ink-quiet"), 2);
-            }
-        for (std::size_t col = 1; col < m_.destinations.size(); ++col)
-            if (m_.destinations[col].kind == "midi_output" &&
-                m_.destinations[col - 1].kind != "midi_output") {
-                const float x = gx + static_cast<float>(col) * kCell;
-                if (x >= cells.x && x <= cells.right())
-                    c.line({x, b.y}, {x, b.bottom()}, t.color("ink-quiet"), 2);
-            }
         c.fillRect({cells.x - 1, b.y, 1, b.h}, t.color("rule"));
         c.fillRect({b.x, cells.y - 1, b.w, 1}, t.color("rule"));
     }
@@ -464,6 +459,7 @@ Status RoutingMatrix::reload() {
         src.depth = static_cast<int>(s.find("depth")->asInt());
         if (const auto* ps = s.find("parent_send")) src.parentSend = ps->asBool();
         if (const auto* rule = s.find("rule")) src.rule = str(*rule, "message");
+        if (src.type == "rack_out") src.track = str(s, "track");
         const int channels = s.find("channels") ? static_cast<int>(s.find("channels")->asInt()) : 2;
         const json::Value* names = s.find("channel_names");
         // A row per auxiliary pair under the strip's own (ADR-0021).
@@ -521,8 +517,13 @@ Status RoutingMatrix::reload() {
                 if (d.kind == "midi_output" && samePort(d.name, output)) to = d.id;
         }
         const auto* midi = r.find("midi");
+        // A rack's Out appears only as a rack send, to a buss or master
+        // (ADR-0075); as a channel's input it is not a send.
+        const bool rackSend = std::any_of(
+            next.destinations.begin(), next.destinations.end(),
+            [&](const auto& d) { return d.id == to && d.kind == "track" && d.type != "channel"; });
         if (from.empty() || to.empty() || bool(midi && !midi->isNull()) != midiMode_ ||
-            (!midiMode_ && from.starts_with("mo_")))
+            (!midiMode_ && from.starts_with("mo_") && !rackSend))
             continue;
         MatrixModel::Send x;
         x.id = str(r, "id");
@@ -656,52 +657,7 @@ void RoutingMatrix::open(std::optional<ui::Rect> anchor) {
             status_->setText(status());
             return;
         }
-        const auto& s = model_.sources[cell->first];
-        const auto& d = model_.destinations[cell->second];
-        const std::string from =
-            s.pair != 1 ? s.strip + " " + s.name : (s.name.empty() ? s.id : s.name);
-        const std::string pair = from + " → " + (d.name.empty() ? d.id : d.name);
-        const auto sends = model_.sendsAt(cell->first, cell->second);
-        if (hardwareAudioMode_) {
-            const auto why = model_.blocked(cell->first, cell->second);
-            const auto replacement = sends.empty() || !sends.front()->matchesCell
-                                         ? inputReplacement(s, d)
-                                         : std::string();
-            std::string assigned;
-            if (!sends.empty()) {
-                assigned = sends.front()->audioDescription.empty()
-                               ? "assigned"
-                               : sends.front()->audioDescription;
-                if (!sends.front()->warning.empty()) assigned += "; " + sends.front()->warning;
-                if (!sends.front()->matchesCell) assigned += "; double-click to assign the pair";
-            }
-            status_->setText(
-                pair + ": " +
-                (!assigned.empty() ? assigned
-                 : !why.empty()    ? "not allowed — " + why
-                                   : "double-click to assign") +
-                (replacement.empty() ? "" : "; " + replacement) +
-                (sends.empty() && s.type == "master" && !s.side && d.deviceChannels.size() == 1
-                     ? "; mono output (L+R)/2"
-                     : "") +
-                (sends.empty() && s.type == "audio_input" && !d.side && s.deviceChannels.size() == 1
-                     ? "; mono input feeds both L and R"
-                     : ""));
-        } else if (!sends.empty() && sends.front()->allInputs)
-            status_->setText(pair + ": All inputs (*) — one shared assignment");
-        else if (!sends.empty())
-            status_->setText(pair + ": " + dbText(sends.front()->volumeDb) + ", " +
-                             sends.front()->tap + (sends.front()->mute ? ", muted" : "") +
-                             " — click to select");
-        else if (const std::string why = model_.blocked(cell->first, cell->second); !why.empty())
-            status_->setText(pair + ": not allowed — " + why);
-        else if (parentCell(cell->first, cell->second))
-            status_->setText(pair + (s.parentSend
-                                         ? ": the parent send, on — double-click to turn it off"
-                                         : ": the parent send, off — double-click to turn it on"));
-        else
-            status_->setText(pair + ": double-click to send" +
-                             (inputReplacement(s, d).empty() ? "" : "; " + inputReplacement(s, d)));
+        status_->setText(hoverText(cell->first, cell->second));
     };
     auto& grid = panel->emplace<Grid>(model_, std::move(hooks));
     grid_ = &grid;
@@ -911,6 +867,59 @@ std::string RoutingMatrix::channelsText(const MatrixModel::Send& x) {
     return "Custom map";
 }
 
+std::string RoutingMatrix::hoverText(std::size_t row, std::size_t col) const {
+    const auto& s = model_.sources[row];
+    const auto& d = model_.destinations[col];
+    const std::string from =
+        s.pair != 1 ? s.strip + " " + s.name : (s.name.empty() ? s.id : s.name);
+    const std::string pair = from + " → " + (d.name.empty() ? d.id : d.name);
+    // A rack send follows its home channel's mute and solo (ADR-0075).
+    std::string home;
+    if (s.type == "rack_out" && !s.track.empty()) {
+        home = s.track;
+        for (const auto& x : model_.sources)
+            if (x.id == s.track && x.pair == 1 && !x.name.empty()) home = x.name;
+        home = "; follows " + home + "'s mute and solo";
+    }
+    const auto sends = model_.sendsAt(row, col);
+    if (hardwareAudioMode_) {
+        const auto why = model_.blocked(row, col);
+        const auto replacement =
+            sends.empty() || !sends.front()->matchesCell ? inputReplacement(s, d) : std::string();
+        std::string assigned;
+        if (!sends.empty()) {
+            assigned = sends.front()->audioDescription.empty() ? "assigned"
+                                                               : sends.front()->audioDescription;
+            if (!sends.front()->warning.empty()) assigned += "; " + sends.front()->warning;
+            if (!sends.front()->matchesCell) assigned += "; double-click to assign the pair";
+        }
+        return pair + ": " +
+               (!assigned.empty() ? assigned
+                : !why.empty()    ? "not allowed — " + why
+                                  : "double-click to assign") +
+               (replacement.empty() ? "" : "; " + replacement) +
+               (sends.empty() && s.type == "master" && !s.side && d.deviceChannels.size() == 1
+                    ? "; mono output (L+R)/2"
+                    : "") +
+               (sends.empty() && s.type == "audio_input" && !d.side && s.deviceChannels.size() == 1
+                    ? "; mono input feeds both L and R"
+                    : "");
+    }
+    if (!sends.empty() && sends.front()->allInputs)
+        return pair + ": All inputs (*) — one shared assignment";
+    if (!sends.empty())
+        return pair + ": " + dbText(sends.front()->volumeDb) +
+               (home.empty() ? ", " + sends.front()->tap : std::string()) +
+               (sends.front()->mute ? ", muted" : "") + home + " — click to select";
+    if (const std::string why = model_.blocked(row, col); !why.empty())
+        return pair + ": not allowed — " + why;
+    if (parentCell(row, col))
+        return pair + (s.parentSend ? ": the parent send, on — double-click to turn it off"
+                                    : ": the parent send, off — double-click to turn it on");
+    return pair + ": double-click to send" + home +
+           (inputReplacement(s, d).empty() ? "" : "; " + inputReplacement(s, d));
+}
+
 std::string RoutingMatrix::status() const {
     if (!statusMessage_.empty()) return statusMessage_;
     if (hardwareAudioMode_)
@@ -1111,10 +1120,20 @@ std::string RoutingMatrix::inputReplacement(const MatrixModel::Source& source,
     const auto id = model::Id::parse(dest.id);
     if (!id) return {};
     const auto session = app_.view();
-    const auto* input = model::midiInputRoute(session, *id);
-    if (!input || !input->from.midiDevice || *input->from.midiDevice == source.name) return {};
-    return dest.name + ": replaces " +
-           (input->from.midiDevice->empty() ? "*" : *input->from.midiDevice);
+    const auto* track = session.tracks.find(*id);
+    if (!track) return {};
+    const auto selected = track->record.input ? track->record.input : track->record.midiInput;
+    const auto* input = selected ? session.routes.find(*selected) : nullptr;
+    if (!input) return {};
+    std::string previous;
+    if (input->from.midiDevice) {
+        if (*input->from.midiDevice == source.name) return {};
+        previous = input->from.midiDevice->empty() ? "*" : *input->from.midiDevice;
+    } else if (input->from.module)
+        previous = model::moduleLabel(session, *input->from.module);
+    else if (input->from.hwChannels)
+        previous = "audio input";
+    return previous.empty() ? "" : dest.name + ": replaces " + previous;
 }
 Status RoutingMatrix::doubleClickCell(std::size_t row, std::size_t col) {
     if (row >= model_.sources.size() || col >= model_.destinations.size())
@@ -1373,6 +1392,17 @@ void RoutingMatrix::refresh() {
     remove_->enabled = removable;
     for (const auto& n : details_->children().back()->children())  // the controls' row
         n->enabled = x != nullptr;
+    // A rack send has level and mute only (ADR-0075).
+    const bool rackSend = !midiMode_ && std::any_of(sends.begin(), sends.end(), [&](auto& id) {
+        const auto* y = sendById(id);
+        return y && y->from.starts_with("mo_");
+    });
+    if (rackSend)
+        for (ui::Node* widget : {static_cast<ui::Node*>(pan_), static_cast<ui::Node*>(channels_),
+                                 static_cast<ui::Node*>(phase_)})
+            widget->enabled = false;
+    for (ui::Button* tap : taps_)
+        if (rackSend) tap->enabled = false;
     auto nameOf = [&](const std::string& id) {
         for (const auto& s : model_.sources)
             if (s.id == id) return s.name.empty() ? id : s.name;

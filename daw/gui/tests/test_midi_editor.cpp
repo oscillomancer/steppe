@@ -957,6 +957,97 @@ TEST_CASE("routing matrix: a rack's In modules are columns; a cell sends into on
     CHECK(aux->channels.to == std::vector<int>{1, 2});
 }
 
+TEST_CASE("routing matrix: a rack's Out rows send to busses and masters only (ADR-0075)") {
+    Fixture f;
+    if (!f.ok) return;
+    const std::string synth = f.exec("track.add", R"({"name":"Synth"})")["track"].asString();
+    const auto added = f.exec("rack.add", R"({"track":")" + synth + R"("})");
+    const std::string out = added.find("out")->asString();
+    const std::string verb =
+        f.exec("track.add", R"({"type":"buss","name":"Verb"})")["track"].asString();
+    gui::FloatingPanel panel(*f.platform, *f.window, *f.root, SUPPLE_GUI_FONTS_DIR, "Panel", 860,
+                             560, 800, 360);
+    gui::RoutingMatrix matrix(panel, *f.actions, *f.dispatcher, *f.app);
+    matrix.open();
+    panel.root().frame(false);
+    REQUIRE(matrix.isOpen());
+    const auto& m = matrix.model();
+    auto row = [&](const std::string& id) {
+        for (std::size_t i = 0; i < m.sources.size(); ++i)
+            if (m.sources[i].id == id && m.sources[i].pair == 1) return i;
+        FAIL("no source " << id);
+        return std::size_t{0};
+    };
+    auto col = [&](const std::string& id) {
+        for (std::size_t i = 0; i < m.destinations.size(); ++i)
+            if (m.destinations[i].id == id && m.destinations[i].kind == "track") return i;
+        FAIL("no destination " << id);
+        return std::size_t{0};
+    };
+    std::string keys;
+    for (const auto& s : m.sources)
+        if (s.name == "Keys") keys = s.id;
+    REQUIRE_FALSE(keys.empty());
+    // The Out's row follows its channel's, one level in, named as the input menu names it.
+    const std::size_t o = row(out);
+    CHECK(o == row(synth) + 1);
+    CHECK(m.sources[o].type == "rack_out");
+    CHECK(m.sources[o].name == "Synth » Out 1");
+    CHECK(m.sources[o].depth == m.sources[row(synth)].depth + 1);
+    // Busses and masters are open; channels (its own and others) are not.
+    CHECK(m.blocked(o, col(verb)).empty());
+    CHECK(m.blocked(o, col("tr_0")).empty());
+    CHECK(m.blocked(o, col(keys)) == "a rack's Out sends to busses and masters");
+    CHECK_FALSE(m.blocked(o, col(synth)).empty());
+    // The hover text names the home whose mute and solo a send follows.
+    CHECK(m.sources[o].track == synth);
+    CHECK(matrix.hoverText(o, col(verb)) ==
+          "Synth » Out 1 → Verb: double-click to send; follows Synth's mute and solo");
+    // Its being the channel's input is not a send.
+    CHECK(m.sends.empty());
+    CHECK_FALSE(matrix.doubleClickCell(o, col(keys)));
+    // A double click sends it to the buss, one version.
+    const auto v = f.app->head().version;
+    REQUIRE(matrix.doubleClickCell(o, col(verb)));
+    CHECK(f.app->head().version == v + 1);
+    REQUIRE(m.sendsAt(o, col(verb)).size() == 1);
+    const std::string send = m.sendsAt(o, col(verb)).front()->id;
+    CHECK(matrix.selectedSend() == send);
+    const model::Route* r = f.app->head().routes.find(*model::Id::parse(send));
+    REQUIRE(r);
+    CHECK(r->from.module == model::Id::parse(out));
+    CHECK(r->to.track == model::Id::parse(verb));
+    CHECK(matrix.status().starts_with("1 sends"));
+    // Level and mute edit it; the tap, pan, channels and polarity do not apply.
+    REQUIRE(matrix.volumeControl());
+    matrix.volumeControl()->onChange(-6.0, ui::Gesture::Set);
+    CHECK(f.app->head().routes.find(*model::Id::parse(send))->volumeDb == doctest::Approx(-6.0));
+    CHECK(matrix.hoverText(o, col(verb))
+              .ends_with("; follows Synth's mute and solo — click to select"));
+    CHECK(matrix.hoverText(o, col(verb)).find("post_fader") == std::string::npos);
+    CHECK(matrix.volumeControl()->enabled);
+    CHECK_FALSE(matrix.panControl()->enabled);
+    for (const char* id : {"routing.tap.post", "routing.tap.pre", "routing.tap.prefx",
+                           "routing.channels", "routing.phase"}) {
+        CAPTURE(id);
+        const auto* control = panel.root().find(id);
+        REQUIRE(control);
+        CHECK_FALSE(control->enabled);
+    }
+    REQUIRE(panel.root().click("routing.mute"));
+    CHECK(f.app->head().routes.find(*model::Id::parse(send))->mute);
+    panel.root().frame(false);
+    f.snapshot("routing-rack-send.png", &panel.root());
+    // A strip send's controls come back with a strip send selected.
+    REQUIRE(matrix.doubleClickCell(row(keys), col(verb)));
+    CHECK(matrix.panControl()->enabled);
+    // Remove takes the rack send away.
+    REQUIRE(matrix.clickCell(o, col(verb)));
+    REQUIRE(panel.root().click("routing.remove"));
+    CHECK(m.sendsAt(o, col(verb)).empty());
+    CHECK_FALSE(f.app->head().routes.find(*model::Id::parse(send)));
+}
+
 TEST_CASE("routing matrix: a channel's hardware or MIDI input is not a send") {
     Fixture f;
     if (!f.ok) return;
@@ -2818,5 +2909,41 @@ TEST_CASE("routing matrix: every tab opens with grid focus and immediate keyboar
         matrix.close();
         matrix.open();
         CHECK(panel.root().focused() == matrix.grid());
+    }
+}
+
+TEST_CASE("routing matrix: hardware MIDI replaces audio and rack inputs") {
+    Fixture f;
+    if (!f.ok) return;
+    auto input = json::Value::object();
+    input["enabled"] = true;
+    REQUIRE(f.app->setMidiPreferences({{"Keyboard", input}}, {}, false));
+    gui::FloatingPanel panel(*f.platform, *f.window, *f.root, SUPPLE_GUI_FONTS_DIR, "Panel", 1000,
+                             560, 800, 360);
+    gui::RoutingMatrix matrix(panel, *f.actions, *f.dispatcher, *f.app);
+    matrix.setHardwareMidiMode();
+    matrix.open();
+    panel.root().frame(false);
+    std::size_t col = 0;
+    while (matrix.model().destinations[col].kind != "track") ++col;
+    const auto track = matrix.model().destinations[col].id;
+    const auto id = *model::Id::parse(track);
+    for (bool rack : {false, true}) {
+        if (rack)
+            f.exec("rack.add", R"({"track":")" + track + R"("})");
+        else
+            f.exec("track.set", R"({"track":")" + track + R"(","record_input":[1,2]})");
+        matrix.sync();
+        REQUIRE(matrix.doubleClickCell(0, col));
+        const auto* route = model::midiInputRoute(f.app->head(), id);
+        REQUIRE(route);
+        CHECK(route->from.midiDevice == "Keyboard");
+        CHECK_FALSE(route->from.module);
+        CHECK_FALSE(route->from.hwChannels);
+        CHECK(matrix.status().find("replaces") != std::string::npos);
+        REQUIRE(matrix.clickCell(0, col));
+        REQUIRE(matrix.removeSelected());
+        CHECK_FALSE(f.app->head().tracks.find(id)->record.input);
+        CHECK_FALSE(f.app->head().tracks.find(id)->record.midiInput);
     }
 }

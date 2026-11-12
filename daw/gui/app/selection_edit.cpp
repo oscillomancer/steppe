@@ -25,6 +25,7 @@ const model::Track* trackOf(const model::Session& s, const std::string& text) {
 }  // namespace
 
 Result<json::Value> SelectionEdit::set(json::Value args, const std::string& gesture) {
+    inputReplacement_.clear();
     cmd::Origin origin{cmd::Origin::Type::Ui, "gui", {}};
     origin.gesture = gesture;
     if (const auto* bypass = args.find("bypass_groups"); bypass && bypass->asBool())
@@ -83,6 +84,17 @@ Result<json::Value> SelectionEdit::set(json::Value args, const std::string& gest
         }
     }
     const bool drag = !gesture.empty() && gesture == gesture_ && start_.contains(track);
+    std::string replaced;
+    const auto* audio = args.find("record_input");
+    const auto* midi = args.find("record_midi");
+    if (seeds.size() > 1 && ((audio && !audio->isNull()) || (midi && !midi->isNull())))
+        for (const auto& seed : seeds) {
+            const auto* t = trackOf(s, seed);
+            const auto* route = t && t->record.input ? s.routes.find(*t->record.input) : nullptr;
+            if (route && route->from.module)
+                replaced +=
+                    (replaced.empty() ? "" : ", ") + model::trackLabel(s, *model::Id::parse(seed));
+        }
     auto apply = [&]() -> Result<json::Value> {
         Result<json::Value> last = json::Value::object();
         for (auto& [id, each] : edits) {
@@ -91,7 +103,7 @@ Result<json::Value> SelectionEdit::set(json::Value args, const std::string& gest
             each["track"] = id;
             each["bypass_groups"] = true;
             if (t->type != model::StripType::Channel && id != track) {
-                for (const char* field : {"monitor", "record_input", "record_midi"})
+                for (const char* field : {"monitor", "record_input", "record_midi", "record_rack"})
                     each.asObject().erase(field);
                 // Masters are armed to record their output (ADR-0057); busses never.
                 if (t->type == model::StripType::Buss) each.asObject().erase("armed");
@@ -126,8 +138,12 @@ Result<json::Value> SelectionEdit::set(json::Value args, const std::string& gest
         }
         return last;
     };
-    if (edits.size() <= 1) return apply();
-    return dispatcher_.transact("Edit " + std::to_string(edits.size()) + " tracks", origin, apply);
+    auto result = edits.size() <= 1
+                      ? apply()
+                      : dispatcher_.transact("Edit " + std::to_string(edits.size()) + " tracks",
+                                             origin, apply);
+    if (result && !replaced.empty()) inputReplacement_ = "Replaced rack inputs on " + replaced;
+    return result;
 }
 
 }  // namespace supple::gui

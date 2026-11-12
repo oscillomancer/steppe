@@ -383,6 +383,13 @@ struct Edge {
     // module `rackOut` into a channel (its record input). -1: neither.
     int rackIn = -1, rackOut = -1;
     std::int64_t rackLatency = 0, rackPadding = 0;
+    // A rack send (ADR-0075): `rackOut` into a buss or master. Its level and
+    // mute run at the rack node into `encoded` (linear, never Console 9), and
+    // it joins the destination after the decode. It follows the mute and solo
+    // of the rack's home channel (`rackHome`, a node index): `homeMute` from
+    // its mix slot, `stripMute` its mute curve, `vcas` its VCAs' mutes.
+    bool rackSend = false, homeMute = false, homeSilenced = false;
+    int rackHome = -1;
     // A MIDI send (ADR-0067): from a channel's MIDI stream or a Note Out
     // (`rackNotes`), to a channel or a Notes module (`midiNotes`). Queues and
     // voices belong to the destination, and stay on its executor; delay
