@@ -1064,7 +1064,7 @@ edit `track.set {hw_output}` (ADR-0056); channels and busses have no direct
 hardware outputs. All other cells are disabled with a reason on hover.
 The engine's resolved LTC output header is prefixed `[LTC]` (a missing configured
 channel resolves to the device's last output). A master assignment there has a
-warning cell (`!`): "LTC replaces <master>'s audio on output N". Sync/device
+warning cell (`!`): `LTC replaces <master>'s audio on output N`. Sync/device
 changes refresh this view even without a project edit. Send controls are hidden: these assignments
 have no independent tap, gain, mute or pan.
 

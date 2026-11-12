@@ -432,8 +432,8 @@ Channels and busses reach hardware through a master. Device channel names appear
 when available; saved channels outside the current device say unavailable.
 When the engine is stopped, stored channels say "engine stopped".
 The actual output used by LTC is labelled `[LTC]`; if the configured channel
-is absent, LTC uses the device's last output. A `!` cell warns "LTC replaces
-<master>'s audio on output N".
+is absent, LTC uses the device's last output. A `!` cell warns
+`LTC replaces <master>'s audio on output N`.
 
 Right-click a stereo input, output, channel or master header and choose
 **Split into L/R** to see and assign its sides, or **Join** to put it back.
