@@ -67,6 +67,12 @@ Status EngineApp::writeMidiPreferences(const std::filesystem::path& file) const 
 }
 Status EngineApp::setMidiPreferences(MidiPortPreferences inputs, MidiPortPreferences outputs,
                                      bool save) {
+    return applyMidiPreferences(std::move(inputs), std::move(outputs), save,
+                                midiPreferencesWarnings_);
+}
+Status EngineApp::applyMidiPreferences(
+    MidiPortPreferences inputs, MidiPortPreferences outputs, bool save,
+    std::array<std::vector<MidiPortPreferenceWarning>, 2> warnings) {
     SUPPLE_TRY(parseMidiPortPreferences(midiPortPreferencesJson(inputs), false));
     SUPPLE_TRY(parseMidiPortPreferences(midiPortPreferencesJson(outputs), true));
     std::optional<json::Value> doc;
@@ -86,7 +92,7 @@ Status EngineApp::setMidiPreferences(MidiPortPreferences inputs, MidiPortPrefere
     }
     if (doc) {
         auto written = writeMidiRecords(options_.midiPreferencesFile, std::move(*doc), inputs,
-                                        outputs, midiPreferencesWarnings_);
+                                        outputs, warnings);
         if (!written) {
             if (engine_) {
                 engine_->setMidiPreferences(oldInputs, oldOutputs);
@@ -98,6 +104,7 @@ Status EngineApp::setMidiPreferences(MidiPortPreferences inputs, MidiPortPrefere
     ++midiPreferencesRevision_;
     midiInputsPreferences_ = std::move(inputs);
     midiOutputsPreferences_ = std::move(outputs);
+    midiPreferencesWarnings_ = std::move(warnings);
     applySync();  // clock and MTC output read the same records (ADR-0073)
     for (bool output : {false, true}) {
         const auto& preferences = output ? midiOutputsPreferences_ : midiInputsPreferences_;
@@ -150,7 +157,13 @@ Status EngineApp::setMidiPort(bool output, const std::string& name, const json::
     for (const auto& entry : edits.asObject()) record[entry.key] = entry.value;
     // Under its canonical name, a record back at every default is dropped.
     if (midiPortRecordIdle(record)) preferences.erase(canonical);
-    return setMidiPreferences(std::move(inputs), std::move(outputs));
+    // The edit replaces a skipped record, idle or not: its raw value is not
+    // written back and its warning goes once the edit succeeds.
+    auto warnings = midiPreferencesWarnings_;
+    std::erase_if(warnings[output ? 1 : 0], [&](const auto& warning) {
+        return !warning.section && warning.port == canonical;
+    });
+    return applyMidiPreferences(std::move(inputs), std::move(outputs), true, std::move(warnings));
 }
 json::Value EngineApp::midiPortsState(bool output) const {
     auto ports = json::Value::array();
