@@ -1051,8 +1051,8 @@ Keyboard/Pads inputs and Hardware synth/Drum machine outputs for offscreen
 render checks, without opening devices.
 
 Hardware Audio mode (`windows.routing.mode: "hardware_audio"`, action
-`ui.routing.hardware_audio`) has device input pairs followed by strips in
-hierarchy order down the left, channel inputs followed by device output pairs
+`ui.routing.hardware_audio`) has device input pairs followed by masters in
+project order down the left, channel inputs followed by device output pairs
 across the top. Device headers have socket marks and show backend channel names
 when available, numbered channels otherwise. Stored assignments outside the
 running device remain visible as unavailable. Input-to-channel cells edit
@@ -1067,7 +1067,8 @@ view even without a project edit. Send controls are hidden: these assignments
 have no independent tap, gain, mute or pan.
 
 Right-click a stereo signal's row or column header for **Split into L/R** or
-**Join**. Splitting a channel affects both its row and its input column. The
+**Join**. Channels split their input columns; masters split their output rows. Channel
+and buss rows are omitted because they cannot feed hardware outputs. The
 **Split all into L/R / Join all** button applies to every visible stereo signal.
 Splitting is presentation only and never changes assignments. Split signals
 are saved as a sorted set of identities in `windows.routing.audio_splits` in

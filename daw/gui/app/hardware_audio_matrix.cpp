@@ -217,7 +217,7 @@ Status RoutingMatrix::reloadHardwareAudio() {
             s.name = name + (side == 1 ? " L" : side == 2 ? " R" : "");
             s.type = type;
             s.depth = depth;
-            next.sources.push_back(s);
+            if (type == "master") next.sources.push_back(s);
             if (type == "channel") {
                 MatrixModel::Destination d;
                 d.id = s.id;

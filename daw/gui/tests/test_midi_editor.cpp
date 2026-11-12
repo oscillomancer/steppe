@@ -2265,8 +2265,13 @@ TEST_CASE("Hardware Audio: assignments replace inputs, edit masters and warn abo
     const auto output = audioCol(matrix, "audio_out:3");
     REQUIRE(matrix.doubleClickCell(audioRow(matrix, "tr_0"), output));
     CHECK(audioOutput(f) == std::vector<int>{3, 4});
-    CHECK_FALSE(matrix.doubleClickCell(audioRow(matrix, channel), output));
-    CHECK_FALSE(matrix.doubleClickCell(audioRow(matrix, bus), output));
+    CHECK(std::none_of(
+        matrix.model().sources.begin(), matrix.model().sources.end(),
+        [&](const auto& source) { return source.signal == channel || source.signal == bus; }));
+    CHECK(std::all_of(matrix.model().sources.begin(), matrix.model().sources.end(),
+                      [](const auto& source) {
+                          return source.type == "audio_input" || source.type == "master";
+                      }));
     CHECK_FALSE(matrix.doubleClickCell(in, output));
     f.exec("sync.set", R"({"ltc_output":true,"ltc_output_channel":3})");
     matrix.sync();
@@ -2332,7 +2337,7 @@ TEST_CASE("Hardware Audio: per-signal and whole-tab split edit only representabl
     CHECK(audioInput(f, channel) == std::vector<int>{3, 4});
     panel.root().frame(false);
     REQUIRE(panel.root().click("routing.audio.split"));
-    CHECK(matrix.model().sources[audioRow(matrix, channel, 1)].side == 1);
+    CHECK(matrix.model().destinations[audioCol(matrix, channel, 1)].side == 1);
     REQUIRE(
         matrix.doubleClickCell(audioRow(matrix, "audio_in:1", 1), audioCol(matrix, channel, 2)));
     CHECK(audioInput(f, channel) == std::vector<int>{3, 1});
@@ -2483,12 +2488,10 @@ TEST_CASE("Hardware Audio: mono signals and odd device channels stay joined") {
     gui::RoutingMatrix matrix(panel, *f.actions, *f.dispatcher, *f.app);
     matrix.setHardwareAudioMode();
     matrix.open();
-    CHECK_FALSE(matrix.audioSignalMenu(true, audioRow(matrix, mono))[0].enabled);
     CHECK_FALSE(matrix.audioSignalMenu(false, audioCol(matrix, mono))[0].enabled);
     CHECK_FALSE(matrix.audioSignalMenu(true, audioRow(matrix, "audio_in:3"))[0].enabled);
     CHECK_FALSE(matrix.audioSignalMenu(false, audioCol(matrix, "audio_out:3"))[0].enabled);
     matrix.splitAllAudio(true);
-    CHECK(matrix.model().sources[audioRow(matrix, mono)].width == 1);
     CHECK(matrix.model().destinations[audioCol(matrix, mono)].width == 1);
     REQUIRE(matrix.doubleClickCell(audioRow(matrix, "audio_in:3"), audioCol(matrix, mono)));
     CHECK(audioInput(f, mono) == std::vector<int>{3});
