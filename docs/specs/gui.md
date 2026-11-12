@@ -1086,7 +1086,9 @@ are disabled with an explanation; assign a stereo pair before changing one
 side. A record input or master output remains one assignment: removing only
 some of its connected split cells refuses with a hint to select all connected
 cells or join the signals. Add/Remove and multi-cell edits remain one undo step;
-conflicting selections for the same side refuse atomically.
+conflicting selections for the same side or selections containing disabled cells
+refuse atomically and name the refused cell. Output uniqueness is checked on
+the final map, so a two-cell selection can swap L/R in one edit.
 
 Matrix updates clamp scroll to the current endpoint range; paint uses
 endpoint-pair indexes for send and cycle rules.

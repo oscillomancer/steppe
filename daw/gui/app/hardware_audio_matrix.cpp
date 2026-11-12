@@ -254,8 +254,6 @@ Status RoutingMatrix::reloadHardwareAudio() {
                     rule =
                         "assign a stereo output first; hw_output cannot silence just one side of a "
                         "master";
-                else if (channels[static_cast<std::size_t>(2 - s.side)] == d.deviceChannels.front())
-                    rule = "a stereo master needs two different hardware outputs";
             }
             if (!rule.empty()) next.cellRules[{s.id, d.id}] = std::move(rule);
             bool connected = false, warning = false;
@@ -321,9 +319,8 @@ Status RoutingMatrix::editHardwareAudio(bool remove) {
         if (remove ? sends.empty() : !sends.empty()) continue;
         const auto rule = model_.blocked(at->first, at->second);
         if (!remove && !rule.empty()) {
-            if (selection_.size() == 1)
-                return refuse(rule, "choose a compatible input or master output cell");
-            continue;
+            return refuse(s.name + " → " + d.name + ": " + rule,
+                          "select compatible cells only; no assignments were changed");
         }
         const bool input = s.type == "audio_input";
         const auto signal = input ? d.signal : s.signal;

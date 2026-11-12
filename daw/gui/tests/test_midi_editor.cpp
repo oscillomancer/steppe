@@ -2516,3 +2516,37 @@ TEST_CASE("Hardware Audio: LTC resolves the unavailable default to output two") 
     CHECK(sends.front()->warning == "LTC replaces Master's audio on output 2");
     f.snapshot("routing-hardware-audio-ltc-fallback.png", &panel.root());
 }
+
+TEST_CASE("Hardware Audio: swap sides atomically and refuse mixed blocked selections") {
+    Fixture f;
+    REQUIRE(f.ok);
+    AudioGridDevice backend;
+    StopGridDevice stop{*f.app};
+    REQUIRE(f.app->startEngine(backend, {.blockSize = 64, .inputs = 2, .outputs = 4},
+                               {.anticipative = false, .workers = 0}));
+    gui::FloatingPanel panel(*f.platform, *f.window, *f.root, SUPPLE_GUI_FONTS_DIR, "Routing", 1000,
+                             560, 800, 360);
+    gui::RoutingMatrix matrix(panel, *f.actions, *f.dispatcher, *f.app);
+    matrix.setHardwareAudioMode();
+    matrix.open();
+    matrix.splitAllAudio(true);
+    const auto l = audioRow(matrix, "tr_0", 1), r = audioRow(matrix, "tr_0", 2);
+    REQUIRE(matrix.model().blocked(l, audioCol(matrix, "audio_out:1", 2)).empty());
+    REQUIRE(matrix.clickCell(l, audioCol(matrix, "audio_out:1", 2)));
+    REQUIRE(matrix.clickCell(r, audioCol(matrix, "audio_out:1", 1), ui::kCtrl));
+    REQUIRE(matrix.addSelected());
+    CHECK(audioOutput(f) == std::vector<int>{2, 1});
+    f.exec("history.undo", "{}");
+    matrix.sync();
+    CHECK(audioOutput(f) == std::vector<int>{1, 2});
+    const auto version = f.app->head().version;
+    REQUIRE(matrix.clickCell(l, audioCol(matrix, "audio_out:3", 1)));
+    REQUIRE(matrix.clickCell(audioRow(matrix, "audio_in:1", 1), audioCol(matrix, "audio_out:3", 1),
+                             ui::kCtrl));
+    auto denied = matrix.addSelected();
+    REQUIRE_FALSE(denied);
+    CHECK(denied.error().message.find("Input 1") != std::string::npos);
+    CHECK_FALSE(denied.error().hint.empty());
+    CHECK(audioOutput(f) == std::vector<int>{1, 2});
+    CHECK(f.app->head().version == version);
+}
