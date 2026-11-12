@@ -51,7 +51,8 @@ void registerRackLevelCommands(cmd::Registry& registry);
 void registerModuleCommands(cmd::Registry& registry);
 void registerMidiPortCommands(cmd::Registry& registry);
 void registerRackProbe(cmd::Registry& registry);
-void removeRacksOn(model::EditTxn& t, const model::Session& s, model::Id track);
+std::vector<schema::Warning> removeRacksOn(model::EditTxn& t, const model::Session& s,
+                                           model::Id track);
 
 using cmd::Command;
 using cmd::Context;
@@ -1625,6 +1626,11 @@ void registerEngineCommands(cmd::Registry& registry) {
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpTool;
         c.summary = "Remove a track with its items, fx, routes and envelopes (not a folder).";
+        c.description =
+            "Removes the track's racks too, except a rack another channel hears (its Out "
+            "as the channel's input, or its Note Out's MIDI), which moves there. A warning "
+            "names each rack removed (track.rack_removed) or moved (track.rack_moved) and "
+            "its rack sends: removed with it, or following the new home's mute and solo.";
         c.tags = {"track"};
         c.args = schema::object<TrackRef>("track_ref")
                      .field("track", &TrackRef::track, idArg("tr", "Track"))
@@ -1677,7 +1683,8 @@ void registerEngineCommands(cmd::Registry& registry) {
             for (const auto& e : s.envelopes)
                 if (gone.count(e.value->target.object)) t.remove<model::Envelope>(e.id);
             // Its racks (ADR-0062), and Notes modules elsewhere stop playing it.
-            removeRacksOn(t, s, id);
+            // Each rack it takes or moves is reported, with its sends (ADR-0075).
+            for (const auto& w : removeRacksOn(t, s, id)) ctx.warn(w.code, w.message, w.path);
             for (const auto& e : s.modules)
                 if (e.value->source == id)
                     t.modify<model::RackModule>(e.id,

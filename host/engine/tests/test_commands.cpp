@@ -2994,10 +2994,46 @@ TEST_CASE("rack sends: commands send an Out to a buss, refuse the rest, and reop
     CHECK(route->volumeDb == -6);
     CHECK(route->mute);
     CHECK(route->learn.size() == 1);
-    // Removing the home channel removes the rack (a buss is no home) and its send.
-    run(bus, "track.remove", R"({"track":"tr_1"})");
+    // Removing the home channel removes the rack (a buss is no home) and its
+    // send, and says so.
+    const auto removed = run(bus, "track.remove", R"({"track":"tr_1"})");
+    REQUIRE(removed.find("warnings"));
+    REQUIRE(removed.find("warnings")->size() == 1);
+    const auto& warning = removed.find("warnings")->at(0);
+    CHECK(warning.find("code")->asString() == "track.rack_removed");
+    CHECK(warning.find("message")->asString() ==
+          "removed " + rack + " (Pad) and its rack sends " + send + " to Verb (tr_2)");
     CHECK(app->head().racks.empty());
     CHECK_FALSE(app->head().routes.find(*model::Id::parse(send)));
+}
+
+TEST_CASE("rack sends: removing the home moves the rack and says where its sends follow") {
+    Workdir dir;
+    auto app = makeApp(dir.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *app);
+    run(bus, "track.add", R"({"name":"Pad"})");                 // tr_1
+    run(bus, "track.add", R"({"name":"Verb","type":"buss"})");  // tr_2
+    run(bus, "track.add", R"({"name":"Other"})");               // tr_3
+    const auto added = run(bus, "rack.add", R"({"track":"tr_1"})");
+    const auto rack = added.find("rack")->asString(), out = added.find("out")->asString();
+    run(bus, "track.set", "{\"track\":\"tr_3\",\"record_rack\":\"" + out + "\"}");
+    const auto send =
+        run(bus, "route.add", "{\"from\":{\"module\":\"" + out + "\"},\"to\":\"tr_2\"}")["id"]
+            .asString();
+    const auto removed = run(bus, "track.remove", R"({"track":"tr_1"})");
+    REQUIRE(removed.find("warnings"));
+    REQUIRE(removed.find("warnings")->size() == 1);
+    const auto& warning = removed.find("warnings")->at(0);
+    CHECK(warning.find("code")->asString() == "track.rack_moved");
+    CHECK(warning.find("message")->asString() ==
+          rack + " (Pad) moved to Other (tr_3); its rack sends " + send +
+              " to Verb (tr_2) follow tr_3's mute and solo");
+    const auto* moved = app->head().racks.find(*model::Id::parse(rack));
+    REQUIRE(moved);
+    CHECK(moved->track == model::Id::parse("tr_3"));
+    CHECK(app->head().routes.find(*model::Id::parse(send)));
 }
 
 TEST_CASE("MIDI sends: commands validate endpoints, controls, cycles and mute-only learn") {

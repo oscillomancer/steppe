@@ -52,7 +52,7 @@ Fields equal to their defaults are omitted, as everywhere (session-model §5).
 
 | Field | Meaning |
 |---|---|
-| `track` | Its home channel (required). Removing the track removes its racks, except a rack another channel hears: one whose Out is that channel's input, else one whose Note Out plays into it (the first by route id). That rack moves home there, keeping the label it showed as its `name`; its Notes modules without a `source` then play the new home's MIDI. A buss or master that takes a rack send is no home: a rack heard only through its sends goes with its track. |
+| `track` | Its home channel (required). Removing the track removes its racks, except a rack another channel hears: one whose Out is that channel's input, else one whose Note Out plays into it (the first by route id). That rack moves home there, keeping the label it showed as its `name`; its Notes modules without a `source` then play the new home's MIDI, and its rack sends follow the new home's mute and solo (as after `rack.set track`). A buss or master that takes a rack send is no home: a rack heard only through its sends goes with its track. `track.remove` reports each rack it removes (`track.rack_removed`) or moves (`track.rack_moved`) in a warning that names the rack's sends. |
 | `name` | Shown on its tab; `""` (default) shows the home track's label. |
 
 ### 2.2 Module

@@ -12240,7 +12240,7 @@ Result:
 
 Rename a rack or move it to another channel.
 
-name "" shows the home channel's name. track moves its home (its Out modules keep feeding the channels they feed; Notes modules without a source follow the new home's MIDI).
+name "" shows the home channel's name. track moves its home (its Out modules keep feeding the channels they feed; Notes modules without a source follow the new home's MIDI; its rack sends to busses and masters follow the new home's mute and solo, ADR-0075). A frozen home's rack cannot move (track.frozen).
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -16385,7 +16385,7 @@ Result:
 
 Remove a track with its items, fx, routes and envelopes (not a folder).
 
-
+Removes the track's racks too, except a rack another channel hears (its Out as the channel's input, or its Note Out's MIDI), which moves there. A warning names each rack removed (track.rack_removed) or moved (track.rack_moved) and its rack sends: removed with it, or following the new home's mute and solo.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 

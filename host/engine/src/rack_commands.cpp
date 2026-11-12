@@ -498,11 +498,22 @@ std::string moduleReference() {
 // Exposed to track.remove (commands.cpp): a track's racks go with it, except
 // a rack that another channel hears (its Out as the channel's input, else a
 // Note Out's MIDI). That rack moves home to the first such channel, keeping
-// the name it showed.
-void removeRacksOn(model::EditTxn& t, const model::Session& s, Id track) {
+// the name it showed. Returns a warning per rack, naming its rack sends
+// (ADR-0075): removed with it, or now following the new home.
+std::vector<schema::Warning> removeRacksOn(model::EditTxn& t, const model::Session& s, Id track) {
+    std::vector<schema::Warning> warnings;
     for (const auto& r : s.racks) {
         if (r.value->track != track) continue;
         std::optional<Id> audio, midi;
+        std::string sends;  // "sd_2 to Verb (tr_2), ..."
+        for (const auto& e : s.routes)
+            if (const model::RackModule* m =
+                    e.value->from.module ? s.modules.find(*e.value->from.module) : nullptr;
+                m && m->rack == r.id && model::rackSendHome(s, *e.value))
+                sends += (sends.empty() ? "" : ", ") + e.id.str() + " to " +
+                         model::trackLabel(s, *e.value->to.track) + " (" +
+                         e.value->to.track->str() + ")";
+        const std::string rack = r.id.str() + " (" + model::rackLabel(s, r.id) + ")";
         for (const auto& e : s.routes) {
             const model::RackModule* from =
                 e.value->from.module ? s.modules.find(*e.value->from.module) : nullptr;
@@ -517,16 +528,28 @@ void removeRacksOn(model::EditTxn& t, const model::Session& s, Id track) {
         }
         if (const std::optional<Id> home = audio ? audio : midi) {
             const std::string shown = model::rackLabel(s, r.id);
-            t.modify<model::Rack>(r.id, [&](model::Rack& rack) {
-                rack.track = *home;
-                rack.name = shown;
+            t.modify<model::Rack>(r.id, [&](model::Rack& x) {
+                x.track = *home;
+                x.name = shown;
             });
+            warnings.push_back({"track.rack_moved",
+                                rack + " moved to " + model::trackLabel(s, *home) + " (" +
+                                    home->str() + ")" +
+                                    (sends.empty() ? std::string()
+                                                   : "; its rack sends " + sends + " follow " +
+                                                         home->str() + "'s mute and solo"),
+                                "/track"});
             continue;
         }
         for (const auto& m : s.modules)
             if (m.value->rack == r.id) removeModule(t, s, m.id);
         t.remove<model::Rack>(r.id);
+        warnings.push_back(
+            {"track.rack_removed",
+             "removed " + rack + (sends.empty() ? std::string() : " and its rack sends " + sends),
+             "/track"});
     }
+    return warnings;
 }
 
 namespace {
@@ -881,7 +904,8 @@ void registerRackCommands(cmd::Registry& registry) {
         c.description =
             "name \"\" shows the home channel's name. track moves its home (its Out modules "
             "keep feeding the channels they feed; Notes modules without a source follow the "
-            "new home's MIDI).";
+            "new home's MIDI; its rack sends to busses and masters follow the new home's mute "
+            "and solo, ADR-0075). A frozen home's rack cannot move (track.frozen).";
         c.args = schema::object<RackSet>("rack_set_args")
                      .field("rack", &RackSet::rack, idOf("rk", "Rack"))
                      .field("name", &RackSet::name, schema::string())

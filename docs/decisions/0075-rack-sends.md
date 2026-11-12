@@ -94,7 +94,12 @@ In module are linear too (rack.md §2.4).
 8. **Removal.** Removing an Out or its rack removes its rack sends.
    Removing the home channel moves the rack to another channel that hears
    it, as before; a buss that only takes rack sends is not a home, so a
-   rack heard only through its sends is removed with them.
+   rack heard only through its sends is removed with them. `track.remove`
+   says so in a warning (`track.rack_removed`, naming the rack and each of
+   its sends, or `track.rack_moved`, naming the new home). Retyping a buss
+   that takes a rack send to a channel is refused (`track.strip_type`,
+   naming the send), and `route.set` does not turn a channel's input route
+   into a send (`route.in_use`; add one with `route.add`).
 9. **Schema 2.13.** Writers emit `supple.project/2.13` (2.11 is the clock
    output work, 2.12 one input per track). There is nothing to migrate:
    older files load unchanged. Older builds refuse a project that contains
