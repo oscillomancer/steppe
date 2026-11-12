@@ -328,7 +328,9 @@ Status RoutingMatrix::editHardwareAudio(bool remove, bool replace) {
     std::string replacements;
     for (const auto& cell : selection_) {
         const auto at = locate(cell);
-        if (!at) continue;
+        if (!at)
+            return refuse("a selected signal is no longer available",
+                          "refresh the view and select its current cells");
         const auto& s = model_.sources[at->first];
         const auto& d = model_.destinations[at->second];
         const auto sends = model_.sendsAt(at->first, at->second);
@@ -343,7 +345,10 @@ Status RoutingMatrix::editHardwareAudio(bool remove, bool replace) {
         const auto signal = input ? d.signal : s.signal;
         const auto id = model::Id::parse(signal);
         const auto* track = id ? session.tracks.find(*id) : nullptr;
-        if (!track) continue;
+        if (!track)
+            return refuse(
+                (input ? d.name : s.name) + ": the selected track no longer exists",
+                "refresh the view and select existing tracks; no assignments were changed");
         auto [found, inserted] = edits.try_emplace(signal);
         auto& edit = found->second;
         if (inserted) {

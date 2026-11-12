@@ -2709,3 +2709,27 @@ TEST_CASE("Hardware Audio: split button eligibility requires a stereo signal") {
     model.destinations.front().side = 1;
     CHECK(model.hasStereoSignals());  // Split stereo still needs Join all.
 }
+
+TEST_CASE("Hardware Audio: stale deleted targets refuse the whole selection") {
+    Fixture f;
+    REQUIRE(f.ok);
+    AudioGridDevice backend;
+    StopGridDevice stop{*f.app};
+    REQUIRE(f.app->startEngine(backend, {.blockSize = 64, .inputs = 2, .outputs = 4},
+                               {.anticipative = false, .workers = 0}));
+    const auto channel = f.exec("track.add", R"({"name":"Removed input"})")["track"].asString();
+    gui::FloatingPanel panel(*f.platform, *f.window, *f.root, SUPPLE_GUI_FONTS_DIR, "Routing", 1000,
+                             560, 800, 360);
+    gui::RoutingMatrix matrix(panel, *f.actions, *f.dispatcher, *f.app);
+    matrix.setHardwareAudioMode();
+    matrix.open();
+    REQUIRE(matrix.clickCell(audioRow(matrix, "tr_0"), audioCol(matrix, "audio_out:3")));
+    REQUIRE(matrix.clickCell(audioRow(matrix, "audio_in:1"), audioCol(matrix, channel), ui::kCtrl));
+    f.exec("track.remove", R"({"track":")" + channel + R"("})");
+    const auto version = f.app->head().version;
+    auto denied = matrix.addSelected();
+    REQUIRE_FALSE(denied);
+    CHECK(denied.error().message.find("Removed input") != std::string::npos);
+    CHECK(audioOutput(f) == std::vector<int>{1, 2});
+    CHECK(f.app->head().version == version);
+}
