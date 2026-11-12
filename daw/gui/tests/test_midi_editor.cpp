@@ -2401,7 +2401,7 @@ TEST_CASE("Hardware Audio: conflicting selections refuse atomically, input sides
     auto denied =
         matrix.doubleClickCell(audioRow(matrix, "audio_in:1", 1), audioCol(matrix, channel, 1));
     REQUIRE_FALSE(denied);
-    CHECK(denied.error().message.find("stereo input first") != std::string::npos);
+    CHECK(denied.error().message.find("assign an input first") != std::string::npos);
     CHECK(audioInput(f, channel).empty());
     // External commands can clear the map before the next GUI sync. A
     // formerly usable split cell must refuse rather than index an empty map.
@@ -2591,4 +2591,36 @@ TEST_CASE("Hardware Audio: joined mono cells identify mono and double-click rest
     CHECK_FALSE(matrix.model().sendsAt(master, output).front()->mono);
     f.exec("history.undo", "{}");
     CHECK(audioOutput(f) == std::vector<int>{5});
+}
+
+TEST_CASE(
+    "Hardware Audio: widen mono record inputs for side edits but preserve mono master refusal") {
+    Fixture f;
+    REQUIRE(f.ok);
+    AudioGridDevice backend;
+    StopGridDevice stop{*f.app};
+    REQUIRE(f.app->startEngine(backend, {.blockSize = 64, .inputs = 4, .outputs = 4},
+                               {.anticipative = false, .workers = 0}));
+    const auto channel = f.exec("track.add", R"({"name":"Mono input"})")["track"].asString();
+    f.exec("track.set", R"({"track":")" + channel + R"(","record_input":[1]})");
+    f.exec("track.set", R"({"track":"tr_0","hw_output":[1]})");
+    gui::FloatingPanel panel(*f.platform, *f.window, *f.root, SUPPLE_GUI_FONTS_DIR, "Routing", 1000,
+                             560, 800, 360);
+    gui::RoutingMatrix matrix(panel, *f.actions, *f.dispatcher, *f.app);
+    matrix.setHardwareAudioMode();
+    matrix.open();
+    matrix.splitAllAudio(true);
+    REQUIRE(
+        matrix.doubleClickCell(audioRow(matrix, "audio_in:3", 1), audioCol(matrix, channel, 1)));
+    CHECK(audioInput(f, channel) == std::vector<int>{3, 1});
+    f.exec("track.set", R"({"track":")" + channel + R"(","record_input":[1]})");
+    matrix.sync();
+    REQUIRE(
+        matrix.doubleClickCell(audioRow(matrix, "audio_in:3", 2), audioCol(matrix, channel, 2)));
+    CHECK(audioInput(f, channel) == std::vector<int>{1, 4});
+    auto denied =
+        matrix.doubleClickCell(audioRow(matrix, "tr_0", 1), audioCol(matrix, "audio_out:3", 1));
+    REQUIRE_FALSE(denied);
+    CHECK_FALSE(denied.error().hint.empty());
+    CHECK(audioOutput(f) == std::vector<int>{1});
 }

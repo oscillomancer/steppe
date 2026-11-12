@@ -339,8 +339,8 @@ instructions are in `docs/guides/installing.md`.
 - **Hardware Audio routing view:** the fourth routing tab edits existing
   channel record inputs and masters' hardware outputs, with device names,
   LTC overlap warnings, per-signal and tab-wide L/R split/join. Split state is
-  per-project UI sidecar state. Mono inputs/outputs and replacing one side of
-  an existing stereo assignment are supported; isolated sides/gaps and partial
+  per-project UI sidecar state. Mono inputs/outputs, widening a mono input while replacing one side, and
+  replacing one side of an existing stereo output assignment are supported; isolated sides/gaps and partial
   removal of an assignment are refused with hints. Channels/busses still reach
   hardware only through masters (ADR-0056); no engine routing feature is added.
 - **Hardware MIDI routing** (ADR-0072, schema 2.10): connects channel/Note Out MIDI to

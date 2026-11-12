@@ -242,10 +242,8 @@ Status RoutingMatrix::reloadHardwareAudio() {
             if (input && d.side) {
                 if (s.deviceChannels.size() != 1)
                     rule = "split the device input pair to choose one channel";
-                else if (channels.size() < 2)
-                    rule =
-                        "assign a stereo input first; one mono record input feeds both L and R, "
-                        "and cannot leave a gap";
+                else if (channels.empty())
+                    rule = "assign an input first; a side cannot leave an unassigned gap";
             }
             if (output && s.side) {
                 if (d.deviceChannels.size() != 1)
@@ -358,6 +356,7 @@ Status RoutingMatrix::editHardwareAudio(bool remove, bool replace) {
         } else {
             // A command can clear/retype this signal between view refreshes.
             // Cached cell rules must never authorize indexing a changed map.
+            if (input && edit.channels.size() == 1) edit.channels.push_back(edit.channels.front());
             if (edit.channels.size() < 2)
                 return refuse("the stereo assignment changed",
                               "assign a stereo pair before editing one side");

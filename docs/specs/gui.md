@@ -1082,11 +1082,13 @@ joined view; hover says "mono: input N to both sides" or "mono: (L+R)/2 to
 output N". Double-clicking a joined pair cell whose assignment differs from
 that pair assigns the complete pair. A split channel/master side can replace that side of an existing
 stereo assignment while retaining the other side, including non-adjacent output
-pairs. Split sides need a single device channel, so split the device pair first.
+pairs. A mono record input `[c]` widens to `[c,c]` before replacing a side,
+so its untouched side keeps hearing the same input. Split sides need a single device channel, so split the device pair first.
 The existing model cannot leave an unassigned gap in a stereo input, silence
 one master side, or duplicate a master's hardware output channel. Such cells
 are disabled with an explanation; assign a stereo pair before changing one
-side. A record input or master output remains one assignment: removing only
+master side; a record-input side needs an existing mono or stereo input.
+A record input or master output remains one assignment: removing only
 some of its connected split cells refuses with a hint to select all connected
 cells or join the signals. Add/Remove and multi-cell edits remain one undo step;
 conflicting selections for the same side or selections containing disabled cells

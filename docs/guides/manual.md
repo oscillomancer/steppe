@@ -443,7 +443,8 @@ a joined master plays the mono sum. An outlined **M** marks a mono assignment;
 hover names the input/output channel and its mono behaviour. Double-click its
 joined pair cell to assign the complete stereo pair. To change just L or R, first assign a
 stereo pair, then split both the signal and the device pair and choose the new
-channel. The other side stays assigned. Isolating or removing just one side
+channel. The other side stays assigned. A mono record input can also be split:
+changing one side keeps the other side on its original mono input. Isolating or removing just one side
 without the other is not supported by these assignments; disabled cells and
 the status line explain why. To remove a split assignment, select all its
 connected cells, or join its signals first. Gain, pan and tap remain on the
