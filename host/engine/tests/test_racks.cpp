@@ -2558,9 +2558,10 @@ namespace {
 struct RackSend {
     model::Session s;
     Id buss, home, other, rack, notes, out, send;
-    explicit RackSend(bool latency, bool homeIntoBuss = true) {
+    explicit RackSend(bool latency, bool homeIntoBuss = true, bool console9 = true) {
         model::Project project;
         project.seed = 4242;
+        project.console9 = console9;
         model::EditTxn t(model::Session::create(project), 1);
         model::Track b;
         b.type = model::StripType::Buss;
@@ -2934,5 +2935,71 @@ TEST_CASE("rack sends: a loop wrap and a seek leave the rack's executor its send
         }
         engine.stop();
         CHECK(engine.processErrors() == 0);
+    }
+}
+
+namespace {
+// Runs `blocks` host blocks, rendering ahead first when anticipative.
+void runBlocks(Engine& engine, DummyBackend& backend, bool anticipative, std::int64_t blocks,
+               std::uint32_t block) {
+    while (blocks > 0) {
+        if (anticipative) REQUIRE(engine.awaitRendered(4096));
+        const std::int64_t n =
+            std::min<std::int64_t>(blocks, std::max<std::int64_t>(1, 4096 / block));
+        backend.run(n);
+        blocks -= n;
+    }
+}
+double peakIn(const std::vector<float>& x, std::size_t from, std::size_t to) {
+    double m = 0;
+    for (std::size_t i = from; i < to && i < x.size(); ++i)
+        m = std::max(m, std::fabs(double(x[i])));
+    return m;
+}
+}  // namespace
+
+TEST_CASE("rack sends: a write pass holds the send's level over its curve (ADR-0061)" *
+          doctest::description("rt")) {
+    // The buss hears only the send: the home channel plays to the master at
+    // -inf (its fader never moves the send). The send's level is -inf, its
+    // latch envelope plays 0 dB; a write hold plays the static -inf.
+    const RackSend r(false, false);
+    const model::EnvTarget target{r.send, "volume"};
+    const auto s = r.with([&](model::EditTxn& t) {
+        t.modify<model::Track>(r.home, [](auto& x) { x.volumeDb = model::kSilenceDb; });
+        t.modify<model::Route>(r.send, [](auto& x) { x.volumeDb = model::kSilenceDb; });
+        model::Envelope env;
+        env.target = target;
+        env.mode = model::EnvMode::Latch;
+        env.timebase = model::Timebase::Time;
+        env.points = {{0, 0}};
+        t.create(env);
+    });
+    constexpr std::uint32_t kBlock = 256;
+    for (const EngineOptions& options :
+         {EngineOptions{.anticipative = false, .workers = 0}, EngineOptions{.workers = 0},
+          EngineOptions{.workers = 2}}) {
+        INFO("anticipative " << options.anticipative << ", workers " << options.workers);
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000 * 4});
+        Engine engine(pool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
+        REQUIRE(engine.load(s));
+        engine.play();
+        runBlocks(engine, backend, options.anticipative, 100, kBlock);
+        const auto generation = engine.planGeneration();
+        CHECK_FALSE(engine.setWriteHolds({target}));  // held without a compile
+        runBlocks(engine, backend, options.anticipative, 250, kBlock);
+        CHECK(engine.planGeneration() == generation);
+        engine.setWriteHolds({});  // released: the curve plays again
+        REQUIRE(engine.load(s));
+        runBlocks(engine, backend, options.anticipative, 250, kBlock);
+        engine.stop();
+        CHECK(engine.processErrors() == 0);
+        const auto& L = backend.capture().channels[0];
+        CHECK(peakIn(L, 10000, 25600) > 0.1);    // the curve: 0 dB
+        CHECK(peakIn(L, 60000, 89600) < 1e-5);   // held at -inf
+        CHECK(peakIn(L, 120000, 153600) > 0.1);  // the curve again
     }
 }
