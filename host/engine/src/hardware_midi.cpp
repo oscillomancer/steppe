@@ -46,11 +46,11 @@ std::int64_t hardwareMidiLead(const Plan& plan, std::size_t port, double offsetM
     std::int64_t lead = 0;
     for (std::size_t p = 0; p < plan.hardwareLeadBase.size(); ++p)
         if (const auto& base = plan.hardwareLeadBase[p])
-            lead = std::max(lead, -(*base + time::samplesAt(
-                                                 (p == port ? offsetMs
-                                                            : plan.midiOutputsSettings[p].offsetMs) /
-                                                     1000.,
-                                                 plan.rate)));
+            lead = std::max(
+                lead,
+                -(*base + time::samplesAt(
+                              (p == port ? offsetMs : plan.midiOutputsSettings[p].offsetMs) / 1000.,
+                              plan.rate)));
     return lead;
 }
 Status prepareHardwareMidi(Plan& plan, Backend& backend, const MidiPortPreferences& inputs,

@@ -1069,10 +1069,10 @@ TEST_CASE("hardware MIDI: a skipped record corrected to every default stays corr
         REQUIRE((*app)->setMidiPort(output, "sYnTh", edit));
         const auto bytes = readFile(options.midiPreferencesFile);
         REQUIRE(bytes);
-        const auto saved = json::parse(std::string_view(
-                                           reinterpret_cast<const char*>(bytes->data()),
-                                           bytes->size()))
-                               .value();
+        const auto saved =
+            json::parse(
+                std::string_view(reinterpret_cast<const char*>(bytes->data()), bytes->size()))
+                .value();
         CHECK(saved.find(section)->find("Synth") == nullptr);
         CHECK(*saved.find(section)->find("Other") == *doc.find(section)->find("Other"));
         CHECK_FALSE(warned("Synth"));

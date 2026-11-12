@@ -710,8 +710,7 @@ class EngineApp : public cmd::Host {
     std::array<std::vector<MidiPortPreferenceWarning>, 2> midiPreferencesWarnings_;
     // setMidiPreferences with the skipped records to keep: an explicit
     // correction leaves its own out, so it is not written back.
-    Status applyMidiPreferences(MidiPortPreferences inputs, MidiPortPreferences outputs,
-                                bool save,
+    Status applyMidiPreferences(MidiPortPreferences inputs, MidiPortPreferences outputs, bool save,
                                 std::array<std::vector<MidiPortPreferenceWarning>, 2> warnings);
     std::uint64_t midiPreferencesRevision_ = 0;
     AppOptions options_;
