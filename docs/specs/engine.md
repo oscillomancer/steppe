@@ -2161,7 +2161,12 @@ period until the device takes it, and nothing else goes to the port
 before it. If the transport resumed meanwhile, the generator is stopped
 as the owed Stop goes and starts again in the same period, so the slave
 hears Stop, then Song Position and Continue (or Start at beat 0), then
-clock. Refusals and a full buffer count in
+clock. A Start or Continue that does not go out (refused, over the
+ordinary limit, which they may not exceed, or no room) leaves the
+generator running for a slave that is not: the generator is stopped
+without a message and begins again the next period, so the slave hears
+Song Position and Continue from where the transport is then, until the
+device takes them. Refusals and a full buffer count in
 `Engine::syncOutputDropped(i)`, sent messages in `syncOutputSent(i)`
 (reset at start). Count-in cycles do not play, so nothing but the
 optional free clock goes out until the timeline moves. Offline renders

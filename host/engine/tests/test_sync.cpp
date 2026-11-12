@@ -1335,6 +1335,47 @@ TEST_CASE("midi clock output: an owed Stop goes before a resume the device also 
     }
 }
 
+TEST_CASE("midi clock output: a refused Start goes again, as Song Position and Continue") {
+    for (bool ahead : {false, true})
+        for (bool refuseAll : {true, false}) {
+            CAPTURE(ahead);
+            CAPTURE(refuseAll);
+            Rig rig(ahead);
+            rig.run("midi.outputs.set",
+                    R"({"port": "Synth", "clock": true, "transport": true, "spp": true})");
+            // The device refuses everything, or other writers fill the
+            // ordinary part of every period: a Start has no reserve.
+            if (refuseAll)
+                rig.backend->full = true;
+            else
+                rig.backend->busy = kMaxMidiOutputEvents - kMidiReleaseReserve;
+            const std::int64_t played = rig.device;
+            rig.run("transport.play", "{}");
+            rig.seconds(0.15);
+            CHECK(sentTo(rig, 0).empty());
+            rig.backend->full = false;
+            rig.backend->busy = 0;
+            rig.seconds(0.15);
+            // The slave is told where the transport is now, then runs.
+            const auto sent = sentTo(rig, 0);
+            std::vector<std::uint8_t> wire;
+            for (const auto& m : sent)
+                if (m.frame >= played && m.event.bytes[0] != 0xF8) wire.push_back(m.event.bytes[0]);
+            CHECK(wire == std::vector<std::uint8_t>{0xF2, 0xFB});
+            const auto* spp = first(sent, 0xF2, played);
+            const auto* resume = first(sent, 0xFB, played);
+            REQUIRE(spp);
+            REQUIRE(resume);
+            CHECK(songPosition(*spp) > 0);
+            CHECK(first(sent, 0xF8, resume->frame));
+            // Once taken, it is not sent again.
+            rig.seconds(0.15);
+            const auto later = sentTo(rig, 0);
+            CHECK(std::count_if(later.begin(), later.end(),
+                                [](const auto& m) { return is(m, 0xFB) || is(m, 0xFA); }) == 1);
+        }
+}
+
 TEST_CASE("midi outputs: the engine writes the clock members and raises an older schema") {
     const fs::path dir =
         fs::temp_directory_path() / ("supple-sync-prefs-" + std::to_string(test::processId()));

@@ -964,10 +964,7 @@ Engine and hosting:
   same-device test against echoing to the sync master compares port names.
   A slave on a device that vanished with no callback left to carry it (a
   JACK server that went away, an unplugged MIDI device) is not sent its
-  final Stop. A Stop the device refuses is owed until it goes, and a
-  resume meanwhile follows it; a refused Start or Continue with no Stop
-  owed is not sent again, so the slave waits for the next transport
-  change.
+  final Stop.
 - Pan modes (ADR-0066): `pan` automation does nothing in dual mode.
   Projects from before ADR-0066 play louder (about 3.5 dB for a channel into
   a master, plus about 6.5 dB per buss on the way); there is no migration.

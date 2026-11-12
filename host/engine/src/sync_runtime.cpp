@@ -504,6 +504,15 @@ void SyncRuntime::writeMidi(const SyncCycle& c) SUPPLE_RT {
         // A generator stopped without its Stop written (no room for it in
         // the event buffer) owes one too.
         if (out.transport && p.slaveRunning && !p.clock.running()) p.stopOwed = true;
+        // A running generator whose Start or Continue did not go out (refused,
+        // over the ordinary limit, or no room) begins again next period: the
+        // slave hears Song Position and Continue (or Start) from where the
+        // transport is then, until the device takes them.
+        if (out.transport && !p.stopOwed && !p.slaveRunning && p.clock.running()) {
+            events.clear();
+            p.clock.stop(0.0, events);  // nothing to stop on the slave
+            events.clear();
+        }
         if (c.outSent) c.outSent[i].fetch_add(sent, std::memory_order_relaxed);
         if (c.outDropped && dropped) c.outDropped[i].fetch_add(dropped, std::memory_order_relaxed);
     }
