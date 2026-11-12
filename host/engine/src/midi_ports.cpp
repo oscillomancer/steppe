@@ -60,7 +60,7 @@ Result<MidiPortPreferences> parseMidiPortPreferences(const json::Value& value, b
                  std::abs(field.value.asDouble()) > 1000))
                 return fail(path + "/" + entry.key + "/offset_ms");
             if (!output && outputFlag(field.key))
-                return fail(path + "/" + entry.key + "/reset_on_stop");
+                return fail(path + "/" + entry.key + "/" + field.key);
         }
         result.emplace(entry.key, entry.value);
     }

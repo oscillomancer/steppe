@@ -1110,8 +1110,16 @@ TEST_CASE("midi outputs: get, set, validation, engine.status and the JSON round 
     auto wrong = parseMidiPortPreferences(json::parse(R"({"A": {"mtc": 1}})").value(), true);
     REQUIRE_FALSE(wrong);
     CHECK(wrong.error().path == "/midi_outputs/A/mtc");
-    // Inputs carry no output members.
-    CHECK_FALSE(parseMidiPortPreferences(json::parse(R"({"A": {"clock": true}})").value(), false));
+    // Inputs carry no output members; the error names the one found.
+    for (const char* member :
+         {"reset_on_stop", "clock", "transport", "spp", "mtc", "clock_while_stopped"}) {
+        CAPTURE(member);
+        auto record = json::Value::object();
+        record["A"][member] = true;
+        auto input = parseMidiPortPreferences(record, false);
+        REQUIRE_FALSE(input);
+        CHECK(input.error().path == std::string("/midi_inputs/A/") + member);
+    }
 }
 
 TEST_CASE("midi clock output: a clock-only lead is reported and previewed") {
