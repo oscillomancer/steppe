@@ -370,6 +370,9 @@ Status RoutingMatrix::editHardwareAudio(bool remove, bool replace) {
         const int side = input ? d.side : s.side;
         const auto& requested = input ? s.deviceChannels : d.deviceChannels;
         if (!side) {
+            if (input && replace && !sends.empty() && edit.channels.size() > 2)
+                return refuse("the record input changed to a multi-channel map",
+                              "refresh the view; its complete recording map was preserved");
             if (!edit.claims.empty() && edit.channels != requested)
                 return refuse("a signal has one input/output assignment",
                               "select one pair, one mono channel, or matching split L/R cells");

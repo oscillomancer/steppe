@@ -2865,6 +2865,19 @@ TEST_CASE("Hardware Audio: lit multi-channel input cells preserve the complete r
     panel.root().frame(false);
     check({1, 3, 2, 4}, "4-channel input 1, 3, 2, 4");
     f.snapshot("routing-hardware-audio-multichannel.png", &panel.root());
+
+    // A command may widen the input after the cached cell offered a pair replacement.
+    f.exec("track.set", R"({"track":")" + channel + R"(","record_input":[1]})");
+    matrix.sync();
+    const auto row = audioRow(matrix, "audio_in:1"), col = audioCol(matrix, channel);
+    REQUIRE_FALSE(matrix.model().sendsAt(row, col).front()->matchesCell);
+    f.exec("track.set", R"({"track":")" + channel + R"(","record_input":[1,2,3,4]})");
+    const auto version = f.app->head().version;
+    const auto denied = matrix.doubleClickCell(row, col);
+    REQUIRE_FALSE(denied);
+    CHECK(denied.error().message.find("multi-channel") != std::string::npos);
+    CHECK(audioInput(f, channel) == std::vector<int>{1, 2, 3, 4});
+    CHECK(f.app->head().version == version);
 }
 
 TEST_CASE("routing matrix: every tab opens with grid focus and immediate keyboard selection") {

@@ -1102,7 +1102,9 @@ joined view; hover says "mono: input N to both sides" or "mono: (L+R)/2 to
 output N". Double-clicking a joined pair cell whose assignment differs from
 that pair assigns the complete pair. Record inputs wider than two channels
 show their entire map on hover and offer no double-click pair replacement on
-lit cells, preserving the extra recording channels. An empty cell remains an
+lit cells, preserving the extra recording channels. If a command widens an
+input before the view refreshes, the stale pair-replacement gesture is refused
+with a refresh hint and leaves the complete map intact. An empty cell remains an
 explicit new assignment. A split channel/master side can replace
 that side of an existing stereo assignment while retaining the other side, including non-adjacent output
 pairs. A mono record input `[c]` widens to `[c,c]` before replacing a side,
