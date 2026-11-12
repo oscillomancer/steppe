@@ -145,8 +145,12 @@ class SyncRuntime {
         double expected = 0.0;      // timeline seconds the next piece continues from
         double lastClock = -1e300;  // output frame of the latest F8 sent
         // The slave was last sent Start or Continue, not yet Stop: what was
-        // written, not the generator's state, so a refused Stop is owed.
+        // written, not the generator's state.
         bool slaveRunning = false;
+        // A Stop for a running slave did not go out (refused, or no room):
+        // it goes before anything else to the port, whatever the generator
+        // has done since.
+        bool stopOwed = false;
     };
     void emit(std::size_t port, const SyncOutput& out, const Piece& piece, std::int64_t delay,
               const time::TimeMap* map, sync::EventBuffer& events) SUPPLE_RT;

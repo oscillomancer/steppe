@@ -149,7 +149,10 @@ output port, which Phase 2's hardware MIDI routing extends.
    device refuses is owed: the runtime keeps what it last sent each slave
    (Start or Continue, or Stop), not the generator's state, and sends an
    owed Stop at frame 0 of each later period until the device takes it,
-   or in its farewell. A slave is left playing only when its device is
+   or in its farewell. Nothing else goes to the port before it; if the
+   transport resumed meanwhile, the slave hears the Stop, then Song
+   Position and Continue (or Start) from where the transport stands. A
+   slave is left playing only when its device is
    gone with no callback to carry the Stop (a JACK server that went away,
    an unplugged MIDI device).
 

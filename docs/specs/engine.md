@@ -2152,11 +2152,16 @@ inverse. Events go through a 2048-entry buffer, filtered by kind (F8
 clock; F2 spp; FA, FB, FC transport; F1 and the full frame mtc), to
 `writeMidi` at `ceil(frame) − c`, while the period's buffer is short of
 the release reserve (`kMaxMidiOutputEvents` − `kMidiReleaseReserve`, every
-writer counted). A Stop may use the reserve; `Port::slaveRunning` is what
-was last written to the slave (Start or Continue, or Stop), and while it
-says running after the generator stopped, the Stop is owed and goes at
-frame 0 of each later period until the device takes it. Refusals and a
-full buffer count in
+writer counted). A Stop may use the reserve. `Port::slaveRunning` is what
+was last written to the slave (Start or Continue, or Stop), not the
+generator's state. A Stop for a running slave that does not go out
+(refused, or no room in the event buffer) sets `Port::stopOwed`, which
+only a written Stop clears: the owed Stop goes at frame 0 of each later
+period until the device takes it, and nothing else goes to the port
+before it. If the transport resumed meanwhile, the generator is stopped
+as the owed Stop goes and starts again in the same period, so the slave
+hears Stop, then Song Position and Continue (or Start at beat 0), then
+clock. Refusals and a full buffer count in
 `Engine::syncOutputDropped(i)`, sent messages in `syncOutputSent(i)`
 (reset at start). Count-in cycles do not play, so nothing but the
 optional free clock goes out until the timeline moves. Offline renders

@@ -1297,6 +1297,39 @@ TEST_CASE("midi clock output: a Stop still owed when the engine stops is sent th
     }
 }
 
+TEST_CASE("midi clock output: an owed Stop goes before a resume the device also refused") {
+    for (bool ahead : {false, true}) {
+        CAPTURE(ahead);
+        Rig rig(ahead);
+        rig.run("midi.outputs.set",
+                R"({"port": "Synth", "clock": true, "transport": true, "spp": true})");
+        rig.run("transport.play", "{}");
+        rig.seconds(0.15);
+        const auto started = sentTo(rig, 0);
+        REQUIRE(first(started, 0xFA));
+        // The device refuses everything through a pause and the resume.
+        rig.backend->full = true;
+        const std::int64_t paused = rig.device;
+        rig.run("transport.pause", "{}");
+        rig.seconds(0.15);
+        rig.run("transport.play", "{}");
+        rig.seconds(0.15);
+        rig.backend->full = false;
+        rig.seconds(0.15);
+        // On the wire after the pause: the owed Stop, then where the
+        // transport stands and Continue, then clock; nothing ahead of it.
+        const auto sent = sentTo(rig, 0);
+        std::vector<std::uint8_t> wire;
+        for (const auto& m : sent)
+            if (m.frame >= paused && m.event.bytes[0] != 0xF8) wire.push_back(m.event.bytes[0]);
+        CHECK(wire == std::vector<std::uint8_t>{0xFC, 0xF2, 0xFB});
+        const auto* resume = first(sent, 0xFB, paused);
+        REQUIRE(resume);
+        CHECK(first(sent, 0xF8, resume->frame));
+        CHECK(rig.transport().playing);
+    }
+}
+
 TEST_CASE("midi outputs: the engine writes the clock members and raises an older schema") {
     const fs::path dir =
         fs::temp_directory_path() / ("supple-sync-prefs-" + std::to_string(test::processId()));
