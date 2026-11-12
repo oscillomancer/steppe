@@ -3150,3 +3150,56 @@ TEST_CASE("input menu: No input clears channels in a mixed strip selection") {
     }
     a.root->setContent(std::make_unique<ui::Node>("detached"));
 }
+
+TEST_CASE("input menu: replacing selected rack Outs reports the affected channels") {
+    App a;
+    if (!a.ok) return;
+    const cmd::Origin origin{cmd::Origin::Type::Test, "inputs", {}};
+    auto call = [&](const char* command, const std::string& text) {
+        auto r = a.dispatcher->execute({command, *json::parse(text), origin});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    const auto voice = call("rack.add", R"({"name":"Voice"})")["track"].asString();
+    const auto pad = call("rack.add", R"({"name":"Pad"})")["track"].asString();
+    const auto channel = call("track.add", R"({"name":"Keys"})")["track"].asString();
+    a.ui.selectedTracks = {channel, voice, pad};
+    auto inputs = [] {
+        return *json::parse(
+            R"({"running":true,"audio":[{"channel":1,"port":"Mic"}],"midi":["Keyboard"]})");
+    };
+    peaks::PeakService peaks(peaks::defaultCacheDir(gui::test::slug()),
+                             [](std::function<void()> f) { f(); });
+    gui::MeterFeed meters;
+    gui::Shell shell(*a.app, *a.dispatcher, a.ui, "", peaks, meters, inputs);
+    a.root->setContent(shell.build(*a.root, *a.actions));
+    for (const char* label : {"Keyboard", "Mic"}) {
+        shell.sync();
+        a.root->frame(false);
+        shell.openInputMenu(*model::Id::parse(channel), {100, 100, 20, 20});
+        a.root->frame(false);
+        auto* menu = a.root->find("tcp.input." + channel);
+        REQUIRE(menu);
+        auto items = ui::menuItems(*menu);
+        const auto at = std::find_if(items.begin(), items.end(),
+                                     [&](const auto& i) { return i.label == label; });
+        REQUIRE(at != items.end());
+        const auto choose = at->run;
+        a.root->closePopups();
+        choose();
+        shell.sync();
+        a.root->frame(false);
+        const auto text = a.root->find("status")->valueText();
+        CHECK(text.find("rack inputs") != std::string::npos);
+        CHECK(text.find("Voice") != std::string::npos);
+        CHECK(text.find("Pad") != std::string::npos);
+        for (const auto& id : {voice, pad}) {
+            const auto* t = a.app->head().tracks.find(*model::Id::parse(id));
+            REQUIRE(t->record.input);
+            CHECK_FALSE(a.app->head().routes.find(*t->record.input)->from.module);
+        }
+        a.snapshot("input-replacements.png");
+        call("history.undo", "{}");
+    }
+    a.root->setContent(std::make_unique<ui::Node>("detached"));
+}

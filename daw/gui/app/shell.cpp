@@ -831,10 +831,15 @@ void Shell::commit(std::string_view command, json::Value args, std::string gestu
         return;
     }
     if (command == "track.set") {  // a strip control: the whole selection when it is selected
-        if (auto r = selectionEdit_.set(std::move(args), gesture); !r && onError)
-            onError(r.error().message);
+        const bool input =
+            args.find("record_input") || args.find("record_midi") || args.find("record_rack");
+        if (auto r = selectionEdit_.set(std::move(args), gesture); !r) {
+            if (onError) onError(r.error().message);
+        } else if (input)
+            setStatus(selectionEdit_.inputReplacement());
         return;
     }
+
     cmd::Origin origin{cmd::Origin::Type::Ui, "gui", {}};
     origin.gesture = std::move(gesture);
     auto r = dispatcher_.execute({std::string(command), std::move(args), std::move(origin)});

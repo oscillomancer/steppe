@@ -613,7 +613,9 @@ it; a VST3 plug-in's list says so.
 
 A track has one input: audio, MIDI or rack. Choosing one replaces the previous
 input. The input menu starts with **No input**, which clears any selection;
-audio inputs, MIDI devices and rack Outs follow in separate sections.
+audio inputs, MIDI devices and rack Outs follow in separate sections. When a
+selection-wide audio or MIDI choice replaces rack Outs, the status line names
+the affected channels.
 
 To play a rack from a keyboard, select the keyboard on another channel,
 arm it and turn monitoring On (Auto listens while stopped or recording).
