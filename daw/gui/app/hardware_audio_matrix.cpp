@@ -278,8 +278,15 @@ Status RoutingMatrix::reloadHardwareAudio() {
                     send.audioDescription =
                         input ? "mono: input " + std::to_string(channels.front()) + " to both sides"
                               : "mono: (L+R)/2 to output " + std::to_string(channels.front());
+                if (input && channels.size() > 2) {
+                    send.audioDescription = std::to_string(channels.size()) + "-channel input ";
+                    for (std::size_t lane = 0; lane < channels.size(); ++lane)
+                        send.audioDescription +=
+                            (lane ? ", " : "") + std::to_string(channels[lane]);
+                }
                 const auto& requested = input ? s.deviceChannels : d.deviceChannels;
-                if (!(input ? d.side : s.side) && requested.size() == 2)
+                if (!(input ? d.side : s.side) && requested.size() == 2 &&
+                    !(input && channels.size() > 2))
                     send.matchesCell = channels == requested;
                 if (warning)
                     send.warning = "LTC replaces " +

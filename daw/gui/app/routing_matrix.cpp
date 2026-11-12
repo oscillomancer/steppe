@@ -664,10 +664,14 @@ void RoutingMatrix::open(std::optional<ui::Rect> anchor) {
         const auto sends = model_.sendsAt(cell->first, cell->second);
         if (hardwareAudioMode_) {
             const auto why = model_.blocked(cell->first, cell->second);
-            const auto replacement = inputReplacement(s, d);
+            const auto replacement = sends.empty() || !sends.front()->matchesCell
+                                         ? inputReplacement(s, d)
+                                         : std::string();
             std::string assigned;
             if (!sends.empty()) {
-                assigned = sends.front()->mono ? sends.front()->audioDescription : "assigned";
+                assigned = sends.front()->audioDescription.empty()
+                               ? "assigned"
+                               : sends.front()->audioDescription;
                 if (!sends.front()->warning.empty()) assigned += "; " + sends.front()->warning;
                 if (!sends.front()->matchesCell) assigned += "; double-click to assign the pair";
             }

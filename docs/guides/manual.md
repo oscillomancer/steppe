@@ -442,7 +442,9 @@ project's window layout and does not change any sound by itself. A single
 input channel chosen for a joined channel is mono; a single output chosen for
 a joined master plays the mono sum. An outlined **M** marks a mono assignment;
 hover names the input/output channel and its mono behaviour. Double-click its
-joined pair cell to assign the complete stereo pair. To change just L or R,
+joined pair cell to assign the complete stereo pair. An input with more than
+two channels shows its whole map on hover; double-clicking a lit cell keeps
+that map, including the extra recording channels. To change just L or R,
 split both the signal and the device pair and choose the new channel. A master
 needs an existing stereo pair; a record input can start mono or stereo. The
 other side stays assigned. Changing one side of a mono record input keeps the

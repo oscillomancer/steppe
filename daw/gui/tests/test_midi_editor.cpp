@@ -2733,3 +2733,45 @@ TEST_CASE("Hardware Audio: stale deleted targets refuse the whole selection") {
     CHECK(audioOutput(f) == std::vector<int>{1, 2});
     CHECK(f.app->head().version == version);
 }
+
+TEST_CASE("Hardware Audio: lit multi-channel input cells preserve the complete recording map") {
+    Fixture f;
+    REQUIRE(f.ok);
+    AudioGridDevice backend;
+    StopGridDevice stop{*f.app};
+    REQUIRE(f.app->startEngine(backend, {.blockSize = 64, .inputs = 6, .outputs = 2},
+                               {.anticipative = false, .workers = 0}));
+    const auto channel =
+        f.exec("track.add", R"({"name":"Four inputs","channels":4})")["track"].asString();
+    f.exec("track.set", R"({"track":")" + channel + R"(","record_input":[1,2,3,4]})");
+    gui::FloatingPanel panel(*f.platform, *f.window, *f.root, SUPPLE_GUI_FONTS_DIR, "Routing", 1000,
+                             560, 800, 360);
+    gui::RoutingMatrix matrix(panel, *f.actions, *f.dispatcher, *f.app);
+    matrix.setHardwareAudioMode();
+    matrix.open();
+    panel.root().frame(false);
+    auto check = [&](const std::vector<int>& expected, const std::string& description) {
+        const auto row = audioRow(matrix, "audio_in:1"), col = audioCol(matrix, channel);
+        REQUIRE(matrix.model().sendsAt(row, col).size() == 1);
+        const auto b = matrix.grid()->bounds();
+        ui::PointerEvent e;
+        e.type = ui::PointerEvent::Type::Move;
+        e.pos = {b.x + 190 + static_cast<float>(col) * 22 + 11,
+                 b.y + 112 + static_cast<float>(row) * 22 + 11};
+        panel.root().pointer(e);
+        const auto hover = panel.root().find("routing.status")->valueText();
+        CHECK(hover.find(description) != std::string::npos);
+        CHECK(hover.find("assign the pair") == std::string::npos);
+        CHECK(hover.find("replaces") == std::string::npos);
+        const auto version = f.app->head().version;
+        REQUIRE(matrix.doubleClickCell(row, col));
+        CHECK(audioInput(f, channel) == expected);
+        CHECK(f.app->head().version == version);
+    };
+    check({1, 2, 3, 4}, "4-channel input 1, 2, 3, 4");
+    f.exec("track.set", R"({"track":")" + channel + R"(","record_input":[1,3,2,4]})");
+    matrix.sync();
+    panel.root().frame(false);
+    check({1, 3, 2, 4}, "4-channel input 1, 3, 2, 4");
+    f.snapshot("routing-hardware-audio-multichannel.png", &panel.root());
+}
