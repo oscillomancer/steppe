@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include "midi_output.h"
 #include "rack_runtime.h"
 namespace supple::engine::detail {
 namespace {
@@ -541,9 +542,17 @@ void HardwareMidiRuntime::finish(float* const* out, std::uint32_t channels, std:
         if (!state.active || state.release || state.generation != pending.generation) continue;
         pending.event.frame =
             static_cast<std::uint32_t>(std::max<std::int64_t>(0, pending.at - frame_));
-        if (pending.event.size)
-            (void)write(state, pending.event);
-        else if (!release(state, pending.event.frame))
+        if (pending.event.size) {
+            // Onsets and other ordinary messages leave the period's release
+            // reserve to note-offs and resets, as clock and MTC do; a
+            // release may use it.
+            if (!closingMessage(pending.event) &&
+                backend_->midiOutputUsed() >= kMaxMidiOutputEvents - kMidiReleaseReserve)
+                outputDrops_[static_cast<std::size_t>(state.port)].fetch_add(
+                    1, std::memory_order_relaxed);
+            else
+                (void)write(state, pending.event);
+        } else if (!release(state, pending.event.frame))
             state.release = true;
     }
     if (closing) {

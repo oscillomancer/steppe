@@ -1089,6 +1089,44 @@ TEST_CASE("hardware MIDI: a skipped record corrected to every default stays corr
     }
 }
 
+TEST_CASE("hardware MIDI: routed onsets leave the period's release reserve") {
+    for (bool anticipative : {false, true}) {
+        CAPTURE(anticipative);
+        // 1,024 notes at once on one route: the whole device period.
+        Session base(model::Tap::PreFx, false, false);
+        model::EditTxn edit(base.value, 2);
+        edit.modify<model::MidiSource>(base.value.midi.begin()->id, [](auto& m) {
+            const auto note = m.sequence.notes.front();
+            m.sequence.notes.assign(kMaxMidiOutputEvents, note);
+        });
+        auto pool = hardwarePool();
+        MediaCache media;
+        DummyBackend backend({.midiOutputPorts = {"Synth"}});
+        Engine engine(pool, media, {.anticipative = anticipative, .workers = 0});
+        REQUIRE(engine.start(backend, {.blockSize = 64, .midiOutputs = true}));
+        REQUIRE(engine.load(edit.commit().value()));
+        engine.play();
+        run(engine, backend, anticipative, 8);
+        // Half go out; the rest are counted drops, and the reserve is left.
+        const auto onsets = events(backend, 0x94);
+        CHECK(onsets.size() == kMaxMidiOutputEvents - kMidiReleaseReserve);
+        for (auto frame : onsets) CHECK(frame / 64 == onsets.front() / 64);
+        CHECK(engine.midiPortDropped(true, 0) >= kMidiReleaseReserve);
+        // Stopping releases what went out.
+        const auto before = backend.midiCapture().size();
+        engine.stop();
+        std::size_t offs = 0;
+        bool reset = false;
+        for (std::size_t i = before; i < backend.midiCapture().size(); ++i) {
+            const auto& e = backend.midiCapture()[i].event;
+            offs += e.bytes[0] == 0x84;
+            reset = reset || (e.bytes[0] == 0xb4 && e.bytes[1] == 123);
+        }
+        CHECK(offs == onsets.size());
+        CHECK(reset);
+    }
+}
+
 TEST_CASE("hardware MIDI: a stopped live release may reuse a pre-block timeline slot") {
     for (bool anticipative : {false, true})
         for (auto tap : {model::Tap::PreFx, model::Tap::PreFader, model::Tap::PostFader})

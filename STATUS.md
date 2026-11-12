@@ -954,10 +954,11 @@ Engine and hosting:
   distance from 1. A MIDI output that must send before its audio (a MIDI port
   slower than the audio, or a negative offset beyond the plan latency)
   adds that much latency to all audio and monitoring, the shared hardware
-  MIDI lead (at most 1 s), clock-only ports included. Clock, MTC and
-  releases leave the last 512 of a device period's 1,024 MIDI messages for
-  a stop's resets, but routed note messages are not held back: a period
-  with more than 512 of them can crowd the resets out. Clock settings
+  MIDI lead (at most 1 s), clock-only ports included. A device period
+  carries at most 1,024 MIDI messages: routed notes, clock and MTC beyond
+  the first 512 are dropped (and counted), leaving the rest for
+  note-offs, resets and a clock Stop; more than 512 routed note-offs in
+  one period can still crowd the resets out. Clock settings
   for a MIDI output are made while its device is connected
   (`midi.outputs.set` refuses a port neither present nor recorded). The
   same-device test against echoing to the sync master compares port names.

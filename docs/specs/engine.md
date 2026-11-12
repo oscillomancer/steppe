@@ -2970,10 +2970,10 @@ The initial plan primes its full lead normally.
 No hardware delay may exceed ten seconds. Limits: 256 routes, 65,536 pending
 messages, 16 ports, and the existing 1,024 messages per device period, shared by
 routed MIDI, clock and MTC (`Backend::midiOutputUsed()` counts every writer):
-releases stop at 1,024 − `kMidiReleaseReserve` (512) and clock and MTC too, so
-the last 512 are left for a stop's CC64/CC123 resets. Routed note messages
-are not held to the reserve: a period of more than 512 of them can still
-crowd the resets out. Equal-frame
+stop-time releases, clock, MTC and every routed message but a release
+(note-off, CC64 or CC123 at zero) stop at 1,024 − `kMidiReleaseReserve`
+(512), and what that refuses counts as dropped, so the last 512 are left
+for routed note-offs, a clock Stop and a stop's CC64/CC123 resets. Equal-frame
 messages preserve route/event insertion order. Overflow is counted. Timeline origin
 is captured with each stream event before a slot can be freed or reused, carried
 through the FX bus and hardware queue, and retained for mute-retriggered notes.

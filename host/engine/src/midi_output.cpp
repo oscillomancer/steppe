@@ -86,7 +86,7 @@ MidiOutputUmp midiOutputUmp(const MidiOutputEvent& e) {
     }
     return result;
 }
-bool closingMessage(const MidiOutputEvent& e) {
+bool closingMessage(const MidiOutputEvent& e) SUPPLE_RT {
     const auto status = e.bytes[0] & 0xf0;
     return status == 0x80 || (status == 0x90 && !e.bytes[2]) ||
            (status == 0xb0 && (e.bytes[1] == 64 || e.bytes[1] == 123) && !e.bytes[2]) ||
