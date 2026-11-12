@@ -455,6 +455,69 @@ TEST_CASE("MIDI from each device reaches the callback in its block (ADR-0016)") 
     fake.reset();
 }
 
+TEST_CASE("sync messages reach the callback beside the channel messages (ADR-0071)") {
+    FakeJack& fake = fakeJack();
+    fake.reset(1024);
+    JackBackend backend(fakeOptions());
+    // {block, frame, port, size, first byte, last byte}, recorded lock-free.
+    std::array<std::array<int, 6>, 64> seen{};
+    std::atomic<int> count{0}, channel{0};
+    std::atomic<bool> listening{false};
+    std::atomic<std::uint64_t> blocks{0};
+    BackendConfig cfg;
+    cfg.midiInputs = true;
+    REQUIRE(backend.start(cfg, [&](const float* const*, float* const* out, std::uint32_t n) {
+        if (n == 0) return;
+        const auto b = blocks.fetch_add(1);
+        if (listening.load(std::memory_order_acquire)) {
+            channel.fetch_add(static_cast<int>(backend.midiInput().size()));
+            for (const SyncMidiEvent& e : backend.syncMidi()) {
+                const int k = count.load(std::memory_order_relaxed);
+                if (k >= static_cast<int>(seen.size())) break;
+                seen[static_cast<std::size_t>(k)] = {
+                    static_cast<int>(b % 4), static_cast<int>(e.frame), e.port, e.size, e.bytes[0],
+                    e.bytes[e.size - 1]};
+                count.store(k + 1, std::memory_order_release);
+            }
+        }
+        for (std::uint32_t i = 0; i < n; ++i) out[0][i] = out[1][i] = 0.0f;
+    }));
+    REQUIRE(waitFor([&] { return blocks.load() >= 8 && blocks.load() % 4 == 0; }));
+    listening.store(true, std::memory_order_release);
+    const unsigned char clock[] = {0xF8}, start[] = {0xFA}, quarter[] = {0xF1, 0x23},
+                        spp[] = {0xF2, 0x10, 0x00},
+                        full[] = {0xF0, 0x7F, 0x7F, 0x01, 0x01, 0x21, 0x02, 0x03, 0x04, 0xF7},
+                        other[] = {0xF0, 0x41, 0x10, 0xF7}, sense[] = {0xFE};
+    fake.midiRaw(0, 5, start, 1);
+    fake.midiRaw(0, 6, clock, 1);
+    fake.midiRaw(1, 300, quarter, 2);
+    fake.midiRaw(1, 600, full, 10);
+    fake.midiRaw(0, 900, spp, 3);
+    fake.midiRaw(0, 901, other, 4);    // other SysEx: dropped
+    fake.midiRaw(0, 902, sense, 1);    // active sensing: dropped
+    fake.midi(0, 950, 0x90, 60, 100);  // a note still goes to midiInput()
+    REQUIRE(waitFor([&] { return count.load(std::memory_order_acquire) >= 5; }));
+    REQUIRE(waitFor([&] { return channel.load() >= 1; }));
+    // What was left out is counted: the other SysEx and active sensing, then
+    // a period's sync messages past its bound.
+    CHECK(waitFor([&] { return backend.midiDropped() == 2; }));
+    listening.store(false, std::memory_order_release);
+    fake.stall(1);  // no cycle in flight: the next period takes them all
+    for (int i = 0; i < static_cast<int>(kMaxSyncMidiEvents) + 88; ++i)
+        fake.midiRaw(0, static_cast<std::uint32_t>(i), clock, 1);
+    fake.stall(0);
+    CHECK(waitFor([&] { return backend.midiDropped() == 2 + 88; }));
+    backend.stop();
+    REQUIRE(count.load() == 5);
+    CHECK(seen[0] == std::array<int, 6>{0, 5, 0, 1, 0xFA, 0xFA});
+    CHECK(seen[1] == std::array<int, 6>{0, 6, 0, 1, 0xF8, 0xF8});
+    CHECK(seen[2] == std::array<int, 6>{1, 300 - 256, 1, 2, 0xF1, 0x23});
+    CHECK(seen[3] == std::array<int, 6>{2, 600 - 512, 1, 10, 0xF0, 0xF7});
+    CHECK(seen[4] == std::array<int, 6>{3, 900 - 768, 0, 3, 0xF2, 0x00});
+    CHECK(channel.load() == 1);
+    fake.reset();
+}
+
 TEST_CASE("JACK rejects an invalid rate before constructing a latency request") {
     for (double rate : {0.0, -1.0, 768001.0, 1e300, std::numeric_limits<double>::infinity(),
                         std::numeric_limits<double>::quiet_NaN()}) {

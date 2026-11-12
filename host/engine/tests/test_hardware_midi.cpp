@@ -1034,6 +1034,99 @@ TEST_CASE("hardware MIDI: unrelated preference writes retain malformed raw recor
     std::filesystem::remove_all(dir);
 }
 
+TEST_CASE("hardware MIDI: a skipped record corrected to every default stays corrected") {
+    for (bool output : {false, true}) {
+        CAPTURE(output);
+        const auto dir = std::filesystem::temp_directory_path() /
+                         ("midi-idle-record-" + std::to_string(test::processId()));
+        std::filesystem::remove_all(dir);
+        std::filesystem::create_directories(dir);
+        AppOptions options;
+        options.workdir = dir;
+        options.midiPreferencesFile = dir / "preferences.json";
+        const char* section = output ? "midi_outputs" : "midi_inputs";
+        const char* field = output ? "clock" : "enabled";
+        auto doc = json::Value::object();
+        doc["schema"] = "supple.preferences/1.8";
+        doc[section]["Synth"][field] = "invalid";
+        doc[section]["Other"]["enabled"] = "bad";  // an unrelated skipped record
+        REQUIRE(writeFileAtomic(options.midiPreferencesFile, json::writeCanonical(doc)));
+        auto app = EngineApp::create(options);
+        REQUIRE(app);
+        auto warned = [&](const std::string& name) {
+            const auto ports = (*app)->midiPortsState(output);
+            for (const auto& port : ports.asArray())
+                if (port.find("name")->asString() == name)
+                    for (const auto& w : port.find("warnings")->asArray())
+                        if (const auto* code = w.find("code");
+                            code && code->asString() == "midi.preferences")
+                            return true;
+            return false;
+        };
+        REQUIRE(warned("Synth"));
+        auto edit = json::Value::object();
+        edit[field] = !output;  // clock false, or an input enabled: every default
+        REQUIRE((*app)->setMidiPort(output, "sYnTh", edit));
+        const auto bytes = readFile(options.midiPreferencesFile);
+        REQUIRE(bytes);
+        const auto saved =
+            json::parse(
+                std::string_view(reinterpret_cast<const char*>(bytes->data()), bytes->size()))
+                .value();
+        CHECK(saved.find(section)->find("Synth") == nullptr);
+        CHECK(*saved.find(section)->find("Other") == *doc.find(section)->find("Other"));
+        CHECK_FALSE(warned("Synth"));
+        CHECK(warned("Other"));
+        CHECK_FALSE((output ? (*app)->midiOutputsPreferences() : (*app)->midiInputsPreferences())
+                        .contains("Synth"));
+        // A restart finds nothing to skip for it.
+        app->reset();
+        app = EngineApp::create(options);
+        REQUIRE(app);
+        CHECK_FALSE(warned("Synth"));
+        app->reset();
+        std::filesystem::remove_all(dir);
+    }
+}
+
+TEST_CASE("hardware MIDI: routed onsets leave the period's release reserve") {
+    for (bool anticipative : {false, true}) {
+        CAPTURE(anticipative);
+        // 1,024 notes at once on one route: the whole device period.
+        Session base(model::Tap::PreFx, false, false);
+        model::EditTxn edit(base.value, 2);
+        edit.modify<model::MidiSource>(base.value.midi.begin()->id, [](auto& m) {
+            const auto note = m.sequence.notes.front();
+            m.sequence.notes.assign(kMaxMidiOutputEvents, note);
+        });
+        auto pool = hardwarePool();
+        MediaCache media;
+        DummyBackend backend({.midiOutputPorts = {"Synth"}});
+        Engine engine(pool, media, {.anticipative = anticipative, .workers = 0});
+        REQUIRE(engine.start(backend, {.blockSize = 64, .midiOutputs = true}));
+        REQUIRE(engine.load(edit.commit().value()));
+        engine.play();
+        run(engine, backend, anticipative, 8);
+        // Half go out; the rest are counted drops, and the reserve is left.
+        const auto onsets = events(backend, 0x94);
+        CHECK(onsets.size() == kMaxMidiOutputEvents - kMidiReleaseReserve);
+        for (auto frame : onsets) CHECK(frame / 64 == onsets.front() / 64);
+        CHECK(engine.midiPortDropped(true, 0) >= kMidiReleaseReserve);
+        // Stopping releases what went out.
+        const auto before = backend.midiCapture().size();
+        engine.stop();
+        std::size_t offs = 0;
+        bool reset = false;
+        for (std::size_t i = before; i < backend.midiCapture().size(); ++i) {
+            const auto& e = backend.midiCapture()[i].event;
+            offs += e.bytes[0] == 0x84;
+            reset = reset || (e.bytes[0] == 0xb4 && e.bytes[1] == 123);
+        }
+        CHECK(offs == onsets.size());
+        CHECK(reset);
+    }
+}
+
 TEST_CASE("hardware MIDI: a stopped live release may reuse a pre-block timeline slot") {
     for (bool anticipative : {false, true})
         for (auto tap : {model::Tap::PreFx, model::Tap::PreFader, model::Tap::PostFader})

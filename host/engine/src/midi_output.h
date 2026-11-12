@@ -9,6 +9,10 @@ inline constexpr std::size_t kMidiOutputQueueSize = 2048;
 // native port/client alive for the remaining scheduled delay, at most 250 ms.
 inline constexpr double kMidiOutputCloseWaitSeconds = .250;
 double midiOutputCloseDeadline(double now, double lastScheduled);
+// What shutdown still delivers, ordered after everything accepted on its
+// port (max(now, lastDue)): note-offs, sustain and all-notes-off at zero,
+// and a clock slave's Stop (FC). The rest of a pending queue is dropped.
+bool closingMessage(const MidiOutputEvent& event) SUPPLE_RT;
 struct TimedMidiOutput {
     double seconds = 0;  // sink clock; first byte's requested departure time
     MidiOutputEvent event;

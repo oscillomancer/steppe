@@ -41,6 +41,41 @@ class RateMenuControl : public Base {
     }
 };
 
+// The tempo button (ADR-0071): a click edits the tempo, a right click opens
+// the sync menu; tinted while external sync runs: green when locked, the
+// accent while it acquires or chases, red when no signal arrives.
+class TempoButton : public ui::Button {
+  public:
+    using ui::Button::Button;
+    std::function<void()> onMenu;
+    void show(const std::string& text, std::string lit) {
+        if (lit != lit_) {
+            lit_ = std::move(lit);
+            invalidate();
+        }
+        if (valueText() != text) setText(text);
+    }
+    const std::string& lit() const { return lit_; }
+    bool onPointer(const ui::PointerEvent& e) override {
+        if (e.button == 3) {
+            if (e.type == ui::PointerEvent::Type::Down && onMenu) onMenu();
+            return true;
+        }
+        return ui::Button::onPointer(e);
+    }
+    void paint(ui::Canvas& c) override {
+        ui::Button::paint(c);
+        if (lit_.empty()) return;
+        const ui::Theme& t = c.theme();
+        const ui::Color tone = t.color(lit_);
+        c.fillRound(bounds(), t.radius("s"), tone.withAlpha(0.22f));
+        c.strokeRound(bounds(), t.radius("s"), tone.withAlpha(0.8f));
+    }
+
+  private:
+    std::string lit_;
+};
+
 std::string rateText(double rate) {
     char buf[32];
     std::snprintf(buf, sizeof buf, "%.4f", rate);
@@ -323,8 +358,10 @@ std::unique_ptr<ui::Node> TransportBar::build() {
     meter_ = &bar->emplace<ui::Button>("transport.meter", "4/4", [this] { openMeterForm(); });
     meter_->layout.width = ui::SizeRule::fixed(48);
     meter_->layout.height = ui::SizeRule::fixed(22);
-    tempo_ = &bar->emplace<ui::Button>("transport.tempo", "120", [this] { openTempoForm(); });
-    tempo_->layout.width = ui::SizeRule::fixed(58);
+    auto& tempo = bar->emplace<TempoButton>("transport.tempo", "120", [this] { openTempoForm(); });
+    tempo.onMenu = [this] { openSyncMenu(); };
+    tempo_ = &tempo;
+    tempo_->layout.width = ui::SizeRule::fixed(74);
     tempo_->layout.height = ui::SizeRule::fixed(22);
     auto& rate = bar->emplace<RateMenuControl<ui::Knob>>("transport.rate");
     rate_ = &rate;
@@ -369,7 +406,24 @@ void TransportBar::sync(bool event, std::chrono::steady_clock::time_point now) {
     if (auto r = app_.transport("get")) info = *r;
     if (position_) setIfChanged(position_, barsText(info.beat, *s.timeMap));
     if (time_) setIfChanged(time_, timeText(info.seconds));
-    if (tempo_) setIfChanged(tempo_, bpmText(*s.timeMap));
+    if (auto* tempo = static_cast<TempoButton*>(tempo_)) {
+        const engine::SyncReport sync = app_.syncReport();
+        syncOn_ = sync.source != "off";
+        if (sync.source == "off") {
+            tempo->show(bpmText(*s.timeMap), {});
+        } else {
+            // The master's tempo for MIDI clock; for timecode, the tempo heard.
+            char text[32];
+            const double bpm = sync.source == "midi_clock" && sync.bpm > 0
+                                   ? sync.bpm
+                                   : s.timeMap->bpmAt(info.beat) *
+                                         app_.head().project->playrate.rate * sync.chaseRate;
+            std::snprintf(text, sizeof text, "EXT %.1f", bpm);
+            tempo->show(text, sync.locked && sync.running ? "meter"
+                              : sync.present              ? "accent"
+                                                          : "armed");
+        }
+    }
     if (meter_) setIfChanged(meter_, meterText(*s.timeMap));
     using Symbol = TransportButton::Symbol;
     if (play_)
@@ -415,8 +469,9 @@ void TransportBar::sync(bool event, std::chrono::steady_clock::time_point now) {
         if (rateValue_) setIfChanged(rateValue_, rateText(shown));
     }
     const bool moving = info.playing || info.recording;
-    if (engine_ && (!lastStatus_ || moving != moving_ || (!moving && event) ||
-                    (moving && now - *lastStatus_ >= std::chrono::milliseconds(250)))) {
+    if (engine_ &&
+        (!lastStatus_ || moving != moving_ || (!moving && event) ||
+         ((moving || syncOn_) && now - *lastStatus_ >= std::chrono::milliseconds(250)))) {
         lastStatus_ = now;
         const engine::EngineStatus st = app_.engineStatus();
         if (!st.running) {
@@ -439,7 +494,8 @@ void TransportBar::sync(bool event, std::chrono::steady_clock::time_point now) {
 }
 
 std::optional<std::chrono::steady_clock::time_point> TransportBar::nextDeadline() const {
-    if (!moving_ || !lastStatus_) return {};
+    // Moving, or following a master (its state changes while stopped too).
+    if ((!moving_ && !syncOn_) || !lastStatus_) return {};
     return *lastStatus_ + std::chrono::milliseconds(250);
 }
 
@@ -499,6 +555,34 @@ void TransportBar::openRateMenu() {
 
 ui::Rect TransportBar::rateAnchor() const {
     return rateReadout_ ? rateReadout_->bounds() : ui::Rect{};
+}
+
+void TransportBar::openSyncMenu() {
+    const std::string source = app_.syncSettings().source;
+    std::vector<ui::MenuItem> items;
+    for (const auto& [value, label] : std::vector<std::pair<std::string, std::string>>{
+             {"off", "External sync: Off"},
+             {"midi_clock", "External sync: MIDI clock"},
+             {"mtc", "External sync: MTC"},
+             {"ltc", "External sync: LTC"}}) {
+        ui::MenuItem item;
+        item.label = label;
+        item.shortcut = actions_.keysFor("sync.source:" + value);
+        item.checked = source == value;
+        item.run = [this, value] {
+            actions_.invoke("sync.source:" + value);  // sync.set {source}
+            sync();
+        };
+        items.push_back(std::move(item));
+    }
+    if (actions_.registry().find("ui.sync.settings")) {
+        items.push_back({"", "", {}, true, true});
+        items.push_back({"Sync settings...", actions_.keysFor("ui.sync.settings"),
+                         [this] { actions_.invoke("ui.sync.settings"); }});
+    }
+    root_.openPopup(
+        ui::makeMenu("transport.sync.menu", std::move(items), [this] { root_.closePopup(); }),
+        tempo_ ? tempo_->bounds() : ui::Rect{}, ui::Placement::Below);
 }
 
 void TransportBar::openTempoForm() {

@@ -68,6 +68,14 @@ laws but runs the stages linear, ADR-0019 §6); `pan_law` (`{db, boost}`:
 omitted when false; the law of every channel and buss without its own,
 ADR-0066); `masters` (ordered master ids, tr_0 first). *(The pre-2.0
 `pan_law` number was dropped with ADR-0019; 2.9 brings back the object.)*
+`timecode` (`{rate, start}`, ADR-0071): `rate` one of `"23.976"`, `"24"`,
+`"25"`, `"29.97df"` (drop-frame), `"29.97"` (non-drop) or `"30"`, default
+`"30"`; `start` the timecode label at project time 0, `HH:MM:SS:FF` with `;`
+before the frames in drop-frame, valid at the rate, default
+`"00:00:00:00"`. Each member is omitted at its default and the object when
+both are. MTC and LTC sync and LTC output read timecode through it:
+timecode seconds = timeline seconds + the start's seconds (a label's frame
+count / fps, real time). `project.get` reports it with defaults filled in.
 
 Master playrate (ADR-0045) is `playrate: {rate, preserve_pitch}`: a finite
 ratio 0.25..4.0 (default 1.0) and bool (default false). Missing settings in
@@ -1127,9 +1135,21 @@ added, so older files load unchanged and nothing migrates. Older builds
 refuse a project that holds a rack send, since their invariants allow an
 Out only into a channel.
 
+### Project timecode (schema 2.11, ADR-0071)
+
+The 2.11 change adds `project.timecode`
+(§1.2), omitted at its default (30 fps from 00:00:00:00), so a project that
+does not set it saves the same bytes as before apart from its schema. A 2.10
+(or older) file loads unchanged with the default: 30 fps is MTC's own code 3
+and the common default of other DAWs, an integer rate without drop-frame
+labels, and from 00:00:00:00 timecode equals project time, so nothing an old
+project shows moves. There is nothing to migrate. An older application
+opening a 2.11 file ignores `timecode` with a warning. (2.10 is the MIDI
+sends change, ADR-0067, below.)
+
 ### MIDI sends (schema 2.10, ADR-0067)
 
-The 2.10 change: Notes modules add optional `source_off`
+Writers emitted `supple.project/2.10`. Notes modules add optional `source_off`
 (default false) and `source_sends` (default true); non-null route `midi`
 admits channel sources and Notes module destinations. Existing 1.x and 2.x
 files retain their meaning: absent `source_off` uses the existing Home/track
@@ -1147,7 +1167,7 @@ the bus). Older builds cannot use the new endpoints, source-off setting,
 
 ### Pan modes and laws (schema 2.9, ADR-0066)
 
-The 2.9 change adds `project.pan_law` and
+Writers emitted `supple.project/2.9`. The 2.9 change adds `project.pan_law` and
 the channels' and busses' `pan_mode`, `width`, `pan_left`, `pan_right` and
 `pan_law` (§1.2, §1.4), each omitted at its default, so a project that uses
 none of them saves the same bytes as before apart from its schema. A 2.8 file

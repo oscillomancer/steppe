@@ -1392,11 +1392,26 @@ std::vector<ui::MenuItem> RoutingMatrix::midiPortMenu(bool output, const std::st
     std::vector<ui::MenuItem> items;
     items.push_back({"Enabled", "", [change, settings] { change("enabled", !settings.enabled); },
                      true, false, settings.enabled});
+    if (output) {
+        // What the port sends to a device that follows Steppe (ADR-0073);
+        // each is one midi.outputs.set.
+        ui::MenuItem rule;
+        rule.separator = true;
+        items.push_back(rule);
+        auto flag = [&](const char* label, const char* field, bool on, bool usable = true) {
+            items.push_back(
+                {label, "", [change, field, on] { change(field, !on); }, usable, false, on});
+        };
+        flag("Send clock", "clock", settings.clock);
+        flag("Send transport", "transport", settings.transport);
+        flag("Song Position Pointer", "spp", settings.spp);
+        flag("MTC", "mtc", settings.mtc);
+        flag("Clock while stopped", "clock_while_stopped", settings.clockWhileStopped,
+             settings.clock);
+        items.push_back(rule);
+        flag("Reset notes on stop", "reset_on_stop", settings.resetOnStop);
+    }
     items.push_back({"Timing offset…", "", [this, output, port] { portOffset(output, port); }});
-    if (output)
-        items.push_back({"Reset notes on stop", "",
-                         [change, settings] { change("reset_on_stop", !settings.resetOnStop); },
-                         true, false, settings.resetOnStop});
     return items;
 }
 void RoutingMatrix::portContext(bool output, const std::string& port, ui::Point at) {

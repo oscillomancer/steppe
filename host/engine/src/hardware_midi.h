@@ -77,7 +77,6 @@ class HardwareMidiRuntime {
     std::uint32_t fadeFrames_ = 1, fadeLeft_ = 0;
     std::size_t audioCursor_ = 0;
     std::uint32_t audioFilled_ = 0;
-    std::size_t wrote_ = 0;
     std::uint32_t lead_ = 0, frames_ = 0;
     std::atomic<std::uint32_t> leadReported_{0};
     std::int64_t frame_ = 0;
@@ -93,4 +92,8 @@ class HardwareMidiRuntime {
     bool write(RouteState&, const MidiOutputEvent&) SUPPLE_RT;
 };
 Status prepareHardwareMidi(Plan&, Backend&, const MidiPortPreferences&, const MidiPortPreferences&);
+// The shared lead (frames) a prepared plan needs, or would need with output
+// `port`'s offset at `offsetMs` (a port of 16 or more: the plan's offsets).
+// The one calculation for preparation, `lead_ms` and the offset preview.
+std::int64_t hardwareMidiLead(const Plan&, std::size_t port = 16, double offsetMs = 0);
 }  // namespace supple::engine::detail

@@ -917,6 +917,11 @@ struct Plan {
     model::Playrate masterPlayrate;
     Automation rateEnvelope;
     bool rateEnabled = false;
+    // Compiled for external sync (ADR-0071): every node live.
+    bool syncPlan = false;
+    // ... and a chase can change the rate: the rate path on with stretch
+    // converters even at 1.0, the chase scale composed into masterPlayrate.rate.
+    bool syncRate = false;
     // Curves/anchors are complete before publication. Executors advance their
     // disjoint windows and source DSP state; scalar transactions use RT queues.
     std::array<std::unique_ptr<PlayrateTimeline>, 2> timelines, previousTimelines;
@@ -1015,6 +1020,10 @@ struct Plan {
     std::vector<std::shared_ptr<HardwareRoute>> hardwareMidi;
     std::array<MidiPortSettings, 16> midiInputsSettings{}, midiOutputsSettings{};
     std::uint32_t hardwareLead = 0;
+    // Per output port, the earliest MIDI it sends relative to its audio
+    // before its offset (routed notes, clock, SPP, MTC; frames), or none:
+    // hardwareMidiLead() derives the lead from it, for any offset.
+    std::array<std::optional<std::int64_t>, 16> hardwareLeadBase{};
     std::span<const MidiInputEvent> deviceMidi;
     std::uint32_t deviceMidiOffset = 0;
     // Armed channels with input FX: what the recorder takes instead of the
@@ -1069,9 +1078,19 @@ const Stereo& edgeSignal(const Plan& p, const Edge& e) SUPPLE_RT;
 // `keepLive`: tracks that stay in the live region even unmonitored (sorted).
 // `recording`: masters recording their output (ADR-0057): each gets a record
 // tap (as every armed master does) and its items are silent where it records.
+// `sync`: compile the plan external sync runs (ADR-0071): with `allLive`,
+// every node in the live region; with `rate` (a chase can change the rate),
+// the master rate path on with pitch preserved and stretch converters even
+// at 1.0, the rate times `rateScale`.
+struct SyncOverrides {
+    double rateScale = 1.0;
+    bool allLive = true;
+    bool rate = true;
+};
 Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, std::uint32_t block,
                      double rate = 0, const std::vector<model::Id>* keepLive = nullptr,
-                     std::span<const RecordingMaster> recording = {});
+                     std::span<const RecordingMaster> recording = {},
+                     const SyncOverrides* sync = nullptr);
 // Main thread: activates new instances, measures latencies, sizes buffers
 // and delays, compiles events and clips.
 Status prepare(Plan& p, const Session& s);

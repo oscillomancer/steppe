@@ -376,6 +376,27 @@ AppActions::AppActions(const cmd::Registry& registry, cmd::Dispatcher& dispatche
         registry_.add(std::move(boost));
     }
 
+    // External sync's source (ADR-0071): the tempo button's menu entries.
+    for (const auto& [source, label] : std::vector<std::pair<std::string, std::string>>{
+             {"off", "Transport: external sync off"},
+             {"midi_clock", "Transport: follow MIDI clock"},
+             {"mtc", "Transport: follow MTC"},
+             {"ltc", "Transport: follow LTC"}}) {
+        actions::Action follow;
+        follow.id = "sync.source:" + source;
+        follow.name = label;
+        follow.description =
+            "Follow an external master (or none): the transport and a live chase rate follow "
+            "it; Sync settings... chooses its input.";
+        follow.builtin = [this, source](const actions::Context&) -> Result<json::Value> {
+            return dispatcher_.execute({"sync.set", obj({{"source", source}}), kOrigin});
+        };
+        follow.checked = [this, source](const actions::Context&) {
+            return app_.syncSettings().source == source;
+        };
+        registry_.add(std::move(follow));
+    }
+
     // Followed by a MIDI controller (ADR-0027).
     addControl(
         "control.track.volume", "Track: volume of selected tracks (MIDI CC)",

@@ -11,8 +11,9 @@ installer scripts, their templates, and GitHub workflows.
 
 Allowed for bundled code: MIT, MIT-0, BSD-2/3-Clause, ISC, Zlib, Apache-2.0,
 BSL-1.0, CC0, Unlicense (OFL-1.1 for fonts). The ASIO SDK is the sanctioned GPL-3.0-only exception, Windows DAW only,
-never plugins (ADR-0033). LAME is the sanctioned LGPL-2.0-or-later exception,
-DAW only, never plugins or the MIT libraries (ADR-0055 §8). Other GPL dependencies need a DAW-only manifest
+never plugins (ADR-0033). LAME (LGPL-2.0-or-later, ADR-0055 §8) and libltc
+(LGPL-3.0-or-later, ADR-0070) are the sanctioned LGPL exceptions, DAW only,
+never plugins or the MIT libraries. Other GPL dependencies need a DAW-only manifest
 declaration and maintainer approval; AGPL is forbidden. LGPL/MPL need the maintainer's explicit approval. Dynamically linked OS libraries
 (libc, ALSA, JACK/PipeWire client libs, X11/Wayland/GL) are acceptable.
 
@@ -22,6 +23,7 @@ declaration and maintainer approval; AGPL is forbidden. LGPL/MPL need the mainta
 | libogg | BSD-3-Clause | 1.3.6; tarball SHA-256 `5c8253…1061` (Xiph's SHA256SUMS) | Ogg container for Ogg Vorbis render outputs; `src/` and headers, with our `config_types.h` | static, DAW only (libs/audio-codecs) |
 | libvorbis | BSD-3-Clause | 1.3.7; tarball SHA-256 `b33cc4…954b` (Xiph's SHA256SUMS) | Ogg Vorbis render outputs (vorbisenc) and their delivery checks (vorbisfile); `lib/` sources and headers | static, DAW only (libs/audio-codecs) |
 | lame | LGPL-2.0-or-later | 3.100; tarball SHA-256 `ddfe36…da1e` (SourceForge's) | MP3 render outputs; the libmp3lame encoder sources and `lame.h`, with our `config.h`; no mpglib decoder, frontends or assembly | static, DAW only (libs/audio-codecs), never plugins or MIT libraries |
+| libltc | LGPL-3.0-or-later | 1.3.2; release tarball SHA-256 `0a6d42…1249` (GitHub release asset) | SMPTE linear timecode (LTC) encoder and decoder for sync output and input; the `src/` library sources, unmodified; no autotools, tests or docs | static, DAW only (libs/sync), never plugins or MIT libraries |
 | clap | MIT | 1.2.10 / `195b42a` | CLAP plugin ABI headers for hosting and for the stock plugins | headers |
 | doctest | MIT | 2.5.3 / `2d0a935` | Unit-test framework; tests only, never shipped | tests |
 | airwindows-console9 | MIT, © 2018 Chris Johnson | `d22a25b7f7c0c8c05e9f3ae480e7f1da9769f49d` | Airwindows Console 9 Channel/Buss reference for the DSP null test; mono AU kernels retained as reference text | test-only, never linked into a shipped binary |
@@ -100,6 +102,18 @@ addition is `config/config.h`, the build configuration. It never enters
 `plugins/` or the MIT libraries, and `tools/license-check` allows it by name.
 MP3 encodes carry LAME's own encoder tag ("LAME3.100") in the LAME/Xing
 header, as upstream writes it.
+
+## libltc notices
+
+libltc 1.3.2, © 2006-2022 Robin Gareus, is under the GNU Lesser General
+Public License version 3 or later (`third_party/libltc-1.3.2/COPYING`; the
+upstream README, AUTHORS and ChangeLog are kept beside it). The maintainer
+approved it on 2026-11-10 (ADR-0070). It is linked statically into the
+GPL-3.0-or-later DAW only, through `libs/sync`, where the DAW's own source
+offer covers it; the vendored files are unmodified, and no build
+configuration is added (the sources need no `config.h`). It never enters
+`plugins/`, `modules/` or the MIT libraries, and `tools/license-check` allows
+it by name.
 
 ## ASIO SDK notices
 

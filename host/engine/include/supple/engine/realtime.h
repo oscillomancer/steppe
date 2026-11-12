@@ -36,12 +36,14 @@
 #include "supple/base/thread.h"
 #include "supple/engine/midi_ports.h"
 #include "supple/engine/offline.h"
+#include "supple/engine/sync.h"
 
 namespace supple::engine {
 
 namespace detail {
 struct Plan;
 struct ChunkRing;
+class SyncRuntime;
 class Workers;
 class LiveWorkers;
 class Recorder;
@@ -152,6 +154,10 @@ struct MidiOutputEvent {
     std::uint8_t bytes[10]{};
 };
 inline constexpr std::size_t kMaxMidiOutputEvents = 1024;  // per device period
+// Of a period's output events, what only releases and resets may use: note
+// streams and clock or MTC stop short of it, so a stop's whole-port
+// all-notes-off always fits (16 channels x CC64 + CC123 x 16 ports).
+inline constexpr std::size_t kMidiReleaseReserve = 512;
 namespace detail {
 // Fixed callback staging shared by all backends. Stable frame order at flush.
 class MidiOutputCycle {
@@ -159,6 +165,7 @@ class MidiOutputCycle {
     void begin(std::uint32_t frames, std::size_t ports) SUPPLE_RT;
     void chunk(std::uint32_t offset, std::uint32_t frames) SUPPLE_RT;
     bool write(const MidiOutputEvent&) SUPPLE_RT;
+    std::size_t size() const SUPPLE_RT { return count_; }  // written this period
     std::span<const MidiOutputEvent> sorted() SUPPLE_RT;
     void drop(std::uint64_t count = 1) SUPPLE_RT {
         dropped_.fetch_add(count, std::memory_order_relaxed);
@@ -193,6 +200,41 @@ inline bool routeMidi(const MidiInputEvent& e, std::uint64_t ports, int fromChan
     out[1] = e.size > 1 ? e.bytes[1] : 0;
     out[2] = e.size > 2 ? e.bytes[2] : 0;
     return true;
+}
+// A sync message from a device input (ADR-0071): Clock (F8), Start (FA),
+// Continue (FB), Stop (FC), Song Position (F2 lsb msb), an MTC quarter
+// frame (F1 dd) or an MTC full frame (F0 7F <id> 01 01 hh mm ss ff F7).
+// Backends deliver them beside the channel messages of midiInput(), which
+// keeps its contract.
+struct SyncMidiEvent {
+    std::uint32_t frame = 0;  // within the callback's frames
+    std::uint16_t port = 0;   // index into Backend::midiPorts()
+    std::uint8_t size = 0;    // 1..10
+    std::array<std::uint8_t, 10> bytes{};
+};
+inline constexpr std::size_t kMaxSyncMidiEvents = 512;  // per callback
+// The size of the sync message `bytes` starts with, or 0 when it is not one
+// (a full frame needs all ten bytes in place). `size` bytes are readable.
+inline std::size_t syncMidiSize(const std::uint8_t* bytes, std::size_t size) SUPPLE_RT {
+    if (size == 0) return 0;
+    switch (bytes[0]) {
+        case 0xF8:
+        case 0xFA:
+        case 0xFB:
+        case 0xFC:
+            return 1;
+        case 0xF1:
+            return size >= 2 && bytes[1] < 0x80 ? 2 : 0;
+        case 0xF2:
+            return size >= 3 && bytes[1] < 0x80 && bytes[2] < 0x80 ? 3 : 0;
+        case 0xF0:
+            return size >= 10 && bytes[1] == 0x7F && bytes[3] == 0x01 && bytes[4] == 0x01 &&
+                           bytes[9] == 0xF7
+                       ? 10
+                       : 0;
+        default:
+            return 0;
+    }
 }
 // A device's control message for MIDI learn (ADR-0027): a note, a CC, a
 // program change or a pitch bend, as heard, in arrival order.
@@ -284,6 +326,10 @@ class Backend {
     // MIDI (ADR-0016). Inside the callback only: this cycle's device events,
     // sorted by frame (at most kMaxMidiInputEvents; more are dropped).
     virtual std::span<const MidiInputEvent> midiInput() const { return {}; }
+    // Inside the callback only: this cycle's sync messages (ADR-0071), sorted
+    // by frame, from every port (at most kMaxSyncMidiEvents; more are dropped,
+    // and counted in midiDropped() where the backend reports drops).
+    virtual std::span<const SyncMidiEvent> syncMidi() const { return {}; }
     virtual std::uint64_t midiDropped() const { return 0; }
     // The MIDI input ports, named after their devices (fixed while running).
     virtual std::vector<std::string> midiPorts() const { return {}; }
@@ -291,6 +337,9 @@ class Backend {
     // Output writes are callback-only, bounded and allocation-free. False
     // counts a rejected event; accepted events may still be lost downstream.
     virtual bool writeMidi(const MidiOutputEvent&) SUPPLE_RT { return false; }
+    // Events accepted so far this device period, by every writer (routed
+    // MIDI, clock and MTC), for the shared release reserve.
+    virtual std::size_t midiOutputUsed() const SUPPLE_RT { return 0; }
     virtual std::vector<std::string> midiOutputPorts() const { return {}; }
     virtual std::uint64_t midiOutDropped() const { return 0; }
     // Loss after callback acceptance, attributed to an output port.
@@ -334,6 +383,10 @@ class DummyBackend : public Backend {
         std::function<void(std::vector<MidiInputEvent>& events, std::uint32_t frames,
                            std::int64_t frame)>
             midi;
+        // Tests: the sync messages of each cycle (ADR-0071), likewise.
+        std::function<void(std::vector<SyncMidiEvent>& events, std::uint32_t frames,
+                           std::int64_t frame)>
+            sync;
     };
     explicit DummyBackend(Options options);
     ~DummyBackend() override;
@@ -346,11 +399,13 @@ class DummyBackend : public Backend {
     Status prepareLiveThread(std::thread::native_handle_type) override { return okStatus(); }
     ThreadPolicy callbackPolicy() override;  // Thread mode: its thread's
     std::span<const MidiInputEvent> midiInput() const override { return midi_; }
+    std::span<const SyncMidiEvent> syncMidi() const override { return sync_; }
     std::vector<std::string> midiPorts() const override { return options_.midiPorts; }
 
     bool writeMidi(const MidiOutputEvent& event) SUPPLE_RT override {
         return midiOutput_.write(event);
     }
+    std::size_t midiOutputUsed() const SUPPLE_RT override { return midiOutput_.size(); }
     std::vector<std::string> midiOutputPorts() const override;
     std::vector<std::int64_t> midiOutputLatency() const override;
     std::uint64_t midiOutDropped() const override { return midiOutput_.dropped(); }
@@ -371,8 +426,10 @@ class DummyBackend : public Backend {
   private:
     detail::MidiOutputCycle midiOutput_;
     std::vector<CapturedMidi> midiCapture_;
+    void captureMidi();  // this callback's MIDI output, into midiCapture_
     std::array<std::atomic<std::uint64_t>, 16> midiAsyncDrops_{};
     std::vector<MidiInputEvent> midi_;  // this cycle's (capacity reserved)
+    std::vector<SyncMidiEvent> sync_;   // likewise
     void cycle();
     void finishMidi();
     Options options_;
@@ -520,6 +577,34 @@ class Engine {
     }
     TransportState transport() const;
     double effectivePlayrate() const { return effectivePlayrate_.load(std::memory_order_relaxed); }
+
+    // --- external sync (ADR-0071) ----------------------------------------------------
+    // Main thread. The configuration the callback runs (now if running, else
+    // from start()); a change of listens() or chases() recompiles the plan
+    // (a sync plan has every node live, and the rate path on with pitch
+    // preserved when it chases).
+    Status setSync(const SyncConfig& config);
+    const SyncConfig& syncConfig() const { return syncConfig_; }
+    // What the callback last reported; the default while stopped or off.
+    SyncStatus syncStatus() const;
+    // The chase scale: the live playrate is the saved rate times it, through
+    // the scalar control path (ADR-0046) on a sync plan. Never saved.
+    void setSyncRate(double scale);
+    double syncRate() const { return syncScale_; }
+    // MIDI clock and MTC output (ADR-0073): messages written to, and refused
+    // by, each Backend::midiOutputPorts() index since start.
+    std::uint64_t syncOutputSent(std::size_t port) const {
+        return port < kMaxSyncOutputs ? syncOutSent_[port].load(std::memory_order_relaxed) : 0;
+    }
+    std::uint64_t syncOutputDropped(std::size_t port) const {
+        return port < kMaxSyncOutputs ? syncOutDropped_[port].load(std::memory_order_relaxed) : 0;
+    }
+    std::vector<std::string> midiOutputPorts() const {
+        return backend_ ? backend_->midiOutputPorts() : std::vector<std::string>{};
+    }
+    std::vector<std::int64_t> midiOutputLatency() const {
+        return backend_ ? backend_->midiOutputLatency() : std::vector<std::int64_t>{};
+    }
     // Main thread: waits (bounded) until the renderer has acted on every
     // transport request, so transport() reports the new state. With the
     // renderer in the callback: two audio cycles (none for a manual backend).
@@ -529,7 +614,8 @@ class Engine {
     // render-ahead amount), or the transport is paused. False on timeout.
     bool awaitRendered(std::int64_t frames, double timeoutSeconds = 10.0);
     // Main thread (tests, tools): waits until the renderer has adopted the
-    // newest plan (anticipative; immediately true otherwise).
+    // newest plan and queued it for the callback, whose next cycle adopts it
+    // (anticipative; immediately true otherwise, where the next cycle does).
     bool awaitPlan(double timeoutSeconds = 10.0);
     // Audio cycles that found no rendered audio while playing (after the
     // pre-roll of a start or seek).
@@ -587,7 +673,8 @@ class Engine {
     void setMidiPreferences(MidiPortPreferences inputs, MidiPortPreferences outputs);
     std::uint64_t midiPortDropped(bool output, std::size_t port) const;
     std::uint32_t midiLeadFrames() const;
-    // Owner thread: shared audio lead for a candidate offset on one port.
+    // Owner thread: the shared audio lead (routed notes, clock, SPP and MTC)
+    // with one port's offset at a candidate value.
     std::uint32_t midiLeadForOffset(std::size_t port, double offsetMs) const;
     const std::vector<std::string>& warnings() const { return warnings_; }
 
@@ -618,6 +705,33 @@ class Engine {
   private:
     friend struct EngineTestAccess;  // defined by the tests alone
     void cycle(const float* const* in, float* const* out, std::uint32_t frames) SUPPLE_RT;
+    // cycle() after its bookkeeping: count-in, then the transport's work.
+    void cycleTransport(const float* const* in, float* const* out, std::uint32_t frames) SUPPLE_RT;
+    // External sync (ADR-0071): the runtime the main thread published, the
+    // one the callback adopted, every one the main thread still owns.
+    void runSync(const float* const* in, float* const* out, std::uint32_t frames,
+                 double timelineBefore, std::uint64_t epochBefore, bool playingBefore) SUPPLE_RT;
+    void publishSyncStatus(const SyncStatus& status) SUPPLE_RT;
+    Status startSync();  // main thread: a runtime for the running device
+    SyncConfig syncConfig_;
+    double syncScale_ = 1.0;
+    std::vector<std::unique_ptr<detail::SyncRuntime>> syncRuntimes_;
+    std::atomic<detail::SyncRuntime*> syncNext_{nullptr}, syncAdopted_{nullptr};
+    detail::SyncRuntime* syncRt_ = nullptr;  // audio thread
+    std::int64_t syncDevice_ = 0;            // audio thread: device frames since start
+    bool syncPlayed_ = false;                // audio thread: the previous cycle played
+    std::atomic<std::int64_t> syncOutputLatency_{0}, syncInputLatency_{0}, syncPlanLatency_{0},
+        syncAudioLead_{0};
+    std::array<std::atomic<std::uint64_t>, kMaxSyncOutputs> syncOutSent_{}, syncOutDropped_{};
+    // Engine stop: the main thread asks the callback for the runtime's
+    // farewell (Stop to running slaves) and waits for it (ADR-0073 §9).
+    std::atomic<bool> syncFarewell_{false}, syncTransportRunning_{false};
+    std::atomic<std::uint32_t> syncFarewells_{0};
+    void sayFarewell() SUPPLE_RT;  // audio thread: the current runtime's
+    static constexpr std::size_t kSyncWords = (sizeof(SyncStatus) + 7) / 8;
+    std::array<std::atomic<std::uint64_t>, kSyncWords> syncWords_{};
+    std::atomic<std::uint64_t> syncSeq_{0};
+    std::uint32_t syncRuntimeIds_ = 0;  // main thread
     // One part of a device cycle (a count-in splits a cycle where it ends):
     // `midiBase` is where the part starts in the cycle's device MIDI.
     void cycleBody(const float* const* in, float* const* out, std::uint32_t frames,

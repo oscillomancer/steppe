@@ -45,6 +45,7 @@ struct PortAudioBackend::Impl {
     std::unique_ptr<detail::MidiSource> midi;
     std::unique_ptr<detail::MidiInputBuffer> midiBuffer;
     std::span<const MidiInputEvent> blockMidi;
+    std::span<const SyncMidiEvent> blockSync;
     bool midiStarted = false;
     std::unique_ptr<detail::MidiSink> sink;
     std::unique_ptr<detail::MidiOutputSender> sender;
@@ -124,6 +125,8 @@ struct PortAudioBackend::Impl {
             for (std::uint32_t c = 0; c < self.config.outputs; ++c) outputs[c] = out[c] + offset;
             self.blockMidi = self.midiStarted ? self.midiBuffer->chunk(offset, count)
                                               : std::span<const MidiInputEvent>{};
+            self.blockSync = self.midiStarted ? self.midiBuffer->syncChunk(offset, count)
+                                              : std::span<const SyncMidiEvent>{};
             self.midiOut.chunk(offset, count);
             self.callback(in ? inputs.data() : nullptr, outputs.data(), count);
             offset += count;
@@ -132,6 +135,7 @@ struct PortAudioBackend::Impl {
             if (self.sender)
                 (void)self.sender->push({midiBase + event.frame / self.config.sampleRate, event});
         self.blockMidi = {};
+        self.blockSync = {};
         if (changed) self.notify();
         return paContinue;
     }
@@ -448,6 +452,7 @@ std::vector<std::string> PortAudioBackend::inputNames() const {
     return std::vector<std::string>(impl_->config.inputs, impl_->inputName);
 }
 std::span<const MidiInputEvent> PortAudioBackend::midiInput() const { return impl_->blockMidi; }
+std::span<const SyncMidiEvent> PortAudioBackend::syncMidi() const { return impl_->blockSync; }
 std::vector<std::string> PortAudioBackend::midiPorts() const {
     return impl_->midiBuffer ? impl_->midiBuffer->names : std::vector<std::string>{};
 }
@@ -460,6 +465,7 @@ std::uint64_t PortAudioBackend::midiDropped() const {
 bool PortAudioBackend::writeMidi(const MidiOutputEvent& event) SUPPLE_RT {
     return impl_->midiOut.write(event);
 }
+std::size_t PortAudioBackend::midiOutputUsed() const SUPPLE_RT { return impl_->midiOut.size(); }
 std::vector<std::string> PortAudioBackend::midiOutputPorts() const {
     return impl_->sinkStarted ? impl_->sink->names : std::vector<std::string>{};
 }
