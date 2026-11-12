@@ -15,7 +15,7 @@ Notes. The rack channel retains its Out and can record audio, while the
 keyboard channel can record notes. Notes' own explicit device selection
 remains available.
 
-Project schema 2.11 validates one distinct input route per channel. The
+Project schema 2.12 validates one distinct input route per channel. The
 MIDI-only `record.input` alias of `record.midi_input` names the same input
 and remains accepted for compatibility. Older files with conflicting input
 references keep rack first, otherwise MIDI when the main FX chain is nonempty,

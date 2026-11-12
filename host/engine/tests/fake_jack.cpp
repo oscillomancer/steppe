@@ -25,7 +25,8 @@ constexpr Frames kMaxPeriod = 8192;
 
 struct MidiMessage {
     Frames time;
-    unsigned char bytes[3];
+    unsigned char bytes[10];
+    std::uint32_t size = 0;  // 0: a channel message, sized by its status
 };
 
 struct Port {
@@ -116,9 +117,11 @@ void run(Client* c) {
                 if (!p->midi || p->output) continue;
                 p->events.clear();
                 for (const auto& [port, m] : g_midiQueue)
-                    if (port == index)
-                        p->events.push_back(
-                            {std::min(m.time, n - 1), {m.bytes[0], m.bytes[1], m.bytes[2]}});
+                    if (port == index) {
+                        MidiMessage at = m;
+                        at.time = std::min(m.time, n - 1);
+                        p->events.push_back(at);
+                    }
                 ++index;
             }
             g_midiQueue.clear();
@@ -275,7 +278,9 @@ int jack_midi_event_get(MidiEvent* event, void* buffer, std::uint32_t index) {
     if (index >= p->events.size()) return -1;
     MidiMessage& m = p->events[index];
     event->time = m.time;
-    event->size = (m.bytes[0] & 0xf0) == 0xc0 || (m.bytes[0] & 0xf0) == 0xd0 ? 2 : 3;
+    event->size = m.size                                                       ? m.size
+                  : (m.bytes[0] & 0xf0) == 0xc0 || (m.bytes[0] & 0xf0) == 0xd0 ? 2
+                                                                               : 3;
     event->buffer = m.bytes;
     return 0;
 }
@@ -423,6 +428,13 @@ void fakejack_midi(int port, Frames time, int status, int data1, int data2) {
                            {time,
                             {static_cast<unsigned char>(status), static_cast<unsigned char>(data1),
                              static_cast<unsigned char>(data2)}}});
+}
+// A raw message of 1..10 bytes (system real-time, SysEx).
+void fakejack_midi_raw(int port, Frames time, const unsigned char* bytes, int size) {
+    std::lock_guard lock(g_midiMutex);
+    MidiMessage m{time, {}, static_cast<std::uint32_t>(std::clamp(size, 1, 10))};
+    std::copy_n(bytes, m.size, m.bytes);
+    g_midiQueue.push_back({port, m});
 }
 const char* fakejack_latency_env() { return g_latencyEnv.c_str(); }
 const char* fakejack_rate_env() { return g_rateEnv.c_str(); }

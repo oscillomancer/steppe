@@ -276,6 +276,18 @@
       "scope": "daw-only"
     },
     {
+      "name": "libltc",
+      "dir": "libltc-1.3.2",
+      "license": "LGPL-3.0-or-later",
+      "license_file": "libltc-1.3.2/COPYING",
+      "version": "1.3.2",
+      "source": "https://github.com/x42/libltc/releases/download/v1.3.2/libltc-1.3.2.tar.gz",
+      "sha256": "0a6d42cd6c21e925a27fa560dc45ac80057d275f23342102825909c02d3b1249",
+      "purpose": "SMPTE linear timecode (LTC) encode and decode for sync input and output (ADR-0070, the maintainer-approved LGPL exception); the src/ library sources only, unmodified; no autotools, tests or docs",
+      "linkage": "static",
+      "scope": "daw-only"
+    },
+    {
       "name": "AudioUnitSDK",
       "dir": "AudioUnitSDK-1.1.0",
       "license": "Apache-2.0",

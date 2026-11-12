@@ -1135,6 +1135,12 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
     values.audio.rate = 96000;
     values.audio.block = 128;
     values.audio.forceGraph = true;
+    values.sync.source = "mtc";
+    values.sync.midiInput = "Interface MIDI 1";
+    values.sync.offsetMs = 12.5;
+    values.sync.onLoss = "freewheel";
+    values.sync.ltcOutput = true;
+    values.sync.ltcOutputChannel = 4;
     REQUIRE(values.save(file));
     auto loaded = gui::Preferences::load(file);
     REQUIRE(loaded);
@@ -1146,13 +1152,15 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
     CHECK_FALSE(loaded->copyImports);
     CHECK(loaded->renderOpenFolder);
     CHECK(loaded->audio == values.audio);
+    CHECK(loaded->sync == values.sync);
+    CHECK(loaded->midiOutputs.empty());  // the engine writes these records, not the GUI
     const auto bytes = readFile(file).value();
-    CHECK(std::string(bytes.begin(), bytes.end()).find("supple.preferences/1.6") !=
+    CHECK(std::string(bytes.begin(), bytes.end()).find("supple.preferences/1.8") !=
           std::string::npos);
     REQUIRE(loaded->save(file));
     CHECK(readFile(file).value() == bytes);
     // Older schemas load, with defaults for what they lack.
-    for (const char* version : {"1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6"}) {
+    for (const char* version : {"1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8"}) {
         REQUIRE(writeFileAtomic(
             file, std::string("{\"schema\":\"supple.preferences/") + version + "\"}"));
         auto old = gui::Preferences::load(file);
@@ -1164,7 +1172,26 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
         CHECK(old->copyImports);
         CHECK_FALSE(old->renderOpenFolder);
         CHECK(old->audio == gui::AudioDeviceSettings{});
+        CHECK(old->sync == engine::SyncSettings{});
+        CHECK(old->midiOutputs.empty());
     }
+    // A 1.8 clock record on disk (the engine's midi.outputs.set) loads, and a
+    // GUI save keeps it as written.
+    const std::string records =
+        R"({"Interface MIDI 1":{"clock":true,"offset_ms":-3.5,"spp":true,"transport":true}})";
+    REQUIRE(writeFileAtomic(
+        file, R"({"schema":"supple.preferences/1.8","midi_outputs":)" + records + "}"));
+    auto clocked = gui::Preferences::load(file);
+    REQUIRE(clocked);
+    const auto clock = engine::midiPortSettings(clocked->midiOutputs, "Interface MIDI 1");
+    CHECK((clock.clock && clock.transport && clock.spp && !clock.mtc));
+    CHECK(clock.offsetMs == -3.5);
+    REQUIRE(clocked->save(file));
+    const auto kept = readFile(file).value();
+    auto keptDoc = json::parse(std::string(kept.begin(), kept.end())).value();
+    REQUIRE(keptDoc.find("midi_outputs"));
+    CHECK(json::writeCanonical(*keptDoc.find("midi_outputs")) ==
+          json::writeCanonical(json::parse(records).value()));
     // A wrong value names its field.
     for (auto [field, bad] : {std::pair{"audio_threads", "65"},
                               {"audio_threads", "1.5"},
@@ -1198,6 +1225,28 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
         CHECK(rejected.error().path == std::string("/audio/") + field);
         CHECK_FALSE(rejected.error().hint.empty());
     }
+    // And a wrong sync value, under /sync (1.7).
+    for (auto [field, bad] : {std::pair{"source", "\"smpte\""},
+                              {"offset_ms", "\"5\""},
+                              {"ltc_input", "0"},
+                              {"freewheel_frames", "1000"}}) {
+        REQUIRE(
+            writeFileAtomic(file, std::string(R"({"schema":"supple.preferences/1.7","sync":{")") +
+                                      field + "\":" + bad + "}}"));
+        auto rejected = gui::Preferences::load(file);
+        REQUIRE_FALSE(rejected);
+        CHECK(rejected.error().code == "preferences.sync");
+        CHECK(rejected.error().path == std::string("/sync/") + field);
+        CHECK_FALSE(rejected.error().hint.empty());
+    }
+    // A wrong MIDI output record is skipped, not fatal: the engine reports it
+    // (midi.outputs.get warnings), and its valid peers load (1.8).
+    REQUIRE(writeFileAtomic(file, R"({"schema":"supple.preferences/1.8","midi_outputs":)"
+                                  R"({"A":{"mtc":1},"B":{"clock":true}}})"));
+    auto skipped = gui::Preferences::load(file);
+    REQUIRE(skipped);
+    CHECK_FALSE(skipped->midiOutputs.contains("A"));
+    CHECK(engine::midiPortSettings(skipped->midiOutputs, "B").clock);
 }
 
 namespace {

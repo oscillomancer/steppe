@@ -110,6 +110,38 @@ instructions are in `docs/guides/installing.md`.
 - **Licensing** (ADR-0033, ADR-0062): DAW code is GPL-3.0-or-later; stock
   plugins, their shared libraries and `modules/` (the rack runtime and the
   stock modules) are MIT.
+- **Sync library** (ADR-0070, `specs/sync.md`): `libs/sync` has timecode
+  arithmetic (23.976 to 30 drop-frame, labels, seconds, start offsets,
+  text), MIDI clock and Song Position output at exact frames with a
+  receiver (tempo, position, lock), MTC quarter-frame and full-frame output
+  with a receiver (either direction, rate detection), LTC encode and decode
+  over libltc, and the chase tracker that turns any of them into a master
+  playrate with relocation and lock. Unit-tested under RealtimeSanitizer;
+  the engine uses it for sync input, LTC output and MIDI clock and MTC
+  output (below).
+- **Project timecode** (ADR-0071, schema 2.11): `project.timecode {rate,
+  start}` (30 fps from 00:00:00:00 by default and for older projects),
+  through `project.set`/`project.get` and Project > Timecode….
+- **External sync and LTC output** (ADR-0071): MIDI clock with Song
+  Position (Start, Continue, Stop, follow tempo or transport only), MTC and
+  LTC on an input channel drive the transport and a live chase rate (pitch
+  preserved, never saved; offline renders unaffected; recording works while
+  slaved); LTC of the transport on a chosen output. `sync.get`/`sync.set`,
+  `engine.status.sync`, the tempo button's right-click menu and Sync
+  settings…, saved in the preferences. Devices deliver sync messages beside
+  channel messages on JACK, CoreMIDI and WinMM. Tested with scripted dummy
+  devices.
+- **MIDI clock and MTC output** (ADR-0073): per MIDI output, clock (24 per
+  quarter note), Start/Continue/Stop, Song Position, MTC at the project's
+  timecode, clock while stopped, and a signed offset; each message leaves
+  with the audio it belongs to (plan latency, the port's audio-minus-MIDI
+  latency and the offset), across tempo changes, playrate, loop wraps and
+  locates, in both executors; nothing during a count-in; not echoed to the
+  sync master's device. One port record and command set with hardware MIDI
+  routing (`midi.outputs.get`/`midi.outputs.set`,
+  `engine.status.midi_outputs`), saved by the engine in the preferences; in
+  the GUI, the Hardware MIDI tab's output header menu and a clock mark on
+  outputs sending clock. Tested on the dummy device's captured MIDI.
 
 - **Session and history** (`specs/session-model.md`, ADR-0008): immutable
   versions with stable ids, per-branch undo, branches with object-level diff
@@ -353,7 +385,7 @@ instructions are in `docs/guides/installing.md`.
   filtering/remapping, fan-out, compensation and exact RT/offline timing.
   Armed MIDI destinations record these routes, with or without an instrument,
   alongside device MIDI, using the recorder's loop, punch and overdub rules.
-  A channel has one input: hardware audio, MIDI or rack Out (schema 2.11,
+  A channel has one input: hardware audio, MIDI or rack Out (schema 2.12,
   ADR-0074). Choosing one replaces the others, including `rack.add`; the input
   menu has one No input choice. Feed Notes with a MIDI send from a separate
   keyboard channel, arming that channel for MIDI and the rack channel for
@@ -911,6 +943,30 @@ Library boundaries:
   on Linux, and native macOS/Windows CI has not run on it.
 
 Engine and hosting:
+- Sync (ADR-0070, ADR-0071, ADR-0073): sync input, LTC output and MIDI
+  clock/MTC output are tested only with dummy devices: real
+  interfaces' timing, WinMM's millisecond timestamps, LTC over analogue
+  lines and the CoreMIDI/WinMM sync paths (written blind on Linux) need
+  device trials and native macOS/Windows CI, which has not run on any of it.
+  While following a source the whole graph runs in the callback (no
+  render-ahead); a chasing source (MTC, LTC, MIDI clock with follow tempo)
+  plays audio clips through the stretcher, close to but not the same as
+  unsynced playback even when locked; Steppe stops when the master plays
+  backwards; recorded takes drift from the timeline by the chase rate's
+  distance from 1. A MIDI output that must send before its audio (a MIDI port
+  slower than the audio, or a negative offset beyond the plan latency)
+  adds that much latency to all audio and monitoring, the shared hardware
+  MIDI lead (at most 1 s), clock-only ports included. A device period
+  carries at most 1,024 MIDI messages: routed notes, clock and MTC beyond
+  the first 512 are dropped (and counted), leaving the rest for
+  note-offs, resets and a clock Stop; more than 512 routed note-offs in
+  one period can still crowd the resets out. Clock settings
+  for a MIDI output are made while its device is connected
+  (`midi.outputs.set` refuses a port neither present nor recorded). The
+  same-device test against echoing to the sync master compares port names.
+  A slave on a device that vanished with no callback left to carry it (a
+  JACK server that went away, an unplugged MIDI device) is not sent its
+  final Stop.
 - Pan modes (ADR-0066): `pan` automation does nothing in dual mode.
   Projects from before ADR-0066 play louder (about 3.5 dB for a channel into
   a master, plus about 6.5 dB per buss on the way); there is no migration.
@@ -1000,16 +1056,17 @@ Engine and hosting:
   non-restart topology advisories
   (ADR-0042). Device-free timing/overflow/lifecycle tests cover the shared path;
   physical MIDI timing/disconnect behavior needs SUPPLE_MIDI_DEVICE_TEST=1 trials.
-  Input SysEx is discarded; WinMM input timestamps have millisecond resolution. WinMM names
+  Input SysEx other than MTC's full frame is discarded; WinMM input
+  timestamps have millisecond resolution. WinMM names
   do not distinguish two identical devices, or a replacement from the original;
   this will be addressed with Windows MIDI Services once its App SDK is released
   for production (ADR-0042).
   Hardware MIDI output device APIs exist (ADR-0069): bounded ten-byte messages,
   JACK playback ports, timestamped CoreMIDI sends off audio, and QPC/timer-based
   WinMM sends off audio. engine.inputs lists destinations; start/status report
-  output warnings, drops and signed audio-minus-MIDI latency per port. MIDI
-  hardware routing and its Hardware MIDI grid are implemented (ADR-0072);
-  clock/SPP/MTC generation is pending. CoreMIDI/WinMM
+  output warnings, drops and signed audio-minus-MIDI latency per port.
+  Hardware MIDI routing and its Hardware MIDI grid (ADR-0072) and clock/SPP/MTC
+  output (ADR-0073) use them. CoreMIDI/WinMM
   wire latency is estimated as zero; WinMM expected jitter is about 1 ms.
   Native macOS/Windows CI and hardware validation have not run for outputs.
   No direct PipeWire/ALSA backend.
@@ -1240,6 +1297,6 @@ detail; core-params formats magnitudes beyond six decimals imprecisely;
 - Profile the 64-frame worst case; a pipelined bridge mode.
 - Close the capacity gap with REAPER (B2) by making the anticipative
   renderer cheaper, then keep refining capacity in both modes.
-- Hardware clock/sync output, a disk-backed media cache.
+- A disk-backed media cache.
 - Lua ergonomics (a script library path, hot reload).
 - Native audio/MIDI hardware validation and GUI hardening on macOS and Windows.

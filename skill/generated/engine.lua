@@ -336,6 +336,7 @@ q = nil
 ---@field dropped integer
 ---@field voice_dropped integer
 ---@field failed_errors any
+---@field sync table
 
 ---@class Steppe.engine_status_result
 ---@field running boolean
@@ -376,6 +377,7 @@ q = nil
 ---@field dropped integer
 ---@field voice_dropped integer
 ---@field failed_errors any
+---@field sync table
 
 ---@class Steppe.engine_stop_result
 ---@field warnings? table[]
@@ -950,6 +952,11 @@ q = nil
 ---@field enabled? boolean
 ---@field offset_ms? number
 ---@field reset_on_stop? boolean
+---@field clock? boolean
+---@field transport? boolean
+---@field spp? boolean
+---@field mtc? boolean
+---@field clock_while_stopped? boolean
 
 ---@class Steppe.midi_write_args
 ---@field item string Item id, e.g. "it_1".
@@ -1067,6 +1074,7 @@ q = nil
 ---@field sample_rate number
 ---@field tempo number
 ---@field meter string
+---@field timecode table The timecode frame rate and the label at project time 0
 ---@field version integer
 ---@field generation integer
 ---@field recoverable integer
@@ -1084,6 +1092,7 @@ q = nil
 ---@field sample_rate number
 ---@field tempo number
 ---@field meter string
+---@field timecode table The timecode frame rate and the label at project time 0
 ---@field version integer
 ---@field generation integer
 ---@field recoverable integer
@@ -1100,6 +1109,7 @@ q = nil
 ---@field sample_rate number
 ---@field tempo number
 ---@field meter string
+---@field timecode table The timecode frame rate and the label at project time 0
 ---@field version integer
 ---@field generation integer
 ---@field recoverable integer
@@ -1135,6 +1145,7 @@ q = nil
 ---@field history_budget_bytes? integer Estimated retained history byte budget; default 1 GiB. Leases and branch boundaries may exceed it.
 ---@field render? table Render settings (session-model §1.10); every member optional
 ---@field timebase? "time"|"beats"|"beats_position"
+---@field timecode? table
 
 ---@class Steppe.project_set_result
 ---@field warnings? table[]
@@ -1598,6 +1609,28 @@ q = nil
 
 ---@class Steppe.session_describe_result
 ---@field text string
+---@field warnings? table[]
+
+---@class Steppe.sync_get_result
+---@field settings any
+---@field status table
+---@field warnings? table[]
+
+---@class Steppe.sync_set_args
+---@field source? "off"|"midi_clock"|"mtc"|"ltc"
+---@field midi_input? string
+---@field ltc_input? integer
+---@field follow_tempo? boolean
+---@field offset_ms? number
+---@field on_loss? "stop"|"freewheel"
+---@field freewheel_frames? integer
+---@field ltc_output? boolean
+---@field ltc_output_channel? integer
+---@field ltc_level_db? number
+
+---@class Steppe.sync_set_result
+---@field settings any
+---@field status table
 ---@field warnings? table[]
 
 ---@class Steppe.take_activate_args
@@ -2246,8 +2279,8 @@ q = nil
 ---@field set fun(args: Steppe.midi_inputs_set_args): table Change one machine MIDI port's enabled state and timing offset.
 
 ---@class Steppe.midi.outputs
----@field get fun(): table Hardware MIDI outputs, timing, settings, loss and startup warnings.
----@field set fun(args: Steppe.midi_outputs_set_args): table Change one machine MIDI port's enabled state and timing offset.
+---@field get fun(): table Hardware MIDI outputs: settings, clock/MTC, timing, loss, warnings.
+---@field set fun(args: Steppe.midi_outputs_set_args): table Change one MIDI output: enabled, offset, reset, clock, SPP, MTC.
 
 ---@class Steppe.module
 ---@field add fun(args: Steppe.module_add_args): table Add a module to a rack: a type with knob values.
@@ -2280,7 +2313,7 @@ q = nil
 ---@field recover fun(args?: Steppe.project_recover_args): Steppe.project_recover_result Put recordings a crash left out back into the project (one undo step).
 ---@field recoverable fun(): Steppe.project_recoverable_result List recordings a crash left out of the project.
 ---@field save fun(args?: Steppe.project_save_args): Steppe.project_save_result Save the project (canonical JSON) to its file or a new path.
----@field set fun(args?: Steppe.project_set_args): Steppe.project_set_result Set project name, title, author, notes, Console 9, pan law or timebase.
+---@field set fun(args?: Steppe.project_set_args): Steppe.project_set_result Set project name, notes, Console 9, pan law, timebase or timecode.
 
 ---@class Steppe.project.template
 ---@field delete fun(args: Steppe.project_template_delete_args): Steppe.project_template_delete_result Delete a saved project template by name.
@@ -2356,6 +2389,10 @@ q = nil
 
 ---@class Steppe.session
 ---@field describe fun(): Steppe.session_describe_result Describe the whole session in compact text (tracks, items, fx, routes).
+
+---@class Steppe.sync
+---@field get fun(): Steppe.sync_get_result Show external sync settings and what the engine hears from the master.
+---@field set fun(args?: Steppe.sync_set_args): Steppe.sync_set_result Set external sync (MIDI clock, MTC, LTC) and LTC output; returns them.
 
 ---@class Steppe.take
 ---@field activate fun(args: Steppe.take_activate_args): Steppe.take_activate_result Choose the take heard from an item.
@@ -2465,6 +2502,7 @@ q = nil
 ---@field route Steppe.route Commands named route.*
 ---@field script Steppe.script Commands named script.*
 ---@field session Steppe.session Commands named session.*
+---@field sync Steppe.sync Commands named sync.*
 ---@field take Steppe.take Commands named take.*
 ---@field tempo Steppe.tempo Commands named tempo.*
 ---@field time Steppe.time Commands named time.*

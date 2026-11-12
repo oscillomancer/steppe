@@ -20,6 +20,7 @@
 #include "supple/json/json.h"
 #include "supple/midi/midi.h"
 #include "supple/model/ids.h"
+#include "supple/sync/timecode.h"
 
 namespace supple::model {
 
@@ -61,6 +62,9 @@ struct Project {
     bool console9 = true;
     PanLaw panLaw;  // channels' and busses' default (ADR-0066)
     Playrate playrate;
+    // The project's timecode (ADR-0071): its frame rate, and the label at
+    // timeline 0. MTC, LTC and the timecode display use it.
+    sync::TimecodeMapping timecode{sync::FrameRate::Fps30, {}};
     std::vector<Id> masters{kMaster};
     std::uint64_t seed = 0;
     std::uint64_t historyBudgetBytes = 1ULL << 30;

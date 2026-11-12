@@ -1885,9 +1885,14 @@ retain port-index order, then arrival order within a port. Preallocated chunk
 storage doubles as merge scratch; no new allocation. Events rebase into each
 engine chunk, including the final short chunk. No allocation, lock, wait or
 logging on receive/audio paths. `Backend::midiDropped()` defaults to zero;
-PortAudio exposes rejected messages and ring/period overflow through it and
-`engine.status.midi_dropped`. SysEx/system messages are dropped and counted
-per reported packet/buffer; driver-unreported SysEx loss cannot be counted.
+PortAudio and JACK expose rejected messages and ring/period overflow
+(JACK: a message that is neither a channel nor a sync message, or past a
+period's `kMaxMidiInputEvents` / `kMaxSyncMidiEvents`) through it and
+`engine.status.midi_dropped`. Sync messages (Clock, Start, Continue, Stop,
+Song Position, MTC quarter frames and the MTC full-frame SysEx) go to
+`Backend::syncMidi()` instead (§ External sync); other system messages and
+SysEx are dropped and counted per reported packet/buffer; driver-unreported
+SysEx loss cannot be counted.
 Two fixed WinMM long buffers are recycled on the monitor, never inside its
 MIDI callback. Short-message reception does not depend on recycling them.
 
@@ -1922,12 +1927,121 @@ Real-device tests require SUPPLE_MIDI_DEVICE_TEST exactly 1; they use fake
 audio and never open an audio device. Native SDK tests do not establish physical
 input timing, disconnect reliability or performance on every driver.
 
+### External sync (ADR-0071)
+
+**Device input.** `Backend::syncMidi()` holds each callback's sync
+messages from every MIDI port, sorted by frame: F8, FA, FB, FC, F2 lsb
+msb, F1 dd and F0 7F id 01 01 hh mm ss ff F7 (`SyncMidiEvent`, up to ten
+bytes, at most `kMaxSyncMidiEvents` = 512; more are counted in
+`midi_dropped`). `syncMidiSize()` classifies them. JACK takes them from its
+events; the native buffer keeps a 512-entry queue per port (`pushSync`,
+`syncChunk`) beside the channel queues; CoreMIDI sends UMP type 1 through
+`push` and reassembles SysEx7 (start/continue/end or complete) into the
+full frame, keeping no other SysEx; WinMM's MIM_DATA system messages go
+through `push` and a ten-byte full frame in a long buffer through
+`pushSync`. `midiInput()` is unchanged. The dummy backend's `sync` option
+scripts them for tests.
+
+**Settings and status.** `EngineApp` holds `SyncSettings` (`sync.get`,
+`sync.set`; ADR-0071 §2) and resolves them for the engine: the MIDI port by
+exact name, else the first containing it (case-insensitive), none (with a
+warning) while that input is disabled in its MIDI port record (ADR-0072;
+its `offset_ms` moves played and recorded MIDI, not the chase, whose
+latency is §9's and whose offset is `sync.set`'s); the input and
+output channels against the device; the project's timecode; the freewheel
+time from its frames. Unresolvable members become warnings in
+`engine.status.sync.warnings` and `sync.set`'s warnings, as does an LTC
+output channel a master's `hw_output` plays to. An LTC output channel the
+device lacks uses its last output instead, with a warning; the setting is
+kept. `engine.status.sync`:
+`{source, input, present, running, locked, state, bpm, timecode, rate,
+chase_rate, error_ms, locate_ms, ltc_output, warnings}`.
+
+**The callback.** `Engine::setSync(SyncConfig)` builds a `SyncRuntime` on
+the main thread (libltc's decoder and encoder are allocated there) and
+publishes it; the callback adopts the newest at the start of a cycle, and
+`service()` frees those before the adopted one. After each cycle's
+transport work (`cycleTransport`, count-in included) `runSync` gives the
+runtime the cycle's sync messages, inputs and outputs, its device frames
+(counted from start), the timeline it played (start and end, from the
+rate clock), the plan's and the device's output latency and the device's
+input latency, and the plan's time map. The runtime feeds the configured
+port's messages to the clock or MTC receiver (ADR-0070 §3-4), or the
+configured input channel to the LTC decoder at device frame − input
+latency; gives the tracker each observation and the receivers' jumps; and,
+while the source runs, updates the tracker with the heard local position
+(processed timeline − output latency × speed) in the source's units: beats
+for MIDI clock (the plan's time map; nominal speed bpm/60 there), timecode
+seconds (timeline + project start + offset; nominal 1) for MTC and LTC. A
+loss is final when nothing was observed for the freewheel time (0: at the
+receiver's timeout); the tracker then resets. The chase rate is the
+tracker's while the transport plays and the source runs (MIDI clock only
+with follow tempo), held through a freewheel, else 1. The first clock after
+Start or Continue has no tempo yet: its position is counted on at the
+project's tempo. LTC output renders into its output channel after the
+masters, labelled with what leaves with it: the runtime keeps the timeline
+each cycle processed as spans (device frame, start, seconds per frame; two
+at a loop wrap, split where the loop's end was reached; a ring of 4096) and
+writes output frame d from the span covering d − the plan's latency, so LTC
+names the audio it is heard with (the device's own latency delays both;
+so does the hardware MIDI lead's audio history, which runs after LTC is
+written, so the lead is not part of that latency).
+Frames before the oldest span, or processed while stopped, are silent; a
+start, locate or wrap (a step of more than a frame) starts the encoder
+again at the next frame boundary; stopped, it is silent at once. The status is published
+under a sequence lock (`Engine::syncStatus()`); the main thread is woken on
+a change of presence, running, lock, a start, stop, jump, relocate request,
+final loss, or a chase rate change (at most every 10 ms). Everything here
+is `SUPPLE_RT`.
+
+**The main thread.** `EngineApp::tick` re-resolves the settings (a no-op
+when unchanged) and acts on the status (ADR-0071 §4): MIDI clock: Stop
+pauses; running after Start/Continue (the first clock) seeks to its beat
+plus (the measured seek time + the heard latency) × tempo / 60 (the
+master's tempo, the project's before a second clock), − offset, and plays;
+a Song Position change while stopped seeks there;
+with follow tempo a relocate request seeks to the prediction. MTC/LTC:
+running while stopped seeks to the prediction (timecode − start − offset at
+the heard time) plus the measured seek time × the master's speed, and
+plays; a relocate request seeks likewise; running backwards pauses; a jump
+(full frame) while stopped seeks. A final loss pauses. Then
+`Engine::setSyncRate(chase rate)` while playing, 1 otherwise.
+The measured seek time (`locate_ms`) averages how long these seeks took on
+the steady clock, each new one weighing half, clamped to 0-500 ms and
+starting at 50 ms. `AppOptions::syncLocateSeconds` fixes it instead, for a
+device whose time stands still while the main thread seeks: the dummy
+backend's manual mode, in tests, which must not pass or fail by the wall
+clock.
+
+**The sync plan and the chase scale.** While `SyncConfig::listens()` (an
+input source) `load()` compiles with `SyncOverrides`: the plan is
+`syncPlan`, and on an anticipative engine every node is live. When
+`SyncConfig::chases()` too (MTC, LTC, or MIDI clock with follow tempo) it
+is also `syncRate`: `rateEnabled`, `masterPlayrate.preservePitch`, clips'
+stretch converters even at 1.0, `masterPlayrate.rate` = saved × scale.
+Stretch at 1.0 is not a null: a chasing session's audio clips differ from
+unsynced playback even when locked (a 441 Hz sine by about −25 dB of its
+level in the tests); MIDI clock without follow tempo and LTC output alone
+play the same samples as without sync. LTC output alone compiles no sync
+plan. A change of `listens()` or `chases()` reloads; `setSync` resets the
+scale to 1 when nothing chases. `setSyncRate(scale)` (0.25..4) publishes saved × scale as a scalar
+control through `loadScalarRate` (ADR-0046: ramp, 150 ms low-pass, both
+executors); on a plan without renderer nodes the control lands after the
+consumed position plus headroom, not the render-ahead. The saved rate and
+`transport.playrate.get`'s `requested_rate` never change; `setSyncRate` does
+nothing on a plan that is not `syncRate`. `startRecording`
+skips the queued-trajectory check on `syncRate` plans (the saved-rate check
+stays), and its recorder is drift-tolerant there: a block whose timeline
+position is within a block of the expected one continues the run (the take
+drifts by the chase rate's distance from 1), only a larger jump starts a new
+run. Offline renders compile without overrides.
+
 ### Native MIDI outputs (ADR-0069)
 
 `BackendConfig.midiOutputs` opens up to 16 destinations; `engine.start` enables
 it. `Backend::midiOutputPorts()` names them, fixed while running;
 `engine.inputs.midi_outputs` lists the same names (empty while stopped).
-No routing or clock generator is added here. `writeMidi(MidiOutputEvent)` is
+Clock and MTC generation is § MIDI clock and MTC output. `writeMidi(MidiOutputEvent)` is
 callback-only: 0-based port, frame within that engine chunk, size 1..10 and ten
 inline bytes. Messages must be complete MIDI 1.0, including system realtime,
 SPP, quarter-frame MTC and full-frame MTC SysEx. Running status and SysEx longer
@@ -1990,6 +2104,105 @@ Device-free fake clocks exercise the production queue path, including scheduling
 loss and shutdown. `SUPPLE_MIDI_DEVICE_TEST=1` alone enables native device opens
 with fake audio and no explicit MIDI sends. macOS/Windows native CI and physical
 timing/disconnect validation remain pending. No additional SDK/library is linked.
+
+### MIDI clock and MTC output (ADR-0073)
+
+**Settings.** Clock output reads the same per-port record as hardware MIDI
+routing (`MidiPortPreferences`, `midi_ports.h`; see "Hardware MIDI routing
+(ADR-0072)"): routing owns `enabled`, `offset_ms` and `reset_on_stop`, and
+the record adds `clock`, `transport`, `spp`, `mtc` and
+`clock_while_stopped` (booleans, outputs only, validated by
+`parseMidiPortPreferences`; `MidiPortSettings` carries them). The records
+live in `preferences.json` (`supple.preferences/1.8`) as `midi_outputs`
+`{"<port>": {...}}`; `EngineApp` is their only writer (`midi.outputs.set`),
+and a malformed record is skipped at startup with a warning, as for
+routing. `midi.outputs.set` resolves its port by a unique case-insensitive
+match among present and recorded names (a port that is neither is refused,
+as for routing: a record is made while its device is connected), applies
+the edits, drops a record back at every default, then rebuilds the plan and
+`applySync()`. `syncConfigFor` resolves each output
+of `Engine::midiOutputPorts()` by its exact name into
+`SyncConfig.outputs[i]` (`kMaxSyncOutputs` = 16): for an enabled port the
+kinds, and `delay` = `midiOutputLatency()[i]` + offset in frames; a
+disabled port sends nothing. While the sync
+source is MIDI clock or MTC on an input whose device is that output (names
+equal without capture/playback, in/out, input/output, midiin/midiout), the
+kinds the master sends are cleared (clock, transport, SPP, clock while
+stopped; or MTC), with a warning in the sync warnings and on the port;
+`sameRuntime()` compares the kinds, so a kind change builds a runtime and a
+delay change adjusts in place.
+
+**The callback.** A runtime with any sending output keeps the span ring
+(as for LTC output: the timeline processed per cycle, the stopped position
+in stopped spans, two spans at a wrap, 4096) and per output a
+`ClockGenerator`, an `MtcGenerator` (the project's timecode) and where the
+last piece ended. Each cycle, after LTC, for each sending output i with
+total delay D = plan latency + hardware MIDI lead + delay_i (never
+negative once the plan's lead covers the port; see below), the window `[c, c + n)` reads the
+timeline at `[c − D, c + n − D)` as pieces: spans clipped to it (before
+the oldest: unknown, nothing sent), then, past the newest span (D < 0), a
+prediction at its speed wrapping at the loop's end. Each piece at output
+frame a: stopped: Stop if running, MTC stops, and when it is a stop or a
+seek (more than 5 ms from where the last piece ended) Song Position and a
+full frame where it stands; with `clock_while_stopped` F8 every
+60 / (24 bpm) seconds at the tempo there, continuing the last clock's
+phase. Playing: start (Start at or before beat 0, else Song Position of
+the next 16th and Continue) when not running, locate (Stop, Song Position,
+Continue; MTC full frame) on a step over 5 ms, then clocks and quarter
+frames inside the piece, beats through the plan's time map with its exact
+inverse. Events go through a 2048-entry buffer, filtered by kind (F8
+clock; F2 spp; FA, FB, FC transport; F1 and the full frame mtc), to
+`writeMidi` at `ceil(frame) − c`, while the period's buffer is short of
+the release reserve (`kMaxMidiOutputEvents` − `kMidiReleaseReserve`, every
+writer counted). A Stop may use the reserve. `Port::slaveRunning` is what
+was last written to the slave (Start or Continue, or Stop), not the
+generator's state. A Stop for a running slave that does not go out
+(refused, or no room in the event buffer) sets `Port::stopOwed`, which
+only a written Stop clears: the owed Stop goes at frame 0 of each later
+period until the device takes it, and nothing else goes to the port
+before it. If the transport resumed meanwhile, the generator is stopped
+as the owed Stop goes and starts again in the same period, so the slave
+hears Stop, then Song Position and Continue (or Start at beat 0), then
+clock. A Start or Continue that does not go out (refused, over the
+ordinary limit, which they may not exceed, or no room) leaves the
+generator running for a slave that is not: the generator is stopped
+without a message and begins again the next period, so the slave hears
+Song Position and Continue from where the transport is then, until the
+device takes them. Refusals and a full buffer count in
+`Engine::syncOutputDropped(i)`, sent messages in `syncOutputSent(i)`
+(reset at start). Count-in cycles do not play, so nothing but the
+optional free clock goes out until the timeline moves. Offline renders
+send nothing.
+
+**Leaving.** `SyncRuntime::farewell()` writes Stop (FC) at frame 0 on each
+port whose transport is running or owed a Stop, stops the generators and
+ends the runtime's MIDI output. The callback calls it on the old runtime as it
+adopts a new one, and on request: `Engine::stop()`, when the callback last
+published `syncTransportRunning_`, sets `syncFarewell_` and waits for
+`syncFarewells_` to count it (at most max(50 ms, 4 periods)), then the
+plan's and device's latency (at most `detail::kMidiOutputCloseWaitSeconds`,
+250 ms), before it sets `shutdownRequested_`. The next running cycle is
+silent and calls `HardwareMidiRuntime::finish(closing)`, which releases the
+routed notes still held: one shutdown path, the Stop before the note-offs
+on each port. `Backend::stop()`'s final zero-frame callback calls both
+again as the fallback for a device that ran no more cycles; every backend
+delivers its MIDI (JACK in a real period, PortAudio to the native sender
+as closing, the dummy backend into its capture). The sender's `stop()`
+keeps `closingMessage()`s from its queues (note-offs, CC64/CC123 at zero
+and FC), stamped `max(now, lastDue[port])` on CoreMIDI and now on WinMM,
+drops the rest, and on CoreMIDI waits for the latest stamp (at most
+250 ms) before the port is disposed.
+
+**Status.** `midi.outputs.get` returns `{ports}`, and
+`engine.status.midi_outputs` the same list (`EngineApp::midiPortsState`):
+routing's port list (see "Hardware MIDI routing (ADR-0072)") with, for each
+output, `clock`, `transport`, `spp`, `mtc` and `clock_while_stopped` as
+set, `sends` (what goes out now), `suppressed` (set but not sent to the
+sync master's device), `delay_ms` (plan latency + latency + offset) and
+`sent` (clock and MTC messages since the engine started). `dropped` sums
+routed MIDI, clock and MTC and the backend's asynchronous loss. The
+routing grid's hardware column `clock` flag (`route.matrix`
+`hardware_midi`) is true when `sends` has `clock`.
 
 ### Master playrate (ADR-0045)
 
@@ -2747,6 +2960,10 @@ Route delay is `plan.outputLatency - source.timelineShift - tappedLatency +
 backend.midiOutputLatency[port] + offset_ms * sampleRate / 1000` (rounded to
 frames). Negative minimum delay adds prepared audio lead to all MIDI delays and a
 final audio delay; lead is limited to one second and reported by `midi_lead_frames`.
+Ports that send clock, transport, SPP or MTC (ADR-0073) count with
+`plan.outputLatency + backend.midiOutputLatency[port] + offset`, so a clock-only
+port faster than its audio gets the lead too; the sync runtime's plan and heard
+latencies include it, and clock follows a lead change at once (no slew).
 Engine output latency, heard timing and recording account for it. History is
 allocated on the owner thread only when publishing a plan with non-zero lead, and
 runs only during non-zero lead or a tap crossfade. It continues across stop, locate,
@@ -2763,7 +2980,12 @@ playback rate. Rapid edits finish the active fade, then fade to the latest targe
 The initial plan primes its full lead normally.
 
 No hardware delay may exceed ten seconds. Limits: 256 routes, 65,536 pending
-messages, 16 ports, and the existing 1,024 messages per device period. Equal-frame
+messages, 16 ports, and the existing 1,024 messages per device period, shared by
+routed MIDI, clock and MTC (`Backend::midiOutputUsed()` counts every writer):
+stop-time releases, clock, MTC and every routed message but a release
+(note-off, CC64 or CC123 at zero) stop at 1,024 − `kMidiReleaseReserve`
+(512), and what that refuses counts as dropped, so the last 512 are left
+for routed note-offs, a clock Stop and a stop's CC64/CC123 resets. Equal-frame
 messages preserve route/event insertion order. Overflow is counted. Timeline origin
 is captured with each stream event before a slot can be freed or reused, carried
 through the FX bus and hardware queue, and retained for mute-retriggered notes.
@@ -2814,9 +3036,12 @@ aggregate `midi_dropped`. Port latency_ms is the signed backend latency before
 user offset/lead; inputs currently report zero device latency.
 
 Preferences add `midi_inputs` and `midi_outputs` maps to
-`supple.preferences/1.6`, keyed by exact enumerated port name. Records retain
-unknown members for clock output compatibility. Defaults are enabled, zero
-offset and output reset_on_stop true. GUI and headless applications use the
+`supple.preferences/1.6` (1.8 adds the outputs' clock members, ADR-0073),
+keyed by exact enumerated port name. Records retain unknown members, so a
+later version's survive edits. Defaults are enabled, zero offset, output
+reset_on_stop true and every clock member false. The engine writer raises
+an older schema label to the current one. A disabled input also stops the
+sync chase from following it. GUI and headless applications use the
 same preferences file; embedded hosts may provide their own persistence.
 
 The engine and GUI share `engine::kPreferencesSchema` for the current machine

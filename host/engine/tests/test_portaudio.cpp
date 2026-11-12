@@ -787,12 +787,45 @@ TEST_CASE("native MIDI rejects system messages, bounds queues and counts period 
     for (unsigned i = 0; i < detail::kMidiQueueSize + 10; ++i)
         midi.send(0, 0, 256, midiWord(0x90, 60, 100));
     midi.buffer->push(1, 10, 0xf0);
-    midi.buffer->push(1, 10, 0xf8);
+    midi.buffer->push(1, 10, 0xfe);  // active sensing (clock goes to syncMidi(), ADR-0071)
     midi.buffer->push(1, 10, midiWord(0x90, 255, 100));
     driver.drive(256);
     CHECK(count == kMaxMidiInputEvents);
     CHECK(backend.midiDropped() == detail::kMidiQueueSize + 10 - kMaxMidiInputEvents + 3);
     backend.stop();
+}
+TEST_CASE("native MIDI delivers sync messages in time order beside channel messages") {
+    auto buffer = std::make_unique<detail::MidiInputBuffer>();
+    buffer->names = {"Clock", "Timecode"};
+    // A period of 64 frames ending at 10 s (48 kHz): frame f is 10 - (64 - f) / 48000.
+    auto at = [](int frame) { return 10 + (frame - 64) / 48000.0; };
+    buffer->push(0, at(40), 0xf8);
+    buffer->push(0, at(2), 0xfa);
+    buffer->push(1, at(10), midiWord(0xf1, 0x23, 0));
+    buffer->push(0, at(20), midiWord(0xf2, 0x10, 0x01));
+    const std::uint8_t full[10] = {0xF0, 0x7F, 0x7F, 0x01, 0x01, 0x21, 2, 3, 4, 0xF7};
+    buffer->pushSync(1, at(30), full, 10);
+    const std::uint8_t other[4] = {0xF0, 0x41, 0x10, 0xF7};
+    buffer->pushSync(1, at(31), other, 4);  // not a sync message: a drop
+    buffer->push(0, at(50), midiWord(0x90, 60, 100));
+    buffer->collect(10, 48000, 64);
+    const auto first = buffer->syncChunk(0, 32);
+    REQUIRE(first.size() == 4);
+    CHECK(first[0].bytes[0] == 0xfa);
+    CHECK(first[0].frame == 2);
+    CHECK(first[1].bytes[0] == 0xf1);
+    CHECK(first[1].bytes[1] == 0x23);
+    CHECK(first[1].port == 1);
+    CHECK(first[2].size == 3);
+    CHECK(first[2].bytes[2] == 0x01);
+    CHECK(first[3].size == 10);
+    CHECK(first[3].frame == 30);
+    const auto second = buffer->syncChunk(32, 32);
+    REQUIRE(second.size() == 1);
+    CHECK(second[0].bytes[0] == 0xf8);
+    CHECK(second[0].frame == 8);
+    CHECK(buffer->chunk(0, 64).size() == 1);
+    CHECK(buffer->dropped() == 1);
 }
 TEST_CASE("WinMM timestamps retain their QPC anchor across 32-bit rollover") {
     CHECK(detail::winMidiSeconds(125, 10, 10.2) == doctest::Approx(10.125));

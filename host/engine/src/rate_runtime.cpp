@@ -96,17 +96,19 @@ bool Engine::loadScalarRate(const model::Session& session, const std::filesystem
         notificationReload_ || rateDeferred_ || dir != p->projectDir ||
         !scalarOnly(*latest_, session))
         return false;
-    const auto value = session.project->playrate.rate;
+    const auto saved = session.project->playrate.rate;
     // An unchanged session can be an explicit maintenance reload. Only value
     // edits (or retrying a coalesced value) qualify for the control shortcut.
-    if (!scalarPending_ && value == latest_->project->playrate.rate) return false;
+    if (!scalarPending_ && saved == latest_->project->playrate.rate) return false;
+    // A chasing sync plan plays the saved rate times the chase scale (ADR-0071).
+    const auto value = p->syncRate ? std::clamp(saved * syncScale_, .25, 4.) : saved;
     // A rate-enabled plan glides through exactly 1.0 like any other value (a
     // MIDI knob's centre lands there), on the converters it was compiled with.
     // A preserve-pitch plan compiled at exactly 1.0 reads its sources as tape
     // (exact at unity, plan.cpp): leaving 1.0 needs the stretch converter, so
     // that prepares a plan, as leaving the unity bypass does.
     if (value != 1 && p->masterPlayrate.preservePitch && p->masterPlayrate.rate == 1 &&
-        p->timelines[0]->points().empty())
+        p->timelines[0]->points().empty() && !p->syncRate)
         return false;
     if (!std::isfinite(value) || value < .25 || value > 4) return false;
     if (value != p->requestedScalar) {
@@ -137,7 +139,10 @@ bool Engine::loadScalarRate(const model::Session& session, const std::filesystem
         // and force a recovery seek. Place the edit beyond everything it may
         // render ahead of what the callback last played: the same point as
         // the frontier when the renderer is caught up.
-        if (options_.anticipative && words[8] == epoch_.load(std::memory_order_acquire))
+        // With every node live (a sync plan) nothing renders ahead of the
+        // callback, so the edit lands after the device's latency (ADR-0071).
+        if (options_.anticipative && words[8] == epoch_.load(std::memory_order_acquire) &&
+            !p->rendererNodes.empty())
             frontier = std::max(
                 frontier, consumed + aheadFrames_ + static_cast<std::int64_t>(p->block) +
                               p->rateDeviceMargin + static_cast<std::int64_t>(p->rate * .15) + 128);
@@ -179,6 +184,19 @@ bool Engine::loadScalarRate(const model::Session& session, const std::filesystem
     latest_ = std::make_shared<const model::Session>(session);
     wakeRenderer();
     return true;
+}
+
+void Engine::setSyncRate(double scale) {
+    scale = std::isfinite(scale) ? std::clamp(scale, .25, 4.) : 1.;
+    if (scale == syncScale_) return;
+    syncScale_ = scale;
+    auto* p = latestPlan_.load(std::memory_order_acquire);
+    // A plan compiled later takes the scale; this one gets a scalar control.
+    if (!backend_ || !latest_ || !p || !p->syncRate) return;
+    scalarPending_ = true;  // publish even though the saved rate is unchanged
+    const auto dir = p->projectDir;
+    const auto session = latest_;
+    if (!loadScalarRate(*session, dir)) scalarPending_ = false;
 }
 
 Status Engine::prepareRatePlan(detail::Plan& p) {

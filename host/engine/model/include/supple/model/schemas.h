@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 // JSON forms of the session objects (core-schema) and the project file
-// `supple.project/2.11` (session-model §5). Fields equal to their defaults are
+// `supple.project/2.12` (session-model §5). Fields equal to their defaults are
 // omitted, so files and diffs stay small; decoding fills them back in.
 #pragma once
 
@@ -16,10 +16,16 @@ namespace supple::model {
 schema::Schema<TrackFreeze> trackFreezeSchema();
 schema::Schema<StripType> stripTypeSchema();
 schema::Schema<RoutePan> routePanSchema();
-schema::Schema<PanLaw> panLawSchema();            // {db: 0|-2.5|-3|-4.5|-6, boost}
-schema::Schema<PanMode> panModeSchema();          // pan | dual | width
-schema::Schema<Timebase> timebaseSchema();        // time | beats | beats_position
-schema::Schema<PinMap> pinMapSchema();            // {in, out, key}: 1-based track channels
+schema::Schema<PanLaw> panLawSchema();    // {db: 0|-2.5|-3|-4.5|-6, boost}
+schema::Schema<PanMode> panModeSchema();  // pan | dual | width
+// The project's timecode (ADR-0071): {rate: "30", start: "00:00:00:00"},
+// either member optional (30 fps, 00:00:00:00); the start is a label valid
+// at the rate (";" before the frames in drop-frame).
+schema::Schema<sync::TimecodeMapping> timecodeSchema();
+schema::Schema<sync::FrameRate>
+frameRateSchema();                          // "23.976" | "24" | "25" | "29.97df" | "29.97" | "30"
+schema::Schema<Timebase> timebaseSchema();  // time | beats | beats_position
+schema::Schema<PinMap> pinMapSchema();      // {in, out, key}: 1-based track channels
 schema::Schema<MidiControl> midiControlSchema();  // {kind, channel, number, device}
 schema::Schema<ControlMode> controlModeSchema();  // absolute | relative1..3 | toggle
 // A ControlBinding's members on the schema of a type that extends it: midi,
@@ -53,7 +59,7 @@ json::Value toJson(const T& object) {
     return schemaOf<T>().encode(object);
 }
 
-inline constexpr std::string_view kProjectSchema = "supple.project/2.11";
+inline constexpr std::string_view kProjectSchema = "supple.project/2.12";
 
 // The whole session as the canonical project document (members in the
 // spec's order, objects keyed by ID in ID order).

@@ -186,6 +186,62 @@ projects (see *Rendering*).
 
 Uninstalling Steppe leaves these folders and your projects in place.
 
+### Project timecode
+
+**Project > Timecode…** sets the project's timecode: its frame rate (23.976,
+24, 25, 29.97 drop-frame, 29.97 non-drop or 30 fps) and its start, the
+timecode at the project's first beat (01:00:00:00 is common for picture
+work). New and older projects use 30 fps from 00:00:00:00. Type the start
+as HH:MM:SS:FF (with `;` before the frames in drop-frame) and press Enter.
+The setting is saved with the project and undoable, and timecode sync and
+LTC output use it.
+
+### Following another machine (sync)
+
+Steppe can follow a master: a drum machine or another DAW sending **MIDI
+clock**, a video deck or DAW sending **MTC**, or a tape machine or video
+system sending **SMPTE LTC** as audio. Right-click the tempo button in the
+transport bar and choose the source; **Sync settings…** in the same menu
+(or Transport > Sync settings…) chooses where it arrives:
+
+- **MIDI clock** and **MTC** arrive on a MIDI input: choose it in **MIDI
+  input**.
+- **LTC** arrives on an audio input: choose the channel in **LTC input**.
+
+When the master plays, Steppe starts at the same place and follows it
+by changing its playrate slightly, with the pitch kept, so it stays with
+the master even if their clocks differ. When the master stops, so does
+Steppe; when it jumps, Steppe jumps too. With MIDI clock, **Follow the
+master's tempo** plays the project at the master's tempo (a 126 bpm master
+plays a 120 bpm project 5% faster); without it, only Start, Stop and Song
+Position are followed. MTC and LTC positions use the project's timecode
+(Project > Timecode…): a master at 01:00:10:00 plays a project that starts
+at 01:00:00:00 from its tenth second. **Offset** moves Steppe later
+(positive) or earlier against the master, and **When the signal stops**
+either stops at once or keeps playing for a few frames, for signals with
+gaps.
+
+The tempo button then reads **EXT** and the tempo heard: green when locked
+to the master, orange while it is catching up, red when nothing arrives.
+The project's own playrate is not changed, and renders are unaffected.
+You can record while following: takes are placed where the master was.
+While following, Steppe processes the whole project live, as when
+monitoring an input, so very heavy projects may need a larger buffer.
+When it follows the master's speed (MTC, LTC, or MIDI clock with Follow
+the master's tempo), audio items play through the time stretcher, which
+sounds very close to, but is not exactly, normal playback.
+
+**LTC output** (off until you turn it on) sends the transport's timecode as
+LTC on an output channel you choose (it replaces anything a master sends to
+that channel), so a tape machine, a camera or another DAW can follow
+Steppe. The timecode is the position of the audio leaving with it, so
+plug-in latency does not put it early. If the chosen channel is not on the
+current device, LTC goes to the device's last output instead, and the
+dialog says so; your choice is kept for when the device has it. It is
+silent while the transport is stopped.
+
+Real devices' timing has not been measured on every system yet.
+
 ## Rendering
 
 **File > Render…** opens the render dialog; **File > Mix** renders the mix
@@ -370,7 +426,8 @@ channel controls work as in the MIDI tab. Device connections save by name and
 warn if missing on reopen.
 
 Right-click a hardware input row or output column header for **Enabled** and
-**Timing offset…**. Positive milliseconds delay; negative milliseconds advance.
+**Timing offset…**; outputs also have the clock items described in "MIDI
+clock and MTC to other devices". Positive milliseconds delay; negative milliseconds advance.
 The range is -1000 to 1000 ms. A live input can advance only within its current
 audio callback. Outputs also offer **Reset notes on stop** (on by default),
 which releases notes and sustain on stop or locate. Engine shutdown always
@@ -966,4 +1023,32 @@ skipped while audio keeps running; close the application using it and restart
 the engine to retry. Device topology changes are advisory and require an
 explicit restart to adopt the new set. `midi.inputs.get`/`midi.outputs.get` show
 per-port settings and warnings. Opening outputs alone sends no music; add
-hardware routes in the routing window. Clock/MTC output controls are pending.
+hardware routes in the routing window.
+
+### MIDI clock and MTC to other devices
+
+A drum machine, sequencer or video system can follow Steppe over a MIDI
+output. In the routing window's **Hardware MIDI** tab, right-click the
+output's column header: **Send clock**, **Send transport**, **Song Position
+Pointer**, **MTC** and **Clock while stopped** (once Send clock is on) turn
+each on or off, beside **Reset notes on stop** and **Timing offset…**. An
+output that is sending clock shows a small clock before its name. An agent
+sets the same with `midi.outputs.set`, one output at a time, for example
+`{"port": "Interface", "clock": true, "transport": true, "spp": true}`:
+`clock` sends MIDI clock while playing, `transport` Start, Continue and
+Stop, `spp` the song position (so a device starts mid-song in the right
+place), `mtc` MIDI time code at the project's timecode, and
+`clock_while_stopped` keeps the clock running at the tempo while stopped.
+`offset_ms` moves that output's MIDI later (or earlier, negative) to suit
+the device, notes and clock alike, and `enabled: false` silences the output.
+An offset earlier than the audio's own latency delays all audio by the
+difference (`lead_ms` shows it), so the clock still lands on time.
+The port is the output's name as `midi.outputs.get` lists it (any letter
+case, as long as only one output matches). Clock and MTC are off until you
+turn them on, and the settings are kept with your preferences, also for a
+device that is not connected now.
+The messages are timed with the audio you hear, so plug-in latency does
+not put them early; nothing is sent during a count-in, and an output on
+the device Steppe follows (Transport sync) does not get its own clock
+back. `midi.outputs.get` and `engine.status` show what each output sends
+and how many messages went out.

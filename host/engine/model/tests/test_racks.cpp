@@ -76,7 +76,7 @@ Patch patch() {
 TEST_CASE("racks: a patch saves, reopens and serializes the same") {
     Patch p = patch();
     const std::string bytes = serializeProject(p.s);
-    CHECK(bytes.find("\"supple.project/2.11\"") != std::string::npos);
+    CHECK(bytes.find("\"supple.project/2.12\"") != std::string::npos);
     CHECK(bytes.find("\"mo_2.saw\"") != std::string::npos);
     auto loaded = parseProject(bytes);
     REQUIRE_MESSAGE(loaded, (loaded ? "" : loaded.error().message));
@@ -265,7 +265,7 @@ TEST_CASE("MIDI sends: channel endpoints, Notes source off and old projects roun
     auto s = t.commit();
     REQUIRE(s);
     const auto bytes = serializeProject(*s);
-    CHECK(bytes.find("supple.project/2.11") != std::string::npos);
+    CHECK(bytes.find("supple.project/2.12") != std::string::npos);
     auto reopened = parseProject(bytes);
     REQUIRE(reopened);
     CHECK(reopened->modules.find(p.notes)->sourceOff);
@@ -520,11 +520,21 @@ TEST_CASE(
             const Id autoId{Kind::AutoItem, base->next[Kind::AutoItem]};
             doc["automation_items"][autoId.str()] = toJson(automation);
             doc["project"]["next_ids"]["ai"] = static_cast<std::int64_t>(autoId.n + 1);
-            for (const char* version : {"supple.project/2.8", "supple.project/2.10"}) {
+            for (const char* version :
+                 {"supple.project/2.8", "supple.project/2.10", "supple.project/2.11"}) {
                 doc["schema"] = version;
+                const bool timecode = std::string_view(version) == "supple.project/2.11";
+                if (timecode)
+                    doc["project"]["timecode"] =
+                        *json::parse(R"({"rate":"25","start":"01:00:00:00"})");
+                else
+                    doc["project"].asObject().erase("timecode");
                 std::vector<schema::Warning> warnings;
                 auto loaded = projectFromJson(doc, &warnings);
                 REQUIRE_MESSAGE(loaded, (loaded ? "" : loaded.error().toString()));
+                if (timecode)
+                    CHECK(loaded->project->timecode ==
+                          sync::TimecodeMapping{sync::FrameRate::Fps25, {1, 0, 0, 0}});
                 const bool keepMidi = !rackInput && mainChain;
                 const auto& record = loaded->tracks.find(p.channel)->record;
                 CHECK(record.input == (keepMidi ? midiId : input));

@@ -38,6 +38,8 @@ struct FakeJack {
     int (*connections)() = fn<int (*)()>("fakejack_connections");
     void (*midi)(int, std::uint32_t, int, int,
                  int) = fn<void (*)(int, std::uint32_t, int, int, int)>("fakejack_midi");
+    void (*midiRaw)(int, std::uint32_t, const unsigned char*, int) =
+        fn<void (*)(int, std::uint32_t, const unsigned char*, int)>("fakejack_midi_raw");
     const char* (*latencyEnv)() = fn<const char* (*)()>("fakejack_latency_env");
     const char* (*rateEnv)() = fn<const char* (*)()>("fakejack_rate_env");
     const char* (*propsEnv)() = fn<const char* (*)()>("fakejack_props_env");

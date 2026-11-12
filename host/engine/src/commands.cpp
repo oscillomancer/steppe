@@ -40,6 +40,8 @@ void registerConsolidateCommands(cmd::Registry& registry);
 void registerExportCommands(cmd::Registry& registry);
 void registerMixCommands(cmd::Registry& registry);
 void registerHealCommands(cmd::Registry& registry);
+void registerSyncCommands(cmd::Registry& registry);
+schema::Schema<SyncReport> syncStatusSchema();
 void registerLearnCommands(cmd::Registry& registry);
 void registerControlLearnCommands(cmd::Registry& registry);
 void registerDspCommands(cmd::Registry& registry);
@@ -129,10 +131,14 @@ schema::Schema<Empty> emptySchema() { return schema::object<Empty>("empty").buil
 
 // --- project / session -----------------------------------------------------------------
 
+struct ProjectTimecode {
+    std::string rate, start;  // as project.timecode saves them, defaults included
+};
 struct ProjectInfo {
     std::string name, path, branch;
     double sampleRate = 0, tempo = 0;
     std::string meter;
+    ProjectTimecode timecode;
     std::int64_t version = 0;
     std::int64_t generation = 0;
     std::int64_t recoverable = 0;    // recordings project.recover can bring back
@@ -156,6 +162,12 @@ schema::Schema<ProjectInfo> projectInfoSchema() {
         .field("sample_rate", &ProjectInfo::sampleRate, schema::number())
         .field("tempo", &ProjectInfo::tempo, schema::number())
         .field("meter", &ProjectInfo::meter, schema::string())
+        .field("timecode", &ProjectInfo::timecode,
+               schema::object<ProjectTimecode>("project_timecode")
+                   .field("rate", &ProjectTimecode::rate, schema::string())
+                   .field("start", &ProjectTimecode::start, schema::string())
+                   .build()
+                   .doc("The timecode frame rate and the label at project time 0"))
         .field("version", &ProjectInfo::version, schema::integer())
         .field("generation", &ProjectInfo::generation, schema::integer())
         .field("recoverable", &ProjectInfo::recoverable, schema::integer())
@@ -173,6 +185,8 @@ ProjectInfo projectInfo(EngineApp& app, const model::Session& s) {
                        s.project->sampleRate,
                        s.timeMap->bpmAt(0),
                        std::to_string(m.numerator) + "/" + std::to_string(m.denominator),
+                       {std::string(sync::rateName(s.project->timecode.rate)),
+                        sync::format(s.project->timecode.start, s.project->timecode.rate)},
                        static_cast<std::int64_t>(s.version),
                        static_cast<std::int64_t>(app.projectGeneration()),
                        static_cast<std::int64_t>(app.recoverable().size()),
@@ -192,9 +206,14 @@ struct RecoverResult {
     std::vector<RecordedInfo> recovered;
     std::optional<std::vector<RecordingWarning>> warnings;
 };
+struct TimecodeArgs {
+    std::optional<sync::FrameRate> rate;
+    std::optional<std::string> start;
+};
 struct ProjectSetArgs {
     std::optional<std::string> name, title, author, notes;
     std::optional<bool> console9;
+    std::optional<TimecodeArgs> timecode;
     std::optional<model::PanLaw> panLaw;
     std::optional<json::Value> render;
     std::optional<model::Timebase> timebase;
@@ -349,6 +368,7 @@ schema::Schema<EngineStatus> engineStatusSchema() {
         .field("dropped", &EngineStatus::dropped, schema::integer())
         .field("voice_dropped", &EngineStatus::voiceDropped, schema::integer())
         .field("failed_errors", &EngineStatus::failedErrors, schema::any())
+        .field("sync", &EngineStatus::sync, syncStatusSchema())
         .build();
 }
 
@@ -976,6 +996,7 @@ void registerEngineCommands(cmd::Registry& registry) {
     registerExportCommands(registry);
     registerMixCommands(registry);
     registerHealCommands(registry);
+    registerSyncCommands(registry);
     registerLearnCommands(registry);
     registerControlLearnCommands(registry);
     registerDspCommands(registry);
@@ -1002,7 +1023,7 @@ void registerEngineCommands(cmd::Registry& registry) {
         c.result = projectInfoSchema();
         c.examples = {
             {"A new project", obj("{}"),
-             obj(R"({"name": "", "path": "", "branch": "main", "sample_rate": 48000.0, "tempo": 120.0, "meter": "4/4", "version": 0, "recoverable": 0, "generation": "<any>", "autosave_available": false})"),
+             obj(R"({"name": "", "path": "", "branch": "main", "sample_rate": 48000.0, "tempo": 120.0, "meter": "4/4", "timecode": {"rate": "30", "start": "00:00:00:00"}, "version": 0, "recoverable": 0, "generation": "<any>", "autosave_available": false})"),
              "empty"}};
         c.run = [](const NoArgs&, Context& ctx) -> Result<ProjectInfo> {
             EngineApp& app = A(ctx);
@@ -1016,10 +1037,13 @@ void registerEngineCommands(cmd::Registry& registry) {
         c.name = "project.set";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpTool;
-        c.summary = "Set project name, title, author, notes, Console 9, pan law or timebase.";
+        c.summary = "Set project name, notes, Console 9, pan law, timebase or timecode.";
         c.description =
             "timebase: what items follow when the tempo changes, for items and tracks that "
-            "inherit it — beats (default), time or beats_position; they keep their place now.";
+            "inherit it — beats (default), time or beats_position; they keep their place now. "
+            "timecode: the frame rate (23.976, 24, 25, 29.97df, 29.97 or 30; default 30) and "
+            "start, the timecode at project time 0 (default 00:00:00:00), which MTC and LTC "
+            "sync and output use; either member alone keeps the other.";
         c.tags = {"project"};
         // Share the model's ID metadata for merge replay, while retaining the
         // state-aware checks and repair hints in run().
@@ -1061,11 +1085,21 @@ void registerEngineCommands(cmd::Registry& registry) {
                                 "branch boundaries may exceed it."))
                      .field("render", &ProjectSetArgs::render, renderArgs)
                      .field("timebase", &ProjectSetArgs::timebase, model::timebaseSchema())
+                     .field("timecode", &ProjectSetArgs::timecode,
+                            schema::object<TimecodeArgs>("timecode_args")
+                                .field("rate", &TimecodeArgs::rate, model::frameRateSchema())
+                                .field("start", &TimecodeArgs::start,
+                                       schema::string().doc(
+                                           "HH:MM:SS:FF, \";\" before the frames in drop-frame"))
+                                .build())
                      .build();
         c.result = emptySchema();
-        c.examples = {{"Name it", obj(R"({"name": "Demo"})"), obj("{}"), "empty"},
-                      {"Pan with the -3 dB law, boosting the sides",
-                       obj(R"({"pan_law": {"db": -3, "boost": true}})"), obj("{}"), "empty"}};
+        c.examples = {
+            {"Name it", obj(R"({"name": "Demo"})"), obj("{}"), "empty"},
+            {"EBU timecode starting at one hour",
+             obj(R"({"timecode": {"rate": "25", "start": "01:00:00:00"}})"), obj("{}"), "empty"},
+            {"Pan with the -3 dB law, boosting the sides",
+             obj(R"({"pan_law": {"db": -3, "boost": true}})"), obj("{}"), "empty"}};
         c.run = [](const ProjectSetArgs& a, Context& ctx) -> Result<Empty> {
             model::EditTxn& t = A(ctx).txn();
             model::Project p = t.project();
@@ -1075,6 +1109,27 @@ void registerEngineCommands(cmd::Registry& registry) {
             if (a.notes) p.notes = *a.notes;
             if (a.console9) p.console9 = *a.console9;
             if (a.panLaw) p.panLaw = *a.panLaw;
+            if (a.timecode) {
+                sync::TimecodeMapping tc = p.timecode;
+                if (a.timecode->rate) tc.rate = *a.timecode->rate;
+                if (a.timecode->start) {
+                    auto label = sync::parse(*a.timecode->start, tc.rate);
+                    if (!label)
+                        return Error("timecode.start", label.error().message, "/timecode/start",
+                                     label.error().hint);
+                    tc.start = *label;
+                } else if (!sync::valid(tc.start, tc.rate)) {
+                    return Error("timecode.start",
+                                 "the start " + sync::format(tc.start, p.timecode.rate) +
+                                     " is not a timecode at " +
+                                     std::string(sync::rateName(tc.rate)) + " fps",
+                                 "/timecode/start",
+                                 "set start with the rate, e.g. {\"rate\": \"" +
+                                     std::string(sync::rateName(tc.rate)) +
+                                     "\", \"start\": \"00:00:00:00\"}");
+                }
+                p.timecode = tc;
+            }
             if (a.historyBudgetBytes) p.historyBudgetBytes = *a.historyBudgetBytes;
             if (a.render) {
                 if (!a.render->isObject())
@@ -1214,7 +1269,7 @@ void registerEngineCommands(cmd::Registry& registry) {
                     {"schema.invalid", "the file has problems", "details list each with its path"}};
         c.examples = {
             {"Open", obj(R"({"path": "example-project.json"})"),
-             obj(R"({"name": "<any>", "path": "<any>", "branch": "main", "sample_rate": "<any>", "tempo": "<any>", "meter": "<any>", "version": "<any>", "recoverable": 0, "generation": "<any>", "autosave_available": false})"),
+             obj(R"({"name": "<any>", "path": "<any>", "branch": "main", "sample_rate": "<any>", "tempo": "<any>", "meter": "<any>", "timecode": "<any>", "version": "<any>", "recoverable": 0, "generation": "<any>", "autosave_available": false})"),
              "saved"}};
         c.run = [](const PathArgs& a, Context& ctx) -> Result<ProjectInfo> {
             EngineApp& app = A(ctx);
@@ -1253,7 +1308,7 @@ void registerEngineCommands(cmd::Registry& registry) {
         c.result = projectInfoSchema();
         c.examples = {
             {"New", obj(R"({"name": "Sketch"})"),
-             obj(R"({"name": "Sketch", "path": "", "branch": "main", "sample_rate": 48000.0, "tempo": "<any>", "meter": "<any>", "version": 0, "recoverable": 0, "generation": "<any>", "autosave_available": false})"),
+             obj(R"({"name": "Sketch", "path": "", "branch": "main", "sample_rate": 48000.0, "tempo": "<any>", "meter": "<any>", "timecode": "<any>", "version": 0, "recoverable": 0, "generation": "<any>", "autosave_available": false})"),
              "song"}};
         c.run = [](const NewArgs& a, Context& ctx) -> Result<ProjectInfo> {
             EngineApp& app = A(ctx);
@@ -4223,7 +4278,7 @@ void registerEngineCommands(cmd::Registry& registry) {
                      "memory_lock": {"requested": false, "active": false},
                      "cpu_idle_latency": {"requested": false, "active": false},
                      "meter_drops": {"renderer": 0, "callback": 0}, "failed_fx": [],
-                     "dropped": 0, "voice_dropped": 0, "failed_errors": []})"),
+                     "dropped": 0, "voice_dropped": 0, "failed_errors": [], "sync": "<any>"})"),
              "empty"}};
         c.run = [](const EngineStartArgs& a, Context& ctx) -> Result<EngineStatus> {
             EngineApp& app = A(ctx);
@@ -4340,8 +4395,8 @@ void registerEngineCommands(cmd::Registry& registry) {
             "(zero when idle); preparation_error explains a failed preparation. "
             "plan_latency: plugin delay plus prepared MIDI audio lead in frames; midi_lead_frames "
             "reports the latter. midi_inputs/midi_outputs give per-port "
-            "enabled/timing/loss/warnings "
-            "(as midi.inputs.get/midi.outputs.get). device_latency: frames from "
+            "enabled/timing/loss/warnings, and for outputs what each sends (clock, transport, "
+            "spp, mtc), as midi.inputs.get/midi.outputs.get. device_latency: frames from "
             "the engine's outputs to the device. restart_needed: the device changed rate or went "
             "away; engine.stop and engine.start again. midi_devices_changed is advisory: "
             "MIDI topology changed but audio keeps running. midi_devices_message asks for an "
@@ -4349,8 +4404,10 @@ void registerEngineCommands(cmd::Registry& registry) {
             "midi_out_dropped counts hardware output rejections, queue/device loss and pending "
             "events discarded at shutdown. midi_output_warnings lists outputs skipped at start; "
             "midi_output_latency is signed audio-minus-MIDI latency per output, in frames. "
-            "midi_dropped: native MIDI messages/packets rejected or lost to bounded queues "
-            "(zero for other backends). midi_warnings lists inputs skipped at start, with "
+            "sync: external sync (sync.get has the same status with the settings). "
+            "midi_dropped: MIDI input messages/packets rejected or lost to bounded queues "
+            "(JACK and native; zero for the dummy backend). midi_warnings lists inputs skipped at "
+            "start, with "
             "device, numeric os_error, message and corrective hint. meter_drops: entries a full "
             "ring "
             "dropped (the renderer's, the audio callback's) — a strip's peak/RMS missed a block, "
@@ -4391,7 +4448,7 @@ void registerEngineCommands(cmd::Registry& registry) {
                      "memory_lock": {"requested": false, "active": false},
                      "cpu_idle_latency": {"requested": false, "active": false},
                      "meter_drops": {"renderer": 0, "callback": 0}, "failed_fx": [],
-                     "dropped": 0, "voice_dropped": 0, "failed_errors": []})"),
+                     "dropped": 0, "voice_dropped": 0, "failed_errors": [], "sync": "<any>"})"),
                        "empty"}};
         c.run = [](const NoArgs&, Context& ctx) -> Result<EngineStatus> {
             return A(ctx).engineStatus();

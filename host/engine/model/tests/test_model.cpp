@@ -569,7 +569,7 @@ TEST_CASE("masters: arm, audio items and lane mute round trip (ADR-0057)") {
     REQUIRE_MESSAGE(s, (s ? std::string() : s.error().toString()));
     REQUIRE(validateStripRules(*s));
     const std::string saved = serializeProject(*s);
-    CHECK(saved.find("\"supple.project/2.11\"") != std::string::npos);
+    CHECK(saved.find("\"" + std::string(kProjectSchema) + "\"") != std::string::npos);
     auto back = parseProject(saved);
     REQUIRE(back);
     CHECK(back->tracks.find(kMaster)->laneMute);
@@ -611,7 +611,7 @@ TEST_CASE("masters: arm, audio items and lane mute round trip (ADR-0057)") {
 
 TEST_CASE("project newer minor ignores unknown fields with load warnings") {
     auto doc = projectToJson(Session::create());
-    doc["schema"] = "supple.project/2.12";
+    doc["schema"] = "supple.project/2.13";
     doc["tracks"]["tr_0"]["future"] = true;
     std::vector<schema::Warning> warnings;
     auto parsed = projectFromJson(doc, &warnings);
@@ -1072,7 +1072,7 @@ TEST_CASE("render settings: a 2.2 file migrates to schema 2.3 and reopens byte-i
     CHECK(loaded->project->render ==
           render::toJson(render::settingsSchema().decode(expected).value()));
     const std::string saved = serializeProject(*loaded);
-    CHECK(saved.find("\"supple.project/2.11\"") != std::string::npos);
+    CHECK(saved.find("\"" + std::string(kProjectSchema) + "\"") != std::string::npos);
     CHECK(saved.find("tail_ms") == std::string::npos);
     auto reopened = parseProject(saved);
     REQUIRE(reopened);
@@ -1232,4 +1232,65 @@ TEST_CASE("pan controls: envelopes and learn round trip and refuse masters") {
     EditTxn bus(*s, 4);
     bus.modify<Track>(id, [](auto& tr) { tr.type = StripType::Buss; });
     CHECK(bus.commit());
+}
+
+TEST_CASE("project timecode saves, reopens and defaults for old projects (ADR-0071)") {
+    // Old files (and new ones at the default) have no timecode: 30 fps from
+    // 00:00:00:00, and nothing is written for it.
+    for (const char* format : {"supple.project/1.7", "supple.project/2.9", "supple.project/2.11"}) {
+        auto doc = projectToJson(Session::create());
+        CHECK_FALSE(doc["project"].find("timecode"));
+        doc["schema"] = format;
+        auto loaded = projectFromJson(doc);
+        REQUIRE(loaded);
+        CHECK(loaded->project->timecode ==
+              sync::TimecodeMapping{sync::FrameRate::Fps30, sync::Timecode{}});
+    }
+    for (const auto& [rate, start, text] :
+         std::vector<std::tuple<sync::FrameRate, sync::Timecode, const char*>>{
+             {sync::FrameRate::Fps25, {1, 0, 0, 0}, R"({"rate":"25","start":"01:00:00:00"})"},
+             {sync::FrameRate::Fps2997Drop,
+              {0, 10, 0, 0},
+              R"({"rate":"29.97df","start":"00:10:00;00"})"},
+             {sync::FrameRate::Fps23976, {}, R"({"rate":"23.976"})"},
+             {sync::FrameRate::Fps30, {0, 59, 59, 29}, R"({"start":"00:59:59:29"})"}}) {
+        EditTxn t(Session::create(), 1);
+        auto project = t.project();
+        project.timecode = {rate, start};
+        t.setProject(project);
+        auto s = t.commit();
+        REQUIRE(s);
+        auto doc = projectToJson(*s);
+        CHECK(json::writeCompact(doc["project"]["timecode"]) == text);
+        const std::string saved = serializeProject(*s);
+        auto reopened = parseProject(saved);
+        REQUIRE(reopened);
+        CHECK(reopened->project->timecode == s->project->timecode);
+        CHECK(serializeProject(*reopened) == saved);
+    }
+    // Refused where they are: a rate off the list, a label the rate skips, an
+    // unknown member.
+    auto doc = projectToJson(Session::create());
+    for (const auto& [value, path, code] :
+         std::vector<std::tuple<const char*, const char*, const char*>>{
+             {R"({"rate": "50"})", "/project/timecode/rate", "timecode.rate"},
+             {R"({"rate": 25})", "/project/timecode/rate", "timecode.rate"},
+             {R"({"rate": "29.97df", "start": "00:01:00;00"})", "/project/timecode/start",
+              "timecode.start"},
+             {R"({"start": "00:00:00:30"})", "/project/timecode/start", "timecode.start"}}) {
+        doc["project"]["timecode"] = json::parse(value).value();
+        auto refused = projectFromJson(doc);
+        REQUIRE_FALSE(refused);
+        CHECK_MESSAGE(refused.error().path == path, refused.error().toString());
+        CHECK(refused.error().code == code);
+        CHECK_FALSE(refused.error().hint.empty());
+    }
+    // An unknown member (a newer build's) loads with a warning, as elsewhere.
+    doc["project"]["timecode"] = json::parse(R"({"rate": "25", "fps": "25"})").value();
+    std::vector<schema::Warning> warnings;
+    auto loaded = projectFromJson(doc, &warnings);
+    REQUIRE(loaded);
+    CHECK(loaded->project->timecode.rate == sync::FrameRate::Fps25);
+    CHECK(std::any_of(warnings.begin(), warnings.end(),
+                      [](const auto& w) { return w.path == "/project/timecode/fps"; }));
 }

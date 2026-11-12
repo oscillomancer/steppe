@@ -27,7 +27,22 @@ Result<json::Value> preferencesDocument(const std::filesystem::path& file) {
 Status writeMidiRecords(const std::filesystem::path& file, json::Value doc,
                         const MidiPortPreferences& inputs, const MidiPortPreferences& outputs,
                         const std::array<std::vector<MidiPortPreferenceWarning>, 2>& warnings) {
-    if (!doc.find("schema")) doc["schema"] = kPreferencesSchema;
+    // A writer of a newer minor version keeps its label; an older or absent
+    // label rises to this one, whose members the records may now carry.
+    constexpr std::string_view prefix = "supple.preferences/1.";
+    const std::string_view current = kPreferencesSchema;
+    auto minor = [&](std::string_view label) -> int {
+        if (!label.starts_with(prefix)) return -1;
+        int n = 0;
+        for (char c : label.substr(prefix.size())) {
+            if (c < '0' || c > '9') return -1;
+            n = n * 10 + (c - '0');
+        }
+        return n;
+    };
+    const auto* schema = doc.find("schema");
+    if (!schema || !schema->isString() || minor(schema->asString()) < minor(current))
+        doc["schema"] = kPreferencesSchema;
     for (bool output : {false, true}) {
         const auto& preferences = output ? outputs : inputs;
         auto records = midiPortPreferencesJson(preferences);
@@ -52,6 +67,12 @@ Status EngineApp::writeMidiPreferences(const std::filesystem::path& file) const 
 }
 Status EngineApp::setMidiPreferences(MidiPortPreferences inputs, MidiPortPreferences outputs,
                                      bool save) {
+    return applyMidiPreferences(std::move(inputs), std::move(outputs), save,
+                                midiPreferencesWarnings_);
+}
+Status EngineApp::applyMidiPreferences(
+    MidiPortPreferences inputs, MidiPortPreferences outputs, bool save,
+    std::array<std::vector<MidiPortPreferenceWarning>, 2> warnings) {
     SUPPLE_TRY(parseMidiPortPreferences(midiPortPreferencesJson(inputs), false));
     SUPPLE_TRY(parseMidiPortPreferences(midiPortPreferencesJson(outputs), true));
     std::optional<json::Value> doc;
@@ -71,7 +92,7 @@ Status EngineApp::setMidiPreferences(MidiPortPreferences inputs, MidiPortPrefere
     }
     if (doc) {
         auto written = writeMidiRecords(options_.midiPreferencesFile, std::move(*doc), inputs,
-                                        outputs, midiPreferencesWarnings_);
+                                        outputs, warnings);
         if (!written) {
             if (engine_) {
                 engine_->setMidiPreferences(oldInputs, oldOutputs);
@@ -83,6 +104,8 @@ Status EngineApp::setMidiPreferences(MidiPortPreferences inputs, MidiPortPrefere
     ++midiPreferencesRevision_;
     midiInputsPreferences_ = std::move(inputs);
     midiOutputsPreferences_ = std::move(outputs);
+    midiPreferencesWarnings_ = std::move(warnings);
+    applySync();  // clock and MTC output read the same records (ADR-0073)
     for (bool output : {false, true}) {
         const auto& preferences = output ? midiOutputsPreferences_ : midiInputsPreferences_;
         std::erase_if(midiPreferencesWarnings_[output ? 1 : 0], [&](const auto& warning) {
@@ -117,7 +140,8 @@ Status EngineApp::setMidiPort(bool output, const std::string& name, const json::
                      hint);
     if (!edits.isObject())
         return Error("midi.preferences", "port edits must be an object", "/",
-                     "use enabled, offset_ms and output reset_on_stop fields");
+                     "use enabled and offset_ms, and for outputs reset_on_stop, clock, transport, "
+                     "spp, mtc and clock_while_stopped");
     const auto& canonical = *matches.begin();
     auto inputs = midiInputsPreferences_, outputs = midiOutputsPreferences_;
     auto& preferences = output ? outputs : inputs;
@@ -131,7 +155,15 @@ Status EngineApp::setMidiPort(bool output, const std::string& name, const json::
                 record = warning.raw;
     }
     for (const auto& entry : edits.asObject()) record[entry.key] = entry.value;
-    return setMidiPreferences(std::move(inputs), std::move(outputs));
+    // Under its canonical name, a record back at every default is dropped.
+    if (midiPortRecordIdle(record)) preferences.erase(canonical);
+    // The edit replaces a skipped record, idle or not: its raw value is not
+    // written back and its warning goes once the edit succeeds.
+    auto warnings = midiPreferencesWarnings_;
+    std::erase_if(warnings[output ? 1 : 0], [&](const auto& warning) {
+        return !warning.section && warning.port == canonical;
+    });
+    return applyMidiPreferences(std::move(inputs), std::move(outputs), true, std::move(warnings));
 }
 json::Value EngineApp::midiPortsState(bool output) const {
     auto ports = json::Value::array();
@@ -145,6 +177,8 @@ json::Value EngineApp::midiPortsState(bool output) const {
     const auto& preferences = output ? midiOutputsPreferences_ : midiInputsPreferences_;
     const auto& loadWarnings = midiPreferencesWarnings_[output ? 1 : 0];
     const std::string sectionName = output ? "MIDI outputs" : "MIDI inputs";
+    const auto clockWarningsByPort =
+        output ? clockWarnings() : std::vector<std::vector<std::string>>{};
     std::vector<std::string> all = names;
     for (const auto& warning : loadWarnings) {
         const auto& name = warning.port.empty() ? sectionName : warning.port;
@@ -194,10 +228,13 @@ json::Value EngineApp::midiPortsState(bool output) const {
         port["latency_ms"] = output && index < latency.size()
                                  ? double(latency[index]) * 1000. / backend_->config().sampleRate
                                  : 0.;
+        // Routed MIDI, clock and MTC, and the backend's asynchronous loss.
         port["dropped"] =
             engine_ && found != names.end()
                 ? static_cast<std::int64_t>(engine_->midiPortDropped(output, index) +
-                                            (output ? backend_->midiOutAsyncDropped(index) : 0))
+                                            (output ? backend_->midiOutAsyncDropped(index) +
+                                                          engine_->syncOutputDropped(index)
+                                                    : 0))
                 : std::int64_t{0};
         port["warnings"] = json::Value::array();
         for (const auto& warning : loadWarnings)
@@ -229,6 +266,9 @@ json::Value EngineApp::midiPortsState(bool output) const {
             w["hint"] = "connect the device and explicitly restart the engine";
             port["warnings"].push_back(std::move(w));
         }
+        if (output)
+            addClockReport(port, found == names.end() ? -1 : static_cast<int>(index), settings,
+                           clockWarningsByPort);
         ports.push_back(std::move(port));
     }
     return ports;
@@ -238,6 +278,7 @@ struct PortEdit {
     std::string port;
     std::optional<bool> enabled, reset;
     std::optional<double> offset;
+    std::optional<bool> clock, transport, spp, mtc, clockWhileStopped;  // outputs (ADR-0073)
 };
 }  // namespace
 void registerMidiPortCommands(cmd::Registry& registry) {
@@ -247,13 +288,24 @@ void registerMidiPortCommands(cmd::Registry& registry) {
         get.name = prefix + ".get";
         get.kind = cmd::Kind::Query;
         get.exposure = cmd::Exposure::McpTool;
-        get.summary = output ? "Hardware MIDI outputs, timing, settings, loss and startup warnings."
+        get.summary = output ? "Hardware MIDI outputs: settings, clock/MTC, timing, loss, warnings."
                              : "Hardware MIDI inputs, timing, settings, loss and startup warnings.";
         get.description =
-            "ports contains name, zero-based index (-1 absent), enabled, offset_ms, latency_ms, "
-            "dropped and structured warnings. Outputs also have reset_on_stop. Output lead_ms "
-            "is the shared lead added to all audio, including monitoring. Settings are "
-            "machine preferences keyed by exact port name; they are not project state.";
+            output
+                ? "ports contains name, zero-based index (-1 absent), enabled, offset_ms, "
+                  "reset_on_stop, latency_ms (audio minus MIDI), dropped (routed MIDI, clock and "
+                  "MTC, and device loss) and structured warnings. lead_ms is the shared lead "
+                  "added to all audio, including monitoring. Clock output (ADR-0073): clock, "
+                  "transport, spp, mtc and clock_while_stopped as set; sends, what goes out now; "
+                  "suppressed, what is set but not sent back to the sync master's device; "
+                  "delay_ms (plan latency + latency + offset) and sent, the clock and MTC "
+                  "messages since the engine started. Settings are machine preferences keyed by "
+                  "exact port name; they are not project state."
+                : "ports contains name, zero-based index (-1 absent), enabled, offset_ms, "
+                  "latency_ms, dropped and structured warnings. A disabled input feeds nothing, "
+                  "the sync chase included; offset_ms moves played and recorded MIDI, not the "
+                  "chase (sync.set has its own offset). Settings are machine preferences keyed "
+                  "by exact port name; they are not project state.";
         get.tags = {"midi", "engine"};
         get.args = schema::object<cmd::NoArgs>("no_args").build();
         get.result = schema::any();
@@ -269,18 +321,37 @@ void registerMidiPortCommands(cmd::Registry& registry) {
         set.name = prefix + ".set";
         set.kind = cmd::Kind::Action;
         set.exposure = cmd::Exposure::McpTool;
-        set.summary = "Change one machine MIDI port's enabled state and timing offset.";
+        set.summary = output ? "Change one MIDI output: enabled, offset, reset, clock, SPP, MTC."
+                             : "Change one machine MIDI port's enabled state and timing offset.";
         set.description =
-            "port is a unique case-insensitive match to a present or recorded name; settings use "
-            "its exact spelling. offset_ms is signed -1000..1000 milliseconds. Positive offsets "
-            "delay. Outputs reset_on_stop defaults true. Applying settings releases "
-            "disabled/changed output routes; inputs retain the existing channel input mechanism. "
-            "Returns the updated ports list.";
+            std::string(
+                "port is a unique case-insensitive match to a present or recorded name; settings "
+                "use its exact spelling. Omitted members keep their values; a record back at "
+                "every default is removed. offset_ms is signed -1000..1000 milliseconds. "
+                "Positive offsets delay. ") +
+            (output ? "reset_on_stop defaults true. clock sends MIDI clock (24 per quarter "
+                      "note) while playing; transport Start, Continue and Stop; spp Song "
+                      "Position before Continue and on locates; mtc MIDI time code at the "
+                      "project's timecode; clock_while_stopped keeps clocking at the tempo while "
+                      "stopped. Clock and MTC leave with the audio they belong to, after the "
+                      "plan's latency, the output's latency and offset_ms; nothing is sent "
+                      "during a count-in. Applying settings releases disabled/changed output "
+                      "routes. "
+                    : "Inputs retain the existing channel input mechanism. ") +
+            "Machine settings: not an undo step, not saved in the project. Returns the updated "
+            "ports list.";
         auto fields = schema::object<PortEdit>("midi_port_edit");
         fields.field("port", &PortEdit::port, schema::string().minLength(1));
         fields.field("enabled", &PortEdit::enabled, schema::boolean());
         fields.field("offset_ms", &PortEdit::offset, schema::number().range(-1000, 1000));
-        if (output) fields.field("reset_on_stop", &PortEdit::reset, schema::boolean());
+        if (output) {
+            fields.field("reset_on_stop", &PortEdit::reset, schema::boolean());
+            fields.field("clock", &PortEdit::clock, schema::boolean());
+            fields.field("transport", &PortEdit::transport, schema::boolean());
+            fields.field("spp", &PortEdit::spp, schema::boolean());
+            fields.field("mtc", &PortEdit::mtc, schema::boolean());
+            fields.field("clock_while_stopped", &PortEdit::clockWhileStopped, schema::boolean());
+        }
         set.args = fields.build();
         set.result = schema::any();
         set.tags = {"midi", "engine"};
@@ -293,6 +364,14 @@ void registerMidiPortCommands(cmd::Registry& registry) {
             if (args.enabled) edits["enabled"] = *args.enabled;
             if (args.offset) edits["offset_ms"] = *args.offset;
             if (args.reset) edits["reset_on_stop"] = *args.reset;
+            auto flag = [&](const char* key, const std::optional<bool>& value) {
+                if (value) edits[key] = *value;
+            };
+            flag("clock", args.clock);
+            flag("transport", args.transport);
+            flag("spp", args.spp);
+            flag("mtc", args.mtc);
+            flag("clock_while_stopped", args.clockWhileStopped);
             SUPPLE_TRY(app.setMidiPort(output, args.port, edits));
             auto result = json::Value::object();
             result["ports"] = app.midiPortsState(output);
