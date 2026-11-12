@@ -2868,6 +2868,7 @@ TEST_CASE("floating panels own their events, resize, sleep and persist placement
                               source.focused() && source.focused()->role() == ui::Role::TextField);
     };
     panel.open(std::move(content), [&] { ++closed; });
+    CHECK(panel.root().focused() == panel.root().find("panel.ok"));
     REQUIRE(panel.window());
     CHECK(panel.window()->id() != f.window->id());
     CHECK((SDL_GetWindowFlags(panel.window()->sdl()) & SDL_WINDOW_UTILITY) != 0);

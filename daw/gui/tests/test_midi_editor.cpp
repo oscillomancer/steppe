@@ -2775,3 +2775,48 @@ TEST_CASE("Hardware Audio: lit multi-channel input cells preserve the complete r
     check({1, 3, 2, 4}, "4-channel input 1, 3, 2, 4");
     f.snapshot("routing-hardware-audio-multichannel.png", &panel.root());
 }
+
+TEST_CASE("routing matrix: every tab opens with grid focus and immediate keyboard selection") {
+    for (int mode = 0; mode < 4; ++mode) {
+        CAPTURE(mode);
+        Fixture f;
+        REQUIRE(f.ok);
+        gui::FloatingPanel panel(*f.platform, *f.window, *f.root, SUPPLE_GUI_FONTS_DIR, "Routing",
+                                 1000, 560, 800, 360);
+        gui::RoutingMatrix matrix(panel, *f.actions, *f.dispatcher, *f.app);
+        if (mode == 0) {
+            const auto bus =
+                f.exec("track.add", R"({"name":"Bus","type":"buss"})")["track"].asString();
+            f.exec("route.add", R"({"from":"tr_1","to":")" + bus + R"("})");
+        } else if (mode == 1) {
+            const auto target =
+                f.exec("track.add", R"({"name":"MIDI target"})")["track"].asString();
+            f.exec("route.add", R"({"from":"tr_1","to":")" + target + R"(","midi":{}})");
+            matrix.setMidiMode(true);
+        } else if (mode == 2) {
+            REQUIRE(f.app->setMidiPreferences({{"Keyboard", json::Value::object()}},
+                                              {{"Synth", json::Value::object()}}, false));
+            f.exec("track.set", R"({"track":"tr_1","record_midi":"Keyboard"})");
+            f.exec("route.add", R"({"from":"tr_1","to_midi":"Synth","midi":{}})");
+            matrix.setHardwareMidiMode();
+        } else {
+            f.exec("track.set", R"({"track":"tr_1","record_input":[1,2]})");
+            matrix.setHardwareAudioMode();
+        }
+        matrix.open();
+        panel.root().frame(false);
+        REQUIRE(panel.root().focused() == matrix.grid());
+        REQUIRE_FALSE(matrix.model().sends.empty());
+        panel.root().key(SDLK_A, ui::kCtrl);
+        CHECK(matrix.selectedCells() ==
+              matrix.model().sources.size() * matrix.model().destinations.size());
+        panel.root().key(SDLK_DELETE);
+        CHECK(matrix.model().sends.empty());
+        CHECK(matrix.midiMode() == (mode == 1 || mode == 2));
+        CHECK(matrix.hardwareMidiMode() == (mode == 2));
+        CHECK(matrix.hardwareAudioMode() == (mode == 3));
+        matrix.close();
+        matrix.open();
+        CHECK(panel.root().focused() == matrix.grid());
+    }
+}

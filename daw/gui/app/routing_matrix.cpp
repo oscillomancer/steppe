@@ -888,6 +888,7 @@ void RoutingMatrix::open(std::optional<ui::Rect> anchor) {
         anchor);
     if (auto r = reload(); !r && status_) status_->setText(r.error().message);
     if (status_) status_->setText(status());
+    root().focus(grid_);
 }
 
 std::string RoutingMatrix::channelsText(const MatrixModel::Send& x) {

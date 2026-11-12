@@ -957,7 +957,9 @@ popup: centred from the View action, or below the strip's "out" button with
 above-anchor fallback and edge clamping. Remembered geometry takes precedence.
 The grid expands with the client area; its channel menu opens in the same
 window. The panel Close button, WM close request and unhandled Escape all
-close this panel without quitting the app.
+close this panel without quitting the app. Each routing tab opens with keyboard
+focus on the grid, so Ctrl+A and Delete work immediately without first
+clicking a cell; opening another kind of floating panel retains its own focus policy.
 
 
 The header switches **Audio | MIDI | Hardware MIDI | Hardware Audio** (ADR-0067/0072), four latching tabs with the
