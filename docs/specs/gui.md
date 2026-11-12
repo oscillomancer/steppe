@@ -1537,7 +1537,8 @@ a new channel). It follows rack.md §8.
   The menu has one **No input** item at the top in its own section, followed
   by hardware audio, MIDI devices and rack Outs in separate sections.
   Choosing any input replaces the other kinds (ADR-0074); No input sends
-  all three clear fields in one `track.set` edit. Only the selected input
+  all three clear fields in one `track.set` edit. In a mixed strip selection,
+  input changes apply to channels only. Only the selected input
   is checked. While the engine is stopped, No input and rack choices remain
   available, with a disabled notice instead of device ports. The TCP and
   mixer input buttons name the one selected input. To play a rack with a

@@ -91,7 +91,7 @@ Result<json::Value> SelectionEdit::set(json::Value args, const std::string& gest
             each["track"] = id;
             each["bypass_groups"] = true;
             if (t->type != model::StripType::Channel && id != track) {
-                for (const char* field : {"monitor", "record_input", "record_midi"})
+                for (const char* field : {"monitor", "record_input", "record_midi", "record_rack"})
                     each.asObject().erase(field);
                 // Masters are armed to record their output (ADR-0057); busses never.
                 if (t->type == model::StripType::Buss) each.asObject().erase("armed");

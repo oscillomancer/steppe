@@ -3104,3 +3104,49 @@ TEST_CASE("every character in the GUI's strings is in the UI font") {
     }());
     CHECK(missing.empty());
 }
+
+TEST_CASE("input menu: No input clears channels in a mixed strip selection") {
+    App a;
+    if (!a.ok) return;
+    const cmd::Origin origin{cmd::Origin::Type::Test, "inputs", {}};
+    auto call = [&](const char* command, const std::string& text) {
+        auto r = a.dispatcher->execute({command, *json::parse(text), origin});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    auto rack = call("rack.add", R"({"name":"Voice"})");
+    const auto channel = rack["track"].asString();
+    const auto midi = call("track.add", R"({"name":"Keys"})")["track"].asString();
+    const auto buss = call("track.add", R"({"type":"buss"})")["track"].asString();
+    call("track.set", R"({"track":")" + midi + R"(","record_midi":"*"})");
+    const auto channelId = *model::Id::parse(channel), midiId = *model::Id::parse(midi);
+    const auto input = a.app->head().tracks.find(channelId)->record.input;
+    a.ui.selectedTracks = {channel, midi, buss, "tr_0"};
+    peaks::PeakService peaks(peaks::defaultCacheDir(gui::test::slug()),
+                             [](std::function<void()> f) { f(); });
+    gui::MeterFeed meters;
+    gui::Shell shell(*a.app, *a.dispatcher, a.ui, "", peaks, meters);
+    std::string error;
+    shell.onError = [&](const std::string& text) { error = text; };
+    a.root->setContent(shell.build(*a.root, *a.actions));
+    shell.sync();
+    a.root->frame(false);
+    shell.openInputMenu(channelId, {100, 100, 20, 20});
+    a.root->frame(false);
+    auto* menu = a.root->find("tcp.input." + channel);
+    REQUIRE(menu);
+    const auto items = ui::menuItems(*menu);
+    REQUIRE(items.front().label == "No input");
+    const auto clear = items.front().run;
+    a.root->closePopups();
+    clear();
+    CHECK(error.empty());
+    CHECK_FALSE(a.app->head().tracks.find(channelId)->record.input);
+    CHECK_FALSE(a.app->head().tracks.find(midiId)->record.midiInput);
+    if (error.empty()) {
+        call("history.undo", "{}");
+        CHECK(a.app->head().tracks.find(channelId)->record.input == input);
+        CHECK(model::midiInputRoute(a.app->head(), midiId));
+    }
+    a.root->setContent(std::make_unique<ui::Node>("detached"));
+}
