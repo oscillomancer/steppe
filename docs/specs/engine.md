@@ -1981,7 +1981,9 @@ masters, labelled with what leaves with it: the runtime keeps the timeline
 each cycle processed as spans (device frame, start, seconds per frame; two
 at a loop wrap, split where the loop's end was reached; a ring of 4096) and
 writes output frame d from the span covering d − the plan's latency, so LTC
-names the audio it is heard with (the device's own latency delays both).
+names the audio it is heard with (the device's own latency delays both;
+so does the hardware MIDI lead's audio history, which runs after LTC is
+written, so the lead is not part of that latency).
 Frames before the oldest span, or processed while stopped, are silent; a
 start, locate or wrap (a step of more than a frame) starts the encoder
 again at the next frame boundary; stopped, it is silent at once. The status is published

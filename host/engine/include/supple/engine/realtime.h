@@ -718,7 +718,8 @@ class Engine {
     detail::SyncRuntime* syncRt_ = nullptr;  // audio thread
     std::int64_t syncDevice_ = 0;            // audio thread: device frames since start
     bool syncPlayed_ = false;                // audio thread: the previous cycle played
-    std::atomic<std::int64_t> syncOutputLatency_{0}, syncInputLatency_{0}, syncPlanLatency_{0};
+    std::atomic<std::int64_t> syncOutputLatency_{0}, syncInputLatency_{0}, syncPlanLatency_{0},
+        syncAudioLead_{0};
     std::array<std::atomic<std::uint64_t>, kMaxSyncOutputs> syncOutSent_{}, syncOutDropped_{};
     // Engine stop: the main thread asks the callback for the runtime's
     // farewell (Stop to running slaves) and waits for it (ADR-0073 §9).

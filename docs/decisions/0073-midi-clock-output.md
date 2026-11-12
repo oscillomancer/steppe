@@ -158,10 +158,12 @@ output port, which Phase 2's hardware MIDI routing extends.
     leave before its audio. A port sending clock, transport, SPP or MTC
     counts the same way (plan latency + its latency + offset < 0 needs that
     much lead), and the lead is part of the plan latency the runtime uses
-    for its delays and for the heard position. A port faster than its audio
-    is then met exactly, at the price of that latency on all audio and
-    monitoring (`lead_ms`), at most one second (more refuses the plan,
-    `engine.midi_lead`). Clock and MTC follow a lead change at once, with
+    for its delays and for the heard position. LTC output is written
+    before the audio history and delayed by it like any channel, so it is
+    labelled with the plan latency without the lead. A port faster than
+    its audio is then met exactly, at the price of that latency on all
+    audio and monitoring (`lead_ms`), at most one second (more refuses the
+    plan, `engine.midi_lead`). Clock and MTC follow a lead change at once, with
     no slew of their own; the audio crossfades its taps over 5 ms
     (ADR-0072), so a clock tick inside that fade can be off its audio by up
     to the change.

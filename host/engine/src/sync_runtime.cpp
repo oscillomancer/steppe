@@ -211,8 +211,10 @@ void SyncRuntime::writeLtc(const SyncCycle& c) SUPPLE_RT {
         return;
     }
     // Output frame d carries the timeline processed at d - latency: the audio
-    // leaving with it. Walk the spans that cover [d0 - L, d0 - L + n).
-    const std::int64_t latency = std::max<std::int64_t>(c.planLatency, 0);
+    // leaving with it. Walk the spans that cover [d0 - L, d0 - L + n). The
+    // hardware MIDI lead's history then delays this channel with the rest of
+    // the audio, so it is not counted here (ADR-0073 §10).
+    const std::int64_t latency = std::max<std::int64_t>(c.planLatency - c.audioLead, 0);
     const std::int64_t from = c.device - latency, to = from + c.frames;
     const double frameSeconds = sync::toSeconds(1.0, config_.timecode.rate);
     std::int64_t at = from;

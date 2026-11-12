@@ -635,6 +635,35 @@ TEST_CASE("ltc output: labelled with the audio leaving the device, through a loo
     }
 }
 
+TEST_CASE("ltc output: labelled with its audio while a clock port leads the audio") {
+    for (bool ahead : {false, true}) {
+        CAPTURE(ahead);
+        Rig rig(ahead, 4, static_cast<std::int64_t>(kRate * 3));
+        rig.latency(8);  // 512 frames of plan latency
+        // A click at timeline 1 s: LTC frame 30 at 30 fps.
+        rig.item(clicks(3, {1.0}));
+        rig.run("sync.set", R"({"ltc_output": true, "ltc_output_channel": 3})");
+        // A clock port 100 ms early: 4,800 - 512 frames of lead, which the
+        // audio history adds to every output, the LTC channel included.
+        rig.run("midi.outputs.set", R"({"port": "Synth", "clock": true, "offset_ms": -100})");
+        rig.seconds(0.05);
+        REQUIRE(rig.app->engine()->midiLeadFrames() == 4800 - 512);
+        rig.run("transport.seek", R"({"seconds": 0})");
+        rig.run("transport.play", "{}");
+        rig.seconds(2);
+        rig.app->stopEngine();
+        const auto& captured = rig.backend->capture();
+        const std::int64_t at = click(captured.channels[0], 0);
+        REQUIRE(at > 0);
+        const auto frames = decodeLtc(captured.channels[2]);
+        const auto thirty = std::find_if(frames.begin(), frames.end(),
+                                         [](const sync::LtcFrame& f) { return f.count == 30; });
+        REQUIRE(thirty != frames.end());
+        MESSAGE("1 s: LTC frame at ", thirty->start, ", audio at ", at);
+        CHECK(std::abs(thirty->start - double(at)) < 8.0);
+    }
+}
+
 TEST_CASE("sync: the rate path only for a source that can change the rate") {
     // What the masters play for a second and a half from 0 under each
     // setting, from its first sound: a sync plan (all live) starts sooner

@@ -43,6 +43,9 @@ struct SyncCycle {
     bool loopActive = false;  // the transport loops (output predicted ahead wraps too)
     double loopStart = 0.0, loopEnd = 0.0;
     std::int64_t planLatency = 0;            // frames from processing to the device outputs
+    // Of planLatency, the hardware MIDI lead: the audio history delays the
+    // outputs by it after the cycle, LTC output included (MIDI is not).
+    std::int64_t audioLead = 0;
     std::int64_t outputLatency = 0;          // frames from processing to the listener
     std::int64_t inputLatency = 0;           // frames from the device input to the callback
     const time::TimeMap* timeMap = nullptr;  // the plan's (beats for MIDI clock)

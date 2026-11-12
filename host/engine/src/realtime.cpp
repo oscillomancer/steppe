@@ -753,6 +753,7 @@ Status Engine::load(const model::Session& session, const std::filesystem::path& 
         plan->outputLatency + plan->hardwareLead + backend_->status().outputLatency,
         std::memory_order_relaxed);
     syncPlanLatency_.store(plan->outputLatency + plan->hardwareLead, std::memory_order_relaxed);
+    syncAudioLead_.store(plan->hardwareLead, std::memory_order_relaxed);
     warnings_ = plan->warnings;
     for (const detail::OutputTap& o : plan->outputs)  // ADR-0056
         if (std::max(o.left, o.right) >= static_cast<int>(deviceOutputs_))
@@ -1564,6 +1565,7 @@ void Engine::runSync(const float* const* in, float* const* out, std::uint32_t fr
     c.loopStart = static_cast<double>(loopC_.start) / rate;
     c.loopEnd = static_cast<double>(loopC_.end) / rate;
     c.planLatency = syncPlanLatency_.load(std::memory_order_relaxed);
+    c.audioLead = syncAudioLead_.load(std::memory_order_relaxed);
     c.outputLatency = syncOutputLatency_.load(std::memory_order_relaxed);
     c.inputLatency = syncInputLatency_.load(std::memory_order_relaxed);
     const detail::Plan* p = ring_ ? livePlan_ : plan_;
