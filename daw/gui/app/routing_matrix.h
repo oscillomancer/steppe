@@ -33,6 +33,7 @@ namespace supple::gui {
 
 struct MatrixModel {
     bool midi = false;
+    bool hardwareAudio = false;
     struct Source {
         std::string id, name, type, parent;
         int depth = 0;
@@ -42,12 +43,18 @@ struct MatrixModel {
         // 3, 5... its auxiliary pairs (width 1: a last odd channel), whose
         // rows follow the strip's with the outputs' names.
         int pair = 1, width = 2;
+        std::string signal;  // joined identity, independent of the L/R view
+        int side = 0;        // 0: joined, 1: left, 2: right
+        std::vector<int> deviceChannels;
         std::string strip;  // the strip's name, for an auxiliary row
     };
     struct Destination {
         // kind: track | key | module (a rack's In); track: a key's strip, an
         // In module's home channel.
         std::string id, name, kind, type, track;
+        std::string signal;
+        int side = 0, width = 2;
+        std::vector<int> deviceChannels;
         bool clock = false;  // Phase 3 sets this in route.matrix
         std::string rule;    // why no strip can feed it (channels)
     };
@@ -57,13 +64,15 @@ struct MatrixModel {
         bool mute = false, mono = false, phaseInvert = false;
         int midiFrom = 0, midiTo = 0;
         std::vector<int> mapFrom, mapTo;  // the channel map (empty: identity)
-        bool allInputs = false;           // one wildcard input assignment expanded over rows
+        std::string warning;
+        bool allInputs = false;  // one wildcard input assignment expanded over rows
     };
     std::vector<Source> sources;
     std::vector<Destination> destinations;
     std::vector<Send> sends;
     std::vector<std::pair<std::string, std::string>> cyclePairs;  // (from, to)
     std::vector<std::string> cyclePaths;                          // by name: "Synth -> FX"
+    std::map<std::pair<std::string, std::string>, std::string> cellRules;
     void index();
     std::map<std::pair<std::string, std::string>, std::string> cycleIndex;
     std::map<std::pair<std::string, std::string>, std::vector<std::size_t>> sendIndex;
@@ -87,6 +96,13 @@ class RoutingMatrix {
     bool midiMode() const { return midiMode_; }
     void setHardwareMidiMode();
     bool hardwareMidiMode() const { return hardwareMidiMode_; }
+    void setHardwareAudioMode();
+    bool hardwareAudioMode() const { return hardwareAudioMode_; }
+    // View state only: project UI sidecar, never the engine/project model.
+    json::Value saveAudioSplits() const;
+    void loadAudioSplits(const json::Value& value);
+    std::vector<ui::MenuItem> audioSignalMenu(bool row, std::size_t index);
+    void splitAllAudio(bool split);
     // A hardware port header's right-click menu: Enabled; for outputs the
     // clock members (ADR-0073) and Reset notes on stop; Timing offset….
     std::vector<ui::MenuItem> midiPortMenu(bool output, const std::string& port);
@@ -130,6 +146,14 @@ class RoutingMatrix {
     std::string statusMessage_;
     void midiChannelMenu(bool from);
     Status reload();
+    Status adoptModel(MatrixModel next);
+    Status reloadHardwareAudio();
+    Status editHardwareAudio(bool remove);
+    bool hardwareAudioChanged() const;
+    std::set<std::string> audioSplits_;
+    const engine::Backend* audioBackend_ = nullptr;
+    unsigned audioInputs_ = 0, audioOutputs_ = 0;
+    int ltcOutput_ = 0;
     void refresh();  // the controls, from the selection
     void select(std::set<Cell> cells, std::optional<Cell> anchor);
     Cell cellAt(std::size_t row, std::size_t col) const;
@@ -155,11 +179,13 @@ class RoutingMatrix {
     MatrixModel model_;
     void portContext(bool output, const std::string& port, ui::Point at);
     void portOffset(bool output, const std::string& port);
-    bool midiMode_ = false, hardwareMidiMode_ = false;
+    bool midiMode_ = false, hardwareMidiMode_ = false, hardwareAudioMode_ = false;
     std::uint64_t midiPreferencesRevision_ = 0;
     // The mode switch: two latching tabs, the active one lit (as the render
     // dialog's output tabs).
     ui::Toggle *audioMode_ = nullptr, *midiModeButton_ = nullptr, *hardwareModeButton_ = nullptr;
+    ui::Toggle* hardwareAudioButton_ = nullptr;
+    ui::Button* splitAudio_ = nullptr;
     ui::Button *midiFrom_ = nullptr, *midiTo_ = nullptr;
     std::uint64_t version_ = 0;
     std::uint64_t projectGeneration_ = ~std::uint64_t{0};

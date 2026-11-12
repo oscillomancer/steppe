@@ -999,9 +999,11 @@ int main(int argc, char** argv) {
             auto v = json::Value::object();
             v["fx"] = fxPanel.saveLayout();
             v["routing"] = routingPanel.saveLayout();
-            v["routing"]["mode"] = routing.hardwareMidiMode() ? "hardware_midi"
-                                   : routing.midiMode()       ? "midi"
-                                                              : "audio";
+            v["routing"]["audio_splits"] = routing.saveAudioSplits();
+            v["routing"]["mode"] = routing.hardwareAudioMode()  ? "hardware_audio"
+                                   : routing.hardwareMidiMode() ? "hardware_midi"
+                                   : routing.midiMode()         ? "midi"
+                                                                : "audio";
             v["rack"] = rackPanel.saveLayout();
             return v;
         },
@@ -1012,7 +1014,12 @@ int main(int argc, char** argv) {
                 if (const auto* mode = panel->find("mode"); mode && mode->isString()) {
                     routing.setMidiMode(mode->asString() == "midi");
                     if (mode->asString() == "hardware_midi") routing.setHardwareMidiMode();
+                    if (mode->asString() == "hardware_audio") routing.setHardwareAudioMode();
                 }
+            const auto* routingState = v.find("routing");
+            routing.loadAudioSplits(routingState && routingState->find("audio_splits")
+                                        ? *routingState->find("audio_splits")
+                                        : json::Value());
             rackPanel.loadLayout(v.find("rack") ? *v.find("rack") : json::Value());
         });
     uiFile.add(

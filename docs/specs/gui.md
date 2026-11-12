@@ -960,7 +960,7 @@ window. The panel Close button, WM close request and unhandled Escape all
 close this panel without quitting the app.
 
 
-The header switches **Audio | MIDI | Hardware MIDI** (ADR-0067/0072), three latching tabs with the
+The header switches **Audio | MIDI | Hardware MIDI | Hardware Audio** (ADR-0067/0072), four latching tabs with the
 active mode lit in the accent colour; the mode persists in the
 `windows.routing.mode` UI sidecar field. Audio mode is the existing grid; MIDI
 routes do not appear in it. In Audio mode (`reaper-ux.md` addendum 2), sources (strips in hierarchy, hardware
@@ -1049,6 +1049,43 @@ clock now: set, enabled, connected and not the sync master's device;
 `route.matrix`) draws a small clock before its name. The dummy fixture flag `--dummy-midi --audio dummy` declares
 Keyboard/Pads inputs and Hardware synth/Drum machine outputs for offscreen
 render checks, without opening devices.
+
+Hardware Audio mode (`windows.routing.mode: "hardware_audio"`, action
+`ui.routing.hardware_audio`) has device input pairs followed by strips in
+hierarchy order down the left, channel inputs followed by device output pairs
+across the top. Device headers have socket marks and show backend channel names
+when available, numbered channels otherwise. Stored assignments outside the
+running device remain visible as unavailable. Input-to-channel cells edit
+`track.set {record_input}`; these replace the channel's MIDI or rack input,
+with replacement text on hover and after editing. Only master-to-device cells
+edit `track.set {hw_output}` (ADR-0056); channels and busses have no direct
+hardware outputs. All other cells are disabled with a reason on hover.
+LTC's output is labelled `[LTC]`; an overlapping master assignment has a warning
+cell (`!`) and its hover explains the overlap. Sync/device changes refresh this
+view even without a project edit. Send controls are hidden: these assignments
+have no independent tap, gain, mute or pan.
+
+Right-click a stereo signal's row or column header for **Split into L/R** or
+**Join**. Splitting a channel affects both its row and its input column. The
+**Split all into L/R / Join all** button applies to every visible stereo signal.
+Splitting is presentation only and never changes assignments. Split signals
+are saved as a sorted set of identities in `windows.routing.audio_splits` in
+the per-project UI sidecar, alongside mode and geometry; they reset on project
+replacement. This keeps the view with the project's channels without adding
+engine or project-model state. Device pairs use numbered identities.
+
+A single device-input row assigned to a joined channel selects a mono input
+(feeds both sides); an output channel assigned from a joined master selects
+mono `(L+R)/2`. A split channel/master side can replace that side of an existing
+stereo assignment while retaining the other side, including non-adjacent output
+pairs. Split sides need a single device channel, so split the device pair first.
+The existing model cannot leave an unassigned gap in a stereo input, silence
+one master side, or duplicate a master's hardware output channel. Such cells
+are disabled with an explanation; assign a stereo pair before changing one
+side. A record input or master output remains one assignment: removing only
+some of its connected split cells refuses with a hint to select all connected
+cells or join the signals. Add/Remove and multi-cell edits remain one undo step;
+conflicting selections for the same side refuse atomically.
 
 Matrix updates clamp scroll to the current endpoint range; paint uses
 endpoint-pair indexes for send and cycle rules.

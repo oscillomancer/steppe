@@ -336,6 +336,13 @@ instructions are in `docs/guides/installing.md`.
   source track unless `source_sends` is off (rack menu: Hear MIDI sends);
   files older than 2.10 load with it off wherever a MIDI route feeds that
   track, so they sound as before. Native macOS/Windows CI and coordinator review remain pending.
+- **Hardware Audio routing view:** the fourth routing tab edits existing
+  channel record inputs and masters' hardware outputs, with device names,
+  LTC overlap warnings, per-signal and tab-wide L/R split/join. Split state is
+  per-project UI sidecar state. Mono inputs/outputs and replacing one side of
+  an existing stereo assignment are supported; isolated sides/gaps and partial
+  removal of an assignment are refused with hints. Channels/busses still reach
+  hardware only through masters (ADR-0056); no engine routing feature is added.
 - **Hardware MIDI routing** (ADR-0072, schema 2.10): connects channel/Note Out MIDI to
   named outputs with tap, mute, channel filter/remap and PDC/port offset timing.
   Post-FX/post-fader taps and held-note recovery use the final FX chain MIDI bus,

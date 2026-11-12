@@ -396,7 +396,7 @@ masters are skipped for these extra controls.
 
 ## Routing
 
-The routing window's **Audio | MIDI | Hardware MIDI** buttons select the kind of send.
+The routing window's **Audio | MIDI | Hardware MIDI | Hardware Audio** buttons select the connections to edit.
 MIDI mode shows channels and rack Note Outs down the left, channels and
 Notes modules across the top. Double-click an empty cell to connect them
 (double-clicking a send only selects it), or select cells and use Add/Remove
@@ -423,6 +423,27 @@ sets the channel's existing MIDI input; a channel has one such input assignment.
 Route an input through a channel to reach a device output. Taps, mute and MIDI
 channel controls work as in the MIDI tab. Device connections save by name and
 warn if missing on reopen.
+
+The fourth tab, **Hardware Audio**, connects device inputs to channel record
+inputs and masters to device outputs. Double-click an empty cell to assign it;
+select connected cells and Remove (or Delete) to disconnect. Choosing an audio
+input replaces the channel's MIDI or rack input, as the status line explains.
+Channels and busses reach hardware through a master. Device channel names appear
+when available; saved channels outside the current device say unavailable.
+An output used by LTC is labelled `[LTC]`; a master's overlap has a `!` warning.
+
+Right-click a stereo input, output, channel or master header and choose
+**Split into L/R** to see and assign its sides, or **Join** to put it back.
+**Split all into L/R / Join all** changes the whole tab. The view saves with the
+project's window layout and does not change any sound by itself. A single
+input channel chosen for a joined channel is mono; a single output chosen for
+a joined master plays the mono sum. To change just L or R, first assign a
+stereo pair, then split both the signal and the device pair and choose the new
+channel. The other side stays assigned. Isolating or removing just one side
+without the other is not supported by these assignments; disabled cells and
+the status line explain why. To remove a split assignment, select all its
+connected cells, or join its signals first. Gain, pan and tap remain on the
+channel or master; this tab has no separate send controls.
 
 Right-click a hardware input row or output column header for **Enabled** and
 **Timing offset…**; outputs also have the clock items described in "MIDI
