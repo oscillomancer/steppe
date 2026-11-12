@@ -457,7 +457,7 @@ std::vector<MidiInputWarning> PortAudioBackend::midiWarnings() const {
 std::uint64_t PortAudioBackend::midiDropped() const {
     return impl_->midiBuffer ? impl_->midiBuffer->dropped() : 0;
 }
-bool PortAudioBackend::writeMidi(const MidiOutputEvent& event) {
+bool PortAudioBackend::writeMidi(const MidiOutputEvent& event) SUPPLE_RT {
     return impl_->midiOut.write(event);
 }
 std::vector<std::string> PortAudioBackend::midiOutputPorts() const {

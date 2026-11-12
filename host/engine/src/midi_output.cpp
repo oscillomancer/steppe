@@ -32,16 +32,16 @@ bool valid(const MidiOutputEvent& e) SUPPLE_RT {
     return true;
 }
 }  // namespace
-void MidiOutputCycle::begin(std::uint32_t frames, std::size_t ports) {
+void MidiOutputCycle::begin(std::uint32_t frames, std::size_t ports) SUPPLE_RT {
     count_ = 0;
     ports_ = ports;
     chunk(0, frames);
 }
-void MidiOutputCycle::chunk(std::uint32_t offset, std::uint32_t frames) {
+void MidiOutputCycle::chunk(std::uint32_t offset, std::uint32_t frames) SUPPLE_RT {
     offset_ = offset;
     frames_ = frames;
 }
-bool MidiOutputCycle::write(const MidiOutputEvent& event) {
+bool MidiOutputCycle::write(const MidiOutputEvent& event) SUPPLE_RT {
     if (event.port >= ports_ || event.frame >= frames_ || count_ == events_.size() ||
         !valid(event)) {
         drop();
@@ -51,14 +51,14 @@ bool MidiOutputCycle::write(const MidiOutputEvent& event) {
     events_[count_++].frame += offset_;
     return true;
 }
-std::span<const MidiOutputEvent> MidiOutputCycle::sorted() {
+std::span<const MidiOutputEvent> MidiOutputCycle::sorted() SUPPLE_RT {
     for (std::size_t i = 1; i < count_; ++i)
         for (std::size_t k = i; k && events_[k].frame < events_[k - 1].frame; --k)
             std::swap(events_[k], events_[k - 1]);
     frames_ = 0;  // writes outside the callback fail
     return {events_.data(), count_};
 }
-MidiOutputUmp midiOutputUmp(const MidiOutputEvent& e) {
+MidiOutputUmp midiOutputUmp(const MidiOutputEvent& e) SUPPLE_RT {
     MidiOutputUmp result;
     if (!valid(e)) return result;
     if (e.bytes[0] != 0xf0) {
@@ -147,7 +147,7 @@ void MidiOutputSender::stop() {
             sink_.waitUntil(deadline);
     }
 }
-bool MidiOutputSender::push(const TimedMidiOutput& event) {
+bool MidiOutputSender::push(const TimedMidiOutput& event) SUPPLE_RT {
     const auto port = event.event.port;
     if (port >= sink_.names.size() || port >= queues_.size() || !std::isfinite(event.seconds)) {
         drop(event.event.port);

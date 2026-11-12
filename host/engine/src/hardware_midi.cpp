@@ -160,12 +160,12 @@ std::uint64_t HardwareMidiRuntime::dropped(bool output, std::size_t port) const 
                ? (output ? outputDrops_[port] : inputDrops_[port]).load(std::memory_order_relaxed)
                : 0;
 }
-void HardwareMidiRuntime::begin(Backend& backend, std::uint32_t frames) {
+void HardwareMidiRuntime::begin(Backend& backend, std::uint32_t frames) SUPPLE_RT {
     backend_ = &backend;
     frames_ = frames;
     wrote_ = 0;
 }
-bool HardwareMidiRuntime::write(RouteState& state, const MidiOutputEvent& value) {
+bool HardwareMidiRuntime::write(RouteState& state, const MidiOutputEvent& value) SUPPLE_RT {
     auto event = value;
     event.port = static_cast<std::uint16_t>(state.port);
     if (!backend_->writeMidi(event)) {
@@ -184,7 +184,7 @@ bool HardwareMidiRuntime::write(RouteState& state, const MidiOutputEvent& value)
     }
     return true;
 }
-bool HardwareMidiRuntime::release(RouteState& state, std::uint32_t at) {
+bool HardwareMidiRuntime::release(RouteState& state, std::uint32_t at) SUPPLE_RT {
     for (std::size_t key = 0; key < state.held.size(); ++key)
         while (state.held[key]) {
             if (wrote_ >= kMaxMidiOutputEvents - 512)
@@ -204,7 +204,7 @@ bool HardwareMidiRuntime::release(RouteState& state, std::uint32_t at) {
         }
     return true;
 }
-void HardwareMidiRuntime::adopt(Plan& plan, std::uint64_t epoch, bool playing) {
+void HardwareMidiRuntime::adopt(Plan& plan, std::uint64_t epoch, bool playing) SUPPLE_RT {
     const bool boundary = epoch != epoch_ || (playing_ && !playing);
     const bool changed = plan_ != &plan || planGeneration_ != plan.generation;
     if (boundary) {
@@ -336,7 +336,7 @@ void HardwareMidiRuntime::adopt(Plan& plan, std::uint64_t epoch, bool playing) {
     playing_ = playing;
 }
 void HardwareMidiRuntime::schedule(std::size_t slot, MidiOutputEvent event, std::int64_t delay,
-                                   std::uint32_t offset, bool timeline) {
+                                   std::uint32_t offset, bool timeline) SUPPLE_RT {
     auto& state = routes_[slot];
     if (count_ == queue_.size()) {
         outputDrops_[static_cast<std::size_t>(state.port)].fetch_add(1, std::memory_order_relaxed);
@@ -348,7 +348,8 @@ void HardwareMidiRuntime::schedule(std::size_t slot, MidiOutputEvent event, std:
                    [](const auto& a, const auto& b) { return later(a, b); });
 }
 void HardwareMidiRuntime::collect(Plan& plan, std::int64_t pos, std::uint32_t frames,
-                                  std::uint32_t offset, bool playing, std::uint64_t epoch) {
+                                  std::uint32_t offset, bool playing,
+                                  std::uint64_t epoch) SUPPLE_RT {
     adopt(plan, epoch, playing);
     if (!frames) return;
     for (auto& pointer : plan.hardwareMidi) {
@@ -486,7 +487,7 @@ void HardwareMidiRuntime::collect(Plan& plan, std::int64_t pos, std::uint32_t fr
     }
 }
 void HardwareMidiRuntime::finish(float* const* out, std::uint32_t channels, std::uint32_t frames,
-                                 bool closing) {
+                                 bool closing) SUPPLE_RT {
     // A failed audio block still reaches finish: disabling a MIDI port must
     // not depend on successful plug-in processing or a plan handoff.
     for (auto& state : routes_)
@@ -571,7 +572,7 @@ void HardwareMidiRuntime::finish(float* const* out, std::uint32_t channels, std:
     frame_ += frames;
 }
 std::span<const MidiInputEvent> HardwareMidiRuntime::input(std::span<const MidiInputEvent> raw,
-                                                           const Plan* plan) {
+                                                           const Plan* plan) SUPPLE_RT {
     if (plan) outputControls_ = plan->midiOutputsSettings;
     for (const auto& e : raw) {
         const auto settings =
