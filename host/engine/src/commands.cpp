@@ -1916,7 +1916,9 @@ void registerEngineCommands(cmd::Registry& registry) {
                     int(bool(a.recordMidi && !a.recordMidi->isNull())) >
                 1)
                 return Error("track.record_input", "choose one input: audio, MIDI or rack",
-                             "/record_input",
+                             recordInput && a.recordMidi && !a.recordMidi->isNull()
+                                 ? "/record_midi"
+                                 : "/record_rack",
                              "provide one of record_input, record_midi or record_rack; "
                              "it replaces the previous input");
             if (a.hwOutput && a.type.value_or(s.tracks.find(*id)->type) != model::StripType::Master)

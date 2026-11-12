@@ -2538,3 +2538,22 @@ TEST_CASE("rack inputs: lost-Out repair leaves ambiguous and cyclic reconnection
         CHECK(model::serializeProject(*reopened) == bytes);
     }
 }
+
+TEST_CASE("rack inputs: conflict errors identify the second input field") {
+    Fixture f;
+    f.run("rack.add");
+    const auto input = f.app->head().tracks.find({model::Kind::Track, 1})->record.input;
+    for (const auto& [fields, path] : std::vector<std::pair<const char*, const char*>>{
+             {R"("record_input":[1],"record_midi":"Keys")", "/record_midi"},
+             {R"("record_input":[1],"record_rack":"mo_1")", "/record_rack"},
+             {R"("record_midi":"Keys","record_rack":"mo_1")", "/record_rack"},
+             {R"("record_input":[1],"record_midi":"Keys","record_rack":"mo_1")", "/record_midi"}}) {
+        const auto r =
+            f.call("track.set", *json::parse(std::string(R"({"track":"tr_1",)") + fields + "}"));
+        REQUIRE_FALSE(r);
+        CHECK(r.error().code == "track.record_input");
+        CHECK(r.error().path == "/args" + std::string(path));
+        CHECK_FALSE(r.error().hint.empty());
+        CHECK(f.app->head().tracks.find({model::Kind::Track, 1})->record.input == input);
+    }
+}
