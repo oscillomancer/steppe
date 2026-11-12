@@ -175,7 +175,7 @@ Status RoutingMatrix::reloadHardwareAudio() {
                     label += " (engine stopped)";
                 else if (channels.back() > available)
                     label += " (unavailable)";
-                if (output && contains(channels, ltc)) label += " [LTC]";
+                if (output && contains(channels, ltc)) label = "[LTC] " + label;
                 if (output) {
                     MatrixModel::Destination d;
                     d.id = sideId(signal, side);

@@ -2535,14 +2535,29 @@ TEST_CASE("Hardware Audio: LTC resolves the unavailable default to output two") 
     matrix.sync();
     CHECK(f.app->resolvedLtcOutputChannel() == 2);
     const auto col = audioCol(matrix, "audio_out:1");
-    CHECK(matrix.model().destinations[col].name.find("[LTC]") != std::string::npos);
+    CHECK(matrix.model().destinations[col].name.starts_with("[LTC] "));
     CHECK(std::none_of(matrix.model().destinations.begin(), matrix.model().destinations.end(),
                        [](const auto& d) { return d.signal == "audio_out:3"; }));
     const auto sends = matrix.model().sendsAt(audioRow(matrix, "tr_0"), col);
     REQUIRE(sends.size() == 1);
     CHECK(sends.front()->warning == "LTC replaces Master's audio on output 2");
+    panel.root().frame(false);
+    const auto b = matrix.grid()->bounds();
+    ui::PointerEvent hover;
+    hover.type = ui::PointerEvent::Type::Move;
+    hover.pos = {b.x + 190 + static_cast<float>(col) * 22 + 11,
+                 b.y + 112 + static_cast<float>(audioRow(matrix, "tr_0")) * 22 + 11};
+    panel.root().pointer(hover);
+    CHECK(panel.root()
+              .find("routing.status")
+              ->valueText()
+              .find("LTC replaces Master's audio on output 2") != std::string::npos);
     f.snapshot("routing-hardware-audio-ltc-fallback.png", &panel.root());
     matrix.splitAllAudio(true);
+    CHECK_FALSE(
+        matrix.model().destinations[audioCol(matrix, "audio_out:1", 1)].name.starts_with("[LTC] "));
+    CHECK(
+        matrix.model().destinations[audioCol(matrix, "audio_out:1", 2)].name.starts_with("[LTC] "));
     const auto split =
         matrix.model().sendsAt(audioRow(matrix, "tr_0", 2), audioCol(matrix, "audio_out:1", 2));
     REQUIRE(split.size() == 1);
