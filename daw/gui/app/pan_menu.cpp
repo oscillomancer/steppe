@@ -97,8 +97,8 @@ void openPanMenu(ui::Root& root, AppActions& actions, const model::Id& track,
          {std::tuple{model::PanMode::Pan, "pan", "Pan mode: pan"},
           std::tuple{model::PanMode::Dual, "dual", "Pan mode: dual pan"},
           std::tuple{model::PanMode::Width, "width", "Pan mode: pan and width"}})
-        add(label, t->panMode == mode, [a, track, name = std::string(name)] {
-            setTrack(*a, track, "pan_mode", json::Value(name));
+        add(label, t->panMode == mode, [a, track, key = std::string(name)] {
+            setTrack(*a, track, "pan_mode", json::Value(key));
         });
     rule();
     const model::PanLaw project = s.project->panLaw;
