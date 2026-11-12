@@ -115,8 +115,20 @@ if(SUPPLE_BUILD_PLUGINS)
       DEPENDEES build
       ALWAYS TRUE)
     if(SUPPLE_BUILD_TESTS)
+      # The embedding probes open a real editor in a window at a fixed spot
+      # on the screen and read its pixels back. Every product's suite shares
+      # one screen (one Xvfb on Linux CI, the desktop elsewhere), and a probe
+      # whose window lies under another probe's reads that window instead of
+      # its own editor, until its deadline passes. They run as
+      # plugin.<name>.embedding, one product at a time, beside the rest of the
+      # suite, which runs in parallel as before.
+      set(on_screen "^(x11-embedding|win32-embedding|win32-embedding-no-host-timer|mac-embedding)$")
       add_test(NAME plugin.${name}.ctest
-        COMMAND ${CMAKE_CTEST_COMMAND} --test-dir "${plugin_build}" --output-on-failure)
+        COMMAND ${CMAKE_CTEST_COMMAND} --test-dir "${plugin_build}" --output-on-failure -E "${on_screen}")
+      add_test(NAME plugin.${name}.embedding
+        COMMAND ${CMAKE_CTEST_COMMAND} --test-dir "${plugin_build}" --output-on-failure -R "${on_screen}"
+                --no-tests=ignore)
+      set_tests_properties(plugin.${name}.embedding PROPERTIES RESOURCE_LOCK plugin-editor-screen)
     endif()
     set(${name}_clap "${staged}/${artifact}.clap" PARENT_SCOPE)
   endfunction()

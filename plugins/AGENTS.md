@@ -31,7 +31,10 @@ run) and the CMake glue that links plugins against the monorepo's libraries.
 The monorepo builds each plugin as an isolated ExternalProject
 (`plugins/CMakeLists.txt`, `supple_add_template_product` and
 `supple_add_stock_script`); its own test suite runs as
-`plugin.<name>.ctest`. Built plugins land in `build/<preset>/plugins/clap/`.
+`plugin.<name>.ctest`, apart from the embedding probes, which read an
+editor's pixels off the shared screen and so run as
+`plugin.<name>.embedding`, one plugin at a time (a `RESOURCE_LOCK`).
+Built plugins land in `build/<preset>/plugins/clap/`.
 
 `template/` is the plugin template at a released framework version, a
 byte-identical copy (`git archive` of the template's commit): change the
