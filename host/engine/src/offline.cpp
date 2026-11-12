@@ -64,6 +64,10 @@ Session upstreamSession(const Session& source, Id target) {
         for (const auto& entry : source.routes) {
             const auto [from, to] = routeNodes(source, *entry.value);
             if (from && to && keep.count(*to)) changed |= keep.insert(*from).second;
+            // A rack send follows its home channel's mute (ADR-0075).
+            if (const auto home = model::rackSendHome(source, *entry.value);
+                home && to && keep.count(*to))
+                changed |= keep.insert(*home).second;
         }
         // A Notes source includes incoming sends, whose channel node must
         // remain available so its implicit reader edges can be compiled.
@@ -570,6 +574,7 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
         selected = &*it;
         // An analysis tap is isolated from the session's current solo state.
         for (Node& node : p.nodes) node.soloSilenced = false;
+        for (Edge& edge : p.edges) edge.homeSilenced = false;  // rack sends (ADR-0075)
     }
     const auto outputLatency =
         selectedTrack
