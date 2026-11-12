@@ -1134,7 +1134,7 @@ removed. A MIDI-only alias is one input and loads unchanged. Current files
 with conflicting inputs fail validation rather than being repaired.
 
 The 2.8–2.11 independent-input behavior (ADR-0065), including repair of a
-keyboard selection into a rack-plus-keyboard pair, is superseded. A legacy
+keyboard selection into a rack-plus-keyboard pair, is superseded. Legacy
 MIDI-only inputs otherwise remain selected. Loading a 2.8 or older file still
 detects the earlier lost-Out state: a rack's home channel has MIDI only in
 `record.input`, and its rack has exactly one unrouted Out. It reconnects that
