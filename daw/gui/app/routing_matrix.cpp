@@ -64,9 +64,14 @@ std::string MatrixModel::blocked(std::size_t row, std::size_t col) const {
     const Destination& d = destinations[col];
     if (s.type == "midi_input" && d.kind != "track")
         return "connect a hardware input through a channel";
+    // A rack's Out sends only to busses and masters (ADR-0075).
+    if (s.type == "rack_out" && (d.kind != "track" || d.type == "channel"))
+        return s.rule.empty() ? "a rack's Out sends to busses and masters" : s.rule;
     if (s.pair != 1 && d.kind == "key")
         return "a key takes a strip's main pair; the plug-in's pins can read others";
-    if (d.kind == "track") {
+    if (s.type == "rack_out") {
+        // a buss or master: open unless it feeds back (below)
+    } else if (d.kind == "track") {
         if (s.id == d.id) return "a strip cannot send to itself";
         if (!s.rule.empty()) return s.rule;
         if (!d.rule.empty()) return d.rule;
@@ -155,7 +160,10 @@ class Grid : public ui::Node {
         const float gx = b.x + kLabelW - scrollX_, gy = b.y + kHeaderH - scrollY_;
         const ui::Rect cells{b.x + kLabelW, b.y + kHeaderH, b.w - kLabelW, b.h - kHeaderH};
         auto typeColor = [&](const std::string& type) {
-            return t.color(type == "master" ? "master" : type == "buss" ? "buss" : "channel");
+            return t.color(type == "master"     ? "master"
+                           : type == "buss"     ? "buss"
+                           : type == "rack_out" ? "track-teal"  // a rack's Out (ADR-0075)
+                                                : "channel");
         };
         // Column headers: rotated names.
         c.save();
@@ -483,8 +491,13 @@ Status RoutingMatrix::reload() {
                 if (d.kind == "midi_output" && samePort(d.name, output)) to = d.id;
         }
         const auto* midi = r.find("midi");
+        // A rack's Out appears only as a rack send, to a buss or master
+        // (ADR-0075); as a channel's input it is not a send.
+        const bool rackSend = std::any_of(
+            next.destinations.begin(), next.destinations.end(),
+            [&](const auto& d) { return d.id == to && d.kind == "track" && d.type != "channel"; });
         if (from.empty() || to.empty() || bool(midi && !midi->isNull()) != midiMode_ ||
-            (!midiMode_ && from.starts_with("mo_")))
+            (!midiMode_ && from.starts_with("mo_") && !rackSend))
             continue;
         MatrixModel::Send x;
         x.id = str(r, "id");
@@ -1250,6 +1263,17 @@ void RoutingMatrix::refresh() {
     remove_->enabled = removable;
     for (const auto& n : details_->children().back()->children())  // the controls' row
         n->enabled = x != nullptr;
+    // A rack send has level and mute only (ADR-0075).
+    const bool rackSend = !midiMode_ && std::any_of(sends.begin(), sends.end(), [&](auto& id) {
+        const auto* y = sendById(id);
+        return y && y->from.starts_with("mo_");
+    });
+    if (rackSend)
+        for (ui::Node* widget : {static_cast<ui::Node*>(pan_), static_cast<ui::Node*>(channels_),
+                                 static_cast<ui::Node*>(phase_)})
+            widget->enabled = false;
+    for (ui::Button* tap : taps_)
+        if (rackSend) tap->enabled = false;
     auto nameOf = [&](const std::string& id) {
         for (const auto& s : model_.sources)
             if (s.id == id) return s.name.empty() ? id : s.name;
