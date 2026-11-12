@@ -41,6 +41,13 @@ std::string fmt(double v, int decimals) {
 
 }  // namespace
 
+bool MatrixModel::hasStereoSignals() const {
+    return std::any_of(sources.begin(), sources.end(),
+                       [](const auto& s) { return s.width == 2; }) ||
+           std::any_of(destinations.begin(), destinations.end(),
+                       [](const auto& d) { return d.width == 2; });
+}
+
 void MatrixModel::index() {
     sourceIndex.clear();
     destinationIndex.clear();
@@ -1342,6 +1349,7 @@ void RoutingMatrix::refresh() {
     for (const auto& s : model_.sources) allSplit = allSplit && (s.width != 2 || s.side != 0);
     for (const auto& d : model_.destinations) allSplit = allSplit && (d.width != 2 || d.side != 0);
     splitAudio_->setText(allSplit ? "Join all" : "Split all into L/R");
+    splitAudio_->enabled = model_.hasStereoSignals();
     hardwareAudioButton_->setOn(hardwareAudioMode_);
     const auto sends = selectedSends();
     const MatrixModel::Send* x = sendById(selectedSend().value_or(""));

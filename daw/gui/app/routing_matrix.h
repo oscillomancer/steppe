@@ -76,6 +76,7 @@ struct MatrixModel {
     std::map<std::pair<std::string, std::string>, std::string> cellRules;
     std::map<std::pair<std::string, int>, std::size_t> sourceIndex;
     std::map<std::string, std::size_t> destinationIndex;
+    bool hasStereoSignals() const;
     void index();
     std::map<std::pair<std::string, std::string>, std::string> cycleIndex;
     std::map<std::pair<std::string, std::string>, std::vector<std::size_t>> sendIndex;

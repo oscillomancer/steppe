@@ -2670,3 +2670,19 @@ TEST_CASE("Hardware Audio: save keeps project device splits and drops deleted tr
     CHECK(saved.asArray()[1].asString() == "audio_out:1");
     CHECK(f.app->head().version == version);
 }
+
+TEST_CASE("Hardware Audio: split button eligibility requires a stereo signal") {
+    gui::MatrixModel model;
+    CHECK_FALSE(model.hasStereoSignals());
+    gui::MatrixModel::Source input;
+    input.width = 1;
+    gui::MatrixModel::Destination output;
+    output.width = 1;
+    model.sources.push_back(input);
+    model.destinations.push_back(output);
+    CHECK_FALSE(model.hasStereoSignals());
+    model.destinations.front().width = 2;
+    CHECK(model.hasStereoSignals());
+    model.destinations.front().side = 1;
+    CHECK(model.hasStereoSignals());  // Split stereo still needs Join all.
+}

@@ -1071,7 +1071,8 @@ have no independent tap, gain, mute or pan.
 Right-click a stereo signal's row or column header for **Split into L/R** or
 **Join**. Channels split their input columns; masters split their output rows. Channel
 and buss rows are omitted because they cannot feed hardware outputs. The
-**Split all into L/R / Join all** button applies to every visible stereo signal.
+**Split all into L/R / Join all** button applies to every visible stereo signal; it is disabled when the view
+contains no stereo signal.
 Splitting is presentation only and never changes assignments. Split signals
 are saved as a sorted set of identities in `windows.routing.audio_splits` in
 the per-project UI sidecar, alongside mode and geometry; they reset on project
