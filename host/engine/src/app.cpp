@@ -1711,9 +1711,8 @@ Result<TransportInfo> EngineApp::transport(std::string_view action, std::optiona
             const model::Route* in =
                 output || !tr.record.input ? nullptr : s.routes.find(*tr.record.input);
             const auto* midi = output ? nullptr : model::midiInputRoute(s, e.id);
-            // The selected audio input wins over incoming MIDI sends (ADR-0074).
-            const bool audioInput = in && (in->from.hwChannels || in->from.module);
-            if (!audioInput && (routed || midi)) {  // MIDI (ADR-0016): events, no file
+            // Explicit MIDI record modes capture sends independently of the selected input.
+            if (routed || midi) {  // MIDI (ADR-0016): events, no file
                 RecordTarget t;
                 t.track = e.id;
                 t.midi = RecordTarget::Midi{

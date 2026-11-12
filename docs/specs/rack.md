@@ -555,8 +555,8 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   identity and the retained route namespaces/addresses; source changes end
   only that track feed, removed routes end only their notes, and a plan edit
   can rebind event slots while preserving held route addresses.
-- **Recording Out.** An armed channel with an Out as its `record.input`
-  records that stereo signal after input FX, before items and track inserts.
+- **Recording Out.** In input record mode, an armed channel with an Out as
+  its `record.input` records that stereo signal after input FX, before items and track inserts.
   To record notes as well, arm a separate MIDI channel that sends to Notes;
   the rack-fed audio channel retains its sole Out input (ADR-0074).
   The channel runs live; its source rack may render ahead through the audio

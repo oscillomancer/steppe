@@ -819,10 +819,10 @@ recordings and other session edits are lost when the process exits.
 MIDI sends, including a rack's Note Out routes, can be recorded by their destination channel. Arm
 it in MIDI replace or MIDI overdub mode, then record; loop and punch apply
 as for device MIDI. The channel needs no instrument or device input, and a
-selected MIDI device can record alongside the rack's notes. A selected audio
-or rack Out input records audio instead of those incoming MIDI sends.
+selected MIDI device can record alongside the rack's notes. An explicit MIDI
+record mode records these sends even if audio or a rack Out is selected.
 
-An armed channel whose input is a rack Out records stereo audio through its
+In input record mode, an armed channel whose input is a rack Out records stereo audio through its
 input FX, before its own items, inserts and fader. It uses ordinary audio
 takes, loop/punch recording and recovery. Disable the live rack feed when
 auditioning the recorded item to avoid doubling it.

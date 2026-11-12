@@ -2440,31 +2440,34 @@ TEST_CASE("rack inputs: selecting inactive MIDI preserves a held timeline note")
     }
 }
 
-TEST_CASE("rack inputs: incoming MIDI sends do not replace selected audio recording") {
-    for (bool rack : {false, true}) {
-        Fixture f;
-        f.run("rack.add");
-        f.run("module.add", R"({"rack":"rk_1","type":"notes"})");
-        f.run("cable.add", R"({"from":"mo_2.gate","to":"mo_1.l"})");
-        f.run("track.add");
-        f.run("item.add", R"({"track":"tr_2","position":0,"notation":"voice v; 1: C4:q r:*"})");
-        f.run("route.add", R"({"from":"tr_2","to":"tr_1","midi":{}})");
-        f.run(
-            "track.set",
-            rack
-                ? R"({"track":"tr_1","armed":true,"record_mode":"midi_replace"})"
-                : R"({"track":"tr_1","record_input":[1,2],"armed":true,"record_mode":"midi_replace"})");
-        const auto midiBefore = f.app->head().midi.size();
-        DummyBackend backend({.mode = DummyBackend::Mode::Manual});
-        REQUIRE(
-            f.app->startEngine(backend, {.blockSize = 256, .inputs = 2}, {.anticipative = false}));
-        REQUIRE(f.app->engine()->awaitPlan());
-        f.run("transport.record");
-        backend.run(80);
-        const auto stopped = f.run("transport.stop");
-        f.app->stopEngine();
-        REQUIRE(stopped.find("recorded")->size() == 1);
-        CHECK(f.app->head().media.size() == 1);
-        CHECK(f.app->head().midi.size() == midiBefore);
-    }
+TEST_CASE("rack inputs: explicit MIDI record modes record sends beside audio or rack inputs") {
+    for (bool rack : {false, true})
+        for (const char* mode : {"input", "midi_overdub", "midi_replace"}) {
+            CAPTURE(rack);
+            CAPTURE(mode);
+            Fixture f;
+            f.run("rack.add");
+            f.run("module.add", R"({"rack":"rk_1","type":"notes"})");
+            f.run("cable.add", R"({"from":"mo_2.gate","to":"mo_1.l"})");
+            f.run("track.add");
+            f.run("item.add", R"({"track":"tr_2","position":0,"notation":"voice v; 1: C4:q r:*"})");
+            f.run("route.add", R"({"from":"tr_2","to":"tr_1","midi":{}})");
+            auto args = *json::parse(R"({"track":"tr_1","armed":true})");
+            args["record_mode"] = mode;
+            if (!rack) args["record_input"] = json::Array{1, 2};
+            f.run("track.set", json::writeCompact(args));
+            const auto midiBefore = f.app->head().midi.size();
+            DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+            REQUIRE(f.app->startEngine(backend, {.blockSize = 256, .inputs = 2},
+                                       {.anticipative = false}));
+            REQUIRE(f.app->engine()->awaitPlan());
+            f.run("transport.record");
+            backend.run(80);
+            const auto stopped = f.run("transport.stop");
+            f.app->stopEngine();
+            REQUIRE(stopped.find("recorded")->size() == 1);
+            const bool isMidi = std::string_view(mode) != "input";
+            CHECK(f.app->head().media.size() == (isMidi ? 0 : 1));
+            CHECK(f.app->head().midi.size() == midiBefore + (isMidi ? 1 : 0));
+        }
 }

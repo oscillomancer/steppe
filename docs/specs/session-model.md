@@ -297,8 +297,8 @@ for MIDI. A track has one input: hardware audio, hardware MIDI or a rack Out
 may keep `record.input` as an alias of the same `midi_input` route; two distinct
 input references fail with `model.invariant` at the record input path and an
 actionable hint; conflicting command arguments use `track.record_input`.
-A rack-fed channel records audio; incoming MIDI sends do not change that
-recording choice. To play and record a keyboard alongside it,
+A rack-fed channel records audio in input record mode. MIDI overdub/replace
+records delivered MIDI sends even with an audio or rack input. To play and record a keyboard alongside it,
 choose MIDI on a separate channel and send it into the rack's Notes module;
 arm that MIDI channel to record notes and the rack channel to record audio.
 A non-null `midi` makes a route MIDI-only (ADR-0067). Sources are channel

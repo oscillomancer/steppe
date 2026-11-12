@@ -836,8 +836,7 @@ first use, and no plug-in code runs early to warm it.
   is padded, just as for device input FX. Without input FX, its recorded
   musical span is bit-identical to the offline rack output.
 - **Recording MIDI sends** (rack.md §6): an armed `midi_overdub` or
-  `midi_replace` channel without a selected audio/rack input records every MIDI
-  send or Note Out route delivered to it,
+  `midi_replace` channel records every MIDI send or Note Out route delivered to it,
   after channel filtering/remapping, mute and compensation. Its selected
   MIDI input device may record alongside those routes. An instrument and a
   device record-input route are optional. Arming makes the destination and
@@ -1363,8 +1362,9 @@ harness. See the tooling README for schemas, limits and invocation details.
 - **MIDI input** (ADR-0016, ADR-0065): `record.midi_input` names a
   channel's MIDI route; old MIDI-only `record.input` remains readable.
   Hardware audio, MIDI and rack Out inputs replace each other (ADR-0074).
-  A selected audio or rack input records audio even when MIDI sends enter the
-  channel; otherwise incoming sends can be recorded as MIDI.
+  In input record mode a selected audio or rack input records audio. MIDI
+  overdub/replace records delivered MIDI sends instead, independently of the
+  selected input.
   `record_midi: null` clears MIDI alone, `record_input: null` hardware audio
   alone and `record_rack: null` a rack Out alone. Clearing all three leaves
   no input. A rack-fed channel records its audio as a WAV take. Feed Notes

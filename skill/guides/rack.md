@@ -675,4 +675,4 @@ track source while keeping its device and explicit MIDI sends. Null restores
 Home. Note Out's MIDI channel knob (`channel`) selects a MIDI channel, not a
 track. The routing window's MIDI mode exposes both Notes and Note Out modules.
 Frozen channels keep sending timeline MIDI at both taps; the frozen audio
-print produces no MIDI. MIDI overdub/replace records delivered sends when no audio input is selected.
+print produces no MIDI. MIDI overdub/replace records delivered sends, even with an audio or rack input selected.
