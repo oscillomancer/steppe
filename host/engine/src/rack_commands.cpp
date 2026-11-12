@@ -760,7 +760,8 @@ void registerRackCommands(cmd::Registry& registry) {
         common(c, "rack.add", Kind::Edit, "Add a modular rack on a channel, its Out the input.");
         c.description =
             "A rack is a patching space homed on a channel (track, or a new channel named "
-            "after name). It starts with an Out module, made the channel's input: what the "
+            "after name). It starts with an Out module, replacing the channel's previous "
+            "audio, MIDI or rack input: what the "
             "patch sends to Out plays on the channel, before its inserts and Console 9 stage. "
             "The channel's MIDI items play into Notes modules. Add modules with module.add and "
             "connect them with cable.add.";
@@ -810,14 +811,12 @@ void registerRackCommands(cmd::Registry& registry) {
             out.y = 40;
             const Id outId = t.create(out);
             const model::Track& home = *t.get<model::Track>(track);
-            if (home.record.input)
-                if (const auto* previous = t.get<model::Route>(*home.record.input);
-                    previous && previous->from.midiDevice)
-                    t.modify<model::Track>(track, [&](auto& x) {
-                        if (!x.record.midiInput) x.record.midiInput = home.record.input;
-                        x.record.input.reset();
-                    });
-            const auto audioInput = t.get<model::Track>(track)->record.input;
+            // Adding a rack chooses its Out as the channel's sole input.
+            const auto audioInput = home.record.input ? home.record.input : home.record.midiInput;
+            t.modify<model::Track>(track, [&](auto& x) {
+                x.record.input = audioInput;
+                x.record.midiInput.reset();
+            });
             if (audioInput && t.get<model::Route>(*audioInput)) {
                 t.modify<model::Route>(*audioInput, [&](model::Route& r) {
                     r.from = model::RouteEnd{};

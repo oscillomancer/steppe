@@ -2180,148 +2180,82 @@ TEST_CASE("the TCP's input menu lists the device's ports and picks one (P5.13)")
     };
     REQUIRE(inputButton());
     CHECK(inputButton()->valueText() == "in \u2014");  // nothing chosen yet
-    // The strip shows the port names; a narrow strip clips the tail, so the
-    // name is a prefix (the menu shows them whole).
-    // "no audio input", the ports, then the MIDI choices ("no MIDI input",
-    // "any MIDI device", each device), a separator and "New rack on this
-    // channel".
     auto checked = [](const ui::List& list) {
         std::vector<std::string> out;
         for (const auto& item : ui::menuItems(list))
             if (item.checked) out.push_back(item.label);
         return out;
     };
-    ui::List* menu = openMenu();
+    auto choose = [&](const std::string& label) {
+        auto* menu = openMenu();
+        REQUIRE(menu);
+        const auto items = ui::menuItems(*menu);
+        const auto found = std::find_if(items.begin(), items.end(),
+                                        [&](const auto& item) { return item.label == label; });
+        REQUIRE(found != items.end());
+        menu->onActivate(static_cast<int>(found - items.begin()));
+        shell.sync();
+        a.root->frame(false);
+    };
+    auto* menu = openMenu();
     REQUIRE(menu);
-    CHECK(menu->count() == 13);
-    CHECK(checked(*menu) == std::vector<std::string>{"no audio input", "no MIDI input"});
-    menu->onActivate(2);                      // "in 2" -> record_input [2]
-    CHECK(a.root->find("popup") == nullptr);  // it closed
-    shell.sync();
-    a.root->frame(false);
-    REQUIRE(inputButton());
-    CHECK(inputButton()->valueText().rfind("AUX1", 0) == 0);
-    // A stereo pair is one entry ([n, n+1]).
-    menu = openMenu();
-    REQUIRE(menu);
-    menu->onActivate(4);  // stereo 1-2
-    shell.sync();
-    a.root->frame(false);
-    REQUIRE(inputButton());
-    CHECK(inputButton()->valueText().rfind("AUX0", 0) == 0);
-    // On a channel without a rack, a MIDI device replaces hardware audio
-    // (ADR-0065): one input, shown alone on the button and in the menu.
-    menu = openMenu();
-    REQUIRE(menu);
-    menu->onActivate(9);  // the first device (Keystation)
-    shell.sync();
-    a.root->frame(false);
-    REQUIRE(inputButton());
-    CHECK(inputButton()->valueText() == "Keystation");
-    const model::Track* tr = a.app->head().tracks.find(id);
-    REQUIRE(tr);
-    REQUIRE(tr->record.input);
-    const model::Route* route = a.app->head().routes.find(*tr->record.input);
-    REQUIRE(route);
-    CHECK_FALSE(route->from.hwChannels);
-    const model::Route* midi = model::midiInputRoute(a.app->head(), id);
-    REQUIRE(midi);
-    CHECK(midi->from.midiDevice.value_or("") == "Keystation");
-    menu = openMenu();
-    REQUIRE(menu);
-    CHECK(checked(*menu) == std::vector<std::string>{"no audio input", "Keystation"});
-    // While the engine is stopped the device reports nothing: one disabled
-    // entry, and picking it changes nothing; "no MIDI input" can still take
-    // the device off.
-    running = false;
+    CHECK(ui::menuItems(*menu).front().label == "No input");
+    CHECK(ui::menuItems(*menu)[1].separator);
+    CHECK(checked(*menu) == std::vector<std::string>{"No input"});
+    a.snapshot("tcp-input-menu.png");
     a.root->closePopups();
+    choose("M Series Pro:capture_AUX1");
+    CHECK(inputButton()->valueText().rfind("AUX1", 0) == 0);
+    choose("M Series Pro:capture_AUX0 + M Series Pro:capture_AUX1");
+    CHECK(inputButton()->valueText().rfind("AUX0", 0) == 0);
+    choose("Keystation");
+    CHECK(shell.inputLabel(id) == "Keystation");
+    REQUIRE(model::midiInputRoute(a.app->head(), id));
     menu = openMenu();
     REQUIRE(menu);
-    CHECK(menu->count() == 4);
-    CHECK(ui::menuItems(*menu)[1].label == "no MIDI input");
-    menu->onActivate(0);
-    shell.sync();
-    a.root->frame(false);
-    REQUIRE(inputButton());
-    CHECK(inputButton()->valueText() == "Keystation");  // unchanged
-    // A rack's Out module is listed whatever the device, "<rack> » <Out>",
-    // and picked as the channel's audio input (ADR-0062); the keyboard stays.
+    CHECK(checked(*menu) == std::vector<std::string>{"Keystation"});
+    a.root->closePopups();
+    running = false;
+    menu = openMenu();
+    REQUIRE(menu);
+    CHECK_FALSE(ui::menuItems(*menu)[2].enabled);
+    menu->onActivate(2);
+    CHECK(shell.inputLabel(id) == "Keystation");
+    a.root->closePopups();
     json::Value rack = json::Value::object();
     rack["name"] = "Bells";
     auto made = a.dispatcher->execute({"rack.add", std::move(rack), ui});
     REQUIRE(made);
     const model::Id out = *model::Id::parse((*made)["out"].asString());
-    a.root->closePopups();
     shell.sync();
     a.root->frame(false);
-    menu = openMenu();
-    REQUIRE(menu);
-    REQUIRE(menu->count() == 6);  // ..., "no rack input", the Out, New rack
-    CHECK(ui::menuItems(*menu)[3].label == "no rack input");
-    menu->onActivate(4);
-    shell.sync();
-    a.root->frame(false);
-    tr = a.app->head().tracks.find(id);
-    REQUIRE(tr->record.input);
-    route = a.app->head().routes.find(*tr->record.input);
-    REQUIRE(route);
-    CHECK(route->from.module == out);
-    midi = model::midiInputRoute(a.app->head(), id);
-    REQUIRE(midi);
-    CHECK(midi->from.midiDevice.value_or("") == "Keystation");
-    // Both on the button: the rack by its name (it has one Out), then the device.
-    REQUIRE(inputButton());
-    CHECK(shell.inputLabel(id) == "Bells + Keystation");
-    running = true;
-    a.root->closePopups();
-    menu = openMenu();
-    REQUIRE(menu);
     const std::string outLabel = "Bells \u00bb " + model::moduleLabel(a.app->head(), out);
-    CHECK(checked(*menu) == std::vector<std::string>{"no audio input", "Keystation", outLabel});
-    a.snapshot("tcp-input-rack-midi.png");
-    // "no MIDI input" clears the device alone: the rack still plays here.
-    menu->onActivate(7);
-    shell.sync();
-    a.root->frame(false);
+    choose(outLabel);
     CHECK_FALSE(model::midiInputRoute(a.app->head(), id));
-    tr = a.app->head().tracks.find(id);
-    REQUIRE(tr->record.input);
-    CHECK(a.app->head().routes.find(*tr->record.input)->from.module == out);
     CHECK(shell.inputLabel(id) == outLabel);
-    // "no rack input" takes the Out off: the channel's input is blank again,
-    // and the rack stays on its own channel.
-    menu = openMenu();
-    REQUIRE(menu);
-    REQUIRE(ui::menuItems(*menu)[12].label == "no rack input");
-    CHECK_FALSE(ui::menuItems(*menu)[12].checked);
-    menu->onActivate(12);
-    shell.sync();
-    a.root->frame(false);
-    tr = a.app->head().tracks.find(id);
-    CHECK_FALSE(tr->record.input);
-    CHECK_FALSE(tr->record.midiInput);
-    CHECK(a.app->head().racks.find(*model::Id::parse((*made)["rack"].asString())));
-    REQUIRE(inputButton());
-    CHECK(inputButton()->valueText() == "in \u2014");
-    menu = openMenu();
-    REQUIRE(menu);
-    CHECK(checked(*menu) ==
-          std::vector<std::string>{"no audio input", "no MIDI input", "no rack input"});
-    // "no audio input" takes hardware audio off, back to blank.
-    menu->onActivate(1);  // in 1
-    shell.sync();
-    a.root->frame(false);
     REQUIRE(a.app->head().tracks.find(id)->record.input);
+    CHECK(a.app->head().routes.find(*a.app->head().tracks.find(id)->record.input)->from.module ==
+          out);
     menu = openMenu();
     REQUIRE(menu);
-    CHECK(checked(*menu) ==
-          std::vector<std::string>{"M Series Pro:capture_AUX0", "no MIDI input", "no rack input"});
-    menu->onActivate(0);
-    shell.sync();
-    a.root->frame(false);
+    CHECK(checked(*menu) == std::vector<std::string>{outLabel});
+    a.snapshot("tcp-input-rack.png");
+    a.root->closePopups();
+    running = true;
+    choose("Launchpad");
+    CHECK(shell.inputLabel(id) == "Launchpad");
+    CHECK(model::midiInputRoute(a.app->head(), id));
+    choose("No input");
     CHECK_FALSE(a.app->head().tracks.find(id)->record.input);
-    REQUIRE(inputButton());
+    CHECK_FALSE(a.app->head().tracks.find(id)->record.midiInput);
     CHECK(inputButton()->valueText() == "in \u2014");
+    CHECK(a.app->head().racks.find(*model::Id::parse((*made)["rack"].asString())));
+    choose(outLabel);
+    choose("No input");
+    CHECK_FALSE(a.app->head().tracks.find(id)->record.input);
+    choose("M Series Pro:capture_AUX0");
+    choose("No input");
+    CHECK_FALSE(a.app->head().tracks.find(id)->record.input);
     // Detach the shell's tree while the shell (and the meter feed it holds a
     // reference to) is still alive: its rows release their meters on the way
     // out.
@@ -3169,4 +3103,151 @@ TEST_CASE("every character in the GUI's strings is in the UI font") {
         return all;
     }());
     CHECK(missing.empty());
+}
+
+TEST_CASE("input menu: No input clears channels in a mixed strip selection") {
+    App a;
+    if (!a.ok) return;
+    const cmd::Origin origin{cmd::Origin::Type::Test, "inputs", {}};
+    auto call = [&](const char* command, const std::string& text) {
+        auto r = a.dispatcher->execute({command, *json::parse(text), origin});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    auto rack = call("rack.add", R"({"name":"Voice"})");
+    const auto channel = rack["track"].asString();
+    const auto midi = call("track.add", R"({"name":"Keys"})")["track"].asString();
+    const auto buss = call("track.add", R"({"type":"buss"})")["track"].asString();
+    call("track.set", R"({"track":")" + midi + R"(","record_midi":"*"})");
+    const auto channelId = *model::Id::parse(channel), midiId = *model::Id::parse(midi);
+    const auto input = a.app->head().tracks.find(channelId)->record.input;
+    a.ui.selectedTracks = {channel, midi, buss, "tr_0"};
+    peaks::PeakService peaks(peaks::defaultCacheDir(gui::test::slug()),
+                             [](std::function<void()> f) { f(); });
+    gui::MeterFeed meters;
+    gui::Shell shell(*a.app, *a.dispatcher, a.ui, "", peaks, meters);
+    std::string error;
+    shell.onError = [&](const std::string& text) { error = text; };
+    a.root->setContent(shell.build(*a.root, *a.actions));
+    shell.sync();
+    a.root->frame(false);
+    shell.openInputMenu(channelId, {100, 100, 20, 20});
+    a.root->frame(false);
+    auto* menu = a.root->find("tcp.input." + channel);
+    REQUIRE(menu);
+    const auto items = ui::menuItems(*menu);
+    REQUIRE(items.front().label == "No input");
+    const auto clear = items.front().run;
+    a.root->closePopups();
+    clear();
+    CHECK(error.empty());
+    CHECK_FALSE(a.app->head().tracks.find(channelId)->record.input);
+    CHECK_FALSE(a.app->head().tracks.find(midiId)->record.midiInput);
+    if (error.empty()) {
+        call("history.undo", "{}");
+        CHECK(a.app->head().tracks.find(channelId)->record.input == input);
+        CHECK(model::midiInputRoute(a.app->head(), midiId));
+    }
+    a.root->setContent(std::make_unique<ui::Node>("detached"));
+}
+
+TEST_CASE("input menu: replacing selected rack Outs reports the affected channels") {
+    App a;
+    if (!a.ok) return;
+    const cmd::Origin origin{cmd::Origin::Type::Test, "inputs", {}};
+    auto call = [&](const char* command, const std::string& text) {
+        auto r = a.dispatcher->execute({command, *json::parse(text), origin});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    const auto voice = call("rack.add", R"({"name":"Voice"})")["track"].asString();
+    const auto pad = call("rack.add", R"({"name":"Pad"})")["track"].asString();
+    const auto channel = call("track.add", R"({"name":"Keys"})")["track"].asString();
+    a.ui.selectedTracks = {channel, voice, pad};
+    auto inputs = [] {
+        return *json::parse(
+            R"({"running":true,"audio":[{"channel":1,"port":"Mic"}],"midi":["Keyboard"]})");
+    };
+    peaks::PeakService peaks(peaks::defaultCacheDir(gui::test::slug()),
+                             [](std::function<void()> f) { f(); });
+    gui::MeterFeed meters;
+    gui::Shell shell(*a.app, *a.dispatcher, a.ui, "", peaks, meters, inputs);
+    a.root->setContent(shell.build(*a.root, *a.actions));
+    for (const char* label : {"Keyboard", "Mic"}) {
+        shell.sync();
+        a.root->frame(false);
+        shell.openInputMenu(*model::Id::parse(channel), {100, 100, 20, 20});
+        a.root->frame(false);
+        auto* menu = a.root->find("tcp.input." + channel);
+        REQUIRE(menu);
+        auto items = ui::menuItems(*menu);
+        const auto at = std::find_if(items.begin(), items.end(),
+                                     [&](const auto& i) { return i.label == label; });
+        REQUIRE(at != items.end());
+        const auto choose = at->run;
+        a.root->closePopups();
+        choose();
+        shell.sync();
+        a.root->frame(false);
+        const auto text = a.root->find("status")->valueText();
+        CHECK(text.find("rack inputs") != std::string::npos);
+        CHECK(text.find("Voice") != std::string::npos);
+        CHECK(text.find("Pad") != std::string::npos);
+        for (const auto& id : {voice, pad}) {
+            const auto* t = a.app->head().tracks.find(*model::Id::parse(id));
+            REQUIRE(t->record.input);
+            CHECK_FALSE(a.app->head().routes.find(*t->record.input)->from.module);
+        }
+        a.snapshot("input-replacements.png");
+        call("history.undo", "{}");
+    }
+    a.root->setContent(std::make_unique<ui::Node>("detached"));
+}
+
+TEST_CASE("input menu: single-track changes preserve an earlier status note") {
+    App a;
+    if (!a.ok) return;
+    const cmd::Origin origin{cmd::Origin::Type::Test, "inputs", {}};
+    auto call = [&](const char* command, const std::string& text) {
+        auto r = a.dispatcher->execute({command, *json::parse(text), origin});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    const auto channel = call("track.add", R"({"name":"Keys"})")["track"].asString();
+    const auto rack = call("rack.add", R"({"name":"Voice"})");
+    const auto out = *model::Id::parse(rack.find("out")->asString());
+    const auto id = *model::Id::parse(channel);
+    const auto outLabel = "Voice \u00bb " + model::moduleLabel(a.app->head(), out);
+    a.ui.selectedTracks = {channel};
+    auto inputs = [] {
+        return *json::parse(
+            R"({"running":true,"audio":[{"channel":1,"port":"Mic"}],"midi":["Keyboard"]})");
+    };
+    peaks::PeakService peaks(peaks::defaultCacheDir(gui::test::slug()),
+                             [](std::function<void()> f) { f(); });
+    gui::MeterFeed meters;
+    gui::Shell shell(*a.app, *a.dispatcher, a.ui, "", peaks, meters, inputs);
+    a.root->setContent(shell.build(*a.root, *a.actions));
+    for (const auto& label :
+         {std::string("Keyboard"), std::string("Mic"), outLabel, std::string("No input")}) {
+        shell.sync();
+        a.root->frame(false);
+        shell.setStatus("Render completed");
+        shell.openInputMenu(id, {100, 100, 20, 20});
+        a.root->frame(false);
+        auto* menu = a.root->find("tcp.input." + channel);
+        REQUIRE(menu);
+        const auto items = ui::menuItems(*menu);
+        const auto at = std::find_if(items.begin(), items.end(),
+                                     [&](const auto& item) { return item.label == label; });
+        REQUIRE(at != items.end());
+        const auto choose = at->run;
+        a.root->closePopups();
+        choose();
+        shell.sync();
+        a.root->frame(false);
+        CHECK(a.root->find("status")->valueText().find("Render completed") != std::string::npos);
+        CHECK(shell.inputLabel(id) == (label == "No input" ? "in \u2014" : label));
+    }
+    a.root->setContent(std::make_unique<ui::Node>("detached"));
 }

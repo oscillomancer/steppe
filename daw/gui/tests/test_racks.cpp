@@ -430,7 +430,7 @@ TEST_CASE("rack window: the light theme") {
 }
 
 TEST_CASE(
-    "rack window: a drag moves the selection, one undo step; ctrl+wheel zooms at the pointer") {
+    "rack window: a drag moves the selection, one undo step; the wheel zooms at the pointer") {
     Fixture f;
     if (!f.ok) return;
     Patch p(f);
@@ -463,7 +463,6 @@ TEST_CASE(
     ui::PointerEvent wheel;
     wheel.type = ui::PointerEvent::Type::Wheel;
     wheel.pos = at;
-    wheel.mods = ui::kCtrl;
     wheel.wheelY = 3;
     f.r().pointer(wheel);
     CHECK(space.view().zoom > zoom);
@@ -471,6 +470,29 @@ TEST_CASE(
     CHECK(space.toSpace(at).y == doctest::Approx(static_cast<double>(under.y)).epsilon(0.001));
     for (int k = 0; k < 40; ++k) f.r().pointer(wheel);
     CHECK(space.view().zoom == doctest::Approx(gui::RackSpace::kMaxZoom));
+    // Ctrl scrolls vertically; Shift scrolls horizontally without zooming.
+    const auto scrolled = space.view();
+    wheel.mods = ui::kCtrl;
+    wheel.wheelY = 1;
+    f.r().pointer(wheel);
+    CHECK(space.view().zoom == scrolled.zoom);
+    CHECK(space.view().y == doctest::Approx(scrolled.y - 40 / scrolled.zoom));
+    const auto shifted = space.view();
+    wheel.mods = ui::kShift;
+    f.r().pointer(wheel);
+    CHECK(space.view().zoom == shifted.zoom);
+    CHECK(space.view().x == doctest::Approx(shifted.x - 40 / shifted.zoom));
+    CHECK(space.view().y == shifted.y);
+    f.snapshot("rack-wheel-navigation.png");
+    // A plain sideways wheel pans without changing zoom or vertical position.
+    const auto sideways = space.view();
+    wheel.mods = 0;
+    wheel.wheelY = 0;
+    wheel.wheelX = 2;
+    f.r().pointer(wheel);
+    CHECK(space.view().x == doctest::Approx(sideways.x + 80 / sideways.zoom));
+    CHECK(space.view().y == sideways.y);
+    CHECK(space.view().zoom == sideways.zoom);
     // Middle-drag pans.
     const auto v = space.view();
     f.drag(at, {at.x - 40, at.y}, 2);
@@ -684,7 +706,7 @@ TEST_CASE("rack window: a display hears the pointer; its edits are one undo step
     f.exec("history.undo", "{}");
     f.frame();
     CHECK(time() == doctest::Approx(20));
-    // The wheel over it, one step; Ctrl+wheel still zooms the space.
+    // The wheel over it, one step; Ctrl+wheel scrolls the space.
     ui::PointerEvent wheel;
     wheel.type = ui::PointerEvent::Type::Wheel;
     wheel.pos = at(70, 60);
@@ -692,10 +714,11 @@ TEST_CASE("rack window: a display hears the pointer; its edits are one undo step
     f.r().pointer(wheel);
     f.frame();
     CHECK(time() == doctest::Approx(30));
-    const double zoom = space.view().zoom;
+    const auto beforeScroll = space.view();
     wheel.mods = ui::kCtrl;
     f.r().pointer(wheel);
-    CHECK(space.view().zoom > zoom);
+    CHECK(space.view().zoom == beforeScroll.zoom);
+    CHECK(space.view().y == doctest::Approx(beforeScroll.y - 40 / beforeScroll.zoom));
     CHECK(time() == doctest::Approx(30));
     // Elsewhere on the module, a drag still moves it.
     f.drag(at(75, 10), at(95, 10));
@@ -1582,15 +1605,16 @@ TEST_CASE("rack window: a Notes module's menu picks its MIDI input and the track
     CHECK(input->shortcut == "none");
     CHECK(plays->shortcut == "home");
     CHECK(play() < 1e-4f);  // nothing selected anywhere: silent
-    // The channel's own MIDI input, armed and monitoring: the keyboard plays
-    // the rack, which still sounds on the channel (ADR-0065).
+    // A separate MIDI channel sends to Notes; the rack keeps its Out input.
+    f.exec("route.add",
+           R"({"from":")" + part.str() + R"(","to":")" + notes.str() + R"(","midi":{}})");
     f.exec("track.set",
-           R"({"track":")" + home.str() + R"(","record_midi":"Keys","armed":true,"monitor":"on"})");
+           R"({"track":")" + part.str() + R"(","record_midi":"Keys","armed":true,"monitor":"on"})");
     f.frame();
     CHECK(play() > 0.01f);
     REQUIRE(f.app->head().tracks.find(home)->record.input);
     // Unarmed, the channel's input is not heard; the module's own device is.
-    f.exec("track.set", R"({"track":")" + home.str() + R"(","armed":false})");
+    f.exec("track.set", R"({"track":")" + part.str() + R"(","armed":false})");
     f.frame();
     CHECK(play() < 1e-4f);
     REQUIRE(openMenu());
@@ -1656,6 +1680,13 @@ TEST_CASE("rack window: stopped, a patch that follows the song says to press pla
     f.frame();
     const std::string hint = "Stopped: press play to start the patch";
     auto hinted = [&] { return f.racks->status().find(hint) != std::string::npos; };
+#if defined(__APPLE__)
+    CHECK(f.racks->status().find("Cmd+wheel: scroll") != std::string::npos);
+    CHECK(f.racks->status().find("Ctrl+wheel: scroll") == std::string::npos);
+#else
+    CHECK(f.racks->status().find("Ctrl+wheel: scroll") != std::string::npos);
+    CHECK(f.racks->status().find("Cmd+wheel: scroll") == std::string::npos);
+#endif
     CHECK_FALSE(hinted());  // nothing in it follows the song
     // An instrument plays from notes: no hint.
     f.exec("rack.preset.load", R"({"rack":")" + rack + R"(","name":"Init Voice"})");

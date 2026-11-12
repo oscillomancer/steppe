@@ -349,7 +349,8 @@ instructions are in `docs/guides/installing.md`.
   keep their device clock. Stopped live input
   monitoring also works with reset disabled. Port status and the offset dialog expose the lead.
   The Hardware MIDI tab edits existing input assignments and hardware sends;
-  header menus edit machine port preferences. Mix and scalar-rate shortcuts
+  header menus edit machine port preferences. Teal socket marks identify hardware
+  headers without dividing the grid with separator lines. Mix and scalar-rate shortcuts
   remain active with hardware routes; mute and VCA gate values use mix slots. CoreMIDI no longer flushes shared
   endpoints at shutdown; CoreMIDI closing releases follow accepted timestamps
   before a shared, at-most-250 ms disposal wait. Longer scheduled horizons remain
@@ -384,17 +385,17 @@ instructions are in `docs/guides/installing.md`.
   filtering/remapping, fan-out, compensation and exact RT/offline timing.
   Armed MIDI destinations record these routes, with or without an instrument,
   alongside device MIDI, using the recorder's loop, punch and overdub rules.
-  A rack channel keeps its Out and a keyboard input together (project
-  schema 2.8, legacy MIDI inputs still load; projects that lost the Out to
-  a keyboard selection are reconnected on load when unambiguous). Elsewhere
-  hardware audio and MIDI still replace each other. Notes on the home track
-  follows its armed monitoring and MIDI channel map in both executors;
-  arming, monitor or device changes end only the keyboard's notes, also when
-  the rack enters the live region mid-song. A rack channel with a keyboard
-  records MIDI; a second channel with the rack's Out as input records its
+  A channel has one input: hardware audio, MIDI or rack Out (schema 2.12,
+  ADR-0074). Choosing one replaces the others, including `rack.add`; the input
+  menu has one No input choice. Feed Notes with a MIDI send from a separate
+  keyboard channel, arming that channel for MIDI and the rack channel for
+  audio. Older conflicting inputs retain rack first, else MIDI with a main
+  FX chain, else audio, with a load warning naming the track. MIDI-only
+  aliases remain readable. Notes monitoring and live-region handoff preserve
+  held timeline notes. Separate armed channels can record notes and rack
   audio in the same pass. Removing a rack's channel moves the rack home to
   a channel that still hears its Out or Note Out, if any. The GUI's input
-  menu checks both selections and its button names both. Notes
+  menu checks the one selected input and its button names that input. Notes
   device/source can be cleared with null. Armed channels record their rack Out audio input as stereo WAV,
   including input FX, loop/punch takes, recovery and undo.
   Sends into rack In ports preserve the tap at the route's level and pan,
@@ -506,7 +507,8 @@ instructions are in `docs/guides/installing.md`.
   modifiers.
 - **Rack window** (ADR-0062, gui.md §4.12): a separate window with a tab per
   rack (`+` adds one), a plain pannable, zoomable space (10-400 %, each
-  rack's view in the UI sidecar), modules drawn from their faces with knobs,
+  rack's view in the UI sidecar; wheel zooms, Ctrl+wheel scrolls vertically,
+  Shift+wheel scrolls across; displays retain wheel editing), modules drawn from their faces with knobs,
   toggles, choices and jacks in signal colours, hanging cables, selection,
   marquee and group moves, knob drags, cables drawn jack to jack or onto a
   knob, modulation rings, telemetry glow, a searchable module browser

@@ -2172,3 +2172,39 @@ TEST_CASE("routing matrix: a single wildcard input cell can be removed") {
     REQUIRE(matrix.removeSelected());
     CHECK(model.sendsAt(0, col).empty());
 }
+
+TEST_CASE("routing matrix: hardware MIDI replaces audio and rack inputs") {
+    Fixture f;
+    if (!f.ok) return;
+    auto input = json::Value::object();
+    input["enabled"] = true;
+    REQUIRE(f.app->setMidiPreferences({{"Keyboard", input}}, {}, false));
+    gui::FloatingPanel panel(*f.platform, *f.window, *f.root, SUPPLE_GUI_FONTS_DIR, "Panel", 1000,
+                             560, 800, 360);
+    gui::RoutingMatrix matrix(panel, *f.actions, *f.dispatcher, *f.app);
+    matrix.setHardwareMidiMode();
+    matrix.open();
+    panel.root().frame(false);
+    std::size_t col = 0;
+    while (matrix.model().destinations[col].kind != "track") ++col;
+    const auto track = matrix.model().destinations[col].id;
+    const auto id = *model::Id::parse(track);
+    for (bool rack : {false, true}) {
+        if (rack)
+            f.exec("rack.add", R"({"track":")" + track + R"("})");
+        else
+            f.exec("track.set", R"({"track":")" + track + R"(","record_input":[1,2]})");
+        matrix.sync();
+        REQUIRE(matrix.doubleClickCell(0, col));
+        const auto* route = model::midiInputRoute(f.app->head(), id);
+        REQUIRE(route);
+        CHECK(route->from.midiDevice == "Keyboard");
+        CHECK_FALSE(route->from.module);
+        CHECK_FALSE(route->from.hwChannels);
+        CHECK(matrix.status().find("replaces") != std::string::npos);
+        REQUIRE(matrix.clickCell(0, col));
+        REQUIRE(matrix.removeSelected());
+        CHECK_FALSE(f.app->head().tracks.find(id)->record.input);
+        CHECK_FALSE(f.app->head().tracks.find(id)->record.midiInput);
+    }
+}

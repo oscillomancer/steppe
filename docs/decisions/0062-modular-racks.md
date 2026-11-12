@@ -21,6 +21,9 @@ such a channel records MIDI; see the current
 [rack](../specs/rack.md) and [session-model](../specs/session-model.md)
 contracts.
 
+*2026-11-11: ADR-0074 supersedes simultaneous rack and hardware MIDI inputs
+and the legacy rack-input reconnection.*
+
 ## Context
 
 Steppe's sound design so far happens inside plugins: a synth's patch, an

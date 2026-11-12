@@ -4,6 +4,9 @@
 Contracts: `docs/specs/session-model.md`, `docs/specs/engine.md` and
 `docs/specs/rack.md`.
 
+*2026-11-11: ADR-0074 supersedes simultaneous rack and hardware MIDI inputs
+and the legacy rack-input reconnection.*
+
 ## Context
 
 A channel's single record-input route made audio and MIDI exclusive.

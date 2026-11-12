@@ -1703,16 +1703,15 @@ void registerEngineCommands(cmd::Registry& registry) {
         c.name = "track.set";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpTool;
-        c.summary =
-            "Set track fields: name, type, volume, pan, mute, solo, polarity, mono, arming.";
+        c.summary = "Set track fields; choosing audio, MIDI or rack input replaces the others.";
         c.description =
             "Only the given fields change. solo: off | on | in_place | defeat. armed + "
             "record_input (device input channels, 1-based) prepare a track for "
             "transport.record; record_midi records MIDI instead: hardware audio "
-            "and MIDI replace each other. A rack's Out (record_rack) keeps a MIDI input beside "
-            "it, which plays its Notes; recording then takes MIDI. null clears each one "
-            "(record_input: null takes off hardware audio, record_rack: null a rack's Out), "
-            "leaving the others. A device name is a "
+            "and MIDI or a rack Out (record_rack) replace each other: a track has one input. "
+            "Choosing one clears the other kinds. null clears only the named kind; set all "
+            "three to null for no input. Feed a rack's Notes through MIDI sends from another "
+            "channel. A device name is a "
             "substring of "
             "the MIDI port (\"*\" = every device), with midi_channel 1-16 (0 = all). monitor: "
             "off | on | auto (auto: while armed) — a monitored track hears its input live (an "
@@ -1777,15 +1776,21 @@ void registerEngineCommands(cmd::Registry& registry) {
                        schema::string().pattern("^(off|on|in_place|defeat)$",
                                                 "off, on, in_place or defeat"))
                 .field("armed", &TrackSetArgs::armed, schema::boolean())
-                .field("record_input", &TrackSetArgs::recordInput,
-                       clearable("clearable_channels",
-                                 schema::arrayOf(schema::integer().range(1, 64))))
-                .field("record_midi", &TrackSetArgs::recordMidi, clearableString(schema::string()))
+                .field(
+                    "record_input", &TrackSetArgs::recordInput,
+                    clearable("clearable_channels", schema::arrayOf(schema::integer().range(1, 64)))
+                        .doc("Hardware audio input; replaces MIDI or rack input. null clears "
+                             "hardware audio only"))
+                .field("record_midi", &TrackSetArgs::recordMidi,
+                       clearableString(schema::string())
+                           .doc("MIDI device; replaces hardware audio or rack input. null clears "
+                                "MIDI only"))
                 .field("record_rack", &TrackSetArgs::recordRack,
                        clearableString(
                            idArg("mo", "Out module")
                                .doc("A rack's Out module as the channel's input: the rack plays "
-                                    "on the channel, before its inserts (rack.list lists them); "
+                                    "on the channel, replacing hardware audio or MIDI (rack.list "
+                                    "lists them); "
                                     "null takes a rack's Out off the input")))
                 .field("midi_channel", &TrackSetArgs::midiChannel, schema::integer().range(0, 16))
                 .field("record_mode", &TrackSetArgs::recordMode,
@@ -1853,6 +1858,8 @@ void registerEngineCommands(cmd::Registry& registry) {
              obj("{}"), "song"},
             {"Only the instrument hears the track's MIDI, as before 2.10",
              obj(R"({"track": "tr_1", "chain_midi": "instrument"})"), obj("{}"), "song"}};
+        c.errors = {{"track.record_input", "choose one input: audio, MIDI or rack",
+                     "provide one non-null input field; it replaces the previous input"}};
         c.run = [](const TrackSetArgs& a, Context& ctx) -> Result<Empty> {
             EngineApp& app = A(ctx);
             const model::Session s = app.view();
@@ -1905,15 +1912,15 @@ void registerEngineCommands(cmd::Registry& registry) {
             }
             const std::optional<std::string> recordRack =
                 a.recordRack && !clearRack ? std::optional(a.recordRack->asString()) : std::nullopt;
-            if (recordRack && recordInput)
-                return Error("track.record_input", "choose one audio input: hardware or a rack Out",
-                             "/record_rack",
-                             "give either record_rack or record_input; MIDI is independent");
-            if (recordInput && a.recordMidi && !a.recordMidi->isNull())
-                return Error("track.record_input", "record hardware audio or MIDI, not both",
-                             "/record_midi",
-                             "provide either record_input for audio or record_midi for MIDI; only "
-                             "a rack's Out (record_rack) keeps a MIDI input beside it");
+            if (int(bool(recordRack)) + int(bool(recordInput)) +
+                    int(bool(a.recordMidi && !a.recordMidi->isNull())) >
+                1)
+                return Error("track.record_input", "choose one input: audio, MIDI or rack",
+                             recordInput && a.recordMidi && !a.recordMidi->isNull()
+                                 ? "/record_midi"
+                                 : "/record_rack",
+                             "provide one of record_input, record_midi or record_rack; "
+                             "it replaces the previous input");
             if (a.hwOutput && a.type.value_or(s.tracks.find(*id)->type) != model::StripType::Master)
                 return Error("track.strip_type", "only masters play to hardware outputs",
                              "/hw_output",
@@ -1980,14 +1987,13 @@ void registerEngineCommands(cmd::Registry& registry) {
                 app.txn().remove<model::Route>(route);
             };
             const model::Route* audioRoute = input ? s.routes.find(*input) : nullptr;
-            bool hardwareAudio = audioRoute && audioRoute->from.hwChannels;
+            const bool hardwareAudio = audioRoute && audioRoute->from.hwChannels;
             // No hardware audio input (record_input: null), or no rack Out
             // (record_rack: null): each takes off only an input of its kind.
             if ((clearAudio && hardwareAudio) ||
                 (clearRack && audioRoute && audioRoute->from.module)) {
                 removeRoute(*input);
                 input.reset();
-                hardwareAudio = false;
             }
             const bool clearMidi = a.recordMidi && a.recordMidi->isNull();
             if ((a.recordMidi && !clearMidi) || a.midiChannel)
@@ -1999,8 +2005,7 @@ void registerEngineCommands(cmd::Registry& registry) {
                 if (recordInput->empty())
                     return Error("track.record_input", "give one or more input channels",
                                  "/record_input", "e.g. [1, 2] for a stereo pair");
-                // Hardware audio and MIDI are exclusive (ADR-0065): the MIDI
-                // route becomes the audio one, as before independent inputs.
+                // Reuse the selected input route when changing its kind.
                 if (midiInput && !clearMidi) {
                     if (!input)
                         input = midiInput;
@@ -2027,8 +2032,8 @@ void registerEngineCommands(cmd::Registry& registry) {
                 if (midiInput) removeRoute(*midiInput);
                 midiInput.reset();
             } else if (a.recordMidi || a.midiChannel) {
-                // MIDI replaces hardware audio; only a rack's Out stays beside it.
-                if (hardwareAudio) {
+                // MIDI replaces either audio source, including a rack Out.
+                if (input) {
                     if (!midiInput)
                         midiInput = input;
                     else
@@ -2065,6 +2070,13 @@ void registerEngineCommands(cmd::Registry& registry) {
                         a.track + " sends into " + m->rack.str() + ", so it cannot hear that rack",
                         "/record_rack",
                         "remove the send into the rack's In module, or pick another Out");
+                if (midiInput) {
+                    if (!input)
+                        input = midiInput;
+                    else
+                        removeRoute(*midiInput);
+                    midiInput.reset();
+                }
                 if (input && s.routes.find(*input)) {
                     app.txn().modify<model::Route>(*input, [&](model::Route& r) {
                         r.from = model::RouteEnd{};
