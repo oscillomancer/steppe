@@ -1097,7 +1097,9 @@ refuse atomically and name the refused cell. Output uniqueness is checked on
 the final map, so a two-cell selection can swap L/R in one edit.
 
 Matrix updates clamp scroll to the current endpoint range; paint uses
-endpoint-pair indexes for send and cycle rules.
+endpoint-pair indexes for send and cycle rules and indexed selection lookup.
+Hardware Audio partial-removal validation counts each connected cell once,
+comparing total and selected counts per assignment.
 Commands: `route.*`, `track.set {record_input}`.
 
 ### 4.7 MIDI editor

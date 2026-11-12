@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <array>
 #include <map>
+#include <unordered_map>
+#include <unordered_set>
 
 #include "supple/engine/realtime.h"
 #include "supple/ui/widgets.h"
@@ -299,15 +301,21 @@ Status RoutingMatrix::editHardwareAudio(bool remove, bool replace) {
     };
     // One assignment may occupy several split cells. Partial removal would
     // silently remove another side or change stereo into an L+R mono sum.
-    if (remove)
-        for (const auto& id : selectedSends())
-            for (std::size_t r = 0; r < model_.sources.size(); ++r)
-                for (std::size_t c = 0; c < model_.destinations.size(); ++c)
-                    for (const auto* send : model_.sendsAt(r, c))
-                        if (send->id == id && !isSelected(r, c))
-                            return refuse("one input/output assignment spans these cells",
-                                          "select all its connected cells, or join the signal "
-                                          "before removing it");
+    if (remove) {
+        std::unordered_set<std::string> chosen;
+        for (const auto& cell : selection_) chosen.insert(cell.source + "\n" + cell.destination);
+        std::unordered_map<std::string, std::pair<std::size_t, std::size_t>> counts;
+        for (const auto& send : model_.sends) {
+            auto& [total, selected] = counts[send.id];
+            ++total;
+            if (chosen.contains(send.from + "\n" + send.to)) ++selected;
+        }
+        for (const auto& [id, count] : counts)
+            if (count.second && count.second != count.first)
+                return refuse(
+                    "one input/output assignment spans these cells",
+                    "select all its connected cells, or join the signal before removing it");
+    }
     const auto session = app_.view();
     struct Edit {
         bool input = false;

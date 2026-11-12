@@ -42,6 +42,12 @@ std::string fmt(double v, int decimals) {
 }  // namespace
 
 void MatrixModel::index() {
+    sourceIndex.clear();
+    destinationIndex.clear();
+    for (std::size_t row = 0; row < sources.size(); ++row)
+        sourceIndex[{sources[row].id, sources[row].pair}] = row;
+    for (std::size_t col = 0; col < destinations.size(); ++col)
+        destinationIndex[destinations[col].id] = col;
     cycleIndex.clear();
     sendIndex.clear();
     for (std::size_t i = 0; i < cyclePairs.size(); ++i) cycleIndex[cyclePairs[i]] = cyclePaths[i];
@@ -908,13 +914,11 @@ RoutingMatrix::Cell RoutingMatrix::cellAt(std::size_t row, std::size_t col) cons
 }
 
 std::optional<std::pair<std::size_t, std::size_t>> RoutingMatrix::locate(const Cell& c) const {
-    std::optional<std::size_t> row, col;
-    for (std::size_t i = 0; i < model_.sources.size() && !row; ++i)
-        if (model_.sources[i].id == c.source && model_.sources[i].pair == c.pair) row = i;
-    for (std::size_t i = 0; i < model_.destinations.size() && !col; ++i)
-        if (model_.destinations[i].id == c.destination) col = i;
-    if (!row || !col) return std::nullopt;
-    return std::pair{*row, *col};
+    const auto row = model_.sourceIndex.find({c.source, c.pair});
+    const auto col = model_.destinationIndex.find(c.destination);
+    if (row == model_.sourceIndex.end() || col == model_.destinationIndex.end())
+        return std::nullopt;
+    return std::pair{row->second, col->second};
 }
 
 bool RoutingMatrix::parentCell(std::size_t row, std::size_t col) const {

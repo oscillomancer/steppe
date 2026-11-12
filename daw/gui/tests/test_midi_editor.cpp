@@ -2471,6 +2471,13 @@ TEST_CASE("Hardware Audio: a 64-channel device stays addressable and refreshes o
     matrix.sync();
     CHECK(matrix.model().sources[audioRow(matrix, "audio_in:63", 2)].name.find("unavailable") !=
           std::string::npos);
+    matrix.selectAll();
+    REQUIRE(matrix.removeSelected());
+    CHECK(audioInput(f, channel).empty());
+    CHECK(audioOutput(f).empty());
+    f.exec("history.undo", "{}");
+    CHECK(audioInput(f, channel) == std::vector<int>{63, 64});
+    CHECK(audioOutput(f) == std::vector<int>{63, 64});
     matrix.loadAudioSplits(json::Value::object());
     CHECK(matrix.saveAudioSplits().asArray().empty());
 }
