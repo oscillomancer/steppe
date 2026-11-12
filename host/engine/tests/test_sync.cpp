@@ -124,9 +124,17 @@ struct Rig {
         app.reset();
         fs::remove_all(dir);
     }
+    // A command, as the app's main thread runs it. Anticipative, it waits
+    // for the renderer so nothing depends on that thread's timing: playing,
+    // the renderer is as far ahead as it goes first (a plan hands over past
+    // what is rendered); stopped, the device does not wait for the renderer,
+    // so the callback has the command's plan before the next cycle.
     json::Value run(const std::string& command, std::string_view args) {
+        if (anticipative) REQUIRE(app->engine()->awaitRendered(std::int64_t{1} << 40));
         auto r = bus->execute({command, json::parse(args).value(), kOrigin});
         REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        if (anticipative && !app->engine()->transport().playing)
+            REQUIRE(app->engine()->awaitPlan());
         return *r;
     }
     std::int64_t device = 0;  // frames run
@@ -392,11 +400,9 @@ TEST_CASE("midi clock: Start leads by the locate time, which sync.get reports") 
             Rig rig(ahead, 2, 0, {0, 0}, locate);
             rig.run("sync.set",
                     R"({"source": "midi_clock", "midi_input": "Clock In", "follow_tempo": false})");
-            // A stopped manual device does not wait for the renderer: without
-            // this the clock could arrive before the callback has the plan's
-            // time map, and the first clock's position would not be carried
-            // on to the end of its period.
-            REQUIRE(rig.app->engine()->awaitPlan());
+            // (Rig::run waits for the plan: otherwise the clock could arrive
+            // before the callback has the plan's time map, and the first
+            // clock's position would not be carried to the end of its period.)
             const json::Value got = rig.run("sync.get", "{}");
             CHECK(got.find("status")->find("locate_ms")->asDouble() ==
                   doctest::Approx(locate * 1000.0));
