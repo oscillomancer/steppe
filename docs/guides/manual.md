@@ -439,7 +439,9 @@ Right-click a stereo input, output, channel or master header and choose
 **Split all into L/R / Join all** changes the whole tab. The view saves with the
 project's window layout and does not change any sound by itself. A single
 input channel chosen for a joined channel is mono; a single output chosen for
-a joined master plays the mono sum. To change just L or R, first assign a
+a joined master plays the mono sum. An outlined **M** marks a mono assignment;
+hover names the input/output channel and its mono behaviour. Double-click its
+joined pair cell to assign the complete stereo pair. To change just L or R, first assign a
 stereo pair, then split both the signal and the device pair and choose the new
 channel. The other side stays assigned. Isolating or removing just one side
 without the other is not supported by these assignments; disabled cells and

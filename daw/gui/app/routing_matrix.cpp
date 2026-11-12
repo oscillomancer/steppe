@@ -257,7 +257,11 @@ class Grid : public ui::Node {
                     const auto colour = sends.front()->mute
                                             ? t.color("ink-faint")
                                             : t.color(m_.midi ? "midi-send" : "accent");
-                    if (sends.front()->allInputs) {
+                    if (m_.hardwareAudio && sends.front()->mono) {
+                        c.strokeRound(dot, 3, colour);
+                        c.text(dot, "M", ui::Font::UiBold, t.type("caption"), colour,
+                               ui::kCenter | ui::kMiddle);
+                    } else if (sends.front()->allInputs) {
                         c.strokeRound(dot, 3, colour);
                         c.text(dot, "*", ui::Font::UiBold, t.type("small"), colour,
                                ui::kCenter | ui::kMiddle);
@@ -648,17 +652,22 @@ void RoutingMatrix::open(std::optional<ui::Rect> anchor) {
         if (hardwareAudioMode_) {
             const auto why = model_.blocked(cell->first, cell->second);
             const auto replacement = inputReplacement(s, d);
+            std::string assigned;
+            if (!sends.empty()) {
+                assigned = sends.front()->mono ? sends.front()->audioDescription : "assigned";
+                if (!sends.front()->warning.empty()) assigned += "; " + sends.front()->warning;
+                if (!sends.front()->matchesCell) assigned += "; double-click to assign the pair";
+            }
             status_->setText(
                 pair + ": " +
-                (!sends.empty()
-                     ? (sends.front()->warning.empty() ? "assigned" : sends.front()->warning)
-                 : !why.empty() ? "not allowed — " + why
-                                : "double-click to assign") +
+                (!assigned.empty() ? assigned
+                 : !why.empty()    ? "not allowed — " + why
+                                   : "double-click to assign") +
                 (replacement.empty() ? "" : "; " + replacement) +
-                (s.type == "master" && !s.side && d.deviceChannels.size() == 1
+                (sends.empty() && s.type == "master" && !s.side && d.deviceChannels.size() == 1
                      ? "; mono output (L+R)/2"
                      : "") +
-                (s.type == "audio_input" && !d.side && s.deviceChannels.size() == 1
+                (sends.empty() && s.type == "audio_input" && !d.side && s.deviceChannels.size() == 1
                      ? "; mono input feeds both L and R"
                      : ""));
         } else if (!sends.empty() && sends.front()->allInputs)
@@ -1094,7 +1103,7 @@ Status RoutingMatrix::doubleClickCell(std::size_t row, std::size_t col) {
     if (row >= model_.sources.size() || col >= model_.destinations.size())
         return Error("gui.routing", "no such cell");
     select({cellAt(row, col)}, cellAt(row, col));
-    if (hardwareAudioMode_) return editHardwareAudio(false);
+    if (hardwareAudioMode_) return editHardwareAudio(false, true);
     // A cell with a send: selected, as in either mode (Remove or Delete removes).
     if (!model_.sendsAt(row, col).empty()) return {};
     // The parent's cell is the implicit parent send: on or off.

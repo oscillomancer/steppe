@@ -64,7 +64,8 @@ struct MatrixModel {
         bool mute = false, mono = false, phaseInvert = false;
         int midiFrom = 0, midiTo = 0;
         std::vector<int> mapFrom, mapTo;  // the channel map (empty: identity)
-        std::string warning;
+        std::string warning, audioDescription;
+        bool matchesCell = true;
         bool allInputs = false;  // one wildcard input assignment expanded over rows
     };
     std::vector<Source> sources;
@@ -148,7 +149,7 @@ class RoutingMatrix {
     Status reload();
     Status adoptModel(MatrixModel next);
     Status reloadHardwareAudio();
-    Status editHardwareAudio(bool remove);
+    Status editHardwareAudio(bool remove, bool replace = false);
     bool hardwareAudioChanged() const;
     std::set<std::string> audioSplits_;
     const engine::Backend* audioBackend_ = nullptr;

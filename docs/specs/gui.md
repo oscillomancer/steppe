@@ -1077,7 +1077,10 @@ engine or project-model state. Device pairs use numbered identities.
 
 A single device-input row assigned to a joined channel selects a mono input
 (feeds both sides); an output channel assigned from a joined master selects
-mono `(L+R)/2`. A split channel/master side can replace that side of an existing
+mono `(L+R)/2`. Mono assignments use an outlined **M**, including in the
+joined view; hover says "mono: input N to both sides" or "mono: (L+R)/2 to
+output N". Double-clicking a joined pair cell whose assignment differs from
+that pair assigns the complete pair. A split channel/master side can replace that side of an existing
 stereo assignment while retaining the other side, including non-adjacent output
 pairs. Split sides need a single device channel, so split the device pair first.
 The existing model cannot leave an unassigned gap in a stereo input, silence

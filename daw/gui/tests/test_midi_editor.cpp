@@ -2550,3 +2550,45 @@ TEST_CASE("Hardware Audio: swap sides atomically and refuse mixed blocked select
     CHECK(audioOutput(f) == std::vector<int>{1, 2});
     CHECK(f.app->head().version == version);
 }
+
+TEST_CASE("Hardware Audio: joined mono cells identify mono and double-click restores the pair") {
+    Fixture f;
+    REQUIRE(f.ok);
+    AudioGridDevice backend;
+    StopGridDevice stop{*f.app};
+    REQUIRE(f.app->startEngine(backend, {.blockSize = 64, .inputs = 2, .outputs = 6},
+                               {.anticipative = false, .workers = 0}));
+    const auto channel = f.exec("track.add", R"({"name":"Mono input"})")["track"].asString();
+    f.exec("track.set", R"({"track":")" + channel + R"(","record_input":[1]})");
+    f.exec("track.set", R"({"track":"tr_0","hw_output":[5]})");
+    gui::FloatingPanel panel(*f.platform, *f.window, *f.root, SUPPLE_GUI_FONTS_DIR, "Routing", 1000,
+                             560, 800, 360);
+    gui::RoutingMatrix matrix(panel, *f.actions, *f.dispatcher, *f.app);
+    matrix.setHardwareAudioMode();
+    matrix.open();
+    panel.root().frame(false);
+    auto hover = [&](std::size_t row, std::size_t col) {
+        const auto b = matrix.grid()->bounds();
+        ui::PointerEvent e;
+        e.type = ui::PointerEvent::Type::Move;
+        e.pos = {b.x + 190 + static_cast<float>(col) * 22 + 11,
+                 b.y + 112 + static_cast<float>(row) * 22 + 11};
+        panel.root().pointer(e);
+        return panel.root().find("routing.status")->valueText();
+    };
+    const auto input = audioRow(matrix, "audio_in:1"), col = audioCol(matrix, channel);
+    const auto master = audioRow(matrix, "tr_0"), output = audioCol(matrix, "audio_out:5");
+    CHECK(matrix.model().sendsAt(input, col).front()->mono);
+    CHECK(matrix.model().sendsAt(master, output).front()->mono);
+    CHECK(hover(input, col).find("mono: input 1 to both sides") != std::string::npos);
+    CHECK(hover(master, output).find("mono: (L+R)/2 to output 5") != std::string::npos);
+    f.snapshot("routing-hardware-audio-mono.png", &panel.root());
+    REQUIRE(matrix.doubleClickCell(input, col));
+    CHECK(audioInput(f, channel) == std::vector<int>{1, 2});
+    CHECK_FALSE(matrix.model().sendsAt(input, col).front()->mono);
+    REQUIRE(matrix.doubleClickCell(master, output));
+    CHECK(audioOutput(f) == std::vector<int>{5, 6});
+    CHECK_FALSE(matrix.model().sendsAt(master, output).front()->mono);
+    f.exec("history.undo", "{}");
+    CHECK(audioOutput(f) == std::vector<int>{5});
+}

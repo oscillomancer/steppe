@@ -272,6 +272,14 @@ Status RoutingMatrix::reloadHardwareAudio() {
                           (input ? d.signal : s.signal);
                 send.from = s.id;
                 send.to = d.id;
+                send.mono = channels.size() == 1;
+                if (send.mono)
+                    send.audioDescription =
+                        input ? "mono: input " + std::to_string(channels.front()) + " to both sides"
+                              : "mono: (L+R)/2 to output " + std::to_string(channels.front());
+                const auto& requested = input ? s.deviceChannels : d.deviceChannels;
+                if (!(input ? d.side : s.side) && requested.size() == 2)
+                    send.matchesCell = channels == requested;
                 if (warning)
                     send.warning =
                         "LTC replaces " + s.name + "'s audio on output " + std::to_string(ltc);
@@ -285,7 +293,7 @@ Status RoutingMatrix::reloadHardwareAudio() {
     return adoptModel(std::move(next));
 }
 
-Status RoutingMatrix::editHardwareAudio(bool remove) {
+Status RoutingMatrix::editHardwareAudio(bool remove, bool replace) {
     auto refuse = [&](const std::string& why, const std::string& hint) -> Status {
         statusMessage_ = why + "; " + hint;
         if (status_) status_->setText(statusMessage_);
@@ -316,7 +324,8 @@ Status RoutingMatrix::editHardwareAudio(bool remove) {
         const auto& s = model_.sources[at->first];
         const auto& d = model_.destinations[at->second];
         const auto sends = model_.sendsAt(at->first, at->second);
-        if (remove ? sends.empty() : !sends.empty()) continue;
+        if (remove ? sends.empty() : !sends.empty() && (!replace || sends.front()->matchesCell))
+            continue;
         const auto rule = model_.blocked(at->first, at->second);
         if (!remove && !rule.empty()) {
             return refuse(s.name + " → " + d.name + ": " + rule,
