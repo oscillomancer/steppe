@@ -3036,6 +3036,76 @@ TEST_CASE("rack sends: removing the home moves the rack and says where its sends
     CHECK(app->head().routes.find(*model::Id::parse(send)));
 }
 
+TEST_CASE("rack sends: choosing another input on the home leaves its sends (ADR-0074)") {
+    Workdir dir;
+    auto app = makeApp(dir.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *app);
+    run(bus, "track.add", R"({"name":"Pad"})");                 // tr_1
+    run(bus, "track.add", R"({"name":"Verb","type":"buss"})");  // tr_2
+    const auto added = run(bus, "rack.add", R"({"track":"tr_1"})");
+    const auto rack = added.find("rack")->asString(), out = added.find("out")->asString();
+    const model::Id pad = *model::Id::parse("tr_1"), outId = *model::Id::parse(out);
+    // The Out is the home's one input and also a send source.
+    const auto sendId = *model::Id::parse(
+        run(bus, "route.add",
+            "{\"from\":{\"module\":\"" + out + "\"},\"to\":\"tr_2\",\"volume_db\":-6}")["id"]
+            .asString());
+    run(bus, "env.add", "{\"route\":\"" + sendId.str() + "\",\"param\":\"volume\"}");
+    const auto sendIntact = [&] {
+        const auto& s = app->head();
+        const auto* send = s.routes.find(sendId);
+        REQUIRE(send);
+        CHECK(send->from.module == outId);
+        CHECK(send->to.track == model::Id::parse("tr_2"));
+        CHECK(send->volumeDb == doctest::Approx(-6.0));
+        CHECK(model::rackSendHome(s, *send) == pad);
+        CHECK(s.envelopes.size() == 1);
+        CHECK(s.racks.find(*model::Id::parse(rack))->track == pad);
+        const auto& record = s.tracks.find(pad)->record;
+        // The send is never the channel's input, whichever input it has.
+        CHECK(record.input != sendId);
+        CHECK(record.midiInput != sendId);
+    };
+    const auto inputFrom = [&]() -> const model::RouteEnd* {
+        const auto& s = app->head();
+        const auto& record = s.tracks.find(pad)->record;
+        const auto id = record.input ? record.input : record.midiInput;
+        const auto* route = id ? s.routes.find(*id) : nullptr;
+        return route ? &route->from : nullptr;
+    };
+    sendIntact();
+    REQUIRE(inputFrom());
+    CHECK(inputFrom()->module == outId);
+    // Each choice replaces the input route's source, never the send's.
+    run(bus, "track.set", R"({"track":"tr_1","record_midi":"Keyboard"})");
+    sendIntact();
+    REQUIRE(inputFrom());
+    CHECK(inputFrom()->midiDevice == "Keyboard");
+    run(bus, "track.set", R"({"track":"tr_1","record_input":[1,2]})");
+    sendIntact();
+    REQUIRE(inputFrom());
+    CHECK(inputFrom()->hwChannels == std::vector<int>{1, 2});
+    run(bus, "track.set", "{\"track\":\"tr_1\",\"record_rack\":\"" + out + "\"}");
+    sendIntact();
+    REQUIRE(inputFrom());
+    CHECK(inputFrom()->module == outId);
+    run(bus, "track.set", R"({"track":"tr_1","record_rack":null})");
+    sendIntact();
+    CHECK_FALSE(app->head().tracks.find(pad)->record.input);
+    // A second rack on the home takes the input; the first rack's send stays.
+    run(bus, "rack.add", R"({"track":"tr_1"})");
+    sendIntact();
+    REQUIRE(inputFrom());
+    CHECK(inputFrom()->module != outId);
+    // The project reopens with the send and one input.
+    const fs::path file = dir.path / "inputs.json";
+    run(bus, "project.save", R"({"path": ")" + file.generic_string() + R"("})");
+    run(bus, "project.open", R"({"path": ")" + file.generic_string() + R"("})");
+    sendIntact();
+}
+
 TEST_CASE("MIDI sends: commands validate endpoints, controls, cycles and mute-only learn") {
     Workdir dir;
     auto app = makeApp(dir.path);

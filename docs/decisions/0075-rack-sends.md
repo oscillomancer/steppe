@@ -107,9 +107,12 @@ In module are linear too (rack.md §2.4).
    naming the send), and `route.set` does not turn a channel's input route
    into a send (`route.in_use`; add one with `route.add`).
 9. **Schema 2.13.** Writers emit `supple.project/2.13` (2.11 is the clock
-   output work, 2.12 one input per track). There is nothing to migrate:
-   older files load unchanged. Older builds refuse a project that contains
-   a rack send (their invariants allow an Out only into a channel).
+   output work, 2.12 one input per track, ADR-0074). There is nothing to
+   migrate: older files load unchanged. Older builds refuse a project that
+   contains a rack send (their invariants allow an Out only into a
+   channel). A rack send is never a channel's input, so ADR-0074's one
+   input per channel is unaffected: choosing another input on the home
+   replaces only its input route, and the sends stay with the rack.
 10. **Routing window.** In Audio mode each channel's Out modules follow its
     row, one level in, named "<rack> » <Out>" with the rack colour (teal,
     as In-module columns). Only buss and master cells are open; a selected
