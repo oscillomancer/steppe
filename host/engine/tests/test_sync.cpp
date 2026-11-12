@@ -777,6 +777,9 @@ const DummyBackend::CapturedMidi* first(const std::vector<DummyBackend::Captured
         if (m.frame >= from && is(m, status)) return &m;
     return nullptr;
 }
+// It points into `sent`, so a temporary would leave it dangling.
+const DummyBackend::CapturedMidi* first(std::vector<DummyBackend::CapturedMidi>&&, std::uint8_t,
+                                        std::int64_t = 0) = delete;
 
 int songPosition(const DummyBackend::CapturedMidi& m) {
     return m.event.bytes[1] | (m.event.bytes[2] << 7);
@@ -1129,6 +1132,8 @@ TEST_CASE("midi clock output: a clock-only lead is reported and previewed") {
         // early, leads all audio by 4,800 frames.
         Rig rig(ahead);
         rig.run("midi.outputs.set", R"({"port": "Synth", "clock": true, "offset_ms": -100})");
+        // The anticipative renderer adopts the plan on its own thread.
+        REQUIRE(rig.app->engine()->awaitPlan());
         rig.seconds(0.15);
         REQUIRE(rig.app->engine()->midiLeadFrames() == 4800);
         // Every port reports the shared lead.
@@ -1240,7 +1245,8 @@ TEST_CASE("midi clock output: a Stop takes the reserve, and a refused one is owe
         };
         rig.run("transport.play", "{}");
         rig.seconds(0.15);
-        REQUIRE(first(sentTo(rig, 0), 0xFA));
+        const auto started = sentTo(rig, 0);
+        REQUIRE(first(started, 0xFA));
         // Other writers fill the ordinary part of the period: clock stops
         // going out, but the Stop is a reset and takes the reserve.
         rig.backend->busy = kMaxMidiOutputEvents - kMidiReleaseReserve;
@@ -1262,7 +1268,8 @@ TEST_CASE("midi clock output: a Stop takes the reserve, and a refused one is owe
         rig.backend->full = false;
         rig.seconds(0.15);
         CHECK(stops(paused) == 1);
-        const auto* owed = first(sentTo(rig, 0), 0xFC, paused);
+        const auto sent = sentTo(rig, 0);
+        const auto* owed = first(sent, 0xFC, paused);
         REQUIRE(owed);
         CHECK(owed->frame < cleared + std::int64_t(kBlock));
         // Nothing more at engine stop: the slave already stopped.
@@ -1284,7 +1291,8 @@ TEST_CASE("midi clock output: a Stop still owed when the engine stops is sent th
         rig.seconds(0.15);
         rig.backend->full = false;
         rig.app->stopEngine();
-        const auto* stop = first(sentTo(rig, 0), 0xFC, paused);
+        const auto sent = sentTo(rig, 0);
+        const auto* stop = first(sent, 0xFC, paused);
         REQUIRE(stop);
     }
 }
