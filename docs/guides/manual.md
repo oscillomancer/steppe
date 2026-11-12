@@ -97,6 +97,26 @@ Sends into rack In ports apply the route's level and pan without Console 9
 trim. Existing effect patches fed by those sends play about 2.34 dB louder
 than earlier builds; check their output level when updating.
 
+A rack's Out modules can also send straight to a buss or master, beside the
+channel they feed: in the routing window's Audio mode each Out has a row
+under its channel ("Pad » Out 1", teal), and only buss and master cells take
+a send. A rack send has a level and a mute, nothing else; pan and polarity
+belong in the rack. It joins the buss after the buss's Console 9 decode,
+unencoded, so it does not get a channel's summing character (route the Out
+into a channel and send from there for that). Muting or soloing the rack's
+channel mutes or solos its rack sends too; its fader does not move them. So
+muting the channel to hear the drum rack's reverb alone silences the reverb
+as well: pull the channel's fader down instead. The routing window's status
+line names the channel each Out row follows; moving the rack to another
+channel (or removing its channel, when another channel also hears it) makes
+the sends follow that channel. Removing a rack's only channel removes the
+rack and its sends; for agents, `track.remove` names them in a warning.
+Freezing the channel leaves its rack sends playing live, so the rack still
+uses its CPU, and locks the rack until you unfreeze: you can still move its
+modules, rename them and change the sends, but not its knobs, cables,
+plug-ins or MIDI learn bindings. Agents use
+`route.add {from: {module: "mo_3"}, to: "tr_5"}`.
+
 ### Printing a mix onto its master
 
 A master has an arm button in the mixer, like a channel. Arm it and press

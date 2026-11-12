@@ -272,10 +272,8 @@ Status validateStripRules(const Session& s) {
             if (to->type == StripType::Channel && !r.from.hwChannels && !r.from.module)
                 return routeError(e.id, "a channel accepts only hardware and rack inputs", "to",
                                   "add a buss and route the channels into it; use fx for a key");
-            if (to->type != StripType::Channel && r.from.module)
-                return routeError(e.id, "an Out module feeds a channel", "to",
-                                  "choose the rack's Out as a channel's input");
-            if (to->type != StripType::Channel && !r.from.track)
+            // A buss or master takes a rack's Out as a rack send (ADR-0075).
+            if (to->type != StripType::Channel && !r.from.track && !r.from.module)
                 return routeError(
                     e.id, "a buss/master accepts audio only from strips", "from",
                     "route hardware into a channel, then route that channel into the buss/master");

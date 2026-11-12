@@ -99,6 +99,14 @@ bool mixOnly(const model::Session& a, const model::Session& b,
                 x.mute = y.mute;
                 return x == y;
             }
+            // A rack send's level (ADR-0075): it is never encoded, so any
+            // level is a mix value (publishMix, syncMix).
+            if (!x.midi && x.from.module && model::rackSendHome(a, x) &&
+                model::rackSendHome(b, y)) {
+                changed |= x.volumeDb != y.volumeDb;
+                x.volumeDb = y.volumeDb;
+                return x == y;
+            }
             // Only sends between strips are plan edges; a level of exactly 0 dB
             // (with nothing else set) is summed without an encoder (plan.cpp).
             if (!x.from.track || !(x.to.track || x.to.fx)) return false;

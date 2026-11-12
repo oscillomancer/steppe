@@ -51,7 +51,8 @@ void registerRackLevelCommands(cmd::Registry& registry);
 void registerModuleCommands(cmd::Registry& registry);
 void registerMidiPortCommands(cmd::Registry& registry);
 void registerRackProbe(cmd::Registry& registry);
-void removeRacksOn(model::EditTxn& t, const model::Session& s, model::Id track);
+std::vector<schema::Warning> removeRacksOn(model::EditTxn& t, const model::Session& s,
+                                           model::Id track);
 
 using cmd::Command;
 using cmd::Context;
@@ -583,6 +584,10 @@ Result<EnvDomain> envDomain(EngineApp& app, const model::Session& s, const model
         return Error("env.param", type->type->id() + " has no knob \"" + t.param + "\"", path,
                      keys.empty() ? "it has no knobs" : "knobs: " + keys);
     }
+    if (t.object.kind == model::Kind::Route && t.param == "pan")
+        if (const auto* route = s.routes.find(t.object); route && model::rackSendHome(s, *route))
+            return Error("route.rack_send", "a rack send has level and mute only", path,
+                         "automate volume or mute; pan in the rack or on the buss");
     if (t.object.kind != model::Kind::Fx) {
         d.mixer = mixerUnit(t.object.kind, t.param);
         if (!d.mixer)
@@ -1621,6 +1626,11 @@ void registerEngineCommands(cmd::Registry& registry) {
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpTool;
         c.summary = "Remove a track with its items, fx, routes and envelopes (not a folder).";
+        c.description =
+            "Removes the track's racks too, except a rack another channel hears (its Out "
+            "as the channel's input, or its Note Out's MIDI), which moves there. A warning "
+            "names each rack removed (track.rack_removed) or moved (track.rack_moved) and "
+            "its rack sends: removed with it, or following the new home's mute and solo.";
         c.tags = {"track"};
         c.args = schema::object<TrackRef>("track_ref")
                      .field("track", &TrackRef::track, idArg("tr", "Track"))
@@ -1673,7 +1683,8 @@ void registerEngineCommands(cmd::Registry& registry) {
             for (const auto& e : s.envelopes)
                 if (gone.count(e.value->target.object)) t.remove<model::Envelope>(e.id);
             // Its racks (ADR-0062), and Notes modules elsewhere stop playing it.
-            removeRacksOn(t, s, id);
+            // Each rack it takes or moves is reported, with its sends (ADR-0075).
+            for (const auto& w : removeRacksOn(t, s, id)) ctx.warn(w.code, w.message, w.path);
             for (const auto& e : s.modules)
                 if (e.value->source == id)
                     t.modify<model::RackModule>(e.id,
@@ -1937,6 +1948,18 @@ void registerEngineCommands(cmd::Registry& registry) {
                 if (*id == model::kMaster)
                     return Error("track.strip_type", "tr_0 cannot be retyped", "/type",
                                  "keep the main master; add another strip instead");
+                // A channel cannot take a rack send (ADR-0075): name the route.
+                if (*a.type == model::StripType::Channel)
+                    for (const auto& r : s.routes)
+                        if (r.value->to.track == *id && model::rackSendHome(s, *r.value))
+                            return Error(
+                                "track.strip_type",
+                                "rack send " + r.id.str() + " reaches this " +
+                                    std::string(model::stripTypeName(s.tracks.find(*id)->type)) +
+                                    "; a channel cannot take one",
+                                "/type",
+                                "remove rack send " + r.id.str() +
+                                    " (route.remove) before retyping");
                 model::EditTxn& txn = app.txn();
                 const auto& old = *s.tracks.find(*id);
                 if (*a.type == model::StripType::Master) {

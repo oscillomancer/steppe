@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 // Racks, modules and cables in the session (ADR-0062, rack.md §2).
 #include <doctest/doctest.h>
+#include <supple/model/groups.h>
 #include <supple/model/schemas.h>
 #include <supple/model/versions.h>
 
@@ -76,7 +77,7 @@ Patch patch() {
 TEST_CASE("racks: a patch saves, reopens and serializes the same") {
     Patch p = patch();
     const std::string bytes = serializeProject(p.s);
-    CHECK(bytes.find("\"supple.project/2.12\"") != std::string::npos);
+    CHECK(bytes.find("\"supple.project/2.13\"") != std::string::npos);
     CHECK(bytes.find("\"mo_2.saw\"") != std::string::npos);
     auto loaded = parseProject(bytes);
     REQUIRE_MESSAGE(loaded, (loaded ? "" : loaded.error().message));
@@ -162,7 +163,7 @@ TEST_CASE("racks: invariants refuse broken patches") {
             },
             "holds a plug-in");
     }
-    SUBCASE("an Out module routed to a buss") {
+    SUBCASE("a rack send with a strip send's controls") {
         refused(
             [&](EditTxn& t) {
                 Track buss;
@@ -173,9 +174,20 @@ TEST_CASE("racks: invariants refuse broken patches") {
                 Route r;
                 r.from.module = p.out;
                 r.to.track = b;
+                r.pan = 30.0;
                 t.create(r);
             },
-            "Out module");
+            "level and mute only");
+    }
+    SUBCASE("an Out module routed to a channel it is not the input of") {
+        refused(
+            [&](EditTxn& t) {
+                Route r;
+                r.from.module = p.out;
+                r.to.track = p.other;
+                t.create(r);
+            },
+            "record input");
     }
     SUBCASE("a track that feeds the rack hears it") {
         // ch 2 sends into the rack's In; feeding ch 2 from the rack's Out
@@ -194,6 +206,70 @@ TEST_CASE("racks: invariants refuse broken patches") {
         refused([&](EditTxn& t) { t.modify<RackModule>(p.vco, [](RackModule& m) { m.x = 2e6; }); },
                 "within");
     }
+}
+
+TEST_CASE("racks: a rack send to a buss saves, reopens and follows its home (ADR-0075)") {
+    Patch p = patch();
+    EditTxn t(p.s, 2);
+    Track buss;
+    buss.type = StripType::Buss;
+    buss.parent = kMaster;
+    const Id b = t.create(buss);
+    t.modify<Track>(kMaster, [&](Track& m) { m.children.push_back(b); });
+    Route send;
+    send.from.module = p.out;
+    send.to.track = b;
+    send.volumeDb = -6;
+    send.mute = true;
+    const Id id = t.create(send);
+    // A rack send may learn level and mute.
+    auto learn = [](std::string param, int cc) {
+        ControlLearn l;
+        l.param = std::move(param);
+        l.control.number = cc;
+        return l;
+    };
+    t.modify<Route>(id, [&](Route& r) {
+        r.learn.push_back(learn("volume", 20));
+        r.learn.push_back(learn("mute", 21));
+    });
+    auto s = t.commit();
+    REQUIRE_MESSAGE(s, (s ? "" : s.error().toString()));
+    CHECK(rackSendHome(*s, *s->routes.find(id)) == p.channel);
+    // The Out stays its channel's input: that route is not a rack send.
+    CHECK_FALSE(rackSendHome(*s, *s->routes.find(*s->tracks.find(p.channel)->record.input)));
+    const std::string bytes = serializeProject(*s);
+    CHECK(bytes.find("\"supple.project/2.13\"") != std::string::npos);
+    auto loaded = parseProject(bytes);
+    REQUIRE_MESSAGE(loaded, (loaded ? "" : loaded.error().toString()));
+    CHECK(serializeProject(*loaded) == bytes);
+    const Route* reopened = loaded->routes.find(id);
+    REQUIRE(reopened);
+    CHECK(reopened->volumeDb == -6);
+    CHECK(reopened->mute);
+    CHECK(reopened->from.module == p.out);
+    CHECK(reopened->to.track == b);
+    // Solo: soloing the buss keeps the home channel (the send's source) audible.
+    EditTxn solo(*loaded, 3);
+    solo.modify<Track>(b, [](Track& tr) { tr.solo = Solo::On; });
+    auto soloed = solo.commit();
+    REQUIRE(soloed);
+    CHECK_FALSE(effectiveTrackLevel(*soloed, p.channel, 0).soloSilenced);
+    // Other learned controls are refused.
+    EditTxn pan(*loaded, 3);
+    pan.modify<Route>(id, [&](Route& r) { r.learn.push_back(learn("pan", 22)); });
+    CHECK_FALSE(pan.commit());
+    // A send from the buss into the rack's In closes a loop through the rack.
+    EditTxn loop(*loaded, 3);
+    Route back;
+    back.from.track = b;
+    back.to.module = p.in;
+    loop.create(back);
+    auto cycle = loop.commit();
+    REQUIRE_FALSE(cycle);
+    std::string all = cycle.error().message;
+    for (const auto& x : cycle.error().details) all += " | " + x.message;
+    CHECK_MESSAGE(all.find("routing cycle") != std::string::npos, all);
 }
 
 TEST_CASE("racks: an envelope can automate a module's knob") {
@@ -265,7 +341,7 @@ TEST_CASE("MIDI sends: channel endpoints, Notes source off and old projects roun
     auto s = t.commit();
     REQUIRE(s);
     const auto bytes = serializeProject(*s);
-    CHECK(bytes.find("supple.project/2.12") != std::string::npos);
+    CHECK(bytes.find("supple.project/2.13") != std::string::npos);
     auto reopened = parseProject(bytes);
     REQUIRE(reopened);
     CHECK(reopened->modules.find(p.notes)->sourceOff);
@@ -505,7 +581,12 @@ TEST_CASE(
             doc["tracks"][p.channel.str()]["record"]["midi_input"] = midiId.str();
             doc["routes"][midiId.str()] = toJson(midi);
             doc["project"]["next_ids"]["sd"] = static_cast<std::int64_t>(midiId.n + 1);
-            CHECK_FALSE(projectFromJson(doc));
+            // From 2.12 (ADR-0074) a conflict is invalid, not migrated; 2.13
+            // (rack sends, ADR-0075) keeps that rule.
+            for (const char* version : {"supple.project/2.12", "supple.project/2.13"}) {
+                doc["schema"] = version;
+                CHECK_FALSE(projectFromJson(doc));
+            }
             const bool midiWins = !rackInput && mainChain;
             const Id dropped = midiWins ? input : midiId;
             Envelope env;

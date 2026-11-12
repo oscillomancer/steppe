@@ -90,3 +90,4 @@ current state.
 | [0072](0072-hardware-midi-routing.md) | Hardware MIDI routes, port preferences and causal alignment | Proposed |
 | [0073](0073-midi-clock-output.md) | MIDI clock, Song Position and MTC output | Proposed |
 | [0074](0074-single-track-input.md) | One hardware audio, MIDI or rack input per track | Accepted |
+| [0075](0075-rack-sends.md) | A rack's Out modules send to busses and masters | Accepted |

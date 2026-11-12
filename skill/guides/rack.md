@@ -187,7 +187,7 @@ feedback FM, Karplus-like loops and self-patched chaos.
 
 | Module | What it does |
 |---|---|
-| `out` | Audio to the DAW. Each Out is a channel's input: `rack.add` makes one its channel's; `track.set {track, record_rack: "mo_N"}` gives another channel another Out (the input menu lists them by label), so one rack can play several channels. |
+| `out` | Audio to the DAW. Each Out is a channel's input: `rack.add` makes one its channel's; `track.set {track, record_rack: "mo_N"}` gives another channel another Out (the input menu lists them by label), so one rack can play several channels. An Out also sends to a buss or master: `route.add {from: {module: "mo_N"}, to: "tr_5", volume_db: -6}` (a rack send: level and mute only, added after the buss's Console 9 decode, muted and soloed with the rack's channel: muting the channel silences the send too, so pull its fader down to hear only the send). Freezing the channel leaves the rack running for its sends and locks it until `track.unfreeze`. |
 | `in` | Audio from the DAW: send tracks to it with `route.add {from: "tr_2", to: "mo_7"}` (the In's id). A rack with an In and an Out is an effect. |
 | `notes` | MIDI from its source track (Home by default) and explicit MIDI sends as `pitch`, `gate`, `velocity`, `pressure` per voice, plus `bend` and `modwheel`. `source` can play a separate keyboard channel; alternatively send that channel to Notes. A rack-fed home channel has no hardware MIDI input. `device` listens to a MIDI input always. |
 | `transport` | The song's clock: `clock` at `division` (1/16), `bar` and `beat` triggers, their phases, `playing`, `reset`. Sequencers stay in time with the song through it (or follow the song themselves when nothing drives their clock). |

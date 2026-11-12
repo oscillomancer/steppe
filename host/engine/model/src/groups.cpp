@@ -208,6 +208,9 @@ EffectiveLevel effectiveTrackLevel(const Session& s, Id track, double seconds) {
             for (const auto& e : s.routes)
                 if (e.value->from.track && e.value->to.track && (forward || !e.value->midi))
                     edge(*e.value->from.track, *e.value->to.track);
+            // A rack send is its home channel's send (ADR-0075).
+            for (const auto& e : s.routes)
+                if (const auto home = rackSendHome(s, *e.value)) edge(*home, *e.value->to.track);
         }
     }
     out.soloSilenced = !soloed.empty() && !audible.contains(track) && t->solo != Solo::Defeat &&

@@ -258,6 +258,8 @@ Status restoreFx(host::Instance& instance, const model::FxInstance& fx, const mo
 Result<json::Value> EngineApp::setPlainParams(model::Id id, const json::Value& values) {
     if (const auto owner = model::frozenOwner(view(), id))
         return model::frozenError(view(), *owner, "/fx");
+    if (const auto home = model::frozenRackHome(view(), id))  // a frozen home's rack (ADR-0075)
+        return model::frozenError(view(), *home, "/fx");
     if (!values.isObject())
         return Error("fx.params", "values must be an object", "/values",
                      "map parameter names or ids to numbers or plugin text");
@@ -1492,7 +1494,9 @@ fs::path EngineApp::newerAutosave(const fs::path& project) const {
 }
 
 bool EngineApp::captureFxState(model::Id id, Error* failure) {
-    if (txn_ || !pool_ || model::frozenOwner(head(), id)) return false;
+    // A frozen home locks its racks' plug-ins (ADR-0075): their state stays.
+    if (txn_ || !pool_ || model::frozenOwner(head(), id) || model::frozenRackHome(head(), id))
+        return false;
     const model::FxInstance* fx = head().fx.find(id);
     host::Instance* instance = pool_->find(id);
     // Semantic plug-ins keep their patch in the model already.
@@ -3202,13 +3206,17 @@ struct Gain : Effect {
     if (fixture == "song") return;
     if (fixture == "song_with_rack" || fixture == "song_with_rack_preset" ||
         fixture == "song_with_rack_learn" || fixture == "song_with_rack_clip" ||
-        fixture == "song_with_note_out") {
+        fixture == "song_with_note_out" || fixture == "song_with_rack_buss") {
         // + rk_1 on tr_1: mo_1 Out (tr_1's input), mo_2 Notes, mo_3 VCA; cb_1 mo_3.out -> mo_1.l
         run("rack.add", R"({"track": "tr_1"})");
         run("module.add", R"({"rack": "rk_1", "type": "notes", "x": 40, "y": 40})");
         run("module.add", R"({"rack": "rk_1", "type": "vca", "x": 300, "y": 40})");
         run("cable.add", R"({"from": "mo_3.out", "to": "mo_1.l"})");
         if (fixture == "song_with_rack") return;
+        if (fixture == "song_with_rack_buss") {  // + tr_2 "Verb", a buss (ADR-0075)
+            run("track.add", R"({"name":"Verb","type":"buss"})");
+            return;
+        }
         if (fixture == "song_with_note_out") {
             run("module.add", R"({"rack":"rk_1","type":"notes_out"})");
             run("track.add", R"({"name":"Note destination"})");

@@ -58,6 +58,19 @@ pans arrive through its mix slots (ADR-0060, §1.6) without a new plan.
   sends; pan = send pan or the strip's), then the edge. Edges into a buss
   or master only sum, channel-map and delay (ADR-0019 §3); a plan-level
   checker asserts it in debug builds and in the strip fuzz test.
+- **Rack sends** *(ADR-0075)*: a route from a rack's Out module into a buss
+  or master. Its level and mute (with the 10 ms ramps, its envelopes, and
+  its home channel's mute, mute curve, VCA mutes and solo silencing) run
+  at the rack node after the Out, linear, never Console 9 (`Edge::rackSend`,
+  `encoded`); the destination adds that signal to its main pair right after
+  its C9 Buss decode, before auxiliary links and the pre-FX tap, through
+  its compensation delay. The checker requires a rack send's destination to
+  decode and an Out edge into a channel not to. A rack send's edge belongs
+  to the rack's executor (`syncMix` reads the home's mute from its slot),
+  and so do its automation cursors: a loop wrap or locate resets them
+  through the rack node's `out` edges, never the destination's `in` (the
+  destination may be live while the rack renders ahead); across the
+  frontier the ring carries its output.
 - **ItemPlayer** (inside a TrackNode): per active item on the track's lanes,
   per take: source reader (audio: disk-streamed decoded+resampled blocks
   from the media cache; MIDI: event generator from the source with playrate
@@ -291,7 +304,8 @@ and envelope with those fields taken from the new one and compares the whole
 object, so any other change (mute, solo, a name, an FX or a route's tap)
 compiles. A send whose level moves to or from exactly 0 dB, or whose pan
 starts or stops following its source, compiles: that decides whether it is
-encoded. An unchanged session is a maintenance reload and compiles too. A
+encoded. A rack send is never encoded, so any change of its `volume_db` is
+a mix value (ADR-0075). An unchanged session is a maintenance reload and compiles too. A
 qualifying edit writes the values into the newest plan's mix slots (per
 node, per route edge, per VCA; parent sends carry no values) between an odd
 and an even sequence number. Each executor, at the start of a block
@@ -2534,6 +2548,9 @@ buffers, then the ordinary fader/pan/mute, Console 9, sends and parent routing r
 The captured latency remains in the normal solve, including live automation
 alignment. No cache work, allocation, locks or files occur in the callback.
 Frozen FX ignore MIDI parameter moves and queued editor output.
+The racks on a frozen channel keep running (their Out modules may also feed
+rack sends, ADR-0075), so their plug-ins are not frozen FX and are not pruned;
+the freeze locks them instead (rack.md §6).
 Original live instances are pruned only after both executor epochs release the
 old plans. Dedicated bridges exit; a shared bridge removes the frozen instances and
 keeps its process for unrelated instances and later reuse. A frozen FX description reads stored state without creating a plugin.

@@ -498,32 +498,58 @@ std::string moduleReference() {
 // Exposed to track.remove (commands.cpp): a track's racks go with it, except
 // a rack that another channel hears (its Out as the channel's input, else a
 // Note Out's MIDI). That rack moves home to the first such channel, keeping
-// the name it showed.
-void removeRacksOn(model::EditTxn& t, const model::Session& s, Id track) {
+// the name it showed. Returns a warning per rack, naming its rack sends
+// (ADR-0075): removed with it, or now following the new home.
+std::vector<schema::Warning> removeRacksOn(model::EditTxn& t, const model::Session& s, Id track) {
+    std::vector<schema::Warning> warnings;
     for (const auto& r : s.racks) {
         if (r.value->track != track) continue;
         std::optional<Id> audio, midi;
+        std::string sends;  // "sd_2 to Verb (tr_2), ..."
+        for (const auto& e : s.routes)
+            if (const model::RackModule* m =
+                    e.value->from.module ? s.modules.find(*e.value->from.module) : nullptr;
+                m && m->rack == r.id && model::rackSendHome(s, *e.value))
+                sends += (sends.empty() ? "" : ", ") + e.id.str() + " to " +
+                         model::trackLabel(s, *e.value->to.track) + " (" +
+                         e.value->to.track->str() + ")";
+        const std::string rack = r.id.str() + " (" + model::rackLabel(s, r.id) + ")";
         for (const auto& e : s.routes) {
             const model::RackModule* from =
                 e.value->from.module ? s.modules.find(*e.value->from.module) : nullptr;
-            if (!from || from->rack != r.id || !e.value->to.track || *e.value->to.track == track ||
-                !s.tracks.contains(*e.value->to.track))
+            // Only a channel can be home: a buss hears a rack send, not the rack.
+            const model::Track* target =
+                e.value->to.track ? s.tracks.find(*e.value->to.track) : nullptr;
+            if (!from || from->rack != r.id || !target || *e.value->to.track == track ||
+                target->type != model::StripType::Channel)
                 continue;
             std::optional<Id>& to = e.value->midi ? midi : audio;
             if (!to) to = *e.value->to.track;
         }
         if (const std::optional<Id> home = audio ? audio : midi) {
             const std::string shown = model::rackLabel(s, r.id);
-            t.modify<model::Rack>(r.id, [&](model::Rack& rack) {
-                rack.track = *home;
-                rack.name = shown;
+            t.modify<model::Rack>(r.id, [&](model::Rack& x) {
+                x.track = *home;
+                x.name = shown;
             });
+            warnings.push_back({"track.rack_moved",
+                                rack + " moved to " + model::trackLabel(s, *home) + " (" +
+                                    home->str() + ")" +
+                                    (sends.empty() ? std::string()
+                                                   : "; its rack sends " + sends + " follow " +
+                                                         home->str() + "'s mute and solo"),
+                                "/track"});
             continue;
         }
         for (const auto& m : s.modules)
             if (m.value->rack == r.id) removeModule(t, s, m.id);
         t.remove<model::Rack>(r.id);
+        warnings.push_back(
+            {"track.rack_removed",
+             "removed " + rack + (sends.empty() ? std::string() : " and its rack sends " + sends),
+             "/track"});
     }
+    return warnings;
 }
 
 namespace {
@@ -649,11 +675,20 @@ json::Value outsOf(const model::Session& s, Id rack) {
         json::Value o = json::Value::object();
         o["module"] = e.id.str();
         o["label"] = model::moduleLabel(s, e.id);
-        json::Value feeds = json::Value::array();
+        json::Value feeds = json::Value::array(), sends = json::Value::array();
         for (const auto& r : s.routes)
-            if (r.value->from.module == e.id && r.value->to.track)
-                feeds.push_back(r.value->to.track->str());
+            if (r.value->from.module == e.id && r.value->to.track) {
+                if (model::rackSendHome(s, *r.value)) {  // ADR-0075
+                    json::Value send = json::Value::object();
+                    send["route"] = r.id.str();
+                    send["to"] = r.value->to.track->str();
+                    sends.push_back(std::move(send));
+                } else {
+                    feeds.push_back(r.value->to.track->str());
+                }
+            }
         o["channels"] = std::move(feeds);
+        if (!sends.asArray().empty()) o["sends"] = std::move(sends);
         outs.push_back(std::move(o));
     }
     return outs;
@@ -868,7 +903,8 @@ void registerRackCommands(cmd::Registry& registry) {
         c.description =
             "name \"\" shows the home channel's name. track moves its home (its Out modules "
             "keep feeding the channels they feed; Notes modules without a source follow the "
-            "new home's MIDI).";
+            "new home's MIDI; its rack sends to busses and masters follow the new home's mute "
+            "and solo, ADR-0075). A frozen home's rack cannot move (track.frozen).";
         c.args = schema::object<RackSet>("rack_set_args")
                      .field("rack", &RackSet::rack, idOf("rk", "Rack"))
                      .field("name", &RackSet::name, schema::string())
@@ -901,6 +937,9 @@ void registerRackCommands(cmd::Registry& registry) {
     [&] {
         Command<cmd::NoArgs, json::Value> c;
         common(c, "rack.list", Kind::Query, "List racks: home channels, module counts, Outs.");
+        c.description =
+            "Each Out lists the channels it is the input of (channels) and, when it has any, "
+            "its rack sends to busses and masters (sends: {route, to}, ADR-0075).";
         c.args = schema::object<cmd::NoArgs>("no_args").build();
         c.examples = {{"One rack", j("{}"),
                        j(R"({"racks": [{"rack": "rk_1", "name": "Bass", "track": "tr_1",
@@ -938,7 +977,8 @@ void registerRackCommands(cmd::Registry& registry) {
             "Modules with their type, label, place and size and the knobs that differ from "
             "their defaults (detail full: also their input, output and knob keys); cables with "
             "feedback (true: it closes a loop and carries the previous frame); Out modules and "
-            "the channels they feed; latency_samples for each Out and the rack node, and "
+            "the channels they feed (sends: their rack sends to busses and masters, ADR-0075, "
+            "{route, to}); latency_samples for each Out and the rack node, and "
             "note_outs with their latencies (ADR-0064); problems (missing types, cables that do "
             "not fit). Brief/default latency reads prepared values without creating plug-ins; "
             "unprepared latency is null. detail full may probe unprepared plug-ins.";

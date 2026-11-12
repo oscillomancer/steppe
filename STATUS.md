@@ -363,7 +363,12 @@ instructions are in `docs/guides/installing.md`.
   port attribution remains in aggregate MIDI loss status.
 - **Modular racks** (ADR-0062, `specs/rack.md`): racks of modules and
   cables on a channel, in the project (schema 2.7) with undo and branches.
-  Out modules are channel inputs, In modules take sends (columns of the
+  Out modules are channel inputs and send to busses and masters (rack
+  sends, ADR-0075, schema 2.13: level and mute only, added after the
+  destination's Console 9 decode, following the home channel's mute and
+  solo; rows of the routing matrix under their channel; freezing the home
+  locks its racks, which keep running for their sends; native macOS and
+  Windows CI pending), In modules take sends (columns of the
   routing matrix, after their rack's channel), Notes modules play
   a track's MIDI or a live input, Transport gives the song's clock, plugin
   modules host CLAP/VST3 plug-ins (instruments played from pitch and gate

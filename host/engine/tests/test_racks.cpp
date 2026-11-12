@@ -2546,3 +2546,516 @@ TEST_CASE("MIDI bus: held notes survive plan swaps; a removed or bypassed plug-i
     }
     for (auto* instance : started) instance->stopProcessing();
 }
+
+// --- Rack sends (ADR-0075) ---------------------------------------------------
+
+namespace {
+
+// A channel `home` under the buss `buss` (or the master), its rack's Out its
+// input: Transport's beat phase through a VCA (0..1 every half second, loud
+// enough that a Console 9 decode would bend it), optionally through a 64-sample
+// latency plug-in. The Out also sends to the buss at -3 dB. Console 9 on.
+struct RackSend {
+    model::Session s;
+    Id buss, home, other, rack, notes, out, send;
+    explicit RackSend(bool latency, bool homeIntoBuss = true, bool console9 = true) {
+        model::Project project;
+        project.seed = 4242;
+        project.console9 = console9;
+        model::EditTxn t(model::Session::create(project), 1);
+        model::Track b;
+        b.type = model::StripType::Buss;
+        b.parent = kMaster;
+        buss = t.create(b);
+        t.modify<model::Track>(kMaster, [&](model::Track& m) { m.children.push_back(buss); });
+        model::Track channel;
+        channel.parent = homeIntoBuss ? buss : kMaster;
+        home = t.create(channel);
+        t.modify<model::Track>(*channel.parent,
+                               [&](model::Track& p) { p.children.push_back(home); });
+        other = addChannel(t);
+        rack = t.create(model::Rack{home, "Pad"});
+        notes = addModule(t, rack, model::kNotesModule);
+        const Id transport = addModule(t, rack, "com.suppleaudio.rack.transport");
+        const Id vca = addModule(t, rack, "com.suppleaudio.rack.vca");
+        out = addModule(t, rack, model::kOutModule);
+        cable(t, transport, "beat_phase", vca, "in");
+        if (latency) {
+            const Id delayed = addPlugin(
+                t, rack, "com.suppleaudio.test.gain",
+                json::parse(
+                    R"({"schema":"supple.test-gain-patch/1.0","params":{"latency":"short"}})")
+                    .value());
+            cable(t, vca, "out", delayed, "in_l");
+            cable(t, delayed, "out_l", out, "l");
+        } else {
+            cable(t, vca, "out", out, "l");
+        }
+        listen(t, out, home);
+        model::Route r;
+        r.from.module = out;
+        r.to.track = buss;
+        r.volumeDb = -3;
+        send = t.create(r);
+        s = commit(t);
+    }
+    model::Session with(const std::function<void(model::EditTxn&)>& edit) const {
+        model::EditTxn t(s, s.version + 1);
+        edit(t);
+        return commit(t);
+    }
+};
+
+// An armed, monitored channel under `buss`: the buss plays live, on the
+// callback, while what feeds it otherwise renders ahead.
+void liveBuss(model::EditTxn& t, Id buss) {
+    model::Track mon;
+    mon.parent = buss;
+    const Id m = t.create(mon);
+    t.modify<model::Track>(buss, [&](model::Track& b) { b.children.push_back(m); });
+    model::Route in;
+    in.from.hwChannels = std::vector<int>{1, 2};
+    in.to.track = m;
+    const Id input = t.create(in);
+    t.modify<model::Track>(m, [&](model::Track& x) {
+        x.record.input = input;
+        x.record.armed = true;
+        x.record.monitor = model::Monitor::On;
+    });
+}
+
+// A volume envelope on the rack send: -20 dB at 0 s to +3 dB at 1.5 s.
+void automateSend(model::EditTxn& t, Id send) {
+    model::Envelope env;
+    env.target = {send, "volume"};
+    env.timebase = model::Timebase::Time;
+    env.points = {{0.0, -20.0}, {1.5, 3.0}};
+    t.create(env);
+}
+
+audio::AudioData renderTap(const model::Session& s, double seconds, std::uint32_t block,
+                           std::optional<Id> track = std::nullopt,
+                           model::Tap tap = model::Tap::PostFader) {
+    InstancePool pool = makePool();
+    OfflineSettings settings;
+    settings.endSeconds = seconds;
+    settings.blockSize = block;
+    settings.track = track;
+    settings.tap = tap;
+    auto r = renderOffline(s, pool, settings);
+    REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+    for (const auto& w : r->warnings) MESSAGE(w);
+    return std::move(r->audio);
+}
+
+}  // namespace
+
+TEST_CASE("rack sends: the Out joins a buss once, after its decode, never encoded") {
+    bool latency = false;
+    SUBCASE("no latency") {}
+    SUBCASE("a 64-sample plug-in in the rack") { latency = true; }
+    CAPTURE(latency);
+    const RackSend r(latency);
+    const auto muted = r.with([&](model::EditTxn& t) {
+        t.modify<model::Route>(r.send, [](model::Route& x) { x.mute = true; });
+    });
+    // The buss after its decode (its pre-FX tap), with and without the send,
+    // and the Out's own signal (the home channel's input, its pre-FX tap).
+    const auto heard = renderTap(r.s, 1.0, 512, r.buss, model::Tap::PreFx);
+    const auto without = renderTap(muted, 1.0, 512, r.buss, model::Tap::PreFx);
+    const auto out = renderTap(r.s, 1.0, 512, r.home, model::Tap::PreFx);
+    const double g = std::pow(10.0, -3.0 / 20);
+    double worst = 0, sent = 0, decoded = 0;
+    for (int c = 0; c < 2; ++c)
+        for (std::size_t i = 0; i < 48000; ++i) {
+            const double x = double(out.channels[c][i]);
+            worst = std::max(worst, std::fabs(double(heard.channels[c][i]) -
+                                              (double(without.channels[c][i]) + g * x)));
+            sent = std::max(sent, std::fabs(g * x));
+            decoded = std::max(decoded, std::fabs(double(without.channels[c][i])));
+        }
+    CHECK(sent > 0.5);     // loud: a decode would bend it
+    CHECK(decoded > 0.1);  // the home channel reaches the buss encoded, as before
+    CHECK(worst < 1e-6);   // added once, linearly, after the decode, aligned
+    // The block size changes nothing.
+    const auto odd = renderTap(r.s, 1.0, 37, r.buss, model::Tap::PreFx);
+    CHECK(odd.channels == heard.channels);
+    // The Out still feeds its channel: the home's input is the same with or
+    // without the send.
+    CHECK(renderTap(muted, 1.0, 512, r.home, model::Tap::PreFx).channels == out.channels);
+    // PDC: the rack node's latency is its slowest routed Out, the send's.
+    auto pool = makePool();
+    MediaCache media;
+    auto plan = supple::engine::detail::compile(r.s, pool, 0, 128);
+    REQUIRE(plan);
+    plan->media = &media;
+    REQUIRE(supple::engine::detail::prepare(*plan, r.s));
+    for (const auto& node : plan->nodes)
+        if (node.rack) CHECK(node.latChain == (latency ? 64 : 0));
+    int sends = 0;
+    for (const auto& e : plan->edges)
+        if (e.rackSend) {
+            ++sends;
+            CHECK_FALSE(e.encode);
+            CHECK(plan->nodes[e.to].id == r.buss);
+            CHECK(plan->nodes[static_cast<std::size_t>(e.rackHome)].id == r.home);
+        }
+    CHECK(sends == 1);
+}
+
+TEST_CASE("rack sends: follow the home channel's mute, mute envelope and solo") {
+    // The home channel plays to the master, so the buss hears only the send.
+    const RackSend r(false, false);
+    const auto muted = r.with([&](model::EditTxn& t) {
+        t.modify<model::Route>(r.send, [](model::Route& x) { x.mute = true; });
+    });
+    const auto silent = renderTap(muted, 1.0, 512, r.buss, model::Tap::PreFx);
+    const auto heard = renderTap(r.s, 1.0, 512, r.buss, model::Tap::PreFx);
+    REQUIRE(heard.channels != silent.channels);
+    SUBCASE("home muted") {
+        const auto s = r.with([&](model::EditTxn& t) {
+            t.modify<model::Track>(r.home, [](model::Track& x) { x.mute = true; });
+        });
+        CHECK(renderTap(s, 1.0, 512, r.buss, model::Tap::PreFx).channels == silent.channels);
+    }
+    SUBCASE("home's mute envelope from 0.5 s") {
+        const auto s = r.with([&](model::EditTxn& t) {
+            model::Envelope env;
+            env.target = {r.home, "mute"};
+            env.timebase = model::Timebase::Time;
+            env.points = {{0.0, 0.0, model::PointShape::Square}, {0.5, 1.0}};
+            t.create(env);
+        });
+        const auto a = renderTap(s, 1.0, 512, r.buss, model::Tap::PreFx);
+        // Heard before, silent once the 10 ms ramp has run.
+        for (std::size_t i : {std::size_t{12000}, std::size_t{23000}})
+            CHECK(a.channels[0][i] == heard.channels[0][i]);
+        for (std::size_t i = 24000 + 480; i < 48000; ++i)
+            REQUIRE(a.channels[0][i] == silent.channels[0][i]);
+    }
+    SUBCASE("a VCA's mute over the home channel") {
+        const auto s = r.with([&](model::EditTxn& t) {
+            model::TrackGroup g;
+            g.name = "Keys";
+            g.members = {r.home};
+            g.vca = model::Vca{};
+            g.vca->mute = true;
+            t.create(g);
+        });
+        CHECK(renderTap(s, 1.0, 512, r.buss, model::Tap::PreFx).channels == silent.channels);
+    }
+    // Solo, through the master mix (an isolated tap ignores solo).
+    const auto mixSilent = renderTap(muted, 1.0, 512).channels;
+    SUBCASE("another channel soloed") {
+        const auto s = r.with([&](model::EditTxn& t) {
+            t.modify<model::Track>(r.other, [](model::Track& x) { x.solo = model::Solo::On; });
+        });
+        const auto mutedToo = r.with([&](model::EditTxn& t) {
+            t.modify<model::Track>(r.other, [](model::Track& x) { x.solo = model::Solo::On; });
+            t.modify<model::Route>(r.send, [](model::Route& x) { x.mute = true; });
+        });
+        CHECK(renderTap(s, 1.0, 512).channels == renderTap(mutedToo, 1.0, 512).channels);
+    }
+    SUBCASE("the buss soloed keeps the send") {
+        const auto s = r.with([&](model::EditTxn& t) {
+            t.modify<model::Track>(r.buss, [](model::Track& x) { x.solo = model::Solo::On; });
+        });
+        const auto mutedToo = r.with([&](model::EditTxn& t) {
+            t.modify<model::Track>(r.buss, [](model::Track& x) { x.solo = model::Solo::On; });
+            t.modify<model::Route>(r.send, [](model::Route& x) { x.mute = true; });
+        });
+        CHECK(renderTap(s, 1.0, 512).channels != renderTap(mutedToo, 1.0, 512).channels);
+        (void)mixSilent;
+    }
+}
+
+TEST_CASE("rack sends: real-time output equals the offline render" * doctest::description("rt")) {
+    bool latency = false;
+    int live = 0;  // 0: playback; 1: the rack is live; 2: the buss is live, the rack ahead
+    SUBCASE("playback") {}
+    SUBCASE("playback, rack latency") { latency = true; }
+    SUBCASE("live rack") { live = 1; }
+    SUBCASE("live buss, rack rendered ahead") { live = 2; }
+    SUBCASE("live buss, rack latency") {
+        live = 2;
+        latency = true;
+    }
+    CAPTURE(latency);
+    CAPTURE(live);
+    const RackSend r(latency);
+    auto s = r.with([&](model::EditTxn& t) {
+        // The send's level moves, so its automation must line up too.
+        automateSend(t, r.send);
+        if (live == 1)  // a Notes device input puts the rack on the callback
+            t.modify<model::RackModule>(r.notes, [](model::RackModule& m) { m.device = ""; });
+        if (live == 2) liveBuss(t, r.buss);
+    });
+    {
+        auto pool = makePool();
+        auto plan = supple::engine::detail::compile(s, pool, 0, 96);
+        REQUIRE(plan);
+        for (const auto& node : plan->nodes) {
+            if (node.rack) CHECK(node.live == (live == 1));
+            if (node.id == r.buss) CHECK(node.live == (live != 0));
+        }
+    }
+    InstancePool offlinePool = makePool();
+    auto offline = renderOffline(s, offlinePool, {.startSeconds = 0, .endSeconds = 2.0}).value();
+    const std::uint32_t block = live == 1 ? 37 : 96;
+    for (const EngineOptions& options :
+         {EngineOptions{.anticipative = false, .workers = 0}, EngineOptions{.workers = 0},
+          EngineOptions{.workers = 3}}) {
+        INFO("anticipative " << options.anticipative << ", workers " << options.workers);
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 96000 + 4096});
+        Engine engine(pool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = block}));
+        REQUIRE(engine.load(s));
+        engine.play();
+        for (std::int64_t cycles = (96000 + 4096) / block; cycles > 0;) {
+            if (options.anticipative) REQUIRE(engine.awaitRendered(4096));
+            const std::int64_t n = std::min<std::int64_t>(cycles, 4096 / block);
+            backend.run(n);
+            cycles -= n;
+        }
+        engine.stop();
+        CHECK(engine.processErrors() == 0);
+        const auto& cap = backend.capture();
+        const std::uint32_t L = engine.outputLatency();
+        double worst = 0, peak = 0;
+        for (int c = 0; c < 2; ++c)
+            for (std::size_t i = 0; i < 96000; ++i) {
+                worst = std::max(worst, std::fabs(double(cap.channels[c][L + i]) -
+                                                  double(offline.audio.channels[c][i])));
+                peak = std::max(peak, std::fabs(double(offline.audio.channels[c][i])));
+            }
+        CHECK(peak > 0.1);
+        CHECK(worst == 0.0);
+    }
+}
+
+TEST_CASE("rack sends: the rack's executor owns its sends' automation cursors (ADR-0075)") {
+    // The buss is live, the rack renders ahead: a live-class wrap or locate
+    // (the callback's) must leave the send's cursors to the rack's executor,
+    // which resets them through the rack node's `out` edges. Otherwise both
+    // threads write them (a data race, though Automation::at rescans).
+    const RackSend r(false);
+    const auto s = r.with([&](model::EditTxn& t) {
+        model::Envelope env;
+        env.target = {r.send, "volume"};
+        env.timebase = model::Timebase::Time;
+        env.points = {{0.0, -20.0}, {0.05, -10.0}, {0.1, -6.0}, {0.15, 0.0}, {1.5, 3.0}};
+        t.create(env);
+        env.target = {r.send, "mute"};
+        env.points = {{0.0, 0.0}, {0.05, 0.0}, {0.1, 0.0}, {1.5, 0.0}};
+        t.create(env);
+        liveBuss(t, r.buss);
+    });
+    auto pool = makePool();
+    MediaCache media;
+    auto plan = supple::engine::detail::compile(s, pool, 0, 128);
+    REQUIRE(plan);
+    plan->media = &media;
+    REQUIRE(supple::engine::detail::prepare(*plan, s));
+    const supple::engine::detail::Edge* send = nullptr;
+    for (const auto& e : plan->edges)
+        if (e.rackSend) send = &e;
+    REQUIRE(send);
+    REQUIRE(send->autoVolume.active());
+    REQUIRE(send->autoMute.active());
+    CHECK(plan->nodes[send->to].live);
+    CHECK_FALSE(plan->nodes[send->from].live);
+    for (std::int64_t pos = 0; pos < 48000 / 4; pos += 128)
+        REQUIRE(supple::engine::detail::processBlock(*plan, pos, 128));
+    const auto volume = send->autoVolume.cursor, mute = send->autoMute.cursor;
+    REQUIRE(volume > 0);
+    REQUIRE(mute > 0);
+    supple::engine::detail::wrapTo(*plan, 0, 1);  // the callback's loop wrap
+    CHECK(send->autoVolume.cursor == volume);
+    CHECK(send->autoMute.cursor == mute);
+    supple::engine::detail::locateClass(*plan, 0, true);  // the callback's seek
+    CHECK(send->autoVolume.cursor == volume);
+    CHECK(send->autoMute.cursor == mute);
+    supple::engine::detail::wrapTo(*plan, 0, 0);  // the renderer's: the owner resets them
+    CHECK(send->autoVolume.cursor == 0);
+    CHECK(send->autoMute.cursor == 0);
+}
+
+TEST_CASE("rack sends: a loop wrap and a seek leave the rack's executor its send's automation" *
+          doctest::description("rt")) {
+    // The buss plays live, the rack renders ahead; the send is automated.
+    // Wrapping or seeking the live class must not touch the send's curves:
+    // the rack's executor reads them (ADR-0075; run under tsan).
+    const RackSend r(false);
+    const auto s = r.with([&](model::EditTxn& t) {
+        automateSend(t, r.send);
+        liveBuss(t, r.buss);
+    });
+    constexpr std::uint32_t kBlock = 128;
+    constexpr std::int64_t kCycles = 48000 * 3 / kBlock;
+    std::vector<float> reference;
+    for (const EngineOptions& options :
+         {EngineOptions{.anticipative = false, .workers = 0}, EngineOptions{.workers = 0},
+          EngineOptions{.workers = 2}}) {
+        INFO("anticipative " << options.anticipative << ", workers " << options.workers);
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend(
+            {.mode = DummyBackend::Mode::Manual, .captureFrames = kCycles * kBlock + 64 * kBlock});
+        Engine engine(pool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
+        REQUIRE(engine.load(s));
+        engine.setLoop(0.25, 0.75, true);
+        engine.play();
+        for (std::int64_t cycles = kCycles; cycles > 0;) {
+            if (options.anticipative) REQUIRE(engine.awaitRendered(4096));
+            const std::int64_t n = std::min<std::int64_t>(cycles, 4096 / kBlock);
+            backend.run(n);
+            cycles -= n;
+        }
+        engine.stop();
+        CHECK(engine.processErrors() == 0);
+        const auto& cap = backend.capture().channels[0];
+        const std::uint32_t L = engine.outputLatency();
+        std::vector<float> heard(cap.begin() + L, cap.begin() + L + 48000 * 2);
+        double peak = 0;
+        for (float x : heard) peak = std::max(peak, std::fabs(double(x)));
+        CHECK(peak > 0.05);
+        if (reference.empty())
+            reference = std::move(heard);
+        else
+            CHECK(heard == reference);  // several wraps, identical in both executors
+        // A seek while playing takes the same path (locateNode).
+        engine.play();
+        engine.seek(0.5);
+        for (int i = 0; i < 64; ++i) {
+            if (options.anticipative) REQUIRE(engine.awaitRendered(kBlock));
+            backend.run(1);
+        }
+        engine.stop();
+        CHECK(engine.processErrors() == 0);
+    }
+}
+
+namespace {
+// Runs `blocks` host blocks, rendering ahead first when anticipative.
+void runBlocks(Engine& engine, DummyBackend& backend, bool anticipative, std::int64_t blocks,
+               std::uint32_t block) {
+    while (blocks > 0) {
+        if (anticipative) REQUIRE(engine.awaitRendered(4096));
+        const std::int64_t n =
+            std::min<std::int64_t>(blocks, std::max<std::int64_t>(1, 4096 / block));
+        backend.run(n);
+        blocks -= n;
+    }
+}
+double peakIn(const std::vector<float>& x, std::size_t from, std::size_t to) {
+    double m = 0;
+    for (std::size_t i = from; i < to && i < x.size(); ++i)
+        m = std::max(m, std::fabs(double(x[i])));
+    return m;
+}
+}  // namespace
+
+TEST_CASE("rack sends: a write pass holds the send's level over its curve (ADR-0061)" *
+          doctest::description("rt")) {
+    // The buss hears only the send: the home channel plays to the master at
+    // -inf (its fader never moves the send). The send's level is -inf, its
+    // latch envelope plays 0 dB; a write hold plays the static -inf.
+    const RackSend r(false, false);
+    const model::EnvTarget target{r.send, "volume"};
+    const auto s = r.with([&](model::EditTxn& t) {
+        t.modify<model::Track>(r.home, [](auto& x) { x.volumeDb = model::kSilenceDb; });
+        t.modify<model::Route>(r.send, [](auto& x) { x.volumeDb = model::kSilenceDb; });
+        model::Envelope env;
+        env.target = target;
+        env.mode = model::EnvMode::Latch;
+        env.timebase = model::Timebase::Time;
+        env.points = {{0, 0}};
+        t.create(env);
+    });
+    constexpr std::uint32_t kBlock = 256;
+    for (const EngineOptions& options :
+         {EngineOptions{.anticipative = false, .workers = 0}, EngineOptions{.workers = 0},
+          EngineOptions{.workers = 2}}) {
+        INFO("anticipative " << options.anticipative << ", workers " << options.workers);
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000 * 4});
+        Engine engine(pool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
+        REQUIRE(engine.load(s));
+        engine.play();
+        runBlocks(engine, backend, options.anticipative, 100, kBlock);
+        const auto generation = engine.planGeneration();
+        CHECK_FALSE(engine.setWriteHolds({target}));  // held without a compile
+        runBlocks(engine, backend, options.anticipative, 250, kBlock);
+        CHECK(engine.planGeneration() == generation);
+        engine.setWriteHolds({});  // released: the curve plays again
+        REQUIRE(engine.load(s));
+        runBlocks(engine, backend, options.anticipative, 250, kBlock);
+        engine.stop();
+        CHECK(engine.processErrors() == 0);
+        const auto& L = backend.capture().channels[0];
+        CHECK(peakIn(L, 10000, 25600) > 0.1);    // the curve: 0 dB
+        CHECK(peakIn(L, 60000, 89600) < 1e-5);   // held at -inf
+        CHECK(peakIn(L, 120000, 153600) > 0.1);  // the curve again
+    }
+}
+
+TEST_CASE("rack sends: home mute and send level are mix edits beside a hardware MIDI route" *
+          doctest::description("rt")) {
+    // With a hardware MIDI route a home mute toggle is a mix-only edit
+    // (ADR-0072); the send follows it from the home's slot. A level edit on
+    // the send is a mix value too (no compile). Console 9 is off so that
+    // the master's decode does not bend the level ratio.
+    const RackSend r(false, false, false);
+    const auto base = r.with([&](model::EditTxn& t) {
+        t.modify<model::Track>(r.home, [](auto& x) { x.volumeDb = model::kSilenceDb; });
+        model::Route hw;
+        hw.from.track = r.home;
+        hw.to.midiDevice = "No such port";
+        hw.midi = model::MidiRouting{};
+        t.create(hw);
+    });
+    const auto quieter = [&] {
+        model::EditTxn t(base, base.version + 1);
+        t.modify<model::Route>(r.send, [](auto& x) { x.volumeDb = -12; });
+        return t.commit().value();
+    }();
+    const auto muted = [&] {
+        model::EditTxn t(quieter, quieter.version + 1);
+        t.modify<model::Track>(r.home, [](auto& x) { x.mute = true; });
+        return t.commit().value();
+    }();
+    constexpr std::uint32_t kBlock = 256;
+    for (const EngineOptions& options :
+         {EngineOptions{.anticipative = false, .workers = 0}, EngineOptions{.workers = 0},
+          EngineOptions{.workers = 2}}) {
+        INFO("anticipative " << options.anticipative << ", workers " << options.workers);
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000 * 4});
+        Engine engine(pool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
+        REQUIRE(engine.load(base));
+        engine.play();
+        runBlocks(engine, backend, options.anticipative, 200, kBlock);
+        const auto generation = engine.planGeneration();
+        REQUIRE(engine.load(quieter));
+        runBlocks(engine, backend, options.anticipative, 200, kBlock);
+        REQUIRE(engine.load(muted));
+        runBlocks(engine, backend, options.anticipative, 200, kBlock);
+        CHECK(engine.planGeneration() == generation);  // neither compiled
+        CHECK(engine.mixEdits() == 2);
+        engine.stop();
+        CHECK(engine.processErrors() == 0);
+        const auto& L = backend.capture().channels[0];
+        const double loud = peakIn(L, 20000, 51200), soft = peakIn(L, 80000, 102400);
+        CHECK(loud > 0.1);
+        CHECK(soft ==
+              doctest::Approx(loud * std::pow(10.0, -9.0 / 20)).epsilon(0.02));  // -3 to -12 dB
+        CHECK(peakIn(L, 130000, 153600) < 1e-5);  // the home's mute silences its send
+    }
+}

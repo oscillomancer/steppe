@@ -552,7 +552,8 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
             continue;
         }
         // Racks (ADR-0062): an Out module into its channel, unity; a send
-        // into an In module, at the route's tap, level and pan.
+        // into an In module, at the route's tap, level and pan. An Out into
+        // a buss or master is a rack send (ADR-0075), at its level and mute.
         if (r.from.module && r.to.track) {
             const model::RackModule* m = s.modules.find(*r.from.module);
             if (!m || !index.count(m->rack) || !index.count(*r.to.track)) continue;
@@ -565,6 +566,15 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
             ed.from = index.at(m->rack);
             ed.route = e.id;
             ed.rackOut = static_cast<int>(at - outs.begin());
+            if (const auto home = model::rackSendHome(s, r)) {
+                ed.rackSend = true;
+                if (index.count(*home)) {
+                    ed.rackHome = static_cast<int>(index.at(*home));
+                    ed.homeMute = s.tracks.find(*home)->mute;
+                }
+                ed.volumeDb = r.volumeDb;
+                ed.muted = r.mute;
+            }
             pending.push_back({ed.from, index.at(*r.to.track), std::move(ed), 1 + e.id.n});
             continue;
         }
@@ -677,6 +687,10 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
                 if (e.value->from.track && e.value->to.track) {
                     down[*e.value->from.track].push_back(*e.value->to.track);
                     if (!e.value->midi) up[*e.value->to.track].push_back(*e.value->from.track);
+                } else if (const auto home = model::rackSendHome(s, *e.value)) {
+                    // A rack send is its home channel's send (ADR-0075).
+                    down[*home].push_back(*e.value->to.track);
+                    up[*e.value->to.track].push_back(*home);
                 }
             std::set<Id> audible = soloed;
             auto flood = [&](std::map<Id, std::vector<Id>>& g) {
@@ -935,6 +949,25 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
                     return Error("automation.budget", "MIDI sends exceed the VCA curve budget",
                                  "/groups", "reduce VCA mute automation or MIDI fan-out");
             }
+            continue;
+        }
+        if (e.rackSend) {  // ADR-0075: run by the rack, after its Out
+            p.nodes[e.from].out.push_back(static_cast<std::size_t>(&e - p.edges.data()));
+            if (e.rackHome >= 0) {
+                const Node& home = p.nodes[static_cast<std::size_t>(e.rackHome)];
+                e.homeSilenced = home.soloSilenced;
+                e.stripMute = home.autoMute;
+                e.vcas = home.vcas;
+            }
+            for (auto& vca : e.vcas.values) {
+                vca.volume.points.clear();  // a rack send follows mute, never the fader
+                vca.volumeDb = 0;
+                controlPoints += vca.gate.points.size();
+            }
+            if (controlPoints > 1000000)
+                return Error("automation.budget", "rack sends exceed the VCA curve budget",
+                             "/groups", "reduce VCA mute automation or rack sends");
+            e.staticGain = sendGain(e.volumeDb, model::Tap::PreFader, 0);
             continue;
         }
         if (e.rackOut >= 0) continue;  // a rack's Out: its audio as is
@@ -1285,7 +1318,7 @@ Status prepare(Plan& p, const Session& s) {
             Edge& e = p.edges[ei];
             if (e.rackPadding) e.delay.init(e.delay.length + e.rackPadding);
             e.tmp.init(block);
-            if (e.encode) e.encoded.init(block);
+            if (e.encode || e.rackSend) e.encoded.init(block);
             e.auxTmp.assign(e.auxLinks.empty() ? 0 : block, 0.0f);
         }
     }
@@ -1310,7 +1343,9 @@ Status prepare(Plan& p, const Session& s) {
         n.vcas.shift(at);
         for (std::size_t ei : n.in) {
             Edge& e = p.edges[ei];
-            auto shift = e.encode
+            // A rack send's controls act at the rack, on its Out (ADR-0075).
+            auto shift = e.rackSend ? p.nodes[e.from].timelineShift + e.rackLatency
+                         : e.encode
                              ? (p.nodes[e.from].timelineShift + tapOffset(p.nodes[e.from], e.tap))
                              : n.timelineShift;
             if (e.stage >= 0) shift += n.chain[static_cast<std::size_t>(e.stage)].before;
@@ -1761,8 +1796,12 @@ Status checkStrips(const Plan& p) {
             // a send into an In module is linear, through its own encoder.
             if (e.midi) continue;
             if (e.rackOut >= 0 || e.rackIn >= 0) {
+                // A channel takes an Out as its input; a summing strip, as
+                // a rack send after its decode (ADR-0075).
                 if ((e.rackOut >= 0) == e.encode || (e.rackIn >= 0) != bool(n.rack) ||
-                    (e.rackOut >= 0 && !p.nodes[e.from].rack))
+                    (e.rackOut >= 0 && !p.nodes[e.from].rack) ||
+                    (e.rackOut >= 0 && e.rackSend != n.decodeInput) ||
+                    (e.rackSend && e.rackOut < 0))
                     return Error("engine.strip_edge", "a rack's edges are its In and Out modules'",
                                  {},
                                  "report this routing compiler inconsistency with the project and "
@@ -1802,6 +1841,7 @@ Status checkStrips(const Plan& p) {
 }
 
 const Stereo& edgeSignal(const Plan& p, const Edge& e) SUPPLE_RT {
+    if (e.rackSend) return e.encoded;  // after the send's level and mute (ADR-0075)
     if (e.rackOut >= 0) return p.nodes[e.from].rackOuts[static_cast<std::size_t>(e.rackOut)];
     if (e.encode) return e.encoded;
     const Node& src = p.nodes[e.from];
@@ -2769,7 +2809,7 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
     // 1. Sum the inputs (fixed order), each through its compensation delay.
     node.sum.clear(n);
     for (std::size_t ei : node.in)
-        if (p.edges[ei].stage < 0 && !p.edges[ei].auxOnly)
+        if (p.edges[ei].stage < 0 && !p.edges[ei].auxOnly && !p.edges[ei].rackSend)
             addEdge(p, p.edges[ei], node.sum, pos, n);
     // Monitored device input enters with the inputs (spec §1.1); auto
     // monitoring plays the timeline instead while playing without recording.
@@ -2818,6 +2858,10 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
     if (node.decodeInput)
         for (std::uint32_t i = 0; i < n; ++i)
             node.decoder.sample(node.sum.l[i], node.sum.r[i], node.sum.l[i], node.sum.r[i]);
+    // Rack sends (ADR-0075): never encoded, so added after the decode, each
+    // through its compensation delay.
+    for (std::size_t ei : node.in)
+        if (p.edges[ei].rackSend) addEdge(p, p.edges[ei], node.sum, pos, n);
     // Auxiliary links (ADR-0020), linear, after the decode.
     for (auto& a : node.aux) std::fill_n(a.begin(), n, 0.0f);
     for (std::size_t ei : node.in) {
@@ -3343,7 +3387,9 @@ void locateNode(Plan& p, Node& n, std::int64_t pos, bool restartConsole) SUPPLE_
     for (std::size_t ei : n.in) {
         Edge& e = p.edges[ei];
         locateEdge(e, restartConsole);
-        if (!e.encode)
+        // A rack send's controls belong to the rack's executor, which resets
+        // them through its `out` edges (ADR-0075).
+        if (!e.encode && !e.rackSend)
             for (Automation* a : {&e.autoVolume, &e.autoPan, &e.autoMute, &e.stripWidth,
                                   &e.stripPanLeft, &e.stripPanRight, &e.stripPanBoost, &e.stripPan})
                 a->cursor = 0;
@@ -3452,7 +3498,7 @@ void wrapTo(Plan& p, std::int64_t pos, int liveClass) SUPPLE_RT {
                 ln.lastSent = std::numeric_limits<double>::quiet_NaN();  // the loop start's value
             }
         for (std::size_t ei : n.in)
-            if (!p.edges[ei].encode)
+            if (!p.edges[ei].encode && !p.edges[ei].rackSend)  // the rack's (ADR-0075)
                 for (Automation* a : {&p.edges[ei].autoVolume, &p.edges[ei].autoPan,
                                       &p.edges[ei].autoMute, &p.edges[ei].stripWidth,
                                       &p.edges[ei].stripPanLeft, &p.edges[ei].stripPanRight,
@@ -3737,6 +3783,10 @@ void publishMix(Plan& p, const model::Session& s, std::span<const model::EnvTarg
         const model::Track* source = r && r->from.track ? s.tracks.find(*r->from.track) : nullptr;
         if (!r) continue;
         mix.routes[i].mute.store(r->mute, relaxed);
+        if (e.rackSend) {  // its level, no pan (ADR-0075)
+            store(mix.routes[i], r->volumeDb, 0, held(holds, *e.route, "volume"), false);
+            continue;
+        }
         if (!source) continue;  // a parent send or Note Out has no strip pan
         store(mix.routes[i], r->volumeDb, r->pan.resolve(source->pan),
               held(holds, *e.route, "volume"), held(holds, *e.route, "pan"));
@@ -3808,7 +3858,11 @@ void syncMix(Plan& p, int liveClass) SUPPLE_RT {
         e.holdStripPanLeft = source.holdPanLeft.load(relaxed);
         e.holdStripPanRight = source.holdPanRight.load(relaxed);
         e.holdStripPanBoost = source.holdPanBoost.load(relaxed);
-        e.staticGain = sendGain(e.volumeDb, e.tap, source.volumeDb.load(relaxed));
+        e.staticGain = e.rackSend ? sendGain(e.volumeDb, model::Tap::PreFader, 0)
+                                  : sendGain(e.volumeDb, e.tap, source.volumeDb.load(relaxed));
+        // A rack send follows its home channel's mute (ADR-0075).
+        if (e.rackSend && e.rackHome >= 0)
+            e.homeMute = mix.strips[static_cast<std::size_t>(e.rackHome)].mute.load(relaxed);
         if (!p.nodes[e.from].master) {
             e.source.width = source.width.load(relaxed);
             e.source.left = source.panLeft.load(relaxed);

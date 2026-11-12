@@ -6,6 +6,10 @@
 Notes destinations and Source None, and exposes Note Out in the MIDI routing
 matrix. Existing audio routing rules remain unchanged.
 
+**2026-11-11 amendment:** [ADR-0075](0075-rack-sends.md) lets an Out module
+send to busses and masters (a rack send, added after the destination's
+decode, level and mute only), beside feeding a channel as its input.
+
 Contracts: `docs/specs/rack.md` (model, runtime, engine, commands, GUI),
 `skill/guides/modules.md` (the module language), `skill/guides/rack.md`
 (patching, for agents). Builds on ADR-0008 (session model), ADR-0014 (live
