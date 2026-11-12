@@ -142,8 +142,13 @@ hears the Out unchanged; mute, a mute envelope, a VCA mute and solo; real
 time equals offline in both executors with workers, for a playback rack, a
 live rack, and a live buss with the rack rendered ahead (with and without
 latency), with a volume envelope on the send. `host/engine/model/tests`:
-round trip, home, learn and cycle refusal. `test_commands.cpp`: route.add,
-route.set, env.add and route.learn.set refusals with hints, the routing
-matrix rows, rack.list, save and reopen, removal with the home channel.
+round trip, home, learn and cycle refusal. A live-class loop wrap or locate
+leaves a rack send's automation cursors to the rack's executor (a plan-level
+test; loop wraps and seeks also play identically in both executors); a write pass holds a send's level; a home mute and a send level
+are mix edits beside a hardware MIDI route. `test_freeze.cpp`: a frozen
+home refuses rack edits and keeps the rack's plug-ins. `test_commands.cpp`:
+route.add, route.set, env.add, route.learn.set and track.set refusals with
+hints, the routing matrix rows, rack.list, save and reopen, removal with
+the home channel and its warning.
 `daw/gui/tests/test_midi_editor.cpp`: the rows, open and blocked cells, the
 controls, a double click that sends, removal.
