@@ -58,6 +58,16 @@ pans arrive through its mix slots (ADR-0060, §1.6) without a new plan.
   sends; pan = send pan or the strip's), then the edge. Edges into a buss
   or master only sum, channel-map and delay (ADR-0019 §3); a plan-level
   checker asserts it in debug builds and in the strip fuzz test.
+- **Rack sends** *(ADR-0075)*: a route from a rack's Out module into a buss
+  or master. Its level and mute (with the 10 ms ramps, its envelopes, and
+  its home channel's mute, mute curve, VCA mutes and solo silencing) run
+  at the rack node after the Out, linear, never Console 9 (`Edge::rackSend`,
+  `encoded`); the destination adds that signal to its main pair right after
+  its C9 Buss decode, before auxiliary links and the pre-FX tap, through
+  its compensation delay. The checker requires a rack send's destination to
+  decode and an Out edge into a channel not to. A rack send's edge belongs
+  to the rack's executor (`syncMix` reads the home's mute from its slot);
+  across the frontier the ring carries its output.
 - **ItemPlayer** (inside a TrackNode): per active item on the track's lanes,
   per take: source reader (audio: disk-streamed decoded+resampled blocks
   from the media cache; MIDI: event generator from the source with playrate

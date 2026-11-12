@@ -1006,6 +1006,14 @@ are refused as for strips, and a strip the rack's Outs reach (its home
 channel, and whatever that feeds) is listed as a cycle ("it would feed back").
 A rack's Out and a channel's hardware or MIDI input are record inputs;
 Audio mode leaves those and all MIDI sends out of its send count.
+A channel's racks' Out modules (ADR-0075) are rows after its own (and its
+auxiliary pairs), one level in, named "<rack> » <Out>" ("Pad » Out 1") with
+the teal mark. Only buss and master cells are open (a rack send, added after
+the destination's decode); channels, keys and In modules are disabled with
+"a rack's Out sends to busses and masters", and a buss that feeds the rack is
+listed as a cycle. A rack send counts and selects as any send, but has level
+and mute only: with one selected, the tap, pan, channels and polarity
+controls are disabled. Its being its channel's input is not drawn.
 
 MIDI mode lists channels in hierarchy order, then their racks' Note Out
 modules indented below them. Columns are channels, each followed by its

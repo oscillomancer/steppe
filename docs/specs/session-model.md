@@ -273,7 +273,7 @@ rendered).
 
 | field | notes |
 |---|---|
-| `from` | `{track: id}` or `{hw_input: {channels: [..]}}` or `{midi_input: device}` or `{module: id}` (a rack's Out module: a channel's record input, or Note Out with `midi`: a channel or Notes module, rack.md §5–6) |
+| `from` | `{track: id}` or `{hw_input: {channels: [..]}}` or `{midi_input: device}` or `{module: id}` (a rack's Out module: a channel's record input, or a rack send to a buss or master, ADR-0075; or Note Out with `midi`: a channel or Notes module, rack.md §5–6) |
 | `to` | `{midi_device: name}` for MIDI-only hardware output (ADR-0072), or `{track: id}` or `{fx: id}` (a plug-in's key, ADR-0018) or `{module: id}` (audio into In, MIDI into Notes); hardware outputs are a master's `hw_output` (§1.4, ADR-0056), and a route to `hw_channels` is refused with `route.hw_output` |
 | `tap` | `post_fader` (default), `pre_fader` (post-FX), `pre_fx` |
 | `volume` dB, `pan` % or `follow` (default: the strip's pan), `mute`, `phase_invert`, `mono` | into a buss/master: realized by the send's own C9 Channel (ADR-0019 §3) |
@@ -327,8 +327,15 @@ separate app preferences. `route.list` includes `from_midi` and `to_midi`;
 Cycles are rejected at edit time (`route.cycle`, naming the cycle).
 ADR-0019 §4 rules, rejected at edit time with `route.strip_type` (and a hint
 naming the allowed alternative): audio into a channel only from `hw_input`;
-audio into a buss/master only from strips; key
-routes from any tap of any strip.
+audio into a buss/master only from strips, or from a rack's Out module as a
+rack send; key routes from any tap of any strip.
+
+A **rack send** (ADR-0075) is an audio route from a rack's Out module to a
+buss or master. It has `volume`, `mute`, envelopes and learn on those two,
+and nothing else (`route.rack_send` refuses a tap, pan, mono, polarity or
+channel map, a `pan` envelope and other learned controls). It is never
+encoded: the destination adds it after its decode. It follows the mute and
+solo of its rack's home channel. An Out may feed its channel and send.
 
 ### 1.9 Envelopes and automation items
 
@@ -534,7 +541,7 @@ routes: sd_1 tr_2 → tr_6 ch 1/2→3/4 pre-fader −6 dB (sidechain)
 markers: mk_1 "Verse" bar 1 · regions: rg_1 "Chorus" bars 9–17
 ```
 
-## 5. Project file (`supple.project/2.10`)
+## 5. Project file (`supple.project/2.13`)
 
 ### 5.1 Shape
 
@@ -1111,9 +1118,18 @@ routes (§1.8) and VCAs. A 2.5 file loads unchanged; an older application openin
 file ignores `learn` with a warning, and its controllers move nothing on strips, sends or
 VCAs.
 
+### Rack sends (schema 2.13, ADR-0075)
+
+Writers emit `supple.project/2.13` (2.11 is the clock output's, 2.12 the
+one-input-per-track change's). A route
+from a rack's Out module may end at a buss or master (§1.8): no field is
+added, so older files load unchanged and nothing migrates. Older builds
+refuse a project that holds a rack send, since their invariants allow an
+Out only into a channel.
+
 ### MIDI sends (schema 2.10, ADR-0067)
 
-Writers emit `supple.project/2.10`. Notes modules add optional `source_off`
+The 2.10 change: Notes modules add optional `source_off`
 (default false) and `source_sends` (default true); non-null route `midi`
 admits channel sources and Notes module destinations. Existing 1.x and 2.x
 files retain their meaning: absent `source_off` uses the existing Home/track

@@ -83,3 +83,4 @@ current state.
 | [0065](0065-independent-record-inputs.md) | A rack's channel keeps its MIDI input beside its audio | Accepted |
 | [0066](0066-pan-modes-and-laws.md) | Pan modes, selectable pan laws and unity Console 9 staging | Accepted |
 | [0068](0068-plugin-midi-output.md) | Plug-in note and MIDI output | Accepted |
+| [0075](0075-rack-sends.md) | A rack's Out modules send to busses and masters | Accepted |

@@ -52,7 +52,7 @@ Fields equal to their defaults are omitted, as everywhere (session-model §5).
 
 | Field | Meaning |
 |---|---|
-| `track` | Its home channel (required). Removing the track removes its racks, except a rack another channel hears: one whose Out is that channel's input, else one whose Note Out plays into it (the first by route id). That rack moves home there, keeping the label it showed as its `name`; its Notes modules without a `source` then play the new home's MIDI. |
+| `track` | Its home channel (required). Removing the track removes its racks, except a rack another channel hears: one whose Out is that channel's input, else one whose Note Out plays into it (the first by route id). That rack moves home there, keeping the label it showed as its `name`; its Notes modules without a `source` then play the new home's MIDI. A buss or master that takes a rack send is no home: a rack heard only through its sends goes with its track. |
 | `name` | Shown on its tab; `""` (default) shows the home track's label. |
 
 ### 2.2 Module
@@ -96,6 +96,17 @@ Both ends are in the same rack. At most one cable joins the same two ends.
   When armed without a MIDI input it records stereo, through its input FX,
   using the ordinary audio recorder's loop/punch, takes, recovery and undo rules.
   `"from": {"module": "mo_3"}`.
+- **From an Out module** to a buss or master: a **rack send** (ADR-0075),
+  in addition to any channel the Out feeds. It has `volume_db`, `mute`,
+  envelopes and MIDI learn on volume and mute, and nothing else (no tap,
+  pan, mono, polarity or channel map: `route.rack_send`). It is never
+  Console 9 encoded: its level and mute run at the rack, linearly, and the
+  destination adds it to its main pair directly after its decode (where
+  ADR-0020's auxiliary links join), so nothing sits between an encode and
+  its decode. It follows the rack's home channel's mute, mute envelope,
+  VCA mutes and solo, never its fader. `route.matrix` lists the Out under
+  its home channel among the audio sources (`type: rack_out`); `rack.list`
+  and `rack.get` give each Out's `sends`.
 - **To an In module** from any track: a send, with the route's tap, level,
   pan, mute, channel map and envelopes. `"to": {"module": "mo_9"}`. Sends
   into In modules are never Console 9 encoded (the rack is not a summing
@@ -117,8 +128,9 @@ Both ends are in the same rack. At most one cable joins the same two ends.
   may patch into itself: that is a feedback cable).
 - A plugin module's `fx` exists and is in no chain and no other module;
   every fx is in exactly one chain or one module.
-- A route with a module end: from an Out module only to a channel (and is
-  that channel's `record.input`), to an In module only from a track.
+- A route with a module end: from an Out module to a channel (and is that
+  channel's `record.input`) or, as a rack send, to a buss or master with
+  level and mute only (ADR-0075); to an In module only from a track.
 - No cycle through the mixer: a track that reaches a rack's In module
   (directly or through other routes and racks) is not fed by that rack's
   Out modules. (`rack.cycle`)
@@ -471,7 +483,14 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   path to any output are not compiled. A rack node has no strip stages.
 - **Edges.** A send to an In module is an edge into the rack node at its
   tap; a channel's record input from an Out module is an edge from the rack
-  node into the channel's input sum (linear, no Console 9 stage).
+  node into the channel's input sum (linear, no Console 9 stage). A rack
+  send (ADR-0075) is an edge from the rack node whose level and mute the
+  rack applies after the Out (`Edge::rackSend`, its home channel's mute
+  from that channel's mix slot, its mute curve and VCA mutes copied); the
+  buss or master adds it after its decode, through its compensation delay.
+  Its envelopes are read at the rack's timeline shift plus the Out's
+  latency. When the destination is live and the rack renders ahead, the
+  frontier ring carries the send's output.
 - **Timing.** Read-ahead PDC treats the node as a strip whose latency is the
   maximum of its routed audio Outs and Note Outs (ADR-0064). Each Out's
   latency is the maximum sum of prepared plug-in stage latencies, including
@@ -564,6 +583,9 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   and input-FX latency, with its usual padding and take rules (engine.md §4).
 - **Live.** A rack is live when it consumes live MIDI or a live track sends
   to it; liveness propagates to what it feeds.
+- **Freeze.** Freezing a rack's home channel prints what the channel hears.
+  Rack sends are not in the print: the rack keeps running for them
+  (ADR-0075).
 - **Parameters.** Knob edits on a running rack go to atomic slots (no
   compile). Envelopes on module parameters compile to curves the schedule
   samples at each grid interval's start and holds across host block fragments;
