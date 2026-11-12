@@ -1680,6 +1680,13 @@ TEST_CASE("rack window: stopped, a patch that follows the song says to press pla
     f.frame();
     const std::string hint = "Stopped: press play to start the patch";
     auto hinted = [&] { return f.racks->status().find(hint) != std::string::npos; };
+#if defined(__APPLE__)
+    CHECK(f.racks->status().find("Cmd+wheel: scroll") != std::string::npos);
+    CHECK(f.racks->status().find("Ctrl+wheel: scroll") == std::string::npos);
+#else
+    CHECK(f.racks->status().find("Ctrl+wheel: scroll") != std::string::npos);
+    CHECK(f.racks->status().find("Cmd+wheel: scroll") == std::string::npos);
+#endif
     CHECK_FALSE(hinted());  // nothing in it follows the song
     // An instrument plays from notes: no hint.
     f.exec("rack.preset.load", R"({"rack":")" + rack + R"(","name":"Init Voice"})");

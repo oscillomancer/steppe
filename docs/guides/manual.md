@@ -505,8 +505,8 @@ patches. Every rack's Out is also listed in each channel's input menu, so
 any channel can take any rack's sound.
 
 Middle-drag or hold Space and drag to pan; the wheel zooms at the pointer
-(10 to 400 %), Ctrl+wheel scrolls vertically, Shift+wheel or a sideways wheel
-scrolls across. Home shows everything, Shift+Home zooms to the selected
+(10 to 400 %), Ctrl+wheel (Cmd+wheel on macOS) scrolls vertically, and
+Shift+wheel or a sideways wheel scrolls across. Home shows everything, Shift+Home zooms to the selected
 modules and Ctrl+0 is 100 %. Zoomed far out, each module shows just its
 name, so a big patch stays readable. Each rack remembers where you left it.
 

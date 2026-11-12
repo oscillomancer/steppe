@@ -819,7 +819,8 @@ selected channel, or a new one).
 
 - **The space.** A plain background, nothing else, until modules are
   added. Middle-drag or Space-drag pans; the wheel zooms at the pointer
-  (10 %–400 %), Ctrl+wheel scrolls vertically and Shift+wheel scrolls across.
+  (10 %–400 %), Ctrl+wheel (Cmd+wheel on macOS) scrolls vertically and
+  Shift+wheel scrolls across.
   A sideways wheel pans horizontally. Interactive displays keep vertical
   wheel editing. Per-rack view (offset, zoom) is in the UI sidecar.
 - **Modules** are panels placed anywhere, dragged freely by their body

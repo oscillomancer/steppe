@@ -1309,7 +1309,7 @@ a new channel). It follows rack.md §8.
   search focused; the line goes with the first other module. Middle-drag
   or Space-drag pans (Space alone, released without a drag, still plays and
   stops), the wheel zooms at the pointer from 10 to 400 %, Ctrl+wheel
-  scrolls vertically and Shift+wheel scrolls across; a sideways wheel pans
+  scrolls vertically (Cmd+wheel on macOS) and Shift+wheel scrolls across; a sideways wheel pans
   horizontally. Ctrl+= and Ctrl+- zoom, Ctrl+0 is 100 %, Home
   shows everything (at most 100 %, as far out as it takes) and Shift+Home
   fills the view with the selection (at most 150 %). Below 55 % the faces'
