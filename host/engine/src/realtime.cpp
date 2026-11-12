@@ -249,17 +249,7 @@ void Engine::setMidiPreferences(MidiPortPreferences inputs, MidiPortPreferences 
 std::uint32_t Engine::midiLeadFrames() const { return hardwareMidi_ ? hardwareMidi_->lead() : 0; }
 std::uint32_t Engine::midiLeadForOffset(std::size_t port, double offsetMs) const {
     const auto* plan = latestPlan_.load(std::memory_order_acquire);
-    if (!plan) return 0;
-    std::int64_t lead = 0;
-    for (const auto& route : plan->hardwareMidi)
-        if (route->port >= 0) {
-            auto delay = route->delay - plan->hardwareLead;
-            if (static_cast<std::size_t>(route->port) == port)
-                delay += time::samplesAt(
-                    (offsetMs - plan->midiOutputsSettings[port].offsetMs) / 1000., plan->rate);
-            lead = std::max(lead, -delay);
-        }
-    return static_cast<std::uint32_t>(lead);
+    return plan ? static_cast<std::uint32_t>(detail::hardwareMidiLead(*plan, port, offsetMs)) : 0;
 }
 std::uint32_t Engine::outputLatency() const { return outputLatency_ + midiLeadFrames(); }
 std::uint64_t Engine::midiPortDropped(bool output, std::size_t port) const {

@@ -672,7 +672,8 @@ class Engine {
     void setMidiPreferences(MidiPortPreferences inputs, MidiPortPreferences outputs);
     std::uint64_t midiPortDropped(bool output, std::size_t port) const;
     std::uint32_t midiLeadFrames() const;
-    // Owner thread: shared audio lead for a candidate offset on one port.
+    // Owner thread: the shared audio lead (routed notes, clock, SPP and MTC)
+    // with one port's offset at a candidate value.
     std::uint32_t midiLeadForOffset(std::size_t port, double offsetMs) const;
     const std::vector<std::string>& warnings() const { return warnings_; }
 

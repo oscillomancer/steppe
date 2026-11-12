@@ -1013,6 +1013,10 @@ struct Plan {
     std::vector<std::shared_ptr<HardwareRoute>> hardwareMidi;
     std::array<MidiPortSettings, 16> midiInputsSettings{}, midiOutputsSettings{};
     std::uint32_t hardwareLead = 0;
+    // Per output port, the earliest MIDI it sends relative to its audio
+    // before its offset (routed notes, clock, SPP, MTC; frames), or none:
+    // hardwareMidiLead() derives the lead from it, for any offset.
+    std::array<std::optional<std::int64_t>, 16> hardwareLeadBase{};
     std::span<const MidiInputEvent> deviceMidi;
     std::uint32_t deviceMidiOffset = 0;
     // Armed channels with input FX: what the recorder takes instead of the

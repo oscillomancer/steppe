@@ -1115,6 +1115,27 @@ TEST_CASE("midi outputs: get, set, validation, engine.status and the JSON round 
     CHECK_FALSE(parseMidiPortPreferences(json::parse(R"({"A": {"clock": true}})").value(), false));
 }
 
+TEST_CASE("midi clock output: a clock-only lead is reported and previewed") {
+    for (bool ahead : {false, true}) {
+        CAPTURE(ahead);
+        // No note routes and no plug-in latency: the clock port alone, 100 ms
+        // early, leads all audio by 4,800 frames.
+        Rig rig(ahead);
+        rig.run("midi.outputs.set", R"({"port": "Synth", "clock": true, "offset_ms": -100})");
+        rig.seconds(0.15);
+        REQUIRE(rig.app->engine()->midiLeadFrames() == 4800);
+        // Every port reports the shared lead.
+        const json::Value got = rig.run("midi.outputs.get", "{}");
+        for (const auto& port : got.find("ports")->asArray())
+            CHECK(port.find("lead_ms")->asDouble() == doctest::Approx(100));
+        // The Timing offset preview: -150 ms would lead by 7,200; 0 by none.
+        CHECK(rig.app->engine()->midiLeadForOffset(0, -150) == 7200);
+        CHECK(rig.app->engine()->midiLeadForOffset(0, 0) == 0);
+        // A port that sends nothing early adds nothing at any offset.
+        CHECK(rig.app->engine()->midiLeadForOffset(1, -500) == 4800);
+    }
+}
+
 TEST_CASE("midi clock output: a port earlier than the audio leads it, and clock follows the lead") {
     // Synth sends 20 ms before its audio, more than the plan's 512 frames of
     // latency: the shared hardware MIDI lead (ADR-0072) covers it although
