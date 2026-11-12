@@ -7,8 +7,6 @@
 // (ADR-0073) land on the device's captured MIDI where their audio is heard.
 #include <doctest/doctest.h>
 
-#include <unistd.h>
-
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -18,6 +16,7 @@
 #include <thread>
 #include <vector>
 
+#include "../../../tests/file_platform.h"
 #include "supple/audio/audio_file.h"
 #include "supple/base/files.h"
 #include "supple/engine/app.h"
@@ -54,7 +53,7 @@ struct BusyBackend : DummyBackend {
 // A master: MIDI messages scheduled at absolute device frames, delivered in
 // the cycle that holds them, or audio on an input channel.
 struct Rig {
-    fs::path dir = fs::temp_directory_path() / ("supple-sync-" + std::to_string(::getpid()));
+    fs::path dir = fs::temp_directory_path() / ("supple-sync-" + std::to_string(test::processId()));
     std::unique_ptr<EngineApp> app;
     cmd::Registry registry;
     std::unique_ptr<cmd::Dispatcher> bus;
@@ -1284,7 +1283,7 @@ TEST_CASE("midi clock output: a Stop still owed when the engine stops is sent th
 
 TEST_CASE("midi outputs: the engine writes the clock members and raises an older schema") {
     const fs::path dir =
-        fs::temp_directory_path() / ("supple-sync-prefs-" + std::to_string(::getpid()));
+        fs::temp_directory_path() / ("supple-sync-prefs-" + std::to_string(test::processId()));
     fs::remove_all(dir);
     fs::create_directories(dir);
     AppOptions options;
@@ -1416,7 +1415,7 @@ TEST_CASE("midi clock output: no slave is left playing") {
 
 TEST_CASE("midi clock output: engine stop sends Stop from a running cycle") {
     const fs::path dir =
-        fs::temp_directory_path() / ("supple-sync-stop-" + std::to_string(::getpid()));
+        fs::temp_directory_path() / ("supple-sync-stop-" + std::to_string(test::processId()));
     fs::remove_all(dir);
     fs::create_directories(dir);
     AppOptions options;
