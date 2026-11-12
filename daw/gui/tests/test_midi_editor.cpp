@@ -2250,6 +2250,7 @@ TEST_CASE("Hardware Audio: assignments replace inputs, edit masters and warn abo
     CHECK_FALSE(model::midiInputRoute(f.app->head(), *model::Id::parse(channel)));
     CHECK(matrix.status().find("replaces MIDI input Keyboard") != std::string::npos);
     REQUIRE(matrix.clickCell(in, col));
+    CHECK(panel.root().find("routing.send")->valueText() == "1 cell selected");
     REQUIRE(matrix.removeSelected());
     CHECK(audioInput(f, channel).empty());
     // A rack Out is replaced through the same existing track.set path.
@@ -2450,6 +2451,7 @@ TEST_CASE("Hardware Audio: a 64-channel device stays addressable and refreshes o
     REQUIRE(matrix.clickCell(audioRow(matrix, "audio_in:63", 2), audioCol(matrix, channel, 2),
                              ui::kCtrl));
     CHECK(matrix.selectedCells() == 2);
+    CHECK(panel.root().find("routing.send")->valueText() == "2 cells selected");
     REQUIRE(matrix.clickCell(audioRow(matrix, "audio_in:1", 1), audioCol(matrix, channel, 1)));
     REQUIRE(matrix.clickCell(audioRow(matrix, "audio_in:1", 2), audioCol(matrix, channel, 2),
                              ui::kCtrl));

@@ -1363,9 +1363,10 @@ void RoutingMatrix::refresh() {
         return id;
     };
     if (hardwareAudioMode_) {
-        sendTitle_->setText(selection_.empty()
-                                ? "Select input/output assignments"
-                                : std::to_string(selection_.size()) + " cells selected");
+        sendTitle_->setText(selection_.empty() ? "Select input/output assignments"
+                                               : std::to_string(selection_.size()) +
+                                                     (selection_.size() == 1 ? " cell selected"
+                                                                             : " cells selected"));
     } else if (selection_.empty())
         sendTitle_->setText("Select cells: click, Ctrl or Shift+click, or a row or column name");
     else if (selection_.size() == 1 && !x) {
