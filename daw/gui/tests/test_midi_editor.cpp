@@ -2256,12 +2256,14 @@ TEST_CASE("Hardware Audio: assignments replace inputs, edit masters and warn abo
     // A rack Out is replaced through the same existing track.set path.
     const auto rack = f.exec("rack.add", R"({"track":")" + channel + R"("})")["rack"].asString();
     const auto module =
-        f.exec("module.add", R"({"rack":")" + rack + R"(","type":"out"})")["module"].asString();
+        f.exec("module.add",
+               R"({"rack":")" + rack + R"(","type":"out","label":"Record return"})")["module"]
+            .asString();
     f.exec("track.set", R"({"track":")" + channel + R"(","record_rack":")" + module + R"("})");
     matrix.sync();
     REQUIRE(matrix.doubleClickCell(in, col));
     CHECK(audioInput(f, channel) == std::vector<int>{1, 2});
-    CHECK(matrix.status().find("replaces Out 1") != std::string::npos);
+    CHECK(matrix.status().find("replaces Record return") != std::string::npos);
     CHECK(matrix.status().find(module) == std::string::npos);
     const auto output = audioCol(matrix, "audio_out:3");
     REQUIRE(matrix.doubleClickCell(audioRow(matrix, "tr_0"), output));
