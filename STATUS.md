@@ -395,7 +395,7 @@ instructions are in `docs/guides/installing.md`.
   held timeline notes. Separate armed channels can record notes and rack
   audio in the same pass. Removing a rack's channel moves the rack home to
   a channel that still hears its Out or Note Out, if any. The GUI's input
-  menu checks both selections and its button names both. Notes
+  menu checks the one selected input and its button names that input. Notes
   device/source can be cleared with null. Armed channels record their rack Out audio input as stereo WAV,
   including input FX, loop/punch takes, recovery and undo.
   Sends into rack In ports preserve the tap at the route's level and pan,

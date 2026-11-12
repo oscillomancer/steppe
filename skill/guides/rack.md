@@ -189,7 +189,7 @@ feedback FM, Karplus-like loops and self-patched chaos.
 |---|---|
 | `out` | Audio to the DAW. Each Out is a channel's input: `rack.add` makes one its channel's; `track.set {track, record_rack: "mo_N"}` gives another channel another Out (the input menu lists them by label), so one rack can play several channels. |
 | `in` | Audio from the DAW: send tracks to it with `route.add {from: "tr_2", to: "mo_7"}` (the In's id). A rack with an In and an Out is an effect. |
-| `notes` | The rack channel's MIDI (its items and, when it monitors, live input) as `pitch`, `gate`, `velocity`, `pressure` per voice, plus `bend` and `modwheel`. `source` plays another track's MIDI; `device` a MIDI input always. |
+| `notes` | MIDI from its source track (Home by default) and explicit MIDI sends as `pitch`, `gate`, `velocity`, `pressure` per voice, plus `bend` and `modwheel`. `source` can play a separate keyboard channel; alternatively send that channel to Notes. A rack-fed home channel has no hardware MIDI input. `device` listens to a MIDI input always. |
 | `transport` | The song's clock: `clock` at `division` (1/16), `bar` and `beat` triggers, their phases, `playing`, `reset`. Sequencers stay in time with the song through it (or follow the song themselves when nothing drives their clock). |
 | `plugin` | A plug-in: `module.add {rack, plugin}`. Instruments play from `pitch` and `gate` (a voice per gate channel: key round(60 + 12 × pitch)). Audio in on `in_l`, `in_r`; out on `out_l`, `out_r`. Its knobs are its plug-in's: `fx.set`, `fx.patch.merge` on its `fx`; a cable into `"synth.cutoff"` (in `rack.patch`) or `fx_N.cutoff` modulates one. |
 
