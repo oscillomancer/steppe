@@ -317,7 +317,8 @@ instructions are in `docs/guides/installing.md`.
   keep their device clock. Stopped live input
   monitoring also works with reset disabled. Port status and the offset dialog expose the lead.
   The Hardware MIDI tab edits existing input assignments and hardware sends;
-  header menus edit machine port preferences. Mix and scalar-rate shortcuts
+  header menus edit machine port preferences. Teal socket marks identify hardware
+  headers without dividing the grid with separator lines. Mix and scalar-rate shortcuts
   remain active with hardware routes; mute and VCA gate values use mix slots. CoreMIDI no longer flushes shared
   endpoints at shutdown; CoreMIDI closing releases follow accepted timestamps
   before a shared, at-most-250 ms disposal wait. Longer scheduled horizons remain

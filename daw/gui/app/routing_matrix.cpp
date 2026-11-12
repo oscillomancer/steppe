@@ -266,20 +266,6 @@ class Grid : public ui::Node {
             }
         }
         c.restore();
-        // Physical endpoint groups have a boundary across both labels and cells.
-        for (std::size_t row = 1; row < m_.sources.size(); ++row)
-            if (m_.sources[row - 1].type == "midi_input" && m_.sources[row].type != "midi_input") {
-                const float y = gy + static_cast<float>(row) * kCell;
-                if (y >= cells.y && y <= cells.bottom())
-                    c.line({b.x, y}, {b.right(), y}, t.color("ink-quiet"), 2);
-            }
-        for (std::size_t col = 1; col < m_.destinations.size(); ++col)
-            if (m_.destinations[col].kind == "midi_output" &&
-                m_.destinations[col - 1].kind != "midi_output") {
-                const float x = gx + static_cast<float>(col) * kCell;
-                if (x >= cells.x && x <= cells.right())
-                    c.line({x, b.y}, {x, b.bottom()}, t.color("ink-quiet"), 2);
-            }
         c.fillRect({cells.x - 1, b.y, 1, b.h}, t.color("rule"));
         c.fillRect({b.x, cells.y - 1, b.w, 1}, t.color("rule"));
     }
