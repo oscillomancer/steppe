@@ -304,7 +304,8 @@ and envelope with those fields taken from the new one and compares the whole
 object, so any other change (mute, solo, a name, an FX or a route's tap)
 compiles. A send whose level moves to or from exactly 0 dB, or whose pan
 starts or stops following its source, compiles: that decides whether it is
-encoded. An unchanged session is a maintenance reload and compiles too. A
+encoded. A rack send is never encoded, so any change of its `volume_db` is
+a mix value (ADR-0075). An unchanged session is a maintenance reload and compiles too. A
 qualifying edit writes the values into the newest plan's mix slots (per
 node, per route edge, per VCA; parent sends carry no values) between an odd
 and an even sequence number. Each executor, at the start of a block

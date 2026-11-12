@@ -3003,3 +3003,59 @@ TEST_CASE("rack sends: a write pass holds the send's level over its curve (ADR-0
         CHECK(peakIn(L, 120000, 153600) > 0.1);  // the curve again
     }
 }
+
+TEST_CASE("rack sends: home mute and send level are mix edits beside a hardware MIDI route" *
+          doctest::description("rt")) {
+    // With a hardware MIDI route a home mute toggle is a mix-only edit
+    // (ADR-0072); the send follows it from the home's slot. A level edit on
+    // the send is a mix value too (no compile). Console 9 is off so that
+    // the master's decode does not bend the level ratio.
+    const RackSend r(false, false, false);
+    const auto base = r.with([&](model::EditTxn& t) {
+        t.modify<model::Track>(r.home, [](auto& x) { x.volumeDb = model::kSilenceDb; });
+        model::Route hw;
+        hw.from.track = r.home;
+        hw.to.midiDevice = "No such port";
+        hw.midi = model::MidiRouting{};
+        t.create(hw);
+    });
+    const auto quieter = [&] {
+        model::EditTxn t(base, base.version + 1);
+        t.modify<model::Route>(r.send, [](auto& x) { x.volumeDb = -12; });
+        return t.commit().value();
+    }();
+    const auto muted = [&] {
+        model::EditTxn t(quieter, quieter.version + 1);
+        t.modify<model::Track>(r.home, [](auto& x) { x.mute = true; });
+        return t.commit().value();
+    }();
+    constexpr std::uint32_t kBlock = 256;
+    for (const EngineOptions& options :
+         {EngineOptions{.anticipative = false, .workers = 0}, EngineOptions{.workers = 0},
+          EngineOptions{.workers = 2}}) {
+        INFO("anticipative " << options.anticipative << ", workers " << options.workers);
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000 * 4});
+        Engine engine(pool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
+        REQUIRE(engine.load(base));
+        engine.play();
+        runBlocks(engine, backend, options.anticipative, 200, kBlock);
+        const auto generation = engine.planGeneration();
+        REQUIRE(engine.load(quieter));
+        runBlocks(engine, backend, options.anticipative, 200, kBlock);
+        REQUIRE(engine.load(muted));
+        runBlocks(engine, backend, options.anticipative, 200, kBlock);
+        CHECK(engine.planGeneration() == generation);  // neither compiled
+        CHECK(engine.mixEdits() == 2);
+        engine.stop();
+        CHECK(engine.processErrors() == 0);
+        const auto& L = backend.capture().channels[0];
+        const double loud = peakIn(L, 20000, 51200), soft = peakIn(L, 80000, 102400);
+        CHECK(loud > 0.1);
+        CHECK(soft ==
+              doctest::Approx(loud * std::pow(10.0, -9.0 / 20)).epsilon(0.02));  // -3 to -12 dB
+        CHECK(peakIn(L, 130000, 153600) < 1e-5);  // the home's mute silences its send
+    }
+}
