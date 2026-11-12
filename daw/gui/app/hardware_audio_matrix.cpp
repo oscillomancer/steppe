@@ -179,7 +179,10 @@ Status RoutingMatrix::reloadHardwareAudio() {
                 for (int c : channels)
                     if (!names[static_cast<std::size_t>(c - 1)].empty())
                         label += " · " + names[static_cast<std::size_t>(c - 1)];
-                if (channels.back() > available) label += " (unavailable)";
+                if (!backend)
+                    label += " (engine stopped)";
+                else if (channels.back() > available)
+                    label += " (unavailable)";
                 if (output && contains(channels, ltc)) label += " [LTC]";
                 if (output) {
                     MatrixModel::Destination d;

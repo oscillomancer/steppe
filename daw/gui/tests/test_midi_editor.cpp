@@ -2469,6 +2469,11 @@ TEST_CASE("Hardware Audio: a 64-channel device stays addressable and refreshes o
     f.snapshot("routing-hardware-audio-64.png", &panel.root());
     f.app->stopEngine();
     matrix.sync();
+    CHECK(matrix.model().sources[audioRow(matrix, "audio_in:63", 2)].name.find("engine stopped") !=
+          std::string::npos);
+    REQUIRE(f.app->startEngine(backend, {.blockSize = 64, .inputs = 2, .outputs = 2},
+                               {.anticipative = false, .workers = 0}));
+    matrix.sync();
     CHECK(matrix.model().sources[audioRow(matrix, "audio_in:63", 2)].name.find("unavailable") !=
           std::string::npos);
     matrix.selectAll();
