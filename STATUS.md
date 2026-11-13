@@ -1278,8 +1278,7 @@ Plugins:
   members, including nested structs and arrays' persistent spare elements.
   Reset snapshots deep-copy buffers; restoring equal-sized buffers does not
   allocate or free. Compiler tests count live backing allocations independently
-  of LeakSanitizer and check that copies do not alias. Native macOS/Windows CI
-  remains pending for this shared compiler/runtime change.
+  of LeakSanitizer and check that copies do not alias.
 - DSP source exports require a visible, automatable parameter with a plain
   name for their host tests and do not retain the JIT's loop budget (a loop
   that never ends hangs a native export). Exports include declared factory
