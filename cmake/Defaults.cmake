@@ -20,6 +20,14 @@ if(SUPPLE_SANITIZE)
       list(APPEND _supple_sanitize_flags -fsanitize=address -fno-omit-frame-pointer)
     elseif(_san STREQUAL "undefined")
       list(APPEND _supple_sanitize_flags -fsanitize=undefined -fno-sanitize-recover=undefined)
+      # Clang's function check reads the eight bytes before every indirect
+      # call's target for a type signature. DSP scripts call into code MIR
+      # generates, and MIR's interpreter into thunks it generates, at the
+      # start of pages it maps, where those bytes may not be mapped: the
+      # check crashes the call (an interpreted stock module did).
+      if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        list(APPEND _supple_sanitize_flags -fno-sanitize=function)
+      endif()
     elseif(_san STREQUAL "thread")
       list(APPEND _supple_sanitize_flags -fsanitize=thread)
     elseif(_san STREQUAL "realtime")
