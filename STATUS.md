@@ -410,6 +410,10 @@ instructions are in `docs/guides/installing.md`.
   menu checks the one selected input and its button names that input. Notes
   device/source can be cleared with null. Armed channels record their rack Out audio input as stereo WAV,
   including input FX, loop/punch takes, recovery and undo.
+  Pooled rack modules have exclusive executor ownership across plan swaps,
+  including stopped monitoring changes; bindings, DSP and deferred Notes
+  resets wait for the preceding executor's joined release without blocking
+  the callback. Native macOS/Windows validation is pending for this handoff.
   Sends into rack In ports preserve the tap at the route's level and pan,
   without a Console 9 encode, with the console enabled or disabled.
   Rack audio and Note Out routes now participate in read-ahead PDC, including

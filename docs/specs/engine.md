@@ -296,6 +296,20 @@ acknowledges via an epoch counter; the model thread destroys the old plan
 (and deactivates removed plugins) only after the acknowledgement. Nothing on
 the RT thread frees memory.
 
+Pooled rack modules also carry exclusive executor owner tokens (rack.md §6).
+Each plan prepares sorted module lists for all nodes and for each executor.
+After its previous job's helpers join, adoption releases modules absent
+from that executor's new list and atomically claims free modules. Block
+boundaries retry claims without waiting. A rack runs only when the caller
+owns every module; unavailable racks emit silent audio and no Note Out
+events without touching shared bindings or DSP state. Locates defer shared
+Notes/Note Out resets to the next owned processing call. This covers an old
+live plan overlapping a newer renderer plan while stopped, when monitoring
+is disabled and `keepLive` does not apply, as well as rapid plan handoffs.
+The callback-only executor uses the same ownership rule for the whole plan;
+offline instances are private. Normal processing keeps the same grid,
+summation and samples in both executors and offline.
+
 **Mix-value edits (ADR-0060).** A session that differs from the last one
 `Engine::load` took only in strip `volume_db`/`pan`/`width`/`pan_left`/`pan_right`,
 send `volume_db`/`pan` and VCA `volume_db` (and in the points of envelopes a

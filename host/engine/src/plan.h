@@ -33,6 +33,10 @@
 #include "supple/time/timeline.h"
 #include "workers.h"
 
+namespace supple::rack {
+class Instance;
+}
+
 namespace supple::engine::detail {
 struct HardwareRoute;
 
@@ -982,6 +986,8 @@ struct Plan {
     std::vector<std::size_t> rendererNodes, liveNodes;
     std::unique_ptr<TaskGraph> rendererGraph, liveGraph;
     std::vector<host::Instance*> rendererInstances, liveInstances;
+    // Pooled rack modules need the same exclusive executor handoff as FX.
+    std::vector<rack::Instance*> modules, rendererModules, liveModules;
     // Metering (P5.3c): the metered nodes each executor measures, filled with
     // the slots by the engine's load() on the main thread, so an executor
     // iterates a list after a block instead of scanning every node.

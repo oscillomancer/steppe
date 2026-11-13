@@ -12,7 +12,10 @@
 #include <cstring>
 #include <functional>
 #include <mutex>
+#include <semaphore>
+#include <thread>
 
+#include "live_workers.h"
 #include "rack_runtime.h"
 #include "supple/base/files.h"
 #include "supple/engine/app.h"
@@ -2037,6 +2040,220 @@ TEST_CASE("rack inputs: Notes hears a separate monitored MIDI channel in both ex
                     CHECK(f.app->head().items.empty());
                 f.app->stopEngine();
             }
+}
+
+// Retain the old callback plan while the renderer has adopted a newer plan,
+// as a preempted callback does when monitoring is disabled while stopped.
+// Bounded concurrent jobs widen the TSan window; the ownership/output checks
+// fail independently of scheduling, without a wall-clock threshold.
+TEST_CASE("rack inputs: pooled modules have one executor across overlapping plans") {
+    for (int workers : {0, 2}) {
+        INFO("workers " << workers);
+        Fixture f;
+        f.run("project.set", R"({"console9":false})");
+        f.run("rack.add");
+        f.run("module.add", R"({"rack":"rk_1","type":"notes"})");
+        f.run("cable.add", R"({"from":"mo_2.gate","to":"mo_1.l"})");
+        f.run("track.add");
+        f.run("route.add", R"({"from":"tr_2","to":"mo_2","midi":{},"tap":"pre_fx"})");
+        f.run("track.set", R"({"track":"tr_2","record_midi":"key","armed":true,"monitor":"on"})");
+        // Two independent racks let both pools actually enlist helpers.
+        f.run("rack.add");
+        f.run("module.add", R"({"rack":"rk_2","type":"notes"})");
+        f.run("cable.add", R"({"from":"mo_4.gate","to":"mo_3.l"})");
+        f.run("route.add", R"({"from":"tr_2","to":"mo_4","midi":{},"tap":"pre_fx"})");
+        const auto monitored = f.app->head();
+        auto old = engine::detail::compile(monitored, f.app->instances(), 0, 37);
+        REQUIRE(old);
+        REQUIRE(engine::detail::prepare(*old, monitored));
+        REQUIRE(old->liveGraph->parallelism > 1);
+        old->split = true;
+        // Engine::load normally resolves backend port names after prepare.
+        for (auto& node : old->nodes)
+            if (node.midiIn) node.midiIn->ports = 1;
+        const char callback = 0, renderer = 0;
+        engine::detail::adoptRackModules(nullptr, &old->liveModules, &callback);
+        MidiInputEvent on{.size = 3, .bytes = {0x90, 72, 100}};
+        old->deviceMidi = {&on, 1};
+        engine::detail::LiveWorkers live(workers);
+        engine::detail::Workers background(workers);
+        REQUIRE(engine::detail::processCallbackBlock(&live, *old, 0, 37, false, true, &callback));
+        old->deviceMidi = {};
+        const auto rackNode = [](auto& plan) -> engine::detail::Node& {
+            return *std::find_if(plan.nodes.begin(), plan.nodes.end(),
+                                 [](const auto& n) { return bool(n.rack); });
+        };
+        REQUIRE(rackNode(*old).rackOuts[0].l.back() > .5f);
+        f.run("track.set", R"({"track":"tr_2","monitor":"off"})");
+        auto next = engine::detail::compile(f.app->head(), f.app->instances(), 0, 37);
+        REQUIRE(next);
+        REQUIRE(engine::detail::prepare(*next, f.app->head()));
+        REQUIRE_FALSE(rackNode(*next).live);
+        REQUIRE(old->liveModules == next->rendererModules);
+        // Adoption and even a restart may precede release by the callback.
+        // Neither is allowed to bind/reset the old executor's Notes or ports.
+        engine::detail::adoptRackModules(&old->rendererModules, &next->rendererModules, &renderer);
+        engine::detail::locateClass(*next, 0, false);
+        std::binary_semaphore ready{0}, go{0};
+        bool callbackOk = true, held = true;
+        std::thread cycle([&] {
+            ready.release();
+            go.acquire();
+            for (int i = 0; i < 256; ++i) {
+                callbackOk &= engine::detail::processCallbackBlock(&live, *old, 0, 37, false, true,
+                                                                   &callback);
+                for (float value : rackNode(*old).rackOuts[0].l) held &= value == 1.0f;
+            }
+        });
+        ready.acquire();
+        go.release();
+        bool rendererOk = true;
+        for (int i = 0; i < 256; ++i) {
+            engine::detail::claimRackModules(next->rendererModules, &renderer);
+            rendererOk &= engine::detail::processRendererBlock(&background, *next, 0, 37, &renderer,
+                                                               nullptr, false);
+        }
+        cycle.join();
+        CHECK(callbackOk);
+        CHECK(rendererOk);
+        CHECK(held);
+        CHECK_FALSE(rackNode(*next).rack->started);
+        CHECK(rackNode(*next).rack->resetNotes);
+        CHECK(std::all_of(next->modules.begin(), next->modules.end(),
+                          [&](auto* in) { return in->owner() == &callback; }));
+        // Another edit can supersede this plan before it ever owns a module.
+        // Its pending locate must survive that continuing adoption.
+        auto pending = engine::detail::compile(f.app->head(), f.app->instances(), 0, 37);
+        REQUIRE(pending);
+        REQUIRE(engine::detail::prepare(*pending, f.app->head()));
+        engine::detail::carryMix(*next, *pending, 0);
+        engine::detail::locateClass(*pending, 0, false, false);
+        CHECK(rackNode(*pending).rack->resetNotes);
+        next = std::move(pending);
+        // Once the callback adopts, the renderer can claim the retained modules
+        // and apply its pending reset. Stopped live notes must not hang.
+        engine::detail::adoptRackModules(&old->liveModules, &next->liveModules, &callback);
+        engine::detail::claimRackModules(next->rendererModules, &renderer);
+        REQUIRE(engine::detail::processRendererBlock(&background, *next, 0, 37, &renderer, nullptr,
+                                                     false));
+        CHECK(rackNode(*next).rack->started);
+        CHECK_FALSE(rackNode(*next).rack->resetNotes);
+        CHECK(std::all_of(rackNode(*next).rackOuts[0].l.begin(),
+                          rackNode(*next).rackOuts[0].l.end(), [](float v) { return v == 0; }));
+        // A rapid newer plan may give the same module back to the callback.
+        // Only one executor may win a simultaneous claim of the freed state.
+        engine::detail::adoptRackModules(&next->rendererModules, nullptr, &renderer);
+        for (auto* in : next->modules) {
+            std::binary_semaphore claim{0};
+            bool callbackClaimed = false;
+            std::thread contender([&] {
+                claim.acquire();
+                callbackClaimed = in->claimOwner(&callback);
+            });
+            claim.release();
+            const bool rendererClaimed = in->claimOwner(&renderer);
+            contender.join();
+            CHECK(callbackClaimed != rendererClaimed);
+            CHECK(in->owner() == (callbackClaimed ? &callback : &renderer));
+            in->releaseOwner();  // both test executors have joined
+        }
+    }
+}
+
+TEST_CASE("rack inputs: hosted plugins retain undelivered gates and modulation during handoff") {
+    for (int scenario = 0; scenario < 3; ++scenario) {
+        const bool instrument = scenario != 0, reattack = scenario == 2;
+        INFO("instrument " << instrument << ", reattack " << reattack);
+        Fixture f;
+        f.run("project.set", R"({"console9":false})");
+        f.run("rack.add");
+        if (instrument) {
+            f.run("module.add", R"({"rack":"rk_1","type":"notes"})");
+            f.run("module.add", R"({"rack":"rk_1","plugin":"com.suppleaudio.test.sine"})");
+            f.run("cable.add", R"({"from":"mo_2.pitch","to":"mo_3.pitch"})");
+            f.run("cable.add", R"({"from":"mo_2.gate","to":"mo_3.gate"})");
+            f.run("item.add", R"({"track":"tr_1","position":0,"notation":"1: C4:w"})");
+        } else {
+            f.run("module.add", R"({"rack":"rk_1","type":"transport"})");
+            f.run("module.add", R"({"rack":"rk_1","plugin":"com.suppleaudio.test.gain"})");
+            f.run("cable.add", R"({"from":"mo_2.playing","to":"mo_3.in_l"})");
+            f.run("cable.add", R"({"from":"mo_2.playing","to":"fx_1.gain","amount":0.1})");
+            f.run("env.add", R"({"fx":"fx_1","param":"gain","points":[{"beat":0,"value":-6}]})");
+        }
+        f.run("cable.add", R"({"from":"mo_3.out_l","to":"mo_1.l"})");
+        const auto session = f.app->head();
+        auto expected = f.app->renderSession(session, {.endSeconds = .002, .blockSize = 32});
+        REQUIRE(expected);
+        auto plan = engine::detail::compile(session, f.app->instances(), 0, 32);
+        REQUIRE(plan);
+        REQUIRE(engine::detail::prepare(*plan, session));
+        auto& node = *std::find_if(plan->nodes.begin(), plan->nodes.end(),
+                                   [](const auto& n) { return bool(n.rack); });
+        auto* plugin = node.rackStages[0].instance;
+        REQUIRE(plugin);
+        const char callback = 0, renderer = 0;
+        engine::detail::adoptRackModules(nullptr, &plan->modules, &renderer);
+        REQUIRE(plugin->claimOwner(&callback));
+        REQUIRE(plugin->startProcessing());
+        plugin->reset();
+        // Modules have transferred but the hosted instance has not. This
+        // block cannot mark its high gate or modulation as delivered.
+        REQUIRE(
+            engine::detail::processCallbackBlock(nullptr, *plan, 0, 32, true, false, &renderer));
+        plugin->stopProcessing();
+        plugin->setOwner(nullptr);
+        REQUIRE(plugin->claimOwner(&renderer));
+        REQUIRE(plugin->startProcessing());
+        REQUIRE(
+            engine::detail::processCallbackBlock(nullptr, *plan, 32, 32, true, false, &renderer));
+        CHECK(std::equal(node.rackOuts[0].l.begin(), node.rackOuts[0].l.end(),
+                         expected->audio.channels[0].begin()));
+        CHECK(std::any_of(node.rackOuts[0].l.begin(), node.rackOuts[0].l.end(),
+                          [](float v) { return std::abs(v) > .01f; }));
+        if (instrument) {
+            // The opposite edge: a gate falls while its instrument belongs
+            // elsewhere. It still needs its release after returning, with
+            // no intervening reset counter change to trigger a retry.
+            plugin->stopProcessing();
+            plugin->setOwner(nullptr);
+            REQUIRE(plugin->claimOwner(&callback));
+            REQUIRE(plugin->startProcessing());
+            engine::detail::locate(*plan, 64);
+            REQUIRE(engine::detail::processCallbackBlock(nullptr, *plan, 64, 32, false, false,
+                                                         &renderer));
+            if (reattack) {
+                // A different pitch rises before the plug-in returns; a high
+                // gate at both ends must not hide the intervening release.
+                auto& feed = node.rack->notes[0];
+                REQUIRE_FALSE(feed.events.empty());
+                feed.events[0].sample = 96;
+                feed.events[0].event.key = 62;
+                feed.next = 0;
+                REQUIRE(engine::detail::processCallbackBlock(nullptr, *plan, 96, 32, true, false,
+                                                             &renderer));
+            }
+            plugin->stopProcessing();
+            plugin->setOwner(nullptr);
+            REQUIRE(plugin->claimOwner(&renderer));
+            REQUIRE(plugin->startProcessing());
+            REQUIRE(engine::detail::processCallbackBlock(nullptr, *plan, 128, 32, reattack, false,
+                                                         &renderer));
+            if (reattack) {
+                const auto& events = node.rackStages[0].blockEvents;
+                CHECK(std::any_of(events.begin(), events.end(), [](const auto& e) {
+                    return e.kind == host::Event::Kind::NoteOff && e.key == 60;
+                }));
+                CHECK(std::any_of(events.begin(), events.end(), [](const auto& e) {
+                    return e.kind == host::Event::Kind::NoteOn && e.key == 62;
+                }));
+            } else
+                CHECK(std::all_of(node.rackOuts[0].l.begin(), node.rackOuts[0].l.end(),
+                                  [](float v) { return v == 0; }));
+        }
+        plugin->stopProcessing();
+        plugin->setOwner(nullptr);
+        engine::detail::adoptRackModules(&plan->modules, nullptr, &renderer);
+    }
 }
 
 TEST_CASE("module.set: null clears Notes device and source while omission retains them") {

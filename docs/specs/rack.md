@@ -384,6 +384,10 @@ saying when the library version is used instead or the type is unavailable.
   generations so racks notice changed code.
 - `rack::Instance`: one module's state (the struct, its runtime record,
   its parameter slots and telemetry). Lives across schedule rebuilds.
+  `owner()`, `claimOwner(token)` and `releaseOwner()` provide an atomic
+  executor handoff. A claim succeeds only from null; only the owning
+  executor releases, after joining all helpers. A host using ownership
+  must own every instance before binding or processing a schedule.
 - `rack::Schedule`: an immutable compiled rack: order, feedback groups,
   cable buffers, port and parameter bindings. Built on the main thread.
 - `rack::HostModule`: what a host module implements: `process(HostBlock&)`
@@ -619,12 +623,28 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   no modulation (a plan warning says so, as for a seventeenth cable).
   Their latency is not compensated inside the rack. A bridged plugin module
   in a live rack passes through, as on a live strip.
+  A hosted instance has its own ownership handoff: while unavailable, its
+  compensated bypass does not consume gate, modulation or parameter
+  automation delivery history. Those events are delivered when the instance
+  becomes available, including a release that occurred during the handoff.
 - **State.** Module instances are kept per rack across plans (keyed by
   module id and code generation) as plugin instances are; offline renders
   build their own from the session. What a plan gives a module (a plugin
   module's stage, buffers and modulation, an In module's buffers) lives in
   the plan and is attached on the audio thread each block, since the
   previous plan may still be running the same instance.
+  The engine hands every pooled module between executors with an atomic
+  owner token, including host modules and scripts. A new renderer plan
+  may precede the callback's adoption of its predecessor: it cannot bind,
+  process or reset modules still owned by the callback. Until all modules
+  are available, that rack's plan-local audio and Note Out results are
+  silent. Claims retry at block boundaries without waiting. A locate's
+  Notes/Note Out reset is deferred until ownership is obtained, retained
+  through continuing plan swaps, and applied before any bindings or MIDI.
+  With anticipation off, the callback owns all modules; offline plans have
+  private instances and need no ownership check. The callback and renderer
+  graphs remain disjoint within each plan; ownership protects shared
+  instances across different plans.
 - **Errors.** `rack.cycle`, `rack.unknown_type`, `rack.port`, `rack.param`,
   `rack.limit` at edit time; plan warnings for missing types.
 

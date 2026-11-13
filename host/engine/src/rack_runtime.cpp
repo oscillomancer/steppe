@@ -572,6 +572,8 @@ Status compileRack(Plan& p, Node& n, const Session& s, Id rackId, InstancePool& 
         patch.modules.push_back({e.id.n, in, m.bypass, {}});
         r->modules.push_back(e.id);
         if (!in) continue;
+        r->instances.push_back(in);
+        p.modules.push_back(in);
         if (auto* out = dynamic_cast<rack::host::Out*>(in->host())) {
             r->outs.push_back(out);
             r->outIds.push_back(e.id);
@@ -805,7 +807,10 @@ void prepareRack(Plan& p, Node& n, const Session& s) {
 
 void locateRack(Node& n, std::int64_t pos, bool restart) SUPPLE_RT {
     RackNode& r = *n.rack;
-    if (restart) ++r.midiEpoch;
+    if (restart) {
+        ++r.midiEpoch;
+        r.resetNotes = true;
+    }
     for (NotesFeed& feed : r.notes) {
         auto it =
             std::lower_bound(feed.events.begin(), feed.events.end(), pos,
@@ -813,12 +818,9 @@ void locateRack(Node& n, std::int64_t pos, bool restart) SUPPLE_RT {
         feed.next = static_cast<std::size_t>(it - feed.events.begin());
         feed.rateFresh = restart;
         if (restart) {
-            feed.notes->endAll();
             feed.midiStage.voices.clear();
         }
     }
-    for (auto& output : r.notesOut)
-        if (restart) output.module->endAll();
     for (auto& curve : r.curves) curve->curve.cursor = 0;
 }
 
@@ -854,6 +856,25 @@ bool toMidi(const host::Event& e, std::uint32_t frame, rack::host::MidiEvent& ou
 bool processRack(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames,
                  const host::Transport& transport, const void* self) SUPPLE_RT {
     RackNode& r = *n.rack;
+    // Plans have distinct schedules but share every module's mutable DSP and
+    // port bindings. A new renderer plan can precede the callback's adoption.
+    // Until the old executor releases all modules, touch only this plan's IO.
+    if (self && std::any_of(r.instances.begin(), r.instances.end(),
+                            [&](const auto* in) { return in->owner() != self; })) {
+        for (auto& out : n.rackOuts) out.clear(frames);
+        for (auto& output : r.notesOut) {
+            output.before = {};
+            output.count = 0;
+        }
+        for (auto ei : n.out)
+            if (p.edges[ei].rackSend) p.edges[ei].encoded.clear(frames);
+        return true;
+    }
+    if (r.resetNotes) {
+        for (auto& feed : r.notes) feed.notes->endAll();
+        for (auto& output : r.notesOut) output.module->endAll();
+        r.resetNotes = false;
+    }
     r.clock.plan = &p;
     // The modules outlive this plan: what it gives them is attached here, on
     // the audio thread, every block (a previous plan may have run them).
@@ -986,6 +1007,21 @@ bool processRack(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames,
     return true;
 }
 
+void claimRackModules(const std::vector<rack::Instance*>& next, const void* self) SUPPLE_RT {
+    for (auto* in : next)
+        if (!in->owner()) in->claimOwner(self);
+}
+
+void adoptRackModules(const std::vector<rack::Instance*>* previous,
+                      const std::vector<rack::Instance*>* next, const void* self) SUPPLE_RT {
+    if (previous)
+        for (auto* in : *previous)
+            if (in->owner() == self &&
+                (!next || !std::binary_search(next->begin(), next->end(), in)))
+                in->releaseOwner();
+    if (next) claimRackModules(*next, self);
+}
+
 void PluginModule::process(const rack::HostContext& ctx) SUPPLE_RT {
     rack::Instance& in = *ctx.instance;
     script::Output& outL = in.outputMember(0);
@@ -995,16 +1031,6 @@ void PluginModule::process(const rack::HostContext& ctx) SUPPLE_RT {
     if (!binding || binding->stage < 0 || !plan || !node || failed) return;
     Stage& st = node->rackStages[static_cast<std::size_t>(binding->stage)];
     Stereo& io = binding->io;
-    // A plug-in replaced or reset (a seek) has forgotten our notes and
-    // modulation: held gates play again, modulation is sent again. (A
-    // bypassed stage still takes its events.)
-    const std::uint32_t resets = st.instance ? st.instance->resets() : 0;
-    if (st.instance != heard_ || resets != heardResets_) {
-        voices_ = {};
-        sentCount_ = 0;
-        heard_ = st.instance;
-        heardResets_ = resets;
-    }
     const script::Input& l = in.inputMember(0);
     const script::Input& r = in.inputMember(1);
     const script::Input& pitch = in.inputMember(2);
@@ -1021,6 +1047,51 @@ void PluginModule::process(const rack::HostContext& ctx) SUPPLE_RT {
         io.l[static_cast<std::size_t>(i)] = static_cast<float>(a);
         io.r[static_cast<std::size_t>(i)] = static_cast<float>(b);
     }
+    const auto frames = static_cast<std::uint32_t>(ctx.frames);
+    auto writeOutput = [&] {
+        for (int i = 0; i < ctx.frames; ++i) {
+            outL[0][i] = static_cast<double>(io.l[static_cast<std::size_t>(i)]);
+            outR[0][i] = static_cast<double>(io.r[static_cast<std::size_t>(i)]);
+        }
+    };
+    // The module and its hosted plug-in have separate ownership handoffs.
+    // While the plug-in is unavailable, keep our gate/modulation history:
+    // runStage's compensated bypass has delivered none of those events.
+    if (st.callbackBypass || !st.instance || (self && st.instance->owner() != self) ||
+        !st.instance->processing()) {
+        // Observe edges without treating them as delivered. A fall/rise
+        // during absence must release the old key and start the new one on
+        // return, even when the gate is high at both ends of the handoff.
+        for (int c = 0; c < rack::kChannels; ++c) {
+            Voice& v = voices_[static_cast<std::size_t>(c)];
+            if (c >= gate.channels()) {
+                v.pending |= v.high;
+                v.high = false;
+                continue;
+            }
+            for (int i = 0; i < ctx.frames; ++i) {
+                const double g = gate[c][i];
+                if ((!v.high && g >= .5) || (v.high && g < .25)) {
+                    v.high = !v.high;
+                    v.pending = true;
+                }
+            }
+        }
+        st.blockEvents.clear();
+        runModuleStage(*plan, st, io, frames, *transport, pos + ctx.offset, self);
+        writeOutput();
+        return;
+    }
+    // A plug-in replaced or reset (a seek) has forgotten our notes and
+    // modulation: held gates play again, modulation is sent again. (A
+    // bypassed stage still takes its events.)
+    const std::uint32_t resets = st.instance ? st.instance->resets() : 0;
+    if (st.instance != heard_ || resets != heardResets_) {
+        voices_ = {};
+        sentCount_ = 0;
+        heard_ = st.instance;
+        heardResets_ = resets;
+    }
     // Notes: a voice's gate rising plays its pitch; falling (below 0.25) ends it.
     st.blockEvents.clear();
     const int voices = std::min(gate.channels(), rack::kChannels);
@@ -1029,9 +1100,10 @@ void PluginModule::process(const rack::HostContext& ctx) SUPPLE_RT {
         for (int i = 0; i < ctx.frames; ++i) {
             const double g = gate[c][i];
             const bool rise = !v.high && g >= 0.5, fall = v.high && g < 0.25;
-            if (!rise && !fall) continue;
+            if (!rise && !fall && !v.pending) continue;
             if (st.blockEvents.size() + 2 > st.blockEvents.capacity()) break;
-            v.high = rise;
+            v.high = rise || (v.high && !fall);
+            v.pending = false;
             if (v.key >= 0) {
                 host::Event off;
                 off.kind = host::Event::Kind::NoteOff;
@@ -1041,7 +1113,7 @@ void PluginModule::process(const rack::HostContext& ctx) SUPPLE_RT {
                 st.blockEvents.push_back(off);
                 v.key = -1;
             }
-            if (rise) {
+            if (v.high) {
                 host::Event on;
                 on.kind = host::Event::Kind::NoteOn;
                 on.time = static_cast<std::uint32_t>(i);
@@ -1064,6 +1136,7 @@ void PluginModule::process(const rack::HostContext& ctx) SUPPLE_RT {
         off.velocity = 0;
         st.blockEvents.push_back(off);
         v.key = -1;
+        v.pending = false;
     }
     // Modulation: each parameter's cables summed at each point of the rack's
     // grid (where a call starts on one: the same frames whatever the host's
@@ -1112,16 +1185,12 @@ void PluginModule::process(const rack::HostContext& ctx) SUPPLE_RT {
         }
         sent_[static_cast<std::size_t>(k)] = want;
     }
-    const auto frames = static_cast<std::uint32_t>(ctx.frames);
     if (!runModuleStage(*plan, st, io, frames, *transport, pos + ctx.offset, self)) {
         failed = true;
         sentCount_ = 0;  // not delivered
         return;
     }
-    for (int i = 0; i < ctx.frames; ++i) {
-        outL[0][i] = static_cast<double>(io.l[static_cast<std::size_t>(i)]);
-        outR[0][i] = static_cast<double>(io.r[static_cast<std::size_t>(i)]);
-    }
+    writeOutput();
 }
 
 }  // namespace supple::engine::detail

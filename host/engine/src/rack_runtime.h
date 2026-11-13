@@ -128,6 +128,7 @@ class PluginModule final : public rack::HostModule {
   private:
     struct Voice {
         bool high = false;
+        bool pending = false;  // observed edge while the plug-in was unavailable
         int key = -1;
     };
     std::array<Voice, rack::kChannels> voices_{};
@@ -239,6 +240,7 @@ struct NotesOutBinding {
 struct RackNode {
     Id rack;
     std::vector<Id> modules;  // the patch's, in id order
+    std::vector<rack::Instance*> instances;
     std::unique_ptr<rack::Schedule> schedule;
     std::vector<rack::host::Out*> outs;  // Node::rackOuts, in module id order
     std::vector<Id> outIds;
@@ -257,7 +259,14 @@ struct RackNode {
     bool playing = false, started = false;
     std::int64_t own = 0, stoppedAt = 0;
     bool live = false;
+    bool resetNotes = false;  // locate defers shared state changes until owned
 };
+
+// Sorted, preallocated module lists. Release dropped instances only after
+// joining the old job; claim free instances atomically, without waiting.
+void adoptRackModules(const std::vector<rack::Instance*>* previous,
+                      const std::vector<rack::Instance*>* next, const void* self) SUPPLE_RT;
+void claimRackModules(const std::vector<rack::Instance*>& next, const void* self) SUPPLE_RT;
 
 // Compiles rack `rack` into node `n` (main thread): instances from the pool,
 // the schedule, its Out/In bindings and Notes feeds. Warnings for what it

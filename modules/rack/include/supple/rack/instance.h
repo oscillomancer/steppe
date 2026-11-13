@@ -85,6 +85,16 @@ class Instance {
     HostModule* host() const { return host_.get(); }
     const Setup& setup() const { return setup_; }
 
+    // Executor ownership across schedules/plans. Only the owner may bind or
+    // process this instance; helpers borrow its token for a joined job.
+    const void* owner() const SUPPLE_RT { return owner_.load(std::memory_order_acquire); }
+    bool claimOwner(const void* owner) SUPPLE_RT {
+        const void* expected = nullptr;
+        return owner_.compare_exchange_strong(expected, owner, std::memory_order_acq_rel);
+    }
+    // Only the owning executor releases, after its last joined access.
+    void releaseOwner() SUPPLE_RT { owner_.store(nullptr, std::memory_order_release); }
+
     // A knob's value in physical units (a percent as 30, a choice its
     // index), kept to its range. Main thread; heard from the next block.
     void setParam(int index, double physical);
@@ -133,6 +143,7 @@ class Instance {
     std::shared_ptr<const ModuleType> type_;
     std::unique_ptr<HostModule> host_;
     Setup setup_;
+    std::atomic<const void*> owner_{nullptr};
     sd::Instance record_;
     void* self_ = nullptr;  // a script's struct
     std::vector<script::Param*> params_;

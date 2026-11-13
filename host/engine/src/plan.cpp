@@ -466,6 +466,7 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         });
     std::sort(p.instances.begin(), p.instances.end());
     p.instances.erase(std::unique(p.instances.begin(), p.instances.end()), p.instances.end());
+    std::sort(p.modules.begin(), p.modules.end());
     // Edges: children's parent sends, then routes; each target sums its
     // inputs in (source order, edge id) order.
     struct Pending {
@@ -1642,6 +1643,9 @@ Status prepare(Plan& p, const Session& s) {
             if (runs(st.instance))
                 (p.nodes[i].live ? p.liveInstances : p.rendererInstances).push_back(st.instance);
         });
+        if (const auto& rack = p.nodes[i].rack)
+            for (auto* in : rack->instances)
+                (p.nodes[i].live ? p.liveModules : p.rendererModules).push_back(in);
     }
     std::vector<std::vector<std::uint32_t>> rdeps;
     for (std::size_t i : p.rendererNodes) {
@@ -1662,6 +1666,7 @@ Status prepare(Plan& p, const Session& s) {
         std::sort(list->begin(), list->end());
         list->erase(std::unique(list->begin(), list->end()), list->end());
     }
+    for (auto* list : {&p.rendererModules, &p.liveModules}) std::sort(list->begin(), list->end());
     for (std::size_t i : p.liveNodes)
         for (std::size_t e : p.nodes[i].in)
             if (!p.nodes[p.edges[e].from].live) {
@@ -1893,11 +1898,17 @@ void addEdgeInto(Plan& p, Edge& e, Stereo& into, std::int64_t pos, std::uint32_t
 bool runModuleStage(Plan& p, Stage& st, Stereo& io, std::uint32_t n,
                     const host::Transport& transport, std::int64_t pos,
                     const void* self) SUPPLE_RT {
-    automateStage(st, pos, n, time::samplesAt(p.startSeconds, p.rate));
-    // Events in time order (notes from the patch, then automation at each frame).
-    for (std::size_t i = 1; i < st.blockEvents.size(); ++i)
-        for (std::size_t k = i; k > 0 && st.blockEvents[k - 1].time > st.blockEvents[k].time; --k)
-            std::swap(st.blockEvents[k - 1], st.blockEvents[k]);
+    // A compensated bypass delivers no events. Keep automation unsent, like
+    // PluginModule's gate/modulation history, until the plug-in is available.
+    if (!st.callbackBypass && st.instance && (!self || st.instance->owner() == self) &&
+        st.instance->processing()) {
+        automateStage(st, pos, n, time::samplesAt(p.startSeconds, p.rate));
+        // Notes from the patch, then automation at each frame.
+        for (std::size_t i = 1; i < st.blockEvents.size(); ++i)
+            for (std::size_t k = i; k > 0 && st.blockEvents[k - 1].time > st.blockEvents[k].time;
+                 --k)
+                std::swap(st.blockEvents[k - 1], st.blockEvents[k]);
+    }
     st.outEvents.clear();
     st.sourceIds.clear();
     st.releases = 0;
@@ -2249,8 +2260,8 @@ bool runStage(Plan& p, Stage& st, Stereo& sum, std::uint32_t n, const host::Tran
     st.auxWritten = false;
     // A stage whose plugin is not processing (start_processing failed)
     // passes audio through, delay-compensated, like a bypass.
-    if (st.callbackBypass || !st.instance || !st.instance->processing() ||
-        (self && st.instance->owner() != self)) {
+    if (st.callbackBypass || !st.instance || (self && st.instance->owner() != self) ||
+        !st.instance->processing()) {
         st.dry.process(sum.l.data(), sum.r.data(), n);  // compensated bypass
         st.appliedWet = -1.0f;
         st.wetRampLeft = 0;  // no ramp to carry: `appliedWet` holds nothing
@@ -2412,8 +2423,8 @@ bool runPinned(Plan& p, Node& node, Stage& st, std::uint32_t n, const host::Tran
         writeAuxOutputs(node, st, n);
         return true;
     }
-    if (st.callbackBypass || !st.instance || !st.instance->processing() ||
-        (self && st.instance->owner() != self) ||
+    if (st.callbackBypass || !st.instance || (self && st.instance->owner() != self) ||
+        !st.instance->processing() ||
         (st.bypass && st.blockEvents.empty() && !st.instance->processRequested() &&
          !st.instance->needsAudioFlush())) {
         for (int c = 0; c < channels; ++c)
@@ -3574,6 +3585,9 @@ void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT {
             if (old.id != n.id) continue;
             // Only what this executor processed (the other one writes the rest).
             if (fromClass >= 0 && old.live != (fromClass == 1)) break;
+            // A locate may still be waiting for pooled module ownership.
+            // Keep that reset through another plan adoption by this executor.
+            if (n.rack && old.rack) n.rack->resetNotes |= old.rack->resetNotes;
             // Match inside the destination's incoming edges: scanning every
             // node to rediscover each edge's destination would be cubic.
             for (std::size_t ei : n.in) {

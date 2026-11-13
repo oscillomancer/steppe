@@ -523,6 +523,11 @@ void Engine::stop() {
         for (host::Instance* in : *list) in->setOwner(nullptr);
         list->clear();
     }
+    // Both executors and their helpers have joined, including a backend
+    // that omitted its final callback. Recover any retained module owners.
+    for (const auto& plan : plans_)
+        for (auto* in : plan->modules)
+            if (in->owner() == &processing_ || in->owner() == &liveProcessing_) in->releaseOwner();
     backend_ = nullptr;
     plan_ = nullptr;
     livePlan_ = nullptr;
@@ -1437,6 +1442,10 @@ void Engine::cycle(const float* const* in, float* const* out, std::uint32_t fram
     } inCycle(*this, out, frames);
     hardwareMidi_->begin(*midiSource_, frames);
     if (frames == 0) {  // the backend's final callback: stop every plugin here
+        detail::adoptRackModules(livePlan_ ? &livePlan_->liveModules : nullptr, nullptr,
+                                 &liveProcessing_);
+        if (!options_.anticipative)
+            detail::adoptRackModules(plan_ ? &plan_->modules : nullptr, nullptr, &processing_);
         sayFarewell();  // if no running cycle sent it
         syncFarewell_.store(false, std::memory_order_relaxed);
         // Anticipative: the renderer stopped its share as it ended; the live
@@ -1708,6 +1717,8 @@ void Engine::cycleBody(const float* const* in, float* const* out, std::uint32_t 
             detail::carryRateSources(*plan_, *plan, -1);
             detail::carryMix(*plan_, *plan, -1);
         }
+        detail::adoptRackModules(plan_ ? &plan_->modules : nullptr, plan ? &plan->modules : nullptr,
+                                 &processing_);
         adoptShare(processing_, plan ? &plan->instances : nullptr, &processing_);
         plan_ = plan;
         if (plan) {
@@ -1717,6 +1728,7 @@ void Engine::cycleBody(const float* const* in, float* const* out, std::uint32_t 
         }
     }
     if (shutdownRequested_.load(std::memory_order_acquire) && !shutDown_.load()) {
+        detail::adoptRackModules(plan ? &plan->modules : nullptr, nullptr, &processing_);
         for (host::Instance* inst : processing_) {
             inst->stopProcessing();
             inst->setOwner(nullptr);
@@ -2357,6 +2369,8 @@ void Engine::adoptRendererSources(detail::Plan* next) SUPPLE_RT {
         if (continuable) detail::carryMix(*plan_, *next, 1, 0);
     }
     if (next) next->handContinuable = continuable;
+    detail::adoptRackModules(plan_ ? &plan_->rendererModules : nullptr,
+                             next ? &next->rendererModules : nullptr, &processing_);
     adoptShare(processing_, next ? &next->rendererInstances : nullptr, &processing_,
                continuable ? &next->liveInstances : nullptr);
     plan_ = next;
@@ -2464,6 +2478,7 @@ void Engine::rendererLoop(std::uint64_t seen) {
                 publishRendererPlan(*plan, seen, queuedRate);
             }
         } else if (plan_) {
+            detail::claimRackModules(plan_->rendererModules, self);
             startFree(processing_, &plan_->rendererInstances, self);  // let go by the callback
         }
         if (epoch_.load(std::memory_order_acquire) != seen) seen = relocate(seen);
@@ -2609,6 +2624,7 @@ void Engine::rendererLoop(std::uint64_t seen) {
         renderedStream_.store(streamLocal_, std::memory_order_release);
     }
     // The renderer is its plugins' audio thread: stop them here.
+    detail::adoptRackModules(plan_ ? &plan_->rendererModules : nullptr, nullptr, self);
     for (host::Instance* in : processing_) {
         in->stopProcessing();
         in->setOwner(nullptr);
@@ -2650,6 +2666,8 @@ void Engine::adoptLive(detail::Plan* next, bool continuous) SUPPLE_RT {
         detail::carryLiveNotes(*livePlan_, *next, true);
         detail::carryMix(*livePlan_, *next, 1);
     }
+    detail::adoptRackModules(livePlan_ ? &livePlan_->liveModules : nullptr,
+                             next ? &next->liveModules : nullptr, &liveProcessing_);
     adoptShare(liveProcessing_, next ? &next->liveInstances : nullptr, &liveProcessing_);
     const bool wasLive = livePlan_ && livePlan_->split;
     detail::Plan* const previous = livePlan_;
@@ -2795,6 +2813,7 @@ std::uint32_t Engine::liveRender(const float* const* in, float* const* out, std:
         liveReady_ = true;
         liveEntered_ = false;
     }
+    detail::claimRackModules(p.liveModules, self);
     startFree(liveProcessing_, &p.liveInstances, self);  // let go by the renderer
     // The frontier: what the renderer made for this position. Before its
     // first chunk (pre-roll) time holds still; the monitored input is heard.
