@@ -75,12 +75,13 @@ uniform float ratio;
 layout(location = 0) in vec4 rect;    // x, y, w, h (design units)
 layout(location = 1) in vec4 color;
 layout(location = 2) in vec4 border;
+layout(location = 3) in vec4 area;    // the part of rect inside the clip
 out vec4 vColor;
 out vec4 vBorder;
 flat out vec4 vPixelRect;  // top-left and size in framebuffer pixels
 void main() {
     vec2 corner = vec2(gl_VertexID & 1, gl_VertexID >> 1);
-    vec2 p = rect.xy + corner * rect.zw;
+    vec2 p = area.xy + corner * area.zw;
     vColor = color;
     vBorder = border;
     vPixelRect = rect * ratio;
@@ -249,6 +250,10 @@ Result<RectRenderer> RectRenderer::create() {
     glVertexAttribPointer(2, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(Instance),
                           reinterpret_cast<void*>(offsetof(Instance, border)));
     glVertexAttribDivisor(2, 1);
+    glEnableVertexAttribArray(3);
+    glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, sizeof(Instance),
+                          reinterpret_cast<void*>(offsetof(Instance, areaX)));
+    glVertexAttribDivisor(3, 1);
     glBindVertexArray(0);
     return r;
 }
@@ -286,6 +291,25 @@ void RectRenderer::flush(const GlFrame& frame) {
             instance.h = bottom - instance.y;
         }
 #endif
+        // Draw only what lies in the clip, so no quad crosses the edge of
+        // the viewport: Apple's software rasterizer drops some instances
+        // that do (whole item bodies were missing from single frames while
+        // the arrange view followed the playhead). The shader still borders
+        // the whole rect, so the pixels are the same.
+        std::size_t kept = 0;
+        for (const auto& instance : instances_) {
+            const Rect area = Rect{instance.x, instance.y, instance.w, instance.h}.intersect(frame.clip);
+            if (area.empty()) continue;
+            Instance& out = instances_[kept++];
+            out = instance;
+            out.areaX = area.x;
+            out.areaY = area.y;
+            out.areaW = area.w;
+            out.areaH = area.h;
+        }
+        instances_.resize(kept);
+    }
+    if (!instances_.empty()) {
         upload(vbo_, capacity_, instances_.data(), instances_.size() * sizeof(Instance));
         blendState();
         glUseProgram(program_.id());

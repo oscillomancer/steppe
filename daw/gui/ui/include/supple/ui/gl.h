@@ -86,6 +86,9 @@ class RectRenderer {
         float x, y, w, h;
         std::uint32_t rgba;
         std::uint32_t border;  // RGBA8; alpha 0 = none
+        // The part of the rect inside the frame's clip, which is what is
+        // drawn; the whole rect still places the border (set by flush).
+        float areaX = 0, areaY = 0, areaW = 0, areaH = 0;
     };
     static Result<RectRenderer> create();
     RectRenderer(RectRenderer&&) noexcept;
