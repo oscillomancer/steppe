@@ -4,6 +4,18 @@ The framework is versioned on its own (`framework/VERSION.txt`) so a product can
 tell which one it carries. Each entry says what a product must do, if
 anything, after `framework/tools/update_framework.cmake` brings it in.
 
+## 1.33.6
+
+What a product must do: nothing.
+
+- **Sanitized Clang builds can call generated code.** The address preset's
+  UBSan leaves out Clang's function check, which reads the eight bytes
+  before every indirect call's target. A product that runs code it
+  generates (a JIT) can place that code at the start of a page whose page
+  before is not mapped, and the check crashed the call. GCC, the Linux
+  presets' default, has no such check; AppleClang and Clang builds did.
+  `generated_code_at_a_page_start_can_be_called` (Linux) makes such a call.
+
 ## 1.33.5
 
 What a product must do: nothing.

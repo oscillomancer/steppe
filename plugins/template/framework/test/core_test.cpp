@@ -30,6 +30,12 @@
 #include "../tools/render_cli.cpp"
 #undef main
 
+#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
+#include <sys/mman.h>
+#include <unistd.h>
+#define SUPPLE_TEST_GENERATED_CODE 1
+#endif
+
 using namespace supple;
 
 namespace {
@@ -2558,5 +2564,37 @@ TEST(a_file_loaded_while_the_audio_runs_arrives_whole) {
     CHECK(e->fileStatus(static_cast<size_t>(k)).state == FileStatus::State::Ready);
     CHECK(e->properties().get(static_cast<size_t>(k)) == a);
 }
+
+#if SUPPLE_TEST_GENERATED_CODE
+// A product that runs code it generates (a JIT, as a DSP-script player
+// does) calls it through plain function pointers, and that code can start
+// a page whose page before is not mapped. UBSan's function check reads the
+// bytes before every indirect call's target, which crashes such a call, so
+// the sanitizer presets leave the check out. Here the code is one return
+// instruction at the start of a page after an inaccessible one.
+TEST(generated_code_at_a_page_start_can_be_called) {
+    const long page = sysconf(_SC_PAGESIZE);
+    void* region = mmap(nullptr, static_cast<size_t>(2 * page), PROT_NONE,
+                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    CHECK(region != MAP_FAILED);
+    if (region == MAP_FAILED) return;
+    unsigned char* code = static_cast<unsigned char*>(region) + page;
+#if defined(__x86_64__)
+    const unsigned char ret[] = {0xc3};
+#else
+    const unsigned char ret[] = {0xc0, 0x03, 0x5f, 0xd6};
+#endif
+    bool ready = mprotect(code, static_cast<size_t>(page), PROT_READ | PROT_WRITE) == 0;
+    if (ready) {
+        std::memcpy(code, ret, sizeof(ret));
+        __builtin___clear_cache(reinterpret_cast<char*>(code),
+                                reinterpret_cast<char*>(code + sizeof(ret)));
+        ready = mprotect(code, static_cast<size_t>(page), PROT_READ | PROT_EXEC) == 0;
+    }
+    CHECK(ready);
+    if (ready) reinterpret_cast<void (*)()>(reinterpret_cast<uintptr_t>(code))();
+    munmap(region, static_cast<size_t>(2 * page));
+}
+#endif
 
 SUPPLE_TEST_MAIN

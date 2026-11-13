@@ -66,6 +66,13 @@ function(supple_sanitize target)
         return()
     elseif (SUPPLE_SANITIZE STREQUAL "address")
         set(flags -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined)
+        # Clang's function check reads the eight bytes before an indirect
+        # call's target for a type signature. Code a product generates (a
+        # JIT) can start a page whose page before is not mapped, where the
+        # check crashes the call; GCC has no such check.
+        if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+            list(APPEND flags -fno-sanitize=function)
+        endif()
     elseif (SUPPLE_SANITIZE STREQUAL "thread")
         set(flags -fsanitize=thread)
     elseif (SUPPLE_SANITIZE STREQUAL "realtime")
