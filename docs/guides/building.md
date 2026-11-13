@@ -124,7 +124,7 @@ Audio uses WASAPI by default, with ASIO available in **Edit > Audio device…**.
 | `release` | Linux | Clang Release, warnings as errors |
 | `linux-package` | Linux | Release distribution targets with isolated static C++ runtimes; tests off |
 | `gcc` | Linux | GCC Debug, for GCC-only warnings |
-| `asan` | Linux | AddressSanitizer with UndefinedBehaviorSanitizer |
+| `asan` | Linux | AddressSanitizer with UndefinedBehaviorSanitizer and leak checks |
 | `tsan` | Linux | ThreadSanitizer |
 | `rtsan` | Linux | RealtimeSanitizer over the audio-path tests |
 | `macos` | macOS | Apple Clang, arm64, Debug by default |
@@ -138,6 +138,8 @@ half an hour in all. Pass `-DSUPPLE_BUILD_TESTS=OFF` at configure time to omit
 tests; the app, helpers and stock plugins still build. The sanitizer presets
 disable the GUI; `gcc` and `asan` exclude the nested source-export test, and
 `tsan`/`rtsan` exclude slow tests (`tsan` also excludes `tsan-skip`).
+`asan` also runs LeakSanitizer: a test fails when a process it starts exits
+with memory nothing points to any more.
 
 `cmake --build --preset dev -j3 --target gui-app.tests` also stages the
 stock plugins its cases use (when plugins are enabled), the MCP helper and the
