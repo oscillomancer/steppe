@@ -297,7 +297,11 @@ TEST_CASE("smooth following moves the picture in whole pixels, so nothing in it 
         return root.readBack();
     };
     // Frames at 60 per second of playback: the view moves 37/60 of a unit at a time.
+    // Every waveform in view first: one that arrives part way through would
+    // differ from the first frame for a reason that is not scrolling.
     const double from = half + 3.0;
+    (void)shot(from);
+    settle(root, arrange->lanes());
     const gui::Image first = shot(from);
     const double firstStart = arrange->viewport().startSeconds;
     REQUIRE(firstStart > 0);
