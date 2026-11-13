@@ -59,6 +59,14 @@ void callRealtime(scriptc::Program::ProcessHook hook, void* instance, void* self
     hook(instance, self, block);
 }
 
+void copyRealtime(const scriptc::Program& program, void* dst, const void* src)
+#if defined(__clang__) && __has_cpp_attribute(clang::nonblocking)
+    [[clang::nonblocking]]
+#endif
+{
+    program.copy(dst, src);
+}
+
 const char* kGain = R"(#include <supple/script.h>
 
 struct Gain : Effect {
@@ -83,6 +91,109 @@ TEST_CASE("optional MIR listings contain a complete module with binary newlines"
     CHECK(listing.find("endmod") != std::string_view::npos);
     CHECK(listing.find('\r') == std::string_view::npos);
     CHECK(compileOk(kGain).program->listing().empty());
+}
+
+TEST_CASE("compiled buffers release their allocations and copies own independent storage") {
+    namespace D = script::detail;
+    // Three direct buffers plus 3 x 3 Cells (the nested arrays' spares too),
+    // each with three buffer types: 30 backing allocations per prepared instance.
+    const std::string members = R"cpp(
+        struct Cell {
+            double before = 13.0;
+            Buffer<double> d;
+            Buffer<float> f;
+            Buffer<int> n;
+            double after = 17.0;
+            void prepare(int size) {
+                d.resize(size);
+                f.resize(size);
+                n.resize(size);
+            }
+            void advance() {
+                d[0] += 4.0;
+                f[0] += 4.0f;
+                n[0] += 4;
+            }
+            double read() const { return before + d[0] + f[0] + n[0] + after; }
+        };
+        Buffer<double> d;
+        Buffer<float> f;
+        Buffer<int> n;
+        Array<Array<Cell, 2>, 2> cells;
+        Shared<double> reading;
+        int size = 2;
+        void prepare() {
+            d.resize(size);
+            f.resize(size);
+            n.resize(size);
+            for (int i = 0; i <= 2; ++i)
+                for (int j = 0; j <= 2; ++j) cells[i][j].prepare(size);
+            size += 1;
+        }
+        void update() {
+            double sum = d[0] + f[0] + n[0];
+            d[0] += 1.0;
+            f[0] += 2.0f;
+            n[0] += 3;
+            for (int i = 0; i <= 2; ++i) {
+                for (int j = 0; j <= 2; ++j) {
+                    sum += cells[i][j].read();
+                    cells[i][j].advance();
+                }
+            }
+            reading.set(sum);
+        }
+    )cpp";
+    for (bool module : {false, true}) {
+        for (bool interpret : {false, true}) {
+            CAPTURE(module);
+            CAPTURE(interpret);
+            const std::string source =
+                "#include <supple/script.h>\nstruct Lifetime : " +
+                std::string(module ? "Module" : "Effect") + " { static constexpr " +
+                (module ? "ModuleInfo" : "Info") +
+                " info = {.name = \"Lifetime\", .id = \"com.example.lifetime\"};" + members +
+                (module ? "void process(int frames) {}" : "void process(Block& io) {}") + "};";
+            const auto compiled = compileOk(source, {.interpret = interpret});
+            const auto& program = *compiled.program;
+            const auto baseline = D::bufferAllocations();
+            constexpr std::size_t count = 30;
+            {
+                JitRunner original(compiled.program), copy(compiled.program);
+                CHECK(D::bufferAllocations() == baseline);
+                original.prepare();
+                CHECK(D::bufferAllocations() == baseline + count);
+                // Resize existing buffers, including the persistent array spares.
+                original.prepare();
+                CHECK(D::bufferAllocations() == baseline + count);
+                original.update();
+                // Copy into an empty instance, then one whose capacities differ.
+                program.copy(copy.self(), original.self());
+                CHECK(D::bufferAllocations() == baseline + count * 2);
+                original.prepare();
+                program.copy(copy.self(), original.self());
+                CHECK(D::bufferAllocations() == baseline + count * 2);
+                // Equal-capacity copies (the audio-thread reset path) stay in place.
+                copyRealtime(program, copy.self(), original.self());
+                copyRealtime(program, original.self(), copy.self());
+                CHECK(D::bufferAllocations() == baseline + count * 2);
+                const auto read = [&](JitRunner& runner) {
+                    runner.update();
+                    return reinterpret_cast<script::Shared<double>*>(
+                               static_cast<unsigned char*>(runner.self()) +
+                               program.shared().at(0).offset)
+                        ->get();
+                };
+                CHECK(read(original) == 384.0);
+                CHECK(read(copy) == 384.0);
+                // Assigning an empty instance releases an existing copy's storage.
+                JitRunner empty(compiled.program);
+                program.copy(copy.self(), empty.self());
+                CHECK(D::bufferAllocations() == baseline + count);
+            }
+            CHECK(D::bufferAllocations() == baseline);
+        }
+    }
 }
 
 TEST_CASE("factory patches are constant checked declarations with physical values") {

@@ -603,7 +603,11 @@ mouse.
   may call any member).
 - `Array<T, N>`: fixed size, any element type, `= {1.0, 0.5}`, `.size()`,
   `.fill(v)`, range-based `for`. `Buffer<T>`: numbers, sized by
-  `resize(n)` in `prepare()`, a member only.
+  `resize(n)` in `prepare()`, a member only. Each instance owns its buffers,
+  including those in nested structs and arrays' spare elements, and releases
+  them on destruction. A host's reset snapshot copies their contents into
+  independent storage; restoring buffers of the same size does not allocate
+  or free.
 - Locals have a value when declared: `double y = 0.0;`, `auto& v = voices[i];`.
   References bind to the selected variable or member; a `const` reference
   to a converted number holds a temporary value. Assignments evaluate the
@@ -698,6 +702,11 @@ anywhere else. There is no network or clock access, and files come only
 through `AudioFile` and `Convolver` members.
 
 ## The runtime library
+
+Hosts can inspect `script::detail::bufferAllocations()` in
+`<supple/script_runtime.h>` for the number of live Buffer backing allocations
+in that runtime, including reset copies. This diagnostic counter is separate
+from the per-instance `prepare()` memory budget and is not a script function.
 
 Math (all in double; `min`, `max`, `clamp`, `abs` also take ints): `sin`
 `cos` `tan` `asin` `acos` `atan` `atan2` `sinh` `cosh` `tanh` `exp` `exp2`

@@ -314,15 +314,35 @@ int wrap(int i, int n) {
 
 // --- containers ----------------------------------------------------------------
 
+namespace {
+std::atomic<std::size_t> gBufferAllocations{0};
+
+template <class T>
+T* allocateBuffer(int size) {
+    if (size <= 0) return nullptr;
+    auto* items = static_cast<T*>(std::calloc(static_cast<std::size_t>(size), sizeof(T)));
+    if (items) gBufferAllocations.fetch_add(1, std::memory_order_relaxed);
+    return items;
+}
+
+template <class T>
+void freeBuffer(T* items) {
+    if (!items) return;
+    std::free(items);
+    gBufferAllocations.fetch_sub(1, std::memory_order_relaxed);
+}
+}  // namespace
+
+std::size_t detail::bufferAllocations() {
+    return gBufferAllocations.load(std::memory_order_relaxed);
+}
+
 template <class T>
 Buffer<T>& Buffer<T>::operator=(const Buffer& other) {
     if (this == &other) return *this;
     if (size_ != other.size_) {
-        std::free(items_);
-        items_ =
-            other.size_ > 0
-                ? static_cast<T*>(std::calloc(static_cast<std::size_t>(other.size_), sizeof(T)))
-                : nullptr;
+        freeBuffer(items_);
+        items_ = allocateBuffer<T>(other.size_);
         size_ = items_ ? other.size_ : 0;
     }
     if (size_ > 0) std::memcpy(items_, other.items_, static_cast<std::size_t>(size_) * sizeof(T));
@@ -331,7 +351,7 @@ Buffer<T>& Buffer<T>::operator=(const Buffer& other) {
 
 template <class T>
 Buffer<T>::~Buffer() {
-    std::free(items_);
+    freeBuffer(items_);
 }
 
 template <class T>
@@ -344,12 +364,11 @@ void Buffer<T>::resize(int size) {
     if (!detail::reserve(static_cast<std::int64_t>(size) * static_cast<std::int64_t>(sizeof(T))))
         return;
     if (size == size_) return;
-    T* grown = size > 0 ? static_cast<T*>(std::calloc(static_cast<std::size_t>(size), sizeof(T)))
-                        : nullptr;
+    T* grown = allocateBuffer<T>(size);
     if (size > 0 && !grown) return;  // out of memory: keep what there was
     const int keep = size < size_ ? size : size_;
     if (keep > 0) std::memcpy(grown, items_, static_cast<std::size_t>(keep) * sizeof(T));
-    std::free(items_);
+    freeBuffer(items_);
     items_ = grown;
     size_ = size;
 }

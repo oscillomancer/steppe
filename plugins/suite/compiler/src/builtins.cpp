@@ -355,6 +355,20 @@ void Builtins::addClasses() {
     Registrar r{*this};
     using L = S::detail::Layout;
 
+    // Buffers have container intrinsics, but own storage just like the DSP
+    // objects below. Keep their typed lifetime thunks in the same table.
+    const auto buffer = [&]<class T>(const Type* element) {
+        auto* c =
+            addClass("Buffer<" + element->name + ">", sizeof(S::Buffer<T>), alignof(S::Buffer<T>));
+        c->type->kind = TypeKind::Buffer;
+        c->type->element = element;
+        c->resource = true;
+        r.lifetime<S::Buffer<T>>(c);
+    };
+    buffer.operator()<double>(double_);
+    buffer.operator()<float>(float_);
+    buffer.operator()<int>(int_);
+
     // Plain value views and records the runtime hands a script.
     auto* transport = addClass("Transport", sizeof(S::Transport), alignof(S::Transport));
     transport->fields = {

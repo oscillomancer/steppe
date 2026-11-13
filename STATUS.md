@@ -1270,6 +1270,12 @@ Plugins:
   refused before allocating and the script stops with
   `script.runtime.memory`, and a hot reload that asks for more keeps the
   previous version. Its reset copy holds as much again.
+- JIT and MIR-interpreted plugins and modules own and release all Buffer
+  members, including nested structs and arrays' persistent spare elements.
+  Reset snapshots deep-copy buffers; restoring equal-sized buffers does not
+  allocate or free. Compiler tests count live backing allocations independently
+  of LeakSanitizer and check that copies do not alias. Native macOS/Windows CI
+  remains pending for this shared compiler/runtime change.
 - DSP source exports require a visible, automatable parameter with a plain
   name for their host tests and do not retain the JIT's loop budget (a loop
   that never ends hangs a native export). Exports include declared factory

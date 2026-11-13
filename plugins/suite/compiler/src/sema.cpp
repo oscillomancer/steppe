@@ -284,19 +284,7 @@ const Type* Sema::arrayType(const Type* element, int count, bool shared,
 }
 
 const Type* Sema::bufferType(const Type* element) {
-    const std::string name = "Buffer<" + element->name + ">";
-    auto it = arrays_.find(name);
-    if (it != arrays_.end()) return it->second;
-    auto t = std::make_unique<Type>();
-    t->kind = TypeKind::Buffer;
-    t->name = name;
-    t->element = element;
-    t->size = static_cast<int>(sizeof(supple::script::Buffer<double>));
-    t->align = 8;
-    Type* raw = t.get();
-    unit_.types.push_back(std::move(t));
-    arrays_[name] = raw;
-    return raw;
+    return b_.cls("Buffer<" + element->name + ">")->type;
 }
 
 const Type* Sema::resolve(TypeSpec* spec, StructDecl* scope, bool allowVoid) {
@@ -554,6 +542,7 @@ void collectObjects(const Type* type, int base, std::vector<ObjectSlot>& out) {
     if (!type) return;
     switch (type->kind) {
         case TypeKind::Object:
+        case TypeKind::Buffer:
             if (type->builtin->construct) out.push_back({base, type->builtin});
             break;
         case TypeKind::Array:

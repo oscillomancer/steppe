@@ -289,6 +289,10 @@ void outOfRange(int line);
 // the instance refused, when they would pass it.
 bool reserve(std::int64_t bytes);
 
+// Live Buffer backing allocations in this runtime, including copies. Diagnostic
+// accounting, independent of prepare()'s per-instance memory budget.
+std::size_t bufferAllocations();
+
 // Where the runtime classes keep what generated code reads directly.
 struct Layout {
     static constexpr int paramValue = offsetof(Param, value_);
