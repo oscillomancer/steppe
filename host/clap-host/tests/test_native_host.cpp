@@ -54,14 +54,25 @@ TEST_CASE("native supervised scanner isolates crashes and hangs and caches resul
     options.bridgeExecutable = SCANNER_PATH;
     options.cacheDirectory = work.path / "cache";
     options.superviseAll = true;
-    options.timeoutMs = 2000;
     ScanReport report;
-    auto first = scan(modules, options, &report);
+    // Neither the good plugin's scan nor the crash may race a deadline: under
+    // a sanitizer on a loaded machine the helper can take seconds to start.
+    options.timeoutMs = 120000;
+    const std::vector<fs::path> goodAndCrash{modules[0], modules[1]};
+    auto first = scan(goodAndCrash, options, &report);
     REQUIRE(first);
-    REQUIRE(first->size() == 1);
-    REQUIRE(report.failures.size() == 2);
+    CHECK(first->size() == 1);
+    REQUIRE(report.failures.size() == 1);
     CHECK(report.failures[0].reason.code == "host.scan.crashed");
-    CHECK(report.failures[1].reason.code == "host.scan.timeout");
+    // A hang outlasts any deadline, so a short one decides nothing by the clock.
+    options.timeoutMs = 2000;
+    const std::vector<fs::path> hang{modules[2]};
+    auto second = scan(hang, options, &report);
+    REQUIRE(second);
+    CHECK(second->empty());
+    REQUIRE(report.failures.size() == 1);
+    CHECK(report.failures[0].reason.code == "host.scan.timeout");
+    // All three are cached: none is scanned again.
     REQUIRE(scan(modules, options, &report));
     CHECK(report.cachedModules == 3);
 }
