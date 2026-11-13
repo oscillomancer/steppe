@@ -298,7 +298,8 @@ void RectRenderer::flush(const GlFrame& frame) {
         // the whole rect, so the pixels are the same.
         std::size_t kept = 0;
         for (const auto& instance : instances_) {
-            const Rect area = Rect{instance.x, instance.y, instance.w, instance.h}.intersect(frame.clip);
+            const Rect area =
+                Rect{instance.x, instance.y, instance.w, instance.h}.intersect(frame.clip);
             if (area.empty()) continue;
             Instance& out = instances_[kept++];
             out = instance;
