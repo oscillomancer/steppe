@@ -196,6 +196,7 @@ class Recorder {
         std::atomic<std::uint64_t> overflow{0};
         // The journal (ADR-0080), the writer thread's, then finish()'s.
         std::FILE* journal = nullptr;
+        bool journalCreated = false;  // by this recording: the take's own file
         Status journalError = okStatus();
         bool header = false;
         std::size_t eventsJournaled = 0, runsJournaled = 0;

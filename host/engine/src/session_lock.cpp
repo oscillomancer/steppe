@@ -15,6 +15,7 @@
 #else
 #include <fcntl.h>
 #include <sys/file.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -58,6 +59,15 @@ std::optional<SessionLock> SessionLock::tryAcquire(const fs::path& folder) {
                     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_ALWAYS,
                     FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
     if (h->handle == INVALID_HANDLE_VALUE) return std::nullopt;
+    // OPEN_REPARSE_POINT opens a link itself rather than its target: refuse
+    // it, as O_NOFOLLOW does, and anything else that is not a plain file.
+    BY_HANDLE_FILE_INFORMATION info{};
+    if (GetFileType(h->handle) != FILE_TYPE_DISK || !GetFileInformationByHandle(h->handle, &info) ||
+        (info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) != 0) {
+        CloseHandle(h->handle);
+        h->handle = INVALID_HANDLE_VALUE;
+        return std::nullopt;
+    }
     OVERLAPPED overlapped{};
     if (!LockFileEx(h->handle, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0,
                     &overlapped)) {
@@ -67,8 +77,15 @@ std::optional<SessionLock> SessionLock::tryAcquire(const fs::path& folder) {
     }
 #else
     // A link is never followed: the lock file is the folder's own.
-    h->fd = ::open(h->file.c_str(), O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0600);
+    // Nonblocking and a regular file only: a named pipe there is not a lock.
+    h->fd = ::open(h->file.c_str(), O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, 0600);
     if (h->fd < 0) return std::nullopt;
+    struct stat st{};
+    if (::fstat(h->fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+        ::close(h->fd);
+        h->fd = -1;
+        return std::nullopt;
+    }
     if (::flock(h->fd, LOCK_EX | LOCK_NB) != 0) {
         ::close(h->fd);
         h->fd = -1;

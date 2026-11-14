@@ -710,8 +710,9 @@ inside too: if `media` itself leads out, they are not recovered
 (`recover.media_outside` warning) and nothing there is touched. Every file
 recovery opens (autosaves, `.keep` copies, sidecars, WAVs before inspection
 or repair) must resolve inside the folder recovery uses; one that does not
-is not opened (`recover.outside`), and `session.lock` is never opened
-through a link. Recovery reads only regular files (a link to one inside is
+is not opened (`recover.outside`), and `session.lock` is taken only as
+a regular file of the folder's own, never through a link (on Windows the
+link itself is refused) and never as a named pipe. Recovery reads only regular files (a link to one inside is
 followed): a named pipe, a device or a folder in the place of any of them,
 or of a MIDI journal, is refused without being waited on
 (`recover.not_file`, or the WAV is passed over) and left as it is. A merge
@@ -1029,7 +1030,10 @@ and naming. All `edit` unless marked (q) query or (a) action.
   A recording's commit (and `project.recover`'s) logs the internal
   `record.commit {takes, punch}`: the takes as the device delivered them
   (file relative to the media folder, segments, loop, MIDI events) and the
-  punch range then, so a merge places them again on another branch.
+  punch range then, so a merge places them again on another branch. Each
+  MIDI event's `bytes` is a channel message (status 128..239, then two
+  data bytes 0..127) and its `voice` fits 32 bits, or the call fails with
+  `record.midi`.
 - **render** (a): `render.mix {master}` (one master for the call; default the `masters` setting, else tr_0), `render.stems`, `render.regions` (matrix),
   `render.items`, `render.dry-run` (q: resolved file list), `render.job.*`;
   `format` (wav|flac), `secondary` (a second file in another format/bit depth

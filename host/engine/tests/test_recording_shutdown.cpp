@@ -337,6 +337,90 @@ TEST_CASE("a MIDI journal's torn or damaged tail is left out") {
     fs::remove_all(dir);
 }
 
+TEST_CASE("a MIDI journal holds only what its writer writes: channel messages and bounded clocks") {
+    // Round-10 review, findings 1 and 2: a data byte over 127 reached the
+    // project (it saved, then would not reopen), and header clocks reached
+    // placement's arithmetic unbounded (signed overflow).
+    const fs::path dir = fs::temp_directory_path() /
+                         ("supple-midi-journal-bounds-" + std::to_string(test::processId()));
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    const fs::path file = dir / "Keys-1.midi.jsonl";
+    const std::string far = std::to_string(std::int64_t(1) << 62);
+    auto header = [](std::string_view fields) {
+        return std::string(R"({"schema":"supple.midi-recording/1.0","track":"tr_1",)") +
+               std::string(fields) + "}\n";
+    };
+    const std::string device = header(
+        R"("sample_rate":48000,"start_sample":48000,"latency":0,"device":true,"routed":false,)"
+        R"("shift":0,"loop":[0,0])");
+    const std::string routed = header(
+        R"("sample_rate":48000,"start_sample":48000,"latency":0,"device":false,"routed":true,)"
+        R"("shift":0,"loop":[0,0])");
+    const std::string route = model::Id{model::Kind::Route, 1}.str();
+    SUBCASE("a damaged event, run or count ends what is trusted") {
+        struct Case {
+            const std::string* head;
+            std::string line;
+        };
+        const Case cases[] = {
+            {&device, "[10,144,255,100]"},          // data byte over 127
+            {&device, "[10,144,60,128]"},           // velocity over 127
+            {&device, "[10,112,60,0]"},             // a data byte where the status goes
+            {&device, "[10,248,0,0]"},              // system real-time: never captured
+            {&device, "[10,240,0,0]"},              // system exclusive: never captured
+            {&device, "[" + far + ",144,60,100]"},  // beyond any timeline
+            {&device, "{\"run\":[" + far + ",0]}"},
+            {&device, "{\"run\":[0," + far + "]}"},
+            {&device, "{\"captured\":" + far + "}"},
+            {&device, "[10,144,60,100,\"" + route + "\",1]"},  // a routed event, unrouted take
+            {&routed, "[10,144,60,100]"},                      // a device event, no device
+            {&routed, "[10,144,60,100,\"" + route + "\",-1]"},
+            {&routed, "[10,144,60,100,\"" + route + "\",2147483648]"},
+        };
+        for (const Case& c : cases) {
+            INFO(c.line);
+            const std::string good =
+                c.head == &device ? "[0,144,60,100]\n" : "[0,144,60,100,\"" + route + "\",1]\n";
+            REQUIRE(writeFileAtomic(file, *c.head + good + c.line + "\n[20,128,60,0]\n"));
+            bool torn = false;
+            auto read = detail::readMidiJournal(file, dir, &torn);
+            REQUIRE(read);
+            CHECK(torn);
+            CHECK(read->events.size() == 1);
+            CHECK(read->captured == 0);
+        }
+    }
+    SUBCASE("a damaged header is not a journal") {
+        const std::string headers[] = {
+            header(R"("sample_rate":48000,"start_sample":0,"latency":9223372036854775807,)"
+                   R"("device":true,"routed":true,"shift":-9223372036854775808,"loop":[0,0])"),
+            header(R"("sample_rate":48000,"start_sample":0,"latency":-1,"device":true,)"
+                   R"("routed":false,"shift":0,"loop":[0,0])"),
+            header(R"("sample_rate":48000,"start_sample":)" + far +
+                   R"(,"latency":0,"device":true,"routed":false,"shift":0,"loop":[0,0])"),
+            header(R"("sample_rate":48000,"start_sample":0,"latency":0,"device":false,)"
+                   R"("routed":true,"shift":)" +
+                   far + R"(,"loop":[0,0])"),
+            header(R"("sample_rate":48000,"start_sample":0,"latency":0,"device":true,)"
+                   R"("routed":false,"shift":0,"loop":[0,)" +
+                   far + "]"),
+            header(R"("sample_rate":48000,"start_sample":0,"latency":0,"device":true,)"
+                   R"("routed":false,"shift":0,"loop":[-5,10])"),
+            header(R"("sample_rate":48000,"start_sample":0,"latency":0,"device":false,)"
+                   R"("routed":false,"shift":0,"loop":[0,0])"),  // records nothing
+        };
+        for (const std::string& h : headers) {
+            INFO(h);
+            REQUIRE(writeFileAtomic(file, h + "[0,144,60,100]\n{\"captured\":1}\n"));
+            auto read = detail::readMidiJournal(file, dir);
+            REQUIRE_FALSE(read);
+            CHECK(read.error().code == "record.journal");
+        }
+    }
+    fs::remove_all(dir);
+}
+
 TEST_CASE("a MIDI take a crash interrupted comes back from its journal, and goes once saved") {
     // ADR-0080: a MIDI take had no crash-recovery file; now its journal is
     // offered by project.recoverable and placed by project.recover as stop
@@ -429,4 +513,88 @@ TEST_CASE("a MIDI take a crash interrupted comes back from its journal, and goes
         CHECK(fs::exists(journal));
         CHECK(app.recoverable().size() == 1);
     }
+}
+
+TEST_CASE("a journal this recording did not create is never the take's, nor deleted at save") {
+    // Round-10 review, finding 5: a dangling link at the journal's name was
+    // refused by the exclusive creation, yet the take still named it as its
+    // journal, and the next save deleted the link.
+    const fs::path dir = fs::temp_directory_path() /
+                         ("supple-midi-journal-owner-" + std::to_string(test::processId()));
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    SUBCASE("the recorder: a refused journal is not the take's file") {
+        RecordTarget target;
+        target.track = {model::Kind::Track, 1};
+        target.midi = RecordTarget::Midi{1, 0, 0, false, 0};
+        target.file = dir / "Keys-1.midi.jsonl";
+        REQUIRE(writeFileAtomic(target.file, "someone else's"));
+        detail::Recorder recorder({target}, 48000, 0);
+        REQUIRE(recorder.open());
+        MidiInputEvent on;
+        on.size = 3;
+        on.bytes[0] = 0x90;
+        on.bytes[1] = 60;
+        on.bytes[2] = 100;
+        recorder.capture(nullptr, 0, 256, 0);
+        recorder.captureMidi({&on, 1}, 0, 256, 0);
+        const auto takes = recorder.finish();
+        REQUIRE(takes.size() == 1);
+        CHECK(takes.front().file.empty());
+        CHECK(std::any_of(takes.front().warnings.begin(), takes.front().warnings.end(),
+                          [](const auto& w) { return w.code == "record.journal"; }));
+        CHECK(*readTextFile(target.file) == "someone else's");
+    }
+    SUBCASE("the app: a dangling link at a journal's name survives recording and saving") {
+        auto created = EngineApp::create({.workdir = dir});
+        REQUIRE(created);
+        auto& app = **created;
+        cmd::Registry registry;
+        registerEngineCommands(registry);
+        cmd::Dispatcher dispatcher(registry, app);
+        auto call = [&](std::string_view name, std::string_view args) {
+            auto result = dispatcher.execute(
+                {std::string(name), *json::parse(args), {cmd::Origin::Type::Test, "owner", ""}});
+            REQUIRE_MESSAGE(result, (result ? "" : result.error().toString()));
+        };
+        call("track.add", R"({"name":"Keys"})");
+        call("track.set", R"({"track":"tr_1","armed":true,"record_midi":"*"})");
+        const fs::path saved = dir / "song/song.json";
+        REQUIRE(app.save(saved));
+        fs::create_directories(app.recordDir());
+        const fs::path link = app.recordDir() / "Keys-1.midi.jsonl";
+        fs::create_symlink(dir / "absent-target", link);
+        DummyBackend backend(
+            {.mode = DummyBackend::Mode::Manual,
+             .midiPorts = {"Keys"},
+             .midi = [](std::vector<MidiInputEvent>& out, std::uint32_t n, std::int64_t frame) {
+                 for (std::int64_t f = frame; f < frame + n; ++f) {
+                     if (f != 0 && f != 256) continue;
+                     MidiInputEvent e;
+                     e.frame = static_cast<std::uint32_t>(f - frame);
+                     e.size = 3;
+                     e.bytes[0] = f == 0 ? 0x90 : 0x80;
+                     e.bytes[1] = 60;
+                     e.bytes[2] = f == 0 ? 100 : 0;
+                     out.push_back(e);
+                 }
+             }});
+        REQUIRE(app.startEngine(backend,
+                                {.sampleRate = 48000, .blockSize = 256, .midiInputs = true},
+                                {.anticipative = false, .workers = 0}));
+        call("transport.record", "{}");
+        backend.run(4);
+        call("transport.stop", "{}");
+        app.stopEngine();
+        REQUIRE(app.head().midi.size() == 1);
+        CHECK(fs::is_symlink(fs::symlink_status(link)));
+        // The link takes the name: the take's journal is the next one.
+        CHECK(fs::is_regular_file(fs::symlink_status(app.recordDir() / "Keys-2.midi.jsonl")));
+        REQUIRE(app.save(saved));
+        CHECK_FALSE(fs::exists(app.recordDir() / "Keys-2.midi.jsonl"));
+        CHECK(fs::is_symlink(fs::symlink_status(link)));
+        CHECK_FALSE(fs::exists(dir / "absent-target"));
+        CHECK(app.recoverable().empty());  // the take's own journal went at the save
+    }
+    fs::remove_all(dir);
 }

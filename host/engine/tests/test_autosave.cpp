@@ -1476,6 +1476,15 @@ TEST_CASE("recovery reads no autosave and opens no lock through a link out of th
         CHECK(app->recoverableSessions().empty());
         CHECK_FALSE(fs::exists(target));
     }
+#if !defined(_WIN32)
+    SUBCASE("a session.lock named pipe") {
+        // Round-10 native CI (Windows took the link): the lock is a plain file.
+        fs::remove(folder / "session.lock");
+        REQUIRE(::mkfifo((folder / "session.lock").c_str(), 0600) == 0);
+        CHECK(app->recoverableSessions().empty());
+        CHECK(fs::is_fifo(fs::symlink_status(folder / "session.lock")));
+    }
+#endif
 }
 
 TEST_CASE("an autosave offered after a first save or a save as survives saving first") {
@@ -1642,3 +1651,260 @@ TEST_CASE("recovery waits on no named pipe in a session a crash left behind") {
     CHECK(fs::is_fifo(fs::symlink_status(pipe)));
 }
 #endif
+
+namespace {
+std::string journalHeader() {
+    return R"({"schema":"supple.midi-recording/1.0","track":"tr_1","sample_rate":48000,)"
+           R"("start_sample":48000,"latency":0,"device":true,"routed":false,"shift":0,)"
+           R"("loop":[0,0]})"
+           "\n";
+}
+}  // namespace
+
+TEST_CASE("a MIDI journal's 8-bit data puts nothing back, replaces nothing, saves nothing") {
+    // Round-10 review, finding 1: pitch 255 was recovered, saved (the journal
+    // then deleted) and refused by the schema on reopen.
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    SUBCASE("an unsaved session with no readable autosave: current work stays") {
+        Unsaved u;
+        {
+            auto earlier = u.run("earlier");
+            cmd::Dispatcher d(registry, *earlier);
+            REQUIRE(d.execute({"track.add", *json::parse(R"({"name":"Keys"})"), kUnit}));
+            earlier->setFixedClock(1'060'000);
+            earlier->tick();
+        }
+        REQUIRE(writeFileAtomic(
+            u.folder("earlier") / "media/rec/Keys-1.midi.jsonl",
+            journalHeader() + "[0,144,255,100]\n[24000,128,255,0]\n{\"captured\":48000}\n"));
+        REQUIRE(writeFileAtomic(u.folder("earlier") / "autosave-1.json", "damaged"));
+        auto app = u.run("current");
+        rename(*app, "Current work");
+        auto r = app->recoverSession("earlier");
+        REQUIRE_FALSE(r);
+        CHECK(r.error().code == "recover.damaged");
+        CHECK(app->head().project->name == "Current work");
+    }
+    SUBCASE("a saved project: what is put back saves and reopens") {
+        Project p;
+        cmd::Dispatcher d(registry, *p.app);
+        REQUIRE(d.execute({"track.add", *json::parse(R"({"name":"Keys"})"), kUnit}));
+        const fs::path saved = p.root / "saved/song.json";
+        REQUIRE(p.app->save(saved));
+        const fs::path journal = p.app->recordDir() / "Keys-1.midi.jsonl";
+        // A good note, then a damaged one: the good one only.
+        REQUIRE(writeFileAtomic(journal, journalHeader() + "[0,144,60,100]\n[100,128,60,0]\n"
+                                                           "{\"captured\":24000}\n"
+                                                           "[30000,144,255,100]\n"
+                                                           "{\"captured\":48000}\n"));
+        auto r = p.app->recover({}, {});
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        REQUIRE(p.app->head().midi.size() == 1);
+        const auto& notes = p.app->head().midi.begin()->value->sequence.notes;
+        REQUIRE(notes.size() == 1);
+        CHECK(notes.front().pitch == 60);
+        REQUIRE(p.app->save(saved));
+        auto opened = p.app->open(saved);
+        CHECK_MESSAGE(opened, (opened ? std::string() : opened.error().toString()));
+    }
+}
+
+TEST_CASE("record.commit refuses MIDI that is not a channel message of 7-bit data") {
+    // A replayed record.commit is read from a project's history: the same
+    // file boundary as the journal (round-10 review, finding 1).
+    Project p;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *p.app);
+    REQUIRE(d.execute({"track.add", json::Value::object(), kUnit}));
+    auto commit = [&](std::string_view bytes) {
+        auto args = json::parse(
+            std::string(R"({"takes":[{"track":"tr_1","file":"","hash":"","start_sample":0,)") +
+            R"("frames":48000,"sample_rate":48000,"midi":true,"loop_start":0,"loop_end":0,)" +
+            R"("overflow_frames":0,"segments":[{"file_frame":0,"timeline":0}],)" +
+            R"("events":[{"timeline":0,"run":0,"voice":-1,"bytes":)" + std::string(bytes) +
+            R"(}]}],"punch":{"enabled":false,"start":0,"end":0}})");
+        REQUIRE(args);
+        return d.execute({"record.commit", *args, kUnit});
+    };
+    for (const char* bytes : {"[144,255,100]", "[144,60,128]", "[248,0,0]", "[112,60,0]",
+                              "[144,60]", "[144,60,100,0]"}) {
+        INFO(bytes);
+        auto r = commit(bytes);
+        REQUIRE_FALSE(r);
+        INFO(r.error().toString());
+        CHECK(r.error().code == "record.midi");
+        CHECK(r.error().path == "/args/takes/0/events/0/bytes");
+        CHECK(p.app->head().midi.empty());
+    }
+    auto good = commit("[144,60,100]");  // the same arguments, a note-on
+    REQUIRE_MESSAGE(good, (good ? std::string() : good.error().toString()));
+    CHECK(p.app->head().midi.size() == 1);
+}
+
+TEST_CASE("a recovered take whose Note Out route is gone keeps its voices apart") {
+    // Round-10 review, finding 3: dropping the missing route also dropped
+    // each voice's identity, so two overlapping notes of one pitch paired as
+    // one (both 480 ticks instead of 960).
+    Project p;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *p.app);
+    REQUIRE(d.execute({"track.add", json::Value::object(), kUnit}));
+    const fs::path saved = p.root / "saved/song.json";
+    REQUIRE(p.app->save(saved));
+    detail::MidiCapture c;
+    c.track = {model::Kind::Track, 1};
+    c.rate = 48000;
+    c.start = 0;
+    c.midi.routed = true;
+    c.captured = 48000;
+    auto event = [&](std::int64_t at, std::uint8_t status, model::Id route, int voice) {
+        detail::CapturedMidiEvent e;
+        e.at = at;
+        e.bytes[0] = status;
+        e.bytes[1] = 60;
+        e.bytes[2] = status == 0x90 ? 100 : 0;
+        e.route = route;
+        e.voice = voice;
+        c.events.push_back(e);
+    };
+    const model::Id gone{model::Kind::Route, 99}, alsoGone{model::Kind::Route, 98};
+    SUBCASE("two voices of one route") {
+        event(0, 0x90, gone, 1);
+        event(12000, 0x90, gone, 2);
+        event(24000, 0x80, gone, 1);
+        event(36000, 0x80, gone, 2);
+    }
+    SUBCASE("the same voice number on two routes") {
+        event(0, 0x90, gone, 1);
+        event(12000, 0x90, alsoGone, 1);
+        event(24000, 0x80, gone, 1);
+        event(36000, 0x80, alsoGone, 1);
+    }
+    // What stop committed: the take as captured, voices kept apart.
+    const RecordedTake stopped = detail::placeMidi(c);
+    REQUIRE(p.app->commitTakes({stopped}, "reference stop"));
+    REQUIRE(p.app->head().midi.size() == 1);
+    const midi::Sequence expected = p.app->head().midi.begin()->value->sequence;
+    REQUIRE(expected.notes.size() == 2);
+    CHECK(expected.notes[0].length == expected.notes[1].length);
+    REQUIRE(p.app->open(saved));  // the routes and the take are not in it
+    auto h = *json::parse(journalHeader());
+    h["start_sample"] = 0;
+    h["device"] = false;
+    h["routed"] = true;
+    std::string journal = json::writeCompact(h) + "\n";
+    for (const auto& e : c.events) {
+        auto row = json::Value::array();
+        row.push_back(static_cast<long long>(e.at));
+        for (auto byte : e.bytes) row.push_back(static_cast<long long>(byte));
+        row.push_back(e.route.str());
+        row.push_back(static_cast<long long>(e.voice));
+        journal += json::writeCompact(row) + "\n";
+    }
+    journal += "{\"captured\":48000}\n";
+    REQUIRE(writeFileAtomic(p.app->recordDir() / "Keys-1.midi.jsonl", journal));
+    auto r = p.app->recover({}, {});
+    REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+    REQUIRE(p.app->head().midi.size() == 1);
+    const midi::Sequence actual = p.app->head().midi.begin()->value->sequence;
+    REQUIRE(actual.notes.size() == 2);
+    for (std::size_t i = 0; i < 2; ++i) {
+        CHECK(actual.notes[i].start == expected.notes[i].start);
+        CHECK(actual.notes[i].length == expected.notes[i].length);
+    }
+}
+
+TEST_CASE("a save that moves or copies the media retires the journal where the take now is") {
+    // Round-10 review, finding 4: cleanup deleted the journal's old path,
+    // so the copy in the new media folder was offered again after saving.
+    const std::string body = "[0,144,60,100]\n[24000,128,60,0]\n{\"captured\":48000}\n";
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    SUBCASE("a first save moves an unsaved session's media") {
+        Unsaved u;
+        {
+            auto earlier = u.run("earlier");
+            cmd::Dispatcher d(registry, *earlier);
+            REQUIRE(d.execute({"track.add", *json::parse(R"({"name":"Keys"})"), kUnit}));
+            earlier->setFixedClock(1'060'000);
+            earlier->tick();
+        }
+        const fs::path old = u.folder("earlier") / "media/rec/Keys-1.midi.jsonl";
+        REQUIRE(writeFileAtomic(old, journalHeader() + body));
+        auto app = u.run("current");
+        auto recovered = app->recoverSession("earlier");
+        REQUIRE(recovered);
+        REQUIRE(recovered->recovered.size() == 1);
+        const fs::path saved = u.root / "saved/song.json";
+        REQUIRE(app->save(saved));
+        CHECK_FALSE(fs::exists(app->recordDir() / old.filename()));
+        CHECK(app->recoverable().empty());
+        REQUIRE(app->open(saved));
+        CHECK(app->head().midi.size() == 1);
+        CHECK(app->recoverable().empty());
+    }
+    SUBCASE("a save as copies a saved project's media") {
+        Project p;
+        cmd::Dispatcher d(registry, *p.app);
+        REQUIRE(d.execute({"track.add", json::Value::object(), kUnit}));
+        const fs::path first = p.root / "first/song.json";
+        REQUIRE(p.app->save(first));
+        const fs::path old = p.app->recordDir() / "Keys-1.midi.jsonl";
+        REQUIRE(writeFileAtomic(old, journalHeader() + body));
+        REQUIRE(p.app->recover({}, {}));
+        const fs::path second = p.root / "second/song.json";
+        REQUIRE(p.app->save(second));
+        CHECK_FALSE(fs::exists(p.app->recordDir() / old.filename()));
+        CHECK(p.app->recoverable().empty());
+        // The first file does not hold the take: its folder keeps the
+        // journal, as it keeps a recording's WAV, and offers it there.
+        CHECK(fs::exists(old));
+        REQUIRE(p.app->open(first));
+        CHECK(p.app->head().midi.empty());
+        CHECK(p.app->recoverable().size() == 1);
+    }
+}
+
+TEST_CASE("replacing an unsaved project without saving discards its journals with its folder") {
+    // Round-10 review, finding 6, decided for ADR-0078: an unsaved project's
+    // folder goes when it is replaced without saving (after the app asks),
+    // MIDI journals included; ADR-0080 names this as its one exception.
+    Unsaved u;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    {
+        auto earlier = u.run("earlier");
+        cmd::Dispatcher d(registry, *earlier);
+        REQUIRE(d.execute({"track.add", *json::parse(R"({"name":"Keys"})"), kUnit}));
+        earlier->setFixedClock(1'060'000);
+        earlier->tick();
+    }
+    const fs::path journal = u.folder("earlier") / "media/rec/Keys-1.midi.jsonl";
+    REQUIRE(writeFileAtomic(journal, journalHeader() + "[0,144,60,100]\n[24000,128,60,0]\n"
+                                                       "{\"captured\":48000}\n"));
+    auto app = u.run("current");
+    auto recovered = app->recoverSession("earlier");
+    REQUIRE(recovered);
+    REQUIRE(recovered->recovered.size() == 1);
+    REQUIRE(fs::exists(journal));
+    SUBCASE("a new project") {
+        model::Project replacement;
+        replacement.name = "Replacement";
+        REQUIRE(app->newProject(replacement));
+    }
+    SUBCASE("opening another project") {
+        Project other;
+        const fs::path file = other.root / "other/song.json";
+        REQUIRE(other.app->save(file));
+        REQUIRE(app->open(file));
+    }
+    CHECK_FALSE(fs::exists(journal));
+    // Its folder is emptied; what may stay is the lock this run holds on it.
+    if (fs::exists(u.folder("earlier")))
+        for (const auto& e : fs::recursive_directory_iterator(u.folder("earlier")))
+            CHECK(e.path().filename() == "session.lock");
+    CHECK(app->recoverableSessions().empty());
+}

@@ -633,7 +633,9 @@ Status EngineApp::replaceProject(model::VersionStore store, fs::path path,
     scratch_.clear();
     reportedFailures_.clear();
     recordingFiles_.clear();
-    midiJournalsPending_.clear();  // not saved: they stay, recoverable (ADR-0080)
+    // Not saved: a saved project's journals stay, offered on its next open;
+    // an unsaved one's went with its folder above (ADR-0078, ADR-0080).
+    midiJournalsPending_.clear();
     endMasterRecording();
     autoWrite_.clear();
     renderQueue_.clear();
@@ -763,6 +765,7 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
         return writeFileAtomic(path, model::serializeProjectFile(*versions_, history));
     };
     const fs::path media = path.parent_path() / head().project->mediaDir;
+    const fs::path oldMedia = mediaDir();
     if (fromScratch) {
         SUPPLE_TRY(moveScratchMedia(media, publish));
     } else {
@@ -794,6 +797,13 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
     // later save to the same path keeps that (recoverAutosave).
     if (std::error_code ec; !openedFile_ || openedFile_->first != path)
         if (const auto time = fs::last_write_time(path, ec); !ec) openedFile_.emplace(path, time);
+    // The journals of the takes this file holds are retired where the save
+    // put them: moved with a first save, copied by a save as into another
+    // folder (whose old copy stays the old project's, as its WAVs do).
+    for (fs::path& journal : midiJournalsPending_)
+        if (const fs::path rel = journal.lexically_relative(oldMedia);
+            !rel.empty() && *rel.begin() != "..")
+            journal = media / rel;
     dropSavedMidiJournals();
     if (fromScratch) releaseScratch();  // its media moved; its autosaves are older than the file
     autosaveMarked_ = true;             // the file itself is the newest copy
@@ -1878,11 +1888,16 @@ Result<TransportInfo> EngineApp::transport(std::string_view action, std::optiona
                 base += std::isalnum(static_cast<unsigned char>(c)) ? c : '-';
             // <base>-<n> free for a WAV, its sidecar and a MIDI journal alike
             // (the writer also creates each exclusively).
+            // Any entry takes a name, a dangling link too (fs::exists
+            // follows it and says no).
+            auto occupied = [](const fs::path& p) {
+                std::error_code ec;
+                return fs::exists(fs::symlink_status(p, ec));
+            };
             auto freeName = [&](const char* extension) {
                 for (int n = 1;; ++n) {
                     const std::string stem = base + "-" + std::to_string(n);
                     const fs::path file = dir / (stem + extension);
-                    std::error_code ec;
                     const bool taken =
                         std::any_of(targets.begin(), targets.end(),
                                     [&](const RecordTarget& o) {
@@ -1890,9 +1905,8 @@ Result<TransportInfo> EngineApp::transport(std::string_view action, std::optiona
                                                o.file.parent_path() / o.file.stem().stem() ==
                                                    dir / stem;
                                     }) ||
-                        fs::exists(dir / (stem + ".wav"), ec) ||
-                        fs::exists(dir / (stem + ".rec.json"), ec) ||
-                        fs::exists(dir / (stem + ".midi.jsonl"), ec);
+                        occupied(dir / (stem + ".wav")) || occupied(dir / (stem + ".rec.json")) ||
+                        occupied(dir / (stem + ".midi.jsonl"));
                     if (!taken) return file;
                 }
             };
@@ -3783,11 +3797,17 @@ Result<std::vector<RecordedInfo>> EngineApp::recover(const std::vector<std::stri
         if (check.midi) {  // placed as stop places it (ADR-0080)
             t = *check.midi;
             // Note Out addresses of routes this project no longer has: the
-            // events stay, unaddressed, as a device's.
+            // events stay, unaddressed. Each voice keeps its own identity
+            // (numbered below a device's -1), so overlapping notes of one
+            // pitch still pair as stop paired them.
+            std::map<std::pair<model::Id, int>, int> unaddressed;
             for (RecordedMidiEvent& e : t.midi)
                 if (e.route != model::Id{} && !s.routes.find(e.route)) {
+                    const auto [it, added] = unaddressed.try_emplace(
+                        {e.route, e.voice}, -2 - static_cast<int>(unaddressed.size()));
+                    (void)added;
                     e.route = {};
-                    e.voice = -1;
+                    e.voice = it->second;
                 }
         }
         t.track = track.value_or(side->track);
