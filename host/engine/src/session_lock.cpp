@@ -53,9 +53,10 @@ std::optional<SessionLock> SessionLock::tryAcquire(const fs::path& folder) {
     h->file = folder / kSessionLockName;
 #if defined(_WIN32)
     // Shared read/write/delete: another run may open it to try the lock.
-    h->handle = CreateFileW(h->file.c_str(), GENERIC_READ | GENERIC_WRITE,
-                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-                            OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    h->handle =
+        CreateFileW(h->file.c_str(), GENERIC_READ | GENERIC_WRITE,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_ALWAYS,
+                    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
     if (h->handle == INVALID_HANDLE_VALUE) return std::nullopt;
     OVERLAPPED overlapped{};
     if (!LockFileEx(h->handle, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0,
@@ -65,7 +66,8 @@ std::optional<SessionLock> SessionLock::tryAcquire(const fs::path& folder) {
         return std::nullopt;
     }
 #else
-    h->fd = ::open(h->file.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0600);
+    // A link is never followed: the lock file is the folder's own.
+    h->fd = ::open(h->file.c_str(), O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0600);
     if (h->fd < 0) return std::nullopt;
     if (::flock(h->fd, LOCK_EX | LOCK_NB) != 0) {
         ::close(h->fd);

@@ -704,7 +704,11 @@ not write names one; no command sets it) gets one more version setting it
 to `media`, with a `recover.media_dir` warning; one that is stays as
 spelled. Recordings are listed, read and repaired only when they are
 inside too: if `media` itself leads out, they are not recovered
-(`recover.media_outside` warning) and nothing there is touched. A merge
+(`recover.media_outside` warning) and nothing there is touched. Every file
+recovery opens (autosaves, `.keep` copies, sidecars, WAVs before inspection
+or repair) must resolve inside the folder recovery uses; one that does not
+is not opened (`recover.outside`), and `session.lock` is never opened
+through a link. A merge
 replayed into an unsaved project writes only inside its session folder and
 refuses any `..` (`history.media_outside`, §5.4). Nothing a recovery could not
 restore is lost by the first save, which releases the folder: an autosave

@@ -67,7 +67,12 @@ used neither, nor `autosave_available` for saved projects.
    (`intermediate/../audio`). Recovery reads and repairs only recordings
    that pass the same test: if even `media` leads out (a link), they are not
    recovered (warning `recover.media_outside`) and nothing there is read or
-   changed. A replayed merge of an unsaved project writes only inside its
+   changed. Every file recovery opens goes through one helper that applies
+   it: autosaves (in the session or `<file>-data` folder they are listed
+   in), the `.keep` copies (in their folder), recording sidecars (in their
+   WAV's folder), WAVs before they are inspected or repaired, and the MIDI
+   journals to come; a file that leads out is not opened
+   (`recover.outside`). `session.lock` is never opened through a link. A replayed merge of an unsaved project writes only inside its
    session folder, as a saved project's does inside its own (ADR-0076), and
    still refuses any `..`. (Amended 2026-11-14 after review rounds 5 and
    6.)

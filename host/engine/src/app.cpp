@@ -2730,32 +2730,6 @@ fs::path EngineApp::mediaDir() const {
 }
 
 namespace {
-// The one test of where a path the engine reads or writes on a file's say
-// leads (ADR-0076, ADR-0078): inside `root` when the deepest part of `path`
-// that exists resolves, every link on the way followed (canonical, so its
-// ancestors too), inside the resolved `root`, and the part that does not
-// exist yet names no ".." (where that leads is unknown until it is made).
-// `missing` (optional) receives the parts that do not exist, deepest first.
-bool resolvedInside(const fs::path& root, const fs::path& path,
-                    std::vector<fs::path>* missing = nullptr) {
-    std::error_code ec;
-    const fs::path base = fs::canonical(root, ec);
-    if (ec) return false;
-    fs::path existing = path;
-    std::vector<fs::path> absent;
-    while (!existing.empty() && !fs::exists(fs::symlink_status(existing, ec))) {
-        absent.push_back(existing);
-        if (existing == existing.parent_path()) return false;
-        existing = existing.parent_path();
-    }
-    for (const auto& part : path.lexically_relative(existing))
-        if (part == "..") return false;
-    const fs::path rel = fs::canonical(existing, ec).lexically_relative(base);
-    if (ec || rel.empty() || *rel.begin() == "..") return false;
-    if (missing) *missing = std::move(absent);
-    return true;
-}
-
 // Why the media folder `setting` (a project's media_dir) names from `folder`
 // may not hold files a replayed step writes: it names ".." anywhere (a step
 // may make folders, so where one leads must not depend on what exists), or
@@ -2765,7 +2739,8 @@ std::string mediaOutside(const fs::path& folder, const std::string& setting,
                          std::vector<fs::path>* missing = nullptr) {
     for (const auto& part : fs::path(setting))
         if (part == "..") return "names '..'";
-    if (!resolvedInside(folder, folder / setting, missing)) return "is outside the project folder";
+    if (!detail::resolvedInside(folder, folder / setting, missing))
+        return "is outside the project folder";
     return {};
 }
 }  // namespace
@@ -2803,7 +2778,7 @@ Status EngineApp::replayMayWriteMedia() {
         for (auto it = made.rbegin(); it != made.rend(); ++it) fs::remove(*it, ec);
         return outside("cannot be made (" + ec.message() + ")");
     }
-    if (!resolvedInside(project, media)) {
+    if (!detail::resolvedInside(project, media)) {
         for (auto it = made.rbegin(); it != made.rend(); ++it) fs::remove(*it, ec);
         return outside("is outside the project folder");
     }
@@ -2923,13 +2898,16 @@ std::int64_t leftoverRecordings(const fs::path& folder, const fs::path& rec,
                                 const std::set<std::string>& used) {
     std::int64_t n = 0;
     std::error_code ec;
-    if (!resolvedInside(folder, rec)) return 0;  // not the session's: never looked at
+    if (!detail::resolvedInside(folder, rec)) return 0;  // not the session's: never looked at
     for (fs::directory_iterator it(rec, ec), end; !ec && it != end; it.increment(ec)) {
         const fs::path& f = it->path();
         if (f.extension() != ".wav" || !it->is_regular_file(ec)) continue;
         if (used.count(("rec" / f.filename()).generic_string())) continue;
         std::error_code sideError;
-        if (fs::exists(detail::sidecarPath(f), sideError)) ++n;
+        if (detail::recoveryFileInside(rec, f) &&
+            detail::recoveryFileInside(rec, detail::sidecarPath(f)) &&
+            fs::exists(detail::sidecarPath(f), sideError))
+            ++n;
     }
     return n;
 }
@@ -2955,10 +2933,11 @@ RecordingCheck checkRecording(const model::Session& s, const fs::path& rec, cons
     std::error_code ec;
     if (!fs::is_directory(fs::symlink_status(rec, ec)) ||
         !fs::is_regular_file(fs::symlink_status(f, ec)) ||
-        !fs::equivalent(f.parent_path(), rec, ec) || ec ||
-        (!root.empty() && !resolvedInside(root, f)))
+        !fs::equivalent(f.parent_path(), rec, ec) || ec || !detail::recoveryFileInside(root, f))
         return out;
-    auto side = detail::readSidecar(f);  // none: not a recording, or capture never began
+    // The sidecar is opened only inside the WAV's own folder (itself inside
+    // `root`): a link to placement metadata elsewhere is not followed.
+    auto side = detail::readSidecar(f, rec);  // none: not a recording, or capture never began
     if (!side) {
         if (fs::exists(detail::sidecarPath(f), ec)) {
             Error e = std::move(side).error();
@@ -2991,7 +2970,7 @@ RecordingCheck checkRecording(const model::Session& s, const fs::path& rec, cons
 std::int64_t usableRecordings(const model::Session& s, const fs::path& rec, const fs::path& root) {
     std::int64_t n = 0;
     std::error_code ec;
-    if (!resolvedInside(root, rec)) return 0;
+    if (!detail::resolvedInside(root, rec)) return 0;
     for (fs::directory_iterator it(rec, ec), end; !ec && it != end; it.increment(ec))
         if (it->path().extension() == ".wav" && checkRecording(s, rec, it->path(), root).usable())
             ++n;
@@ -3012,7 +2991,7 @@ Status confineMedia(model::VersionStore& store, const fs::path& folder,
         SUPPLE_TRY(store.switchBranch(name));
         const auto head = store.head();
         const std::string was = head->project->mediaDir;
-        if (resolvedInside(folder, folder / was)) continue;
+        if (detail::resolvedInside(folder, folder / was)) continue;
         // The default itself leads out (a link): nothing better to point at;
         // recoverSession says its recordings are not recovered.
         if (was == fallback) continue;
@@ -3108,7 +3087,7 @@ std::vector<RecoverableSession> EngineApp::recoverableSessions(
         std::string media = model::Project{}.mediaDir;
         std::set<std::string> used;
         for (const fs::path& file : autosavesIn(folder)) {
-            auto text = readTextFile(file, std::size_t(1) << 30);
+            auto text = detail::readRecoveryText(folder, file, std::size_t(1) << 30);
             auto opened = text ? model::parseProjectFile(*text, nullptr, replayableStep)
                                : Result<model::OpenedProject>(std::move(text).error());
             if (!opened) {
@@ -3221,7 +3200,8 @@ Result<std::vector<EngineApp::RecoveryKeep>> EngineApp::keepForFirstSave(
 Status EngineApp::publishRecoveryKeeps(const fs::path& file,
                                        std::vector<schema::Warning>* warnings) {
     for (auto it = recoveryKeep_.begin(); it != recoveryKeep_.end();) {
-        auto bytes = readFile(it->copy, std::size_t(1) << 30);
+        auto bytes =
+            detail::readRecoveryFile(it->copy.parent_path(), it->copy, std::size_t(1) << 30);
         const std::string name = file.filename().string() + it->suffix;
         fs::path backup;
         Status kept = bytes ? Status(Error("file.exists", "")) : Status(bytes.error());
@@ -3296,7 +3276,7 @@ Result<SessionRecovery> EngineApp::recoverAutosave(const std::string& name) {
         const auto time = fs::last_write_time(file, ec);
         if (name.empty() && (ec || time <= written)) continue;
         std::vector<schema::Warning> parsed;
-        auto text = readTextFile(file, std::size_t(1) << 30);
+        auto text = detail::readRecoveryText(folder, file, std::size_t(1) << 30);
         auto opened = text ? model::parseProjectFile(*text, &parsed, replayableStep)
                            : Result<model::OpenedProject>(text.error());
         if (!opened && !name.empty())
@@ -3358,7 +3338,7 @@ Result<SessionRecovery> EngineApp::recoverSession(const std::string& session) {
     std::vector<RawAutosave> keep;
     for (const fs::path& file : autosavesIn(*folder)) {
         std::vector<schema::Warning> parsed;
-        auto text = readTextFile(file, std::size_t(1) << 30);
+        auto text = detail::readRecoveryText(*folder, file, std::size_t(1) << 30);
         auto opened = text ? model::parseProjectFile(*text, &parsed, replayableStep)
                            : Result<model::OpenedProject>(text.error());
         if (!opened && text)
@@ -3439,7 +3419,8 @@ Result<SessionRecovery> EngineApp::recoverSession(const std::string& session) {
     }
     recoveryKeep_ = std::move(*kept);
     for (auto& w : replaced) out.warnings.push_back({w.code, w.message, w.path, "", "", ""});
-    if (std::error_code ec; fs::exists(recordDir(), ec) && !resolvedInside(*folder, recordDir()))
+    if (std::error_code ec;
+        fs::exists(recordDir(), ec) && !detail::resolvedInside(*folder, recordDir()))
         out.warnings.push_back(
             {"recover.media_outside",
              "the recordings folder " + recordDir().string() +
@@ -3742,7 +3723,10 @@ Result<std::vector<RecordedInfo>> EngineApp::recover(const std::vector<std::stri
         if (!inRecordDir(t.file))  // replaced since it was listed
             return Error("recover.unknown_file", t.file.string() + " is not a recording to recover",
                          {}, "choose a file listed by project.recoverable for the current project");
-        auto frames = audio::repairWavStream(t.file);
+        // Checked again right before the header is rewritten.
+        Status inside = detail::recoveryFileInside(recoveryRoot(), t.file);
+        auto frames = inside ? audio::repairWavStream(t.file)
+                             : Result<std::uint64_t>(std::move(inside).error());
         if (!frames) {
             warn(frames.error(), t.file.lexically_relative(mediaDir()), t.track.str());
             it = takes.erase(it);

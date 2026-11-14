@@ -1399,3 +1399,79 @@ TEST_CASE("a named autosave must be newer than the file as the project was opene
         CHECK(p.app->head().project->name == "Autosaved");
     }
 }
+
+TEST_CASE("recovery opens no file through a link out of the session") {
+    // Round-8 review, finding 2: the WAV was confined but its sidecar was
+    // read through a link to placement metadata outside the session.
+    Unsaved u;
+    const std::string left = "20261114-090000-43";
+    const fs::path folder = u.folder(left);
+    const fs::path wav = folder / "media" / "rec" / "take.wav";
+    const fs::path elsewhere = u.root / "outside-sidecar" / "other.wav";
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    {
+        auto earlier = u.run(left);
+        cmd::Dispatcher d(registry, *earlier);
+        REQUIRE(d.execute({"track.add", json::Value::object(), kUnit}));
+        earlier->setFixedClock(1'060'000);
+        earlier->tick();
+    }
+    leaveRecording(wav);
+    fs::create_directories(elsewhere.parent_path());
+    REQUIRE(engine::detail::writeSidecar(elsewhere,
+                                         {{model::Kind::Track, 1}, 480000, 48000, {}, 0, 0}));
+    fs::remove(engine::detail::sidecarPath(wav));
+    fs::create_symlink(engine::detail::sidecarPath(elsewhere), engine::detail::sidecarPath(wav));
+    auto app = u.run("20261114-100000-1");
+    rename(*app, "Current work");
+
+    SUBCASE("a sidecar link: the take is not placed from it") {
+        CHECK(app->recoverableSessions().front().recordings == 0);
+        auto r = app->recoverSession(left);
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        CHECK(r->recovered.empty());
+        CHECK(app->head().items.size() == 0);
+    }
+    SUBCASE("a sidecar link and no readable autosave: nothing to put back, nothing changed") {
+        REQUIRE(writeFileAtomic(folder / "autosave-1.json", "damaged"));
+        auto r = app->recoverSession(left);
+        REQUIRE_FALSE(r);
+        CHECK(r.error().code == "recover.damaged");
+        CHECK(app->head().project->name == "Current work");
+    }
+}
+
+TEST_CASE("recovery reads no autosave and opens no lock through a link out of the session") {
+    // Round-8 review, finding 2, for the other files recovery opens.
+    Unsaved u;
+    const std::string left = "20261114-090000-44";
+    const fs::path folder = u.folder(left);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    {
+        auto earlier = u.run(left);
+        cmd::Dispatcher d(registry, *earlier);
+        REQUIRE(d.execute({"track.add", json::Value::object(), kUnit}));
+        earlier->setFixedClock(1'060'000);
+        earlier->tick();
+    }
+    auto app = u.run("20261114-100000-1");
+    rename(*app, "Current work");
+    SUBCASE("an autosave link") {
+        const fs::path outsideAutosave = u.root / "outside-autosave.json";
+        fs::rename(folder / "autosave-1.json", outsideAutosave);
+        fs::create_symlink(outsideAutosave, folder / "autosave-1.json");
+        auto r = app->recoverSession(left);
+        CHECK_FALSE(r);
+        CHECK(app->head().project->name == "Current work");
+    }
+    SUBCASE("a session.lock link") {
+        fs::remove(folder / "session.lock");
+        const fs::path target = u.root / "outside-lock";
+        fs::create_symlink(target, folder / "session.lock");
+        CHECK(app->recoverableSessions().empty());
+        CHECK_FALSE(fs::exists(target));
+    }
+}
+

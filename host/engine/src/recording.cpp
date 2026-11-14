@@ -9,6 +9,7 @@
 #include <map>
 #include <tuple>
 
+#include "media_files.h"
 #include "supple/base/files.h"
 #include "supple/base/thread.h"
 #include "supple/json/json.h"
@@ -45,8 +46,9 @@ Status writeSidecar(const std::filesystem::path& wav, const RecordingInfo& info)
     return writeFileAtomic(sidecarPath(wav), json::writeCanonical(v) + "\n");
 }
 
-Result<RecordingInfo> readSidecar(const std::filesystem::path& wav) {
-    auto text = readTextFile(sidecarPath(wav), 1 << 20);
+Result<RecordingInfo> readSidecar(const std::filesystem::path& wav,
+                                  const std::filesystem::path& root) {
+    auto text = readRecoveryText(root, sidecarPath(wav), 1 << 20);
     if (!text) return std::move(text).error();
     auto v = json::parse(*text);
     if (!v) return std::move(v).error();
