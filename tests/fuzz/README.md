@@ -23,14 +23,20 @@ ASAN_OPTIONS=detect_leaks=0:alloc_dealloc_mismatch=0 \
   build/fuzz/tests/fuzz/history-corpus
 ```
 
-`project.fuzz` feeds bytes to the parser used by `project.open`. Accepted
+`project.fuzz` feeds bytes to the parser used by `project.open`, with the
+engine's rule for which saved steps may replay (ADR-0076). Accepted
 projects must satisfy the model invariants and survive a canonical text
-round trip. The corpus contains files saved by the engine (empty, MIDI song,
-FX, automation), plus a saved project with a route and a missing audio media
-item, and one with an unmerged agent branch (`song_branches.json`, its
-`branches` section, ADR-0076). Missing media is valid project state; a
-branches section that does not restore opens main alone and must then
-round-trip as main.
+round trip (with history kept). Then it walks what undo, redo and merges
+walk in what was restored: every branch is undone to its base and redone to
+its end, each head checked, and each branch is merged into main with a
+replayer that changes nothing (the history walks are the real ones; a walk
+that does not end shows up as a timeout). The corpus contains files saved by
+the engine (empty, MIDI song, FX, automation), plus a saved project with a
+route and a missing audio media item, one with an unmerged agent branch
+(`song_branches.json`, its `branches` section) and the same branch undone
+once and saved with `history: true` (`song_branches_redo.json`, a redo
+step). Missing media is valid project state; a branches section that does
+not restore opens main alone and must then round-trip as main.
 
 `history.fuzz` maps bytes to real bus commands on a fresh `EngineApp`,
 including batches, failed calls, undo/redo and branch operations. After each
