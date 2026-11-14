@@ -872,7 +872,10 @@ first use, and no plug-in code runs early to warm it.
   place a take with the same function (`detail::placeMidi`). A journal that
   cannot be written gives the committed take a `record.journal` warning and
   does not stop the recording. The app deletes a committed take's journal
-  once a save or autosave is written.
+  once a save or autosave is written, where the save put it: a first save
+  moves it with the media, and a save as into another folder deletes the
+  copy there, leaving the old folder's for the old project, whose file does
+  not hold the take.
 - **Recording a rack Out** (rack.md §6): an armed channel whose selected
   `record.input` is an Out module records its stereo input, after input FX
   and before its own items, inserts, fader and Console 9 encode. Arming makes

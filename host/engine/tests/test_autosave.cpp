@@ -1816,3 +1816,54 @@ TEST_CASE("a recovered take whose Note Out route is gone keeps its voices apart"
         CHECK(actual.notes[i].length == expected.notes[i].length);
     }
 }
+
+TEST_CASE("a save that moves or copies the media retires the journal where the take now is") {
+    // Round-10 review, finding 4: cleanup deleted the journal's old path,
+    // so the copy in the new media folder was offered again after saving.
+    const std::string body = "[0,144,60,100]\n[24000,128,60,0]\n{\"captured\":48000}\n";
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    SUBCASE("a first save moves an unsaved session's media") {
+        Unsaved u;
+        {
+            auto earlier = u.run("earlier");
+            cmd::Dispatcher d(registry, *earlier);
+            REQUIRE(d.execute({"track.add", *json::parse(R"({"name":"Keys"})"), kUnit}));
+            earlier->setFixedClock(1'060'000);
+            earlier->tick();
+        }
+        const fs::path old = u.folder("earlier") / "media/rec/Keys-1.midi.jsonl";
+        REQUIRE(writeFileAtomic(old, journalHeader() + body));
+        auto app = u.run("current");
+        auto recovered = app->recoverSession("earlier");
+        REQUIRE(recovered);
+        REQUIRE(recovered->recovered.size() == 1);
+        const fs::path saved = u.root / "saved/song.json";
+        REQUIRE(app->save(saved));
+        CHECK_FALSE(fs::exists(app->recordDir() / old.filename()));
+        CHECK(app->recoverable().empty());
+        REQUIRE(app->open(saved));
+        CHECK(app->head().midi.size() == 1);
+        CHECK(app->recoverable().empty());
+    }
+    SUBCASE("a save as copies a saved project's media") {
+        Project p;
+        cmd::Dispatcher d(registry, *p.app);
+        REQUIRE(d.execute({"track.add", json::Value::object(), kUnit}));
+        const fs::path first = p.root / "first/song.json";
+        REQUIRE(p.app->save(first));
+        const fs::path old = p.app->recordDir() / "Keys-1.midi.jsonl";
+        REQUIRE(writeFileAtomic(old, journalHeader() + body));
+        REQUIRE(p.app->recover({}, {}));
+        const fs::path second = p.root / "second/song.json";
+        REQUIRE(p.app->save(second));
+        CHECK_FALSE(fs::exists(p.app->recordDir() / old.filename()));
+        CHECK(p.app->recoverable().empty());
+        // The first file does not hold the take: its folder keeps the
+        // journal, as it keeps a recording's WAV, and offers it there.
+        CHECK(fs::exists(old));
+        REQUIRE(p.app->open(first));
+        CHECK(p.app->head().midi.empty());
+        CHECK(p.app->recoverable().size() == 1);
+    }
+}

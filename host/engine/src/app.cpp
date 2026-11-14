@@ -763,6 +763,7 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
         return writeFileAtomic(path, model::serializeProjectFile(*versions_, history));
     };
     const fs::path media = path.parent_path() / head().project->mediaDir;
+    const fs::path oldMedia = mediaDir();
     if (fromScratch) {
         SUPPLE_TRY(moveScratchMedia(media, publish));
     } else {
@@ -794,6 +795,13 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
     // later save to the same path keeps that (recoverAutosave).
     if (std::error_code ec; !openedFile_ || openedFile_->first != path)
         if (const auto time = fs::last_write_time(path, ec); !ec) openedFile_.emplace(path, time);
+    // The journals of the takes this file holds are retired where the save
+    // put them: moved with a first save, copied by a save as into another
+    // folder (whose old copy stays the old project's, as its WAVs do).
+    for (fs::path& journal : midiJournalsPending_)
+        if (const fs::path rel = journal.lexically_relative(oldMedia);
+            !rel.empty() && *rel.begin() != "..")
+            journal = media / rel;
     dropSavedMidiJournals();
     if (fromScratch) releaseScratch();  // its media moved; its autosaves are older than the file
     autosaveMarked_ = true;             // the file itself is the newest copy

@@ -107,3 +107,9 @@ same way (`record.midi`).
 its address is dropped but each of its voices stays distinct (an
 unaddressed voice of its own), so overlapping notes of one pitch pair as
 stop paired them; dropping the voice too had merged them.
+
+*Amended 2026-11-14 after review round 10:* a save deletes the journals of
+the takes it holds where it put them. A first save moves them with the
+media; a save as into another folder deletes the copy there and leaves the
+old folder's, which the old file does not hold (as it leaves that folder's
+WAVs). Deleting the old path had left the new copy to be offered again.
