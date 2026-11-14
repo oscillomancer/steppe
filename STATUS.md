@@ -224,6 +224,14 @@ instructions are in `docs/guides/installing.md`.
   drags sent once per frame rather than per pointer motion;
   every node, plug-ins and bridged plug-ins included, runs with FTZ/DAZ in
   every executor, and owned audio threads prefault their stacks (ADR-0025).
+  A seeded plan-swap soak drives real command edits during dummy-backend
+  playback in both executors, with output, reclamation, save/reopen render
+  equivalence and undo-content checks. The short `rt` case and opt-in long
+  runs share a JSONL replay path (`tests/fuzz/README.md`); native macOS/Windows
+  validation of this harness is pending. Extended runs expose a retained-pool
+  RT/offline mismatch after a connected VCA's level changes: the one-edit
+  replay in `tests/fuzz/plan-soak-corpus/rack-level.jsonl` is pending engine
+  triage; the harness preserves the failure without changing engine behavior.
 - **Strips and routing** (ADR-0019 to ADR-0022): typed channel, buss and
   master strips with Console 9 summing (switchable, level-matched; unity
   staging, so a hop costs nothing, ADR-0066); pan modes (pan, dual pan, pan
