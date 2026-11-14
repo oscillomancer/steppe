@@ -61,8 +61,10 @@ The branch's steps are also what the human reviews after reopening:
    canonical document. If it no longer matches (a program that does not keep
    branches changed main) or the section is malformed, the project opens main
    alone with a `project.history` warning. The first save over that file then
-   keeps a copy of it as `<file>.pre-branches.bak` (`-2`, `-3`… if taken) and
-   says so (`project.history_backup`); the file itself is untouched until then.
+   keeps a copy of it as `<file>.pre-branches.bak` (`-2`, `-3`… if taken),
+   written like a save (temporary file, fsync, rename) before the file is
+   replaced, and says so (`project.history_backup`); the file itself is
+   untouched until then.
    Damage includes links undo and merges could not walk: a `replay_of` that
    is not an earlier version (a merge would loop on it) and redo steps that
    do not continue the head one by one (redo would jump off the branch and

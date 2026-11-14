@@ -201,6 +201,11 @@ TEST_CASE("saving over a file whose branches did not load keeps a copy of it onc
     const auto backup = p.root / "song.json.pre-branches.bak";
     REQUIRE(fs::exists(backup));
     CHECK(*readTextFile(backup) == stale);
+    // Written as saves are (review of item A, finding 6): nothing half-done
+    // is left beside it.
+    for (const auto& e : fs::directory_iterator(p.root))
+        CHECK_MESSAGE(e.path().filename().string().find(".tmp") == std::string::npos,
+                      e.path().string());
     warnings.clear();
     REQUIRE(p.app->save("song.json", &warnings));  // once: the next save just saves
     CHECK_FALSE(hasWarning(warnings, "project.history_backup"));

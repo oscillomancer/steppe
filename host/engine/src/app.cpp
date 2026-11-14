@@ -717,12 +717,16 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
             for (int n = 2; fs::exists(backup, ec); ++n)
                 backup =
                     path.parent_path() / (name + ".pre-branches-" + std::to_string(n) + ".bak");
-            fs::copy_file(path, backup, ec);
-            if (ec)
+            // The only copy of those branches: written like a save (temporary
+            // file, fsync, rename, fsync of the folder) before the file is
+            // replaced, so a power loss leaves it whole or absent.
+            auto bytes = readFile(path, std::size_t(1) << 30);
+            Status kept = bytes ? writeFileAtomic(backup, *bytes) : Status(bytes.error());
+            if (!kept)
                 return Error("project.history_backup",
                              "could not keep a copy of the file before saving over its unreadable "
                              "branches: " +
-                                 ec.message(),
+                                 kept.error().message,
                              backup.string(),
                              "make the project folder writable, or save to another file");
             if (warnings)
