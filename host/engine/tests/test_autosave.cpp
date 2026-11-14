@@ -590,3 +590,241 @@ TEST_CASE("a recording committed on a branch reaches main through a replayed mer
     };
     CHECK(resolved(main.media.begin()->value->path) == resolved(branchMedia));
 }
+
+// --- unsaved projects left behind (ADR-0078) ------------------------------------------------
+
+namespace {
+
+struct Unsaved {
+    fs::path root =
+        fs::temp_directory_path() / ("supple-unsaved-" + std::to_string(test::processId()));
+    fs::path folder(const std::string& name) const { return root / "unsaved" / name; }
+    Unsaved() { fs::remove_all(root); }
+    ~Unsaved() { fs::remove_all(root); }
+    // An app whose unsaved project lives in unsaved/<name>, as the GUI's does.
+    std::unique_ptr<EngineApp> run(const std::string& name) const {
+        AppOptions o;
+        o.workdir = root / "work";
+        o.scratchDir = folder(name);
+        auto created = EngineApp::create(o);
+        REQUIRE(created);
+        (*created)->setFixedClock(1'000'000);
+        REQUIRE((*created)->newProject({}));  // its autosave interval starts on that clock
+        return std::move(*created);
+    }
+};
+
+void rename(EngineApp& app, const std::string& name) {
+    auto transaction = app.beginTransaction({cmd::Origin::Type::Test, "unit", ""}, "Rename");
+    REQUIRE(transaction);
+    auto project = app.txn().project();
+    project.name = name;
+    app.txn().setProject(project);
+    REQUIRE(app.commitTransaction(*transaction));
+}
+
+const cmd::Origin kUnit{cmd::Origin::Type::Test, "unit", ""};
+
+}  // namespace
+
+TEST_CASE("an unsaved project autosaves into its own folder, which the first save empties") {
+    Unsaved u;
+    auto app = u.run("20261114-090000-1");
+    const fs::path own = u.folder("20261114-090000-1");
+    CHECK(fs::exists(own / "session.lock"));  // held from the start
+    CHECK(app->autosaveDir() == own);
+    app->tick();
+    CHECK_FALSE(fs::exists(own / "autosave-1.json"));  // nothing changed yet
+    rename(*app, "Sketch");
+    CHECK(app->nextServiceDelayMs() == 60'000);
+    app->setFixedClock(1'060'000);
+    app->tick();
+    REQUIRE(fs::exists(own / "autosave-1.json"));
+    auto opened = model::parseProjectFile(*readTextFile(own / "autosave-1.json"));
+    REQUIRE(opened);
+    CHECK(opened->store.head()->project->name == "Sketch");
+
+    REQUIRE(app->save(u.root / "song" / "song.json"));
+    CHECK_FALSE(fs::exists(own));  // its autosaves and lock went with the first save
+    CHECK(app->autosaveDir() == u.root / "song" / "song.json-data");
+    REQUIRE(app->newProject({}));  // a new unsaved project takes the folder again
+    CHECK(fs::exists(own / "session.lock"));
+    app->clearScratch();
+    CHECK_FALSE(fs::exists(own));
+}
+
+TEST_CASE("an unsaved project a run left behind is listed, recovered and deleted") {
+    Unsaved u;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    const std::string left = "20261114-090000-4242";
+    auto earlier = u.run(left);
+    {
+        cmd::Dispatcher d(registry, *earlier);
+        rename(*earlier, "Sketch");
+        REQUIRE(d.execute({"track.add", json::parse(R"({"name": "Vocal"})").value(), kUnit}));
+        earlier->setFixedClock(1'060'000);
+        earlier->tick();
+        REQUIRE(fs::exists(u.folder(left) / "autosave-1.json"));
+        // Then a take is recorded and never committed: rec/Vocal-1.wav.
+        earlier->setupFixture(d, "recording_take_file");
+    }
+    auto app = u.run("20261114-100000-1");
+    // While the earlier run is alive its folder is its own.
+    CHECK(app->recoverableSessions().empty());
+    CHECK(app->recoverableSessionCount() == 0);
+    CHECK(app->recoverSession(left).error().code == "recover.busy");
+    CHECK(app->deleteSession(left).error().code == "recover.busy");
+
+    earlier.reset();  // the run ends without discarding its project, as a crash does
+    REQUIRE(fs::exists(u.folder(left)));
+    const auto sessions = app->recoverableSessions();
+    REQUIRE(sessions.size() == 1);
+    const RecoverableSession& s = sessions.front();
+    CHECK(s.session == left);
+    CHECK(s.name == "Sketch");
+    CHECK(s.tracks == 1);
+    CHECK(s.branches == std::vector<std::string>{"main"});
+    CHECK(s.recordings == 1);
+    CHECK(s.bytes > 0);
+    CHECK(s.autosavedMs.has_value());
+    CHECK(s.startedMs.has_value());
+    CHECK(app->recoverableSessionCount() == 1);
+    CHECK(app->head().tracks.size() == 1);  // the master: listing loads nothing
+
+    for (const std::string bad : {"", "..", "../work", "20261114-100000-1", "nope"})
+        CHECK(app->recoverSession(bad).error().code == "recover.unknown_session");
+
+    auto recovered = app->recoverSession(left);
+    REQUIRE_MESSAGE(recovered, (recovered ? std::string() : recovered.error().toString()));
+    CHECK(recovered->autosave == "autosave-1.json");
+    REQUIRE(recovered->recovered.size() == 1);
+    CHECK(recovered->recovered.front().track == "tr_1");
+    CHECK(app->projectPath().empty());  // still unsaved
+    CHECK(app->head().project->name == "Sketch");
+    CHECK(app->head().items.size() == 1);
+    CHECK(app->options().scratchDir == u.folder(left));
+    CHECK_FALSE(fs::exists(u.folder("20261114-100000-1")));  // this run's own, unused
+    REQUIRE(app->undo());  // the recordings came back as their own step
+    CHECK(app->head().items.size() == 0);
+    CHECK(app->head().tracks.size() == 2);
+    REQUIRE(app->redo());
+
+    // The folder is this run's now: another run does not list it, and the
+    // autosaves continue there.
+    auto other = u.run("20261114-110000-2");
+    CHECK(other->recoverableSessions().empty());
+    rename(*app, "Sketch 2");
+    app->setFixedClock(1'120'000);
+    app->tick();
+    CHECK(fs::exists(u.folder(left) / "autosave-2.json"));
+
+    app->clearScratch();  // discarded after all
+    CHECK_FALSE(fs::exists(u.folder(left)));
+}
+
+TEST_CASE("a damaged autosave falls back to an older one; a folder with nothing readable") {
+    Unsaved u;
+    auto app = u.run("20261114-100000-1");
+    model::Project old;
+    old.name = "Older";
+    const fs::path a = u.folder("20261114-080000-7");
+    REQUIRE(writeFileAtomic(a / "autosave-1.json", model::serializeProjectFile(model::VersionStore(
+                                                       model::Session::create(old)))));
+    REQUIRE(writeFileAtomic(a / "autosave-2.json", "{\"schema\": \"not a project\"}"));
+    const fs::path b = u.folder("20261114-085000-8");
+    REQUIRE(writeFileAtomic(b / "autosave-1.json", "garbage"));
+
+    std::vector<RecordingWarning> warnings;
+    const auto sessions = app->recoverableSessions(&warnings);
+    REQUIRE(sessions.size() == 2);
+    CHECK(sessions[0].name == "Older");
+    CHECK(sessions[1].name.empty());
+    CHECK_FALSE(sessions[1].autosavedMs.has_value());
+    CHECK(warnings.size() == 2);
+
+    auto damaged = app->recoverSession("20261114-085000-8");
+    REQUIRE_FALSE(damaged);
+    CHECK(damaged.error().code == "recover.damaged");
+    CHECK(fs::exists(b));  // refused: nothing changed
+    REQUIRE(app->deleteSession("20261114-085000-8"));
+    CHECK_FALSE(fs::exists(b));
+
+    auto r = app->recoverSession("20261114-080000-7");
+    REQUIRE(r);
+    CHECK(r->autosave == "autosave-1.json");
+    REQUIRE(r->warnings.size() == 1);
+    CHECK(r->warnings.front().code == "recover.autosave");
+    CHECK(app->head().project->name == "Older");
+    CHECK(app->recoverableSessions().empty());
+}
+
+TEST_CASE("folders left behind with nothing in them go when an app starts, after an hour") {
+    Unsaved u;
+    const auto now = fs::file_time_type::clock::now();
+    const fs::path stale = u.folder("20261114-070000-5"), fresh = u.folder("20261114-075900-6"),
+                   kept = u.folder("20261114-071000-9");
+    fs::create_directories(stale / "media" / "rec");
+    REQUIRE(writeFileAtomic(stale / "session.lock", ""));
+    fs::last_write_time(stale, now - std::chrono::hours(2));
+    fs::create_directories(fresh);
+    REQUIRE(writeFileAtomic(kept / "media" / "rec" / "take.wav", "audio"));
+    fs::last_write_time(kept, now - std::chrono::hours(2));
+    auto app = u.run("20261114-080000-1");
+    CHECK_FALSE(fs::exists(stale));
+    CHECK(fs::exists(fresh));  // a run starting now may not hold its lock yet
+    CHECK(fs::exists(kept));   // something in it: never deleted unasked
+    const auto sessions = app->recoverableSessions();
+    REQUIRE(sessions.size() == 1);
+    CHECK(sessions.front().session == "20261114-071000-9");
+    CHECK(sessions.front().recordings == 0);  // no sidecar: not a recording
+}
+
+TEST_CASE("a recovered autosave's saved steps are checked like an opened file's") {
+    // ADR-0076 decision 9 applies to every project file the engine reads:
+    // an autosave left behind is someone's file too.
+    Unsaved u;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    const std::string left = "20261114-090000-77";
+    {
+        auto earlier = u.run(left);
+        cmd::Dispatcher d(registry, *earlier);
+        REQUIRE(d.execute({"track.add", json::parse(R"({"name": "Drums"})").value(), kUnit}));
+        REQUIRE(earlier->versions().createBranch("agent/claude/bass", "main"));
+        REQUIRE(earlier->switchBranch("agent/claude/bass"));
+        REQUIRE(d.execute({"track.add", json::parse(R"({"name": "Bass"})").value(), kUnit}));
+        REQUIRE(earlier->switchBranch("main"));
+        earlier->setFixedClock(1'060'000);
+        earlier->tick();
+        REQUIRE(fs::exists(u.folder(left) / "autosave-1.json"));
+    }
+    const fs::path autosave = u.folder(left) / "autosave-1.json";
+    const fs::path victim = u.root / "victim.txt";
+    REQUIRE(writeFileAtomic(victim, "precious"));
+    auto doc = json::parse(*readTextFile(autosave)).value();
+    bool replaced = false;
+    for (auto& v : doc["branches"]["versions"].asObject())
+        if (const auto* list = v.value.find("invocations"); list && list->size()) {
+            json::Value step = json::Value::object();
+            step["command"] = "project.save";
+            step["args"] = json::Value::object();
+            step["args"]["path"] = victim.string();
+            v.value["invocations"] = json::Value::array();
+            v.value["invocations"].push_back(std::move(step));
+            replaced = true;
+        }
+    REQUIRE(replaced);
+    REQUIRE(writeFileAtomic(autosave, json::writeCanonical(doc)));
+
+    auto app = u.run("20261114-100000-1");
+    const auto sessions = app->recoverableSessions();
+    REQUIRE(sessions.size() == 1);
+    CHECK(sessions.front().branches == std::vector<std::string>{"main"});
+    auto recovered = app->recoverSession(left);
+    REQUIRE_MESSAGE(recovered, (recovered ? std::string() : recovered.error().toString()));
+    CHECK(std::any_of(recovered->warnings.begin(), recovered->warnings.end(),
+                      [](const RecordingWarning& w) { return w.code == "project.history"; }));
+    CHECK(app->versions().branches() == std::vector<std::string>{"main"});
+    CHECK(*readTextFile(victim) == "precious");
+}

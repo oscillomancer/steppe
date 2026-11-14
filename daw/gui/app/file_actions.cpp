@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <memory>
 
+#include "supple/gui/process.h"
 #include "supple/product.h"
 #include "supple/ui/list.h"
 #include "supple/ui/popup.h"
@@ -185,6 +186,7 @@ FileActions::FileActions(ui::Root& root, AppActions& actions, cmd::Dispatcher& d
                                    start.empty() ? nullptr : start.c_str(), false);
         });
     });
+    actions_.addUi("ui.file.recover", "File: recover unsaved work…", [this] { openRecovery(); });
     actions_.addUi("ui.file.save", "File: save", [this] {
         if (app_.projectPath().empty()) return (void)actions_.run("ui.file.save_as");
         if (exec("project.save", json::Value::object())) markSaved();
@@ -274,6 +276,208 @@ void FileActions::showSaveWarnings(const std::string& command, const json::Value
     row.layout.dir = ui::Layout::Dir::Row;
     row.layout.height = ui::SizeRule::fixed(28);
     row.emplace<ui::Button>("file.warning.ok", "OK", [this] { root_.closePopup(); });
+    root_.openPopup(std::move(form), {}, ui::Placement::Center);
+}
+
+namespace {
+// "2026-11-14 09:12", local time.
+std::string localStamp(std::int64_t unixMs) {
+    const std::tm tm = localTime(static_cast<std::time_t>(unixMs / 1000));
+    char text[32] = {};
+    std::strftime(text, sizeof text, "%Y-%m-%d %H:%M", &tm);
+    return text;
+}
+
+std::string diskSize(std::int64_t bytes) {
+    char text[32] = {};
+    if (bytes >= 1'000'000)
+        std::snprintf(text, sizeof text, "%.1f MB", static_cast<double>(bytes) / 1e6);
+    else
+        std::snprintf(text, sizeof text, "%lld kB",
+                      static_cast<long long>(std::max<std::int64_t>(1, (bytes + 999) / 1000)));
+    return text;
+}
+
+std::string plural(std::int64_t n, const char* one, const char* many) {
+    return std::to_string(n) + " " + (n == 1 ? one : many);
+}
+
+std::int64_t integerAt(const json::Value& v, const char* key) {
+    const json::Value* f = v.find(key);
+    return f && f->isNumber() ? static_cast<std::int64_t>(f->asDouble()) : 0;
+}
+
+constexpr std::size_t kRecoveryRows = 6;
+}  // namespace
+
+void FileActions::openRecovery() {
+    if (root_.popupOpen()) root_.closePopups();
+    auto listed = exec("project.recoverable", json::Value::object());
+    if (!listed) return;
+    std::vector<const json::Value*> sessions;
+    if (const json::Value* list = listed->find("sessions"); list && list->isArray())
+        for (const json::Value& s : list->asArray()) sessions.push_back(&s);
+    std::reverse(sessions.begin(), sessions.end());  // newest first
+    const std::size_t shown = std::min(sessions.size(), kRecoveryRows);
+    auto form = std::make_unique<ui::Node>("file.recover");
+    form->layout.dir = ui::Layout::Dir::Column;
+    form->layout.width = ui::SizeRule::fixed(600);
+    form->layout.height = ui::SizeRule::fixed(static_cast<float>(
+        sessions.empty() ? 116 : 132 + 50 * shown + (sessions.size() > shown ? 22 : 0)));
+    form->layout.padding = ui::Insets::all(14);
+    form->layout.gap = 10;
+    form->emplace<ui::Label>("file.recover.title", "Recover unsaved work", ui::Font::UiBold,
+                             "body");
+    form->emplace<ui::TextBlock>(
+        "file.recover.text",
+        sessions.empty()
+            ? "Nothing to recover: every earlier unsaved project was saved or discarded."
+            : std::string(product::kName) +
+                  " stopped before these unsaved projects were saved or discarded. Nothing is "
+                  "opened until you choose; Later keeps them for File > Recover unsaved work…",
+        ui::Font::Ui, "small", "ink-quiet");
+    for (std::size_t i = 0; i < shown; ++i) {
+        const json::Value& s = *sessions[i];
+        const std::string session = s.find("session")->asString();
+        const std::string name = s.find("name") ? s.find("name")->asString() : "";
+        const std::string title = name.empty() ? "Untitled project" : name;
+        const std::string size = diskSize(integerAt(s, "bytes"));
+        std::string details;
+        if (const json::Value* started = s.find("started_ms"); started && started->isNumber())
+            details = "Started " + localStamp(integerAt(s, "started_ms"));
+        else
+            details = session;
+        if (const json::Value* saved = s.find("autosaved_ms"); saved && saved->isNumber())
+            details += " · autosaved " + localStamp(integerAt(s, "autosaved_ms")) + " · " +
+                       plural(integerAt(s, "tracks"), "track", "tracks");
+        else
+            details += " · no autosave";
+        if (const json::Value* b = s.find("branches"); b && b->isArray() && b->asArray().size() > 1)
+            details += " · " +
+                       plural(static_cast<std::int64_t>(b->asArray().size()), "branch", "branches");
+        if (const auto takes = integerAt(s, "recordings"); takes > 0)
+            details += " · " + plural(takes, "recording", "recordings");
+        details += " · " + size;
+        const std::string row = "file.recover.session." + std::to_string(i);
+        auto& line = form->emplace<ui::Node>(row);
+        line.layout.dir = ui::Layout::Dir::Row;
+        line.layout.height = ui::SizeRule::fixed(40);
+        line.layout.gap = 8;
+        auto& text = line.emplace<ui::Node>(row + ".text");
+        text.layout.dir = ui::Layout::Dir::Column;
+        text.emplace<ui::Label>(row + ".title", title, ui::Font::UiBold, "small");
+        text.emplace<ui::Label>(row + ".details", details, ui::Font::Ui, "caption", "ink-quiet");
+        auto& recover =
+            line.emplace<ui::Button>("file.recover.open." + std::to_string(i), "Recover",
+                                     [this, session, title] { recoverSession(session, title); });
+        recover.layout.width = ui::SizeRule::fixed(84);
+        recover.layout.height = ui::SizeRule::fixed(28);
+        auto& remove = line.emplace<ui::Button>(
+            "file.recover.delete." + std::to_string(i), "Delete",
+            [this, session, title, size] { confirmDeleteSession(session, title, size); });
+        remove.layout.width = ui::SizeRule::fixed(72);
+        remove.layout.height = ui::SizeRule::fixed(28);
+    }
+    if (sessions.size() > shown)
+        form->emplace<ui::Label>("file.recover.more",
+                                 plural(static_cast<std::int64_t>(sessions.size() - shown),
+                                        "older one is", "older ones are") +
+                                     " not shown: recover or delete some of these to see them.",
+                                 ui::Font::Ui, "caption", "ink-quiet");
+    auto& buttons = form->emplace<ui::Node>("file.recover.buttons");
+    buttons.layout.dir = ui::Layout::Dir::Row;
+    buttons.layout.height = ui::SizeRule::fixed(28);
+    buttons.emplace<ui::Node>("file.recover.space");
+    auto& later = buttons.emplace<ui::Button>(
+        "file.recover.later", sessions.empty() ? "OK" : "Later", [this] { root_.closePopup(); });
+    later.layout.width = ui::SizeRule::fixed(84);
+    root_.openPopup(std::move(form), {}, ui::Placement::Center);
+}
+
+void FileActions::recoverSession(const std::string& session, const std::string& title) {
+    root_.closePopup();
+    confirmDiscard("Recover \"" + title + "\"?", [this, session, title] {
+        json::Value args = json::Value::object();
+        args["session"] = session;
+        auto r = exec("project.recover", std::move(args));
+        if (!r) return;
+        ui_.selectedTracks.clear();
+        ui_.selectedItems.clear();
+        // Not marked saved: it is unsaved until the user saves it.
+        std::string text;
+        if (const json::Value* a = r->find("autosave"); a && a->isString())
+            text = "Opened from its newest readable autosave.";
+        else
+            text = "It had no autosave: a new project holds what could be put back.";
+        if (const json::Value* back = r->find("recovered");
+            back && back->isArray() && !back->asArray().empty())
+            text += " " +
+                    plural(static_cast<std::int64_t>(back->asArray().size()), "recording was",
+                           "recordings were") +
+                    " put back (Undo removes them).";
+        text += " It is not saved yet: save it to keep it.";
+        if (const json::Value* warnings = r->find("warnings"); warnings && warnings->isArray())
+            for (const auto& w : warnings->asArray())
+                if (const json::Value* m = w.find("message"); m && m->isString())
+                    text += "\n" + m->asString();
+        showNotice("file.recovered", "Recovered \"" + title + "\"", text);
+    });
+}
+
+void FileActions::confirmDeleteSession(const std::string& session, const std::string& title,
+                                       const std::string& size) {
+    root_.closePopup();
+    auto form = std::make_unique<ui::Node>("file.recover.confirm");
+    form->layout.dir = ui::Layout::Dir::Column;
+    form->layout.width = ui::SizeRule::fixed(420);
+    form->layout.height = ui::SizeRule::fixed(130);
+    form->layout.padding = ui::Insets::all(14);
+    form->layout.gap = 10;
+    form->emplace<ui::Label>("file.recover.confirm.title", "Delete \"" + title + "\"?",
+                             ui::Font::UiBold, "body");
+    form->emplace<ui::TextBlock>(
+        "file.recover.confirm.text",
+        "Its folder (" + size + "), recordings included, is deleted for good.", ui::Font::Ui,
+        "small", "ink-quiet");
+    auto& row = form->emplace<ui::Node>("file.recover.confirm.buttons");
+    row.layout.dir = ui::Layout::Dir::Row;
+    row.layout.height = ui::SizeRule::fixed(28);
+    row.layout.gap = 8;
+    row.emplace<ui::Button>("file.recover.confirm.delete", "Delete", [this, session] {
+        root_.closePopup();
+        json::Value args = json::Value::object();
+        args["session"] = session;
+        (void)exec("project.recoverable.delete", std::move(args));
+        openRecovery();  // the rest, or that nothing is left
+    });
+    row.emplace<ui::Button>("file.recover.confirm.cancel", "Cancel", [this] {
+        root_.closePopup();
+        openRecovery();
+    });
+    root_.openPopup(std::move(form), {}, ui::Placement::Center);
+}
+
+void FileActions::showNotice(const std::string& id, const std::string& title,
+                             const std::string& text) {
+    int lines = 0;
+    std::size_t start = 0;
+    while (start <= text.size()) {
+        const auto end = std::min(text.find('\n', start), text.size());
+        lines += 1 + static_cast<int>((end - start) / 60);
+        start = end + 1;
+    }
+    auto form = std::make_unique<ui::Node>(id);
+    form->layout.dir = ui::Layout::Dir::Column;
+    form->layout.width = ui::SizeRule::fixed(460);
+    form->layout.height = ui::SizeRule::fixed(static_cast<float>(80 + 16 * std::min(lines, 12)));
+    form->layout.padding = ui::Insets::all(14);
+    form->layout.gap = 10;
+    form->emplace<ui::Label>(id + ".title", title, ui::Font::UiBold, "body");
+    form->emplace<ui::TextBlock>(id + ".text", text, ui::Font::Ui, "small", "ink-quiet");
+    auto& row = form->emplace<ui::Node>(id + ".buttons");
+    row.layout.dir = ui::Layout::Dir::Row;
+    row.layout.height = ui::SizeRule::fixed(28);
+    row.emplace<ui::Button>(id + ".ok", "OK", [this] { root_.closePopup(); });
     root_.openPopup(std::move(form), {}, ui::Placement::Center);
 }
 

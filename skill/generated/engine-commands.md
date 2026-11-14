@@ -10506,6 +10506,10 @@ Kind: `query`. Exposure: `mcp-tool`.
     "autosave_available": {
       "type": "boolean"
     },
+    "recoverable_sessions": {
+      "type": "integer",
+      "description": "Unsaved projects earlier runs left behind (project.recoverable lists them)"
+    },
     "warnings": {
       "type": "array",
       "items": {
@@ -10525,7 +10529,8 @@ Kind: `query`. Exposure: `mcp-tool`.
     "version",
     "generation",
     "recoverable",
-    "autosave_available"
+    "autosave_available",
+    "recoverable_sessions"
   ],
   "additionalProperties": false
 }
@@ -10559,7 +10564,8 @@ Result:
   "version": 0,
   "recoverable": 0,
   "generation": "<any>",
-  "autosave_available": false
+  "autosave_available": false,
+  "recoverable_sessions": 0
 }
 
 ```
@@ -10638,6 +10644,10 @@ Kind: `action`. Exposure: `mcp-exec`.
     "autosave_available": {
       "type": "boolean"
     },
+    "recoverable_sessions": {
+      "type": "integer",
+      "description": "Unsaved projects earlier runs left behind (project.recoverable lists them)"
+    },
     "warnings": {
       "type": "array",
       "items": {
@@ -10657,7 +10667,8 @@ Kind: `action`. Exposure: `mcp-exec`.
     "version",
     "generation",
     "recoverable",
-    "autosave_available"
+    "autosave_available",
+    "recoverable_sessions"
   ],
   "additionalProperties": false
 }
@@ -10690,7 +10701,8 @@ Result:
   "version": 0,
   "recoverable": 0,
   "generation": "<any>",
-  "autosave_available": false
+  "autosave_available": false,
+  "recoverable_sessions": 0
 }
 
 ```
@@ -10768,6 +10780,10 @@ Kind: `action`. Exposure: `mcp-tool`.
     "autosave_available": {
       "type": "boolean"
     },
+    "recoverable_sessions": {
+      "type": "integer",
+      "description": "Unsaved projects earlier runs left behind (project.recoverable lists them)"
+    },
     "warnings": {
       "type": "array",
       "items": {
@@ -10787,7 +10803,8 @@ Kind: `action`. Exposure: `mcp-tool`.
     "version",
     "generation",
     "recoverable",
-    "autosave_available"
+    "autosave_available",
+    "recoverable_sessions"
   ],
   "additionalProperties": false
 }
@@ -10825,16 +10842,17 @@ Result:
   "version": "<any>",
   "recoverable": 0,
   "generation": "<any>",
-  "autosave_available": false
+  "autosave_available": false,
+  "recoverable_sessions": 0
 }
 
 ```
 
 ## `project.recover@1`
 
-Put recordings a crash left out back into the project (one undo step).
+Put back what a crash left behind: recordings, or an unsaved project.
 
-files: as project.recoverable lists them (omit for all). Each becomes an item on the track it was recorded on (or track) at the position it was recorded.
+files: as project.recoverable lists them (omit for all). Each becomes an item on the track it was recorded on (or track) at the position it was recorded, in one undo step. session: instead opens that unsaved project from its newest readable autosave in place of the current one (unsaved changes are lost: save first), still unsaved, and puts back its leftover recordings as one more undo step.
 
 Kind: `action`. Exposure: `mcp-tool`.
 
@@ -10844,6 +10862,7 @@ Kind: `action`. Exposure: `mcp-tool`.
 | --- | --- | --- | --- | --- | --- |
 | `files` | array |  |  |  |  |
 | `track` | string |  |  |  | Track id, e.g. "tr_1". |
+| `session` | string |  |  |  | A session project.recoverable lists |
 
 ### Result
 
@@ -10916,6 +10935,10 @@ Kind: `action`. Exposure: `mcp-tool`.
         "additionalProperties": false
       }
     },
+    "autosave": {
+      "type": "string",
+      "description": "The session's autosave it opened"
+    },
     "warnings": {
       "type": "array",
       "items": {
@@ -10935,6 +10958,10 @@ Kind: `action`. Exposure: `mcp-tool`.
 - `recover.unknown_file`: a file is not a recording to recover Hint: project.recoverable lists them
 - `recover.duplicate_file`: a file is listed twice Hint: list each once
 - `recover.no_track`: the track it was recorded on is gone Hint: give track
+- `recover.unknown_session`: no unsaved project of that name was left behind Hint: project.recoverable lists them
+- `recover.busy`: the session belongs to an app that is running Hint: recover it in that app
+- `recover.damaged`: nothing in the session can be opened Hint: project.recoverable.delete
+- `recover.session_args`: session cannot be combined with files or track Hint: recover the session, then its recordings
 
 ### Examples
 
@@ -10964,11 +10991,40 @@ Result:
 
 ```
 
+**Recover an unsaved project** (`session_left_behind`)
+
+```json
+{
+  "session": "20261114-090000-4242"
+}
+
+```
+
+Result:
+
+```json
+{
+  "recovered": [
+    {
+      "track": "tr_1",
+      "item": "<any>",
+      "take": "<any>",
+      "file": "<any>",
+      "seconds": 1.0,
+      "lost_frames": 0,
+      "takes": "<any>"
+    }
+  ],
+  "autosave": "autosave-1.json"
+}
+
+```
+
 ## `project.recoverable@1`
 
-List recordings a crash left out of the project.
+List recordings and unsaved projects a crash left behind.
 
-Takes recorded but never committed (the program stopped mid-recording) or never saved, found in the media folder's rec/. start_seconds is where each was recorded; seconds includes audio written after the file's last header update.
+recordings: takes recorded but never committed (the program stopped mid-recording) or never saved, found in the media folder's rec/. start_seconds is where each was recorded; seconds includes audio written after the file's last header update. sessions: unsaved projects of earlier runs that ended without saving or discarding them (a crash), each with its newest autosave's project name, tracks and branches, its leftover recordings and its size on disk; project.recover {session} opens one, project.recoverable.delete deletes one.
 
 Kind: `query`. Exposure: `mcp-tool`.
 
@@ -11015,9 +11071,52 @@ Kind: `query`. Exposure: `mcp-tool`.
         "required": ["file", "track", "start_seconds", "seconds", "channels"],
         "additionalProperties": false
       }
+    },
+    "sessions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "recoverable_session",
+        "properties": {
+          "session": {
+            "type": "string"
+          },
+          "started_ms": {
+            "type": "integer",
+            "description": "When that run started (Unix ms)"
+          },
+          "autosaved_ms": {
+            "type": "integer",
+            "description": "When its newest readable autosave was written (Unix ms); absent: none, only recordings"
+          },
+          "name": {
+            "type": "string"
+          },
+          "tracks": {
+            "type": "integer",
+            "description": "Channels and busses, not masters"
+          },
+          "branches": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "recordings": {
+            "type": "integer",
+            "description": "Takes no autosaved version uses"
+          },
+          "bytes": {
+            "type": "integer",
+            "description": "Its folder's size on disk"
+          }
+        },
+        "required": ["session", "name", "tracks", "branches", "recordings", "bytes"],
+        "additionalProperties": false
+      }
     }
   },
-  "required": ["recordings"],
+  "required": ["recordings", "sessions"],
   "additionalProperties": false
 }
 
@@ -11044,6 +11143,35 @@ Result:
       "seconds": 1.0,
       "channels": 2
     }
+  ],
+  "sessions": []
+}
+
+```
+
+**An unsaved project a crash left behind** (`session_left_behind`)
+
+```json
+{}
+
+```
+
+Result:
+
+```json
+{
+  "recordings": [],
+  "sessions": [
+    {
+      "session": "20261114-090000-4242",
+      "started_ms": "<any>",
+      "autosaved_ms": "<any>",
+      "name": "Sketch",
+      "tracks": 1,
+      "branches": ["main"],
+      "recordings": 1,
+      "bytes": "<any>"
+    }
   ]
 }
 
@@ -11060,7 +11188,71 @@ Result:
 
 ```json
 {
-  "recordings": []
+  "recordings": [],
+  "sessions": []
+}
+
+```
+
+## `project.recoverable.delete@1`
+
+Delete an unsaved project a crash left behind, with its recordings.
+
+session: as project.recoverable lists it. Its folder and everything in it are deleted for good (this is not an undo step).
+
+Kind: `action`. Exposure: `mcp-tool`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `session` | string |  |  |  |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "session_deleted",
+  "properties": {
+    "session": {
+      "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["session"],
+  "additionalProperties": false
+}
+
+```
+
+### Errors
+
+- `recover.unknown_session`: no unsaved project of that name was left behind Hint: project.recoverable lists them
+- `recover.busy`: the session belongs to an app that is running Hint: quit that app
+- `recover.delete`: the folder could not be deleted Hint: make it writable
+
+### Examples
+
+**Delete one** (`session_left_behind`)
+
+```json
+{
+  "session": "20261114-090000-4242"
+}
+
+```
+
+Result:
+
+```json
+{
+  "session": "20261114-090000-4242"
 }
 
 ```

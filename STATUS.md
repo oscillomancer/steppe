@@ -150,7 +150,9 @@ instructions are in `docs/guides/installing.md`.
   the oldest steps. Undo to an FX's initial unsaved settings restores its factory
   state while retaining the previous processing instance until plan retirement.
   Project format `supple.project/2.14` with migration from
-  1.x, autosave, crash recovery of recordings, a per-project UI sidecar.
+  1.x, autosave (unsaved projects too, recovered from File > Recover unsaved
+  work… or at start, ADR-0078), crash recovery of recordings, a per-project
+  UI sidecar.
   Saves and autosaves keep every branch with its unmerged steps and the
   current branch (ADR-0076): a reopened agent branch is reviewable, undoable
   and merges as before; `project.save {history: true}` also keeps undo

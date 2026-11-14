@@ -486,6 +486,10 @@ int main(int argc, char** argv) {
     gui::FileActions fileActions(root, appActions, dispatcher, **app, uiState, (*window)->sdl(),
                                  [&](std::function<void()> f) { loop.post(std::move(f)); });
     fileActions.registerQuit([&] { quit = true; }, !o.offscreen && o.frames <= 0);
+    // Unsaved projects earlier runs left behind: offered, never opened unasked
+    // (ADR-0078).
+    if (o.project.empty() && (*app)->recoverableSessionCount() > 0)
+        o.actions.insert(o.actions.begin(), "ui.file.recover");
     gui::HelpActions helpActions(
         root, appActions, (*window)->sdl(),
         [&](std::function<void()> f) { loop.post(std::move(f)); }, gui::help::ownExecutable());

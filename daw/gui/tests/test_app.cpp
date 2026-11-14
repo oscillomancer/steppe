@@ -117,8 +117,11 @@ struct App {
     std::unique_ptr<gui::AppActions> actions;
     bool ok = false;
 
+    // `scratch`: the unsaved project's folder, relative to `dir` (as the
+    // GUI's unsaved/<run>); empty keeps the engine's default.
     App(int width = 1000, int height = 640,
-        gui::Platform::Driver driver = gui::Platform::Driver::Offscreen) {
+        gui::Platform::Driver driver = gui::Platform::Driver::Offscreen,
+        const std::filesystem::path& scratch = {}) {
         dir = std::filesystem::temp_directory_path() /
               ("supple-app-test-" + std::to_string(testProcessId()));
         (void)gui::help::removeExportTree(dir);
@@ -145,6 +148,7 @@ struct App {
         fonts = *f;
         engine::AppOptions options;
         options.workdir = dir;
+        if (!scratch.empty()) options.scratchDir = dir / scratch;
         auto a = engine::EngineApp::create(options);
         REQUIRE(a);
         app = std::move(*a);
@@ -3263,4 +3267,75 @@ TEST_CASE("input menu: single-track changes preserve an earlier status note") {
         CHECK(shell.inputLabel(id) == (label == "No input" ? "in \u2014" : label));
     }
     a.root->setContent(std::make_unique<ui::Node>("detached"));
+}
+
+TEST_CASE("file actions: unsaved work a run left behind is offered, never opened unasked") {
+    // ADR-0078: File > Recover unsaved work… (and at start) lists what earlier
+    // runs left; nothing loads until the user picks Recover.
+    App a(1000, 640, gui::Platform::Driver::Offscreen, "unsaved/20261114-100000-1");
+    REQUIRE(a.ok);
+    const std::string left = "20261114-090000-4242";
+    {
+        engine::AppOptions o;
+        o.workdir = a.dir / "earlier";
+        o.scratchDir = a.dir / "unsaved" / left;
+        auto earlier = engine::EngineApp::create(o);
+        REQUIRE(earlier);
+        (*earlier)->setFixedClock(1'000'000);
+        REQUIRE((*earlier)->newProject({}));
+        cmd::Dispatcher d(a.registry, **earlier);
+        REQUIRE(d.execute({"project.set", json::parse(R"({"name":"Sketch"})").value(), {}}));
+        REQUIRE(d.execute({"track.add", json::parse(R"({"name":"Vocal"})").value(), {}}));
+        (*earlier)->setFixedClock(1'060'000);
+        (*earlier)->tick();
+        REQUIRE(std::filesystem::exists(o.scratchDir / "autosave-1.json"));
+    }  // gone without discarding its project, as after a crash
+    REQUIRE(a.app->recoverableSessionCount() == 1);
+    gui::FileActions files(*a.root, *a.actions, *a.dispatcher, *a.app, a.ui, a.window->sdl(),
+                           [](auto task) { task(); });
+    const std::size_t tracksBefore = a.app->head().tracks.size();
+
+    REQUIRE(a.actions->run("ui.file.recover"));
+    a.root->frame(false);
+    REQUIRE(a.root->find("file.recover"));
+    REQUIRE(a.root->find("file.recover.session.0"));
+    CHECK_FALSE(a.root->find("file.recover.session.1"));
+    a.snapshot("file-recover.png");
+
+    SUBCASE("Later closes it and loads nothing") {
+        REQUIRE(a.root->click("file.recover.later"));
+        a.root->frame(false);
+        CHECK_FALSE(a.root->find("file.recover"));
+        CHECK(a.app->head().tracks.size() == tracksBefore);
+        CHECK(a.app->recoverableSessionCount() == 1);
+    }
+    SUBCASE("Delete asks once more; Cancel keeps it") {
+        REQUIRE(a.root->click("file.recover.delete.0"));
+        a.root->frame(false);
+        REQUIRE(a.root->find("file.recover.confirm"));
+        REQUIRE(a.root->click("file.recover.confirm.cancel"));
+        a.root->frame(false);
+        CHECK(a.root->find("file.recover.session.0"));
+        CHECK(std::filesystem::exists(a.dir / "unsaved" / left));
+        REQUIRE(a.root->click("file.recover.delete.0"));
+        a.root->frame(false);
+        REQUIRE(a.root->click("file.recover.confirm.delete"));
+        a.root->frame(false);
+        CHECK_FALSE(std::filesystem::exists(a.dir / "unsaved" / left));
+        CHECK_FALSE(a.root->find("file.recover.session.0"));  // "nothing to recover"
+        CHECK(a.root->find("file.recover"));
+        CHECK(a.app->head().tracks.size() == tracksBefore);
+    }
+    SUBCASE("Recover opens it, unsaved") {
+        REQUIRE(a.root->click("file.recover.open.0"));
+        a.root->frame(false);
+        if (a.root->find("file.confirm")) REQUIRE(a.root->click("file.confirm.discard"));
+        a.root->frame(false);
+        REQUIRE(a.root->find("file.recovered"));
+        CHECK(a.app->head().project->name == "Sketch");
+        CHECK(a.app->head().tracks.size() == tracksBefore + 1);
+        CHECK(a.app->projectPath().empty());
+        CHECK(a.app->recoverableSessionCount() == 0);
+        a.snapshot("file-recovered.png");
+    }
 }

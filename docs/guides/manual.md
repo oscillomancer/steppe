@@ -181,7 +181,18 @@ Until a project is saved, its recordings go to a folder of its own under the
 data folder (below), in `unsaved/<start time>-<pid>/media/rec`. The first
 save moves them into `media/` beside the project file. Quitting, or starting
 another project, without saving deletes that folder after the app has asked.
-A crashed run leaves its folder behind, recordings included.
+
+An unsaved project is autosaved into that folder every minute while it
+changes, like a saved one. If Steppe stops without you saving or discarding
+(a crash, a power cut), the folder stays, with its autosaves and recordings.
+The next time Steppe starts without a project to open, it lists what was left
+behind: each with its name, when it was last autosaved, how many tracks and
+recordings it has, and its size. **Recover** opens it (after asking about any
+unsaved changes in the current project), still unsaved: save it to keep it.
+**Delete** removes it for good, after asking once more. **Later** closes the
+list and keeps everything; File > Recover unsaved work… shows it again. A
+Steppe that is still running keeps its own folder to itself, so two copies
+of the app never offer each other's work.
 
 New, Open and Quit (including File > Quit, Cmd+Q on macOS and closing the main
 window) first stop an active recording and add its takes to the

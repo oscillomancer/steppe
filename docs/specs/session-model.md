@@ -648,8 +648,8 @@ The engine app writes autosaves from main-thread service (engine.md §6,
 ADR-0030), only when a named project's branch heads or current branch
 changed since the last one (`VersionStore::heads()`: an edit on a branch
 that is not current counts, media hash completions do not) and 60 s of
-monotonic service time have passed. Unchanged/unnamed projects have no
-autosave deadline; an overdue edit arms immediate service. A failed write
+monotonic service time have passed. Unchanged projects have no autosave
+deadline; an overdue edit arms immediate service. A failed write
 waits 60 s before retrying. History timestamps still use wall time, and
 `<n>` is a positive unsigned 64-bit decimal index and counts up from the highest
 present. Discovery and rotation ignore names with nonnumeric or out-of-range
@@ -658,6 +658,32 @@ suffixes (such as `autosave-1-backup.json`). An exhausted index reports
 `project.open` of a file that has
 a newer autosave next to it reports `autosave_available` and loads nothing
 from it; opening the autosave file itself is how it comes back.
+
+**Unsaved projects (ADR-0078).** An unsaved project autosaves the same way
+into its scratch folder (`<data>/<slug>/unsaved/<start time>-<pid>/`,
+`autosave-<n>.json`, keep 5); the first save removes those autosaves with
+the folder. While an unsaved project uses the folder, the run holds an
+exclusive OS lock on `<scratch>/session.lock` (`flock` on POSIX,
+`LockFileEx` on Windows), which the system releases however the process
+ends. A sibling folder whose lock can be taken was left behind by a run that
+is gone; one whose lock is held is a running app's and is never listed or
+touched. Process IDs decide nothing. Left-behind folders with content stay
+until the user recovers or deletes them; empty ones untouched for an hour
+are removed when an app starts.
+`project.recoverable` lists them as `sessions` beside `recordings`
+(`session`, `started_ms`, `autosaved_ms`, `name`, `tracks`, `branches`,
+`recordings`, `bytes`); `project.recover {session}` replaces the current
+project (as `project.open`: the caller asks about unsaved changes first)
+with the folder's newest readable autosave (older ones are tried, each
+failure a `recover.autosave` warning), takes the folder and its lock over,
+stays unsaved, puts the folder's leftover recordings back as one more undo
+step, and returns `autosave` (the file it used, or none). Errors:
+`recover.unknown_session` (not a left-behind sibling, including path
+tricks), `recover.busy` (its run is alive), `recover.damaged` (nothing in it
+opens). `project.recoverable.delete {session}` deletes one. Project-info
+results count `recoverable_sessions`. Autosaves read for listing or
+recovery are checked like any opened file, including §5.4's rule for saved
+steps.
 
 ### 5.4 Branches in the file (schema 2.14, ADR-0076)
 
@@ -844,7 +870,9 @@ Schemas are written per command in code (ADR-0007); this is the inventory
 and naming. All `edit` unless marked (q) query or (a) action.
 
 - **project**: `project.new` (a), `project.open` (a), `project.save` (a),
-  `project.get` (q), `project.set`, `project.describe` (q); templates
+  `project.get` (q), `project.set`, `project.describe` (q); crash leftovers
+  `project.recoverable` (q), `project.recover {files?, track? | session}` (a),
+  `project.recoverable.delete {session}` (a) (§5.3); templates
   `project.template.save` (a), `project.template.load {name}` (a, a new
   unsaved project), `project.template.list` (q), `project.template.delete`
   (a).

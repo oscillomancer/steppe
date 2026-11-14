@@ -92,3 +92,4 @@ current state.
 | [0074](0074-single-track-input.md) | One hardware audio, MIDI or rack input per track | Accepted |
 | [0075](0075-rack-sends.md) | A rack's Out modules send to busses and masters | Accepted |
 | [0076](0076-saved-branches.md) | Project files keep branches and their unmerged steps | Accepted |
+| [0078](0078-unsaved-recovery.md) | Unsaved projects autosave and come back after a crash | Accepted |

@@ -45,7 +45,8 @@ class SourcePreparation;
 
 namespace detail {
 class RuntimeProtection;
-}
+class SessionLock;
+}  // namespace detail
 
 struct AppOptions {
     std::vector<std::string> dummyMidiInputs,
@@ -73,9 +74,13 @@ struct AppOptions {
     // <workdir>/rack-presets; the app passes <data>/<slug>/rack-presets.
     std::filesystem::path rackPresetDir;
     // An unsaved project's own folder (the GUI's, one per run): its media (the
-    // recordings) live in <scratchDir>/<media_dir> until the first save moves
-    // them beside the project file; clearScratch() deletes it when the
-    // unsaved project is discarded. Empty: <workdir>/media, never deleted.
+    // recordings) and autosaves live in <scratchDir>/<media_dir> and
+    // <scratchDir>/autosave-<n>.json until the first save moves the media
+    // beside the project file; clearScratch() deletes it when the unsaved
+    // project is discarded. The app holds an OS lock on its session.lock
+    // while it uses it (ADR-0078); other folders beside it in the same parent
+    // are earlier runs', recoverableSessions() lists those a run left
+    // behind. Empty: <workdir>/media, never deleted, no autosaves.
     std::filesystem::path scratchDir;
     std::string jackLibrary = "libjack.so.0";                    // tests use a stand-in
     std::shared_ptr<RuntimeProtectionOps> runtimeProtectionOps;  // null: Linux operations
@@ -221,6 +226,27 @@ struct RecoverableInfo {
     std::int64_t channels = 0;
 };
 
+// An unsaved project a run left behind (it crashed or was killed): its
+// folder beside the scratch folder, no longer locked, with something in it
+// (ADR-0078).
+struct RecoverableSession {
+    std::string session;                      // the folder's name
+    std::optional<std::int64_t> startedMs;    // when that run started (Unix ms)
+    std::optional<std::int64_t> autosavedMs;  // its newest readable autosave
+    std::string name;                         // the project's name, from the autosave
+    std::int64_t tracks = 0;                  // channels and busses (not masters)
+    std::vector<std::string> branches;
+    std::int64_t recordings = 0;  // takes in its rec/ no autosaved version uses
+    std::int64_t bytes = 0;       // the folder's size on disk
+};
+
+// What recoverSession() brought back.
+struct SessionRecovery {
+    std::string autosave;                 // the autosave file it opened ("" if none)
+    std::vector<RecordedInfo> recovered;  // leftover recordings put back
+    std::vector<RecordingWarning> warnings;
+};
+
 struct TransportInfo {
     bool playing = false, recording = false;
     bool countingIn = false;
@@ -277,10 +303,27 @@ class EngineApp : public cmd::Host {
     // Where relative media paths resolve: the saved project's folder, or the
     // scratch folder of an unsaved one (empty without either).
     std::filesystem::path projectDir() const;
-    // Deletes the scratch folder (an unsaved project's recordings): called when
-    // the unsaved project is discarded (quit, new, open). Does nothing once the
-    // project is saved, and never touches a folder holding the work directory.
+    // Deletes the scratch folder (an unsaved project's recordings and
+    // autosaves) and releases its lock: called when the unsaved project is
+    // discarded (quit, new, open). Does nothing once the project is saved,
+    // and never touches a folder holding the work directory.
     void clearScratch();
+    // Unsaved projects earlier runs left behind (ADR-0078), oldest first:
+    // folders beside the scratch folder whose lock no running app holds and
+    // that hold an autosave or a file. Unreadable autosaves are skipped with
+    // a warning. Empty without a scratch folder.
+    std::vector<RecoverableSession> recoverableSessions(
+        std::vector<RecordingWarning>* warnings = nullptr) const;
+    // How many there are, without reading their autosaves.
+    std::int64_t recoverableSessionCount() const;
+    // Replaces the project (as open() does: the caller decides about unsaved
+    // changes first) with `session`'s newest readable autosave, still
+    // unsaved, takes its folder over as the scratch folder (with its lock),
+    // and puts back its leftover recordings as one more version. The run's
+    // own folder is discarded.
+    Result<SessionRecovery> recoverSession(const std::string& session);
+    // Deletes a folder recoverableSessions() lists.
+    Status deleteSession(const std::string& session);
 
     // --- plugins ----------------------------------------------------------------
     const host::ScanReport& pluginScanReport() const { return scanReport_; }
@@ -929,6 +972,14 @@ class EngineApp : public cmd::Host {
     std::filesystem::path branchesBackupFor_;
     bool replaying_ = false;
     std::vector<std::filesystem::path>* mergeCreated_ = nullptr;
+    // The OS lock on the scratch folder while an unsaved project uses it
+    // (ADR-0078).
+    std::unique_ptr<detail::SessionLock> scratchLock_;
+    void holdScratch();     // creates the scratch folder and takes its lock
+    void releaseScratch();  // after the first save: autosaves, lock, empty folder go
+    // A sibling of the scratch folder named `session`, or an error.
+    Result<std::filesystem::path> sessionFolder(const std::string& session) const;
+    void pruneEmptySessions();  // at creation: left-behind folders with nothing in them
 };
 
 // Clones a take and its owned FX/envelopes/automation. `copy` may already

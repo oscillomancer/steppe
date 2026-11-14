@@ -1037,7 +1037,8 @@ TEST_CASE("an unsaved project records into its scratch folder; the first save mo
         app->setupFixture(d, "recording_interrupted");
         REQUIRE(fs::exists(scratch / "media" / "rec" / "Vocal-1.wav"));
         REQUIRE(app->newProject(model::Project{}));
-        CHECK_FALSE(fs::exists(scratch));
+        CHECK_FALSE(fs::exists(scratch / "media"));
+        CHECK(fs::exists(scratch / "session.lock"));  // the new project's (ADR-0078)
         app->setupFixture(d, "recording_interrupted");
         REQUIRE(fs::exists(scratch / "media" / "rec" / "Vocal-1.wav"));
         app->clearScratch();

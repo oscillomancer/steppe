@@ -5,6 +5,7 @@
 #include "module_library.h"
 #include "rack_runtime.h"
 #include "runtime_protection.h"
+#include "session_lock.h"
 #include "source_preparation.h"
 #include "supple/model/freeze.h"
 #include "supple/model/numeric.h"
@@ -18,6 +19,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <ctime>
 #include <fstream>
 #include <numbers>
 #include <set>
@@ -56,6 +58,12 @@ const cmd::Registry& engineCommands() {
         return r;
     }();
     return *registry;
+}
+
+// Every project file the engine reads (opened, autosaves listed or
+// recovered) checks its saved steps with the same rule (ADR-0076).
+Status replayableStep(const model::Invocation& step) {
+    return EngineApp::replayableFromFile(engineCommands(), step);
 }
 
 bool iequals(std::string_view a, std::string_view b) {
@@ -128,6 +136,7 @@ Result<std::unique_ptr<EngineApp>> EngineApp::create(AppOptions options, model::
     app->modules_ = detail::loadModuleLibrary(detail::builtinModuleCatalog(), app->moduleDir());
     app->pool_->racks().setCatalog(app->modules_);
     SUPPLE_TRY(app->newProject(std::move(project)));
+    app->pruneEmptySessions();
     return app;
 }
 
@@ -667,10 +676,11 @@ Status EngineApp::replaceProject(model::VersionStore store, fs::path path,
     versions_ = std::make_unique<model::VersionStore>(std::move(store));
     projectPath_ = std::move(path);
     branchesBackupFor_.clear();
-    autosaveMarked_ = !projectPath_.empty();
+    autosaveMarked_ = !autosaveDir().empty();
     autosaveMs_ = serviceClockMs();
     autosaveHeads_ = versions_->heads();
     const Status prepared = prepare ? prepare() : Status{};
+    if (projectPath_.empty()) holdScratch();  // an unsaved project's folder is this run's
     if (running) SUPPLE_TRY(startEngine(*running, config, settings));
     headChanged();
     return prepared;
@@ -772,7 +782,8 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
                  dir.string()});
     }
     projectPath_ = path;
-    autosaveMarked_ = true;  // the file itself is the newest copy
+    if (fromScratch) releaseScratch();  // its media moved; its autosaves are older than the file
+    autosaveMarked_ = true;             // the file itself is the newest copy
     autosaveMs_ = serviceClockMs();
     autosaveHeads_ = versions_->heads();
     return okStatus();
@@ -782,9 +793,7 @@ Status EngineApp::open(const fs::path& where, std::vector<schema::Warning>* warn
     const fs::path path = resolve(where);
     auto text = readTextFile(path, std::size_t(1) << 30);
     if (!text) return std::move(text).error();
-    auto opened = model::parseProjectFile(*text, warnings, [](const model::Invocation& i) {
-        return replayableFromFile(engineCommands(), i);
-    });
+    auto opened = model::parseProjectFile(*text, warnings, replayableStep);
     if (!opened) return std::move(opened).error();
     if (opened->branchesDropped && warnings) {
         const Error& why = *opened->branchesDropped;
@@ -1471,7 +1480,7 @@ std::optional<std::uint64_t> EngineApp::nextServiceDelayMs() const {
         const auto ms = deadline <= now ? 0 : deadline - now;
         if (!delay || ms < *delay) delay = ms;
     };
-    if (!projectPath_.empty() && versions_->heads() != autosaveHeads_)
+    if (!autosaveDir().empty() && versions_->heads() != autosaveHeads_)
         at(autosaveMs_ + kAutosaveIntervalMs);
     if (restarting_) at(std::min(restartRetryAt_, restartUntil_));
     if (!txn_)
@@ -1498,7 +1507,7 @@ std::optional<std::chrono::steady_clock::time_point> EngineApp::nextServiceDeadl
 }
 
 void EngineApp::maybeAutosave() {
-    if (projectPath_.empty()) return;
+    if (autosaveDir().empty()) return;
     const std::uint64_t now = serviceClockMs();
     if (!autosaveMarked_) {
         autosaveMarked_ = true;
@@ -1570,7 +1579,7 @@ void EngineApp::retryRestart() {
 }
 
 fs::path EngineApp::autosaveDir() const {
-    if (projectPath_.empty()) return {};
+    if (projectPath_.empty()) return options_.scratchDir;  // an unsaved project's (ADR-0078)
     return projectPath_.parent_path() / (projectPath_.filename().string() + "-data");
 }
 
@@ -1672,6 +1681,7 @@ void EngineApp::captureFxStates(const std::vector<model::Id>& fx,
 void EngineApp::autosave() {
     const fs::path dir = autosaveDir();
     if (dir.empty()) return;
+    if (projectPath_.empty()) holdScratch();
     // Rotate: the next free index, then the oldest files over the keep count go.
     std::uint64_t next = 1;
     std::vector<std::pair<std::uint64_t, fs::path>> existing;
@@ -2751,8 +2761,338 @@ void EngineApp::clearScratch() {
     // file (or, if that failed, are still here and must stay).
     if (!projectPath_.empty() || scratch.empty() || scratch == scratch.root_path()) return;
     if (within(options_.workdir, scratch)) return;
+    if (scratchLock_) {
+        scratchLock_->releaseAndRemove();
+        scratchLock_.reset();
+    }
     std::error_code ec;
     fs::remove_all(scratch, ec);
+}
+
+// --- unsaved projects left behind (ADR-0078) --------------------------------------------------
+
+namespace {
+// The numbered autosaves in `folder`, newest first.
+std::vector<fs::path> autosavesIn(const fs::path& folder) {
+    std::vector<std::pair<std::uint64_t, fs::path>> found;
+    std::error_code ec;
+    for (fs::directory_iterator it(folder, ec), end; !ec && it != end; it.increment(ec))
+        if (const auto n = autosaveIndex(it->path().filename().string());
+            n && it->is_regular_file(ec))
+            found.push_back({*n, it->path()});
+    std::sort(found.begin(), found.end(),
+              [](const auto& a, const auto& b) { return a.first > b.first; });
+    std::vector<fs::path> out;
+    for (auto& f : found) out.push_back(std::move(f.second));
+    return out;
+}
+
+// Whether `folder` holds anything but its lock file (empty folders do not
+// count), and the size of its files.
+bool sessionContent(const fs::path& folder, std::int64_t* bytes = nullptr) {
+    bool content = false;
+    std::error_code ec;
+    for (fs::recursive_directory_iterator
+             it(folder, fs::directory_options::skip_permission_denied, ec),
+         end;
+         !ec && it != end; it.increment(ec)) {
+        const auto status = it->symlink_status(ec);
+        if (ec || fs::is_directory(status)) continue;
+        if (it.depth() == 0 && it->path().filename() == detail::kSessionLockName) continue;
+        content = true;
+        if (!bytes) return true;
+        if (fs::is_regular_file(status)) {
+            std::error_code sizeError;
+            const auto size = it->file_size(sizeError);
+            if (!sizeError) *bytes += static_cast<std::int64_t>(size);
+        }
+    }
+    return content;
+}
+
+// When the run that named the folder <YYYYmmdd-HHMMSS>-<pid> started, in Unix
+// milliseconds (the name is local time).
+std::optional<std::int64_t> sessionStartedMs(const std::string& name) {
+    std::tm t{};
+    int year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;
+    if (name.size() < 15 || name[8] != '-') return std::nullopt;
+    for (std::size_t i = 0; i < 15; ++i)
+        if (i != 8 && !std::isdigit(static_cast<unsigned char>(name[i]))) return std::nullopt;
+    auto number = [&](std::size_t at, std::size_t n) {
+        int v = 0;
+        std::from_chars(name.data() + at, name.data() + at + n, v);
+        return v;
+    };
+    year = number(0, 4), month = number(4, 2), day = number(6, 2);
+    hour = number(9, 2), minute = number(11, 2), second = number(13, 2);
+    t.tm_year = year - 1900, t.tm_mon = month - 1, t.tm_mday = day;
+    t.tm_hour = hour, t.tm_min = minute, t.tm_sec = second, t.tm_isdst = -1;
+    const std::time_t when = std::mktime(&t);
+    if (when == static_cast<std::time_t>(-1)) return std::nullopt;
+    return static_cast<std::int64_t>(when) * 1000;
+}
+
+std::optional<std::int64_t> fileTimeMs(const fs::path& file) {
+    std::error_code ec;
+    const auto written = fs::last_write_time(file, ec);
+    if (ec) return std::nullopt;
+    // The file clock's epoch is unspecified: measure from now on both clocks.
+    const auto age = fs::file_time_type::clock::now() - written;
+    const auto at = std::chrono::system_clock::now() -
+                    std::chrono::duration_cast<std::chrono::system_clock::duration>(age);
+    return std::chrono::duration_cast<std::chrono::milliseconds>(at.time_since_epoch()).count();
+}
+
+// Recordings with a sidecar in <folder>/<mediaDir>/rec that no path in
+// `used` (relative to the media folder) names.
+std::int64_t leftoverRecordings(const fs::path& rec, const std::set<std::string>& used) {
+    std::int64_t n = 0;
+    std::error_code ec;
+    for (fs::directory_iterator it(rec, ec), end; !ec && it != end; it.increment(ec)) {
+        const fs::path& f = it->path();
+        if (f.extension() != ".wav" || !it->is_regular_file(ec)) continue;
+        if (used.count(("rec" / f.filename()).generic_string())) continue;
+        std::error_code sideError;
+        if (fs::exists(detail::sidecarPath(f), sideError)) ++n;
+    }
+    return n;
+}
+
+constexpr std::chrono::hours kPruneAfter{1};
+}  // namespace
+
+void EngineApp::holdScratch() {
+    const fs::path& scratch = options_.scratchDir;
+    if (scratch.empty() || scratchLock_) return;
+    // Another run may hold the lock for a moment while it looks at this
+    // folder (recoverableSessions()): try again briefly.
+    for (int attempt = 0; attempt < 40 && !scratchLock_; ++attempt) {
+        if (attempt) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        std::error_code ec;
+        fs::create_directories(scratch, ec);
+        if (auto lock = detail::SessionLock::tryAcquire(scratch))
+            scratchLock_ = std::make_unique<detail::SessionLock>(std::move(*lock));
+    }
+}
+
+void EngineApp::releaseScratch() {
+    const fs::path& scratch = options_.scratchDir;
+    if (scratch.empty()) return;
+    std::error_code ec;
+    for (const fs::path& f : autosavesIn(scratch)) fs::remove(f, ec);
+    if (scratchLock_) {
+        scratchLock_->releaseAndRemove();
+        scratchLock_.reset();
+    }
+    fs::remove(scratch, ec);  // only when empty: media whose move failed stay
+}
+
+Result<fs::path> EngineApp::sessionFolder(const std::string& session) const {
+    const fs::path& own = options_.scratchDir;
+    auto unknown = [&](std::string why) {
+        return Error("recover.unknown_session", std::move(why), "/session",
+                     "use a session project.recoverable lists");
+    };
+    if (own.empty()) return unknown("this app keeps no unsaved projects in folders");
+    const fs::path name(session);
+    if (session.empty() || name.filename() != name || session == "." || session == ".." ||
+        session.find_first_of("/\\") != std::string::npos)
+        return unknown("\"" + session + "\" is not a session name");
+    const fs::path folder = own.parent_path() / name;
+    std::error_code ec;
+    if (name == own.filename() || !fs::is_directory(fs::symlink_status(folder, ec)))
+        return unknown("there is no unsaved project " + session + " left behind");
+    return folder;
+}
+
+std::vector<RecoverableSession> EngineApp::recoverableSessions(
+    std::vector<RecordingWarning>* warnings) const {
+    std::vector<RecoverableSession> out;
+    const fs::path& own = options_.scratchDir;
+    if (own.empty()) return out;
+    std::vector<fs::path> folders;
+    std::error_code ec;
+    for (fs::directory_iterator it(own.parent_path(), ec), end; !ec && it != end; it.increment(ec))
+        if (it->path().filename() != own.filename() && fs::is_directory(it->symlink_status(ec)))
+            folders.push_back(it->path());
+    std::sort(folders.begin(), folders.end());
+    for (const fs::path& folder : folders) {
+        const auto lock = detail::SessionLock::tryAcquire(folder);
+        if (!lock) continue;  // a running app's
+        RecoverableSession s;
+        s.session = folder.filename().string();
+        if (!sessionContent(folder, &s.bytes)) continue;
+        s.startedMs = sessionStartedMs(s.session);
+        std::string media = model::Project{}.mediaDir;
+        std::set<std::string> used;
+        for (const fs::path& file : autosavesIn(folder)) {
+            auto text = readTextFile(file, std::size_t(1) << 30);
+            auto opened = text ? model::parseProjectFile(*text, nullptr, replayableStep)
+                               : Result<model::OpenedProject>(std::move(text).error());
+            if (!opened) {
+                if (warnings)
+                    warnings->push_back({"recover.autosave",
+                                         "an autosave of " + s.session +
+                                             " cannot be read: " + opened.error().message,
+                                         "/sessions", "an older autosave is used instead", "",
+                                         s.session + "/" + file.filename().string()});
+                continue;
+            }
+            const auto head = opened->store.head();
+            s.autosavedMs = fileTimeMs(file);
+            s.name = head->project->name;
+            for (const auto& t : head->tracks)
+                if (t.value->parent) ++s.tracks;  // masters are not counted
+            s.branches = opened->store.branches();
+            media = head->project->mediaDir;
+            opened->store.forEachVersion([&](const model::Version& v) {
+                for (const auto& e : v.session->media)
+                    if (const fs::path p = e.value->path; p.is_relative())
+                        used.insert(p.lexically_normal().generic_string());
+            });
+            break;
+        }
+        s.recordings = leftoverRecordings(folder / media / "rec", used);
+        out.push_back(std::move(s));
+    }
+    return out;
+}
+
+std::int64_t EngineApp::recoverableSessionCount() const {
+    const fs::path& own = options_.scratchDir;
+    if (own.empty()) return 0;
+    std::int64_t n = 0;
+    std::error_code ec;
+    for (fs::directory_iterator it(own.parent_path(), ec), end; !ec && it != end;
+         it.increment(ec)) {
+        if (it->path().filename() == own.filename() || !fs::is_directory(it->symlink_status(ec)))
+            continue;
+        if (detail::SessionLock::tryAcquire(it->path()) && sessionContent(it->path())) ++n;
+    }
+    return n;
+}
+
+void EngineApp::pruneEmptySessions() {
+    const fs::path& own = options_.scratchDir;
+    if (own.empty()) return;
+    std::vector<fs::path> empty;
+    std::error_code ec;
+    for (fs::directory_iterator it(own.parent_path(), ec), end; !ec && it != end;
+         it.increment(ec)) {
+        const fs::path& folder = it->path();
+        if (folder.filename() == own.filename() || !fs::is_directory(it->symlink_status(ec)))
+            continue;
+        // A run starting now may not hold its new folder's lock yet: only
+        // folders untouched for a while go.
+        std::error_code timeError;
+        const auto written = fs::last_write_time(folder, timeError);
+        if (timeError || fs::file_time_type::clock::now() - written < kPruneAfter) continue;
+        auto lock = detail::SessionLock::tryAcquire(folder);
+        if (!lock || sessionContent(folder)) continue;
+        for (fs::directory_iterator child(folder, ec), last; !ec && child != last;
+             child.increment(ec))
+            if (child->path().filename() != detail::kSessionLockName) {
+                std::error_code ignored;
+                fs::remove_all(child->path(), ignored);
+            }
+        lock->releaseAndRemove();
+        empty.push_back(folder);
+    }
+    for (const fs::path& folder : empty) fs::remove(folder, ec);
+}
+
+Result<SessionRecovery> EngineApp::recoverSession(const std::string& session) {
+    auto folder = sessionFolder(session);
+    if (!folder) return std::move(folder).error();
+    auto lock = detail::SessionLock::tryAcquire(*folder);
+    if (!lock)
+        return Error("recover.busy", session + " belongs to an app that is running", "/session",
+                     "recover it in that app, or quit that app and retry");
+    if (!sessionContent(*folder))
+        return Error("recover.unknown_session", "there is nothing in " + session + " to recover",
+                     "/session", "use a session project.recoverable lists");
+    SessionRecovery out;
+    std::optional<model::VersionStore> store;
+    for (const fs::path& file : autosavesIn(*folder)) {
+        std::vector<schema::Warning> parsed;
+        auto text = readTextFile(file, std::size_t(1) << 30);
+        auto opened = text ? model::parseProjectFile(*text, &parsed, replayableStep)
+                           : Result<model::OpenedProject>(std::move(text).error());
+        if (!opened) {
+            out.warnings.push_back(
+                {"recover.autosave",
+                 file.filename().string() +
+                     " cannot be read, an older autosave was tried: " + opened.error().message,
+                 "/session", "", "", file.filename().string()});
+            continue;
+        }
+        for (auto& w : parsed)
+            out.warnings.push_back({w.code, w.message, w.path, "", "", file.filename().string()});
+        if (opened->branchesDropped)
+            out.warnings.push_back({"project.history",
+                                    "opened main alone: the autosave's branches could not be "
+                                    "restored (" +
+                                        opened->branchesDropped->message + ")",
+                                    "/branches", "", "", file.filename().string()});
+        store = std::move(opened->store);
+        out.autosave = file.filename().string();
+        break;
+    }
+    const std::string media = store ? store->head()->project->mediaDir : model::Project{}.mediaDir;
+    std::error_code ec;
+    const bool recordings = fs::is_directory(*folder / media / "rec", ec);
+    if (!store && !recordings)
+        return Error("recover.damaged", "nothing in " + session + " can be opened", "/session",
+                     "delete it with project.recoverable.delete, or copy what you need out of " +
+                         folder->string() + " first");
+    if (!store) store.emplace(model::Session::create(model::Project{}));
+    auto held = std::make_unique<detail::SessionLock>(std::move(*lock));
+    std::vector<schema::Warning> replaced;
+    SUPPLE_TRY(replaceProject(
+        std::move(*store), {},
+        [&]() -> Status {
+            // The left-behind folder becomes this run's: its media resolve
+            // there, autosaves continue its numbering.
+            options_.scratchDir = *folder;
+            scratchLock_ = std::move(held);
+            return okStatus();
+        },
+        &replaced));
+    for (auto& w : replaced) out.warnings.push_back({w.code, w.message, w.path, "", "", ""});
+    if (!recoverable().empty()) {
+        auto r = recover({}, std::nullopt, &out.warnings);
+        if (r)
+            out.recovered = std::move(*r);
+        else
+            out.warnings.push_back(
+                {r.error().code, r.error().message + "; the recordings stay recoverable",
+                 r.error().path, "use project.recover with files and track to place them", "", ""});
+    }
+    return out;
+}
+
+Status EngineApp::deleteSession(const std::string& session) {
+    auto folder = sessionFolder(session);
+    if (!folder) return std::move(folder).error();
+    auto lock = detail::SessionLock::tryAcquire(*folder);
+    if (!lock)
+        return Error("recover.busy", session + " belongs to an app that is running", "/session",
+                     "quit the app using it and retry");
+    std::error_code ec;
+    for (fs::directory_iterator child(*folder, ec), last; !ec && child != last; child.increment(ec))
+        if (child->path().filename() != detail::kSessionLockName) {
+            std::error_code removeError;
+            fs::remove_all(child->path(), removeError);
+            if (removeError)
+                return Error("recover.delete", removeError.message(), "/session",
+                             "make " + child->path().string() + " writable and retry");
+        }
+    lock->releaseAndRemove();
+    fs::remove(*folder, ec);
+    if (ec)
+        return Error("recover.delete", ec.message(), "/session",
+                     "make " + folder->string() + " writable and retry");
+    return okStatus();
 }
 
 // First save: stage and verify copies while the scratch originals remain.
@@ -3312,8 +3652,29 @@ void EngineApp::setupFixture(cmd::Dispatcher& d, std::string_view fixture) {
         (void)st;
         return;
     }
-    if (fixture == "recording_interrupted") {  // tr_1 "Vocal" + rec/Vocal-1.wav, never committed
+    // Beside this run's unsaved folder, one a crashed run left: project
+    // "Sketch" autosaved with tr_1 "Vocal", then rec/Vocal-1.wav recorded and
+    // never committed (ADR-0078).
+    if (fixture == "session_left_behind") {
+        const fs::path unsaved = options_.workdir / "unsaved";
+        options_.scratchDir = unsaved / "20261114-090000-4242";
+        model::Project sketch;
+        sketch.name = "Sketch";
+        auto st = newProject(std::move(sketch));
+        assert(st && "fixture project failed");
         run("track.add", R"({"name": "Vocal"})");
+        autosave();
+        setupFixture(d, "recording_take_file");
+        scratchLock_.reset();  // the run ends without discarding its folder
+        options_.scratchDir = unsaved / "20261114-100000-1";
+        st = newProject(model::Project{});
+        assert(st && "fixture project failed");
+        (void)st;
+        return;
+    }
+    if (fixture == "recording_interrupted" || fixture == "recording_take_file") {
+        // tr_1 "Vocal" + rec/Vocal-1.wav, never committed
+        if (fixture == "recording_interrupted") run("track.add", R"({"name": "Vocal"})");
         // One second of stereo from 1 s on; the recording stopped (crashed)
         // half a second after its last header rewrite.
         const fs::path file = recordDir() / "Vocal-1.wav";

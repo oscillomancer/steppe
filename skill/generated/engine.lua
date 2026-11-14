@@ -1096,6 +1096,7 @@ q = nil
 ---@field generation integer
 ---@field recoverable integer
 ---@field autosave_available boolean
+---@field recoverable_sessions integer Unsaved projects earlier runs left behind (project.recoverable lists them)
 ---@field warnings? table[]
 
 ---@class Steppe.project_new_args
@@ -1115,6 +1116,7 @@ q = nil
 ---@field generation integer
 ---@field recoverable integer
 ---@field autosave_available boolean
+---@field recoverable_sessions integer Unsaved projects earlier runs left behind (project.recoverable lists them)
 ---@field warnings? table[]
 
 ---@class Steppe.project_open_args
@@ -1133,19 +1135,30 @@ q = nil
 ---@field generation integer
 ---@field recoverable integer
 ---@field autosave_available boolean
+---@field recoverable_sessions integer Unsaved projects earlier runs left behind (project.recoverable lists them)
 ---@field warnings? table[]
 
 ---@class Steppe.project_recover_args
 ---@field files? string[]
 ---@field track? string Track id, e.g. "tr_1".
+---@field session? string A session project.recoverable lists
 
 ---@class Steppe.project_recover_result
 ---@field recovered table[]
+---@field autosave? string The session's autosave it opened
 ---@field warnings? table[]
 
 ---@class Steppe.project_recoverable_result
 ---@field warnings? table[]
 ---@field recordings table[]
+---@field sessions table[]
+
+---@class Steppe.project_recoverable_delete_args
+---@field session string
+
+---@class Steppe.project_recoverable_delete_result
+---@field session string
+---@field warnings? table[]
 
 ---@class Steppe.project_save_args
 ---@field path? string
@@ -2340,10 +2353,13 @@ q = nil
 ---@field get fun(): Steppe.project_get_result Show the project: name, rate, tempo, meter, file, version and branch.
 ---@field new fun(args?: Steppe.project_new_args): Steppe.project_new_result Start a new, empty project (replaces the current one and its history).
 ---@field open fun(args?: Steppe.project_open_args): Steppe.project_open_result Open a project file and its branches (replaces the current project).
----@field recover fun(args?: Steppe.project_recover_args): Steppe.project_recover_result Put recordings a crash left out back into the project (one undo step).
----@field recoverable fun(): Steppe.project_recoverable_result List recordings a crash left out of the project.
+---@field recover fun(args?: Steppe.project_recover_args): Steppe.project_recover_result Put back what a crash left behind: recordings, or an unsaved project.
+---@field recoverable fun(): Steppe.project_recoverable_result List recordings and unsaved projects a crash left behind.
 ---@field save fun(args?: Steppe.project_save_args): Steppe.project_save_result Save the project (canonical JSON) to its file or a new path.
 ---@field set fun(args?: Steppe.project_set_args): Steppe.project_set_result Set project name, notes, Console 9, pan law, timebase or timecode.
+
+---@class Steppe.project.recoverable
+---@field delete fun(args: Steppe.project_recoverable_delete_args): Steppe.project_recoverable_delete_result Delete an unsaved project a crash left behind, with its recordings.
 
 ---@class Steppe.project.template
 ---@field delete fun(args: Steppe.project_template_delete_args): Steppe.project_template_delete_result Delete a saved project template by name.

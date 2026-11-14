@@ -100,6 +100,11 @@ class FileActions {
     // A save's (or template's) warnings, if it has any, in a popup: a plug-in
     // whose state could not be read keeps its earlier state.
     void showSaveWarnings(const std::string& command, const json::Value& result);
+    // File > Recover unsaved work… (also offered at start when there is
+    // some): unsaved projects earlier runs left behind (project.recoverable),
+    // newest first, each with Recover and Delete. Nothing loads until the
+    // user chooses (ADR-0078).
+    void openRecovery();
 
   private:
     struct DiscardRequest;
@@ -111,6 +116,10 @@ class FileActions {
     Result<json::Value> exec(const std::string& command, json::Value args);
     void markSaved();
     void showError(const std::string& message);
+    void recoverSession(const std::string& session, const std::string& title);
+    void confirmDeleteSession(const std::string& session, const std::string& title,
+                              const std::string& size);
+    void showNotice(const std::string& id, const std::string& title, const std::string& text);
     ui::Root& root_;
     AppActions& actions_;
     cmd::Dispatcher& dispatcher_;
