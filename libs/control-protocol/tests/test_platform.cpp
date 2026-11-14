@@ -113,8 +113,15 @@ TEST_CASE("client connection generations distinguish reconnects from calls") {
     cmd::Dispatcher bus(commands, host);
     ModelQueue queue;
     rpc::Server first(commands, bus, [&](auto task) { queue.post(std::move(task)); });
-    const auto dir = std::filesystem::temp_directory_path() / "supple-rpc-generation-test";
-    std::filesystem::create_directories(dir);
+    // Atomic directory creation keeps concurrent test processes independent
+    // without native process-id APIs or long platform temporary paths.
+    std::filesystem::path dir;
+    for (std::uint64_t suffix = 0;; ++suffix) {
+        dir = std::filesystem::temp_directory_path() / ("supple-rpc-gen-" + std::to_string(suffix));
+        std::error_code error;
+        if (std::filesystem::create_directory(dir, error)) break;
+        REQUIRE_MESSAGE((!error || error == std::errc::file_exists), error.message());
+    }
     const auto path = dir / "endpoint.sock";
     REQUIRE(first.start(path));
     rpc::Client client;
