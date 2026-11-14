@@ -315,8 +315,12 @@ matching one-paragraph text summary. No audio model ever "listens".
 ## 8. Agents
 
 - **MCP**: in-process (sandbox/engine serve stdio) or proxy (`<slug>-mcp`
-  to a running engine's socket). Most commands are MCP tools of their own;
-  `describe`, `exec` and `query` reach the rest.
+  to a running engine's socket). The engine's default catalogue exposes 37
+  common commands as dedicated tools plus `describe`, `exec` and `query`.
+  `describe` lists all commands or returns one command's full contract;
+  `exec` calls any command and `query` calls read-only commands. Both engine
+  MCP and proxy accept `--tools all` to expose every non-Internal command as
+  a dedicated tool (ADR-0077). The sandbox's dedicated set is unchanged.
 - **Branches first**: the skill teaches agents to propose on a branch and ask
   the human to listen. Every agent action is in the command log and undo
   history with its origin.
