@@ -1518,3 +1518,69 @@ TEST_CASE("an autosave offered after a first save or a save as survives saving f
     REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
     CHECK(p.app->head().project->name == "Autosaved");
 }
+
+TEST_CASE(
+    "an unsaved session's MIDI journals come back on their track, or on the Recovered channel") {
+    // ADR-0080 with ADR-0078: a session a crash left behind holds the
+    // journal of a MIDI take that was never committed.
+    Unsaved u;
+    const std::string left = "20261114-090000-51";
+    const fs::path folder = u.folder(left);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    {
+        auto earlier = u.run(left);
+        cmd::Dispatcher d(registry, *earlier);
+        REQUIRE(d.execute({"track.add", json::parse(R"({"name": "Keys"})").value(), kUnit}));
+        earlier->setFixedClock(1'060'000);
+        earlier->tick();
+    }
+    // One note at 1 s, half a second long, on tr_1; the last line torn.
+    const std::string header =
+        R"({"schema":"supple.midi-recording/1.0","track":"tr_1","sample_rate":48000,)"
+        R"("start_sample":48000,"latency":0,"device":true,"routed":false,"shift":0,)"
+        R"("loop":[0,0]})"
+        "\n";
+    auto journal = [&](const std::string& body) {
+        fs::create_directories(folder / "media" / "rec");
+        REQUIRE(writeFileAtomic(folder / "media" / "rec" / "Keys-1.midi.jsonl", header + body));
+    };
+    auto app = u.run("20261114-100000-1");
+    rename(*app, "Current work");
+
+    SUBCASE("with a readable autosave: on the track it was recorded on") {
+        journal("[0,144,60,100]\n[24000,128,60,0]\n{\"captured\":48000}\n[30000,144");
+        CHECK(app->recoverableSessions().front().recordings == 1);
+        auto r = app->recoverSession(left);
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        REQUIRE(r->recovered.size() == 1);
+        CHECK(r->recovered.front().track == "tr_1");
+        REQUIRE(app->head().midi.size() == 1);
+        const auto& seq = app->head().midi.begin()->value->sequence;
+        REQUIRE(seq.notes.size() == 1);
+        CHECK(seq.notes[0].pitch == 60);
+        CHECK(app->recoverable().empty());
+        REQUIRE(app->save(u.root / "song" / "song.json"));
+        CHECK_FALSE(fs::exists(folder));  // the journal went with the first save
+    }
+    SUBCASE("without one: on the Recovered channel") {
+        REQUIRE(writeFileAtomic(folder / "autosave-1.json", "garbage"));
+        journal("[0,144,60,100]\n[24000,128,60,0]\n{\"captured\":48000}\n");
+        auto r = app->recoverSession(left);
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        REQUIRE(r->recovered.size() == 1);
+        const auto* track = app->head().tracks.find(*model::Id::parse(r->recovered.front().track));
+        REQUIRE(track);
+        CHECK(track->name == "Recovered");
+        CHECK(app->head().midi.size() == 1);
+    }
+    SUBCASE("a journal with nothing played and no autosave: nothing to put back") {
+        REQUIRE(writeFileAtomic(folder / "autosave-1.json", "garbage"));
+        journal("{\"captured\":48000}\n");
+        CHECK(app->recoverableSessions().front().recordings == 0);
+        auto r = app->recoverSession(left);
+        REQUIRE_FALSE(r);
+        CHECK(r.error().code == "recover.damaged");
+        CHECK(app->head().project->name == "Current work");
+    }
+}

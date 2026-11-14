@@ -3,6 +3,7 @@
 #pragma once
 #include <cerrno>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -13,11 +14,14 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#include <fcntl.h>
+#include <io.h>
 #include <process.h>
 #include <windows.h>
 
 #include "supple/base/files.h"
 #else
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
@@ -71,6 +75,41 @@ inline int publishNew(const std::filesystem::path& temp, const std::filesystem::
     return -1;
 #else
     return ::link(temp.c_str(), target.c_str());
+#endif
+}
+// A new file to append to (a recording's MIDI journal, ADR-0080): never
+// over an existing file and never through a link. Null on failure (errno).
+inline std::FILE* createAppend(const std::filesystem::path& path) {
+#if defined(_WIN32)
+    const HANDLE handle =
+        CreateFileW(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr,
+                    CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) return nullptr;
+    const int fd =
+        _open_osfhandle(reinterpret_cast<intptr_t>(handle), _O_BINARY | _O_WRONLY | _O_APPEND);
+    if (fd < 0) {
+        CloseHandle(handle);
+        return nullptr;
+    }
+    std::FILE* stream = _fdopen(fd, "ab");
+    if (!stream) _close(fd);
+    return stream;
+#else
+    const int fd =
+        ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_APPEND | O_NOFOLLOW | O_CLOEXEC, 0644);
+    if (fd < 0) return nullptr;
+    std::FILE* stream = ::fdopen(fd, "ab");
+    if (!stream) ::close(fd);
+    return stream;
+#endif
+}
+// What was written reaches the disk (fflush, then fsync / FlushFileBuffers).
+inline bool syncFile(std::FILE* stream) {
+    if (std::fflush(stream) != 0) return false;
+#if defined(_WIN32)
+    return FlushFileBuffers(reinterpret_cast<HANDLE>(_get_osfhandle(_fileno(stream)))) != 0;
+#else
+    return ::fsync(::fileno(stream)) == 0;
 #endif
 }
 // Nonserialized cache identity, follows symlinks. No file reads on audio threads.

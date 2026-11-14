@@ -633,6 +633,7 @@ Status EngineApp::replaceProject(model::VersionStore store, fs::path path,
     scratch_.clear();
     reportedFailures_.clear();
     recordingFiles_.clear();
+    midiJournalsPending_.clear();  // not saved: they stay, recoverable (ADR-0080)
     endMasterRecording();
     autoWrite_.clear();
     renderQueue_.clear();
@@ -793,6 +794,7 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
     // later save to the same path keeps that (recoverAutosave).
     if (std::error_code ec; !openedFile_ || openedFile_->first != path)
         if (const auto time = fs::last_write_time(path, ec); !ec) openedFile_.emplace(path, time);
+    dropSavedMidiJournals();
     if (fromScratch) releaseScratch();  // its media moved; its autosaves are older than the file
     autosaveMarked_ = true;             // the file itself is the newest copy
     autosaveMs_ = serviceClockMs();
@@ -1716,6 +1718,7 @@ void EngineApp::autosave() {
         autosaveMs_ = serviceClockMs();  // try again after an interval, not every tick
         return;
     }
+    dropSavedMidiJournals();
     existing.push_back({next, file});
     std::sort(existing.begin(), existing.end(),
               [](const auto& a, const auto& b) { return a.first < b.first; });
@@ -1727,6 +1730,14 @@ void EngineApp::autosave() {
     autosaveHeads_ = versions_->heads();
     autosaveMs_ = serviceClockMs();
     autosaveMarked_ = true;
+}
+
+void EngineApp::dropSavedMidiJournals() {
+    for (const fs::path& journal : midiJournalsPending_) {
+        std::error_code ec;
+        fs::remove(journal, ec);  // a failure leaves it recoverable: offered again, never lost
+    }
+    midiJournalsPending_.clear();
 }
 
 void EngineApp::restartFx(model::Id fx) {
@@ -1858,13 +1869,37 @@ Result<TransportInfo> EngineApp::transport(std::string_view action, std::optiona
                 output || !tr.record.input ? nullptr : s.routes.find(*tr.record.input);
             const auto* midi = output ? nullptr : model::midiInputRoute(s, e.id);
             // Explicit MIDI record modes capture sends independently of the selected input.
-            if (routed || midi) {  // MIDI (ADR-0016): events, no file
+            std::string base;
+            for (char c : tr.name.empty() ? e.id.str() : tr.name)
+                base += std::isalnum(static_cast<unsigned char>(c)) ? c : '-';
+            // <base>-<n> free for a WAV, its sidecar and a MIDI journal alike
+            // (the writer also creates each exclusively).
+            auto freeName = [&](const char* extension) {
+                for (int n = 1;; ++n) {
+                    const std::string stem = base + "-" + std::to_string(n);
+                    const fs::path file = dir / (stem + extension);
+                    std::error_code ec;
+                    const bool taken =
+                        std::any_of(targets.begin(), targets.end(),
+                                    [&](const RecordTarget& o) {
+                                        return !o.file.empty() &&
+                                               o.file.parent_path() / o.file.stem().stem() ==
+                                                   dir / stem;
+                                    }) ||
+                        fs::exists(dir / (stem + ".wav"), ec) ||
+                        fs::exists(dir / (stem + ".rec.json"), ec) ||
+                        fs::exists(dir / (stem + ".midi.jsonl"), ec);
+                    if (!taken) return file;
+                }
+            };
+            if (routed || midi) {  // MIDI (ADR-0016): events; a journal for recovery (ADR-0080)
                 RecordTarget t;
                 t.track = e.id;
                 t.midi = RecordTarget::Midi{
                     midi ? midiPortMask(engine_->midiPorts(), *midi->from.midiDevice) : 0,
                     midi && midi->midi ? midi->midi->fromChannel : 0,
                     midi && midi->midi ? midi->midi->toChannel : 0, routed};
+                t.file = freeName(".midi.jsonl");
                 targets.push_back(std::move(t));
                 continue;
             }
@@ -1875,24 +1910,12 @@ Result<TransportInfo> EngineApp::transport(std::string_view action, std::optiona
             t.rackInput = in && in->from.module.has_value();
             if (in && in->from.hwChannels)
                 for (int ch : *in->from.hwChannels) t.inputs.push_back(ch - 1);
-            std::string base;
-            for (char c : tr.name.empty() ? e.id.str() : tr.name)
-                base += std::isalnum(static_cast<unsigned char>(c)) ? c : '-';
-            for (int n = 1;; ++n) {  // (the writer also creates it exclusively)
-                t.file = dir / (base + "-" + std::to_string(n) + ".wav");
-                std::error_code ec;
-                const bool taken =
-                    std::any_of(targets.begin(), targets.end(),
-                                [&](const RecordTarget& o) { return o.file == t.file; });
-                if (!taken && !fs::exists(t.file, ec) &&
-                    !fs::exists(detail::sidecarPath(t.file), ec))
-                    break;
-            }
+            t.file = freeName(".wav");
             targets.push_back(std::move(t));
         }
-        std::vector<fs::path> files;
+        std::vector<fs::path> files;  // WAVs and MIDI journals: not leftovers while recording
         for (const RecordTarget& t : targets)
-            if (!t.midi) files.push_back(t.file);
+            if (!t.file.empty()) files.push_back(t.file);
         // A recording master's own items are silent where it records: in the
         // punch range, else everywhere (ADR-0057). The plan changes first.
         std::vector<RecordingMaster> masters;
@@ -2466,6 +2489,10 @@ Result<std::vector<RecordedInfo>> EngineApp::commitTakes(const std::vector<Recor
     record_.invocations.push_back(
         {"record.commit", detail::recordCommitArgs(takes, punch_, media)});
     SUPPLE_TRY(commitTransaction(*txnId));
+    // The MIDI takes are in the project now; their journals go once a saved
+    // file or autosave holds them (ADR-0080).
+    for (const RecordedTake& r : takes)
+        if (r.isMidi && !r.file.empty()) midiJournalsPending_.push_back(r.file);
     for (auto& [source, pendingTake] : pendingHashes) {
         // Open only; all reads happen on the worker. The handle survives a
         // first save moving the scratch file before the job gets to run.
@@ -2906,6 +2933,12 @@ std::int64_t leftoverRecordings(const fs::path& folder, const fs::path& rec,
     if (!detail::resolvedInside(folder, rec)) return 0;  // not the session's: never looked at
     for (fs::directory_iterator it(rec, ec), end; !ec && it != end; it.increment(ec)) {
         const fs::path& f = it->path();
+        if (detail::isMidiJournal(f)) {  // ADR-0080: no sidecar; the journal says it all
+            if (!fs::is_regular_file(fs::symlink_status(f, ec))) continue;
+            // Counted as recovery would place it: only with something played.
+            if (auto c = detail::readMidiJournal(f, rec); c && !c->events.empty()) ++n;
+            continue;
+        }
         if (f.extension() != ".wav" || !it->is_regular_file(ec)) continue;
         if (used.count(("rec" / f.filename()).generic_string())) continue;
         std::error_code sideError;
@@ -2925,11 +2958,16 @@ std::int64_t leftoverRecordings(const fs::path& folder, const fs::path& rec,
 // link out of the session is read or repaired. The listing, the recovery
 // itself and a session's preflight all ask this, so none accepts what
 // another refuses.
+// A MIDI journal (ADR-0080) is checked the same way: it reads (inside its
+// folder), it holds at least one event, and the take it places is inside
+// the timeline; `midi` is then that take, as stop would have committed it
+// up to the crash.
 struct RecordingCheck {
     std::optional<detail::RecordingInfo> side;
     std::optional<audio::WavStreamInfo> wav;  // set when it can be put back
+    std::optional<RecordedTake> midi;         // or this, for a MIDI journal
     std::optional<Error> problem;             // why not, when it is worth saying
-    bool usable() const { return wav.has_value(); }
+    bool usable() const { return wav.has_value() || midi.has_value(); }
 };
 
 RecordingCheck checkRecording(const model::Session& s, const fs::path& rec, const fs::path& f,
@@ -2940,6 +2978,29 @@ RecordingCheck checkRecording(const model::Session& s, const fs::path& rec, cons
         !fs::is_regular_file(fs::symlink_status(f, ec)) ||
         !fs::equivalent(f.parent_path(), rec, ec) || ec || !detail::recoveryFileInside(root, f))
         return out;
+    if (detail::isMidiJournal(f)) {
+        auto capture = detail::readMidiJournal(f, rec);
+        if (!capture) {
+            Error e = std::move(capture).error();
+            e.code = "record.journal";
+            if (e.path.empty()) e.path = "/";
+            if (e.hint.empty()) e.hint = "skip this file; it is not a readable MIDI journal";
+            out.problem = std::move(e);
+            return out;
+        }
+        RecordedTake take = detail::placeMidi(*capture);
+        out.side = detail::RecordingInfo{take.track,    take.startSample, take.sampleRate,
+                                         take.segments, take.loop.start,  take.loop.end};
+        if (take.midi.empty() || take.frames <= 0) return out;  // nothing was played
+        if (auto valid = recordingBounds(s, *out.side, static_cast<std::uint64_t>(take.frames));
+            !valid) {
+            out.problem = valid.error();
+            return out;
+        }
+        take.file = f;
+        out.midi = std::move(take);
+        return out;
+    }
     // The sidecar is opened only inside the WAV's own folder (itself inside
     // `root`): a link to placement metadata elsewhere is not followed.
     auto side = detail::readSidecar(f, rec);  // none: not a recording, or capture never began
@@ -2977,7 +3038,8 @@ std::int64_t usableRecordings(const model::Session& s, const fs::path& rec, cons
     std::error_code ec;
     if (!detail::resolvedInside(root, rec)) return 0;
     for (fs::directory_iterator it(rec, ec), end; !ec && it != end; it.increment(ec))
-        if (it->path().extension() == ".wav" && checkRecording(s, rec, it->path(), root).usable())
+        if ((it->path().extension() == ".wav" || detail::isMidiJournal(it->path())) &&
+            checkRecording(s, rec, it->path(), root).usable())
             ++n;
     return n;
 }
@@ -3626,10 +3688,12 @@ std::vector<RecoverableInfo> EngineApp::recoverable(std::vector<RecordingWarning
         }
     });
     for (const fs::path& f : recordingFiles_) used.insert(comparable(f));
+    for (const fs::path& f : midiJournalsPending_) used.insert(comparable(f));
     std::vector<fs::path> files;
     for (auto it = fs::directory_iterator(dir, ec); !ec && it != fs::directory_iterator();
          it.increment(ec))
-        if (it->path().extension() == ".wav") files.push_back(it->path());
+        if (it->path().extension() == ".wav" || detail::isMidiJournal(it->path()))
+            files.push_back(it->path());
     std::sort(files.begin(), files.end());
     const fs::path media = mediaDir();
     for (const fs::path& f : files) {
@@ -3645,13 +3709,17 @@ std::vector<RecoverableInfo> EngineApp::recoverable(std::vector<RecordingWarning
             continue;
         }
         const detail::RecordingInfo* side = &*check.side;
-        const audio::WavStreamInfo* info = &*check.wav;
         RecoverableInfo r;
         r.file = f.lexically_relative(media).string();
         r.track = side->track.str();
         r.startSeconds = static_cast<double>(side->startSample) / side->sampleRate;
-        r.seconds = static_cast<double>(info->fileFrames) / info->sampleRate;
-        r.channels = info->channels;
+        if (check.midi) {
+            r.seconds = static_cast<double>(check.midi->frames) / check.midi->sampleRate;
+            r.midiEvents = static_cast<std::int64_t>(check.midi->midi.size());
+        } else {
+            r.seconds = static_cast<double>(check.wav->fileFrames) / check.wav->sampleRate;
+            r.channels = check.wav->channels;
+        }
         out.push_back(std::move(r));
     }
     return out;
@@ -3708,6 +3776,16 @@ Result<std::vector<RecordedInfo>> EngineApp::recover(const std::vector<std::stri
             continue;
         }
         const detail::RecordingInfo* side = &*check.side;
+        if (check.midi) {  // placed as stop places it (ADR-0080)
+            t = *check.midi;
+            // Note Out addresses of routes this project no longer has: the
+            // events stay, unaddressed, as a device's.
+            for (RecordedMidiEvent& e : t.midi)
+                if (e.route != model::Id{} && !s.routes.find(e.route)) {
+                    e.route = {};
+                    e.voice = -1;
+                }
+        }
         t.track = track.value_or(side->track);
         if (!s.tracks.find(t.track))
             return Error("recover.no_track",
@@ -3717,14 +3795,20 @@ Result<std::vector<RecordedInfo>> EngineApp::recover(const std::vector<std::stri
         if (s.tracks.find(t.track)->type == model::StripType::Buss)
             return Error("track.strip_type", "recover recordings onto a channel or master",
                          "/track", "choose a child channel of the buss instead");
-        t.startSample = side->startSample;
-        t.sampleRate = side->sampleRate;
-        t.segments = side->segments;  // loop passes, when the recording ended normally
-        t.loop = {side->loopStart, side->loopEnd};
+        if (!check.midi) {
+            t.startSample = side->startSample;
+            t.sampleRate = side->sampleRate;
+            t.segments = side->segments;  // loop passes, when the recording ended normally
+            t.loop = {side->loopStart, side->loopEnd};
+        }
         takes.push_back(std::move(t));
     }
     for (auto it = takes.begin(); it != takes.end();) {
         RecordedTake& t = *it;
+        if (t.isMidi) {  // nothing to repair; checked just above
+            ++it;
+            continue;
+        }
         if (!inRecordDir(t.file))  // replaced since it was listed
             return Error("recover.unknown_file", t.file.string() + " is not a recording to recover",
                          {}, "choose a file listed by project.recoverable for the current project");

@@ -226,6 +226,8 @@ struct RecoverableInfo {
     std::string track;
     double startSeconds = 0, seconds = 0;
     std::int64_t channels = 0;
+    // A MIDI take's journal (ADR-0080): how many events it holds (channels 0).
+    std::optional<std::int64_t> midiEvents;
 };
 
 // An unsaved project a run left behind (it crashed or was killed): its
@@ -951,6 +953,10 @@ class EngineApp : public cmd::Host {
     double syncSeekSeconds_ = 0.05;  // how long a seek takes to be heard (measured)
     std::vector<std::string> syncWarnings_;
     std::vector<std::filesystem::path> recordingFiles_;  // while recording
+    // MIDI journals (ADR-0080) of takes committed in this project and not
+    // yet in a saved file or autosave: not leftovers; deleted once one is.
+    std::vector<std::filesystem::path> midiJournalsPending_;
+    void dropSavedMidiJournals();
     bool recordingMasters_ = false;  // armed masters record their output (ADR-0057)
     std::set<model::Id> reportedFailures_;
     std::filesystem::path projectPath_;

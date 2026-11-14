@@ -185,6 +185,8 @@ another project, without saving deletes that folder after the app has asked.
 An unsaved project is autosaved into that folder every minute while it
 changes, like a saved one. If Steppe stops without you saving or discarding
 (a crash, a power cut), the folder stays, with its autosaves and recordings.
+MIDI recordings are kept as they are played, so a crash loses at most the
+last moment of a take (a power cut, at most the last five seconds).
 The next time Steppe starts without a project to open, it lists what was left
 behind: each with its name, when it was last autosaved, how many tracks and
 recordings it has, and its size. **Recover** opens it (after asking about any
@@ -902,8 +904,9 @@ report the option and how to correct it before playback starts.
 
 For headless recording, stop the transport and save the project before closing
 an MCP connection or stopping the socket server. Shutdown finishes capture but
-does not save the project. Unsaved audio files can be recovered; unsaved MIDI
-recordings and other session edits are lost when the process exits.
+does not save the project. Unsaved audio and MIDI recordings can be recovered
+(File > Recover unsaved work…, or `project.recover`); other session edits are
+lost when the process exits.
 
 MIDI sends, including a rack's Note Out routes, can be recorded by their destination channel. Arm
 it in MIDI replace or MIDI overdub mode, then record; loop and punch apply

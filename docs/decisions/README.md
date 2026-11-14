@@ -93,3 +93,4 @@ current state.
 | [0075](0075-rack-sends.md) | A rack's Out modules send to busses and masters | Accepted |
 | [0076](0076-saved-branches.md) | Project files keep branches and their unmerged steps | Accepted |
 | [0078](0078-unsaved-recovery.md) | Unsaved projects autosave and come back after a crash | Accepted |
+| [0080](0080-midi-recording-recovery.md) | MIDI takes survive a crash through a journal | Accepted |

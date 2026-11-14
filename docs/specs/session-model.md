@@ -684,7 +684,8 @@ is gone; one whose lock is held is a running app's and is never listed or
 touched. Process IDs decide nothing. Left-behind folders with content stay
 until the user recovers or deletes them; empty ones untouched for an hour
 are removed when an app starts.
-`project.recoverable` lists them as `sessions` beside `recordings`
+`project.recoverable` lists them (MIDI takes' journals among the
+recordings, ADR-0080) as `sessions` beside `recordings`
 (`session`, `started_ms`, `autosaved_ms`, `name`, `tracks`, `branches`,
 `recordings`, `bytes`); `project.recover {session}` replaces the current
 project (as `project.open`: the caller asks about unsaved changes first)
@@ -694,7 +695,8 @@ stays unsaved, puts the folder's leftover recordings back as one more undo
 step, and returns `autosave` (the file it used, or none). Without a
 readable autosave it recovers only when at least one recording can be put
 back, by the test `project.recover` applies when it places one (a sidecar
-that reads, a WAV with frames, a placement inside the timeline): a new
+that reads, a WAV with frames, a placement inside the timeline; for a MIDI
+journal, at least one event and a placement inside the timeline): a new
 project with one channel, "Recovered", that holds them; otherwise
 `recover.damaged`, with the current project and every file untouched. An
 unsaved project's media stay in its session folder. A path is inside it

@@ -879,8 +879,11 @@ json::Value recordCommitArgs(const std::vector<RecordedTake>& takes, const Trans
         t.track = r.track.str();
         std::error_code ec;
         const fs::path rel = media.empty() ? fs::path() : fs::relative(r.file, media, ec);
-        t.file =
-            !ec && !rel.empty() && *rel.begin() != ".." ? rel.generic_string() : r.file.string();
+        // A MIDI take's file is its crash-recovery journal (ADR-0080): not
+        // part of what a merge replays.
+        if (!r.isMidi)
+            t.file = !ec && !rel.empty() && *rel.begin() != ".." ? rel.generic_string()
+                                                                 : r.file.string();
         t.hash = r.hash;
         t.startSample = r.startSample;
         t.frames = r.frames;

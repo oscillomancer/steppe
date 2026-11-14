@@ -3,11 +3,15 @@
 #include <doctest/doctest.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <thread>
 
 #include "../../../tests/file_platform.h"
+#include "recording.h"
 #include "supple/audio/audio_file.h"
+#include "supple/base/files.h"
 #include "supple/engine/app.h"
 #include "supple/model/schemas.h"
 
@@ -198,4 +202,231 @@ TEST_CASE("MIDI sends: armed destinations record internal MIDI without a device 
             }
     }
     CHECK(notes == 1);
+}
+
+namespace {
+// Polls a recording's MIDI journal until it holds `events` events (the
+// writer thread appends every few milliseconds), as a crash would find it.
+std::optional<detail::MidiCapture> journalWith(const fs::path& file, std::size_t events) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    for (;;) {
+        if (auto c = detail::readMidiJournal(file, file.parent_path());
+            c && c->events.size() >= events)
+            return *c;
+        if (std::chrono::steady_clock::now() > deadline) return std::nullopt;
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+}
+
+void sameTake(const RecordedTake& a, const RecordedTake& b) {
+    CHECK(a.track == b.track);
+    CHECK(a.startSample == b.startSample);
+    CHECK(a.frames == b.frames);
+    CHECK(a.loop.start == b.loop.start);
+    CHECK(a.loop.end == b.loop.end);
+    REQUIRE(a.segments.size() == b.segments.size());
+    for (std::size_t i = 0; i < a.segments.size(); ++i) {
+        CHECK(a.segments[i].fileFrame == b.segments[i].fileFrame);
+        CHECK(a.segments[i].timeline == b.segments[i].timeline);
+    }
+    REQUIRE(a.midi.size() == b.midi.size());
+    for (std::size_t i = 0; i < a.midi.size(); ++i) {
+        CHECK(a.midi[i].timeline == b.midi[i].timeline);
+        CHECK(a.midi[i].run == b.midi[i].run);
+        CHECK(std::equal(a.midi[i].bytes, a.midi[i].bytes + 3, b.midi[i].bytes));
+        CHECK(a.midi[i].route == b.midi[i].route);
+        CHECK(a.midi[i].voice == b.midi[i].voice);
+    }
+}
+}  // namespace
+
+TEST_CASE("a MIDI take's journal places what stopping would commit, written off the audio thread") {
+    // ADR-0080. capture(), captureMidi() and captureRoutedMidi() are the
+    // audio thread's (SUPPLE_RT, checked under the rtsan preset): they only
+    // push to the rings and publish how far capture got; the writer thread
+    // journals. A journal read while recording places the take as finish()
+    // does, loop passes included.
+    const fs::path dir =
+        fs::temp_directory_path() / ("supple-midi-journal-" + std::to_string(test::processId()));
+    fs::remove_all(dir);
+    const model::Id track{model::Kind::Track, 2}, route{model::Kind::Route, 1};
+    RecordTarget target;
+    target.track = track;
+    const bool routed = GENERATE(false, true);
+    target.midi = RecordTarget::Midi{1, 0, 0, routed, routed ? 40 : 0};
+    target.file = dir / "Keys-1.midi.jsonl";
+    detail::Recorder recorder({target}, 48000, 100);
+    recorder.setLoop({1000, 1256, true});
+    REQUIRE(recorder.open());
+    auto note = [](std::uint32_t frame, std::uint8_t status, std::uint8_t pitch) {
+        MidiInputEvent e;
+        e.frame = frame;
+        e.size = 3;
+        e.bytes[0] = status;
+        e.bytes[1] = pitch;
+        e.bytes[2] = status == 0x90 ? 100 : 0;
+        return e;
+    };
+    // Two loop passes over [1000, 1256): a note in each, one held over the
+    // wrap; with routed input, a Note Out voice too.
+    const MidiInputEvent first[] = {note(10, 0x90, 60), note(200, 0x80, 60), note(250, 0x90, 64)};
+    const MidiInputEvent second[] = {note(5, 0x80, 64), note(30, 0x90, 67)};
+    detail::RoutedMidiEvent voice;
+    voice.frame = 20;
+    voice.bytes[0] = 0x90;
+    voice.bytes[1] = 72;
+    voice.bytes[2] = 90;
+    voice.route = route;
+    voice.voice = 3;
+    recorder.capture(nullptr, 0, 256, 1000);
+    recorder.captureMidi(first, 0, 256, 1000);
+    if (routed) recorder.captureRoutedMidi(track, {&voice, 1}, 256);
+    recorder.capture(nullptr, 0, 256, 1000);  // the loop wrapped
+    recorder.captureMidi(second, 0, 256, 1000);
+    const std::size_t events = 5 + (routed ? 1 : 0);
+    const auto crashed = journalWith(target.file, events);
+    REQUIRE(crashed);
+    const RecordedTake recovered = detail::placeMidi(*crashed);
+    const auto takes = recorder.finish({1000, 1256, true});
+    REQUIRE(takes.size() == 1);
+    const RecordedTake& stopped = takes.front();
+    CHECK(stopped.file == target.file);
+    CHECK(stopped.warnings.empty());
+    CHECK(stopped.segments.size() == 2);  // two passes
+    sameTake(recovered, stopped);
+    // The journal stays (the app deletes it once a save holds the take), and
+    // reads back as the whole take.
+    auto after = detail::readMidiJournal(target.file, dir);
+    REQUIRE(after);
+    sameTake(detail::placeMidi(*after), stopped);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("a MIDI journal's torn or damaged tail is left out") {
+    const fs::path dir = fs::temp_directory_path() /
+                         ("supple-midi-journal-torn-" + std::to_string(test::processId()));
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    const std::string header =
+        R"({"device":true,"latency":0,"loop":[0,0],"routed":false,"sample_rate":48000,)"
+        R"("schema":"supple.midi-recording/1.0","shift":0,"start_sample":48000,"track":"tr_1"})"
+        "\n";
+    const fs::path file = dir / "Keys-1.midi.jsonl";
+    bool torn = false;
+    SUBCASE("a torn last line") {
+        REQUIRE(writeFileAtomic(file, header + "[0,144,60,100]\n{\"captured\":256}\n[300,128,6"));
+        auto c = detail::readMidiJournal(file, dir, &torn);
+        REQUIRE(c);
+        CHECK(torn);
+        CHECK(c->events.size() == 1);
+        CHECK(c->captured == 256);
+    }
+    SUBCASE("a damaged line: nothing after it is trusted") {
+        REQUIRE(writeFileAtomic(file, header + "[0,144,60,100]\n[0,999,1,1]\n[10,128,60,0]\n"));
+        auto c = detail::readMidiJournal(file, dir, &torn);
+        REQUIRE(c);
+        CHECK(torn);
+        CHECK(c->events.size() == 1);
+    }
+    SUBCASE("no header") {
+        REQUIRE(writeFileAtomic(file, "[0,144,60,100]\n"));
+        auto c = detail::readMidiJournal(file, dir, &torn);
+        REQUIRE_FALSE(c);
+        CHECK(c.error().code == "record.journal");
+    }
+    fs::remove_all(dir);
+}
+
+TEST_CASE("a MIDI take a crash interrupted comes back from its journal, and goes once saved") {
+    // ADR-0080: a MIDI take had no crash-recovery file; now its journal is
+    // offered by project.recoverable and placed by project.recover as stop
+    // would have committed it. Once a saved file holds the take, it goes.
+    struct Root {
+        fs::path path =
+            fs::temp_directory_path() / ("supple-midi-crash-" + std::to_string(test::processId()));
+        Root() { fs::remove_all(path); }
+        ~Root() { fs::remove_all(path); }
+    } root;
+    auto created = EngineApp::create({.workdir = root.path});
+    REQUIRE(created);
+    auto& app = **created;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher dispatcher(registry, app);
+    auto call = [&](std::string_view name, std::string_view args) {
+        auto result = dispatcher.execute(
+            {std::string(name), *json::parse(args), {cmd::Origin::Type::Test, "crash", ""}});
+        REQUIRE_MESSAGE(result, (result ? "" : result.error().toString()));
+        return *result;
+    };
+    call("track.add", R"({"name":"Keys"})");
+    call("track.set", R"({"track":"tr_1","armed":true,"record_midi":"*"})");
+    REQUIRE(app.save(root.path / "song" / "song.json"));  // what the crash leaves on disk
+    DummyBackend backend(
+        {.mode = DummyBackend::Mode::Manual,
+         .midiPorts = {"Test keyboard"},
+         .midi = [](std::vector<MidiInputEvent>& out, std::uint32_t n, std::int64_t frame) {
+             for (std::int64_t f = frame; f < frame + n; ++f) {
+                 if (f != 256 && f != 768) continue;
+                 MidiInputEvent event;
+                 event.frame = static_cast<std::uint32_t>(f - frame);
+                 event.size = 3;
+                 event.bytes[0] = f == 256 ? 0x90 : 0x80;
+                 event.bytes[1] = 60;
+                 event.bytes[2] = f == 256 ? 100 : 0;
+                 out.push_back(event);
+             }
+         }});
+    REQUIRE(app.startEngine(backend, {.sampleRate = 48000, .blockSize = 256, .midiInputs = true},
+                            {.anticipative = false, .workers = 0}));
+    call("transport.record", "{}");
+    backend.run(4);
+    const fs::path journal = app.recordDir() / "Keys-1.midi.jsonl";
+    // As a crash would find it: written while recording, never finished.
+    REQUIRE(journalWith(journal, 2));
+    const std::string crashed = *readTextFile(journal);
+    CHECK(app.recoverable().empty());  // recording now: not a leftover
+    call("transport.stop", "{}");
+    REQUIRE(app.head().midi.size() == 1);
+    const auto stopped = app.head().midi.begin()->value->sequence;
+    REQUIRE(stopped.notes.size() == 1);
+    CHECK(fs::exists(journal));        // kept until a saved file holds the take
+    CHECK(app.recoverable().empty());  // and not offered: the project has it
+
+    SUBCASE("a crash before the save: offered and put back as stop committed it") {
+        app.stopEngine();
+        REQUIRE(app.open(root.path / "song" / "song.json"));  // as the next run opens it
+        REQUIRE(writeFileAtomic(journal, crashed));
+        auto listed = call("project.recoverable", "{}");
+        REQUIRE(listed["recordings"].size() == 1);
+        const json::Value& row = listed["recordings"].at(0);
+        CHECK(row.find("file")->asString() == "rec/Keys-1.midi.jsonl");
+        CHECK(row.find("midi_events")->asInt() == 2);
+        CHECK(row.find("track")->asString() == "tr_1");
+        auto recovered = call("project.recover", "{}");
+        REQUIRE(recovered["recovered"].size() == 1);
+        REQUIRE(app.head().midi.size() == 1);
+        const auto& back = app.head().midi.begin()->value->sequence;
+        REQUIRE(back.notes.size() == 1);
+        CHECK(back.notes[0].pitch == stopped.notes[0].pitch);
+        CHECK(back.notes[0].start == stopped.notes[0].start);
+        CHECK(back.notes[0].length == stopped.notes[0].length);
+        CHECK(app.recoverable().empty());
+        REQUIRE(app.save(root.path / "song" / "song.json"));
+        CHECK_FALSE(fs::exists(journal));
+    }
+    SUBCASE("saved: the journal goes") {
+        REQUIRE(app.save(root.path / "song" / "song.json"));
+        CHECK_FALSE(fs::exists(journal));
+        app.stopEngine();
+        REQUIRE(app.open(root.path / "song" / "song.json"));
+        CHECK(app.recoverable().empty());
+        CHECK(app.head().midi.size() == 1);
+    }
+    SUBCASE("not saved: the journal stays, offered on the next open") {
+        app.stopEngine();
+        REQUIRE(app.open(root.path / "song" / "song.json"));
+        CHECK(fs::exists(journal));
+        CHECK(app.recoverable().size() == 1);
+    }
 }
