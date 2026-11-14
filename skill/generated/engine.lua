@@ -537,7 +537,7 @@ q = nil
 ---@field warnings? table[]
 
 ---@class Steppe.fx_meters_args
----@field fx string
+---@field fx string Plugin instance id, e.g. "fx_1".
 ---@field from? "live"|"render" live: the playing instance; render: the last render.mix (default: "live")
 
 ---@class Steppe.fx_meters_result
@@ -546,15 +546,15 @@ q = nil
 ---@field warnings? table[]
 
 ---@class Steppe.fx_move_args
----@field fx string
----@field track? string
+---@field fx string Plugin instance id, e.g. "fx_1".
+---@field track? string Track id, e.g. "tr_1".
 ---@field index integer
 
 ---@class Steppe.fx_move_result
 ---@field warnings? table[]
 
 ---@class Steppe.fx_param_get_args
----@field fx string
+---@field fx string Plugin instance id, e.g. "fx_1".
 ---@field param string
 
 ---@class Steppe.fx_param_get_result
@@ -572,7 +572,7 @@ q = nil
 ---@field warnings? table[]
 
 ---@class Steppe.fx_patch_get_args
----@field fx string
+---@field fx string Plugin instance id, e.g. "fx_1".
 ---@field changed_only? boolean (default: false)
 
 ---@class Steppe.fx_patch_get_result
@@ -580,7 +580,7 @@ q = nil
 ---@field warnings? table[]
 
 ---@class Steppe.fx_patch_list_args
----@field fx string
+---@field fx string Plugin instance id, e.g. "fx_1".
 
 ---@class Steppe.fx_patch_list_result
 ---@field patches any
@@ -597,7 +597,7 @@ q = nil
 ---@field warnings? table[]
 
 ---@class Steppe.fx_patch_set_args
----@field fx string
+---@field fx string Plugin instance id, e.g. "fx_1".
 ---@field patch? any
 ---@field name? string
 
@@ -759,7 +759,7 @@ q = nil
 ---@field warnings? (string|table)[]
 
 ---@class Steppe.item_apply_fx_args
----@field item string
+---@field item string Item id, e.g. "it_1".
 ---@field mode? string (default: "take")
 
 ---@class Steppe.item_apply_fx_result
@@ -778,7 +778,7 @@ q = nil
 
 ---@class Steppe.item_duplicate_args
 ---@field bypass_groups? boolean (default: false)
----@field item string
+---@field item string Item id, e.g. "it_1".
 ---@field to? number
 
 ---@class Steppe.item_duplicate_result
@@ -787,7 +787,7 @@ q = nil
 ---@field warnings? table[]
 
 ---@class Steppe.item_explode_takes_args
----@field item string
+---@field item string Item id, e.g. "it_1".
 ---@field mode? string (default: "tracks")
 
 ---@class Steppe.item_explode_takes_result
@@ -849,7 +849,7 @@ q = nil
 
 ---@class Steppe.item_set_args
 ---@field bypass_groups? boolean (default: false)
----@field item string
+---@field item string Item id, e.g. "it_1".
 ---@field position? number
 ---@field bar? integer
 ---@field length? number
@@ -870,7 +870,7 @@ q = nil
 
 ---@class Steppe.item_split_args
 ---@field bypass_groups? boolean (default: false)
----@field item string
+---@field item string Item id, e.g. "it_1".
 ---@field at number
 ---@field snap? "none"|"zero_crossing" (default: "none")
 
@@ -914,13 +914,13 @@ q = nil
 ---@field warnings? table[]
 
 ---@class Steppe.marker_remove_args
----@field id string
+---@field id string Marker id, e.g. "mk_1".
 
 ---@class Steppe.marker_remove_result
 ---@field warnings? table[]
 
 ---@class Steppe.marker_set_args
----@field id string
+---@field id string Marker id, e.g. "mk_1".
 ---@field pos? number
 ---@field name? string
 ---@field color? string
@@ -1280,13 +1280,13 @@ q = nil
 ---@field warnings? table[]
 
 ---@class Steppe.region_remove_args
----@field id string
+---@field id string Region id, e.g. "rg_1".
 
 ---@class Steppe.region_remove_result
 ---@field warnings? table[]
 
 ---@class Steppe.region_set_args
----@field id string
+---@field id string Region id, e.g. "rg_1".
 ---@field start? number
 ---@field end? number
 ---@field name? string
@@ -1570,13 +1570,13 @@ q = nil
 ---@field mode? string (default: "audio")
 
 ---@class Steppe.route_remove_args
----@field route string
+---@field route string Route id, e.g. "sd_1".
 
 ---@class Steppe.route_remove_result
 ---@field warnings? table[]
 
 ---@class Steppe.route_set_args
----@field route string
+---@field route string Route id, e.g. "sd_1".
 ---@field from? string|table
 ---@field to? string|table
 ---@field to_midi? string Exact hardware MIDI output name; requires midi: {} and replaces to/fx.
@@ -1634,24 +1634,24 @@ q = nil
 ---@field warnings? table[]
 
 ---@class Steppe.take_activate_args
----@field item string
----@field take? string
+---@field item string Item id, e.g. "it_1".
+---@field take? string Take id, e.g. "tk_1".
 ---@field index? integer
 
 ---@class Steppe.take_activate_result
 ---@field warnings? table[]
 
 ---@class Steppe.take_add_args
----@field item string
----@field from? string
+---@field item string Item id, e.g. "it_1".
+---@field from? string Take id, e.g. "tk_1".
 
 ---@class Steppe.take_add_result
 ---@field id string
 ---@field warnings? table[]
 
 ---@class Steppe.take_extract_args
----@field take string
----@field track string
+---@field take string Take id, e.g. "tk_1".
+---@field track string Track id, e.g. "tr_1".
 ---@field position? number Beats.
 
 ---@class Steppe.take_extract_result
@@ -1674,14 +1674,14 @@ q = nil
 ---@field sensitivity? number (default: 0.5)
 
 ---@class Steppe.take_list_args
----@field item string
+---@field item string Item id, e.g. "it_1".
 
 ---@class Steppe.take_list_result
 ---@field takes table[]
 ---@field warnings? table[]
 
 ---@class Steppe.take_remove_args
----@field take string
+---@field take string Take id, e.g. "tk_1".
 
 ---@class Steppe.take_remove_result
 ---@field item string
@@ -1689,7 +1689,7 @@ q = nil
 ---@field warnings? table[]
 
 ---@class Steppe.take_set_args
----@field take string
+---@field take string Take id, e.g. "tk_1".
 ---@field gain_db? number|string Quantity strings are range-checked by the server.
 ---@field pan? number|string Quantity strings are range-checked by the server.
 ---@field channel_mode? "normal"|"reverse_stereo"|"mono_mix"|"left"|"right"
@@ -1832,8 +1832,8 @@ q = nil
 ---@field warnings? table[]
 
 ---@class Steppe.track_move_args
----@field track string
----@field parent? string
+---@field track string Track id, e.g. "tr_1".
+---@field parent? string Track id, e.g. "tr_1".
 ---@field index? integer
 
 ---@class Steppe.track_move_result

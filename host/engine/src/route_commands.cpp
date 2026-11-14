@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 // Routing commands: route.add, route.set, route.remove, route.list and route.matrix.
-#include "extra_command_helpers.h"
+#include "command_helpers.h"
 
 namespace supple::engine {
 
@@ -127,7 +127,8 @@ auto midiRouteArgs() {
 template <class T>
 schema::Schema<T> routeArgsSchema(const char* name) {
     auto b = schema::object<T>(name);
-    if constexpr (std::is_same_v<T, RouteSetArgs>) b.field("route", &T::route, idSchema("sd"));
+    if constexpr (std::is_same_v<T, RouteSetArgs>)
+        b.field("route", &T::route, idArg("sd", "Route"));
     b.field("from", &T::from, routeEndArg());
     b.field("to", &T::to, routeEndArg());
     b.field("to_midi", &T::toMidi,
@@ -137,8 +138,9 @@ schema::Schema<T> routeArgsSchema(const char* name) {
             midiRouteArgs().doc("MIDI send routing; {} means every channel unchanged. Channel "
                                 "values 0..16: from 0 = all, to 0 = original."));
     b.field("fx", &T::fx,
-            idSchema("fx").doc("Feed this plug-in's sidechain (key) input instead of a track's "
-                               "input; `to` may be left out"));
+            idArg("fx", "Plugin instance")
+                .doc("Feed this plug-in's sidechain (key) input instead of a track's "
+                     "input; `to` may be left out"));
     b.field("tap", &T::tap, tapSchema());
     b.field("volume_db", &T::volumeDb,
             schema::number().range(model::kSilenceDb, 12).unit(units::Unit::dB));
@@ -161,11 +163,11 @@ Result<model::Route> buildRoute(const RouteArgs& a, const model::Session& s, Eng
     if (!a.from.empty()) {
         r.from = model::RouteEnd{};
         if (a.from.starts_with("mo_")) {
-            auto from = require<model::RackModule>(s, a.from, "/from");
+            auto from = existing<model::RackModule>(s, a.from, "/from");
             if (!from) return std::move(from).error();
             r.from.module = *from;
         } else {
-            auto from = require<model::Track>(s, a.from, "/from");
+            auto from = existing<model::Track>(s, a.from, "/from");
             if (!from) return std::move(from).error();
             r.from.track = *from;
         }
@@ -180,7 +182,7 @@ Result<model::Route> buildRoute(const RouteArgs& a, const model::Session& s, Eng
         if (r.midi)
             return Error("route.endpoint", "a plug-in key is an audio-only destination", "/fx",
                          "send MIDI to a channel or a Notes module with to");
-        auto fx = require<model::FxInstance>(s, *a.fx, "/fx");
+        auto fx = existing<model::FxInstance>(s, *a.fx, "/fx");
         if (!fx) return std::move(fx).error();
         const auto owner = model::trackOfFx(s, *fx);
         if (!owner)
@@ -197,7 +199,7 @@ Result<model::Route> buildRoute(const RouteArgs& a, const model::Session& s, Eng
         r.to = model::RouteEnd{};
         r.to.fx = *fx;
     } else if (a.to && a.to->starts_with("mo_")) {  // a rack's In module (ADR-0062)
-        auto to = require<model::RackModule>(s, *a.to, "/to");
+        auto to = existing<model::RackModule>(s, *a.to, "/to");
         if (!to) return std::move(to).error();
         if (s.modules.find(*to)->type != (r.midi ? model::kNotesModule : model::kInModule))
             return Error("route.endpoint", *a.to + " is not a compatible module", "/to",
@@ -205,7 +207,7 @@ Result<model::Route> buildRoute(const RouteArgs& a, const model::Session& s, Eng
         r.to = model::RouteEnd{};
         r.to.module = *to;
     } else if (a.to) {
-        auto to = require<model::Track>(s, *a.to, "/to");
+        auto to = existing<model::Track>(s, *a.to, "/to");
         if (!to) return std::move(to).error();
         r.to = model::RouteEnd{};
         r.to.track = *to;
@@ -438,7 +440,7 @@ void registerRouteCommands(cmd::Registry& registry) {
                      "keep sd_1 as tr_1's input; add a rack send with route.add"}};
         c.run = [](const RouteSetArgs& a, Context& ctx) -> Result<Empty> {
             const auto s = app(ctx).view();
-            auto id = require<model::Route>(s, a.route, "/route");
+            auto id = existing<model::Route>(s, a.route, "/route");
             if (!id) return std::move(id).error();
             RouteArgs edits{a.from.value_or(""), a.to,       a.fx,   a.tap,
                             a.volumeDb,          a.pan,      a.mute, a.mono,
@@ -462,13 +464,13 @@ void registerRouteCommands(cmd::Registry& registry) {
         c.summary = "Remove a send.";
         c.tags = {"route"};
         c.args = schema::object<RouteRef>("route_ref")
-                     .field("route", &RouteRef::route, idSchema("sd"))
+                     .field("route", &RouteRef::route, idArg("sd", "Route"))
                      .build();
         c.result = emptySchema();
         c.examples = {{"Remove", j(R"({"route":"sd_1"})"), j("{}"), "song_with_route"}};
         c.run = [](const RouteRef& a, Context& ctx) -> Result<Empty> {
             const auto s = app(ctx).view();
-            auto id = require<model::Route>(s, a.route, "/route");
+            auto id = existing<model::Route>(s, a.route, "/route");
             if (!id) return std::move(id).error();
             for (const auto& e : s.tracks)
                 if (e.value->record.input == *id || e.value->record.midiInput == *id)

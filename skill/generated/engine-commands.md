@@ -5336,7 +5336,7 @@ Kind: `query`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `fx` | string |  |  |  |  |
+| `fx` | string |  |  |  | Plugin instance id, e.g. "fx_1". |
 | `from` | string |  |  | "live" | live: the playing instance; render: the last render.mix |
 
 ### Result
@@ -5399,8 +5399,8 @@ Kind: `edit`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `fx` | string |  |  |  |  |
-| `track` | string |  |  |  |  |
+| `fx` | string |  |  |  | Plugin instance id, e.g. "fx_1". |
+| `track` | string |  |  |  | Track id, e.g. "tr_1". |
 | `index` | integer |  | 0.0.. |  |  |
 
 ### Result
@@ -5453,7 +5453,7 @@ Kind: `query`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `fx` | string |  |  |  |  |
+| `fx` | string |  |  |  | Plugin instance id, e.g. "fx_1". |
 | `param` | string |  |  |  |  |
 
 ### Result
@@ -5580,7 +5580,7 @@ Kind: `query`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `fx` | string |  |  |  |  |
+| `fx` | string |  |  |  | Plugin instance id, e.g. "fx_1". |
 | `changed_only` | boolean |  |  | false |  |
 
 ### Result
@@ -5636,7 +5636,7 @@ Kind: `query`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `fx` | string |  |  |  |  |
+| `fx` | string |  |  |  | Plugin instance id, e.g. "fx_1". |
 
 ### Result
 
@@ -5763,7 +5763,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `fx` | string |  |  |  |  |
+| `fx` | string |  |  |  | Plugin instance id, e.g. "fx_1". |
 | `patch` | value |  |  |  |  |
 | `name` | string |  |  |  |  |
 
@@ -7302,7 +7302,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `item` | string |  |  |  |  |
+| `item` | string |  |  |  | Item id, e.g. "it_1". |
 | `mode` | string |  |  | "take" |  |
 
 ### Result
@@ -7441,7 +7441,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `bypass_groups` | boolean |  |  | false |  |
-| `item` | string |  |  |  |  |
+| `item` | string |  |  |  | Item id, e.g. "it_1". |
 | `to` | number |  | 0.0.. |  |  |
 
 ### Result
@@ -7506,7 +7506,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `item` | string |  |  |  |  |
+| `item` | string |  |  |  | Item id, e.g. "it_1". |
 | `mode` | string |  |  | "tracks" |  |
 
 ### Result
@@ -8003,7 +8003,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `bypass_groups` | boolean |  |  | false |  |
-| `item` | string |  |  |  |  |
+| `item` | string |  |  |  | Item id, e.g. "it_1". |
 | `position` | number |  | 0.0.. |  |  |
 | `bar` | integer |  | 1.0..2147483647.0 |  |  |
 | `length` | number |  | 0.0.. |  |  |
@@ -8087,7 +8087,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `bypass_groups` | boolean |  |  | false |  |
-| `item` | string |  |  |  |  |
+| `item` | string |  |  |  | Item id, e.g. "it_1". |
 | `at` | number |  | 0.0.. |  |  |
 | `snap` | string |  |  | "none" |  |
 
@@ -8656,7 +8656,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `id` | string |  |  |  |  |
+| `id` | string |  |  |  | Marker id, e.g. "mk_1". |
 
 ### Result
 
@@ -8707,7 +8707,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `id` | string |  |  |  |  |
+| `id` | string |  |  |  | Marker id, e.g. "mk_1". |
 | `pos` | number |  | 0.0.. |  |  |
 | `name` | string |  |  |  |  |
 | `color` | string |  |  |  |  |
@@ -12436,7 +12436,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `id` | string |  |  |  |  |
+| `id` | string |  |  |  | Region id, e.g. "rg_1". |
 
 ### Result
 
@@ -12487,7 +12487,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `id` | string |  |  |  |  |
+| `id` | string |  |  |  | Region id, e.g. "rg_1". |
 | `start` | number |  | 0.0.. |  |  |
 | `end` | number |  | 0.0.. |  |  |
 | `name` | string |  |  |  |  |
@@ -14019,7 +14019,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `route` | string |  |  |  |  |
+| `route` | string |  |  |  | Route id, e.g. "sd_1". |
 
 ### Result
 
@@ -14070,7 +14070,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `route` | string |  |  |  |  |
+| `route` | string |  |  |  | Route id, e.g. "sd_1". |
 | `from` | value |  |  |  |  |
 | `to` | value |  |  |  |  |
 | `to_midi` | string |  |  |  | Exact hardware MIDI output name; requires midi: {} and replaces to/fx. |
@@ -14588,8 +14588,8 @@ Kind: `edit`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `item` | string |  |  |  |  |
-| `take` | string |  |  |  |  |
+| `item` | string |  |  |  | Item id, e.g. "it_1". |
+| `take` | string |  |  |  | Take id, e.g. "tk_1". |
 | `index` | integer |  | 0.0.. |  |  |
 
 ### Result
@@ -14642,8 +14642,8 @@ Kind: `edit`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `item` | string |  |  |  |  |
-| `from` | string |  |  |  |  |
+| `item` | string |  |  |  | Item id, e.g. "it_1". |
+| `from` | string |  |  |  | Take id, e.g. "tk_1". |
 
 ### Result
 
@@ -14701,8 +14701,8 @@ Kind: `edit`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `take` | string |  |  |  |  |
-| `track` | string |  |  |  |  |
+| `take` | string |  |  |  | Take id, e.g. "tk_1". |
+| `track` | string |  |  |  | Track id, e.g. "tr_1". |
 | `position` | number |  | 0.0.. |  | Beats. |
 
 ### Result
@@ -14878,7 +14878,7 @@ Kind: `query`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `item` | string |  |  |  |  |
+| `item` | string |  |  |  | Item id, e.g. "it_1". |
 
 ### Result
 
@@ -15020,7 +15020,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `take` | string |  |  |  |  |
+| `take` | string |  |  |  | Take id, e.g. "tk_1". |
 
 ### Result
 
@@ -15081,7 +15081,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `take` | string |  |  |  |  |
+| `take` | string |  |  |  | Take id, e.g. "tk_1". |
 | `gain_db` | value | dB | -150.0..24.0 |  | Quantity strings are range-checked by the server. |
 | `pan` | value | % | -100.0..100.0 |  | Quantity strings are range-checked by the server. |
 | `channel_mode` | string |  |  |  |  |
@@ -16335,8 +16335,8 @@ Kind: `edit`. Exposure: `mcp-tool`.
 
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `track` | string |  |  |  |  |
-| `parent` | string |  |  |  |  |
+| `track` | string |  |  |  | Track id, e.g. "tr_1". |
+| `parent` | string |  |  |  | Track id, e.g. "tr_1". |
 | `index` | integer |  | 0.0.. |  |  |
 
 ### Result

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 // Ruler commands: markers, regions and time.convert.
-#include "extra_command_helpers.h"
+#include "command_helpers.h"
 
 namespace supple::engine {
 
@@ -46,7 +46,8 @@ struct TimeResult {
 template <class T, bool Region, bool WithId>
 schema::Schema<T> rulerArgsSchema(const char* name) {
     auto b = schema::object<T>(name);
-    if constexpr (WithId) b.field("id", &T::id, idSchema(Region ? "rg" : "mk"));
+    if constexpr (WithId)
+        b.field("id", &T::id, idArg(Region ? "rg" : "mk", Region ? "Region" : "Marker"));
     if constexpr (Region) {
         b.field("start", &T::start, schema::number().min(0));
         b.field("end", &T::end, schema::number().min(0));
@@ -128,7 +129,7 @@ void registerRulerCommands(cmd::Registry& registry) {
                            j("{}"), fixture}};
             c.run = [](const RulerSetArgs& a, Context& ctx) -> Result<Empty> {
                 const auto s = app(ctx).view();
-                auto id = require<Object>(s, a.id, "/id");
+                auto id = existing<Object>(s, a.id, "/id");
                 if (!id) return std::move(id).error();
                 Object o = *model::Traits<Object>::map(s).find(*id);
                 if constexpr (Region) {
@@ -155,13 +156,14 @@ void registerRulerCommands(cmd::Registry& registry) {
             c.summary = "Remove a ruler.";
             c.tags = {"ruler"};
             c.args = schema::object<RulerRef>("ruler_ref")
-                         .field("id", &RulerRef::id, idSchema(Region ? "rg" : "mk"))
+                         .field("id", &RulerRef::id,
+                                idArg(Region ? "rg" : "mk", Region ? "Region" : "Marker"))
                          .build();
             c.result = emptySchema();
             c.examples = {
                 {"Remove", j(std::string("{\"id\":\"") + exampleId + "\"}"), j("{}"), fixture}};
             c.run = [](const RulerRef& a, Context& ctx) -> Result<Empty> {
-                auto id = require<Object>(app(ctx).view(), a.id, "/id");
+                auto id = existing<Object>(app(ctx).view(), a.id, "/id");
                 if (!id) return std::move(id).error();
                 app(ctx).txn().remove<Object>(*id);
                 return Empty{};

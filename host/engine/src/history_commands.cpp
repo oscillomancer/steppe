@@ -46,11 +46,11 @@ void registerHistoryCommands(cmd::Registry& registry) {
         c.tags = {"history"};
         c.args = schema::object<NoArgs>("no_args").build();
         c.result = historyResult();
-        c.examples = {{undo ? "Undo" : "Redo", obj("{}"),
-                       obj(R"({"version": "<any>", "label": "<any>"})"),
+        c.examples = {{undo ? "Undo" : "Redo", j("{}"),
+                       j(R"({"version": "<any>", "label": "<any>"})"),
                        undo ? "song" : "song_undone"}};
         c.run = [undo](const NoArgs&, Context& ctx) -> Result<HistoryResult> {
-            EngineApp& app = A(ctx);
+            EngineApp& app = engine::app(ctx);
             SUPPLE_TRY(undo ? app.undo() : app.redo());
             const model::Version* v =
                 app.versions().version(app.versions().headVersion(app.versions().branch()));
@@ -84,11 +84,11 @@ void registerHistoryCommands(cmd::Registry& registry) {
                               schema::integerOf<std::uint64_t>())
                        .build();
         c.examples = {
-            {"List", obj("{}"),
-             obj(R"({"versions": "<any>", "can_undo": true, "can_redo": false, "truncated": false, "retained_bytes": "<any>", "budget_bytes": 1073741824})"),
+            {"List", j("{}"),
+             j(R"({"versions": "<any>", "can_undo": true, "can_redo": false, "truncated": false, "retained_bytes": "<any>", "budget_bytes": 1073741824})"),
              "song"}};
         c.run = [](const NoArgs&, Context& ctx) -> Result<HistoryList> {
-            EngineApp& app = A(ctx);
+            EngineApp& app = engine::app(ctx);
             HistoryList out;
             for (const model::Version* v : app.versions().history(20))
                 out.versions.push_back({static_cast<std::int64_t>(v->id), v->txn.label,
@@ -166,10 +166,10 @@ void registerHistoryCommands(cmd::Registry& registry) {
                        .build();
         c.errors = {{"branch.exists", "a branch with that name exists",
                      "pick another name or switch to it"}};
-        c.examples = {{"An agent branch", obj(R"({"name": "agent/claude/darker"})"),
-                       obj(R"({"name": "agent/claude/darker"})"), "song"}};
+        c.examples = {{"An agent branch", j(R"({"name": "agent/claude/darker"})"),
+                       j(R"({"name": "agent/claude/darker"})"), "song"}};
         c.run = [](const BranchCreateArgs& a, Context& ctx) -> Result<BranchName> {
-            EngineApp& app = A(ctx);
+            EngineApp& app = engine::app(ctx);
             if (a.version) {
                 if (a.from)
                     return Error("branch.args", "give from or version, not both", "/version",
@@ -197,10 +197,9 @@ void registerHistoryCommands(cmd::Registry& registry) {
         c.result = schema::object<BranchName>("branch_name")
                        .field("name", &BranchName::name, schema::string())
                        .build();
-        c.examples = {
-            {"Back to main", obj(R"({"name": "main"})"), obj(R"({"name": "main"})"), "song"}};
+        c.examples = {{"Back to main", j(R"({"name": "main"})"), j(R"({"name": "main"})"), "song"}};
         c.run = [](const BranchName& a, Context& ctx) -> Result<BranchName> {
-            SUPPLE_TRY(A(ctx).switchBranch(a.name));
+            SUPPLE_TRY(app(ctx).switchBranch(a.name));
             return BranchName{a.name};
         };
         addChecked(registry, std::move(c));
@@ -218,9 +217,9 @@ void registerHistoryCommands(cmd::Registry& registry) {
                        .field("current", &BranchList::current, schema::string())
                        .build();
         c.examples = {
-            {"List", obj("{}"), obj(R"({"branches": ["main"], "current": "main"})"), "empty"}};
+            {"List", j("{}"), j(R"({"branches": ["main"], "current": "main"})"), "empty"}};
         c.run = [](const NoArgs&, Context& ctx) -> Result<BranchList> {
-            EngineApp& app = A(ctx);
+            EngineApp& app = engine::app(ctx);
             return BranchList{app.versions().branches(), app.versions().branch()};
         };
         addChecked(registry, std::move(c));
@@ -245,10 +244,10 @@ void registerHistoryCommands(cmd::Registry& registry) {
         c.result = schema::object<BranchDiff>("branch_diff")
                        .field("changes", &BranchDiff::changes, schema::arrayOf(entry))
                        .build();
-        c.examples = {{"Main against itself", obj(R"({"a": "main", "b": "main"})"),
-                       obj(R"({"changes": []})"), "song"}};
+        c.examples = {{"Main against itself", j(R"({"a": "main", "b": "main"})"),
+                       j(R"({"changes": []})"), "song"}};
         c.run = [](const BranchDiffArgs& a, Context& ctx) -> Result<BranchDiff> {
-            EngineApp& app = A(ctx);
+            EngineApp& app = engine::app(ctx);
             auto ha = app.versions().head(a.a), hb = app.versions().head(a.b);
             if (!ha) return Error("branch.unknown", "no branch " + a.a, "/a", "see branch.list");
             if (!hb) return Error("branch.unknown", "no branch " + a.b, "/b", "see branch.list");
@@ -287,11 +286,11 @@ void registerHistoryCommands(cmd::Registry& registry) {
         c.errors = {{"branch.conflict", "both sides changed the same thing",
                      "details: one per conflict with the object"}};
         c.examples = {
-            {"Merge an agent branch", obj(R"({"from": "agent/claude/darker"})"),
-             obj(R"({"fast_forward": true, "up_to_date": false, "version": "<any>", "remapped": {}})"),
+            {"Merge an agent branch", j(R"({"from": "agent/claude/darker"})"),
+             j(R"({"fast_forward": true, "up_to_date": false, "version": "<any>", "remapped": {}})"),
              "branch_ahead"}};
         c.run = [](const BranchMergeArgs& a, Context& ctx) -> Result<BranchMergeResult> {
-            EngineApp& app = A(ctx);
+            EngineApp& app = engine::app(ctx);
             const std::string into = a.into.value_or("main");
             auto out = app.mergeBranch(ctx.service<const cmd::Registry>(), a.from, into);
             if (!out.conflicts.empty()) {
@@ -328,10 +327,9 @@ void registerHistoryCommands(cmd::Registry& registry) {
                      .field("name", &BranchName::name, branchName())
                      .build();
         c.result = emptySchema();
-        c.examples = {
-            {"Delete", obj(R"({"name": "agent/claude/darker"})"), obj("{}"), "branch_ahead"}};
+        c.examples = {{"Delete", j(R"({"name": "agent/claude/darker"})"), j("{}"), "branch_ahead"}};
         c.run = [](const BranchName& a, Context& ctx) -> Result<Empty> {
-            SUPPLE_TRY(A(ctx).versions().deleteBranch(a.name));
+            SUPPLE_TRY(app(ctx).versions().deleteBranch(a.name));
             return Empty{};
         };
         addChecked(registry, std::move(c));

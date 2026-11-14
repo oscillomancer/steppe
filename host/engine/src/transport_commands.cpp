@@ -92,11 +92,11 @@ void registerTransportCommands(cmd::Registry& registry) {
         c.tags = {"transport", "automation"};
         c.args = schema::object<NoArgs>("no_args").build();
         c.result = playrateSchema();
-        c.examples = {{"Factory settings", obj("{}"),
-                       obj(R"({"requested_rate":1.0,"effective_rate":1.0,"preserve_pitch":false})"),
+        c.examples = {{"Factory settings", j("{}"),
+                       j(R"({"requested_rate":1.0,"effective_rate":1.0,"preserve_pitch":false})"),
                        "empty"}};
         c.run = [](const NoArgs&, Context& ctx) -> Result<PlayrateInfo> {
-            return playrateInfo(A(ctx).view(), A(ctx).engine());
+            return playrateInfo(app(ctx).view(), app(ctx).engine());
         };
         addChecked(registry, std::move(c));
     }();
@@ -127,12 +127,11 @@ void registerTransportCommands(cmd::Registry& registry) {
         c.result = playrateSchema();
         c.errors = {{"record.playrate", "recording requires unity master playrate",
                      "stop recording before changing rate or enabling a non-unity rate envelope"}};
-        c.examples = {{"Store double speed with pitch preservation",
-                       obj(R"({"rate":2,"preserve_pitch":true})"),
-                       obj(R"({"requested_rate":2.0,"effective_rate":1.0,"preserve_pitch":true})"),
-                       "empty"}};
+        c.examples = {
+            {"Store double speed with pitch preservation", j(R"({"rate":2,"preserve_pitch":true})"),
+             j(R"({"requested_rate":2.0,"effective_rate":1.0,"preserve_pitch":true})"), "empty"}};
         c.run = [](const PlayrateArgs& a, Context& ctx) -> Result<PlayrateInfo> {
-            EngineApp& app = A(ctx);
+            EngineApp& app = engine::app(ctx);
             // Refuse before recording an automation move into transient writer
             // state; a failed transaction must not leave a latch hold behind.
             if (app.engine() && app.engine()->recording() && a.rate && *a.rate != 1)
@@ -172,9 +171,9 @@ void registerTransportCommands(cmd::Registry& registry) {
                      "disable it with env.set {active: false} before applying the scalar rate"},
                     {"tempo.range", "a scaled BPM is outside 1..1000",
                      "reduce the master rate or adjust the tempo map first"}};
-        c.examples = {{"Apply the factory unity rate", obj("{}"), obj("{}"), "empty"}};
+        c.examples = {{"Apply the factory unity rate", j("{}"), j("{}"), "empty"}};
         c.run = [](const NoArgs&, Context& ctx) -> Result<Empty> {
-            EngineApp& app = A(ctx);
+            EngineApp& app = engine::app(ctx);
             if (const auto* engine = app.engine()) {
                 if (engine->recording())
                     return Error("record.playrate", "stop recording before applying playrate",
@@ -258,14 +257,14 @@ void registerTransportCommands(cmd::Registry& registry) {
                                 "output recording is not supported yet",
                                 "use track.set {record_mode: input} on the reported track"});
         }
-        c.examples = {{"While the engine runs", obj("{}"),
-                       obj(std::string(R"({"playing": )") + (playing ? "true" : "false") +
-                           R"(, "recording": )" + (rec ? "true" : "false") +
-                           R"(, "seconds": "<any>", "beat": "<any>", "sample": "<any>",)"
-                           R"( "loop": "<any>", "punch": "<any>", "counting_in": false})"),
+        c.examples = {{"While the engine runs", j("{}"),
+                       j(std::string(R"({"playing": )") + (playing ? "true" : "false") +
+                         R"(, "recording": )" + (rec ? "true" : "false") +
+                         R"(, "seconds": "<any>", "beat": "<any>", "sample": "<any>",)"
+                         R"( "loop": "<any>", "punch": "<any>", "counting_in": false})"),
                        rec ? "engine_armed" : "engine_running"}};
         c.run = [act = std::string(action)](const NoArgs&, Context& ctx) -> Result<TransportInfo> {
-            return A(ctx).transport(act);
+            return app(ctx).transport(act);
         };
         addChecked(registry, std::move(c));
     }
@@ -291,12 +290,12 @@ void registerTransportCommands(cmd::Registry& registry) {
             {"engine.stopped", "the engine is not running", "engine.start first"},
             {"transport.position", "not exactly one position", "give seconds, beat or bar"}};
         c.examples = {
-            {"To bar 2 (120 BPM, 4/4)", obj(R"({"bar": 2})"),
-             obj(R"({"playing": false, "recording": false, "seconds": 2.0, "beat": 4.0, "sample": 96000,
+            {"To bar 2 (120 BPM, 4/4)", j(R"({"bar": 2})"),
+             j(R"({"playing": false, "recording": false, "seconds": 2.0, "beat": 4.0, "sample": 96000,
                     "loop": "<any>", "punch": "<any>", "counting_in": false})"),
              "engine_running"}};
         c.run = [](const SeekArgs& a, Context& ctx) -> Result<TransportInfo> {
-            EngineApp& app = A(ctx);
+            EngineApp& app = engine::app(ctx);
             if (a.seconds.has_value() + a.beat.has_value() + a.bar.has_value() != 1)
                 return Error("transport.position", "give exactly one position", "",
                              "seconds, beat or bar");
@@ -328,14 +327,14 @@ void registerTransportCommands(cmd::Registry& registry) {
         c.result = transportSchema();
         c.errors = {{"engine.stopped", "the engine is not running", "engine.start first"}};
         c.examples = {
-            {"Stopped at the start", obj("{}"),
-             obj(R"({"playing": false, "recording": false, "seconds": 0.0, "beat": 0.0, "sample": 0,
+            {"Stopped at the start", j("{}"),
+             j(R"({"playing": false, "recording": false, "seconds": 0.0, "beat": 0.0, "sample": 0,
                     "loop": {"enabled": false, "start_seconds": 0.0, "end_seconds": 0.0},
                     "punch": {"enabled": false, "start_seconds": 0.0, "end_seconds": 0.0},
                     "counting_in": false})"),
              "engine_running"}};
         c.run = [](const NoArgs&, Context& ctx) -> Result<TransportInfo> {
-            return A(ctx).transport("get");
+            return app(ctx).transport("get");
         };
         addChecked(registry, std::move(c));
     }();
@@ -376,16 +375,16 @@ void registerTransportCommands(cmd::Registry& registry) {
                 .field("count_in_bars", &MetronomeSettings::countInBars, schema::integerOf<int>())
                 .field("count_in_playback", &MetronomeSettings::countInPlayback, schema::boolean())
                 .build();
-        c.examples = {{"On", obj(R"({"enabled": true})"),
-                       obj(R"({"enabled": true, "volume_db": -6.0, "count_in_bars": 0,
+        c.examples = {{"On", j(R"({"enabled": true})"),
+                       j(R"({"enabled": true, "volume_db": -6.0, "count_in_bars": 0,
                                "count_in_playback": false})"),
                        "empty"},
-                      {"Two bars of count-in before recording", obj(R"({"count_in_bars": 2})"),
-                       obj(R"({"enabled": false, "volume_db": -6.0, "count_in_bars": 2,
+                      {"Two bars of count-in before recording", j(R"({"count_in_bars": 2})"),
+                       j(R"({"enabled": false, "volume_db": -6.0, "count_in_bars": 2,
                                "count_in_playback": false})"),
                        "empty"}};
         c.run = [](const MetronomeArgs& a, Context& ctx) -> Result<MetronomeSettings> {
-            EngineApp& app = A(ctx);
+            EngineApp& app = engine::app(ctx);
             MetronomeSettings m = app.metronome();
             if (a.enabled) m.enabled = *a.enabled;
             if (a.volumeDb) m.volumeDb = *a.volumeDb;
@@ -431,12 +430,12 @@ void registerTransportCommands(cmd::Registry& registry) {
                      "not one start and one end, end not after start, or clear with a range",
                      "e.g. start_bar 5, end_bar 9"}};
         c.examples = {
-            {"Bars 2-3 (120 BPM, 4/4)", obj(R"({"start_bar": 2, "end_bar": 4})"),
-             obj(R"({"enabled": true, "start_seconds": 2.0, "end_seconds": 6.0})"), "empty"},
-            {"Remove the range", obj(R"({"clear": true})"),
-             obj(R"({"enabled": false, "start_seconds": 0, "end_seconds": 0})"), "empty"}};
+            {"Bars 2-3 (120 BPM, 4/4)", j(R"({"start_bar": 2, "end_bar": 4})"),
+             j(R"({"enabled": true, "start_seconds": 2.0, "end_seconds": 6.0})"), "empty"},
+            {"Remove the range", j(R"({"clear": true})"),
+             j(R"({"enabled": false, "start_seconds": 0, "end_seconds": 0})"), "empty"}};
         c.run = [loop](const RangeArgs& a, Context& ctx) -> Result<TransportRange> {
-            EngineApp& app = A(ctx);
+            EngineApp& app = engine::app(ctx);
             TransportRange r = loop ? app.loop() : app.punch();
             const int starts =
                 a.startSeconds.has_value() + a.startBeat.has_value() + a.startBar.has_value();

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 // Plug-in catalogue commands: plugin.list and plugin.scan.
-#include "extra_command_helpers.h"
+#include "command_helpers.h"
 
 namespace supple::engine {
 

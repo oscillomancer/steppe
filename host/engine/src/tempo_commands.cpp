@@ -61,10 +61,10 @@ void registerTempoCommands(cmd::Registry& registry) {
                        .build();
         c.examples = {
             {"Slow down after 8 bars",
-             obj(R"({"points": [{"beat": 0, "bpm": 120}, {"beat": 32, "bpm": 100, "ramp": false}]})"),
-             obj(R"({"count": 2})"), "empty"}};
+             j(R"({"points": [{"beat": 0, "bpm": 120}, {"beat": 32, "bpm": 100, "ramp": false}]})"),
+             j(R"({"count": 2})"), "empty"}};
         c.run = [](const TempoSetArgs& a, Context& ctx) -> Result<CountResult> {
-            model::EditTxn& t = A(ctx).txn();
+            model::EditTxn& t = app(ctx).txn();
             if (a.points.empty() || a.points.front().beat != 0.0)
                 return Error("tempo.first", "the first tempo point must be at beat 0",
                              "/points/0/beat", "set the first point beat to 0");
@@ -75,7 +75,7 @@ void registerTempoCommands(cmd::Registry& registry) {
                         "/points/" + std::to_string(i) + "/beat",
                         "sort points by increasing beat and remove duplicate beat positions");
             std::vector<Id> old;
-            const auto current = A(ctx).view();
+            const auto current = app(ctx).view();
             for (const auto& e : current.tempo) old.push_back(e.id);
             for (Id id : old) t.remove<model::TempoPointObj>(id);
             for (const auto& p : a.points) t.create(model::TempoPointObj{p.beat, p.bpm, p.ramp});
@@ -96,10 +96,9 @@ void registerTempoCommands(cmd::Registry& registry) {
                             schema::string().pattern("^[0-9]{1,2}/[0-9]{1,2}$", "N/D"))
                      .build();
         c.result = emptySchema();
-        c.examples = {
-            {"Waltz from bar 9", obj(R"({"bar": 9, "meter": "3/4"})"), obj("{}"), "empty"}};
+        c.examples = {{"Waltz from bar 9", j(R"({"bar": 9, "meter": "3/4"})"), j("{}"), "empty"}};
         c.run = [](const TimesigSetArgs& a, Context& ctx) -> Result<Empty> {
-            model::EditTxn& t = A(ctx).txn();
+            model::EditTxn& t = app(ctx).txn();
             const auto slash = a.meter.find('/');
             const int n = std::stoi(a.meter.substr(0, slash)),
                       d = std::stoi(a.meter.substr(slash + 1));
@@ -107,7 +106,7 @@ void registerTempoCommands(cmd::Registry& registry) {
                 return Error("timesig.invalid", "invalid meter " + a.meter, "/meter",
                              "N 1..64, D a power of 2");
             std::optional<Id> at;
-            const auto current = A(ctx).view();
+            const auto current = app(ctx).view();
             for (const auto& e : current.meters)
                 if (e.value->bar == a.bar) at = e.id;
             if (at)
@@ -131,11 +130,11 @@ void registerTempoCommands(cmd::Registry& registry) {
                      .field("bar", &TimesigRemoveArgs::bar, schema::integerOf<int>().min(2))
                      .build();
         c.result = emptySchema();
-        c.examples = {{"Back to 4/4 at bar 9", obj(R"({"bar": 9})"), obj("{}"), "meter_change"}};
+        c.examples = {{"Back to 4/4 at bar 9", j(R"({"bar": 9})"), j("{}"), "meter_change"}};
         c.run = [](const TimesigRemoveArgs& a, Context& ctx) -> Result<Empty> {
-            model::EditTxn& t = A(ctx).txn();
+            model::EditTxn& t = app(ctx).txn();
             std::optional<Id> at;
-            const auto current = A(ctx).view();
+            const auto current = app(ctx).view();
             for (const auto& e : current.meters)
                 if (e.value->bar == a.bar) at = e.id;
             if (!at)

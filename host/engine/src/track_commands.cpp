@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
-// Track commands: track.add, track.remove, track.set and track.list (session-model §7).
+// Track commands: track.add, track.remove, track.set, track.list and track.move.
 #include "command_helpers.h"
 
 namespace supple::engine {
@@ -102,6 +102,29 @@ struct TrackList {
     std::vector<TrackEntry> tracks;
 };
 
+struct TrackMoveArgs {
+    std::string track;
+    std::optional<std::string> parent;
+    std::optional<std::int64_t> index;
+};
+
+// Is `track` a descendant of `ancestor` in the folder nesting (children lists)?
+// Moving a track under one of its own descendants would make the tree cyclic.
+bool nestedUnder(const model::Session& s, Id ancestor, Id track) {
+    std::vector<Id> stack{track};
+    std::set<Id> seen;
+    while (!stack.empty()) {
+        const Id cur = stack.back();
+        stack.pop_back();
+        if (!seen.insert(cur).second) continue;
+        if (cur == ancestor) return true;
+        const model::Track* found = s.tracks.find(cur);
+        if (!found) continue;
+        for (Id child : found->children) stack.push_back(child);
+    }
+    return false;
+}
+
 }  // namespace
 
 void registerTrackCommands(cmd::Registry& registry) {
@@ -131,9 +154,9 @@ void registerTrackCommands(cmd::Registry& registry) {
                        .field("track", &TrackRef::track, schema::string())
                        .build();
         c.examples = {
-            {"Add a bass track", obj(R"({"name": "Bass"})"), obj(R"({"track": "tr_1"})"), "empty"}};
+            {"Add a bass track", j(R"({"name": "Bass"})"), j(R"({"track": "tr_1"})"), "empty"}};
         c.run = [](const TrackAddArgs& a, Context& ctx) -> Result<TrackRef> {
-            model::EditTxn& t = A(ctx).txn();
+            model::EditTxn& t = app(ctx).txn();
             Id parent = model::kMaster;
             if (a.parent) {
                 auto p = Id::parse(*a.parent);
@@ -156,7 +179,7 @@ void registerTrackCommands(cmd::Registry& registry) {
             tr.type = a.type;
             tr.name = a.name.value_or("");
             if (tr.name.empty()) tr.name = model::nextTrackName(t.preview(), a.type);
-            if (a.type == model::StripType::Channel) tr.record.monitor = A(ctx).defaultMonitor();
+            if (a.type == model::StripType::Channel) tr.record.monitor = app(ctx).defaultMonitor();
             if (a.type != model::StripType::Master) tr.parent = parent;
             if (a.channels) tr.channels = static_cast<int>(*a.channels);
             const Id id = t.create(tr);
@@ -193,9 +216,9 @@ void registerTrackCommands(cmd::Registry& registry) {
                      .field("track", &TrackRef::track, idArg("tr", "Track"))
                      .build();
         c.result = emptySchema();
-        c.examples = {{"Remove", obj(R"({"track": "tr_1"})"), obj("{}"), "song"}};
+        c.examples = {{"Remove", j(R"({"track": "tr_1"})"), j("{}"), "song"}};
         c.run = [](const TrackRef& a, Context& ctx) -> Result<Empty> {
-            EngineApp& app = A(ctx);
+            EngineApp& app = engine::app(ctx);
             model::EditTxn& t = app.txn();
             const model::Session s = app.view();
             auto idr = existing<model::Track>(s, a.track, "/track");
@@ -402,34 +425,34 @@ void registerTrackCommands(cmd::Registry& registry) {
         c.result = emptySchema();
         c.examples = {
             {"Turn the bass down 4 dB and a little left",
-             obj(R"({"track": "tr_1", "volume_db": "-4 dB", "pan": -15})"), obj("{}"), "song"},
+             j(R"({"track": "tr_1", "volume_db": "-4 dB", "pan": -15})"), j("{}"), "song"},
             {"Arm for recording from inputs 1 and 2",
-             obj(R"({"track": "tr_1", "armed": true, "record_input": [1, 2]})"), obj("{}"), "song"},
+             j(R"({"track": "tr_1", "armed": true, "record_input": [1, 2]})"), j("{}"), "song"},
             {"Feed the parent only through explicit sends",
-             obj(R"({"track": "tr_1", "parent_send": false})"), obj("{}"), "song"},
+             j(R"({"track": "tr_1", "parent_send": false})"), j("{}"), "song"},
             {"Play and record a MIDI keyboard (any device, channel 1)",
-             obj(R"({"track": "tr_1", "armed": true, "record_midi": "*", "midi_channel": 1, "monitor": "auto"})"),
-             obj("{}"), "song"},
+             j(R"({"track": "tr_1", "armed": true, "record_midi": "*", "midi_channel": 1, "monitor": "auto"})"),
+             j("{}"), "song"},
             {"Narrow a stereo strip to half width, a little right",
-             obj(R"({"track": "tr_1", "pan_mode": "width", "width": 50, "pan": 20})"), obj("{}"),
+             j(R"({"track": "tr_1", "pan_mode": "width", "width": 50, "pan": 20})"), j("{}"),
              "song"},
-            {"Give a strip the -3 dB pan law", obj(R"({"track": "tr_1", "pan_law": {"db": -3}})"),
-             obj("{}"), "song"},
-            {"Check the mix in mono", obj(R"({"track": "tr_0", "mono": true})"), obj("{}"), "song"},
+            {"Give a strip the -3 dB pan law", j(R"({"track": "tr_1", "pan_law": {"db": -3}})"),
+             j("{}"), "song"},
+            {"Check the mix in mono", j(R"({"track": "tr_0", "mono": true})"), j("{}"), "song"},
             {"Four channels: a key signal can arrive on 3/4",
-             obj(R"({"track": "tr_1", "channels": 4})"), obj("{}"), "song"},
-            {"Play the main mix to outputs 3 and 4",
-             obj(R"({"track": "tr_0", "hw_output": [3, 4]})"), obj("{}"), "song"},
-            {"Arm the main master to print the mix", obj(R"({"track": "tr_0", "armed": true})"),
-             obj("{}"), "song"},
-            {"Hear the live mix without the print", obj(R"({"track": "tr_0", "lane_mute": true})"),
-             obj("{}"), "song"},
+             j(R"({"track": "tr_1", "channels": 4})"), j("{}"), "song"},
+            {"Play the main mix to outputs 3 and 4", j(R"({"track": "tr_0", "hw_output": [3, 4]})"),
+             j("{}"), "song"},
+            {"Arm the main master to print the mix", j(R"({"track": "tr_0", "armed": true})"),
+             j("{}"), "song"},
+            {"Hear the live mix without the print", j(R"({"track": "tr_0", "lane_mute": true})"),
+             j("{}"), "song"},
             {"Only the instrument hears the track's MIDI, as before 2.10",
-             obj(R"({"track": "tr_1", "chain_midi": "instrument"})"), obj("{}"), "song"}};
+             j(R"({"track": "tr_1", "chain_midi": "instrument"})"), j("{}"), "song"}};
         c.errors = {{"track.record_input", "choose one input: audio, MIDI or rack",
                      "provide one non-null input field; it replaces the previous input"}};
         c.run = [](const TrackSetArgs& a, Context& ctx) -> Result<Empty> {
-            EngineApp& app = A(ctx);
+            EngineApp& app = engine::app(ctx);
             const model::Session s = app.view();
             auto id = existing<model::Track>(s, a.track, "/track");
             if (!id) return std::move(id).error();
@@ -870,9 +893,9 @@ void registerTrackCommands(cmd::Registry& registry) {
         c.result = schema::object<TrackList>("track_list")
                        .field("tracks", &TrackList::tracks, schema::arrayOf(entry))
                        .build();
-        c.examples = {{"List", obj("{}"), obj(R"({"tracks": "<any>"})"), "song"}};
+        c.examples = {{"List", j("{}"), j(R"({"tracks": "<any>"})"), "song"}};
         c.run = [](const TrackListArgs& args, Context& ctx) -> Result<TrackList> {
-            const model::Session s = A(ctx).view();
+            const model::Session s = app(ctx).view();
             TrackList out;
             static constexpr const char* kSolo[] = {"off", "on", "in_place", "defeat"};
             std::function<void(Id, int)> walk = [&](Id id, int depth) {
@@ -886,7 +909,8 @@ void registerTrackCommands(cmd::Registry& registry) {
                 e.parent = t.parent ? t.parent->str() : "";
                 e.depth = depth;
                 e.volumeDb = t.volumeDb;
-                e.at = args.at.value_or(A(ctx).engine() ? A(ctx).engine()->transport().seconds : 0);
+                e.at = args.at.value_or(app(ctx).engine() ? app(ctx).engine()->transport().seconds
+                                                          : 0);
                 e.groups = model::trackGroups(s, id);
                 e.vcas = model::vcaControllers(s, id);
                 if (t.type == model::StripType::Master) {
@@ -910,6 +934,86 @@ void registerTrackCommands(cmd::Registry& registry) {
             };
             for (Id master : s.project->masters) walk(master, 0);
             return out;
+        };
+        addChecked(registry, std::move(c));
+    }();
+    [&] {
+        Command<TrackMoveArgs, Empty> c;
+        c.name = "track.move";
+        c.kind = Kind::Edit;
+        c.exposure = cmd::Exposure::McpTool;
+        c.summary = "Move a track under another track or reorder it among its siblings.";
+        c.description =
+            "parent defaults to the track's current parent (a pure reorder); index defaults to "
+            "the end of the destination's children. A track cannot move under itself or one of "
+            "its own descendants.";
+        c.tags = {"track"};
+        c.args = schema::object<TrackMoveArgs>("track_move_args")
+                     .field("track", &TrackMoveArgs::track, idArg("tr", "Track"))
+                     .field("parent", &TrackMoveArgs::parent, idArg("tr", "Track"))
+                     .field("index", &TrackMoveArgs::index, schema::integer().min(0))
+                     .build();
+        c.result = emptySchema();
+        c.errors = {{"tr.cycle", "the destination is inside the track", "choose another parent"}};
+        c.examples = {{"Move a track to the master", j(R"({"track":"tr_1","parent":"tr_0"})"),
+                       j("{}"), "song"}};
+        c.run = [](const TrackMoveArgs& a, Context& ctx) -> Result<Empty> {
+            const auto s = app(ctx).view();
+            auto id = existing<model::Track>(s, a.track, "/track");
+            if (!id) return std::move(id).error();
+            if (*id == model::kMaster)
+                return Error("track.strip_type", "tr_0 must remain the first root", "/track",
+                             "reorder another master or move a channel/buss instead");
+            const model::Track& track = *s.tracks.find(*id);
+            if (track.type == model::StripType::Master) {
+                if (a.parent)
+                    return Error("track.strip_type", "masters have no parent", "/parent",
+                                 "omit parent to reorder a master");
+                auto p = app(ctx).txn().project();
+                std::erase(p.masters, *id);
+                auto at = a.index ? std::clamp<std::size_t>(*a.index, 1, p.masters.size())
+                                  : p.masters.size();
+                p.masters.insert(p.masters.begin() + static_cast<std::ptrdiff_t>(at), *id);
+                app(ctx).txn().setProject(std::move(p));
+                return Empty{};
+            }
+            const Id from = *track.parent;
+            Id target = from;
+            if (a.parent) {
+                auto parent = existing<model::Track>(s, *a.parent, "/parent");
+                if (!parent) return std::move(parent).error();
+                target = *parent;
+            }
+            if (target == *id)
+                return Error("tr.cycle", "a track cannot be moved under itself", "/parent",
+                             "choose another parent");
+            if (target != model::kMaster && nestedUnder(s, *id, target))
+                return Error("tr.cycle", "a track cannot be moved under one of its own children",
+                             "/parent", "choose a track outside it");
+            // The send graph: a folder send or a route that already reaches the
+            // track would close a feedback loop (the same check route.add uses).
+            if (target != from)
+                if (auto cycle = routeCycle(s, *id, target)) {
+                    return Error("tr.cycle",
+                                 "the move creates a cycle: " + cycleText(s, *cycle, true),
+                                 "/parent", "choose a destination that does not feed this track");
+                }
+            if (s.tracks.find(target)->type == model::StripType::Channel)
+                return Error("track.strip_type", "a channel cannot have children", "/parent",
+                             "add a buss and place the channels under it");
+            model::EditTxn& t = app(ctx).txn();
+            t.modify<model::Track>(from, [&](model::Track& p) {
+                p.children.erase(std::remove(p.children.begin(), p.children.end(), *id),
+                                 p.children.end());
+            });
+            t.modify<model::Track>(target, [&](model::Track& p) {
+                const auto at = a.index ? std::min<std::size_t>(static_cast<std::size_t>(*a.index),
+                                                                p.children.size())
+                                        : p.children.size();
+                p.children.insert(p.children.begin() + static_cast<std::ptrdiff_t>(at), *id);
+            });
+            t.modify<model::Track>(*id, [&](model::Track& tr) { tr.parent = target; });
+            return Empty{};
         };
         addChecked(registry, std::move(c));
     }();

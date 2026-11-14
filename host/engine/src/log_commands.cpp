@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 // log.list: the application log.
-#include "extra_command_helpers.h"
+#include "command_helpers.h"
 
 namespace supple::engine {
 

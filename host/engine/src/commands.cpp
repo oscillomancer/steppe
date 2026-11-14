@@ -33,12 +33,8 @@ namespace supple::engine {
 
 void registerRouteCommands(cmd::Registry& registry);
 void registerLogCommands(cmd::Registry& registry);
-void registerTrackMoveCommands(cmd::Registry& registry);
 void registerRulerCommands(cmd::Registry& registry);
 void registerPluginCommands(cmd::Registry& registry);
-void registerItemEditCommands(cmd::Registry& registry);
-void registerTakeBasicCommands(cmd::Registry& registry);
-void registerFxPatchCommands(cmd::Registry& registry);
 void registerGroupCommands(cmd::Registry& registry);
 void registerMidiCommands(cmd::Registry& registry);
 void registerChainCommands(cmd::Registry& registry);
@@ -82,12 +78,8 @@ void registerEngineCommands(cmd::Registry& registry) {
     registerFreezeCommands(registry);
     registerRouteCommands(registry);
     registerLogCommands(registry);
-    registerTrackMoveCommands(registry);
     registerRulerCommands(registry);
     registerPluginCommands(registry);
-    registerItemEditCommands(registry);
-    registerTakeBasicCommands(registry);
-    registerFxPatchCommands(registry);
     registerGroupCommands(registry);
     registerMidiCommands(registry);
     registerChainCommands(registry);

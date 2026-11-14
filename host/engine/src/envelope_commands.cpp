@@ -178,22 +178,22 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
                        .build();
         c.examples = {
             {"Fade a track out over bar 2",
-             obj(R"({"track": "tr_1", "param": "volume", "points": [{"bar": 2, "value": 0}, {"bar": 3, "value": "-60 dB"}]})"),
-             obj(R"({"env": "en_1", "points": 2})"), "song"},
+             j(R"({"track": "tr_1", "param": "volume", "points": [{"bar": 2, "value": 0}, {"bar": 3, "value": "-60 dB"}]})"),
+             j(R"({"env": "en_1", "points": 2})"), "song"},
             {"Sweep a plugin parameter",
-             obj(R"({"fx": "fx_2", "param": "gain", "points": [{"beat": 0, "value": "-12 dB", "shape": "slow"}, {"beat": 4, "value": 0}]})"),
-             obj(R"({"env": "en_1", "points": 2})"), "song_with_fx"},
+             j(R"({"fx": "fx_2", "param": "gain", "points": [{"beat": 0, "value": "-12 dB", "shape": "slow"}, {"beat": 4, "value": 0}]})"),
+             j(R"({"env": "en_1", "points": 2})"), "song_with_fx"},
             {"Duck a take halfway through its item",
-             obj(R"({"take": "tk_1", "param": "volume", "points": [{"beat": 0, "value": 0}, {"beat": 2, "value": "-12 dB"}]})"),
-             obj(R"({"env": "en_1", "points": 2})"), "song_with_audio"},
+             j(R"({"take": "tk_1", "param": "volume", "points": [{"beat": 0, "value": 0}, {"beat": 2, "value": "-12 dB"}]})"),
+             j(R"({"env": "en_1", "points": 2})"), "song_with_audio"},
             {"A rack module's knob: a VCA opening over a bar",
-             obj(R"({"module": "mo_3", "param": "level", "points": [{"beat": 0, "value": -40}, {"beat": 4, "value": 0}]})"),
-             obj(R"({"env": "en_1", "points": 2})"), "song_with_rack"},
+             j(R"({"module": "mo_3", "param": "level", "points": [{"beat": 0, "value": -40}, {"beat": 4, "value": 0}]})"),
+             j(R"({"env": "en_1", "points": 2})"), "song_with_rack"},
             {"Master rate envelope",
-             obj(R"({"track":"tr_0","param":"playrate","points":[{"beat":0,"value":1},{"beat":4,"value":2}]})"),
-             obj(R"({"env":"en_1","points":2})"), "empty"}};
+             j(R"({"track":"tr_0","param":"playrate","points":[{"beat":0,"value":1},{"beat":4,"value":2}]})"),
+             j(R"({"env":"en_1","points":2})"), "empty"}};
         c.run = [](const EnvAddArgs& a, Context& ctx) -> Result<EnvAddResult> {
-            EngineApp& app = A(ctx);
+            EngineApp& app = engine::app(ctx);
             const model::Session s = app.view();
             if (a.track.has_value() + a.fx.has_value() + a.route.has_value() + a.take.has_value() +
                     a.group.has_value() + a.module.has_value() !=
@@ -278,10 +278,10 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
                        .build();
         c.examples = {
             {"Three points",
-             obj(R"({"env": "en_1", "points": [{"beat": 0, "value": -6}, {"beat": 2, "value": 0, "shape": "square"}, {"beat": 3, "value": "-3 dB"}]})"),
-             obj(R"({"points": 3})"), "song_with_env"}};
+             j(R"({"env": "en_1", "points": [{"beat": 0, "value": -6}, {"beat": 2, "value": 0, "shape": "square"}, {"beat": 3, "value": "-3 dB"}]})"),
+             j(R"({"points": 3})"), "song_with_env"}};
         c.run = [](const EnvPointsSetArgs& a, Context& ctx) -> Result<EnvCount> {
-            EngineApp& app = A(ctx);
+            EngineApp& app = engine::app(ctx);
             const model::Session s = app.view();
             auto id = existing<model::Envelope>(s, a.env, "/env");
             if (!id) return std::move(id).error();
@@ -330,10 +330,10 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
                      .field("mode", &EnvSetArgs::mode, envModeSchema())
                      .build();
         c.result = emptySchema();
-        c.examples = {{"Mute the automation", obj(R"({"env": "en_1", "active": false})"), obj("{}"),
+        c.examples = {{"Mute the automation", j(R"({"env": "en_1", "active": false})"), j("{}"),
                        "song_with_env"}};
         c.run = [](const EnvSetArgs& a, Context& ctx) -> Result<Empty> {
-            EngineApp& app = A(ctx);
+            EngineApp& app = engine::app(ctx);
             auto id = existing<model::Envelope>(app.view(), a.env, "/env");
             if (!id) return std::move(id).error();
             app.txn().modify<model::Envelope>(*id, [&](model::Envelope& e) {
@@ -356,9 +356,9 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
                      .field("env", &EnvRef::env, idArg("en", "Envelope"))
                      .build();
         c.result = emptySchema();
-        c.examples = {{"Remove", obj(R"({"env": "en_1"})"), obj("{}"), "song_with_env"}};
+        c.examples = {{"Remove", j(R"({"env": "en_1"})"), j("{}"), "song_with_env"}};
         c.run = [](const EnvRef& a, Context& ctx) -> Result<Empty> {
-            EngineApp& app = A(ctx);
+            EngineApp& app = engine::app(ctx);
             auto id = existing<model::Envelope>(app.view(), a.env, "/env");
             if (!id) return std::move(id).error();
             app.txn().remove<model::Envelope>(*id);
@@ -389,11 +389,11 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
                        .field("envelopes", &EnvList::envelopes, schema::arrayOf(entry))
                        .build();
         c.examples = {
-            {"All", obj("{}"),
-             obj(R"({"envelopes": [{"env": "en_1", "target": "fx_2", "param": "gain", "points": 2, "active": true, "visible": true, "mode": "read"}]})"),
+            {"All", j("{}"),
+             j(R"({"envelopes": [{"env": "en_1", "target": "fx_2", "param": "gain", "points": 2, "active": true, "visible": true, "mode": "read"}]})"),
              "song_with_env"}};
         c.run = [](const EnvListArgs& a, Context& ctx) -> Result<EnvList> {
-            const model::Session s = A(ctx).view();
+            const model::Session s = app(ctx).view();
             static constexpr const char* kModes[] = {"trim",  "read",          "touch",
                                                      "latch", "latch_preview", "write"};
             EnvList out;
@@ -538,8 +538,8 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
             c.result = schema::any();
             c.examples = {
                 {"A one-bar swell, looped over two bars",
-                 obj(R"({"env": "en_1", "bar": 1, "length": 8, "source_length": 4, "points": [{"beat": 0, "value": -12}, {"beat": 4, "value": 0}]})"),
-                 obj(R"({"id": "ai_1", "env": "en_1", "position": 0.0, "length": 8.0,
+                 j(R"({"env": "en_1", "bar": 1, "length": 8, "source_length": 4, "points": [{"beat": 0, "value": -12}, {"beat": 4, "value": 0}]})"),
+                 j(R"({"id": "ai_1", "env": "en_1", "position": 0.0, "length": 8.0,
                                    "source_length": 4.0, "loop": true, "pool": 0,
                                    "baseline": 0.0, "amplitude": 1.0, "name": "",
                                    "points": [{"beat": 0.0, "value": -12.0},
@@ -547,7 +547,7 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
                  "song_with_env"}};
             c.run = [itemPoints, entryOf](const AutoItemAddArgs& a,
                                           Context& ctx) -> Result<json::Value> {
-                EngineApp& app = A(ctx);
+                EngineApp& app = engine::app(ctx);
                 const model::Session s = app.view();
                 auto en = existing<model::Envelope>(s, a.env, "/env");
                 if (!en) return std::move(en).error();
@@ -611,11 +611,11 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
                     .field("name", &AutoItemSetArgs::name, schema::string())
                     .build();
             c.result = schema::any();
-            c.examples = {{"Two beats later", obj(R"({"item": "ai_1", "position": 2})"),
-                           obj(R"("<any>")"), "song_with_autoitem"}};
+            c.examples = {{"Two beats later", j(R"({"item": "ai_1", "position": 2})"),
+                           j(R"("<any>")"), "song_with_autoitem"}};
             c.run = [itemPoints, propagate, entryOf](const AutoItemSetArgs& a,
                                                      Context& ctx) -> Result<json::Value> {
-                EngineApp& app = A(ctx);
+                EngineApp& app = engine::app(ctx);
                 const model::Session s = app.view();
                 auto id = existing<model::AutomationItem>(s, a.item, "/item");
                 if (!id) return std::move(id).error();
@@ -655,10 +655,10 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
                          .defaultValue(true)
                          .build();
             c.result = schema::any();
-            c.examples = {{"A pooled copy right after it", obj(R"({"item": "ai_1"})"),
-                           obj(R"("<any>")"), "song_with_autoitem"}};
+            c.examples = {{"A pooled copy right after it", j(R"({"item": "ai_1"})"),
+                           j(R"("<any>")"), "song_with_autoitem"}};
             c.run = [entryOf](const AutoItemDupArgs& a, Context& ctx) -> Result<json::Value> {
-                EngineApp& app = A(ctx);
+                EngineApp& app = engine::app(ctx);
                 const model::Session s = app.view();
                 auto id = existing<model::AutomationItem>(s, a.item, "/item");
                 if (!id) return std::move(id).error();
@@ -694,10 +694,10 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
                          .field("item", &AutoItemRef::item, idArg("ai", "Automation item"))
                          .build();
             c.result = emptySchema();
-            c.examples = {{unpool ? "Unpool" : "Remove", obj(R"({"item": "ai_1"})"), obj("{}"),
+            c.examples = {{unpool ? "Unpool" : "Remove", j(R"({"item": "ai_1"})"), j("{}"),
                            "song_with_autoitem"}};
             c.run = [unpool](const AutoItemRef& a, Context& ctx) -> Result<Empty> {
-                EngineApp& app = A(ctx);
+                EngineApp& app = engine::app(ctx);
                 auto id = existing<model::AutomationItem>(app.view(), a.item, "/item");
                 if (!id) return std::move(id).error();
                 if (unpool)
@@ -723,9 +723,9 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
                          .field("env", &ListArgs::env, idArg("en", "Envelope"))
                          .build();
             c.result = schema::any();
-            c.examples = {{"None yet", obj("{}"), obj(R"({"items": []})"), "empty"}};
+            c.examples = {{"None yet", j("{}"), j(R"({"items": []})"), "empty"}};
             c.run = [entryOf](const ListArgs& a, Context& ctx) -> Result<json::Value> {
-                const model::Session s = A(ctx).view();
+                const model::Session s = app(ctx).view();
                 json::Value items = json::Value::array();
                 for (const auto& e : s.autoItems)
                     if (!a.env || e.value->envelope.str() == *a.env)

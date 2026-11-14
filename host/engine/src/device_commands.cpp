@@ -179,7 +179,7 @@ void registerDeviceCommands(cmd::Registry& registry) {
         c.errors = {{"backend.unsupported", "native device enumeration is unavailable",
                      "use engine.inputs with JACK"}};
         c.examples = {
-            {"Without hardware", obj(R"({"backend":"dummy"})"), obj(R"({"devices":[]})"), "empty"}};
+            {"Without hardware", j(R"({"backend":"dummy"})"), j(R"({"devices":[]})"), "empty"}};
         c.run = [](const EngineDevicesArgs& args, Context&) -> Result<EngineDevicesResult> {
             if (args.backend == BackendArg::Dummy) return EngineDevicesResult{};
             if (args.backend == BackendArg::Jack)
@@ -254,8 +254,8 @@ void registerDeviceCommands(cmd::Registry& registry) {
             {"backend.open", "no JACK server answered", "is PipeWire running?"},
             {"backend.unsupported", "backend is unavailable on this platform", "select dummy"}};
         c.examples = {
-            {"Without a device", obj(R"({"backend": "dummy", "block": 128})"),
-             obj(R"({"running": true, "backend": "dummy", "sample_rate": 48000.0, "block": 128,
+            {"Without a device", j(R"({"backend": "dummy", "block": 128})"),
+             j(R"({"running": true, "backend": "dummy", "sample_rate": 48000.0, "block": 128,
                      "period": 128, "plan_latency": 0, "device_latency": 0, "xruns": 0, "midi_dropped": 0, "midi_warnings": [], "midi_out_dropped": 0, "midi_output_warnings": [], "midi_output_latency": [], "midi_inputs": [], "midi_outputs": [], "midi_lead_frames": 0,
                      "midi_devices_changed": false, "midi_devices_message": "",
                      "preparing_audio": false, "preparation_error": "",
@@ -275,7 +275,7 @@ void registerDeviceCommands(cmd::Registry& registry) {
                      "dropped": 0, "voice_dropped": 0, "failed_errors": [], "sync": "<any>"})"),
              "empty"}};
         c.run = [](const EngineStartArgs& a, Context& ctx) -> Result<EngineStatus> {
-            EngineApp& app = A(ctx);
+            EngineApp& app = engine::app(ctx);
 #if defined(__linux__)
             constexpr auto defaultBackend = BackendArg::Jack;
 #else
@@ -308,9 +308,9 @@ void registerDeviceCommands(cmd::Registry& registry) {
         c.tags = {"engine"};
         c.args = schema::object<NoArgs>("no_args").build();
         c.result = emptySchema();
-        c.examples = {{"Stop", obj("{}"), obj("{}"), "engine_running"}};
+        c.examples = {{"Stop", j("{}"), j("{}"), "engine_running"}};
         c.run = [](const NoArgs&, Context& ctx) -> Result<Empty> {
-            A(ctx).stopEngine();
+            app(ctx).stopEngine();
             return Empty{};
         };
         addChecked(registry, std::move(c));
@@ -335,11 +335,11 @@ void registerDeviceCommands(cmd::Registry& registry) {
         c.args = schema::object<NoArgs>("no_args").build();
         c.result = schema::any();
         c.examples = {
-            {"Stopped", obj("{}"),
-             obj(R"({"running": false, "audio": [], "midi": [], "outputs": [], "midi_outputs": []})"),
+            {"Stopped", j("{}"),
+             j(R"({"running": false, "audio": [], "midi": [], "outputs": [], "midi_outputs": []})"),
              "empty"}};
         c.run = [](const NoArgs&, Context& ctx) -> Result<json::Value> {
-            EngineApp& app = A(ctx);
+            EngineApp& app = engine::app(ctx);
             const Backend* backend = app.backend();
             json::Value out = json::Value::object();
             out["running"] = backend != nullptr;
@@ -424,8 +424,8 @@ void registerDeviceCommands(cmd::Registry& registry) {
         c.tags = {"engine"};
         c.args = schema::object<NoArgs>("no_args").build();
         c.result = engineStatusSchema();
-        c.examples = {{"Not running", obj("{}"),
-                       obj(R"({"running": false, "backend": "", "sample_rate": 0.0, "block": 0,
+        c.examples = {{"Not running", j("{}"),
+                       j(R"({"running": false, "backend": "", "sample_rate": 0.0, "block": 0,
                      "period": 0, "plan_latency": 0, "device_latency": 0, "xruns": 0, "midi_dropped": 0, "midi_warnings": [], "midi_out_dropped": 0, "midi_output_warnings": [], "midi_output_latency": [], "midi_inputs": [], "midi_outputs": [], "midi_lead_frames": 0,
                      "midi_devices_changed": false, "midi_devices_message": "",
                      "preparing_audio": false, "preparation_error": "",
@@ -445,7 +445,7 @@ void registerDeviceCommands(cmd::Registry& registry) {
                      "dropped": 0, "voice_dropped": 0, "failed_errors": [], "sync": "<any>"})"),
                        "empty"}};
         c.run = [](const NoArgs&, Context& ctx) -> Result<EngineStatus> {
-            return A(ctx).engineStatus();
+            return app(ctx).engineStatus();
         };
         addChecked(registry, std::move(c));
     }();

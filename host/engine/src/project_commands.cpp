@@ -130,11 +130,11 @@ void registerProjectCommands(cmd::Registry& registry) {
             "if you want it (nothing is loaded silently).";
         c.result = projectInfoSchema();
         c.examples = {
-            {"A new project", obj("{}"),
-             obj(R"({"name": "", "path": "", "branch": "main", "sample_rate": 48000.0, "tempo": 120.0, "meter": "4/4", "timecode": {"rate": "30", "start": "00:00:00:00"}, "version": 0, "recoverable": 0, "generation": "<any>", "autosave_available": false})"),
+            {"A new project", j("{}"),
+             j(R"({"name": "", "path": "", "branch": "main", "sample_rate": 48000.0, "tempo": 120.0, "meter": "4/4", "timecode": {"rate": "30", "start": "00:00:00:00"}, "version": 0, "recoverable": 0, "generation": "<any>", "autosave_available": false})"),
              "empty"}};
         c.run = [](const NoArgs&, Context& ctx) -> Result<ProjectInfo> {
-            EngineApp& app = A(ctx);
+            EngineApp& app = engine::app(ctx);
             return projectInfo(app, app.view());
         };
         addChecked(registry, std::move(c));
@@ -203,13 +203,13 @@ void registerProjectCommands(cmd::Registry& registry) {
                      .build();
         c.result = emptySchema();
         c.examples = {
-            {"Name it", obj(R"({"name": "Demo"})"), obj("{}"), "empty"},
+            {"Name it", j(R"({"name": "Demo"})"), j("{}"), "empty"},
             {"EBU timecode starting at one hour",
-             obj(R"({"timecode": {"rate": "25", "start": "01:00:00:00"}})"), obj("{}"), "empty"},
+             j(R"({"timecode": {"rate": "25", "start": "01:00:00:00"}})"), j("{}"), "empty"},
             {"Pan with the -3 dB law, boosting the sides",
-             obj(R"({"pan_law": {"db": -3, "boost": true}})"), obj("{}"), "empty"}};
+             j(R"({"pan_law": {"db": -3, "boost": true}})"), j("{}"), "empty"}};
         c.run = [](const ProjectSetArgs& a, Context& ctx) -> Result<Empty> {
-            model::EditTxn& t = A(ctx).txn();
+            model::EditTxn& t = app(ctx).txn();
             model::Project p = t.project();
             if (a.name) p.name = *a.name;
             if (a.title) p.title = *a.title;
@@ -252,7 +252,7 @@ void registerProjectCommands(cmd::Registry& registry) {
                     for (const auto& [key, row] : matrix->asObject()) {
                         if (key != "project") {
                             auto id = model::Id::parse(key);
-                            if (!id || !A(ctx).view().regions.contains(*id))
+                            if (!id || !app(ctx).view().regions.contains(*id))
                                 return Error("render.matrix", "unknown matrix region " + key,
                                              "/render/matrix", "use region.add first");
                         }
@@ -270,7 +270,7 @@ void registerProjectCommands(cmd::Registry& registry) {
                                              "id from track.list");
                             {
                                 auto id = model::Id::parse(cell.asString());
-                                if (!id || !A(ctx).view().tracks.contains(*id))
+                                if (!id || !app(ctx).view().tracks.contains(*id))
                                     return Error("render.matrix",
                                                  "unknown matrix track " + cell.asString(),
                                                  "/render/matrix", "use track.list");
@@ -282,7 +282,7 @@ void registerProjectCommands(cmd::Registry& registry) {
                     if (const auto* tracks = stems->find("tracks"))
                         for (const auto& cell : tracks->asArray()) {
                             auto id = model::Id::parse(cell.asString());
-                            if (!id || !A(ctx).view().tracks.contains(*id))
+                            if (!id || !app(ctx).view().tracks.contains(*id))
                                 return Error("track.unknown",
                                              "unknown stem track " + cell.asString(),
                                              "/render/stems/tracks", "use track.list");
@@ -290,7 +290,7 @@ void registerProjectCommands(cmd::Registry& registry) {
                 if (const auto* masters = a.render->find("masters"))  // ADR-0056
                     for (const auto& cell : masters->asArray()) {
                         auto id = model::Id::parse(cell.asString());
-                        const model::Session view = A(ctx).view();
+                        const model::Session view = app(ctx).view();
                         const model::Track* strip = id ? view.tracks.find(*id) : nullptr;
                         if (!strip || strip->type != model::StripType::Master)
                             return Error("render.masters", "not a master: " + cell.asString(),
@@ -301,7 +301,7 @@ void registerProjectCommands(cmd::Registry& registry) {
             }
             if (a.timebase && *a.timebase != p.timebase) {
                 // Items that inherit the project's timebase keep their place.
-                const model::Session s = A(ctx).view();
+                const model::Session s = app(ctx).view();
                 for (const auto& e : s.items) {
                     const model::Track* tr = s.tracks.find(e.value->track);
                     if (e.value->timebase != model::ItemTimebase::Track ||
@@ -338,11 +338,10 @@ void registerProjectCommands(cmd::Registry& registry) {
                        .field("warnings", &SaveResult::warnings,
                               schema::arrayOf(warningSchema("save_warning")))
                        .build();
-        c.examples = {{"Save next to the work directory",
-                       obj(R"({"path": "example-project.json"})"), obj(R"({"path": "<any>"})"),
-                       "empty"}};
+        c.examples = {{"Save next to the work directory", j(R"({"path": "example-project.json"})"),
+                       j(R"({"path": "<any>"})"), "empty"}};
         c.run = [](const PathArgs& a, Context& ctx) -> Result<SaveResult> {
-            EngineApp& app = A(ctx);
+            EngineApp& app = engine::app(ctx);
             fs::path p = a.path ? fs::path(*a.path) : app.projectPath();
             if (p.empty())
                 return Error("project.no_path", "the project has no file yet", "/path",
@@ -376,11 +375,11 @@ void registerProjectCommands(cmd::Registry& registry) {
         c.errors = {{"file.open", "the file cannot be read", "check the path"},
                     {"schema.invalid", "the file has problems", "details list each with its path"}};
         c.examples = {
-            {"Open", obj(R"({"path": "example-project.json"})"),
-             obj(R"({"name": "<any>", "path": "<any>", "branch": "main", "sample_rate": "<any>", "tempo": "<any>", "meter": "<any>", "timecode": "<any>", "version": "<any>", "recoverable": 0, "generation": "<any>", "autosave_available": false})"),
+            {"Open", j(R"({"path": "example-project.json"})"),
+             j(R"({"name": "<any>", "path": "<any>", "branch": "main", "sample_rate": "<any>", "tempo": "<any>", "meter": "<any>", "timecode": "<any>", "version": "<any>", "recoverable": 0, "generation": "<any>", "autosave_available": false})"),
              "saved"}};
         c.run = [](const PathArgs& a, Context& ctx) -> Result<ProjectInfo> {
-            EngineApp& app = A(ctx);
+            EngineApp& app = engine::app(ctx);
             if (!a.path)
                 return Error("project.no_path", "give the project file to open", "/path",
                              "provide path naming an existing project JSON file");
@@ -415,11 +414,11 @@ void registerProjectCommands(cmd::Registry& registry) {
                      .build();
         c.result = projectInfoSchema();
         c.examples = {
-            {"New", obj(R"({"name": "Sketch"})"),
-             obj(R"({"name": "Sketch", "path": "", "branch": "main", "sample_rate": 48000.0, "tempo": "<any>", "meter": "<any>", "timecode": "<any>", "version": 0, "recoverable": 0, "generation": "<any>", "autosave_available": false})"),
+            {"New", j(R"({"name": "Sketch"})"),
+             j(R"({"name": "Sketch", "path": "", "branch": "main", "sample_rate": 48000.0, "tempo": "<any>", "meter": "<any>", "timecode": "<any>", "version": 0, "recoverable": 0, "generation": "<any>", "autosave_available": false})"),
              "song"}};
         c.run = [](const NewArgs& a, Context& ctx) -> Result<ProjectInfo> {
-            EngineApp& app = A(ctx);
+            EngineApp& app = engine::app(ctx);
             model::Project p;
             if (a.name) p.name = *a.name;
             if (a.sampleRate) p.sampleRate = *a.sampleRate;
@@ -457,15 +456,15 @@ void registerProjectCommands(cmd::Registry& registry) {
                                .field("channels", &RecoverableInfo::channels, schema::integer())
                                .build()))
                 .build();
-        c.examples = {{"After a crash while recording", obj("{}"),
-                       obj(R"({"recordings": [{"file": "rec/Vocal-1.wav", "track": "tr_1",
+        c.examples = {{"After a crash while recording", j("{}"),
+                       j(R"({"recordings": [{"file": "rec/Vocal-1.wav", "track": "tr_1",
                               "start_seconds": 1.0, "seconds": 1.0, "channels": 2}]})"),
                        "recording_interrupted"},
-                      {"Nothing to recover", obj("{}"), obj(R"({"recordings": []})"), "empty"}};
+                      {"Nothing to recover", j("{}"), j(R"({"recordings": []})"), "empty"}};
         c.run = [](const NoArgs&, Context& ctx) -> Result<RecoverableList> {
             std::vector<RecordingWarning> warnings;
             RecoverableList out;
-            out.recordings = A(ctx).recoverable(&warnings);
+            out.recordings = app(ctx).recoverable(&warnings);
             if (!warnings.empty()) out.warnings = std::move(warnings);
             return out;
         };
@@ -496,13 +495,13 @@ void registerProjectCommands(cmd::Registry& registry) {
                      "project.recoverable lists them"},
                     {"recover.duplicate_file", "a file is listed twice", "list each once"},
                     {"recover.no_track", "the track it was recorded on is gone", "give track"}};
-        c.examples = {{"Recover everything", obj("{}"),
-                       obj(R"({"recovered": [{"track": "tr_1", "item": "it_1", "take": "tk_1",
+        c.examples = {{"Recover everything", j("{}"),
+                       j(R"({"recovered": [{"track": "tr_1", "item": "it_1", "take": "tk_1",
                               "file": "<any>", "seconds": 1.0, "lost_frames": 0,
                               "takes": ["tk_1"]}]})"),
                        "recording_interrupted"}};
         c.run = [](const RecoverArgs& a, Context& ctx) -> Result<RecoverResult> {
-            EngineApp& app = A(ctx);
+            EngineApp& app = engine::app(ctx);
             std::optional<Id> track;
             if (a.track) {
                 auto id = existing<model::Track>(app.view(), *a.track, "/track");
@@ -533,9 +532,9 @@ void registerProjectCommands(cmd::Registry& registry) {
         c.result = schema::object<TextResult>("text")
                        .field("text", &TextResult::text, schema::string())
                        .build();
-        c.examples = {{"Describe", obj("{}"), obj(R"({"text": "<any>"})"), "song"}};
+        c.examples = {{"Describe", j("{}"), j(R"({"text": "<any>"})"), "song"}};
         c.run = [](const NoArgs&, Context& ctx) -> Result<TextResult> {
-            return TextResult{describeSession(A(ctx).view())};
+            return TextResult{describeSession(app(ctx).view())};
         };
         addChecked(registry, std::move(c));
     }();

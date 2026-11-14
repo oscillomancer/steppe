@@ -4213,7 +4213,8 @@
       "properties": {
         "fx": {
           "type": "string",
-          "pattern": "^fx_[0-9]+$"
+          "pattern": "^fx_[0-9]+$",
+          "description": "Plugin instance id, e.g. \"fx_1\"."
         },
         "from": {
           "type": "string",
@@ -4262,11 +4263,13 @@
       "properties": {
         "fx": {
           "type": "string",
-          "pattern": "^fx_[0-9]+$"
+          "pattern": "^fx_[0-9]+$",
+          "description": "Plugin instance id, e.g. \"fx_1\"."
         },
         "track": {
           "type": "string",
-          "pattern": "^tr_[0-9]+$"
+          "pattern": "^tr_[0-9]+$",
+          "description": "Track id, e.g. \"tr_1\"."
         },
         "index": {
           "type": "integer",
@@ -4305,7 +4308,8 @@
       "properties": {
         "fx": {
           "type": "string",
-          "pattern": "^fx_[0-9]+$"
+          "pattern": "^fx_[0-9]+$",
+          "description": "Plugin instance id, e.g. \"fx_1\"."
         },
         "param": {
           "type": "string",
@@ -4395,7 +4399,8 @@
       "properties": {
         "fx": {
           "type": "string",
-          "pattern": "^fx_[0-9]+$"
+          "pattern": "^fx_[0-9]+$",
+          "description": "Plugin instance id, e.g. \"fx_1\"."
         },
         "changed_only": {
           "type": "boolean",
@@ -4436,7 +4441,8 @@
       "properties": {
         "fx": {
           "type": "string",
-          "pattern": "^fx_[0-9]+$"
+          "pattern": "^fx_[0-9]+$",
+          "description": "Plugin instance id, e.g. \"fx_1\"."
         }
       },
       "required": ["fx"],
@@ -4522,7 +4528,8 @@
       "properties": {
         "fx": {
           "type": "string",
-          "pattern": "^fx_[0-9]+$"
+          "pattern": "^fx_[0-9]+$",
+          "description": "Plugin instance id, e.g. \"fx_1\"."
         },
         "patch": {},
         "name": {
@@ -5744,7 +5751,8 @@
       "properties": {
         "item": {
           "type": "string",
-          "pattern": "^it_[0-9]+$"
+          "pattern": "^it_[0-9]+$",
+          "description": "Item id, e.g. \"it_1\"."
         },
         "mode": {
           "type": "string",
@@ -5824,7 +5832,8 @@
         },
         "item": {
           "type": "string",
-          "pattern": "^it_[0-9]+$"
+          "pattern": "^it_[0-9]+$",
+          "description": "Item id, e.g. \"it_1\"."
         },
         "to": {
           "type": "number",
@@ -5874,7 +5883,8 @@
       "properties": {
         "item": {
           "type": "string",
-          "pattern": "^it_[0-9]+$"
+          "pattern": "^it_[0-9]+$",
+          "description": "Item id, e.g. \"it_1\"."
         },
         "mode": {
           "type": "string",
@@ -6103,11 +6113,13 @@
             "properties": {
               "item": {
                 "type": "string",
-                "pattern": "^it_[0-9]+$"
+                "pattern": "^it_[0-9]+$",
+                "description": "Item id, e.g. \"it_1\"."
               },
               "track": {
                 "type": "string",
-                "pattern": "^tr_[0-9]+$"
+                "pattern": "^tr_[0-9]+$",
+                "description": "Track id, e.g. \"tr_1\"."
               },
               "position": {
                 "type": "number",
@@ -6202,7 +6214,8 @@
         },
         "item": {
           "type": "string",
-          "pattern": "^it_[0-9]+$"
+          "pattern": "^it_[0-9]+$",
+          "description": "Item id, e.g. \"it_1\"."
         },
         "position": {
           "type": "number",
@@ -6306,7 +6319,8 @@
         },
         "item": {
           "type": "string",
-          "pattern": "^it_[0-9]+$"
+          "pattern": "^it_[0-9]+$",
+          "description": "Item id, e.g. \"it_1\"."
         },
         "at": {
           "type": "number",
@@ -6511,7 +6525,8 @@
       "properties": {
         "id": {
           "type": "string",
-          "pattern": "^mk_[0-9]+$"
+          "pattern": "^mk_[0-9]+$",
+          "description": "Marker id, e.g. \"mk_1\"."
         }
       },
       "required": ["id"],
@@ -6546,7 +6561,8 @@
       "properties": {
         "id": {
           "type": "string",
-          "pattern": "^mk_[0-9]+$"
+          "pattern": "^mk_[0-9]+$",
+          "description": "Marker id, e.g. \"mk_1\"."
         },
         "pos": {
           "type": "number",
@@ -9405,7 +9421,8 @@
       "properties": {
         "id": {
           "type": "string",
-          "pattern": "^rg_[0-9]+$"
+          "pattern": "^rg_[0-9]+$",
+          "description": "Region id, e.g. \"rg_1\"."
         }
       },
       "required": ["id"],
@@ -9440,7 +9457,8 @@
       "properties": {
         "id": {
           "type": "string",
-          "pattern": "^rg_[0-9]+$"
+          "pattern": "^rg_[0-9]+$",
+          "description": "Region id, e.g. \"rg_1\"."
         },
         "start": {
           "type": "number",
@@ -12575,7 +12593,8 @@
       "properties": {
         "route": {
           "type": "string",
-          "pattern": "^sd_[0-9]+$"
+          "pattern": "^sd_[0-9]+$",
+          "description": "Route id, e.g. \"sd_1\"."
         }
       },
       "required": ["route"],
@@ -12610,7 +12629,8 @@
       "properties": {
         "route": {
           "type": "string",
-          "pattern": "^sd_[0-9]+$"
+          "pattern": "^sd_[0-9]+$",
+          "description": "Route id, e.g. \"sd_1\"."
         },
         "from": {
           "oneOf": [
@@ -13086,11 +13106,13 @@
       "properties": {
         "item": {
           "type": "string",
-          "pattern": "^it_[0-9]+$"
+          "pattern": "^it_[0-9]+$",
+          "description": "Item id, e.g. \"it_1\"."
         },
         "take": {
           "type": "string",
-          "pattern": "^tk_[0-9]+$"
+          "pattern": "^tk_[0-9]+$",
+          "description": "Take id, e.g. \"tk_1\"."
         },
         "index": {
           "type": "integer",
@@ -13129,11 +13151,13 @@
       "properties": {
         "item": {
           "type": "string",
-          "pattern": "^it_[0-9]+$"
+          "pattern": "^it_[0-9]+$",
+          "description": "Item id, e.g. \"it_1\"."
         },
         "from": {
           "type": "string",
-          "pattern": "^tk_[0-9]+$"
+          "pattern": "^tk_[0-9]+$",
+          "description": "Take id, e.g. \"tk_1\"."
         }
       },
       "required": ["item"],
@@ -13172,11 +13196,13 @@
       "properties": {
         "take": {
           "type": "string",
-          "pattern": "^tk_[0-9]+$"
+          "pattern": "^tk_[0-9]+$",
+          "description": "Take id, e.g. \"tk_1\"."
         },
         "track": {
           "type": "string",
-          "pattern": "^tr_[0-9]+$"
+          "pattern": "^tr_[0-9]+$",
+          "description": "Track id, e.g. \"tr_1\"."
         },
         "position": {
           "type": "number",
@@ -13220,7 +13246,8 @@
       "properties": {
         "item": {
           "type": "string",
-          "pattern": "^it_[0-9]+$"
+          "pattern": "^it_[0-9]+$",
+          "description": "Item id, e.g. \"it_1\"."
         }
       },
       "required": ["item"],
@@ -13344,7 +13371,8 @@
       "properties": {
         "take": {
           "type": "string",
-          "pattern": "^tk_[0-9]+$"
+          "pattern": "^tk_[0-9]+$",
+          "description": "Take id, e.g. \"tk_1\"."
         }
       },
       "required": ["take"],
@@ -13386,7 +13414,8 @@
       "properties": {
         "take": {
           "type": "string",
-          "pattern": "^tk_[0-9]+$"
+          "pattern": "^tk_[0-9]+$",
+          "description": "Take id, e.g. \"tk_1\"."
         },
         "gain_db": {
           "anyOf": [
@@ -14276,11 +14305,13 @@
       "properties": {
         "track": {
           "type": "string",
-          "pattern": "^tr_[0-9]+$"
+          "pattern": "^tr_[0-9]+$",
+          "description": "Track id, e.g. \"tr_1\"."
         },
         "parent": {
           "type": "string",
-          "pattern": "^tr_[0-9]+$"
+          "pattern": "^tr_[0-9]+$",
+          "description": "Track id, e.g. \"tr_1\"."
         },
         "index": {
           "type": "integer",
