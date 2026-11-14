@@ -325,6 +325,9 @@ TEST_CASE("a replayed merge writes files only inside the project's own folder") 
         CHECK(filesUnder(outside).empty());
         CHECK_FALSE(fs::exists(outside));
         fs::remove_all(outside);
+        // Round-3 review, finding 2: the refusal left the replay's
+        // transaction installed, so the next edit failed (history.nested).
+        run("track.add", R"({"name": "After"})");
     }
     SUBCASE("through a symlink that leaves the project: refused the same way") {
         const fs::path outside =
@@ -350,6 +353,49 @@ TEST_CASE("a replayed merge writes files only inside the project's own folder") 
         CHECK(merged.error().code == "branch.conflict");
         CHECK(filesUnder(outside).empty());
         fs::remove_all(outside);
+    }
+    SUBCASE("a missing folder and .. cannot hide a link out of the project") {
+        // Round-3 review, finding 1: weakly_canonical stops at the missing
+        // component and normalizes the rest lexically.
+        const fs::path outside =
+            p.root.parent_path() / ("supple-outside-" + std::to_string(test::processId()));
+        fs::remove_all(outside);
+        fs::create_directories(outside);
+        std::error_code ec;
+        fs::create_directory_symlink(outside, p.root / "link", ec);
+        if (ec) {
+            fs::remove_all(outside);
+            return;
+        }
+        auto t = p.app->beginTransaction(unit, "Media through a missing folder");
+        REQUIRE(t);
+        auto project = p.app->txn().project();
+        project.mediaDir = "missing/../link/new-media";
+        p.app->txn().setProject(project);
+        REQUIRE(p.app->commitTransaction(*t));
+        run("track.add", R"({"name": "Keys"})");
+        auto merged = d.execute(
+            {"branch.merge", json::parse(R"({"from": "agent/claude/fx"})").value(), unit});
+        REQUIRE_FALSE(merged);
+        CHECK(merged.error().code == "branch.conflict");
+        CHECK(filesUnder(outside).empty());
+        CHECK_FALSE(fs::exists(outside / "new-media"));
+        CHECK_FALSE(fs::exists(p.root / "missing"));
+        run("track.add", R"({"name": "After"})");
+        fs::remove_all(outside);
+    }
+    SUBCASE("a new media folder inside the project is made, and removed if the merge fails") {
+        auto t = p.app->beginTransaction(unit, "Media in a new folder");
+        REQUIRE(t);
+        auto project = p.app->txn().project();
+        project.mediaDir = "new/nested/media";
+        p.app->txn().setProject(project);
+        REQUIRE(p.app->commitTransaction(*t));
+        run("track.remove", R"({"track": ")" + otherTrack + R"("})");  // the later step fails
+        auto merged = d.execute(
+            {"branch.merge", json::parse(R"({"from": "agent/claude/fx"})").value(), unit});
+        REQUIRE_FALSE(merged);
+        CHECK_FALSE(fs::exists(p.root / "new"));
     }
     SUBCASE("a merge that fails after a replayed render removes the file it wrote") {
         const auto before = filesUnder(p.root);

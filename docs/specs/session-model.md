@@ -768,11 +768,14 @@ and nothing else is kept (the file is then the document alone).
   (`EngineApp::replayableFromFile`). Saves, renders, transport, jobs and
   every other action never run from a log. Replayed edits create files only
   in the media folder (`item.apply-fx` renders, `item.add` copies of
-  imports), never through an existing link. Before any step runs, the media
-  folder must resolve (symlinks followed) inside the folder that holds the
-  project file; otherwise the merge stops with an `invalid` conflict
-  (`history.media_outside`). A merge that fails removes the files its
-  replays created. A replayed `rack.preset.load` does not install modules
+  imports), published under a free name and never through or over an
+  existing file or link. Before any step runs, a `media_dir` naming `..` is
+  refused; otherwise the media folder is made and must resolve (`canonical`,
+  every link followed) inside the resolved folder that holds the project
+  file, or the merge stops with an `invalid` conflict
+  (`history.media_outside`) and the folders the check made are removed. A
+  merge that fails removes the files and folders its replays created. While
+  replaying, steps capture no automation from the live transport. A replayed `rack.preset.load` does not install modules
   into the library. Reads are deliberately permitted and not sandboxed:
   `item.add` reads the audio or MIDI file it names (any file a media entry
   could name), and the preset, chain, template and render-preset loads read

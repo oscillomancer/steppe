@@ -93,13 +93,22 @@ The branch's steps are also what the human reviews after reopening:
    itself, so replay adds these limits:
    - **Writes stay inside the project's own folder.** Replayed edits create
      files only in the media folder (`item.apply-fx` renders, `item.add`
-     copies of imports), and before any step runs, the media folder must
-     resolve, with symlinks followed, inside the folder that holds the
-     project file. A file's `media_dir` may name any folder, so otherwise a
-     merge stops with an `invalid` conflict (`history.media_outside`). An
-     unsaved project's media folder is the engine's own. New files are never
-     written through an existing link. A merge that fails removes the files
-     its replays created (and the media folder, if it made it).
+     copies of imports). Before any step runs (and before the live
+     transaction is set aside), a `media_dir` naming `..` is refused
+     outright; otherwise the media folder is made and resolved with every
+     link followed (`canonical`), and must lie inside the resolved folder
+     that holds the project file. A file's `media_dir` may name any folder,
+     so otherwise a merge stops with an `invalid` conflict
+     (`history.media_outside`) and the folders the check made are removed.
+     An unsaved project's media folder is the engine's own. A render is
+     written under a temporary name and published only under a free name,
+     never through or over an existing file or link. A merge that fails
+     removes the files and folders its replays created. What this does not
+     cover: a link inside the media folder changed by another program while
+     the merge runs.
+   - **No live capture.** While replaying, a step does not write automation
+     from the live transport or join the live write pass; a pass's writes
+     arrive as their logged `env.write.commit`.
    - **No writes to the user's libraries.** `rack.preset.load` refuses to
      install a preset's modules into the module library while replaying.
    - **Reads are deliberately permitted.** A replayed `item.add` reads the
@@ -110,9 +119,10 @@ The branch's steps are also what the human reviews after reopening:
      project's media table can already name any file, so this gives a file
      no read access it lacked; it is not a file-read sandbox. Plug-ins run
      natively and are outside any of this.
-   (Amended 2026-11-14 after the second review: the first form of this
-   decision said edits could only add files to the media folder, but a
-   `media_dir` outside the project made that untrue.)
+   (Amended 2026-11-14 after the second and third reviews: the first form
+   said edits could only add files to the media folder, which a `media_dir`
+   outside the project made untrue; the second resolved a folder not yet
+   made lexically, which `missing/../link` escaped.)
 
 10. **A save carries what every kept version depends on**, not only the
     current head's: the module copies beside the file cover every retained

@@ -5,11 +5,15 @@
 // render an item through its FX as a new audio take (MIDI through the track's
 // instrument). Every command is one undo step.
 #include <algorithm>
+#include <atomic>
+#include <cerrno>
 #include <cmath>
+#include <cstring>
 #include <set>
 
 #include "command_helpers.h"
 #include "command_validation.h"
+#include "file_platform.h"
 #include "media_files.h"
 #include "recording.h"
 #include "supple/audio/audio_file.h"
@@ -743,10 +747,31 @@ void registerTakeCommands(cmd::Registry& registry) {
             const fs::path dir = engine.mediaDir();
             std::error_code ec;
             fs::create_directories(dir, ec);
-            const fs::path file =
-                freshFile(dir, (heard->name.empty() ? std::string("item") : heard->name) + " fx");
+            // Written under a temporary name, then published only under a
+            // free one: another writer may take the fresh name meanwhile.
+            static std::atomic<unsigned> serial{0};
+            const std::string stem =
+                (heard->name.empty() ? std::string("item") : heard->name) + " fx";
+            fs::path temp = dir / ("." + stem + "." + std::to_string(detail::files::processId()) +
+                                   "." + std::to_string(serial.fetch_add(1)) + ".tmp");
+            if (auto written = audio::writeWav(temp, rendered->audio); !written) {
+                fs::remove(temp, ec);
+                return std::move(written).error();
+            }
+            fs::path file;
+            for (int attempt = 0;; ++attempt) {
+                file = freshFile(dir, stem);
+                if (detail::files::publishNew(temp, file) == 0) break;
+                if (errno != EEXIST || attempt >= 100) {
+                    const std::string reason = std::strerror(errno);
+                    fs::remove(temp, ec);
+                    return Error("item.apply_fx_write",
+                                 "cannot publish the render as " + file.string() + ": " + reason,
+                                 "/item", "check media-folder permissions and free space");
+                }
+            }
+            fs::remove(temp, ec);  // the published name keeps the file
             engine.noteCreatedFile(file);
-            SUPPLE_TRY(audio::writeWav(file, rendered->audio));
             auto hash = sha256File(file);
             if (!hash) return std::move(hash).error();
             model::MediaSource md;

@@ -427,8 +427,9 @@ class EngineApp : public cmd::Host {
     }
     // Where a replayed edit may create files: the project's media folder,
     // which must resolve (symlinks followed) inside the project's own folder.
-    // "history.media_outside" otherwise.
-    Status replayMayWriteMedia() const;
+    // "history.media_outside" otherwise, also for a media_dir naming "..".
+    // Makes the folder to resolve it, and removes what it made if refused.
+    Status replayMayWriteMedia();
     // Re-executes recorded invocations on `base` as `version` (the replayer
     // for merges): commands run against a temporary transaction on that base,
     // each first checked with replayableFromFile().
