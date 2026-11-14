@@ -329,6 +329,14 @@ transaction-safe inside a batch), `rpc.*` (§3), `mcp.*` (§4).
   frames messages; requests are posted to the model thread's queue and
   answered in order per connection.
 
+The synchronous `rpc::Client::connectionGeneration()` returns zero when it is
+disconnected, including when a nonblocking probe observes a closed peer. A live
+connection has a generation incremented after every successful `rpc.hello`
+connection handshake, including automatic reconnects. Closing the client does
+not reset the counter. Observation consumes no data and sends no requests;
+ordinary `call` retains its existing no-replay transport contract. This lets
+adapters refresh peer metadata before relying on cached admission decisions.
+
 ---
 
 ## 4. MCP adapter (`mcp/`)
@@ -336,8 +344,8 @@ transaction-safe inside a batch), `rpc.*` (§3), `mcp.*` (§4).
 - **Protocol:** MCP over stdio (JSON-RPC 2.0, newline-delimited), protocol
   version negotiation per the MCP spec: support `2025-06-18` and newer
   revisions that are backward compatible; reply with the client's requested
-  version if supported, else the newest supported. Capabilities: `tools`
-  (no `listChanged`). `ping` supported. `logging`/`resources`
+  version if supported, else the newest supported. Capabilities: `tools`; the proxy declares
+  `tools.listChanged: true`. `ping` supported. `logging`/`resources`
   later.
 - **Envelopes:** validate JSON-RPC fields before suppressing replies to valid
   notifications. Malformed objects without `id` receive Invalid Request
@@ -433,6 +441,31 @@ when the result is an object (MCP structured content is an object) and
 "code at path: message\nHint: hint" plus details>}]`, `structuredContent` =
 the Error JSON. Protocol-level problems (unknown tool) are JSON-RPC errors
 per MCP.
+
+The proxy checks its RPC connection generation before consulting cached tool
+names or query kinds. A disconnected peer is detected with a nonblocking,
+non-consuming socket probe; explicit and automatic reconnects both change the
+generation. After reconnect it fetches `registry.list` once. An identical index
+retains the existing definitions without a notification or description requests.
+A changed index stages fresh kinds, dedicated-tool mappings and descriptions
+for the selected mode, then replaces them together. Failed or interrupted
+refreshes leave catalogue admission invalid until a later refresh succeeds.
+
+After initialization, a successful changed-index refresh queues
+`notifications/tools/list_changed` (JSON-RPC 2.0, no id) on the existing MCP
+stream. `serve` drains and flushes notifications before the triggering request's
+response; embedders using `handle` must drain `takeNotifications()` after each
+call. Multiple pending changes may coalesce into one notification. In-process
+catalogues are fixed and omit the `listChanged` capability. MCP Tools /
+[List Changed Notification](https://modelcontextprotocol.io/specification/2025-11-25/server/tools#list-changed-notification)
+says servers advertising that capability SHOULD notify when their tools change.
+
+A failed invocation known not to have been sent (`rpc.write` or `rpc.connect`)
+may be retried once, after refreshing the catalogue and rerouting the original
+tool call through current query admission and tool lookup. A sent but unanswered
+invocation (`rpc.read`, timeout or interruption) is never automatically replayed,
+including edits whose committed result was lost. A read failure may reconnect
+and refresh metadata for subsequent calls while returning the original error.
 
 The standalone MCP proxy gives its RPC client twice the command bus's maximum
 job-wait duration (currently 60 seconds versus 30). Dispatch and response delivery

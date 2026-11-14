@@ -798,6 +798,9 @@ The proxy loads the command index once and fetches descriptions only for the
 selected dedicated tools. Use `describe` for other contracts when needed; `exec`
 validates through the running application. Use the proxy and application from
 the same installation: startup requires exposure metadata in the command index.
+After an app restart, the proxy checks the catalogue on the next tool request
+and notifies the agent when it changes. If an edit loses its response, inspect
+project state before deciding whether to retry it.
 
 Saved `dsp.test` audio and `dsp.preview` pictures use readable, shortened
 filenames with a hash when a plugin ID needs escaping or truncation, or ends

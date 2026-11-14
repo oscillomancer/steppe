@@ -40,3 +40,23 @@ exercise versioned exposure changes, and validate/execute an undescribed command
 
 The proxy and application must agree on the index extension even though the
 transport remains protocol 1. The installer supplies matching binaries.
+
+### Reconnect catalogue refresh (2026-11-14)
+
+The proxy observes RPC connection generations before admitting cached queries
+or dedicated tool names. Explicit and automatic reconnects both refetch the
+index. An identical index reuses definitions; a changed index stages all kinds
+and the selected dedicated descriptions, then atomically installs the result.
+A failed refresh prevents cached admission until refresh succeeds.
+
+The proxy advertises tools.listChanged and queues
+notifications/tools/list_changed after a changed-index refresh. Stdio serving
+flushes the notification before the triggering reply; handle embedders drain
+takeNotifications. The MCP Tools specification's List Changed Notification
+section uses SHOULD for notifications when an advertised tool list changes:
+https://modelcontextprotocol.io/specification/2025-11-25/server/tools#list-changed-notification
+
+Retry only requests known not to have been sent, after rerouting against fresh
+kinds and tool mappings. Never replay a sent-but-unanswered edit. A regression
+restarts the peer with a Query changed to Edit, a new query and different tools;
+another drops an edit's committed reply and proves it executes only once.

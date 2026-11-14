@@ -1452,7 +1452,9 @@ that exactly duplicates structuredContent is shown once.
   "result": {
     "protocolVersion": "2025-06-18",
     "capabilities": {
-      "tools": {}
+      "tools": {
+        "listChanged": true
+      }
     },
     "serverInfo": {
       "name": "steppe",
