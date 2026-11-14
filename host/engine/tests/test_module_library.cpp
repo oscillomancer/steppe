@@ -771,6 +771,32 @@ TEST_CASE("module library: a project keeps copies of the modules it plays") {
     CHECK(saved->find("0.5") != std::string::npos);
 }
 
+TEST_CASE("module library: a save keeps the modules every kept version plays") {
+    // Review of item A, finding 2: only the current head's modules were copied.
+    Fixture here;
+    here.write("level", kLevel);
+    here.run("project.set", R"({"console9": false})");
+    here.run("track.add", R"({"name": "Synth"})");
+    here.run("rack.add", R"({"track": "tr_1"})");
+    REQUIRE(here.app->versions().createBranch("topic", "main"));
+    REQUIRE(here.app->switchBranch("topic"));
+    here.run("rack.patch", R"({"rack": "rk_1", "modules": {"lvl": {"type": "com.example.level"}},
+                               "cables": [["lvl.out", "mo_1.l"]]})");
+    REQUIRE(here.app->switchBranch("main"));  // main plays no custom module
+    const auto song = here.dir / "song" / "song.json";
+    json::Value args = json::Value::object();
+    args["path"] = song.string();
+    REQUIRE(here.call("project.save", args));
+    CHECK(std::filesystem::exists(song.parent_path() / "modules" / "level" / "level.cpp"));
+
+    // Opened where the library lacks it: the branch still plays it.
+    Fixture there;
+    REQUIRE(there.call("project.open", args));
+    REQUIRE(there.app->switchBranch("topic"));
+    CHECK(there.app->modules()->find("com.example.level") != nullptr);
+    CHECK(there.level() == doctest::Approx(0.25).epsilon(1e-3));
+}
+
 TEST_CASE("rack presets: a malformed file is skipped with a warning") {
     Fixture f;
     REQUIRE(

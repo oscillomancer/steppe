@@ -701,6 +701,15 @@ and nothing else is kept (the file is then the document alone).
   main's undo stops at its saved head, and no redo is kept. A branch whose
   base was behind its fork with main starts its undo at that fork.
   `history: true` keeps every retained version, base and redo step.
+- **What a branch depends on goes with the file.** A save covers every
+  version it keeps, not only the current head: the copies of the user's
+  modules beside the file (`modules/`, ADR-0062) are those any retained
+  version plays; plug-in state blobs are in the file (by hash, in each
+  version's `state`); media live in the media folder, which a first save
+  moves and a save as into another folder copies whole, whichever version
+  uses them (imports, recordings, renders and freezes all land there).
+  Nothing else is project-local: DSP scripts, presets, chains, templates and
+  rack presets are the user's libraries, applied to the session when used.
 - **Opening.** Each state is decoded like a document. Objects equal to their
   first parent's share its entry and revision; others take the version id.
   A malformed section, or a `main_hash` that no longer matches main (a

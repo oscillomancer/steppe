@@ -81,6 +81,14 @@ The branch's steps are also what the human reviews after reopening:
    replay checks every step it runs. A test pins the list of edit commands,
    so a new edit command is audited for this before it can be saved.
 
+10. **A save carries what every kept version depends on**, not only the
+    current head's: the module copies beside the file cover every retained
+    version (the first version copied only the current head's, so a
+    branch's custom module was missing after reopening elsewhere). Media
+    are in the media folder, which saves move or copy whole; plug-in state
+    blobs are in the file. DSP scripts, presets, chains and templates are
+    the user's libraries, not part of the project.
+
 ## Consequences
 
 - Agent branches survive quitting, crashes (through autosaves) and reopening,

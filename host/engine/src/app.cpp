@@ -743,10 +743,17 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
         if (!projectPath_.empty()) SUPPLE_TRY(detail::copyFolder(mediaDir(), media));
         SUPPLE_TRY(publish());
     }
-    // The user's modules it plays go with it, as its media do (ADR-0062).
+    // The user's modules it plays go with it, as its media do (ADR-0062):
+    // those of every version the store keeps, not only the current head's,
+    // since the file keeps branches and may keep undo (ADR-0076). A version
+    // the save squashes away costs at most an unused copy.
     if (const fs::path dir = projectModuleDir(path); !dir.empty()) {
+        std::set<std::string> seen;
         std::vector<std::string> types;
-        for (const auto& e : head().modules) types.push_back(e.value->type);
+        versions_->forEachVersion([&](const model::Version& v) {
+            for (const auto& e : v.session->modules)
+                if (seen.insert(e.value->type).second) types.push_back(e.value->type);
+        });
         if (Status copied = detail::saveProjectModules(*modules_, types, dir); !copied && warnings)
             warnings->push_back(
                 {"project.modules",
