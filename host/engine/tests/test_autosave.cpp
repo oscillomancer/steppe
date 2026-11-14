@@ -329,6 +329,33 @@ TEST_CASE("a replayed merge writes files only inside the project's own folder") 
         // transaction installed, so the next edit failed (history.nested).
         run("track.add", R"({"name": "After"})");
     }
+    SUBCASE("nothing is made outside the project, not even for a moment") {
+        // Co-director, after round 3: the folder was made before it was
+        // checked (and removed after). A read-only outside parent shows it:
+        // making a folder there would fail first, with another error.
+        const fs::path outside =
+            p.root.parent_path() / ("supple-outside-" + std::to_string(test::processId()));
+        fs::remove_all(outside);
+        fs::create_directories(outside);
+        fs::permissions(outside, fs::perms::owner_read | fs::perms::owner_exec);
+        auto t = p.app->beginTransaction(unit, "Media in a new folder elsewhere");
+        REQUIRE(t);
+        auto project = p.app->txn().project();
+        project.mediaDir = (outside / "new" / "media").string();
+        p.app->txn().setProject(project);
+        REQUIRE(p.app->commitTransaction(*t));
+        run("track.add", R"({"name": "Keys"})");
+        auto merged = d.execute(
+            {"branch.merge", json::parse(R"({"from": "agent/claude/fx"})").value(), unit});
+        fs::permissions(outside, fs::perms::owner_all);
+        REQUIRE_FALSE(merged);
+        REQUIRE(merged.error().details.size() == 1);
+        CHECK(merged.error().details[0].message.find("is outside the project folder") !=
+              std::string::npos);
+        CHECK(fs::is_empty(outside));
+        run("track.add", R"({"name": "After"})");
+        fs::remove_all(outside);
+    }
     SUBCASE("through a symlink that leaves the project: refused the same way") {
         const fs::path outside =
             p.root.parent_path() / ("supple-outside-" + std::to_string(test::processId()));

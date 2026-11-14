@@ -2742,24 +2742,35 @@ Status EngineApp::replayMayWriteMedia() {
     // it is made.
     for (const auto& part : fs::path(head().project->mediaDir))
         if (part == "..") return outside("names '..'");
-    // Make the folder, then resolve it for real (every link followed): the
-    // folders this made are removed again if it turns out to be outside, and
-    // by a merge that fails.
     const fs::path media = mediaDir();
     std::error_code ec;
-    std::vector<fs::path> made;
-    for (fs::path p = media; !p.empty() && !fs::exists(fs::symlink_status(p, ec));
-         p = p.parent_path()) {
-        made.push_back(p);
-        if (p == p.parent_path()) break;
-    }
-    std::reverse(made.begin(), made.end());  // shallowest first
-    fs::create_directories(media, ec);
-    if (ec) return outside("cannot be made (" + ec.message() + ")");
     const fs::path root = fs::canonical(project, ec);
-    const fs::path real = ec ? fs::path() : fs::canonical(media, ec);
-    const fs::path rel = real.lexically_relative(root);
-    if (ec || rel.empty() || *rel.begin() == "..") {
+    if (ec) return outside("cannot be checked (" + ec.message() + ")");
+    auto inside = [&](const fs::path& p) {
+        std::error_code e;
+        const fs::path rel = fs::canonical(p, e).lexically_relative(root);
+        return !e && !rel.empty() && *rel.begin() != "..";
+    };
+    // Nothing is made anywhere until the deepest folder that exists (a link
+    // counts, and is followed) resolves inside the project.
+    std::vector<fs::path> made;
+    fs::path existing = media;
+    while (!existing.empty() && !fs::exists(fs::symlink_status(existing, ec))) {
+        made.push_back(existing);
+        if (existing == existing.parent_path()) break;
+        existing = existing.parent_path();
+    }
+    if (!inside(existing)) return outside("is outside the project folder");
+    std::reverse(made.begin(), made.end());  // shallowest first
+    // Then make the rest and resolve it for real once more: the folders this
+    // made are removed again if it is outside after all, and by a merge that
+    // fails.
+    fs::create_directories(media, ec);
+    if (ec) {
+        for (auto it = made.rbegin(); it != made.rend(); ++it) fs::remove(*it, ec);
+        return outside("cannot be made (" + ec.message() + ")");
+    }
+    if (!inside(media)) {
         for (auto it = made.rbegin(); it != made.rend(); ++it) fs::remove(*it, ec);
         return outside("is outside the project folder");
     }

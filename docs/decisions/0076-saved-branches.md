@@ -95,9 +95,10 @@ The branch's steps are also what the human reviews after reopening:
      files only in the media folder (`item.apply-fx` renders, `item.add`
      copies of imports). Before any step runs (and before the live
      transaction is set aside), a `media_dir` naming `..` is refused
-     outright; otherwise the media folder is made and resolved with every
-     link followed (`canonical`), and must lie inside the resolved folder
-     that holds the project file. A file's `media_dir` may name any folder,
+     outright. Nothing is made until the deepest folder of the media path
+     that exists resolves (`canonical`, every link followed) inside the
+     resolved folder that holds the project file; then the media folder is
+     made and must resolve inside it too. A file's `media_dir` may name any folder,
      so otherwise a merge stops with an `invalid` conflict
      (`history.media_outside`) and the folders the check made are removed.
      An unsaved project's media folder is the engine's own. A render is
