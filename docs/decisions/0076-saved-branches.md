@@ -62,8 +62,11 @@ The branch's steps are also what the human reviews after reopening:
    branches changed main) or the section is malformed, the project opens main
    alone with a `project.history` warning. The first save over that file then
    keeps a copy of it as `<file>.pre-branches.bak` (`-2`, `-3`… if taken),
-   written like a save (temporary file, fsync, rename) before the file is
-   replaced, and says so (`project.history_backup`); the file itself is
+   written like a save (temporary file, fsync) and published only under a
+   free name, atomically and without replacing (`writeFileNew`: another app
+   that opened the same file may be keeping its own copy under the same name
+   at that moment; a taken name moves on to the next), before the file is
+   replaced; it says so (`project.history_backup`), and the file itself is
    untouched until then.
    Damage includes links undo and merges could not walk: a `replay_of` that
    is not an earlier version (a merge would loop on it) and redo steps that

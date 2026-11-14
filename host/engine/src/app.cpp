@@ -713,15 +713,22 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
         if (!branchesBackupFor_.empty() && fs::exists(path, ec) &&
             fs::equivalent(path, branchesBackupFor_, ec)) {
             const std::string name = path.filename().string();
-            fs::path backup = path.parent_path() / (name + ".pre-branches.bak");
-            for (int n = 2; fs::exists(backup, ec); ++n)
-                backup =
-                    path.parent_path() / (name + ".pre-branches-" + std::to_string(n) + ".bak");
             // The only copy of those branches: written like a save (temporary
-            // file, fsync, rename, fsync of the folder) before the file is
-            // replaced, so a power loss leaves it whole or absent.
+            // file, fsync, then published) before the file is replaced, so a
+            // power loss leaves it whole or absent. Published only under a
+            // free name, atomically: another app that opened the same file
+            // may be keeping its own copy under the same name right now.
             auto bytes = readFile(path, std::size_t(1) << 30);
-            Status kept = bytes ? writeFileAtomic(backup, *bytes) : Status(bytes.error());
+            fs::path backup;
+            Status kept = bytes ? Status(Error("file.exists", "")) : Status(bytes.error());
+            for (int n = 1; bytes && !kept && kept.error().code == "file.exists" && n < 10000;
+                 ++n) {
+                backup = path.parent_path() /
+                         (n == 1 ? name + ".pre-branches.bak"
+                                 : name + ".pre-branches-" + std::to_string(n) + ".bak");
+                if (fs::exists(backup, ec)) continue;
+                kept = writeFileNew(backup, *bytes);
+            }
             if (!kept)
                 return Error("project.history_backup",
                              "could not keep a copy of the file before saving over its unreadable "

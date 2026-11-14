@@ -271,3 +271,43 @@ TEST_CASE("files: retryWhileFileBusy gives up at once on other errors") {
     CHECK(attempts == 1);
 }
 #endif
+
+TEST_CASE("writeFileNew publishes only under a free name, synced, never replacing") {
+    const fs::path dir = fs::temp_directory_path() / ("supple-new-" + std::to_string(getpid()));
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    const fs::path file = dir / "copy.bak";
+    REQUIRE(writeFileNew(file, bytesOf("first")));
+    CHECK(*readTextFile(file) == "first");
+    auto again = writeFileNew(file, bytesOf("second"));
+    REQUIRE_FALSE(again);
+    CHECK(again.error().code == "file.exists");
+    CHECK(*readTextFile(file) == "first");
+
+    // Taken between the sync and the publication (another writer chose the
+    // same free name): still refused, the other writer's file kept.
+    const fs::path raced = dir / "raced.bak";
+    std::vector<fs::path> synced;
+    setFileSyncHookForTesting([&](const fs::path& p) {
+        synced.push_back(p);
+        if (p == raced) std::ofstream(raced) << "other";
+        return true;
+    });
+    auto lost = writeFileNew(raced, bytesOf("mine"));
+    setFileSyncHookForTesting({});
+    REQUIRE_FALSE(lost);
+    CHECK(lost.error().code == "file.exists");
+    CHECK(*readTextFile(raced) == "other");
+    CHECK(synced == std::vector<fs::path>{raced});
+
+    // A failed sync publishes nothing.
+    setFileSyncHookForTesting([](const fs::path&) { return false; });
+    auto unsynced = writeFileNew(dir / "never.bak", bytesOf("x"));
+    setFileSyncHookForTesting({});
+    REQUIRE_FALSE(unsynced);
+    CHECK_FALSE(fs::exists(dir / "never.bak"));
+    std::size_t files = 0;
+    for ([[maybe_unused]] const auto& e : fs::directory_iterator(dir)) ++files;
+    CHECK(files == 2);  // no temporary file left behind
+    fs::remove_all(dir);
+}

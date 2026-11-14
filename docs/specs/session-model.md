@@ -720,8 +720,10 @@ and nothing else is kept (the file is then the document alone).
   A malformed section, or a `main_hash` that no longer matches main (a
   program that does not keep branches edited it), opens main alone with a
   `project.history` warning; the first save over that file keeps a copy of
-  it as `<file>.pre-branches.bak` (`-2`, `-3`… when taken), written
-  atomically like a save before the file is replaced, reported as a
+  it as `<file>.pre-branches.bak` (`-2`, `-3`… when taken), synced and
+  published under a free name without ever replacing another file (another
+  app may be keeping its copy of the same file at the same moment) before
+  the file is replaced, reported as a
   `project.history_backup` warning. A 2.13 or older file opens as main.
 - **What opening checks.** Besides the structure: every parent is an earlier
   saved version (at most two); `replay_of` names an earlier version (0:

@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 #include <doctest/doctest.h>
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <set>
 
 #include "../../../tests/file_platform.h"
@@ -210,6 +212,55 @@ TEST_CASE("saving over a file whose branches did not load keeps a copy of it onc
     REQUIRE(p.app->save("song.json", &warnings));  // once: the next save just saves
     CHECK_FALSE(hasWarning(warnings, "project.history_backup"));
     CHECK_FALSE(fs::exists(p.root / "song.json.pre-branches-2.bak"));
+}
+
+TEST_CASE("the pre-branches backup is synced and never replaces another backup") {
+    // Re-review of item A fixes, finding 1: two apps that opened the same file
+    // can choose the same free name; the second must not replace the first's
+    // backup. And the backup must be synced before the file is replaced.
+    Project p;
+    p.diverge();
+    REQUIRE(p.app->save("song.json"));
+    auto doc = json::parse(*readTextFile(p.root / "song.json")).value();
+    doc["project"]["name"] = "Changed elsewhere";
+    const std::string stale = json::writeCanonical(doc) + "\n";
+    REQUIRE(writeFileAtomic(p.root / "song.json", stale));
+    REQUIRE(p.app->open("song.json"));
+    const fs::path first = p.root / "song.json.pre-branches.bak";
+    const fs::path second = p.root / "song.json.pre-branches-2.bak";
+
+    SUBCASE("a failed sync stops the save, the file untouched") {
+        setFileSyncHookForTesting([&](const fs::path& f) { return f != first; });
+        std::vector<schema::Warning> warnings;
+        auto saved = p.app->save("song.json", &warnings);
+        setFileSyncHookForTesting({});
+        REQUIRE_FALSE(saved);
+        CHECK(saved.error().code == "project.history_backup");
+        CHECK(*readTextFile(p.root / "song.json") == stale);
+        CHECK_FALSE(fs::exists(first));
+    }
+    SUBCASE("another app publishes the same name first") {
+        std::vector<fs::path> synced;
+        setFileSyncHookForTesting([&](const fs::path& f) {
+            synced.push_back(f);
+            // The other app wins the race for the free name meanwhile.
+            if (f == first && !fs::exists(first)) std::ofstream(first) << "the other app's";
+            return true;
+        });
+        std::vector<schema::Warning> warnings;
+        auto saved = p.app->save("song.json", &warnings);
+        setFileSyncHookForTesting({});
+        REQUIRE(saved);
+        CHECK(*readTextFile(first) == "the other app's");  // kept
+        REQUIRE(fs::exists(second));
+        CHECK(*readTextFile(second) == stale);
+        REQUIRE(hasWarning(warnings, "project.history_backup"));
+        // Synced before the project file itself was replaced.
+        auto at = [&](const fs::path& f) { return std::find(synced.begin(), synced.end(), f); };
+        REQUIRE(at(second) != synced.end());
+        REQUIRE(at(p.root / "song.json") != synced.end());
+        CHECK(at(second) < at(p.root / "song.json"));
+    }
 }
 
 // --- saved logs replay only edits (review of item A, finding 1) -----------------------------

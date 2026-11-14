@@ -7,6 +7,12 @@
 #else
 #include <fcntl.h>
 #include <unistd.h>
+#if defined(__linux__)
+#include <sys/syscall.h>
+#endif
+#if defined(__APPLE__)
+#include <stdio.h>  // renamex_np
+#endif
 #endif
 
 #include <algorithm>
@@ -137,7 +143,30 @@ Error fileBusyError(const fs::path& target, unsigned long winError) {
 }
 #endif
 
+namespace {
+std::function<bool(const fs::path&)>& syncHook() {
+    static std::function<bool(const fs::path&)> hook;
+    return hook;
+}
+bool syncAllowed(const fs::path& path) { return !syncHook() || syncHook()(path); }
+
+Status writeFile(const fs::path& path, std::span<const std::uint8_t> bytes, bool replace);
+}  // namespace
+
+void setFileSyncHookForTesting(std::function<bool(const fs::path&)> hook) {
+    syncHook() = std::move(hook);
+}
+
 Status writeFileAtomic(const fs::path& path, std::span<const std::uint8_t> bytes) {
+    return writeFile(path, bytes, true);
+}
+
+Status writeFileNew(const fs::path& path, std::span<const std::uint8_t> bytes) {
+    return writeFile(path, bytes, false);
+}
+
+namespace {
+Status writeFile(const fs::path& path, std::span<const std::uint8_t> bytes, bool replace) {
     std::error_code ec;
     const fs::path dir = path.has_parent_path() ? path.parent_path() : fs::path(".");
     fs::create_directories(dir, ec);
@@ -164,7 +193,7 @@ Status writeFileAtomic(const fs::path& path, std::span<const std::uint8_t> bytes
     // must not prevent the next writer from atomically replacing that name.
     FILE_RENAME_INFO rename{};
     constexpr DWORD kReplaceIfExists = 0x1, kPosixSemantics = 0x2;
-    rename.Flags = kReplaceIfExists | kPosixSemantics;
+    rename.Flags = replace ? kReplaceIfExists | kPosixSemantics : kPosixSemantics;
     rename.FileNameLength = static_cast<DWORD>(destination.size() * sizeof(wchar_t));
     std::vector<std::uint8_t> renameBytes(sizeof(rename) + rename.FileNameLength + sizeof(wchar_t));
     std::memcpy(renameBytes.data(), &rename, sizeof(rename));
@@ -189,7 +218,7 @@ Status writeFileAtomic(const fs::path& path, std::span<const std::uint8_t> bytes
         }
         off += written;
     }
-    if (!::FlushFileBuffers(file)) {
+    if (!syncAllowed(path) || !::FlushFileBuffers(file)) {
         const DWORD code = ::GetLastError();
         ::CloseHandle(file);
         return error("cannot sync", code);
@@ -203,6 +232,10 @@ Status writeFileAtomic(const fs::path& path, std::span<const std::uint8_t> bytes
             },
             renameError)) {
         ::CloseHandle(file);
+        if (!replace && (renameError == ERROR_ALREADY_EXISTS || renameError == ERROR_FILE_EXISTS)) {
+            fs::remove(tmp, ec);
+            return Error("file.exists", displayPath(path) + " exists", {}, "choose another name");
+        }
         if (isFileBusyError(path, renameError)) {
             fs::remove(tmp, ec);
             return fileBusyError(path, renameError);
@@ -238,15 +271,48 @@ Status writeFileAtomic(const fs::path& path, std::span<const std::uint8_t> bytes
         off += static_cast<std::size_t>(n);
     }
     // Durability: the data reaches the disk before the rename makes it visible.
+    if (!syncAllowed(path)) {
+        errno = EIO;
+        return fail("cannot sync");
+    }
     if (::fsync(fd) != 0) return fail("cannot sync");
     if (::close(fd) != 0) {
         fs::remove(tmp, ec);
         return Error("file.write", "cannot close " + displayPath(tmp));
     }
-    if (::rename(tmp.c_str(), path.c_str()) != 0) {
-        const std::string reason = std::strerror(errno);
-        fs::remove(tmp, ec);
-        return Error("file.write", "cannot move " + displayPath(tmp) + " into place: " + reason);
+    if (replace) {
+        if (::rename(tmp.c_str(), path.c_str()) != 0) {
+            const std::string reason = std::strerror(errno);
+            fs::remove(tmp, ec);
+            return Error("file.write",
+                         "cannot move " + displayPath(tmp) + " into place: " + reason);
+        }
+    } else {
+        // Publish only if the name is free, in one step: a rename that refuses
+        // to replace where the system has one, else a hard link (which fails
+        // on an existing name) and removing the temporary name.
+        int published = -1;
+        errno = ENOSYS;  // no such rename here: link below
+#if defined(__linux__) && defined(SYS_renameat2)
+        published = static_cast<int>(::syscall(SYS_renameat2, AT_FDCWD, tmp.c_str(), AT_FDCWD,
+                                               path.c_str(), 1U /* RENAME_NOREPLACE */));
+#elif defined(__APPLE__)
+        published = ::renamex_np(tmp.c_str(), path.c_str(), RENAME_EXCL);
+#endif
+        if (published != 0 && errno != EEXIST) {
+            published = ::link(tmp.c_str(), path.c_str());
+            if (published == 0) ::unlink(tmp.c_str());
+        }
+        if (published != 0) {
+            const int code = errno;
+            const std::string reason = std::strerror(code);
+            fs::remove(tmp, ec);
+            if (code == EEXIST)
+                return Error("file.exists", displayPath(path) + " exists", {},
+                             "choose another name");
+            return Error("file.write",
+                         "cannot move " + displayPath(tmp) + " into place: " + reason);
+        }
     }
     // And the directory entry: sync the directory (best effort).
     const int dfd = ::open(dir.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
@@ -257,6 +323,7 @@ Status writeFileAtomic(const fs::path& path, std::span<const std::uint8_t> bytes
 #endif
     return okStatus();
 }
+}  // namespace
 
 Status writeFileAtomic(const fs::path& path, std::string_view text) {
     return writeFileAtomic(
