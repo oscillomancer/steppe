@@ -684,7 +684,8 @@ is gone; one whose lock is held is a running app's and is never listed or
 touched. Process IDs decide nothing. Left-behind folders with content stay
 until the user recovers or deletes them; empty ones untouched for an hour
 are removed when an app starts.
-`project.recoverable` lists them as `sessions` beside `recordings`
+`project.recoverable` lists them (MIDI takes' journals among the
+recordings, ADR-0080) as `sessions` beside `recordings`
 (`session`, `started_ms`, `autosaved_ms`, `name`, `tracks`, `branches`,
 `recordings`, `bytes`); `project.recover {session}` replaces the current
 project (as `project.open`: the caller asks about unsaved changes first)
@@ -694,7 +695,8 @@ stays unsaved, puts the folder's leftover recordings back as one more undo
 step, and returns `autosave` (the file it used, or none). Without a
 readable autosave it recovers only when at least one recording can be put
 back, by the test `project.recover` applies when it places one (a sidecar
-that reads, a WAV with frames, a placement inside the timeline): a new
+that reads, a WAV with frames, a placement inside the timeline; for a MIDI
+journal, at least one event and a placement inside the timeline): a new
 project with one channel, "Recovered", that holds them; otherwise
 `recover.damaged`, with the current project and every file untouched. An
 unsaved project's media stay in its session folder. A path is inside it
@@ -708,8 +710,12 @@ inside too: if `media` itself leads out, they are not recovered
 (`recover.media_outside` warning) and nothing there is touched. Every file
 recovery opens (autosaves, `.keep` copies, sidecars, WAVs before inspection
 or repair) must resolve inside the folder recovery uses; one that does not
-is not opened (`recover.outside`), and `session.lock` is never opened
-through a link. A merge
+is not opened (`recover.outside`), and `session.lock` is taken only as
+a regular file of the folder's own, never through a link (on Windows the
+link itself is refused) and never as a named pipe. Recovery reads only regular files (a link to one inside is
+followed): a named pipe, a device or a folder in the place of any of them,
+or of a MIDI journal, is refused without being waited on
+(`recover.not_file`, or the WAV is passed over) and left as it is. A merge
 replayed into an unsaved project writes only inside its session folder and
 refuses any `..` (`history.media_outside`, §5.4). Nothing a recovery could not
 restore is lost by the first save, which releases the folder: an autosave
@@ -1024,7 +1030,10 @@ and naming. All `edit` unless marked (q) query or (a) action.
   A recording's commit (and `project.recover`'s) logs the internal
   `record.commit {takes, punch}`: the takes as the device delivered them
   (file relative to the media folder, segments, loop, MIDI events) and the
-  punch range then, so a merge places them again on another branch.
+  punch range then, so a merge places them again on another branch. Each
+  MIDI event's `bytes` is a channel message (status 128..239, then two
+  data bytes 0..127) and its `voice` fits 32 bits, or the call fails with
+  `record.midi`.
 - **render** (a): `render.mix {master}` (one master for the call; default the `masters` setting, else tr_0), `render.stems`, `render.regions` (matrix),
   `render.items`, `render.dry-run` (q: resolved file list), `render.job.*`;
   `format` (wav|flac), `secondary` (a second file in another format/bit depth

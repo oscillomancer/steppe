@@ -468,7 +468,8 @@ void registerProjectCommands(cmd::Registry& registry) {
         c.exposure = cmd::Exposure::McpExec;
         c.summary = "List recordings and unsaved projects a crash left behind.";
         c.description =
-            "recordings: takes recorded but never committed (the program stopped "
+            "recordings: takes (audio WAVs, and MIDI takes' journals with midi_events) recorded "
+            "but never committed (the program stopped "
             "mid-recording) or never saved, found in the media folder's rec/. start_seconds is "
             "where each was recorded; seconds includes audio written after the file's last "
             "header update. sessions: unsaved projects of earlier runs that ended without "
@@ -490,6 +491,9 @@ void registerProjectCommands(cmd::Registry& registry) {
                                       schema::number())
                                .field("seconds", &RecoverableInfo::seconds, schema::number())
                                .field("channels", &RecoverableInfo::channels, schema::integer())
+                               .field("midi_events", &RecoverableInfo::midiEvents,
+                                      schema::integer().doc(
+                                          "A MIDI take's journal: the events it holds"))
                                .build()))
                 .field("sessions", &RecoverableList::sessions,
                        schema::arrayOf(

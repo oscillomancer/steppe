@@ -1165,8 +1165,13 @@ Session and editing:
   mode to record; existing project files still load.
 - Engine stop/device restart retains finished audio and MIDI takes and commits
   them before app teardown. Headless exit does not save the project; clients
-  must stop and save first to preserve MIDI and other session edits. Audio
-  WAVs/sidecars remain recoverable; MIDI has no crash-recovery file.
+  must stop and save first to preserve session edits. Audio WAVs/sidecars and
+  MIDI take journals remain recoverable (ADR-0080): a MIDI take loses at most
+  the writer's last 20 ms pass on a crash, 5 s on a power cut. A committed
+  MIDI take's journal is deleted at the next save or autosave, so a take
+  undone before that save is not offered later (an undone audio WAV is). A
+  crash between an autosave and that deletion can offer a take the autosave
+  already holds. Native macOS/Windows runs of the journal are pending.
 - Save As into a subdirectory of the source media folder skips its destination
   subtree, including resolved symlink aliases, so copied files are not copied again.
 - Master playrate 0.25..4x and its tr_0 envelope persist in schema 2.1.
@@ -1220,7 +1225,7 @@ Session and editing:
   mid-call, and the cache remains memory-backed. Native CI for audio warp and
   background preparation is pending on macOS/Windows.
 - Loop recording passes that span a change of the loop range are not
-  handled; MIDI recordings have no crash recovery.
+  handled; a MIDI take's journal keeps the loop in effect at its start.
 - Master recording (ADR-0057): a plan change that moves a master's latency
   while it records shifts the rest of the take, as output-latency changes do
   for channel takes. Starting a recording while already playing lets an

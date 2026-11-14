@@ -75,7 +75,10 @@ used neither, nor `autosave_available` for saved projects.
    (`recover.outside`). `session.lock` is never opened through a link. A replayed merge of an unsaved project writes only inside its
    session folder, as a saved project's does inside its own (ADR-0076), and
    still refuses any `..`. (Amended 2026-11-14 after review rounds 5 and
-   6.)
+   6.) That helper reads regular files only: a named pipe, a device or a
+   folder in a file's place is refused without being waited on
+   (`recover.not_file`); WAVs are opened the same way. (Amended
+   2026-11-14 after review round 9.)
    `project.recoverable.delete {session}` deletes one. `project.get` and the
    other project-info results count `recoverable_sessions`.
 5. **The GUI offers, never loads.** At start without a project argument, and

@@ -820,8 +820,9 @@ first use, and no plug-in code runs early to warm it.
   socket-loop shutdown explicitly stop the engine while the session and bus
   still exist. This does not save a project: clients must stop recording and
   save before disconnecting to retain MIDI/session edits across process exit.
-  Audio WAVs and placement sidecars remain recoverable; MIDI has no recovery
-  sidecar. Forced termination cannot execute this shutdown path.
+  Audio WAVs and placement sidecars remain recoverable, and so do MIDI takes
+  through their journals (ADR-0080). Forced termination cannot execute this
+  shutdown path.
 - **Recording admission**: an armed track with `record.mode: output` fails
   `transport.record` with `record.output_unsupported`, its `/tracks/<id>/record/mode`
   path, and a hint to select input mode. This check runs before any recording
@@ -833,7 +834,7 @@ first use, and no plug-in code runs early to warm it.
   flush; a sidecar per file records its track and start, and
   `project.recover` repairs the header to cover everything on disk and places
   takes a crash left out (ADR-0014); punch in/out and loop recording (one take per pass); MIDI recording
-  into MIDI takes. Audio ring overflow becomes equal-length silence at its file
+  into MIDI takes, each journaled for crash recovery (below). Audio ring overflow becomes equal-length silence at its file
   position and is still reported; loop run positions remain in file-time units.
   Disk and periodic header errors stop only the failing target and retain that
   target's first error. The loop run table holds the initial run plus 4096 wraps;
@@ -847,6 +848,38 @@ first use, and no plug-in code runs early to warm it.
   survive pending hash jobs (including finalized loop runs at stop); the
   background finalization adds an optional `hash` without changing their
   recovery contract.
+- **MIDI take journals** (ADR-0080): each MIDI target writes
+  `<media>/rec/<Track>-<n>.midi.jsonl` (created exclusively, never through a
+  link; a name any entry has, a dangling link too, is not free, and a take
+  whose journal could not be created names none, so nothing already there
+  is ever deleted as its journal), JSON Lines with schema `supple.midi-recording/1.0`: a header object
+  (`track`, `sample_rate`, `start_sample`, `latency`, `device`, `routed`,
+  `shift`, `loop`), then events `[at, status, data1, data2]` (plus `route`,
+  `voice` for Note Out voices; `at` in captured frames), `{"run": [captured
+  frame, timeline]}` per loop wrap or seek, and `{"captured": n}`. The audio
+  thread only pushes to the MIDI rings and stores how far capture got (one
+  atomic store); the writer thread appends what it drains every 20 ms,
+  flushes to the OS each pass and fsyncs every 5 s. Loss window: about 20 ms
+  on a program crash (more only if the writer fell behind, up to the
+  4096-event ring), 5 s on a system crash. Readers drop a torn last line and
+  everything from the first line that does not read, or that holds what the
+  writer cannot write: an event that is not a channel message (status
+  0x80..0xEF, 7-bit data), a device event in a take with no device, a Note
+  Out event in one that is not routed, a voice outside 0..2^31-1, or a
+  clock (`at`, a run, `captured`) beyond 2^48 frames. A header whose clocks
+  are beyond that (or `latency` negative, or a loop that is neither `[0, 0]`
+  nor increasing), or that records neither a device nor Note Out, makes the
+  file not a journal (`record.journal`). The bound keeps placement's
+  arithmetic inside 64 bits. Stop and recovery
+  place a take with the same function (`detail::placeMidi`). A journal that
+  cannot be written gives the committed take a `record.journal` warning and
+  does not stop the recording. The app deletes a committed take's journal
+  once a save or autosave is written, where the save put it: a first save
+  moves it with the media, and a save as into another folder deletes the
+  copy there, leaving the old folder's for the old project, whose file does
+  not hold the take. Replacing a saved project without saving leaves its journals, offered on
+  its next open; replacing an unsaved one without saving discards them with
+  its folder (ADR-0078).
 - **Recording a rack Out** (rack.md §6): an armed channel whose selected
   `record.input` is an Out module records its stereo input, after input FX
   and before its own items, inserts, fader and Console 9 encode. Arming makes
@@ -1479,7 +1512,14 @@ A committed recording may carry a `warnings` array with structured
 `recording.loop_runs_full` is forwarded to `transport.stop` / pause callers
 and the `record.warning` event while retained passes still commit.
 `project.recoverable` and `project.recover` expose skipped invalid-sidecar
-diagnostics in the same optional `warnings` shape (`record.sidecar`). Recovery
+diagnostics in the same optional `warnings` shape (`record.sidecar`, and
+`record.journal` for a MIDI journal whose header does not read).
+`project.recoverable` lists a MIDI journal with at least one event that no
+committed take of the project holds (`midi_events`: how many; `channels`
+0); `project.recover` places it as stop would have, with its Note Out route
+ids dropped where the project no longer has the route; each such voice
+keeps its own identity, so overlapping notes of one pitch pair as stop paired
+them (ADR-0080). Recovery
 skips corrupt selections and continues with valid recordings; an unknown path
 still fails, and a directory with no recordings or diagnostics reports
 `recover.nothing`.

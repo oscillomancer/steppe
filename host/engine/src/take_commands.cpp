@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cerrno>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <set>
 
@@ -842,14 +843,24 @@ void registerTakeCommands(cmd::Registry& registry) {
                 r.isMidi = t.midi;
                 for (std::size_t k = 0; k < t.events.size(); ++k) {
                     const RecMidiArg& e = t.events[k];
+                    const std::string event = at + "/events/" + std::to_string(k);
+                    // A channel message as captured (ADR-0080): a status
+                    // 0x80..0xEF, then two 7-bit data bytes.
+                    if (e.bytes.size() != 3 || e.bytes[0] < 0x80 || e.bytes[0] > 0xef ||
+                        e.bytes[1] > 0x7f || e.bytes[2] > 0x7f)
+                        return Error(
+                            "record.midi", "a recorded MIDI event is not a channel message",
+                            event + "/bytes", "give [status 128..239, data 0..127, data 0..127]");
+                    if (e.voice < INT32_MIN || e.voice > INT32_MAX)
+                        return Error("record.midi", "a recorded MIDI voice is out of range",
+                                     event + "/voice", "give a voice within 32 bits");
                     RecordedMidiEvent m;
                     m.timeline = e.timeline;
                     m.run = static_cast<std::uint32_t>(e.run);
-                    for (std::size_t b = 0; b < 3 && b < e.bytes.size(); ++b)
+                    for (std::size_t b = 0; b < 3; ++b)
                         m.bytes[b] = static_cast<std::uint8_t>(e.bytes[b]);
                     if (e.route) {
-                        auto route = existing<model::Route>(
-                            s, *e.route, at + "/events/" + std::to_string(k) + "/route");
+                        auto route = existing<model::Route>(s, *e.route, event + "/route");
                         if (!route) return std::move(route).error();
                         m.route = *route;
                     }
@@ -879,8 +890,11 @@ json::Value recordCommitArgs(const std::vector<RecordedTake>& takes, const Trans
         t.track = r.track.str();
         std::error_code ec;
         const fs::path rel = media.empty() ? fs::path() : fs::relative(r.file, media, ec);
-        t.file =
-            !ec && !rel.empty() && *rel.begin() != ".." ? rel.generic_string() : r.file.string();
+        // A MIDI take's file is its crash-recovery journal (ADR-0080): not
+        // part of what a merge replays.
+        if (!r.isMidi)
+            t.file = !ec && !rel.empty() && *rel.begin() != ".." ? rel.generic_string()
+                                                                 : r.file.string();
         t.hash = r.hash;
         t.startSample = r.startSample;
         t.frames = r.frames;
