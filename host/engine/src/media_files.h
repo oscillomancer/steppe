@@ -43,6 +43,8 @@ bool resolvedInside(const std::filesystem::path& root, const std::filesystem::pa
 // the copies kept for the first save, recording sidecars and WAVs, MIDI
 // journals. A file that does not resolve inside `root` (the folder recovery
 // may use) is not opened: recover.outside. An empty `root` confines nothing.
+// Only a regular file is read (a link to one is followed): a named pipe, a
+// device or a folder is refused without being waited on, recover.not_file.
 Status recoveryFileInside(const std::filesystem::path& root, const std::filesystem::path& file);
 Result<std::vector<std::uint8_t>> readRecoveryFile(const std::filesystem::path& root,
                                                    const std::filesystem::path& file,

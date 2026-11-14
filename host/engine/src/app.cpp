@@ -2941,10 +2941,10 @@ std::int64_t leftoverRecordings(const fs::path& folder, const fs::path& rec,
         }
         if (f.extension() != ".wav" || !it->is_regular_file(ec)) continue;
         if (used.count(("rec" / f.filename()).generic_string())) continue;
-        std::error_code sideError;
+        std::error_code sideError;  // a sidecar recovery would read: regular, inside
         if (detail::recoveryFileInside(rec, f) &&
             detail::recoveryFileInside(rec, detail::sidecarPath(f)) &&
-            fs::exists(detail::sidecarPath(f), sideError))
+            fs::is_regular_file(fs::status(detail::sidecarPath(f), sideError)))
             ++n;
     }
     return n;

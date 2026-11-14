@@ -18,6 +18,8 @@
 #include "../src/file_platform.h"
 #if defined(_WIN32)
 #include <winioctl.h>
+#else
+#include <sys/stat.h>
 #endif
 
 using namespace supple::audio;
@@ -612,6 +614,35 @@ TEST_CASE("recording creation is exclusive and native paths survive recovery") {
         MESSAGE("symlink probe unavailable: ", ec.message());
     }
 }
+
+#if !defined(_WIN32)
+TEST_CASE("a recording's WAV stream is read and repaired only as a regular file") {
+    // Round-9 review: crash recovery must never wait in open() on a named
+    // pipe left where a recording was.
+    const fs::path dir = fs::temp_directory_path() /
+                         ("supple-wav-pipe-" + std::to_string(supple::test::processId()));
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    struct Cleanup {
+        fs::path path;
+        ~Cleanup() { fs::remove_all(path); }
+    } cleanup{dir};
+    const fs::path pipe = dir / "take.wav";
+    REQUIRE(::mkfifo(pipe.c_str(), 0600) == 0);
+    bool inspected = true, repaired = true, written = true;
+    CHECK_FALSE(supple::test::waitsOnFifo(pipe, [&] {
+        inspected = inspectWavStream(pipe).ok();
+        repaired = repairWavStream(pipe).ok();
+        WavStreamWriter writer;
+        written = writer.open(pipe, 48000, 2).ok();
+    }));
+    CHECK_FALSE(inspected);
+    CHECK_FALSE(repaired);
+    CHECK_FALSE(written);
+    CHECK_FALSE(inspectWavStream(dir));  // a folder neither
+    CHECK(fs::is_fifo(pipe));
+}
+#endif
 
 TEST_CASE("streaming render files sync and publish atomically over native paths") {
     const auto path =

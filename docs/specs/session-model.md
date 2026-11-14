@@ -711,7 +711,10 @@ inside too: if `media` itself leads out, they are not recovered
 recovery opens (autosaves, `.keep` copies, sidecars, WAVs before inspection
 or repair) must resolve inside the folder recovery uses; one that does not
 is not opened (`recover.outside`), and `session.lock` is never opened
-through a link. A merge
+through a link. Recovery reads only regular files (a link to one inside is
+followed): a named pipe, a device or a folder in the place of any of them,
+or of a MIDI journal, is refused without being waited on
+(`recover.not_file`, or the WAV is passed over) and left as it is. A merge
 replayed into an unsaved project writes only inside its session folder and
 refuses any `..` (`history.media_outside`, §5.4). Nothing a recovery could not
 restore is lost by the first save, which releases the folder: an autosave

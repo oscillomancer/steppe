@@ -184,13 +184,34 @@ Status recoveryFileInside(const fs::path& root, const fs::path& file) {
 Result<std::vector<std::uint8_t>> readRecoveryFile(const fs::path& root, const fs::path& file,
                                                    std::size_t limit) {
     SUPPLE_TRY(recoveryFileInside(root, file));
-    return readFile(file, limit);
+    std::vector<std::uint8_t> bytes;
+    switch (files::readRegular(file, limit, bytes)) {
+        case files::ReadRegular::Read:
+            return bytes;
+        case files::ReadRegular::Missing:
+            return Error("file.open", "cannot open " + file.string() + ": it does not exist", {},
+                         "check the path");
+        case files::ReadRegular::NotRegular:
+            return Error("recover.not_file",
+                         file.string() + " is not a regular file; recovery does not open it", {},
+                         "move it out of the folder: recovery reads only the regular files a "
+                         "recording or an autosave leaves");
+        case files::ReadRegular::TooLarge:
+            return Error("file.too_large",
+                         file.string() + " is larger than " + std::to_string(limit) + " bytes", {},
+                         "this is not a file recovery wrote; move it out of the folder");
+        case files::ReadRegular::Failed:
+            break;
+    }
+    return Error("file.read", "cannot read " + file.string(), {},
+                 "check that the file is readable");
 }
 
 Result<std::string> readRecoveryText(const fs::path& root, const fs::path& file,
                                      std::size_t limit) {
-    SUPPLE_TRY(recoveryFileInside(root, file));
-    return readTextFile(file, limit);
+    auto bytes = readRecoveryFile(root, file, limit);
+    if (!bytes) return std::move(bytes).error();
+    return std::string(bytes->begin(), bytes->end());
 }
 
 }  // namespace supple::engine::detail

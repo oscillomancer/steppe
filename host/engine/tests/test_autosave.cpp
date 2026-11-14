@@ -17,6 +17,9 @@
 #include "supple/json/json.h"
 #include "supple/model/project_file.h"
 #include "supple/model/schemas.h"
+#if !defined(_WIN32)
+#include <sys/stat.h>
+#endif
 
 using namespace supple;
 using namespace supple::engine;
@@ -1584,3 +1587,58 @@ TEST_CASE(
         CHECK(app->head().project->name == "Current work");
     }
 }
+
+#if !defined(_WIN32)
+TEST_CASE("recovery waits on no named pipe in a session a crash left behind") {
+    // Round-9 review: a WAV's sidecar that was a named pipe resolved inside
+    // the session, and recovery waited in open() for a writer. A pipe in
+    // the place of any file recovery reads is passed over; it stays.
+    Unsaved u;
+    const std::string left = "20261114-090000-61";
+    const fs::path folder = u.folder(left);
+    const fs::path rec = folder / "media" / "rec";
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    {
+        auto earlier = u.run(left);
+        cmd::Dispatcher d(registry, *earlier);
+        REQUIRE(d.execute({"track.add", json::Value::object(), kUnit}));
+        earlier->setFixedClock(1'060'000);
+        earlier->tick();
+    }
+    REQUIRE(fs::exists(folder / "autosave-1.json"));
+    auto app = u.run("20261114-100000-1");
+    rename(*app, "Current work");
+    fs::path pipe;
+    SUBCASE("a sidecar") {
+        leaveRecording(rec / "take.wav");
+        pipe = engine::detail::sidecarPath(rec / "take.wav");
+        fs::remove(pipe);
+    }
+    SUBCASE("a recording's WAV") {
+        leaveRecording(rec / "take.wav");
+        pipe = rec / "pipe.wav";
+        REQUIRE(engine::detail::writeSidecar(pipe, {{model::Kind::Track, 1}, 0, 48000, {}, 0, 0}));
+    }
+    SUBCASE("a MIDI journal") {
+        fs::create_directories(rec);
+        pipe = rec / "Keys-1.midi.jsonl";
+    }
+    SUBCASE("a newer autosave") { pipe = folder / "autosave-2.json"; }
+    REQUIRE(::mkfifo(pipe.c_str(), 0600) == 0);
+    std::int64_t listed = -1;
+    CHECK_FALSE(
+        test::waitsOnFifo(pipe, [&] { listed = app->recoverableSessions().front().recordings; }));
+    // Only the real take beside the pipe, and none whose sidecar is the pipe.
+    const std::int64_t real = fs::is_regular_file(engine::detail::sidecarPath(rec / "take.wav"));
+    CHECK(listed == real);
+    std::optional<Result<SessionRecovery>> r;
+    CHECK_FALSE(test::waitsOnFifo(pipe, [&] { r = app->recoverSession(left); }));
+    REQUIRE(r);
+    REQUIRE_MESSAGE(*r, (*r ? std::string() : r->error().toString()));
+    CHECK(static_cast<std::int64_t>((*r)->recovered.size()) == real);
+    for (const auto& took : (*r)->recovered)
+        CHECK_FALSE(took.file.ends_with(pipe.filename().string()));
+    CHECK(fs::is_fifo(fs::symlink_status(pipe)));
+}
+#endif
