@@ -502,6 +502,33 @@ TEST_CASE("automation a pass wrote on a branch reaches main through a replayed m
     CHECK(env->points == written);
 }
 
+TEST_CASE("a merge while main plays replays a pass's writes without capturing new ones") {
+    // Round-3 review, finding 3: the replayed track.set steps also wrote at
+    // main's live position, and joined main's own write pass.
+    WriteHost h("latch");
+    h.run("transport.pause");
+    REQUIRE(h.app->versions().createBranch("agent/claude/ride", "main"));
+    REQUIRE(h.app->switchBranch("agent/claude/ride"));
+    h.run("transport.play");
+    h.backend.run(4);
+    for (double db : {-3.0, -6.0, -9.0}) h.fader(db);
+    h.run("transport.pause");
+    const auto written = h.app->head().envelopes.begin()->value->points;
+    REQUIRE(written.size() > 2);
+    REQUIRE(h.app->switchBranch("main"));
+    h.run("track.add");                            // main moves on: the merge replays the branch
+    h.run("transport.seek", R"({"seconds": 4})");  // farther ahead than the pass
+    h.run("transport.play");
+    h.backend.run(4);
+    auto merged = h.run("branch.merge", R"({"from": "agent/claude/ride"})");
+    CHECK_FALSE(merged["fast_forward"].asBool());
+    const model::Id en1{model::Kind::Envelope, 1};
+    REQUIRE(h.app->head().envelopes.find(en1));
+    CHECK(h.app->head().envelopes.find(en1)->points == written);
+    h.run("transport.pause");  // main's own pass wrote nothing: nothing to hold
+    CHECK(h.app->head().envelopes.find(en1)->points == written);
+}
+
 TEST_CASE("a touch pass lets go of a level half a second after its last write") {
     WriteHost h("touch");
     const auto generation = h.engine().planGeneration();

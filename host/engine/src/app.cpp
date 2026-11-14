@@ -2032,7 +2032,9 @@ bool EngineApp::writesAutomation(model::Id object, const std::string& param) con
 }
 
 void EngineApp::recordAutomation(model::Id object, const std::string& param, double value) {
-    if (!engine_ || !txn_ || !engine_->transport().playing) return;
+    // A replayed step's writes come from its logged env.write.commit, not
+    // from where the live transport is now (nor into the live pass).
+    if (replaying_ || !engine_ || !txn_ || !engine_->transport().playing) return;
     recordAutomationAt(object, param, value, engine_->transport().seconds);
 }
 
