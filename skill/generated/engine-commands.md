@@ -6272,6 +6272,42 @@ Result:
 
 ```
 
+## `fx.state.capture@1`
+
+Record a plug-in's own state change as a replayable edit.
+
+
+
+Kind: `edit`. Exposure: `internal`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `fx` | string |  |  |  | Plug-in id, e.g. "fx_1". |
+| `state` | string |  |  |  | The state's blob hash, as the plug-in's state field holds it |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "empty",
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "additionalProperties": false
+}
+
+```
+
+### Examples
+
 ## `group.add@1`
 
 Create a named track group with optional links and members.

@@ -1514,6 +1514,11 @@ bool EngineApp::captureFxState(model::Id id, Error* failure) {
     origin.gesture = "state:" + id.str();  // later changes to it join this step
     auto txid = beginTransaction(origin, "Plug-in state");
     if (!txid) return false;
+    // Logged as fx.state.capture, so a merge replays it on another branch.
+    json::Value args = json::Value::object();
+    args["fx"] = id.str();
+    args["state"] = hash;
+    record_.invocations.push_back({"fx.state.capture", std::move(args)});
     txn().putBlob(hash, std::make_shared<const model::Blob>(model::Blob{std::move(*saved)}));
     model::FxInstance next = *fx;
     next.state = hash;

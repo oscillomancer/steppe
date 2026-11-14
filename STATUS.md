@@ -151,6 +151,7 @@ instructions are in `docs/guides/installing.md`.
   state while retaining the previous processing instance until plan retirement.
   Project format `supple.project/2.6` with migration from
   1.x, autosave, crash recovery of recordings, a per-project UI sidecar.
+  A plug-in's own state change (`fx.state.capture`) replays in merges.
 - **Track freeze** (ADR-0054): whole-channel pre-fader float32 capture, including
   take FX and auxiliary channels, with virtual latency and plugin retirement.
   Typed freeze/unfreeze, cancellable jobs, dependency-checked completion, retained
@@ -1210,6 +1211,10 @@ Session and editing:
 - `fx.copy` does not copy envelopes or key routes; take FX cannot be keyed.
 - The history budget's size estimate walks shared payloads per version, and
   squashed steps keep large invocation arguments.
+- Merges replay logged invocations; two internal edits log none, so a merge
+  that replays them (main moved since the fork) drops their effect: automation
+  written during playback ("Automation written") and recording commits made on
+  a branch. Found by reading `EngineApp`; not yet tested or fixed.
 
 GUI:
 - Automation-item point editing requires an amplitude magnitude above 0.000000001; restore

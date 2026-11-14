@@ -664,6 +664,13 @@ q = nil
 ---@class Steppe.fx_set_result
 ---@field warnings? table[]
 
+---@class Steppe.fx_state_capture_args
+---@field fx string Plug-in id, e.g. "fx_1".
+---@field state string The state's blob hash, as the plug-in's state field holds it
+
+---@class Steppe.fx_state_capture_result
+---@field warnings? table[]
+
 ---@class Steppe.group_add_args
 ---@field name string
 ---@field color? string
@@ -2214,6 +2221,9 @@ q = nil
 ---@field list fun(args: Steppe.fx_preset_list_args): Steppe.fx_preset_list_result List a plugin's presets: its factory ones, then the user's.
 ---@field load fun(args: Steppe.fx_preset_load_args): Steppe.fx_preset_load_result Apply a factory or user preset to a plugin instance in one undo step.
 ---@field save fun(args: Steppe.fx_preset_save_args): Steppe.fx_preset_save_result Save a plugin instance's current settings as a named user preset.
+
+---@class Steppe.fx.state
+---@field capture fun(args: Steppe.fx_state_capture_args): Steppe.fx_state_capture_result Record a plug-in's own state change as a replayable edit.
 
 ---@class Steppe.group
 ---@field add fun(args: Steppe.group_add_args): Steppe.group_add_result Create a named track group with optional links and members.

@@ -813,7 +813,9 @@ and naming. All `edit` unless marked (q) query or (a) action.
   soft_takeover?, when_selected?, when_focused?, when_visible?}` (one per
   parameter; a plain parameter by id or name), `fx.learn.remove {fx, param}`,
   `fx.learn.list {fx?}` (q),
-  `fx.state.capture` (internal, from plugin notifications), `plugin.list`
+  `fx.state.capture {fx, state}` (internal: a plug-in's own state change
+  as a save or its dirty notification captures it, logged so merges replay
+  it; the state is found by hash in any kept version), `plugin.list`
   (q), `plugin.scan` (a).
 - **routes**: `route.add {from, to, tap, channels, …}`, `route.remove`,
   `route.set`, `route.list` (q), `route.matrix {mode: audio|midi}` (q). MIDI
