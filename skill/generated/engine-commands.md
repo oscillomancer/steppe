@@ -12380,6 +12380,30 @@ Result:
 
 ```
 
+## `record.commit@1`
+
+Record a recording's commit (or a recovery's) as a replayable edit.
+
+The takes as the device delivered them and the punch range then; placing them again builds the same items, takes and sources. Audio files must still be there.
+
+Kind: `edit`. Exposure: `internal`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `takes` | array |  |  |  |  |
+| `punch` | object |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
+
 ## `region.add@1`
 
 Add a named region in beats.

@@ -1285,6 +1285,10 @@ q = nil
 ---@field name? string
 ---@field track? string
 
+---@class Steppe.record_commit_args
+---@field takes table[]
+---@field punch table
+
 ---@class Steppe.region_add_args
 ---@field start? number
 ---@field end? number
@@ -2369,6 +2373,9 @@ q = nil
 ---@field load fun(args: Steppe.rack_preset_load_args): table Add a saved preset's modules and cables to a rack.
 ---@field save fun(args: Steppe.rack_preset_save_args): table Save a rack's modules and cables as a preset.
 
+---@class Steppe.record
+---@field commit fun(args: Steppe.record_commit_args): table Record a recording's commit (or a recovery's) as a replayable edit.
+
 ---@class Steppe.region
 ---@field add fun(args?: Steppe.region_add_args): Steppe.region_add_result Add a named region in beats.
 ---@field list fun(): Steppe.region_list_result List rulers in this project.
@@ -2522,6 +2529,7 @@ q = nil
 ---@field plugin Steppe.plugin Commands named plugin.*
 ---@field project Steppe.project Commands named project.*
 ---@field rack Steppe.rack Commands named rack.*
+---@field record Steppe.record Commands named record.*
 ---@field region Steppe.region Commands named region.*
 ---@field registry Steppe.registry Commands named registry.*
 ---@field render Steppe.render Commands named render.*

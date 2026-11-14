@@ -2404,7 +2404,6 @@ Status commitMidiTake(model::EditTxn& t, const model::Session& s, const Recorded
 
 Result<std::vector<RecordedInfo>> EngineApp::commitTakes(const std::vector<RecordedTake>& takes,
                                                          std::string_view label) {
-    std::vector<RecordedInfo> out;
     std::vector<std::pair<Id, RecordedTake>> pendingHashes;
     const model::Session initial = view();
     for (const auto& r : takes) {
@@ -2416,135 +2415,15 @@ Result<std::vector<RecordedInfo>> EngineApp::commitTakes(const std::vector<Recor
     }
     auto txnId = beginTransaction({cmd::Origin::Type::Internal, "engine", ""}, label);
     if (!txnId) return std::move(txnId).error();
-    const model::Session s = view();
-    // Relative to the media folder when there is one (a saved project's or the
-    // scratch folder), so a first save can move the files and keep the paths.
-    const fs::path media = projectDir().empty() ? fs::path() : projectDir() / s.project->mediaDir;
-    for (const RecordedTake& r : takes) {
-        for (const Error& e : r.warnings) {
-            json::Value ev = json::Value::object();
-            ev["code"] = e.code;
-            ev["message"] = e.message;
-            ev["path"] = e.path;
-            ev["hint"] = e.hint;
-            ev["track"] = r.track.str();
-            ev["file"] = r.file.string();
-            emit("record.warning", std::move(ev));
-        }
-        if (!r.error.empty()) {
-            json::Value ev = json::Value::object();
-            ev["track"] = r.track.str();
-            ev["file"] = r.file.string();
-            ev["error"] = r.error;
-            emit("record.error", std::move(ev));
-        }
-        const double rate = r.sampleRate > 0 ? r.sampleRate : s.project->sampleRate;
-        if (r.frames <= 0 || !s.tracks.find(r.track)) continue;
-        // The runs on the timeline (ADR-0015): one per loop pass, or one.
-        std::vector<RecordedSegment> segs = r.segments;
-        if (segs.empty()) segs.push_back({0, r.startSample});
-        std::vector<Run> runs;
-        for (std::size_t k = 0; k < segs.size(); ++k) {
-            const std::int64_t to =
-                std::min(r.frames, k + 1 < segs.size() ? segs[k + 1].fileFrame : r.frames);
-            if (to > segs[k].fileFrame)
-                runs.push_back({segs[k].fileFrame, to, segs[k].timeline, k});
-        }
-        const bool passes = runs.size() > 1 && r.loop.end > r.loop.start;
-        // Items: the loop range for passes (one take per pass), else one per
-        // run; within the punch range and never before the timeline's start
-        // (material outside stays in the file, skipped by the take).
-        const auto punchFrom = static_cast<std::int64_t>(std::llround(punch_.start * rate));
-        const auto punchTo = static_cast<std::int64_t>(std::llround(punch_.end * rate));
-        auto clip = [&](std::int64_t& from, std::int64_t& to) {
-            if (punch_.enabled) {
-                from = std::max(from, punchFrom);
-                to = std::min(to, punchTo);
-            }
-            from = std::max<std::int64_t>(from, 0);
-            return to > from;
-        };
-        std::vector<ItemPlan> items;
-        if (passes) {
-            ItemPlan ip{r.loop.start, r.loop.end, {}};
-            if (clip(ip.start, ip.end)) {
-                for (std::size_t k = 0; k < runs.size(); ++k) {
-                    const Run& run = runs[k];
-                    const std::int64_t t1 = run.t0 + (run.to - run.from);
-                    if (t1 <= ip.start || run.t0 >= ip.end) continue;
-                    ip.takes.push_back(
-                        {run.from + (ip.start - run.t0), run.t0 <= ip.start && t1 >= ip.end, k});
-                }
-                if (!ip.takes.empty()) items.push_back(std::move(ip));
-            }
-        } else {
-            for (std::size_t k = 0; k < runs.size(); ++k) {
-                const Run& run = runs[k];
-                ItemPlan ip{run.t0, run.t0 + (run.to - run.from), {}};
-                if (!clip(ip.start, ip.end)) continue;
-                ip.takes.push_back({run.from + (ip.start - run.t0), true, k});
-                items.push_back(std::move(ip));
-            }
-        }
-        if (items.empty()) continue;
-        if (r.isMidi) {
-            if (!r.midi.empty()) SUPPLE_TRY(commitMidiTake(txn(), s, r, runs, items, rate, out));
-            continue;
-        }
-        // Known hashes may reuse a source; freshly closed files commit now
-        // with an empty hash and complete their metadata in the background.
-        model::EditTxn& t = txn();
-        Id source;
-        if (const auto known = model::mediaSourceWithHash(s, r.hash)) {
-            source = *known;
-        } else {
-            model::MediaSource md;
-            std::error_code ec;
-            const fs::path rel = media.empty() ? fs::path() : fs::relative(r.file, media, ec);
-            md.path = !ec && !rel.empty() && *rel.begin() != ".." ? rel.string() : r.file.string();
-            md.hash = r.hash;
-            md.format = "wav";
-            md.sampleRate = rate;  // the device's (resampled to the plan's rate on playback)
-            md.channels = 0;
-            if (auto head = audio::inspectWavStream(r.file))
-                md.channels = static_cast<int>(head->channels);
-            md.frames = r.frames;
-            source = t.create(std::move(md));
-            if (r.hash.empty() && commands_) pendingHashes.emplace_back(source, r);
-        }
-        for (const ItemPlan& ip : items) {
-            model::Item item;
-            item.track = r.track;
-            const double start = static_cast<double>(ip.start) / rate;
-            const double end = static_cast<double>(ip.end) / rate;
-            model::placeItemSeconds(s, item, start, end);  // in the track's timebase
-            RecordedInfo info;
-            info.warnings = recordingWarnings(r);
-            std::optional<Id> active;
-            for (std::size_t k = 0; k < ip.takes.size(); ++k) {
-                model::Take take;
-                take.source = source;
-                take.startOffset =
-                    static_cast<double>(ip.takes[k].fileFrame) / rate;  // < 0: silence first
-                take.name = r.file.stem().string();
-                if (ip.takes.size() > 1) take.name += " pass " + std::to_string(k + 1);
-                const Id tk = t.create(std::move(take));
-                item.takes.push_back(tk);
-                info.takes.push_back(tk.str());
-                if (ip.takes[k].whole) active = tk;  // the newest whole pass...
-            }
-            if (!active) active = item.takes.back();  // ...or the last one
-            item.activeTake = active;
-            const Id it = t.create(std::move(item));
-            info.track = r.track.str();
-            info.item = it.str();
-            info.take = active->str();
-            info.file = r.file.string();
-            info.seconds = end - start;
-            info.lostFrames = static_cast<std::int64_t>(r.overflowFrames);
-            out.push_back(std::move(info));
-        }
-    }
+    auto placed = placeTakes(takes, punch_, &pendingHashes);
+    if (!placed) return std::move(placed).error();
+    std::vector<RecordedInfo> out = std::move(*placed);
+    // Logged as record.commit, so a merge replays it on another branch: the
+    // takes came from the device, not from a command.
+    const fs::path media =
+        projectDir().empty() ? fs::path() : projectDir() / head().project->mediaDir;
+    record_.invocations.push_back(
+        {"record.commit", detail::recordCommitArgs(takes, punch_, media)});
     SUPPLE_TRY(commitTransaction(*txnId));
     for (auto& [source, pendingTake] : pendingHashes) {
         // Open only; all reads happen on the worker. The handle survives a
@@ -2587,7 +2466,164 @@ Result<std::vector<RecordedInfo>> EngineApp::commitTakes(const std::vector<Recor
                              });
         });
     }
+    return out;
+}
 
+Result<std::vector<RecordedInfo>> EngineApp::placeTakes(
+    const std::vector<RecordedTake>& takes, const TransportRange& punch,
+    std::vector<std::pair<Id, RecordedTake>>* pendingHashes) {
+    std::vector<RecordedInfo> out;
+    const bool live = pendingHashes != nullptr;  // else record.commit replays them
+    const model::Session s = view();
+    if (!live)  // commitTakes checked them before its transaction
+        for (const auto& r : takes) {
+            if (r.frames <= 0) continue;
+            const double rate = r.sampleRate == 0 ? s.project->sampleRate : r.sampleRate;
+            detail::RecordingInfo side{r.track,    r.startSample, rate,
+                                       r.segments, r.loop.start,  r.loop.end};
+            SUPPLE_TRY(recordingBounds(s, side, static_cast<std::uint64_t>(r.frames)));
+        }
+    // Relative to the media folder when there is one (a saved project's or the
+    // scratch folder), so a first save can move the files and keep the paths.
+    const fs::path media = projectDir().empty() ? fs::path() : projectDir() / s.project->mediaDir;
+    for (const RecordedTake& r : takes) {
+        if (live)
+            for (const Error& e : r.warnings) {
+                json::Value ev = json::Value::object();
+                ev["code"] = e.code;
+                ev["message"] = e.message;
+                ev["path"] = e.path;
+                ev["hint"] = e.hint;
+                ev["track"] = r.track.str();
+                ev["file"] = r.file.string();
+                emit("record.warning", std::move(ev));
+            }
+        if (live && !r.error.empty()) {
+            json::Value ev = json::Value::object();
+            ev["track"] = r.track.str();
+            ev["file"] = r.file.string();
+            ev["error"] = r.error;
+            emit("record.error", std::move(ev));
+        }
+        const double rate = r.sampleRate > 0 ? r.sampleRate : s.project->sampleRate;
+        if (r.frames <= 0 || !s.tracks.find(r.track)) continue;
+        // The runs on the timeline (ADR-0015): one per loop pass, or one.
+        std::vector<RecordedSegment> segs = r.segments;
+        if (segs.empty()) segs.push_back({0, r.startSample});
+        std::vector<Run> runs;
+        for (std::size_t k = 0; k < segs.size(); ++k) {
+            const std::int64_t to =
+                std::min(r.frames, k + 1 < segs.size() ? segs[k + 1].fileFrame : r.frames);
+            if (to > segs[k].fileFrame)
+                runs.push_back({segs[k].fileFrame, to, segs[k].timeline, k});
+        }
+        const bool passes = runs.size() > 1 && r.loop.end > r.loop.start;
+        // Items: the loop range for passes (one take per pass), else one per
+        // run; within the punch range and never before the timeline's start
+        // (material outside stays in the file, skipped by the take).
+        const auto punchFrom = static_cast<std::int64_t>(std::llround(punch.start * rate));
+        const auto punchTo = static_cast<std::int64_t>(std::llround(punch.end * rate));
+        auto clip = [&](std::int64_t& from, std::int64_t& to) {
+            if (punch.enabled) {
+                from = std::max(from, punchFrom);
+                to = std::min(to, punchTo);
+            }
+            from = std::max<std::int64_t>(from, 0);
+            return to > from;
+        };
+        std::vector<ItemPlan> items;
+        if (passes) {
+            ItemPlan ip{r.loop.start, r.loop.end, {}};
+            if (clip(ip.start, ip.end)) {
+                for (std::size_t k = 0; k < runs.size(); ++k) {
+                    const Run& run = runs[k];
+                    const std::int64_t t1 = run.t0 + (run.to - run.from);
+                    if (t1 <= ip.start || run.t0 >= ip.end) continue;
+                    ip.takes.push_back(
+                        {run.from + (ip.start - run.t0), run.t0 <= ip.start && t1 >= ip.end, k});
+                }
+                if (!ip.takes.empty()) items.push_back(std::move(ip));
+            }
+        } else {
+            for (std::size_t k = 0; k < runs.size(); ++k) {
+                const Run& run = runs[k];
+                ItemPlan ip{run.t0, run.t0 + (run.to - run.from), {}};
+                if (!clip(ip.start, ip.end)) continue;
+                ip.takes.push_back({run.from + (ip.start - run.t0), true, k});
+                items.push_back(std::move(ip));
+            }
+        }
+        if (items.empty()) continue;
+        if (r.isMidi) {
+            if (!r.midi.empty()) SUPPLE_TRY(commitMidiTake(txn(), s, r, runs, items, rate, out));
+            continue;
+        }
+        // Known hashes may reuse a source; freshly closed files commit now
+        // with an empty hash and complete their metadata in the background.
+        model::EditTxn& t = txn();
+        // Replayed before its hash was known here: the branch's own source
+        // for the file may have it by now.
+        std::string hash = r.hash;
+        std::error_code relError;
+        const fs::path relative =
+            media.empty() ? fs::path() : fs::relative(r.file, media, relError);
+        const std::string mediaPath = !relError && !relative.empty() && *relative.begin() != ".."
+                                          ? relative.string()
+                                          : r.file.string();
+        if (!live && hash.empty())
+            versions_->forEachVersion([&](const model::Version& v) {
+                for (const auto& e : v.session->media)
+                    if (hash.empty() && e.value->path == mediaPath) hash = e.value->hash;
+            });
+        Id source;
+        if (const auto known = model::mediaSourceWithHash(s, hash)) {
+            source = *known;
+        } else {
+            model::MediaSource md;
+            md.path = mediaPath;
+            md.hash = hash;
+            md.format = "wav";
+            md.sampleRate = rate;  // the device's (resampled to the plan's rate on playback)
+            md.channels = 0;
+            if (auto head = audio::inspectWavStream(r.file))
+                md.channels = static_cast<int>(head->channels);
+            md.frames = r.frames;
+            source = t.create(std::move(md));
+            if (hash.empty() && commands_ && live) pendingHashes->emplace_back(source, r);
+        }
+        for (const ItemPlan& ip : items) {
+            model::Item item;
+            item.track = r.track;
+            const double start = static_cast<double>(ip.start) / rate;
+            const double end = static_cast<double>(ip.end) / rate;
+            model::placeItemSeconds(s, item, start, end);  // in the track's timebase
+            RecordedInfo info;
+            info.warnings = recordingWarnings(r);
+            std::optional<Id> active;
+            for (std::size_t k = 0; k < ip.takes.size(); ++k) {
+                model::Take take;
+                take.source = source;
+                take.startOffset =
+                    static_cast<double>(ip.takes[k].fileFrame) / rate;  // < 0: silence first
+                take.name = r.file.stem().string();
+                if (ip.takes.size() > 1) take.name += " pass " + std::to_string(k + 1);
+                const Id tk = t.create(std::move(take));
+                item.takes.push_back(tk);
+                info.takes.push_back(tk.str());
+                if (ip.takes[k].whole) active = tk;  // the newest whole pass...
+            }
+            if (!active) active = item.takes.back();  // ...or the last one
+            item.activeTake = active;
+            const Id it = t.create(std::move(item));
+            info.track = r.track.str();
+            info.item = it.str();
+            info.take = active->str();
+            info.file = r.file.string();
+            info.seconds = end - start;
+            info.lostFrames = static_cast<std::int64_t>(r.overflowFrames);
+            out.push_back(std::move(info));
+        }
+    }
     return out;
 }
 

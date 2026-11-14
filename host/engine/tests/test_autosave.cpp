@@ -339,6 +339,7 @@ TEST_CASE("every edit command a saved branch may replay has been audited") {
                                                "rack.preset.load",
                                                "rack.remove",
                                                "rack.set",
+                                               "record.commit",
                                                "region.add",
                                                "region.remove",
                                                "region.set",
@@ -387,4 +388,51 @@ TEST_CASE("every edit command a saved branch may replay has been audited") {
     for (const auto& name : edits) listed += "\"" + name + "\", ";
     INFO(listed);
     CHECK(edits == audited);
+}
+
+TEST_CASE("a recording committed on a branch reaches main through a replayed merge") {
+    // Out of scope of item A, found then: a recording's commit logged no
+    // step, so a merge that replays the branch dropped the takes.
+    Project p;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *p.app);
+    const cmd::Origin unit{cmd::Origin::Type::Test, "unit", ""};
+    auto run = [&](const char* command, std::string_view args) {
+        auto r = d.execute({command, json::parse(args).value(), unit});
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        return *r;
+    };
+    p.app->setupFixture(d, "recording_interrupted");  // tr_1 + rec/Vocal-1.wav, on main
+    REQUIRE(p.app->versions().createBranch("agent/claude/take", "main"));
+    REQUIRE(p.app->switchBranch("agent/claude/take"));
+    run("project.recover", "{}");  // the take is committed as a recording stop commits it
+    REQUIRE(p.app->head().items.size() == 1);
+    const model::Item branchItem = *p.app->head().items.begin()->value;
+    const std::string branchMedia = p.app->head().media.begin()->value->path;
+    REQUIRE(p.app->switchBranch("main"));
+    run("track.add", R"({"name": "Keys"})");  // main moves on: the merge replays the branch
+    SUBCASE("live") {}
+    SUBCASE("after saving and reopening: record.commit is a saved step that may replay") {
+        REQUIRE(p.app->save("song.json"));
+        std::vector<schema::Warning> warnings;
+        REQUIRE(p.app->open("song.json", &warnings));
+        CHECK_FALSE(hasWarning(warnings, "project.history"));
+        REQUIRE(p.app->switchBranch("main"));
+    }
+    auto merged = run("branch.merge", R"({"from": "agent/claude/take"})");
+    CHECK_FALSE(merged["fast_forward"].asBool());
+    const model::Session& main = p.app->head();
+    REQUIRE(main.items.size() == 1);
+    const model::Item& item = *main.items.begin()->value;
+    CHECK(item.track == branchItem.track);
+    CHECK(item.position == branchItem.position);
+    CHECK(item.length == branchItem.length);
+    REQUIRE(main.media.size() == 1);
+    // The same file, named relative to the media folder once there is one.
+    auto resolved = [&](const std::string& path) {
+        const fs::path f(path);
+        return fs::weakly_canonical(f.is_relative() ? p.app->mediaDir() / f : f);
+    };
+    CHECK(resolved(main.media.begin()->value->path) == resolved(branchMedia));
 }

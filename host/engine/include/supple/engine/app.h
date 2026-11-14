@@ -513,6 +513,13 @@ class EngineApp : public cmd::Host {
     // Commits recorded takes as items on their tracks (one version).
     Result<std::vector<RecordedInfo>> commitTakes(const std::vector<RecordedTake>& takes,
                                                   std::string_view label = "record");
+    // Places recorded takes as items in the open transaction, with `punch`
+    // as it was when they were recorded. `pendingHashes` (live commits): the
+    // sources whose files still need hashing, and warnings are emitted; null
+    // when record.commit replays a commit on another branch.
+    Result<std::vector<RecordedInfo>> placeTakes(
+        const std::vector<RecordedTake>& takes, const TransportRange& punch,
+        std::vector<std::pair<model::Id, RecordedTake>>* pendingHashes);
 
     // --- recordings (crash recovery, ADR-0014 §3) -----------------------------------
     // Where media lives: next to the project file, or the work directory's

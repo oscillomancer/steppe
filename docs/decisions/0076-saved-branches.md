@@ -114,8 +114,8 @@ The branch's steps are also what the human reviews after reopening:
   plug-in's own state change now logs the internal `fx.state.capture {fx,
   state}`, which finds the state by hash in any kept version; automation
   written during playback logs the internal `env.write.commit` with the
-  points it wrote; recording commits still log nothing (`STATUS.md`, known
-  limits).
+  points it wrote, and a recording's commit the internal `record.commit`
+  with the takes as recorded.
 
 ## Alternatives considered
 

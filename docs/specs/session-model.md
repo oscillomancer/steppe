@@ -935,6 +935,10 @@ and naming. All `edit` unless marked (q) query or (a) action.
   `transport.punch {start, end | clear}` (`clear` removes the range and turns
   it off), `transport.metronome {count_in_bars,
   count_in_playback, …}` (a count-in before recording), `transport.get` (q).
+  A recording's commit (and `project.recover`'s) logs the internal
+  `record.commit {takes, punch}`: the takes as the device delivered them
+  (file relative to the media folder, segments, loop, MIDI events) and the
+  punch range then, so a merge places them again on another branch.
 - **render** (a): `render.mix {master}` (one master for the call; default the `masters` setting, else tr_0), `render.stems`, `render.regions` (matrix),
   `render.items`, `render.dry-run` (q: resolved file list), `render.job.*`;
   `format` (wav|flac), `secondary` (a second file in another format/bit depth
