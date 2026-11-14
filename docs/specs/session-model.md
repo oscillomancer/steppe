@@ -717,6 +717,13 @@ and nothing else is kept (the file is then the document alone).
   `project.history` warning; the first save over that file keeps a copy of
   it as `<file>.pre-branches.bak` (`-2`, `-3`… when taken), reported as a
   `project.history_backup` warning. A 2.13 or older file opens as main.
+- **What opening checks.** Besides the structure: every parent is an earlier
+  saved version (at most two); `replay_of` names an earlier version (0:
+  none), so the links merges walk back always end; each branch's `base` is
+  on its head's first-parent line, and its `redo` steps continue the head
+  one by one (the last one's first parent is the head, each earlier one's
+  the step after it), so undo and redo stay on saved versions; every saved
+  step is replayable (below). Any failure is damage: main opens alone.
 - Logged invocations are part of the format: a command whose arguments
   change incompatibly makes a merge of an older file's branch stop with an
   `invalid` conflict.

@@ -1007,6 +1007,41 @@ TEST_CASE("a damaged or stale branches section opens main alone") {
         CHECK(opened->store.branches() == std::vector<std::string>{"main"});
         CHECK_FALSE(projectFileFromJson(doc, nullptr, edits)->branchesDropped);  // the real one
     }
+    SUBCASE("a version that is a replay of itself (review of item A #3)") {
+        auto damaged = doc;
+        auto& versions = damaged["branches"]["versions"].asObject();
+        REQUIRE(versions.begin() != versions.end());
+        auto& first = *versions.begin();
+        first.value["replay_of"] = json::parse(first.key).value();  // a cycle a merge would loop on
+        CHECK(open(damaged) == "history.saved");
+    }
+    SUBCASE("a later version named as what a version replays") {
+        auto damaged = doc;
+        auto& versions = damaged["branches"]["versions"].asObject();
+        std::string newest;
+        for (const auto& v : versions)
+            newest = std::max(newest, v.key, [](auto& a, auto& b) {
+                return a.size() != b.size() ? a.size() < b.size() : a < b;
+            });
+        versions.begin()->value["replay_of"] = json::parse(newest).value();
+        CHECK(open(damaged) == "history.saved");
+    }
+    SUBCASE("a redo step that does not continue the head (review of item A #4)") {
+        auto damaged = doc;
+        auto& main = damaged["branches"]["refs"]["main"];
+        REQUIRE(main.find("head")->asDouble() == main.find("base")->asDouble());
+        // Any other saved version: redo would jump there and undo then walk
+        // off its parents.
+        for (const auto& v : damaged["branches"]["versions"].asObject())
+            if (v.key !=
+                std::to_string(static_cast<std::uint64_t>(main.find("head")->asDouble()))) {
+                main["redo"] = json::Value::array();
+                main["redo"].push_back(json::parse(v.key).value());
+                break;
+            }
+        REQUIRE(main.find("redo"));
+        CHECK(open(damaged) == "history.saved");
+    }
     SUBCASE("a state that does not load") {
         auto damaged = doc;
         for (auto& v : damaged["branches"]["versions"].asObject())

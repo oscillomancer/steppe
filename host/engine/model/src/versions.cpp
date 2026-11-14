@@ -768,7 +768,7 @@ bool VersionStore::canRedo() const { return !branches_.at(current_).redo.empty()
 Status VersionStore::undo() {
     Branch& b = branches_.at(current_);
     b.view.reset();
-    if (b.head == b.base)
+    if (b.head == b.base || versions_.at(b.head).parents.empty())
         return Error("history.nothing_to_undo", "nothing to undo on branch " + current_);
     b.redo.push_back(b.head);
     b.head = versions_.at(b.head).parents.front();
@@ -958,6 +958,9 @@ MergeOutcome VersionStore::merge(std::string_view from, std::string_view into,
             if (it == versions_.end()) break;
             if (held.try_emplace(of, remap).second) replayed.insert(of);
             remap = compose(it->second.mergeRemap, remap);
+            // Replays copy earlier steps; never follow a link that does not
+            // go back (restore() refuses them, this keeps the walk finite).
+            if (it->second.replayOf >= of) break;
             of = it->second.replayOf;
         }
         if (v.parents.empty()) break;
@@ -1258,6 +1261,10 @@ Result<VersionStore> VersionStore::restore(SavedHistory saved) {
                            path + "/parents");
         if (id >= saved.next)
             return bad("next_version must be past every version", "/branches/next_version");
+        // A replay copies an earlier step: merges walk these links back.
+        if (v.replayOf != 0 && v.replayOf >= id)  // 0: not a replay
+            return bad("replay_of " + std::to_string(v.replayOf) + " is not an earlier version",
+                       path + "/replay_of");
     }
     VersionStore store;
     store.versions_ = std::move(saved.versions);
@@ -1273,10 +1280,20 @@ Result<VersionStore> VersionStore::restore(SavedHistory saved) {
         if (!store.descends(sb.head, sb.base))
             return bad("base " + std::to_string(sb.base) + " is not behind the head",
                        path + "/base");
-        for (const auto id : sb.redo)
-            if (!store.versions_.contains(id))
-                return bad("redo step " + std::to_string(id) + " is not a saved version",
+        // Redo is the way back up: its last step continues the head, each
+        // earlier one the step after it (undo then walks back down).
+        std::uint64_t below = sb.head;
+        for (auto it = sb.redo.rbegin(); it != sb.redo.rend(); ++it) {
+            const auto found = store.versions_.find(*it);
+            if (found == store.versions_.end())
+                return bad("redo step " + std::to_string(*it) + " is not a saved version",
                            path + "/redo");
+            if (found->second.parents.empty() || found->second.parents.front() != below)
+                return bad("redo step " + std::to_string(*it) + " does not continue " +
+                               std::to_string(below),
+                           path + "/redo");
+            below = *it;
+        }
         Counters allocated = sb.allocated;
         const auto& counters = store.versions_.at(sb.head).session->next;
         for (std::size_t k = 0; k < kKindCount; ++k)

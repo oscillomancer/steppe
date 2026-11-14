@@ -58,6 +58,10 @@ The branch's steps are also what the human reviews after reopening:
    alone with a `project.history` warning. The first save over that file then
    keeps a copy of it as `<file>.pre-branches.bak` (`-2`, `-3`… if taken) and
    says so (`project.history_backup`); the file itself is untouched until then.
+   Damage includes links undo and merges could not walk: a `replay_of` that
+   is not an earlier version (a merge would loop on it) and redo steps that
+   do not continue the head one by one (redo would jump off the branch and
+   undo then fail), as the review of the first version found.
 7. **Autosaves** write the same format. Autosave and the GUI's
    unsaved-changes check compare every branch's head and the current branch
    (`VersionStore::heads()`) with those last written, not only the current
