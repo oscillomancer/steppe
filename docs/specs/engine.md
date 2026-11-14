@@ -1071,6 +1071,19 @@ instance).
   ADR-0026). A renderer waiting for a bridged plug-in therefore never waits
   behind a lower-priority thread. Applying it is best effort: a refusal leaves
   the thread as it was.
+- **Live deadline (ADR-0081).** `host::LiveBridgeDeadline` sets, for the
+  calling thread, the steady-clock time (`host::steadyNanoseconds()`) by which
+  bridged audio-thread calls must be answered. Under it a call spins briefly,
+  then makes timed waits on the done word up to the deadline and nothing
+  else: no `alive()` check, kill or reap. Unanswered, `process()` outputs
+  silence (no output events) and returns true, lifecycle calls return false,
+  and the request stays outstanding; every later call first waits for that
+  answer (under its own deadline) before it touches the shared memory, and
+  discards the late output. `host::bridgeLateCalls()` counts late calls
+  process-wide. Consecutive late calls spanning 50 ms fail the instance with
+  the hung reason; the audio thread only sets the flag, and the main thread
+  kills the process when it services the instance. Without a deadline the
+  background rules below apply unchanged.
 - The current bridge is synchronous and runs only offline or on rendered-ahead
   nodes. A stage on a device-callback node (including a take FX stage) passes
   through with its compensated delay; the callback calls neither processing nor

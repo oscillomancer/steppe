@@ -355,19 +355,25 @@ struct Layout {
 };
 
 #if !defined(_WIN32)
-inline long futexWait(std::atomic<std::uint32_t>& word, std::uint32_t expected, int timeoutMs) {
+// `timeoutNs` < 0: no timeout.
+inline long futexWaitNs(std::atomic<std::uint32_t>& word, std::uint32_t expected,
+                        long long timeoutNs) {
 #if defined(__linux__)
-    timespec ts{timeoutMs / 1000, static_cast<long>(timeoutMs % 1000) * 1000000L};
+    timespec ts{static_cast<time_t>(timeoutNs / 1'000'000'000),
+                static_cast<long>(timeoutNs % 1'000'000'000)};
     return ::syscall(SYS_futex, reinterpret_cast<std::uint32_t*>(&word), FUTEX_WAIT, expected,
-                     timeoutMs < 0 ? nullptr : &ts, nullptr, 0);
+                     timeoutNs < 0 ? nullptr : &ts, nullptr, 0);
 #elif defined(__APPLE__)
-    if (timeoutMs < 0)
+    if (timeoutNs < 0)
         return os_sync_wait_on_address(&word, expected, sizeof(expected),
                                        OS_SYNC_WAIT_ON_ADDRESS_SHARED);
     return os_sync_wait_on_address_with_timeout(
         &word, expected, sizeof(expected), OS_SYNC_WAIT_ON_ADDRESS_SHARED,
-        OS_CLOCK_MACH_ABSOLUTE_TIME, static_cast<std::uint64_t>(timeoutMs) * 1'000'000);
+        OS_CLOCK_MACH_ABSOLUTE_TIME, static_cast<std::uint64_t>(timeoutNs));
 #endif
+}
+inline long futexWait(std::atomic<std::uint32_t>& word, std::uint32_t expected, int timeoutMs) {
+    return futexWaitNs(word, expected, timeoutMs < 0 ? -1 : timeoutMs * 1'000'000LL);
 }
 inline void futexWake(std::atomic<std::uint32_t>& word) {
 #if defined(__linux__)
@@ -428,14 +434,20 @@ class SharedSignals {
 #endif
     long wait(std::atomic<std::uint32_t>& word, std::uint32_t seen, int timeoutMs,
               bool completion = false) {
+        return waitNs(word, seen, timeoutMs < 0 ? -1 : timeoutMs * 1'000'000LL, completion);
+    }
+    // Windows waits in whole milliseconds, rounded down: under one, it only
+    // checks the event, and the caller's loop rechecks its deadline.
+    long waitNs(std::atomic<std::uint32_t>& word, std::uint32_t seen, long long timeoutNs,
+                bool completion = false) {
 #if defined(_WIN32)
         if (word.load(std::memory_order_acquire) != seen) {
             errno = EAGAIN;
             return -1;
         }
-        const auto result =
-            WaitForSingleObject(completion ? done_ : request_,
-                                timeoutMs < 0 ? INFINITE : static_cast<DWORD>(timeoutMs));
+        const auto result = WaitForSingleObject(
+            completion ? done_ : request_,
+            timeoutNs < 0 ? INFINITE : static_cast<DWORD>(timeoutNs / 1'000'000));
         if (result == WAIT_OBJECT_0) return 0;
         errno = result == WAIT_TIMEOUT ? ETIMEDOUT : EIO;
         return -1;
@@ -447,7 +459,7 @@ class SharedSignals {
             return -1;
         }
 #endif
-        return futexWait(word, seen, timeoutMs);
+        return futexWaitNs(word, seen, timeoutNs);
 #endif
     }
     void wake(std::atomic<std::uint32_t>& word, bool completion = false) SUPPLE_RT {

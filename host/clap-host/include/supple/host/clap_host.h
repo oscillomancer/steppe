@@ -251,6 +251,29 @@ void setBridgeAudioPolicy(ThreadPolicy policy);
 ThreadPolicy bridgeAudioPolicy() SUPPLE_RT;
 bool bridgeProcessFailed(const std::shared_ptr<BridgeProcess>& process);
 
+// ADR-0081: the device callback's bridge deadline, on the steady clock in
+// nanoseconds (steadyNanoseconds()). While one is set on the calling thread,
+// a bridged instance's audio-thread calls wait for its answer only until
+// then, and never check, kill or reap its process: a stage that has not
+// answered is silent for the block (process() returns true) and its request
+// stays outstanding, answered before the shared memory is used again. After
+// 50 ms of consecutive late blocks the instance fails, and the main thread
+// kills its process when it next services it. Unset (0), the background
+// deadline applies (ADR-0013). Each callback-owned thread sets it per cycle.
+class LiveBridgeDeadline {
+  public:
+    explicit LiveBridgeDeadline(std::int64_t steadyNs) SUPPLE_RT;
+    ~LiveBridgeDeadline() SUPPLE_RT;
+    LiveBridgeDeadline(const LiveBridgeDeadline&) = delete;
+    LiveBridgeDeadline& operator=(const LiveBridgeDeadline&) = delete;
+
+  private:
+    std::int64_t previous_;
+};
+std::int64_t steadyNanoseconds() SUPPLE_RT;
+// Bridged audio-thread calls that missed a live deadline, process-wide.
+std::uint64_t bridgeLateCalls() SUPPLE_RT;
+
 class Instance {
   public:
     // `isolated`: the plugin runs in a bridge process. Pass `bridge` to share

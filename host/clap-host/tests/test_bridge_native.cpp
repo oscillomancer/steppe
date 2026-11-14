@@ -6,6 +6,8 @@
 #include <supple/base/waitable.h>
 #include <supple/host/clap_host.h>
 #if !defined(_WIN32)
+#include <signal.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #endif
 #if defined(__linux__)
@@ -16,6 +18,7 @@
 #include <array>
 #include <chrono>
 #include <ostream>
+#include <thread>
 #include "../src/bridge_client.h"
 #include "../src/bridge_protocol.h"
 using namespace supple;
@@ -205,6 +208,89 @@ TEST_CASE("native bridge deadlines kill a hung audio worker and return silence")
     CHECK((*remote)->failed());
     CHECK((*remote)->failure().find("stopped responding") != std::string::npos);
     CHECK(std::all_of(audio.outLeft.begin(), audio.outLeft.end(), [](float v) { return v == 0; }));
+}
+TEST_CASE("a bridged plug-in late for the callback's deadline is silent for that block only") {
+    // ADR-0081: a block not answered by the live deadline is silence, the
+    // request stays outstanding and is answered before the next one; the
+    // process is not checked or killed by the audio thread.
+    setBridgeExecutable(BRIDGE_PATH);
+    auto remote =
+        Instance::create(nativePlugin(FIXTURE_CLAP_PATH, "com.suppleaudio.test.crash"), {}, true);
+    REQUIRE(remote);
+    Instance& c = **remote;
+    REQUIRE(c.activate(48000, 1, 64));
+    REQUIRE(c.startProcessing());
+    Audio audio;
+    audio.left.fill(0.25f);
+    audio.right.fill(0.25f);
+    REQUIRE(c.process(audio.block()));
+    REQUIRE(audio.outLeft[0] == doctest::Approx(0.25));
+    const auto before = bridgeLateCalls();
+    REQUIRE(c.setParam(1, 3));  // 20 ms over the next block
+    {
+        LiveBridgeDeadline deadline(steadyNanoseconds() + 1'000'000);
+        REQUIRE(c.process(audio.block()));
+    }
+    CHECK(std::all_of(audio.outLeft.begin(), audio.outLeft.end(), [](float v) { return v == 0; }));
+    CHECK(bridgeLateCalls() == before + 1);
+    CHECK_FALSE(c.failed());
+    REQUIRE(c.setParam(1, 0));  // passes again from the next block
+    {
+        // Waits for the late block's answer, then answers this one.
+        LiveBridgeDeadline deadline(steadyNanoseconds() + 5'000'000'000);
+        REQUIRE(c.process(audio.block()));
+    }
+    CHECK(audio.outLeft[0] == doctest::Approx(0.25));
+    CHECK(bridgeLateCalls() == before + 1);
+    CHECK_FALSE(c.failed());
+    c.stopProcessing();
+    c.deactivate();
+}
+TEST_CASE("a hung bridged plug-in fails after 50 ms of late blocks; main kills its process") {
+    setBridgeExecutable(BRIDGE_PATH);
+    auto remote =
+        Instance::create(nativePlugin(FIXTURE_CLAP_PATH, "com.suppleaudio.test.crash"), {}, true);
+    REQUIRE(remote);
+    Instance& c = **remote;
+    REQUIRE(c.activate(48000, 1, 64));
+    REQUIRE(c.startProcessing());
+    REQUIRE(c.setParam(1, 2));  // hangs in the next block
+    Audio audio;
+    const auto before = bridgeLateCalls();
+    int blocks = 0;
+    // Deadlines already past: no block waits. The instance fails once its
+    // late blocks span 50 ms; the guard only keeps a broken build from looping.
+    const auto guard = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    bool silent = true;
+    while (!c.failed() && std::chrono::steady_clock::now() < guard) {
+        LiveBridgeDeadline deadline(steadyNanoseconds());
+        REQUIRE(c.process(audio.block()));
+        ++blocks;
+        silent = silent && std::all_of(audio.outLeft.begin(), audio.outLeft.end(),
+                                       [](float v) { return v == 0; });
+    }
+    CHECK(silent);
+    // It failed through late blocks, none of which waited for the hang.
+    CHECK(blocks > 1);
+    CHECK(bridgeLateCalls() - before == static_cast<std::uint64_t>(blocks));
+    REQUIRE(c.failed());
+    CHECK(c.failure().find("stopped responding") != std::string::npos);
+#if !defined(_WIN32)
+    const int pid = c.bridgePid();
+    REQUIRE(pid > 0);
+    // Exited (a zombie until reaped counts), observed without reaping it.
+    auto exited = [pid] {
+        siginfo_t info{};
+        return ::waitid(P_PID, static_cast<id_t>(pid), &info, WEXITED | WNOHANG | WNOWAIT) == 0 &&
+               info.si_pid == pid;
+    };
+    CHECK_FALSE(exited());  // the audio thread killed nothing
+    while (!exited() && std::chrono::steady_clock::now() < guard) {
+        c.serviceMainThread();  // main reaps the failure, killing the bridge
+        std::this_thread::yield();
+    }
+    CHECK(exited());
+#endif
 }
 TEST_CASE("native bridge notifications ACK and rearm without periodic parent polling") {
     setBridgeExecutable(BRIDGE_PATH);

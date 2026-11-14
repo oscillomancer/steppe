@@ -1359,7 +1359,8 @@ clap_process_status CLAP_ABI multiOutProcess(const clap_plugin_t* pl, const clap
 
 // --- crash (the isolation fixture) -------------------------------------------------------
 // An effect that passes audio through until its Mode parameter says otherwise:
-// 1 crashes the process in process() (SIGSEGV), 2 hangs it there.
+// 1 crashes the process in process() (SIGSEGV), 2 hangs it there, 3 takes
+// 20 ms over each block (a plug-in that misses a live deadline, ADR-0081).
 
 const clap_plugin_descriptor_t* crashDescriptor() {
     static const char* features[] = {CLAP_PLUGIN_FEATURE_AUDIO_EFFECT, nullptr};
@@ -1391,7 +1392,7 @@ bool CLAP_ABI crashParamInfo(const clap_plugin_t*, uint32_t index, clap_param_in
     info->id = 1;
     info->flags = CLAP_PARAM_IS_STEPPED | CLAP_PARAM_IS_AUTOMATABLE;
     std::snprintf(info->name, sizeof(info->name), "Mode");
-    info->max_value = 2;
+    info->max_value = 3;
     return true;
 }
 bool CLAP_ABI crashParamValue(const clap_plugin_t* pl, clap_id id, double* out) {
@@ -1400,8 +1401,8 @@ bool CLAP_ABI crashParamValue(const clap_plugin_t* pl, clap_id id, double* out) 
     return true;
 }
 bool CLAP_ABI crashValueToText(const clap_plugin_t*, clap_id, double v, char* out, uint32_t size) {
-    static const char* kNames[] = {"pass", "crash", "hang"};
-    std::snprintf(out, size, "%s", kNames[std::clamp(static_cast<int>(v), 0, 2)]);
+    static const char* kNames[] = {"pass", "crash", "hang", "slow"};
+    std::snprintf(out, size, "%s", kNames[std::clamp(static_cast<int>(v), 0, 3)]);
     return true;
 }
 bool CLAP_ABI crashTextToValue(const clap_plugin_t*, clap_id, const char*, double*) {
@@ -1432,6 +1433,11 @@ clap_process_status CLAP_ABI crashProcess(const clap_plugin_t* pl, const clap_pr
     crashEvents(pl, p->in_events);
     if (C(pl)->mode.load() == 1) std::raise(SIGSEGV);
     while (C(pl)->mode.load() == 2) {  // spin (no system call: sanitizers see a hang, not a call)
+    }
+    if (C(pl)->mode.load() == 3) {  // spin on the clock: no system call either
+        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(20);
+        while (std::chrono::steady_clock::now() < until) {
+        }
     }
     for (uint32_t c = 0; c < 2; ++c)
         for (uint32_t i = 0; i < p->frames_count; ++i)

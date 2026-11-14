@@ -31,6 +31,7 @@ class RemoteInstance;
 
 class BridgeProcess {
   public:
+    static constexpr int kHung = -2;
     static Result<std::shared_ptr<BridgeProcess>> spawn();
     ~BridgeProcess();
     Result<std::vector<std::uint8_t>> call(bridge::Op op, std::uint32_t instance,
@@ -48,7 +49,6 @@ class BridgeProcess {
   private:
     friend struct BridgeTestAccess;
     friend class RemoteInstance;
-    static constexpr int kHung = -2;
     static constexpr int kProtocolViolation = -3;
     BridgeProcess() = default;
     Status initializeNotifications();
@@ -160,6 +160,14 @@ class RemoteInstance {
                                            bridge::Resource fd = bridge::noResource,
                                            int timeoutMs = 10000);
     bool command(bridge::Cmd cmd) SUPPLE_RT;
+    // Whether request `req` was answered: within the live deadline when the
+    // calling thread has one (ADR-0081), else within the background one
+    // (ADR-0013), which fails and kills a bridge that misses it.
+    bool answered(std::uint32_t req, bridge::Cmd cmd) SUPPLE_RT;
+    // The shared memory is the bridge's until it answers the request a late
+    // live block left outstanding: waits for that answer first.
+    bool settle() SUPPLE_RT;
+    void late(std::uint32_t outstanding) SUPPLE_RT;
     void unmap();
 
     std::shared_ptr<BridgeProcess> process_;
@@ -169,7 +177,9 @@ class RemoteInstance {
     bridge::SharedSignals signals_;
     bridge::Layout layout_{0, 0, 0};
     std::uint32_t seq_ = 0;
-    int deadlineMs_ = 2000;  // for process(); lifecycle commands get longer
+    std::uint32_t outstanding_ = 0;  // a late live request not yet answered
+    std::int64_t lateSince_ = 0;     // steady ns of the first of consecutive late calls
+    int deadlineMs_ = 2000;          // for process(); lifecycle commands get longer
     std::uint32_t latency_ = 0, tail_ = 0;
     bool reportsTail_ = false, restartPending_ = false;
     // Control servicing publishes this flag while audio checks for idle work.

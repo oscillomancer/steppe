@@ -319,6 +319,8 @@ void BridgeProcess::killBridge() {
 // Main thread: observes exit without reaping the helper-owned leader.
 void BridgeProcess::reap() {
     if (pid_ <= 0) return;
+    // A live block may fail a hung bridge but never kills it (ADR-0081).
+    if (failed_.load() && failSignal_.load() == kHung && child_ && child_->alive()) killBridge();
     if (!child_ || child_->alive()) return;
     const int why = child_->exitStatus();
     pid_ = -1;
@@ -821,21 +823,42 @@ Instance::EditorRequests RemoteInstance::editorRequests() {
 
 // --- data plane (audio thread) ----------------------------------------------------------
 
-bool RemoteInstance::command(Cmd cmd) SUPPLE_RT {
-    if (!hdr_ || process_->failed()) return false;
-    // The sanctioned exception to the audio thread's no-syscall rule
-    // (ADR-0013): waking the bridge and waiting for it, with a deadline.
-    rt::ScopedSanctionedSyscall syscalls;
-    hdr_->cmd = static_cast<std::uint32_t>(cmd);
-    const std::uint32_t req = ++seq_;
-    hdr_->request.store(req, std::memory_order_release);
-#if defined(__linux__)
-    futexWake(hdr_->request);
-#else
-    signals_.wake(hdr_->request);
-#endif
+namespace {
+thread_local std::int64_t tLiveDeadline = 0;  // ADR-0081; 0: none
+std::atomic<std::uint64_t> gLateCalls{0};
+// Consecutive late live calls for this long fail the instance (ADR-0081).
+constexpr std::int64_t kLateFailNs = 50'000'000;
+}  // namespace
+
+LiveBridgeDeadline::LiveBridgeDeadline(std::int64_t steadyNs) SUPPLE_RT : previous_(tLiveDeadline) {
+    tLiveDeadline = steadyNs > 0 ? steadyNs : 1;
+}
+LiveBridgeDeadline::~LiveBridgeDeadline() SUPPLE_RT { tLiveDeadline = previous_; }
+std::int64_t steadyNanoseconds() SUPPLE_RT {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+std::uint64_t bridgeLateCalls() SUPPLE_RT { return gLateCalls.load(std::memory_order_relaxed); }
+
+bool RemoteInstance::answered(std::uint32_t req, Cmd cmd) SUPPLE_RT {
     for (int spin = 0; spin < 4000; ++spin)
         if (hdr_->done.load(std::memory_order_acquire) == req) return true;
+    if (const std::int64_t live = tLiveDeadline) {
+        // The callback's wait (ADR-0081): timed waits on the done word up to
+        // the cycle's deadline, and nothing else.
+        for (;;) {
+            const std::uint32_t seen = hdr_->done.load(std::memory_order_acquire);
+            if (seen == req) return true;
+            const std::int64_t left = live - steadyNanoseconds();
+            if (left <= 0) return false;
+#if defined(__linux__)
+            futexWaitNs(hdr_->done, seen, left);
+#else
+            signals_.waitNs(hdr_->done, seen, left, true);
+#endif
+        }
+    }
     // Lifecycle commands may page in a plugin's code; a block must not stall
     // the renderer long, but a loaded machine must not get a healthy plugin
     // killed either.
@@ -855,15 +878,65 @@ bool RemoteInstance::command(Cmd cmd) SUPPLE_RT {
             return false;
         }
         if (std::chrono::steady_clock::now() > deadline) {
-            process_->fail(-2);
+            process_->fail(BridgeProcess::kHung);
             process_->killBridge();
             return false;
         }
     }
 }
 
+void RemoteInstance::late(std::uint32_t outstanding) SUPPLE_RT {
+    if (outstanding) outstanding_ = outstanding;
+    gLateCalls.fetch_add(1, std::memory_order_relaxed);
+    const std::int64_t now = steadyNanoseconds();
+    if (!lateSince_)
+        lateSince_ = now;
+    else if (now - lateSince_ >= kLateFailNs)
+        process_->fail(BridgeProcess::kHung);  // main kills it when it reaps (ADR-0081)
+}
+
+bool RemoteInstance::settle() SUPPLE_RT {
+    if (!outstanding_) return true;
+    if (!answered(outstanding_, Cmd::Process)) {
+        if (tLiveDeadline) late(0);
+        return false;
+    }
+    outstanding_ = 0;  // that late block's output is not used
+    return true;
+}
+
+bool RemoteInstance::command(Cmd cmd) SUPPLE_RT {
+    if (!hdr_ || process_->failed()) return false;
+    // The sanctioned exception to the audio thread's no-syscall rule:
+    // waking the bridge and waiting for it, with a deadline (ADR-0013, and
+    // in the callback ADR-0081).
+    rt::ScopedSanctionedSyscall syscalls;
+    if (!settle()) return false;
+    hdr_->cmd = static_cast<std::uint32_t>(cmd);
+    const std::uint32_t req = ++seq_;
+    hdr_->request.store(req, std::memory_order_release);
+#if defined(__linux__)
+    futexWake(hdr_->request);
+#else
+    signals_.wake(hdr_->request);
+#endif
+    if (answered(req, cmd)) {
+        lateSince_ = 0;
+        return true;
+    }
+    if (tLiveDeadline) late(req);
+    return false;
+}
+
 bool RemoteInstance::startProcessing() SUPPLE_RT {
-    if (hdr_) {  // published with the command's request
+    if (!hdr_ || process_->failed()) return false;
+    {
+        rt::ScopedSanctionedSyscall syscalls;
+        if (!settle()) return false;
+    }
+    // A start a late block left outstanding may have been answered since.
+    if (hdr_->processing != 0) return true;
+    {  // published with the command's request
         const ThreadPolicy policy = bridgeAudioPolicy();
         hdr_->audioPolicy = static_cast<std::uint32_t>(policy.kind);
         hdr_->audioPriority = static_cast<std::uint32_t>(policy.priority);
@@ -887,6 +960,13 @@ bool RemoteInstance::process(const ProcessBlock& b, OutputEvents* out) SUPPLE_RT
     if (!hdr_ || process_->failed()) {
         silence();  // a failed node is silent; the session plays on
         return true;
+    }
+    {
+        rt::ScopedSanctionedSyscall syscalls;
+        if (!settle()) {  // still busy with a late block: this one is late too
+            silence();
+            return true;
+        }
     }
     auto* base = static_cast<std::uint8_t*>(map_);
     auto* inAudio = reinterpret_cast<float*>(base + layout_.inAudio);
