@@ -85,7 +85,10 @@ json::Value recordCommitArgs(const std::vector<RecordedTake>& takes, const Trans
 
 std::filesystem::path sidecarPath(const std::filesystem::path& wav);
 Status writeSidecar(const std::filesystem::path& wav, const RecordingInfo& info);
-Result<RecordingInfo> readSidecar(const std::filesystem::path& wav);
+// `root` (optional): the sidecar is read only if it resolves inside it
+// (recover.outside otherwise; media_files.h).
+Result<RecordingInfo> readSidecar(const std::filesystem::path& wav,
+                                  const std::filesystem::path& root = {});
 
 class Recorder {
   public:

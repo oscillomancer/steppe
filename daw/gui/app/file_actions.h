@@ -118,7 +118,11 @@ class FileActions {
     void markSaved();
     void showError(const std::string& message);
     void recoverSession(const std::string& session, const std::string& title);
-    void recoverProjectAutosave();
+    // `autosave`: the one the popup offered for the project at `path` in
+    // `generation`, opened even if the question before it saves the file
+    // over it; nothing, if another project has replaced that one since.
+    void recoverProjectAutosave(const std::string& autosave, std::uint64_t generation,
+                                const std::filesystem::path& path);
     void recoverProjectRecordings();
     void confirmDeleteSession(const std::string& session, const std::string& title,
                               const std::string& size);

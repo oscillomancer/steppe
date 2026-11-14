@@ -14,6 +14,7 @@
 #include <cerrno>
 #include <cstring>
 
+#include "supple/base/files.h"
 #include "supple/base/sha256.h"
 
 namespace supple::engine::detail {
@@ -152,6 +153,44 @@ Status copyFolder(const fs::path& from, const fs::path& to) {
     }
     if (ec) return copyError(from, to, ec.message());
     return {};
+}
+
+bool resolvedInside(const fs::path& root, const fs::path& path, std::vector<fs::path>* missing) {
+    std::error_code ec;
+    const fs::path base = fs::canonical(root, ec);
+    if (ec) return false;
+    fs::path existing = path;
+    std::vector<fs::path> absent;
+    while (!existing.empty() && !fs::exists(fs::symlink_status(existing, ec))) {
+        absent.push_back(existing);
+        if (existing == existing.parent_path()) return false;
+        existing = existing.parent_path();
+    }
+    for (const auto& part : path.lexically_relative(existing))
+        if (part == "..") return false;
+    const fs::path rel = fs::canonical(existing, ec).lexically_relative(base);
+    if (ec || rel.empty() || *rel.begin() == "..") return false;
+    if (missing) *missing = std::move(absent);
+    return true;
+}
+
+Status recoveryFileInside(const fs::path& root, const fs::path& file) {
+    if (root.empty() || resolvedInside(root, file)) return okStatus();
+    return Error("recover.outside",
+                 file.string() + " leads outside " + root.string() + "; recovery does not open it",
+                 {}, "copy the file into " + root.string() + " if it belongs there");
+}
+
+Result<std::vector<std::uint8_t>> readRecoveryFile(const fs::path& root, const fs::path& file,
+                                                   std::size_t limit) {
+    SUPPLE_TRY(recoveryFileInside(root, file));
+    return readFile(file, limit);
+}
+
+Result<std::string> readRecoveryText(const fs::path& root, const fs::path& file,
+                                     std::size_t limit) {
+    SUPPLE_TRY(recoveryFileInside(root, file));
+    return readTextFile(file, limit);
 }
 
 }  // namespace supple::engine::detail

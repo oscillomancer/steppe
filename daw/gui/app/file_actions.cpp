@@ -361,10 +361,17 @@ void FileActions::openRecovery() {
         button.layout.width = ui::SizeRule::fixed(164);
         button.layout.height = ui::SizeRule::fixed(28);
     };
-    if (newerAutosave)
+    if (newerAutosave) {
+        // The one offered now: saving first must not make it "older".
+        const std::string offered = app_.newerAutosave(app_.projectPath()).filename().string();
+        const auto generation = app_.projectGeneration();
+        const auto path = app_.projectPath();
         projectRow("file.recover.autosave", "This project's newer autosave",
                    "Changes made after it was last saved", "Open autosave",
-                   [this] { recoverProjectAutosave(); });
+                   [this, offered, generation, path] {
+                       recoverProjectAutosave(offered, generation, path);
+                   });
+    }
     if (recordings > 0)
         projectRow("file.recover.recordings", "Recordings left out of this project",
                    plural(recordings, "recording was", "recordings were") +
@@ -428,11 +435,30 @@ void FileActions::openRecovery() {
     root_.openPopup(std::move(form), {}, ui::Placement::Center);
 }
 
-void FileActions::recoverProjectAutosave() {
+void FileActions::recoverProjectAutosave(const std::string& autosave, std::uint64_t generation,
+                                         const std::filesystem::path& path) {
     root_.closePopup();
-    confirmDiscard("Open the newer autosave?", [this] {
+    // Offered for one project: another opened since (here or by an agent)
+    // has its own autosaves, and this offer says nothing about them.
+    auto same = [this, generation, path] {
+        return app_.projectGeneration() == generation && app_.projectPath() == path;
+    };
+    if (!same()) {
+        showError(
+            "Another project was opened after this autosave was offered; nothing was "
+            "loaded. Use File > Recover unsaved work… for the open project's own.");
+        return;
+    }
+    confirmDiscard("Open the newer autosave?", [this, autosave, same] {
+        if (!same()) {
+            showError(
+                "Another project was opened while the question was open; nothing was "
+                "loaded.");
+            return;
+        }
         json::Value args = json::Value::object();
         args["autosave"] = true;
+        if (!autosave.empty()) args["autosave_file"] = autosave;
         auto r = exec("project.recover", std::move(args));
         if (!r) return;
         ui_.selectedTracks.clear();
@@ -570,6 +596,8 @@ void FileActions::openPath(const std::filesystem::path& path) {
         ui_.selectedTracks.clear();
         ui_.selectedItems.clear();
         markSaved();
+        // An offer made for the project this replaced no longer applies.
+        if (root_.find("file.recover")) root_.closePopups();
         // A crash left work beside it: offered, never loaded (ADR-0078).
         const json::Value* a = opened->find("autosave_available");
         if ((a && a->isBool() && a->asBool()) || integerAt(*opened, "recoverable") > 0)

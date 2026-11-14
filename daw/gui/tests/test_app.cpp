@@ -46,6 +46,7 @@
 #include "supple/host/clap_host.h"
 #include "supple/json/parse.h"
 #include "supple/json/write.h"
+#include "supple/model/project_file.h"
 #include "supple/peaks/peaks.h"
 #include "supple/ui/controls.h"
 #include "supple/ui/forms.h"
@@ -3399,4 +3400,150 @@ TEST_CASE("file actions: opening a saved project offers its newer autosave, neve
         CHECK(files.dirty());
         CHECK(*readTextFile(file) == onDisk);
     }
+}
+
+TEST_CASE("file actions: saving first still opens the autosave that was offered") {
+    // Round-5 review, finding 4: Open autosave, then Save in the question,
+    // made the file newer than the offered autosave, which then could not be
+    // opened. The popup's autosave is opened by name.
+    App a;
+    REQUIRE(a.ok);
+    auto exec = [&](const char* name, const char* args) {
+        auto r = a.dispatcher->execute({name, json::parse(args).value(), {}});
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        return *r;
+    };
+    const auto file = a.dir / "song" / "song.json";
+    a.app->setFixedClock(1'000'000);
+    exec("project.set", R"({"name":"Saved"})");
+    REQUIRE(a.app->save(file));
+    // Coarse file clocks: the save, the autosave and the next save must
+    // order the same way on every file system.
+    std::filesystem::last_write_time(
+        file, std::filesystem::file_time_type::clock::now() - std::chrono::hours(2));
+    exec("project.set", R"({"name":"Autosaved work"})");
+    a.app->setFixedClock(1'061'000);
+    a.app->tick();
+    const auto autosave = a.app->newerAutosave(file);
+    REQUIRE_FALSE(autosave.empty());
+    std::filesystem::last_write_time(
+        autosave, std::filesystem::file_time_type::clock::now() - std::chrono::hours(1));
+    std::vector<std::string> errors;
+    a.actions->onError = [&](const std::string& e) { errors.push_back(e); };
+    gui::FileActions files(*a.root, *a.actions, *a.dispatcher, *a.app, a.ui, a.window->sdl(),
+                           [](auto task) { task(); });
+    files.openPath(file);
+    a.root->frame(false);
+    REQUIRE(a.root->find("file.recover.autosave"));
+    exec("project.set", R"({"name":"Current work to keep"})");
+    REQUIRE(files.dirty());
+    REQUIRE(a.root->click("file.recover.autosave.open"));
+    a.root->frame(false);
+    REQUIRE(a.root->find("file.confirm"));
+    REQUIRE(a.root->click("file.confirm.save"));
+    a.root->frame(false);
+    CHECK(errors.empty());
+    CHECK(a.app->head().project->name == "Autosaved work");
+    CHECK(a.root->find("file.recovered"));
+    CHECK(model::parseProjectFile(*readTextFile(file))->store.head()->project->name ==
+          "Current work to keep");
+}
+
+TEST_CASE("file actions: an offered autosave is never applied to another project") {
+    // Round-6 review, finding 2: project A's popup offered autosave-1.json;
+    // after B was opened (here or by an agent), the old button opened B's
+    // older autosave-1.json.
+    bool agent = false;
+    SUBCASE("opened from the GUI") {}
+    SUBCASE("opened by an agent") { agent = true; }
+    App a;
+    REQUIRE(a.ok);
+    const auto first = a.dir / "A" / "song.json";
+    const auto second = a.dir / "B" / "song.json";
+    auto document = [](const char* name) {
+        model::Project p;
+        p.name = name;
+        return model::serializeProjectFile(model::VersionStore(model::Session::create(p)));
+    };
+    REQUIRE(writeFileAtomic(first, document("A saved")));
+    REQUIRE(writeFileAtomic(first.string() + "-data/autosave-1.json", document("A autosave")));
+    REQUIRE(writeFileAtomic(second.string() + "-data/autosave-1.json", document("B older")));
+    REQUIRE(writeFileAtomic(second, document("B saved")));
+    const auto now = std::filesystem::file_time_type::clock::now();
+    std::filesystem::last_write_time(first, now - std::chrono::hours(2));
+    std::filesystem::last_write_time(second.string() + "-data/autosave-1.json",
+                                     now - std::chrono::hours(2));
+    std::vector<std::string> errors;
+    a.actions->onError = [&](const std::string& e) { errors.push_back(e); };
+    gui::FileActions files(*a.root, *a.actions, *a.dispatcher, *a.app, a.ui, a.window->sdl(),
+                           [](auto task) { task(); });
+    files.openPath(first);
+    a.root->frame(false);
+    REQUIRE(a.root->find("file.recover.autosave"));
+    if (agent) {
+        auto args = json::Value::object();
+        args["path"] = second.string();
+        REQUIRE(a.dispatcher->execute({"project.open", args, {}}));
+    } else {
+        files.openPath(second);
+    }
+    a.root->frame(false);
+    REQUIRE(a.app->head().project->name == "B saved");
+    CHECK(bool(a.root->find("file.recover.autosave")) == agent);  // the GUI closes it
+    if (a.root->find("file.recover.autosave.open")) {
+        REQUIRE(a.root->click("file.recover.autosave.open"));
+        a.root->frame(false);
+        if (a.root->find("file.confirm.discard")) {
+            REQUIRE(a.root->click("file.confirm.discard"));
+            a.root->frame(false);
+        }
+        CHECK(errors.size() == 1);
+    }
+    CHECK(a.app->head().project->name == "B saved");
+    CHECK_FALSE(a.root->find("file.recovered"));
+}
+
+TEST_CASE("file actions: Save before Open autosave works after a first save") {
+    // Round-8 review, finding 1, through the GUI: a project first saved this
+    // run (no reopen), its newer autosave offered, then Open autosave > Save.
+    App a;
+    REQUIRE(a.ok);
+    a.app->setFixedClock(1'000'000);
+    const auto file = a.dir / "A" / "song.json";
+    const auto old = std::filesystem::file_time_type::clock::now() - std::chrono::hours(2);
+    auto run = [&](const char* command, const char* args) {
+        auto r = a.dispatcher->execute({command, json::parse(args).value(), {}});
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+    };
+    run("project.set", R"({"name":"Saved"})");
+    setFileSyncHookForTesting([&](const std::filesystem::path& f) {
+        for (const auto& e : std::filesystem::directory_iterator(f.parent_path()))
+            if (e.path().filename().string().starts_with(f.filename().string() + "."))
+                std::filesystem::last_write_time(e.path(), old);
+        return true;
+    });
+    auto saved = a.app->save(file);
+    setFileSyncHookForTesting({});
+    REQUIRE(saved);
+    std::vector<std::string> errors;
+    a.actions->onError = [&](const std::string& e) { errors.push_back(e); };
+    gui::FileActions files(*a.root, *a.actions, *a.dispatcher, *a.app, a.ui, a.window->sdl(),
+                           [](auto task) { task(); });
+    run("project.set", R"({"name":"Autosaved"})");
+    a.app->setFixedClock(1'061'000);
+    a.app->tick();
+    const auto offered = a.app->newerAutosave(file);
+    REQUIRE_FALSE(offered.empty());
+    std::filesystem::last_write_time(offered, old + std::chrono::hours(1));
+    files.openRecovery();
+    a.root->frame(false);
+    run("project.set", R"({"name":"Current"})");
+    REQUIRE(a.root->click("file.recover.autosave.open"));
+    a.root->frame(false);
+    REQUIRE(a.root->click("file.confirm.save"));
+    a.root->frame(false);
+    CHECK(errors.empty());
+    CHECK(a.app->head().project->name == "Autosaved");
+    CHECK(a.root->find("file.recovered"));
+    CHECK(model::parseProjectFile(*readTextFile(file))->store.head()->project->name == "Current");
 }

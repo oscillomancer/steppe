@@ -5,10 +5,14 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <set>
+#include <thread>
 
 #include "../../../tests/file_platform.h"
+#include "recording.h"
 #include "supple/base/files.h"
+#include "supple/base/sha256.h"
 #include "supple/engine/app.h"
 #include "supple/json/json.h"
 #include "supple/model/project_file.h"
@@ -293,6 +297,15 @@ TEST_CASE("a replayed merge writes files only inside the project's own folder") 
     };
     p.app->setupFixture(d, "recording_interrupted");
     run("project.recover", "{}");  // it_1: an audio item on tr_1
+    // Its hash is finalized in the background, rewriting the sidecar through
+    // a temporary file: wait for it, so no file snapshot below races it.
+    for (const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+         p.app->head().media.begin()->value->hash.empty() &&
+         std::chrono::steady_clock::now() < deadline;) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        d.flushJobEvents();
+    }
+    REQUIRE_FALSE(p.app->head().media.begin()->value->hash.empty());
     REQUIRE(p.app->save("song.json"));
     auto other = run("track.add", R"({"name": "Other"})");
     const std::string otherTrack = other["track"].asString();
@@ -995,6 +1008,15 @@ TEST_CASE("a saved project's newer autosave is opened only when asked, keeping t
         {"project.recover", json::parse(R"({"autosave": true, "session": "x"})").value(), kUnit});
     REQUIRE_FALSE(mixed);
     CHECK(mixed.error().code == "recover.autosave_args");
+    auto alone = d.execute(
+        {"project.recover", json::parse(R"({"autosave_file": "autosave-1.json"})").value(), kUnit});
+    REQUIRE_FALSE(alone);
+    CHECK(alone.error().code == "recover.autosave_args");
+    auto elsewhere = d.execute(
+        {"project.recover",
+         json::parse(R"({"autosave": true, "autosave_file": "../song.json"})").value(), kUnit});
+    REQUIRE_FALSE(elsewhere);
+    CHECK(elsewhere.error().code == "recover.no_autosave");
 
     auto r = d.execute({"project.recover", json::parse(R"({"autosave": true})").value(), kUnit});
     REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
@@ -1059,4 +1081,440 @@ TEST_CASE("a saved project's recovered autosave keeps what it could not restore 
     REQUIRE(fs::exists(p.root / "song.json.unreadable-autosave.bak"));
     CHECK(*readTextFile(p.root / "song.json.unreadable-autosave.bak") == "garbage");
     CHECK_FALSE(fs::exists(p.root / "victim.txt"));
+}
+
+namespace {
+// A session left behind whose autosave keeps a branch; main's name was then
+// changed by hand, so the branches no longer fit and are rejected at
+// recovery (kept as .pre-branches). Returns the autosave's bytes.
+std::string leaveRejectedBranches(const Unsaved& u, const std::string& left) {
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    {
+        auto earlier = u.run(left);
+        cmd::Dispatcher d(registry, *earlier);
+        REQUIRE(d.execute({"track.add", json::Value::object(), kUnit}));
+        REQUIRE(earlier->versions().createBranch("topic", "main"));
+        REQUIRE(earlier->switchBranch("topic"));
+        REQUIRE(d.execute({"track.add", json::Value::object(), kUnit}));
+        REQUIRE(earlier->switchBranch("main"));
+        earlier->setFixedClock(1'060'000);
+        earlier->tick();
+    }
+    const fs::path file = u.folder(left) / "autosave-1.json";
+    auto doc = json::parse(*readTextFile(file)).value();
+    doc["project"]["name"] = "Changed by hand";
+    const std::string raw = json::writeCanonical(doc);
+    REQUIRE(writeFileAtomic(file, raw));
+    return raw;
+}
+
+}  // namespace
+
+TEST_CASE("a recovered unsaved session keeps what it writes inside its own folder") {
+    // Round-5 review, finding 1: replays skipped the media check for every
+    // unsaved project, but a recovered session's state came from a file.
+    Unsaved u;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    const std::string left = "20261114-090000-31";
+    const fs::path outside = u.root / "outside";
+    {
+        auto earlier = u.run(left);
+        cmd::Dispatcher d(registry, *earlier);
+        REQUIRE(d.execute({"track.add", json::Value::object(), kUnit}));
+        REQUIRE(d.execute(
+            {"item.add",
+             json::parse(R"({"track": "tr_1", "notation": "voice lead; 1: C4:q r:*"})").value(),
+             kUnit}));
+        REQUIRE(earlier->versions().createBranch("topic", "main"));
+        REQUIRE(earlier->switchBranch("topic"));
+        REQUIRE(d.execute({"item.apply-fx", json::parse(R"({"item": "it_1"})").value(), kUnit}));
+        REQUIRE(earlier->switchBranch("main"));
+        // No command sets media_dir: only a file not written by this program
+        // names a folder outside the session.
+        auto t = earlier->beginTransaction(kUnit, "Media elsewhere");
+        REQUIRE(t);
+        auto project = earlier->txn().project();
+        project.mediaDir = outside.string();
+        earlier->txn().setProject(project);
+        REQUIRE(earlier->commitTransaction(*t));
+        earlier->setFixedClock(1'060'000);
+        earlier->tick();
+    }
+    auto app = u.run("20261114-100000-1");
+    cmd::Dispatcher d(registry, *app);
+    auto recovered = app->recoverSession(left);
+    REQUIRE_MESSAGE(recovered, (recovered ? std::string() : recovered.error().toString()));
+    REQUIRE(app->versions().branches().size() == 2);
+    CHECK(app->projectPath().empty());
+
+    SUBCASE("the file's outside media folder is not used") {
+        CHECK(std::any_of(recovered->warnings.begin(), recovered->warnings.end(),
+                          [](const RecordingWarning& w) { return w.code == "recover.media_dir"; }));
+        CHECK(app->head().project->mediaDir == "media");
+        auto merged =
+            d.execute({"branch.merge", json::parse(R"({"from": "topic"})").value(), kUnit});
+        REQUIRE_MESSAGE(merged, (merged ? std::string() : merged.error().toString()));
+        CHECK_FALSE(fs::exists(outside));
+        CHECK(std::any_of(
+            fs::directory_iterator(u.folder(left) / "media"), {},
+            [](const fs::directory_entry& e) { return e.path().extension() == ".wav"; }));
+    }
+    SUBCASE("a replay is held to the session folder") {
+        auto t = app->beginTransaction(kUnit, "Media elsewhere again");
+        REQUIRE(t);
+        auto project = app->txn().project();
+        project.mediaDir = outside.string();
+        app->txn().setProject(project);
+        REQUIRE(app->commitTransaction(*t));
+        auto merged =
+            d.execute({"branch.merge", json::parse(R"({"from": "topic"})").value(), kUnit});
+        REQUIRE_FALSE(merged);
+        CHECK(merged.error().code == "branch.conflict");
+        REQUIRE(merged.error().details.size() == 1);
+        CHECK(merged.error().details[0].message.find("outside the project folder") !=
+              std::string::npos);
+        CHECK_FALSE(fs::exists(outside));
+    }
+}
+
+TEST_CASE("a recovery whose preservation copy fails changes nothing") {
+    // Round-5 review, finding 2: a failed .keep copy was only a warning, and
+    // the next save deleted the only source of the rejected branches.
+    Unsaved u;
+    const std::string left = "20261114-090000-32";
+    const std::string raw = leaveRejectedBranches(u, left);
+    auto app = u.run("20261114-100000-1");
+    rename(*app, "Current work");
+    setFileSyncHookForTesting([](const fs::path& f) { return f.extension() != ".keep"; });
+    auto failed = app->recoverSession(left);
+    setFileSyncHookForTesting({});
+    REQUIRE_FALSE(failed);
+    CHECK(failed.error().code == "recover.keep");
+    CHECK(app->head().project->name == "Current work");
+    CHECK(*readTextFile(u.folder(left) / "autosave-1.json") == raw);
+    for (const fs::path& f : filesUnder(u.root)) CHECK(f.extension() != ".keep");
+    CHECK(app->recoverableSessions().size() == 1);  // still there, still left behind
+
+    auto recovered = app->recoverSession(left);  // once the copy can be made
+    REQUIRE_MESSAGE(recovered, (recovered ? std::string() : recovered.error().toString()));
+    REQUIRE(app->save(u.root / "song" / "song.json"));
+    CHECK(*readTextFile(u.root / "song" / "song.json.pre-branches.bak") == raw);
+}
+
+TEST_CASE("a saved project's autosave recovery whose preservation copy fails changes nothing") {
+    // Round-5 review, finding 2, for project.recover {autosave: true}.
+    Project p;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *p.app);
+    p.rename("Saved");
+    REQUIRE(p.app->save("song.json"));
+    p.rename("After the save");
+    p.app->setFixedClock(1'060'000);
+    p.app->tick();
+    const fs::path data = p.root / "song.json-data";
+    REQUIRE(writeFileAtomic(data / "autosave-9.json", "garbage"));  // newer, unreadable
+    REQUIRE(p.app->open("song.json"));
+    setFileSyncHookForTesting([](const fs::path& f) { return f.extension() != ".keep"; });
+    auto failed =
+        d.execute({"project.recover", json::parse(R"({"autosave": true})").value(), kUnit});
+    setFileSyncHookForTesting({});
+    REQUIRE_FALSE(failed);
+    CHECK(failed.error().code == "recover.keep");
+    CHECK(p.app->head().project->name == "Saved");
+    CHECK(*readTextFile(data / "autosave-9.json") == "garbage");
+    for (const fs::path& f : filesUnder(p.root)) CHECK(f.extension() != ".keep");
+}
+
+TEST_CASE("a recording placement would refuse cannot justify replacing current work") {
+    // Round-5 review, finding 3: the preflight counted a recording whose
+    // placement is outside the timeline, so recovery replaced current work
+    // with an empty "Recovered" channel.
+    Unsaved u;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    const std::string left = "20261114-090000-33";
+    {
+        auto earlier = u.run(left);
+        cmd::Dispatcher d(registry, *earlier);
+        earlier->setupFixture(d, "recording_take_file");
+    }
+    REQUIRE(writeFileAtomic(u.folder(left) / "autosave-1.json", "garbage"));
+    fs::path wav;
+    for (const fs::path& f : filesUnder(u.folder(left)))
+        if (f.extension() == ".wav") wav = f;
+    REQUIRE_FALSE(wav.empty());
+    auto side = engine::detail::readSidecar(wav);
+    REQUIRE(side);
+    side->startSample = INT64_MAX;
+    side->segments.clear();
+    REQUIRE(engine::detail::writeSidecar(wav, *side));
+    auto app = u.run("20261114-100000-1");
+    rename(*app, "Current work");
+    auto r = app->recoverSession(left);
+    REQUIRE_FALSE(r);
+    CHECK(r.error().code == "recover.damaged");
+    CHECK(app->head().project->name == "Current work");
+    CHECK(*readTextFile(u.folder(left) / "autosave-1.json") == "garbage");
+}
+
+namespace {
+// Every file under `root`, relative, with its digest.
+std::map<fs::path, std::string> digests(const fs::path& root) {
+    std::map<fs::path, std::string> out;
+    for (const fs::path& f : filesUnder(root))
+        out[f.lexically_relative(root)] = sha256File(f).value();
+    return out;
+}
+
+// A recording a crash left in `rec` (sidecar first, as the recorder writes
+// them), one second long, on tr_1 at the timeline's second second.
+void leaveRecording(const fs::path& wav) {
+    fs::create_directories(wav.parent_path());
+    audio::WavStreamWriter writer;
+    std::vector<float> block(96000, .2f);
+    REQUIRE(engine::detail::writeSidecar(wav, {{model::Kind::Track, 1}, 48000, 48000, {}, 0, 0}));
+    REQUIRE(writer.open(wav, 48000, 2));
+    REQUIRE(writer.append(block.data(), 48000));
+    REQUIRE(writer.close());
+}
+}  // namespace
+
+TEST_CASE("recovery never reads or repairs recordings through a link out of the session") {
+    // Round-6 review, finding 1: <session>/media was itself a link out of
+    // the session; resetting media_dir to "media" did not help, and the
+    // recordings there were recovered and their headers rewritten.
+    Unsaved u;
+    const std::string left = "20261114-090000-41";
+    const fs::path outside = u.root / "outside-session";
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    {
+        auto earlier = u.run(left);
+        cmd::Dispatcher d(registry, *earlier);
+        REQUIRE(d.execute({"track.add", json::Value::object(), kUnit}));
+        earlier->setFixedClock(1'060'000);
+        earlier->tick();
+    }
+    leaveRecording(outside / "rec" / "take.wav");
+    fs::remove_all(u.folder(left) / "media");
+    fs::create_directory_symlink(outside, u.folder(left) / "media");
+    const auto before = digests(outside);
+    auto app = u.run("20261114-100000-1");
+    rename(*app, "Current work");
+    const auto sessions = app->recoverableSessions();
+    REQUIRE(sessions.size() == 1);
+    CHECK(sessions.front().recordings == 0);
+
+    SUBCASE("with a readable autosave: the project comes back, the recordings do not") {
+        auto recovered = app->recoverSession(left);
+        REQUIRE_MESSAGE(recovered, (recovered ? std::string() : recovered.error().toString()));
+        CHECK(recovered->recovered.empty());
+        CHECK(std::any_of(
+            recovered->warnings.begin(), recovered->warnings.end(),
+            [](const RecordingWarning& w) { return w.code == "recover.media_outside"; }));
+        CHECK(app->head().items.size() == 0);
+        CHECK(app->recoverable().empty());
+        CHECK_FALSE(app->recover({}, {}));
+    }
+    SUBCASE("without one: nothing to put back, nothing changed") {
+        REQUIRE(writeFileAtomic(u.folder(left) / "autosave-1.json", "garbage"));
+        auto r = app->recoverSession(left);
+        REQUIRE_FALSE(r);
+        CHECK(r.error().code == "recover.damaged");
+        CHECK(app->head().project->name == "Current work");
+    }
+    CHECK(digests(outside) == before);
+}
+
+TEST_CASE("recovery keeps a media folder that resolves inside the session, whatever its spelling") {
+    // Round-6 review, finding 3: any ".." in media_dir reset it, though the
+    // folder it names is in the session, and its recordings went missing.
+    Unsaved u;
+    const std::string left = "20261114-090000-42";
+    const std::string setting = "intermediate/../audio";
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    {
+        auto earlier = u.run(left);
+        cmd::Dispatcher d(registry, *earlier);
+        REQUIRE(d.execute({"track.add", json::Value::object(), kUnit}));
+        auto t = earlier->beginTransaction(kUnit, "Media folder");
+        REQUIRE(t);
+        auto project = earlier->txn().project();
+        project.mediaDir = setting;
+        earlier->txn().setProject(project);
+        REQUIRE(earlier->commitTransaction(*t));
+        earlier->setFixedClock(1'060'000);
+        earlier->tick();
+    }
+    fs::create_directories(u.folder(left) / "intermediate");
+    leaveRecording(u.folder(left) / "audio" / "rec" / "take.wav");
+    auto app = u.run("20261114-100000-1");
+    auto recovered = app->recoverSession(left);
+    REQUIRE_MESSAGE(recovered, (recovered ? std::string() : recovered.error().toString()));
+    CHECK(app->head().project->mediaDir == setting);
+    CHECK(std::none_of(recovered->warnings.begin(), recovered->warnings.end(),
+                       [](const RecordingWarning& w) { return w.code == "recover.media_dir"; }));
+    CHECK(recovered->recovered.size() == 1);
+    CHECK(app->head().items.size() == 1);
+}
+
+TEST_CASE("a named autosave must be newer than the file as the project was opened") {
+    // Round-6 review, finding 2: a name offered for one project opened
+    // another project's older autosave of the same name.
+    Project p;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *p.app);
+    p.rename("Saved");
+    REQUIRE(p.app->save("song.json"));
+    const fs::path data = p.root / "song.json-data";
+    p.rename("Autosaved");
+    p.app->setFixedClock(1'060'000);
+    p.app->tick();
+    REQUIRE(fs::exists(data / "autosave-1.json"));
+    const auto now = fs::file_time_type::clock::now();
+    auto args = json::parse(R"({"autosave": true, "autosave_file": "autosave-1.json"})").value();
+
+    SUBCASE("older than the file as opened: refused") {
+        fs::last_write_time(data / "autosave-1.json", now - std::chrono::hours(2));
+        fs::last_write_time(p.root / "song.json", now - std::chrono::hours(1));
+        REQUIRE(p.app->open("song.json"));
+        auto r = d.execute({"project.recover", args, kUnit});
+        REQUIRE_FALSE(r);
+        CHECK(r.error().code == "recover.no_autosave");
+        CHECK(p.app->head().project->name == "Saved");
+    }
+    SUBCASE("newer than the file as opened, though saved over since: opened") {
+        fs::last_write_time(p.root / "song.json", now - std::chrono::hours(2));
+        fs::last_write_time(data / "autosave-1.json", now - std::chrono::hours(1));
+        REQUIRE(p.app->open("song.json"));
+        p.rename("Saved again");
+        REQUIRE(p.app->save("song.json"));
+        auto r = d.execute({"project.recover", args, kUnit});
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        CHECK(p.app->head().project->name == "Autosaved");
+    }
+}
+
+TEST_CASE("recovery opens no file through a link out of the session") {
+    // Round-8 review, finding 2: the WAV was confined but its sidecar was
+    // read through a link to placement metadata outside the session.
+    Unsaved u;
+    const std::string left = "20261114-090000-43";
+    const fs::path folder = u.folder(left);
+    const fs::path wav = folder / "media" / "rec" / "take.wav";
+    const fs::path elsewhere = u.root / "outside-sidecar" / "other.wav";
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    {
+        auto earlier = u.run(left);
+        cmd::Dispatcher d(registry, *earlier);
+        REQUIRE(d.execute({"track.add", json::Value::object(), kUnit}));
+        earlier->setFixedClock(1'060'000);
+        earlier->tick();
+    }
+    leaveRecording(wav);
+    fs::create_directories(elsewhere.parent_path());
+    REQUIRE(engine::detail::writeSidecar(elsewhere,
+                                         {{model::Kind::Track, 1}, 480000, 48000, {}, 0, 0}));
+    fs::remove(engine::detail::sidecarPath(wav));
+    fs::create_symlink(engine::detail::sidecarPath(elsewhere), engine::detail::sidecarPath(wav));
+    auto app = u.run("20261114-100000-1");
+    rename(*app, "Current work");
+
+    SUBCASE("a sidecar link: the take is not placed from it") {
+        CHECK(app->recoverableSessions().front().recordings == 0);
+        auto r = app->recoverSession(left);
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        CHECK(r->recovered.empty());
+        CHECK(app->head().items.size() == 0);
+    }
+    SUBCASE("a sidecar link and no readable autosave: nothing to put back, nothing changed") {
+        REQUIRE(writeFileAtomic(folder / "autosave-1.json", "damaged"));
+        auto r = app->recoverSession(left);
+        REQUIRE_FALSE(r);
+        CHECK(r.error().code == "recover.damaged");
+        CHECK(app->head().project->name == "Current work");
+    }
+}
+
+TEST_CASE("recovery reads no autosave and opens no lock through a link out of the session") {
+    // Round-8 review, finding 2, for the other files recovery opens.
+    Unsaved u;
+    const std::string left = "20261114-090000-44";
+    const fs::path folder = u.folder(left);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    {
+        auto earlier = u.run(left);
+        cmd::Dispatcher d(registry, *earlier);
+        REQUIRE(d.execute({"track.add", json::Value::object(), kUnit}));
+        earlier->setFixedClock(1'060'000);
+        earlier->tick();
+    }
+    auto app = u.run("20261114-100000-1");
+    rename(*app, "Current work");
+    SUBCASE("an autosave link") {
+        const fs::path outsideAutosave = u.root / "outside-autosave.json";
+        fs::rename(folder / "autosave-1.json", outsideAutosave);
+        fs::create_symlink(outsideAutosave, folder / "autosave-1.json");
+        auto r = app->recoverSession(left);
+        CHECK_FALSE(r);
+        CHECK(app->head().project->name == "Current work");
+    }
+    SUBCASE("a session.lock link") {
+        fs::remove(folder / "session.lock");
+        const fs::path target = u.root / "outside-lock";
+        fs::create_symlink(target, folder / "session.lock");
+        CHECK(app->recoverableSessions().empty());
+        CHECK_FALSE(fs::exists(target));
+    }
+}
+
+TEST_CASE("an autosave offered after a first save or a save as survives saving first") {
+    // Round-8 review, finding 1: only opening a project recorded the file the
+    // offer is made against; after a first save or a save as, Save in the
+    // question made the offered autosave look older than the file.
+    bool saveAs = false;
+    SUBCASE("first saved this run") {}
+    SUBCASE("saved as another file this run") { saveAs = true; }
+    Project p;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *p.app);
+    const fs::path file = p.root / "song.json";
+    const auto t0 = fs::file_time_type::clock::now() - std::chrono::hours(2);
+    if (saveAs) {
+        REQUIRE(p.app->save("previous.json"));
+        REQUIRE(p.app->open("previous.json"));
+    }
+    p.rename("Saved");
+    // The save publishes a file dated two hours ago, as a coarse clock might.
+    setFileSyncHookForTesting([&](const fs::path& f) {
+        for (const auto& e : fs::directory_iterator(f.parent_path()))
+            if (e.path().filename().string().starts_with(f.filename().string() + "."))
+                fs::last_write_time(e.path(), t0);
+        return true;
+    });
+    auto saved = p.app->save(file);
+    setFileSyncHookForTesting({});
+    REQUIRE(saved);
+    p.rename("Autosaved");
+    p.app->setFixedClock(1'060'000);
+    p.app->tick();
+    const fs::path offered = p.app->newerAutosave(file);
+    REQUIRE_FALSE(offered.empty());
+    fs::last_write_time(offered, t0 + std::chrono::hours(1));
+    p.rename("Current work");
+    REQUIRE(p.app->save(file));  // Save in the question
+    auto args = json::Value::object();
+    args["autosave"] = true;
+    args["autosave_file"] = offered.filename().string();
+    auto r = d.execute({"project.recover", args, kUnit});
+    REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+    CHECK(p.app->head().project->name == "Autosaved");
 }

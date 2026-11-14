@@ -1143,6 +1143,7 @@ q = nil
 ---@field track? string Track id, e.g. "tr_1".
 ---@field session? string A session project.recoverable lists
 ---@field autosave? boolean The saved project's newer autosave (default: false)
+---@field autosave_file? string With autosave: which one, e.g. autosave-3.json, as offered
 
 ---@class Steppe.project_recover_result
 ---@field recovered table[]

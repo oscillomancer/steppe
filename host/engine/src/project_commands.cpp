@@ -94,6 +94,7 @@ struct RecoverArgs {
     std::optional<std::string> track;
     std::optional<std::string> session;
     bool autosave = false;
+    std::optional<std::string> autosaveFile;
 };
 
 struct RecoverResult {
@@ -548,7 +549,9 @@ void registerProjectCommands(cmd::Registry& registry) {
             "still unsaved, and puts back its leftover recordings as one more undo step. "
             "autosave: instead opens the saved project's autosave newer than its file "
             "(project.get autosave_available) in place of what is open, keeping its path: it "
-            "is unsaved until saved over the file.";
+            "is unsaved until saved over the file. autosave_file names the autosave to open "
+            "(as project.recover returned or a client offered it); it must be newer than the "
+            "file as this project was opened.";
         c.tags = {"project", "recording"};
         c.args = schema::object<RecoverArgs>("recover_args")
                      .field("files", &RecoverArgs::files, schema::arrayOf(schema::string()))
@@ -558,6 +561,9 @@ void registerProjectCommands(cmd::Registry& registry) {
                      .field("autosave", &RecoverArgs::autosave,
                             schema::boolean().doc("The saved project's newer autosave"))
                      .defaultValue(false)
+                     .field("autosave_file", &RecoverArgs::autosaveFile,
+                            schema::string().doc(
+                                "With autosave: which one, e.g. autosave-3.json, as offered"))
                      .build();
         c.result =
             schema::object<RecoverResult>("recover_result")
@@ -583,6 +589,8 @@ void registerProjectCommands(cmd::Registry& registry) {
              "recover the session, then its recordings"},
             {"recover.no_autosave", "no autosave is newer than the saved file",
              "open the project as saved"},
+            {"recover.keep", "a copy recovery must keep could not be made; nothing changed",
+             "make the folder writable and retry"},
             {"recover.autosave_args", "autosave cannot be combined with session, files or track",
              "recover the autosave, then the recordings"}};
         c.examples = {{"Recover everything", j("{}"),
@@ -597,12 +605,15 @@ void registerProjectCommands(cmd::Registry& registry) {
                        "session_left_behind"}};
         c.run = [](const RecoverArgs& a, Context& ctx) -> Result<RecoverResult> {
             EngineApp& app = engine::app(ctx);
+            if (a.autosaveFile && !a.autosave)
+                return Error("recover.autosave_args", "autosave_file needs autosave: true",
+                             "/autosave_file", "add autosave: true");
             if (a.autosave) {
                 if (a.session || a.files || a.track)
                     return Error("recover.autosave_args",
                                  "autosave cannot be combined with session, files or track",
                                  "/autosave", "recover the autosave, then the recordings");
-                auto r = app.recoverAutosave();
+                auto r = app.recoverAutosave(a.autosaveFile.value_or(""));
                 if (!r) return std::move(r).error();
                 RecoverResult out;
                 out.autosave = r->autosave;

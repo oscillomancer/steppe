@@ -5,8 +5,11 @@
 // never depends on a file somewhere else. Main/I-O threads only.
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 #include "supple/base/result.h"
 
@@ -26,5 +29,25 @@ Result<std::string> copyIntoFolder(const std::filesystem::path& file,
 // strictly within `from` is excluded from traversal, including resolved symlink
 // aliases. An ancestor destination receives the source files normally.
 Status copyFolder(const std::filesystem::path& from, const std::filesystem::path& to);
+
+// The one test of where a path the engine reads or writes on a file's say
+// leads (ADR-0076, ADR-0078): inside `root` when the deepest part of `path`
+// that exists resolves, every link on the way followed (canonical, so its
+// ancestors too), inside the resolved `root`, and the part that does not
+// exist yet names no ".." (where that leads is unknown until it is made).
+// `missing` (optional) receives the parts that do not exist, deepest first.
+bool resolvedInside(const std::filesystem::path& root, const std::filesystem::path& path,
+                    std::vector<std::filesystem::path>* missing = nullptr);
+
+// Every file crash recovery opens goes through these (ADR-0078): autosaves,
+// the copies kept for the first save, recording sidecars and WAVs, MIDI
+// journals. A file that does not resolve inside `root` (the folder recovery
+// may use) is not opened: recover.outside. An empty `root` confines nothing.
+Status recoveryFileInside(const std::filesystem::path& root, const std::filesystem::path& file);
+Result<std::vector<std::uint8_t>> readRecoveryFile(const std::filesystem::path& root,
+                                                   const std::filesystem::path& file,
+                                                   std::size_t limit);
+Result<std::string> readRecoveryText(const std::filesystem::path& root,
+                                     const std::filesystem::path& file, std::size_t limit);
 
 }  // namespace supple::engine::detail

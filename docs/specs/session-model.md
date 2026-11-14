@@ -663,9 +663,15 @@ autosave newer than the file that reads (older ones are tried, each failure
 a `recover.autosave` warning) replaces the open project, keeping its path,
 so it stays unsaved until saved over the file; `recover.no_autosave` when
 there is none, `recover.autosave_args` combined with `session`, `files` or
-`track`. Saved steps in it are checked as in an opened file (§5.4), and an
-autosave it could not fully restore (branches dropped, or unreadable) is
-kept through the first save as for an unsaved project's (below).
+`track`. `autosave_file` (with `autosave: true`) names the autosave to open,
+such as the one a client offered: only it is tried, and it must be newer
+than the file as this project was opened (or first saved, or saved under a
+new path; later saves to the same path keep that), so a save since does not
+make it unopenable (`recover.no_autosave` when it is not an autosave of the project,
+is not newer than that, or does not read). Saved steps in it are checked as in an
+opened file (§5.4), and an autosave it could not fully restore (branches
+dropped, or unreadable) is kept through the first save as for an unsaved
+project's (below).
 
 **Unsaved projects (ADR-0078).** An unsaved project autosaves the same way
 into its scratch folder (`<data>/<slug>/unsaved/<start time>-<pid>/`,
@@ -687,9 +693,25 @@ failure a `recover.autosave` warning), takes the folder and its lock over,
 stays unsaved, puts the folder's leftover recordings back as one more undo
 step, and returns `autosave` (the file it used, or none). Without a
 readable autosave it recovers only when at least one recording can be put
-back (a sidecar that reads and a WAV with frames): a new project with one
-channel, "Recovered", that holds them; otherwise `recover.damaged`, with the
-current project and every file untouched. Nothing a recovery could not
+back, by the test `project.recover` applies when it places one (a sidecar
+that reads, a WAV with frames, a placement inside the timeline): a new
+project with one channel, "Recovered", that holds them; otherwise
+`recover.damaged`, with the current project and every file untouched. An
+unsaved project's media stay in its session folder. A path is inside it
+when the deepest part of it that exists resolves (every link followed)
+inside the resolved folder and the part that does not exist names no `..`.
+A recovered branch whose `media_dir` is not (only a file this program did
+not write names one; no command sets it) gets one more version setting it
+to `media`, with a `recover.media_dir` warning; one that is stays as
+spelled. Recordings are listed, read and repaired only when they are
+inside too: if `media` itself leads out, they are not recovered
+(`recover.media_outside` warning) and nothing there is touched. Every file
+recovery opens (autosaves, `.keep` copies, sidecars, WAVs before inspection
+or repair) must resolve inside the folder recovery uses; one that does not
+is not opened (`recover.outside`), and `session.lock` is never opened
+through a link. A merge
+replayed into an unsaved project writes only inside its session folder and
+refuses any `..` (`history.media_outside`, §5.4). Nothing a recovery could not
 restore is lost by the first save, which releases the folder: an autosave
 whose branches were not restored (opened as main alone, `project.history`)
 or that could not be read is copied at recovery beside the autosaves
@@ -697,7 +719,9 @@ or that could not be read is copied at recovery beside the autosaves
 rotated), and the first save publishes each beside the saved file as
 `<file>.pre-branches.bak` or `<file>.unreadable-autosave.bak` (`-2`… when
 taken, never replacing) before it writes the file, with a
-`project.history_backup` warning; if that fails, the save fails. Errors:
+`project.history_backup` warning; if that fails, the save fails. The copies
+are made before the recovery replaces anything: if one cannot be made, it
+fails with `recover.keep` and changes nothing. Errors:
 `recover.unknown_session` (not a left-behind sibling, including path
 tricks), `recover.busy` (its run is alive), `recover.damaged` (nothing in it
 can be opened or put back). `project.recoverable.delete {session}` deletes one. Project-info
@@ -792,7 +816,8 @@ and nothing else is kept (the file is then the document alone).
   existing file or link. Before any step runs, a `media_dir` naming `..` is
   refused; nothing is made until the deepest existing folder of the media
   path resolves (`canonical`, every link followed) inside the resolved folder
-  that holds the project file, and the media folder made then must resolve
+  that holds the project file (an unsaved project's session folder; only a
+  headless engine's folderless `<workdir>/media` is exempt), and the media folder made then must resolve
   inside it too, or the merge stops with an `invalid` conflict
   (`history.media_outside`) and the folders the check made are removed. A
   merge that fails removes the files and folders its replays created. While
@@ -896,7 +921,7 @@ and naming. All `edit` unless marked (q) query or (a) action.
 - **project**: `project.new` (a), `project.open` (a), `project.save` (a),
   `project.get` (q), `project.set`, `project.describe` (q); crash leftovers
   `project.recoverable` (q), `project.recover {files?, track? | session |
-  autosave}` (a),
+  autosave, autosave_file?}` (a),
   `project.recoverable.delete {session}` (a) (§5.3); templates
   `project.template.save` (a), `project.template.load {name}` (a, a new
   unsaved project), `project.template.list` (q), `project.template.delete`

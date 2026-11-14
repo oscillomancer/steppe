@@ -51,7 +51,31 @@ used neither, nor `autosave_available` for saved projects.
    `<file>.unreadable-autosave.bak`, never replacing) before the folder is
    released. (Amended 2026-11-14 after the recovery review: an empty `rec/`
    made a damaged session recover as a blank project, and the first save
-   deleted the only raw copy of rejected branches.)
+   deleted the only raw copy of rejected branches.) Those copies are made
+   before anything is replaced: if one cannot be made, the recovery fails
+   (`recover.keep`) and changes nothing. "Can really be put back" is the
+   test `project.recover` applies when it places a recording (sidecar,
+   frames, a placement inside the timeline), asked of the project the
+   recordings would go into. An unsaved project's media live in its session
+   folder. One test decides what is inside it: the deepest part of a path
+   that exists, every link on the way followed, resolves inside the
+   resolved folder, and a part that does not exist yet names no `..`. A
+   recovered branch whose `media_dir` fails it gets one more version setting
+   it back to `media` (warning `recover.media_dir`; no command sets
+   `media_dir`, so only a file this program did not write names such a
+   folder); one that passes is kept however it is spelled
+   (`intermediate/../audio`). Recovery reads and repairs only recordings
+   that pass the same test: if even `media` leads out (a link), they are not
+   recovered (warning `recover.media_outside`) and nothing there is read or
+   changed. Every file recovery opens goes through one helper that applies
+   it: autosaves (in the session or `<file>-data` folder they are listed
+   in), the `.keep` copies (in their folder), recording sidecars (in their
+   WAV's folder), WAVs before they are inspected or repaired, and the MIDI
+   journals to come; a file that leads out is not opened
+   (`recover.outside`). `session.lock` is never opened through a link. A replayed merge of an unsaved project writes only inside its
+   session folder, as a saved project's does inside its own (ADR-0076), and
+   still refuses any `..`. (Amended 2026-11-14 after review rounds 5 and
+   6.)
    `project.recoverable.delete {session}` deletes one. `project.get` and the
    other project-info results count `recoverable_sessions`.
 5. **The GUI offers, never loads.** At start without a project argument, and
@@ -66,7 +90,17 @@ used neither, nor `autosave_available` for saved projects.
    `project.recover {autosave: true}` opens the newest such autosave that
    reads in place of the open project, keeping the project's path: it is
    unsaved until saved over the file, which stays as it was until then.
-   Leftover recordings are put back with `project.recover` as before.
+   `autosave_file` names the one to open; it must be newer than the file as
+   this project was opened (not as it is now): the GUI opens the autosave
+   its popup offered, so choosing Save in the unsaved-changes question
+   before it does not make that autosave unopenable, while a name offered for
+   another project opens nothing older in this one. "As this project was
+   opened" is the file as opened, or as first saved, or as saved under a new
+   path; later saves to the same path keep it. The popup's offer is bound to
+   the project (its path and generation) it was made for: opening another
+   project from the GUI closes it; after an agent opens one, the popup may
+   stay, but its button loads nothing and says why. Leftover recordings are put back
+   with `project.recover` as before.
 
 ## Consequences
 

@@ -26,6 +26,8 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <tuple>
+#include <utility>
 #include <vector>
 #include "supple/base/stop.h"
 
@@ -327,7 +329,9 @@ class EngineApp : public cmd::Host {
     // project's path, so it is unsaved until saved over the file
     // ("recover.no_autosave" when there is none). Leftover recordings stay
     // for project.recover.
-    Result<SessionRecovery> recoverAutosave();
+    // `name` (optional) opens that autosave of the project's folder, the one
+    // that was offered, even if the file has been saved since.
+    Result<SessionRecovery> recoverAutosave(const std::string& name = {});
     // Deletes a folder recoverableSessions() lists.
     Status deleteSession(const std::string& session);
 
@@ -987,8 +991,19 @@ class EngineApp : public cmd::Host {
         std::string suffix;  // ".pre-branches", ".unreadable-autosave"
     };
     std::vector<RecoveryKeep> recoveryKeep_;
-    Status keepForFirstSave(const std::filesystem::path& folder, const std::string& name,
-                            std::string_view bytes, std::string suffix);
+    // The project file and its time when this project was opened: a named
+    // autosave must be newer than that (recoverAutosave).
+    std::optional<std::pair<std::filesystem::path, std::filesystem::file_time_type>> openedFile_;
+    // Where recovery may read and repair recordings: an unsaved project's
+    // session folder; empty for a saved project (its file names its media).
+    std::filesystem::path recoveryRoot() const;
+    // A raw autosave a recovery cannot fully restore: (name, bytes, suffix).
+    using RawAutosave = std::tuple<std::string, std::string, std::string>;
+    // Copies each into `folder` out of the autosave rotation, all or none
+    // (recover.keep at `path`), before a recovery replaces anything.
+    Result<std::vector<RecoveryKeep>> keepForFirstSave(const std::filesystem::path& folder,
+                                                       const std::vector<RawAutosave>& raw,
+                                                       const std::string& path);
     Status publishRecoveryKeeps(const std::filesystem::path& file,
                                 std::vector<schema::Warning>* warnings);
     bool replaying_ = false;
