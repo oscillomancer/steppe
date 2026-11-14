@@ -447,8 +447,11 @@ classes from it, all process-local:
 - **Lifetime.** Threads end at `stop()`, so nothing is restored. CPU affinity
   is never changed: threads keep the inherited mask.
 - **Bridges.** `host::setBridgeAudioPolicy` carries the applied background
-  policy to bridged instances while the engine runs (normal otherwise): each
-  bridge audio thread takes it when its processing starts (§5).
+  policy to bridged instances while the engine runs (normal otherwise), and
+  `host::setLiveBridgeAudioPolicy` the callback's policy for live calls
+  (ADR-0081): each bridge audio thread takes the class each command asks
+  for (§5). `engine.status.bridge_threads_refused` lists the isolated FX
+  whose bridge thread was refused it.
 - **Reporting.** `Engine::scheduling()` records each class's applied policy
   at start (None for a class without threads, and for all while stopped).
   `engine.start` and `engine.status` report it as `scheduling`: `callback`,
@@ -943,7 +946,9 @@ handles. The existing background/offline bounded-wait exception and failure
 semantics apply on each platform. Native editor hosting follows ADR-0040;
 the DAW shell is integrated separately on port-gui.
 
-POSIX protocol 19 / Windows protocol 20 carry typed native editor parents
+POSIX protocol 21 / Windows protocol 22 add each command's audio class and the
+bridge's refusal flag to the header (ADR-0081); 20/21 added plug-in note and
+MIDI output (ADR-0068). POSIX protocol 19 / Windows protocol 20 carry typed native editor parents
 (ADR-0040), live editor scale changes (`EditorScale`) and Cocoa editor window
 frames, with unchanged Header layout. Windows retains the v14
 u64 recipient-owned resource after each frame prefix (all-ones means
@@ -1064,13 +1069,19 @@ instance).
 - The bridge's audio thread sets FTZ and DAZ around each `process()` and
   restores its MXCSR afterwards (§2.4), so a bridged plug-in computes as an
   in-process one does.
-- Each instance's audio thread is named `audio-bridge`. On `StartProcessing`
-  it takes the scheduling the host writes into the shared-memory header
-  (`audioPolicy`, `audioPriority`; protocol version 10), which is the engine's
-  background policy while an engine runs and normal otherwise (§2.2,
-  ADR-0026). A renderer waiting for a bridged plug-in therefore never waits
-  behind a lower-priority thread. Applying it is best effort: a refusal leaves
-  the thread as it was.
+- Each instance's audio thread is named `audio-bridge`. Every command carries
+  the class it runs in (protocol POSIX 21 / Windows 22; `audioClass` in the
+  header): background, the policy in `audioPolicy`/`audioPriority` (the
+  engine's background policy while an engine runs, normal otherwise; §2.2,
+  ADR-0026), or live under a live deadline (ADR-0081): on Linux the
+  callback's policy in `livePolicy`/`livePriority`, on macOS a
+  time-constraint policy for the command's block at the activation rate, on
+  Windows MMCSS "Pro Audio" at critical priority (the bridge links `avrt`).
+  The thread changes class only when the request changes. A waiting renderer
+  or callback therefore never waits behind a lower-priority thread. Applying
+  it is best effort: a refusal leaves the thread as it was, and the answer's
+  `classRefused` says so; `Instance::bridgeThreadRefused()` and
+  `engine.status.bridge_threads_refused` report it.
 - **Live deadline (ADR-0081).** `host::LiveBridgeDeadline` sets, for the
   calling thread, the steady-clock time (`host::steadyNanoseconds()`) by which
   bridged audio-thread calls must be answered. Under it a call spins briefly,

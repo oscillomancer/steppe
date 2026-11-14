@@ -1765,6 +1765,8 @@ EngineStatus EngineApp::engineStatus() {
         st.warnings.push_back(st.memoryLock.error->message + "; " + st.memoryLock.error->hint);
     st.dropped = static_cast<std::int64_t>(outputDrops_ + consumerDrops_);
     st.voiceDropped = static_cast<std::int64_t>(voiceDrops_);
+    for (const model::Id& id : pool_->bridgeThreadsRefused())
+        st.bridgeThreadsRefused.push_back(id.str());
     for (const auto& [id, error] : pool_->failedErrors()) {
         st.failedFx.push_back(id.str());
         auto failure = json::Value::object();

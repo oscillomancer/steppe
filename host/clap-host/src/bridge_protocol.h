@@ -52,10 +52,12 @@ inline constexpr std::uint32_t kMagic = 0x31474253;  // "SBG1"
 // 20/21: plug-in note and MIDI output (ADR-0068): the Create reply says whether
 // the plug-in outputs notes; the Header carries the host sink's capacity and
 // the unsupported-output count; OutputEvent gains its MIDI kinds and bytes.
+// 21/22: every command carries the audio thread's class, background or live
+// (ADR-0081), and the bridge reports whether it got it.
 #if defined(_WIN32)
-inline constexpr std::uint32_t kVersion = 21;  // Windows runs one ahead: native control handles
+inline constexpr std::uint32_t kVersion = 22;  // Windows runs one ahead: native control handles
 #else
-inline constexpr std::uint32_t kVersion = 20;
+inline constexpr std::uint32_t kVersion = 21;
 #endif
 inline constexpr int kControlFd = 3;  // the bridge's end of the socketpair
 inline constexpr std::uint32_t kMaxChannels = 16;
@@ -326,9 +328,17 @@ struct Header {
     std::uint32_t outSink, outEventCapacity;
     std::uint32_t outEventCount, outEventsDropped, outEventsUnsupported;
     std::uint32_t processing;  // the plugin's processing state after the command
-    // StartProcessing: the scheduling the audio thread takes (ThreadPolicy's
-    // kind and priority; kind 0, None, keeps the current one).
+    // Every command: the class the audio thread runs it in (ADR-0026,
+    // ADR-0081). audioClass 1: background, ThreadPolicy kind and priority in
+    // audioPolicy/audioPriority (kind 0, None, keeps the current one); 2: live,
+    // the callback's class (Linux: livePolicy/livePriority; macOS: a
+    // time-constraint policy for the block's period; Windows: MMCSS Pro
+    // Audio); 0: unchanged.
     std::uint32_t audioPolicy, audioPriority;
+    std::uint32_t audioClass, livePolicy, livePriority;
+    // The bridge, with each answer: 1 when the thread did not get the class
+    // last asked for (it keeps what it had), else 0.
+    std::uint32_t classRefused;
 };
 static_assert(std::atomic<std::uint32_t>::is_always_lock_free);
 

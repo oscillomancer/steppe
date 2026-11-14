@@ -32,18 +32,33 @@ constexpr int kCreateTimeoutMs = 20000;
 // ThreadPolicy as kind << 8 | priority, read on audio threads.
 std::atomic<std::uint32_t> gBridgeAudioPolicy{static_cast<std::uint32_t>(ThreadPolicy::Kind::Normal)
                                               << 8};
+std::atomic<std::uint32_t> gLiveBridgeAudioPolicy{
+    static_cast<std::uint32_t>(ThreadPolicy::Kind::Normal) << 8};
+
+std::uint32_t pack(ThreadPolicy policy) {
+    return static_cast<std::uint32_t>(policy.kind) << 8 |
+           static_cast<std::uint32_t>(std::clamp(policy.priority, 0, 99));
+}
+ThreadPolicy unpack(std::uint32_t packed) SUPPLE_RT {
+    return {static_cast<ThreadPolicy::Kind>(packed >> 8), static_cast<int>(packed & 0xff)};
+}
 
 }  // namespace
 
 void setBridgeAudioPolicy(ThreadPolicy policy) {
-    gBridgeAudioPolicy.store(static_cast<std::uint32_t>(policy.kind) << 8 |
-                                 static_cast<std::uint32_t>(std::clamp(policy.priority, 0, 99)),
-                             std::memory_order_relaxed);
+    gBridgeAudioPolicy.store(pack(policy), std::memory_order_relaxed);
 }
 
 ThreadPolicy bridgeAudioPolicy() SUPPLE_RT {
-    const std::uint32_t packed = gBridgeAudioPolicy.load(std::memory_order_relaxed);
-    return {static_cast<ThreadPolicy::Kind>(packed >> 8), static_cast<int>(packed & 0xff)};
+    return unpack(gBridgeAudioPolicy.load(std::memory_order_relaxed));
+}
+
+void setLiveBridgeAudioPolicy(ThreadPolicy policy) {
+    gLiveBridgeAudioPolicy.store(pack(policy), std::memory_order_relaxed);
+}
+
+ThreadPolicy liveBridgeAudioPolicy() SUPPLE_RT {
+    return unpack(gLiveBridgeAudioPolicy.load(std::memory_order_relaxed));
 }
 
 void setBridgeExecutable(std::filesystem::path path) {
@@ -912,6 +927,14 @@ bool RemoteInstance::command(Cmd cmd) SUPPLE_RT {
     // in the callback ADR-0081).
     rt::ScopedSanctionedSyscall syscalls;
     if (!settle()) return false;
+    // The class the bridge's thread runs this in: live under a live deadline
+    // (ADR-0081), else the background class (ADR-0026).
+    const ThreadPolicy background = bridgeAudioPolicy(), live = liveBridgeAudioPolicy();
+    hdr_->audioClass = tLiveDeadline ? 2 : 1;
+    hdr_->audioPolicy = static_cast<std::uint32_t>(background.kind);
+    hdr_->audioPriority = static_cast<std::uint32_t>(background.priority);
+    hdr_->livePolicy = static_cast<std::uint32_t>(live.kind);
+    hdr_->livePriority = static_cast<std::uint32_t>(live.priority);
     hdr_->cmd = static_cast<std::uint32_t>(cmd);
     const std::uint32_t req = ++seq_;
     hdr_->request.store(req, std::memory_order_release);
@@ -922,6 +945,7 @@ bool RemoteInstance::command(Cmd cmd) SUPPLE_RT {
 #endif
     if (answered(req, cmd)) {
         lateSince_ = 0;
+        classRefused_.store(hdr_->classRefused != 0, std::memory_order_relaxed);
         return true;
     }
     if (tLiveDeadline) late(req);
@@ -936,11 +960,6 @@ bool RemoteInstance::startProcessing() SUPPLE_RT {
     }
     // A start a late block left outstanding may have been answered since.
     if (hdr_->processing != 0) return true;
-    {  // published with the command's request
-        const ThreadPolicy policy = bridgeAudioPolicy();
-        hdr_->audioPolicy = static_cast<std::uint32_t>(policy.kind);
-        hdr_->audioPriority = static_cast<std::uint32_t>(policy.priority);
-    }
     if (!command(Cmd::StartProcessing)) return false;
     return hdr_->processing != 0;
 }

@@ -348,6 +348,14 @@ std::vector<std::pair<Id, Error>> InstancePool::failedErrors() const {
     return out;
 }
 
+std::vector<Id> InstancePool::bridgeThreadsRefused() const {
+    std::vector<Id> out;
+    for (const auto& [id, entry] : instances_)
+        if (entry.instance && !entry.instance->failed() && entry.instance->bridgeThreadRefused())
+            out.push_back(id);
+    return out;
+}
+
 bool InstancePool::automationCleared(Id id, std::uint32_t param) const {
     auto it = instances_.find(id);
     return it != instances_.end() &&

@@ -25,6 +25,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <sstream>
 #include <thread>
 #include <vector>
 #include "../src/bridge_client.h"
@@ -921,6 +922,70 @@ TEST_CASE("isolation: a hanging plugin is killed at the deadline") {
     c.stopProcessing();
 }
 
+namespace {
+// The scheduling policy (SCHED_*) of the bridge process's audio thread, read
+// from /proc; -1 when it is not found.
+int bridgeAudioThreadPolicy(int pid) {
+    std::error_code ec;
+    for (const auto& task :
+         std::filesystem::directory_iterator("/proc/" + std::to_string(pid) + "/task", ec)) {
+        std::string name;
+        std::getline(std::ifstream(task.path() / "comm"), name);
+        if (name != "audio-bridge") continue;
+        std::string stat;
+        std::getline(std::ifstream(task.path() / "stat"), stat);
+        std::istringstream fields(stat.substr(stat.rfind(')') + 2));
+        std::string field;
+        for (int i = 3; i <= 41 && fields >> field; ++i)
+            if (i == 41) return std::stoi(field);  // proc(5): policy
+    }
+    return -1;
+}
+}  // namespace
+
+TEST_CASE("a bridged audio thread takes the class each call asks for, and says when refused") {
+    // ADR-0081 point 5: live calls run in the callback's class, others in the
+    // background class; a refusal is reported (it used to leave no trace).
+    setBridgeExecutable(BRIDGE_PATH);
+    auto inst = Instance::create(find("com.suppleaudio.test.gain"), {}, true);
+    REQUIRE(inst);
+    Instance& g = **inst;
+    REQUIRE(g.activate(48000, 1, 64));
+    REQUIRE(g.startProcessing());
+    Buffers buf(64);
+    auto live = [&] {
+        LiveBridgeDeadline deadline(steadyNanoseconds() + 5'000'000'000);
+        REQUIRE(g.process(buf.block(64)));
+    };
+    struct Restore {
+        ~Restore() { setLiveBridgeAudioPolicy({ThreadPolicy::Kind::Normal, 0}); }
+    } restore;
+    rlimit limit{};
+    REQUIRE(::getrlimit(RLIMIT_RTPRIO, &limit) == 0);
+    if (::geteuid() != 0 && limit.rlim_cur < 99) {
+        setLiveBridgeAudioPolicy({ThreadPolicy::Kind::Fifo, 99});  // beyond RLIMIT_RTPRIO
+        live();
+        CHECK(g.bridgeThreadRefused());
+        CHECK(bridgeAudioThreadPolicy(g.bridgePid()) == SCHED_OTHER);
+        REQUIRE(g.process(buf.block(64)));  // background: normal, granted
+        CHECK_FALSE(g.bridgeThreadRefused());
+    } else {
+        MESSAGE("skipped the refusal: real-time priority 99 is allowed here");
+    }
+    if (limit.rlim_cur >= 1) {
+        setLiveBridgeAudioPolicy({ThreadPolicy::Kind::Fifo, 1});
+        live();
+        CHECK_FALSE(g.bridgeThreadRefused());
+        CHECK(bridgeAudioThreadPolicy(g.bridgePid()) == SCHED_FIFO);
+        REQUIRE(g.process(buf.block(64)));  // back to the background class
+        CHECK(bridgeAudioThreadPolicy(g.bridgePid()) == SCHED_OTHER);
+    } else {
+        MESSAGE("skipped the live class: RLIMIT_RTPRIO is 0");
+    }
+    g.stopProcessing();
+    g.deactivate();
+}
+
 TEST_CASE("isolation: a missing bridge is a clean error") {
     setBridgeExecutable("/nonexistent/supple-bridge");
     auto inst = Instance::create(find("com.suppleaudio.test.gain"), {}, true);
@@ -1392,7 +1457,7 @@ TEST_CASE("bridge protocol v6 retains nested structured error details") {
     CHECK(decoded.details[0].hint == "correct it");
     REQUIRE(decoded.details[0].details.size() == 1);
     CHECK(decoded.details[0].details[0].code == "leaf");
-    CHECK(bridge::kVersion == 20);
+    CHECK(bridge::kVersion == 21);
 }
 
 TEST_CASE("editor failures destroy the partial editor and show-hide requests reach its owner") {

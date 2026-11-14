@@ -138,6 +138,8 @@ class RemoteInstance {
     bool process(const ProcessBlock& block, OutputEvents* out) SUPPLE_RT;
 
     bool failed() const { return process_->failed(); }
+    // The bridge's audio thread did not get the class its last command asked for.
+    bool classRefused() const { return classRefused_.load(std::memory_order_relaxed); }
     std::string failure() const;
     void setDeadlineMs(int ms) { deadlineMs_ = ms; }
     int bridgePid() const { return process_->pid(); }
@@ -185,6 +187,7 @@ class RemoteInstance {
     // Control servicing publishes this flag while audio checks for idle work.
     std::atomic<bool> needsAudioFlush_{false};
     std::atomic<bool> processRequested_{false};
+    std::atomic<bool> classRefused_{false};
 };
 
 std::filesystem::path bridgeExecutable();

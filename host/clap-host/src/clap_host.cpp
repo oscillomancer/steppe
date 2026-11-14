@@ -1083,6 +1083,7 @@ bool Instance::reportsTail() const {
 bool Instance::failed() const { return remote_ && remote_->failed(); }
 
 int Instance::bridgePid() const { return remote_ ? remote_->bridgePid() : -1; }
+bool Instance::bridgeThreadRefused() const { return remote_ && remote_->classRefused(); }
 
 std::string Instance::failure() const { return remote_ ? remote_->failure() : std::string(); }
 

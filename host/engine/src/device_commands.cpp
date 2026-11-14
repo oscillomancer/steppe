@@ -134,6 +134,8 @@ schema::Schema<EngineStatus> engineStatusSchema() {
         .field("cpu_idle_latency", &EngineStatus::cpuIdleLatency, runtimeProtectionSchema())
         .field("meter_drops", &EngineStatus::meterDrops, meterDropsSchema())
         .field("failed_fx", &EngineStatus::failedFx, schema::arrayOf(schema::string()))
+        .field("bridge_threads_refused", &EngineStatus::bridgeThreadsRefused,
+               schema::arrayOf(schema::string()))
         .field("dropped", &EngineStatus::dropped, schema::integer())
         .field("voice_dropped", &EngineStatus::voiceDropped, schema::integer())
         .field("failed_errors", &EngineStatus::failedErrors, schema::any())
@@ -272,6 +274,7 @@ void registerDeviceCommands(cmd::Registry& registry) {
                      "memory_lock": {"requested": false, "active": false},
                      "cpu_idle_latency": {"requested": false, "active": false},
                      "meter_drops": {"renderer": 0, "callback": 0}, "failed_fx": [],
+                     "bridge_threads_refused": [],
                      "dropped": 0, "voice_dropped": 0, "failed_errors": [], "sync": "<any>"})"),
              "empty"}};
         c.run = [](const EngineStartArgs& a, Context& ctx) -> Result<EngineStatus> {
@@ -420,7 +423,10 @@ void registerDeviceCommands(cmd::Registry& registry) {
             "plan warnings with corrective actions. failed_errors adds structured code, "
             "message, path and hint to each failure. "
             "failed_fx: isolated plugins whose "
-            "process crashed or hung (silent now; fx.restart re-creates them).";
+            "process crashed or hung (silent now; fx.restart re-creates them). "
+            "bridge_threads_refused: isolated plugins whose bridge audio thread was refused "
+            "the scheduling it asked for (it runs at what it had and can fall behind under "
+            "load; grant real-time scheduling to the user and restart the engine).";
         c.tags = {"engine"};
         c.args = schema::object<NoArgs>("no_args").build();
         c.result = engineStatusSchema();
@@ -442,6 +448,7 @@ void registerDeviceCommands(cmd::Registry& registry) {
                      "memory_lock": {"requested": false, "active": false},
                      "cpu_idle_latency": {"requested": false, "active": false},
                      "meter_drops": {"renderer": 0, "callback": 0}, "failed_fx": [],
+                     "bridge_threads_refused": [],
                      "dropped": 0, "voice_dropped": 0, "failed_errors": [], "sync": "<any>"})"),
                        "empty"}};
         c.run = [](const NoArgs&, Context& ctx) -> Result<EngineStatus> {

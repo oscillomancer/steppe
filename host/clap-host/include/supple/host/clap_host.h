@@ -249,6 +249,13 @@ Result<std::shared_ptr<BridgeProcess>> createBridgeProcess();
 // does not wait behind a lower-priority thread (ADR-0026).
 void setBridgeAudioPolicy(ThreadPolicy policy);
 ThreadPolicy bridgeAudioPolicy() SUPPLE_RT;
+// The class a bridged instance's audio thread takes while it runs under a
+// live deadline (ADR-0081): the device callback's (process-wide; Normal by
+// default). On Linux this policy and priority; macOS and Windows apply their
+// own audio class in the bridge (time-constraint, MMCSS Pro Audio) whatever
+// it says. The engine sets it while it runs.
+void setLiveBridgeAudioPolicy(ThreadPolicy policy);
+ThreadPolicy liveBridgeAudioPolicy() SUPPLE_RT;
 bool bridgeProcessFailed(const std::shared_ptr<BridgeProcess>& process);
 
 // ADR-0081: the device callback's bridge deadline, on the steady clock in
@@ -304,6 +311,9 @@ class Instance {
     std::string failure() const;
     bool isolated() const { return remote_ != nullptr; }
     int bridgePid() const;  // -1 for in-process
+    // Bridged: its bridge's audio thread was refused the scheduling class the
+    // last audio-thread call asked for (ADR-0026, ADR-0081); false in process.
+    bool bridgeThreadRefused() const;
 
     // --- ports (valid after create; a stereo configuration is selected when offered) ---
     std::uint32_t audioInputChannels() const { return inChannels_; }

@@ -6,8 +6,18 @@
 // commands arrive in per-instance shared memory sent with Activate and run on
 // that instance's audio thread. Exits when the host closes the control socket.
 #if defined(_WIN32)
+#include <avrt.h>
 #include <fcntl.h>
 #include <io.h>
+#include <windows.h>
+#elif defined(__APPLE__)
+#include <fcntl.h>
+#include <mach/mach.h>
+#include <mach/mach_time.h>
+#include <mach/thread_policy.h>
+#include <pthread.h>
+#include <signal.h>
+#include <unistd.h>
 #else
 #include <fcntl.h>
 #include <pthread.h>
@@ -45,6 +55,72 @@ using namespace supple::host;
 using namespace supple::host::bridge;
 
 namespace {
+
+// The class an instance's audio thread runs a command in (ADR-0026,
+// ADR-0081): what the host asked for, as the header carries it.
+struct AudioClass {
+    std::uint32_t kind = 0;  // 0: none yet, 1: background, 2: live
+    ThreadPolicy background, live;
+    bool operator==(const AudioClass&) const = default;
+};
+
+ThreadPolicy policyFrom(std::uint32_t kind, std::uint32_t priority) {
+    return {kind <= static_cast<std::uint32_t>(ThreadPolicy::Kind::High)
+                ? static_cast<ThreadPolicy::Kind>(kind)
+                : ThreadPolicy::Kind::None,
+            static_cast<int>(std::min(priority, 99u))};
+}
+
+// The calling thread (an instance's audio thread) takes `want`; false when it
+// was refused, the thread then keeping what it could. The live class is the
+// callback's: on Linux its policy and priority; on macOS a time-constraint
+// policy for a block of `frames` at `rate` (the device helpers' rule,
+// ADR-0038); on Windows MMCSS Pro Audio at critical priority. Setup calls,
+// made only when the class changes.
+bool takeAudioClass(const AudioClass& want, double rate, std::uint32_t frames) {
+#if defined(_WIN32)
+    static thread_local HANDLE mmcss = nullptr;
+    const auto thread = GetCurrentThread();
+    if (want.kind == 2) {
+        (void)rate;
+        (void)frames;
+        DWORD index = 0;
+        if (!mmcss) mmcss = AvSetMmThreadCharacteristicsW(L"Pro Audio", &index);
+        return mmcss && AvSetMmThreadPriority(mmcss, AVRT_PRIORITY_CRITICAL);
+    }
+    if (mmcss) AvRevertMmThreadCharacteristics(mmcss);
+    mmcss = nullptr;
+#elif defined(__APPLE__)
+    const auto thread = ::pthread_self();
+    const auto mach = pthread_mach_thread_np(thread);
+    if (want.kind == 2) {
+        mach_timebase_info_data_t timebase{};
+        mach_timebase_info(&timebase);
+        const double ticks =
+            rate > 0 ? double(frames) / rate * 1e9 * timebase.denom / timebase.numer : 0;
+        const auto period = static_cast<std::uint32_t>(std::clamp(ticks, 1.0, double(UINT32_MAX)));
+        thread_time_constraint_policy_data_t policy{};
+        policy.period = period;
+        policy.computation = std::max<std::uint32_t>(1, period / 3);
+        policy.constraint = std::max(policy.computation, period / 2);
+        policy.preemptible = TRUE;
+        return thread_policy_set(mach, THREAD_TIME_CONSTRAINT_POLICY,
+                                 reinterpret_cast<thread_policy_t>(&policy),
+                                 THREAD_TIME_CONSTRAINT_POLICY_COUNT) == KERN_SUCCESS;
+    }
+    (void)thread_policy_set(mach, THREAD_STANDARD_POLICY, nullptr, THREAD_STANDARD_POLICY_COUNT);
+#else
+    (void)rate;
+    (void)frames;
+    const auto thread = ::pthread_self();
+    if (want.kind == 2) {
+        if (want.live.kind == ThreadPolicy::Kind::None) return true;
+        return setThreadPolicy(thread, want.live) && threadPolicy(thread) == want.live;
+    }
+#endif
+    if (want.background.kind == ThreadPolicy::Kind::None) return true;
+    return static_cast<bool>(setThreadPolicy(thread, want.background));
+}
 
 struct BridgeInstance {
     std::unique_ptr<Instance> instance;
@@ -131,6 +207,7 @@ struct BridgeInstance {
     Header* hdr = nullptr;
     SharedSignals signals;
     Layout layout{0, 0, 0};
+    double rate = 0;  // of the current activation
     std::thread audio;
     std::atomic<bool> quit{false};
     // Serializes the plugin's lifecycle: the main thread's servicing (which
@@ -165,7 +242,8 @@ struct BridgeInstance {
         for (std::uint32_t c = 0; c < layout.outChannels; ++c)
             out[c] = outAudio + static_cast<std::size_t>(c) * layout.maxFrames;
         // Created by the bridge's main thread: normal until told otherwise.
-        ThreadPolicy policy{ThreadPolicy::Kind::Normal, 0};
+        AudioClass taken;
+        bool refused = false;
         while (!quit.load()) {
             const std::uint32_t req = hdr->request.load(std::memory_order_acquire);
             if (req == last) {
@@ -179,6 +257,19 @@ struct BridgeInstance {
             if (quit.load(std::memory_order_acquire)) break;
             last = req;
             const auto command = static_cast<Cmd>(hdr->cmd);
+            // The class the host asks for with this command, taken before it
+            // runs, only when it changed (best effort: a refusal keeps the
+            // thread as it was, and the answer says so).
+            if (hdr->audioClass == 1 || hdr->audioClass == 2) {
+                const AudioClass want{hdr->audioClass,
+                                      policyFrom(hdr->audioPolicy, hdr->audioPriority),
+                                      policyFrom(hdr->livePolicy, hdr->livePriority)};
+                if (want != taken) {
+                    refused = !takeAudioClass(
+                        want, rate, command == Cmd::Process ? hdr->frames : layout.maxFrames);
+                    taken = want;
+                }
+            }
             bool hadFlush = false;
             std::uint32_t result = 1;
             switch (command) {
@@ -219,23 +310,6 @@ struct BridgeInstance {
                     break;
                 }
                 case Cmd::StartProcessing: {
-                    // The host's background policy (ADR-0026), best effort: a
-                    // refusal leaves the thread as it was.
-                    const auto kind = hdr->audioPolicy;  // an unknown kind is ignored
-                    const ThreadPolicy want{
-                        kind <= static_cast<std::uint32_t>(ThreadPolicy::Kind::High)
-                            ? static_cast<ThreadPolicy::Kind>(kind)
-                            : ThreadPolicy::Kind::None,
-                        static_cast<int>(std::min(hdr->audioPriority, 99u))};
-                    if (want.kind != ThreadPolicy::Kind::None && want != policy) {
-#if defined(_WIN32)
-                        const auto thread = GetCurrentThread();
-#else
-                        const auto thread = ::pthread_self();
-#endif
-                        (void)setThreadPolicy(thread, want);
-                        policy = threadPolicy(thread);
-                    }
                     std::lock_guard lock(lifecycle);
                     result = instance->startProcessing() ? 1 : 0;
                     break;
@@ -261,6 +335,7 @@ struct BridgeInstance {
             }
             hdr->result = result;
             hdr->processing = instance->processing() ? 1 : 0;
+            hdr->classRefused = refused ? 1 : 0;
             hdr->done.store(req, std::memory_order_release);
 #if defined(__linux__)
             futexWake(hdr->done);
@@ -496,6 +571,7 @@ struct Bridge {
                     unmap();
                     return fail(st.error());
                 }
+                slot.rate = rate;
                 const std::uint32_t first = hdr->request.load(std::memory_order_acquire);
                 audio = std::thread([&slot, first] {
                     nameThread("audio-bridge");

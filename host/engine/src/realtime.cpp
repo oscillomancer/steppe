@@ -346,6 +346,10 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
     liveWorkersReady_.store(liveWorkers_.get(), std::memory_order_release);
     scheduling_.callback = backend.callbackPolicy();
     if (liveWorkers_) scheduling_.live = liveWorkers_->policy();
+    // A bridged plug-in on a live node runs in the callback's class (ADR-0081).
+    host::setLiveBridgeAudioPolicy(scheduling_.callback.kind == ThreadPolicy::Kind::None
+                                       ? ThreadPolicy{ThreadPolicy::Kind::Normal, 0}
+                                       : scheduling_.callback);
     if (options_.anticipative) {
         aheadFrames_ = std::max<std::int64_t>(
             2 * options_.renderBlock,
@@ -568,6 +572,7 @@ void Engine::stop() {
     ring_.reset();  // no callbacks after backend_->stop()
     scheduling_ = {};
     host::setBridgeAudioPolicy({ThreadPolicy::Kind::Normal, 0});
+    host::setLiveBridgeAudioPolicy({ThreadPolicy::Kind::Normal, 0});
 }
 
 Status Engine::load(const model::Session& session, const std::filesystem::path& projectDir) {

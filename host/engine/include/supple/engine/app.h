@@ -185,8 +185,11 @@ struct EngineStatus {
     std::vector<std::string> warnings;
     RuntimeProtectionStatus memoryLock;
     RuntimeProtectionStatus cpuIdleLatency;
-    MeterDrops meterDrops;                       // meter entries dropped by a full ring
-    std::vector<std::string> failedFx;           // isolated instances whose bridge crashed or hung
+    MeterDrops meterDrops;              // meter entries dropped by a full ring
+    std::vector<std::string> failedFx;  // isolated instances whose bridge crashed or hung
+    // Isolated instances whose bridge audio thread was refused its scheduling
+    // class (ADR-0026, ADR-0081).
+    std::vector<std::string> bridgeThreadsRefused;
     std::int64_t dropped = 0, voiceDropped = 0;  // plug-in output/voice transport
     json::Value failedErrors = json::Value::array();
     SyncReport sync;  // external sync (ADR-0071)

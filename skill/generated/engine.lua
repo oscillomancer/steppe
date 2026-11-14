@@ -333,6 +333,7 @@ q = nil
 ---@field cpu_idle_latency table
 ---@field meter_drops table
 ---@field failed_fx string[]
+---@field bridge_threads_refused string[]
 ---@field dropped integer
 ---@field voice_dropped integer
 ---@field failed_errors any
@@ -374,6 +375,7 @@ q = nil
 ---@field cpu_idle_latency table
 ---@field meter_drops table
 ---@field failed_fx string[]
+---@field bridge_threads_refused string[]
 ---@field dropped integer
 ---@field voice_dropped integer
 ---@field failed_errors any

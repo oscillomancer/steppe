@@ -87,6 +87,8 @@ class InstancePool {
     bool restarting(model::Id id) const;
     bool restarting(const host::Instance* instance) const;
     std::vector<std::pair<model::Id, Error>> failedErrors() const;
+    // Isolated instances whose bridge audio thread was refused its class.
+    std::vector<model::Id> bridgeThreadsRefused() const;
     const Error* failure(model::Id id) const;
     std::uint32_t rememberedLatency(model::Id id) const;
     void rememberLatency(model::Id id, std::uint32_t latency);  // what a plan compensated
