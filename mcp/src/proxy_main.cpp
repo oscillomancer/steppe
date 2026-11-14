@@ -22,13 +22,19 @@ int main(int argc, char** argv) {
     using namespace supple;
     std::filesystem::path path;
     std::string instance = "default";
+    mcp::ToolSet tools = mcp::ToolSet::Core;
     for (int i = 1; i < argc; ++i) {
         if (std::string_view(argv[i]) == "--socket" && i + 1 < argc)
             path = argv[++i];
         else if (std::string_view(argv[i]) == "--instance" && i + 1 < argc)
             instance = argv[++i];
+        else if (std::string_view(argv[i]) == "--tools" && i + 1 < argc &&
+                 (std::string_view(argv[i + 1]) == "core" ||
+                  std::string_view(argv[i + 1]) == "all"))
+            tools = std::string_view(argv[++i]) == "all" ? mcp::ToolSet::All : mcp::ToolSet::Core;
         else {
-            std::fprintf(stderr, "usage: %.*s-mcp [--instance NAME] [--socket PATH]\n",
+            std::fprintf(stderr,
+                         "usage: %.*s-mcp [--instance NAME] [--socket PATH] [--tools core|all]\n",
                          static_cast<int>(product::kSlug.size()), product::kSlug.data());
             return 2;
         }
@@ -47,10 +53,13 @@ int main(int argc, char** argv) {
         return 1;
     }
     // After the app restarts, calls reconnect to the same socket.
-    auto server = mcp::Server::proxy(client, [&](const cmd::Origin& origin) {
-        return client.connect(path, origin.client.empty() ? "mcp-proxy" : origin.client,
-                              origin.agent, true);
-    });
+    auto server = mcp::Server::proxy(
+        client,
+        [&](const cmd::Origin& origin) {
+            return client.connect(path, origin.client.empty() ? "mcp-proxy" : origin.client,
+                                  origin.agent, true);
+        },
+        tools);
     if (!server) {
         std::fprintf(stderr, "%s\n", server.error().toString().c_str());
         return 1;

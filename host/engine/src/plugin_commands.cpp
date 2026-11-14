@@ -156,7 +156,7 @@ void registerPluginCommands(cmd::Registry& registry) {
         Command<ScanArgs, PluginList> c;
         c.name = "plugin.scan";
         c.kind = Kind::Action;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Rescan configured plugin paths and return the available plugins.";
         c.description =
             "wait: false scans in the background (every module through the supervised "

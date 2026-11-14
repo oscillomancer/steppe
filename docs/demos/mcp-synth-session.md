@@ -42,7 +42,7 @@ that exactly duplicates structuredContent is shown once.
       "name": "steppe",
       "version": "0.6.0"
     },
-    "instructions": "Successful command results may include warnings: command warnings followed by bus diagnostics {code: string, message: string, path: string}. Paths are retained as emitted. Non-object results with bus warnings become {result: value, warnings: [...]}. Batch warnings stay on each step's result."
+    "instructions": "Dedicated tools cover common commands (or all public commands with --tools all). Use describe to discover other commands, then exec or query to call them. Calling describe with no arguments lists all commands. Successful command results may include warnings: command warnings followed by bus diagnostics {code: string, message: string, path: string}. Paths are retained as emitted. Non-object results with bus warnings become {result: value, warnings: [...]}. Batch warnings stay on each step's result."
   }
 }
 ```
@@ -1458,7 +1458,7 @@ that exactly duplicates structuredContent is shown once.
       "name": "steppe",
       "version": "0.6.0"
     },
-    "instructions": "Successful command results may include warnings: command warnings followed by bus diagnostics {code: string, message: string, path: string}. Paths are retained as emitted. Non-object results with bus warnings become {result: value, warnings: [...]}. Batch warnings stay on each step's result."
+    "instructions": "Dedicated tools cover common commands (or all public commands with --tools all). Use describe to discover other commands, then exec or query to call them. Calling describe with no arguments lists all commands. Successful command results may include warnings: command warnings followed by bus diagnostics {code: string, message: string, path: string}. Paths are retained as emitted. Non-object results with bus warnings become {result: value, warnings: [...]}. Batch warnings stay on each step's result."
   }
 }
 ```

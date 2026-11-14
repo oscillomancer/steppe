@@ -762,7 +762,7 @@ template <class A>
 void common(Command<A, json::Value>& c, std::string name, Kind kind, std::string summary) {
     c.name = std::move(name);
     c.kind = kind;
-    c.exposure = cmd::Exposure::McpTool;
+    c.exposure = cmd::Exposure::McpExec;
     c.summary = std::move(summary);
     c.tags = {"rack", "modular"};
     c.result = schema::any();

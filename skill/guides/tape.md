@@ -102,7 +102,7 @@ Tracking through it live: `"latency":"low"` with `"oversampling":"x2"`
 
 Factory patches: Mastering, Mix Bus, Peak Rounding, Tracking, Hot Drums,
 Fat Bass, Saturated, Warm Electronics, Underbiased, Cassette, Worn
-Machine, Warped, Clean Transfer (`preset_list`/`fx_patch_list`).
+Machine, Warped, Clean Transfer (`preset_list`/`exec {"command": "fx.patch.list"}`).
 
 ## What each part does
 

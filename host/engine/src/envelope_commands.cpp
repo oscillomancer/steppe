@@ -317,7 +317,7 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
         Command<EnvSetArgs, Empty> c;
         c.name = "env.set";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Set an envelope's options: active (heard), mode (read, touch, latch, write).";
         c.description =
             "visible shows or hides the envelope's lane in the arrange view (a hidden envelope "
@@ -349,7 +349,7 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
         Command<EnvRef, Empty> c;
         c.name = "env.remove";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Remove an envelope (the parameter returns to its set value).";
         c.tags = {"automation"};
         c.args = schema::object<EnvRef>("env_ref")
@@ -370,7 +370,7 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
         Command<EnvListArgs, EnvList> c;
         c.name = "env.list";
         c.kind = Kind::Query;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "List envelopes (optionally of one track, route or plugin).";
         c.tags = {"automation"};
         c.args = schema::object<EnvListArgs>("env_list_args")
@@ -511,7 +511,7 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
             Command<AutoItemAddArgs, json::Value> c;
             c.name = "autoitem.add";
             c.kind = Kind::Edit;
-            c.exposure = cmd::Exposure::McpTool;
+            c.exposure = cmd::Exposure::McpExec;
             c.summary = "Put an automation item on an envelope: a block that replaces it there.";
             c.description =
                 "position (beat) or bar, length in beats. points (beats from the item's start, "
@@ -590,7 +590,7 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
             Command<AutoItemSetArgs, json::Value> c;
             c.name = "autoitem.set";
             c.kind = Kind::Edit;
-            c.exposure = cmd::Exposure::McpTool;
+            c.exposure = cmd::Exposure::McpExec;
             c.summary = "Move, resize, loop, scale or rewrite an automation item.";
             c.description =
                 "points and source_length reach every item of its pool; position, length, loop, "
@@ -644,7 +644,7 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
             Command<AutoItemDupArgs, json::Value> c;
             c.name = "autoitem.duplicate";
             c.kind = Kind::Edit;
-            c.exposure = cmd::Exposure::McpTool;
+            c.exposure = cmd::Exposure::McpExec;
             c.summary = "Copy an automation item (pooled by default: edits to either reach both).";
             c.description = "position: where the copy starts (default: right after the item).";
             c.tags = {"automation"};
@@ -686,7 +686,7 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
             Command<AutoItemRef, Empty> c;
             c.name = unpool ? "autoitem.unpool" : "autoitem.remove";
             c.kind = Kind::Edit;
-            c.exposure = cmd::Exposure::McpTool;
+            c.exposure = cmd::Exposure::McpExec;
             c.summary = unpool ? "Take an automation item out of its pool (its points stay)."
                                : "Remove an automation item (the envelope under it plays again).";
             c.tags = {"automation"};
@@ -716,7 +716,7 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
             Command<ListArgs, json::Value> c;
             c.name = "autoitem.list";
             c.kind = Kind::Query;
-            c.exposure = cmd::Exposure::McpTool;
+            c.exposure = cmd::Exposure::McpExec;
             c.summary = "List automation items (all, or one envelope's), with their points.";
             c.tags = {"automation"};
             c.args = schema::object<ListArgs>("autoitem_list_args")

@@ -29,10 +29,11 @@ struct TestTraits<engine::EngineApp> {
 namespace supple::engine {
 
 void registerDspCommands(cmd::Registry& registry) {
-    dsp_commands::registerDspCommands<EngineApp>(registry);
-    dsp_commands::registerDspTest<EngineApp>(registry, "com.suppleaudio.test.gain");
-    dsp_commands::registerDspExport<EngineApp>(registry);
-    dsp_commands::registerDspPreview<EngineApp>(registry);
+    dsp_commands::registerDspCommands<EngineApp>(registry, cmd::Exposure::McpExec);
+    dsp_commands::registerDspTest<EngineApp>(registry, "com.suppleaudio.test.gain",
+                                             cmd::Exposure::McpExec);
+    dsp_commands::registerDspExport<EngineApp>(registry, cmd::Exposure::McpExec);
+    dsp_commands::registerDspPreview<EngineApp>(registry, cmd::Exposure::McpExec);
 }
 
 }  // namespace supple::engine

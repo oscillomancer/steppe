@@ -958,17 +958,19 @@ Status runExamples(const Registry& registry, const FixtureFactory& factory,
     }
     return {};
 }
-json::Value mcpToolList(const Registry& registry) {
+json::Value mcpToolList(const Registry& registry, bool allTools) {
     json::Value tools = json::Value::array();
     for (auto* info : registry.all()) {
-        if (info->exposure != Exposure::McpTool || registry.find(info->name) != info) continue;
+        if (info->exposure == Exposure::Internal ||
+            (!allTools && info->exposure != Exposure::McpTool) || registry.find(info->name) != info)
+            continue;
         json::Value tool = json::Value::object();
         std::string name = info->name;
         std::replace(name.begin(), name.end(), '.', '_');
         tool["name"] = name;
         tool["title"] = info->summary;
-        tool["description"] =
-            info->summary + " " + info->description + " See describe for errors and examples.";
+        tool["description"] = (info->description.empty() ? info->summary : info->description) +
+                              " See describe for errors and examples.";
         auto input = info->argsSchema;
         if (auto* properties = input.find("properties"); properties && properties->isObject())
             for (auto& field : input["properties"].asObject()) {
@@ -982,11 +984,6 @@ json::Value mcpToolList(const Registry& registry) {
                 field.value["description"] = std::move(updated);
             }
         tool["inputSchema"] = std::move(input);
-        // MCP output schemas must describe an object; results declared as any
-        // JSON value (an empty schema) advertise none.
-        if (const auto* type = info->resultSchema.find("type");
-            type && type->isString() && type->asString() == "object")
-            tool["outputSchema"] = info->resultSchema;
         tool["annotations"] = json::Value::object();
         tool["annotations"]["readOnlyHint"] = info->kind == Kind::Query;
         tool["annotations"]["destructiveHint"] = info->kind == Kind::Action;

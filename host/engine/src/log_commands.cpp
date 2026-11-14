@@ -15,7 +15,7 @@ void registerLogCommands(cmd::Registry& registry) {
         Command<LogArgs, json::Value> c;
         c.name = "log.list";
         c.kind = Kind::Query;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Recent commands with origin, arguments and outcome (the command log).";
         c.description =
             "Newest last. Who did what: origin is gui, agent:<client>/<model>, mcp:<client>, "

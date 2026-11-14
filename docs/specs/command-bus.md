@@ -1,7 +1,7 @@
 # Spec: command bus, control protocol and MCP adapter
 
 **Status:** Implemented. Interface changes go through an ADR.
-**Decision record:** ADR-0007, ADR-0063.
+**Decision record:** ADR-0007, ADR-0063, ADR-0077.
 **Libraries:** `libs/command-bus` (`supple::cmd`), `libs/control-protocol`
 (`supple::rpc`), `mcp/` (`supple::mcp`). All run on the model thread only
 (transports marshal requests onto it). Depend on core-json and core-schema.
@@ -161,7 +161,7 @@ non-object results, a warning-bearing reply is
 replies retain their original shape. Failed invocations use the existing
 structured Error contract, without a success warning payload.
 
-The registry's result JSON Schema and MCP output schemas include optional
+The registry's result JSON Schema includes optional
 warning metadata: `warnings: {type: "array", items: {type: "object"}}`,
 without repeating the entry fields or their description per command. Legacy
 non-object command warnings retain mixed item schemas. The shared entry
@@ -235,7 +235,8 @@ Registered by the library, `Kind::Edit`, `McpTool`.
 Generators (each a function in the library, deterministic output, committed
 results checked by a drift test):
 
-- `mcpToolList(registry)` — MCP tool definitions (§4.2).
+- `mcpToolList(registry, bool allTools = false)` — dedicated MCP definitions (§4.2);
+  false selects McpTool, true selects every non-Internal command.
 - `markdownReference(registry)` → `skill/generated/*-commands.md`: per command,
   heading, summary, description, an args table (field, type, unit, range,
   default, description), result shape, errors with hints, examples as JSON.
@@ -339,7 +340,7 @@ transaction-safe inside a batch), `rpc.*` (§3), `mcp.*` (§4).
   array. Array params in requests to this adapter return Invalid params
   (`-32602`).
 - **Deployments:** in-process (`McpServer` wraps a `Dispatcher` directly —
-  the sandbox CLI `--mcp` mode) and proxy (`<slug>-mcp` forwarding to a
+  the sandbox or engine CLI `--mcp` mode) and proxy (`<slug>-mcp` forwarding to a
   control-protocol socket).
 
 ### 4.1 Tool naming
@@ -352,15 +353,53 @@ version). Generic tools: `describe` (→ `registry.describe`/`registry.list`),
 
 ### 4.2 Tool definitions
 
-For every `McpTool` command: `name`, `title` (summary), `description`
-(summary + description + a one-line pointer to errors/examples via
-`describe`), `inputSchema` (args JSON Schema, with `x-unit` hints folded into
-field descriptions like "(Hz; accepts \"1.2 kHz\")" because clients ignore
-unknown keywords), `outputSchema` (result JSON Schema, only when it is an
-object schema: MCP requires `type: "object"`, and clients such as the Python
-SDK refuse the whole tool list otherwise), `annotations`
-(`readOnlyHint` for Query, `destructiveHint: false` for Edit — undoable —
-and `idempotentHint` where true).
+Both `<slug>-mcp` and `<slug>-engine --mcp` accept `--tools core|all`,
+defaulting to `core`; invalid or missing values fail with usage (exit 2).
+Core lists only `McpTool` commands; `all` lists every non-Internal command,
+including existing `McpExec` commands. Both use the latest command version.
+The sandbox exposure declarations and the GUI's additional `gui.selection`
+context query are unchanged.
+
+The engine core is exactly these 37 commands, plus `describe`, `exec`, `query`:
+
+```
+project.get project.open project.save session.describe
+track.add track.set track.list track.remove
+item.add item.set item.remove midi.write midi.get
+fx.add fx.describe fx.patch.get fx.patch.merge fx.remove plugin.list
+route.add env.add env.points.set tempo.set
+transport.play transport.stop transport.seek
+render.mix analyze.track analyze.render analyze.compare
+branch.create branch.switch branch.diff branch.merge history.undo batch engine.start
+```
+
+All other formerly dedicated engine commands use `McpExec`. Every command
+remains callable via `exec`, read-only commands via `query`, and discoverable
+via `describe`. The complete core `tools/list` JSON-RPC frame (UTF-8, including
+newline) must be at most 60,000 bytes; tests pin both this budget and the set.
+
+Each dedicated definition contains `name`, `title` (summary), `description`
+(command description, falling back to summary if empty, followed by
+"See describe for errors and examples."), `inputSchema` (args JSON Schema,
+with `x-unit` hints folded into field descriptions because clients ignore
+unknown keywords), and `annotations` (`readOnlyHint` for Query,
+`destructiveHint: false` for Edit — undoable — and `idempotentHint` where true).
+Dedicated definitions omit `outputSchema` in both modes and deployments;
+`describe` still exposes the complete result schema, and results still carry
+structured content. MCP 2025-06-18 Tools / Output Schema makes the schema
+optional and Structured Content permits JSON-object results independently:
+<https://modelcontextprotocol.io/specification/2025-06-18/server/tools>.
+
+`describe {}` returns `{columns: ["name", "kind", "summary"], namespaces:
+{<namespace>: [[<name>, <kind>, <summary>], ...]}}`. Namespace is the first
+name segment; standalone `batch` has its own group. Rows retain the registry's
+name/version order and include every registered command; summaries are at most
+80 characters. The full engine index targets less than 25,000 UTF-8 bytes.
+Existing `tag`, `kind`, and `text` filters apply before grouping (`text`
+searches names and summaries). `describe {command: <name>}` is unchanged:
+full args/result schemas, errors, examples and command metadata. The underlying
+`registry.list` contract is unchanged. Initialize instructions explain the
+common tools, describe/exec/query workflow and argument-free index.
 
 ### 4.3 Calls and results
 

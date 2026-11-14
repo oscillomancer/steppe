@@ -75,8 +75,9 @@ json::Value toolFromInfo(const json::Value& info) {
     auto name = stringField(info, "name");
     std::replace(name.begin(), name.end(), '.', '_');
     auto title = stringField(info, "summary");
-    auto description =
-        title + " " + stringField(info, "description") + " See describe for errors and examples.";
+    auto description = stringField(info, "description");
+    if (description.empty()) description = title;
+    description += " See describe for errors and examples.";
     auto* args = info.find("args");
     auto input = args ? *args : objectSchema({});
     if (auto* props = input.find("properties"); props && props->isObject())
@@ -87,9 +88,8 @@ json::Value toolFromInfo(const json::Value& info) {
             field.value["description"] = prior + (prior.empty() ? "" : " ") + "(" +
                                          unit->asString() + "; accepts quantity strings)";
         }
-    auto* result = info.find("result");
     auto value = tool(std::move(name), std::move(title), std::move(description), std::move(input),
-                      result ? *result : typeSchema("object"));
+                      json::Value::object());
     auto kind = stringField(info, "kind");
     value["annotations"] = json::Value::object();
     value["annotations"]["readOnlyHint"] = kind == "query";
@@ -101,16 +101,17 @@ json::Value toolFromInfo(const json::Value& info) {
 }
 }  // namespace
 
-Server::Server(const cmd::Registry& registry, cmd::Dispatcher& dispatcher) {
+Server::Server(const cmd::Registry& registry, cmd::Dispatcher& dispatcher, ToolSet tools) {
     invoke_ = [&dispatcher](std::string_view name, const json::Value& args,
                             const cmd::Origin& origin) {
         return dispatcher.execute({std::string(name), args, origin});
     };
-    dedicated_ = cmd::mcpToolList(registry);
+    dedicated_ = cmd::mcpToolList(registry, tools == ToolSet::All);
     for (auto* info : registry.all()) {
         if (registry.find(info->name) != info) continue;
         kinds_[info->name] = info->kind;
-        if (info->exposure == cmd::Exposure::McpTool) {
+        if (info->exposure != cmd::Exposure::Internal &&
+            (tools == ToolSet::All || info->exposure == cmd::Exposure::McpTool)) {
             std::string toolName = info->name;
             std::replace(toolName.begin(), toolName.end(), '.', '_');
             commands_[toolName] = info->name;
@@ -134,7 +135,8 @@ Server::Server(rpc::Client& client, Reconnect reconnect)
         return unsent ? client.call(name, args) : result;
     };
 }
-Result<std::unique_ptr<Server>> Server::proxy(rpc::Client& client, Reconnect reconnect) {
+Result<std::unique_ptr<Server>> Server::proxy(rpc::Client& client, Reconnect reconnect,
+                                              ToolSet tools) {
     auto server = std::unique_ptr<Server>(new Server(client, std::move(reconnect)));
     auto listed = client.call("registry.list");
     if (!listed) return listed.error();
@@ -157,7 +159,8 @@ Result<std::unique_ptr<Server>> Server::proxy(rpc::Client& client, Reconnect rec
         server->kinds_[name] = kind == "query"  ? cmd::Kind::Query
                                : kind == "edit" ? cmd::Kind::Edit
                                                 : cmd::Kind::Action;
-        if (stringField(*described, "exposure") == "mcp-tool") {
+        if (stringField(*described, "exposure") != "internal" &&
+            (tools == ToolSet::All || stringField(*described, "exposure") == "mcp-tool")) {
             auto definition = toolFromInfo(*described);
             auto toolName = stringField(definition, "name");
             server->commands_[toolName] = name;
@@ -171,7 +174,8 @@ json::Value Server::tools() const {
     auto out = dedicated_;
     auto string = typeSchema("string"), object = typeSchema("object");
     out.push_back(tool(
-        "describe", "Describe commands", "Search or describe registered commands.",
+        "describe", "Describe commands",
+        "List all commands grouped by namespace, filter by tag/kind/text, or describe one command.",
         objectSchema({{"command", string}, {"tag", string}, {"kind", string}, {"text", string}})));
     auto execInput = objectSchema({{"command", string}, {"args", object}, {"batch", object}});
     out.push_back(tool("exec", "Execute a command", "Run one command or an atomic batch.",
@@ -189,7 +193,25 @@ Result<json::Value> Server::call(std::string_view name, const json::Value& args)
             params["command"] = command;
             return invoke_("registry.describe", params, origin_);
         }
-        return invoke_("registry.list", args, origin_);
+        auto listed = invoke_("registry.list", args, origin_);
+        if (!listed) return listed.error();
+        json::Value index = json::Value::object();
+        index["namespaces"] = json::Value::object();
+        if (auto* commands = listed->find("commands"); commands && commands->isArray())
+            for (const auto& item : commands->asArray()) {
+                auto commandName = stringField(item, "name");
+                auto ns = commandName.substr(0, commandName.find('.'));
+                auto& group = index["namespaces"][ns];
+                if (!group.isArray()) group = json::Value::array();
+                // Rows: name, kind, summary. Keep the complete index inexpensive to read.
+                json::Value row = json::Value::array();
+                row.push_back(commandName);
+                row.push_back(stringField(item, "kind"));
+                row.push_back(stringField(item, "summary"));
+                group.push_back(std::move(row));
+            }
+        index["columns"] = json::parse(R"(["name","kind","summary"])").value();
+        return index;
     }
     if (name == "exec") {
         if (auto* batch = args.find("batch")) return invoke_("batch", *batch, origin_);
@@ -255,6 +277,9 @@ std::optional<json::Value> Server::handle(const json::Value& request) {
         result["serverInfo"]["name"] = std::string(product::kSlug);
         result["serverInfo"]["version"] = std::string(product::kVersion);
         result["instructions"] =
+            "Dedicated tools cover common commands (or all public commands with --tools all). "
+            "Use describe to discover other commands, then exec or query to call them. "
+            "Calling describe with no arguments lists all commands. "
             "Successful command results may include warnings: command warnings followed by "
             "bus diagnostics {code: string, message: string, path: string}. Paths are retained "
             "as emitted. Non-object results with bus warnings become {result: value, warnings: "

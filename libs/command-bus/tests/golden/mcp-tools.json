@@ -2,7 +2,7 @@
   {
     "name": "batch",
     "title": "Run commands atomically.",
-    "description": "Run commands atomically. Run commands atomically. See describe for errors and examples.",
+    "description": "Run commands atomically. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -33,17 +33,6 @@
       "required": ["steps"],
       "additionalProperties": false
     },
-    "outputSchema": {
-      "type": "object",
-      "properties": {
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        }
-      }
-    },
     "annotations": {
       "readOnlyHint": false,
       "destructiveHint": false,
@@ -53,7 +42,7 @@
   {
     "name": "toy_add",
     "title": "Add to the toy counter.",
-    "description": "Add to the toy counter. Returns the new counter value. See describe for errors and examples.",
+    "description": "Returns the new counter value. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "amount",
@@ -63,23 +52,6 @@
         }
       },
       "required": ["value"],
-      "additionalProperties": false
-    },
-    "outputSchema": {
-      "type": "object",
-      "title": "count",
-      "properties": {
-        "count": {
-          "type": "integer"
-        },
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        }
-      },
-      "required": ["count"],
       "additionalProperties": false
     },
     "annotations": {
@@ -91,7 +63,7 @@
   {
     "name": "toy_set",
     "title": "Set the toy counter.",
-    "description": "Set the toy counter.  See describe for errors and examples.",
+    "description": "Set the toy counter. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "amount",
@@ -101,23 +73,6 @@
         }
       },
       "required": ["value"],
-      "additionalProperties": false
-    },
-    "outputSchema": {
-      "type": "object",
-      "title": "count",
-      "properties": {
-        "count": {
-          "type": "integer"
-        },
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "object"
-          }
-        }
-      },
-      "required": ["count"],
       "additionalProperties": false
     },
     "annotations": {

@@ -11,7 +11,7 @@
 //       the LuaLS annotations of the scripting bindings.
 //   <slug>-engine modules --markdown
 //       The built-in rack module types as a Markdown reference.
-//   <slug>-engine --mcp [--project FILE] [--workdir DIR] [--plugin-path P]...
+//   <slug>-engine --mcp [--tools core|all] [--project FILE] [--workdir DIR] [--plugin-path P]...
 //       Serve MCP over stdio against the in-process engine session.
 //   <slug>-engine serve [--project FILE] [--instance NAME] [--socket PATH]
 //       Serve the command bus on a Unix socket from the model thread.
@@ -66,7 +66,8 @@ int usage() {
         "[--plugin-path P]...\n"
         "       %s-engine registry [--markdown | --mcp-tools | --lua]\n"
         "       %s-engine modules --markdown\n"
-        "       %s-engine --mcp [--project FILE] [--workdir DIR] [--plugin-path P]...\n"
+        "       %s-engine --mcp [--tools core|all] [--project FILE] [--workdir DIR] [--plugin-path "
+        "P]...\n"
         "       %s-engine serve [--project FILE] [--instance NAME] [--socket PATH]\n"
         "       %s-engine play FILE [--bar N] [--seconds S] [--block N] "
         "[--backend jack|portaudio|dummy] [--host-api NAME] [--output-device NAME] "
@@ -243,6 +244,7 @@ int main(int argc, char** argv) {
     engine::registerEngineCommands(registry);
     if (args[0] == "--mcp" || args[0] == "serve") {
         const bool rpcMode = args[0] == "serve";
+        mcp::ToolSet tools = mcp::ToolSet::Core;
         engine::AppOptions options;
         options.identity.name = std::string(product::kName);
         options.identity.vendor = std::string(product::kVendor);
@@ -257,7 +259,11 @@ int main(int argc, char** argv) {
                 options.workdir = args[++i];
             else if (args[i] == "--plugin-path" && i + 1 < args.size())
                 options.pluginPath.emplace_back(args[++i]);
-            else if (rpcMode && args[i] == "--instance" && i + 1 < args.size())
+            else if (!rpcMode && args[i] == "--tools" && i + 1 < args.size()) {
+                const auto& value = args[++i];
+                if (value != "core" && value != "all") return usage();
+                tools = value == "all" ? mcp::ToolSet::All : mcp::ToolSet::Core;
+            } else if (rpcMode && args[i] == "--instance" && i + 1 < args.size())
                 instance = args[++i];
             else if (rpcMode && args[i] == "--socket" && i + 1 < args.size())
                 socket = args[++i];
@@ -341,7 +347,7 @@ int main(int argc, char** argv) {
             server.stop();
             return 0;
         }
-        mcp::Server server(registry, dispatcher);
+        mcp::Server server(registry, dispatcher, tools);
         // The tick drains the app's events: MCP has no event channel, so they
         // would only pile up.
         mcp::Tick tick;

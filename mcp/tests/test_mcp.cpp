@@ -128,6 +128,25 @@ cmd::Registry registry() {
         return Count{ctx.service<int>()};
     };
     r.add(std::move(warning));
+    cmd::Command<cmd::NoArgs, Count> peek;
+    peek.name = "counter.peek";
+    peek.kind = cmd::Kind::Query;
+    peek.exposure = cmd::Exposure::McpExec;
+    peek.summary = "Read the counter.";
+    peek.description = "Inspect the current value without editing it.";
+    peek.args = schema::object<cmd::NoArgs>("no_args").build();
+    peek.result = schema::object<Count>("count")
+                      .field("count", &Count::count, schema::integerOf<int>())
+                      .build();
+    peek.examples = {
+        {"Read", json::Value::object(), json::parse(R"({"count":0})").value(), "empty"}};
+    peek.run = [](const cmd::NoArgs&, cmd::Context& ctx) -> Result<Count> {
+        return Count{ctx.service<int>()};
+    };
+    r.add(peek);
+    peek.name = "counter.secret";
+    peek.exposure = cmd::Exposure::Internal;
+    r.add(std::move(peek));
     return r;
 }
 json::Value parse(std::string_view input) { return json::parse(input).value(); }
@@ -152,8 +171,8 @@ void checkWarnings(mcp::Server& server) {
     REQUIRE(text);
     CHECK(*text == *structured);
 }
-// MCP clients refuse a tool list whose output schemas are not object schemas
-// (the Python SDK fails the whole list), and structured content is an object.
+// Dedicated tools omit output schemas; describe retains them, and structured
+// content remains an object (array results are text only).
 void checkMcpShapes(mcp::Server& server, int id) {
     auto listed = request(
         server, R"({"jsonrpc":"2.0","id":)" + std::to_string(id) + R"(,"method":"tools/list"})");
@@ -167,14 +186,18 @@ void checkMcpShapes(mcp::Server& server, int id) {
             sawHistory = true;
             CHECK(tool.find("outputSchema") == nullptr);
         }
-        if (tool.find("name")->asString() == "counter_warn") {
-            const auto& schema = *tool.find("outputSchema");
-            CHECK(*schema.find("additionalProperties") == false);
-            CHECK(*schema.find("properties")->find("warnings") ==
-                  parse(R"({"type":"array","items":{"type":"object"}})"));
-        }
+        if (tool.find("name")->asString().starts_with("counter_"))
+            CHECK(tool.find("outputSchema") == nullptr);
     }
     CHECK(sawHistory);
+    auto described = request(
+        server,
+        R"({"jsonrpc":"2.0","id":)" + std::to_string(id + 2) +
+            R"(,"method":"tools/call","params":{"name":"describe","arguments":{"command":"counter.warn"}}})");
+    const auto& schema = *described.find("result")->find("structuredContent")->find("result");
+    CHECK(*schema.find("additionalProperties") == false);
+    CHECK(*schema.find("properties")->find("warnings") ==
+          parse(R"({"type":"array","items":{"type":"object"}})"));
     auto history = request(
         server,
         R"({"jsonrpc":"2.0","id":)" + std::to_string(id + 1) +
@@ -396,6 +419,62 @@ TEST_CASE("the proxy reconnects after the app restarts") {
     CHECK(reconnects == 1);
     client.close();
     second.stop();
+}
+
+TEST_CASE("core and all tool sets agree through in-process and proxy deployments") {
+    auto commands = registry();
+    Host host;
+    cmd::Dispatcher dispatcher(commands, host);
+    ModelQueue queue;
+    rpc::Server remote(commands, dispatcher, [&](auto task) { queue.post(std::move(task)); });
+    auto path = std::filesystem::temp_directory_path() /
+                ("mcp-tools-" + std::to_string(::getpid()) + ".sock");
+    REQUIRE(remote.start(path));
+    rpc::Client client;
+    REQUIRE(client.connect(path, "tool-set-test"));
+    for (auto set : {mcp::ToolSet::Core, mcp::ToolSet::All}) {
+        mcp::Server local(commands, dispatcher, set);
+        auto proxy = mcp::Server::proxy(client, {}, set);
+        REQUIRE(proxy);
+        std::vector<json::Value> catalogues;
+        for (auto* server : {&local, proxy->get()}) {
+            request(
+                *server,
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}})");
+            auto listed = request(*server, R"({"jsonrpc":"2.0","id":2,"method":"tools/list"})");
+            catalogues.push_back(*listed.find("result"));
+            bool peek = false;
+            for (const auto& tool : listed.find("result")->find("tools")->asArray()) {
+                auto name = tool.find("name")->asString();
+                CHECK(name != "counter_secret");
+                if (name == "counter_peek") {
+                    peek = true;
+                    CHECK(tool.find("description")->asString() ==
+                          "Inspect the current value without editing it. See describe for errors "
+                          "and examples.");
+                }
+                if (name == "counter_add")
+                    CHECK(tool.find("description")->asString() ==
+                          "Add to counter. See describe for errors and examples.");
+            }
+            CHECK(peek == (set == mcp::ToolSet::All));
+            auto result = request(
+                *server,
+                R"({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"exec","arguments":{"command":"counter.peek"}}})");
+            CHECK(result.find("result")->find("structuredContent")->find("count")->asInt() == 0);
+            auto dedicated = request(
+                *server,
+                R"({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"counter_peek"}})");
+            if (set == mcp::ToolSet::Core)
+                CHECK(dedicated.find("error")->find("code")->asInt() == -32601);
+            else
+                CHECK(dedicated.find("result")->find("structuredContent")->find("count")->asInt() ==
+                      0);
+        }
+        CHECK(catalogues[0] == catalogues[1]);
+    }
+    client.close();
+    remote.stop();
 }
 
 TEST_CASE("MCP stdio caps an unterminated oversized frame") {

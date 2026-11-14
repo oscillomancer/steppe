@@ -361,7 +361,8 @@ using FixtureFactory = std::function<std::unique_ptr<Host>(std::string_view)>;
 // say); examples whose fixture it cannot are skipped. Every fixture when absent.
 using FixtureAvailable = std::function<bool(std::string_view)>;
 Status runExamples(const Registry&, const FixtureFactory&, const FixtureAvailable& = {});
-json::Value mcpToolList(const Registry&);
+// allTools includes every non-Internal command, regardless of MCP exposure.
+json::Value mcpToolList(const Registry&, bool allTools = false);
 std::string markdownReference(const Registry&);
 // LuaLS annotations of the generated bindings (ADR-0006): the `q` table a
 // script sees — one class per command's arguments and result, one per command

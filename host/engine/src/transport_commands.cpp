@@ -81,7 +81,7 @@ void registerTransportCommands(cmd::Registry& registry) {
         Command<NoArgs, PlayrateInfo> c;
         c.name = "transport.playrate.get";
         c.kind = Kind::Query;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Get requested/effective master playrate, pitch mode and active envelope.";
         c.description =
             "requested_rate is the saved project ratio; envelope names the active nonempty "
@@ -104,7 +104,7 @@ void registerTransportCommands(cmd::Registry& registry) {
         Command<PlayrateArgs, PlayrateInfo> c;
         c.name = "transport.playrate.set";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Set the project's master playrate ratio and preserve-pitch flag.";
         c.description =
             "rate: finite 0.25..4.0 (default 1); preserve_pitch defaults false in a new project. "
@@ -153,7 +153,7 @@ void registerTransportCommands(cmd::Registry& registry) {
         Command<NoArgs, Empty> c;
         c.name = "transport.playrate.apply-to-tempo";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Scale every tempo-point BPM by master playrate, then reset the rate to 1.";
         c.description =
             "One version: multiply every BPM by the saved scalar rate, preserving beat "
@@ -221,7 +221,9 @@ void registerTransportCommands(cmd::Registry& registry) {
         Command<NoArgs, TransportInfo> c;
         c.name = std::string("transport.") + action;
         c.kind = Kind::Action;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = c.name == "transport.play" || c.name == "transport.stop"
+                         ? cmd::Exposure::McpTool
+                         : cmd::Exposure::McpExec;
         c.summary = summary;
         c.tags = {"transport"};
         c.args = schema::object<NoArgs>("no_args").build();
@@ -320,7 +322,7 @@ void registerTransportCommands(cmd::Registry& registry) {
         Command<NoArgs, TransportInfo> c;
         c.name = "transport.get";
         c.kind = Kind::Query;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "The play position and whether it is playing.";
         c.tags = {"transport"};
         c.args = schema::object<NoArgs>("no_args").build();
@@ -348,7 +350,7 @@ void registerTransportCommands(cmd::Registry& registry) {
         Command<MetronomeArgs, MetronomeSettings> c;
         c.name = "transport.metronome";
         c.kind = Kind::Action;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Turn the metronome on or off and set its level; returns the settings.";
         c.description =
             "A click on every beat of the meter while the transport plays (the bar's first "
@@ -399,7 +401,7 @@ void registerTransportCommands(cmd::Registry& registry) {
         Command<RangeArgs, TransportRange> c;
         c.name = loop ? "transport.loop" : "transport.punch";
         c.kind = Kind::Action;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = loop ? "Set or toggle the loop range: playback reaching its end repeats it."
                          : "Set or toggle the punch range: recordings keep only that range.";
         c.description =

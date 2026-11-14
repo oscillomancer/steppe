@@ -209,7 +209,7 @@ void registerExportCommands(cmd::Registry& registry) {
     cmd::Command<ExportArgs, ExportResult> c;
     c.name = "item.export";
     c.kind = cmd::Kind::Action;
-    c.exposure = cmd::Exposure::McpTool;
+    c.exposure = cmd::Exposure::McpExec;
     c.summary = "Write an item's raw audio (WAV) or its MIDI (SMF) to a file.";
     c.description =
         "Exports the active take over the part the item covers (trims and splits respected). "

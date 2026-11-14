@@ -40,7 +40,7 @@ void registerHistoryCommands(cmd::Registry& registry) {
         Command<NoArgs, HistoryResult> c;
         c.name = undo ? "history.undo" : "history.redo";
         c.kind = Kind::Action;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = undo ? cmd::Exposure::McpTool : cmd::Exposure::McpExec;
         c.summary =
             undo ? "Undo the last change on the current branch." : "Redo the last undone change.";
         c.tags = {"history"};
@@ -62,7 +62,7 @@ void registerHistoryCommands(cmd::Registry& registry) {
         Command<NoArgs, HistoryList> c;
         c.name = "history.list";
         c.kind = Kind::Query;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "List the current branch's recent versions (newest first).";
         c.tags = {"history"};
         c.args = schema::object<NoArgs>("no_args").build();
@@ -208,7 +208,7 @@ void registerHistoryCommands(cmd::Registry& registry) {
         Command<NoArgs, BranchList> c;
         c.name = "branch.list";
         c.kind = Kind::Query;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "List branches and the current one.";
         c.tags = {"branch"};
         c.args = schema::object<NoArgs>("no_args").build();
@@ -320,7 +320,7 @@ void registerHistoryCommands(cmd::Registry& registry) {
         Command<BranchName, Empty> c;
         c.name = "branch.delete";
         c.kind = Kind::Action;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Delete a branch (not main, not the current one).";
         c.tags = {"branch"};
         c.args = schema::object<BranchName>("branch_name")

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Exercise a real sandbox socket server through the stdio MCP proxy."""
+"""Exercise engine/sandbox socket servers through the stdio MCP proxy."""
 import json
 import os
 from pipe_ready import wait_pipe
@@ -74,6 +74,34 @@ def main():
                 assert Path(rendered["result"]["structuredContent"]["path"]).exists(), rendered
             proxy.stdin.close()
             assert proxy.wait(timeout=10) == 0, proxy.stderr.read().decode()
+
+            # The CLI must forward --tools all to the proxy catalogue builder.
+            messages = [
+                {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+                    "protocolVersion": "2025-06-18", "clientInfo": {"name": "all-tools-test"}}},
+                {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+            ]
+            all_tools = subprocess.run(
+                [proxy_binary, "--socket", str(socket), "--tools", "all"],
+                input="".join(json.dumps(m) + "\n" for m in messages),
+                capture_output=True, text=True, check=True,
+            )
+            all_listed = json.loads(all_tools.stdout.splitlines()[1])["result"]["tools"]
+            registry = json.loads(subprocess.run(
+                [server_binary, "registry"], capture_output=True, text=True, check=True,
+            ).stdout)["commands"]
+            generic = {"describe", "exec"} | ({"query"} if engine_mode else set())
+            public = {c["name"].replace(".", "_") for c in registry.values()
+                      if c["exposure"] != "internal"}
+            assert {t["name"] for t in all_listed} == public | generic
+            assert names <= {t["name"] for t in all_listed}
+            if engine_mode:
+                assert "fx_patch_list" not in names
+                assert "fx_patch_list" in {t["name"] for t in all_listed}
+            for options in [("--tools",), ("--tools", "invalid")]:
+                invalid = subprocess.run([proxy_binary, *options], capture_output=True, text=True)
+                assert invalid.returncode == 2, invalid
+                assert "--tools core|all" in invalid.stderr
         finally:
             if proxy and proxy.poll() is None:
                 proxy.kill()

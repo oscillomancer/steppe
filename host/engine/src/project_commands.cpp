@@ -144,7 +144,7 @@ void registerProjectCommands(cmd::Registry& registry) {
         Command<ProjectSetArgs, Empty> c;
         c.name = "project.set";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Set project name, notes, Console 9, pan law, timebase or timecode.";
         c.description =
             "timebase: what items follow when the tempo changes, for items and tracks that "
@@ -433,7 +433,7 @@ void registerProjectCommands(cmd::Registry& registry) {
         Command<NoArgs, RecoverableList> c;
         c.name = "project.recoverable";
         c.kind = Kind::Query;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "List recordings a crash left out of the project.";
         c.description =
             "Takes recorded but never committed (the program stopped mid-recording) or never "
@@ -474,7 +474,7 @@ void registerProjectCommands(cmd::Registry& registry) {
         Command<RecoverArgs, RecoverResult> c;
         c.name = "project.recover";
         c.kind = Kind::Action;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Put recordings a crash left out back into the project (one undo step).";
         c.description =
             "files: as project.recoverable lists them (omit for all). Each becomes an item on "

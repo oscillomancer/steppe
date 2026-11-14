@@ -162,7 +162,7 @@ instructions are in `docs/guides/installing.md`.
   freeze. Cache preparation currently uses MediaCache; a prepared-source service
   can replace that localized path. Seek/loop/random-plugin and external plugin
   asset limits are documented in the engine spec and manual.
-- **Command bus** (`specs/command-bus.md`, ADR-0007): about 120 typed
+- **Command bus** (`specs/command-bus.md`, ADR-0007): typed
   commands with JSON Schema, units, examples run as tests and structured
   errors. Context and decoder warnings reach successful replies in `warnings`,
   preserving command diagnostics consistently over sockets, MCP and Lua
@@ -173,6 +173,12 @@ instructions are in `docs/guides/installing.md`.
   (ADR-0006). Lua structured-error expansion has the same value/text budget
   as returned values, including repeated references to shared details.
   The skill's command reference is generated and drift-tested.
+  The engine MCP default is 37 common tools plus describe/exec/query, with a
+  60,000-byte tools/list budget. Other commands remain discoverable in the compact
+  namespace index and callable through exec/query; --tools all exposes every
+  non-Internal command. Dedicated tools omit output schemas; describe retains them
+  (ADR-0077). Sandbox exposures are unchanged. Native macOS/Windows CI for this
+  catalogue and CLI change is pending before merge.
 - **Engine** (`specs/engine.md`): deterministic offline renders with
   real-time output bit-identical to them; anticipative rendering for
   non-live tracks (ADR-0012) and a live region for monitored tracks

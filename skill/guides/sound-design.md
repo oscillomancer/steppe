@@ -7,7 +7,8 @@ patch is `supple.marram-patch/1.0`: physical values under `params`, flat
 keys (`filter1.cutoff`), and `routes` for modulation. The exact keys, units
 and ranges come from `plugin_describe` (sandbox) or `fx_describe` (DAW); this
 guide is about *how to get to a sound*. The workflow below uses sandbox
-tools; in the DAW use `fx_*` patch tools and `render_mix` / `analyze_compare`
+tools; in the DAW use `fx_patch_get` / `fx_patch_merge`, `exec` for other
+`fx.*` commands, and `render_mix` / `analyze_compare`
 (see the host table in `SKILL.md`). The optimizer is sandbox-only.
 
 Effects are not part of it. Put the stock effects after it in the chain:
