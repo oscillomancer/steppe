@@ -265,6 +265,109 @@ TEST_CASE("the pre-branches backup is synced and never replaces another backup")
 
 // --- saved logs replay only edits (review of item A, finding 1) -----------------------------
 
+namespace {
+std::vector<fs::path> filesUnder(const fs::path& dir) {
+    std::vector<fs::path> out;
+    std::error_code ec;
+    for (auto it = fs::recursive_directory_iterator(dir, ec); !ec && it != fs::end(it);
+         it.increment(ec))
+        if (it->is_regular_file()) out.push_back(it->path());
+    std::sort(out.begin(), out.end());
+    return out;
+}
+}  // namespace
+
+TEST_CASE("a replayed merge writes files only inside the project's own folder") {
+    // Re-review of the item A fixes, finding 2: item.apply-fx is an edit, and
+    // replayed it rendered into whatever media_dir named, even outside the
+    // project; a merge that failed afterwards left the file there.
+    Project p;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *p.app);
+    const cmd::Origin unit{cmd::Origin::Type::Test, "unit", ""};
+    auto run = [&](const char* command, std::string_view args) {
+        auto r = d.execute({command, json::parse(args).value(), unit});
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        return *r;
+    };
+    p.app->setupFixture(d, "recording_interrupted");
+    run("project.recover", "{}");  // it_1: an audio item on tr_1
+    REQUIRE(p.app->save("song.json"));
+    auto other = run("track.add", R"({"name": "Other"})");
+    const std::string otherTrack = other["track"].asString();
+    REQUIRE(p.app->versions().createBranch("agent/claude/fx", "main"));
+    REQUIRE(p.app->switchBranch("agent/claude/fx"));
+    run("item.apply-fx", R"({"item": "it_1"})");
+    run("track.set", R"({"track": ")" + otherTrack + R"(", "name": "Renamed"})");
+    REQUIRE(p.app->switchBranch("main"));
+
+    SUBCASE("media_dir outside the project: refused before anything is written") {
+        const fs::path outside =
+            p.root.parent_path() / ("supple-outside-" + std::to_string(test::processId()));
+        fs::remove_all(outside);
+        auto t = p.app->beginTransaction(unit, "Media elsewhere");
+        REQUIRE(t);
+        auto project = p.app->txn().project();
+        project.mediaDir = outside.string();
+        p.app->txn().setProject(project);
+        REQUIRE(p.app->commitTransaction(*t));
+        run("track.add", R"({"name": "Keys"})");  // main moved: the merge replays
+        const auto version = p.app->head().version;
+        auto merged = d.execute(
+            {"branch.merge", json::parse(R"({"from": "agent/claude/fx"})").value(), unit});
+        REQUIRE_FALSE(merged);
+        CHECK(merged.error().code == "branch.conflict");
+        REQUIRE(merged.error().details.size() == 1);
+        CHECK(merged.error().details[0].message.find("outside the project folder") !=
+              std::string::npos);
+        CHECK(p.app->head().version == version);
+        CHECK(filesUnder(outside).empty());
+        CHECK_FALSE(fs::exists(outside));
+        fs::remove_all(outside);
+    }
+    SUBCASE("through a symlink that leaves the project: refused the same way") {
+        const fs::path outside =
+            p.root.parent_path() / ("supple-outside-" + std::to_string(test::processId()));
+        fs::remove_all(outside);
+        fs::create_directories(outside);
+        std::error_code ec;
+        fs::create_directory_symlink(outside, p.root / "linked", ec);
+        if (ec) {
+            fs::remove_all(outside);
+            return;  // no symlinks here (Windows without the privilege)
+        }
+        auto t = p.app->beginTransaction(unit, "Media through a link");
+        REQUIRE(t);
+        auto project = p.app->txn().project();
+        project.mediaDir = "linked";
+        p.app->txn().setProject(project);
+        REQUIRE(p.app->commitTransaction(*t));
+        run("track.add", R"({"name": "Keys"})");
+        auto merged = d.execute(
+            {"branch.merge", json::parse(R"({"from": "agent/claude/fx"})").value(), unit});
+        REQUIRE_FALSE(merged);
+        CHECK(merged.error().code == "branch.conflict");
+        CHECK(filesUnder(outside).empty());
+        fs::remove_all(outside);
+    }
+    SUBCASE("a merge that fails after a replayed render removes the file it wrote") {
+        const auto before = filesUnder(p.root);
+        run("track.remove", R"({"track": ")" + otherTrack + R"("})");  // the later step fails
+        auto merged = d.execute(
+            {"branch.merge", json::parse(R"({"from": "agent/claude/fx"})").value(), unit});
+        REQUIRE_FALSE(merged);
+        CHECK(merged.error().code == "branch.conflict");
+        auto after = filesUnder(p.root);
+        after.erase(std::remove_if(after.begin(), after.end(),
+                                   [](const fs::path& f) {
+                                       return f.filename().string().starts_with("autosave");
+                                   }),
+                    after.end());
+        CHECK(after == before);
+    }
+}
+
 TEST_CASE("a saved branch step that is not an edit is refused at open and at replay") {
     Project p;
     cmd::Registry registry;

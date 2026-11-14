@@ -76,8 +76,9 @@ Status copyNew(const fs::path& from, const fs::path& to) {
 
 }  // namespace
 
-Result<std::string> copyIntoFolder(const fs::path& file, const fs::path& dir) {
+Result<std::string> copyIntoFolder(const fs::path& file, const fs::path& dir, bool* created) {
     std::error_code ec;
+    if (created) *created = false;
     if (!fs::is_regular_file(file, ec))
         return Error("media.missing", file.string() + " is missing", {},
                      "restore the file, or remove the items that use it");
@@ -96,6 +97,7 @@ Result<std::string> copyIntoFolder(const fs::path& file, const fs::path& dir) {
             if (fs::exists(target, ec)) continue;  // another writer took the name
             return std::move(copied).error();
         }
+        if (created) *created = true;
         return name;
     }
     return copyError(file, dir, "too many files with this name");

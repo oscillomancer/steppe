@@ -739,12 +739,18 @@ and nothing else is kept (the file is then the document alone).
   someone else must not name a step that does more than edit the session.
   Every saved invocation must be a registered edit command of this program
   (`kind: edit`, not `batch`) whose arguments fit its schema
-  (`EngineApp::replayableFromFile`). Edit commands change the session and at
-  most add new files to the project's media folder (imports, renders,
-  freezes); the files they read are ones a project's media can name anyway,
-  or the user's own libraries by name. A replayed `rack.preset.load` does not
-  install modules into the library. Saves, renders, transport, jobs and
-  every other action never run from a log. The engine checks each saved step
+  (`EngineApp::replayableFromFile`). Saves, renders, transport, jobs and
+  every other action never run from a log. Replayed edits create files only
+  in the media folder (`item.apply-fx` renders, `item.add` copies of
+  imports), never through an existing link. Before any step runs, the media
+  folder must resolve (symlinks followed) inside the folder that holds the
+  project file; otherwise the merge stops with an `invalid` conflict
+  (`history.media_outside`). A merge that fails removes the files its
+  replays created. A replayed `rack.preset.load` does not install modules
+  into the library. Reads are deliberately permitted and not sandboxed:
+  `item.add` reads the audio or MIDI file it names (any file a media entry
+  could name), and the preset, chain, template and render-preset loads read
+  the user's libraries by name. The engine checks each saved step
   when it opens a file: one that fails (`history.command`) opens main alone
   with a `project.history` warning, like other damage. Replay checks each
   step it runs again. The set of edit commands is pinned by a test, so a new

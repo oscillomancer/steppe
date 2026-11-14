@@ -417,8 +417,10 @@ void registerItemCommands(cmd::Registry& registry) {
                         // The project's own copy, so it never depends on the
                         // original staying where it is (a replay finds the
                         // same bytes under the same name and reuses them).
-                        auto name = detail::copyIntoFolder(*a.audioFile, app.mediaDir());
+                        bool created = false;
+                        auto name = detail::copyIntoFolder(*a.audioFile, app.mediaDir(), &created);
                         if (!name) return std::move(name).error().at("/audio_file");
+                        if (created) app.noteCreatedFile(app.mediaDir() / *name);
                         md.path = *name;
                     }
                     md.hash = *hash;

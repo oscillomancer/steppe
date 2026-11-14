@@ -84,16 +84,35 @@ The branch's steps are also what the human reviews after reopening:
    branch's saved steps, so a file someone else made could otherwise run any
    command (the review of this ADR's first version overwrote a file with a
    saved `project.save`). A saved step must name a registered edit command
-   of this program (not `batch`) with arguments that fit its schema. Edits
-   change the session and at most add new files in the project's media
-   folder; what they read (imported audio, MIDI files, the user's presets,
-   chains and templates by name) a project's media can already name. The one
-   edit that writes elsewhere, `rack.preset.load` installing a preset's
-   modules into the library, refuses to install while replaying. The rule is
-   enforced twice: opening checks every saved step (a violation is damage:
-   main opens alone with a `project.history` warning, and (6) applies), and
-   replay checks every step it runs. A test pins the list of edit commands,
-   so a new edit command is audited for this before it can be saved.
+   of this program (not `batch`) with arguments that fit its schema. The rule
+   is enforced twice: opening checks every saved step (a violation is
+   damage: main opens alone with a `project.history` warning, and (6)
+   applies), and replay checks every step it runs. A test pins the list of
+   edit commands, so a new edit command is audited for this before it can be
+   saved. Being an edit is a necessary condition, not a confinement in
+   itself, so replay adds these limits:
+   - **Writes stay inside the project's own folder.** Replayed edits create
+     files only in the media folder (`item.apply-fx` renders, `item.add`
+     copies of imports), and before any step runs, the media folder must
+     resolve, with symlinks followed, inside the folder that holds the
+     project file. A file's `media_dir` may name any folder, so otherwise a
+     merge stops with an `invalid` conflict (`history.media_outside`). An
+     unsaved project's media folder is the engine's own. New files are never
+     written through an existing link. A merge that fails removes the files
+     its replays created (and the media folder, if it made it).
+   - **No writes to the user's libraries.** `rack.preset.load` refuses to
+     install a preset's modules into the module library while replaying.
+   - **Reads are deliberately permitted.** A replayed `item.add` reads the
+     audio or MIDI file its arguments name, wherever it is, and with
+     copy-imports on, copies audio into the media folder. `fx.preset.load`,
+     `fx.chain.load`, `rack.preset.load`, `track.template.load` and
+     `render.preset.load` read the user's libraries by validated name. A
+     project's media table can already name any file, so this gives a file
+     no read access it lacked; it is not a file-read sandbox. Plug-ins run
+     natively and are outside any of this.
+   (Amended 2026-11-14 after the second review: the first form of this
+   decision said edits could only add files to the media folder, but a
+   `media_dir` outside the project made that untrue.)
 
 10. **A save carries what every kept version depends on**, not only the
     current head's: the module copies beside the file cover every retained

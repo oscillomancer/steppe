@@ -108,7 +108,8 @@ fs::path freshFile(const fs::path& dir, std::string name) {
     std::error_code ec;
     for (int n = 1;; ++n) {
         const fs::path p = dir / (n == 1 ? name + ".wav" : name + "-" + std::to_string(n) + ".wav");
-        if (!fs::exists(p, ec)) return p;
+        // Not even a dangling link: writing through it would land elsewhere.
+        if (!fs::exists(fs::symlink_status(p, ec))) return p;
     }
 }
 
@@ -744,6 +745,7 @@ void registerTakeCommands(cmd::Registry& registry) {
             fs::create_directories(dir, ec);
             const fs::path file =
                 freshFile(dir, (heard->name.empty() ? std::string("item") : heard->name) + " fx");
+            engine.noteCreatedFile(file);
             SUPPLE_TRY(audio::writeWav(file, rendered->audio));
             auto hash = sha256File(file);
             if (!hash) return std::move(hash).error();

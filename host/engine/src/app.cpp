@@ -903,6 +903,9 @@ Result<model::Replayed> EngineApp::replay(const cmd::Registry& registry, const m
     std::unique_ptr<model::EditTxn> saved = std::move(txn_);
     model::TxnRecord savedRecord = std::move(record_);
     txn_ = std::make_unique<model::EditTxn>(base, version);
+    // Before any step runs: a replay writes files only inside the project's
+    // own folder (a file's media_dir may name any folder, or a link out).
+    SUPPLE_TRY(replayMayWriteMedia());
     const bool wasReplaying = std::exchange(replaying_, true);
     auto restore = [&] {
         txn_ = std::move(saved);
@@ -1028,6 +1031,12 @@ model::MergeOutcome EngineApp::mergeBranch(const cmd::Registry& registry, std::s
                 return refused;
             }
         }
+    // Files the replays create are removed if nothing is merged.
+    std::vector<fs::path> created;
+    const fs::path media = mediaDir();
+    std::error_code ec;
+    const bool hadMedia = fs::exists(media, ec);
+    mergeCreated_ = &created;
     auto outcome = versions_->merge(
         from, into,
         [&](const model::Session& base, const std::vector<model::Invocation>& inv,
@@ -1042,6 +1051,11 @@ model::MergeOutcome EngineApp::mergeBranch(const cmd::Registry& registry, std::s
             return info ? &info->argsSchema : nullptr;
         },
         clockMs());
+    mergeCreated_ = nullptr;
+    if (!outcome.conflicts.empty()) {
+        for (const auto& file : created) fs::remove(file, ec);
+        if (!hadMedia) fs::remove(media, ec);  // only if it is still empty
+    }
     if (outcome.conflicts.empty() && !outcome.upToDate && versions_->branch() == into)
         headChanged();
     return outcome;
@@ -2698,6 +2712,24 @@ void EngineApp::finalizeRecordingHash(Id source, model::MediaSource expected, Re
 fs::path EngineApp::mediaDir() const {
     return projectDir().empty() ? options_.workdir / "media"
                                 : projectDir() / head().project->mediaDir;
+}
+
+Status EngineApp::replayMayWriteMedia() const {
+    // An unsaved project's media folder is the engine's own (workdir/media),
+    // not named by any file.
+    if (projectPath_.empty()) return okStatus();
+    std::error_code ec;
+    const fs::path root = fs::weakly_canonical(projectPath_.parent_path(), ec);
+    const fs::path media = fs::weakly_canonical(mediaDir(), ec);
+    const fs::path rel = media.lexically_relative(root);
+    if (!ec && !rel.empty() && *rel.begin() != "..") return okStatus();
+    return Error("history.media_outside",
+                 "the media folder " + mediaDir().string() + " is outside the project folder " +
+                     projectPath_.parent_path().string() +
+                     "; steps replayed in a merge may create files only inside it",
+                 "/project/media_dir",
+                 "set media_dir to a folder inside the project, or merge into a branch that has "
+                 "not moved since the fork");
 }
 
 fs::path EngineApp::projectDir() const {

@@ -377,6 +377,15 @@ class EngineApp : public cmd::Host {
     // outside the project (rack.preset.load installing modules into the
     // library) refuses instead.
     bool replaying() const { return replaying_; }
+    // A replayed edit that creates a file names it here before writing it;
+    // a merge that then fails removes the files its replays created.
+    void noteCreatedFile(const std::filesystem::path& file) {
+        if (mergeCreated_) mergeCreated_->push_back(file);
+    }
+    // Where a replayed edit may create files: the project's media folder,
+    // which must resolve (symlinks followed) inside the project's own folder.
+    // "history.media_outside" otherwise.
+    Status replayMayWriteMedia() const;
     // Re-executes recorded invocations on `base` as `version` (the replayer
     // for merges): commands run against a temporary transaction on that base,
     // each first checked with replayableFromFile().
@@ -919,6 +928,7 @@ class EngineApp : public cmd::Host {
     // first save over it keeps a copy first (ADR-0076).
     std::filesystem::path branchesBackupFor_;
     bool replaying_ = false;
+    std::vector<std::filesystem::path>* mergeCreated_ = nullptr;
 };
 
 // Clones a take and its owned FX/envelopes/automation. `copy` may already
