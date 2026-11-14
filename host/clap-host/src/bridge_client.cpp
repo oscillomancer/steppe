@@ -865,12 +865,14 @@ bool RemoteInstance::answered(std::uint32_t req, Cmd cmd) SUPPLE_RT {
         if (hdr_->done.load(std::memory_order_acquire) == req) return true;
     if (const std::int64_t live = tLiveDeadline) {
         // The callback's wait (ADR-0081): timed waits on the done word up to
-        // the cycle's deadline, and nothing else.
+        // the cycle's deadline, and nothing else. Only the wait itself is
+        // sanctioned, so RealtimeSanitizer checks the rest of this path.
         for (;;) {
             const std::uint32_t seen = hdr_->done.load(std::memory_order_acquire);
             if (seen == req) return true;
             const std::int64_t left = live - steadyNanoseconds();
             if (left <= 0) return false;
+            rt::ScopedSanctionedSyscall wait;
 #if defined(__linux__)
             futexWaitNs(hdr_->done, seen, left);
 #else
@@ -878,6 +880,9 @@ bool RemoteInstance::answered(std::uint32_t req, Cmd cmd) SUPPLE_RT {
 #endif
         }
     }
+    // Off the callback (ADR-0013): waits with a failure deadline, checking
+    // the bridge is alive and killing a hung one, all sanctioned there.
+    rt::ScopedSanctionedSyscall background;
     // Lifecycle commands may page in a plugin's code; a block must not stall
     // the renderer long, but a loaded machine must not get a healthy plugin
     // killed either.
@@ -926,10 +931,9 @@ bool RemoteInstance::settle() SUPPLE_RT {
 
 bool RemoteInstance::command(Cmd cmd) SUPPLE_RT {
     if (!hdr_ || process_->failed()) return false;
-    // The sanctioned exception to the audio thread's no-syscall rule:
-    // waking the bridge and waiting for it, with a deadline (ADR-0013, and
-    // in the callback ADR-0081).
-    rt::ScopedSanctionedSyscall syscalls;
+    // The sanctioned exception to the audio thread's no-syscall rule is
+    // waking the bridge and waiting for it (ADR-0013, and in the callback
+    // ADR-0081): each scoped where it happens, here and in answered().
     if (!settle()) return false;
     // The class the bridge's thread runs this in: live under a live deadline
     // (ADR-0081), else the background class (ADR-0026).
@@ -942,11 +946,14 @@ bool RemoteInstance::command(Cmd cmd) SUPPLE_RT {
     hdr_->cmd = static_cast<std::uint32_t>(cmd);
     const std::uint32_t req = ++seq_;
     hdr_->request.store(req, std::memory_order_release);
+    {
+        rt::ScopedSanctionedSyscall wake;
 #if defined(__linux__)
-    futexWake(hdr_->request);
+        futexWake(hdr_->request);
 #else
-    signals_.wake(hdr_->request);
+        signals_.wake(hdr_->request);
 #endif
+    }
     if (answered(req, cmd)) {
         lateSince_ = 0;
         classRefused_.store(hdr_->classRefused != 0, std::memory_order_relaxed);
@@ -958,10 +965,7 @@ bool RemoteInstance::command(Cmd cmd) SUPPLE_RT {
 
 bool RemoteInstance::startProcessing() SUPPLE_RT {
     if (!hdr_ || process_->failed()) return false;
-    {
-        rt::ScopedSanctionedSyscall syscalls;
-        if (!settle()) return false;
-    }
+    if (!settle()) return false;
     // A start a late block left outstanding may have been answered since.
     if (hdr_->processing != 0) return true;
     if (!command(Cmd::StartProcessing)) return false;
@@ -984,12 +988,9 @@ bool RemoteInstance::process(const ProcessBlock& b, OutputEvents* out) SUPPLE_RT
         silence();  // a failed node is silent; the session plays on
         return true;
     }
-    {
-        rt::ScopedSanctionedSyscall syscalls;
-        if (!settle()) {  // still busy with a late block: this one is late too
-            silence();
-            return true;
-        }
+    if (!settle()) {  // still busy with a late block: this one is late too
+        silence();
+        return true;
     }
     auto* base = static_cast<std::uint8_t*>(map_);
     auto* inAudio = reinterpret_cast<float*>(base + layout_.inAudio);

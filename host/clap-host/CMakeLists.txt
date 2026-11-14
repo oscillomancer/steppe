@@ -92,6 +92,27 @@ if(SUPPLE_BUILD_TESTS)
            --cycles 20 --warmup 5)
   set_tests_properties(clap-host.bridge-bench PROPERTIES LABELS "clap-host;tsan-skip")
 
+  # ADR-0081: the rtsan preset checks the callback's bridged path. A bridged
+  # call under a live deadline must pass, and an allocation after it in the
+  # same SUPPLE_RT code must still be caught: the marker, then no "did not
+  # fire" (a report inside the bridged call prints no marker).
+  if(SUPPLE_SANITIZE MATCHES "realtime")
+    add_executable(rtsan-bridge-selfcheck tests/rtsan_bridge_selfcheck.cpp)
+    target_link_libraries(rtsan-bridge-selfcheck PRIVATE supple::clap-host)
+    supple_target_defaults(rtsan-bridge-selfcheck)
+    target_compile_options(rtsan-bridge-selfcheck PRIVATE -Wno-function-effects)
+    add_dependencies(rtsan-bridge-selfcheck clap-host-fixtures ${PRODUCT_SLUG}-bridge)
+    target_compile_definitions(rtsan-bridge-selfcheck PRIVATE
+                               FIXTURE_CLAP_PATH="$<TARGET_FILE:clap-host-fixtures>"
+                               BRIDGE_PATH="$<TARGET_FILE:${PRODUCT_SLUG}-bridge>")
+    add_test(NAME rtsan-bridge-selfcheck COMMAND rtsan-bridge-selfcheck)
+    set_tests_properties(rtsan-bridge-selfcheck PROPERTIES
+      ENVIRONMENT "RTSAN_OPTIONS=halt_on_error=1"
+      PASS_REGULAR_EXPRESSION "bridged call under a live deadline: clean"
+      FAIL_REGULAR_EXPRESSION "rtsan did not fire"
+      LABELS "clap-host;rt")
+  endif()
+
   foreach(_mode good crash hang)
     add_library(clap-scan-${_mode} MODULE tests/fixture_scan.cpp)
     target_link_libraries(clap-scan-${_mode} PRIVATE supple::clap)

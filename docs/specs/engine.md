@@ -1111,6 +1111,11 @@ instance).
   the hung reason; the audio thread only sets the flag, and the main thread
   kills the process when it services the instance. Without a deadline the
   background rules below apply unchanged.
+  Only the wake and each timed wait are inside `rt::ScopedSanctionedSyscall`,
+  so the rtsan preset checks the rest of the path; the background wait
+  (ADR-0013: `alive()`, kill) keeps one scope over its loop. The rtsan-only
+  test `rtsan-bridge-selfcheck` makes a bridged call under a live deadline,
+  which must pass, then allocates, which must be caught.
 - The bridge is synchronous everywhere. Offline and on rendered-ahead nodes it
   keeps the background deadlines below. On device-callback nodes (armed and
   monitored tracks, input FX, take FX stages, and every node with
