@@ -1867,3 +1867,44 @@ TEST_CASE("a save that moves or copies the media retires the journal where the t
         CHECK(p.app->recoverable().size() == 1);
     }
 }
+
+TEST_CASE("replacing an unsaved project without saving discards its journals with its folder") {
+    // Round-10 review, finding 6, decided for ADR-0078: an unsaved project's
+    // folder goes when it is replaced without saving (after the app asks),
+    // MIDI journals included; ADR-0080 names this as its one exception.
+    Unsaved u;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    {
+        auto earlier = u.run("earlier");
+        cmd::Dispatcher d(registry, *earlier);
+        REQUIRE(d.execute({"track.add", *json::parse(R"({"name":"Keys"})"), kUnit}));
+        earlier->setFixedClock(1'060'000);
+        earlier->tick();
+    }
+    const fs::path journal = u.folder("earlier") / "media/rec/Keys-1.midi.jsonl";
+    REQUIRE(writeFileAtomic(journal, journalHeader() + "[0,144,60,100]\n[24000,128,60,0]\n"
+                                                       "{\"captured\":48000}\n"));
+    auto app = u.run("current");
+    auto recovered = app->recoverSession("earlier");
+    REQUIRE(recovered);
+    REQUIRE(recovered->recovered.size() == 1);
+    REQUIRE(fs::exists(journal));
+    SUBCASE("a new project") {
+        model::Project replacement;
+        replacement.name = "Replacement";
+        REQUIRE(app->newProject(replacement));
+    }
+    SUBCASE("opening another project") {
+        Project other;
+        const fs::path file = other.root / "other/song.json";
+        REQUIRE(other.app->save(file));
+        REQUIRE(app->open(file));
+    }
+    CHECK_FALSE(fs::exists(journal));
+    // Its folder is emptied; what may stay is the lock this run holds on it.
+    if (fs::exists(u.folder("earlier")))
+        for (const auto& e : fs::recursive_directory_iterator(u.folder("earlier")))
+            CHECK(e.path().filename() == "session.lock");
+    CHECK(app->recoverableSessions().empty());
+}

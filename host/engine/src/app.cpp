@@ -633,7 +633,9 @@ Status EngineApp::replaceProject(model::VersionStore store, fs::path path,
     scratch_.clear();
     reportedFailures_.clear();
     recordingFiles_.clear();
-    midiJournalsPending_.clear();  // not saved: they stay, recoverable (ADR-0080)
+    // Not saved: a saved project's journals stay, offered on its next open;
+    // an unsaved one's went with its folder above (ADR-0078, ADR-0080).
+    midiJournalsPending_.clear();
     endMasterRecording();
     autoWrite_.clear();
     renderQueue_.clear();

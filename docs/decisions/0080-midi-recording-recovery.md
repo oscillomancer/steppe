@@ -119,3 +119,11 @@ its recording created, or none. A name that any entry has, a dangling link
 included, is not free; if the exclusive creation still fails, the take has
 no journal (the `record.journal` warning) and the entry there is never
 deleted as one.
+
+*Amended 2026-11-14 after review round 10:* point 6's "opening another
+project without saving leaves it" holds for a saved project. **The one
+exception:** an unsaved (untitled) project replaced without saving, by a
+new project or by opening another, loses its folder as ADR-0078 decides,
+after the app has asked, and its journals with it, as its WAVs and
+autosaves go. ADR-0078 wins: discarding an untitled project discards all of
+it.
