@@ -288,6 +288,7 @@ TEST_CASE("every edit command a saved branch may replay has been audited") {
                                                "env.points.set",
                                                "env.remove",
                                                "env.set",
+                                               "env.write.commit",
                                                "fx.add",
                                                "fx.chain.load",
                                                "fx.copy",

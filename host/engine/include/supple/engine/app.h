@@ -550,6 +550,13 @@ class EngineApp : public cmd::Host {
     // a write envelope never touched is flattened over the pass (one
     // transaction, "Automation written").
     void recordAutomation(model::Id object, const std::string& param, double value);
+    // A write pass's edit of one envelope, in the open transaction: the points
+    // with after < pos <= through go, `points` come in (each where its
+    // position sorts). `log`: also log it as env.write.commit, so a merge
+    // replays it on another branch (what the pass computed from the transport
+    // cannot be computed again there). env.write.commit runs it unlogged.
+    void writeEnvelope(model::Id env, double after, double through,
+                       const std::vector<model::EnvPoint>& points, bool log);
     // Whether a change to this parameter would be recorded now.
     bool writesAutomation(model::Id object, const std::string& param) const;
     // transport.loop / transport.punch (ADR-0015): transport state, not

@@ -113,8 +113,9 @@ The branch's steps are also what the human reviews after reopening:
 - A merge (live or after reopening) can only replay what a step logged. A
   plug-in's own state change now logs the internal `fx.state.capture {fx,
   state}`, which finds the state by hash in any kept version; automation
-  written during playback and recording commits still log nothing
-  (`STATUS.md`, known limits).
+  written during playback logs the internal `env.write.commit` with the
+  points it wrote; recording commits still log nothing (`STATUS.md`, known
+  limits).
 
 ## Alternatives considered
 

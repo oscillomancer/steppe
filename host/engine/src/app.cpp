@@ -2021,21 +2021,21 @@ void EngineApp::recordAutomationAt(model::Id object, const std::string& param, d
     const double fromSeconds =
         !first && it->second.lastSeconds < seconds ? it->second.lastSeconds : seconds;
     const double startSeconds = it == autoWrite_.end() ? seconds : it->second.startSeconds;
-    txn().modify<model::Envelope>(*envId, [&](model::Envelope& env) {
+    {
+        const model::Envelope& env = *s.envelopes.find(*envId);
         const double pos = envelopePosition(s, env, seconds);
         const double from = envelopePosition(s, env, fromSeconds);
         const double before = envelopeAt(env.points, pos, staticValue(s, env.target));
-        std::erase_if(env.points, [&](const model::EnvPoint& p) {
-            return first ? std::abs(p.pos - pos) < 1e-9 : p.pos > from && p.pos <= pos + 1e-9;
-        });
+        std::vector<model::EnvPoint> points;
         // Preserve the existing 0.001-beat entry guard, converted into the
         // envelope's domain just like the write position and erase window.
         const double beat = s.timeMap->beatAt(seconds);
         if (first && beat > 1e-3)
-            insertPoint(env.points, envelopePosition(s, env, s.timeMap->secondsAt(beat - 1e-3)),
-                        before);
-        insertPoint(env.points, pos, value);
-    });
+            points.push_back({envelopePosition(s, env, s.timeMap->secondsAt(beat - 1e-3)), before});
+        points.push_back({pos, value});
+        // The first write replaces only a point at its own position.
+        writeEnvelope(*envId, first ? pos - 1e-9 : from, pos + 1e-9, points, true);
+    }
     AutoWrite w;
     w.startSeconds = startSeconds;
     w.lastSeconds = seconds;
@@ -2088,18 +2088,40 @@ Status EngineApp::finishAutomationPass(double stopSeconds) {
     auto txnId =
         beginTransaction({cmd::Origin::Type::Internal, "engine", ""}, "Automation written");
     if (!txnId) return std::move(txnId).error();
-    for (const auto& [id, w] : work)
-        txn().modify<model::Envelope>(id, [&](model::Envelope& env) {
-            const double start = envelopePosition(s, env, w.startSeconds);
-            const double stop = envelopePosition(s, env, stopSeconds);
-            const double from = w.touched ? envelopePosition(s, env, w.lastSeconds) : start - 1e-9;
-            std::erase_if(env.points, [&](const model::EnvPoint& p) {
-                return p.pos > from && p.pos <= stop + 1e-9;
-            });
-            if (!w.touched) insertPoint(env.points, start, w.lastValue);
-            insertPoint(env.points, stop, w.lastValue);
-        });
+    for (const auto& [id, w] : work) {
+        const model::Envelope& env = *s.envelopes.find(id);
+        const double start = envelopePosition(s, env, w.startSeconds);
+        const double stop = envelopePosition(s, env, stopSeconds);
+        const double from = w.touched ? envelopePosition(s, env, w.lastSeconds) : start - 1e-9;
+        std::vector<model::EnvPoint> points;
+        if (!w.touched) points.push_back({start, w.lastValue});
+        points.push_back({stop, w.lastValue});
+        writeEnvelope(id, from, stop + 1e-9, points, true);
+    }
     return commitTransaction(*txnId);
+}
+
+void EngineApp::writeEnvelope(model::Id env, double after, double through,
+                              const std::vector<model::EnvPoint>& points, bool log) {
+    txn().modify<model::Envelope>(env, [&](model::Envelope& e) {
+        std::erase_if(e.points,
+                      [&](const model::EnvPoint& p) { return p.pos > after && p.pos <= through; });
+        for (const auto& p : points) insertPoint(e.points, p.pos, p.value);
+    });
+    if (!log) return;
+    json::Value args = json::Value::object();
+    args["env"] = env.str();
+    args["after"] = after;
+    args["through"] = through;
+    json::Value list = json::Value::array();
+    for (const auto& p : points) {
+        json::Value point = json::Value::object();
+        point["pos"] = p.pos;
+        point["value"] = p.value;
+        list.push_back(std::move(point));
+    }
+    args["points"] = std::move(list);
+    record_.invocations.push_back({"env.write.commit", std::move(args)});
 }
 
 void EngineApp::startPlaying(int countInBars) {

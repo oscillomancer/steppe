@@ -921,7 +921,9 @@ and naming. All `edit` unless marked (q) query or (a) action.
   are `vca.learn.*` (Track groups and VCA controls, below).
 - **automation**: `env.add {target}`, `env.remove`, `env.set {mode, active,
   …}`, `env.points.set {env, points, range?}`, `env.points.add`,
-  `env.points.remove {range}`, `env.add {take, param}` (take envelopes);
+  `env.points.remove {range}`, `env.add {take, param}` (take envelopes),
+  `env.write.commit {env, after, through, points}` (internal: what a write
+  pass wrote, in the envelope's units, logged so merges replay it);
   automation items `autoitem.add {env, position|bar, length, points?,
   source_length, loop}` (no points: captures what plays there),
   `autoitem.set` (points and source_length reach the pool),

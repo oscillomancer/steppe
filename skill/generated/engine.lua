@@ -429,6 +429,15 @@ q = nil
 ---@class Steppe.env_set_result
 ---@field warnings? table[]
 
+---@class Steppe.env_write_commit_args
+---@field env string Envelope id, e.g. "en_1".
+---@field after number
+---@field through number
+---@field points table[]
+
+---@class Steppe.env_write_commit_result
+---@field warnings? table[]
+
 ---@class Steppe.fx_add_args
 ---@field track? string Track id, e.g. "tr_1".
 ---@field take? string Take id, e.g. "tk_1".
@@ -2188,6 +2197,9 @@ q = nil
 
 ---@class Steppe.env.points
 ---@field set fun(args: Steppe.env_points_set_args): Steppe.env_points_set_result Replace an envelope's points (all of them, or those in a beat range).
+
+---@class Steppe.env.write
+---@field commit fun(args: Steppe.env_write_commit_args): Steppe.env_write_commit_result Record what a write pass wrote into an envelope as a replayable edit.
 
 ---@class Steppe.fx
 ---@field add fun(args: Steppe.fx_add_args): Steppe.fx_add_result Insert a plugin into a track's (or a take's) FX chain and return its id.

@@ -4563,6 +4563,44 @@ Result:
 
 ```
 
+## `env.write.commit@1`
+
+Record what a write pass wrote into an envelope as a replayable edit.
+
+Points with after < pos <= through go and the given points come in, in the envelope's own units (beats or seconds by its timebase, stored values).
+
+Kind: `edit`. Exposure: `internal`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `env` | string |  |  |  | Envelope id, e.g. "en_1". |
+| `after` | number |  |  |  |  |
+| `through` | number |  |  |  |  |
+| `points` | array |  |  |  |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "empty",
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "additionalProperties": false
+}
+
+```
+
+### Examples
+
 ## `fx.add@1`
 
 Insert a plugin into a track's (or a take's) FX chain and return its id.

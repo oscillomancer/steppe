@@ -480,6 +480,28 @@ TEST_CASE("a latch pass holds what it writes without compiling, until the pass e
     CHECK(h.engine().planGeneration() > before);
 }
 
+TEST_CASE("automation a pass wrote on a branch reaches main through a replayed merge") {
+    // Out of scope of item A, found then: the pass's writes logged no step,
+    // so a merge that replays the branch dropped them.
+    WriteHost h("latch");
+    h.run("transport.pause");
+    REQUIRE(h.app->versions().createBranch("agent/claude/ride", "main"));
+    REQUIRE(h.app->switchBranch("agent/claude/ride"));
+    h.run("transport.play");
+    h.backend.run(4);
+    for (double db : {-3.0, -6.0, -9.0}) h.fader(db);
+    h.run("transport.pause");  // "Automation written": held to the stop
+    const auto written = h.app->head().envelopes.begin()->value->points;
+    REQUIRE(written.size() > 2);
+    REQUIRE(h.app->switchBranch("main"));
+    h.run("track.add");  // main moves on: the merge replays the branch
+    auto merged = h.run("branch.merge", R"({"from": "agent/claude/ride"})");
+    CHECK_FALSE(merged["fast_forward"].asBool());
+    const auto* env = h.app->head().envelopes.find(model::Id{model::Kind::Envelope, 1});
+    REQUIRE(env);
+    CHECK(env->points == written);
+}
+
 TEST_CASE("a touch pass lets go of a level half a second after its last write") {
     WriteHost h("touch");
     const auto generation = h.engine().planGeneration();
