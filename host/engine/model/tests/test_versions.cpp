@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 #include <doctest/doctest.h>
+#include <supple/model/project_file.h>
+#include <supple/model/schemas.h>
 #include <supple/model/versions.h>
 #include <ostream>
 
@@ -797,4 +799,209 @@ TEST_CASE("history budget preserves leases of snapshots replaced by media hash c
     lease.reset();
     vs.enforceBudget();
     CHECK_FALSE(vs.version(*recorded));
+}
+
+// --- project files keep branches (ADR-0076) -------------------------------------------------
+
+namespace {
+
+VersionStore reopen(const VersionStore& vs, bool history = false) {
+    auto opened = parseProjectFile(serializeProjectFile(vs, history));
+    REQUIRE_MESSAGE(opened, (opened ? std::string() : opened.error().toString()));
+    REQUIRE_MESSAGE(
+        !opened->branchesDropped,
+        (opened->branchesDropped ? opened->branchesDropped->toString() : std::string()));
+    return std::move(opened->store);
+}
+
+std::string headText(const VersionStore& vs, std::string_view branch) {
+    return serializeProject(*vs.head(branch));
+}
+
+// Drums on main; an agent branch adds a bass (tr_2 there) and sets its level
+// in two steps; main meanwhile adds keys (also tr_2) and mutes the drums.
+VersionStore diverged() {
+    VersionStore vs(Session::create());
+    run(vs, {inv("track.add", R"({"name": "Drums"})")});
+    REQUIRE(vs.createBranch("agent/claude/bass", "main"));
+    REQUIRE(vs.switchBranch("agent/claude/bass"));
+    run(vs, {inv("track.add", R"({"name": "Bass"})")});
+    run(vs, {inv("track.set", R"({"track": "tr_2", "volume_db": -4})")});
+    REQUIRE(vs.switchBranch("main"));
+    run(vs, {inv("track.add", R"({"name": "Keys"})")});
+    run(vs, {inv("track.set", R"({"track": "tr_1", "mute": true})")});
+    return vs;
+}
+
+}  // namespace
+
+TEST_CASE("a project file keeps every branch head, its unmerged steps and the current branch") {
+    VersionStore vs = diverged();
+    REQUIRE(vs.switchBranch("agent/claude/bass"));
+    const std::string text = serializeProjectFile(vs);
+    // The document is main's head whichever branch is current.
+    auto document = parseProject(text);
+    REQUIRE(document);
+    CHECK(serializeProject(*document) == headText(vs, "main"));
+
+    VersionStore back = reopen(vs);
+    CHECK(back.branches() == vs.branches());
+    CHECK(back.branch() == "agent/claude/bass");
+    for (const auto& name : vs.branches()) CHECK(headText(back, name) == headText(vs, name));
+    CHECK(back.nextVersion() == vs.nextVersion());
+    CHECK(serializeProjectFile(back) == text);  // saving again changes nothing
+
+    // The branch's own steps are exact and undoable; main's history is not kept.
+    const auto steps = back.history();
+    REQUIRE(steps.size() == 3);  // both steps and the fork they start from
+    CHECK(steps[0]->txn.label == "track.set");
+    CHECK(steps[1]->txn.label == "track.add");
+    REQUIRE(back.undo());
+    REQUIRE(back.undo());
+    CHECK(back.head()->tracks.size() == 2);  // the master and the drums: the fork
+    CHECK_FALSE(back.undo());
+    REQUIRE(back.redo());
+    REQUIRE(back.redo());
+    REQUIRE(back.switchBranch("main"));
+    CHECK_FALSE(back.canUndo());
+
+    // Merging after reopening does what merging before the save did.
+    auto before = vs.merge("agent/claude/bass", "main", apply, schemas);
+    auto after = back.merge("agent/claude/bass", "main", apply, schemas);
+    REQUIRE(before.conflicts.empty());
+    REQUIRE_MESSAGE(after.conflicts.empty(),
+                    (after.conflicts.empty() ? "" : after.conflicts[0].message));
+    CHECK(after.remap == before.remap);
+    CHECK(after.remap.at(*Id::parse("tr_2")) == *Id::parse("tr_3"));
+    CHECK(track(back, "main", "tr_3")->name == "Bass");
+    CHECK(track(back, "main", "tr_3")->volumeDb == -4.0);
+    CHECK(track(back, "main", "tr_1")->mute);
+    CHECK(headText(back, "main") == headText(vs, "main"));
+}
+
+TEST_CASE("after reopening, a merge still finds both sides' edits of one object") {
+    VersionStore vs = diverged();
+    REQUIRE(vs.switchBranch("agent/claude/bass"));
+    run(vs, {inv("track.set", R"({"track": "tr_1", "volume_db": -2})")});  // the drums
+    REQUIRE(vs.switchBranch("main"));
+    SUBCASE("the same field: a conflict") {
+        run(vs, {inv("track.set", R"({"track": "tr_1", "volume_db": -6})")});
+        VersionStore back = reopen(vs);
+        const auto head = back.headVersion("main");
+        auto m = back.merge("agent/claude/bass", "main", apply, schemas);
+        REQUIRE(m.conflicts.size() == 1);
+        CHECK(m.conflicts[0].kind == Conflict::Kind::ConcurrentEdit);
+        CHECK(m.conflicts[0].step == 2);  // the third step of the branch, as before the save
+        CHECK(m.conflicts[0].message.find("volume_db") != std::string::npos);
+        CHECK(back.headVersion("main") == head);
+    }
+    SUBCASE("another field of an object main changed: no conflict") {
+        VersionStore back = reopen(vs);  // main muted the drums, the branch set their level
+        auto m = back.merge("agent/claude/bass", "main", apply, schemas);
+        REQUIRE_MESSAGE(m.conflicts.empty(), (m.conflicts.empty() ? "" : m.conflicts[0].message));
+        CHECK(track(back, "main", "tr_1")->mute);
+        CHECK(track(back, "main", "tr_1")->volumeDb == -2.0);
+    }
+}
+
+TEST_CASE("a branch merged, continued and reopened merges only its new steps") {
+    VersionStore vs(Session::create());
+    REQUIRE(vs.createBranch("topic", "main"));
+    run(vs, {inv("track.add", R"({"name": "Main track"})")});  // tr_1 on main
+    REQUIRE(vs.switchBranch("topic"));
+    run(vs, {inv("track.add", R"({"name": "Branch track"})")});            // tr_1 on the branch
+    REQUIRE(vs.merge("topic", "main", apply, schemas).conflicts.empty());  // tr_2 on main
+    run(vs, {inv("track.set", R"({"track": "tr_1", "volume_db": -9})")});
+    VersionStore back = reopen(vs);
+    REQUIRE(back.history().size() == 2);  // the new step and where it continues from
+    auto m = back.merge("topic", "main", apply, schemas);
+    REQUIRE_MESSAGE(m.conflicts.empty(), (m.conflicts.empty() ? "" : m.conflicts[0].message));
+    CHECK(m.remap.at(*Id::parse("tr_1")) == *Id::parse("tr_2"));
+    CHECK(back.head("main")->tracks.size() == 3);  // no second copy of the branch track
+    CHECK(track(back, "main", "tr_1")->volumeDb == 0.0);
+    CHECK(track(back, "main", "tr_2")->volumeDb == -9.0);
+    CHECK(back.merge("topic", "main", apply, schemas).upToDate);
+}
+
+TEST_CASE("a merged and deleted branch leaves nothing behind in the file") {
+    VersionStore vs = diverged();
+    REQUIRE(vs.merge("agent/claude/bass", "main", apply, schemas).conflicts.empty());
+    REQUIRE(vs.deleteBranch("agent/claude/bass"));
+    const std::string text = serializeProjectFile(vs);
+    CHECK(text.find("\"branches\"") == std::string::npos);
+    CHECK(text == serializeProject(*vs.head()));
+}
+
+TEST_CASE("history: true keeps undo and redo; the default keeps neither on main") {
+    VersionStore vs(Session::create());
+    run(vs, {inv("track.add", R"({"name": "One"})")});
+    run(vs, {inv("track.add", R"({"name": "Two"})")});
+    run(vs, {inv("track.add", R"({"name": "Three"})")});
+    REQUIRE(vs.undo());
+    const std::string plain = serializeProjectFile(vs);
+    CHECK(plain.find("\"branches\"") == std::string::npos);  // main alone: just the document
+    VersionStore flat = reopen(vs);
+    CHECK_FALSE(flat.canUndo());
+    CHECK_FALSE(flat.canRedo());
+
+    VersionStore back = reopen(vs, true);
+    CHECK(headText(back, "main") == headText(vs, "main"));
+    REQUIRE(back.canRedo());
+    REQUIRE(back.redo());
+    CHECK(back.head()->tracks.size() == 4);
+    REQUIRE(back.undo());
+    REQUIRE(back.undo());
+    REQUIRE(back.undo());
+    CHECK(back.head()->tracks.size() == 1);
+    CHECK_FALSE(back.undo());
+    CHECK(serializeProjectFile(reopen(vs, true), true) == serializeProjectFile(vs, true));
+}
+
+TEST_CASE("a damaged or stale branches section opens main alone") {
+    const VersionStore vs = diverged();
+    auto doc = json::parse(serializeProjectFile(vs)).value();
+    REQUIRE(doc.find("branches"));
+    auto open = [](const json::Value& d) {
+        auto opened = projectFileFromJson(d);
+        REQUIRE(opened);
+        REQUIRE(opened->branchesDropped);
+        CHECK(opened->store.branches() == std::vector<std::string>{"main"});
+        return opened->branchesDropped->code;
+    };
+    SUBCASE("main edited by a program that does not keep branches") {
+        auto edited = doc;
+        edited["project"]["name"] = "Renamed elsewhere";
+        CHECK(open(edited) == "history.stale");
+    }
+    SUBCASE("a version missing its parent") {
+        auto damaged = doc;
+        auto& versions = damaged["branches"]["versions"];
+        for (auto& v : versions.asObject())
+            if (v.value.find("parents")->size()) {
+                v.value["parents"] = json::parse("[999999]").value();
+                break;
+            }
+        CHECK(open(damaged) == "history.saved");
+    }
+    SUBCASE("a state that does not load") {
+        auto damaged = doc;
+        for (auto& v : damaged["branches"]["versions"].asObject())
+            if (v.value.find("state")) {
+                v.value["state"]["set"]["/tracks/tr_9"] = json::parse(R"({"type": 4})").value();
+                break;
+            }
+        CHECK(open(damaged) == "history.saved");
+    }
+}
+
+TEST_CASE("a project saved before branches were kept opens as main") {
+    VersionStore vs(Session::create());
+    run(vs, {inv("track.add", R"({"name": "Old"})")});
+    auto doc = projectToJson(*vs.head());
+    doc["schema"] = "supple.project/2.13";
+    auto opened = projectFileFromJson(doc);
+    REQUIRE(opened);
+    CHECK_FALSE(opened->branchesDropped);
+    CHECK(opened->store.branches() == std::vector<std::string>{"main"});
+    CHECK(opened->store.head()->tracks.find(*Id::parse("tr_1"))->name == "Old");
 }

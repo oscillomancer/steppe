@@ -554,7 +554,7 @@ routes: sd_1 tr_2 → tr_6 ch 1/2→3/4 pre-fader −6 dB (sidechain)
 markers: mk_1 "Verse" bar 1 · regions: rg_1 "Chorus" bars 9–17
 ```
 
-## 5. Project file (`supple.project/2.13`)
+## 5. Project file (`supple.project/2.14`)
 
 ### 5.1 Shape
 
@@ -585,7 +585,8 @@ Canonical JSON (ADR-0009) with members in this order: `schema`, `project`,
 `tempo` (`points`, `meters`), `rulers` (`markers`, `regions`), `tracks`,
 `items`, `takes`, `fx`, `sources` (`media`, `midi`), `routes`, `envelopes`,
 `automation_items`, `groups`, `racks`, `modules` and `cables` (when present), `blobs`, then preserved unknown top-level
-sections and `extensions`. `groups` / `gr_*` are typed track groups since 2.2 (ADR-0052);
+sections and `extensions`, and last `branches` (§5.4) when the project has
+more than main to keep. The document is always main's head. `groups` / `gr_*` are typed track groups since 2.2 (ADR-0052);
 older opaque groups are preserved in extensions with a warning. `ui` belongs to the sidecar. *(Amended 2026-09-26: `fx` — plugin instances are
 ID-keyed objects like the rest; chains reference them by id.)* Members equal
 to their defaults are omitted (the schema fills them in on load). Objects keyed by ID in ID order
@@ -621,8 +622,8 @@ Beside it is an optional sidecar directory, the file name plus `-data`
 (`demo.json-data/`), for blobs over 1 MiB (`<hash>.bin`) and autosaves.
 UI state lives separately in `<name>.ui.json` (gui.md §1.2), never in the
 project document. Saves are atomic (write temp, fsync, rename). Autosave every 60 s to
-`<file>-data/autosave-<n>.json` (keep 5). History is persisted only
-on request (ADR-0008 clarification).
+`<file>-data/autosave-<n>.json` (keep 5). Saves and autosaves keep every
+branch (§5.4); undo history only on request (`project.save {history: true}`).
 
 Media live in the project's `media_dir` (default `media/`) beside the file
 and are named relative to it. A project saved for the first time takes its
@@ -643,8 +644,10 @@ read back as new source media. An ancestor destination is copied to normally,
 so saving back to the original project folder includes newly recorded media.
 
 The engine app writes autosaves from main-thread service (engine.md §6,
-ADR-0030), only when a named project's head changed since the last one and
-60 s of monotonic service time have passed. Unchanged/unnamed projects have no
+ADR-0030), only when a named project's branch heads or current branch
+changed since the last one (`VersionStore::heads()`: an edit on a branch
+that is not current counts, media hash completions do not) and 60 s of
+monotonic service time have passed. Unchanged/unnamed projects have no
 autosave deadline; an overdue edit arms immediate service. A failed write
 waits 60 s before retrying. History timestamps still use wall time, and
 `<n>` is a positive unsigned 64-bit decimal index and counts up from the highest
@@ -654,6 +657,60 @@ suffixes (such as `autosave-1-backup.json`). An exhausted index reports
 `project.open` of a file that has
 a newer autosave next to it reports `autosave_available` and loads nothing
 from it; opening the autosave file itself is how it comes back.
+
+### 5.4 Branches in the file (schema 2.14, ADR-0076)
+
+The document is main's head, whichever branch is current; a `branches`
+section after it keeps the rest. It is omitted when main is the only branch
+and nothing else is kept (the file is then the document alone).
+
+```
+"branches": {
+  "current": "agent/claude/bass",
+  "next_version": 31,
+  "main_hash": "sha256:<hex>",           // of main's canonical document
+  "refs": {"main": {"head": 30, "base": 30, "next_ids": {…}},
+           "agent/claude/bass": {"head": 22, "base": 9, "redo": [24], "next_ids": {…}}},
+  "versions": {"9":  {"parents": [], "label": "track.add", …, "state": {…}},
+               "22": {"parents": [21], "label": "track.set", "origin": "mcp:claude-code",
+                      "time_ms": 1763100000000,
+                      "invocations": [{"command": "track.set", "args": {…}}],
+                      "changes": [["update", "tr_2"]], "created": [],
+                      "state": {"set": {"/tracks/tr_2": {…}}, "remove": ["/items/it_4"]}},
+               "30": {"parents": [9], "label": "earlier history", "squashed_steps": 6,
+                      "squashed_fields": {"tr_1": ["mute"]}}}}
+```
+
+- `refs`: every branch's `head`, `base` (undo stops there), `redo` (oldest
+  first, omitted when empty) and `next_ids` (the lineage's ID high-water
+  marks, §1.1). `current` is restored on open.
+- `versions` by decimal id. Each has `parents` (one or two, older ids, or
+  none for the oldest kept), `label`, and when not empty `origin`, `time_ms`,
+  `invocations` (resolved, as merges replay them), `changes` (`[op, id]`,
+  op `add`, `remove` or `update`), `created`, `squashed_steps`,
+  `squashed_fields`, `replay_of` and `merge_remap` (§6.4). `state` is the
+  version's session as the objects in which it differs from main's head: one
+  `set` entry per object by ID (`/tracks/tr_2`, `/tempo/points/tp_1`), per
+  blob by hash, or per other section (`/project`), and `remove` pointers;
+  main's head has no `state` (it is the document).
+- **What is kept.** By default: every branch head; each branch's steps since
+  it left main, exact (undoable after opening, and merges report conflicts
+  at their step); the fork it left from; a merge's source parent while that
+  branch continues from it. Main's own history, merged parts and deleted
+  branches' lineages are squashed as the history budget squashes (§6.2):
+  main's undo stops at its saved head, and no redo is kept. A branch whose
+  base was behind its fork with main starts its undo at that fork.
+  `history: true` keeps every retained version, base and redo step.
+- **Opening.** Each state is decoded like a document. Objects equal to their
+  first parent's share its entry and revision; others take the version id.
+  A malformed section, or a `main_hash` that no longer matches main (a
+  program that does not keep branches edited it), opens main alone with a
+  `project.history` warning; the first save over that file keeps a copy of
+  it as `<file>.pre-branches.bak` (`-2`, `-3`… when taken), reported as a
+  `project.history_backup` warning. A 2.13 or older file opens as main.
+- Logged invocations are part of the format: a command whose arguments
+  change incompatibly makes a merge of an older file's branch stop with an
+  `invalid` conflict.
 
 ## 6. Versions, undo, branches
 
@@ -676,7 +733,9 @@ the combined step as one operation. Shared MIDI/blob/object/collection payloads
 are counted once. Leases, branch bases/heads, redo targets and fork/merge
 boundaries survive; required data/replay logs may exceed the budget.
 `history.list` reports `truncated`, `retained_bytes`, `budget_bytes`, and
-`squashed_steps` per entry. This does not persist undo history into project files.
+`squashed_steps` per entry. Project files keep undo history only with
+`project.save {history: true}`; they always keep branches and their unmerged
+steps (§5.4).
 Coalescing: consecutive edits with the same `coalesce_key` (e.g. one fader
 gesture, `fx.param.set` on the same param within one gesture) replace the
 head instead of stacking.

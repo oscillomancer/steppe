@@ -76,6 +76,25 @@ struct MergeOutcome {
     std::map<Id, Id> remap;  // branch ID -> ID on the target, including earlier merges'
 };
 
+// A branch as a project file keeps it (ADR-0076).
+struct SavedBranch {
+    std::string name;
+    std::uint64_t head = 0, base = 0;
+    std::vector<std::uint64_t> redo;  // oldest first, as Branch keeps it
+    Counters allocated;
+};
+
+// What a project file keeps of a VersionStore (ADR-0076): the versions,
+// oldest first, every branch and the current one. Without full history this
+// is every branch head, the unmerged steps of each branch since it left main
+// (exact) and what merges still need behind them, squashed.
+struct SavedHistory {
+    std::map<std::uint64_t, Version> versions;
+    std::vector<SavedBranch> branches;  // main first
+    std::string current = "main";
+    std::uint64_t next = 1;
+};
+
 // Re-executes a transaction's invocations on `base` (the command layer
 // provides this), building the result as `version`.
 struct Replayed {
@@ -93,6 +112,24 @@ class VersionStore {
   public:
     // `initial` becomes version `initial.version` on branch "main".
     explicit VersionStore(Session initial);
+    // A store as a project file kept it; checks that the graph is whole
+    // (`history.saved` errors name the version or branch).
+    static Result<VersionStore> restore(SavedHistory saved);
+    // The store as a project file keeps it (ADR-0076). `fullHistory` keeps
+    // every version still retained, the bases and the redo steps; otherwise
+    // undo stops at each head, but every branch's steps since it left main
+    // stay exact and undoable. Leases are not saved.
+    SavedHistory saved(bool fullHistory) const;
+    // What a project file's content follows: every branch's head and the
+    // current branch. Equal when nothing a save keeps has changed (an undo
+    // back to the saved head included); media metadata completions, which
+    // are recomputed, do not count.
+    struct Heads {
+        std::string current;
+        std::map<std::string, std::uint64_t, std::less<>> heads;
+        friend bool operator==(const Heads&, const Heads&) = default;
+    };
+    Heads heads() const;
 
     const std::string& branch() const { return current_; }
     std::shared_ptr<const Session> head() const { return head(current_); }
@@ -141,6 +178,7 @@ class VersionStore {
                        const ArgSchemas& schemas, std::uint64_t timeMs = 0);
 
   private:
+    VersionStore() = default;  // restore() fills it
     struct Branch {
         std::uint64_t head = 0, base = 0;
         std::vector<std::uint64_t> redo;

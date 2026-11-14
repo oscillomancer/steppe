@@ -27,7 +27,10 @@ ASAN_OPTIONS=detect_leaks=0:alloc_dealloc_mismatch=0 \
 projects must satisfy the model invariants and survive a canonical text
 round trip. The corpus contains files saved by the engine (empty, MIDI song,
 FX, automation), plus a saved project with a route and a missing audio media
-item. Missing media is valid project state.
+item, and one with an unmerged agent branch (`song_branches.json`, its
+`branches` section, ADR-0076). Missing media is valid project state; a
+branches section that does not restore opens main alone and must then
+round-trip as main.
 
 `history.fuzz` maps bytes to real bus commands on a fresh `EngineApp`,
 including batches, failed calls, undo/redo and branch operations. After each
