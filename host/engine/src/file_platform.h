@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <system_error>
 #include <vector>
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -80,28 +81,44 @@ inline int publishNew(const std::filesystem::path& temp, const std::filesystem::
 #endif
 }
 // A new file to append to (a recording's MIDI journal, ADR-0080): never
-// over an existing file and never through a link. Null on failure (errno).
-inline std::FILE* createAppend(const std::filesystem::path& path) {
+// over an existing file and never through a link. Null on failure, with the
+// reason in `error` (GetLastError for CreateFileW, errno otherwise).
+inline std::FILE* createAppend(const std::filesystem::path& path, std::error_code& error) {
 #if defined(_WIN32)
+    // GENERIC_WRITE, which FlushFileBuffers documents as required (syncFile);
+    // the CRT's _O_APPEND puts every write at the end.
     const HANDLE handle =
-        CreateFileW(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr,
+        CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr,
                     CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-    if (handle == INVALID_HANDLE_VALUE) return nullptr;
+    if (handle == INVALID_HANDLE_VALUE) {
+        error = std::error_code(static_cast<int>(GetLastError()), std::system_category());
+        return nullptr;
+    }
     const int fd =
         _open_osfhandle(reinterpret_cast<intptr_t>(handle), _O_BINARY | _O_WRONLY | _O_APPEND);
     if (fd < 0) {
+        error = std::error_code(errno, std::generic_category());
         CloseHandle(handle);
         return nullptr;
     }
     std::FILE* stream = _fdopen(fd, "ab");
-    if (!stream) _close(fd);
+    if (!stream) {
+        error = std::error_code(errno, std::generic_category());
+        _close(fd);
+    }
     return stream;
 #else
     const int fd =
         ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_APPEND | O_NOFOLLOW | O_CLOEXEC, 0644);
-    if (fd < 0) return nullptr;
+    if (fd < 0) {
+        error = std::error_code(errno, std::generic_category());
+        return nullptr;
+    }
     std::FILE* stream = ::fdopen(fd, "ab");
-    if (!stream) ::close(fd);
+    if (!stream) {
+        error = std::error_code(errno, std::generic_category());
+        ::close(fd);
+    }
     return stream;
 #endif
 }

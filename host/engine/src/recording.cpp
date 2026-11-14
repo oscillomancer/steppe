@@ -414,14 +414,14 @@ Status Recorder::open() {
         if (t->target.file.empty()) continue;
         std::error_code ec;
         std::filesystem::create_directories(t->target.file.parent_path(), ec);
-        t->journal = files::createAppend(t->target.file);
+        std::error_code why;
+        t->journal = files::createAppend(t->target.file, why);
         if (!t->journal)
-            t->journalError = Error("record.journal",
-                                    "cannot create " + t->target.file.string() + ": " +
-                                        std::error_code(errno, std::generic_category()).message(),
-                                    "/recording",
-                                    "make the recordings folder writable; this take has no "
-                                    "crash recovery");
+            t->journalError = Error(
+                "record.journal", "cannot create " + t->target.file.string() + ": " + why.message(),
+                "/recording",
+                "make the recordings folder writable; this take has no "
+                "crash recovery");
     }
     writer_ = std::thread([this] { writerLoop(); });
     return okStatus();
