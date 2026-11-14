@@ -481,6 +481,11 @@ struct EngineOptions {
     double renderAheadMs = 200.0;      // how far ahead of the playhead
     int workers = -1;                  // helpers per pool; -1: every allowed CPU but three
     BenchProbe* benchProbe = nullptr;  // benchmark only; preallocated, outlives stop()
+    // The floor of each callback cycle's bridge deadline (ADR-0081): bridged
+    // calls on live nodes wait until the cycle's start plus its period or
+    // this, whichever is larger. Tests raise it so that a loaded machine
+    // never makes a healthy bridged plug-in late.
+    double liveBridgeDeadlineMs = 2.0;
     // The renderer's and background pool's scheduling (engine.md §2.2,
     // ADR-0026). Auto: real-time below a real-time callback, else normal. The
     // others force it for benchmarks and tests (still below a real-time
@@ -620,6 +625,9 @@ class Engine {
     // Audio cycles that found no rendered audio while playing (after the
     // pre-roll of a start or seek).
     std::uint64_t anticipationMisses() const { return misses_.load(); }
+    // Callback cycles in which a bridged plug-in did not answer by the
+    // cycle's bridge deadline (ADR-0081): each ran past its period.
+    std::uint64_t bridgeLateCycles() const { return bridgeLate_.load(); }
     // Recording (main thread): capture starts with the first played cycle,
     // placed where the performer heard it (device and plan latency).
     // Main thread: masters recording their output (ADR-0057), for the plans
@@ -999,6 +1007,7 @@ class Engine {
     LoopRange loopC_;                           // audio thread: the loop it plays
     std::uint64_t xportSeen_ = ~0ull;           // as seekSeen_: one executor at a time
     std::atomic<std::uint64_t> misses_{0};
+    std::atomic<std::uint64_t> bridgeLate_{0};
 
     // The callback's share when anticipative: its plan and the live instances
     // it owns, and where it plays live nodes.

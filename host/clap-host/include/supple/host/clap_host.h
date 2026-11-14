@@ -266,7 +266,8 @@ bool bridgeProcessFailed(const std::shared_ptr<BridgeProcess>& process);
 // stays outstanding, answered before the shared memory is used again. After
 // 50 ms of consecutive late blocks the instance fails, and the main thread
 // kills its process when it next services it. Unset (0), the background
-// deadline applies (ADR-0013). Each callback-owned thread sets it per cycle.
+// deadline applies (ADR-0013). Each callback-owned thread sets it per cycle;
+// 0 sets none (a live helper serving a cycle without one).
 class LiveBridgeDeadline {
   public:
     explicit LiveBridgeDeadline(std::int64_t steadyNs) SUPPLE_RT;
@@ -278,6 +279,8 @@ class LiveBridgeDeadline {
     std::int64_t previous_;
 };
 std::int64_t steadyNanoseconds() SUPPLE_RT;
+// The calling thread's live deadline, 0 for none.
+std::int64_t currentLiveBridgeDeadline() SUPPLE_RT;
 // Bridged audio-thread calls that missed a live deadline, process-wide.
 std::uint64_t bridgeLateCalls() SUPPLE_RT;
 

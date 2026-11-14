@@ -253,15 +253,16 @@ CLAP (including `com.suppleaudio.semantic-params`) and VST3; LV2 is not
 supported. Isolation modes per plugin instance, REAPER-style: in-process,
 shared bridge process, dedicated process (ADR-0013). Bridged plugins
 exchange audio and events with the engine through shared memory. The
-caller (the anticipative renderer, or an offline render) writes the block's
-input, wakes the bridge and waits for its output up to a deadline; a bridge
-that dies or misses the deadline fails the plugins it hosts (one in a
-dedicated process, every instance in a shared one: silence and an error
-event) and the session survives. Bridges isolate crashes of ordinary plugins;
-they are not a security sandbox against hostile ones. Synchronous bridge calls never run in
-the device callback, so a bridged plugin on a live (monitored) node is
-passed through with a warning; a pipelined mode for live nodes is future
-work.
+caller (the anticipative renderer, an offline render, or on a live
+(monitored) node the device callback and its live helpers) writes the
+block's input, wakes the bridge and waits for its output up to a deadline; a
+bridge that dies or misses the background deadline fails the plugins it hosts
+(one in a dedicated process, every instance in a shared one: silence and an
+error event) and the session survives. In the callback the wait ends at the
+cycle's bridge deadline (ADR-0081): a late block is silent and counted as an
+xrun, and 50 ms of late blocks fail the plug-in. Bridges isolate crashes of
+ordinary plugins; they are not a security sandbox against hostile ones. A
+pipelined mode for live nodes is future work.
 
 Linux keeps its memfd/socketpair/shared futex/pidfd path. macOS transfers an
 unlinked shm_open descriptor, uses shared address waits and pipe notifications,

@@ -1785,7 +1785,9 @@ EngineStatus EngineApp::engineStatus() {
     st.period = b.period;
     st.planLatency = engine_->outputLatency();
     st.deviceLatency = b.outputLatency;
-    st.xruns = static_cast<std::int64_t>(b.xruns);
+    // A cycle a bridged plug-in made late is an xrun too (ADR-0081).
+    st.bridgeLate = static_cast<std::int64_t>(engine_->bridgeLateCycles());
+    st.xruns = static_cast<std::int64_t>(b.xruns) + st.bridgeLate;
     st.midiDropped = static_cast<std::int64_t>(backend_->midiDropped());
     st.midiWarnings = backend_->midiWarnings();
     st.midiOutDropped = static_cast<std::int64_t>(backend_->midiOutDropped());

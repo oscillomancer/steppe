@@ -378,8 +378,8 @@ editor/automation eligibility preferences remain planned (ADR-0014).
   them together with any CLAP request.
 - **Live nodes** run on the callback and its separate bounded live pool
   (ADR-0024). With anticipation disabled this executor runs the entire graph.
-  Limit 1 processes it serially. Synchronous
-  bridged stages pass through on live nodes, with a warning (§5).
+  Limit 1 processes it serially. Bridged stages on live nodes are processed
+  there too, under the cycle's bridge deadline (§5, ADR-0081).
 
 ### 2.2 Worker pool
 
@@ -503,8 +503,9 @@ ownership tokens to every helper. There is no late-output discard, timeout or
 rerun: a late in-flight node makes its cycle late. A processing error still joins
 all work before silencing/counting the failed segment; it never cancels in-flight
 plug-in state. Summation order and numeric policy (§2.4) remain identical to
-offline processing. Synchronous bridge stages still pass through, including on
-helpers.
+offline processing. Bridged stages run on the callback and on helpers alike:
+`LiveWorkers::run` hands the callback's bridge deadline to every helper that
+claims the job (ADR-0081).
 
 `Backend::liveThreadCapacity()` and `prepareLiveThread(native_handle)` run on
 main after backend start, before publishing the pool to callbacks. Unknown
@@ -1095,12 +1096,17 @@ instance).
   the hung reason; the audio thread only sets the flag, and the main thread
   kills the process when it services the instance. Without a deadline the
   background rules below apply unchanged.
-- The current bridge is synchronous and runs only offline or on rendered-ahead
-  nodes. A stage on a device-callback node (including a take FX stage) passes
-  through with its compensated delay; the callback calls neither processing nor
-  lifecycle methods of the bridge. The plan warning names the FX and asks for
-  `isolation: in_process` to monitor through it. Pipelined live bridging is future
-  work (ADR-0013); synchronous monitoring is not supported.
+- The bridge is synchronous everywhere. Offline and on rendered-ahead nodes it
+  keeps the background deadlines below. On device-callback nodes (armed and
+  monitored tracks, input FX, take FX stages, and every node with
+  anticipation off) the callback and its live helpers process bridged stages
+  and make their lifecycle calls under the cycle's bridge deadline (ADR-0081):
+  `Engine::cycle` sets it to the cycle's start plus its period or
+  `EngineOptions::liveBridgeDeadlineMs` (default 2 ms), whichever is larger.
+  No latency is added and the output is the in-process output. A cycle with a
+  late bridged call counts in `Engine::bridgeLateCycles()`,
+  `engine.status.bridge_late`, and in `engine.status.xruns`. A pipelined mode
+  remains future work.
 - Crash handling: a control thread watches the process (pidfd); on crash the
   instance becomes a **failed node** (silence; `fx.failed` event with the
   signal and last known state kept in the model), the rest of the session
@@ -1120,8 +1126,9 @@ decimal integers. Command schemas still validate the device/transport ranges.
 The engine registers the session-model §7 command catalogue on the command
 bus and exposes it through the control protocol (Unix socket), Lua and MCP (proxy or in-process). Engine-specific commands:
 `engine.start {backend, device, rate, block}`, `engine.stop`,
-`engine.status` (q: backend, rate, block, load, xruns, anticipation
-misses, meter drops), `engine.settings.set {render_ahead_ms,
+`engine.status` (q: backend, rate, block, load, xruns (device xruns plus
+`bridge_late`, the callback cycles a bridged plug-in made late, ADR-0081),
+anticipation misses, meter drops), `engine.settings.set {render_ahead_ms,
 worker_threads, automation_resolution, …}`.
 `OfflineResult::graph` supplies compiled graph text: input edges and residual
 padding, `lat_in` (the forward arrival diagnostic), `lat_chain` (compensated
@@ -1472,9 +1479,8 @@ harness. See the tooling README for schemas, limits and invocation details.
   a frontier miss, or the switch from unity to a rate) the nodes entering
   the live region start afresh: voices and held notes cleared, plug-ins
   reset, racks restarted, so nothing hangs, but a held note cuts. Bridged
-  stages pass through on live nodes (§2.1), so a bridged instrument falls
-  silent when armed. A node leaving the live region stays live while the
-  transport plays (`keepLive`).
+  stages take part as in-process ones do (§2.1, §5). A node leaving the live
+  region stays live while the transport plays (`keepLive`).
 - **Smooth swaps:** a plan swap carries each strip's fader ramps and Console 9 state
   and each insert's applied wet level into the new plan
   (`carryMix`, by track and by instance, per executor); a changed volume,

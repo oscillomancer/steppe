@@ -672,25 +672,8 @@ Status Engine::load(const model::Session& session, const std::filesystem::path& 
             plan = std::move(*again);
         }
     }
-    // Synchronous bridge calls (including lifecycle) belong to the renderer.
-    // A live bridge is a compensated pass-through until live pipelining exists.
-    std::vector<host::Instance*> blocked;
-    for (detail::Node& node : plan->nodes) {
-        if (options_.anticipative && !node.live) continue;
-        detail::forEachStage(node, [&](detail::Stage& stage) {
-            if (!stage.instance || !stage.instance->isolated()) return;
-            stage.callbackBypass = true;
-            blocked.push_back(stage.instance);
-            plan->warnings.push_back(stage.fx.str() +
-                                     ": bridged FX is passed through on a live node; set isolation "
-                                     "to in_process to monitor through it");
-        });
-    }
-    std::sort(blocked.begin(), blocked.end());
-    for (auto* instances : {&plan->instances, &plan->liveInstances, &plan->rendererInstances})
-        std::erase_if(*instances, [&](host::Instance* instance) {
-            return std::binary_search(blocked.begin(), blocked.end(), instance);
-        });
+    // Bridged FX on live nodes run in the callback under its bridge deadline
+    // (ADR-0081): no stage is passed through for being isolated.
     if (std::any_of(plan->nodes.begin(), plan->nodes.end(),
                     [](const detail::Node& n) { return n.midiIn.has_value() || n.rack; })) {
         const std::vector<std::string> ports = backend_->midiPorts();  // ADR-0016
@@ -1445,6 +1428,26 @@ void Engine::cycle(const float* const* in, float* const* out, std::uint32_t fram
                 e.notifyMain();
         }
     } inCycle(*this, out, frames);
+    // ADR-0081: bridged calls on this thread, and on the live helpers serving
+    // this cycle, wait no later than the cycle's start plus its period or
+    // 2 ms, whichever is larger. A cycle with a late call ran past its period.
+    struct BridgeCycle {
+        Engine& engine;
+        std::uint64_t late = host::bridgeLateCalls();
+        host::LiveBridgeDeadline deadline;
+        BridgeCycle(Engine& e, std::uint32_t count)
+            : engine(e),
+              deadline(host::steadyNanoseconds() +
+                       std::max<std::int64_t>(
+                           static_cast<std::int64_t>(e.options_.liveBridgeDeadlineMs * 1e6),
+                           static_cast<std::int64_t>(count * 1e9 / e.config_.sampleRate))) {}
+        ~BridgeCycle() {
+            if (host::bridgeLateCalls() != late) {
+                engine.bridgeLate_.fetch_add(1, std::memory_order_relaxed);
+                engine.notifyMain();
+            }
+        }
+    } bridgeCycle(*this, frames);
     hardwareMidi_->begin(*midiSource_, frames);
     if (frames == 0) {  // the backend's final callback: stop every plugin here
         detail::adoptRackModules(livePlan_ ? &livePlan_->liveModules : nullptr, nullptr,

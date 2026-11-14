@@ -59,6 +59,9 @@ class LiveWorkers {
     TaskGraph* job_ = nullptr;
     Fn fn_ = nullptr;
     void* context_ = nullptr;
+    // The callback's bridge deadline for this job (ADR-0081), which helpers
+    // take for their bridged calls; 0 for none.
+    std::int64_t deadline_ = 0;
 };
 
 }  // namespace detail

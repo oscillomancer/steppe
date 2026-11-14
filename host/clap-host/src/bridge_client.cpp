@@ -324,6 +324,9 @@ void RemoteInstance::unmap() {
     signals_.clear();
     map_ = nullptr;
     hdr_ = nullptr;
+    // A new region starts with nothing outstanding (its sequence restarts).
+    outstanding_ = 0;
+    lateSince_ = 0;
 }
 
 void BridgeProcess::killBridge() {
@@ -846,8 +849,9 @@ constexpr std::int64_t kLateFailNs = 50'000'000;
 }  // namespace
 
 LiveBridgeDeadline::LiveBridgeDeadline(std::int64_t steadyNs) SUPPLE_RT : previous_(tLiveDeadline) {
-    tLiveDeadline = steadyNs > 0 ? steadyNs : 1;
+    tLiveDeadline = steadyNs > 0 ? steadyNs : 0;
 }
+std::int64_t currentLiveBridgeDeadline() SUPPLE_RT { return tLiveDeadline; }
 LiveBridgeDeadline::~LiveBridgeDeadline() SUPPLE_RT { tLiveDeadline = previous_; }
 std::int64_t steadyNanoseconds() SUPPLE_RT {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(

@@ -169,6 +169,7 @@ struct EngineStatus {
     std::int64_t block = 0, period = 0;
     std::int64_t planLatency = 0, deviceLatency = 0;  // frames
     std::int64_t xruns = 0, cycles = 0, processErrors = 0;
+    std::int64_t bridgeLate = 0;  // callback cycles a bridged plug-in made late (ADR-0081)
     std::int64_t midiDropped = 0, midiOutDropped = 0, midiLeadFrames = 0;
     json::Value midiInputs = json::Value::array(), midiOutputs = json::Value::array();
     std::vector<MidiInputWarning> midiOutputWarnings;

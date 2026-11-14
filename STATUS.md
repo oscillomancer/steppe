@@ -190,8 +190,11 @@ instructions are in `docs/guides/installing.md`.
   ending monitoring, or changing the monitor mode, ends only the keyboard's
   notes. Known limits: the first change since audio started that turns a
   playrate on while playing restarts the strips it moves into the live
-  region, so a held note cuts; a bridged plug-in passes through on a live
-  strip (engine.md §2.1), so a bridged instrument falls silent when armed. A
+  region, so a held note cuts. Bridged plug-ins play on live strips too, in
+  the callback under a bounded wait (ADR-0081), with their in-process output
+  in both executors (tested with device MIDI, effects, note output and
+  input FX); a late block is silent and counted in `bridge_late` and
+  `xruns`. A
   DAG worker pool with graph-bounded participation and idle parking
   (ADR-0023), a separate live callback fork-join pool (ADR-0024) with FIFO
   JACK helpers, a claim-based lifetime join that does not wait for unclaimed
@@ -1057,9 +1060,13 @@ Engine and hosting:
   its FX. The bridge inherits the host's limits, so this needs a limit or
   policy change for the user; such a thread's plug-in can then fall behind
   under load like an unelevated renderer.
-- There is no pipelined bridge mode, so a bridged plugin on a live
-  (monitored) track is passed through with a warning; set its isolation to
-  in-process to hear it while monitoring.
+- A bridged plug-in on a live (monitored) track costs the callback a round
+  trip to its bridge per block (about 10 µs more than in process at the
+  median in B6, `docs/benchmarks/b6.md`, serially along a chain); one that
+  does not answer by the cycle's bridge deadline (its period or 2 ms,
+  whichever is larger) is silent for that block, which counts as an xrun.
+  There is no pipelined bridge mode. macOS and Windows timing is unmeasured,
+  and the macOS bridge does not join the device's audio workgroup.
 - Audio backends: Linux JACK, dummy, and native PortAudio (CoreAudio on macOS;
   WASAPI/ASIO on Windows), with selection, latency/xruns and restart notifications.
   Fake-device output equals offline in both executors, with native CI coverage.

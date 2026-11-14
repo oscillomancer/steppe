@@ -2,6 +2,8 @@
 // Copyright (c) 2026 Supple Audio
 #include "live_workers.h"
 
+#include "supple/host/clap_host.h"
+
 #include <algorithm>
 #include <string>
 
@@ -94,6 +96,7 @@ void LiveWorkers::run(TaskGraph& g, Fn fn, void* context) SUPPLE_RT {
     job_ = &g;
     fn_ = fn;
     context_ = context;
+    deadline_ = host::currentLiveBridgeDeadline();
     // The preceding close/join excludes readers of the old job. A late claim
     // either sees closed and reads no fields, or acquires this publication.
     open_.store(true, std::memory_order_seq_cst);
@@ -126,6 +129,7 @@ void LiveWorkers::loop(unsigned index) {
         event(Event::Claimed);
         if (open_.load(std::memory_order_seq_cst)) {
             event(Event::Entered);
+            const host::LiveBridgeDeadline deadline(deadline_);
             help(*job_, fn_, context_);
             event(Event::Leave);
         } else {

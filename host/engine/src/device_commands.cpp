@@ -108,6 +108,7 @@ schema::Schema<EngineStatus> engineStatusSchema() {
         .field("plan_latency", &EngineStatus::planLatency, schema::integer())
         .field("device_latency", &EngineStatus::deviceLatency, schema::integer())
         .field("xruns", &EngineStatus::xruns, schema::integer())
+        .field("bridge_late", &EngineStatus::bridgeLate, schema::integer())
         .field("midi_dropped", &EngineStatus::midiDropped, schema::integer())
         .field("midi_inputs", &EngineStatus::midiInputs, schema::any())
         .field("midi_outputs", &EngineStatus::midiOutputs, schema::any())
@@ -258,7 +259,7 @@ void registerDeviceCommands(cmd::Registry& registry) {
         c.examples = {
             {"Without a device", j(R"({"backend": "dummy", "block": 128})"),
              j(R"({"running": true, "backend": "dummy", "sample_rate": 48000.0, "block": 128,
-                     "period": 128, "plan_latency": 0, "device_latency": 0, "xruns": 0, "midi_dropped": 0, "midi_warnings": [], "midi_out_dropped": 0, "midi_output_warnings": [], "midi_output_latency": [], "midi_inputs": [], "midi_outputs": [], "midi_lead_frames": 0,
+                     "period": 128, "plan_latency": 0, "device_latency": 0, "xruns": 0, "bridge_late": 0, "midi_dropped": 0, "midi_warnings": [], "midi_out_dropped": 0, "midi_output_warnings": [], "midi_output_latency": [], "midi_inputs": [], "midi_outputs": [], "midi_lead_frames": 0,
                      "midi_devices_changed": false, "midi_devices_message": "",
                      "preparing_audio": false, "preparation_error": "",
                      "prepared_version": "<any>", "preparation_version": 0,
@@ -424,6 +425,9 @@ void registerDeviceCommands(cmd::Registry& registry) {
             "message, path and hint to each failure. "
             "failed_fx: isolated plugins whose "
             "process crashed or hung (silent now; fx.restart re-creates them). "
+            "bridge_late: callback cycles in which a bridged plugin had not answered by the "
+            "cycle's bridge deadline (its period or 2 ms, whichever is larger); its output was "
+            "silent for that cycle, and xruns counts each of these cycles too. "
             "bridge_threads_refused: isolated plugins whose bridge audio thread was refused "
             "the scheduling it asked for (it runs at what it had and can fall behind under "
             "load; grant real-time scheduling to the user and restart the engine).";
@@ -432,7 +436,7 @@ void registerDeviceCommands(cmd::Registry& registry) {
         c.result = engineStatusSchema();
         c.examples = {{"Not running", j("{}"),
                        j(R"({"running": false, "backend": "", "sample_rate": 0.0, "block": 0,
-                     "period": 0, "plan_latency": 0, "device_latency": 0, "xruns": 0, "midi_dropped": 0, "midi_warnings": [], "midi_out_dropped": 0, "midi_output_warnings": [], "midi_output_latency": [], "midi_inputs": [], "midi_outputs": [], "midi_lead_frames": 0,
+                     "period": 0, "plan_latency": 0, "device_latency": 0, "xruns": 0, "bridge_late": 0, "midi_dropped": 0, "midi_warnings": [], "midi_out_dropped": 0, "midi_output_warnings": [], "midi_output_latency": [], "midi_inputs": [], "midi_outputs": [], "midi_lead_frames": 0,
                      "midi_devices_changed": false, "midi_devices_message": "",
                      "preparing_audio": false, "preparation_error": "",
                      "prepared_version": 0, "preparation_version": 0,
