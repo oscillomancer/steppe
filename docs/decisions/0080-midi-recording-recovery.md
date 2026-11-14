@@ -102,3 +102,8 @@ a header outside it makes the file not a journal. A pitch of 255 had been
 recovered, saved and then refused on reopen, and extreme header clocks
 overflowed placement. `record.commit` checks its MIDI bytes and voices the
 same way (`record.midi`).
+
+*Amended 2026-11-14 after review round 10:* when a Note Out route is gone,
+its address is dropped but each of its voices stays distinct (an
+unaddressed voice of its own), so overlapping notes of one pitch pair as
+stop paired them; dropping the voice too had merged them.

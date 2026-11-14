@@ -1510,7 +1510,9 @@ diagnostics in the same optional `warnings` shape (`record.sidecar`, and
 `project.recoverable` lists a MIDI journal with at least one event that no
 committed take of the project holds (`midi_events`: how many; `channels`
 0); `project.recover` places it as stop would have, with its Note Out route
-ids dropped where the project no longer has the route (ADR-0080). Recovery
+ids dropped where the project no longer has the route; each such voice
+keeps its own identity, so overlapping notes of one pitch pair as stop paired
+them (ADR-0080). Recovery
 skips corrupt selections and continues with valid recordings; an unknown path
 still fails, and a directory with no recordings or diagnostics reports
 `recover.nothing`.

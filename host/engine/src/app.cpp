@@ -3779,11 +3779,17 @@ Result<std::vector<RecordedInfo>> EngineApp::recover(const std::vector<std::stri
         if (check.midi) {  // placed as stop places it (ADR-0080)
             t = *check.midi;
             // Note Out addresses of routes this project no longer has: the
-            // events stay, unaddressed, as a device's.
+            // events stay, unaddressed. Each voice keeps its own identity
+            // (numbered below a device's -1), so overlapping notes of one
+            // pitch still pair as stop paired them.
+            std::map<std::pair<model::Id, int>, int> unaddressed;
             for (RecordedMidiEvent& e : t.midi)
                 if (e.route != model::Id{} && !s.routes.find(e.route)) {
+                    const auto [it, added] = unaddressed.try_emplace(
+                        {e.route, e.voice}, -2 - static_cast<int>(unaddressed.size()));
+                    (void)added;
                     e.route = {};
-                    e.voice = -1;
+                    e.voice = it->second;
                 }
         }
         t.track = track.value_or(side->track);

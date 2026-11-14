@@ -1742,3 +1742,77 @@ TEST_CASE("record.commit refuses MIDI that is not a channel message of 7-bit dat
     REQUIRE_MESSAGE(good, (good ? std::string() : good.error().toString()));
     CHECK(p.app->head().midi.size() == 1);
 }
+
+TEST_CASE("a recovered take whose Note Out route is gone keeps its voices apart") {
+    // Round-10 review, finding 3: dropping the missing route also dropped
+    // each voice's identity, so two overlapping notes of one pitch paired as
+    // one (both 480 ticks instead of 960).
+    Project p;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *p.app);
+    REQUIRE(d.execute({"track.add", json::Value::object(), kUnit}));
+    const fs::path saved = p.root / "saved/song.json";
+    REQUIRE(p.app->save(saved));
+    detail::MidiCapture c;
+    c.track = {model::Kind::Track, 1};
+    c.rate = 48000;
+    c.start = 0;
+    c.midi.routed = true;
+    c.captured = 48000;
+    auto event = [&](std::int64_t at, std::uint8_t status, model::Id route, int voice) {
+        detail::CapturedMidiEvent e;
+        e.at = at;
+        e.bytes[0] = status;
+        e.bytes[1] = 60;
+        e.bytes[2] = status == 0x90 ? 100 : 0;
+        e.route = route;
+        e.voice = voice;
+        c.events.push_back(e);
+    };
+    const model::Id gone{model::Kind::Route, 99}, alsoGone{model::Kind::Route, 98};
+    SUBCASE("two voices of one route") {
+        event(0, 0x90, gone, 1);
+        event(12000, 0x90, gone, 2);
+        event(24000, 0x80, gone, 1);
+        event(36000, 0x80, gone, 2);
+    }
+    SUBCASE("the same voice number on two routes") {
+        event(0, 0x90, gone, 1);
+        event(12000, 0x90, alsoGone, 1);
+        event(24000, 0x80, gone, 1);
+        event(36000, 0x80, alsoGone, 1);
+    }
+    // What stop committed: the take as captured, voices kept apart.
+    const RecordedTake stopped = detail::placeMidi(c);
+    REQUIRE(p.app->commitTakes({stopped}, "reference stop"));
+    REQUIRE(p.app->head().midi.size() == 1);
+    const midi::Sequence expected = p.app->head().midi.begin()->value->sequence;
+    REQUIRE(expected.notes.size() == 2);
+    CHECK(expected.notes[0].length == expected.notes[1].length);
+    REQUIRE(p.app->open(saved));  // the routes and the take are not in it
+    auto h = *json::parse(journalHeader());
+    h["start_sample"] = 0;
+    h["device"] = false;
+    h["routed"] = true;
+    std::string journal = json::writeCompact(h) + "\n";
+    for (const auto& e : c.events) {
+        auto row = json::Value::array();
+        row.push_back(static_cast<long long>(e.at));
+        for (auto byte : e.bytes) row.push_back(static_cast<long long>(byte));
+        row.push_back(e.route.str());
+        row.push_back(static_cast<long long>(e.voice));
+        journal += json::writeCompact(row) + "\n";
+    }
+    journal += "{\"captured\":48000}\n";
+    REQUIRE(writeFileAtomic(p.app->recordDir() / "Keys-1.midi.jsonl", journal));
+    auto r = p.app->recover({}, {});
+    REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+    REQUIRE(p.app->head().midi.size() == 1);
+    const midi::Sequence actual = p.app->head().midi.begin()->value->sequence;
+    REQUIRE(actual.notes.size() == 2);
+    for (std::size_t i = 0; i < 2; ++i) {
+        CHECK(actual.notes[i].start == expected.notes[i].start);
+        CHECK(actual.notes[i].length == expected.notes[i].length);
+    }
+}
