@@ -1629,7 +1629,7 @@ void registerQueueCommands(cmd::Registry& registry) {
         Command<QueueAddArgs, json::Value> c;
         c.name = "render.queue.add";
         c.kind = Kind::Action;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Queue a render (mix, stems or regions) to run later with render.queue.run.";
         c.description =
             "args: the render command's arguments (as for render.mix/stems/regions). The queued "
@@ -1705,7 +1705,7 @@ void registerQueueCommands(cmd::Registry& registry) {
         Command<cmd::NoArgs, json::Value> c;
         c.name = "render.queue.list";
         c.kind = Kind::Query;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "The queued renders, in the order render.queue.run runs them.";
         c.tags = {"render"};
         c.args = schema::object<cmd::NoArgs>("no_args").build();
@@ -1725,7 +1725,7 @@ void registerQueueCommands(cmd::Registry& registry) {
         Command<QueueRemoveArgs, json::Value> c;
         c.name = "render.queue.remove";
         c.kind = Kind::Action;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Take a render off the queue (id), or clear it (all: true).";
         c.tags = {"render"};
         c.args = schema::object<QueueRemoveArgs>("render_queue_remove_args")
@@ -1762,7 +1762,7 @@ void registerQueueCommands(cmd::Registry& registry) {
         Command<QueueRunArgs, json::Value> c;
         c.name = "render.queue.run";
         c.kind = Kind::Action;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Run every queued render in order; each one leaves the queue when it is done.";
         c.description =
             "Each render renders the version it was queued at. job: true runs them as one job "
@@ -1893,7 +1893,7 @@ void registerSettingsCommands(cmd::Registry& registry) {
         Command<Args, json::Value> c;
         c.name = "render.settings";
         c.kind = Kind::Query;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "The render settings that apply, and the layer each one comes from.";
         c.description =
             "effective: what a render with these arguments would use (every member filled in); "
@@ -1927,7 +1927,7 @@ void registerSettingsCommands(cmd::Registry& registry) {
         Command<cmd::NoArgs, json::Value> c;
         c.name = "render.preset.list";
         c.kind = Kind::Query;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Render presets: the factory ones, then the user's, with their settings.";
         c.description =
             "default: the user's render default, or null. Presets live in the user's data "
@@ -1956,7 +1956,7 @@ void registerSettingsCommands(cmd::Registry& registry) {
         Command<PresetSaveArgs, json::Value> c;
         c.name = "render.preset.save";
         c.kind = Kind::Action;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Save render settings as a named preset, or as the user's render default.";
         c.description =
             "settings: what to save (default: the effective settings now). Never saved: "
@@ -2000,7 +2000,7 @@ void registerSettingsCommands(cmd::Registry& registry) {
         Command<PresetNameArgs, json::Value> c;
         c.name = "render.preset.load";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Replace the project's render settings with a preset (one undo step).";
         c.tags = {"render"};
         c.args = schema::object<PresetNameArgs>("render_preset_load_args")
@@ -2043,7 +2043,7 @@ void registerSettingsCommands(cmd::Registry& registry) {
         Command<PresetNameArgs, json::Value> c;
         c.name = "render.preset.delete";
         c.kind = Kind::Action;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Delete one of the user's render presets, or the user's render default.";
         c.tags = {"render"};
         c.args = schema::object<PresetNameArgs>("render_preset_delete_args")
@@ -2076,7 +2076,7 @@ void registerRenderCommands(cmd::Registry& registry) {
         c.name = name;
         const std::string_view which(name);
         c.kind = which == "render.dry-run" ? Kind::Query : Kind::Action;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = which == "render.mix" ? cmd::Exposure::McpTool : cmd::Exposure::McpExec;
         c.summary =
             which == "render.mix"
                 ? "Render the mix offline with the project's render settings (default: whole song)."
@@ -2180,7 +2180,7 @@ void registerRenderCommands(cmd::Registry& registry) {
     Command<AbArgs, json::Value> ab;
     ab.name = "branch.render-ab";
     ab.kind = Kind::Action;
-    ab.exposure = cmd::Exposure::McpTool;
+    ab.exposure = cmd::Exposure::McpExec;
     ab.summary = "Render two branch heads over the same range and compare them.";
     ab.tags = {"branch", "render"};
     ab.args = schema::object<AbArgs>("render_ab_args")

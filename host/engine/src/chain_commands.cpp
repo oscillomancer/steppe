@@ -399,7 +399,7 @@ void registerTemplateCommands(cmd::Registry& registry) {
         cmd::Command<TemplateSaveArgs, SaveResult> c;
         c.name = "track.template.save";
         c.kind = cmd::Kind::Action;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Save a strip (settings and FX chains) as a named track template.";
         c.description =
             "Writes a supple.track-template/1.0 file to the user's track-templates directory: "
@@ -473,7 +473,7 @@ void registerTemplateCommands(cmd::Registry& registry) {
         cmd::Command<TemplateLoadArgs, TemplateLoadResult> c;
         c.name = "track.template.load";
         c.kind = cmd::Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Add a strip from a track template (settings and FX) in one undo step.";
         c.description =
             "Give exactly one of name (in the user's track-templates directory) or path. parent "
@@ -551,7 +551,7 @@ void registerTemplateCommands(cmd::Registry& registry) {
         cmd::Command<NoArgs, TemplateListResult> c;
         c.name = "track.template.list";
         c.kind = cmd::Kind::Query;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "List saved track templates by name, path and effect count.";
         c.tags = {"track", "presets"};
         c.args = schema::object<NoArgs>("track_template_list_args").build();
@@ -594,7 +594,7 @@ void registerTemplateCommands(cmd::Registry& registry) {
         cmd::Command<NameArgs, PathResult> c;
         c.name = "track.template.delete";
         c.kind = cmd::Kind::Action;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Delete a saved track template by name.";
         c.tags = {"track", "presets"};
         c.args = schema::object<NameArgs>("track_template_delete_args")
@@ -710,7 +710,7 @@ void registerProjectTemplateCommands(cmd::Registry& registry) {
         cmd::Command<ProjectTemplateSaveArgs, TemplateSaveResult> c;
         c.name = "project.template.save";
         c.kind = cmd::Kind::Action;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Save the whole project as a named project template.";
         c.description =
             "Writes the project as it is now (tracks, FX and their states, routing, items, "
@@ -758,7 +758,7 @@ void registerProjectTemplateCommands(cmd::Registry& registry) {
         cmd::Command<NameArgs, ProjectTemplateLoadResult> c;
         c.name = "project.template.load";
         c.kind = cmd::Kind::Action;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Start a new, unsaved project from a project template.";
         c.description =
             "Replaces the current project and its history, like project.new: unsaved changes are "
@@ -791,7 +791,7 @@ void registerProjectTemplateCommands(cmd::Registry& registry) {
         cmd::Command<NoArgs, ProjectTemplateListResult> c;
         c.name = "project.template.list";
         c.kind = cmd::Kind::Query;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "List saved project templates by name and path.";
         c.tags = {"project", "presets"};
         c.args = schema::object<NoArgs>("project_template_list_args").build();
@@ -837,7 +837,7 @@ void registerProjectTemplateCommands(cmd::Registry& registry) {
         cmd::Command<NameArgs, PathResult> c;
         c.name = "project.template.delete";
         c.kind = cmd::Kind::Action;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Delete a saved project template by name.";
         c.tags = {"project", "presets"};
         c.args = schema::object<NameArgs>("project_template_delete_args")
@@ -1039,7 +1039,7 @@ void registerPresetCommands(cmd::Registry& registry) {
         cmd::Command<PresetListArgs, PresetListResult> c;
         c.name = "fx.preset.list";
         c.kind = cmd::Kind::Query;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "List a plugin's presets: its factory ones, then the user's.";
         c.description =
             "source factory: the plugin's own patches in its order (read-only; the same as "
@@ -1085,7 +1085,7 @@ void registerPresetCommands(cmd::Registry& registry) {
         cmd::Command<PresetArgs, PresetLoadResult> c;
         c.name = "fx.preset.load";
         c.kind = cmd::Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Apply a factory or user preset to a plugin instance in one undo step.";
         c.description =
             "name from fx.preset.list. source (factory or user) is needed only when both have "
@@ -1194,7 +1194,7 @@ void registerPresetCommands(cmd::Registry& registry) {
         cmd::Command<PresetSaveArgs, PathResult> c;
         c.name = "fx.preset.save";
         c.kind = cmd::Kind::Action;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Save a plugin instance's current settings as a named user preset.";
         c.description =
             "Saves what the running plugin has now (editor edits included): the patch of a "
@@ -1295,7 +1295,7 @@ void registerPresetCommands(cmd::Registry& registry) {
         cmd::Command<PresetDeleteArgs, PathResult> c;
         c.name = "fx.preset.delete";
         c.kind = cmd::Kind::Action;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Delete one of the user's presets for a plugin; factory presets stay.";
         c.description =
             "Removes the user preset's file. Factory presets belong to the plugin and cannot be "
@@ -1362,7 +1362,7 @@ void registerChainCommands(cmd::Registry& registry) {
         cmd::Command<SaveArgs, SaveResult> c;
         c.name = "fx.chain.save";
         c.kind = cmd::Kind::Action;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Save an ordered FX chain as a named preset.";
         c.description =
             "Save main (default) or input FX to the user's chains directory. Preserves semantic "
@@ -1418,7 +1418,7 @@ void registerChainCommands(cmd::Registry& registry) {
         cmd::Command<LoadArgs, LoadResult> c;
         c.name = "fx.chain.load";
         c.kind = cmd::Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Append or replace a track's FX chain from a preset in one undo step.";
         c.description =
             "Give exactly one of name (in the user's chains directory) or path (relative to the "
@@ -1486,7 +1486,7 @@ void registerChainCommands(cmd::Registry& registry) {
         cmd::Command<NoArgs, ListResult> c;
         c.name = "fx.chain.list";
         c.kind = cmd::Kind::Query;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "List saved FX chain presets by name, path and effect count.";
         c.description =
             "Lists valid supple.fx-chain/1.0 files, sorted by name and path. Invalid documents are "
@@ -1543,7 +1543,7 @@ void registerChainCommands(cmd::Registry& registry) {
         cmd::Command<NameArgs, PathResult> c;
         c.name = "fx.chain.delete";
         c.kind = cmd::Kind::Action;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Delete a saved FX chain preset by name.";
         c.description =
             "Removes the preset file from the user's chains directory. Tracks that loaded it keep "
@@ -1570,7 +1570,7 @@ void registerChainCommands(cmd::Registry& registry) {
         cmd::Command<CopyArgs, CopyResult> c;
         c.name = "fx.copy";
         c.kind = cmd::Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Copy a plugin and its current settings into a track's FX chain.";
         c.description =
             "Adds a new instance of fx's plugin to track's main (default) or input chain, at index "
@@ -1642,7 +1642,7 @@ void registerChainCommands(cmd::Registry& registry) {
         cmd::Command<DuplicateArgs, DuplicateResult> c;
         c.name = "track.duplicate";
         c.kind = cmd::Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Duplicate channels or busses with their FX, items, sends and automation.";
         c.description =
             "Each copy goes right after its original, under the same parent, with the same "

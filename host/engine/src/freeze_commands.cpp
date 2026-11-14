@@ -337,7 +337,7 @@ void registerFreezeCommands(cmd::Registry& registry) {
         cmd::Command<Args, json::Value> c;
         c.name = "track.freeze";
         c.kind = cmd::Kind::Action;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Freeze a channel's items and FX to pre-fader audio and release its plugins.";
         c.errors = {{"freeze.unsupported", "the channel has unsupported live dependencies",
                      "disarm it and remove external inputs; use unity master playrate"},
@@ -435,7 +435,7 @@ void registerFreezeCommands(cmd::Registry& registry) {
         cmd::Command<Args, json::Value> c;
         c.name = "track.unfreeze";
         c.kind = cmd::Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Restore a frozen channel's original items and plugin state.";
         c.errors = {{"freeze.restore", "saved plugins could not be restored",
                      "install or repair the saved plugins before unfreezing"}};

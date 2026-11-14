@@ -941,7 +941,7 @@ void registerTrackCommands(cmd::Registry& registry) {
         Command<TrackMoveArgs, Empty> c;
         c.name = "track.move";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Move a track under another track or reorder it among its siblings.";
         c.description =
             "parent defaults to the track's current parent (a pure reorder); index defaults to "

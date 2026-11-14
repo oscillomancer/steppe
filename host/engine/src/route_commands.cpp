@@ -419,7 +419,7 @@ void registerRouteCommands(cmd::Registry& registry) {
         Command<RouteSetArgs, Empty> c;
         c.name = "route.set";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Change a route's endpoints, tap, level, pan, mute, or channel map.";
         c.tags = {"route", "mix"};
         c.args = routeArgsSchema<RouteSetArgs>("route_set_args");
@@ -460,7 +460,7 @@ void registerRouteCommands(cmd::Registry& registry) {
         Command<RouteRef, Empty> c;
         c.name = "route.remove";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Remove a send.";
         c.tags = {"route"};
         c.args = schema::object<RouteRef>("route_ref")
@@ -488,7 +488,7 @@ void registerRouteCommands(cmd::Registry& registry) {
         Command<cmd::NoArgs, RouteList> c;
         c.name = "route.list";
         c.kind = Kind::Query;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "List sends with endpoints and mixer settings.";
         c.tags = {"route"};
         c.args = schema::object<cmd::NoArgs>("no_args").build();
@@ -537,7 +537,7 @@ void registerRouteCommands(cmd::Registry& registry) {
         Command<RouteMatrixArgs, json::Value> c;
         c.name = "route.matrix";
         c.kind = Kind::Query;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Read audio or MIDI endpoints, existing sends and blocked pairs.";
         c.description =
             "mode: audio (default), midi or hardware_midi (channels/Note Out and hardware inputs "

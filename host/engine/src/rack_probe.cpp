@@ -333,7 +333,7 @@ void registerRackProbe(cmd::Registry& registry) {
     Command<ProbeArgs, json::Value> c;
     c.name = "rack.probe";
     c.kind = Kind::Query;
-    c.exposure = cmd::Exposure::McpTool;
+    c.exposure = cmd::Exposure::McpExec;
     c.summary = "Listen to a rack's ports: level, pitch, gate rate, notes, a CV's range.";
     c.description =
         "Renders the project offline from from_beat (default 0) for seconds (default 2, at "
@@ -483,7 +483,7 @@ void registerRackCapture(cmd::Registry& registry) {
     Command<CaptureArgs, json::Value> c;
     c.name = "rack.capture";
     c.kind = Kind::Action;
-    c.exposure = cmd::Exposure::McpTool;
+    c.exposure = cmd::Exposure::McpExec;
     c.summary = "Record a rack's pitch and gate as notes in a MIDI item on a track.";
     c.description =
         "Renders the project offline from from_beat (default 0) for beats (default 16, at most "

@@ -26,7 +26,7 @@ struct Fixture {
     cmd::Registry registry;
     std::unique_ptr<EngineApp> app;
     std::unique_ptr<cmd::Dispatcher> bus;
-    Fixture() {
+    explicit Fixture(bool seedSong = true) {
         AppOptions options;
         options.workdir = dir;
         options.pluginPath = {FIXTURE_CLAP_PATH};
@@ -40,7 +40,7 @@ struct Fixture {
         app = std::move(*created);
         registerEngineCommands(registry);
         bus = std::make_unique<cmd::Dispatcher>(registry, *app);
-        app->setupFixture(*bus, "song_with_audio");
+        if (seedSong) app->setupFixture(*bus, "song_with_audio");
     }
     ~Fixture() {
         bus.reset();
@@ -55,6 +55,14 @@ struct Fixture {
         REQUIRE_MESSAGE(result, (result ? "" : result.error().toString()));
         return *result;
     }
+    void checkUnknown(const char* command, std::string_view args, std::string_view code,
+                      std::string_view path, std::string_view hint) {
+        auto result = call(command, args);
+        REQUIRE_FALSE(result);
+        CHECK(result.error().code == code);
+        CHECK(result.error().path == path);
+        CHECK(result.error().hint == hint);
+    }
     json::Value finish(const json::Value& job) {
         {
             std::unique_lock lock(mutex);
@@ -68,6 +76,56 @@ struct Fixture {
     }
 };
 }  // namespace
+
+TEST_CASE("unknown track IDs list the existing tracks, including the empty project's master") {
+    Fixture f(false);
+    auto check = [&](std::string_view hint) {
+        f.checkUnknown("track.remove", R"({"track":"tr_999"})", "tr.unknown", "/args/track", hint);
+    };
+    check("existing: tr_0");
+    f.run("track.add");
+    check("existing: tr_0, tr_1");
+    for (int i = 0; i < 6; ++i) f.run("track.add");
+    check("existing: tr_0, tr_1, tr_2, tr_3, tr_4, tr_5, tr_6, tr_7");
+    f.run("track.add");
+    check("existing: tr_0, tr_1, tr_2, tr_3, tr_4, tr_5, tr_6, tr_7, …");
+}
+
+TEST_CASE("unknown item IDs list existing items or explain that there are none") {
+    Fixture f(false);
+    auto check = [&](std::string_view hint) {
+        f.checkUnknown("item.remove", R"({"item":"it_999"})", "it.unknown", "/args/item", hint);
+    };
+    check("there are none yet");
+    f.run("track.add");
+    const auto add = [&] {
+        f.run("item.add", R"({"track":"tr_1","notation":"voice a; 1: C4:w"})");
+    };
+    add();
+    check("existing: it_1");
+    for (int i = 0; i < 7; ++i) add();
+    check("existing: it_1, it_2, it_3, it_4, it_5, it_6, it_7, it_8");
+    add();
+    check("existing: it_1, it_2, it_3, it_4, it_5, it_6, it_7, it_8, …");
+}
+
+TEST_CASE("unknown FX IDs list existing instances or explain that there are none") {
+    Fixture f(false);
+    auto check = [&](std::string_view hint) {
+        f.checkUnknown("fx.remove", R"({"fx":"fx_999"})", "fx.unknown", "/args/fx", hint);
+    };
+    check("there are none yet");
+    f.run("track.add");
+    const auto add = [&] {
+        f.run("fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.gain"})");
+    };
+    add();
+    check("existing: fx_1");
+    for (int i = 0; i < 7; ++i) add();
+    check("existing: fx_1, fx_2, fx_3, fx_4, fx_5, fx_6, fx_7, fx_8");
+    add();
+    check("existing: fx_1, fx_2, fx_3, fx_4, fx_5, fx_6, fx_7, fx_8, …");
+}
 
 TEST_CASE("consolidation bakes item and take FX with silence in gaps, leaving track FX live") {
     Fixture f;

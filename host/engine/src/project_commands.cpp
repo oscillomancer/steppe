@@ -167,7 +167,7 @@ void registerProjectCommands(cmd::Registry& registry) {
         Command<ProjectSetArgs, Empty> c;
         c.name = "project.set";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Set project name, notes, Console 9, pan law, timebase or timecode.";
         c.description =
             "timebase: what items follow when the tempo changes, for items and tracks that "
@@ -464,7 +464,7 @@ void registerProjectCommands(cmd::Registry& registry) {
         Command<NoArgs, RecoverableList> c;
         c.name = "project.recoverable";
         c.kind = Kind::Query;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "List recordings and unsaved projects a crash left behind.";
         c.description =
             "recordings: takes recorded but never committed (the program stopped "
@@ -538,7 +538,7 @@ void registerProjectCommands(cmd::Registry& registry) {
         Command<RecoverArgs, RecoverResult> c;
         c.name = "project.recover";
         c.kind = Kind::Action;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Put back what a crash left behind: recordings, or an unsaved project.";
         c.description =
             "files: as project.recoverable lists them (omit for all). Each becomes an item on "
@@ -643,7 +643,7 @@ void registerProjectCommands(cmd::Registry& registry) {
         Command<SessionArgs, SessionArgs> c;
         c.name = "project.recoverable.delete";
         c.kind = Kind::Action;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Delete an unsaved project a crash left behind, with its recordings.";
         c.description =
             "session: as project.recoverable lists it. Its folder and everything in it are "

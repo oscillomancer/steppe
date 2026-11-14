@@ -311,7 +311,7 @@ void registerMixCommands(cmd::Registry& registry) {
     cmd::Command<Args, json::Value> command;
     command.name = "item.mix-to-track";
     command.kind = cmd::Kind::Action;
-    command.exposure = cmd::Exposure::McpTool;
+    command.exposure = cmd::Exposure::McpExec;
     command.summary = "Mix the selected items through their strips onto a new muted channel.";
     command.description =
         "Background job. Only the given items sound; each plays through its channel's full strip "

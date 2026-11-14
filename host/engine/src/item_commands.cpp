@@ -480,7 +480,7 @@ void registerItemCommands(cmd::Registry& registry) {
         Command<ItemMoveArgs, Empty> c;
         c.name = "item.move";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Move an item in time (position in beats or bar) and/or to another track.";
         c.tags = {"item"};
         c.args = schema::object<ItemMoveArgs>("item_move_args")
@@ -689,7 +689,7 @@ void registerItemCommands(cmd::Registry& registry) {
         Command<ItemDuplicateArgs, ItemDuplicateResult> c;
         c.name = "item.duplicate";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary =
             "Copy an item and its takes to a new beat position (default: immediately after).";
         c.tags = {"item"};
@@ -735,7 +735,7 @@ void registerItemCommands(cmd::Registry& registry) {
         Command<ItemPasteArgs, ItemPasteResult> c;
         c.name = "item.paste";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Copy items as they were in a version (a clipboard) to tracks and beats.";
         c.description =
             "version: where the items are read (default: now) — a GUI copy or cut remembers the "
@@ -863,7 +863,7 @@ void registerItemCommands(cmd::Registry& registry) {
         Command<ItemSplitArgs, SplitResult> c;
         c.name = "item.split";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Split an item at a beat, optionally at the prior audio zero crossing.";
         c.description =
             "snap defaults to none. zero_crossing searches the active take's prepared playback "

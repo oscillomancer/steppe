@@ -402,7 +402,7 @@ void registerLearnCommands(cmd::Registry& registry) {
         Command<LearnArgs, LearnSetResult> c;
         c.name = "fx.learn.set";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Let a MIDI controller (CC, note, pitch bend) move a plugin parameter.";
         c.description =
             "One binding per parameter (a new one replaces it). midi.device: a substring of the "
@@ -457,7 +457,7 @@ void registerLearnCommands(cmd::Registry& registry) {
         Command<LearnRef, Empty> c;
         c.name = "fx.learn.remove";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Remove a plugin parameter's MIDI controller binding.";
         c.tags = {"fx", "midi"};
         c.args = schema::object<LearnRef>("fx_learn_remove_args")
@@ -492,7 +492,7 @@ void registerLearnCommands(cmd::Registry& registry) {
         Command<LearnListArgs, LearnList> c;
         c.name = "fx.learn.list";
         c.kind = Kind::Query;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "List the MIDI controller bindings of plugin parameters.";
         c.description = "Every effect's, or one effect's (fx). control names the message in words.";
         c.tags = {"fx", "midi"};

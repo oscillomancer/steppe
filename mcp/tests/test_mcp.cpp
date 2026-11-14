@@ -17,6 +17,7 @@
 #include <condition_variable>
 #include <deque>
 #include <mutex>
+#include <set>
 #include <sstream>
 #include <thread>
 using namespace supple;
@@ -75,6 +76,20 @@ struct Host : cmd::Host {
     void log(const cmd::LogRecord&) override {}
     void emit(std::string_view, json::Value) override {}
 };
+struct RecordingHost : Host {
+    std::mutex logMutex;
+    std::vector<cmd::LogRecord> records;
+    void log(const cmd::LogRecord& record) override {
+        std::lock_guard lock(logMutex);
+        records.push_back(record);
+    }
+    std::vector<cmd::LogRecord> takeLog() {
+        std::lock_guard lock(logMutex);
+        std::vector<cmd::LogRecord> result;
+        result.swap(records);
+        return result;
+    }
+};
 cmd::Registry registry() {
     cmd::Registry r;
     cmd::Command<Args, Count> command;
@@ -128,6 +143,25 @@ cmd::Registry registry() {
         return Count{ctx.service<int>()};
     };
     r.add(std::move(warning));
+    cmd::Command<cmd::NoArgs, Count> peek;
+    peek.name = "counter.peek";
+    peek.kind = cmd::Kind::Query;
+    peek.exposure = cmd::Exposure::McpExec;
+    peek.summary = "Read the counter.";
+    peek.description = "Inspect the current value without editing it.";
+    peek.args = schema::object<cmd::NoArgs>("no_args").build();
+    peek.result = schema::object<Count>("count")
+                      .field("count", &Count::count, schema::integerOf<int>())
+                      .build();
+    peek.examples = {
+        {"Read", json::Value::object(), json::parse(R"({"count":0})").value(), "empty"}};
+    peek.run = [](const cmd::NoArgs&, cmd::Context& ctx) -> Result<Count> {
+        return Count{ctx.service<int>()};
+    };
+    r.add(peek);
+    peek.name = "counter.secret";
+    peek.exposure = cmd::Exposure::Internal;
+    r.add(std::move(peek));
     return r;
 }
 json::Value parse(std::string_view input) { return json::parse(input).value(); }
@@ -152,8 +186,8 @@ void checkWarnings(mcp::Server& server) {
     REQUIRE(text);
     CHECK(*text == *structured);
 }
-// MCP clients refuse a tool list whose output schemas are not object schemas
-// (the Python SDK fails the whole list), and structured content is an object.
+// Dedicated tools omit output schemas; describe retains them, and structured
+// content remains an object (array results are text only).
 void checkMcpShapes(mcp::Server& server, int id) {
     auto listed = request(
         server, R"({"jsonrpc":"2.0","id":)" + std::to_string(id) + R"(,"method":"tools/list"})");
@@ -167,14 +201,18 @@ void checkMcpShapes(mcp::Server& server, int id) {
             sawHistory = true;
             CHECK(tool.find("outputSchema") == nullptr);
         }
-        if (tool.find("name")->asString() == "counter_warn") {
-            const auto& schema = *tool.find("outputSchema");
-            CHECK(*schema.find("additionalProperties") == false);
-            CHECK(*schema.find("properties")->find("warnings") ==
-                  parse(R"({"type":"array","items":{"type":"object"}})"));
-        }
+        if (tool.find("name")->asString().starts_with("counter_"))
+            CHECK(tool.find("outputSchema") == nullptr);
     }
     CHECK(sawHistory);
+    auto described = request(
+        server,
+        R"({"jsonrpc":"2.0","id":)" + std::to_string(id + 2) +
+            R"(,"method":"tools/call","params":{"name":"describe","arguments":{"command":"counter.warn"}}})");
+    const auto& schema = *described.find("result")->find("structuredContent")->find("result");
+    CHECK(*schema.find("additionalProperties") == false);
+    CHECK(*schema.find("properties")->find("warnings") ==
+          parse(R"({"type":"array","items":{"type":"object"}})"));
     auto history = request(
         server,
         R"({"jsonrpc":"2.0","id":)" + std::to_string(id + 1) +
@@ -396,6 +434,172 @@ TEST_CASE("the proxy reconnects after the app restarts") {
     CHECK(reconnects == 1);
     client.close();
     second.stop();
+}
+
+TEST_CASE("proxy startup fetches only selected tools and resolves other commands on demand") {
+    auto commands = registry();
+    cmd::Command<Args, Count> adjust;
+    adjust.name = "counter.adjust";
+    adjust.kind = cmd::Kind::Edit;
+    adjust.exposure = cmd::Exposure::McpExec;
+    adjust.summary = "Adjust the counter.";
+    adjust.args =
+        schema::object<Args>("args").field("value", &Args::value, schema::integerOf<int>()).build();
+    adjust.result = schema::object<Count>("count")
+                        .field("count", &Count::count, schema::integerOf<int>())
+                        .build();
+    adjust.examples = {{"Adjust", parse(R"({"value":1})"), parse(R"({"count":1})"), "empty"}};
+    adjust.run = [](const Args& args, cmd::Context& ctx) -> Result<Count> {
+        return Count{ctx.service<int>() += args.value};
+    };
+    commands.add(adjust);
+    for (int i = 0; i < 24; ++i) {
+        adjust.name = "deferred.command" + std::to_string(i);
+        commands.add(adjust);
+    }
+    // Select the latest version before filtering: exposures may change.
+    adjust.name = "counter.former";
+    adjust.exposure = cmd::Exposure::McpTool;
+    commands.add(adjust);
+    adjust.version = 2;
+    adjust.exposure = cmd::Exposure::McpExec;
+    commands.add(adjust);
+    adjust.name = "counter.promoted";
+    adjust.version = 1;
+    adjust.exposure = cmd::Exposure::Internal;
+    commands.add(adjust);
+    adjust.version = 2;
+    adjust.exposure = cmd::Exposure::McpTool;
+    commands.add(adjust);
+    cmd::Command<cmd::NoArgs, Count> session;
+    session.name = "session.describe";  // enables the generic query tool
+    session.summary = "Read the counter's session.";
+    session.args = schema::object<cmd::NoArgs>("no_args").build();
+    session.result = adjust.result;
+    session.examples = {{"Read", parse("{}"), parse(R"({"count":0})"), "empty"}};
+    session.run = [](const cmd::NoArgs&, cmd::Context& ctx) -> Result<Count> {
+        return Count{ctx.service<int>()};
+    };
+    commands.add(std::move(session));
+    RecordingHost host;
+    cmd::Dispatcher dispatcher(commands, host);
+    ModelQueue queue;
+    rpc::Server remote(commands, dispatcher, [&](auto task) { queue.post(std::move(task)); });
+    auto path = std::filesystem::temp_directory_path() /
+                ("mcp-tools-" + std::to_string(::getpid()) + ".sock");
+    REQUIRE(remote.start(path));
+    rpc::Client client;
+    REQUIRE(client.connect(path, "tool-set-test"));
+    for (auto set : {mcp::ToolSet::Core, mcp::ToolSet::All}) {
+        mcp::Server local(commands, dispatcher, set);
+        host.takeLog();
+        auto proxy = mcp::Server::proxy(client, {}, set);
+        REQUIRE(proxy);
+        auto startup = host.takeLog();
+        std::set<std::string> expected;
+        for (const auto* info : commands.all()) {
+            if (commands.find(info->name) != info || info->exposure == cmd::Exposure::Internal)
+                continue;
+            if (set == mcp::ToolSet::All || info->exposure == cmd::Exposure::McpTool)
+                expected.insert(info->name + "@" + std::to_string(info->version));
+        }
+        REQUIRE(startup.size() == 1 + expected.size());
+        CHECK(startup.front().command == "registry.list");
+        for (std::size_t i = 1; i < startup.size(); ++i) {
+            CHECK(startup[i].command == "registry.describe");
+            CHECK(expected.erase(startup[i].args.find("command")->asString()) == 1);
+        }
+        CHECK(expected.empty());
+        std::vector<json::Value> catalogues;
+        for (auto* server : {&local, proxy->get()}) {
+            request(
+                *server,
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}})");
+            auto listed = request(*server, R"({"jsonrpc":"2.0","id":2,"method":"tools/list"})");
+            catalogues.push_back(*listed.find("result"));
+            bool peek = false;
+            for (const auto& tool : listed.find("result")->find("tools")->asArray()) {
+                auto name = tool.find("name")->asString();
+                CHECK(name != "counter_secret");
+                if (name == "counter_peek") {
+                    peek = true;
+                    CHECK(tool.find("description")->asString() ==
+                          "Inspect the current value without editing it. See describe for errors "
+                          "and examples.");
+                }
+                if (name == "counter_add")
+                    CHECK(tool.find("description")->asString() ==
+                          "Add to counter. See describe for errors and examples.");
+            }
+            CHECK(peek == (set == mcp::ToolSet::All));
+            auto result = request(
+                *server,
+                R"({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"exec","arguments":{"command":"counter.peek"}}})");
+            CHECK(result.find("result")->find("structuredContent")->find("count")->asInt() == 0);
+            auto dedicated = request(
+                *server,
+                R"({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"counter_peek"}})");
+            if (set == mcp::ToolSet::Core)
+                CHECK(dedicated.find("error")->find("code")->asInt() == -32601);
+            else
+                CHECK(dedicated.find("result")->find("structuredContent")->find("count")->asInt() ==
+                      0);
+        }
+        CHECK(catalogues[0] == catalogues[1]);
+        // No description was fetched for this edit during core startup. Even
+        // before describe, its real dispatcher validates and executes it.
+        host.takeLog();
+        auto invalid = request(
+            **proxy,
+            R"({"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"exec","arguments":{"command":"counter.adjust","args":{"value":"bad"}}}})");
+        const auto* failure = invalid.find("result")->find("structuredContent");
+        REQUIRE(failure);
+        CHECK(failure->find("code")->asString() == "command.invalid_args");
+        auto changed = request(
+            **proxy,
+            R"({"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"exec","arguments":{"command":"counter.adjust","args":{"value":4}}}})");
+        CHECK(changed.find("result")->find("structuredContent")->find("count")->asInt() == 4);
+        auto calls = host.takeLog();
+        REQUIRE(calls.size() == 2);
+        CHECK(calls[0].command == "counter.adjust");
+        CHECK_FALSE(calls[0].ok);
+        CHECK(calls[1].command == "counter.adjust");
+        CHECK(calls[1].ok);
+        auto read = request(
+            **proxy,
+            R"({"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"query","arguments":{"command":"counter.peek"}}})");
+        CHECK(read.find("result")->find("structuredContent")->find("count")->asInt() == 4);
+        calls = host.takeLog();
+        REQUIRE(calls.size() == 1);
+        CHECK(calls.front().command == "counter.peek");
+        auto denied = request(
+            **proxy,
+            R"({"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"query","arguments":{"command":"counter.adjust","args":{"value":4}}}})");
+        CHECK(denied.find("result")->find("structuredContent")->find("code")->asString() ==
+              "mcp.query");
+        CHECK(host.takeLog().empty());
+        auto described = request(
+            **proxy,
+            R"({"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"describe","arguments":{"command":"counter.adjust"}}})");
+        const auto* detail = described.find("result")->find("structuredContent");
+        REQUIRE(detail);
+        CHECK(detail->find("name")->asString() == "counter.adjust");
+        CHECK(detail->find("args")->find("properties")->find("value")->find("type")->asString() ==
+              "integer");
+        CHECK(detail->find("result")->find("type")->asString() == "object");
+        CHECK(detail->find("errors")->isArray());
+        CHECK(detail->find("examples")->size() == 1);
+        calls = host.takeLog();
+        REQUIRE(calls.size() == 1);
+        CHECK(calls.front().command == "registry.describe");
+        CHECK(calls.front().args.find("command")->asString() == "counter.adjust");
+        auto restored = request(
+            **proxy,
+            R"({"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"exec","arguments":{"command":"counter.adjust","args":{"value":-4}}}})");
+        CHECK(restored.find("result")->find("structuredContent")->find("count")->asInt() == 0);
+    }
+    client.close();
+    remote.stop();
 }
 
 TEST_CASE("MCP stdio caps an unterminated oversized frame") {

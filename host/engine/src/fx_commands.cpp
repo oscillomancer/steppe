@@ -377,7 +377,7 @@ void registerFxCommands(cmd::Registry& registry) {
         Command<FxSetArgs, Empty> c;
         c.name = "fx.set";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Set instance options: bypass, offline, wet, label, isolation, pins, MIDI.";
         c.description =
             "isolation: in_process, dedicated (the plugin runs in a process of its own: a "
@@ -466,7 +466,7 @@ void registerFxCommands(cmd::Registry& registry) {
         Command<FxRef, Empty> c;
         c.name = "fx.restart";
         c.kind = Kind::Action;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Re-create a plugin instance from its saved patch/state (after a crash).";
         c.description =
             "engine.status lists failed_fx: isolated plugins whose process crashed or hung. "
@@ -566,7 +566,7 @@ void registerFxCommands(cmd::Registry& registry) {
         Command<FxParamSetArgs, MergeResult> c;
         c.name = "fx.param.set";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Set semantic parameters in units, or plain plugin parameters by name/id.";
         c.description =
             "Plain CLAP/VST3 values use the declared range or plugin text; read-only parameters "
@@ -756,7 +756,7 @@ void registerFxCommands(cmd::Registry& registry) {
         Command<FxMoveArgs, Empty> c;
         c.name = "fx.move";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Move a plugin within a track chain or to another track.";
         c.description =
             "Works on the track's chain, on its input chain (an input-chain effect stays on its "
@@ -893,7 +893,7 @@ void registerFxCommands(cmd::Registry& registry) {
         Command<FxPatchListArgs, FxPatchListResult> c;
         c.name = "fx.patch.list";
         c.kind = Kind::Query;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "List an instance's read-only factory patches, by name.";
         c.tags = {"fx", "patch"};
         c.args = schema::object<FxPatchListArgs>("fx_patch_list_args")
@@ -918,7 +918,7 @@ void registerFxCommands(cmd::Registry& registry) {
         Command<FxPatchSetArgs, FxPatchResult> c;
         c.name = "fx.patch.set";
         c.kind = Kind::Edit;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Replace a semantic patch, or apply a factory patch by name.";
         c.description =
             "Give exactly one of patch or name. Factory names come from fx.patch.list; omitted "
@@ -979,7 +979,7 @@ void registerFxCommands(cmd::Registry& registry) {
         Command<FxParamGetArgs, FxParamResult> c;
         c.name = "fx.param.get";
         c.kind = Kind::Query;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Read one saved plugin parameter by semantic key or numeric CLAP id.";
         c.tags = {"fx", "params"};
         c.args = schema::object<FxParamGetArgs>("fx_param_get_args")
@@ -1013,7 +1013,7 @@ void registerFxCommands(cmd::Registry& registry) {
         Command<FxMetersArgs, FxMetersResult> c;
         c.name = "fx.meters";
         c.kind = Kind::Query;
-        c.exposure = cmd::Exposure::McpTool;
+        c.exposure = cmd::Exposure::McpExec;
         c.summary = "Read a plugin's meters and readouts, playing now or as a render ended.";
         c.description =
             "The read-only parameters of a plugin: a semantic plugin's by patch key in physical "

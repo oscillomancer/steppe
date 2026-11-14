@@ -316,7 +316,7 @@ inline Status writeSource(const fs::path& kit, const fs::path& dest, const std::
 }  // namespace exporting
 
 template <class Host>
-void registerDspExport(cmd::Registry& registry) {
+void registerDspExport(cmd::Registry& registry, cmd::Exposure exposure = cmd::Exposure::McpTool) {
     using namespace exporting;
     using cmd::Command;
     using cmd::Context;
@@ -324,7 +324,7 @@ void registerDspExport(cmd::Registry& registry) {
     Command<ExportArgs, ExportResult> c;
     c.name = "dsp.export";
     c.kind = Kind::Action;
-    c.exposure = cmd::Exposure::McpTool;
+    c.exposure = exposure;
     c.summary = "Export a DSP script as a plugin for other DAWs: a CLAP file, or C++ source.";
     c.description =
         "format clap (the default): copies the platform's script player and embeds the script "

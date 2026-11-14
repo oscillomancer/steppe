@@ -732,11 +732,13 @@ If a project copy cannot be loaded, opening the project reports the source
 problem and whether a library version is used instead or a type is unavailable.
 
 Agents can do all of this through the MCP tools: build a patch in one
-step (`rack_patch`), listen to it as numbers (`rack_probe` reports pitch,
-levels, gate rates and the notes a sequencer plays), write and edit
-modules (`module_write`, `module_edit`; the modules playing one are
-rebuilt at once), save and load rack presets, automate knobs and bind
-them to MIDI controllers (`module_learn_set`).
+step (`exec {"command": "rack.patch"}`), listen to it as numbers
+(`exec {"command": "rack.probe"}` reports pitch, levels, gate rates and the
+notes a sequencer plays), write and edit modules
+(`exec {"command": "module.write"}`, `exec {"command": "module.edit"}`; the
+modules playing one are rebuilt at once), save and load rack presets,
+automate knobs and bind
+them to MIDI controllers (`exec {"command": "module.learn.set"}`).
 
 ## MIDI controllers
 
@@ -812,6 +814,21 @@ Steppe is built to be driven by an AI agent as well as by hand. `steppe-mcp`
 serves the running app's commands as MCP tools over stdio. What an agent
 does lands in the same undo history as your own edits. The bundled skill
 teaches the agent Steppe's commands, units and notation.
+
+By default, the engine exposes 37 common command tools plus `describe`, `exec`
+and `query`; the running GUI also exposes `gui_selection` for its selection. `describe` with no arguments lists every command, grouped by
+namespace; pass `command` for its full schemas, errors and examples. Call
+other commands with `exec {"command": "fx.patch.list", "args": {"fx": "fx_2"}}`,
+or `query` for read-only commands. Dedicated tool definitions leave out result
+schemas; `describe` provides them when needed. For clients that defer tool
+loading, add `--tools all` to `steppe-mcp` or `steppe-engine --mcp` to expose
+every non-Internal command as a dedicated tool. `--tools core` explicitly
+selects the default. The plugin sandbox keeps its existing dedicated commands.
+
+The proxy loads the command index once and fetches descriptions only for the
+selected dedicated tools. Use `describe` for other contracts when needed; `exec`
+validates through the running application. Use the proxy and application from
+the same installation: startup requires exposure metadata in the command index.
 
 Saved `dsp.test` audio and `dsp.preview` pictures use readable, shortened
 filenames with a hash when a plugin ID needs escaping or truncation, or ends

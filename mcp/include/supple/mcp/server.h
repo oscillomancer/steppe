@@ -14,6 +14,8 @@
 #include <vector>
 
 namespace supple::mcp {
+enum class ToolSet { Core, All };
+
 // Service on the serving thread, between requests or bytes of partial frames.
 // The native reader waits for async sources/deadlines; legacy callers use an interval.
 struct Tick {
@@ -34,12 +36,14 @@ struct Tick {
 // executes on the caller's model thread; the proxy forwards through rpc::Client.
 class Server {
   public:
-    Server(const cmd::Registry& registry, cmd::Dispatcher& dispatcher);
+    Server(const cmd::Registry& registry, cmd::Dispatcher& dispatcher,
+           ToolSet tools = ToolSet::Core);
     // A proxy to an app's control socket. `reconnect` (optional) connects the
     // client again after the app restarted; a call whose request never reached
     // the app (it was gone) reconnects once and is sent again.
     using Reconnect = std::function<Status(const cmd::Origin&)>;
-    static Result<std::unique_ptr<Server>> proxy(rpc::Client& client, Reconnect reconnect = {});
+    static Result<std::unique_ptr<Server>> proxy(rpc::Client& client, Reconnect reconnect = {},
+                                                 ToolSet tools = ToolSet::Core);
     Status serve(std::istream& input, std::ostream& output, Tick tick = {});
     // As above, reading requests from `fd` so it can be polled with the tick's
     // deadline (a negative fd reads blocking).
