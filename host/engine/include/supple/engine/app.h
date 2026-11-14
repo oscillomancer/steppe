@@ -330,12 +330,18 @@ class EngineApp : public cmd::Host {
     Result<std::string> describeFx(const model::FxInstance& fx, bool changedOnly);
 
     // --- project files ------------------------------------------------------------
-    // Atomic; becomes the project path. `warnings` names each running plug-in
-    // whose state could not be read: the file keeps the state it had before.
-    Status save(const std::filesystem::path& path,
-                std::vector<schema::Warning>* warnings = nullptr);
+    // Atomic; becomes the project path. The file holds main's head and every
+    // branch (ADR-0076); `history` also keeps undo history. `warnings` names
+    // each running plug-in whose state could not be read: the file keeps the
+    // state it had before.
+    Status save(const std::filesystem::path& path, std::vector<schema::Warning>* warnings = nullptr,
+                bool history = false);
+    // Replaces the history with the file's: its branches and current branch.
+    // A branches section that cannot be restored opens main alone with a
+    // project.history warning; the first save over that file keeps a copy of
+    // it (<file>.pre-branches.bak).
     Status open(const std::filesystem::path& path,
-                std::vector<schema::Warning>* warnings = nullptr);  // replaces the history
+                std::vector<schema::Warning>* warnings = nullptr);
     Status newProject(model::Project project);
     // A project template (project.template.*): `folder` receives project.json
     // (the head, without history) and media/ with a copy of every audio file
@@ -698,11 +704,14 @@ class EngineApp : public cmd::Host {
     // Writes one autosave (rotating: the newest 5 stay) and marks the head
     // saved. Errors are emitted as engine.error.
     void autosave();
-    void maybeAutosave();  // autosave() when the head changed and an interval passed
+    void maybeAutosave();  // autosave() when the project changed and an interval passed
 
     // `prepare` runs once the new project is in place, before the engine
     // starts on it (a template's media copied into its folder).
     Status replaceProject(model::Session session, std::filesystem::path path,
+                          const std::function<Status()>& prepare = {},
+                          std::vector<schema::Warning>* warnings = nullptr);
+    Status replaceProject(model::VersionStore store, std::filesystem::path path,
                           const std::function<Status()>& prepare = {},
                           std::vector<schema::Warning>* warnings = nullptr);
     bool copyImports_ = false;
@@ -874,10 +883,13 @@ class EngineApp : public cmd::Host {
     std::uint64_t restartRetryAt_ = 0;  // the next attempt
     std::uint64_t restartBackoff_ = 0;  // ms, doubling to 4 s
 
-    // Autosave: the head version last written and when.
+    // Autosave: the branch heads last written and when.
     bool autosaveMarked_ = false;
     std::uint64_t autosaveMs_ = 0;
-    std::uint64_t autosaveVersion_ = 0;
+    model::VersionStore::Heads autosaveHeads_;
+    // The opened file whose branches section could not be restored: the
+    // first save over it keeps a copy first (ADR-0076).
+    std::filesystem::path branchesBackupFor_;
 };
 
 // Clones a take and its owned FX/envelopes/automation. `copy` may already

@@ -1003,6 +1003,18 @@ TEST_CASE(
     files.saveAs(a.dir / "song");  // the extension is added, in a folder of its own
     CHECK(std::filesystem::exists(a.dir / "song" / "song.json"));
     CHECK_FALSE(files.dirty());
+    // An edit on another branch is unsaved too, though main is as saved: the
+    // file keeps every branch (ADR-0076).
+    auto run = [&](const char* name, const char* args) {
+        auto r = a.dispatcher->execute({name, json::parse(args).value(), {}});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+    };
+    run("branch.create", R"({"name": "agent/claude/idea"})");
+    run("track.add", R"({"name": "Idea"})");
+    run("branch.switch", R"({"name": "main"})");
+    CHECK(files.dirty());
+    files.saveAs(a.dir / "song");
+    CHECK_FALSE(files.dirty());
 
     // Import: one file onto the selected track; several onto new tracks, one undo step.
     audio::AudioData tone;

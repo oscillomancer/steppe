@@ -7867,6 +7867,13 @@
         "branch": {
           "type": "string"
         },
+        "branches": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Every branch the project holds; the file keeps them all"
+        },
         "sample_rate": {
           "type": "number"
         },
@@ -7914,6 +7921,7 @@
         "name",
         "path",
         "branch",
+        "branches",
         "sample_rate",
         "tempo",
         "meter",
@@ -7933,8 +7941,8 @@
   },
   {
     "name": "project_open",
-    "title": "Open a project file (replaces the current project and its history).",
-    "description": "Open a project file (replaces the current project and its history). recoverable > 0: recordings a crash left out of the project; project.recoverable lists them and project.recover puts them back. autosave_available: a newer autosave exists next to the file (it is not loaded silently). warnings also report project module copies that could not be read or compiled, and name types using a library version instead or left unavailable. See describe for errors and examples.",
+    "title": "Open a project file and its branches (replaces the current project).",
+    "description": "Open a project file and its branches (replaces the current project). recoverable > 0: recordings a crash left out of the project; project.recoverable lists them and project.recover puts them back. autosave_available: a newer autosave exists next to the file (it is not loaded silently). branch: the branch current when saved. warnings: project.history when the saved branches could not be restored (main opens alone; the first save over the file keeps a copy of it); also project module copies that could not be read or compiled, and name types using a library version instead or left unavailable. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "path_args",
@@ -7958,6 +7966,13 @@
         "branch": {
           "type": "string"
         },
+        "branches": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Every branch the project holds; the file keeps them all"
+        },
         "sample_rate": {
           "type": "number"
         },
@@ -8005,6 +8020,7 @@
         "name",
         "path",
         "branch",
+        "branches",
         "sample_rate",
         "tempo",
         "meter",
@@ -8187,13 +8203,18 @@
   {
     "name": "project_save",
     "title": "Save the project (canonical JSON) to its file or a new path.",
-    "description": "Save the project (canonical JSON) to its file or a new path. path: where to save (becomes the project's file); omit to save in place. warnings: running plug-ins whose current state could not be read; the file keeps the state each had before (fx.restart, then save again, or replace the plug-in). See describe for errors and examples.",
+    "description": "Save the project (canonical JSON) to its file or a new path. path: where to save (becomes the project's file); omit to save in place. The file keeps every branch with its unmerged steps (undoable after opening) and which branch is current; history: true also keeps undo history. warnings: running plug-ins whose current state could not be read; the file keeps the state each had before (fx.restart, then save again, or replace the plug-in); project.history_backup names the copy kept of a file whose branches could not be restored when opened. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
-      "title": "path_args",
+      "title": "save_args",
       "properties": {
         "path": {
           "type": "string"
+        },
+        "history": {
+          "type": "boolean",
+          "description": "Also keep undo and redo history (ADR-0076)",
+          "default": false
         }
       },
       "additionalProperties": false

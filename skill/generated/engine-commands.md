@@ -10425,6 +10425,13 @@ Kind: `query`. Exposure: `mcp-tool`.
     "branch": {
       "type": "string"
     },
+    "branches": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Every branch the project holds; the file keeps them all"
+    },
     "sample_rate": {
       "type": "number"
     },
@@ -10472,6 +10479,7 @@ Kind: `query`. Exposure: `mcp-tool`.
     "name",
     "path",
     "branch",
+    "branches",
     "sample_rate",
     "tempo",
     "meter",
@@ -10502,6 +10510,7 @@ Result:
   "name": "",
   "path": "",
   "branch": "main",
+  "branches": ["main"],
   "sample_rate": 48000.0,
   "tempo": 120.0,
   "meter": "4/4",
@@ -10548,6 +10557,13 @@ Kind: `action`. Exposure: `mcp-exec`.
     "branch": {
       "type": "string"
     },
+    "branches": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Every branch the project holds; the file keeps them all"
+    },
     "sample_rate": {
       "type": "number"
     },
@@ -10595,6 +10611,7 @@ Kind: `action`. Exposure: `mcp-exec`.
     "name",
     "path",
     "branch",
+    "branches",
     "sample_rate",
     "tempo",
     "meter",
@@ -10627,6 +10644,7 @@ Result:
   "name": "Sketch",
   "path": "",
   "branch": "main",
+  "branches": ["main"],
   "sample_rate": 48000.0,
   "tempo": "<any>",
   "meter": "<any>",
@@ -10641,9 +10659,9 @@ Result:
 
 ## `project.open@1`
 
-Open a project file (replaces the current project and its history).
+Open a project file and its branches (replaces the current project).
 
-recoverable > 0: recordings a crash left out of the project; project.recoverable lists them and project.recover puts them back. autosave_available: a newer autosave exists next to the file (it is not loaded silently). warnings also report project module copies that could not be read or compiled, and name types using a library version instead or left unavailable.
+recoverable > 0: recordings a crash left out of the project; project.recoverable lists them and project.recover puts them back. autosave_available: a newer autosave exists next to the file (it is not loaded silently). branch: the branch current when saved. warnings: project.history when the saved branches could not be restored (main opens alone; the first save over the file keeps a copy of it); also project module copies that could not be read or compiled, and name types using a library version instead or left unavailable.
 
 Kind: `action`. Exposure: `mcp-tool`.
 
@@ -10668,6 +10686,13 @@ Kind: `action`. Exposure: `mcp-tool`.
     },
     "branch": {
       "type": "string"
+    },
+    "branches": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Every branch the project holds; the file keeps them all"
     },
     "sample_rate": {
       "type": "number"
@@ -10716,6 +10741,7 @@ Kind: `action`. Exposure: `mcp-tool`.
     "name",
     "path",
     "branch",
+    "branches",
     "sample_rate",
     "tempo",
     "meter",
@@ -10753,6 +10779,7 @@ Result:
   "name": "<any>",
   "path": "<any>",
   "branch": "main",
+  "branches": ["main"],
   "sample_rate": "<any>",
   "tempo": "<any>",
   "meter": "<any>",
@@ -11004,7 +11031,7 @@ Result:
 
 Save the project (canonical JSON) to its file or a new path.
 
-path: where to save (becomes the project's file); omit to save in place. warnings: running plug-ins whose current state could not be read; the file keeps the state each had before (fx.restart, then save again, or replace the plug-in).
+path: where to save (becomes the project's file); omit to save in place. The file keeps every branch with its unmerged steps (undoable after opening) and which branch is current; history: true also keeps undo history. warnings: running plug-ins whose current state could not be read; the file keeps the state each had before (fx.restart, then save again, or replace the plug-in); project.history_backup names the copy kept of a file whose branches could not be restored when opened.
 
 Kind: `action`. Exposure: `mcp-tool`.
 
@@ -11013,6 +11040,7 @@ Kind: `action`. Exposure: `mcp-tool`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `path` | string |  |  |  |  |
+| `history` | boolean |  |  | false | Also keep undo and redo history (ADR-0076) |
 
 ### Result
 

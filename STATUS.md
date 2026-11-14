@@ -149,9 +149,13 @@ instructions are in `docs/guides/installing.md`.
   two branches, a command log with origins, a history budget that squashes
   the oldest steps. Undo to an FX's initial unsaved settings restores its factory
   state while retaining the previous processing instance until plan retirement.
-  Project format `supple.project/2.6` with migration from
+  Project format `supple.project/2.14` with migration from
   1.x, autosave, crash recovery of recordings, a per-project UI sidecar.
-  A plug-in's own state change (`fx.state.capture`) replays in merges.
+  Saves and autosaves keep every branch with its unmerged steps and the
+  current branch (ADR-0076): a reopened agent branch is reviewable, undoable
+  and merges as before; `project.save {history: true}` also keeps undo
+  history. A plug-in's own state change (`fx.state.capture`) replays in
+  merges.
 - **Track freeze** (ADR-0054): whole-channel pre-fader float32 capture, including
   take FX and auxiliary channels, with virtual latency and plugin retirement.
   Typed freeze/unfreeze, cancellable jobs, dependency-checked completion, retained
@@ -1215,6 +1219,12 @@ Session and editing:
   that replays them (main moved since the fork) drops their effect: automation
   written during playback ("Automation written") and recording commits made on
   a branch. Found by reading `EngineApp`; not yet tested or fixed.
+- Saved branches (ADR-0076): main's undo history and redo steps are kept only
+  with `project.save {history: true}`, which the GUI does not offer yet. A
+  command whose arguments change incompatibly makes a merge of an older
+  file's branch stop with an `invalid` conflict. Saving serializes every kept
+  version's state on the main thread. Linux is tested locally; native
+  macOS/Windows CI has not run on it yet.
 
 GUI:
 - Automation-item point editing requires an amplitude magnitude above 0.000000001; restore

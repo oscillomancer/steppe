@@ -15,6 +15,7 @@ struct ProjectTimecode {
 
 struct ProjectInfo {
     std::string name, path, branch;
+    std::vector<std::string> branches;
     double sampleRate = 0, tempo = 0;
     std::string meter;
     ProjectTimecode timecode;
@@ -38,6 +39,9 @@ schema::Schema<ProjectInfo> projectInfoSchema() {
         .field("name", &ProjectInfo::name, schema::string())
         .field("path", &ProjectInfo::path, schema::string())
         .field("branch", &ProjectInfo::branch, schema::string())
+        .field("branches", &ProjectInfo::branches,
+               schema::arrayOf(schema::string())
+                   .doc("Every branch the project holds; the file keeps them all"))
         .field("sample_rate", &ProjectInfo::sampleRate, schema::number())
         .field("tempo", &ProjectInfo::tempo, schema::number())
         .field("meter", &ProjectInfo::meter, schema::string())
@@ -61,6 +65,7 @@ ProjectInfo projectInfo(EngineApp& app, const model::Session& s) {
     return ProjectInfo{s.project->name,
                        project.string(),
                        app.versions().branch(),
+                       app.versions().branches(),
                        s.project->sampleRate,
                        s.timeMap->bpmAt(0),
                        std::to_string(m.numerator) + "/" + std::to_string(m.denominator),
@@ -107,6 +112,11 @@ struct PathArgs {
     std::optional<std::string> path;
 };
 
+struct SaveArgs {
+    std::optional<std::string> path;
+    bool history = false;
+};
+
 struct SaveResult {
     std::string path;
     std::optional<std::vector<schema::Warning>> warnings;  // plug-in states not read
@@ -131,7 +141,7 @@ void registerProjectCommands(cmd::Registry& registry) {
         c.result = projectInfoSchema();
         c.examples = {
             {"A new project", j("{}"),
-             j(R"({"name": "", "path": "", "branch": "main", "sample_rate": 48000.0, "tempo": 120.0, "meter": "4/4", "timecode": {"rate": "30", "start": "00:00:00:00"}, "version": 0, "recoverable": 0, "generation": "<any>", "autosave_available": false})"),
+             j(R"({"name": "", "path": "", "branch": "main", "branches": ["main"], "sample_rate": 48000.0, "tempo": 120.0, "meter": "4/4", "timecode": {"rate": "30", "start": "00:00:00:00"}, "version": 0, "recoverable": 0, "generation": "<any>", "autosave_available": false})"),
              "empty"}};
         c.run = [](const NoArgs&, Context& ctx) -> Result<ProjectInfo> {
             EngineApp& app = engine::app(ctx);
@@ -320,18 +330,24 @@ void registerProjectCommands(cmd::Registry& registry) {
     }();
     // ---------------------------------------------------------------- project.save / project.open
     [&] {
-        Command<PathArgs, SaveResult> c;
+        Command<SaveArgs, SaveResult> c;
         c.name = "project.save";
         c.kind = Kind::Action;
         c.exposure = cmd::Exposure::McpTool;
         c.summary = "Save the project (canonical JSON) to its file or a new path.";
         c.description =
-            "path: where to save (becomes the project's file); omit to save in place. warnings: "
-            "running plug-ins whose current state could not be read; the file keeps the state "
-            "each had before (fx.restart, then save again, or replace the plug-in).";
+            "path: where to save (becomes the project's file); omit to save in place. The file "
+            "keeps every branch with its unmerged steps (undoable after opening) and which branch "
+            "is current; history: true also keeps undo history. warnings: running plug-ins "
+            "whose current state could not be read; the file keeps the state each had before "
+            "(fx.restart, then save again, or replace the plug-in); project.history_backup names "
+            "the copy kept of a file whose branches could not be restored when opened.";
         c.tags = {"project"};
-        c.args = schema::object<PathArgs>("path_args")
-                     .field("path", &PathArgs::path, schema::string())
+        c.args = schema::object<SaveArgs>("save_args")
+                     .field("path", &SaveArgs::path, schema::string())
+                     .field("history", &SaveArgs::history,
+                            schema::boolean().doc("Also keep undo and redo history (ADR-0076)"))
+                     .defaultValue(false)
                      .build();
         c.result = schema::object<SaveResult>("save_result")
                        .field("path", &SaveResult::path, schema::string())
@@ -340,14 +356,14 @@ void registerProjectCommands(cmd::Registry& registry) {
                        .build();
         c.examples = {{"Save next to the work directory", j(R"({"path": "example-project.json"})"),
                        j(R"({"path": "<any>"})"), "empty"}};
-        c.run = [](const PathArgs& a, Context& ctx) -> Result<SaveResult> {
+        c.run = [](const SaveArgs& a, Context& ctx) -> Result<SaveResult> {
             EngineApp& app = engine::app(ctx);
             fs::path p = a.path ? fs::path(*a.path) : app.projectPath();
             if (p.empty())
                 return Error("project.no_path", "the project has no file yet", "/path",
                              "give a path");
             std::vector<schema::Warning> warnings;
-            SUPPLE_TRY(app.save(p, &warnings));
+            SUPPLE_TRY(app.save(p, &warnings, a.history));
             for (const auto& w : warnings) ctx.warn(w.code, w.message, w.path);
             SaveResult result{app.projectPath().string(), {}};
             if (!warnings.empty()) result.warnings = std::move(warnings);
@@ -360,7 +376,7 @@ void registerProjectCommands(cmd::Registry& registry) {
         c.name = "project.open";
         c.kind = Kind::Action;
         c.exposure = cmd::Exposure::McpTool;
-        c.summary = "Open a project file (replaces the current project and its history).";
+        c.summary = "Open a project file and its branches (replaces the current project).";
         c.tags = {"project"};
         c.args = schema::object<PathArgs>("path_args")
                      .field("path", &PathArgs::path, schema::string())
@@ -368,7 +384,9 @@ void registerProjectCommands(cmd::Registry& registry) {
         c.description =
             "recoverable > 0: recordings a crash left out of the project; project.recoverable "
             "lists them and project.recover puts them back. autosave_available: a newer autosave "
-            "exists next to the file (it is not loaded silently). warnings also report project "
+            "exists next to the file (it is not loaded silently). branch: the branch current when "
+            "saved. warnings: project.history when the saved branches could not be restored "
+            "(main opens alone; the first save over the file keeps a copy of it); also project "
             "module copies that could not be read or compiled, and name types using a library "
             "version instead or left unavailable.";
         c.result = projectInfoSchema();
@@ -376,7 +394,7 @@ void registerProjectCommands(cmd::Registry& registry) {
                     {"schema.invalid", "the file has problems", "details list each with its path"}};
         c.examples = {
             {"Open", j(R"({"path": "example-project.json"})"),
-             j(R"({"name": "<any>", "path": "<any>", "branch": "main", "sample_rate": "<any>", "tempo": "<any>", "meter": "<any>", "timecode": "<any>", "version": "<any>", "recoverable": 0, "generation": "<any>", "autosave_available": false})"),
+             j(R"({"name": "<any>", "path": "<any>", "branch": "main", "branches": ["main"], "sample_rate": "<any>", "tempo": "<any>", "meter": "<any>", "timecode": "<any>", "version": "<any>", "recoverable": 0, "generation": "<any>", "autosave_available": false})"),
              "saved"}};
         c.run = [](const PathArgs& a, Context& ctx) -> Result<ProjectInfo> {
             EngineApp& app = engine::app(ctx);
@@ -415,7 +433,7 @@ void registerProjectCommands(cmd::Registry& registry) {
         c.result = projectInfoSchema();
         c.examples = {
             {"New", j(R"({"name": "Sketch"})"),
-             j(R"({"name": "Sketch", "path": "", "branch": "main", "sample_rate": 48000.0, "tempo": "<any>", "meter": "<any>", "timecode": "<any>", "version": 0, "recoverable": 0, "generation": "<any>", "autosave_available": false})"),
+             j(R"({"name": "Sketch", "path": "", "branch": "main", "branches": ["main"], "sample_rate": 48000.0, "tempo": "<any>", "meter": "<any>", "timecode": "<any>", "version": 0, "recoverable": 0, "generation": "<any>", "autosave_available": false})"),
              "song"}};
         c.run = [](const NewArgs& a, Context& ctx) -> Result<ProjectInfo> {
             EngineApp& app = engine::app(ctx);

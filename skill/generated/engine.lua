@@ -1078,6 +1078,7 @@ q = nil
 ---@field name string
 ---@field path string
 ---@field branch string
+---@field branches string[] Every branch the project holds; the file keeps them all
 ---@field sample_rate number
 ---@field tempo number
 ---@field meter string
@@ -1096,6 +1097,7 @@ q = nil
 ---@field name string
 ---@field path string
 ---@field branch string
+---@field branches string[] Every branch the project holds; the file keeps them all
 ---@field sample_rate number
 ---@field tempo number
 ---@field meter string
@@ -1113,6 +1115,7 @@ q = nil
 ---@field name string
 ---@field path string
 ---@field branch string
+---@field branches string[] Every branch the project holds; the file keeps them all
 ---@field sample_rate number
 ---@field tempo number
 ---@field meter string
@@ -1137,6 +1140,7 @@ q = nil
 
 ---@class Steppe.project_save_args
 ---@field path? string
+---@field history? boolean Also keep undo and redo history (ADR-0076) (default: false)
 
 ---@class Steppe.project_save_result
 ---@field path string
@@ -2319,7 +2323,7 @@ q = nil
 ---@class Steppe.project
 ---@field get fun(): Steppe.project_get_result Show the project: name, rate, tempo, meter, file, version and branch.
 ---@field new fun(args?: Steppe.project_new_args): Steppe.project_new_result Start a new, empty project (replaces the current one and its history).
----@field open fun(args?: Steppe.project_open_args): Steppe.project_open_result Open a project file (replaces the current project and its history).
+---@field open fun(args?: Steppe.project_open_args): Steppe.project_open_result Open a project file and its branches (replaces the current project).
 ---@field recover fun(args?: Steppe.project_recover_args): Steppe.project_recover_result Put recordings a crash left out back into the project (one undo step).
 ---@field recoverable fun(): Steppe.project_recoverable_result List recordings a crash left out of the project.
 ---@field save fun(args?: Steppe.project_save_args): Steppe.project_save_result Save the project (canonical JSON) to its file or a new path.

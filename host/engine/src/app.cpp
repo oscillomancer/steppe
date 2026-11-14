@@ -33,6 +33,7 @@
 #include "supple/dsp/oversampler.h"
 #include "supple/engine/jack.h"
 #include "supple/model/env_shape.h"
+#include "supple/model/project_file.h"
 #include "supple/model/schemas.h"
 #include "supple/product.h"
 
@@ -572,6 +573,13 @@ Result<model::Id> copyTake(const model::Session& source, model::EditTxn& txn, mo
 Status EngineApp::replaceProject(model::Session session, fs::path path,
                                  const std::function<Status()>& prepare,
                                  std::vector<schema::Warning>* warnings) {
+    return replaceProject(model::VersionStore(std::move(session)), std::move(path), prepare,
+                          warnings);
+}
+
+Status EngineApp::replaceProject(model::VersionStore store, fs::path path,
+                                 const std::function<Status()>& prepare,
+                                 std::vector<schema::Warning>* warnings) {
     Backend* running = engine_ ? backend_ : nullptr;
     const auto config = engine_ ? engine_->config() : BackendConfig{};
     // Preserve the caller's Automatic/explicit choice, not the resolved count:
@@ -625,7 +633,7 @@ Status EngineApp::replaceProject(model::Session session, fs::path path,
         // An unreadable or broken source may not reveal its id. Name every
         // used type left without a project copy, and the version that will play.
         std::set<std::string> seen;
-        for (const auto& m : session.modules) {
+        for (const auto& m : store.head()->modules) {
             const std::string& id = m.value->type;
             if (!seen.insert(id).second) continue;
             const auto* entry = modules_->find(id);
@@ -645,11 +653,12 @@ Status EngineApp::replaceProject(model::Session session, fs::path path,
         clearScripts_ = scripts_->active();
         if (!clearScripts_) scripts_->clear();
     }
-    versions_ = std::make_unique<model::VersionStore>(std::move(session));
+    versions_ = std::make_unique<model::VersionStore>(std::move(store));
     projectPath_ = std::move(path);
+    branchesBackupFor_.clear();
     autosaveMarked_ = !projectPath_.empty();
     autosaveMs_ = serviceClockMs();
-    autosaveVersion_ = head().version;
+    autosaveHeads_ = versions_->heads();
     const Status prepared = prepare ? prepare() : Status{};
     if (running) SUPPLE_TRY(startEngine(*running, config, settings));
     headChanged();
@@ -672,7 +681,8 @@ fs::path EngineApp::resolve(const fs::path& path) const {
     return path.is_relative() ? options_.workdir / path : path;
 }
 
-Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warnings) {
+Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warnings,
+                       bool history) {
     const fs::path path = resolve(where);
     if (!txn_) commitLearned(true);  // a control just moved: its values in the file
     // What running plug-ins hold now (a sampler's loaded files), as hosts
@@ -685,7 +695,34 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
     if (fromScratch && engine_ && engine_->recording())
         return Error("project.recording", "a recording is running", {},
                      "stop it before the project's first save (its files move then)");
-    auto publish = [&] { return writeFileAtomic(path, model::serializeProject(head())); };
+    auto publish = [&]() -> Status {
+        // This file's branches could not be restored when it was opened:
+        // keep it before writing main alone over it.
+        std::error_code ec;
+        if (!branchesBackupFor_.empty() && fs::exists(path, ec) &&
+            fs::equivalent(path, branchesBackupFor_, ec)) {
+            const std::string name = path.filename().string();
+            fs::path backup = path.parent_path() / (name + ".pre-branches.bak");
+            for (int n = 2; fs::exists(backup, ec); ++n)
+                backup =
+                    path.parent_path() / (name + ".pre-branches-" + std::to_string(n) + ".bak");
+            fs::copy_file(path, backup, ec);
+            if (ec)
+                return Error("project.history_backup",
+                             "could not keep a copy of the file before saving over its unreadable "
+                             "branches: " +
+                                 ec.message(),
+                             backup.string(),
+                             "make the project folder writable, or save to another file");
+            if (warnings)
+                warnings->push_back(
+                    {"project.history_backup",
+                     "kept the file with its unreadable branches as " + backup.filename().string(),
+                     backup.string()});
+            branchesBackupFor_.clear();
+        }
+        return writeFileAtomic(path, model::serializeProjectFile(*versions_, history));
+    };
     const fs::path media = path.parent_path() / head().project->mediaDir;
     if (fromScratch) {
         SUPPLE_TRY(moveScratchMedia(media, publish));
@@ -708,7 +745,7 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
     projectPath_ = path;
     autosaveMarked_ = true;  // the file itself is the newest copy
     autosaveMs_ = serviceClockMs();
-    autosaveVersion_ = head().version;
+    autosaveHeads_ = versions_->heads();
     return okStatus();
 }
 
@@ -716,8 +753,19 @@ Status EngineApp::open(const fs::path& where, std::vector<schema::Warning>* warn
     const fs::path path = resolve(where);
     auto text = readTextFile(path, std::size_t(1) << 30);
     if (!text) return std::move(text).error();
-    auto s = model::parseProject(*text, warnings);
-    if (!s) return std::move(s).error();
+    auto opened = model::parseProjectFile(*text, warnings);
+    if (!opened) return std::move(opened).error();
+    if (opened->branchesDropped && warnings) {
+        const Error& why = *opened->branchesDropped;
+        warnings->push_back({"project.history",
+                             "opened main alone: the saved branches could not be restored (" +
+                                 why.message + (why.path.empty() ? "" : " at " + why.path) +
+                                 "). Saving over this file first keeps a copy of it as " +
+                                 path.filename().string() + ".pre-branches.bak",
+                             why.path.empty() ? "/branches" : why.path});
+    }
+    const auto current = opened->store.head();
+    const model::Session* s = current.get();
     if (warnings) {
         // Scoped so that its probes are released before the engine creates
         // the real instances (no probe sits beside its instance during open).
@@ -737,7 +785,10 @@ Status EngineApp::open(const fs::path& where, std::vector<schema::Warning>* warn
                                      checked.error().path});
         }
     }
-    return replaceProject(std::move(*s), path, {}, warnings);
+    const bool dropped = opened->branchesDropped.has_value();
+    SUPPLE_TRY(replaceProject(std::move(opened->store), path, {}, warnings));
+    if (dropped) branchesBackupFor_ = path;
+    return okStatus();
 }
 
 Status EngineApp::writeTemplate(const fs::path& folder, std::vector<schema::Warning>* warnings) {
@@ -1353,7 +1404,7 @@ std::optional<std::uint64_t> EngineApp::nextServiceDelayMs() const {
         const auto ms = deadline <= now ? 0 : deadline - now;
         if (!delay || ms < *delay) delay = ms;
     };
-    if (!projectPath_.empty() && head().version != autosaveVersion_)
+    if (!projectPath_.empty() && versions_->heads() != autosaveHeads_)
         at(autosaveMs_ + kAutosaveIntervalMs);
     if (restarting_) at(std::min(restartRetryAt_, restartUntil_));
     if (!txn_)
@@ -1385,11 +1436,12 @@ void EngineApp::maybeAutosave() {
     if (!autosaveMarked_) {
         autosaveMarked_ = true;
         autosaveMs_ = now;
-        autosaveVersion_ = head().version;
+        autosaveHeads_ = versions_->heads();
         return;
     }
-    // Autosave when the head changed and an interval passed since the last one.
-    if (head().version == autosaveVersion_ || now < autosaveMs_ + kAutosaveIntervalMs) return;
+    // Autosave when the project (any branch) changed and an interval passed
+    // since the last one.
+    if (versions_->heads() == autosaveHeads_ || now < autosaveMs_ + kAutosaveIntervalMs) return;
     autosave();
 }
 
@@ -1574,7 +1626,7 @@ void EngineApp::autosave() {
         existing.push_back({*n, it->path()});
     }
     const fs::path file = dir / ("autosave-" + std::to_string(next) + ".json");
-    if (auto st = writeFileAtomic(file, model::serializeProject(head())); !st) {
+    if (auto st = writeFileAtomic(file, model::serializeProjectFile(*versions_)); !st) {
         emit("engine.error", json::Value(st.error().toString()));
         autosaveMs_ = serviceClockMs();  // try again after an interval, not every tick
         return;
@@ -1587,7 +1639,7 @@ void EngineApp::autosave() {
         fs::remove(existing.front().second, ignored);
         existing.erase(existing.begin());
     }
-    autosaveVersion_ = head().version;
+    autosaveHeads_ = versions_->heads();
     autosaveMs_ = serviceClockMs();
     autosaveMarked_ = true;
 }

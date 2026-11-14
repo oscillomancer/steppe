@@ -13,6 +13,7 @@
 #include <string>
 
 #include "app_actions.h"
+#include "supple/model/versions.h"
 #include "supple/ui/root.h"
 
 struct SDL_Window;
@@ -119,9 +120,8 @@ class FileActions {
     Post post_;
     SaveDialog saveDialog_;
     DialogLifetime dialogs_;
-    std::uint64_t savedVersion_ = 0;
+    model::VersionStore::Heads savedHeads_;  // the branch heads when last saved
     std::uint64_t projectGeneration_ = ~std::uint64_t{0};
-    std::string savedBranch_;
     std::string replaceTemplate_;  // a name that exists: Save again replaces it
 };
 

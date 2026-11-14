@@ -164,6 +164,19 @@ A project is a JSON file. Its media lives in the `media/` folder beside it.
 Project and FX chain files accept oversampling factors 1, 2, 4 or 8. If a
 hand-edited file uses another factor, loading reports the field and allowed values.
 
+A project file keeps every branch, not just the one you are on: an agent's
+branch you have not merged yet is still there after quitting and reopening,
+with each of its steps (History panel), and it can be undone step by step or
+merged into main as before. The file opens on the branch that was current when
+it was saved. Main's own undo history is not kept: after reopening, undo on
+main starts from the saved state. (Agents can keep it with
+`project.save {"history": true}`.) Autosaves keep branches too.
+
+If a program that does not know about branches (an older Steppe, a script)
+changed the file's main project, the saved branches no longer fit it: Steppe
+opens main alone and says so, and the first time you save over that file it
+keeps a copy of the old one beside it as `<file>.pre-branches.bak`.
+
 Until a project is saved, its recordings go to a folder of its own under the
 data folder (below), in `unsaved/<start time>-<pid>/media/rec`. The first
 save moves them into `media/` beside the project file. Quitting, or starting
