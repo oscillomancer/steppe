@@ -337,6 +337,90 @@ TEST_CASE("a MIDI journal's torn or damaged tail is left out") {
     fs::remove_all(dir);
 }
 
+TEST_CASE("a MIDI journal holds only what its writer writes: channel messages and bounded clocks") {
+    // Round-10 review, findings 1 and 2: a data byte over 127 reached the
+    // project (it saved, then would not reopen), and header clocks reached
+    // placement's arithmetic unbounded (signed overflow).
+    const fs::path dir = fs::temp_directory_path() /
+                         ("supple-midi-journal-bounds-" + std::to_string(test::processId()));
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    const fs::path file = dir / "Keys-1.midi.jsonl";
+    const std::string far = std::to_string(std::int64_t(1) << 62);
+    auto header = [](std::string_view fields) {
+        return std::string(R"({"schema":"supple.midi-recording/1.0","track":"tr_1",)") +
+               std::string(fields) + "}\n";
+    };
+    const std::string device = header(
+        R"("sample_rate":48000,"start_sample":48000,"latency":0,"device":true,"routed":false,)"
+        R"("shift":0,"loop":[0,0])");
+    const std::string routed = header(
+        R"("sample_rate":48000,"start_sample":48000,"latency":0,"device":false,"routed":true,)"
+        R"("shift":0,"loop":[0,0])");
+    const std::string route = model::Id{model::Kind::Route, 1}.str();
+    SUBCASE("a damaged event, run or count ends what is trusted") {
+        struct Case {
+            const std::string* head;
+            std::string line;
+        };
+        const Case cases[] = {
+            {&device, "[10,144,255,100]"},          // data byte over 127
+            {&device, "[10,144,60,128]"},           // velocity over 127
+            {&device, "[10,112,60,0]"},             // a data byte where the status goes
+            {&device, "[10,248,0,0]"},              // system real-time: never captured
+            {&device, "[10,240,0,0]"},              // system exclusive: never captured
+            {&device, "[" + far + ",144,60,100]"},  // beyond any timeline
+            {&device, "{\"run\":[" + far + ",0]}"},
+            {&device, "{\"run\":[0," + far + "]}"},
+            {&device, "{\"captured\":" + far + "}"},
+            {&device, "[10,144,60,100,\"" + route + "\",1]"},  // a routed event, unrouted take
+            {&routed, "[10,144,60,100]"},                      // a device event, no device
+            {&routed, "[10,144,60,100,\"" + route + "\",-1]"},
+            {&routed, "[10,144,60,100,\"" + route + "\",2147483648]"},
+        };
+        for (const Case& c : cases) {
+            INFO(c.line);
+            const std::string good =
+                c.head == &device ? "[0,144,60,100]\n" : "[0,144,60,100,\"" + route + "\",1]\n";
+            REQUIRE(writeFileAtomic(file, *c.head + good + c.line + "\n[20,128,60,0]\n"));
+            bool torn = false;
+            auto read = detail::readMidiJournal(file, dir, &torn);
+            REQUIRE(read);
+            CHECK(torn);
+            CHECK(read->events.size() == 1);
+            CHECK(read->captured == 0);
+        }
+    }
+    SUBCASE("a damaged header is not a journal") {
+        const std::string headers[] = {
+            header(R"("sample_rate":48000,"start_sample":0,"latency":9223372036854775807,)"
+                   R"("device":true,"routed":true,"shift":-9223372036854775808,"loop":[0,0])"),
+            header(R"("sample_rate":48000,"start_sample":0,"latency":-1,"device":true,)"
+                   R"("routed":false,"shift":0,"loop":[0,0])"),
+            header(R"("sample_rate":48000,"start_sample":)" + far +
+                   R"(,"latency":0,"device":true,"routed":false,"shift":0,"loop":[0,0])"),
+            header(R"("sample_rate":48000,"start_sample":0,"latency":0,"device":false,)"
+                   R"("routed":true,"shift":)" +
+                   far + R"(,"loop":[0,0])"),
+            header(R"("sample_rate":48000,"start_sample":0,"latency":0,"device":true,)"
+                   R"("routed":false,"shift":0,"loop":[0,)" +
+                   far + "]"),
+            header(R"("sample_rate":48000,"start_sample":0,"latency":0,"device":true,)"
+                   R"("routed":false,"shift":0,"loop":[-5,10])"),
+            header(R"("sample_rate":48000,"start_sample":0,"latency":0,"device":false,)"
+                   R"("routed":false,"shift":0,"loop":[0,0])"),  // records nothing
+        };
+        for (const std::string& h : headers) {
+            INFO(h);
+            REQUIRE(writeFileAtomic(file, h + "[0,144,60,100]\n{\"captured\":1}\n"));
+            auto read = detail::readMidiJournal(file, dir);
+            REQUIRE_FALSE(read);
+            CHECK(read.error().code == "record.journal");
+        }
+    }
+    fs::remove_all(dir);
+}
+
 TEST_CASE("a MIDI take a crash interrupted comes back from its journal, and goes once saved") {
     // ADR-0080: a MIDI take had no crash-recovery file; now its journal is
     // offered by project.recoverable and placed by project.recover as stop

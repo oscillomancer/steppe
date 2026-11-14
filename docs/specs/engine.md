@@ -860,7 +860,15 @@ first use, and no plug-in code runs early to warm it.
   flushes to the OS each pass and fsyncs every 5 s. Loss window: about 20 ms
   on a program crash (more only if the writer fell behind, up to the
   4096-event ring), 5 s on a system crash. Readers drop a torn last line and
-  everything from the first line that does not read. Stop and recovery
+  everything from the first line that does not read, or that holds what the
+  writer cannot write: an event that is not a channel message (status
+  0x80..0xEF, 7-bit data), a device event in a take with no device, a Note
+  Out event in one that is not routed, a voice outside 0..2^31-1, or a
+  clock (`at`, a run, `captured`) beyond 2^48 frames. A header whose clocks
+  are beyond that (or `latency` negative, or a loop that is neither `[0, 0]`
+  nor increasing), or that records neither a device nor Note Out, makes the
+  file not a journal (`record.journal`). The bound keeps placement's
+  arithmetic inside 64 bits. Stop and recovery
   place a take with the same function (`detail::placeMidi`). A journal that
   cannot be written gives the committed take a `record.journal` warning and
   does not stop the recording. The app deletes a committed take's journal

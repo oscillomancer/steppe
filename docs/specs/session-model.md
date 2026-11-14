@@ -1030,7 +1030,10 @@ and naming. All `edit` unless marked (q) query or (a) action.
   A recording's commit (and `project.recover`'s) logs the internal
   `record.commit {takes, punch}`: the takes as the device delivered them
   (file relative to the media folder, segments, loop, MIDI events) and the
-  punch range then, so a merge places them again on another branch.
+  punch range then, so a merge places them again on another branch. Each
+  MIDI event's `bytes` is a channel message (status 128..239, then two
+  data bytes 0..127) and its `voice` fits 32 bits, or the call fails with
+  `record.midi`.
 - **render** (a): `render.mix {master}` (one master for the call; default the `masters` setting, else tr_0), `render.stems`, `render.regions` (matrix),
   `render.items`, `render.dry-run` (q: resolved file list), `render.job.*`;
   `format` (wav|flac), `secondary` (a second file in another format/bit depth

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <map>
 #include <tuple>
@@ -180,6 +181,13 @@ RecordedTake placeMidi(const MidiCapture& c) {
 namespace {
 constexpr std::string_view kJournalSuffix = ".midi.jsonl";
 constexpr std::string_view kJournalSchema = "supple.midi-recording/1.0";
+// Every clock a journal holds is within this many frames of zero (over 23
+// years at 384 kHz). A value beyond it is damage, and the bound keeps
+// placeMidi's sums, of at most six such terms, far inside int64.
+constexpr std::int64_t kJournalClockLimit = std::int64_t(1) << 48;
+bool clock(const json::Value& v, std::int64_t low = -kJournalClockLimit) {
+    return v.isInt() && v.asInt() >= low && v.asInt() <= kJournalClockLimit;
+}
 
 // One value per line: compact (keys in a fixed order), never a newline inside.
 std::string journalLine(const json::Value& v) { return json::writeCompact(v) + "\n"; }
@@ -219,9 +227,10 @@ Result<MidiCapture> readMidiJournal(const std::filesystem::path& file,
                 track && track->isString() ? model::Id::parse(track->asString()) : std::nullopt;
             if (!id || id->kind != model::Kind::Track)
                 return invalid("/0/track", "expected a tr_ track id");
-            auto integer = [&](const char* name, std::int64_t& out) {
+            auto integer = [&](const char* name, std::int64_t& out,
+                               std::int64_t low = -kJournalClockLimit) {
                 const auto* f = v->find(name);
-                if (!f || !f->isInt()) return false;
+                if (!f || !clock(*f, low)) return false;
                 out = f->asInt();
                 return true;
             };
@@ -236,13 +245,15 @@ Result<MidiCapture> readMidiJournal(const std::filesystem::path& file,
             bool device = false;
             if (!rate || !rate->isNumber() || !std::isfinite(rate->asDouble()) ||
                 rate->asDouble() <= 0 || !integer("start_sample", c.start) ||
-                !integer("latency", c.latency) || !integer("shift", c.midi.shift) ||
-                !flag("device", device) || !flag("routed", c.midi.routed) || !loop ||
-                !loop->isArray() || loop->size() != 2 || !loop->at(0).isInt() ||
-                !loop->at(1).isInt())
+                !integer("latency", c.latency, 0) || !integer("shift", c.midi.shift) ||
+                !flag("device", device) || !flag("routed", c.midi.routed) ||
+                !(device || c.midi.routed) || !loop || !loop->isArray() || loop->size() != 2 ||
+                !clock(loop->at(0), 0) || !clock(loop->at(1), 0) ||
+                (loop->at(1).asInt() <= loop->at(0).asInt() &&
+                 (loop->at(0).asInt() != 0 || loop->at(1).asInt() != 0)))
                 return invalid("/0",
                                "expected sample_rate, start_sample, latency, shift, device, "
-                               "routed and loop");
+                               "routed and loop, within the range a recording can have");
             c.track = *id;
             c.rate = rate->asDouble();
             c.midi.ports = device ? 1 : 0;
@@ -260,18 +271,22 @@ Result<MidiCapture> readMidiJournal(const std::filesystem::path& file,
             break;
         }
         if (v->isArray()) {  // [at, status, data1, data2] (, route, voice)
+            // As captured: a channel message (status 0x80..0xEF, 7-bit data),
+            // from a device only if the take hears one, routed only if routed.
             const auto n = v->size();
-            bool ok = (n == 4 || n == 6) && v->at(0).isInt() && v->at(0).asInt() >= 0;
+            bool ok = ((n == 4 && c.midi.ports) || (n == 6 && c.midi.routed)) && clock(v->at(0), 0);
             CapturedMidiEvent e;
             for (std::size_t b = 0; ok && b < 3; ++b) {
-                ok = v->at(b + 1).isInt() && v->at(b + 1).asInt() >= 0 &&
-                     v->at(b + 1).asInt() <= 255;
+                const std::int64_t low = b == 0 ? 0x80 : 0, high = b == 0 ? 0xef : 0x7f;
+                ok = v->at(b + 1).isInt() && v->at(b + 1).asInt() >= low &&
+                     v->at(b + 1).asInt() <= high;
                 if (ok) e.bytes[b] = static_cast<std::uint8_t>(v->at(b + 1).asInt());
             }
             if (ok && n == 6) {
                 const auto route =
                     v->at(4).isString() ? model::Id::parse(v->at(4).asString()) : std::nullopt;
-                ok = route && route->kind == model::Kind::Route && v->at(5).isInt();
+                ok = route && route->kind == model::Kind::Route && v->at(5).isInt() &&
+                     v->at(5).asInt() >= 0 && v->at(5).asInt() <= INT32_MAX;
                 if (ok) {
                     e.route = *route;
                     e.voice = static_cast<int>(v->at(5).asInt());
@@ -284,15 +299,15 @@ Result<MidiCapture> readMidiJournal(const std::filesystem::path& file,
             e.at = v->at(0).asInt();
             c.events.push_back(e);
         } else if (const auto* run = v->isObject() ? v->find("run") : nullptr) {
-            if (!run->isArray() || run->size() != 2 || !run->at(0).isInt() || !run->at(1).isInt() ||
-                run->at(0).asInt() < 0 ||
+            if (!run->isArray() || run->size() != 2 || !clock(run->at(0), 0) ||
+                !clock(run->at(1)) ||
                 (!c.runs.empty() && run->at(0).asInt() < c.runs.back().fileFrame)) {
                 stop();
                 break;
             }
             c.runs.push_back({run->at(0).asInt(), run->at(1).asInt()});
         } else if (const auto* captured = v->isObject() ? v->find("captured") : nullptr) {
-            if (!captured->isInt() || captured->asInt() < 0) {
+            if (!clock(*captured, 0)) {
                 stop();
                 break;
             }

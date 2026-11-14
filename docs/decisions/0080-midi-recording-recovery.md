@@ -91,3 +91,14 @@ takes should be among them.
   offer takes the project already has.
 - **Marking committed takes in the project file:** a schema change for what
   only matters until the next save.
+
+*Amended 2026-11-14 after review round 10:* a line holds only what the
+writer writes. An event is a channel message (status 0x80..0xEF, 7-bit
+data), from a device only in a take that records one and with a Note Out
+`route` and `voice` (0..2^31-1) only in a routed take; every clock is within
+2^48 frames, and `latency` and the loop are not negative. An event, run or
+count outside this ends what is trusted, as a line that does not read does;
+a header outside it makes the file not a journal. A pitch of 255 had been
+recovered, saved and then refused on reopen, and extreme header clocks
+overflowed placement. `record.commit` checks its MIDI bytes and voices the
+same way (`record.midi`).

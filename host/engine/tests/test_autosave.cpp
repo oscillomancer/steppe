@@ -1651,3 +1651,94 @@ TEST_CASE("recovery waits on no named pipe in a session a crash left behind") {
     CHECK(fs::is_fifo(fs::symlink_status(pipe)));
 }
 #endif
+
+namespace {
+std::string journalHeader() {
+    return R"({"schema":"supple.midi-recording/1.0","track":"tr_1","sample_rate":48000,)"
+           R"("start_sample":48000,"latency":0,"device":true,"routed":false,"shift":0,)"
+           R"("loop":[0,0]})"
+           "\n";
+}
+}  // namespace
+
+TEST_CASE("a MIDI journal's 8-bit data puts nothing back, replaces nothing, saves nothing") {
+    // Round-10 review, finding 1: pitch 255 was recovered, saved (the journal
+    // then deleted) and refused by the schema on reopen.
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    SUBCASE("an unsaved session with no readable autosave: current work stays") {
+        Unsaved u;
+        {
+            auto earlier = u.run("earlier");
+            cmd::Dispatcher d(registry, *earlier);
+            REQUIRE(d.execute({"track.add", *json::parse(R"({"name":"Keys"})"), kUnit}));
+            earlier->setFixedClock(1'060'000);
+            earlier->tick();
+        }
+        REQUIRE(writeFileAtomic(
+            u.folder("earlier") / "media/rec/Keys-1.midi.jsonl",
+            journalHeader() + "[0,144,255,100]\n[24000,128,255,0]\n{\"captured\":48000}\n"));
+        REQUIRE(writeFileAtomic(u.folder("earlier") / "autosave-1.json", "damaged"));
+        auto app = u.run("current");
+        rename(*app, "Current work");
+        auto r = app->recoverSession("earlier");
+        REQUIRE_FALSE(r);
+        CHECK(r.error().code == "recover.damaged");
+        CHECK(app->head().project->name == "Current work");
+    }
+    SUBCASE("a saved project: what is put back saves and reopens") {
+        Project p;
+        cmd::Dispatcher d(registry, *p.app);
+        REQUIRE(d.execute({"track.add", *json::parse(R"({"name":"Keys"})"), kUnit}));
+        const fs::path saved = p.root / "saved/song.json";
+        REQUIRE(p.app->save(saved));
+        const fs::path journal = p.app->recordDir() / "Keys-1.midi.jsonl";
+        // A good note, then a damaged one: the good one only.
+        REQUIRE(writeFileAtomic(journal, journalHeader() + "[0,144,60,100]\n[100,128,60,0]\n"
+                                                           "{\"captured\":24000}\n"
+                                                           "[30000,144,255,100]\n"
+                                                           "{\"captured\":48000}\n"));
+        auto r = p.app->recover({}, {});
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        REQUIRE(p.app->head().midi.size() == 1);
+        const auto& notes = p.app->head().midi.begin()->value->sequence.notes;
+        REQUIRE(notes.size() == 1);
+        CHECK(notes.front().pitch == 60);
+        REQUIRE(p.app->save(saved));
+        auto opened = p.app->open(saved);
+        CHECK_MESSAGE(opened, (opened ? std::string() : opened.error().toString()));
+    }
+}
+
+TEST_CASE("record.commit refuses MIDI that is not a channel message of 7-bit data") {
+    // A replayed record.commit is read from a project's history: the same
+    // file boundary as the journal (round-10 review, finding 1).
+    Project p;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *p.app);
+    REQUIRE(d.execute({"track.add", json::Value::object(), kUnit}));
+    auto commit = [&](std::string_view bytes) {
+        auto args = json::parse(
+            std::string(R"({"takes":[{"track":"tr_1","file":"","hash":"","start_sample":0,)") +
+            R"("frames":48000,"sample_rate":48000,"midi":true,"loop_start":0,"loop_end":0,)" +
+            R"("overflow_frames":0,"segments":[{"file_frame":0,"timeline":0}],)" +
+            R"("events":[{"timeline":0,"run":0,"voice":-1,"bytes":)" + std::string(bytes) +
+            R"(}]}],"punch":{"enabled":false,"start":0,"end":0}})");
+        REQUIRE(args);
+        return d.execute({"record.commit", *args, kUnit});
+    };
+    for (const char* bytes : {"[144,255,100]", "[144,60,128]", "[248,0,0]", "[112,60,0]",
+                              "[144,60]", "[144,60,100,0]"}) {
+        INFO(bytes);
+        auto r = commit(bytes);
+        REQUIRE_FALSE(r);
+        INFO(r.error().toString());
+        CHECK(r.error().code == "record.midi");
+        CHECK(r.error().path == "/args/takes/0/events/0/bytes");
+        CHECK(p.app->head().midi.empty());
+    }
+    auto good = commit("[144,60,100]");  // the same arguments, a note-on
+    REQUIRE_MESSAGE(good, (good ? std::string() : good.error().toString()));
+    CHECK(p.app->head().midi.size() == 1);
+}
