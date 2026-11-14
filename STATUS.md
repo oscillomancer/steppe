@@ -232,9 +232,10 @@ instructions are in `docs/guides/installing.md`.
   RT/offline mismatch after a connected VCA's level changes: the one-edit
   replay in `tests/fuzz/plan-soak-corpus/rack-level.jsonl` is pending engine
   triage; the harness preserves the failure without changing engine behavior.
-  The soak also finds a command-boundary bug: `track.move` rejects a valid
-  reorder under the track's current non-root buss as `tr.cycle`; the two-move
-  reproducer is in the fuzzing guide. Both findings await lead triage.
+  `track.move` accepts reorders under a non-root buss and moves between
+  sibling folders, and refuses destinations in the moved track's own subtree.
+  Its portable command regression covers undo and cycle rollback; the
+  two-move soak replay is in the fuzzing guide.
 - **Strips and routing** (ADR-0019 to ADR-0022): typed channel, buss and
   master strips with Console 9 summing (switchable, level-matched; unity
   staging, so a hop costs nothing, ADR-0066); pan modes (pan, dual pan, pan

@@ -136,8 +136,8 @@ retained-RT null is an additional strict probe; the requested offline versus
 reopened-file comparison passes in these cases.
 
 The long run also found a valid reorder rejected as `tr.cycle` (first seed
-17855668924378716666, both executors). The first move below passes on its own;
-the second should reorder the buss's child but is rejected. Save this JSONL
+17855668924378716666, both executors). This is now fixed: both moves below
+succeed, including the reorder under the current buss. Save this JSONL
 and use `SUPPLE_SOAK_REPLAY` (set `anticipative: true` to exercise that executor):
 
 ```jsonl
@@ -146,6 +146,6 @@ and use `SUPPLE_SOAK_REPLAY` (set `anticipative: true` to exercise that executor
 {"phase":"edits","command":"track.move","args":{"track":"tr_2","parent":"tr_3","index":0}}
 ```
 
-The harness's `tr_3` is a buss and `tr_2` starts under the master. Engine
-processing and command behavior are unchanged; both findings are reported to
-the lead rather than repaired here.
+The harness's `tr_3` is a buss and `tr_2` starts under the master. The portable
+command regression also covers sibling-folder moves, self/descendant cycle
+refusal and exact undo restoration.

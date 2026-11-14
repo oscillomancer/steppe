@@ -77,6 +77,68 @@ struct Fixture {
 };
 }  // namespace
 
+TEST_CASE("track.move permits non-root reorders and sibling folders but rejects descendants") {
+    Fixture f(false);
+    f.run("track.add", R"({"name":"A","type":"buss"})");                      // tr_1
+    f.run("track.add", R"({"name":"B","type":"buss"})");                      // tr_2
+    f.run("track.add", R"({"name":"Child","type":"buss","parent":"tr_1"})");  // tr_3
+    f.run("track.add", R"({"name":"Deep","type":"buss","parent":"tr_3"})");   // tr_4
+    f.run("track.add", R"({"name":"First","parent":"tr_1"})");                // tr_5
+    f.run("track.add", R"({"name":"Second","parent":"tr_1"})");               // tr_6
+    const auto initial = model::serializeProject(f.app->head());
+    const auto track = [&](unsigned n) -> const model::Track& {
+        const auto* result = f.app->head().tracks.find({model::Kind::Track, n});
+        REQUIRE(result);
+        return *result;
+    };
+    const auto children = [&](unsigned parent, std::initializer_list<unsigned> expected) {
+        std::vector<model::Id> ids;
+        for (auto n : expected) ids.push_back({model::Kind::Track, n});
+        CHECK(track(parent).children == ids);
+        REQUIRE(model::checkInvariants(f.app->head()));
+    };
+    // Explicit and inferred current parents must both permit real reorders.
+    f.run("track.move", R"({"track":"tr_6","parent":"tr_1","index":0})");
+    children(1, {6, 3, 5});
+    CHECK(track(6).parent == model::Id{model::Kind::Track, 1});
+    const auto reordered = model::serializeProject(f.app->head());
+    f.run("track.move", R"({"track":"tr_5","index":0})");
+    children(1, {5, 6, 3});
+    f.run("history.undo");
+    CHECK(model::serializeProject(f.app->head()) == reordered);
+    f.run("history.undo");
+    CHECK(model::serializeProject(f.app->head()) == initial);
+
+    // Reparent a whole subtree between sibling folders, then undo it exactly.
+    f.run("track.move", R"({"track":"tr_3","parent":"tr_2","index":0})");
+    children(1, {5, 6});
+    children(2, {3});
+    children(3, {4});
+    CHECK(track(3).parent == model::Id{model::Kind::Track, 2});
+    CHECK(track(4).parent == model::Id{model::Kind::Track, 3});
+    const auto moved = model::serializeProject(f.app->head());
+    const auto version = f.app->head().version;
+    for (unsigned parent : {2, 3, 4}) {
+        CAPTURE(parent);
+        auto refused = f.call(
+            "track.move", "{\"track\":\"tr_2\",\"parent\":\"tr_" + std::to_string(parent) + "\"}");
+        REQUIRE_FALSE(refused);
+        CHECK(refused.error().code == "tr.cycle");
+        CHECK(refused.error().path == "/args/parent");
+        CHECK_FALSE(refused.error().hint.empty());
+        CHECK(refused.error().message ==
+              (parent == 2 ? "a track cannot be moved under itself"
+                           : "a track cannot be moved under one of its own children"));
+        CHECK(f.app->head().version == version);
+        CHECK(model::serializeProject(f.app->head()) == moved);
+    }
+    f.run("history.undo");
+    CHECK(model::serializeProject(f.app->head()) == initial);
+    children(0, {1, 2});
+    children(1, {3, 5, 6});
+    children(2, {});
+}
+
 TEST_CASE("unknown track IDs list the existing tracks, including the empty project's master") {
     Fixture f(false);
     auto check = [&](std::string_view hint) {
