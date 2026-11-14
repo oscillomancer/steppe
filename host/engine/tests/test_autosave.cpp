@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <set>
+#include <thread>
 
 #include "../../../tests/file_platform.h"
 #include "recording.h"
@@ -294,6 +295,15 @@ TEST_CASE("a replayed merge writes files only inside the project's own folder") 
     };
     p.app->setupFixture(d, "recording_interrupted");
     run("project.recover", "{}");  // it_1: an audio item on tr_1
+    // Its hash is finalized in the background, rewriting the sidecar through
+    // a temporary file: wait for it, so no file snapshot below races it.
+    for (const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+         p.app->head().media.begin()->value->hash.empty() &&
+         std::chrono::steady_clock::now() < deadline;) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        d.flushJobEvents();
+    }
+    REQUIRE_FALSE(p.app->head().media.begin()->value->hash.empty());
     REQUIRE(p.app->save("song.json"));
     auto other = run("track.add", R"({"name": "Other"})");
     const std::string otherTrack = other["track"].asString();
