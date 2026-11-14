@@ -131,4 +131,21 @@ failing one-edit reproducers:
 changing the connected VCA's level from -30 to -27 makes the retained RT pool
 differ from the saved project's offline render, in both executors. An empty
 replay passes. The default seeds do not hit this final state; the journal is
-opt-in diagnostic coverage, pending an engine fix by the lead.
+opt-in diagnostic coverage, pending reset-contract triage by the lead. This
+retained-RT null is an additional strict probe; the requested offline versus
+reopened-file comparison passes in these cases.
+
+The long run also found a valid reorder rejected as `tr.cycle` (first seed
+17855668924378716666, both executors). The first move below passes on its own;
+the second should reorder the buss's child but is rejected. Save this JSONL
+and use `SUPPLE_SOAK_REPLAY` (set `anticipative: true` to exercise that executor):
+
+```jsonl
+{"schema":"supple.plan-soak/1","seed":"17855668924378716666","anticipative":false}
+{"phase":"edits","command":"track.move","args":{"track":"tr_2","parent":"tr_3","index":0}}
+{"phase":"edits","command":"track.move","args":{"track":"tr_2","parent":"tr_3","index":0}}
+```
+
+The harness's `tr_3` is a buss and `tr_2` starts under the master. Engine
+processing and command behavior are unchanged; both findings are reported to
+the lead rather than repaired here.
