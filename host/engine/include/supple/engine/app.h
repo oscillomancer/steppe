@@ -26,6 +26,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <tuple>
 #include <vector>
 #include "supple/base/stop.h"
 
@@ -987,8 +988,13 @@ class EngineApp : public cmd::Host {
         std::string suffix;  // ".pre-branches", ".unreadable-autosave"
     };
     std::vector<RecoveryKeep> recoveryKeep_;
-    Status keepForFirstSave(const std::filesystem::path& folder, const std::string& name,
-                            std::string_view bytes, std::string suffix);
+    // A raw autosave a recovery cannot fully restore: (name, bytes, suffix).
+    using RawAutosave = std::tuple<std::string, std::string, std::string>;
+    // Copies each into `folder` out of the autosave rotation, all or none
+    // (recover.keep at `path`), before a recovery replaces anything.
+    Result<std::vector<RecoveryKeep>> keepForFirstSave(const std::filesystem::path& folder,
+                                                       const std::vector<RawAutosave>& raw,
+                                                       const std::string& path);
     Status publishRecoveryKeeps(const std::filesystem::path& file,
                                 std::vector<schema::Warning>* warnings);
     bool replaying_ = false;

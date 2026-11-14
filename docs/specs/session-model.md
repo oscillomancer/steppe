@@ -687,9 +687,16 @@ failure a `recover.autosave` warning), takes the folder and its lock over,
 stays unsaved, puts the folder's leftover recordings back as one more undo
 step, and returns `autosave` (the file it used, or none). Without a
 readable autosave it recovers only when at least one recording can be put
-back (a sidecar that reads and a WAV with frames): a new project with one
-channel, "Recovered", that holds them; otherwise `recover.damaged`, with the
-current project and every file untouched. Nothing a recovery could not
+back, by the test `project.recover` applies when it places one (a sidecar
+that reads, a WAV with frames, a placement inside the timeline): a new
+project with one channel, "Recovered", that holds them; otherwise
+`recover.damaged`, with the current project and every file untouched. An
+unsaved project's media stay in its session folder: a recovered branch
+whose `media_dir` leads outside it (only a file this program did not write
+names one; no command sets it) gets one more version setting it to `media`,
+with a `recover.media_dir` warning, and a merge replayed into an unsaved
+project writes only inside its session folder (`history.media_outside`,
+§5.4). Nothing a recovery could not
 restore is lost by the first save, which releases the folder: an autosave
 whose branches were not restored (opened as main alone, `project.history`)
 or that could not be read is copied at recovery beside the autosaves
@@ -697,7 +704,9 @@ or that could not be read is copied at recovery beside the autosaves
 rotated), and the first save publishes each beside the saved file as
 `<file>.pre-branches.bak` or `<file>.unreadable-autosave.bak` (`-2`… when
 taken, never replacing) before it writes the file, with a
-`project.history_backup` warning; if that fails, the save fails. Errors:
+`project.history_backup` warning; if that fails, the save fails. The copies
+are made before the recovery replaces anything: if one cannot be made, it
+fails with `recover.keep` and changes nothing. Errors:
 `recover.unknown_session` (not a left-behind sibling, including path
 tricks), `recover.busy` (its run is alive), `recover.damaged` (nothing in it
 can be opened or put back). `project.recoverable.delete {session}` deletes one. Project-info
@@ -792,7 +801,8 @@ and nothing else is kept (the file is then the document alone).
   existing file or link. Before any step runs, a `media_dir` naming `..` is
   refused; nothing is made until the deepest existing folder of the media
   path resolves (`canonical`, every link followed) inside the resolved folder
-  that holds the project file, and the media folder made then must resolve
+  that holds the project file (an unsaved project's session folder; only a
+  headless engine's folderless `<workdir>/media` is exempt), and the media folder made then must resolve
   inside it too, or the merge stops with an `invalid` conflict
   (`history.media_outside`) and the folders the check made are removed. A
   merge that fails removes the files and folders its replays created. While

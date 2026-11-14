@@ -51,7 +51,18 @@ used neither, nor `autosave_available` for saved projects.
    `<file>.unreadable-autosave.bak`, never replacing) before the folder is
    released. (Amended 2026-11-14 after the recovery review: an empty `rec/`
    made a damaged session recover as a blank project, and the first save
-   deleted the only raw copy of rejected branches.)
+   deleted the only raw copy of rejected branches.) Those copies are made
+   before anything is replaced: if one cannot be made, the recovery fails
+   (`recover.keep`) and changes nothing. "Can really be put back" is the
+   test `project.recover` applies when it places a recording (sidecar,
+   frames, a placement inside the timeline), asked of the project the
+   recordings would go into. An unsaved project's media live in its session
+   folder: a recovered branch whose `media_dir` leads elsewhere gets one more
+   version setting it back to `media` (warning `recover.media_dir`; no
+   command sets `media_dir`, so only a file this program did not write names
+   such a folder), and a replayed merge of an unsaved project writes only
+   inside its session folder, as a saved project's does inside its own
+   (ADR-0076). (Amended 2026-11-14 after review round 5.)
    `project.recoverable.delete {session}` deletes one. `project.get` and the
    other project-info results count `recoverable_sessions`.
 5. **The GUI offers, never loads.** At start without a project argument, and

@@ -583,6 +583,8 @@ void registerProjectCommands(cmd::Registry& registry) {
              "recover the session, then its recordings"},
             {"recover.no_autosave", "no autosave is newer than the saved file",
              "open the project as saved"},
+            {"recover.keep", "a copy recovery must keep could not be made; nothing changed",
+             "make the folder writable and retry"},
             {"recover.autosave_args", "autosave cannot be combined with session, files or track",
              "recover the autosave, then the recordings"}};
         c.examples = {{"Recover everything", j("{}"),

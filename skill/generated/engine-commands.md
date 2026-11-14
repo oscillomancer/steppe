@@ -10964,6 +10964,7 @@ Kind: `action`. Exposure: `mcp-tool`.
 - `recover.damaged`: nothing in the session can be opened Hint: project.recoverable.delete
 - `recover.session_args`: session cannot be combined with files or track Hint: recover the session, then its recordings
 - `recover.no_autosave`: no autosave is newer than the saved file Hint: open the project as saved
+- `recover.keep`: a copy recovery must keep could not be made; nothing changed Hint: make the folder writable and retry
 - `recover.autosave_args`: autosave cannot be combined with session, files or track Hint: recover the autosave, then the recordings
 
 ### Examples

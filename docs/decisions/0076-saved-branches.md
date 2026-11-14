@@ -101,7 +101,10 @@ The branch's steps are also what the human reviews after reopening:
      made and must resolve inside it too. A file's `media_dir` may name any folder,
      so otherwise a merge stops with an `invalid` conflict
      (`history.media_outside`) and the folders the check made are removed.
-     An unsaved project's media folder is the engine's own. A render is
+     An unsaved project is held to its session folder the same way (its
+     state may come from a recovered autosave, ADR-0078); only one with no
+     folder at all (a headless engine's `<workdir>/media`) is the engine's
+     own. (Amended 2026-11-14, review round 5.) A render is
      written under a temporary name and published only under a free name,
      never through or over an existing file or link. A merge that fails
      removes the files and folders its replays created. What this does not
