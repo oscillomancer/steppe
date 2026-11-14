@@ -571,15 +571,16 @@ and audio items on masters (ADR-0057). Before 2.4, a route from a master to `hw_
 played) becomes that master's `hw_output` (its first such route) and the
 route is dropped, with a `project.hw_output_route` warning.
 
-The loader accepts 1.x and 2.x documents and saves 2.5. Migration allocates
-child channel IDs in track-ID order, inserts each child first, and moves the
-source items and record/input FX there while keeping user inserts on the
-buss. Hardware/MIDI record routes follow the new child. Legacy numeric send
-pan remains numeric (including the old default centre); new sends default to
-`follow`. `project.open` includes nonempty load `warnings` as structured
-`{code, message, path}` entries, including the change to Console 9 staging.
-Masters are ordered by `project.masters`, independently of processing order;
-`track.list` and `session.describe` visit every root in that order.
+The loader accepts 1.x and 2.x documents and saves the current schema (2.14,
+§5). Migration allocates child channel IDs in track-ID order, inserts each
+child first, and moves the source items and record/input FX there while
+keeping user inserts on the buss. Hardware/MIDI record routes follow the new
+child. Legacy numeric send pan remains numeric (including the old default
+centre); new sends default to `follow`. `project.open` includes nonempty load
+`warnings` as structured `{code, message, path}` entries, including the change
+to Console 9 staging. Masters are ordered by `project.masters`, independently
+of processing order; `track.list` and `session.describe` visit every root in
+that order.
 
 Canonical JSON (ADR-0009) with members in this order: `schema`, `project`,
 `tempo` (`points`, `meters`), `rulers` (`markers`, `regions`), `tracks`,
