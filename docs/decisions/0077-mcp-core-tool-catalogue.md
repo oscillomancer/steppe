@@ -42,3 +42,9 @@ all. Every command remains reachable and discoverable. Structured results and
 bus validation remain unchanged, while clients wanting a result schema fetch it
 on demand. All mode intentionally has a larger catalogue. Sandbox definitions
 also gain shorter descriptions and omit output schemas, but retain their tools.
+
+### Registry index follow-up (2026-11-14)
+
+[ADR-0079](0079-registry-index-exposure.md) adds exposure metadata to registry.list
+so the proxy fetches only selected dedicated-tool descriptions at startup and
+resolves other contracts on demand.

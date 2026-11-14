@@ -177,8 +177,12 @@ instructions are in `docs/guides/installing.md`.
   60,000-byte tools/list budget. Other commands remain discoverable in the compact
   namespace index and callable through exec/query; --tools all exposes every
   non-Internal command. Dedicated tools omit output schemas; describe retains them
-  (ADR-0077). Sandbox exposures are unchanged. Native macOS/Windows CI for this
-  catalogue and CLI change is pending before merge.
+  (ADR-0077). Registry index rows include exposure (ADR-0079); proxy startup
+  fetches one index plus descriptions only for the chosen dedicated set.
+  Named describe calls fetch contracts on demand, and exec dispatches without
+  schema prefetch. The proxy requires the updated index from the running app.
+  Sandbox exposures are unchanged. Native macOS/Windows CI for these catalogue,
+  protocol and proxy changes is pending before merge.
 - **Engine** (`specs/engine.md`): deterministic offline renders with
   real-time output bit-identical to them; anticipative rendering for
   non-live tracks (ADR-0012) and a live region for monitored tracks

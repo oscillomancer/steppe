@@ -294,6 +294,19 @@ TEST_CASE("meta commands, generators and examples") {
     auto listed = call(dispatcher, "registry.list", obj("{\"kind\":\"edit\",\"text\":\"toy\"}"));
     REQUIRE(listed);
     CHECK(listed->find("commands")->size() == 3);
+    auto index = call(dispatcher, "registry.list");
+    REQUIRE(index);
+    for (const auto& entry : index->find("commands")->asArray()) {
+        auto* exposure = entry.find("exposure");
+        REQUIRE(exposure);
+        auto* info = registry.find(entry.find("name")->asString(),
+                                   static_cast<int>(entry.find("version")->asInt()));
+        REQUIRE(info);
+        const auto expected = info->exposure == Exposure::McpTool   ? "mcp-tool"
+                              : info->exposure == Exposure::McpExec ? "mcp-exec"
+                                                                    : "internal";
+        CHECK(exposure->asString() == expected);
+    }
     auto described = call(dispatcher, "registry.describe", obj("{\"command\":\"toy.add\"}"));
     REQUIRE(described);
     CHECK(described->find("name")->asString() == "toy.add");

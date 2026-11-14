@@ -460,6 +460,7 @@ Registry::Registry() {
                 item["version"] = info->version;
                 item["kind"] = kindName(info->kind);
                 item["summary"] = info->summary;
+                item["exposure"] = exposureName(info->exposure);
                 result["commands"].push_back(std::move(item));
             }
             return result;
@@ -575,6 +576,7 @@ Registry::Registry() {
     listed["version"] = self.version;
     listed["kind"] = kindName(self.kind);
     listed["summary"] = self.summary;
+    listed["exposure"] = exposureName(self.exposure);
     listExample.result["commands"].push_back(std::move(listed));
     auto& describe = commands_.at({"registry.describe", 1}).examples.front();
     describe.args["command"] = "registry.list";

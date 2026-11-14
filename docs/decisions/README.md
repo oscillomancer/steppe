@@ -92,3 +92,4 @@ current state.
 | [0074](0074-single-track-input.md) | One hardware audio, MIDI or rack input per track | Accepted |
 | [0075](0075-rack-sends.md) | A rack's Out modules send to busses and masters | Accepted |
 | [0077](0077-mcp-core-tool-catalogue.md) | A bounded MCP core tool catalogue | Accepted |
+| [0079](0079-registry-index-exposure.md) | Exposure metadata in the registry index | Accepted |

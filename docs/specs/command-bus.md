@@ -1,7 +1,7 @@
 # Spec: command bus, control protocol and MCP adapter
 
 **Status:** Implemented. Interface changes go through an ADR.
-**Decision record:** ADR-0007, ADR-0063, ADR-0077.
+**Decision record:** ADR-0007, ADR-0063, ADR-0077, ADR-0079.
 **Libraries:** `libs/command-bus` (`supple::cmd`), `libs/control-protocol`
 (`supple::rpc`), `mcp/` (`supple::mcp`). All run on the model thread only
 (transports marshal requests onto it). Depend on core-json and core-schema.
@@ -101,8 +101,13 @@ struct CommandInfo {
 ```
 
 The library registers its own meta commands: `registry.list` (filter by
-tag/kind/text; returns name, version, kind, summary) and `registry.describe`
+tag/kind/text; returns name, version, kind, summary, exposure) and `registry.describe`
 (one command: full schemas, errors, examples). Both `Query`, `McpExec`.
+
+Each `registry.list` row identifies one registered command version. `exposure`
+is `mcp-tool`, `mcp-exec` or `internal`, matching that version's declaration.
+Filters retain all five fields. This additive protocol-1 extension (ADR-0079)
+lets consumers select tool definitions without fetching every full description.
 
 ### 1.4 Dispatch
 
@@ -359,6 +364,21 @@ Core lists only `McpTool` commands; `all` lists every non-Internal command,
 including existing `McpExec` commands. Both use the latest command version.
 The sandbox exposure declarations and the GUI's additional `gui.selection`
 context query are unchanged.
+
+The proxy makes one `registry.list` request, selects the latest version of
+each command, then fetches exactly one `registry.describe` per dedicated tool
+selected by the chosen mode. Its startup command-request count is therefore
+`1 + dedicated tools` (excluding RPC handshakes). Internal commands are never
+hydrated at startup. Kind metadata from the full index supports `query` for
+commands outside the dedicated set. A named `describe` fetches its full contract
+on demand; `exec` forwards directly to the dispatcher for validation and
+execution without a schema-prefetch request. The compact MCP describe index
+continues to contain only name, kind and summary.
+
+The proxy requires a valid exposure on each latest index row. Missing or
+unknown values fail startup with `mcp.registry` at `/commands` and a hint to
+update the running application and proxy to matching versions, rather than
+silently fetching every description. Older proxies can ignore the added field.
 
 The engine core is exactly these 37 commands, plus `describe`, `exec`, `query`:
 

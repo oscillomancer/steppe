@@ -143,29 +143,34 @@ Result<std::unique_ptr<Server>> Server::proxy(rpc::Client& client, Reconnect rec
     auto* commands = listed->find("commands");
     if (!commands || !commands->isArray())
         return Error("mcp.registry", "remote registry.list returned no commands");
-    std::map<std::string, int> latest;
+    std::map<std::string, const json::Value*> latest;
     for (const auto& item : commands->asArray()) {
         auto name = stringField(item, "name");
         auto* version = item.find("version");
-        if (version && version->isInt())
-            latest[name] = std::max(latest[name], static_cast<int>(version->asInt()));
+        if (!version || !version->isInt()) continue;
+        auto prior = latest.find(name);
+        if (prior == latest.end() || version->asInt() > prior->second->find("version")->asInt())
+            latest[name] = &item;
     }
-    for (const auto& [name, version] : latest) {
-        json::Value args = json::Value::object();
-        args["command"] = name + "@" + std::to_string(version);
-        auto described = client.call("registry.describe", args);
-        if (!described) return described.error();
-        auto kind = stringField(*described, "kind");
+    for (const auto& [name, info] : latest) {
+        auto exposure = stringField(*info, "exposure");
+        if (exposure != "mcp-tool" && exposure != "mcp-exec" && exposure != "internal")
+            return Error("mcp.registry", "remote registry.list has no valid command exposure",
+                         "/commands",
+                         "update the running application and proxy to matching versions");
+        auto kind = stringField(*info, "kind");
         server->kinds_[name] = kind == "query"  ? cmd::Kind::Query
                                : kind == "edit" ? cmd::Kind::Edit
                                                 : cmd::Kind::Action;
-        if (stringField(*described, "exposure") != "internal" &&
-            (tools == ToolSet::All || stringField(*described, "exposure") == "mcp-tool")) {
-            auto definition = toolFromInfo(*described);
-            auto toolName = stringField(definition, "name");
-            server->commands_[toolName] = name;
-            server->dedicated_.push_back(std::move(definition));
-        }
+        if (exposure == "internal" || (tools == ToolSet::Core && exposure != "mcp-tool")) continue;
+        json::Value args = json::Value::object();
+        args["command"] = name + "@" + std::to_string(info->find("version")->asInt());
+        auto described = client.call("registry.describe", args);
+        if (!described) return described.error();
+        auto definition = toolFromInfo(*described);
+        auto toolName = stringField(definition, "name");
+        server->commands_[toolName] = name;
+        server->dedicated_.push_back(std::move(definition));
     }
     server->queryTool_ = latest.contains("session.describe");
     return server;

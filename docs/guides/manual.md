@@ -794,6 +794,11 @@ loading, add `--tools all` to `steppe-mcp` or `steppe-engine --mcp` to expose
 every non-Internal command as a dedicated tool. `--tools core` explicitly
 selects the default. The plugin sandbox keeps its existing dedicated commands.
 
+The proxy loads the command index once and fetches descriptions only for the
+selected dedicated tools. Use `describe` for other contracts when needed; `exec`
+validates through the running application. Use the proxy and application from
+the same installation: startup requires exposure metadata in the command index.
+
 Saved `dsp.test` audio and `dsp.preview` pictures use readable, shortened
 filenames with a hash when a plugin ID needs escaping or truncation, or ends
 in the reserved `-` plus 16 hexadecimal digits suffix. Stock plugin filenames

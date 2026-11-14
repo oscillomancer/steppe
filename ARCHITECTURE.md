@@ -320,7 +320,9 @@ matching one-paragraph text summary. No audio model ever "listens".
   `describe` lists all commands or returns one command's full contract;
   `exec` calls any command and `query` calls read-only commands. Both engine
   MCP and proxy accept `--tools all` to expose every non-Internal command as
-  a dedicated tool (ADR-0077). The sandbox's dedicated set is unchanged.
+  a dedicated tool (ADR-0077). Proxy startup reads the command index once
+  and fetches only selected dedicated-tool descriptions; other contracts are
+  described on demand (ADR-0079). The sandbox's dedicated set is unchanged.
 - **Branches first**: the skill teaches agents to propose on a branch and ask
   the human to listen. Every agent action is in the command log and undo
   history with its origin.
