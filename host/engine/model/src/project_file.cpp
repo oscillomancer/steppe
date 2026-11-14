@@ -3,6 +3,8 @@
 #include "supple/model/project_file.h"
 
 #include <charconv>
+#include <map>
+#include <new>
 #include <set>
 
 #include "supple/base/sha256.h"
@@ -465,6 +467,11 @@ Result<VersionStore> restoreBranches(const json::Value& mainDoc, const json::Val
 
     const auto* versions = section.find("versions");
     if (!versions || !versions->isObject()) return r.fail("expected versions", "/versions");
+    // Every version's record first, then the states oldest first: each is
+    // decoded and at once shares what equals its first parent's (already
+    // shared), so memory grows with what the versions change, not with
+    // their number times the document (review of item A, finding 5).
+    std::map<std::uint64_t, const json::Value*> states;
     for (const auto& m : versions->asObject()) {
         const Reader at{json::pointerJoin("/branches/versions", m.key)};
         std::uint64_t id = 0;
@@ -475,13 +482,21 @@ Result<VersionStore> restoreBranches(const json::Value& mainDoc, const json::Val
         auto v = versionFrom(m.value, id, at, check);
         if (!v) return std::move(v).error();
         const auto* state = m.value.find("state");
+        if (id == mainHead && state)
+            return at.fail("main's head is the document; it has no state", "/state");
+        if (id != mainHead && !state) return at.fail("expected state", "/state");
+        states.emplace(id, state);
+        saved.versions.emplace(id, std::move(*v));
+    }
+    if (!saved.versions.contains(mainHead))
+        return r.fail("main's head is not among the versions", "/refs/main/head");
+    for (auto& [id, v] : saved.versions) {
+        const Reader at{"/branches/versions/" + std::to_string(id)};
         Session session;
         if (id == mainHead) {
-            if (state) return at.fail("main's head is the document; it has no state", "/state");
             session = main;
         } else {
-            if (!state) return at.fail("expected state", "/state");
-            auto doc = applyDelta(mainDoc, *state, at.base + "/state");
+            auto doc = applyDelta(mainDoc, *states.at(id), at.base + "/state");
             if (!doc) return std::move(doc).error();
             auto decoded = projectFromJson(*doc);
             if (!decoded) {
@@ -491,21 +506,13 @@ Result<VersionStore> restoreBranches(const json::Value& mainDoc, const json::Val
             session = std::move(*decoded);
         }
         session.version = id;
-        v->session = std::make_shared<const Session>(std::move(session));
-        saved.versions.emplace(id, std::move(*v));
-    }
-    if (!saved.versions.contains(mainHead))
-        return r.fail("main's head is not among the versions", "/refs/main/head");
-    // Oldest first, so each parent is shared before its children.
-    for (auto& [id, v] : saved.versions) {
-        Session s = *v.session;
         const Session* parent = nullptr;
         if (!v.parents.empty())
             if (const auto it = saved.versions.find(v.parents.front());
                 it != saved.versions.end() && it->first < id)
                 parent = it->second.session.get();
-        shareRevisions(s, parent);
-        v.session = std::make_shared<const Session>(std::move(s));
+        shareRevisions(session, parent);
+        v.session = std::make_shared<const Session>(std::move(session));
     }
     return VersionStore::restore(std::move(saved));
 }
@@ -560,7 +567,14 @@ Result<OpenedProject> projectFileFromJson(const json::Value& input,
     auto main = projectFromJson(doc, warnings);
     if (!main) return std::move(main).error();
     if (!section) return OpenedProject{VersionStore(std::move(*main)), std::nullopt};
-    auto restored = restoreBranches(doc, *section, *main, check);
+    Result<VersionStore> restored = Error("history.saved", "not restored");
+    try {
+        restored = restoreBranches(doc, *section, *main, check);
+    } catch (const std::bad_alloc&) {
+        // Main loaded; the rest does not fit in memory: it is damage too.
+        restored = Error("history.saved", "the saved branches do not fit in memory", "/branches",
+                         "main opens alone");
+    }
     if (!restored)
         return OpenedProject{VersionStore(std::move(*main)), std::move(restored).error()};
     return OpenedProject{std::move(*restored), std::nullopt};
@@ -569,9 +583,14 @@ Result<OpenedProject> projectFileFromJson(const json::Value& input,
 Result<OpenedProject> parseProjectFile(std::string_view text,
                                        std::vector<schema::Warning>* warnings,
                                        const InvocationCheck& check) {
-    auto doc = json::parse(text);
-    if (!doc) return std::move(doc).error();
-    return projectFileFromJson(*doc, warnings, check);
+    try {
+        auto doc = json::parse(text);
+        if (!doc) return std::move(doc).error();
+        return projectFileFromJson(*doc, warnings, check);
+    } catch (const std::bad_alloc&) {
+        return Error("project.memory", "the project does not fit in memory", {},
+                     "close other programs, or open it on a machine with more memory");
+    }
 }
 
 }  // namespace supple::model

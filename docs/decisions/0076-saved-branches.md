@@ -51,7 +51,12 @@ The branch's steps are also what the human reviews after reopening:
 5. **Opening** restores the branches and the current branch. Revisions are
    rebuilt: an object equal to its first parent's shares its entry and
    revision, others take the version's number, which keeps the merge
-   shortcut sound and restores structural sharing in memory.
+   shortcut sound and restores structural sharing in memory. Versions are
+   rebuilt oldest first, each sharing with its parent as it is decoded, so
+   opening needs memory for what the versions change (the first version
+   decoded them all before sharing: 2,005 versions of a document with 128 KiB
+   of notes ran out of 256 MiB). Running out of memory anyway is damage, not
+   a crash.
 6. **Damaged or stale sections.** `main_hash` is the SHA-256 of main's
    canonical document. If it no longer matches (a program that does not keep
    branches changed main) or the section is malformed, the project opens main

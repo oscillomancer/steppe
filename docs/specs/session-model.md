@@ -710,8 +710,12 @@ and nothing else is kept (the file is then the document alone).
   uses them (imports, recordings, renders and freezes all land there).
   Nothing else is project-local: DSP scripts, presets, chains, templates and
   rack presets are the user's libraries, applied to the session when used.
-- **Opening.** Each state is decoded like a document. Objects equal to their
-  first parent's share its entry and revision; others take the version id.
+- **Opening.** Each state is decoded like a document, oldest first, and at
+  once shares the objects equal to its first parent's (entry and revision);
+  others take the version id. Memory grows with what versions change, not
+  with their number times the document. A section that does not fit in
+  memory anyway is damage (main opens alone); a main document that does not
+  fit fails the open with `project.memory`.
   A malformed section, or a `main_hash` that no longer matches main (a
   program that does not keep branches edited it), opens main alone with a
   `project.history` warning; the first save over that file keeps a copy of

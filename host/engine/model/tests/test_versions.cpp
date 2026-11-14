@@ -6,6 +6,23 @@
 #include <supple/model/versions.h>
 #include <ostream>
 
+#if defined(__linux__) && !defined(__SANITIZE_ADDRESS__) && !defined(__SANITIZE_THREAD__)
+#if defined(__has_feature)
+#if !__has_feature(address_sanitizer) && !__has_feature(thread_sanitizer) && \
+    !__has_feature(memory_sanitizer)
+#define SUPPLE_MEMORY_LIMIT_TEST 1
+#endif
+#else
+#define SUPPLE_MEMORY_LIMIT_TEST 1
+#endif
+#endif
+#if SUPPLE_MEMORY_LIMIT_TEST
+#include <sys/resource.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <fstream>
+#endif
+
 using namespace supple;
 using namespace supple::model;
 
@@ -1052,6 +1069,67 @@ TEST_CASE("a damaged or stale branches section opens main alone") {
         CHECK(open(damaged) == "history.saved");
     }
 }
+
+#if SUPPLE_MEMORY_LIMIT_TEST
+TEST_CASE("many saved versions of a large document open in bounded memory") {
+    // Review of item A, finding 5: 2,005 versions of a project with 128 KiB of
+    // notes were each decoded in full before any sharing, which needs well
+    // over 256 MiB and died with std::bad_alloc. Rebuilt oldest first, each
+    // shares its parent's objects as it is decoded.
+    Project project;
+    project.notes = std::string(128 * 1024, 'n');
+    VersionStore vs(Session::create(std::move(project)));
+    run(vs, {inv("track.add", R"({"name": "One"})")});
+    auto doc = json::parse(serializeProjectFile(vs, true)).value();
+    auto& section = doc["branches"];
+    auto& versions = section["versions"].asObject();
+    REQUIRE(versions.size() == 2);
+    json::Value root = versions.begin()->value, head = std::next(versions.begin())->value;
+    REQUIRE(root.find("state"));
+    REQUIRE_FALSE(head.find("state"));
+    constexpr std::uint64_t n = 2005;
+    json::Value chain = json::Value::object();
+    for (std::uint64_t id = 1; id <= n; ++id) {
+        json::Value v = id == n ? head : root;
+        // Each earlier version equals the document: a full decode each.
+        if (id != n) v["state"] = json::Value::object();
+        v["parents"] = json::Value::array();
+        if (id > 1) v["parents"].push_back(id - 1);
+        chain[std::to_string(id)] = std::move(v);
+    }
+    section["versions"] = std::move(chain);
+    section["next_version"] = n + 1;
+    section["refs"]["main"]["head"] = n;
+    section["refs"]["main"]["base"] = 1;
+    section["refs"]["main"].asObject().erase("redo");
+    const std::string text = json::writeCanonical(doc);
+    REQUIRE(text.size() < 1024 * 1024);  // a small file
+
+    // A child process gets 160 MiB more address space than it has now.
+    std::size_t pages = 0;
+    std::ifstream("/proc/self/statm") >> pages;
+    const auto limit = static_cast<rlim_t>(pages) * static_cast<rlim_t>(sysconf(_SC_PAGESIZE)) +
+                       (rlim_t{160} << 20);
+    const pid_t child = fork();
+    REQUIRE(child >= 0);
+    if (child == 0) {
+        rlimit cap{limit, limit};
+        if (setrlimit(RLIMIT_AS, &cap) != 0) _exit(9);
+        try {
+            auto opened = parseProjectFile(text);
+            if (!opened) _exit(4);
+            if (opened->branchesDropped) _exit(2);
+            _exit(opened->store.canUndo() ? 0 : 5);
+        } catch (const std::bad_alloc&) {
+            _exit(3);  // escaped the loader
+        }
+    }
+    int status = 0;
+    REQUIRE(waitpid(child, &status, 0) == child);
+    REQUIRE(WIFEXITED(status));
+    CHECK(WEXITSTATUS(status) == 0);  // 3: bad_alloc escaped; 2: refused as too large
+}
+#endif
 
 TEST_CASE("a project saved before branches were kept opens as main") {
     VersionStore vs(Session::create());
