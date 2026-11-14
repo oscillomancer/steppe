@@ -12,10 +12,12 @@
 #else
 #include <unistd.h>
 #endif
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <deque>
+#include <future>
 #include <mutex>
 #include <set>
 #include <sstream>
@@ -432,6 +434,226 @@ TEST_CASE("the proxy reconnects after the app restarts") {
     REQUIRE(content->find("count"));
     CHECK(content->find("count")->asInt() == 4);
     CHECK(reconnects == 1);
+    client.close();
+    second.stop();
+}
+
+TEST_CASE("restarted catalogues refresh query admission and notify the MCP client") {
+    auto catalogue = [](bool updated) {
+        cmd::Registry result;
+        auto add = [&](const char* name, cmd::Kind kind, cmd::Exposure exposure,
+                       const char* summary, int version = 1) {
+            cmd::Command<cmd::NoArgs, Count> command;
+            command.name = name;
+            command.version = version;
+            command.kind = kind;
+            command.exposure = exposure;
+            command.summary = summary;
+            command.description = summary;
+            command.args = schema::object<cmd::NoArgs>("no_args").build();
+            command.result = schema::object<Count>("count")
+                                 .field("count", &Count::count, schema::integerOf<int>())
+                                 .build();
+            command.examples = {{"Run", parse("{}"), parse(R"({"count":"<any>"})"), "empty"}};
+            command.run = [kind](const cmd::NoArgs&, cmd::Context& ctx) -> Result<Count> {
+                auto& count = ctx.service<int>();
+                if (kind == cmd::Kind::Edit) ++count;
+                return Count{count};
+            };
+            result.add(std::move(command));
+        };
+        add("session.describe", cmd::Kind::Query, cmd::Exposure::McpExec, "Read the session.");
+        add("catalogue.change", updated ? cmd::Kind::Edit : cmd::Kind::Query,
+            cmd::Exposure::McpTool, updated ? "Change the counter." : "Read the counter.",
+            updated ? 2 : 1);
+        add(updated ? "catalogue.new" : "catalogue.old", cmd::Kind::Query, cmd::Exposure::McpTool,
+            "Read the counter.");
+        return result;
+    };
+    for (auto tools : {mcp::ToolSet::Core, mcp::ToolSet::All}) {
+        for (bool customReconnect : {false, true}) {
+            INFO("all tools: ", tools == mcp::ToolSet::All, ", callback: ", customReconnect);
+            auto oldCommands = catalogue(false), newCommands = catalogue(true);
+            RecordingHost host;
+            cmd::Dispatcher oldBus(oldCommands, host), newBus(newCommands, host);
+            ModelQueue model;
+            auto path = std::filesystem::temp_directory_path() /
+                        ("mcp-catalogue-" + std::to_string(::getpid()) + ".sock");
+            rpc::Server first(oldCommands, oldBus, [&](auto task) { model.post(std::move(task)); });
+            REQUIRE(first.start(path));
+            rpc::Client client;
+            REQUIRE(client.connect(path, "catalogue-test", {}, true));
+            mcp::Server::Reconnect reconnect;
+            if (customReconnect)
+                reconnect = [&](const cmd::Origin&) {
+                    return client.connect(path, "catalogue-test", {}, true);
+                };
+            auto proxy = mcp::Server::proxy(client, reconnect, tools);
+            REQUIRE(proxy);
+            auto initialized = request(
+                **proxy,
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}})");
+            first.stop();
+            if (customReconnect) {
+                client.close();  // force the explicit reconnect callback
+            } else {
+                // A failed call retains the endpoint. The next RPC call will
+                // automatically reopen it, without a proxy reconnect callback.
+                auto lost = client.call("registry.list");
+                REQUIRE_FALSE(lost);
+            }
+            rpc::Server second(newCommands, newBus,
+                               [&](auto task) { model.post(std::move(task)); });
+            REQUIRE(second.start(path));
+            host.takeLog();
+            const std::string changedQuery =
+                R"({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"query","arguments":{"command":"catalogue.change"}}})"
+                "\n";
+            const std::string newQuery =
+                R"({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"query","arguments":{"command":"catalogue.new"}}})"
+                "\n";
+            // Exercise both first-call orders: a new query must reconnect
+            // before it can be rejected by a stale local admission map.
+            std::istringstream input(
+                (customReconnect ? newQuery + changedQuery : changedQuery + newQuery) +
+                R"({"jsonrpc":"2.0","id":4,"method":"tools/list"})"
+                "\n"
+                R"({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"catalogue_old"}})"
+                "\n"
+                R"({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"catalogue_new"}})"
+                "\n");
+            std::ostringstream output;
+            REQUIRE((*proxy)->serve(input, output));
+            std::map<std::int64_t, json::Value> replies;
+            int notifications = 0;
+            std::istringstream frames(output.str());
+            for (std::string frame; std::getline(frames, frame);) {
+                auto value = parse(frame);
+                if (auto* id = value.find("id")) {
+                    replies[id->asInt()] = std::move(value);
+                } else {
+                    CHECK(value.find("method")->asString() == "notifications/tools/list_changed");
+                    CHECK(value.find("jsonrpc")->asString() == "2.0");
+                    ++notifications;
+                }
+            }
+            REQUIRE(replies.size() == 5);
+            const auto& denied = *replies.at(2).find("result");
+            CHECK(denied.find("isError"));
+            if (denied.find("isError"))
+                CHECK(denied.find("structuredContent")->find("code")->asString() == "mcp.query");
+            for (auto id : {3, 6}) {
+                const auto* read = replies.at(id).find("result");
+                CHECK(read);
+                if (!read) continue;
+                CHECK_FALSE(read->find("isError"));
+                if (!read->find("isError"))
+                    CHECK(read->find("structuredContent")->find("count")->asInt() == 0);
+            }
+            const auto* removed = replies.at(5).find("error");
+            CHECK(removed);
+            if (removed) CHECK(removed->find("code")->asInt() == -32601);
+            bool sawNew = false;
+            for (const auto& tool : replies.at(4).find("result")->find("tools")->asArray()) {
+                auto name = tool.find("name")->asString();
+                CHECK(name != "catalogue_old");
+                if (name == "catalogue_new") sawNew = true;
+                if (name == "catalogue_change") {
+                    CHECK_FALSE(tool.find("annotations")->find("readOnlyHint")->asBool());
+                    CHECK(tool.find("description")->asString().starts_with("Change the counter."));
+                }
+            }
+            CHECK(sawNew);
+            CHECK(notifications == 1);
+            const auto* capability = initialized.find("result")
+                                         ->find("capabilities")
+                                         ->find("tools")
+                                         ->find("listChanged");
+            CHECK(capability);
+            if (capability) CHECK(capability->asBool());
+            auto calls = host.takeLog();
+            CHECK(std::count_if(calls.begin(), calls.end(), [](const auto& call) {
+                      return call.command == "registry.list";
+                  }) == 1);
+            CHECK(std::none_of(calls.begin(), calls.end(), [](const auto& call) {
+                return call.command == "catalogue.change";
+            }));
+            second.stop();
+            auto disconnected = client.call("registry.list");
+            REQUIRE_FALSE(disconnected);
+            rpc::Server third(newCommands, newBus, [&](auto task) { model.post(std::move(task)); });
+            REQUIRE(third.start(path));
+            host.takeLog();
+            std::istringstream sameInput(R"({"jsonrpc":"2.0","id":7,"method":"tools/list"})"
+                                         "\n");
+            std::ostringstream sameOutput;
+            REQUIRE((*proxy)->serve(sameInput, sameOutput));
+            // Identical index: only the index request, with no notification
+            // and no schema fetches. The single output frame is the reply.
+            auto sameReply = json::parse(sameOutput.str());
+            REQUIRE(sameReply);
+            CHECK(sameReply->find("id")->asInt() == 7);
+            calls = host.takeLog();
+            REQUIRE(calls.size() == 1);
+            CHECK(calls.front().command == "registry.list");
+            client.close();
+            third.stop();
+        }
+    }
+}
+
+TEST_CASE("an edit whose reply is lost is not resent after catalogue refresh") {
+    struct StopAfterEdit : Host {
+        std::function<void()> afterEdit;
+        void log(const cmd::LogRecord& record) override {
+            if (record.command == "counter.add" && record.ok && afterEdit) {
+                auto stop = std::move(afterEdit);
+                stop();  // after commit, before RPC can enqueue the reply
+            }
+        }
+    } host;
+    auto commands = registry();
+    cmd::Dispatcher bus(commands, host);
+    ModelQueue model;
+    auto path = std::filesystem::temp_directory_path() /
+                ("mcp-lost-reply-" + std::to_string(::getpid()) + ".sock");
+    rpc::Server first(commands, bus, [&](auto task) { model.post(std::move(task)); });
+    rpc::Server second(commands, bus, [&](auto task) { model.post(std::move(task)); });
+    REQUIRE(first.start(path));
+    rpc::Client client;
+    REQUIRE(client.connect(path, "lost-reply", {}, true));
+    std::promise<Status> restarted;
+    auto ready = restarted.get_future().share();
+    auto proxy = mcp::Server::proxy(client, [&](const cmd::Origin& origin) -> Status {
+        const auto& status = ready.get();
+        if (!status) return status.error();
+        return client.connect(path, origin.client, origin.agent, true);
+    });
+    REQUIRE(proxy);
+    request(
+        **proxy,
+        R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","clientInfo":{"name":"lost-reply"}}})");
+    std::promise<void> armed;
+    auto armedFuture = armed.get_future();
+    model.post([&] {
+        host.afterEdit = [&] {
+            first.stop();
+            restarted.set_value(second.start(path));
+        };
+        armed.set_value();
+    });
+    armedFuture.get();
+    auto lost = request(
+        **proxy,
+        R"({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"counter_add","arguments":{"value":1}}})");
+    const auto* result = lost.find("result");
+    REQUIRE(result);
+    CHECK(result->find("isError"));
+    CHECK(result->find("structuredContent")->find("code")->asString() == "rpc.read");
+    auto read = request(
+        **proxy,
+        R"({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"exec","arguments":{"command":"counter.peek"}}})");
+    CHECK(read.find("result")->find("structuredContent")->find("count")->asInt() == 1);
     client.close();
     second.stop();
 }

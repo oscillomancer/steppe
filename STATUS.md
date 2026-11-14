@@ -188,7 +188,10 @@ instructions are in `docs/guides/installing.md`.
   (ADR-0077). Registry index rows include exposure (ADR-0079); proxy startup
   fetches one index plus descriptions only for the chosen dedicated set.
   Named describe calls fetch contracts on demand, and exec dispatches without
-  schema prefetch. The proxy requires the updated index from the running app.
+  schema prefetch. Reconnects refresh the index before cached query admission;
+  changed catalogues replace selected definitions and notify MCP clients.
+  Edits with lost replies are never retried automatically. The proxy requires
+  the updated index from the running app.
   Sandbox exposures are unchanged. Native macOS/Windows CI for these catalogue,
   protocol and proxy changes is pending before merge.
 - **Engine** (`specs/engine.md`): deterministic offline renders with

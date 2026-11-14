@@ -635,7 +635,10 @@ Status Client::open(Deadline deadline) {
         break;
     }
     auto result = exchange("rpc.hello", *hello_, deadline);
-    if (result) return {};
+    if (result) {
+        ++connectionGeneration_;
+        return {};
+    }
     drop();  // a connection without a handshake cannot serve calls
     return result.error();
 }
@@ -649,6 +652,13 @@ void Client::close() {
     drop();
     path_.clear();
     hello_.reset();
+}
+std::uint64_t Client::connectionGeneration() {
+    if (fd_ != -1) {
+        const auto ready = net::peek(static_cast<net::Socket>(fd_));
+        if (ready == 0 || (ready < 0 && errno != EAGAIN && errno != EINTR)) drop();
+    }
+    return fd_ == -1 ? 0 : connectionGeneration_;
 }
 void Client::setTimeout(std::chrono::milliseconds timeout) {
     timeout_ = std::clamp(timeout, std::chrono::milliseconds(1),
