@@ -57,12 +57,20 @@ used neither, nor `autosave_available` for saved projects.
    test `project.recover` applies when it places a recording (sidecar,
    frames, a placement inside the timeline), asked of the project the
    recordings would go into. An unsaved project's media live in its session
-   folder: a recovered branch whose `media_dir` leads elsewhere gets one more
-   version setting it back to `media` (warning `recover.media_dir`; no
-   command sets `media_dir`, so only a file this program did not write names
-   such a folder), and a replayed merge of an unsaved project writes only
-   inside its session folder, as a saved project's does inside its own
-   (ADR-0076). (Amended 2026-11-14 after review round 5.)
+   folder. One test decides what is inside it: the deepest part of a path
+   that exists, every link on the way followed, resolves inside the
+   resolved folder, and a part that does not exist yet names no `..`. A
+   recovered branch whose `media_dir` fails it gets one more version setting
+   it back to `media` (warning `recover.media_dir`; no command sets
+   `media_dir`, so only a file this program did not write names such a
+   folder); one that passes is kept however it is spelled
+   (`intermediate/../audio`). Recovery reads and repairs only recordings
+   that pass the same test: if even `media` leads out (a link), they are not
+   recovered (warning `recover.media_outside`) and nothing there is read or
+   changed. A replayed merge of an unsaved project writes only inside its
+   session folder, as a saved project's does inside its own (ADR-0076), and
+   still refuses any `..`. (Amended 2026-11-14 after review rounds 5 and
+   6.)
    `project.recoverable.delete {session}` deletes one. `project.get` and the
    other project-info results count `recoverable_sessions`.
 5. **The GUI offers, never loads.** At start without a project argument, and

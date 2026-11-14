@@ -695,12 +695,17 @@ back, by the test `project.recover` applies when it places one (a sidecar
 that reads, a WAV with frames, a placement inside the timeline): a new
 project with one channel, "Recovered", that holds them; otherwise
 `recover.damaged`, with the current project and every file untouched. An
-unsaved project's media stay in its session folder: a recovered branch
-whose `media_dir` leads outside it (only a file this program did not write
-names one; no command sets it) gets one more version setting it to `media`,
-with a `recover.media_dir` warning, and a merge replayed into an unsaved
-project writes only inside its session folder (`history.media_outside`,
-§5.4). Nothing a recovery could not
+unsaved project's media stay in its session folder. A path is inside it
+when the deepest part of it that exists resolves (every link followed)
+inside the resolved folder and the part that does not exist names no `..`.
+A recovered branch whose `media_dir` is not (only a file this program did
+not write names one; no command sets it) gets one more version setting it
+to `media`, with a `recover.media_dir` warning; one that is stays as
+spelled. Recordings are listed, read and repaired only when they are
+inside too: if `media` itself leads out, they are not recovered
+(`recover.media_outside` warning) and nothing there is touched. A merge
+replayed into an unsaved project writes only inside its session folder and
+refuses any `..` (`history.media_outside`, §5.4). Nothing a recovery could not
 restore is lost by the first save, which releases the folder: an autosave
 whose branches were not restored (opened as main alone, `project.history`)
 or that could not be read is copied at recovery beside the autosaves

@@ -27,6 +27,7 @@
 #include <string_view>
 #include <thread>
 #include <tuple>
+#include <utility>
 #include <vector>
 #include "supple/base/stop.h"
 
@@ -990,6 +991,9 @@ class EngineApp : public cmd::Host {
         std::string suffix;  // ".pre-branches", ".unreadable-autosave"
     };
     std::vector<RecoveryKeep> recoveryKeep_;
+    // Where recovery may read and repair recordings: an unsaved project's
+    // session folder; empty for a saved project (its file names its media).
+    std::filesystem::path recoveryRoot() const;
     // A raw autosave a recovery cannot fully restore: (name, bytes, suffix).
     using RawAutosave = std::tuple<std::string, std::string, std::string>;
     // Copies each into `folder` out of the autosave rotation, all or none

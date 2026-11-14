@@ -2726,35 +2726,42 @@ fs::path EngineApp::mediaDir() const {
 }
 
 namespace {
-// Whether `p` (which exists) resolves inside `root` (canonical), links followed.
-bool resolvesInside(const fs::path& root, const fs::path& p) {
-    std::error_code e;
-    const fs::path rel = fs::canonical(p, e).lexically_relative(root);
-    return !e && !rel.empty() && *rel.begin() != "..";
+// The one test of where a path the engine reads or writes on a file's say
+// leads (ADR-0076, ADR-0078): inside `root` when the deepest part of `path`
+// that exists resolves, every link on the way followed (canonical, so its
+// ancestors too), inside the resolved `root`, and the part that does not
+// exist yet names no ".." (where that leads is unknown until it is made).
+// `missing` (optional) receives the parts that do not exist, deepest first.
+bool resolvedInside(const fs::path& root, const fs::path& path,
+                    std::vector<fs::path>* missing = nullptr) {
+    std::error_code ec;
+    const fs::path base = fs::canonical(root, ec);
+    if (ec) return false;
+    fs::path existing = path;
+    std::vector<fs::path> absent;
+    while (!existing.empty() && !fs::exists(fs::symlink_status(existing, ec))) {
+        absent.push_back(existing);
+        if (existing == existing.parent_path()) return false;
+        existing = existing.parent_path();
+    }
+    for (const auto& part : path.lexically_relative(existing))
+        if (part == "..") return false;
+    const fs::path rel = fs::canonical(existing, ec).lexically_relative(base);
+    if (ec || rel.empty() || *rel.begin() == "..") return false;
+    if (missing) *missing = std::move(absent);
+    return true;
 }
 
 // Why the media folder `setting` (a project's media_dir) names from `folder`
-// may not hold files the engine writes on a file's say (a replayed step, a
-// recovered session): it names "..", or the deepest folder of it that
-// exists, links followed, is outside `folder`. Empty when it is inside.
-// `missing` (optional) receives the folders that do not exist yet, deepest
-// first.
+// may not hold files a replayed step writes: it names ".." anywhere (a step
+// may make folders, so where one leads must not depend on what exists), or
+// it does not resolve inside `folder`. Empty when it may. `missing`
+// (optional) receives the folders that do not exist yet, deepest first.
 std::string mediaOutside(const fs::path& folder, const std::string& setting,
                          std::vector<fs::path>* missing = nullptr) {
-    // No "..": a missing folder before one would hide where it leads until
-    // it is made.
     for (const auto& part : fs::path(setting))
         if (part == "..") return "names '..'";
-    std::error_code ec;
-    const fs::path root = fs::canonical(folder, ec);
-    if (ec) return "cannot be checked (" + ec.message() + ")";
-    fs::path existing = folder / setting;
-    while (!existing.empty() && !fs::exists(fs::symlink_status(existing, ec))) {
-        if (missing) missing->push_back(existing);
-        if (existing == existing.parent_path()) break;
-        existing = existing.parent_path();
-    }
-    if (!resolvesInside(root, existing)) return "is outside the project folder";
+    if (!resolvedInside(folder, folder / setting, missing)) return "is outside the project folder";
     return {};
 }
 }  // namespace
@@ -2792,13 +2799,17 @@ Status EngineApp::replayMayWriteMedia() {
         for (auto it = made.rbegin(); it != made.rend(); ++it) fs::remove(*it, ec);
         return outside("cannot be made (" + ec.message() + ")");
     }
-    if (!resolvesInside(fs::canonical(project, ec), media)) {
+    if (!resolvedInside(project, media)) {
         for (auto it = made.rbegin(); it != made.rend(); ++it) fs::remove(*it, ec);
         return outside("is outside the project folder");
     }
     if (mergeCreated_)  // a failed merge removes them (after its files)
         mergeCreated_->insert(mergeCreated_->begin(), made.begin(), made.end());
     return okStatus();
+}
+
+fs::path EngineApp::recoveryRoot() const {
+    return projectPath_.empty() ? options_.scratchDir : fs::path();
 }
 
 fs::path EngineApp::projectDir() const {
@@ -2904,9 +2915,11 @@ std::optional<std::int64_t> fileTimeMs(const fs::path& file) {
 
 // Recordings with a sidecar in <folder>/<mediaDir>/rec that no path in
 // `used` (relative to the media folder) names.
-std::int64_t leftoverRecordings(const fs::path& rec, const std::set<std::string>& used) {
+std::int64_t leftoverRecordings(const fs::path& folder, const fs::path& rec,
+                                const std::set<std::string>& used) {
     std::int64_t n = 0;
     std::error_code ec;
+    if (!resolvedInside(folder, rec)) return 0;  // not the session's: never looked at
     for (fs::directory_iterator it(rec, ec), end; !ec && it != end; it.increment(ec)) {
         const fs::path& f = it->path();
         if (f.extension() != ".wav" || !it->is_regular_file(ec)) continue;
@@ -2920,8 +2933,11 @@ std::int64_t leftoverRecordings(const fs::path& rec, const std::set<std::string>
 // What recover() can put back from one WAV in `rec` (ADR-0014): a regular
 // file directly in that real folder (recovery rewrites headers, so nothing
 // reached through a link), a sidecar that reads, frames, and a placement
-// inside the timeline of `s`. The listing, the recovery itself and a
-// session's preflight all ask this, so none accepts what another refuses.
+// inside the timeline of `s`. With `root` (an unsaved project's session
+// folder), the file must resolve inside it too: nothing reached through a
+// link out of the session is read or repaired. The listing, the recovery
+// itself and a session's preflight all ask this, so none accepts what
+// another refuses.
 struct RecordingCheck {
     std::optional<detail::RecordingInfo> side;
     std::optional<audio::WavStreamInfo> wav;  // set when it can be put back
@@ -2929,12 +2945,14 @@ struct RecordingCheck {
     bool usable() const { return wav.has_value(); }
 };
 
-RecordingCheck checkRecording(const model::Session& s, const fs::path& rec, const fs::path& f) {
+RecordingCheck checkRecording(const model::Session& s, const fs::path& rec, const fs::path& f,
+                              const fs::path& root) {
     RecordingCheck out;
     std::error_code ec;
     if (!fs::is_directory(fs::symlink_status(rec, ec)) ||
         !fs::is_regular_file(fs::symlink_status(f, ec)) ||
-        !fs::equivalent(f.parent_path(), rec, ec) || ec)
+        !fs::equivalent(f.parent_path(), rec, ec) || ec ||
+        (!root.empty() && !resolvedInside(root, f)))
         return out;
     auto side = detail::readSidecar(f);  // none: not a recording, or capture never began
     if (!side) {
@@ -2966,17 +2984,22 @@ RecordingCheck checkRecording(const model::Session& s, const fs::path& rec, cons
 }
 
 // Recordings in `rec` that recover() could put back into `s`.
-std::int64_t usableRecordings(const model::Session& s, const fs::path& rec) {
+std::int64_t usableRecordings(const model::Session& s, const fs::path& rec, const fs::path& root) {
     std::int64_t n = 0;
     std::error_code ec;
+    if (!resolvedInside(root, rec)) return 0;
     for (fs::directory_iterator it(rec, ec), end; !ec && it != end; it.increment(ec))
-        if (it->path().extension() == ".wav" && checkRecording(s, rec, it->path()).usable()) ++n;
+        if (it->path().extension() == ".wav" && checkRecording(s, rec, it->path(), root).usable())
+            ++n;
     return n;
 }
 
 // A recovered session's media live in its folder (ADR-0078): on each branch
-// whose media_dir leads elsewhere, one more version puts it back to the
-// default. Only a file not written by this program names such a folder.
+// whose media_dir does not resolve inside it (resolvedInside, as it is on
+// disk now: "a/../media" that does is kept), one more version puts it back
+// to the default. Only a file not written by this program names such a
+// folder. If the default does not resolve inside either (a link out), the
+// recordings there are not recovered: recover() asks the same test.
 Status confineMedia(model::VersionStore& store, const fs::path& folder,
                     std::vector<RecordingWarning>& warnings) {
     const std::string current = store.branch();
@@ -2985,8 +3008,10 @@ Status confineMedia(model::VersionStore& store, const fs::path& folder,
         SUPPLE_TRY(store.switchBranch(name));
         const auto head = store.head();
         const std::string was = head->project->mediaDir;
-        const std::string why = mediaOutside(folder, was);
-        if (why.empty()) continue;
+        if (resolvedInside(folder, folder / was)) continue;
+        // The default itself leads out (a link): nothing better to point at;
+        // recoverSession says its recordings are not recovered.
+        if (was == fallback) continue;
         model::EditTxn t(*head, store.nextVersion());
         model::Project project = t.project();
         project.mediaDir = fallback;
@@ -3002,8 +3027,8 @@ Status confineMedia(model::VersionStore& store, const fs::path& folder,
                                       std::move(created));
         if (!committed) return std::move(committed).error();
         warnings.push_back({"recover.media_dir",
-                            "the media folder " + was + " of branch " + name + " " + why +
-                                "; recovered, it uses " + fallback +
+                            "the media folder " + was + " of branch " + name +
+                                " is outside the session folder; recovered, it uses " + fallback +
                                 " in the session folder, so media only in " + was + " are missing",
                             "/project/media_dir",
                             "copy the media into the session's " + fallback + " folder", "", ""});
@@ -3105,7 +3130,7 @@ std::vector<RecoverableSession> EngineApp::recoverableSessions(
             });
             break;
         }
-        s.recordings = leftoverRecordings(folder / media / "rec", used);
+        s.recordings = leftoverRecordings(folder, folder / media / "rec", used);
         out.push_back(std::move(s));
     }
     return out;
@@ -3367,7 +3392,7 @@ Result<SessionRecovery> EngineApp::recoverSession(const std::string& session) {
         auto made = t.commit();
         if (!made) return std::move(made).error();
         // Placed by the same rules recover() uses, against this project.
-        if (usableRecordings(*made, *folder / made->project->mediaDir / "rec") == 0)
+        if (usableRecordings(*made, *folder / made->project->mediaDir / "rec", *folder) == 0)
             return Error("recover.damaged", "nothing in " + session + " can be opened", "/session",
                          "delete it with project.recoverable.delete, or copy what you need out "
                          "of " +
@@ -3398,6 +3423,14 @@ Result<SessionRecovery> EngineApp::recoverSession(const std::string& session) {
     }
     recoveryKeep_ = std::move(*kept);
     for (auto& w : replaced) out.warnings.push_back({w.code, w.message, w.path, "", "", ""});
+    if (std::error_code ec; fs::exists(recordDir(), ec) && !resolvedInside(*folder, recordDir()))
+        out.warnings.push_back(
+            {"recover.media_outside",
+             "the recordings folder " + recordDir().string() +
+                 " leads outside the session folder: its recordings are not recovered, and "
+                 "nothing there was read or changed",
+             "/project/media_dir", "copy the recordings into the session folder, then recover them",
+             "", ""});
     if (!recoverable().empty()) {
         auto r = recover({}, recoveredTrack, &out.warnings);
         if (r)
@@ -3599,7 +3632,7 @@ std::vector<RecoverableInfo> EngineApp::recoverable(std::vector<RecordingWarning
     const fs::path media = mediaDir();
     for (const fs::path& f : files) {
         if (used.count(comparable(f))) continue;
-        const RecordingCheck check = checkRecording(head(), dir, f);
+        const RecordingCheck check = checkRecording(head(), dir, f, recoveryRoot());
         if (!check.usable()) {
             if (warnings && check.problem) {
                 const Error& e = *check.problem;
@@ -3664,7 +3697,7 @@ Result<std::vector<RecordedInfo>> EngineApp::recover(const std::vector<std::stri
         RecordedTake t;
         t.file = mediaDir() / r->file;
         // Again, as the preflight and the listing ask: it may have changed.
-        const RecordingCheck check = checkRecording(s, recordDir(), t.file);
+        const RecordingCheck check = checkRecording(s, recordDir(), t.file, recoveryRoot());
         if (!check.usable() && !check.problem)  // gone or replaced since it was listed
             return Error("recover.unknown_file", r->file + " is not a recording to recover", {},
                          "choose a file listed by project.recoverable for the current project");

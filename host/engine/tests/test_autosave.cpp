@@ -5,12 +5,14 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <set>
 #include <thread>
 
 #include "../../../tests/file_platform.h"
 #include "recording.h"
 #include "supple/base/files.h"
+#include "supple/base/sha256.h"
 #include "supple/engine/app.h"
 #include "supple/json/json.h"
 #include "supple/model/project_file.h"
@@ -1256,4 +1258,106 @@ TEST_CASE("a recording placement would refuse cannot justify replacing current w
     CHECK(r.error().code == "recover.damaged");
     CHECK(app->head().project->name == "Current work");
     CHECK(*readTextFile(u.folder(left) / "autosave-1.json") == "garbage");
+}
+
+namespace {
+// Every file under `root`, relative, with its digest.
+std::map<fs::path, std::string> digests(const fs::path& root) {
+    std::map<fs::path, std::string> out;
+    for (const fs::path& f : filesUnder(root))
+        out[f.lexically_relative(root)] = sha256File(f).value();
+    return out;
+}
+
+// A recording a crash left in `rec` (sidecar first, as the recorder writes
+// them), one second long, on tr_1 at the timeline's second second.
+void leaveRecording(const fs::path& wav) {
+    fs::create_directories(wav.parent_path());
+    audio::WavStreamWriter writer;
+    std::vector<float> block(96000, .2f);
+    REQUIRE(engine::detail::writeSidecar(wav, {{model::Kind::Track, 1}, 48000, 48000, {}, 0, 0}));
+    REQUIRE(writer.open(wav, 48000, 2));
+    REQUIRE(writer.append(block.data(), 48000));
+    REQUIRE(writer.close());
+}
+}  // namespace
+
+TEST_CASE("recovery never reads or repairs recordings through a link out of the session") {
+    // Round-6 review, finding 1: <session>/media was itself a link out of
+    // the session; resetting media_dir to "media" did not help, and the
+    // recordings there were recovered and their headers rewritten.
+    Unsaved u;
+    const std::string left = "20261114-090000-41";
+    const fs::path outside = u.root / "outside-session";
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    {
+        auto earlier = u.run(left);
+        cmd::Dispatcher d(registry, *earlier);
+        REQUIRE(d.execute({"track.add", json::Value::object(), kUnit}));
+        earlier->setFixedClock(1'060'000);
+        earlier->tick();
+    }
+    leaveRecording(outside / "rec" / "take.wav");
+    fs::remove_all(u.folder(left) / "media");
+    fs::create_directory_symlink(outside, u.folder(left) / "media");
+    const auto before = digests(outside);
+    auto app = u.run("20261114-100000-1");
+    rename(*app, "Current work");
+    const auto sessions = app->recoverableSessions();
+    REQUIRE(sessions.size() == 1);
+    CHECK(sessions.front().recordings == 0);
+
+    SUBCASE("with a readable autosave: the project comes back, the recordings do not") {
+        auto recovered = app->recoverSession(left);
+        REQUIRE_MESSAGE(recovered, (recovered ? std::string() : recovered.error().toString()));
+        CHECK(recovered->recovered.empty());
+        CHECK(std::any_of(
+            recovered->warnings.begin(), recovered->warnings.end(),
+            [](const RecordingWarning& w) { return w.code == "recover.media_outside"; }));
+        CHECK(app->head().items.size() == 0);
+        CHECK(app->recoverable().empty());
+        CHECK_FALSE(app->recover({}, {}));
+    }
+    SUBCASE("without one: nothing to put back, nothing changed") {
+        REQUIRE(writeFileAtomic(u.folder(left) / "autosave-1.json", "garbage"));
+        auto r = app->recoverSession(left);
+        REQUIRE_FALSE(r);
+        CHECK(r.error().code == "recover.damaged");
+        CHECK(app->head().project->name == "Current work");
+    }
+    CHECK(digests(outside) == before);
+}
+
+TEST_CASE("recovery keeps a media folder that resolves inside the session, whatever its spelling") {
+    // Round-6 review, finding 3: any ".." in media_dir reset it, though the
+    // folder it names is in the session, and its recordings went missing.
+    Unsaved u;
+    const std::string left = "20261114-090000-42";
+    const std::string setting = "intermediate/../audio";
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    {
+        auto earlier = u.run(left);
+        cmd::Dispatcher d(registry, *earlier);
+        REQUIRE(d.execute({"track.add", json::Value::object(), kUnit}));
+        auto t = earlier->beginTransaction(kUnit, "Media folder");
+        REQUIRE(t);
+        auto project = earlier->txn().project();
+        project.mediaDir = setting;
+        earlier->txn().setProject(project);
+        REQUIRE(earlier->commitTransaction(*t));
+        earlier->setFixedClock(1'060'000);
+        earlier->tick();
+    }
+    fs::create_directories(u.folder(left) / "intermediate");
+    leaveRecording(u.folder(left) / "audio" / "rec" / "take.wav");
+    auto app = u.run("20261114-100000-1");
+    auto recovered = app->recoverSession(left);
+    REQUIRE_MESSAGE(recovered, (recovered ? std::string() : recovered.error().toString()));
+    CHECK(app->head().project->mediaDir == setting);
+    CHECK(std::none_of(recovered->warnings.begin(), recovered->warnings.end(),
+                       [](const RecordingWarning& w) { return w.code == "recover.media_dir"; }));
+    CHECK(recovered->recovered.size() == 1);
+    CHECK(app->head().items.size() == 1);
 }
