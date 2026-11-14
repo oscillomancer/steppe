@@ -3105,6 +3105,62 @@ Status EngineApp::publishRecoveryKeeps(const fs::path& file,
     return okStatus();
 }
 
+Result<SessionRecovery> EngineApp::recoverAutosave() {
+    auto none = [] {
+        return Error("recover.no_autosave", "there is no autosave newer than the saved file",
+                     "/autosave", "open the project as saved; nothing was lost");
+    };
+    if (projectPath_.empty()) return none();
+    std::error_code ec;
+    const auto written = fs::last_write_time(projectPath_, ec);
+    if (ec) return none();
+    SessionRecovery out;
+    const fs::path folder = autosaveDir();
+    // The same rule as a session's (ADR-0078): what this recovery cannot
+    // fully restore is kept for the first save to publish beside the file.
+    std::vector<std::tuple<std::string, std::string, std::string>> keep;
+    for (const fs::path& file : autosavesIn(folder)) {  // newest first
+        const auto time = fs::last_write_time(file, ec);
+        if (ec || time <= written) continue;
+        std::vector<schema::Warning> parsed;
+        auto text = readTextFile(file, std::size_t(1) << 30);
+        auto opened = text ? model::parseProjectFile(*text, &parsed, replayableStep)
+                           : Result<model::OpenedProject>(text.error());
+        if (!opened && text)
+            keep.emplace_back(file.filename().string(), *text, ".unreadable-autosave");
+        if (!opened) {
+            out.warnings.push_back(
+                {"recover.autosave",
+                 file.filename().string() +
+                     " cannot be read, an older autosave was tried: " + opened.error().message,
+                 "/autosave", "", "", file.filename().string()});
+            continue;
+        }
+        for (auto& w : parsed)
+            out.warnings.push_back({w.code, w.message, w.path, "", "", file.filename().string()});
+        if (opened->branchesDropped)
+            out.warnings.push_back({"project.history",
+                                    "opened main alone: the autosave's branches could not be "
+                                    "restored (" +
+                                        opened->branchesDropped->message + ")",
+                                    "/branches", "", "", file.filename().string()});
+        if (opened->branchesDropped)
+            keep.emplace_back(file.filename().string(), *text, ".pre-branches");
+        std::vector<schema::Warning> replaced;
+        SUPPLE_TRY(replaceProject(std::move(opened->store), projectPath_, {}, &replaced));
+        for (auto& w : replaced) out.warnings.push_back({w.code, w.message, w.path, "", "", ""});
+        for (const auto& [name, bytes, suffix] : keep)
+            if (Status kept = keepForFirstSave(folder, name, bytes, suffix); !kept)
+                out.warnings.push_back(
+                    {kept.error().code,
+                     "could not keep a copy of " + name + ": " + kept.error().message, "/autosave",
+                     "copy it out of the folder before saving", "", name});
+        out.autosave = file.filename().string();
+        return out;
+    }
+    return none();
+}
+
 Result<SessionRecovery> EngineApp::recoverSession(const std::string& session) {
     auto folder = sessionFolder(session);
     if (!folder) return std::move(folder).error();

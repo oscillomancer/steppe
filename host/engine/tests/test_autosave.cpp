@@ -964,3 +964,99 @@ TEST_CASE("a session with no readable autosave recovers only recordings it can p
         CHECK(*readTextFile(kept) == "garbage");
     }
 }
+
+TEST_CASE("a saved project's newer autosave is opened only when asked, keeping the file's path") {
+    // ADR-0078 decision 6: offered, never loaded unasked; it stays unsaved.
+    Project p;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *p.app);
+    p.rename("Saved");
+    REQUIRE(p.app->save("song.json"));
+    const std::string saved = *readTextFile(p.root / "song.json");
+    auto none = d.execute({"project.recover", json::parse(R"({"autosave": true})").value(), kUnit});
+    REQUIRE_FALSE(none);
+    CHECK(none.error().code == "recover.no_autosave");
+
+    p.rename("Edited after the save");
+    p.app->setFixedClock(1'060'000);
+    p.app->tick();
+    REQUIRE(std::any_of(fs::directory_iterator(p.root / "song.json-data"), fs::directory_iterator(),
+                        [](const fs::directory_entry& e) {
+                            return e.path().filename().string().starts_with("autosave-");
+                        }));
+    REQUIRE(p.app->open("song.json"));  // as after a crash: the file as saved
+    CHECK(p.app->head().project->name == "Saved");
+    auto info = d.execute({"project.get", json::Value::object(), kUnit});
+    REQUIRE(info);
+    CHECK((*info)["autosave_available"].asBool());
+
+    auto mixed = d.execute(
+        {"project.recover", json::parse(R"({"autosave": true, "session": "x"})").value(), kUnit});
+    REQUIRE_FALSE(mixed);
+    CHECK(mixed.error().code == "recover.autosave_args");
+
+    auto r = d.execute({"project.recover", json::parse(R"({"autosave": true})").value(), kUnit});
+    REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+    CHECK((*r)["autosave"].asString().starts_with("autosave-"));
+    CHECK(p.app->head().project->name == "Edited after the save");
+    CHECK(p.app->projectPath() == p.root / "song.json");
+    CHECK(*readTextFile(p.root / "song.json") == saved);  // untouched until saved
+    REQUIRE(p.app->save("song.json"));
+    CHECK(
+        model::parseProjectFile(*readTextFile(p.root / "song.json"))->store.head()->project->name ==
+        "Edited after the save");
+}
+
+TEST_CASE("a saved project's recovered autosave keeps what it could not restore through the save") {
+    // The round-4 rules for sessions, for a saved project's newer autosave:
+    // rejected branches and unreadable autosaves are kept beside the file.
+    Project p;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *p.app);
+    auto run = [&](const char* command, std::string_view args) {
+        auto r = d.execute({command, json::parse(args).value(), kUnit});
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        return *r;
+    };
+    run("track.add", R"({"name": "Drums"})");
+    REQUIRE(p.app->versions().createBranch("agent/claude/bass", "main"));
+    REQUIRE(p.app->switchBranch("agent/claude/bass"));
+    run("track.add", R"({"name": "Bass"})");
+    REQUIRE(p.app->switchBranch("main"));
+    REQUIRE(p.app->save("song.json"));
+    p.rename("After the save");
+    p.app->setFixedClock(1'060'000);
+    p.app->tick();
+    const fs::path data = p.root / "song.json-data";
+    REQUIRE(fs::exists(data / "autosave-1.json"));
+    // Its branch step became one no file may replay: main alone comes back.
+    auto doc = json::parse(*readTextFile(data / "autosave-1.json")).value();
+    for (auto& v : doc["branches"]["versions"].asObject())
+        if (const auto* list = v.value.find("invocations"); list && list->size()) {
+            json::Value step = json::Value::object();
+            step["command"] = "project.save";
+            step["args"] = json::Value::object();
+            step["args"]["path"] = (p.root / "victim.txt").string();
+            v.value["invocations"] = json::Value::array();
+            v.value["invocations"].push_back(std::move(step));
+        }
+    const std::string crafted = json::writeCanonical(doc);
+    REQUIRE(writeFileAtomic(data / "autosave-1.json", crafted));
+    REQUIRE(writeFileAtomic(data / "autosave-2.json", "garbage"));  // newer, unreadable
+    REQUIRE(p.app->open("song.json"));
+
+    auto r = run("project.recover", R"({"autosave": true})");
+    CHECK(r["autosave"].asString() == "autosave-1.json");
+    CHECK(p.app->head().project->name == "After the save");
+    CHECK(p.app->versions().branches() == std::vector<std::string>{"main"});
+    std::vector<schema::Warning> warnings;
+    REQUIRE(p.app->save("song.json", &warnings));
+    CHECK(hasWarning(warnings, "project.history_backup"));
+    REQUIRE(fs::exists(p.root / "song.json.pre-branches.bak"));
+    CHECK(*readTextFile(p.root / "song.json.pre-branches.bak") == crafted);
+    REQUIRE(fs::exists(p.root / "song.json.unreadable-autosave.bak"));
+    CHECK(*readTextFile(p.root / "song.json.unreadable-autosave.bak") == "garbage");
+    CHECK_FALSE(fs::exists(p.root / "victim.txt"));
+}

@@ -93,6 +93,7 @@ struct RecoverArgs {
     std::optional<std::vector<std::string>> files;
     std::optional<std::string> track;
     std::optional<std::string> session;
+    bool autosave = false;
 };
 
 struct RecoverResult {
@@ -544,35 +545,46 @@ void registerProjectCommands(cmd::Registry& registry) {
             "the track it was recorded on (or track) at the position it was recorded, in one "
             "undo step. session: instead opens that unsaved project from its newest readable "
             "autosave in place of the current one (unsaved changes are lost: save first), "
-            "still unsaved, and puts back its leftover recordings as one more undo step.";
+            "still unsaved, and puts back its leftover recordings as one more undo step. "
+            "autosave: instead opens the saved project's autosave newer than its file "
+            "(project.get autosave_available) in place of what is open, keeping its path: it "
+            "is unsaved until saved over the file.";
         c.tags = {"project", "recording"};
         c.args = schema::object<RecoverArgs>("recover_args")
                      .field("files", &RecoverArgs::files, schema::arrayOf(schema::string()))
                      .field("track", &RecoverArgs::track, idArg("tr", "Track"))
                      .field("session", &RecoverArgs::session,
                             schema::string().doc("A session project.recoverable lists"))
+                     .field("autosave", &RecoverArgs::autosave,
+                            schema::boolean().doc("The saved project's newer autosave"))
+                     .defaultValue(false)
                      .build();
         c.result =
             schema::object<RecoverResult>("recover_result")
                 .field("recovered", &RecoverResult::recovered, schema::arrayOf(recordedSchema()))
                 .field("autosave", &RecoverResult::autosave,
-                       schema::string().doc("The session's autosave it opened"))
+                       schema::string().doc("The autosave it opened"))
                 .field("warnings", &RecoverResult::warnings,
                        schema::arrayOf(recordingWarningSchema()))
                 .build();
-        c.errors = {{"recover.nothing", "there is nothing to recover", "project.recoverable"},
-                    {"recover.unknown_file", "a file is not a recording to recover",
-                     "project.recoverable lists them"},
-                    {"recover.duplicate_file", "a file is listed twice", "list each once"},
-                    {"recover.no_track", "the track it was recorded on is gone", "give track"},
-                    {"recover.unknown_session", "no unsaved project of that name was left behind",
-                     "project.recoverable lists them"},
-                    {"recover.busy", "the session belongs to an app that is running",
-                     "recover it in that app"},
-                    {"recover.damaged", "nothing in the session can be opened",
-                     "project.recoverable.delete"},
-                    {"recover.session_args", "session cannot be combined with files or track",
-                     "recover the session, then its recordings"}};
+        c.errors = {
+            {"recover.nothing", "there is nothing to recover", "project.recoverable"},
+            {"recover.unknown_file", "a file is not a recording to recover",
+             "project.recoverable lists them"},
+            {"recover.duplicate_file", "a file is listed twice", "list each once"},
+            {"recover.no_track", "the track it was recorded on is gone", "give track"},
+            {"recover.unknown_session", "no unsaved project of that name was left behind",
+             "project.recoverable lists them"},
+            {"recover.busy", "the session belongs to an app that is running",
+             "recover it in that app"},
+            {"recover.damaged", "nothing in the session can be opened",
+             "project.recoverable.delete"},
+            {"recover.session_args", "session cannot be combined with files or track",
+             "recover the session, then its recordings"},
+            {"recover.no_autosave", "no autosave is newer than the saved file",
+             "open the project as saved"},
+            {"recover.autosave_args", "autosave cannot be combined with session, files or track",
+             "recover the autosave, then the recordings"}};
         c.examples = {{"Recover everything", j("{}"),
                        j(R"({"recovered": [{"track": "tr_1", "item": "it_1", "take": "tk_1",
                               "file": "<any>", "seconds": 1.0, "lost_frames": 0,
@@ -585,6 +597,18 @@ void registerProjectCommands(cmd::Registry& registry) {
                        "session_left_behind"}};
         c.run = [](const RecoverArgs& a, Context& ctx) -> Result<RecoverResult> {
             EngineApp& app = engine::app(ctx);
+            if (a.autosave) {
+                if (a.session || a.files || a.track)
+                    return Error("recover.autosave_args",
+                                 "autosave cannot be combined with session, files or track",
+                                 "/autosave", "recover the autosave, then the recordings");
+                auto r = app.recoverAutosave();
+                if (!r) return std::move(r).error();
+                RecoverResult out;
+                out.autosave = r->autosave;
+                if (!r->warnings.empty()) out.warnings = std::move(r->warnings);
+                return out;
+            }
             if (a.session) {
                 if (a.files || a.track)
                     return Error("recover.session_args",

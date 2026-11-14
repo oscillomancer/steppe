@@ -11,6 +11,7 @@
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -41,6 +42,7 @@
 #include "supple/base/paths.h"
 #include "supple/engine/app.h"
 #include "supple/gui/png.h"
+#include "supple/gui/process.h"
 #include "supple/host/clap_host.h"
 #include "supple/json/parse.h"
 #include "supple/json/write.h"
@@ -3272,9 +3274,19 @@ TEST_CASE("input menu: single-track changes preserve an earlier status note") {
 TEST_CASE("file actions: unsaved work a run left behind is offered, never opened unasked") {
     // ADR-0078: File > Recover unsaved work… (and at start) lists what earlier
     // runs left; nothing loads until the user picks Recover.
-    App a(1000, 640, gui::Platform::Driver::Offscreen, "unsaved/20261114-100000-1");
+    // Session folders are named by local start time, as the GUI names them:
+    // the earlier run started a few minutes ago, so its row reads in order
+    // with its autosave's (real) time.
+    auto stamp = [](std::time_t when) {
+        const std::tm local = gui::localTime(when);
+        char text[32] = {};
+        std::strftime(text, sizeof text, "%Y%m%d-%H%M%S", &local);
+        return std::string(text);
+    };
+    const std::time_t now = std::time(nullptr);
+    App a(1000, 640, gui::Platform::Driver::Offscreen, "unsaved/" + stamp(now) + "-1");
     REQUIRE(a.ok);
-    const std::string left = "20261114-090000-4242";
+    const std::string left = stamp(now - 300) + "-4242";
     {
         engine::AppOptions o;
         o.workdir = a.dir / "earlier";
@@ -3337,5 +3349,54 @@ TEST_CASE("file actions: unsaved work a run left behind is offered, never opened
         CHECK(a.app->projectPath().empty());
         CHECK(a.app->recoverableSessionCount() == 0);
         a.snapshot("file-recovered.png");
+    }
+}
+
+TEST_CASE("file actions: opening a saved project offers its newer autosave, never loads it") {
+    // ADR-0078 decision 6: an autosave newer than the file is offered on
+    // open; Open autosave brings it back unsaved, under the file's path.
+    App a;
+    REQUIRE(a.ok);
+    auto exec = [&](const char* name, const char* args = "{}") {
+        auto r = a.dispatcher->execute({name, json::parse(args).value(), {}});
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        return *r;
+    };
+    const auto file = a.dir / "song" / "song.json";
+    a.app->setFixedClock(1'000'000);
+    exec("project.set", R"({"name":"Saved"})");
+    REQUIRE(a.app->save(file));
+    exec("project.set", R"({"name":"After the save"})");
+    exec("track.add", R"({"name":"Late idea"})");
+    a.app->setFixedClock(1'061'000);
+    a.app->tick();
+    REQUIRE(!a.app->newerAutosave(file).empty());
+    gui::FileActions files(*a.root, *a.actions, *a.dispatcher, *a.app, a.ui, a.window->sdl(),
+                           [](auto task) { task(); });
+    files.openPath(file);  // as after a crash: the file as saved
+    a.root->frame(false);
+    CHECK(a.app->head().project->name == "Saved");
+    REQUIRE(a.root->find("file.recover"));
+    REQUIRE(a.root->find("file.recover.autosave"));
+    CHECK_FALSE(a.root->find("file.recover.recordings"));
+    a.snapshot("file-recover-autosave.png");
+    const std::string onDisk = *readTextFile(file);
+
+    SUBCASE("Later loads nothing") {
+        REQUIRE(a.root->click("file.recover.later"));
+        a.root->frame(false);
+        CHECK_FALSE(a.root->find("file.recover"));
+        CHECK(a.app->head().project->name == "Saved");
+    }
+    SUBCASE("Open autosave brings the later changes back, unsaved") {
+        REQUIRE(a.root->click("file.recover.autosave.open"));
+        a.root->frame(false);
+        if (a.root->find("file.confirm")) REQUIRE(a.root->click("file.confirm.discard"));
+        a.root->frame(false);
+        REQUIRE(a.root->find("file.recovered"));
+        CHECK(a.app->head().project->name == "After the save");
+        CHECK(a.app->projectPath() == file);
+        CHECK(files.dirty());
+        CHECK(*readTextFile(file) == onDisk);
     }
 }

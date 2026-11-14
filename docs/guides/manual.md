@@ -194,6 +194,13 @@ list and keeps everything; File > Recover unsaved work… shows it again. A
 Steppe that is still running keeps its own folder to itself, so two copies
 of the app never offer each other's work.
 
+The same list appears when you open a saved project that Steppe autosaved
+after its last save, or whose recordings were not added because Steppe
+stopped while recording. **Open autosave** replaces what you opened with
+those later changes; the file itself is not changed until you save.
+**Put back** adds the recordings where they were recorded, as one step you
+can undo.
+
 New, Open and Quit (including File > Quit, Cmd+Q on macOS and closing the main
 window) first stop an active recording and add its takes to the
 project, then ask whether to save the changes. Cancel keeps the recorded takes;

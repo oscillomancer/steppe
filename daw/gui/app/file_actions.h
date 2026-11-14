@@ -100,10 +100,11 @@ class FileActions {
     // A save's (or template's) warnings, if it has any, in a popup: a plug-in
     // whose state could not be read keeps its earlier state.
     void showSaveWarnings(const std::string& command, const json::Value& result);
-    // File > Recover unsaved work… (also offered at start when there is
-    // some): unsaved projects earlier runs left behind (project.recoverable),
-    // newest first, each with Recover and Delete. Nothing loads until the
-    // user chooses (ADR-0078).
+    // File > Recover unsaved work… (also offered at start and after opening
+    // a project when there is some): the open project's newer autosave and
+    // leftover recordings, then unsaved projects earlier runs left behind
+    // (project.recoverable), newest first, each with Recover and Delete.
+    // Nothing loads until the user chooses (ADR-0078).
     void openRecovery();
 
   private:
@@ -117,6 +118,8 @@ class FileActions {
     void markSaved();
     void showError(const std::string& message);
     void recoverSession(const std::string& session, const std::string& title);
+    void recoverProjectAutosave();
+    void recoverProjectRecordings();
     void confirmDeleteSession(const std::string& session, const std::string& title,
                               const std::string& size);
     void showNotice(const std::string& id, const std::string& title, const std::string& text);

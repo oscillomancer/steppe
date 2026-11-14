@@ -10852,7 +10852,7 @@ Result:
 
 Put back what a crash left behind: recordings, or an unsaved project.
 
-files: as project.recoverable lists them (omit for all). Each becomes an item on the track it was recorded on (or track) at the position it was recorded, in one undo step. session: instead opens that unsaved project from its newest readable autosave in place of the current one (unsaved changes are lost: save first), still unsaved, and puts back its leftover recordings as one more undo step.
+files: as project.recoverable lists them (omit for all). Each becomes an item on the track it was recorded on (or track) at the position it was recorded, in one undo step. session: instead opens that unsaved project from its newest readable autosave in place of the current one (unsaved changes are lost: save first), still unsaved, and puts back its leftover recordings as one more undo step. autosave: instead opens the saved project's autosave newer than its file (project.get autosave_available) in place of what is open, keeping its path: it is unsaved until saved over the file.
 
 Kind: `action`. Exposure: `mcp-tool`.
 
@@ -10863,6 +10863,7 @@ Kind: `action`. Exposure: `mcp-tool`.
 | `files` | array |  |  |  |  |
 | `track` | string |  |  |  | Track id, e.g. "tr_1". |
 | `session` | string |  |  |  | A session project.recoverable lists |
+| `autosave` | boolean |  |  | false | The saved project's newer autosave |
 
 ### Result
 
@@ -10937,7 +10938,7 @@ Kind: `action`. Exposure: `mcp-tool`.
     },
     "autosave": {
       "type": "string",
-      "description": "The session's autosave it opened"
+      "description": "The autosave it opened"
     },
     "warnings": {
       "type": "array",
@@ -10962,6 +10963,8 @@ Kind: `action`. Exposure: `mcp-tool`.
 - `recover.busy`: the session belongs to an app that is running Hint: recover it in that app
 - `recover.damaged`: nothing in the session can be opened Hint: project.recoverable.delete
 - `recover.session_args`: session cannot be combined with files or track Hint: recover the session, then its recordings
+- `recover.no_autosave`: no autosave is newer than the saved file Hint: open the project as saved
+- `recover.autosave_args`: autosave cannot be combined with session, files or track Hint: recover the autosave, then the recordings
 
 ### Examples
 

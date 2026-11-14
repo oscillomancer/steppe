@@ -658,7 +658,14 @@ suffixes (such as `autosave-1-backup.json`). An exhausted index reports
 `autosave.index` without writing or pruning, and retries after the same interval.
 `project.open` of a file that has
 a newer autosave next to it reports `autosave_available` and loads nothing
-from it; opening the autosave file itself is how it comes back.
+from it. `project.recover {autosave: true}` brings it back: the newest
+autosave newer than the file that reads (older ones are tried, each failure
+a `recover.autosave` warning) replaces the open project, keeping its path,
+so it stays unsaved until saved over the file; `recover.no_autosave` when
+there is none, `recover.autosave_args` combined with `session`, `files` or
+`track`. Saved steps in it are checked as in an opened file (§5.4), and an
+autosave it could not fully restore (branches dropped, or unreadable) is
+kept through the first save as for an unsaved project's (below).
 
 **Unsaved projects (ADR-0078).** An unsaved project autosaves the same way
 into its scratch folder (`<data>/<slug>/unsaved/<start time>-<pid>/`,
@@ -888,7 +895,8 @@ and naming. All `edit` unless marked (q) query or (a) action.
 
 - **project**: `project.new` (a), `project.open` (a), `project.save` (a),
   `project.get` (q), `project.set`, `project.describe` (q); crash leftovers
-  `project.recoverable` (q), `project.recover {files?, track? | session}` (a),
+  `project.recoverable` (q), `project.recover {files?, track? | session |
+  autosave}` (a),
   `project.recoverable.delete {session}` (a) (§5.3); templates
   `project.template.save` (a), `project.template.load {name}` (a, a new
   unsaved project), `project.template.list` (q), `project.template.delete`

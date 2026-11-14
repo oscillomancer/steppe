@@ -59,6 +59,14 @@ used neither, nor `autosave_available` for saved projects.
    first, with their size), each with Recover and Delete (Delete asks once
    more); Later closes it and nothing is loaded. Recover goes through the
    usual unsaved-changes question.
+6. **Saved projects get the same offer.** Opening a saved project (from the
+   GUI or as the start argument) that has an autosave newer than its file,
+   or recordings a crash left out of its `rec/`, opens the same popup with
+   rows for those first; nothing loads until the user chooses.
+   `project.recover {autosave: true}` opens the newest such autosave that
+   reads in place of the open project, keeping the project's path: it is
+   unsaved until saved over the file, which stays as it was until then.
+   Leftover recordings are put back with `project.recover` as before.
 
 ## Consequences
 

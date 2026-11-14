@@ -1142,10 +1142,11 @@ q = nil
 ---@field files? string[]
 ---@field track? string Track id, e.g. "tr_1".
 ---@field session? string A session project.recoverable lists
+---@field autosave? boolean The saved project's newer autosave (default: false)
 
 ---@class Steppe.project_recover_result
 ---@field recovered table[]
----@field autosave? string The session's autosave it opened
+---@field autosave? string The autosave it opened
 ---@field warnings? table[]
 
 ---@class Steppe.project_recoverable_result

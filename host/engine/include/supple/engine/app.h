@@ -322,6 +322,12 @@ class EngineApp : public cmd::Host {
     // and puts back its leftover recordings as one more version. The run's
     // own folder is discarded.
     Result<SessionRecovery> recoverSession(const std::string& session);
+    // A saved project with an autosave newer than its file: replaces the
+    // current project with the newest such autosave that reads, keeping the
+    // project's path, so it is unsaved until saved over the file
+    // ("recover.no_autosave" when there is none). Leftover recordings stay
+    // for project.recover.
+    Result<SessionRecovery> recoverAutosave();
     // Deletes a folder recoverableSessions() lists.
     Status deleteSession(const std::string& session);
 

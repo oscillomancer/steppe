@@ -318,24 +318,58 @@ void FileActions::openRecovery() {
     if (const json::Value* list = listed->find("sessions"); list && list->isArray())
         for (const json::Value& s : list->asArray()) sessions.push_back(&s);
     std::reverse(sessions.begin(), sessions.end());  // newest first
+    // The open project's own leftovers come first: an autosave newer than its
+    // file, and recordings a crash left out of it.
+    bool newerAutosave = false;
+    std::int64_t recordings = 0;
+    if (auto info = exec("project.get", json::Value::object())) {
+        const json::Value* a = info->find("autosave_available");
+        newerAutosave = a && a->isBool() && a->asBool();
+        recordings = integerAt(*info, "recoverable");
+    }
+    const std::size_t projectRows = (newerAutosave ? 1 : 0) + (recordings > 0 ? 1 : 0);
+    const bool nothing = sessions.empty() && projectRows == 0;
     const std::size_t shown = std::min(sessions.size(), kRecoveryRows);
     auto form = std::make_unique<ui::Node>("file.recover");
     form->layout.dir = ui::Layout::Dir::Column;
     form->layout.width = ui::SizeRule::fixed(600);
     form->layout.height = ui::SizeRule::fixed(static_cast<float>(
-        sessions.empty() ? 116 : 132 + 50 * shown + (sessions.size() > shown ? 22 : 0)));
+        nothing ? 116 : 132 + 50 * (shown + projectRows) + (sessions.size() > shown ? 22 : 0)));
     form->layout.padding = ui::Insets::all(14);
     form->layout.gap = 10;
     form->emplace<ui::Label>("file.recover.title", "Recover unsaved work", ui::Font::UiBold,
                              "body");
     form->emplace<ui::TextBlock>(
         "file.recover.text",
-        sessions.empty()
-            ? "Nothing to recover: every earlier unsaved project was saved or discarded."
-            : std::string(product::kName) +
-                  " stopped before these unsaved projects were saved or discarded. Nothing is "
-                  "opened until you choose; Later keeps them for File > Recover unsaved work…",
+        nothing ? "Nothing to recover: every earlier unsaved project was saved or discarded."
+                : std::string(product::kName) +
+                      " stopped before this work was saved or discarded. Nothing is opened "
+                      "until you choose; Later keeps it for File > Recover unsaved work…",
         ui::Font::Ui, "small", "ink-quiet");
+    auto projectRow = [&](const std::string& id, const std::string& title,
+                          const std::string& details, const std::string& action,
+                          std::function<void()> run) {
+        auto& line = form->emplace<ui::Node>(id);
+        line.layout.dir = ui::Layout::Dir::Row;
+        line.layout.height = ui::SizeRule::fixed(40);
+        line.layout.gap = 8;
+        auto& text = line.emplace<ui::Node>(id + ".text");
+        text.layout.dir = ui::Layout::Dir::Column;
+        text.emplace<ui::Label>(id + ".title", title, ui::Font::UiBold, "small");
+        text.emplace<ui::Label>(id + ".details", details, ui::Font::Ui, "caption", "ink-quiet");
+        auto& button = line.emplace<ui::Button>(id + ".open", action, std::move(run));
+        button.layout.width = ui::SizeRule::fixed(164);
+        button.layout.height = ui::SizeRule::fixed(28);
+    };
+    if (newerAutosave)
+        projectRow("file.recover.autosave", "This project's newer autosave",
+                   "Changes made after it was last saved", "Open autosave",
+                   [this] { recoverProjectAutosave(); });
+    if (recordings > 0)
+        projectRow("file.recover.recordings", "Recordings left out of this project",
+                   plural(recordings, "recording was", "recordings were") +
+                       " not added when recording stopped",
+                   "Put back", [this] { recoverProjectRecordings(); });
     for (std::size_t i = 0; i < shown; ++i) {
         const json::Value& s = *sessions[i];
         const std::string session = s.find("session")->asString();
@@ -388,10 +422,43 @@ void FileActions::openRecovery() {
     buttons.layout.dir = ui::Layout::Dir::Row;
     buttons.layout.height = ui::SizeRule::fixed(28);
     buttons.emplace<ui::Node>("file.recover.space");
-    auto& later = buttons.emplace<ui::Button>(
-        "file.recover.later", sessions.empty() ? "OK" : "Later", [this] { root_.closePopup(); });
+    auto& later = buttons.emplace<ui::Button>("file.recover.later", nothing ? "OK" : "Later",
+                                              [this] { root_.closePopup(); });
     later.layout.width = ui::SizeRule::fixed(84);
     root_.openPopup(std::move(form), {}, ui::Placement::Center);
+}
+
+void FileActions::recoverProjectAutosave() {
+    root_.closePopup();
+    confirmDiscard("Open the newer autosave?", [this] {
+        json::Value args = json::Value::object();
+        args["autosave"] = true;
+        auto r = exec("project.recover", std::move(args));
+        if (!r) return;
+        ui_.selectedTracks.clear();
+        ui_.selectedItems.clear();
+        // Not marked saved: the file on disk is still the older version.
+        std::string text =
+            "Opened the newest autosave in place of the saved file. It is not saved yet: save "
+            "it to keep it.";
+        if (const json::Value* warnings = r->find("warnings"); warnings && warnings->isArray())
+            for (const auto& w : warnings->asArray())
+                if (const json::Value* m = w.find("message"); m && m->isString())
+                    text += "\n" + m->asString();
+        showNotice("file.recovered", "Recovered the autosave", text);
+    });
+}
+
+void FileActions::recoverProjectRecordings() {
+    root_.closePopup();
+    auto r = exec("project.recover", json::Value::object());
+    if (!r) return;
+    std::int64_t count = 0;
+    if (const json::Value* back = r->find("recovered"); back && back->isArray())
+        count = static_cast<std::int64_t>(back->asArray().size());
+    showNotice("file.recovered", "Recovered recordings",
+               plural(count, "recording was", "recordings were") +
+                   " put back where recorded (Undo removes them).");
 }
 
 void FileActions::recoverSession(const std::string& session, const std::string& title) {
@@ -499,10 +566,14 @@ void FileActions::showError(const std::string& message) {
 void FileActions::openPath(const std::filesystem::path& path) {
     json::Value args = json::Value::object();
     args["path"] = path.string();
-    if (exec("project.open", std::move(args))) {
+    if (auto opened = exec("project.open", std::move(args))) {
         ui_.selectedTracks.clear();
         ui_.selectedItems.clear();
         markSaved();
+        // A crash left work beside it: offered, never loaded (ADR-0078).
+        const json::Value* a = opened->find("autosave_available");
+        if ((a && a->isBool() && a->asBool()) || integerAt(*opened, "recoverable") > 0)
+            openRecovery();
     }
 }
 
