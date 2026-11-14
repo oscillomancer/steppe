@@ -24,6 +24,19 @@ class Installer(unittest.TestCase):
         self.home = self.root / "home"
         self.home.mkdir()
         self.env = dict(os.environ, HOME=str(self.home))
+        # Control cache generation instead of depending on desktop-file-utils' version.
+        tools = self.root / "tools"
+        tools.mkdir()
+        desktop_database = tools / "update-desktop-database"
+        desktop_database.write_text(
+            '#!/bin/sh\n'
+            'printf "[MIME Cache]\\n" > "$1/mimeinfo.cache"\n'
+            'if [ "$PACKAGE_TEST_INTENT_CACHE" = 1 ]; then\n'
+            '  printf "[Intent Cache]\\n" > "$1/intent.cache"\n'
+            'fi\n')
+        desktop_database.chmod(0o755)
+        self.env.update(PATH=str(tools) + os.pathsep + os.environ.get("PATH", os.defpath),
+                        PACKAGE_TEST_INTENT_CACHE="0")
         for rel in ("bin", "lib/example/plugins", "share/applications", "share/icons/hicolor/16x16/apps"):
             (self.source / rel).mkdir(parents=True)
         for name in ("example", "example-engine", "example-mcp", "example-bridge", "example-scanner"):
@@ -46,19 +59,27 @@ class Installer(unittest.TestCase):
         other = self.home / ".clap/Other.clap"
         other.parent.mkdir()
         other.write_text("unrelated")
-        result = self.install("--plugins")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue((self.prefix / "bin/example-mcp").is_symlink())
-        desktop = (self.prefix / "share/applications/example.desktop").read_text()
-        self.assertIn(r'prefix with spaces & dollars\\$', desktop)
-        self.assertTrue((self.home / ".clap/Stock.clap").is_file())
-        result = subprocess.run([str(self.prefix / "opt/example/uninstall.sh"), "--prefix", str(self.prefix)],
-                                env=self.env, capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertFalse(self.prefix.exists())
-        self.assertEqual(other.read_text(), "unrelated")
-        self.assertFalse((self.home / ".clap/Stock.clap").exists())
-        self.assertTrue(self.root.exists(), "Uninstall must not prune above prefix")
+        for intent_cache in (False, True):
+            with self.subTest(intent_cache=intent_cache):
+                self.env["PACKAGE_TEST_INTENT_CACHE"] = "1" if intent_cache else "0"
+                result = self.install("--plugins")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue((self.prefix / "bin/example-mcp").is_symlink())
+                desktop = (self.prefix / "share/applications/example.desktop").read_text()
+                self.assertIn(r'prefix with spaces & dollars\\$', desktop)
+                self.assertTrue((self.home / ".clap/Stock.clap").is_file())
+                cache = self.prefix / "share/applications/intent.cache"
+                self.assertEqual(cache.is_file(), intent_cache)
+                manifest = (self.prefix / "opt/example/.installed-files").read_text().splitlines()
+                self.assertEqual(str(cache) in manifest, intent_cache)
+                result = subprocess.run([str(self.prefix / "opt/example/uninstall.sh"), "--prefix", str(self.prefix)],
+                                        env=self.env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertFalse(cache.exists())
+                self.assertFalse(self.prefix.exists())
+                self.assertEqual(other.read_text(), "unrelated")
+                self.assertFalse((self.home / ".clap/Stock.clap").exists())
+                self.assertTrue(self.root.exists(), "Uninstall must not prune above prefix")
 
     def test_collision_writes_nothing(self):
         conflict = self.home / ".clap/Stock.clap"
