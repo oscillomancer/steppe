@@ -675,6 +675,10 @@ Status EngineApp::replaceProject(model::VersionStore store, fs::path path,
     }
     versions_ = std::make_unique<model::VersionStore>(std::move(store));
     projectPath_ = std::move(path);
+    openedFile_.reset();
+    if (std::error_code ec; !projectPath_.empty())
+        if (const auto time = fs::last_write_time(projectPath_, ec); !ec)
+            openedFile_.emplace(projectPath_, time);
     branchesBackupFor_.clear();
     recoveryKeep_.clear();
     autosaveMarked_ = !autosaveDir().empty();
@@ -3259,8 +3263,10 @@ Result<SessionRecovery> EngineApp::recoverAutosave(const std::string& name) {
     if (ec) return none();
     SessionRecovery out;
     const fs::path folder = autosaveDir();
-    // A named one is the one that was offered: opened even if the file has
-    // been saved since (the question before opening it offers Save).
+    // A named one is the one that was offered: it must be newer than the
+    // file as this project was opened, so a save since (the question before
+    // opening it offers Save) does not make it unopenable, and a name offered
+    // for another project opens nothing older in this one.
     std::vector<fs::path> candidates;
     if (!name.empty()) {
         const fs::path file = folder / name;
@@ -3269,6 +3275,16 @@ Result<SessionRecovery> EngineApp::recoverAutosave(const std::string& name) {
             return Error("recover.no_autosave", name + " is not an autosave of this project",
                          "/autosave_file",
                          "omit autosave_file to open the newest autosave newer than the file");
+        const auto opened =
+            openedFile_ && openedFile_->first == projectPath_ ? openedFile_->second : written;
+        const auto time = fs::last_write_time(file, ec);
+        if (ec || time <= opened)
+            return Error("recover.no_autosave",
+                         name + " is not newer than " + projectPath_.filename().string() +
+                             " as it was opened",
+                         "/autosave_file",
+                         "open the project as saved, or omit autosave_file to open the newest "
+                         "autosave newer than the file");
         candidates.push_back(file);
     } else {
         candidates = autosavesIn(folder);  // newest first

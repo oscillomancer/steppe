@@ -1360,7 +1360,9 @@ project's own leftovers, when there are any: an autosave newer than its file
 (`file.recover.autosave`, Open autosave `file.recover.autosave.open`:
 the unsaved-changes question, then `project.recover {autosave: true,
 autosave_file}` naming the autosave the popup offered, so choosing Save in
-that question does not make it unopenable; the project stays unsaved) and recordings left out of it
+that question does not make it unopenable; the project stays unsaved; the
+offer belongs to the project it was made for: opening another project
+closes the popup, and a stale button loads nothing and says so) and recordings left out of it
 (`file.recover.recordings`, Put back `file.recover.recordings.open`:
 `project.recover`). Then the unsaved projects earlier runs left behind
 (`project.recoverable` sessions), newest first, at most six (a line says how many older ones are not shown). Each row

@@ -550,8 +550,8 @@ void registerProjectCommands(cmd::Registry& registry) {
             "autosave: instead opens the saved project's autosave newer than its file "
             "(project.get autosave_available) in place of what is open, keeping its path: it "
             "is unsaved until saved over the file. autosave_file names the autosave to open "
-            "(as project.recover returned or a client offered it), even if the file was saved "
-            "since.";
+            "(as project.recover returned or a client offered it); it must be newer than the "
+            "file as this project was opened.";
         c.tags = {"project", "recording"};
         c.args = schema::object<RecoverArgs>("recover_args")
                      .field("files", &RecoverArgs::files, schema::arrayOf(schema::string()))

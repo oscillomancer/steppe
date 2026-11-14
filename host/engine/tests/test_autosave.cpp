@@ -1361,3 +1361,41 @@ TEST_CASE("recovery keeps a media folder that resolves inside the session, whate
     CHECK(recovered->recovered.size() == 1);
     CHECK(app->head().items.size() == 1);
 }
+
+TEST_CASE("a named autosave must be newer than the file as the project was opened") {
+    // Round-6 review, finding 2: a name offered for one project opened
+    // another project's older autosave of the same name.
+    Project p;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *p.app);
+    p.rename("Saved");
+    REQUIRE(p.app->save("song.json"));
+    const fs::path data = p.root / "song.json-data";
+    p.rename("Autosaved");
+    p.app->setFixedClock(1'060'000);
+    p.app->tick();
+    REQUIRE(fs::exists(data / "autosave-1.json"));
+    const auto now = fs::file_time_type::clock::now();
+    auto args = json::parse(R"({"autosave": true, "autosave_file": "autosave-1.json"})").value();
+
+    SUBCASE("older than the file as opened: refused") {
+        fs::last_write_time(data / "autosave-1.json", now - std::chrono::hours(2));
+        fs::last_write_time(p.root / "song.json", now - std::chrono::hours(1));
+        REQUIRE(p.app->open("song.json"));
+        auto r = d.execute({"project.recover", args, kUnit});
+        REQUIRE_FALSE(r);
+        CHECK(r.error().code == "recover.no_autosave");
+        CHECK(p.app->head().project->name == "Saved");
+    }
+    SUBCASE("newer than the file as opened, though saved over since: opened") {
+        fs::last_write_time(p.root / "song.json", now - std::chrono::hours(2));
+        fs::last_write_time(data / "autosave-1.json", now - std::chrono::hours(1));
+        REQUIRE(p.app->open("song.json"));
+        p.rename("Saved again");
+        REQUIRE(p.app->save("song.json"));
+        auto r = d.execute({"project.recover", args, kUnit});
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        CHECK(p.app->head().project->name == "Autosaved");
+    }
+}

@@ -991,6 +991,9 @@ class EngineApp : public cmd::Host {
         std::string suffix;  // ".pre-branches", ".unreadable-autosave"
     };
     std::vector<RecoveryKeep> recoveryKeep_;
+    // The project file and its time when this project was opened: a named
+    // autosave must be newer than that (recoverAutosave).
+    std::optional<std::pair<std::filesystem::path, std::filesystem::file_time_type>> openedFile_;
     // Where recovery may read and repair recordings: an unsaved project's
     // session folder; empty for a saved project (its file names its media).
     std::filesystem::path recoveryRoot() const;

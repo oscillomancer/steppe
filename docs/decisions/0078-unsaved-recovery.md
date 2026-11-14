@@ -85,10 +85,13 @@ used neither, nor `autosave_available` for saved projects.
    `project.recover {autosave: true}` opens the newest such autosave that
    reads in place of the open project, keeping the project's path: it is
    unsaved until saved over the file, which stays as it was until then.
-   `autosave_file` names the one to open, even if the file has been saved
-   since: the GUI opens the autosave its popup offered, so choosing Save in
-   the unsaved-changes question before it does not make that autosave
-   "older" than the file and unopenable. Leftover recordings are put back
+   `autosave_file` names the one to open; it must be newer than the file as
+   this project was opened (not as it is now): the GUI opens the autosave
+   its popup offered, so choosing Save in the unsaved-changes question
+   before it does not make that autosave unopenable, while a name offered for
+   another project opens nothing older in this one. The popup's offer is
+   bound to the project (its path and generation) it was made for: opening
+   another project closes it, and a stale button loads nothing. Leftover recordings are put back
    with `project.recover` as before.
 
 ## Consequences
