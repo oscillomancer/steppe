@@ -42,7 +42,16 @@ used neither, nor `autosave_available` for saved projects.
    (as `project.open`; the caller asks about unsaved changes first), from
    the newest autosave that reads (older ones are tried, with a warning),
    takes the folder over as its own (with its lock), stays unsaved, and puts
-   back the folder's leftover recordings as one more undo step.
+   back the folder's leftover recordings as one more undo step. Without a
+   readable autosave it recovers only recordings that can really be put back
+   (onto one new channel); with none, it refuses (`recover.damaged`) and
+   changes nothing. An autosave whose branches were not restored, or one that
+   could not be read, is kept: copied at recovery out of the rotation, and
+   published beside the file by the first save (`<file>.pre-branches.bak`,
+   `<file>.unreadable-autosave.bak`, never replacing) before the folder is
+   released. (Amended 2026-11-14 after the recovery review: an empty `rec/`
+   made a damaged session recover as a blank project, and the first save
+   deleted the only raw copy of rejected branches.)
    `project.recoverable.delete {session}` deletes one. `project.get` and the
    other project-info results count `recoverable_sessions`.
 5. **The GUI offers, never loads.** At start without a project argument, and

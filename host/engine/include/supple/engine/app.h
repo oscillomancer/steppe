@@ -971,6 +971,20 @@ class EngineApp : public cmd::Host {
     // The opened file whose branches section could not be restored: the
     // first save over it keeps a copy first (ADR-0076).
     std::filesystem::path branchesBackupFor_;
+    // Raw files a recovery must not lose (ADR-0078): an autosave whose
+    // branches were not restored, or one that could not be read at all. Each
+    // is a copy beside the autosaves (a name rotation leaves alone), published
+    // beside the file by the first save as <file><suffix>.bak before the
+    // autosaves go, then removed.
+    struct RecoveryKeep {
+        std::filesystem::path copy;
+        std::string suffix;  // ".pre-branches", ".unreadable-autosave"
+    };
+    std::vector<RecoveryKeep> recoveryKeep_;
+    Status keepForFirstSave(const std::filesystem::path& folder, const std::string& name,
+                            std::string_view bytes, std::string suffix);
+    Status publishRecoveryKeeps(const std::filesystem::path& file,
+                                std::vector<schema::Warning>* warnings);
     bool replaying_ = false;
     std::vector<std::filesystem::path>* mergeCreated_ = nullptr;
     // The OS lock on the scratch folder while an unsaved project uses it

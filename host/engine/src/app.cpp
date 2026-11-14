@@ -676,6 +676,7 @@ Status EngineApp::replaceProject(model::VersionStore store, fs::path path,
     versions_ = std::make_unique<model::VersionStore>(std::move(store));
     projectPath_ = std::move(path);
     branchesBackupFor_.clear();
+    recoveryKeep_.clear();
     autosaveMarked_ = !autosaveDir().empty();
     autosaveMs_ = serviceClockMs();
     autosaveHeads_ = versions_->heads();
@@ -753,6 +754,7 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
                      backup.string()});
             branchesBackupFor_.clear();
         }
+        SUPPLE_TRY(publishRecoveryKeeps(path, warnings));
         return writeFileAtomic(path, model::serializeProjectFile(*versions_, history));
     };
     const fs::path media = path.parent_path() / head().project->mediaDir;
@@ -2895,6 +2897,21 @@ std::int64_t leftoverRecordings(const fs::path& rec, const std::set<std::string>
     return n;
 }
 
+// Recordings in `rec` that recover() could put back: a sidecar that reads
+// and a WAV with frames.
+std::int64_t usableRecordings(const fs::path& rec) {
+    std::int64_t n = 0;
+    std::error_code ec;
+    for (fs::directory_iterator it(rec, ec), end; !ec && it != end; it.increment(ec)) {
+        const fs::path& f = it->path();
+        if (f.extension() != ".wav" || !it->is_regular_file(ec)) continue;
+        if (!detail::readSidecar(f)) continue;
+        auto info = audio::inspectWavStream(f);
+        if (info && info->fileFrames > 0) ++n;
+    }
+    return n;
+}
+
 constexpr std::chrono::hours kPruneAfter{1};
 }  // namespace
 
@@ -3038,6 +3055,56 @@ void EngineApp::pruneEmptySessions() {
     for (const fs::path& folder : empty) fs::remove(folder, ec);
 }
 
+Status EngineApp::keepForFirstSave(const fs::path& folder, const std::string& name,
+                                   std::string_view bytes, std::string suffix) {
+    const auto data = std::span(reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
+    for (int n = 1; n < 1000; ++n) {
+        const fs::path copy =
+            folder / (name + suffix + (n == 1 ? "" : "-" + std::to_string(n)) + ".keep");
+        Status written = writeFileNew(copy, data);
+        if (written) {
+            recoveryKeep_.push_back({copy, std::move(suffix)});
+            return okStatus();
+        }
+        if (written.error().code != "file.exists") return written;
+    }
+    return Error("file.exists", "too many kept copies of " + name);
+}
+
+Status EngineApp::publishRecoveryKeeps(const fs::path& file,
+                                       std::vector<schema::Warning>* warnings) {
+    for (auto it = recoveryKeep_.begin(); it != recoveryKeep_.end();) {
+        auto bytes = readFile(it->copy, std::size_t(1) << 30);
+        const std::string name = file.filename().string() + it->suffix;
+        fs::path backup;
+        Status kept = bytes ? Status(Error("file.exists", "")) : Status(bytes.error());
+        for (int n = 1; bytes && !kept && kept.error().code == "file.exists" && n < 10000; ++n) {
+            backup = file.parent_path() /
+                     (n == 1 ? name + ".bak" : name + "-" + std::to_string(n) + ".bak");
+            kept = writeFileNew(backup, *bytes);
+        }
+        if (!kept)
+            return Error("project.history_backup",
+                         "could not keep a copy of the recovered autosave before its folder is "
+                         "released: " +
+                             kept.error().message,
+                         backup.string(),
+                         "make the project folder writable, or save to another file");
+        if (warnings)
+            warnings->push_back({"project.history_backup",
+                                 "kept the recovered session's " +
+                                     std::string(it->suffix == ".pre-branches"
+                                                     ? "autosave with its unrestored branches"
+                                                     : "unreadable autosave") +
+                                     " as " + backup.filename().string(),
+                                 backup.string()});
+        std::error_code ec;
+        fs::remove(it->copy, ec);
+        it = recoveryKeep_.erase(it);
+    }
+    return okStatus();
+}
+
 Result<SessionRecovery> EngineApp::recoverSession(const std::string& session) {
     auto folder = sessionFolder(session);
     if (!folder) return std::move(folder).error();
@@ -3050,11 +3117,15 @@ Result<SessionRecovery> EngineApp::recoverSession(const std::string& session) {
                      "/session", "use a session project.recoverable lists");
     SessionRecovery out;
     std::optional<model::VersionStore> store;
+    // Raw autosaves that must outlive the first save: (name, bytes, suffix).
+    std::vector<std::tuple<std::string, std::string, std::string>> keep;
     for (const fs::path& file : autosavesIn(*folder)) {
         std::vector<schema::Warning> parsed;
         auto text = readTextFile(file, std::size_t(1) << 30);
         auto opened = text ? model::parseProjectFile(*text, &parsed, replayableStep)
-                           : Result<model::OpenedProject>(std::move(text).error());
+                           : Result<model::OpenedProject>(text.error());
+        if (!opened && text)
+            keep.emplace_back(file.filename().string(), *text, ".unreadable-autosave");
         if (!opened) {
             out.warnings.push_back(
                 {"recover.autosave",
@@ -3071,18 +3142,37 @@ Result<SessionRecovery> EngineApp::recoverSession(const std::string& session) {
                                     "restored (" +
                                         opened->branchesDropped->message + ")",
                                     "/branches", "", "", file.filename().string()});
+        if (opened->branchesDropped)
+            keep.emplace_back(file.filename().string(), *text, ".pre-branches");
         store = std::move(opened->store);
         out.autosave = file.filename().string();
         break;
     }
-    const std::string media = store ? store->head()->project->mediaDir : model::Project{}.mediaDir;
-    std::error_code ec;
-    const bool recordings = fs::is_directory(*folder / media / "rec", ec);
-    if (!store && !recordings)
-        return Error("recover.damaged", "nothing in " + session + " can be opened", "/session",
-                     "delete it with project.recoverable.delete, or copy what you need out of " +
-                         folder->string() + " first");
-    if (!store) store.emplace(model::Session::create(model::Project{}));
+    // Without a readable autosave, only recordings that can really be put
+    // back make a recovery: a blank project in place of the user's work, and
+    // the unreadable autosaves deleted by its first save, would be worse.
+    std::optional<Id> recoveredTrack;
+    if (!store) {
+        if (usableRecordings(*folder / model::Project{}.mediaDir / "rec") == 0)
+            return Error("recover.damaged", "nothing in " + session + " can be opened", "/session",
+                         "delete it with project.recoverable.delete, or copy what you need out "
+                         "of " +
+                             folder->string() + " first");
+        // The tracks they were recorded on are in the unreadable autosave:
+        // they go on one new channel.
+        model::Session blank = model::Session::create(model::Project{});
+        model::EditTxn t(blank, blank.version);
+        model::Track tr;
+        tr.type = model::StripType::Channel;
+        tr.name = "Recovered";
+        tr.parent = model::kMaster;
+        const Id id = t.create(tr);
+        t.modify<model::Track>(model::kMaster, [&](model::Track& m) { m.children.push_back(id); });
+        auto made = t.commit();
+        if (!made) return std::move(made).error();
+        store.emplace(std::move(*made));
+        recoveredTrack = id;
+    }
     auto held = std::make_unique<detail::SessionLock>(std::move(*lock));
     std::vector<schema::Warning> replaced;
     SUPPLE_TRY(replaceProject(
@@ -3096,8 +3186,15 @@ Result<SessionRecovery> EngineApp::recoverSession(const std::string& session) {
         },
         &replaced));
     for (auto& w : replaced) out.warnings.push_back({w.code, w.message, w.path, "", "", ""});
+    for (const auto& [name, bytes, suffix] : keep)
+        if (Status kept = keepForFirstSave(*folder, name, bytes, suffix); !kept)
+            out.warnings.push_back({kept.error().code,
+                                    "could not keep a copy of " + name +
+                                        ": the first save deletes it: " + kept.error().message,
+                                    "/session", "copy it out of the folder before saving", "",
+                                    name});
     if (!recoverable().empty()) {
-        auto r = recover({}, std::nullopt, &out.warnings);
+        auto r = recover({}, recoveredTrack, &out.warnings);
         if (r)
             out.recovered = std::move(*r);
         else

@@ -900,4 +900,67 @@ TEST_CASE("a recovered autosave's saved steps are checked like an opened file's"
                       [](const RecordingWarning& w) { return w.code == "project.history"; }));
     CHECK(app->versions().branches() == std::vector<std::string>{"main"});
     CHECK(*readTextFile(victim) == "precious");
+
+    // Round-4 review, finding 2: the first save released the folder and
+    // deleted the only raw copy of those branches. It is kept beside the
+    // saved file, as project.open's first save keeps one.
+    const std::string raw = json::writeCanonical(doc);
+    std::vector<schema::Warning> saveWarnings;
+    REQUIRE(app->save(u.root / "song" / "song.json", &saveWarnings));
+    CHECK(hasWarning(saveWarnings, "project.history_backup"));
+    const fs::path kept = u.root / "song" / "song.json.pre-branches.bak";
+    REQUIRE(fs::exists(kept));
+    CHECK(*readTextFile(kept) == raw);
+    CHECK_FALSE(fs::exists(u.folder(left)));  // released once the copy is out
+}
+
+TEST_CASE("a session with no readable autosave recovers only recordings it can place") {
+    // Round-4 review, finding 1: an empty rec/ folder made a session whose
+    // autosaves were all damaged recover as a blank project, and the first
+    // save then deleted the unreadable autosave.
+    Unsaved u;
+    auto app = u.run("20261114-100000-1");
+    rename(*app, "Current work");
+    const std::string left = "20261114-085000-8";
+    const fs::path folder = u.folder(left);
+    REQUIRE(writeFileAtomic(folder / "autosave-1.json", "garbage"));
+
+    SUBCASE("an empty recordings folder: refused, nothing touched") {
+        fs::create_directories(folder / "media" / "rec");
+        auto r = app->recoverSession(left);
+        REQUIRE_FALSE(r);
+        CHECK(r.error().code == "recover.damaged");
+        CHECK(app->head().project->name == "Current work");
+        CHECK(*readTextFile(folder / "autosave-1.json") == "garbage");
+    }
+    SUBCASE("a WAV without a usable sidecar: refused the same way") {
+        fs::create_directories(folder / "media" / "rec");
+        REQUIRE(writeFileAtomic(folder / "media" / "rec" / "Vocal-1.wav", "not audio"));
+        REQUIRE(writeFileAtomic(folder / "media" / "rec" / "Vocal-1.rec.json", "{}"));
+        auto r = app->recoverSession(left);
+        REQUIRE_FALSE(r);
+        CHECK(r.error().code == "recover.damaged");
+        CHECK(app->head().project->name == "Current work");
+    }
+    SUBCASE("a real recording: placed on a new track; the unreadable autosave kept on save") {
+        cmd::Registry registry;
+        registerEngineCommands(registry);
+        {
+            // A run that recorded a take and stopped before any autosave.
+            auto earlier = u.run("20261114-084000-5");
+            cmd::Dispatcher d(registry, *earlier);
+            earlier->setupFixture(d, "recording_take_file");
+        }
+        fs::rename(u.folder("20261114-084000-5") / "media", folder / "media");
+        auto r = app->recoverSession(left);
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        REQUIRE(r->recovered.size() == 1);
+        CHECK(app->head().items.size() == 1);
+        std::vector<schema::Warning> saveWarnings;
+        REQUIRE(app->save(u.root / "song" / "song.json", &saveWarnings));
+        CHECK(hasWarning(saveWarnings, "project.history_backup"));
+        const fs::path kept = u.root / "song" / "song.json.unreadable-autosave.bak";
+        REQUIRE(fs::exists(kept));
+        CHECK(*readTextFile(kept) == "garbage");
+    }
 }

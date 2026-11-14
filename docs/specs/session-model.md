@@ -645,7 +645,8 @@ read back as new source media. An ancestor destination is copied to normally,
 so saving back to the original project folder includes newly recorded media.
 
 The engine app writes autosaves from main-thread service (engine.md §6,
-ADR-0030), only when a named project's branch heads or current branch
+ADR-0030), for saved and unsaved projects alike (an unsaved one into its
+scratch folder, below), only when the project's branch heads or current branch
 changed since the last one (`VersionStore::heads()`: an edit on a branch
 that is not current counts, media hash completions do not) and 60 s of
 monotonic service time have passed. Unchanged projects have no autosave
@@ -677,10 +678,22 @@ project (as `project.open`: the caller asks about unsaved changes first)
 with the folder's newest readable autosave (older ones are tried, each
 failure a `recover.autosave` warning), takes the folder and its lock over,
 stays unsaved, puts the folder's leftover recordings back as one more undo
-step, and returns `autosave` (the file it used, or none). Errors:
+step, and returns `autosave` (the file it used, or none). Without a
+readable autosave it recovers only when at least one recording can be put
+back (a sidecar that reads and a WAV with frames): a new project with one
+channel, "Recovered", that holds them; otherwise `recover.damaged`, with the
+current project and every file untouched. Nothing a recovery could not
+restore is lost by the first save, which releases the folder: an autosave
+whose branches were not restored (opened as main alone, `project.history`)
+or that could not be read is copied at recovery beside the autosaves
+(`<autosave>.pre-branches.keep` / `.unreadable-autosave.keep`, never
+rotated), and the first save publishes each beside the saved file as
+`<file>.pre-branches.bak` or `<file>.unreadable-autosave.bak` (`-2`… when
+taken, never replacing) before it writes the file, with a
+`project.history_backup` warning; if that fails, the save fails. Errors:
 `recover.unknown_session` (not a left-behind sibling, including path
 tricks), `recover.busy` (its run is alive), `recover.damaged` (nothing in it
-opens). `project.recoverable.delete {session}` deletes one. Project-info
+can be opened or put back). `project.recoverable.delete {session}` deletes one. Project-info
 results count `recoverable_sessions`. Autosaves read for listing or
 recovery are checked like any opened file, including §5.4's rule for saved
 steps.
