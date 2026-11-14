@@ -983,6 +983,30 @@ TEST_CASE("a damaged or stale branches section opens main alone") {
             }
         CHECK(open(damaged) == "history.saved");
     }
+    SUBCASE("a logged step the program may not replay (ADR-0076, review of item A #1)") {
+        auto crafted = doc;
+        bool replaced = false;
+        for (auto& v : crafted["branches"]["versions"].asObject())
+            if (const auto* list = v.value.find("invocations"); list && list->size() && !replaced) {
+                v.value["invocations"] =
+                    json::parse(R"([{"command": "project.save", "args": {"path": "x.json"}}])")
+                        .value();
+                replaced = true;
+            }
+        REQUIRE(replaced);
+        CHECK(projectFileFromJson(crafted)->branchesDropped == std::nullopt);  // no rule given
+        const InvocationCheck edits = [](const Invocation& i) -> Status {
+            if (i.command.rfind("track.", 0) == 0) return okStatus();
+            return Error("history.command", i.command + " is not an edit");
+        };
+        auto opened = projectFileFromJson(crafted, nullptr, edits);
+        REQUIRE(opened);
+        REQUIRE(opened->branchesDropped);
+        CHECK(opened->branchesDropped->code == "history.command");
+        CHECK(opened->branchesDropped->path.find("/invocations/0") != std::string::npos);
+        CHECK(opened->store.branches() == std::vector<std::string>{"main"});
+        CHECK_FALSE(projectFileFromJson(doc, nullptr, edits)->branchesDropped);  // the real one
+    }
     SUBCASE("a state that does not load") {
         auto damaged = doc;
         for (auto& v : damaged["branches"]["versions"].asObject())

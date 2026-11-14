@@ -3,6 +3,7 @@
 #include <doctest/doctest.h>
 #include <chrono>
 #include <filesystem>
+#include <set>
 
 #include "../../../tests/file_platform.h"
 #include "supple/base/files.h"
@@ -204,4 +205,180 @@ TEST_CASE("saving over a file whose branches did not load keeps a copy of it onc
     REQUIRE(p.app->save("song.json", &warnings));  // once: the next save just saves
     CHECK_FALSE(hasWarning(warnings, "project.history_backup"));
     CHECK_FALSE(fs::exists(p.root / "song.json.pre-branches-2.bak"));
+}
+
+// --- saved logs replay only edits (review of item A, finding 1) -----------------------------
+
+TEST_CASE("a saved branch step that is not an edit is refused at open and at replay") {
+    Project p;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *p.app);
+    const cmd::Origin unit{cmd::Origin::Type::Test, "unit", ""};
+    auto run = [&](const char* command, std::string_view args) {
+        auto r = d.execute({command, json::parse(args).value(), unit});
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+    };
+    run("track.add", R"({"name": "Drums"})");
+    REQUIRE(p.app->versions().createBranch("agent/claude/bass", "main"));
+    REQUIRE(p.app->switchBranch("agent/claude/bass"));
+    run("track.add", R"({"name": "Bass"})");
+    REQUIRE(p.app->switchBranch("main"));
+    run("track.add", R"({"name": "Keys"})");  // main moves on: a merge replays the branch
+    REQUIRE(p.app->save("song.json"));
+    const fs::path victim = p.root / "victim.txt";
+    REQUIRE(writeFileAtomic(victim, "precious"));
+
+    // Someone else's file: the branch's step became a save over another file.
+    auto doc = json::parse(*readTextFile(p.root / "song.json")).value();
+    bool replaced = false;
+    for (auto& v : doc["branches"]["versions"].asObject())
+        if (const auto* list = v.value.find("invocations"); list && list->size()) {
+            json::Value step = json::Value::object();
+            step["command"] = "project.save";
+            step["args"] = json::Value::object();
+            step["args"]["path"] = victim.string();
+            v.value["invocations"] = json::Value::array();
+            v.value["invocations"].push_back(std::move(step));
+            replaced = true;
+        }
+    REQUIRE(replaced);
+    REQUIRE(writeFileAtomic(p.root / "crafted.json", json::writeCanonical(doc)));
+    std::vector<schema::Warning> warnings;
+    REQUIRE(p.app->open("crafted.json", &warnings));
+    CHECK(hasWarning(warnings, "project.history"));
+    CHECK(p.app->versions().branches() == std::vector<std::string>{"main"});
+    CHECK(*readTextFile(victim) == "precious");
+
+    // And should one reach a replay, it is refused there too.
+    json::Value saveArgs = json::Value::object();
+    saveArgs["path"] = victim.string();
+    auto replayed = p.app->replay(registry, p.app->head(), {{"project.save", saveArgs}},
+                                  p.app->versions().nextVersion());
+    REQUIRE_FALSE(replayed);
+    CHECK(replayed.error().code == "history.command");
+    CHECK(*readTextFile(victim) == "precious");
+}
+
+TEST_CASE("every edit command a saved branch may replay has been audited") {
+    // A saved branch can name any of these, and a merge runs it (ADR-0076,
+    // "Replayable steps"). Each was checked to change only the session and at
+    // most add new files to the project's media folder. A new edit command
+    // must be checked the same way before it joins this list.
+    // Reading files is no new power: a project's media may name any path. Each
+    // writes only new files in the media folder (item.add copies, renders,
+    // freezes); rack.preset.load installs nothing while replaying.
+    static const std::set<std::string> audited{"audio.quantize",
+                                               "audio.warp.detach",
+                                               "audio.warp.reset",
+                                               "autoitem.add",
+                                               "autoitem.duplicate",
+                                               "autoitem.remove",
+                                               "autoitem.set",
+                                               "autoitem.unpool",
+                                               "cable.add",
+                                               "cable.remove",
+                                               "cable.set",
+                                               "env.add",
+                                               "env.points.set",
+                                               "env.remove",
+                                               "env.set",
+                                               "fx.add",
+                                               "fx.chain.load",
+                                               "fx.copy",
+                                               "fx.learn.remove",
+                                               "fx.learn.set",
+                                               "fx.move",
+                                               "fx.param.set",
+                                               "fx.patch.merge",
+                                               "fx.patch.set",
+                                               "fx.preset.load",
+                                               "fx.remove",
+                                               "fx.set",
+                                               "fx.state.capture",
+                                               "group.add",
+                                               "group.members.set",
+                                               "group.remove",
+                                               "group.set",
+                                               "item.add",
+                                               "item.apply-fx",
+                                               "item.consolidate.commit",
+                                               "item.duplicate",
+                                               "item.explode-takes",
+                                               "item.heal",
+                                               "item.mix-to-track.commit",
+                                               "item.move",
+                                               "item.paste",
+                                               "item.remove",
+                                               "item.set",
+                                               "item.split",
+                                               "marker.add",
+                                               "marker.remove",
+                                               "marker.set",
+                                               "midi.edit",
+                                               "midi.write",
+                                               "module.add",
+                                               "module.duplicate",
+                                               "module.learn.remove",
+                                               "module.learn.set",
+                                               "module.randomize",
+                                               "module.remove",
+                                               "module.set",
+                                               "project.set",
+                                               "rack.add",
+                                               "rack.arrange",
+                                               "rack.capture.commit",
+                                               "rack.paste",
+                                               "rack.patch",
+                                               "rack.preset.load",
+                                               "rack.remove",
+                                               "rack.set",
+                                               "region.add",
+                                               "region.remove",
+                                               "region.set",
+                                               "render.preset.load",
+                                               "route.add",
+                                               "route.learn.remove",
+                                               "route.learn.set",
+                                               "route.remove",
+                                               "route.set",
+                                               "take.activate",
+                                               "take.add",
+                                               "take.extract",
+                                               "take.hits.set",
+                                               "take.remove",
+                                               "take.set",
+                                               "take.stretch.add",
+                                               "take.stretch.move",
+                                               "take.stretch.remove",
+                                               "tempo.set",
+                                               "timesig.remove",
+                                               "timesig.set",
+                                               "track.add",
+                                               "track.duplicate",
+                                               "track.freeze.commit",
+                                               "track.learn.remove",
+                                               "track.learn.set",
+                                               "track.move",
+                                               "track.remove",
+                                               "track.set",
+                                               "track.template.load",
+                                               "track.unfreeze",
+                                               "transport.playrate.apply-to-tempo",
+                                               "transport.playrate.set",
+                                               "vca.add",
+                                               "vca.learn.remove",
+                                               "vca.learn.set",
+                                               "vca.members.set",
+                                               "vca.remove",
+                                               "vca.set"};
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    std::set<std::string> edits;
+    for (const cmd::CommandInfo* info : registry.all())
+        if (info->kind == cmd::Kind::Edit && info->name != "batch") edits.insert(info->name);
+    std::string listed;
+    for (const auto& name : edits) listed += "\"" + name + "\", ";
+    INFO(listed);
+    CHECK(edits == audited);
 }

@@ -713,6 +713,31 @@ TEST_CASE("rack presets: a patch brings its own modules to another library") {
     CHECK((*differs)["warnings"].at(0).find("code")->asString() == "rack.preset_module");
 }
 
+TEST_CASE("rack presets: a replayed step does not install modules (ADR-0076)") {
+    Fixture here;
+    here.write("level", kLevel);
+    here.run("track.add", R"({"name": "Synth"})");
+    here.run("rack.add", R"({"track": "tr_1"})");
+    here.run("rack.patch", R"({"rack": "rk_1", "modules": {"lvl": {"type": "com.example.level"}},
+                               "cables": [["lvl.out", "mo_1.l"]]})");
+    json::Value saved = here.run("rack.preset.save", R"({"rack": "rk_1", "name": "Constant"})");
+    // A merge replays a saved branch's step on a machine without the module:
+    // the step may change the project, not the user's library.
+    Fixture there;
+    there.run("track.add", R"({"name": "Synth"})");
+    there.run("rack.add", R"({"track": "tr_1"})");
+    json::Value args = json::Value::object();
+    args["rack"] = "rk_1";
+    args["path"] = saved["path"].asString();
+    auto replayed =
+        there.app->replay(there.registry, there.app->head(), {{"rack.preset.load", args}},
+                          there.app->versions().nextVersion());
+    REQUIRE_FALSE(replayed);
+    CHECK(replayed.error().code == "rack.preset_module");
+    CHECK_FALSE(std::filesystem::exists(there.app->moduleDir() / "level"));
+    CHECK_FALSE(there.app->replaying());
+}
+
 TEST_CASE("module library: a project keeps copies of the modules it plays") {
     Fixture here;
     here.write("level", kLevel);

@@ -291,7 +291,8 @@ void shareRevisions(Session& s, const Session* p) {
         if (const auto found = p->blobs.find(hash); found != p->blobs.end()) blob = found->second;
 }
 
-Result<Version> versionFrom(const json::Value& e, std::uint64_t id, const Reader& r) {
+Result<Version> versionFrom(const json::Value& e, std::uint64_t id, const Reader& r,
+                            const InvocationCheck& check) {
     if (!e.isObject()) return r.fail("expected a version object");
     static const std::set<std::string_view> members{
         "parents", "label",          "origin",          "time_ms",   "invocations", "changes",
@@ -335,7 +336,14 @@ Result<Version> versionFrom(const json::Value& e, std::uint64_t id, const Reader
             const auto* args = inv.find("args");
             if (!inv.isObject() || !command || !command->isString() || !args)
                 return r.fail("expected {command, args}", "/invocations/" + std::to_string(i));
-            v.txn.invocations.push_back({command->asString(), *args});
+            Invocation step{command->asString(), *args};
+            if (check)
+                if (Status allowed = check(step); !allowed)
+                    return Error("history.command", allowed.error().message,
+                                 r.base + "/invocations/" + std::to_string(i),
+                                 "a saved branch may hold only edits of the session; main still "
+                                 "opens without the branches");
+            v.txn.invocations.push_back(std::move(step));
         }
     }
     if (const auto* list = e.find("changes")) {
@@ -392,7 +400,7 @@ Result<Version> versionFrom(const json::Value& e, std::uint64_t id, const Reader
 }
 
 Result<VersionStore> restoreBranches(const json::Value& mainDoc, const json::Value& section,
-                                     const Session& main) {
+                                     const Session& main, const InvocationCheck& check) {
     const Reader r{"/branches"};
     if (!section.isObject()) return r.fail("expected an object");
     static const std::set<std::string_view> members{"current", "next_version", "main_hash", "refs",
@@ -464,7 +472,7 @@ Result<VersionStore> restoreBranches(const json::Value& mainDoc, const json::Val
         if (parsed.ec != std::errc{} || parsed.ptr != m.key.data() + m.key.size() ||
             std::to_string(id) != m.key)
             return at.fail("version keys are decimal numbers");
-        auto v = versionFrom(m.value, id, at);
+        auto v = versionFrom(m.value, id, at, check);
         if (!v) return std::move(v).error();
         const auto* state = m.value.find("state");
         Session session;
@@ -540,7 +548,8 @@ std::string serializeProjectFile(const VersionStore& store, bool history) {
 }
 
 Result<OpenedProject> projectFileFromJson(const json::Value& input,
-                                          std::vector<schema::Warning>* warnings) {
+                                          std::vector<schema::Warning>* warnings,
+                                          const InvocationCheck& check) {
     if (!input.isObject()) return Error("project.type", "a project is a JSON object");
     json::Value doc = input;
     std::optional<json::Value> section;
@@ -551,17 +560,18 @@ Result<OpenedProject> projectFileFromJson(const json::Value& input,
     auto main = projectFromJson(doc, warnings);
     if (!main) return std::move(main).error();
     if (!section) return OpenedProject{VersionStore(std::move(*main)), std::nullopt};
-    auto restored = restoreBranches(doc, *section, *main);
+    auto restored = restoreBranches(doc, *section, *main, check);
     if (!restored)
         return OpenedProject{VersionStore(std::move(*main)), std::move(restored).error()};
     return OpenedProject{std::move(*restored), std::nullopt};
 }
 
 Result<OpenedProject> parseProjectFile(std::string_view text,
-                                       std::vector<schema::Warning>* warnings) {
+                                       std::vector<schema::Warning>* warnings,
+                                       const InvocationCheck& check) {
     auto doc = json::parse(text);
     if (!doc) return std::move(doc).error();
-    return projectFileFromJson(*doc, warnings);
+    return projectFileFromJson(*doc, warnings, check);
 }
 
 }  // namespace supple::model

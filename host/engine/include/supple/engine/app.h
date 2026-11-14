@@ -364,8 +364,22 @@ class EngineApp : public cmd::Host {
     }
 
     // --- branches ------------------------------------------------------------------
+    // Whether a logged step may be replayed from a saved file (ADR-0076,
+    // "Replayable steps"): a registered edit command of this program (Kind
+    // Edit, not batch) whose arguments fit its schema. Edits change the session
+    // and at most add new files to the project's media folder; anything else
+    // (saves, renders, transport, files elsewhere) never runs from a log.
+    // open() checks every saved step against the engine's commands, replay()
+    // every step it runs.
+    static Status replayableFromFile(const cmd::Registry& registry,
+                                     const model::Invocation& invocation);
+    // True while replay() runs steps: an edit that would otherwise write
+    // outside the project (rack.preset.load installing modules into the
+    // library) refuses instead.
+    bool replaying() const { return replaying_; }
     // Re-executes recorded invocations on `base` as `version` (the replayer
-    // for merges): commands run against a temporary transaction on that base.
+    // for merges): commands run against a temporary transaction on that base,
+    // each first checked with replayableFromFile().
     Result<model::Replayed> replay(const cmd::Registry& registry, const model::Session& base,
                                    const std::vector<model::Invocation>& invocations,
                                    std::uint64_t version);
@@ -890,6 +904,7 @@ class EngineApp : public cmd::Host {
     // The opened file whose branches section could not be restored: the
     // first save over it keeps a copy first (ADR-0076).
     std::filesystem::path branchesBackupFor_;
+    bool replaying_ = false;
 };
 
 // Clones a take and its owned FX/envelopes/automation. `copy` may already

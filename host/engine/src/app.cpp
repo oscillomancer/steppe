@@ -47,6 +47,17 @@ namespace fs = std::filesystem;
 using model::Id;
 
 namespace {
+// The engine's own commands, for checking a file's logged steps before any
+// dispatcher exists (open() may run without one).
+const cmd::Registry& engineCommands() {
+    static const cmd::Registry* registry = [] {
+        auto* r = new cmd::Registry;  // never destroyed: a static's exit order is unknown
+        registerEngineCommands(*r);
+        return r;
+    }();
+    return *registry;
+}
+
 bool iequals(std::string_view a, std::string_view b) {
     return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
                return std::tolower(static_cast<unsigned char>(x)) ==
@@ -753,7 +764,9 @@ Status EngineApp::open(const fs::path& where, std::vector<schema::Warning>* warn
     const fs::path path = resolve(where);
     auto text = readTextFile(path, std::size_t(1) << 30);
     if (!text) return std::move(text).error();
-    auto opened = model::parseProjectFile(*text, warnings);
+    auto opened = model::parseProjectFile(*text, warnings, [](const model::Invocation& i) {
+        return replayableFromFile(engineCommands(), i);
+    });
     if (!opened) return std::move(opened).error();
     if (opened->branchesDropped && warnings) {
         const Error& why = *opened->branchesDropped;
@@ -850,15 +863,33 @@ Status EngineApp::openTemplate(const fs::path& where, std::vector<schema::Warnin
 
 // --- branches ----------------------------------------------------------------------------
 
+Status EngineApp::replayableFromFile(const cmd::Registry& registry,
+                                     const model::Invocation& invocation) {
+    auto refuse = [&](std::string why) {
+        return Error("history.command", invocation.command + ": " + why, "/command",
+                     "a branch may replay only edits of the session");
+    };
+    const cmd::CommandInfo* info = registry.find(invocation.command);
+    if (!info) return refuse("not a command of this program");
+    if (info->kind != cmd::Kind::Edit || invocation.command == "batch")
+        return refuse("not an edit of the session, so a saved step may not run it");
+    if (info->validate)
+        if (Status fits = info->validate(invocation.args); !fits)
+            return refuse("its arguments do not fit the command: " + fits.error().message);
+    return okStatus();
+}
+
 Result<model::Replayed> EngineApp::replay(const cmd::Registry& registry, const model::Session& base,
                                           const std::vector<model::Invocation>& invocations,
                                           std::uint64_t version) {
     std::unique_ptr<model::EditTxn> saved = std::move(txn_);
     model::TxnRecord savedRecord = std::move(record_);
     txn_ = std::make_unique<model::EditTxn>(base, version);
+    const bool wasReplaying = std::exchange(replaying_, true);
     auto restore = [&] {
         txn_ = std::move(saved);
         record_ = std::move(savedRecord);
+        replaying_ = wasReplaying;
     };
     for (std::size_t i = 0; i < invocations.size(); ++i) {
         const model::Invocation& inv = invocations[i];
@@ -868,6 +899,10 @@ Result<model::Replayed> EngineApp::replay(const cmd::Registry& registry, const m
             return Error("history.replay", "unknown command " + inv.command + " in history", {},
                          "use history undo or a branch predating the unsupported command, or open "
                          "this history with an engine that provides that command");
+        }
+        if (Status allowed = replayableFromFile(registry, inv); !allowed) {
+            restore();
+            return std::move(allowed).error();
         }
         cmd::Context ctx = makeContext({cmd::Origin::Type::Internal, "replay", ""});
         ctx.provide<const cmd::Registry>(registry);

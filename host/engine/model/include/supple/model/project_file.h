@@ -7,6 +7,7 @@
 // which it differs from main's head.
 #pragma once
 
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -30,11 +31,19 @@ struct OpenedProject {
     // main opened alone, and saving over the file would drop the section.
     std::optional<Error> branchesDropped;
 };
+// Which logged steps a saved branch may hold: a merge replays them, so a
+// file from someone else must not be able to name a step that does more than
+// edit the session (ADR-0076, "Replayable steps"). The engine passes its rule
+// (EngineApp::replayableFromFile); without one only the structure is checked.
+using InvocationCheck = std::function<Status(const Invocation&)>;
 // Main's document must load (its errors are the project's); a damaged or
-// stale branches section only sets branchesDropped.
+// stale branches section, or one with a step `check` refuses, only sets
+// branchesDropped.
 Result<OpenedProject> projectFileFromJson(const json::Value& doc,
-                                          std::vector<schema::Warning>* warnings = nullptr);
+                                          std::vector<schema::Warning>* warnings = nullptr,
+                                          const InvocationCheck& check = {});
 Result<OpenedProject> parseProjectFile(std::string_view text,
-                                       std::vector<schema::Warning>* warnings = nullptr);
+                                       std::vector<schema::Warning>* warnings = nullptr,
+                                       const InvocationCheck& check = {});
 
 }  // namespace supple::model

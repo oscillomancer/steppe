@@ -66,6 +66,20 @@ The branch's steps are also what the human reviews after reopening:
 8. Older files (2.13 and before) open as main alone, as they always did. An
    older build opening a 2.14 file sees main, keeps the section verbatim and,
    if it changes main, makes the section stale (6).
+9. **Only edits replay from a file.** A merge after reopening runs the
+   branch's saved steps, so a file someone else made could otherwise run any
+   command (the review of this ADR's first version overwrote a file with a
+   saved `project.save`). A saved step must name a registered edit command
+   of this program (not `batch`) with arguments that fit its schema. Edits
+   change the session and at most add new files in the project's media
+   folder; what they read (imported audio, MIDI files, the user's presets,
+   chains and templates by name) a project's media can already name. The one
+   edit that writes elsewhere, `rack.preset.load` installing a preset's
+   modules into the library, refuses to install while replaying. The rule is
+   enforced twice: opening checks every saved step (a violation is damage:
+   main opens alone with a `project.history` warning, and (6) applies), and
+   replay checks every step it runs. A test pins the list of edit commands,
+   so a new edit command is audited for this before it can be saved.
 
 ## Consequences
 
