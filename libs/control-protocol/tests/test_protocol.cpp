@@ -432,39 +432,6 @@ TEST_CASE("structured errors keep their text locations across RPC") {
 
 // The model thread is held until the call has returned, so the call can only
 // end by timing out; no wall-clock threshold decides the result.
-TEST_CASE("client connection generations distinguish reconnects from calls") {
-    auto commands = registry();
-    Host host;
-    cmd::Dispatcher bus(commands, host);
-    ModelQueue queue;
-    rpc::Server first(commands, bus, [&](auto task) { queue.post(std::move(task)); });
-    const auto path = testSocket("generation");
-    REQUIRE(first.start(path));
-    rpc::Client client;
-    CHECK(client.connectionGeneration() == 0);
-    REQUIRE(client.connect(path, "generation-test"));
-    const auto original = client.connectionGeneration();
-    REQUIRE(original != 0);
-    REQUIRE(client.call("registry.list"));
-    CHECK(client.connectionGeneration() == original);
-    first.stop();
-    // Observe EOF deterministically, rather than deciding by how quickly
-    // a native socket reports its peer's close to a nonblocking probe.
-    REQUIRE_FALSE(client.call("registry.list"));
-    CHECK(client.connectionGeneration() == 0);
-    rpc::Server second(commands, bus, [&](auto task) { queue.post(std::move(task)); });
-    REQUIRE(second.start(path));
-    REQUIRE(client.call("registry.list"));  // automatic reconnect
-    const auto automatic = client.connectionGeneration();
-    CHECK(automatic > original);
-    client.close();
-    CHECK(client.connectionGeneration() == 0);
-    REQUIRE(client.connect(path, "generation-test"));
-    CHECK(client.connectionGeneration() > automatic);
-    client.close();
-    second.stop();
-}
-
 TEST_CASE("a timed-out call closes the connection and the next call reconnects") {
     auto commands = registry();
     Host host;

@@ -106,3 +106,39 @@ TEST_CASE("portable AF_UNIX startup refuses paths beyond the platform limit") {
     CHECK(result.error().code == "rpc.path");
     std::filesystem::remove_all(dir);
 }
+
+TEST_CASE("client connection generations distinguish reconnects from calls") {
+    auto commands = registry();
+    Host host;
+    cmd::Dispatcher bus(commands, host);
+    ModelQueue queue;
+    rpc::Server first(commands, bus, [&](auto task) { queue.post(std::move(task)); });
+    const auto dir = std::filesystem::temp_directory_path() / "supple-rpc-generation-test";
+    std::filesystem::create_directories(dir);
+    const auto path = dir / "endpoint.sock";
+    REQUIRE(first.start(path));
+    rpc::Client client;
+    CHECK(client.connectionGeneration() == 0);
+    REQUIRE(client.connect(path, "generation-test"));
+    const auto original = client.connectionGeneration();
+    REQUIRE(original != 0);
+    REQUIRE(client.call("registry.list"));
+    CHECK(client.connectionGeneration() == original);
+    first.stop();
+    // Observe EOF deterministically, rather than deciding by how quickly
+    // a native socket reports its peer's close to a nonblocking probe.
+    REQUIRE_FALSE(client.call("registry.list"));
+    CHECK(client.connectionGeneration() == 0);
+    rpc::Server second(commands, bus, [&](auto task) { queue.post(std::move(task)); });
+    REQUIRE(second.start(path));
+    REQUIRE(client.call("registry.list"));  // automatic reconnect
+    const auto automatic = client.connectionGeneration();
+    CHECK(automatic > original);
+    client.close();
+    CHECK(client.connectionGeneration() == 0);
+    REQUIRE(client.connect(path, "generation-test"));
+    CHECK(client.connectionGeneration() > automatic);
+    client.close();
+    second.stop();
+    std::filesystem::remove_all(dir);
+}
