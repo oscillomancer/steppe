@@ -710,8 +710,9 @@ inside too: if `media` itself leads out, they are not recovered
 (`recover.media_outside` warning) and nothing there is touched. Every file
 recovery opens (autosaves, `.keep` copies, sidecars, WAVs before inspection
 or repair) must resolve inside the folder recovery uses; one that does not
-is not opened (`recover.outside`), and `session.lock` is never opened
-through a link. Recovery reads only regular files (a link to one inside is
+is not opened (`recover.outside`), and `session.lock` is taken only as
+a regular file of the folder's own, never through a link (on Windows the
+link itself is refused) and never as a named pipe. Recovery reads only regular files (a link to one inside is
 followed): a named pipe, a device or a folder in the place of any of them,
 or of a MIDI journal, is refused without being waited on
 (`recover.not_file`, or the WAV is passed over) and left as it is. A merge

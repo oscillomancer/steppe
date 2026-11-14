@@ -1476,6 +1476,15 @@ TEST_CASE("recovery reads no autosave and opens no lock through a link out of th
         CHECK(app->recoverableSessions().empty());
         CHECK_FALSE(fs::exists(target));
     }
+#if !defined(_WIN32)
+    SUBCASE("a session.lock named pipe") {
+        // Round-10 native CI (Windows took the link): the lock is a plain file.
+        fs::remove(folder / "session.lock");
+        REQUIRE(::mkfifo((folder / "session.lock").c_str(), 0600) == 0);
+        CHECK(app->recoverableSessions().empty());
+        CHECK(fs::is_fifo(fs::symlink_status(folder / "session.lock")));
+    }
+#endif
 }
 
 TEST_CASE("an autosave offered after a first save or a save as survives saving first") {
