@@ -79,7 +79,8 @@ probes and conformance tests also link host libraries.
   `RenderPlan`: reads inputs, runs live-path nodes at device buffer size,
   consumes render-ahead buffers for non-live paths, writes outputs, posts
   meters into SPSC rings. Never allocates, frees, locks, blocks, logs, throws,
-  or touches files. Entry points are annotated `SUPPLE_RT` and every audio-path
+  or touches files, except that it may wait for a bridged plug-in's answer
+  up to the cycle's bridge deadline (ADR-0081, below). Entry points are annotated `SUPPLE_RT` and every audio-path
   test also runs under RealtimeSanitizer.
 - **Native MIDI receive threads** — CoreMIDI's client receive thread or WinMM's
   per-device callback publishes timestamped short messages into preallocated
@@ -172,18 +173,24 @@ model: two kinds of channel, never confused:
 - **Lossy** channels for telemetry only (meters, scopes, analysis frames):
   SPSC rings that drop the newest item on overflow and count drops.
 
-The device callback never blocks or calls the synchronous bridge. ADR-0013
-sanctions a narrower exception for background rendering: bridge calls wake a
+ADR-0013 sanctions an exception for background rendering: bridge calls wake a
 child with a futex, spin briefly, then wait with a bounded failure deadline,
-inside `supple::rt::ScopedSanctionedSyscall`. This exception does not authorize
-waits or synchronous bridge calls in the device callback. ADR-0024 additionally
+inside `supple::rt::ScopedSanctionedSyscall`. ADR-0081 sanctions the only wait
+in the device callback (and its live helpers): for a bridged plug-in on a live
+node, one wake of its request word and timed waits on its done word, never
+past the cycle's bridge deadline (cycle start plus its period or 2 ms,
+whichever is larger), with no process checks, kills, allocation or locks. A
+stage still unanswered at the deadline is silent for that cycle, the cycle
+counts as an xrun, and after 50 ms of late cycles the plug-in fails; the
+main thread kills its process. ADR-0024 additionally
 sanctions `supple::rt::wake()`, a nonblocking private futex wake for live
 helpers. ADR-0028 extends that same nonblocking wake to the renderer;
-no callback waits are allowed. The callback executes ready nodes and joins
+no other callback waits are allowed. The callback executes ready nodes and joins
 using atomics only; helpers park between segments, and every helper that
 claimed the job must depart before plan state is reused. Unclaimed late
 helpers cannot access retired jobs and need not be awaited. A late in-flight
-node makes the cycle late; no output is discarded. The background pool
+node makes the cycle late; no output is discarded (a bridged stage past the
+bridge deadline is the one exception, above). The background pool
 currently uses atomic wait/notify between jobs and when no task is ready.
 Participation is bounded by graph dependencies and departure is joined
 explicitly (ADR-0023); this pool does not participate in live callback execution.

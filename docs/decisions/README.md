@@ -94,3 +94,4 @@ current state.
 | [0076](0076-saved-branches.md) | Project files keep branches and their unmerged steps | Accepted |
 | [0078](0078-unsaved-recovery.md) | Unsaved projects autosave and come back after a crash | Accepted |
 | [0080](0080-midi-recording-recovery.md) | MIDI takes survive a crash through a journal | Accepted |
+| [0081](0081-live-bridged-plugins.md) | Bridged plug-ins run on live nodes, with a bounded wait | Accepted |

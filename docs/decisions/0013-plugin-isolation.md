@@ -6,6 +6,10 @@
 **Amendment, 2026-10-07:** [ADR-0024](0024-live-multiprocessing.md) defines
 live callback fork-join, helper scheduling and the nonblocking wake exception.
 
+**Amendment, 2026-11-14:** [ADR-0081](0081-live-bridged-plugins.md) lets
+the callback process bridged plug-ins on live nodes, with one bounded wait
+per cycle; it states the exception to the callback's no-wait rule.
+
 **Amendment, 2026-11-10:** [ADR-0068](0068-plugin-midi-output.md) carries
 plug-in note and MIDI output through the data plane and passes the host
 sink's room to the bridge (protocol POSIX 20 / Windows 21).
