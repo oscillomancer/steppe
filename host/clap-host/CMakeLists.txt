@@ -77,6 +77,18 @@ if(SUPPLE_BUILD_TESTS)
                              BRIDGE_PATH="$<TARGET_FILE:${PRODUCT_SLUG}-bridge>")
 
 
+  # B6 (ADR-0013): bridged against in-process process() cost, on the gain
+  # fixture. A measurement tool; its test only proves that it runs.
+  add_executable(bridge-bench tools/bridge_bench.cpp)
+  target_link_libraries(bridge-bench PRIVATE supple::clap-host supple::core-json)
+  supple_target_defaults(bridge-bench)
+  add_dependencies(bridge-bench clap-host-fixtures ${PRODUCT_SLUG}-bridge)
+  target_compile_definitions(bridge-bench PRIVATE FIXTURE_CLAP_PATH="$<TARGET_FILE:clap-host-fixtures>"
+                             BRIDGE_PATH="$<TARGET_FILE:${PRODUCT_SLUG}-bridge>")
+  add_test(NAME clap-host.bridge-bench COMMAND bridge-bench --blocks 64 --instances 1,2
+           --cycles 20 --warmup 5)
+  set_tests_properties(clap-host.bridge-bench PROPERTIES LABELS "clap-host;tsan-skip")
+
   foreach(_mode good crash hang)
     add_library(clap-scan-${_mode} MODULE tests/fixture_scan.cpp)
     target_link_libraries(clap-scan-${_mode} PRIVATE supple::clap)

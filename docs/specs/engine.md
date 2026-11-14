@@ -1205,7 +1205,10 @@ controls); `moveParam` moves any parameter the way a binding does, for the
 - **B5 edit responsiveness:** 1000 random edits via the bus while playing:
   main-thread time per edit (p95 < 2 ms), no xruns, plan swap latency.
 - **B6 isolation:** crash test (§5) + CPU overhead of synchronous background bridge vs
-  in-process for 16 instances.
+  in-process for 16 instances. `bridge-bench` (host/clap-host/tools) times
+  bridged against in-process calls on the gain fixture per block size,
+  stage count and isolation, paced like a callback; results are in
+  `docs/benchmarks/b6.md`.
 
 Results are recorded with kernel, PipeWire version, quantum actually
 granted, and CPU governor (read-only facts).
