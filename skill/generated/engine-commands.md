@@ -10852,7 +10852,7 @@ Result:
 
 Put back what a crash left behind: recordings, or an unsaved project.
 
-files: as project.recoverable lists them (omit for all). Each becomes an item on the track it was recorded on (or track) at the position it was recorded, in one undo step. session: instead opens that unsaved project from its newest readable autosave in place of the current one (unsaved changes are lost: save first), still unsaved, and puts back its leftover recordings as one more undo step. autosave: instead opens the saved project's autosave newer than its file (project.get autosave_available) in place of what is open, keeping its path: it is unsaved until saved over the file.
+files: as project.recoverable lists them (omit for all). Each becomes an item on the track it was recorded on (or track) at the position it was recorded, in one undo step. session: instead opens that unsaved project from its newest readable autosave in place of the current one (unsaved changes are lost: save first), still unsaved, and puts back its leftover recordings as one more undo step. autosave: instead opens the saved project's autosave newer than its file (project.get autosave_available) in place of what is open, keeping its path: it is unsaved until saved over the file. autosave_file names the autosave to open (as project.recover returned or a client offered it), even if the file was saved since.
 
 Kind: `action`. Exposure: `mcp-tool`.
 
@@ -10864,6 +10864,7 @@ Kind: `action`. Exposure: `mcp-tool`.
 | `track` | string |  |  |  | Track id, e.g. "tr_1". |
 | `session` | string |  |  |  | A session project.recoverable lists |
 | `autosave` | boolean |  |  | false | The saved project's newer autosave |
+| `autosave_file` | string |  |  |  | With autosave: which one, e.g. autosave-3.json, as offered |
 
 ### Result
 

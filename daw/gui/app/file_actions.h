@@ -118,7 +118,9 @@ class FileActions {
     void markSaved();
     void showError(const std::string& message);
     void recoverSession(const std::string& session, const std::string& title);
-    void recoverProjectAutosave();
+    // `autosave`: the one the popup offered, opened even if the question
+    // before it saves the file over it.
+    void recoverProjectAutosave(const std::string& autosave);
     void recoverProjectRecordings();
     void confirmDeleteSession(const std::string& session, const std::string& title,
                               const std::string& size);

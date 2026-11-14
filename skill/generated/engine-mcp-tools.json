@@ -8051,7 +8051,7 @@
   {
     "name": "project_recover",
     "title": "Put back what a crash left behind: recordings, or an unsaved project.",
-    "description": "Put back what a crash left behind: recordings, or an unsaved project. files: as project.recoverable lists them (omit for all). Each becomes an item on the track it was recorded on (or track) at the position it was recorded, in one undo step. session: instead opens that unsaved project from its newest readable autosave in place of the current one (unsaved changes are lost: save first), still unsaved, and puts back its leftover recordings as one more undo step. autosave: instead opens the saved project's autosave newer than its file (project.get autosave_available) in place of what is open, keeping its path: it is unsaved until saved over the file. See describe for errors and examples.",
+    "description": "Put back what a crash left behind: recordings, or an unsaved project. files: as project.recoverable lists them (omit for all). Each becomes an item on the track it was recorded on (or track) at the position it was recorded, in one undo step. session: instead opens that unsaved project from its newest readable autosave in place of the current one (unsaved changes are lost: save first), still unsaved, and puts back its leftover recordings as one more undo step. autosave: instead opens the saved project's autosave newer than its file (project.get autosave_available) in place of what is open, keeping its path: it is unsaved until saved over the file. autosave_file names the autosave to open (as project.recover returned or a client offered it), even if the file was saved since. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "recover_args",
@@ -8075,6 +8075,10 @@
           "type": "boolean",
           "description": "The saved project's newer autosave",
           "default": false
+        },
+        "autosave_file": {
+          "type": "string",
+          "description": "With autosave: which one, e.g. autosave-3.json, as offered"
         }
       },
       "additionalProperties": false

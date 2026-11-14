@@ -328,7 +328,9 @@ class EngineApp : public cmd::Host {
     // project's path, so it is unsaved until saved over the file
     // ("recover.no_autosave" when there is none). Leftover recordings stay
     // for project.recover.
-    Result<SessionRecovery> recoverAutosave();
+    // `name` (optional) opens that autosave of the project's folder, the one
+    // that was offered, even if the file has been saved since.
+    Result<SessionRecovery> recoverAutosave(const std::string& name = {});
     // Deletes a folder recoverableSessions() lists.
     Status deleteSession(const std::string& session);
 

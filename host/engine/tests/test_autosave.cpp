@@ -996,6 +996,15 @@ TEST_CASE("a saved project's newer autosave is opened only when asked, keeping t
         {"project.recover", json::parse(R"({"autosave": true, "session": "x"})").value(), kUnit});
     REQUIRE_FALSE(mixed);
     CHECK(mixed.error().code == "recover.autosave_args");
+    auto alone = d.execute(
+        {"project.recover", json::parse(R"({"autosave_file": "autosave-1.json"})").value(), kUnit});
+    REQUIRE_FALSE(alone);
+    CHECK(alone.error().code == "recover.autosave_args");
+    auto elsewhere = d.execute(
+        {"project.recover",
+         json::parse(R"({"autosave": true, "autosave_file": "../song.json"})").value(), kUnit});
+    REQUIRE_FALSE(elsewhere);
+    CHECK(elsewhere.error().code == "recover.no_autosave");
 
     auto r = d.execute({"project.recover", json::parse(R"({"autosave": true})").value(), kUnit});
     REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));

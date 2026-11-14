@@ -3223,7 +3223,7 @@ Status EngineApp::publishRecoveryKeeps(const fs::path& file,
     return okStatus();
 }
 
-Result<SessionRecovery> EngineApp::recoverAutosave() {
+Result<SessionRecovery> EngineApp::recoverAutosave(const std::string& name) {
     auto none = [] {
         return Error("recover.no_autosave", "there is no autosave newer than the saved file",
                      "/autosave", "open the project as saved; nothing was lost");
@@ -3234,16 +3234,34 @@ Result<SessionRecovery> EngineApp::recoverAutosave() {
     if (ec) return none();
     SessionRecovery out;
     const fs::path folder = autosaveDir();
+    // A named one is the one that was offered: opened even if the file has
+    // been saved since (the question before opening it offers Save).
+    std::vector<fs::path> candidates;
+    if (!name.empty()) {
+        const fs::path file = folder / name;
+        if (!autosaveIndex(name) || fs::path(name).filename() != fs::path(name) ||
+            !fs::is_regular_file(fs::symlink_status(file, ec)))
+            return Error("recover.no_autosave", name + " is not an autosave of this project",
+                         "/autosave_file",
+                         "omit autosave_file to open the newest autosave newer than the file");
+        candidates.push_back(file);
+    } else {
+        candidates = autosavesIn(folder);  // newest first
+    }
     // The same rule as a session's (ADR-0078): what this recovery cannot
     // fully restore is kept for the first save to publish beside the file.
     std::vector<RawAutosave> keep;
-    for (const fs::path& file : autosavesIn(folder)) {  // newest first
+    for (const fs::path& file : candidates) {
         const auto time = fs::last_write_time(file, ec);
-        if (ec || time <= written) continue;
+        if (name.empty() && (ec || time <= written)) continue;
         std::vector<schema::Warning> parsed;
         auto text = readTextFile(file, std::size_t(1) << 30);
         auto opened = text ? model::parseProjectFile(*text, &parsed, replayableStep)
                            : Result<model::OpenedProject>(text.error());
+        if (!opened && !name.empty())
+            return Error("recover.no_autosave", name + " cannot be read: " + opened.error().message,
+                         "/autosave_file",
+                         "open the project as saved, or omit autosave_file to try the others");
         if (!opened && text)
             keep.emplace_back(file.filename().string(), *text, ".unreadable-autosave");
         if (!opened) {

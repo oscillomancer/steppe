@@ -361,10 +361,13 @@ void FileActions::openRecovery() {
         button.layout.width = ui::SizeRule::fixed(164);
         button.layout.height = ui::SizeRule::fixed(28);
     };
-    if (newerAutosave)
+    if (newerAutosave) {
+        // The one offered now: saving first must not make it "older".
+        const std::string offered = app_.newerAutosave(app_.projectPath()).filename().string();
         projectRow("file.recover.autosave", "This project's newer autosave",
                    "Changes made after it was last saved", "Open autosave",
-                   [this] { recoverProjectAutosave(); });
+                   [this, offered] { recoverProjectAutosave(offered); });
+    }
     if (recordings > 0)
         projectRow("file.recover.recordings", "Recordings left out of this project",
                    plural(recordings, "recording was", "recordings were") +
@@ -428,11 +431,12 @@ void FileActions::openRecovery() {
     root_.openPopup(std::move(form), {}, ui::Placement::Center);
 }
 
-void FileActions::recoverProjectAutosave() {
+void FileActions::recoverProjectAutosave(const std::string& autosave) {
     root_.closePopup();
-    confirmDiscard("Open the newer autosave?", [this] {
+    confirmDiscard("Open the newer autosave?", [this, autosave] {
         json::Value args = json::Value::object();
         args["autosave"] = true;
+        if (!autosave.empty()) args["autosave_file"] = autosave;
         auto r = exec("project.recover", std::move(args));
         if (!r) return;
         ui_.selectedTracks.clear();

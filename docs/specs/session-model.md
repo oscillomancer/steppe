@@ -663,9 +663,13 @@ autosave newer than the file that reads (older ones are tried, each failure
 a `recover.autosave` warning) replaces the open project, keeping its path,
 so it stays unsaved until saved over the file; `recover.no_autosave` when
 there is none, `recover.autosave_args` combined with `session`, `files` or
-`track`. Saved steps in it are checked as in an opened file (§5.4), and an
-autosave it could not fully restore (branches dropped, or unreadable) is
-kept through the first save as for an unsaved project's (below).
+`track`. `autosave_file` (with `autosave: true`) names the autosave to open,
+such as the one a client offered: it is opened even if the file was saved
+since, and only it is tried (`recover.no_autosave` when it is not an autosave
+of the project or does not read). Saved steps in it are checked as in an
+opened file (§5.4), and an autosave it could not fully restore (branches
+dropped, or unreadable) is kept through the first save as for an unsaved
+project's (below).
 
 **Unsaved projects (ADR-0078).** An unsaved project autosaves the same way
 into its scratch folder (`<data>/<slug>/unsaved/<start time>-<pid>/`,
@@ -906,7 +910,7 @@ and naming. All `edit` unless marked (q) query or (a) action.
 - **project**: `project.new` (a), `project.open` (a), `project.save` (a),
   `project.get` (q), `project.set`, `project.describe` (q); crash leftovers
   `project.recoverable` (q), `project.recover {files?, track? | session |
-  autosave}` (a),
+  autosave, autosave_file?}` (a),
   `project.recoverable.delete {session}` (a) (§5.3); templates
   `project.template.save` (a), `project.template.load {name}` (a, a new
   unsaved project), `project.template.list` (q), `project.template.delete`
