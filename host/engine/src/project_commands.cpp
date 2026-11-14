@@ -15,13 +15,15 @@ struct ProjectTimecode {
 
 struct ProjectInfo {
     std::string name, path, branch;
+    std::vector<std::string> branches;
     double sampleRate = 0, tempo = 0;
     std::string meter;
     ProjectTimecode timecode;
     std::int64_t version = 0;
     std::int64_t generation = 0;
-    std::int64_t recoverable = 0;    // recordings project.recover can bring back
-    bool autosaveAvailable = false;  // a newer autosave exists (not loaded)
+    std::int64_t recoverable = 0;          // recordings project.recover can bring back
+    bool autosaveAvailable = false;        // a newer autosave exists (not loaded)
+    std::int64_t recoverableSessions = 0;  // unsaved projects earlier runs left behind
     std::optional<std::vector<schema::Warning>> warnings;
 };
 
@@ -38,6 +40,9 @@ schema::Schema<ProjectInfo> projectInfoSchema() {
         .field("name", &ProjectInfo::name, schema::string())
         .field("path", &ProjectInfo::path, schema::string())
         .field("branch", &ProjectInfo::branch, schema::string())
+        .field("branches", &ProjectInfo::branches,
+               schema::arrayOf(schema::string())
+                   .doc("Every branch the project holds; the file keeps them all"))
         .field("sample_rate", &ProjectInfo::sampleRate, schema::number())
         .field("tempo", &ProjectInfo::tempo, schema::number())
         .field("meter", &ProjectInfo::meter, schema::string())
@@ -51,6 +56,9 @@ schema::Schema<ProjectInfo> projectInfoSchema() {
         .field("generation", &ProjectInfo::generation, schema::integer())
         .field("recoverable", &ProjectInfo::recoverable, schema::integer())
         .field("autosave_available", &ProjectInfo::autosaveAvailable, schema::boolean())
+        .field("recoverable_sessions", &ProjectInfo::recoverableSessions,
+               schema::integer().doc("Unsaved projects earlier runs left behind "
+                                     "(project.recoverable lists them)"))
         .field("warnings", &ProjectInfo::warnings, schema::arrayOf(warningSchema("load_warning")))
         .build();
 }
@@ -61,6 +69,7 @@ ProjectInfo projectInfo(EngineApp& app, const model::Session& s) {
     return ProjectInfo{s.project->name,
                        project.string(),
                        app.versions().branch(),
+                       app.versions().branches(),
                        s.project->sampleRate,
                        s.timeMap->bpmAt(0),
                        std::to_string(m.numerator) + "/" + std::to_string(m.denominator),
@@ -70,22 +79,31 @@ ProjectInfo projectInfo(EngineApp& app, const model::Session& s) {
                        static_cast<std::int64_t>(app.projectGeneration()),
                        static_cast<std::int64_t>(app.recoverable().size()),
                        !app.newerAutosave(project).empty(),
+                       app.recoverableSessionCount(),
                        std::nullopt};
 }
 
 struct RecoverableList {
     std::vector<RecoverableInfo> recordings;
+    std::vector<RecoverableSession> sessions;
     std::optional<std::vector<RecordingWarning>> warnings;
 };
 
 struct RecoverArgs {
     std::optional<std::vector<std::string>> files;
     std::optional<std::string> track;
+    std::optional<std::string> session;
+    bool autosave = false;
 };
 
 struct RecoverResult {
     std::vector<RecordedInfo> recovered;
+    std::optional<std::string> autosave;  // the session's autosave opened
     std::optional<std::vector<RecordingWarning>> warnings;
+};
+
+struct SessionArgs {
+    std::string session;
 };
 
 struct TimecodeArgs {
@@ -105,6 +123,11 @@ struct ProjectSetArgs {
 
 struct PathArgs {
     std::optional<std::string> path;
+};
+
+struct SaveArgs {
+    std::optional<std::string> path;
+    bool history = false;
 };
 
 struct SaveResult {
@@ -131,7 +154,7 @@ void registerProjectCommands(cmd::Registry& registry) {
         c.result = projectInfoSchema();
         c.examples = {
             {"A new project", j("{}"),
-             j(R"({"name": "", "path": "", "branch": "main", "sample_rate": 48000.0, "tempo": 120.0, "meter": "4/4", "timecode": {"rate": "30", "start": "00:00:00:00"}, "version": 0, "recoverable": 0, "generation": "<any>", "autosave_available": false})"),
+             j(R"({"name": "", "path": "", "branch": "main", "branches": ["main"], "sample_rate": 48000.0, "tempo": 120.0, "meter": "4/4", "timecode": {"rate": "30", "start": "00:00:00:00"}, "version": 0, "recoverable": 0, "generation": "<any>", "autosave_available": false, "recoverable_sessions": 0})"),
              "empty"}};
         c.run = [](const NoArgs&, Context& ctx) -> Result<ProjectInfo> {
             EngineApp& app = engine::app(ctx);
@@ -320,18 +343,24 @@ void registerProjectCommands(cmd::Registry& registry) {
     }();
     // ---------------------------------------------------------------- project.save / project.open
     [&] {
-        Command<PathArgs, SaveResult> c;
+        Command<SaveArgs, SaveResult> c;
         c.name = "project.save";
         c.kind = Kind::Action;
         c.exposure = cmd::Exposure::McpTool;
         c.summary = "Save the project (canonical JSON) to its file or a new path.";
         c.description =
-            "path: where to save (becomes the project's file); omit to save in place. warnings: "
-            "running plug-ins whose current state could not be read; the file keeps the state "
-            "each had before (fx.restart, then save again, or replace the plug-in).";
+            "path: where to save (becomes the project's file); omit to save in place. The file "
+            "keeps every branch with its unmerged steps (undoable after opening) and which branch "
+            "is current; history: true also keeps undo history. warnings: running plug-ins "
+            "whose current state could not be read; the file keeps the state each had before "
+            "(fx.restart, then save again, or replace the plug-in); project.history_backup names "
+            "the copy kept of a file whose branches could not be restored when opened.";
         c.tags = {"project"};
-        c.args = schema::object<PathArgs>("path_args")
-                     .field("path", &PathArgs::path, schema::string())
+        c.args = schema::object<SaveArgs>("save_args")
+                     .field("path", &SaveArgs::path, schema::string())
+                     .field("history", &SaveArgs::history,
+                            schema::boolean().doc("Also keep undo and redo history (ADR-0076)"))
+                     .defaultValue(false)
                      .build();
         c.result = schema::object<SaveResult>("save_result")
                        .field("path", &SaveResult::path, schema::string())
@@ -340,14 +369,14 @@ void registerProjectCommands(cmd::Registry& registry) {
                        .build();
         c.examples = {{"Save next to the work directory", j(R"({"path": "example-project.json"})"),
                        j(R"({"path": "<any>"})"), "empty"}};
-        c.run = [](const PathArgs& a, Context& ctx) -> Result<SaveResult> {
+        c.run = [](const SaveArgs& a, Context& ctx) -> Result<SaveResult> {
             EngineApp& app = engine::app(ctx);
             fs::path p = a.path ? fs::path(*a.path) : app.projectPath();
             if (p.empty())
                 return Error("project.no_path", "the project has no file yet", "/path",
                              "give a path");
             std::vector<schema::Warning> warnings;
-            SUPPLE_TRY(app.save(p, &warnings));
+            SUPPLE_TRY(app.save(p, &warnings, a.history));
             for (const auto& w : warnings) ctx.warn(w.code, w.message, w.path);
             SaveResult result{app.projectPath().string(), {}};
             if (!warnings.empty()) result.warnings = std::move(warnings);
@@ -360,7 +389,7 @@ void registerProjectCommands(cmd::Registry& registry) {
         c.name = "project.open";
         c.kind = Kind::Action;
         c.exposure = cmd::Exposure::McpTool;
-        c.summary = "Open a project file (replaces the current project and its history).";
+        c.summary = "Open a project file and its branches (replaces the current project).";
         c.tags = {"project"};
         c.args = schema::object<PathArgs>("path_args")
                      .field("path", &PathArgs::path, schema::string())
@@ -368,7 +397,9 @@ void registerProjectCommands(cmd::Registry& registry) {
         c.description =
             "recoverable > 0: recordings a crash left out of the project; project.recoverable "
             "lists them and project.recover puts them back. autosave_available: a newer autosave "
-            "exists next to the file (it is not loaded silently). warnings also report project "
+            "exists next to the file (it is not loaded silently). branch: the branch current when "
+            "saved. warnings: project.history when the saved branches could not be restored "
+            "(main opens alone; the first save over the file keeps a copy of it); also project "
             "module copies that could not be read or compiled, and name types using a library "
             "version instead or left unavailable.";
         c.result = projectInfoSchema();
@@ -376,7 +407,7 @@ void registerProjectCommands(cmd::Registry& registry) {
                     {"schema.invalid", "the file has problems", "details list each with its path"}};
         c.examples = {
             {"Open", j(R"({"path": "example-project.json"})"),
-             j(R"({"name": "<any>", "path": "<any>", "branch": "main", "sample_rate": "<any>", "tempo": "<any>", "meter": "<any>", "timecode": "<any>", "version": "<any>", "recoverable": 0, "generation": "<any>", "autosave_available": false})"),
+             j(R"({"name": "<any>", "path": "<any>", "branch": "main", "branches": ["main"], "sample_rate": "<any>", "tempo": "<any>", "meter": "<any>", "timecode": "<any>", "version": "<any>", "recoverable": 0, "generation": "<any>", "autosave_available": false, "recoverable_sessions": 0})"),
              "saved"}};
         c.run = [](const PathArgs& a, Context& ctx) -> Result<ProjectInfo> {
             EngineApp& app = engine::app(ctx);
@@ -415,7 +446,7 @@ void registerProjectCommands(cmd::Registry& registry) {
         c.result = projectInfoSchema();
         c.examples = {
             {"New", j(R"({"name": "Sketch"})"),
-             j(R"({"name": "Sketch", "path": "", "branch": "main", "sample_rate": 48000.0, "tempo": "<any>", "meter": "<any>", "timecode": "<any>", "version": 0, "recoverable": 0, "generation": "<any>", "autosave_available": false})"),
+             j(R"({"name": "Sketch", "path": "", "branch": "main", "branches": ["main"], "sample_rate": 48000.0, "tempo": "<any>", "meter": "<any>", "timecode": "<any>", "version": 0, "recoverable": 0, "generation": "<any>", "autosave_available": false, "recoverable_sessions": 0})"),
              "song"}};
         c.run = [](const NewArgs& a, Context& ctx) -> Result<ProjectInfo> {
             EngineApp& app = engine::app(ctx);
@@ -434,11 +465,15 @@ void registerProjectCommands(cmd::Registry& registry) {
         c.name = "project.recoverable";
         c.kind = Kind::Query;
         c.exposure = cmd::Exposure::McpTool;
-        c.summary = "List recordings a crash left out of the project.";
+        c.summary = "List recordings and unsaved projects a crash left behind.";
         c.description =
-            "Takes recorded but never committed (the program stopped mid-recording) or never "
-            "saved, found in the media folder's rec/. start_seconds is where each was "
-            "recorded; seconds includes audio written after the file's last header update.";
+            "recordings: takes recorded but never committed (the program stopped "
+            "mid-recording) or never saved, found in the media folder's rec/. start_seconds is "
+            "where each was recorded; seconds includes audio written after the file's last "
+            "header update. sessions: unsaved projects of earlier runs that ended without "
+            "saving or discarding them (a crash), each with its newest autosave's project "
+            "name, tracks and branches, its leftover recordings and its size on disk; "
+            "project.recover {session} opens one, project.recoverable.delete deletes one.";
         c.tags = {"project", "recording"};
         c.args = schema::object<NoArgs>("no_args").build();
         c.result =
@@ -455,16 +490,45 @@ void registerProjectCommands(cmd::Registry& registry) {
                                .field("seconds", &RecoverableInfo::seconds, schema::number())
                                .field("channels", &RecoverableInfo::channels, schema::integer())
                                .build()))
+                .field("sessions", &RecoverableList::sessions,
+                       schema::arrayOf(
+                           schema::object<RecoverableSession>("recoverable_session")
+                               .field("session", &RecoverableSession::session, schema::string())
+                               .field("started_ms", &RecoverableSession::startedMs,
+                                      schema::integer().doc("When that run started (Unix ms)"))
+                               .field("autosaved_ms", &RecoverableSession::autosavedMs,
+                                      schema::integer().doc(
+                                          "When its newest readable autosave was written "
+                                          "(Unix ms); absent: none, only recordings"))
+                               .field("name", &RecoverableSession::name, schema::string())
+                               .field("tracks", &RecoverableSession::tracks,
+                                      schema::integer().doc("Channels and busses, not masters"))
+                               .field("branches", &RecoverableSession::branches,
+                                      schema::arrayOf(schema::string()))
+                               .field("recordings", &RecoverableSession::recordings,
+                                      schema::integer().doc("Takes no autosaved version uses"))
+                               .field("bytes", &RecoverableSession::bytes,
+                                      schema::integer().doc("Its folder's size on disk"))
+                               .build()))
                 .build();
-        c.examples = {{"After a crash while recording", j("{}"),
-                       j(R"({"recordings": [{"file": "rec/Vocal-1.wav", "track": "tr_1",
-                              "start_seconds": 1.0, "seconds": 1.0, "channels": 2}]})"),
-                       "recording_interrupted"},
-                      {"Nothing to recover", j("{}"), j(R"({"recordings": []})"), "empty"}};
+        c.examples = {
+            {"After a crash while recording", j("{}"),
+             j(R"({"recordings": [{"file": "rec/Vocal-1.wav", "track": "tr_1",
+                              "start_seconds": 1.0, "seconds": 1.0, "channels": 2}],
+                              "sessions": []})"),
+             "recording_interrupted"},
+            {"An unsaved project a crash left behind", j("{}"),
+             j(R"({"recordings": [], "sessions": [{"session": "20261114-090000-4242",
+                              "started_ms": "<any>", "autosaved_ms": "<any>", "name": "Sketch",
+                              "tracks": 1, "branches": ["main"], "recordings": 1,
+                              "bytes": "<any>"}]})"),
+             "session_left_behind"},
+            {"Nothing to recover", j("{}"), j(R"({"recordings": [], "sessions": []})"), "empty"}};
         c.run = [](const NoArgs&, Context& ctx) -> Result<RecoverableList> {
             std::vector<RecordingWarning> warnings;
             RecoverableList out;
             out.recordings = app(ctx).recoverable(&warnings);
+            out.sessions = app(ctx).recoverableSessions(&warnings);
             if (!warnings.empty()) out.warnings = std::move(warnings);
             return out;
         };
@@ -475,33 +539,90 @@ void registerProjectCommands(cmd::Registry& registry) {
         c.name = "project.recover";
         c.kind = Kind::Action;
         c.exposure = cmd::Exposure::McpTool;
-        c.summary = "Put recordings a crash left out back into the project (one undo step).";
+        c.summary = "Put back what a crash left behind: recordings, or an unsaved project.";
         c.description =
             "files: as project.recoverable lists them (omit for all). Each becomes an item on "
-            "the track it was recorded on (or track) at the position it was recorded.";
+            "the track it was recorded on (or track) at the position it was recorded, in one "
+            "undo step. session: instead opens that unsaved project from its newest readable "
+            "autosave in place of the current one (unsaved changes are lost: save first), "
+            "still unsaved, and puts back its leftover recordings as one more undo step. "
+            "autosave: instead opens the saved project's autosave newer than its file "
+            "(project.get autosave_available) in place of what is open, keeping its path: it "
+            "is unsaved until saved over the file.";
         c.tags = {"project", "recording"};
         c.args = schema::object<RecoverArgs>("recover_args")
                      .field("files", &RecoverArgs::files, schema::arrayOf(schema::string()))
                      .field("track", &RecoverArgs::track, idArg("tr", "Track"))
+                     .field("session", &RecoverArgs::session,
+                            schema::string().doc("A session project.recoverable lists"))
+                     .field("autosave", &RecoverArgs::autosave,
+                            schema::boolean().doc("The saved project's newer autosave"))
+                     .defaultValue(false)
                      .build();
         c.result =
             schema::object<RecoverResult>("recover_result")
                 .field("recovered", &RecoverResult::recovered, schema::arrayOf(recordedSchema()))
+                .field("autosave", &RecoverResult::autosave,
+                       schema::string().doc("The autosave it opened"))
                 .field("warnings", &RecoverResult::warnings,
                        schema::arrayOf(recordingWarningSchema()))
                 .build();
-        c.errors = {{"recover.nothing", "there is nothing to recover", "project.recoverable"},
-                    {"recover.unknown_file", "a file is not a recording to recover",
-                     "project.recoverable lists them"},
-                    {"recover.duplicate_file", "a file is listed twice", "list each once"},
-                    {"recover.no_track", "the track it was recorded on is gone", "give track"}};
+        c.errors = {
+            {"recover.nothing", "there is nothing to recover", "project.recoverable"},
+            {"recover.unknown_file", "a file is not a recording to recover",
+             "project.recoverable lists them"},
+            {"recover.duplicate_file", "a file is listed twice", "list each once"},
+            {"recover.no_track", "the track it was recorded on is gone", "give track"},
+            {"recover.unknown_session", "no unsaved project of that name was left behind",
+             "project.recoverable lists them"},
+            {"recover.busy", "the session belongs to an app that is running",
+             "recover it in that app"},
+            {"recover.damaged", "nothing in the session can be opened",
+             "project.recoverable.delete"},
+            {"recover.session_args", "session cannot be combined with files or track",
+             "recover the session, then its recordings"},
+            {"recover.no_autosave", "no autosave is newer than the saved file",
+             "open the project as saved"},
+            {"recover.autosave_args", "autosave cannot be combined with session, files or track",
+             "recover the autosave, then the recordings"}};
         c.examples = {{"Recover everything", j("{}"),
                        j(R"({"recovered": [{"track": "tr_1", "item": "it_1", "take": "tk_1",
                               "file": "<any>", "seconds": 1.0, "lost_frames": 0,
                               "takes": ["tk_1"]}]})"),
-                       "recording_interrupted"}};
+                       "recording_interrupted"},
+                      {"Recover an unsaved project", j(R"({"session": "20261114-090000-4242"})"),
+                       j(R"({"recovered": [{"track": "tr_1", "item": "<any>", "take": "<any>",
+                              "file": "<any>", "seconds": 1.0, "lost_frames": 0,
+                              "takes": "<any>"}], "autosave": "autosave-1.json"})"),
+                       "session_left_behind"}};
         c.run = [](const RecoverArgs& a, Context& ctx) -> Result<RecoverResult> {
             EngineApp& app = engine::app(ctx);
+            if (a.autosave) {
+                if (a.session || a.files || a.track)
+                    return Error("recover.autosave_args",
+                                 "autosave cannot be combined with session, files or track",
+                                 "/autosave", "recover the autosave, then the recordings");
+                auto r = app.recoverAutosave();
+                if (!r) return std::move(r).error();
+                RecoverResult out;
+                out.autosave = r->autosave;
+                if (!r->warnings.empty()) out.warnings = std::move(r->warnings);
+                return out;
+            }
+            if (a.session) {
+                if (a.files || a.track)
+                    return Error("recover.session_args",
+                                 "session cannot be combined with files or track",
+                                 a.files ? "/files" : "/track",
+                                 "recover the session first, then its recordings");
+                auto r = app.recoverSession(*a.session);
+                if (!r) return std::move(r).error();
+                RecoverResult out;
+                out.recovered = std::move(r->recovered);
+                if (!r->autosave.empty()) out.autosave = r->autosave;
+                if (!r->warnings.empty()) out.warnings = std::move(r->warnings);
+                return out;
+            }
             std::optional<Id> track;
             if (a.track) {
                 auto id = existing<model::Track>(app.view(), *a.track, "/track");
@@ -515,6 +636,35 @@ void registerProjectCommands(cmd::Registry& registry) {
             out.recovered = std::move(*r);
             if (!warnings.empty()) out.warnings = std::move(warnings);
             return out;
+        };
+        addChecked(registry, std::move(c));
+    }();
+    [&] {
+        Command<SessionArgs, SessionArgs> c;
+        c.name = "project.recoverable.delete";
+        c.kind = Kind::Action;
+        c.exposure = cmd::Exposure::McpTool;
+        c.summary = "Delete an unsaved project a crash left behind, with its recordings.";
+        c.description =
+            "session: as project.recoverable lists it. Its folder and everything in it are "
+            "deleted for good (this is not an undo step).";
+        c.tags = {"project", "recording"};
+        c.args = schema::object<SessionArgs>("session_args")
+                     .field("session", &SessionArgs::session, schema::string())
+                     .build();
+        c.result = schema::object<SessionArgs>("session_deleted")
+                       .field("session", &SessionArgs::session, schema::string())
+                       .build();
+        c.errors = {
+            {"recover.unknown_session", "no unsaved project of that name was left behind",
+             "project.recoverable lists them"},
+            {"recover.busy", "the session belongs to an app that is running", "quit that app"},
+            {"recover.delete", "the folder could not be deleted", "make it writable"}};
+        c.examples = {{"Delete one", j(R"({"session": "20261114-090000-4242"})"),
+                       j(R"({"session": "20261114-090000-4242"})"), "session_left_behind"}};
+        c.run = [](const SessionArgs& a, Context& ctx) -> Result<SessionArgs> {
+            SUPPLE_TRY(app(ctx).deleteSession(a.session));
+            return a;
         };
         addChecked(registry, std::move(c));
     }();

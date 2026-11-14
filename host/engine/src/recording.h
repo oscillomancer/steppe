@@ -18,6 +18,11 @@
 #include "supple/audio/wav_stream.h"
 #include "supple/base/rt.h"
 #include "supple/engine/realtime.h"
+#include "supple/json/json.h"
+
+namespace supple::engine {
+struct TransportRange;
+}
 
 namespace supple::engine::detail {
 
@@ -71,6 +76,12 @@ struct RoutedMidiEvent {
     model::Id route = {};
     int voice = -1;
 };
+
+// record.commit's arguments for takes committed with `punch` (take_commands.cpp):
+// files relative to `media` when inside it, so they resolve after a save
+// moves the project (ADR-0076).
+json::Value recordCommitArgs(const std::vector<RecordedTake>& takes, const TransportRange& punch,
+                             const std::filesystem::path& media);
 
 std::filesystem::path sidecarPath(const std::filesystem::path& wav);
 Status writeSidecar(const std::filesystem::path& wav, const RecordingInfo& info);

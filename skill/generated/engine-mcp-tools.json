@@ -7867,6 +7867,13 @@
         "branch": {
           "type": "string"
         },
+        "branches": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Every branch the project holds; the file keeps them all"
+        },
         "sample_rate": {
           "type": "number"
         },
@@ -7903,6 +7910,10 @@
         "autosave_available": {
           "type": "boolean"
         },
+        "recoverable_sessions": {
+          "type": "integer",
+          "description": "Unsaved projects earlier runs left behind (project.recoverable lists them)"
+        },
         "warnings": {
           "type": "array",
           "items": {
@@ -7914,6 +7925,7 @@
         "name",
         "path",
         "branch",
+        "branches",
         "sample_rate",
         "tempo",
         "meter",
@@ -7921,7 +7933,8 @@
         "version",
         "generation",
         "recoverable",
-        "autosave_available"
+        "autosave_available",
+        "recoverable_sessions"
       ],
       "additionalProperties": false
     },
@@ -7933,8 +7946,8 @@
   },
   {
     "name": "project_open",
-    "title": "Open a project file (replaces the current project and its history).",
-    "description": "Open a project file (replaces the current project and its history). recoverable > 0: recordings a crash left out of the project; project.recoverable lists them and project.recover puts them back. autosave_available: a newer autosave exists next to the file (it is not loaded silently). warnings also report project module copies that could not be read or compiled, and name types using a library version instead or left unavailable. See describe for errors and examples.",
+    "title": "Open a project file and its branches (replaces the current project).",
+    "description": "Open a project file and its branches (replaces the current project). recoverable > 0: recordings a crash left out of the project; project.recoverable lists them and project.recover puts them back. autosave_available: a newer autosave exists next to the file (it is not loaded silently). branch: the branch current when saved. warnings: project.history when the saved branches could not be restored (main opens alone; the first save over the file keeps a copy of it); also project module copies that could not be read or compiled, and name types using a library version instead or left unavailable. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "path_args",
@@ -7958,6 +7971,13 @@
         "branch": {
           "type": "string"
         },
+        "branches": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Every branch the project holds; the file keeps them all"
+        },
         "sample_rate": {
           "type": "number"
         },
@@ -7994,6 +8014,10 @@
         "autosave_available": {
           "type": "boolean"
         },
+        "recoverable_sessions": {
+          "type": "integer",
+          "description": "Unsaved projects earlier runs left behind (project.recoverable lists them)"
+        },
         "warnings": {
           "type": "array",
           "items": {
@@ -8005,6 +8029,7 @@
         "name",
         "path",
         "branch",
+        "branches",
         "sample_rate",
         "tempo",
         "meter",
@@ -8012,7 +8037,8 @@
         "version",
         "generation",
         "recoverable",
-        "autosave_available"
+        "autosave_available",
+        "recoverable_sessions"
       ],
       "additionalProperties": false
     },
@@ -8024,8 +8050,8 @@
   },
   {
     "name": "project_recover",
-    "title": "Put recordings a crash left out back into the project (one undo step).",
-    "description": "Put recordings a crash left out back into the project (one undo step). files: as project.recoverable lists them (omit for all). Each becomes an item on the track it was recorded on (or track) at the position it was recorded. See describe for errors and examples.",
+    "title": "Put back what a crash left behind: recordings, or an unsaved project.",
+    "description": "Put back what a crash left behind: recordings, or an unsaved project. files: as project.recoverable lists them (omit for all). Each becomes an item on the track it was recorded on (or track) at the position it was recorded, in one undo step. session: instead opens that unsaved project from its newest readable autosave in place of the current one (unsaved changes are lost: save first), still unsaved, and puts back its leftover recordings as one more undo step. autosave: instead opens the saved project's autosave newer than its file (project.get autosave_available) in place of what is open, keeping its path: it is unsaved until saved over the file. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "recover_args",
@@ -8040,6 +8066,15 @@
           "type": "string",
           "pattern": "^tr_[0-9]+$",
           "description": "Track id, e.g. \"tr_1\"."
+        },
+        "session": {
+          "type": "string",
+          "description": "A session project.recoverable lists"
+        },
+        "autosave": {
+          "type": "boolean",
+          "description": "The saved project's newer autosave",
+          "default": false
         }
       },
       "additionalProperties": false
@@ -8112,6 +8147,10 @@
             "additionalProperties": false
           }
         },
+        "autosave": {
+          "type": "string",
+          "description": "The autosave it opened"
+        },
         "warnings": {
           "type": "array",
           "items": {
@@ -8130,8 +8169,8 @@
   },
   {
     "name": "project_recoverable",
-    "title": "List recordings a crash left out of the project.",
-    "description": "List recordings a crash left out of the project. Takes recorded but never committed (the program stopped mid-recording) or never saved, found in the media folder's rec/. start_seconds is where each was recorded; seconds includes audio written after the file's last header update. See describe for errors and examples.",
+    "title": "List recordings and unsaved projects a crash left behind.",
+    "description": "List recordings and unsaved projects a crash left behind. recordings: takes recorded but never committed (the program stopped mid-recording) or never saved, found in the media folder's rec/. start_seconds is where each was recorded; seconds includes audio written after the file's last header update. sessions: unsaved projects of earlier runs that ended without saving or discarding them (a crash), each with its newest autosave's project name, tracks and branches, its leftover recordings and its size on disk; project.recover {session} opens one, project.recoverable.delete deletes one. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "no_args",
@@ -8173,9 +8212,52 @@
             "required": ["file", "track", "start_seconds", "seconds", "channels"],
             "additionalProperties": false
           }
+        },
+        "sessions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "title": "recoverable_session",
+            "properties": {
+              "session": {
+                "type": "string"
+              },
+              "started_ms": {
+                "type": "integer",
+                "description": "When that run started (Unix ms)"
+              },
+              "autosaved_ms": {
+                "type": "integer",
+                "description": "When its newest readable autosave was written (Unix ms); absent: none, only recordings"
+              },
+              "name": {
+                "type": "string"
+              },
+              "tracks": {
+                "type": "integer",
+                "description": "Channels and busses, not masters"
+              },
+              "branches": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "recordings": {
+                "type": "integer",
+                "description": "Takes no autosaved version uses"
+              },
+              "bytes": {
+                "type": "integer",
+                "description": "Its folder's size on disk"
+              }
+            },
+            "required": ["session", "name", "tracks", "branches", "recordings", "bytes"],
+            "additionalProperties": false
+          }
         }
       },
-      "required": ["recordings"],
+      "required": ["recordings", "sessions"],
       "additionalProperties": false
     },
     "annotations": {
@@ -8185,15 +8267,58 @@
     }
   },
   {
-    "name": "project_save",
-    "title": "Save the project (canonical JSON) to its file or a new path.",
-    "description": "Save the project (canonical JSON) to its file or a new path. path: where to save (becomes the project's file); omit to save in place. warnings: running plug-ins whose current state could not be read; the file keeps the state each had before (fx.restart, then save again, or replace the plug-in). See describe for errors and examples.",
+    "name": "project_recoverable_delete",
+    "title": "Delete an unsaved project a crash left behind, with its recordings.",
+    "description": "Delete an unsaved project a crash left behind, with its recordings. session: as project.recoverable lists it. Its folder and everything in it are deleted for good (this is not an undo step). See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
-      "title": "path_args",
+      "title": "session_args",
+      "properties": {
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": ["session"],
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "title": "session_deleted",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": ["session"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false
+    }
+  },
+  {
+    "name": "project_save",
+    "title": "Save the project (canonical JSON) to its file or a new path.",
+    "description": "Save the project (canonical JSON) to its file or a new path. path: where to save (becomes the project's file); omit to save in place. The file keeps every branch with its unmerged steps (undoable after opening) and which branch is current; history: true also keeps undo history. warnings: running plug-ins whose current state could not be read; the file keeps the state each had before (fx.restart, then save again, or replace the plug-in); project.history_backup names the copy kept of a file whose branches could not be restored when opened. See describe for errors and examples.",
+    "inputSchema": {
+      "type": "object",
+      "title": "save_args",
       "properties": {
         "path": {
           "type": "string"
+        },
+        "history": {
+          "type": "boolean",
+          "description": "Also keep undo and redo history (ADR-0076)",
+          "default": false
         }
       },
       "additionalProperties": false

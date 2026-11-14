@@ -16,8 +16,9 @@ namespace supple::engine::detail {
 // file of that name with the same bytes is reused; one with other bytes
 // leaves it alone and the copy gets "-2", "-3"… before the extension. The
 // copy is a clone where the filesystem supports one, and appears whole.
+// `created` (optional) is set when a new file was written.
 Result<std::string> copyIntoFolder(const std::filesystem::path& file,
-                                   const std::filesystem::path& dir);
+                                   const std::filesystem::path& dir, bool* created = nullptr);
 
 // Every file under `from` to the same place under `to` (an absent `from`
 // copies nothing). A file already there with the same bytes is kept; one

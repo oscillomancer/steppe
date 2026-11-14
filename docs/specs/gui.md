@@ -1354,6 +1354,28 @@ starts a new, unsaved project from one (after the unsaved-changes question)
 with its own copy of the template's audio, and a right click offers
 Delete.
 
+**Recover unsaved work** (ADR-0078). File > Recover unsaved work…
+(`ui.file.recover`) opens a popup (`file.recover`). First come the open
+project's own leftovers, when there are any: an autosave newer than its file
+(`file.recover.autosave`, Open autosave `file.recover.autosave.open`:
+the unsaved-changes question, then `project.recover {autosave: true}`; the
+project stays unsaved) and recordings left out of it
+(`file.recover.recordings`, Put back `file.recover.recordings.open`:
+`project.recover`). Then the unsaved projects earlier runs left behind
+(`project.recoverable` sessions), newest first, at most six (a line says how many older ones are not shown). Each row
+(`file.recover.session.N`) shows the project name (or "Untitled project"),
+when its run started, its newest autosave's time and track count (or "no
+autosave"), branches and leftover recordings if any, and its size on disk,
+with Recover (`file.recover.open.N`) and Delete (`file.recover.delete.N`).
+Recover goes through the unsaved-changes question, then `project.recover`;
+a notice (`file.recovered`) says where it came from, what was put back,
+any warnings, and that it is not saved yet. Delete asks once more
+(`file.recover.confirm`, naming the size; Delete / Cancel) and returns to
+the list. Later (`file.recover.later`) closes the popup and loads nothing.
+At start without a project argument the app runs the same action when an
+unsaved project was left behind; at start with one, and after File > Open,
+when that project has a newer autosave or leftover recordings. Nothing is ever opened unasked.
+
 **Track templates** keep one strip — its settings and both FX chains, not
 its items or routing — by name in `<config>/<slug>/track-templates/`
 (track.template.*): Track > Save as template… asks for a name for the first

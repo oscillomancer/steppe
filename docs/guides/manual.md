@@ -164,11 +164,42 @@ A project is a JSON file. Its media lives in the `media/` folder beside it.
 Project and FX chain files accept oversampling factors 1, 2, 4 or 8. If a
 hand-edited file uses another factor, loading reports the field and allowed values.
 
+A project file keeps every branch, not just the one you are on: an agent's
+branch you have not merged yet is still there after quitting and reopening,
+with each of its steps (History panel), and it can be undone step by step or
+merged into main as before. The file opens on the branch that was current when
+it was saved. Main's own undo history is not kept: after reopening, undo on
+main starts from the saved state. (Agents can keep it with
+`project.save {"history": true}`.) Autosaves keep branches too.
+
+If a program that does not know about branches (an older Steppe, a script)
+changed the file's main project, the saved branches no longer fit it: Steppe
+opens main alone and says so, and the first time you save over that file it
+keeps a copy of the old one beside it as `<file>.pre-branches.bak`.
+
 Until a project is saved, its recordings go to a folder of its own under the
 data folder (below), in `unsaved/<start time>-<pid>/media/rec`. The first
 save moves them into `media/` beside the project file. Quitting, or starting
 another project, without saving deletes that folder after the app has asked.
-A crashed run leaves its folder behind, recordings included.
+
+An unsaved project is autosaved into that folder every minute while it
+changes, like a saved one. If Steppe stops without you saving or discarding
+(a crash, a power cut), the folder stays, with its autosaves and recordings.
+The next time Steppe starts without a project to open, it lists what was left
+behind: each with its name, when it was last autosaved, how many tracks and
+recordings it has, and its size. **Recover** opens it (after asking about any
+unsaved changes in the current project), still unsaved: save it to keep it.
+**Delete** removes it for good, after asking once more. **Later** closes the
+list and keeps everything; File > Recover unsaved work… shows it again. A
+Steppe that is still running keeps its own folder to itself, so two copies
+of the app never offer each other's work.
+
+The same list appears when you open a saved project that Steppe autosaved
+after its last save, or whose recordings were not added because Steppe
+stopped while recording. **Open autosave** replaces what you opened with
+those later changes; the file itself is not changed until you save.
+**Put back** adds the recordings where they were recorded, as one step you
+can undo.
 
 New, Open and Quit (including File > Quit, Cmd+Q on macOS and closing the main
 window) first stop an active recording and add its takes to the

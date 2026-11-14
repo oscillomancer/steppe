@@ -81,7 +81,7 @@ target_compile_definitions(history.fuzz PRIVATE FIXTURE_CLAP_PATH="$<TARGET_FILE
 add_dependencies(history.fuzz clap-host-fixtures)
 file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/project-corpus DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
 file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/history-corpus DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
-add_test(NAME project.fuzz-smoke COMMAND project.fuzz -runs=100
+add_test(NAME project.fuzz-smoke COMMAND project.fuzz -runs=100 -timeout=30
   ${CMAKE_CURRENT_BINARY_DIR}/project-corpus)
 add_test(NAME history.fuzz-smoke COMMAND history.fuzz -runs=100
   ${CMAKE_CURRENT_BINARY_DIR}/history-corpus)

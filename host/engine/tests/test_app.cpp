@@ -298,6 +298,47 @@ TEST_CASE("agent branches: parallel edits merge by replay; conflicts are reporte
     CHECK(app->head().tracks.find(*model::Id::parse("tr_5"))->notes == "copy of tr_1");
 }
 
+TEST_CASE("a plug-in state captured on a branch reaches main through a replayed merge") {
+    Root root;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    auto app = makeApp(root.path);
+    cmd::Dispatcher d(registry, *app);
+    auto call = [&](std::string command, std::string_view args) {
+        auto r = d.execute({std::move(command), j(args), kTest});
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        return *r;
+    };
+    call("track.add", R"({"name":"A"})");
+    call("track.add", R"({"name":"B"})");
+    call("fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.edge"})");
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    REQUIRE(
+        app->startEngine(backend, {.sampleRate = 48000, .blockSize = 64}, {.anticipative = false}));
+    backend.run(1);
+    app->tick();
+    const model::Id fx = *model::Id::parse("fx_1");
+    call("branch.create", R"({"name":"agent/claude/state"})");
+    // A change only the plug-in knows about (its editor, a preset loaded in
+    // it), captured on the branch as a save captures running plug-ins.
+    auto* instance = app->instanceOf(fx);
+    REQUIRE(instance);
+    const std::vector<std::uint8_t> live{0, 9, 0, 0};
+    REQUIRE(instance->loadState(live));
+    REQUIRE(app->save("song.json"));
+    const auto captured = app->versions().head("agent/claude/state")->fx.find(fx)->state;
+    REQUIRE(captured);
+    call("branch.switch", R"({"name":"main"})");
+    call("track.set", R"({"track":"tr_2","mute":true})");  // main moved: the merge replays
+    auto merged = call("branch.merge", R"({"from":"agent/claude/state"})");
+    CHECK_FALSE(merged["fast_forward"].asBool());
+    const auto* onMain = app->head().fx.find(fx);
+    REQUIRE(onMain);
+    CHECK(onMain->state == captured);
+    if (onMain->state) CHECK(app->head().blobs.at(*onMain->state)->data == live);
+    app->stopEngine();
+}
+
 TEST_CASE("an LLM plays the song in real time over the bus (a stand-in libjack)") {
     FakeJack& fake = fakeJack();
     fake.reset(1024);
@@ -996,7 +1037,8 @@ TEST_CASE("an unsaved project records into its scratch folder; the first save mo
         app->setupFixture(d, "recording_interrupted");
         REQUIRE(fs::exists(scratch / "media" / "rec" / "Vocal-1.wav"));
         REQUIRE(app->newProject(model::Project{}));
-        CHECK_FALSE(fs::exists(scratch));
+        CHECK_FALSE(fs::exists(scratch / "media"));
+        CHECK(fs::exists(scratch / "session.lock"));  // the new project's (ADR-0078)
         app->setupFixture(d, "recording_interrupted");
         REQUIRE(fs::exists(scratch / "media" / "rec" / "Vocal-1.wav"));
         app->clearScratch();

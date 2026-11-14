@@ -429,6 +429,15 @@ q = nil
 ---@class Steppe.env_set_result
 ---@field warnings? table[]
 
+---@class Steppe.env_write_commit_args
+---@field env string Envelope id, e.g. "en_1".
+---@field after number
+---@field through number
+---@field points table[]
+
+---@class Steppe.env_write_commit_result
+---@field warnings? table[]
+
 ---@class Steppe.fx_add_args
 ---@field track? string Track id, e.g. "tr_1".
 ---@field take? string Take id, e.g. "tk_1".
@@ -662,6 +671,13 @@ q = nil
 ---@field midi_output? "replace"|"merge"
 
 ---@class Steppe.fx_set_result
+---@field warnings? table[]
+
+---@class Steppe.fx_state_capture_args
+---@field fx string Plug-in id, e.g. "fx_1".
+---@field state string The state's blob hash, as the plug-in's state field holds it
+
+---@class Steppe.fx_state_capture_result
 ---@field warnings? table[]
 
 ---@class Steppe.group_add_args
@@ -1071,6 +1087,7 @@ q = nil
 ---@field name string
 ---@field path string
 ---@field branch string
+---@field branches string[] Every branch the project holds; the file keeps them all
 ---@field sample_rate number
 ---@field tempo number
 ---@field meter string
@@ -1079,6 +1096,7 @@ q = nil
 ---@field generation integer
 ---@field recoverable integer
 ---@field autosave_available boolean
+---@field recoverable_sessions integer Unsaved projects earlier runs left behind (project.recoverable lists them)
 ---@field warnings? table[]
 
 ---@class Steppe.project_new_args
@@ -1089,6 +1107,7 @@ q = nil
 ---@field name string
 ---@field path string
 ---@field branch string
+---@field branches string[] Every branch the project holds; the file keeps them all
 ---@field sample_rate number
 ---@field tempo number
 ---@field meter string
@@ -1097,6 +1116,7 @@ q = nil
 ---@field generation integer
 ---@field recoverable integer
 ---@field autosave_available boolean
+---@field recoverable_sessions integer Unsaved projects earlier runs left behind (project.recoverable lists them)
 ---@field warnings? table[]
 
 ---@class Steppe.project_open_args
@@ -1106,6 +1126,7 @@ q = nil
 ---@field name string
 ---@field path string
 ---@field branch string
+---@field branches string[] Every branch the project holds; the file keeps them all
 ---@field sample_rate number
 ---@field tempo number
 ---@field meter string
@@ -1114,22 +1135,35 @@ q = nil
 ---@field generation integer
 ---@field recoverable integer
 ---@field autosave_available boolean
+---@field recoverable_sessions integer Unsaved projects earlier runs left behind (project.recoverable lists them)
 ---@field warnings? table[]
 
 ---@class Steppe.project_recover_args
 ---@field files? string[]
 ---@field track? string Track id, e.g. "tr_1".
+---@field session? string A session project.recoverable lists
+---@field autosave? boolean The saved project's newer autosave (default: false)
 
 ---@class Steppe.project_recover_result
 ---@field recovered table[]
+---@field autosave? string The autosave it opened
 ---@field warnings? table[]
 
 ---@class Steppe.project_recoverable_result
 ---@field warnings? table[]
 ---@field recordings table[]
+---@field sessions table[]
+
+---@class Steppe.project_recoverable_delete_args
+---@field session string
+
+---@class Steppe.project_recoverable_delete_result
+---@field session string
+---@field warnings? table[]
 
 ---@class Steppe.project_save_args
 ---@field path? string
+---@field history? boolean Also keep undo and redo history (ADR-0076) (default: false)
 
 ---@class Steppe.project_save_result
 ---@field path string
@@ -1264,6 +1298,10 @@ q = nil
 ---@field rack string
 ---@field name? string
 ---@field track? string
+
+---@class Steppe.record_commit_args
+---@field takes table[]
+---@field punch table
 
 ---@class Steppe.region_add_args
 ---@field start? number
@@ -2178,6 +2216,9 @@ q = nil
 ---@class Steppe.env.points
 ---@field set fun(args: Steppe.env_points_set_args): Steppe.env_points_set_result Replace an envelope's points (all of them, or those in a beat range).
 
+---@class Steppe.env.write
+---@field commit fun(args: Steppe.env_write_commit_args): Steppe.env_write_commit_result Record what a write pass wrote into an envelope as a replayable edit.
+
 ---@class Steppe.fx
 ---@field add fun(args: Steppe.fx_add_args): Steppe.fx_add_result Insert a plugin into a track's (or a take's) FX chain and return its id.
 ---@field copy fun(args: Steppe.fx_copy_args): Steppe.fx_copy_result Copy a plugin and its current settings into a track's FX chain.
@@ -2214,6 +2255,9 @@ q = nil
 ---@field list fun(args: Steppe.fx_preset_list_args): Steppe.fx_preset_list_result List a plugin's presets: its factory ones, then the user's.
 ---@field load fun(args: Steppe.fx_preset_load_args): Steppe.fx_preset_load_result Apply a factory or user preset to a plugin instance in one undo step.
 ---@field save fun(args: Steppe.fx_preset_save_args): Steppe.fx_preset_save_result Save a plugin instance's current settings as a named user preset.
+
+---@class Steppe.fx.state
+---@field capture fun(args: Steppe.fx_state_capture_args): Steppe.fx_state_capture_result Record a plug-in's own state change as a replayable edit.
 
 ---@class Steppe.group
 ---@field add fun(args: Steppe.group_add_args): Steppe.group_add_result Create a named track group with optional links and members.
@@ -2309,11 +2353,14 @@ q = nil
 ---@class Steppe.project
 ---@field get fun(): Steppe.project_get_result Show the project: name, rate, tempo, meter, file, version and branch.
 ---@field new fun(args?: Steppe.project_new_args): Steppe.project_new_result Start a new, empty project (replaces the current one and its history).
----@field open fun(args?: Steppe.project_open_args): Steppe.project_open_result Open a project file (replaces the current project and its history).
----@field recover fun(args?: Steppe.project_recover_args): Steppe.project_recover_result Put recordings a crash left out back into the project (one undo step).
----@field recoverable fun(): Steppe.project_recoverable_result List recordings a crash left out of the project.
+---@field open fun(args?: Steppe.project_open_args): Steppe.project_open_result Open a project file and its branches (replaces the current project).
+---@field recover fun(args?: Steppe.project_recover_args): Steppe.project_recover_result Put back what a crash left behind: recordings, or an unsaved project.
+---@field recoverable fun(): Steppe.project_recoverable_result List recordings and unsaved projects a crash left behind.
 ---@field save fun(args?: Steppe.project_save_args): Steppe.project_save_result Save the project (canonical JSON) to its file or a new path.
 ---@field set fun(args?: Steppe.project_set_args): Steppe.project_set_result Set project name, notes, Console 9, pan law, timebase or timecode.
+
+---@class Steppe.project.recoverable
+---@field delete fun(args: Steppe.project_recoverable_delete_args): Steppe.project_recoverable_delete_result Delete an unsaved project a crash left behind, with its recordings.
 
 ---@class Steppe.project.template
 ---@field delete fun(args: Steppe.project_template_delete_args): Steppe.project_template_delete_result Delete a saved project template by name.
@@ -2342,6 +2389,9 @@ q = nil
 ---@field list fun(args?: Steppe.rack_preset_list_args): table List rack presets, saved and factory: names and contents.
 ---@field load fun(args: Steppe.rack_preset_load_args): table Add a saved preset's modules and cables to a rack.
 ---@field save fun(args: Steppe.rack_preset_save_args): table Save a rack's modules and cables as a preset.
+
+---@class Steppe.record
+---@field commit fun(args: Steppe.record_commit_args): table Record a recording's commit (or a recovery's) as a replayable edit.
 
 ---@class Steppe.region
 ---@field add fun(args?: Steppe.region_add_args): Steppe.region_add_result Add a named region in beats.
@@ -2496,6 +2546,7 @@ q = nil
 ---@field plugin Steppe.plugin Commands named plugin.*
 ---@field project Steppe.project Commands named project.*
 ---@field rack Steppe.rack Commands named rack.*
+---@field record Steppe.record Commands named record.*
 ---@field region Steppe.region Commands named region.*
 ---@field registry Steppe.registry Commands named registry.*
 ---@field render Steppe.render Commands named render.*

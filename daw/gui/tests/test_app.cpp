@@ -11,6 +11,7 @@
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -41,6 +42,7 @@
 #include "supple/base/paths.h"
 #include "supple/engine/app.h"
 #include "supple/gui/png.h"
+#include "supple/gui/process.h"
 #include "supple/host/clap_host.h"
 #include "supple/json/parse.h"
 #include "supple/json/write.h"
@@ -117,8 +119,11 @@ struct App {
     std::unique_ptr<gui::AppActions> actions;
     bool ok = false;
 
+    // `scratch`: the unsaved project's folder, relative to `dir` (as the
+    // GUI's unsaved/<run>); empty keeps the engine's default.
     App(int width = 1000, int height = 640,
-        gui::Platform::Driver driver = gui::Platform::Driver::Offscreen) {
+        gui::Platform::Driver driver = gui::Platform::Driver::Offscreen,
+        const std::filesystem::path& scratch = {}) {
         dir = std::filesystem::temp_directory_path() /
               ("supple-app-test-" + std::to_string(testProcessId()));
         (void)gui::help::removeExportTree(dir);
@@ -145,6 +150,7 @@ struct App {
         fonts = *f;
         engine::AppOptions options;
         options.workdir = dir;
+        if (!scratch.empty()) options.scratchDir = dir / scratch;
         auto a = engine::EngineApp::create(options);
         REQUIRE(a);
         app = std::move(*a);
@@ -1002,6 +1008,18 @@ TEST_CASE(
     CHECK(files.dirty());
     files.saveAs(a.dir / "song");  // the extension is added, in a folder of its own
     CHECK(std::filesystem::exists(a.dir / "song" / "song.json"));
+    CHECK_FALSE(files.dirty());
+    // An edit on another branch is unsaved too, though main is as saved: the
+    // file keeps every branch (ADR-0076).
+    auto run = [&](const char* name, const char* args) {
+        auto r = a.dispatcher->execute({name, json::parse(args).value(), {}});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+    };
+    run("branch.create", R"({"name": "agent/claude/idea"})");
+    run("track.add", R"({"name": "Idea"})");
+    run("branch.switch", R"({"name": "main"})");
+    CHECK(files.dirty());
+    files.saveAs(a.dir / "song");
     CHECK_FALSE(files.dirty());
 
     // Import: one file onto the selected track; several onto new tracks, one undo step.
@@ -3251,4 +3269,134 @@ TEST_CASE("input menu: single-track changes preserve an earlier status note") {
         CHECK(shell.inputLabel(id) == (label == "No input" ? "in \u2014" : label));
     }
     a.root->setContent(std::make_unique<ui::Node>("detached"));
+}
+
+TEST_CASE("file actions: unsaved work a run left behind is offered, never opened unasked") {
+    // ADR-0078: File > Recover unsaved work… (and at start) lists what earlier
+    // runs left; nothing loads until the user picks Recover.
+    // Session folders are named by local start time, as the GUI names them:
+    // the earlier run started a few minutes ago, so its row reads in order
+    // with its autosave's (real) time.
+    auto stamp = [](std::time_t when) {
+        const std::tm local = gui::localTime(when);
+        char text[32] = {};
+        std::strftime(text, sizeof text, "%Y%m%d-%H%M%S", &local);
+        return std::string(text);
+    };
+    const std::time_t now = std::time(nullptr);
+    App a(1000, 640, gui::Platform::Driver::Offscreen, "unsaved/" + stamp(now) + "-1");
+    REQUIRE(a.ok);
+    const std::string left = stamp(now - 300) + "-4242";
+    {
+        engine::AppOptions o;
+        o.workdir = a.dir / "earlier";
+        o.scratchDir = a.dir / "unsaved" / left;
+        auto earlier = engine::EngineApp::create(o);
+        REQUIRE(earlier);
+        (*earlier)->setFixedClock(1'000'000);
+        REQUIRE((*earlier)->newProject({}));
+        cmd::Dispatcher d(a.registry, **earlier);
+        REQUIRE(d.execute({"project.set", json::parse(R"({"name":"Sketch"})").value(), {}}));
+        REQUIRE(d.execute({"track.add", json::parse(R"({"name":"Vocal"})").value(), {}}));
+        (*earlier)->setFixedClock(1'060'000);
+        (*earlier)->tick();
+        REQUIRE(std::filesystem::exists(o.scratchDir / "autosave-1.json"));
+    }  // gone without discarding its project, as after a crash
+    REQUIRE(a.app->recoverableSessionCount() == 1);
+    gui::FileActions files(*a.root, *a.actions, *a.dispatcher, *a.app, a.ui, a.window->sdl(),
+                           [](auto task) { task(); });
+    const std::size_t tracksBefore = a.app->head().tracks.size();
+
+    REQUIRE(a.actions->run("ui.file.recover"));
+    a.root->frame(false);
+    REQUIRE(a.root->find("file.recover"));
+    REQUIRE(a.root->find("file.recover.session.0"));
+    CHECK_FALSE(a.root->find("file.recover.session.1"));
+    a.snapshot("file-recover.png");
+
+    SUBCASE("Later closes it and loads nothing") {
+        REQUIRE(a.root->click("file.recover.later"));
+        a.root->frame(false);
+        CHECK_FALSE(a.root->find("file.recover"));
+        CHECK(a.app->head().tracks.size() == tracksBefore);
+        CHECK(a.app->recoverableSessionCount() == 1);
+    }
+    SUBCASE("Delete asks once more; Cancel keeps it") {
+        REQUIRE(a.root->click("file.recover.delete.0"));
+        a.root->frame(false);
+        REQUIRE(a.root->find("file.recover.confirm"));
+        REQUIRE(a.root->click("file.recover.confirm.cancel"));
+        a.root->frame(false);
+        CHECK(a.root->find("file.recover.session.0"));
+        CHECK(std::filesystem::exists(a.dir / "unsaved" / left));
+        REQUIRE(a.root->click("file.recover.delete.0"));
+        a.root->frame(false);
+        REQUIRE(a.root->click("file.recover.confirm.delete"));
+        a.root->frame(false);
+        CHECK_FALSE(std::filesystem::exists(a.dir / "unsaved" / left));
+        CHECK_FALSE(a.root->find("file.recover.session.0"));  // "nothing to recover"
+        CHECK(a.root->find("file.recover"));
+        CHECK(a.app->head().tracks.size() == tracksBefore);
+    }
+    SUBCASE("Recover opens it, unsaved") {
+        REQUIRE(a.root->click("file.recover.open.0"));
+        a.root->frame(false);
+        if (a.root->find("file.confirm")) REQUIRE(a.root->click("file.confirm.discard"));
+        a.root->frame(false);
+        REQUIRE(a.root->find("file.recovered"));
+        CHECK(a.app->head().project->name == "Sketch");
+        CHECK(a.app->head().tracks.size() == tracksBefore + 1);
+        CHECK(a.app->projectPath().empty());
+        CHECK(a.app->recoverableSessionCount() == 0);
+        a.snapshot("file-recovered.png");
+    }
+}
+
+TEST_CASE("file actions: opening a saved project offers its newer autosave, never loads it") {
+    // ADR-0078 decision 6: an autosave newer than the file is offered on
+    // open; Open autosave brings it back unsaved, under the file's path.
+    App a;
+    REQUIRE(a.ok);
+    auto exec = [&](const char* name, const char* args = "{}") {
+        auto r = a.dispatcher->execute({name, json::parse(args).value(), {}});
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        return *r;
+    };
+    const auto file = a.dir / "song" / "song.json";
+    a.app->setFixedClock(1'000'000);
+    exec("project.set", R"({"name":"Saved"})");
+    REQUIRE(a.app->save(file));
+    exec("project.set", R"({"name":"After the save"})");
+    exec("track.add", R"({"name":"Late idea"})");
+    a.app->setFixedClock(1'061'000);
+    a.app->tick();
+    REQUIRE(!a.app->newerAutosave(file).empty());
+    gui::FileActions files(*a.root, *a.actions, *a.dispatcher, *a.app, a.ui, a.window->sdl(),
+                           [](auto task) { task(); });
+    files.openPath(file);  // as after a crash: the file as saved
+    a.root->frame(false);
+    CHECK(a.app->head().project->name == "Saved");
+    REQUIRE(a.root->find("file.recover"));
+    REQUIRE(a.root->find("file.recover.autosave"));
+    CHECK_FALSE(a.root->find("file.recover.recordings"));
+    a.snapshot("file-recover-autosave.png");
+    const std::string onDisk = *readTextFile(file);
+
+    SUBCASE("Later loads nothing") {
+        REQUIRE(a.root->click("file.recover.later"));
+        a.root->frame(false);
+        CHECK_FALSE(a.root->find("file.recover"));
+        CHECK(a.app->head().project->name == "Saved");
+    }
+    SUBCASE("Open autosave brings the later changes back, unsaved") {
+        REQUIRE(a.root->click("file.recover.autosave.open"));
+        a.root->frame(false);
+        if (a.root->find("file.confirm")) REQUIRE(a.root->click("file.confirm.discard"));
+        a.root->frame(false);
+        REQUIRE(a.root->find("file.recovered"));
+        CHECK(a.app->head().project->name == "After the save");
+        CHECK(a.app->projectPath() == file);
+        CHECK(files.dirty());
+        CHECK(*readTextFile(file) == onDisk);
+    }
 }

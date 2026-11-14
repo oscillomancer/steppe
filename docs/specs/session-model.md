@@ -554,7 +554,7 @@ routes: sd_1 tr_2 → tr_6 ch 1/2→3/4 pre-fader −6 dB (sidechain)
 markers: mk_1 "Verse" bar 1 · regions: rg_1 "Chorus" bars 9–17
 ```
 
-## 5. Project file (`supple.project/2.13`)
+## 5. Project file (`supple.project/2.14`)
 
 ### 5.1 Shape
 
@@ -571,21 +571,23 @@ and audio items on masters (ADR-0057). Before 2.4, a route from a master to `hw_
 played) becomes that master's `hw_output` (its first such route) and the
 route is dropped, with a `project.hw_output_route` warning.
 
-The loader accepts 1.x and 2.x documents and saves 2.5. Migration allocates
-child channel IDs in track-ID order, inserts each child first, and moves the
-source items and record/input FX there while keeping user inserts on the
-buss. Hardware/MIDI record routes follow the new child. Legacy numeric send
-pan remains numeric (including the old default centre); new sends default to
-`follow`. `project.open` includes nonempty load `warnings` as structured
-`{code, message, path}` entries, including the change to Console 9 staging.
-Masters are ordered by `project.masters`, independently of processing order;
-`track.list` and `session.describe` visit every root in that order.
+The loader accepts 1.x and 2.x documents and saves the current schema (2.14,
+§5). Migration allocates child channel IDs in track-ID order, inserts each
+child first, and moves the source items and record/input FX there while
+keeping user inserts on the buss. Hardware/MIDI record routes follow the new
+child. Legacy numeric send pan remains numeric (including the old default
+centre); new sends default to `follow`. `project.open` includes nonempty load
+`warnings` as structured `{code, message, path}` entries, including the change
+to Console 9 staging. Masters are ordered by `project.masters`, independently
+of processing order; `track.list` and `session.describe` visit every root in
+that order.
 
 Canonical JSON (ADR-0009) with members in this order: `schema`, `project`,
 `tempo` (`points`, `meters`), `rulers` (`markers`, `regions`), `tracks`,
 `items`, `takes`, `fx`, `sources` (`media`, `midi`), `routes`, `envelopes`,
 `automation_items`, `groups`, `racks`, `modules` and `cables` (when present), `blobs`, then preserved unknown top-level
-sections and `extensions`. `groups` / `gr_*` are typed track groups since 2.2 (ADR-0052);
+sections and `extensions`, and last `branches` (§5.4) when the project has
+more than main to keep. The document is always main's head. `groups` / `gr_*` are typed track groups since 2.2 (ADR-0052);
 older opaque groups are preserved in extensions with a warning. `ui` belongs to the sidecar. *(Amended 2026-09-26: `fx` — plugin instances are
 ID-keyed objects like the rest; chains reference them by id.)* Members equal
 to their defaults are omitted (the schema fills them in on load). Objects keyed by ID in ID order
@@ -621,8 +623,8 @@ Beside it is an optional sidecar directory, the file name plus `-data`
 (`demo.json-data/`), for blobs over 1 MiB (`<hash>.bin`) and autosaves.
 UI state lives separately in `<name>.ui.json` (gui.md §1.2), never in the
 project document. Saves are atomic (write temp, fsync, rename). Autosave every 60 s to
-`<file>-data/autosave-<n>.json` (keep 5). History is persisted only
-on request (ADR-0008 clarification).
+`<file>-data/autosave-<n>.json` (keep 5). Saves and autosaves keep every
+branch (§5.4); undo history only on request (`project.save {history: true}`).
 
 Media live in the project's `media_dir` (default `media/`) beside the file
 and are named relative to it. A project saved for the first time takes its
@@ -643,9 +645,12 @@ read back as new source media. An ancestor destination is copied to normally,
 so saving back to the original project folder includes newly recorded media.
 
 The engine app writes autosaves from main-thread service (engine.md §6,
-ADR-0030), only when a named project's head changed since the last one and
-60 s of monotonic service time have passed. Unchanged/unnamed projects have no
-autosave deadline; an overdue edit arms immediate service. A failed write
+ADR-0030), for saved and unsaved projects alike (an unsaved one into its
+scratch folder, below), only when the project's branch heads or current branch
+changed since the last one (`VersionStore::heads()`: an edit on a branch
+that is not current counts, media hash completions do not) and 60 s of
+monotonic service time have passed. Unchanged projects have no autosave
+deadline; an overdue edit arms immediate service. A failed write
 waits 60 s before retrying. History timestamps still use wall time, and
 `<n>` is a positive unsigned 64-bit decimal index and counts up from the highest
 present. Discovery and rotation ignore names with nonnumeric or out-of-range
@@ -653,7 +658,153 @@ suffixes (such as `autosave-1-backup.json`). An exhausted index reports
 `autosave.index` without writing or pruning, and retries after the same interval.
 `project.open` of a file that has
 a newer autosave next to it reports `autosave_available` and loads nothing
-from it; opening the autosave file itself is how it comes back.
+from it. `project.recover {autosave: true}` brings it back: the newest
+autosave newer than the file that reads (older ones are tried, each failure
+a `recover.autosave` warning) replaces the open project, keeping its path,
+so it stays unsaved until saved over the file; `recover.no_autosave` when
+there is none, `recover.autosave_args` combined with `session`, `files` or
+`track`. Saved steps in it are checked as in an opened file (§5.4), and an
+autosave it could not fully restore (branches dropped, or unreadable) is
+kept through the first save as for an unsaved project's (below).
+
+**Unsaved projects (ADR-0078).** An unsaved project autosaves the same way
+into its scratch folder (`<data>/<slug>/unsaved/<start time>-<pid>/`,
+`autosave-<n>.json`, keep 5); the first save removes those autosaves with
+the folder. While an unsaved project uses the folder, the run holds an
+exclusive OS lock on `<scratch>/session.lock` (`flock` on POSIX,
+`LockFileEx` on Windows), which the system releases however the process
+ends. A sibling folder whose lock can be taken was left behind by a run that
+is gone; one whose lock is held is a running app's and is never listed or
+touched. Process IDs decide nothing. Left-behind folders with content stay
+until the user recovers or deletes them; empty ones untouched for an hour
+are removed when an app starts.
+`project.recoverable` lists them as `sessions` beside `recordings`
+(`session`, `started_ms`, `autosaved_ms`, `name`, `tracks`, `branches`,
+`recordings`, `bytes`); `project.recover {session}` replaces the current
+project (as `project.open`: the caller asks about unsaved changes first)
+with the folder's newest readable autosave (older ones are tried, each
+failure a `recover.autosave` warning), takes the folder and its lock over,
+stays unsaved, puts the folder's leftover recordings back as one more undo
+step, and returns `autosave` (the file it used, or none). Without a
+readable autosave it recovers only when at least one recording can be put
+back (a sidecar that reads and a WAV with frames): a new project with one
+channel, "Recovered", that holds them; otherwise `recover.damaged`, with the
+current project and every file untouched. Nothing a recovery could not
+restore is lost by the first save, which releases the folder: an autosave
+whose branches were not restored (opened as main alone, `project.history`)
+or that could not be read is copied at recovery beside the autosaves
+(`<autosave>.pre-branches.keep` / `.unreadable-autosave.keep`, never
+rotated), and the first save publishes each beside the saved file as
+`<file>.pre-branches.bak` or `<file>.unreadable-autosave.bak` (`-2`… when
+taken, never replacing) before it writes the file, with a
+`project.history_backup` warning; if that fails, the save fails. Errors:
+`recover.unknown_session` (not a left-behind sibling, including path
+tricks), `recover.busy` (its run is alive), `recover.damaged` (nothing in it
+can be opened or put back). `project.recoverable.delete {session}` deletes one. Project-info
+results count `recoverable_sessions`. Autosaves read for listing or
+recovery are checked like any opened file, including §5.4's rule for saved
+steps.
+
+### 5.4 Branches in the file (schema 2.14, ADR-0076)
+
+The document is main's head, whichever branch is current; a `branches`
+section after it keeps the rest. It is omitted when main is the only branch
+and nothing else is kept (the file is then the document alone).
+
+```
+"branches": {
+  "current": "agent/claude/bass",
+  "next_version": 31,
+  "main_hash": "sha256:<hex>",           // of main's canonical document
+  "refs": {"main": {"head": 30, "base": 30, "next_ids": {…}},
+           "agent/claude/bass": {"head": 22, "base": 9, "redo": [24], "next_ids": {…}}},
+  "versions": {"9":  {"parents": [], "label": "track.add", …, "state": {…}},
+               "22": {"parents": [21], "label": "track.set", "origin": "mcp:claude-code",
+                      "time_ms": 1763100000000,
+                      "invocations": [{"command": "track.set", "args": {…}}],
+                      "changes": [["update", "tr_2"]], "created": [],
+                      "state": {"set": {"/tracks/tr_2": {…}}, "remove": ["/items/it_4"]}},
+               "30": {"parents": [9], "label": "earlier history", "squashed_steps": 6,
+                      "squashed_fields": {"tr_1": ["mute"]}}}}
+```
+
+- `refs`: every branch's `head`, `base` (undo stops there), `redo` (oldest
+  first, omitted when empty) and `next_ids` (the lineage's ID high-water
+  marks, §1.1). `current` is restored on open.
+- `versions` by decimal id. Each has `parents` (one or two, older ids, or
+  none for the oldest kept), `label`, and when not empty `origin`, `time_ms`,
+  `invocations` (resolved, as merges replay them), `changes` (`[op, id]`,
+  op `add`, `remove` or `update`), `created`, `squashed_steps`,
+  `squashed_fields`, `replay_of` and `merge_remap` (§6.4). `state` is the
+  version's session as the objects in which it differs from main's head: one
+  `set` entry per object by ID (`/tracks/tr_2`, `/tempo/points/tp_1`), per
+  blob by hash, or per other section (`/project`), and `remove` pointers;
+  main's head has no `state` (it is the document).
+- **What is kept.** By default: every branch head; each branch's steps since
+  it left main, exact (undoable after opening, and merges report conflicts
+  at their step); the fork it left from; a merge's source parent while that
+  branch continues from it. Main's own history, merged parts and deleted
+  branches' lineages are squashed as the history budget squashes (§6.2):
+  main's undo stops at its saved head, and no redo is kept. A branch whose
+  base was behind its fork with main starts its undo at that fork.
+  `history: true` keeps every retained version, base and redo step.
+- **What a branch depends on goes with the file.** A save covers every
+  version it keeps, not only the current head: the copies of the user's
+  modules beside the file (`modules/`, ADR-0062) are those any retained
+  version plays; plug-in state blobs are in the file (by hash, in each
+  version's `state`); media live in the media folder, which a first save
+  moves and a save as into another folder copies whole, whichever version
+  uses them (imports, recordings, renders and freezes all land there).
+  Nothing else is project-local: DSP scripts, presets, chains, templates and
+  rack presets are the user's libraries, applied to the session when used.
+- **Opening.** Each state is decoded like a document, oldest first, and at
+  once shares the objects equal to its first parent's (entry and revision);
+  others take the version id. Memory grows with what versions change, not
+  with their number times the document. A section that does not fit in
+  memory anyway is damage (main opens alone); a main document that does not
+  fit fails the open with `project.memory`.
+  A malformed section, or a `main_hash` that no longer matches main (a
+  program that does not keep branches edited it), opens main alone with a
+  `project.history` warning; the first save over that file keeps a copy of
+  it as `<file>.pre-branches.bak` (`-2`, `-3`… when taken), synced and
+  published under a free name without ever replacing another file (another
+  app may be keeping its copy of the same file at the same moment) before
+  the file is replaced, reported as a
+  `project.history_backup` warning. A 2.13 or older file opens as main.
+- **What opening checks.** Besides the structure: every parent is an earlier
+  saved version (at most two); `replay_of` names an earlier version (0:
+  none), so the links merges walk back always end; each branch's `base` is
+  on its head's first-parent line, and its `redo` steps continue the head
+  one by one (the last one's first parent is the head, each earlier one's
+  the step after it), so undo and redo stay on saved versions; every saved
+  step is replayable (below). Any failure is damage: main opens alone.
+- Logged invocations are part of the format: a command whose arguments
+  change incompatibly makes a merge of an older file's branch stop with an
+  `invalid` conflict.
+- **Replayable steps.** A merge runs a branch's logged steps, so a file from
+  someone else must not name a step that does more than edit the session.
+  Every saved invocation must be a registered edit command of this program
+  (`kind: edit`, not `batch`) whose arguments fit its schema
+  (`EngineApp::replayableFromFile`). Saves, renders, transport, jobs and
+  every other action never run from a log. Replayed edits create files only
+  in the media folder (`item.apply-fx` renders, `item.add` copies of
+  imports), published under a free name and never through or over an
+  existing file or link. Before any step runs, a `media_dir` naming `..` is
+  refused; nothing is made until the deepest existing folder of the media
+  path resolves (`canonical`, every link followed) inside the resolved folder
+  that holds the project file, and the media folder made then must resolve
+  inside it too, or the merge stops with an `invalid` conflict
+  (`history.media_outside`) and the folders the check made are removed. A
+  merge that fails removes the files and folders its replays created. While
+  replaying, steps capture no automation from the live transport. A replayed `rack.preset.load` does not install modules
+  into the library. Reads are deliberately permitted and not sandboxed:
+  `item.add` reads the audio or MIDI file it names (any file a media entry
+  could name), and the preset, chain, template and render-preset loads read
+  the user's libraries by name. The engine checks each saved step
+  when it opens a file: one that fails (`history.command`) opens main alone
+  with a `project.history` warning, like other damage. Replay checks each
+  step it runs again. The set of edit commands is pinned by a test, so a new
+  one is audited before a saved branch may use it.
 
 ## 6. Versions, undo, branches
 
@@ -676,7 +827,9 @@ the combined step as one operation. Shared MIDI/blob/object/collection payloads
 are counted once. Leases, branch bases/heads, redo targets and fork/merge
 boundaries survive; required data/replay logs may exceed the budget.
 `history.list` reports `truncated`, `retained_bytes`, `budget_bytes`, and
-`squashed_steps` per entry. This does not persist undo history into project files.
+`squashed_steps` per entry. Project files keep undo history only with
+`project.save {history: true}`; they always keep branches and their unmerged
+steps (§5.4).
 Coalescing: consecutive edits with the same `coalesce_key` (e.g. one fader
 gesture, `fx.param.set` on the same param within one gesture) replace the
 head instead of stacking.
@@ -741,7 +894,10 @@ Schemas are written per command in code (ADR-0007); this is the inventory
 and naming. All `edit` unless marked (q) query or (a) action.
 
 - **project**: `project.new` (a), `project.open` (a), `project.save` (a),
-  `project.get` (q), `project.set`, `project.describe` (q); templates
+  `project.get` (q), `project.set`, `project.describe` (q); crash leftovers
+  `project.recoverable` (q), `project.recover {files?, track? | session |
+  autosave}` (a),
+  `project.recoverable.delete {session}` (a) (§5.3); templates
   `project.template.save` (a), `project.template.load {name}` (a, a new
   unsaved project), `project.template.list` (q), `project.template.delete`
   (a).
@@ -813,7 +969,9 @@ and naming. All `edit` unless marked (q) query or (a) action.
   soft_takeover?, when_selected?, when_focused?, when_visible?}` (one per
   parameter; a plain parameter by id or name), `fx.learn.remove {fx, param}`,
   `fx.learn.list {fx?}` (q),
-  `fx.state.capture` (internal, from plugin notifications), `plugin.list`
+  `fx.state.capture {fx, state}` (internal: a plug-in's own state change
+  as a save or its dirty notification captures it, logged so merges replay
+  it; the state is found by hash in any kept version), `plugin.list`
   (q), `plugin.scan` (a).
 - **routes**: `route.add {from, to, tap, channels, …}`, `route.remove`,
   `route.set`, `route.list` (q), `route.matrix {mode: audio|midi}` (q). MIDI
@@ -824,7 +982,9 @@ and naming. All `edit` unless marked (q) query or (a) action.
   are `vca.learn.*` (Track groups and VCA controls, below).
 - **automation**: `env.add {target}`, `env.remove`, `env.set {mode, active,
   …}`, `env.points.set {env, points, range?}`, `env.points.add`,
-  `env.points.remove {range}`, `env.add {take, param}` (take envelopes);
+  `env.points.remove {range}`, `env.add {take, param}` (take envelopes),
+  `env.write.commit {env, after, through, points}` (internal: what a write
+  pass wrote, in the envelope's units, logged so merges replay it);
   automation items `autoitem.add {env, position|bar, length, points?,
   source_length, loop}` (no points: captures what plays there),
   `autoitem.set` (points and source_length reach the pool),
@@ -836,6 +996,10 @@ and naming. All `edit` unless marked (q) query or (a) action.
   `transport.punch {start, end | clear}` (`clear` removes the range and turns
   it off), `transport.metronome {count_in_bars,
   count_in_playback, …}` (a count-in before recording), `transport.get` (q).
+  A recording's commit (and `project.recover`'s) logs the internal
+  `record.commit {takes, punch}`: the takes as the device delivered them
+  (file relative to the media folder, segments, loop, MIDI events) and the
+  punch range then, so a merge places them again on another branch.
 - **render** (a): `render.mix {master}` (one master for the call; default the `masters` setting, else tr_0), `render.stems`, `render.regions` (matrix),
   `render.items`, `render.dry-run` (q: resolved file list), `render.job.*`;
   `format` (wav|flac), `secondary` (a second file in another format/bit depth

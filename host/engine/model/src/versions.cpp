@@ -420,6 +420,12 @@ bool VersionStore::updateMediaHash(Id id, const MediaSource& expected, std::stri
     return updated;
 }
 
+VersionStore::Heads VersionStore::heads() const {
+    Heads out{current_, {}};
+    for (const auto& [name, b] : branches_) out.heads.emplace(name, b.head);
+    return out;
+}
+
 std::uint64_t VersionStore::headVersion(std::string_view name) const {
     const Branch* b = lookup(name);
     return b ? b->head : 0;
@@ -594,42 +600,33 @@ bool VersionStore::historyTruncated() const {
     }
 }
 
-void VersionStore::enforceBudget() {
-    collectUnused();
-    RetainedSize size;
-    for (const auto& [id, v] : versions_) size.add(v);
-    const auto budget =
-        versions_.at(branches_.at(current_).head).session->project->historyBudgetBytes;
-    if (size.bytes <= budget) return;
-    std::set<std::uint64_t> protectedIds;
+namespace {
+// Combines each unprotected linear step into its only child, oldest first,
+// while `more()` holds. The child keeps its end snapshot and takes the
+// combined replay log, changes, created IDs and the fields both touched.
+// Roots, merges and `exact` children (leased snapshots) stay as they are.
+void squashSteps(std::map<std::uint64_t, Version>& versions,
+                 const std::set<std::uint64_t>& protectedIds,
+                 const std::function<bool(const Version&)>& exact,
+                 const std::function<bool()>& more,
+                 const std::function<void(std::uint64_t)>& dropped,
+                 const std::function<void(const Version&)>& added) {
     std::map<std::uint64_t, std::vector<std::uint64_t>> children;
-    for (const auto& [name, b] : branches_) {
-        protectedIds.insert(b.head);
-        protectedIds.insert(b.base);
-        protectedIds.insert(b.redo.begin(), b.redo.end());
-    }
-    for (const auto& [id, v] : versions_) {
-        if (v.session.use_count() > 1 || metadataLeases_.contains(id) || v.parents.size() != 1)
-            protectedIds.insert(id);
+    for (const auto& [id, v] : versions)
         for (auto parent : v.parents) children[parent].push_back(id);
-    }
-    // Oldest first, independently across branch lineages. Forks, merge nodes,
-    // redo steps and leases remain exact. The child retains the end snapshot
-    // and the combined replay log of the earlier-history step.
-    for (auto it = versions_.begin(); it != versions_.end() && size.bytes > budget;) {
+    for (auto it = versions.begin(); it != versions.end() && more();) {
         const auto id = it->first;
         auto& v = it->second;
         auto next = std::next(it);
-        if (!protectedIds.contains(id) && children[id].size() == 1) {
-            auto& child = versions_.at(children[id].front());
-            if (child.parents.size() == 1 && child.session.use_count() == 1 &&
-                !metadataLeases_.contains(child.id)) {
-                size.drop(child.id);
-                size.drop(id);
+        if (!protectedIds.contains(id) && v.parents.size() == 1 && children[id].size() == 1) {
+            auto& child = versions.at(children[id].front());
+            if (child.parents.size() == 1 && !exact(child)) {
+                dropped(child.id);
+                dropped(id);
                 auto remember = [&](const Version& step) {
                     for (const auto& [object, fields] : step.squashedFields)
                         child.squashedFields[object].insert(fields.begin(), fields.end());
-                    const auto& before = *versions_.at(step.parents.front()).session;
+                    const auto& before = *versions.at(step.parents.front()).session;
                     for (const auto& change : step.changes) {
                         if (change.op != Change::Op::Update) continue;
                         auto fields = changedFields(before, *step.session, change.id);
@@ -651,12 +648,38 @@ void VersionStore::enforceBudget() {
                 child.txn.coalesceKey.clear();
                 auto& siblings = children[v.parents.front()];
                 std::replace(siblings.begin(), siblings.end(), id, child.id);
-                size.add(child);
-                versions_.erase(it);
+                added(child);
+                versions.erase(it);
             }
         }
         it = next;
     }
+}
+}  // namespace
+
+void VersionStore::enforceBudget() {
+    collectUnused();
+    RetainedSize size;
+    for (const auto& [id, v] : versions_) size.add(v);
+    const auto budget =
+        versions_.at(branches_.at(current_).head).session->project->historyBudgetBytes;
+    if (size.bytes <= budget) return;
+    std::set<std::uint64_t> protectedIds;
+    for (const auto& [name, b] : branches_) {
+        protectedIds.insert(b.head);
+        protectedIds.insert(b.base);
+        protectedIds.insert(b.redo.begin(), b.redo.end());
+    }
+    auto leased = [&](const Version& v) {
+        return v.session.use_count() > 1 || metadataLeases_.contains(v.id);
+    };
+    for (const auto& [id, v] : versions_)
+        if (leased(v)) protectedIds.insert(id);
+    // Oldest first, independently across branch lineages. Forks, merge nodes,
+    // redo steps and leases remain exact.
+    squashSteps(
+        versions_, protectedIds, leased, [&] { return size.bytes > budget; },
+        [&](std::uint64_t id) { size.drop(id); }, [&](const Version& v) { size.add(v); });
 }
 
 Result<std::uint64_t> VersionStore::commit(Session session, TxnRecord txn,
@@ -745,7 +768,7 @@ bool VersionStore::canRedo() const { return !branches_.at(current_).redo.empty()
 Status VersionStore::undo() {
     Branch& b = branches_.at(current_);
     b.view.reset();
-    if (b.head == b.base)
+    if (b.head == b.base || versions_.at(b.head).parents.empty())
         return Error("history.nothing_to_undo", "nothing to undo on branch " + current_);
     b.redo.push_back(b.head);
     b.head = versions_.at(b.head).parents.front();
@@ -935,6 +958,9 @@ MergeOutcome VersionStore::merge(std::string_view from, std::string_view into,
             if (it == versions_.end()) break;
             if (held.try_emplace(of, remap).second) replayed.insert(of);
             remap = compose(it->second.mergeRemap, remap);
+            // Replays copy earlier steps; never follow a link that does not
+            // go back (restore() refuses them, this keeps the walk finite).
+            if (it->second.replayOf >= of) break;
             of = it->second.replayOf;
         }
         if (v.parents.empty()) break;
@@ -1106,6 +1132,181 @@ MergeOutcome VersionStore::merge(std::string_view from, std::string_view into,
     state.reset();
     enforceBudget();
     return out;
+}
+
+// --- project files (ADR-0076) -----------------------------------------------------------
+
+SavedHistory VersionStore::saved(bool fullHistory) const {
+    SavedHistory out;
+    out.current = current_;
+    out.next = next_;
+    const Branch& main = branches_.at("main");
+    auto addBranch = [&](const std::string& name, const Branch& b) {
+        SavedBranch sb{name, b.head, b.head, {}, b.allocated};
+        if (fullHistory) {
+            sb.base = b.base;
+            sb.redo = b.redo;
+        }
+        out.branches.push_back(std::move(sb));
+    };
+    addBranch("main", main);
+    for (const auto& [name, b] : branches_)
+        if (name != "main") addBranch(name, b);
+
+    // Only what the branches reach: leased snapshots are not saved.
+    auto reachableFrom = [&](const std::map<std::uint64_t, Version>& versions) {
+        std::vector<std::uint64_t> pending;
+        for (const auto& b : out.branches) {
+            pending.push_back(b.head);
+            pending.push_back(b.base);
+            pending.insert(pending.end(), b.redo.begin(), b.redo.end());
+        }
+        std::set<std::uint64_t> reachable;
+        while (!pending.empty()) {
+            const auto id = pending.back();
+            pending.pop_back();
+            if (!reachable.insert(id).second) continue;
+            if (const auto it = versions.find(id); it != versions.end())
+                pending.insert(pending.end(), it->second.parents.begin(), it->second.parents.end());
+        }
+        return reachable;
+    };
+    for (const auto id : reachableFrom(versions_)) out.versions.emplace(id, versions_.at(id));
+    for (auto& [id, v] : out.versions)
+        v.txn.coalesceKey.clear();  // nothing folds into a saved step
+    if (fullHistory) return out;
+
+    // Each branch's steps since it left main stay exact and undoable: they
+    // are its proposal. Its base moves up to that fork when it was below it
+    // (the part behind was merged already).
+    std::set<std::uint64_t> keep;
+    for (auto& sb : out.branches) {
+        keep.insert(sb.head);
+        if (sb.name == "main") continue;
+        const Branch& b = branches_.at(sb.name);
+        const std::uint64_t fork = forkPoint(b.head, main.head);
+        std::uint64_t last = b.head;
+        bool baseOnPath = false;
+        for (std::uint64_t id = b.head; id >= fork;) {
+            keep.insert(id);
+            last = id;
+            if (id == b.base) baseOnPath = true;
+            const Version& v = versions_.at(id);
+            if (id == fork || v.parents.empty()) break;
+            id = v.parents.front();
+        }
+        sb.base = baseOnPath ? b.base : last;
+    }
+    // A merge's source parent matters only while a branch still continues
+    // from it without holding the merge (the next merge of that branch starts
+    // there). Otherwise the merged lineage behind it goes.
+    std::vector<std::set<std::uint64_t>> lineages;
+    for (const auto& sb : out.branches) lineages.push_back(ancestors(sb.head));
+    for (auto& [id, v] : out.versions) {
+        if (v.parents.size() != 2) continue;
+        const auto source = v.parents[1];
+        const bool needed = std::any_of(lineages.begin(), lineages.end(), [&](const auto& held) {
+            return held.contains(source) && !held.contains(id);
+        });
+        if (!needed) v.parents.pop_back();
+    }
+    const auto reachable = reachableFrom(out.versions);
+    std::erase_if(out.versions, [&](const auto& e) { return !reachable.contains(e.first); });
+
+    std::set<std::uint64_t> protectedIds = keep;
+    for (const auto& sb : out.branches) protectedIds.insert(sb.base);
+    squashSteps(
+        out.versions, protectedIds, [](const Version&) { return false; }, [] { return true; },
+        [](std::uint64_t) {}, [](const Version&) {});
+    // Nothing undoes past a base, so the root behind the oldest needed
+    // version goes; that version becomes the root.
+    for (bool cut = true; cut;) {
+        cut = false;
+        for (auto it = out.versions.begin(); it != out.versions.end(); ++it) {
+            if (!it->second.parents.empty() || protectedIds.contains(it->first)) continue;
+            std::vector<std::uint64_t> children;
+            for (const auto& [id, v] : out.versions)
+                if (std::find(v.parents.begin(), v.parents.end(), it->first) != v.parents.end())
+                    children.push_back(id);
+            if (children.size() != 1) continue;
+            Version& child = out.versions.at(children.front());
+            if (child.parents.size() != 1) continue;
+            child.parents.clear();
+            child.changes.clear();
+            child.created.clear();
+            child.txn.invocations.clear();
+            child.squashedFields.clear();
+            out.versions.erase(it);
+            cut = true;
+            break;
+        }
+    }
+    return out;
+}
+
+Result<VersionStore> VersionStore::restore(SavedHistory saved) {
+    auto bad = [](std::string message, std::string path) {
+        return Error("history.saved", std::move(message), std::move(path),
+                     "the branches section is damaged; main still opens without it");
+    };
+    if (saved.versions.empty()) return bad("no versions", "/branches/versions");
+    for (const auto& [id, v] : saved.versions) {
+        const std::string path = "/branches/versions/" + std::to_string(id);
+        if (!v.session || v.session->version != id || v.id != id)
+            return bad("version " + std::to_string(id) + " has no state of its own", path);
+        if (v.parents.size() > 2) return bad("more than two parents", path + "/parents");
+        for (const auto parent : v.parents)
+            if (parent >= id || !saved.versions.contains(parent))
+                return bad("parent " + std::to_string(parent) + " is not an earlier saved version",
+                           path + "/parents");
+        if (id >= saved.next)
+            return bad("next_version must be past every version", "/branches/next_version");
+        // A replay copies an earlier step: merges walk these links back.
+        if (v.replayOf != 0 && v.replayOf >= id)  // 0: not a replay
+            return bad("replay_of " + std::to_string(v.replayOf) + " is not an earlier version",
+                       path + "/replay_of");
+    }
+    VersionStore store;
+    store.versions_ = std::move(saved.versions);
+    store.next_ = saved.next;
+    for (auto& sb : saved.branches) {
+        const std::string path = json::pointerJoin("/branches/refs", sb.name);
+        if (store.branches_.contains(sb.name)) return bad("branch listed twice", path);
+        if (sb.name.empty() || sb.name.size() > 100)
+            return bad("branch names are 1-100 characters", path);
+        if (!store.versions_.contains(sb.head))
+            return bad("head " + std::to_string(sb.head) + " is not a saved version",
+                       path + "/head");
+        if (!store.descends(sb.head, sb.base))
+            return bad("base " + std::to_string(sb.base) + " is not behind the head",
+                       path + "/base");
+        // Redo is the way back up: its last step continues the head, each
+        // earlier one the step after it (undo then walks back down).
+        std::uint64_t below = sb.head;
+        for (auto it = sb.redo.rbegin(); it != sb.redo.rend(); ++it) {
+            const auto found = store.versions_.find(*it);
+            if (found == store.versions_.end())
+                return bad("redo step " + std::to_string(*it) + " is not a saved version",
+                           path + "/redo");
+            if (found->second.parents.empty() || found->second.parents.front() != below)
+                return bad("redo step " + std::to_string(*it) + " does not continue " +
+                               std::to_string(below),
+                           path + "/redo");
+            below = *it;
+        }
+        Counters allocated = sb.allocated;
+        const auto& counters = store.versions_.at(sb.head).session->next;
+        for (std::size_t k = 0; k < kKindCount; ++k)
+            allocated.next[k] = std::max(allocated.next[k], counters.next[k]);
+        store.branches_.emplace(sb.name, Branch{sb.head, sb.base, std::move(sb.redo), allocated});
+    }
+    if (!store.branches_.contains("main")) return bad("there is no main branch", "/branches/refs");
+    if (!store.branches_.contains(saved.current))
+        return bad("the current branch " + saved.current + " is not listed", "/branches/current");
+    store.current_ = std::move(saved.current);
+    // Squashed steps shared before the save may be reached from one branch now.
+    store.collectUnused();
+    return store;
 }
 
 }  // namespace supple::model

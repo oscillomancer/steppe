@@ -111,6 +111,8 @@ model code and a reconciler between model versions and live plugin instances.
   nothing. Unreachable versions are freed immediately (reference counting).
   Saving a project writes branch heads; history persistence is optional
   (`project.save {history: true}`), capped by the same budget.
+  *(2026-11-14: implemented by ADR-0076, which also keeps each branch's
+  unmerged steps by default so that it merges after reopening.)*
 - **Coalescing.** Continuous gestures (a fader drag, an agent sweeping a
   value through many `fx.param.set` calls in one batch) coalesce into one
   version per gesture/batch, not one per event.
