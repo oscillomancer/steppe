@@ -514,3 +514,87 @@ TEST_CASE("a MIDI take a crash interrupted comes back from its journal, and goes
         CHECK(app.recoverable().size() == 1);
     }
 }
+
+TEST_CASE("a journal this recording did not create is never the take's, nor deleted at save") {
+    // Round-10 review, finding 5: a dangling link at the journal's name was
+    // refused by the exclusive creation, yet the take still named it as its
+    // journal, and the next save deleted the link.
+    const fs::path dir = fs::temp_directory_path() /
+                         ("supple-midi-journal-owner-" + std::to_string(test::processId()));
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    SUBCASE("the recorder: a refused journal is not the take's file") {
+        RecordTarget target;
+        target.track = {model::Kind::Track, 1};
+        target.midi = RecordTarget::Midi{1, 0, 0, false, 0};
+        target.file = dir / "Keys-1.midi.jsonl";
+        REQUIRE(writeFileAtomic(target.file, "someone else's"));
+        detail::Recorder recorder({target}, 48000, 0);
+        REQUIRE(recorder.open());
+        MidiInputEvent on;
+        on.size = 3;
+        on.bytes[0] = 0x90;
+        on.bytes[1] = 60;
+        on.bytes[2] = 100;
+        recorder.capture(nullptr, 0, 256, 0);
+        recorder.captureMidi({&on, 1}, 0, 256, 0);
+        const auto takes = recorder.finish();
+        REQUIRE(takes.size() == 1);
+        CHECK(takes.front().file.empty());
+        CHECK(std::any_of(takes.front().warnings.begin(), takes.front().warnings.end(),
+                          [](const auto& w) { return w.code == "record.journal"; }));
+        CHECK(*readTextFile(target.file) == "someone else's");
+    }
+    SUBCASE("the app: a dangling link at a journal's name survives recording and saving") {
+        auto created = EngineApp::create({.workdir = dir});
+        REQUIRE(created);
+        auto& app = **created;
+        cmd::Registry registry;
+        registerEngineCommands(registry);
+        cmd::Dispatcher dispatcher(registry, app);
+        auto call = [&](std::string_view name, std::string_view args) {
+            auto result = dispatcher.execute(
+                {std::string(name), *json::parse(args), {cmd::Origin::Type::Test, "owner", ""}});
+            REQUIRE_MESSAGE(result, (result ? "" : result.error().toString()));
+        };
+        call("track.add", R"({"name":"Keys"})");
+        call("track.set", R"({"track":"tr_1","armed":true,"record_midi":"*"})");
+        const fs::path saved = dir / "song/song.json";
+        REQUIRE(app.save(saved));
+        fs::create_directories(app.recordDir());
+        const fs::path link = app.recordDir() / "Keys-1.midi.jsonl";
+        fs::create_symlink(dir / "absent-target", link);
+        DummyBackend backend(
+            {.mode = DummyBackend::Mode::Manual,
+             .midiPorts = {"Keys"},
+             .midi = [](std::vector<MidiInputEvent>& out, std::uint32_t n, std::int64_t frame) {
+                 for (std::int64_t f = frame; f < frame + n; ++f) {
+                     if (f != 0 && f != 256) continue;
+                     MidiInputEvent e;
+                     e.frame = static_cast<std::uint32_t>(f - frame);
+                     e.size = 3;
+                     e.bytes[0] = f == 0 ? 0x90 : 0x80;
+                     e.bytes[1] = 60;
+                     e.bytes[2] = f == 0 ? 100 : 0;
+                     out.push_back(e);
+                 }
+             }});
+        REQUIRE(app.startEngine(backend,
+                                {.sampleRate = 48000, .blockSize = 256, .midiInputs = true},
+                                {.anticipative = false, .workers = 0}));
+        call("transport.record", "{}");
+        backend.run(4);
+        call("transport.stop", "{}");
+        app.stopEngine();
+        REQUIRE(app.head().midi.size() == 1);
+        CHECK(fs::is_symlink(fs::symlink_status(link)));
+        // The link takes the name: the take's journal is the next one.
+        CHECK(fs::is_regular_file(fs::symlink_status(app.recordDir() / "Keys-2.midi.jsonl")));
+        REQUIRE(app.save(saved));
+        CHECK_FALSE(fs::exists(app.recordDir() / "Keys-2.midi.jsonl"));
+        CHECK(fs::is_symlink(fs::symlink_status(link)));
+        CHECK_FALSE(fs::exists(dir / "absent-target"));
+        CHECK(app.recoverable().empty());  // the take's own journal went at the save
+    }
+    fs::remove_all(dir);
+}

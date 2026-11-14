@@ -850,7 +850,9 @@ first use, and no plug-in code runs early to warm it.
   recovery contract.
 - **MIDI take journals** (ADR-0080): each MIDI target writes
   `<media>/rec/<Track>-<n>.midi.jsonl` (created exclusively, never through a
-  link), JSON Lines with schema `supple.midi-recording/1.0`: a header object
+  link; a name any entry has, a dangling link too, is not free, and a take
+  whose journal could not be created names none, so nothing already there
+  is ever deleted as its journal), JSON Lines with schema `supple.midi-recording/1.0`: a header object
   (`track`, `sample_rate`, `start_sample`, `latency`, `device`, `routed`,
   `shift`, `loop`), then events `[at, status, data1, data2]` (plus `route`,
   `voice` for Note Out voices; `at` in captured frames), `{"run": [captured

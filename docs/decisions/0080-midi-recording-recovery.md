@@ -113,3 +113,9 @@ the takes it holds where it put them. A first save moves them with the
 media; a save as into another folder deletes the copy there and leaves the
 old folder's, which the old file does not hold (as it leaves that folder's
 WAVs). Deleting the old path had left the new copy to be offered again.
+
+*Amended 2026-11-14 after review round 10:* a take's journal is the file
+its recording created, or none. A name that any entry has, a dangling link
+included, is not free; if the exclusive creation still fails, the take has
+no journal (the `record.journal` warning) and the entry there is never
+deleted as one.

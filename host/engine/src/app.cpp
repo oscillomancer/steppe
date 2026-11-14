@@ -1882,11 +1882,16 @@ Result<TransportInfo> EngineApp::transport(std::string_view action, std::optiona
                 base += std::isalnum(static_cast<unsigned char>(c)) ? c : '-';
             // <base>-<n> free for a WAV, its sidecar and a MIDI journal alike
             // (the writer also creates each exclusively).
+            // Any entry takes a name, a dangling link too (fs::exists
+            // follows it and says no).
+            auto occupied = [](const fs::path& p) {
+                std::error_code ec;
+                return fs::exists(fs::symlink_status(p, ec));
+            };
             auto freeName = [&](const char* extension) {
                 for (int n = 1;; ++n) {
                     const std::string stem = base + "-" + std::to_string(n);
                     const fs::path file = dir / (stem + extension);
-                    std::error_code ec;
                     const bool taken =
                         std::any_of(targets.begin(), targets.end(),
                                     [&](const RecordTarget& o) {
@@ -1894,9 +1899,8 @@ Result<TransportInfo> EngineApp::transport(std::string_view action, std::optiona
                                                o.file.parent_path() / o.file.stem().stem() ==
                                                    dir / stem;
                                     }) ||
-                        fs::exists(dir / (stem + ".wav"), ec) ||
-                        fs::exists(dir / (stem + ".rec.json"), ec) ||
-                        fs::exists(dir / (stem + ".midi.jsonl"), ec);
+                        occupied(dir / (stem + ".wav")) || occupied(dir / (stem + ".rec.json")) ||
+                        occupied(dir / (stem + ".midi.jsonl"));
                     if (!taken) return file;
                 }
             };

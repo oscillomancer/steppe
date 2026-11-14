@@ -416,6 +416,7 @@ Status Recorder::open() {
         std::filesystem::create_directories(t->target.file.parent_path(), ec);
         std::error_code why;
         t->journal = files::createAppend(t->target.file, why);
+        t->journalCreated = t->journal != nullptr;
         if (!t->journal)
             t->journalError = Error(
                 "record.journal", "cannot create " + t->target.file.string() + ": " + why.message(),
@@ -764,7 +765,10 @@ std::vector<RecordedTake> Recorder::finish(LoopRange loop) {
         c.overflow = t->overflow.load();
         c.runsFull = runsFull_;
         RecordedTake r = placeMidi(c);
-        r.file = t->target.file;  // the journal (none when its target had none)
+        // The journal, only if this recording created it: a file already at
+        // its name (refused by the exclusive creation) is someone else's,
+        // and the app deletes a take's journal once a save holds the take.
+        if (t->journalCreated) r.file = t->target.file;
         if (!t->journalError) r.warnings.push_back(t->journalError.error());
         out.push_back(std::move(r));
     }
