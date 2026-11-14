@@ -1475,3 +1475,46 @@ TEST_CASE("recovery reads no autosave and opens no lock through a link out of th
     }
 }
 
+TEST_CASE("an autosave offered after a first save or a save as survives saving first") {
+    // Round-8 review, finding 1: only opening a project recorded the file the
+    // offer is made against; after a first save or a save as, Save in the
+    // question made the offered autosave look older than the file.
+    bool saveAs = false;
+    SUBCASE("first saved this run") {}
+    SUBCASE("saved as another file this run") { saveAs = true; }
+    Project p;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *p.app);
+    const fs::path file = p.root / "song.json";
+    const auto t0 = fs::file_time_type::clock::now() - std::chrono::hours(2);
+    if (saveAs) {
+        REQUIRE(p.app->save("previous.json"));
+        REQUIRE(p.app->open("previous.json"));
+    }
+    p.rename("Saved");
+    // The save publishes a file dated two hours ago, as a coarse clock might.
+    setFileSyncHookForTesting([&](const fs::path& f) {
+        for (const auto& e : fs::directory_iterator(f.parent_path()))
+            if (e.path().filename().string().starts_with(f.filename().string() + "."))
+                fs::last_write_time(e.path(), t0);
+        return true;
+    });
+    auto saved = p.app->save(file);
+    setFileSyncHookForTesting({});
+    REQUIRE(saved);
+    p.rename("Autosaved");
+    p.app->setFixedClock(1'060'000);
+    p.app->tick();
+    const fs::path offered = p.app->newerAutosave(file);
+    REQUIRE_FALSE(offered.empty());
+    fs::last_write_time(offered, t0 + std::chrono::hours(1));
+    p.rename("Current work");
+    REQUIRE(p.app->save(file));  // Save in the question
+    auto args = json::Value::object();
+    args["autosave"] = true;
+    args["autosave_file"] = offered.filename().string();
+    auto r = d.execute({"project.recover", args, kUnit});
+    REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+    CHECK(p.app->head().project->name == "Autosaved");
+}

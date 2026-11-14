@@ -788,6 +788,11 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
                  dir.string()});
     }
     projectPath_ = path;
+    // A first save or a save as gives the project a file: an autosave
+    // offered from now on is offered against the file as it is now, and a
+    // later save to the same path keeps that (recoverAutosave).
+    if (std::error_code ec; !openedFile_ || openedFile_->first != path)
+        if (const auto time = fs::last_write_time(path, ec); !ec) openedFile_.emplace(path, time);
     if (fromScratch) releaseScratch();  // its media moved; its autosaves are older than the file
     autosaveMarked_ = true;             // the file itself is the newest copy
     autosaveMs_ = serviceClockMs();

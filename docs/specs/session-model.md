@@ -665,8 +665,9 @@ so it stays unsaved until saved over the file; `recover.no_autosave` when
 there is none, `recover.autosave_args` combined with `session`, `files` or
 `track`. `autosave_file` (with `autosave: true`) names the autosave to open,
 such as the one a client offered: only it is tried, and it must be newer
-than the file as this project was opened, so a save since does not make it
-unopenable (`recover.no_autosave` when it is not an autosave of the project,
+than the file as this project was opened (or first saved, or saved under a
+new path; later saves to the same path keep that), so a save since does not
+make it unopenable (`recover.no_autosave` when it is not an autosave of the project,
 is not newer than that, or does not read). Saved steps in it are checked as in an
 opened file (§5.4), and an autosave it could not fully restore (branches
 dropped, or unreadable) is kept through the first save as for an unsaved

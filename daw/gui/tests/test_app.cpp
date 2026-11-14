@@ -3502,3 +3502,48 @@ TEST_CASE("file actions: an offered autosave is never applied to another project
     CHECK(a.app->head().project->name == "B saved");
     CHECK_FALSE(a.root->find("file.recovered"));
 }
+
+TEST_CASE("file actions: Save before Open autosave works after a first save") {
+    // Round-8 review, finding 1, through the GUI: a project first saved this
+    // run (no reopen), its newer autosave offered, then Open autosave > Save.
+    App a;
+    REQUIRE(a.ok);
+    a.app->setFixedClock(1'000'000);
+    const auto file = a.dir / "A" / "song.json";
+    const auto old = std::filesystem::file_time_type::clock::now() - std::chrono::hours(2);
+    auto run = [&](const char* command, const char* args) {
+        auto r = a.dispatcher->execute({command, json::parse(args).value(), {}});
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+    };
+    run("project.set", R"({"name":"Saved"})");
+    setFileSyncHookForTesting([&](const std::filesystem::path& f) {
+        for (const auto& e : std::filesystem::directory_iterator(f.parent_path()))
+            if (e.path().filename().string().starts_with(f.filename().string() + "."))
+                std::filesystem::last_write_time(e.path(), old);
+        return true;
+    });
+    auto saved = a.app->save(file);
+    setFileSyncHookForTesting({});
+    REQUIRE(saved);
+    std::vector<std::string> errors;
+    a.actions->onError = [&](const std::string& e) { errors.push_back(e); };
+    gui::FileActions files(*a.root, *a.actions, *a.dispatcher, *a.app, a.ui, a.window->sdl(),
+                           [](auto task) { task(); });
+    run("project.set", R"({"name":"Autosaved"})");
+    a.app->setFixedClock(1'061'000);
+    a.app->tick();
+    const auto offered = a.app->newerAutosave(file);
+    REQUIRE_FALSE(offered.empty());
+    std::filesystem::last_write_time(offered, old + std::chrono::hours(1));
+    files.openRecovery();
+    a.root->frame(false);
+    run("project.set", R"({"name":"Current"})");
+    REQUIRE(a.root->click("file.recover.autosave.open"));
+    a.root->frame(false);
+    REQUIRE(a.root->click("file.confirm.save"));
+    a.root->frame(false);
+    CHECK(errors.empty());
+    CHECK(a.app->head().project->name == "Autosaved");
+    CHECK(a.root->find("file.recovered"));
+    CHECK(model::parseProjectFile(*readTextFile(file))->store.head()->project->name == "Current");
+}

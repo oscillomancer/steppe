@@ -94,9 +94,12 @@ used neither, nor `autosave_available` for saved projects.
    this project was opened (not as it is now): the GUI opens the autosave
    its popup offered, so choosing Save in the unsaved-changes question
    before it does not make that autosave unopenable, while a name offered for
-   another project opens nothing older in this one. The popup's offer is
-   bound to the project (its path and generation) it was made for: opening
-   another project closes it, and a stale button loads nothing. Leftover recordings are put back
+   another project opens nothing older in this one. "As this project was
+   opened" is the file as opened, or as first saved, or as saved under a new
+   path; later saves to the same path keep it. The popup's offer is bound to
+   the project (its path and generation) it was made for: opening another
+   project from the GUI closes it; after an agent opens one, the popup may
+   stay, but its button loads nothing and says why. Leftover recordings are put back
    with `project.recover` as before.
 
 ## Consequences
