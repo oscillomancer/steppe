@@ -44,6 +44,12 @@ Status copyNew(const fs::path& from, const fs::path& to) {
                                    std::to_string(serial.fetch_add(1)) + ".copy-tmp");
     };
     fs::path temp;
+    // Check after reservation: native identity catches case folding and other
+    // filesystem aliases too, including a final name equal to this candidate.
+    const auto isPayload = [&] {
+        std::error_code ignored;
+        return fs::equivalent(temp, to, ignored);
+    };
 #if defined(__linux__)
     const int in = ::open(from.c_str(), O_RDONLY | O_CLOEXEC);
     if (in < 0) return copyError(from, to, std::strerror(errno));
@@ -51,7 +57,15 @@ Status copyNew(const fs::path& from, const fs::path& to) {
     for (;;) {
         temp = nextTemp();
         out = ::open(temp.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
-        if (out >= 0) break;
+        if (out >= 0) {
+            if (!isPayload()) break;
+            ::close(out);
+            std::error_code cleanup;
+            fs::remove(temp, cleanup);
+            if (!cleanup) continue;
+            ::close(in);
+            return copyError(from, to, cleanup.message());
+        }
         const auto error = errno;
         if (error != EEXIST) {
             ::close(in);
@@ -71,7 +85,12 @@ Status copyNew(const fs::path& from, const fs::path& to) {
         temp = nextTemp();
         auto* reserved = files::createAppend(temp, ec);
         if (reserved) {
-            if (std::fclose(reserved) == 0) break;
+            if (std::fclose(reserved) == 0) {
+                if (!isPayload()) break;
+                fs::remove(temp, ec);
+                if (!ec) continue;
+                return copyError(from, to, ec.message());
+            }
             const std::string reason = std::strerror(errno);
             fs::remove(temp, ec);
             return copyError(from, to, reason);

@@ -484,7 +484,8 @@ instructions are in `docs/guides/installing.md`.
   in a folder of its own with its own media; imports are copied into the
   project by default, and Save as into another folder copies the media. Media
   staging names are short and exclusively reserved; valid destination filenames
-  need no spare bytes for a temporary suffix. Save As retains media with
+  need no spare bytes for a temporary suffix, and a reserved staging entry
+  cannot alias the final payload name. Save As retains media with
   temporary-looking suffixes, including files used only by saved branches. FX
   chain presets, track templates (a strip and its chains) and project
   templates (with a copy of their audio) are saved, loaded and deleted in

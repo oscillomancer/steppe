@@ -10,12 +10,61 @@
 
 #include "../../../tests/file_platform.h"
 #include "../src/media_files.h"
+#include "supple/audio/audio_file.h"
+#include "supple/base/sha256.h"
 #if !defined(_WIN32)
 #include <sys/stat.h>
 #endif
 
 namespace fs = std::filesystem;
 using namespace supple::engine;
+
+namespace {
+// These cases run in separate CTest processes: the first staging serial is
+// deterministically zero, regardless of earlier imports in the ordinary suite.
+void stagingCollision(bool folder, bool upper) {
+    const auto root = fs::temp_directory_path() /
+                      ("supple-copy-name-" + std::to_string(supple::test::processId()));
+    REQUIRE(fs::create_directory(root));
+    struct Cleanup {
+        fs::path path;
+        ~Cleanup() { fs::remove_all(path); }
+    } cleanup{root};
+    fs::create_directory(root / "source");
+    const auto name = std::string(upper ? ".COPY-" : ".copy-") +
+                      std::to_string(supple::test::processId()) + "-0.copy-tmp";
+    const auto source = root / "source" / name;
+    supple::audio::AudioData audio;
+    audio.sampleRate = 48000;
+    audio.channels = {{.25f, -.25f, .5f, -.5f}};
+    REQUIRE(supple::audio::writeWav(source, audio));
+    const auto before = supple::sha256File(source);
+    REQUIRE(before);
+    const auto target = root / "dest";
+    if (folder) {
+        REQUIRE(detail::copyFolder(source.parent_path(), target));
+    } else {
+        const auto copied = detail::copyIntoFolder(source, target);
+        REQUIRE_MESSAGE(copied, (copied ? "" : copied.error().toString()));
+        CHECK(*copied == name);
+    }
+    const auto decoded = supple::audio::readAudio(target / name);
+    REQUIRE(decoded);
+    CHECK(decoded->channels == audio.channels);
+    CHECK(supple::sha256File(target / name).value() == *before);
+    CHECK(supple::sha256File(source).value() == *before);
+    CHECK(std::distance(fs::directory_iterator(target), fs::directory_iterator{}) == 1);
+}
+}  // namespace
+
+TEST_CASE("media staging collision: import" * doctest::skip()) { stagingCollision(false, false); }
+TEST_CASE("media staging collision: folder" * doctest::skip()) { stagingCollision(true, false); }
+TEST_CASE("media staging collision: import-case" * doctest::skip()) {
+    stagingCollision(false, true);
+}
+TEST_CASE("media staging collision: folder-case" * doctest::skip()) {
+    stagingCollision(true, true);
+}
 
 TEST_CASE("media copy accepts a valid filename without room for a staging suffix") {
     const auto root = fs::temp_directory_path() /

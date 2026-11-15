@@ -644,6 +644,9 @@ cleanup succeeds, so `media.copy` identifies the cause of a failed import or sav
 Copy staging uses short, exclusively reserved names independent of the final
 filename: a valid destination name needs no spare bytes for a temporary suffix,
 and cleanup removes only the staging file this operation created.
+After reserving a staging file its native identity must differ from the final
+payload path (including case-insensitive aliases); otherwise it is removed and
+a different candidate reserved. A payload may itself have a staging-looking name.
 Save As does not discard a media file by a temporary-looking filename suffix:
 an imported file named `take.copy-tmp` may be used by a saved branch even when
 the current branch has no items. Unreferenced stale copy files may therefore
