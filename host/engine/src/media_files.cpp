@@ -160,7 +160,6 @@ Status copyFolder(const fs::path& from, const fs::path& to, std::vector<fs::path
         }
         if (!it->is_regular_file(ec)) continue;
         const fs::path rel = it->path().lexically_relative(from);
-        if (rel.filename().string().ends_with(".copy-tmp")) continue;
         const fs::path target = to / rel;
         if (fs::exists(target, ec)) {
             if (sameBytes(it->path(), target)) continue;

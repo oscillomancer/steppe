@@ -140,6 +140,58 @@ bool hasWarning(const std::vector<schema::Warning>& warnings, std::string_view c
 
 }  // namespace
 
+TEST_CASE("save as preserves audio referenced only by a saved branch regardless of filename") {
+    Project p;
+    std::string name;
+    SUBCASE("ordinary media") { name = "take.wav"; }
+    SUBCASE("a user filename resembling a staging marker") { name = "take.copy-tmp"; }
+    fs::create_directories(p.root / "source");
+    fs::create_directories(p.root / "first");
+    fs::create_directories(p.root / "second");
+    const auto original = p.root / "source" / name;
+    audio::WavStreamWriter writer;
+    REQUIRE(writer.open(original, 48000, 1));
+    const std::vector<float> samples(128, .25f);
+    REQUIRE(writer.append(samples.data(), samples.size()));
+    REQUIRE(writer.close());
+    REQUIRE(p.app->save(p.root / "first" / "project.json"));
+    p.app->setCopyImportedMedia(true);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *p.app);
+    auto call = [&](std::string command, json::Value args) {
+        auto result = bus.execute(
+            {command, std::move(args), {cmd::Origin::Type::Test, "media-branches", ""}});
+        REQUIRE_MESSAGE(result, (result ? "" : result.error().toString()));
+        return *result;
+    };
+    auto args = json::Value::object();
+    const auto track = call("track.add", args)["track"].asString();
+    args["track"] = track;
+    args["audio_file"] = original.string();
+    call("item.add", args);
+    args = json::Value::object();
+    args["name"] = "kept";
+    args["switch"] = false;
+    call("branch.create", args);
+    args = json::Value::object();
+    call("history.undo", args);
+    REQUIRE(p.app->head().items.empty());
+    REQUIRE(p.app->head().media.empty());
+    REQUIRE(p.app->save(p.root / "first" / "project.json"));
+    REQUIRE(p.app->save(p.root / "second" / "project.json"));
+    CHECK(fs::exists(p.root / "first" / "media" / name));
+    REQUIRE(fs::exists(p.root / "second" / "media" / name));
+    REQUIRE(p.app->open(p.root / "second" / "project.json"));
+    REQUIRE(p.app->switchBranch("kept"));
+    REQUIRE(p.app->head().items.size() == 1);
+    REQUIRE(p.app->head().media.size() == 1);
+    CHECK(p.app->head().media.begin()->value->path == name);
+    const auto kept = sha256File(p.root / "second" / "media" / name);
+    REQUIRE(kept);
+    CHECK(*kept == sha256File(original).value());
+}
+
 TEST_CASE("a saved project is main's head and brings back its branches and current branch") {
     Project p;
     p.diverge();

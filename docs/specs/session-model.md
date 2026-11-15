@@ -644,6 +644,10 @@ cleanup succeeds, so `media.copy` identifies the cause of a failed import or sav
 Copy staging uses short, exclusively reserved names independent of the final
 filename: a valid destination name needs no spare bytes for a temporary suffix,
 and cleanup removes only the staging file this operation created.
+Save As does not discard a media file by a temporary-looking filename suffix:
+an imported file named `take.copy-tmp` may be used by a saved branch even when
+the current branch has no items. Unreferenced stale copy files may therefore
+travel with the folder; filename-based garbage collection must not omit payload.
 Only if the resolved destination is a strict descendant of the resolved source
 media folder does the recursive copy skip that destination subtree, including
 symlink aliases. Existing destination files stay there; copied files are never
