@@ -60,7 +60,10 @@ std::unique_ptr<Instance> Instance::make(std::shared_ptr<const ModuleType> type,
 
 Instance::~Instance() {
     host_.reset();
-    if (self_ && type_ && type_->code()) type_->code()->destroy(self_);
+    if (type_ && type_->code()) {
+        if (self_) type_->code()->destroy(self_);
+        if (pristine_) type_->code()->destroy(pristine_);
+    }
 }
 
 void Instance::bindMembers() {
@@ -87,6 +90,10 @@ void Instance::bindMembers() {
             inputs_.push_back(in);
         }
     }
+    // restart()'s room for the bindings, so it never allocates.
+    for (const script::Param* p : params_) heldParams_.push_back(*p);
+    for (const script::Input* in : inputs_) heldInputs_.push_back(*in);
+    for (const script::Output* o : outputs_) heldOutputs_.push_back(*o);
     const std::size_t n = params.size();
     targets_ = std::make_unique<std::atomic<double>[]>(n);
     scale_.resize(n);
@@ -142,6 +149,16 @@ void Instance::prepare() {
         record_.memory = -1;
     }
     first_ = true;
+    // What restart() returns to: a copy of the prepared struct, bound to
+    // the same record (its runtime objects sized as prepare() sized them,
+    // so copying it back is in place).
+    const sd::ModuleCode& code = *type_->code();
+    if (!pristine_) {
+        pristine_ = code.create();
+        sd::Instance::bind(*reinterpret_cast<script::Plugin*>(pristine_), &record_);
+    }
+    code.copy(pristine_, self_);
+    pristineTail_ = record_.tail;
 }
 
 float Instance::outputLevel(int output) const {
@@ -182,6 +199,27 @@ void Instance::reset() {
     record_.status.clear();
     record_.status.memoryRefused.store(false, std::memory_order_relaxed);
     prepare();
+}
+
+void Instance::restart() SUPPLE_RT {
+    for (std::size_t o = 0; o < outputs_.size(); ++o)
+        outputLevels_[o].store(0.0f, std::memory_order_relaxed);
+    first_ = true;  // parameters snap to their targets, as a new instance's
+    if (host_) {
+        host_->restart(*this);
+        return;
+    }
+    if (!pristine_) return;
+    // The members hold the schedule's bindings (buffers, glides, slots):
+    // keep them across the copy, which would bring back prepare()'s.
+    for (std::size_t i = 0; i < params_.size(); ++i) heldParams_[i] = *params_[i];
+    for (std::size_t k = 0; k < inputs_.size(); ++k) heldInputs_[k] = *inputs_[k];
+    for (std::size_t o = 0; o < outputs_.size(); ++o) heldOutputs_[o] = *outputs_[o];
+    type_->code()->copy(self_, pristine_);
+    for (std::size_t i = 0; i < params_.size(); ++i) *params_[i] = heldParams_[i];
+    for (std::size_t k = 0; k < inputs_.size(); ++k) *inputs_[k] = heldInputs_[k];
+    for (std::size_t o = 0; o < outputs_.size(); ++o) *outputs_[o] = heldOutputs_[o];
+    record_.tail = pristineTail_;
 }
 
 void Instance::setParam(int index, double physical) {

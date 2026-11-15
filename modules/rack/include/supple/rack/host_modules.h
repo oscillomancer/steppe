@@ -149,6 +149,7 @@ class Notes final : public HostModule {
     void retainSource(std::uint64_t source, std::span<const int> notes) SUPPLE_RT;
     void retainRoutes(std::span<const std::uint64_t> routes) SUPPLE_RT;
     void prepare(Instance& instance) override;
+    void restart(Instance& instance) SUPPLE_RT override;
     void process(const HostContext& ctx) SUPPLE_RT override;
 
   private:
@@ -193,6 +194,7 @@ class Notes final : public HostModule {
 class Transport final : public HostModule {
   public:
     void prepare(Instance& instance) override;
+    void restart(Instance& instance) SUPPLE_RT override;
     void process(const HostContext& ctx) SUPPLE_RT override;
 
   private:

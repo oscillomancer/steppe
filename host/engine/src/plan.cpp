@@ -3351,7 +3351,7 @@ void locateTakes(Node& n, std::int64_t pos, bool wrap, bool keepPlaying = false)
 }  // namespace
 
 void locateNode(Plan& p, Node& n, std::int64_t pos, bool restartConsole) SUPPLE_RT {
-    if (n.rack) locateRack(n, pos, restartConsole);
+    if (n.rack) locateRack(n, pos, restartConsole, restartConsole);
     locateTakes(n, pos, false, !restartConsole);
     auto it = std::lower_bound(n.events.begin(), n.events.end(), pos,
                                [](const TimedEvent& e, std::int64_t x) { return e.sample < x; });
@@ -3423,7 +3423,7 @@ bool processBlockOn(Workers& workers, Plan& p, std::int64_t pos, std::uint32_t n
 
 void locate(Plan& p, std::int64_t pos, bool restartConsole) SUPPLE_RT {
     for (Node& n : p.nodes) {
-        if (n.rack) locateRack(n, pos, restartConsole);
+        if (n.rack) locateRack(n, pos, restartConsole, restartConsole);
         locateTakes(n, pos, false, !restartConsole);  // adoption keeps takes playing
         auto it =
             std::lower_bound(n.events.begin(), n.events.end(), pos,
@@ -3480,7 +3480,7 @@ void locate(Plan& p, std::int64_t pos, bool restartConsole) SUPPLE_RT {
 void wrapTo(Plan& p, std::int64_t pos, int liveClass) SUPPLE_RT {
     for (Node& n : p.nodes) {
         if (liveClass >= 0 && n.live != (liveClass == 1)) continue;
-        if (n.rack) locateRack(n, pos, true);  // notes held at the wrap end there
+        if (n.rack) locateRack(n, pos, true, false);  // notes held at the wrap end there
         if (!p.rateEnabled) locateTakes(n, pos, true);
         auto it =
             std::lower_bound(n.events.begin(), n.events.end(), pos,
@@ -3587,7 +3587,10 @@ void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT {
             if (fromClass >= 0 && old.live != (fromClass == 1)) break;
             // A locate may still be waiting for pooled module ownership.
             // Keep that reset through another plan adoption by this executor.
-            if (n.rack && old.rack) n.rack->resetNotes |= old.rack->resetNotes;
+            if (n.rack && old.rack) {
+                n.rack->resetNotes |= old.rack->resetNotes;
+                n.rack->resetModules |= old.rack->resetModules;
+            }
             // Match inside the destination's incoming edges: scanning every
             // node to rediscover each edge's destination would be cubic.
             for (std::size_t ei : n.in) {
