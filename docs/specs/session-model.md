@@ -631,7 +631,10 @@ and are named relative to it. A project saved for the first time takes its
 unsaved recordings and imports from the scratch folder; one saved as into
 another folder gets a copy of its media folder there (the old project keeps
 its own; a different file of the same name already there refuses the save,
-`media.conflict`). With the app's copy-imports setting on (the GUI's
+`media.conflict`). While a recording runs, a first save and a save as into
+another folder are refused (`project.recording`): the recording's files
+move or are copied once it stops. Saving in place, or as another file in
+the same folder, works while recording. With the app's copy-imports setting on (the GUI's
 default), item.add copies an imported audio file into the media folder (a
 same-named file with other bytes gets `-2`, `-3`…; the same bytes are
 reused) instead of naming it where it is. The GUI gives each project a

@@ -770,6 +770,13 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
     const bool sameMedia =
         media == oldMedia || (fs::exists(media, sameError) && fs::exists(oldMedia, sameError) &&
                               fs::equivalent(media, oldMedia, sameError));
+    // A recording writes into the project's media folder until it stops: a
+    // save as into another folder would copy its first part while the rest
+    // goes on into the old one. As a first save, it waits for the stop.
+    if (!fromScratch && !projectPath_.empty() && !sameMedia && engine_ && engine_->recording())
+        return Error("project.recording", "a recording is running", {},
+                     "stop it before saving as into another folder (its files are copied then), "
+                     "or save in place");
     std::vector<fs::path> createdMedia;  // what this save created in the new media folder
     if (fromScratch) {
         SUPPLE_TRY(moveScratchMedia(media, publish));
