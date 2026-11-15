@@ -63,6 +63,7 @@ namespace {
 struct AudioClass {
     std::uint32_t kind = 0;  // 0: none yet, 1: background, 2: live
     ThreadPolicy background, live;
+    std::uint32_t period = 0;  // live: the device period in frames (0: unknown)
     bool operator==(const AudioClass&) const = default;
 };
 
@@ -106,9 +107,18 @@ bool takeAudioClass(const AudioClass& want, double rate, std::uint32_t frames) {
         policy.computation = std::max<std::uint32_t>(1, period / 3);
         policy.constraint = std::max(policy.computation, period / 2);
         policy.preemptible = TRUE;
-        return thread_policy_set(mach, THREAD_TIME_CONSTRAINT_POLICY,
-                                 reinterpret_cast<thread_policy_t>(&policy),
-                                 THREAD_TIME_CONSTRAINT_POLICY_COUNT) == KERN_SUCCESS;
+        if (thread_policy_set(mach, THREAD_TIME_CONSTRAINT_POLICY,
+                              reinterpret_cast<thread_policy_t>(&policy),
+                              THREAD_TIME_CONSTRAINT_POLICY_COUNT) != KERN_SUCCESS)
+            return false;
+        // Read back, as Linux does: the thread has the constraint asked for.
+        thread_time_constraint_policy_data_t got{};
+        mach_msg_type_number_t count = THREAD_TIME_CONSTRAINT_POLICY_COUNT;
+        boolean_t isDefault = FALSE;
+        return thread_policy_get(mach, THREAD_TIME_CONSTRAINT_POLICY,
+                                 reinterpret_cast<thread_policy_t>(&got), &count,
+                                 &isDefault) == KERN_SUCCESS &&
+               !isDefault && got.period == policy.period;
     }
     (void)thread_policy_set(mach, THREAD_STANDARD_POLICY, nullptr, THREAD_STANDARD_POLICY_COUNT);
 #else
@@ -146,6 +156,18 @@ std::int32_t currentCpu() {
 ThreadPolicy appliedClass() {
 #if defined(_WIN32)
     return threadPolicy(GetCurrentThread());
+#elif defined(__APPLE__)
+    // The live class is a Mach time-constraint policy, which the QoS that
+    // threadPolicy() reads does not show.
+    thread_time_constraint_policy_data_t policy{};
+    mach_msg_type_number_t count = THREAD_TIME_CONSTRAINT_POLICY_COUNT;
+    boolean_t isDefault = FALSE;
+    if (thread_policy_get(pthread_mach_thread_np(::pthread_self()), THREAD_TIME_CONSTRAINT_POLICY,
+                          reinterpret_cast<thread_policy_t>(&policy), &count,
+                          &isDefault) == KERN_SUCCESS &&
+        !isDefault && policy.period > 0)
+        return {ThreadPolicy::Kind::High, 0};
+    return threadPolicy(::pthread_self());
 #else
     return threadPolicy(::pthread_self());
 #endif
@@ -297,12 +319,18 @@ struct BridgeInstance {
             // runs, only when it changed (best effort: a refusal keeps the
             // thread as it was, and the answer says so).
             if (hdr->audioClass == 1 || hdr->audioClass == 2) {
+                // The live class's period is the device's, not the
+                // activation's capacity (render-ahead blocks are larger);
+                // a change of it is a change of class.
                 const AudioClass want{hdr->audioClass,
                                       policyFrom(hdr->audioPolicy, hdr->audioPriority),
-                                      policyFrom(hdr->livePolicy, hdr->livePriority)};
+                                      policyFrom(hdr->livePolicy, hdr->livePriority),
+                                      hdr->audioClass == 2 ? hdr->livePeriod : 0};
                 if (want != taken) {
-                    refused = !takeAudioClass(
-                        want, rate, command == Cmd::Process ? hdr->frames : layout.maxFrames);
+                    refused = !takeAudioClass(want, rate,
+                                              want.period               ? want.period
+                                              : command == Cmd::Process ? hdr->frames
+                                                                        : layout.maxFrames);
                     taken = want;
                     applied = appliedClass();
                 }

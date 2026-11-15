@@ -1465,9 +1465,9 @@ TEST_CASE("bridge protocol v6 retains nested structured error details") {
     REQUIRE(decoded.details[0].details.size() == 1);
     CHECK(decoded.details[0].details[0].code == "leaf");
 #if defined(_WIN32)
-    CHECK(bridge::kVersion == 23);
+    CHECK(bridge::kVersion == 24);
 #else
-    CHECK(bridge::kVersion == 22);
+    CHECK(bridge::kVersion == 23);
 #endif
 }
 
@@ -2333,6 +2333,7 @@ struct GatedPeer {
     std::vector<bridge::Cmd> commands;
     std::vector<std::vector<Event>> blocks;  // each Process's events
     std::vector<float> firstInput;           // each Process's first input sample
+    std::vector<std::uint32_t> periods;      // each command's livePeriod
     std::thread thread;
 
     // `hold`: the first request it holds (0: none).
@@ -2341,6 +2342,7 @@ struct GatedPeer {
         commands.reserve(64);
         blocks.reserve(64);
         firstInput.reserve(64);
+        periods.reserve(64);
         void* arena =
             ::mmap(nullptr, layout.size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
         REQUIRE(arena != MAP_FAILED);
@@ -2372,6 +2374,7 @@ struct GatedPeer {
             if (quit.load()) return;
             const auto cmd = static_cast<bridge::Cmd>(header->cmd);
             commands.push_back(cmd);
+            periods.push_back(header->livePeriod);
             if (cmd == bridge::Cmd::StartProcessing) processing = !refuseStart;
             if (cmd == bridge::Cmd::StopProcessing) processing = false;
             if (cmd == bridge::Cmd::Reset) sounding = false;
@@ -2650,4 +2653,28 @@ TEST_CASE("a bridged start that misses its live deadline is unanswered, not refu
         CHECK_FALSE(peer.instance->startProcessing());
         CHECK_FALSE(peer.instance->startUnanswered());
     }
+}
+
+TEST_CASE("bridged calls carry the device period for the live class") {
+    // Round 16: macOS sized the live time constraint by the activation's
+    // capacity (the 1024-frame render block on a 128-frame device) and never
+    // corrected it. The engine's device period now goes with every command.
+    struct Restore {
+        ~Restore() { setLiveBridgeAudioPolicy({ThreadPolicy::Kind::Normal, 0}); }
+    } restore;
+    GatedPeer peer(0);
+    Buffers buf(64);
+    setLiveBridgeAudioPolicy({ThreadPolicy::Kind::Normal, 0}, 128);
+    {
+        Patient patient;
+        CHECK(peer.instance->startProcessing());
+        CHECK(peer.instance->process(buf.block(64), nullptr));
+    }
+    setLiveBridgeAudioPolicy({ThreadPolicy::Kind::Normal, 0}, 256);
+    {
+        Patient patient;
+        CHECK(peer.instance->process(buf.block(64), nullptr));
+    }
+    CHECK(liveBridgePeriod() == 256);
+    CHECK(peer.periods == std::vector<std::uint32_t>{128, 128, 256});
 }

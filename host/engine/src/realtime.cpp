@@ -352,7 +352,8 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
     // A bridged plug-in on a live node runs in the callback's class (ADR-0081).
     host::setLiveBridgeAudioPolicy(scheduling_.callback.kind == ThreadPolicy::Kind::None
                                        ? ThreadPolicy{ThreadPolicy::Kind::Normal, 0}
-                                       : scheduling_.callback);
+                                       : scheduling_.callback,
+                                   config_.blockSize);
     if (options_.anticipative) {
         aheadFrames_ = std::max<std::int64_t>(
             2 * options_.renderBlock,

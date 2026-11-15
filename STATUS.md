@@ -1066,7 +1066,9 @@ Engine and hosting:
   ADR-0081) keeps what it had; `engine.status.bridge_threads_refused` names
   its FX. The bridge inherits the host's limits, so this needs a limit or
   policy change for the user; such a thread's plug-in can then fall behind
-  under load like an unelevated renderer.
+  under load like an unelevated renderer. On macOS the live class's time
+  constraint is sized by the device period and read back; that path has not
+  run natively yet.
 - A bridged plug-in on a live (monitored) track costs the callback a round
   trip to its bridge per block (about 10 µs more than in process at the
   median in B6, `docs/benchmarks/b6.md`, serially along a chain); one that

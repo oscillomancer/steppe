@@ -56,10 +56,12 @@ inline constexpr std::uint32_t kMagic = 0x31474253;  // "SBG1"
 // (ADR-0081), and the bridge reports whether it got it.
 // 22/23: every command carries its timing, the bridge thread's CPU and
 // migrations, and the class it read back (ADR-0081 diagnostics).
+// 23/24: every command carries the device period, which sizes the live class
+// on macOS (ADR-0081 §5).
 #if defined(_WIN32)
-inline constexpr std::uint32_t kVersion = 23;  // Windows runs one ahead: native control handles
+inline constexpr std::uint32_t kVersion = 24;  // Windows runs one ahead: native control handles
 #else
-inline constexpr std::uint32_t kVersion = 22;
+inline constexpr std::uint32_t kVersion = 23;
 #endif
 inline constexpr int kControlFd = 3;  // the bridge's end of the socketpair
 inline constexpr std::uint32_t kMaxChannels = 16;
@@ -334,10 +336,13 @@ struct Header {
     // ADR-0081). audioClass 1: background, ThreadPolicy kind and priority in
     // audioPolicy/audioPriority (kind 0, None, keeps the current one); 2: live,
     // the callback's class (Linux: livePolicy/livePriority; macOS: a
-    // time-constraint policy for the block's period; Windows: MMCSS Pro
-    // Audio); 0: unchanged.
+    // time-constraint policy for livePeriod; Windows: MMCSS Pro Audio); 0:
+    // unchanged.
     std::uint32_t audioPolicy, audioPriority;
     std::uint32_t audioClass, livePolicy, livePriority;
+    // The device period in frames while an engine runs (0: none, the live
+    // class then takes the command's block).
+    std::uint32_t livePeriod;
     // The bridge, with each answer: 1 when the thread did not get the class
     // last asked for (it keeps what it had), else 0.
     std::uint32_t classRefused;
@@ -348,7 +353,8 @@ struct Header {
     // The bridge's audio thread with each answer: the CPU it ran the command
     // on (-1 unknown), how often it has changed CPU since it started, and
     // its class as read back after it last took one (ThreadPolicy kind and
-    // priority; on macOS and Windows the kind the platform class maps to).
+    // priority; on macOS and Windows the kind the platform class maps to:
+    // High for a time-constraint policy or MMCSS).
     std::int32_t cpu;
     std::uint32_t migrations;
     std::uint32_t appliedPolicy, appliedPriority;

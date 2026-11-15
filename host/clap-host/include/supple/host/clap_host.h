@@ -256,9 +256,11 @@ ThreadPolicy bridgeAudioPolicy() SUPPLE_RT;
 // live deadline (ADR-0081): the device callback's (process-wide; Normal by
 // default). On Linux this policy and priority; macOS and Windows apply their
 // own audio class in the bridge (time-constraint, MMCSS Pro Audio) whatever
-// it says. The engine sets it while it runs.
-void setLiveBridgeAudioPolicy(ThreadPolicy policy);
+// it says. The engine sets it while it runs, with the device period in
+// frames, which sizes the macOS time constraint (0: the command's block).
+void setLiveBridgeAudioPolicy(ThreadPolicy policy, std::uint32_t periodFrames = 0);
 ThreadPolicy liveBridgeAudioPolicy() SUPPLE_RT;
+std::uint32_t liveBridgePeriod() SUPPLE_RT;
 bool bridgeProcessFailed(const std::shared_ptr<BridgeProcess>& process);
 
 // ADR-0081: the device callback's bridge deadline, on the steady clock in
