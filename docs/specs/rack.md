@@ -432,10 +432,29 @@ interval (they split it differently in the real-time and offline renders):
 stock modules advance state per frame, and do their control-rate work
 (Delay's wander, VCO's drift, Harmonic's partial plan, Resonator's and
 Drum's tuning, Sequencer's step knobs) every 32 frames counted from
-`prepare()` or a restart, reading cables at that frame. A run that starts
-on the grid does that work where it did per call. Song positions are exact
-too: every call of a grid interval gets the transport read at the
-interval's start (`Clock::transport(position - phase)`) with
+`prepare()` or a restart, reading cables at that frame. Outside a feedback
+group, a run whose calls start on the grid does that work where it did
+once a call. A feedback group calls its modules a frame at a time, so
+there it now comes every 32 frames, not every frame. Projects do not pin
+stock modules (a project's module copies cannot override a stock id), so
+a saved patch plays the current ones, and these patches sound different
+from before this cadence, even on the grid:
+
+- in a feedback group: Harmonic (its partial plan and ramp), Resonator
+  (tuning from its pitch input and knobs), Delay (the wow and flutter
+  wander, on by default), VCO with drift, and Drum and Sequencer whose
+  knobs are modulated (tuning and tone; the step knobs);
+- Slew, and a Macro whose value moves: they glide from a start's second
+  frame (they passed the whole first call through, unglided);
+- Markov clocked from a cable: the step length goes back to the song's
+  eighth at the frame a reset falls on (it waited for the next call), so
+  a gate after a reset can differ for up to 31 frames;
+- Reverb: damping comes back at the frame Freeze ends (the rest of that
+  call ran undamped), and the tail differs from there.
+
+Song positions are exact too: every call of a grid interval gets the
+transport read at the interval's start (`Clock::transport(position -
+phase)`) with
 `Transport::offset` set to the phase (plus the frame, for a feedback
 group's per-frame calls), and modules compute frame i's position as
 `beats + (offset + i) * perFrame`, the same expression for a frame whatever

@@ -402,7 +402,15 @@ instructions are in `docs/guides/installing.md`.
   (so a delay's 10 s lines are). No stock module's sound depends on where
   host blocks split the grid, which a seek off it does, song positions
   included (`Transport::offset`; checked for every stock module, and in
-  both executors after seeks off the grid). Engine-owned `module.copy` / `rack.paste` retain modules,
+  both executors after seeks off the grid). Getting there changed the
+  sound of some saved patches, on the grid too, since projects play the
+  current stock modules: in a feedback group, Harmonic, Resonator, Delay,
+  VCO with drift, and modulated Drum and Sequencer do their control-rate
+  work every 32 frames instead of every frame; Slew and a moving Macro
+  glide from a start's second frame instead of after the first 32; Markov
+  clocked from a cable restores its step length at a reset's frame; Reverb
+  damps from the frame Freeze ends (`rack.md` lists them). There is no
+  compatibility path to the old sound. Engine-owned `module.copy` / `rack.paste` retain modules,
   internal cables (including plug-in parameter modulation), learn bindings
   and copy-time live plug-in state across cuts and racks, as one paste undo
   step; unavailable types or plug-ins refuse the paste without changing the
