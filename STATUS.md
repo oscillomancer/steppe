@@ -249,6 +249,7 @@ instructions are in `docs/guides/installing.md`.
   its fader, beside the live mix, with a lane mute, and are silent in the
   punch range while it records. WAV recovery repairs both container byte counts
   even when a damaged length still rounds down to the correct frame count.
+  Simultaneous recording targets reserve case-folded names before opening files.
 - **Editing**: items, takes, comping lanes, fades and crossfades with shapes,
   cursor splitting from the item right-click menu (shared with S) and an audio-only prior
   zero-crossing split (100 ms search, louder stereo channel, cursor fallback;

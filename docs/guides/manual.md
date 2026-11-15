@@ -922,6 +922,10 @@ input FX, before its own items, inserts and fader. It uses ordinary audio
 takes, loop/punch recording and recovery. Disable the live rack feed when
 auditioning the recorded item to avoid doubling it.
 
+Recorded filenames use sanitized track names and take numbers. Tracks named
+`Vocal` and `vocal` receive distinct take names when recorded together, including
+on case-insensitive filesystems.
+
 Output recording is not supported yet. If a loaded project has an armed track
 in output record mode, recording fails before creating any files. Switch that
 track to input mode with `track.set {track: "tr_1", record_mode: "input"}`.

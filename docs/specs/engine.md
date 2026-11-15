@@ -831,7 +831,10 @@ first use, and no plug-in code runs early to warm it.
 - **Recording**: RT thread writes input frames into large preallocated SPSC
   rings (≥ 10 s); an I/O thread writes them to WAV/RF64 files incrementally,
   rewriting the header every 5 s so a crash leaves a valid file up to the last
-  flush; a sidecar per file records its track and start, and
+  flush. Targets reserve their sanitized track/take stems with ASCII case folding
+  before any files are opened, so simultaneous names cannot collide on
+  case-insensitive filesystems. Existing WAV, sidecar and MIDI journal entries
+  also reserve their stems. A sidecar per file records its track and start;
   `project.recover` repairs the header to cover everything on disk and places
   takes a crash left out (ADR-0014). Repair checks both RIFF and data byte
   counts against the whole frames physically present, including a torn size

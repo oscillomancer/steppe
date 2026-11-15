@@ -19,6 +19,58 @@ using namespace supple;
 using namespace supple::engine;
 namespace fs = std::filesystem;
 
+TEST_CASE("simultaneous recording names are distinct after ASCII case folding") {
+    struct Root {
+        fs::path path =
+            fs::temp_directory_path() /
+            ("supple-record-case-" + std::to_string(test::processId()) + "-" +
+             std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        Root() { REQUIRE(fs::create_directory(path)); }
+        ~Root() { fs::remove_all(path); }
+    } root;
+    DummyBackend backend(
+        {.mode = DummyBackend::Mode::Manual,
+         .input = [](float* const* in, std::uint32_t channels, std::uint32_t frames, std::int64_t) {
+             for (std::uint32_t c = 0; c < channels; ++c)
+                 std::fill_n(in[c], frames, c == 0 ? .25f : -.5f);
+         }});
+    auto created = EngineApp::create({.workdir = root.path});
+    REQUIRE(created);
+    auto& app = **created;
+    auto txn = app.beginTransaction({cmd::Origin::Type::Test, "record-case", ""}, "Arm");
+    REQUIRE(txn);
+    for (int channel = 0; channel < 2; ++channel) {
+        model::Track track;
+        track.name = channel == 0 ? "Vocal" : "vocal";
+        track.parent = model::kMaster;
+        track.record.armed = true;
+        const auto id = app.txn().create(track);
+        model::Route route;
+        route.from.hwChannels = std::vector<int>{channel + 1};
+        route.to.track = id;
+        const auto input = app.txn().create(route);
+        app.txn().modify<model::Track>(id, [&](auto& value) { value.record.input = input; });
+        app.txn().modify<model::Track>(model::kMaster,
+                                       [&](auto& value) { value.children.push_back(id); });
+    }
+    REQUIRE(app.commitTransaction(*txn));
+    REQUIRE(app.startEngine(backend, {.sampleRate = 48000, .blockSize = 128, .inputs = 2},
+                            {.anticipative = false, .workers = 0}));
+    REQUIRE(app.transport("record"));
+    backend.run(4);
+    REQUIRE(app.transport("stop"));
+    CHECK(fs::exists(app.recordDir() / "Vocal-1.wav"));
+    CHECK(fs::exists(app.recordDir() / "vocal-2.wav"));
+    const auto first = audio::readAudio(app.recordDir() / "Vocal-1.wav");
+    const auto second = audio::readAudio(app.recordDir() / "vocal-2.wav");
+    REQUIRE(first);
+    REQUIRE(second);
+    CHECK(first->frames() > 0);
+    CHECK(first->channels[0] == std::vector<float>(first->frames(), .25f));
+    CHECK(second->channels[0] == std::vector<float>(second->frames(), -.5f));
+    app.stopEngine();
+}
+
 TEST_CASE("output record mode loads but recording fails before creating files") {
     struct Root {
         fs::path path = fs::temp_directory_path() /

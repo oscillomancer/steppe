@@ -1948,6 +1948,7 @@ Result<TransportInfo> EngineApp::transport(std::string_view action, std::optiona
         SUPPLE_TRY(model::validateRecordingPlayrate(s));  // before creating a record folder/file
         const fs::path dir = recordDir();
         std::vector<RecordTarget> targets;
+        std::set<std::string> reservedStems;
         for (const auto& e : s.tracks) {
             const model::Track& tr = *e.value;
             if (tr.record.armed && tr.record.mode == model::RecordMode::Output)
@@ -1983,17 +1984,18 @@ Result<TransportInfo> EngineApp::transport(std::string_view action, std::optiona
             auto freeName = [&](const char* extension) {
                 for (int n = 1;; ++n) {
                     const std::string stem = base + "-" + std::to_string(n);
+                    auto folded = stem;
+                    for (char& c : folded)
+                        if (c >= 'A' && c <= 'Z') c = char(c - 'A' + 'a');
                     const fs::path file = dir / (stem + extension);
-                    const bool taken =
-                        std::any_of(targets.begin(), targets.end(),
-                                    [&](const RecordTarget& o) {
-                                        return !o.file.empty() &&
-                                               o.file.parent_path() / o.file.stem().stem() ==
-                                                   dir / stem;
-                                    }) ||
-                        occupied(dir / (stem + ".wav")) || occupied(dir / (stem + ".rec.json")) ||
-                        occupied(dir / (stem + ".midi.jsonl"));
-                    if (!taken) return file;
+                    const bool taken = reservedStems.contains(folded) ||
+                                       occupied(dir / (stem + ".wav")) ||
+                                       occupied(dir / (stem + ".rec.json")) ||
+                                       occupied(dir / (stem + ".midi.jsonl"));
+                    if (!taken) {
+                        reservedStems.insert(std::move(folded));
+                        return file;
+                    }
                 }
             };
             if (routed || midi) {  // MIDI (ADR-0016): events; a journal for recovery (ADR-0080)
