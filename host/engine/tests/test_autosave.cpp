@@ -2286,3 +2286,34 @@ TEST_CASE("autosave numbers stay within what a project file can hold") {
         CHECK(opened->autosavedThrough == std::uint64_t{INT64_MAX});
     }
 }
+
+TEST_CASE("retrying a failed save as retires the journal copy the first attempt made") {
+    // Round-13 review, finding 4: the copy a failed save as made was found
+    // already there by the retry, so it was not this save's to retire and
+    // stayed offered for recovery after the file saved.
+    Project p;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *p.app);
+    REQUIRE(d.execute({"track.add", json::Value::object(), kUnit}));
+    REQUIRE(p.app->save(p.root / "first/song.json"));
+    const auto old = p.app->recordDir() / "Keys-1.midi.jsonl";
+    REQUIRE(writeFileAtomic(
+        old, journalHeader() + "[0,144,60,100]\n[24000,128,60,0]\n{\"captured\":48000}\n"));
+    REQUIRE(p.app->recover({}, {}));
+    const auto second = p.root / "second/song.json";
+    setFileSyncHookForTesting([&](const fs::path& f) { return f != second; });
+    auto failed = p.app->save(second);
+    setFileSyncHookForTesting({});
+    REQUIRE_FALSE(failed);
+    REQUIRE_FALSE(fs::exists(second));
+    const auto copy = second.parent_path() / "media/rec" / old.filename();
+    REQUIRE(fs::exists(copy));
+    REQUIRE(p.app->save(second));
+    CHECK_FALSE(fs::exists(copy));
+    CHECK(p.app->recoverable().empty());
+    REQUIRE(p.app->open(second));
+    CHECK(p.app->head().midi.size() == 1);
+    CHECK(p.app->recoverable().empty());
+    CHECK(fs::exists(old));  // the first project's journal stays its own
+}

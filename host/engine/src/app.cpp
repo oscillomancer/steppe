@@ -636,6 +636,7 @@ Status EngineApp::replaceProject(model::VersionStore store, fs::path path,
     // Not saved: a saved project's journals stay, offered on its next open;
     // an unsaved one's went with its folder above (ADR-0078, ADR-0080).
     midiJournalsPending_.clear();
+    unpublishedCopies_.clear();
     endMasterRecording();
     autoWrite_.clear();
     renderQueue_.clear();
@@ -811,8 +812,19 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
     } else {
         // Saved as into another folder: that folder gets its own copy of the
         // media (the old project keeps its files).
-        if (!projectPath_.empty()) SUPPLE_TRY(detail::copyFolder(mediaDir(), media, &createdMedia));
+        if (!projectPath_.empty()) {
+            Status copied = detail::copyFolder(mediaDir(), media, &createdMedia);
+            // Until a file holds them, a failure keeps them ours: a retry
+            // would take them for files that were there before it.
+            for (const fs::path& file : createdMedia)
+                if (std::find(unpublishedCopies_.begin(), unpublishedCopies_.end(), file) ==
+                    unpublishedCopies_.end())
+                    unpublishedCopies_.push_back(file);
+            SUPPLE_TRY(std::move(copied));
+        }
         SUPPLE_TRY(publish());
+        createdMedia = std::move(unpublishedCopies_);
+        unpublishedCopies_.clear();
     }
     // The user's modules it plays go with it, as its media do (ADR-0062):
     // those of every version the store keeps, not only the current head's,
