@@ -40,6 +40,17 @@ constexpr std::int64_t kHeaderBytes = 80;
 constexpr std::int64_t kLegacyHeaderBytes = 44;
 constexpr std::uint64_t kMaxLegacyData = UINT32_MAX - (kLegacyHeaderBytes - 8);
 
+// Promotion can tear within either FourCC, including reordered byte writes.
+// Only old/new bytes at their exact positions qualify; all fixed layout and
+// format checks still apply before any recovery write.
+bool promotionTag(const std::uint8_t* tag, const char* before, const char* after) {
+    for (int i = 0; i < 4; ++i)
+        if (tag[i] != static_cast<std::uint8_t>(before[i]) &&
+            tag[i] != static_cast<std::uint8_t>(after[i]))
+            return false;
+    return true;
+}
+
 bool writeAt(std::FILE* file, std::int64_t offset, const void* bytes, std::size_t size) {
     return detail::files::seek(file, offset, SEEK_SET) == 0 &&
            std::fwrite(bytes, 1, size, file) == size;
@@ -209,8 +220,10 @@ Result<StreamHeader> inspectStream(const std::filesystem::path& path) {
     const bool legacy = std::memcmp(h.data() + 12, "fmt ", 4) == 0;
     const bool ds64 = std::memcmp(h.data() + 12, "ds64", 4) == 0;
     const bool junk = std::memcmp(h.data() + 12, "JUNK", 4) == 0;
-    if ((!riff && !rf64) || (legacy && !riff) ||
-        (!legacy && (!(ds64 || junk) || get32(h.data() + 16) != 28 || read < kHeaderBytes)))
+    const bool container = promotionTag(h.data(), "RIFF", "RF64");
+    const bool reserved = promotionTag(h.data() + 12, "JUNK", "ds64");
+    if (!container || (legacy && !riff) ||
+        (!legacy && (!reserved || get32(h.data() + 16) != 28 || read < kHeaderBytes)))
         return invalid();
     StreamHeader out;
     out.bytes = legacy ? kLegacyHeaderBytes : kHeaderBytes;
@@ -232,13 +245,14 @@ Result<StreamHeader> inspectStream(const std::filesystem::path& path) {
     info.fileFrames = (legacy ? std::min(physical, kMaxLegacyData) : physical) / frameBytes;
     const auto wholeBytes = info.fileFrames * frameBytes;
     info.headerFrames = (ds64 ? get64(h.data() + 28) : get32(f + 28)) / frameBytes;
-    out.rf64 = rf64 || ds64 || (!legacy && wholeBytes + kHeaderBytes - 8 > UINT32_MAX);
+    const bool torn = (!riff && !rf64) || (!legacy && !junk && !ds64);
+    out.rf64 = rf64 || ds64 || torn || (!legacy && wholeBytes + kHeaderBytes - 8 > UINT32_MAX);
     if (rf64 && ds64)
         out.sizesMatch = get32(h.data() + 4) == UINT32_MAX && get32(f + 28) == UINT32_MAX &&
                          get64(h.data() + 20) == wholeBytes + kHeaderBytes - 8 &&
                          get64(h.data() + 28) == wholeBytes &&
                          get64(h.data() + 36) == info.fileFrames && get32(h.data() + 44) == 0;
-    else if (riff && !ds64 && !out.rf64)
+    else if (riff && (legacy || junk) && !out.rf64)
         out.sizesMatch =
             get32(h.data() + 4) == wholeBytes + static_cast<std::uint64_t>(out.bytes - 8) &&
             get32(f + 28) == wholeBytes;

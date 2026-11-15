@@ -1083,3 +1083,74 @@ TEST_CASE("streamed WAV promotes in place at an injected limit and repairs inter
     CHECK(decoded->channels == std::vector<std::vector<float>>(2, std::vector<float>(40, .25f)));
     REQUIRE(repairWavStream(path));  // unchanged valid-header fast path
 }
+
+TEST_CASE("RF64 promotion repairs every interrupted header byte and tag mixture") {
+    const auto root = fs::temp_directory_path() /
+                      ("supple-rf64-bytewise-" + std::to_string(supple::test::processId()));
+    REQUIRE(fs::create_directory(root));
+    struct Cleanup {
+        fs::path path;
+        ~Cleanup() { fs::remove_all(path); }
+    } cleanup{root};
+    const auto original = root / "original.wav", tornFile = root / "torn.wav";
+    WavStreamWriter writer;
+    REQUIRE(writer.open(original, 48000, 2));
+    WavStreamWriterTestAccess::riffLimit(writer, 256);
+    std::vector<float> block(32);
+    for (std::size_t i = 0; i < block.size(); ++i) block[i] = static_cast<float>(i) / 32;
+    REQUIRE(writer.append(block.data(), 16));
+    REQUIRE(writer.sync());  // an earlier durable prefix must never become inaccessible
+    const auto before = supple::readFile(original);
+    REQUIRE(before);
+    REQUIRE(writer.append(block.data(), 16));
+    REQUIRE(writer.close());
+    const auto after = supple::readFile(original);
+    REQUIRE(after);
+    auto state = *after;
+    std::copy_n(before->begin(), 80, state.begin());  // complete retained audio, old header
+    auto verify = [&](const std::vector<std::uint8_t>& bytes) {
+        REQUIRE(supple::writeFileAtomic(tornFile, bytes));
+        const auto inspected = inspectWavStream(tornFile);
+        CHECK_MESSAGE(inspected, (inspected ? "" : inspected.error().toString()));
+        if (!inspected) return;
+        CHECK(inspected->fileFrames == 32);
+        const auto repaired = repairWavStream(tornFile);
+        REQUIRE(repaired);
+        CHECK(*repaired == 32);
+        const auto decoded = readAudio(tornFile);
+        REQUIRE(decoded);
+        for (std::size_t c = 0; c < 2; ++c)
+            for (std::size_t frame = 0; frame < 32; ++frame)
+                CHECK(decoded->channels[c][frame] == block[2 * (frame % 16) + c]);
+        CHECK(inspectWavStream(tornFile)->headerFrames == 32);
+    };
+    // Model each write in writeSizes in order, interrupting after every byte.
+    for (const auto [offset, count] : {std::pair{20, 28}, {12, 4}, {4, 4}, {76, 4}, {0, 4}}) {
+        for (int n = 0; n <= count; ++n) {
+            INFO("offset " << offset << ", written " << n);
+            auto bytes = state;
+            std::copy_n(after->begin() + offset, n, bytes.begin() + offset);
+            verify(bytes);
+        }
+        std::copy_n(after->begin() + offset, count, state.begin() + offset);
+    }
+    // Also cover non-prefix mixtures if individual persisted tag bytes reorder.
+    for (unsigned chunk = 0; chunk < 16; ++chunk)
+        for (unsigned container = 0; container < 16; ++container) {
+            INFO("chunk mask " << chunk << ", container mask " << container);
+            auto bytes = *after;
+            for (unsigned i = 0; i < 4; ++i) {
+                bytes[12 + i] = (chunk & (1u << i)) ? (*after)[12 + i] : (*before)[12 + i];
+                bytes[i] = (container & (1u << i)) ? (*after)[i] : (*before)[i];
+            }
+            verify(bytes);
+        }
+    for (const int offset : {0, 8, 12, 16, 48, 52, 56, 58, 60, 64, 68, 70, 72}) {
+        auto damaged = *after;
+        damaged[static_cast<std::size_t>(offset)] = '!';
+        REQUIRE(supple::writeFileAtomic(tornFile, damaged));
+        CHECK_FALSE(inspectWavStream(tornFile));
+        CHECK_FALSE(repairWavStream(tornFile));
+        CHECK(*supple::readFile(tornFile) == damaged);  // no unrelated repair guesses
+    }
+}

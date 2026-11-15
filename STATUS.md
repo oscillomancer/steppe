@@ -1167,7 +1167,8 @@ Session and editing:
   Native macOS/Windows journal validation remains pending.
 - Streaming audio recording reserves JUNK/ds64 space and promotes to RF64 in
   place at the 32-bit size limit (ADR-0082). Old 44-byte recordings and new
-  RIFF/RF64 files remain repairable; decode/import accept RF64. Promotion is
+  RIFF/RF64 files remain repairable, including bytewise-torn promotion tags;
+  decode/import accept RF64. Promotion is
   covered locally using an injected limit and sparse files; native macOS/Windows
   validation remains pending.
 - Consolidation's shared engine/model code has local Linux coverage; native

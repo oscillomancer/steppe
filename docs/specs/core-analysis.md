@@ -341,7 +341,11 @@ Streaming recording files reserve an 80-byte header: RIFF/WAVE, `JUNK` with a
 Crossing either 32-bit container/data limit promotes JUNK to `ds64` and RIFF
 to RF64 in place, with 64-bit RIFF/data/frame counts and 32-bit sentinels.
 Audio never moves. Promotion writes ds64 payload/tag and sentinels before the
-RF64 marker; recovery also recognizes an interrupted RIFF+ds64 promotion.
+RF64 marker; recovery also recognizes interrupted promotion tags, including every bytewise
+mixture of the old/new RIFF/RF64 and JUNK/ds64 FourCCs. This requires the
+unchanged reserved-chunk length, float32 fmt, data position and rate/alignment
+checks; unrelated or truncated layouts remain invalid. Repair reconstructs
+sizes from the complete physical prefix, never the torn size fields.
 `inspectWavStream`/`repairWavStream` accept the legacy 44-byte recording layout
 and the new reserved RIFF/RF64 layout. Repair covers every complete physical
 frame, excludes a trailing partial frame, and syncs the repaired header before

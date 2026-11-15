@@ -859,7 +859,7 @@ first use, and no plug-in code runs early to warm it.
   in their 80-byte RIFF header. A take crossing the 32-bit size limit promotes
   that space to ds64 and becomes RF64 in place, without moving samples or
   stopping capture. Recovery reads/repairs old 44-byte recordings and new
-  RIFF/RF64 recordings, including an interrupted promotion. Decoding, metadata
+  RIFF/RF64 recordings, including bytewise-torn promotion FourCCs in the otherwise unchanged fixed layout. Decoding, metadata
   inspection and media import accept RF64. Tests inject a small size threshold
   or use sparse files, without writing a 4 GiB audio payload.
 - **Audio placement journals** (ADR-0082): each WAV owns an exclusively
