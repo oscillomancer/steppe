@@ -53,11 +53,14 @@ if (SUPPLE_BUILD_TESTS AND COMMAND supple_test)
             target_compile_definitions(processor-tests PRIVATE
                 SUPPLE_MARRAM_SCRIPT="${SUPPLE_SUITE}/../marram/script/marram.cpp")
         endif()
-        # The examples compiled as C++, as source exports build them.
+        # The examples compiled as C++, as source exports build them. An
+        # Array may start from single braces (= {1.0, 0.5}), as the language
+        # allows, without a warning (as each plug-in's targets.cmake).
         if (MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-            target_compile_options(processor-tests PRIVATE /clang:-ffp-contract=off /clang:-fwrapv)
+            target_compile_options(processor-tests PRIVATE
+                /clang:-ffp-contract=off /clang:-fwrapv -Wno-missing-braces)
         else()
-            target_compile_options(processor-tests PRIVATE -ffp-contract=off -fwrapv)
+            target_compile_options(processor-tests PRIVATE -ffp-contract=off -fwrapv -Wno-missing-braces)
         endif()
         set_tests_properties(processor-tests PROPERTIES ENVIRONMENT "SUPPLE_SCRIPT_LIBRARY=${player_library}")
     endif()
