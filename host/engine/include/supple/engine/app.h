@@ -744,6 +744,9 @@ class EngineApp : public cmd::Host {
     std::filesystem::path autosaveDir() const;
     // The newest autosave of the project file `project` that is newer than the
     // file itself, or empty. project.open reports it instead of loading it.
+    // Newer: numbered above the file's autosaved_through (the open project's
+    // file), or, for a file without one, written after it; the highest
+    // numbered of those.
     std::filesystem::path newerAutosave(const std::filesystem::path& project) const;
 
     // --- scripting ------------------------------------------------------------------
@@ -1011,9 +1014,20 @@ class EngineApp : public cmd::Host {
         std::string suffix;  // ".pre-branches", ".unreadable-autosave"
     };
     std::vector<RecoveryKeep> recoveryKeep_;
-    // The project file and its time when this project was opened: a named
-    // autosave must be newer than that (recoverAutosave).
-    std::optional<std::pair<std::filesystem::path, std::filesystem::file_time_type>> openedFile_;
+    // The project file as this project was opened (or first saved, or saved
+    // under a new path): a named autosave must be newer than that
+    // (recoverAutosave). `through` is its autosaved_through; a file without
+    // one (before 2.15) is compared by `time`.
+    struct OpenedFile {
+        std::filesystem::path path;
+        std::filesystem::file_time_type time;
+        std::optional<std::uint64_t> through;
+    };
+    std::optional<OpenedFile> openedFile_;
+    // The project file's autosaved_through as it is now (opened or saved):
+    // an autosave numbered above it is newer than the file (ADR-0078).
+    // Absent for a file without one, whose autosaves go by file time.
+    std::optional<std::uint64_t> autosavedThrough_;
     // Where recovery may read and repair recordings: an unsaved project's
     // session folder; empty for a saved project (its file names its media).
     std::filesystem::path recoveryRoot() const;

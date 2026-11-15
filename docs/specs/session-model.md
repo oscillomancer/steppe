@@ -557,7 +557,7 @@ routes: sd_1 tr_2 → tr_6 ch 1/2→3/4 pre-fader −6 dB (sidechain)
 markers: mk_1 "Verse" bar 1 · regions: rg_1 "Chorus" bars 9–17
 ```
 
-## 5. Project file (`supple.project/2.14`)
+## 5. Project file (`supple.project/2.15`)
 
 ### 5.1 Shape
 
@@ -574,7 +574,7 @@ and audio items on masters (ADR-0057). Before 2.4, a route from a master to `hw_
 played) becomes that master's `hw_output` (its first such route) and the
 route is dropped, with a `project.hw_output_route` warning.
 
-The loader accepts 1.x and 2.x documents and saves the current schema (2.14,
+The loader accepts 1.x and 2.x documents and saves the current schema (2.15,
 §5). Migration allocates child channel IDs in track-ID order, inserts each
 child first, and moves the source items and record/input FX there while
 keeping user inserts on the buss. Hardware/MIDI record routes follow the new
@@ -664,10 +664,16 @@ suffixes (such as `autosave-1-backup.json`). An exhausted index reports
 `autosave.index` without writing or pruning, and retries after the same interval.
 `project.open` of a file that has
 a newer autosave next to it reports `autosave_available` and loads nothing
-from it. Newer means a later write time; an autosave written after a save
-is dated after the file even where the file clock's grain (a Windows tick,
-FAT's two seconds) or a clock set back would give it the same or an earlier
-time. `project.recover {autosave: true}` brings it back: the newest
+from it. Newer means numbered above the file's `autosaved_through`
+(schema 2.15): the highest autosave number beside the file when it was
+saved, whose work it therefore holds. An autosave is numbered past the
+highest present and past that number, so the newest is the highest
+numbered, and file times decide nothing (a clock set back, a coarse file
+clock or a future-dated file cannot reorder them). A file without the field
+(2.14 and older, or written by another program) goes by write time: an
+autosave written after it, the highest numbered of those. A value that is
+not a count opens with a `project.autosaved_through` warning and goes by
+write time. `project.recover {autosave: true}` brings it back: the newest
 autosave newer than the file that reads (older ones are tried, each failure
 a `recover.autosave` warning) replaces the open project, keeping its path,
 so it stays unsaved until saved over the file; `recover.no_autosave` when
@@ -1048,7 +1054,10 @@ and naming. All `edit` unless marked (q) query or (a) action.
   (`frames`, `file_frame`, `loop_start`, `loop_end`, `overflow_frames`),
   `run` fits 32 bits and `sample_rate` is above 0; otherwise the call fails
   with `command.invalid_args`, its detail `schema.out_of_range` at the
-  field's path.
+  field's path. A loop ends after it starts or is [0, 0] (none), or the call
+  fails with `record.loop` at the take's `loop_end`; each punch endpoint, in
+  every take's frames, is within the same 2^48, and an enabled punch ends
+  after it starts, or the call fails with `record.punch` at that endpoint.
 - **render** (a): `render.mix {master}` (one master for the call; default the `masters` setting, else tr_0), `render.stems`, `render.regions` (matrix),
   `render.items`, `render.dry-run` (q: resolved file list), `render.job.*`;
   `format` (wav|flac), `secondary` (a second file in another format/bit depth
