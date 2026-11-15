@@ -56,14 +56,21 @@ struct BridgeTestAccess {
         process.ackPending_.store(true, std::memory_order_release);
         process.delivery_.fetch_add(1, std::memory_order_release);
     }
+    // `previous`: the last request number the arena has seen.
     static std::unique_ptr<RemoteInstance> dataPlane(std::shared_ptr<BridgeProcess> process,
-                                                     void* arena, bridge::Layout layout) {
+                                                     void* arena, bridge::Layout layout,
+                                                     std::uint32_t previous = 0) {
         std::unique_ptr<RemoteInstance> instance(new RemoteInstance);
         instance->process_ = std::move(process);
         instance->map_ = arena;
         instance->hdr_ = static_cast<bridge::Header*>(arena);
         instance->layout_ = layout;
+        instance->seq_ = previous;
         return instance;
+    }
+    // Gated tests: consecutive late calls never fail the instance as hung.
+    static void neverHung(RemoteInstance& instance) {
+        instance.lateFailNs_ = std::numeric_limits<std::int64_t>::max();
     }
     static bool pendingDirty(const std::shared_ptr<BridgeProcess>& process, std::size_t member) {
         return process->members_.at(member)->pendingNotes_.stateDirty;
@@ -2308,4 +2315,308 @@ TEST_CASE("bridged calls report where their time went") {
     CHECK(t.live.pastDeadline == 0);
     CHECK(t.live.waitMaxNs >= span);  // it gives up only once the deadline passed
     h.stopProcessing();
+}
+
+namespace {
+// A scripted bridge audio thread for the live path (ADR-0081). It answers the
+// requests it receives in turn, the n-th (from 1) only once `allowed` >= n.
+// The gate is an atomic, so nothing depends on timing: a call made under a
+// deadline already past is late exactly when the peer holds its request.
+struct GatedPeer {
+    bridge::Layout layout{64, 2, 2};
+    bridge::Header* header = nullptr;
+    std::unique_ptr<RemoteInstance> instance;
+    std::atomic<bool> quit{false};
+    std::atomic<unsigned> allowed, accepted{0}, completed{0};
+    bool refuseStart = false;
+    // Written by the peer before it answers; read once that answer is seen.
+    std::vector<bridge::Cmd> commands;
+    std::vector<std::vector<Event>> blocks;  // each Process's events
+    std::vector<float> firstInput;           // each Process's first input sample
+    std::thread thread;
+
+    // `hold`: the first request it holds (0: none).
+    explicit GatedPeer(unsigned hold = 1, std::uint32_t previous = 0, bool refuse = false)
+        : allowed(hold ? hold - 1 : ~0u), refuseStart(refuse) {
+        commands.reserve(64);
+        blocks.reserve(64);
+        firstInput.reserve(64);
+        void* arena =
+            ::mmap(nullptr, layout.size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+        REQUIRE(arena != MAP_FAILED);
+        header = new (arena) bridge::Header{};
+        header->request = previous;
+        header->done = previous;
+        instance =
+            BridgeTestAccess::dataPlane(BridgeTestAccess::adopt(-1, -1), arena, layout, previous);
+        BridgeTestAccess::neverHung(*instance);
+        thread = std::thread([this, previous] { run(previous); });
+    }
+    ~GatedPeer() {
+        quit = true;
+        thread.join();
+        instance.reset();  // unmaps the arena
+    }
+    void release(unsigned upTo = ~0u) { allowed.store(upTo); }
+    void run(std::uint32_t last) {
+        auto* base = reinterpret_cast<std::uint8_t*>(header);
+        bool sounding = false, processing = false;
+        while (!quit.load()) {
+            const std::uint32_t req = header->request.load(std::memory_order_acquire);
+            if (req == last) {
+                std::this_thread::yield();
+                continue;
+            }
+            const unsigned n = accepted.fetch_add(1) + 1;
+            while (allowed.load() < n && !quit.load()) std::this_thread::yield();
+            if (quit.load()) return;
+            const auto cmd = static_cast<bridge::Cmd>(header->cmd);
+            commands.push_back(cmd);
+            if (cmd == bridge::Cmd::StartProcessing) processing = !refuseStart;
+            if (cmd == bridge::Cmd::StopProcessing) processing = false;
+            if (cmd == bridge::Cmd::Reset) sounding = false;
+            if (cmd == bridge::Cmd::Process) {
+                const auto* ev = reinterpret_cast<const Event*>(base + layout.events);
+                blocks.emplace_back(ev, ev + header->eventCount);
+                for (const Event& e : blocks.back()) {
+                    if (e.kind == Event::Kind::NoteOn) sounding = true;
+                    if (e.kind == Event::Kind::NoteOff) sounding = false;
+                }
+                firstInput.push_back(reinterpret_cast<const float*>(base + layout.inAudio)[0]);
+                auto* out = reinterpret_cast<float*>(base + layout.outAudio);
+                std::fill_n(out, layout.maxFrames * layout.outChannels, sounding ? 1.0f : 0.0f);
+                header->outEventCount = 0;
+            }
+            header->processing = processing ? 1 : 0;
+            header->result = 1;
+            header->seenNs = header->postedNs;
+            header->finishedNs = steadyNanoseconds();
+            header->cpu = 0;
+            last = req;
+            header->done.store(req, std::memory_order_release);
+            bridge::futexWake(header->done);
+            completed.fetch_add(1);
+        }
+    }
+    static void waitFor(const std::atomic<unsigned>& count, unsigned n) {
+        while (count.load() < n) std::this_thread::yield();
+    }
+};
+
+// Calls under a deadline already past: late unless already answered. Only
+// held requests, or ones answered before the call, are made this way.
+struct Past {
+    LiveBridgeDeadline deadline{steadyNanoseconds() - 1};
+};
+// Calls with a deadline far off: they wait for the peer's answer.
+struct Patient {
+    LiveBridgeDeadline deadline{steadyNanoseconds() + 30'000'000'000};
+};
+
+Event note(Event::Kind kind, std::int16_t key, std::uint32_t time = 0) {
+    Event e;
+    e.kind = kind;
+    e.key = key;
+    e.time = time;
+    return e;
+}
+Event param(std::uint32_t id, double value, std::uint32_t time = 0) {
+    Event e;
+    e.kind = Event::Kind::Param;
+    e.paramId = id;
+    e.value = value;
+    e.time = time;
+    return e;
+}
+}  // namespace
+
+TEST_CASE("a late bridged request stays outstanding when its number wraps through zero") {
+    // Round 16: request 0 could not be told from none outstanding, so the
+    // next call wrote the arena the bridge still owned.
+    GatedPeer peer(1, std::numeric_limits<std::uint32_t>::max());
+    Buffers buf(64);
+    std::fill(buf.l.begin(), buf.l.end(), 1.0f);
+    {
+        Past past;
+        CHECK(peer.instance->process(buf.block(64), nullptr));  // request 0, held
+    }
+    GatedPeer::waitFor(peer.accepted, 1);
+    std::fill(buf.l.begin(), buf.l.end(), 2.0f);
+    {
+        Past past;
+        CHECK(peer.instance->process(buf.block(64), nullptr));  // skipped: 0 is outstanding
+    }
+    CHECK(peer.header->request.load() == 0);
+    const auto* input = reinterpret_cast<const float*>(
+        reinterpret_cast<std::uint8_t*>(peer.header) + peer.layout.inAudio);
+    CHECK(input[0] == 1.0f);
+    peer.release();
+    {
+        Patient patient;
+        CHECK(peer.instance->process(buf.block(64), nullptr));
+    }
+    REQUIRE(peer.firstInput.size() == 2);
+    CHECK(peer.firstInput[0] == 1.0f);
+    CHECK(peer.firstInput[1] == 2.0f);
+    CHECK_FALSE(peer.instance->failed());
+}
+
+TEST_CASE("what skipped blocks tell a late bridged plug-in reaches it with the next block") {
+    // Round 16: a block skipped while a late one was outstanding lost its
+    // events, a note off among them, and the note sounded on (ADR-0081 §4).
+    GatedPeer peer;
+    Buffers buf(64);
+    const Event on = note(Event::Kind::NoteOn, 60, 3);
+    {
+        Past past;
+        CHECK(peer.instance->process(buf.block(64, {&on, 1}), nullptr));  // late, held
+    }
+    GatedPeer::waitFor(peer.accepted, 1);
+    const std::array skipped{param(3, 0.25, 5), note(Event::Kind::NoteOff, 60, 17)};
+    {
+        Past past;
+        CHECK(peer.instance->process(buf.block(64, skipped), nullptr));
+    }
+    CHECK(std::all_of(buf.ol.begin(), buf.ol.end(), [](float x) { return x == 0.0f; }));
+    peer.release();
+    const Event own = param(3, 0.5, 9);
+    {
+        Patient patient;
+        CHECK(peer.instance->process(buf.block(64, {&own, 1}), nullptr));
+    }
+    CHECK(buf.ol[0] == 0.0f);  // the note off arrived
+    REQUIRE(peer.blocks.size() == 2);
+    const std::vector<Event>& got = peer.blocks[1];
+    REQUIRE(got.size() == 3);
+    CHECK(got[0].kind == Event::Kind::Param);
+    CHECK(got[0].value == 0.25);
+    CHECK(got[0].time == 0);
+    CHECK(got[1].kind == Event::Kind::NoteOff);
+    CHECK(got[1].time == 0);
+    CHECK(got[2].value == 0.5);
+    CHECK(got[2].time == 9);
+    CHECK_FALSE(peer.instance->failed());
+}
+
+TEST_CASE("lifecycle commands a late bridge cannot take yet are sent before its next block") {
+    // Round 16: reset, stop and flush issued while a late request was
+    // outstanding were dropped, so a seek left the plug-in's voices playing.
+    Buffers buf(64);
+    const Event on = note(Event::Kind::NoteOn, 60);
+    using bridge::Cmd;
+    SUBCASE("a reset, sent once, drops the notes carried before it") {
+        GatedPeer peer;
+        {
+            Past past;
+            CHECK(peer.instance->process(buf.block(64, {&on, 1}), nullptr));
+        }
+        GatedPeer::waitFor(peer.accepted, 1);
+        const std::array skipped{note(Event::Kind::NoteOn, 64), param(2, 0.75)};
+        {
+            Past past;
+            CHECK(peer.instance->process(buf.block(64, skipped), nullptr));
+            peer.instance->reset();
+            peer.instance->reset();
+        }
+        peer.release();
+        {
+            Patient patient;
+            CHECK(peer.instance->process(buf.block(64), nullptr));
+        }
+        CHECK(peer.commands == std::vector{Cmd::Process, Cmd::Reset, Cmd::Process});
+        REQUIRE(peer.blocks.size() == 2);
+        REQUIRE(peer.blocks[1].size() == 1);
+        CHECK(peer.blocks[1][0].kind == Event::Kind::Param);
+        CHECK(buf.ol[0] == 0.0f);  // nothing sounds after the reset
+    }
+    SUBCASE("in order: reset, stop, flush, then what is asked next") {
+        GatedPeer peer;
+        {
+            Past past;
+            CHECK(peer.instance->process(buf.block(64), nullptr));
+        }
+        GatedPeer::waitFor(peer.accepted, 1);
+        {
+            Past past;
+            peer.instance->flush();
+            peer.instance->stopProcessing();
+            peer.instance->reset();
+        }
+        peer.release();
+        {
+            Patient patient;
+            CHECK(peer.instance->startProcessing());
+        }
+        CHECK(peer.commands == std::vector{Cmd::Process, Cmd::Reset, Cmd::StopProcessing,
+                                           Cmd::Flush, Cmd::StartProcessing});
+    }
+    SUBCASE("a kept command late in its turn is outstanding, the others still kept") {
+        GatedPeer peer;
+        {
+            Past past;
+            CHECK(peer.instance->process(buf.block(64), nullptr));  // request 1, held
+        }
+        GatedPeer::waitFor(peer.accepted, 1);
+        {
+            Past past;
+            peer.instance->reset();
+            peer.instance->stopProcessing();
+        }
+        peer.release(1);  // answers the block, holds what comes next
+        GatedPeer::waitFor(peer.completed, 1);
+        {
+            Past past;
+            peer.instance->flush();  // settles, posts the reset, which is held
+        }
+        CHECK(peer.header->request.load() == 2);
+        peer.release();
+        {
+            Patient patient;
+            CHECK(peer.instance->process(buf.block(64), nullptr));
+        }
+        CHECK(peer.commands ==
+              std::vector{Cmd::Process, Cmd::Reset, Cmd::StopProcessing, Cmd::Flush, Cmd::Process});
+    }
+}
+
+TEST_CASE("more than a late bridge can carry resets it and keeps each parameter's value") {
+    GatedPeer peer;
+    Buffers buf(64);
+    const Event on = note(Event::Kind::NoteOn, 60);
+    {
+        Past past;
+        CHECK(peer.instance->process(buf.block(64, {&on, 1}), nullptr));
+    }
+    GatedPeer::waitFor(peer.accepted, 1);
+    // A note, then more parameter changes than fit: ten parameters, cycling.
+    std::vector<Event> skipped{note(Event::Kind::NoteOn, 64)};
+    const std::uint32_t changes = RemoteInstance::kMaxCarried + 88;
+    for (std::uint32_t i = 0; i < changes; ++i) skipped.push_back(param(i % 10, i, i % 64));
+    {
+        Past past;
+        CHECK(peer.instance->process(buf.block(64, skipped), nullptr));
+    }
+    peer.release();
+    {
+        Patient patient;
+        CHECK(peer.instance->process(buf.block(64), nullptr));
+    }
+    using bridge::Cmd;
+    CHECK(peer.commands == std::vector{Cmd::Process, Cmd::Reset, Cmd::Process});
+    REQUIRE(peer.blocks.size() == 2);
+    const std::vector<Event>& got = peer.blocks[1];
+    CHECK(got.size() <= RemoteInstance::kMaxCarried);
+    CHECK(std::all_of(got.begin(), got.end(),
+                      [](const Event& e) { return e.kind == Event::Kind::Param; }));
+    for (std::uint32_t id = 0; id < 10; ++id) {
+        CAPTURE(id);
+        const auto last =
+            std::find_if(got.rbegin(), got.rend(), [&](const Event& e) { return e.paramId == id; });
+        REQUIRE(last != got.rend());
+        // The last change of parameter `id`.
+        std::uint32_t expected = changes - 1;
+        while (expected % 10 != id) --expected;
+        CHECK(last->value == double(expected));
+    }
+    CHECK(buf.ol[0] == 0.0f);
 }

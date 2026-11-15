@@ -132,10 +132,15 @@ class RemoteInstance {
 
     // audio thread
     bool startProcessing() SUPPLE_RT;
+    // While a late request is outstanding (ADR-0081 §4) these are kept, in
+    // this order and once each, and sent before the next block: stop, reset,
+    // flush. A reset drops the notes carried from skipped blocks.
     void stopProcessing() SUPPLE_RT;
     void reset() SUPPLE_RT;
     void flush() SUPPLE_RT;
     bool process(const ProcessBlock& block, OutputEvents* out) SUPPLE_RT;
+    // Events a skipped block carries to the next one the plug-in processes.
+    static constexpr std::uint32_t kMaxCarried = 512;
 
     bool failed() const { return process_->failed(); }
     // The bridge's audio thread did not get the class its last command asked for.
@@ -161,15 +166,29 @@ class RemoteInstance {
     Result<std::vector<std::uint8_t>> call(bridge::Op op, const bridge::Writer& w,
                                            bridge::Resource fd = bridge::noResource,
                                            int timeoutMs = 10000);
+    enum class Sent : std::uint8_t { Answered, Late, Unsent };
+    // Posts `cmd` and waits for its answer; Late leaves it outstanding.
+    // Requires a settled instance.
+    Sent post(bridge::Cmd cmd) SUPPLE_RT;
+    // settle(), then post(): false unless it was answered.
     bool command(bridge::Cmd cmd) SUPPLE_RT;
+    // While unsettled, keeps a lifecycle command for settle() to send.
+    void lifecycle(bridge::Cmd cmd) SUPPLE_RT;
+    // A skipped block's events, for the next block the plug-in processes.
+    void carry(std::span<const Event> events) SUPPLE_RT;
+    void dropCarriedNotes() SUPPLE_RT;
+    // Too much carried: keep each parameter's latest value, drop the notes
+    // and reset the plug-in first, so no note it never hears the end of hangs.
+    void overflow() SUPPLE_RT;
     // Whether request `req` was answered: within the live deadline when the
     // calling thread has one (ADR-0081), else within the background one
     // (ADR-0013), which fails and kills a bridge that misses it.
     bool answered(std::uint32_t req, bridge::Cmd cmd) SUPPLE_RT;
     // The shared memory is the bridge's until it answers the request a late
-    // live block left outstanding: waits for that answer first.
+    // live block left outstanding: waits for that answer first, then sends
+    // the lifecycle commands kept meanwhile. False while one is outstanding.
     bool settle() SUPPLE_RT;
-    void late(std::uint32_t outstanding) SUPPLE_RT;
+    void late() SUPPLE_RT;
     void unmap();
 
     std::shared_ptr<BridgeProcess> process_;
@@ -179,10 +198,15 @@ class RemoteInstance {
     bridge::SharedSignals signals_;
     bridge::Layout layout_{0, 0, 0};
     std::uint32_t seq_ = 0;
-    std::uint32_t outstanding_ = 0;  // a late live request not yet answered
-    std::int64_t lateSince_ = 0;     // steady ns of the first of consecutive late calls
-    bool spun_ = false;              // the last answer came while spinning, before a wait
-    int deadlineMs_ = 2000;          // for process(); lifecycle commands get longer
+    std::uint32_t outstanding_ = 0;  // a late live request not yet answered (if pending_)
+    bool pending_ = false;           // apart from its number, which wraps through 0
+    std::uint8_t lifecycle_ = 0;     // kept commands, a bit each (bridge_client.cpp)
+    std::unique_ptr<Event[]> carried_ = std::make_unique<Event[]>(kMaxCarried);
+    std::uint32_t carriedCount_ = 0;
+    std::int64_t lateSince_ = 0;            // steady ns of the first of consecutive late calls
+    std::int64_t lateFailNs_ = 50'000'000;  // consecutive late calls fail it after this
+    bool spun_ = false;                     // the last answer came while spinning, before a wait
+    int deadlineMs_ = 2000;                 // for process(); lifecycle commands get longer
     std::uint32_t latency_ = 0, tail_ = 0;
     bool reportsTail_ = false, restartPending_ = false;
     // Control servicing publishes this flag while audio checks for idle work.

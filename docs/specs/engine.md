@@ -1122,10 +1122,20 @@ instance).
   bridged audio-thread calls must be answered. Under it a call spins briefly,
   then makes timed waits on the done word up to the deadline and nothing
   else: no `alive()` check, kill or reap. Unanswered, `process()` outputs
-  silence (no output events) and returns true, lifecycle calls return false,
-  and the request stays outstanding; every later call first waits for that
-  answer (under its own deadline) before it touches the shared memory, and
-  discards the late output. `host::bridgeLateCalls()` counts late calls
+  silence (no output events) and returns true, and the request stays
+  outstanding (a flag says so, not its number, which wraps through 0); every
+  later call first waits for that answer (under its own deadline) before it
+  touches the shared memory, and discards the late output. A block skipped
+  meanwhile is silent and its audio is lost, but its events reach the
+  plug-in at offset 0 of the next block it processes, in order and before
+  that block's own: no note off, pedal or parameter change is lost. At most
+  `RemoteInstance::kMaxCarried` (512) are carried; beyond that, or when they
+  and the next block's would not fit the arena's 2048, the notes and MIDI are
+  dropped, each parameter keeps its latest value, and the plug-in is reset
+  before that block, so no note whose end it never heard hangs. Stop, reset
+  and flush asked for meanwhile are kept, once each, and sent first when the
+  answer comes, in the order reset, stop, flush; a reset drops the carried
+  notes, which came before it. `host::bridgeLateCalls()` counts late calls
   process-wide. Consecutive late calls spanning 50 ms fail the instance with
   the hung reason; the audio thread only sets the flag, and the main thread
   kills the process when it services the instance. Without a deadline the

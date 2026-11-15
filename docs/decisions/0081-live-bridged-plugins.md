@@ -100,6 +100,17 @@ with an `engine.status` warning when no bridge is found. The project keeps
 its process until it is made again. Making `shared_bridge` the shipped
 default is a separate decision, gated on this ADR's measurements.
 
+*Amended 2026-11-15 (review round 16):* point 4's "the plug-in has
+processed every block in order" holds for the blocks the bridge was sent. A
+block skipped while a late request is outstanding is not sent: its output is
+silence and its audio input is lost, but its events reach the plug-in at the
+start of the next block it processes, in order, so a note off, a pedal or a
+parameter change is never lost. The carry is bounded (512 events); beyond it
+the notes are dropped, each parameter keeps its latest value and the plug-in
+is reset before that block, so no stale note survives. Lifecycle commands
+asked for meanwhile (reset, stop, flush) are kept, once each, and sent in
+that order before anything else (`docs/specs/engine.md`, live deadline).
+
 ## Alternatives considered
 
 - **Pipelined live bridging:** never waits, but adds a block of latency per

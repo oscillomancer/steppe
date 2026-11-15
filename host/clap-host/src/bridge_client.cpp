@@ -324,8 +324,12 @@ void RemoteInstance::unmap() {
     signals_.clear();
     map_ = nullptr;
     hdr_ = nullptr;
-    // A new region starts with nothing outstanding (its sequence restarts).
+    // A new region starts with nothing outstanding (its sequence restarts),
+    // kept or carried.
     outstanding_ = 0;
+    pending_ = false;
+    lifecycle_ = 0;
+    carriedCount_ = 0;
     lateSince_ = 0;
 }
 
@@ -878,8 +882,6 @@ void bucket(std::array<std::atomic<std::uint64_t>, 9>& buckets, std::int64_t ns)
         ++b;
     buckets[b].fetch_add(1, std::memory_order_relaxed);
 }
-// Consecutive late live calls for this long fail the instance (ADR-0081).
-constexpr std::int64_t kLateFailNs = 50'000'000;
 }  // namespace
 
 LiveBridgeDeadline::LiveBridgeDeadline(std::int64_t steadyNs) SUPPLE_RT : previous_(tLiveDeadline) {
@@ -945,40 +947,115 @@ bool RemoteInstance::answered(std::uint32_t req, Cmd cmd) SUPPLE_RT {
     }
 }
 
-void RemoteInstance::late(std::uint32_t outstanding) SUPPLE_RT {
-    if (outstanding) outstanding_ = outstanding;
+void RemoteInstance::late() SUPPLE_RT {
     gLateCalls.fetch_add(1, std::memory_order_relaxed);
     const std::int64_t now = steadyNanoseconds();
     if (!lateSince_)
         lateSince_ = now;
-    else if (now - lateSince_ >= kLateFailNs)
+    else if (now - lateSince_ >= lateFailNs_)  // 50 ms (ADR-0081)
         process_->fail(BridgeProcess::kHung);  // main kills it when it reaps (ADR-0081)
 }
 
+namespace {
+// Lifecycle commands kept while a late request is outstanding, sent in this
+// order: a reset before a stop, as the engine asks for them, and a flush
+// last, since it runs only while not processing.
+constexpr std::uint8_t kKeepReset = 1, kKeepStop = 2, kKeepFlush = 4;
+std::uint8_t keepBit(Cmd cmd) SUPPLE_RT {
+    return cmd == Cmd::Reset            ? kKeepReset
+           : cmd == Cmd::StopProcessing ? kKeepStop
+           : cmd == Cmd::Flush          ? kKeepFlush
+                                        : 0;
+}
+bool isParam(const Event& e) SUPPLE_RT {
+    return e.kind == Event::Kind::Param || e.kind == Event::Kind::ParamMod;
+}
+// The same parameter of the same voice (CLAP's wildcards included as such).
+bool sameTarget(const Event& a, const Event& b) SUPPLE_RT {
+    return a.kind == b.kind && a.paramId == b.paramId && a.port == b.port &&
+           a.channel == b.channel && a.key == b.key && a.noteId == b.noteId;
+}
+}  // namespace
+
 bool RemoteInstance::settle() SUPPLE_RT {
-    if (!outstanding_) return true;
-    TimingCounters& timing = gTiming[tLiveDeadline ? 1 : 0];
-    const std::int64_t from = steadyNanoseconds();
-    const bool ok = answered(outstanding_, Cmd::Process);
-    timing.settles.fetch_add(1, std::memory_order_relaxed);
-    add(timing.waitMax, timing.waitSum, steadyNanoseconds() - from);
-    if (!ok) {
-        if (tLiveDeadline) {
-            timing.lateSettles.fetch_add(1, std::memory_order_relaxed);
-            late(0);
+    if (pending_) {
+        TimingCounters& timing = gTiming[tLiveDeadline ? 1 : 0];
+        const std::int64_t from = steadyNanoseconds();
+        const bool ok = answered(outstanding_, Cmd::Process);
+        timing.settles.fetch_add(1, std::memory_order_relaxed);
+        add(timing.waitMax, timing.waitSum, steadyNanoseconds() - from);
+        if (!ok) {
+            if (tLiveDeadline) {
+                timing.lateSettles.fetch_add(1, std::memory_order_relaxed);
+                late();
+            }
+            return false;
         }
-        return false;
+        pending_ = false;  // that late request's output is not used
     }
-    outstanding_ = 0;  // that late block's output is not used
+    while (lifecycle_) {
+        const Cmd cmd = lifecycle_ & kKeepReset  ? Cmd::Reset
+                        : lifecycle_ & kKeepStop ? Cmd::StopProcessing
+                                                 : Cmd::Flush;
+        lifecycle_ = static_cast<std::uint8_t>(lifecycle_ & ~keepBit(cmd));
+        if (post(cmd) != Sent::Answered) return false;
+    }
     return true;
+}
+
+void RemoteInstance::lifecycle(Cmd cmd) SUPPLE_RT {
+    if (cmd == Cmd::Reset) dropCarriedNotes();  // they came before it
+    if (!hdr_ || process_->failed()) return;
+    if (settle()) {
+        (void)post(cmd);  // answered, or outstanding: either way the bridge has it
+        return;
+    }
+    if (!process_->failed()) lifecycle_ = static_cast<std::uint8_t>(lifecycle_ | keepBit(cmd));
+}
+
+void RemoteInstance::dropCarriedNotes() SUPPLE_RT {
+    std::uint32_t kept = 0;
+    for (std::uint32_t i = 0; i < carriedCount_; ++i)
+        if (isParam(carried_[i])) carried_[kept++] = carried_[i];
+    carriedCount_ = kept;
+}
+
+void RemoteInstance::overflow() SUPPLE_RT {
+    std::uint32_t kept = 0;
+    for (std::uint32_t i = 0; i < carriedCount_; ++i) {
+        if (!isParam(carried_[i])) continue;
+        bool later = false;
+        for (std::uint32_t j = i + 1; j < carriedCount_ && !later; ++j)
+            later = sameTarget(carried_[i], carried_[j]);
+        if (!later) carried_[kept++] = carried_[i];
+    }
+    carriedCount_ = kept;
+    lifecycle_ = static_cast<std::uint8_t>(lifecycle_ | kKeepReset);
+}
+
+void RemoteInstance::carry(std::span<const Event> events) SUPPLE_RT {
+    for (const Event& e : events) {
+        if (carriedCount_ == kMaxCarried) overflow();
+        // Still full: more parameters than it holds. The reset overflow()
+        // keeps means no dropped note can hang.
+        if (carriedCount_ == kMaxCarried) return;
+        Event& kept = carried_[carriedCount_++];
+        kept = e;
+        kept.time = 0;
+    }
 }
 
 bool RemoteInstance::command(Cmd cmd) SUPPLE_RT {
     if (!hdr_ || process_->failed()) return false;
+    if (!settle()) return false;
+    return post(cmd) == Sent::Answered;
+}
+
+RemoteInstance::Sent RemoteInstance::post(Cmd cmd) SUPPLE_RT {
+    if (!hdr_ || process_->failed()) return Sent::Unsent;
     // The sanctioned exception to the audio thread's no-syscall rule is
     // waking the bridge and waiting for it (ADR-0013, and in the callback
     // ADR-0081): each scoped where it happens, here and in answered().
-    if (!settle()) return false;
     // The class the bridge's thread runs this in: live under a live deadline
     // (ADR-0081), else the background class (ADR-0026).
     const ThreadPolicy background = bridgeAudioPolicy(), live = liveBridgeAudioPolicy();
@@ -1034,13 +1111,14 @@ bool RemoteInstance::command(Cmd cmd) SUPPLE_RT {
 #endif
         lateSince_ = 0;
         classRefused_.store(hdr_->classRefused != 0, std::memory_order_relaxed);
-        return true;
+        return Sent::Answered;
     }
-    if (tLiveDeadline) {
-        timing.late.fetch_add(1, std::memory_order_relaxed);
-        late(req);
-    }
-    return false;
+    if (!tLiveDeadline) return Sent::Unsent;  // answered() failed the bridge
+    timing.late.fetch_add(1, std::memory_order_relaxed);
+    outstanding_ = req;
+    pending_ = true;
+    late();
+    return Sent::Late;
 }
 
 BridgeWaits bridgeLiveWaits() SUPPLE_RT {
@@ -1101,15 +1179,14 @@ void resetBridgeTiming() {
 bool RemoteInstance::startProcessing() SUPPLE_RT {
     if (!hdr_ || process_->failed()) return false;
     if (!settle()) return false;
-    // A start a late block left outstanding may have been answered since.
+    // A start left outstanding by a late call may have been answered since.
     if (hdr_->processing != 0) return true;
-    if (!command(Cmd::StartProcessing)) return false;
-    return hdr_->processing != 0;
+    return post(Cmd::StartProcessing) == Sent::Answered && hdr_->processing != 0;
 }
 
-void RemoteInstance::stopProcessing() SUPPLE_RT { command(Cmd::StopProcessing); }
-void RemoteInstance::reset() SUPPLE_RT { command(Cmd::Reset); }
-void RemoteInstance::flush() SUPPLE_RT { command(Cmd::Flush); }
+void RemoteInstance::stopProcessing() SUPPLE_RT { lifecycle(Cmd::StopProcessing); }
+void RemoteInstance::reset() SUPPLE_RT { lifecycle(Cmd::Reset); }
+void RemoteInstance::flush() SUPPLE_RT { lifecycle(Cmd::Flush); }
 
 bool RemoteInstance::process(const ProcessBlock& b, OutputEvents* out) SUPPLE_RT {
     const std::uint32_t frames = std::min(b.frames, layout_.maxFrames);
@@ -1123,7 +1200,13 @@ bool RemoteInstance::process(const ProcessBlock& b, OutputEvents* out) SUPPLE_RT
         silence();  // a failed node is silent; the session plays on
         return true;
     }
-    if (!settle()) {  // still busy with a late block: this one is late too
+    const auto own = static_cast<std::uint32_t>(std::min<std::size_t>(b.events.size(), kMaxEvents));
+    if (carriedCount_ && carriedCount_ + own > kMaxEvents) overflow();
+    if (!settle()) {
+        // Still busy with a late request: this block is skipped too. Its
+        // output is silence and its audio is lost, but what it tells the
+        // plug-in reaches it with the next block it processes (ADR-0081 §4).
+        carry(b.events);
         silence();
         return true;
     }
@@ -1147,10 +1230,12 @@ bool RemoteInstance::process(const ProcessBlock& b, OutputEvents* out) SUPPLE_RT
             else
                 std::fill_n(dst, frames, 0.0f);
         }
+    // Events carried from skipped blocks first, at its start, then its own.
     auto* events = reinterpret_cast<Event*>(base + layout_.events);
-    const auto n = static_cast<std::uint32_t>(std::min<std::size_t>(b.events.size(), kMaxEvents));
-    std::copy_n(b.events.begin(), n, events);
-    hdr_->eventCount = n;
+    std::copy_n(carried_.get(), carriedCount_, events);
+    const std::uint32_t n = std::min(own, kMaxEvents - carriedCount_);
+    std::copy_n(b.events.begin(), n, events + carriedCount_);
+    hdr_->eventCount = carriedCount_ + n;
     hdr_->frames = frames;
     hdr_->steadyTime = b.steadyTime;
     hdr_->hasTransport = b.transport ? 1 : 0;
@@ -1160,7 +1245,9 @@ bool RemoteInstance::process(const ProcessBlock& b, OutputEvents* out) SUPPLE_RT
                                    : 0;
     hdr_->outSink = out ? 1 : 0;
     hdr_->outEventCapacity = room;
-    if (!command(Cmd::Process)) {
+    const Sent sent = post(Cmd::Process);
+    carriedCount_ = 0;  // the bridge has them, whether it answers in time or not
+    if (sent != Sent::Answered) {
         silence();
         return true;
     }
