@@ -23,7 +23,8 @@
 
 namespace supple::engine {
 class EngineApp;
-}
+struct EngineTestAccess;
+}  // namespace supple::engine
 
 namespace supple::engine::detail {
 
@@ -150,6 +151,8 @@ class PluginModule final : public rack::HostModule {
 // the rate stay; replaced ones live until every plan that may use them is
 // gone (setGeneration, prune), as InstancePool's plug-ins. Main thread.
 class RackPool {
+    friend struct ::supple::engine::EngineTestAccess;  // read-only test probes
+
   public:
     RackPool();
     ~RackPool();

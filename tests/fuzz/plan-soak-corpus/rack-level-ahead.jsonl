@@ -1,0 +1,2 @@
+{"schema":"supple.plan-soak/1","seed":"3162988884480698625","anticipative":true}
+{"phase":"edits","command":"module.set","args":{"module":"mo_3","bypass":false,"params":{"level":-27}}}

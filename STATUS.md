@@ -232,6 +232,25 @@ instructions are in `docs/guides/installing.md`.
   drags sent once per frame rather than per pointer motion;
   every node, plug-ins and bridged plug-ins included, runs with FTZ/DAZ in
   every executor, and owned audio threads prefault their stacks (ADR-0025).
+  A seeded plan-swap soak drives real command edits during dummy-backend
+  playback in both executors, with output, reclamation, save/reopen render
+  equivalence and undo-content checks. The short `rt` case and opt-in long
+  runs share a JSONL replay path (`tests/fuzz/README.md`); native macOS/Windows
+  validation of this harness is pending. Intermediate 1024-frame locate windows
+  compare the running engine's paced output with private offline renders after
+  every settled edit, cycling through beats 0–3; journals retain exact windows
+  for replay. The comparison covers intermediate project states after a locate,
+  not the uninterrupted pre-locate swap crossfade. Readiness and sample counts
+  decide correctness; a watchdog abort is separately labelled and exits 124.
+  Rack modules restart at locates, so the retained-pool VCA-level reproducers
+  in `tests/fuzz/plan-soak-corpus/` now pass.
+  `track.move` accepts reorders under a non-root buss and moves between
+  sibling folders, and refuses destinations in the moved track's own subtree.
+  Its portable command regression covers undo and cycle rollback; the
+  two-move soak replay is in the fuzzing guide. Soak reclamation checkpoints
+  observe executor adoption before collection and require a stable generation;
+  a manual-callback regression covers acknowledgement arriving after an earlier
+  collection, which previously caused a false retained-plan failure.
 - **Strips and routing** (ADR-0019 to ADR-0022): typed channel, buss and
   master strips with Console 9 summing (switchable, level-matched; unity
   staging, so a hop costs nothing, ADR-0066); pan modes (pan, dual pan, pan

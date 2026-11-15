@@ -962,6 +962,12 @@ and naming. All `edit` unless marked (q) query or (a) action.
   refused), `track.list` (q); templates `track.template.save {track, name}`
   (a), `track.template.load {name}` (a new strip under the master),
   `track.template.list` (q), `track.template.delete` (a).
+  `track.move` defaults `parent` to the current parent and `index` to the
+  end of its children. Reordering under the current parent (including a
+  non-root buss) and moving to a sibling folder are allowed. A destination
+  equal to the moved track or inside its subtree is refused as `tr.cycle`
+  before mutation; reparenting also preserves the acyclic send graph. Undo
+  restores the original parents and sibling order.
 - **items/takes**: `item.add {track, position, length, source|midi|notation}`,
   `item.consolidate {items}` (background action, one atomic result edit;
   active audio with take FX baked, MIDI kept separate per track; engine.md),

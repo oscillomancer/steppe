@@ -310,6 +310,47 @@ The callback-only executor uses the same ownership rule for the whole plan;
 offline instances are private. Normal processing keeps the same grid,
 summation and samples in both executors and offline.
 
+`engine-plan-soak.tests` exercises this contract with seeded command sequences
+while a paced dummy audio thread plays, in both executors with two helpers.
+Its `engine;rt` CTest entry runs in the normal and sanitizer presets. Every
+command checks model invariants and nondecreasing per-branch ID counters;
+after source preparation and plan adoption, every step checks finite, bounded
+device output, process errors, and reclamation of old plans and replaced FX
+and rack modules. The graph, pending handoffs and retained-plan capacity are
+bounded independently of the long-run duration. At the start and after every
+settled edit, a 1024-frame intermediate window is compared bit for bit with a
+private offline render of the current project, in both executors. The dummy
+driver parks between callbacks, outside the RT entry, then runs fixed callback
+counts on its existing paced audio thread with renderer readiness handshakes.
+The engine and pooled instances stay running. A locate supplies the defined
+DSP reset boundary; before it, four complete 128-frame callbacks after parking
+drain the specified 10 ms swap/wet fade. Adoption alone can acknowledge at a
+block's start, so an earlier cycle-count observation is insufficient.
+Window anchors cycle through beats 0, 1, 2 and 3 of the
+current tempo map. Output latency is accounted for, and the preceding loop
+and position are restored afterwards. JSONL checkpoint rows preserve exact
+sample windows when replaying or shrinking an edit prefix. These probes cover
+intermediate project states after a locate, not arbitrary uninterrupted DSP
+history or the pre-locate plan-swap crossfade.
+
+Each epoch stops playback,
+compares an offline render with a fresh app reopened from the saved final
+project, and checks the retained RT pool against that reference bit for bit.
+Unwinding both branches restores the original canonical project content,
+excluding only `project.next_ids`, whose high-water marks intentionally survive
+undo (ADR-0008). The seed determines the operation stream; native thread
+interleaving remains free. Readiness, callback counts and sample values decide
+correctness; elapsed time does not. A 60-second handshake watchdog exits 124
+with `WATCHDOG ABORT` and no audio-mismatch verdict, rather than asserting or
+continuing the diagnostic run. Wall time also paces the driver and selects an
+opt-in long-run budget, without deciding a sample comparison. Long-run and
+replay controls are in `tests/fuzz/README.md`.
+
+Reclamation checkpoints observe both executor acknowledgements before
+collecting on the model thread and require the published generation to stay
+unchanged through collection. A callback acknowledgement arriving after an
+earlier collection does not imply that collection already freed its old plan.
+
 **Mix-value edits (ADR-0060).** A session that differs from the last one
 `Engine::load` took only in strip `volume_db`/`pan`/`width`/`pan_left`/`pan_right`,
 send `volume_db`/`pan` and VCA `volume_db` (and in the points of envelopes a
