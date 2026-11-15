@@ -37,7 +37,15 @@ class WavStreamWriter {
     std::uint32_t channels() const { return channels_; }
 
   private:
+    friend struct WavStreamWriterTestAccess;
+    struct IoHooks {
+        void* context = nullptr;
+        std::size_t (*write)(void*, const void*, std::size_t, std::FILE*) = nullptr;
+        int (*flush)(void*, std::FILE*) = nullptr;
+    } io_;
+    void reconcileWritten();
     std::FILE* file_ = nullptr;
+    bool failed_ = false;
     std::uint32_t channels_ = 0;
     std::uint64_t frames_ = 0;
 };

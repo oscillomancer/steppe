@@ -48,6 +48,7 @@ Status WavStreamWriter::open(const std::filesystem::path& path, double sampleRat
                      "cannot create " + detail::files::text(path) + " (does it exist?)");
     channels_ = channels;
     frames_ = 0;
+    failed_ = false;
     std::uint8_t h[kHeaderBytes] = {};
     const auto rate = static_cast<std::uint32_t>(std::lround(sampleRate));
     std::memcpy(h, "RIFF", 4);
@@ -68,16 +69,27 @@ Status WavStreamWriter::open(const std::filesystem::path& path, double sampleRat
 
 Status WavStreamWriter::append(const float* frames, std::size_t count) {
     if (!file_) return Error("audio.stream", "the writer is closed");
+    if (failed_) return Error("file.write", "the recording target has failed");
     if (count > kMaxData / (channels_ * 4) - frames_)
         return Error("audio.stream_full", "a recording over 4 GiB needs RF64 (not yet)");
-    if (count && std::fwrite(frames, sizeof(float) * channels_, count, file_) != count)
+    const auto bytes = count * sizeof(float) * channels_;
+    const auto written = io_.write ? io_.write(io_.context, frames, bytes, file_)
+                                   : std::fwrite(frames, 1, bytes, file_);
+    if (written != bytes) {
+        (void)std::fflush(file_);
+        reconcileWritten();
         return Error("file.write", "short write");
+    }
     frames_ += count;
     return okStatus();
 }
 
 Status WavStreamWriter::updateHeader() {
     if (!file_) return okStatus();
+    // A buffered write can fail here too. Still try to publish the complete
+    // physical prefix, preserving the original failure for the caller.
+    auto status = flush();
+    std::clearerr(file_);
     const auto data = static_cast<std::uint32_t>(frames_ * channels_ * 4);
     std::uint8_t b[4];
     const auto end = detail::files::tell(file_);
@@ -89,11 +101,24 @@ Status WavStreamWriter::updateHeader() {
     if (detail::files::seek(file_, 40, SEEK_SET) != 0 || std::fwrite(b, 1, 4, file_) != 4)
         return Error("file.write", "header");
     if (detail::files::seek(file_, end, SEEK_SET) != 0) return Error("file.write", "seek");
-    return flush();
+    auto header = flush();
+    return status ? header : status;
+}
+
+void WavStreamWriter::reconcileWritten() {
+    failed_ = true;
+    const auto bytes = detail::files::size(file_);
+    if (bytes >= kHeaderBytes)
+        frames_ = static_cast<std::uint64_t>(bytes - kHeaderBytes) / (channels_ * 4);
+    else if (bytes >= 0)
+        frames_ = 0;
 }
 
 Status WavStreamWriter::flush() {
-    if (file_ && std::fflush(file_) != 0) return Error("file.write", "flush");
+    if (file_ && (io_.flush ? io_.flush(io_.context, file_) : std::fflush(file_)) != 0) {
+        reconcileWritten();
+        return Error("file.write", "flush");
+    }
     return okStatus();
 }
 

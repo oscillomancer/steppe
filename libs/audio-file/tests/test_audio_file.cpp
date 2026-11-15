@@ -16,6 +16,7 @@
 #include <supple/audio/wav_stream.h>
 #include <supple/base/files.h>
 #include "../../../tests/file_platform.h"
+#include "../../../tests/wav_stream_test_support.h"
 #include "../src/file_platform.h"
 #if defined(_WIN32)
 #include <winioctl.h>
@@ -325,6 +326,41 @@ TEST_CASE("a streamed WAV is readable after every header update and after close"
     CHECK(double(whole->channels[0][999]) == doctest::Approx(0.999));
     CHECK(double(whole->channels[1][1499]) == doctest::Approx(-0.499));
     std::filesystem::remove(path);
+}
+
+TEST_CASE("streamed WAV write failures retain every complete physical frame") {
+    const auto path = fs::temp_directory_path() /
+                      ("supple-wav-short-" + std::to_string(supple::test::processId()) + ".wav");
+    struct Cleanup {
+        fs::path path;
+        ~Cleanup() { fs::remove(path); }
+    } cleanup{path};
+    fs::remove(path);
+    WavStreamWriter writer;
+    REQUIRE(writer.open(path, 48000, 1));
+    const std::vector<float> samples(128, .25f);
+    REQUIRE(writer.append(samples.data(), 64));
+    REQUIRE(writer.updateHeader());
+    WavStreamWriterTestAccess::Fault fault{.bytes = 106};  // 26 frames and two trailing bytes
+    WavStreamWriterTestAccess::inject(writer, fault);
+    SUBCASE("short append") { CHECK_FALSE(writer.append(samples.data(), samples.size())); }
+    SUBCASE("a buffered append fails at flush") {
+        fault.buffered = true;
+        REQUIRE(writer.append(samples.data(), samples.size()));
+        fault.failFlush = true;
+        CHECK_FALSE(writer.flush());
+        fault.failFlush = false;
+    }
+    CHECK(writer.frames() == 90);
+    CHECK_FALSE(writer.append(samples.data(), 1));  // failed targets never resume
+    REQUIRE(writer.close());
+    const auto info = inspectWavStream(path);
+    REQUIRE(info);
+    CHECK(info->headerFrames == 90);
+    CHECK(info->fileFrames == 90);
+    const auto decoded = readAudio(path);
+    REQUIRE(decoded);
+    CHECK(decoded->channels[0] == std::vector<float>(90, .25f));
 }
 
 TEST_CASE("streamed WAV repair validates both byte counts, not only complete frames") {

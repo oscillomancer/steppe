@@ -1,5 +1,9 @@
 # ADR-0014: Recording, input monitoring and the live region
 
+**Amendment, 2026-11-15:** [ADR-0082](0082-audio-media-durability.md)
+defines immediate recording errors, physical-prefix salvage, durable audio
+checkpoints, append-only audio placement journals and RIFF-to-RF64 promotion.
+
 **Status:** Accepted, 2026-09-27 (recording, input monitoring and crash recovery implemented). Spec: `docs/specs/engine.md` §2.1, §4
 (recording), `docs/specs/session-model.md` (`track.record`, routes from
 `hw_input`). Builds on ADR-0012 (anticipation) and ADR-0004 (JACK inputs).

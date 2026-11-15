@@ -326,6 +326,12 @@ IEEE-float WAV headers, including those EXTENSIBLE subformats, must have
 to whole bytes). FLAC inspection requires a complete, exactly 34-byte
 STREAMINFO with a positive sample rate. Violations return `audio.format`.
 
+`WavStreamWriter` is owned off-RT by the recording writer. On a short append
+or buffered flush failure it stops accepting audio and reconciles `frames()`
+with complete frames physically present in its open file; final header updates
+retain that prefix (ADR-0082). A failed write never claims buffered, unwritten
+frames as retained, and never discards complete frames already written.
+
 ## 10. Tests and docs
 
 Beyond §1.2: each descriptor against synthetic signals with known answers

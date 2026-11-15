@@ -103,6 +103,13 @@ struct RecordedSegment {
     std::int64_t timeline = 0;
 };
 
+// A writer-thread failure, consumed by the model before recording stops.
+struct RecordingError {
+    model::Id track;
+    std::filesystem::path file;
+    Error error;
+};
+
 struct RecordedTake {
     model::Id track;
     std::filesystem::path file;
@@ -120,6 +127,7 @@ struct RecordedTake {
     } loop;
     std::uint64_t overflowFrames = 0;  // input lost because the disk fell behind
     std::string error;                 // first file/sidecar error of this target, if any
+    std::optional<Error> failure;      // structured first error, including stop/close failures
     std::vector<Error> warnings;       // e.g. recording.loop_runs_full; retained passes are usable
     double sampleRate = 0;             // of the file and of startSample (the engine's rate)
     // MIDI (ADR-0016): no file; `frames` is the length recorded, `segments`
@@ -630,6 +638,7 @@ class Engine {
     Status startRecording(std::vector<RecordTarget> targets);
     // Also retrieves takes finalized by stop(), once, after the device stopped.
     Result<std::vector<RecordedTake>> stopRecording();
+    std::vector<RecordingError> takeRecordingErrors();
     bool recording() const { return recorderOwned_ != nullptr; }
     // Tests: while held, the renderer renders nothing. Wait for its
     // acknowledgement before driving a manual backend into an underrun.
@@ -704,6 +713,7 @@ class Engine {
 
   private:
     friend struct EngineTestAccess;  // defined by the tests alone
+    friend struct RecordingErrorTestAccess;
     void cycle(const float* const* in, float* const* out, std::uint32_t frames) SUPPLE_RT;
     // cycle() after its bookkeeping: count-in, then the transport's work.
     void cycleTransport(const float* const* in, float* const* out, std::uint32_t frames) SUPPLE_RT;

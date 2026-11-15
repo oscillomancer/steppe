@@ -1515,6 +1515,20 @@ harness. See the tooling README for schemas, limits and invocation details.
 
 ### Recording diagnostics (2026-10-04)
 
+Audio writer failures (ADR-0082) latch the first error per target and wake the
+model thread. `Engine::takeRecordingErrors()` consumes these off-RT notices
+(`track`, `file`, structured `error`); EngineApp emits `record.error` immediately,
+with `track`, `file`, `error` text and `code`, `message`, `path`, `hint`.
+Stop reports a not-yet-delivered failure, without duplicating an earlier event.
+`RecordedTake::failure` retains the structured first error for that stop/close
+fallback, beside the existing `error` text.
+The failed audio target stops writing and retains every complete frame physically
+written, including a short-write prefix; its final header and take use that
+count. Healthy targets and playback continue. Recording file creation, writes,
+prefix accounting, header updates and closure run on the recording writer;
+the model joins it and commits metadata only. The GUI shows the error in its
+status line while recording continues for healthy targets.
+
 A committed recording may carry a `warnings` array with structured
 `code`, `message`, `path`, `hint`, `track` and `file` fields.
 `recording.loop_runs_full` is forwarded to `transport.stop` / pause callers

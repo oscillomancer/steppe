@@ -185,6 +185,12 @@ folder: stop recording first, and its files move or are copied then.
 Saving in place works while recording. Quitting, or starting
 another project, without saving deletes that folder after the app has asked.
 
+If an audio recording cannot be written, the status line shows the failed
+file and error immediately. That target keeps every complete sample frame
+written so far and stops writing; other armed targets and playback continue.
+Stop and save the retained takes, then check free space and storage before
+starting another recording.
+
 An unsaved project is autosaved into that folder every minute while it
 changes, like a saved one. If Steppe stops without you saving or discarding
 (a crash, a power cut), the folder stays, with its autosaves and recordings.

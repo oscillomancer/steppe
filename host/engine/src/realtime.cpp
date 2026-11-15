@@ -2181,6 +2181,7 @@ Status Engine::startRecording(std::vector<RecordTarget> targets) {
     const std::int64_t latency =
         static_cast<std::int64_t>(outputLatency()) + b.outputLatency + b.inputLatency;
     auto rec = std::make_unique<detail::Recorder>(std::move(targets), config_.sampleRate, latency);
+    rec->setMainThreadWake(mainWake_);
     rec->setDriftTolerant(slaved && slaved->syncRate);
     rec->setLoop(readLoop());  // for the MIDI journals (ADR-0080)
     SUPPLE_TRY(rec->open());
@@ -2213,6 +2214,10 @@ Result<std::vector<RecordedTake>> Engine::stopRecording() {
     recorderOwned_.reset();
     for (auto& take : takes) stoppedTakes_.push_back(std::move(take));
     return std::exchange(stoppedTakes_, {});
+}
+
+std::vector<RecordingError> Engine::takeRecordingErrors() {
+    return recorderOwned_ ? recorderOwned_->takeErrors() : std::vector<RecordingError>{};
 }
 
 std::uint64_t Engine::relocate(std::uint64_t previous) {

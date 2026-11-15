@@ -23,7 +23,8 @@
 
 namespace supple::engine {
 struct TransportRange;
-}
+struct RecordingErrorTestAccess;
+}  // namespace supple::engine
 
 namespace supple::engine::detail {
 
@@ -153,6 +154,8 @@ class Recorder {
     // Creates the files (WAVs, and the MIDI targets' journals at their
     // `file`) and starts the writer thread.
     Status open();
+    void setMainThreadWake(MainThreadWake* wake) { mainWake_ = wake; }
+    std::vector<RecordingError> takeErrors();  // model thread, immutable published errors
     // Audio thread: `pos` is the timeline sample of this callback's output.
     // A track listed in `processed` records that signal, its first `latency`
     // frames dropped so the file lines up with what was played.
@@ -175,6 +178,7 @@ class Recorder {
 
   private:
     friend struct RecorderTestAccess;
+    friend struct ::supple::engine::RecordingErrorTestAccess;
     struct Track {
         RecordTarget target;
         FrameRing ring;
@@ -183,6 +187,7 @@ class Recorder {
         Status writeError = okStatus();  // writer thread, then finish after join
         Status sidecarError = okStatus();
         Status firstError = okStatus();
+        std::atomic<bool> errorPending{false};
         // Input FX latency (set at the first frame), or a master's offset
         // (set at construction, ADR-0057): `skip` frames still to drop,
         // `shift` how far the file runs behind the captured frames (ahead of
@@ -209,6 +214,8 @@ class Recorder {
         std::int64_t capturedJournaled = -1;
     };
     void writerLoop();
+    Status openFiles();
+    void closeFiles();
     std::int64_t midiClock(const MidiTrack& track) const SUPPLE_RT;
     void pushMidi(MidiTrack& track, const MidiEvent& event) SUPPLE_RT;
     // Appends what the MIDI tracks drained since the last call to their
@@ -219,7 +226,7 @@ class Recorder {
     void padTo(Track& t, std::int64_t frame);
     void writeSidecars();
     void updateHeaders();
-    static void rememberError(Track& track, Status status, bool sidecar = false);
+    void rememberError(Track& track, Status status, bool sidecar = false);
 
     std::vector<std::unique_ptr<Track>> tracks_;
     std::vector<std::unique_ptr<MidiTrack>> midiTracks_;
@@ -244,7 +251,8 @@ class Recorder {
     std::atomic<bool> stop_{false};
     std::atomic<bool> writerStalled_{false}, writerStallAck_{false};  // test access
     std::thread writer_;
-    bool sidecars_ = false;  // writer thread
+    bool sidecars_ = false;               // writer thread
+    MainThreadWake* mainWake_ = nullptr;  // set before starting the writer
 };
 
 }  // namespace supple::engine::detail

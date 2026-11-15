@@ -1,5 +1,9 @@
 # ADR-0080: MIDI takes survive a crash through a journal
 
+**Amendment, 2026-11-15:** [ADR-0082](0082-audio-media-durability.md)
+extends the shared journal, durability and retirement policy to audio takes.
+MIDI journal failures retain this ADR's warning and in-memory-take behaviour.
+
 **Status:** Accepted, 2026-11-14. Extends ADR-0014 (recording and its crash
 recovery), ADR-0016 (MIDI recording) and ADR-0078 (unsaved projects come
 back after a crash). Contracts: `docs/specs/engine.md` §4 (Recording),

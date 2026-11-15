@@ -956,6 +956,8 @@ class EngineApp : public cmd::Host {
     double syncSeekSeconds_ = 0.05;  // how long a seek takes to be heard (measured)
     std::vector<std::string> syncWarnings_;
     std::vector<std::filesystem::path> recordingFiles_;  // while recording
+    std::set<std::filesystem::path> recordingErrorsReported_;
+    void emitRecordingError(const RecordingError& error);
     // MIDI journals (ADR-0080) of takes committed in this project and not
     // yet in a saved file or autosave: not leftovers; deleted once one is.
     std::vector<std::filesystem::path> midiJournalsPending_;

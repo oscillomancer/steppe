@@ -9,6 +9,7 @@
 #include <thread>
 
 #include "../../../tests/file_platform.h"
+#include "../../../tests/wav_stream_test_support.h"
 #include "recording.h"
 #include "supple/audio/audio_file.h"
 #include "supple/base/files.h"
@@ -18,6 +19,95 @@
 using namespace supple;
 using namespace supple::engine;
 namespace fs = std::filesystem;
+
+namespace supple::engine {
+struct RecordingErrorTestAccess {
+    static void failNextAudioWrite(Engine& engine, audio::WavStreamWriterTestAccess::Fault& fault) {
+        auto& recorder = *engine.recorderOwned_;
+        recorder.writerStalled_.store(true);
+        while (!recorder.writerStallAck_.load()) recorder.writerStallAck_.wait(false);
+        audio::WavStreamWriterTestAccess::inject(recorder.tracks_[0]->writer, fault);
+        recorder.writerStalled_.store(false);
+    }
+    static void awaitError(Engine& engine) {
+        auto& pending = engine.recorderOwned_->tracks_[0]->errorPending;
+        while (!pending.load()) pending.wait(false);
+    }
+};
+}  // namespace supple::engine
+
+TEST_CASE("audio write failure wakes the model before stop and retains the physical prefix") {
+    struct Root {
+        fs::path path = fs::temp_directory_path() /
+                        ("supple-record-live-error-" + std::to_string(test::processId()));
+        Root() { REQUIRE(fs::create_directory(path)); }
+        ~Root() { fs::remove_all(path); }
+    } root;
+    DummyBackend backend(
+        {.mode = DummyBackend::Mode::Manual,
+         .input = [](float* const* in, std::uint32_t channels, std::uint32_t n, std::int64_t) {
+             for (std::uint32_t c = 0; c < channels; ++c) std::fill_n(in[c], n, .25f);
+         }});
+    audio::WavStreamWriterTestAccess::Fault fault{.bytes = 106};
+    auto created = EngineApp::create({.workdir = root.path});
+    REQUIRE(created);
+    auto& app = **created;
+    const auto txn = app.beginTransaction({cmd::Origin::Type::Test, "write-error", ""}, "Arm");
+    REQUIRE(txn);
+    for (int channel = 0; channel < 2; ++channel) {
+        model::Track track;
+        track.name = channel == 0 ? "Failed" : "Healthy";
+        track.parent = model::kMaster;
+        track.record.armed = true;
+        const auto id = app.txn().create(track);
+        model::Route route;
+        route.from.hwChannels = std::vector<int>{1};
+        route.to.track = id;
+        const auto input = app.txn().create(route);
+        app.txn().modify<model::Track>(id, [&](auto& value) { value.record.input = input; });
+        app.txn().modify<model::Track>(model::kMaster,
+                                       [&](auto& value) { value.children.push_back(id); });
+    }
+    REQUIRE(app.commitTransaction(*txn));
+    REQUIRE(app.startEngine(backend, {.sampleRate = 48000, .blockSize = 128, .inputs = 1},
+                            {.anticipative = false, .workers = 0}));
+    REQUIRE(app.transport("record"));
+    RecordingErrorTestAccess::failNextAudioWrite(*app.engine(), fault);
+    backend.run(2);
+    RecordingErrorTestAccess::awaitError(*app.engine());
+    app.tick();
+    std::size_t errors = 0;
+    for (const auto& [topic, payload] : app.takeEvents())
+        if (topic == "record.error") {
+            ++errors;
+            REQUIRE(payload.find("code"));
+            REQUIRE(payload.find("hint"));
+            REQUIRE(payload.find("file"));
+            CHECK(payload.find("code")->asString() == "file.write");
+            CHECK_FALSE(payload.find("hint")->asString().empty());
+            CHECK(payload.find("file")->asString().find("Failed-1.wav") != std::string::npos);
+        }
+    CHECK(errors == 1);
+    CHECK(app.engine()->recording());
+    backend.run(2);
+    const auto stopped = app.transport("stop");
+    REQUIRE(stopped);
+    REQUIRE(stopped->recorded);
+    REQUIRE(stopped->recorded->size() == 2);
+    for (const auto& info : *stopped->recorded)
+        if (info.file.find("Failed-1.wav") != std::string::npos) CHECK(info.lostFrames == 486);
+    for (const auto& [topic, payload] : app.takeEvents()) {
+        (void)payload;
+        CHECK(topic != "record.error");
+    }
+    const auto failed = audio::readAudio(app.recordDir() / "Failed-1.wav");
+    const auto healthy = audio::readAudio(app.recordDir() / "Healthy-1.wav");
+    REQUIRE(failed);
+    REQUIRE(healthy);
+    CHECK(failed->channels[0] == std::vector<float>(26, .25f));
+    CHECK(healthy->channels[0] == std::vector<float>(512, .25f));
+    app.stopEngine();
+}
 
 TEST_CASE("simultaneous recording names are distinct after ASCII case folding") {
     struct Root {

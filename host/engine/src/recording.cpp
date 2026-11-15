@@ -7,12 +7,14 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <future>
 #include <map>
 #include <tuple>
 
 #include "file_platform.h"
 #include "media_files.h"
 #include "supple/base/files.h"
+#include "supple/base/main_thread_wake.h"
 #include "supple/base/thread.h"
 #include "supple/json/json.h"
 
@@ -396,10 +398,25 @@ Recorder::Recorder(std::vector<RecordTarget> targets, double rate, std::int64_t 
 Recorder::~Recorder() {
     stop_ = true;
     if (writer_.joinable()) writer_.join();
-    closeJournals();
 }
 
 Status Recorder::open() {
+    std::promise<Status> opened;
+    auto ready = opened.get_future();
+    writer_ = std::thread([this, opened = std::move(opened)]() mutable {
+        auto status = openFiles();
+        if (!status) closeFiles();
+        const bool run = status.ok();
+        opened.set_value(std::move(status));
+        if (run) {
+            writerLoop();
+            closeFiles();
+        }
+    });
+    return ready.get();
+}
+
+Status Recorder::openFiles() {
     for (auto& t : tracks_) {
         std::error_code ec;
         std::filesystem::create_directories(t->target.file.parent_path(), ec);
@@ -421,8 +438,20 @@ Status Recorder::open() {
                 "make the recordings folder writable; this take has no "
                 "crash recovery");
     }
-    writer_ = std::thread([this] { writerLoop(); });
     return okStatus();
+}
+
+void Recorder::closeFiles() {
+    closeJournals();
+    for (auto& t : tracks_) rememberError(*t, t->writer.close());
+}
+
+std::vector<RecordingError> Recorder::takeErrors() {
+    std::vector<RecordingError> errors;
+    for (auto& t : tracks_)
+        if (t->errorPending.exchange(false, std::memory_order_acquire))
+            errors.push_back({t->target.track, t->target.file, t->firstError.error()});
+    return errors;
 }
 
 void Recorder::capture(const float* const* in, std::uint32_t inChannels, std::uint32_t frames,
@@ -649,15 +678,24 @@ void Recorder::drain(Track& t, std::vector<float>& scratch) {
         const std::size_t n = t.ring.read(scratch.data(), chunk, &first);
         if (n == 0) break;
         padTo(t, first);
+        const auto before = t.writer.frames();
         if (t.writeError) {
             auto st = t.writer.append(scratch.data(), n);
             rememberError(t, std::move(st));
         }
-        if (!t.writeError) t.overflow.fetch_add(n, std::memory_order_relaxed);  // lost too
+        if (!t.writeError) {
+            const auto expected = before + n;
+            const auto retained = t.writer.frames();
+            if (expected > retained)
+                t.overflow.fetch_add(expected - retained, std::memory_order_relaxed);
+        }
     }
     if (t.writeError) {
+        const auto before = t.writer.frames();
         auto st = t.writer.flush();  // a crash of the process keeps what the OS has
         rememberError(t, std::move(st));
+        if (before > t.writer.frames())
+            t.overflow.fetch_add(before - t.writer.frames(), std::memory_order_relaxed);
     }
 }
 
@@ -674,9 +712,15 @@ void Recorder::writeSidecars() {
 
 void Recorder::rememberError(Track& track, Status status, bool sidecar) {
     if (status) return;
-    if (track.firstError) track.firstError = status.error();
+    if (track.firstError) {
+        track.firstError = status.error();
+        track.errorPending.store(true, std::memory_order_release);
+        track.errorPending.notify_all();
+        if (mainWake_) mainWake_->notify();
+    }
     Status& target = sidecar ? track.sidecarError : track.writeError;
     if (target) target = std::move(status);
+    if (sidecar && track.writeError) track.writeError = track.sidecarError.error();
 }
 
 void Recorder::updateHeaders() {
@@ -691,6 +735,7 @@ void Recorder::writerLoop() {
     while (!stop_.load(std::memory_order_acquire)) {
         if (writerStalled_.load(std::memory_order_acquire)) {
             writerStallAck_.store(true, std::memory_order_release);
+            writerStallAck_.notify_all();
             while (writerStalled_.load(std::memory_order_acquire) && !stop_.load())
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
             writerStallAck_.store(false, std::memory_order_release);
@@ -746,8 +791,6 @@ std::vector<RecordedTake> Recorder::finish(LoopRange loop) {
     for (std::size_t i = 0; i < count; ++i)
         segments.push_back({segments_[i].fileFrame + latency_, segments_[i].timeline});
     // MIDI (ADR-0016): placed by the rule a journal's recovery uses too.
-    drainMidi();
-    writeJournals(true);
     for (auto& t : midiTracks_) {
         MidiCapture c;
         c.track = t->target.track;
@@ -769,7 +812,6 @@ std::vector<RecordedTake> Recorder::finish(LoopRange loop) {
         if (!t->journalError) r.warnings.push_back(t->journalError.error());
         out.push_back(std::move(r));
     }
-    closeJournals();
     for (auto& t : tracks_) {
         RecordedTake r;
         r.track = t->target.track;
@@ -781,8 +823,10 @@ std::vector<RecordedTake> Recorder::finish(LoopRange loop) {
             if (sg.fileFrame < r.frames) r.segments.push_back(sg);
         r.loop = {loop.start, loop.end};
         r.overflowFrames = t->overflow.load();
-        rememberError(*t, t->writer.close());
-        if (!t->firstError) r.error = t->firstError.error().toString();
+        if (!t->firstError) {
+            r.failure = t->firstError.error();
+            r.error = r.failure->toString();
+        }
         if (runsFull_)
             r.warnings.emplace_back(
                 "recording.loop_runs_full",

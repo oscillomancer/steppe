@@ -250,6 +250,9 @@ instructions are in `docs/guides/installing.md`.
   punch range while it records. WAV recovery repairs both container byte counts
   even when a damaged length still rounds down to the correct frame count.
   Simultaneous recording targets reserve case-folded names before opening files.
+  Audio write errors retain the complete physical prefix and wake the model
+  immediately; the GUI status line identifies the failure while healthy targets
+  continue (ADR-0082). Recording file operations stay on the writer thread.
 - **Editing**: items, takes, comping lanes, fades and crossfades with shapes,
   cursor splitting from the item right-click menu (shared with S) and an audio-only prior
   zero-crossing split (100 ms search, louder stereo channel, cursor fallback;
@@ -1154,13 +1157,11 @@ Session and editing:
   window. Imported/copied media and first-save media staging also lack explicit
   payload/directory durability barriers before the project is published.
 - A crash during audio loop/seek recording retains written samples but loses
-  the run placement metadata saved only at stop. Short writes can leave more
-  complete frames on disk than the stopped take accounts for; writer errors
-  reach `record.error` at commit, with no mid-take notification. These need
-  recovery and notification policy decisions before changing behaviour.
+  the run placement metadata saved only at stop. ADR-0082 defines the pending
+  placement-journal implementation and the durability changes above.
 - Streaming audio recording still stops at the RIFF 4 GiB limit
   (`audio.stream_full`), despite ADR-0014 and the engine spec describing RF64.
-  Offline RF64 export is separate; a streaming format/recovery decision is pending.
+  Offline RF64 export is separate; ADR-0082 defines the pending streaming format.
 - Consolidation's shared engine/model code has local Linux coverage; native
   macOS/Windows validation remains pending before merge.
 - Project files accept `record.mode: output`, but output capture is not

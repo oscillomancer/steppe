@@ -633,6 +633,7 @@ Status EngineApp::replaceProject(model::VersionStore store, fs::path path,
     scratch_.clear();
     reportedFailures_.clear();
     recordingFiles_.clear();
+    recordingErrorsReported_.clear();
     // Not saved: a saved project's journals stay, offered on its next open;
     // an unsaved one's went with its folder above (ADR-0078, ADR-0080).
     midiJournalsPending_.clear();
@@ -1439,6 +1440,23 @@ constexpr std::uint64_t kRestartGiveUpMs = 30'000;
 constexpr std::uint64_t kTouchReleaseMs = 500;
 }  // namespace
 
+void EngineApp::emitRecordingError(const RecordingError& failure) {
+    if (!recordingErrorsReported_.insert(failure.file).second) return;
+    const auto& error = failure.error;
+    auto event = json::Value::object();
+    event["track"] = failure.track.str();
+    event["file"] = failure.file.string();
+    event["error"] = error.toString();
+    event["code"] = error.code;
+    event["message"] = error.message;
+    event["path"] = error.path.empty() ? "/recording/" + failure.track.str() : error.path;
+    event["hint"] =
+        error.hint.empty()
+            ? "save the retained audio; check free space and storage before recording again"
+            : error.hint;
+    emit("record.error", std::move(event));
+}
+
 void EngineApp::tick() {
     mainWake_.drain();  // re-arm before inspecting producer queues
     std::erase_if(jobs_,
@@ -1461,6 +1479,7 @@ void EngineApp::tick() {
     }
     if (engine_) {
         engine_->service();
+        for (const auto& error : engine_->takeRecordingErrors()) emitRecordingError(error);
         serviceSync();                  // what the sync master did, to the transport (ADR-0071)
         if (!txn_) updateWriteHolds();  // a touch hold's release time passed
         consumePluginOutputs();
@@ -2037,6 +2056,7 @@ Result<TransportInfo> EngineApp::transport(std::string_view action, std::optiona
             return std::move(started).error();
         }
         recordingFiles_ = std::move(files);
+        recordingErrorsReported_.clear();
         playStart_ = engine_->transport().seconds;
         startPlaying(metronome_.countInBars);
     } else if (action == "play") {
@@ -2672,13 +2692,9 @@ Result<std::vector<RecordedInfo>> EngineApp::placeTakes(
                 ev["file"] = r.file.string();
                 emit("record.warning", std::move(ev));
             }
-        if (live && !r.error.empty()) {
-            json::Value ev = json::Value::object();
-            ev["track"] = r.track.str();
-            ev["file"] = r.file.string();
-            ev["error"] = r.error;
-            emit("record.error", std::move(ev));
-        }
+        if (live && !r.error.empty())
+            emitRecordingError(
+                {r.track, r.file, r.failure.value_or(Error("record.write", r.error))});
         const double rate = r.sampleRate > 0 ? r.sampleRate : s.project->sampleRate;
         if (r.frames <= 0 || !s.tracks.find(r.track)) continue;
         // The runs on the timeline (ADR-0015): one per loop pass, or one.

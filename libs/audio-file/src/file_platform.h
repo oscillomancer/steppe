@@ -74,6 +74,16 @@ inline std::int64_t tell(std::FILE* stream) {
     return ::ftello(stream);
 #endif
 }
+inline std::int64_t size(std::FILE* stream) {
+#if defined(_WIN32)
+    LARGE_INTEGER bytes{};
+    const auto handle = reinterpret_cast<HANDLE>(_get_osfhandle(_fileno(stream)));
+    return GetFileSizeEx(handle, &bytes) ? bytes.QuadPart : -1;
+#else
+    struct stat info{};
+    return ::fstat(::fileno(stream), &info) == 0 ? info.st_size : -1;
+#endif
+}
 inline int seek(std::FILE* stream, std::int64_t offset, int origin) {
 #if defined(_WIN32)
     return _fseeki64(stream, offset, origin);
