@@ -1615,6 +1615,28 @@ std::optional<std::uint64_t> autosaveIndex(std::string_view name) {
         return std::nullopt;
     return index;
 }
+
+// A saved project's autosave is offered by being newer than its file
+// (ADR-0078 decision 6). A file clock's grain (a Windows tick, a coarse
+// kernel clock, FAT's two seconds) can give a save and the autosave written
+// after it the same time, and a clock set back an earlier one: the autosave
+// is made later than the file by the least step the file system keeps.
+void laterThan(const fs::path& autosave, const fs::path& file) {
+    std::error_code ec;
+    const auto base = fs::last_write_time(file, ec);
+    if (ec) return;
+    using std::chrono::duration_cast;
+    using Step = fs::file_time_type::duration;
+    for (const Step step : {duration_cast<Step>(std::chrono::microseconds(1)),
+                            duration_cast<Step>(std::chrono::milliseconds(1)),
+                            duration_cast<Step>(std::chrono::seconds(1)),
+                            duration_cast<Step>(std::chrono::seconds(2))}) {
+        const auto time = fs::last_write_time(autosave, ec);
+        if (ec || time > base) return;
+        fs::last_write_time(autosave, base + step, ec);
+        if (ec) return;
+    }
+}
 }  // namespace
 
 fs::path EngineApp::newerAutosave(const fs::path& project) const {
@@ -1728,6 +1750,7 @@ void EngineApp::autosave() {
         autosaveMs_ = serviceClockMs();  // try again after an interval, not every tick
         return;
     }
+    if (!projectPath_.empty()) laterThan(file, projectPath_);
     dropSavedMidiJournals();
     existing.push_back({next, file});
     std::sort(existing.begin(), existing.end(),
@@ -2654,7 +2677,7 @@ Result<std::vector<RecordedInfo>> EngineApp::placeTakes(
         const fs::path relative =
             media.empty() ? fs::path() : fs::relative(r.file, media, relError);
         const std::string mediaPath = !relError && !relative.empty() && *relative.begin() != ".."
-                                          ? relative.string()
+                                          ? relative.generic_string()
                                           : r.file.string();
         if (!live && hash.empty())
             versions_->forEachVersion([&](const model::Version& v) {
@@ -3722,13 +3745,13 @@ std::vector<RecoverableInfo> EngineApp::recoverable(std::vector<RecordingWarning
                 const Error& e = *check.problem;
                 warnings->push_back({e.code, e.message, e.path, e.hint,
                                      check.side ? check.side->track.str() : std::string(),
-                                     f.lexically_relative(media).string()});
+                                     f.lexically_relative(media).generic_string()});
             }
             continue;
         }
         const detail::RecordingInfo* side = &*check.side;
         RecoverableInfo r;
-        r.file = f.lexically_relative(media).string();
+        r.file = f.lexically_relative(media).generic_string();
         r.track = side->track.str();
         r.startSeconds = static_cast<double>(side->startSample) / side->sampleRate;
         if (check.midi) {

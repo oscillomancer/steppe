@@ -181,10 +181,7 @@ RecordedTake placeMidi(const MidiCapture& c) {
 namespace {
 constexpr std::string_view kJournalSuffix = ".midi.jsonl";
 constexpr std::string_view kJournalSchema = "supple.midi-recording/1.0";
-// Every clock a journal holds is within this many frames of zero (over 23
-// years at 384 kHz). A value beyond it is damage, and the bound keeps
-// placeMidi's sums, of at most six such terms, far inside int64.
-constexpr std::int64_t kJournalClockLimit = std::int64_t(1) << 48;
+constexpr std::int64_t kJournalClockLimit = kRecordingClockLimit;
 bool clock(const json::Value& v, std::int64_t low = -kJournalClockLimit) {
     return v.isInt() && v.asInt() >= low && v.asInt() <= kJournalClockLimit;
 }
