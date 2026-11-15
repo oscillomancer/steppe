@@ -535,6 +535,14 @@ path; Audio processing threads Limit 1 disables it on next start.
 6. Write hardware outputs; publish meters (lossy rings) and state deltas
    (coalescing slots).
 
+When driving a manual dummy backend, wait for `Engine::awaitPlan()` after
+publishing a plan before counting its output-settling callbacks. This wait
+ends after the renderer has adopted the plan and queued it for the callback.
+`awaitRendered()` waits for audio in the transport epoch, not for the latest
+plan; while stopped it can return immediately. Fast manual callbacks do not
+pace the renderer like a device clock does. Both waits belong on the
+test/model thread.
+
 **Device outputs (ADR-0056).** The plan lists the masters with a
 `hw_output` (tr_0 plays to 1/2 unless it says otherwise) as output taps.
 Every executor writes all of the device's opened channels: each tap's main

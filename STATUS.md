@@ -414,6 +414,8 @@ instructions are in `docs/guides/installing.md`.
   including stopped monitoring changes; bindings, DSP and deferred Notes
   resets wait for the preceding executor's joined release without blocking
   the callback. Native macOS/Windows validation is pending for this handoff.
+  The manual-backend monitor-off regression waits for plan adoption before
+  counting its 64-block silence bound, independent of renderer scheduling.
   Sends into rack In ports preserve the tap at the route's level and pan,
   without a Console 9 encode, with the console enabled or disabled.
   Rack audio and Note Out routes now participate in read-ahead PDC, including
