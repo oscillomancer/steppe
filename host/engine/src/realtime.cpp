@@ -1460,12 +1460,15 @@ void Engine::cycle(const float* const* in, float* const* out, std::uint32_t fram
                                          longest, took, std::memory_order_relaxed)) {
             }
             if (took <= period) return;
-            if (lateCall)
-                engine.overrunLateWait_.fetch_add(1, std::memory_order_relaxed);
-            else if (now.waitNs - waits.waitNs >= took - period)
-                engine.overrunSlowBridge_.fetch_add(1, std::memory_order_relaxed);
-            else
+            // The bridge is to blame only when its waits cover the overrun:
+            // a call posted after the deadline had passed is late, but the
+            // time went before it.
+            if (now.waitNs - waits.waitNs < took - period)
                 engine.overrunNotWaiting_.fetch_add(1, std::memory_order_relaxed);
+            else if (lateCall)
+                engine.overrunLateWait_.fetch_add(1, std::memory_order_relaxed);
+            else
+                engine.overrunSlowBridge_.fetch_add(1, std::memory_order_relaxed);
         }
     } bridgeCycle(*this, frames);
     hardwareMidi_->begin(*midiSource_, frames);

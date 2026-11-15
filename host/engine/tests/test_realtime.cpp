@@ -3508,6 +3508,51 @@ TEST_CASE("live bridged effects play in the callback as in-process ones do") {
     }
 }
 
+TEST_CASE("a cycle late before its bridged call is not blamed on the bridge") {
+    // ADR-0081 diagnostics: an in-process stage spends 20 ms, so the bridged
+    // gain after it is posted past the cycle's deadline and is late. The
+    // overrun is the in-process stage's, not the bridge's wait.
+    host::setBridgeExecutable(BRIDGE_PATH);
+    auto base = monitoring(synthSession(0, "com.suppleaudio.test.crash"));
+    model::EditTxn t(base, 2);
+    Id live, crash;
+    for (const auto& e : base.tracks)
+        if (e.value->type == model::StripType::Channel) live = e.id;
+    crash = base.tracks.find(live)->chain.back();
+    model::FxInstance gain;
+    gain.plugin.id = "com.suppleaudio.test.gain";
+    gain.isolation = model::Isolation::Dedicated;
+    gain.patch =
+        json::parse(R"({"schema": "supple.test-gain-patch/1.0", "params": {"latency": "short"}})")
+            .value();
+    const Id gainId = t.create(gain);
+    t.modify<model::Track>(live, [&](auto& tr) { tr.chain.push_back(gainId); });
+    const auto session = t.commit().value();
+    constexpr std::uint32_t kBlock = 128;
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend(constantInput(16 * kBlock));
+    Engine engine(pool, media, kInCallback);
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock, .inputs = 2}));
+    REQUIRE(engine.load(session));
+    engine.play();
+    backend.run(2);
+    REQUIRE(pool.find(gainId));
+    REQUIRE(pool.find(gainId)->isolated());
+    REQUIRE(pool.find(crash));
+    REQUIRE_FALSE(pool.find(crash)->isolated());
+    const auto before = engine.bridgeOverruns();
+    const auto lateBefore = engine.bridgeLateCycles();
+    REQUIRE(pool.find(crash)->setParam(1, 3));  // 20 ms in every block from now
+    backend.run(2);
+    const auto after = engine.bridgeOverruns();
+    CHECK(engine.bridgeLateCycles() > lateBefore);  // the gain was late
+    CHECK(after.notWaiting - before.notWaiting >= 1);
+    CHECK(after.lateWait == before.lateWait);
+    CHECK(after.slowBridge == before.slowBridge);
+    engine.stop();
+}
+
 TEST_CASE("a hung bridged plug-in on a live track fails within the bound; the rest plays") {
     // ADR-0081: each callback waits for it only until the cycle's bridge
     // deadline, its output silent; after 50 ms of late cycles it fails (the

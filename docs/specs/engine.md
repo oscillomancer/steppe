@@ -1154,10 +1154,12 @@ instance).
   calls whose bridge thread did not hold the class asked for (Linux). A wait
   for an earlier late block before the next call (`settles`) counts its wait
   too. `Engine::bridgeOverruns()` sorts each callback cycle with live bridged
-  calls that ran past its period: `late_wait` (a call hit the deadline),
-  `slow_bridge` (the waits cover the overrun: the bridge was slow to answer)
-  or `not_waiting` (the time went elsewhere, such as the callback thread
-  being descheduled), and keeps the longest such cycle.
+  calls that ran past its period. When the cycle's bridged waits cover the
+  overrun it is `late_wait` (a call hit the deadline) or `slow_bridge` (the
+  bridge answered in time but slowly); otherwise it is `not_waiting`: the
+  time went elsewhere, such as another stage's work or the callback thread
+  waiting for a CPU, including a call that was late because it was posted
+  after the deadline had passed. The longest such cycle is kept.
   `engine.status.bridge_timing` reports both; the call counters are
   process-wide, the cycle counters per engine.
 - Crash handling: a control thread watches the process (pidfd); on crash the
