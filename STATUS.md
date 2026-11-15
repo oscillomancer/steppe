@@ -236,10 +236,14 @@ instructions are in `docs/guides/installing.md`.
   playback in both executors, with output, reclamation, save/reopen render
   equivalence and undo-content checks. The short `rt` case and opt-in long
   runs share a JSONL replay path (`tests/fuzz/README.md`); native macOS/Windows
-  validation of this harness is pending. Extended runs expose a retained-pool
-  RT/offline mismatch after a connected VCA's level changes: the one-edit
-  replay in `tests/fuzz/plan-soak-corpus/rack-level.jsonl` is pending engine
-  triage; the harness preserves the failure without changing engine behavior.
+  validation of this harness is pending. Intermediate 1024-frame locate windows
+  compare the running engine's paced output with private offline renders after
+  every settled edit, cycling through beats 0–3; journals retain exact windows
+  for replay. The comparison covers intermediate project states after a locate,
+  not the uninterrupted pre-locate swap crossfade. Readiness and sample counts
+  decide correctness; a watchdog abort is separately labelled and exits 124.
+  Rack modules restart at locates, so the retained-pool VCA-level reproducers
+  in `tests/fuzz/plan-soak-corpus/` now pass.
   `track.move` accepts reorders under a non-root buss and moves between
   sibling folders, and refuses destinations in the moved track's own subtree.
   Its portable command regression covers undo and cycle rollback; the

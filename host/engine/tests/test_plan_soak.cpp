@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 #include <doctest/doctest.h>
 #include <atomic>
+#include <bit>
 #include <charconv>
 #include <cstdlib>
 #include <cstring>
@@ -11,6 +12,7 @@
 #include "rack_runtime.h"
 #include "realtime_common.h"
 #include "supple/base/files.h"
+#include "supple/base/thread.h"
 #include "supple/engine/app.h"
 #include "supple/model/schemas.h"
 
@@ -23,10 +25,34 @@ struct EngineTestAccess {
         return e.stoppedGen_.load() >= e.publishedGen_ &&
                (!e.options_.anticipative || e.callbackGen_.load() >= e.publishedGen_);
     }
+    static bool planReady(const Engine& e) {
+        return !e.ring_ || e.stoppedGen_.load(std::memory_order_acquire) >= e.publishedGen_;
+    }
+    static bool rendered(Engine& e, std::int64_t frames) {
+        if (!e.ring_) return true;
+        const auto epoch = e.epoch_.load();
+        const bool playing = e.wantPlaying_.load();
+        if (e.epochDone_.load() >= epoch && e.reportedPlaying_.load() == playing &&
+            (!playing ||
+             e.renderedStream_.load(std::memory_order_acquire) - e.playedStream(epoch) >=
+                 std::min(frames, e.aheadFrames_)))
+            return true;
+        e.wakeRenderer();
+        return false;
+    }
     static std::size_t pending(const Engine& e) {
         return e.planHandoffs_.size() + e.ratePlanRequests_.size();
     }
     static std::size_t rackRetired(const detail::RackPool& pool) { return pool.retired_.size(); }
+    // Callback-only probe, after its driver's completion acknowledgement.
+    static std::uint32_t wetRamp(const Engine& e, Id fx) {
+        std::uint32_t remaining = 0;
+        for (const auto& node : e.plan_->nodes)
+            detail::forEachStage(node, [&](const detail::Stage& stage) {
+                if (stage.fx == fx) remaining = stage.wetRampLeft;
+            });
+        return remaining;
+    }
 };
 }  // namespace supple::engine
 
@@ -57,6 +83,34 @@ std::uint64_t setting(const char* key, std::uint64_t fallback) {
                     key << " must be an unsigned decimal integer");
     return value;
 }
+
+std::string watchdogContext;
+template <class Predicate>
+void untilReady(const char* stage, Predicate ready) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    while (!ready()) {
+        if (std::chrono::steady_clock::now() >= deadline) {
+            // A hung handshake is an aborted run, never a numeric audio verdict.
+            // Do not unwind through a potentially hung engine or keep fuzzing.
+            std::cerr << "plan-soak WATCHDOG ABORT stage=" << stage << ' ' << watchdogContext
+                      << " (no audio mismatch verdict), exit=124" << std::endl;
+            std::_Exit(124);
+        }
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
+    }
+}
+
+void planReady(Engine& engine) {
+    untilReady("renderer plan adoption", [&] { return EngineTestAccess::planReady(engine); });
+}
+
+void runReady(Engine& engine, DummyBackend& backend, std::int64_t cycles) {
+    for (std::int64_t i = 0; i < cycles; ++i) {
+        untilReady("manual render readiness",
+                   [&] { return EngineTestAccess::rendered(engine, kBlock); });
+        backend.run(1);
+    }
+}
 // Readiness is supplied separately so the regression can place a real
 // manual callback acknowledgement at the same boundary as the racing callback.
 template <class Ready>
@@ -77,7 +131,7 @@ void replayRetirementCheckpoint() {
     REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
     const auto original = model::Session::create({.console9 = false});
     REQUIRE(engine.load(original));
-    REQUIRE(engine.awaitPlan());
+    planReady(engine);
     backend.run(1);
     engine.service();
     REQUIRE(EngineTestAccess::plans(engine) == 1);
@@ -87,7 +141,7 @@ void replayRetirementCheckpoint() {
     auto changed = edit.commit();
     REQUIRE(changed);
     REQUIRE(engine.load(*changed));
-    REQUIRE(engine.awaitPlan());
+    planReady(engine);
     // Renderer ready, callback still using the preceding plan. Collection
     // must retain it until that callback has released it.
     REQUIRE_FALSE(EngineTestAccess::adopted(engine));
@@ -118,12 +172,72 @@ std::string content(const model::Session& s) {
 // Only the audio thread writes its counters; the model thread reads atomics.
 class ObservedDummy : public DummyBackend {
   public:
-    ObservedDummy() : DummyBackend({.mode = Mode::Thread, .paced = true}) {}
+    ObservedDummy() : DummyBackend({.mode = Mode::Manual}) {}
+    ~ObservedDummy() override { stop(); }
     Status start(const BackendConfig& config, Callback callback) override {
         callback_ = std::move(callback);
         channels_ = config.outputs;
-        return DummyBackend::start(config,
-                                   [this](auto in, auto out, auto n) { observe(in, out, n); });
+        auto result =
+            DummyBackend::start(config, [this](auto in, auto out, auto n) { observe(in, out, n); });
+        if (!result) return result;
+        running_.store(true);
+        driver_ = std::thread([this, config] {
+            nameThread("audio-dummy");
+            const auto period = std::chrono::duration<double>(config.blockSize / config.sampleRate);
+            while (running_.load()) {
+                // Driver pacing/parking is outside the annotated audio entry.
+                // The real callback never waits, locks or allocates.
+                const bool free = free_.load();
+                if (!free && permits_.load() == 0) {
+                    parkSeen_.store(parkRequest_.load(), std::memory_order_release);
+                    std::this_thread::sleep_for(std::chrono::microseconds(100));
+                    continue;
+                }
+                if (!free) permits_.fetch_sub(1);
+                DummyBackend::run(1);
+                completed_.fetch_add(1, std::memory_order_release);
+                std::this_thread::sleep_for(period);
+            }
+        });
+        return okStatus();
+    }
+    void stop() override {
+        running_.store(false);
+        if (driver_.joinable()) driver_.join();
+        DummyBackend::stop();
+    }
+    bool ownsThread() const override { return true; }
+    ThreadPolicy callbackPolicy() override {
+        return driver_.joinable() ? threadPolicy(driver_.native_handle()) : ThreadPolicy{};
+    }
+    void park() {
+        free_.store(false);
+        const auto request = parkRequest_.fetch_add(1) + 1;
+        untilReady("park paced driver",
+                   [&] { return parkSeen_.load(std::memory_order_acquire) >= request; });
+    }
+    void resume() { free_.store(true); }
+    void arm(std::size_t frames) {
+        // Model thread, with the driver parked. Reused bounded window storage.
+        window_.sampleRate = config().sampleRate;
+        window_.channels.assign(channels_, std::vector<float>(frames));
+        captured_ = 0;
+        capturing_ = true;
+    }
+    void advance(Engine& engine, std::int64_t cycles) {
+        for (std::int64_t i = 0; i < cycles; ++i) {
+            untilReady("paced render readiness",
+                       [&] { return EngineTestAccess::rendered(engine, kBlock); });
+            const auto goal = completed_.load() + 1;
+            permits_.fetch_add(1, std::memory_order_release);
+            untilReady("paced callback completion",
+                       [&] { return completed_.load(std::memory_order_acquire) >= goal; });
+        }
+    }
+    const audio::AudioData& window() {
+        capturing_ = false;  // after the final completion acknowledgement
+        REQUIRE(captured_ == window_.frames());
+        return window_;
     }
     bool bad() const { return bad_.load(); }
     bool sounded() const { return sounded_.load(); }
@@ -131,6 +245,12 @@ class ObservedDummy : public DummyBackend {
   private:
     void observe(const float* const* in, float* const* out, std::uint32_t n) SUPPLE_RT {
         callback_(in, out, n);
+        if (capturing_) {
+            const auto frames = std::min<std::size_t>(n, window_.frames() - captured_);
+            for (std::uint32_t c = 0; c < channels_; ++c)
+                std::copy_n(out[c], frames, window_.channels[c].data() + captured_);
+            captured_ += frames;
+        }
         for (std::uint32_t c = 0; c < channels_; ++c)
             for (std::uint32_t i = 0; i < n; ++i) {
                 const float value = out[c][i];
@@ -141,6 +261,13 @@ class ObservedDummy : public DummyBackend {
     Callback callback_;
     std::uint32_t channels_ = 0;
     std::atomic<bool> bad_{false}, sounded_{false};
+    std::thread driver_;
+    std::atomic<bool> running_{false}, free_{true};
+    std::atomic<std::uint64_t> parkRequest_{0}, parkSeen_{0};
+    std::atomic<std::uint64_t> permits_{0}, completed_{0};
+    audio::AudioData window_;
+    std::size_t captured_ = 0;
+    bool capturing_ = false;
 };
 
 struct Soak {
@@ -160,9 +287,12 @@ struct Soak {
     EngineOptions options;
     bool passed = false;
     std::uint64_t swaps = 0;
+    std::uint64_t checkpoints = 0;
+    bool automaticCheckpoints = true;
 
-    Soak(std::uint64_t seed, bool ahead)
+    Soak(std::uint64_t seed, bool ahead, bool explicitCheckpoints = false)
         : options{.anticipative = ahead, .renderBlock = 128, .renderAheadMs = 20, .workers = 2} {
+        automaticCheckpoints = !explicitCheckpoints;
         root = std::filesystem::temp_directory_path() /
                ("supple-plan-soak-" +
                 std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
@@ -182,6 +312,9 @@ struct Soak {
         journal << json::writeCompact(header) << '\n' << std::flush;
         std::cout << "plan-soak seed=" << seed << " anticipative=" << ahead
                   << " replay=" << (root / "replay.jsonl").string() << std::endl;
+        watchdogContext = "seed=" + std::to_string(seed) +
+                          " anticipative=" + std::to_string(ahead) +
+                          " replay=" + (root / "replay.jsonl").string();
         AppOptions config;
         config.workdir = root;
         config.pluginPath = {kFixture};
@@ -226,7 +359,7 @@ struct Soak {
         call("transport.loop", args(R"({"start_seconds":0,"end_seconds":0.25})"));
         call("transport.play");
         settle();
-        // Setup is fixed; replay contains only subsequent edits and finish diagnostics.
+        // Setup is fixed; replay starts with its initial window, then the edits.
         phase = "edits";
         commands.clear();
         trace.clear();
@@ -234,6 +367,8 @@ struct Soak {
         journal.open(root / "replay.jsonl", std::ios::trunc);
         REQUIRE(journal.good());
         journal << json::writeCompact(header) << '\n' << std::flush;
+        // Establish audibility from a fixed, ready window even for empty replays.
+        if (automaticCheckpoints) audioCheckpoint();
     }
     ~Soak() {
         bus.reset();
@@ -276,29 +411,23 @@ struct Soak {
     }
     void settle() {
         INFO(trace);
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-        auto wait = [&](auto predicate) {
-            while (!predicate()) {
-                if (std::chrono::steady_clock::now() >= deadline) return false;
-                std::this_thread::sleep_for(std::chrono::microseconds(100));
-            }
-            return true;
-        };
-        REQUIRE(wait([&] {
+        untilReady("source preparation", [&] {
             app->tick();
             return !app->preparingAudio();
-        }));
+        });
         REQUIRE_MESSAGE(app->preparationError().empty(), app->preparationError());
         REQUIRE(app->engine() != nullptr);
         Engine& engine = *app->engine();
         // service can itself publish a plan after a latency/restart callback.
         // Drain that adoption too before asserting reclamation at quiescence.
-        REQUIRE(wait([&] {
-            if (!engine.awaitPlan()) return false;
+        untilReady("plan reclamation", [&] {
+            planReady(engine);
+            untilReady("transport playing acknowledgement",
+                       [&] { return engine.transport().playing; });
             const auto target = engine.cycles() + 4;
-            if (!wait([&] { return engine.cycles() >= target; })) return false;
+            untilReady("four callback acknowledgements", [&] { return engine.cycles() >= target; });
             return collectAdoptedPlan(engine, [&] { return EngineTestAccess::adopted(engine); });
-        }));
+        });
         REQUIRE(engine.transport().playing);
         REQUIRE(engine.processErrors() == 0);
         REQUIRE_FALSE(backend.bad());
@@ -315,6 +444,60 @@ struct Soak {
         REQUIRE(app->head().routes.size() <= 7);
         REQUIRE(app->head().modules.size() <= 6);
         checkModel();
+        if (phase == "edits" && automaticCheckpoints) audioCheckpoint();
+    }
+    void audioCheckpoint(const json::Value* replay = nullptr) {
+        constexpr std::size_t frames = 1024;
+        const auto index = replay ? replay->find("index")->asInt() : std::int64_t(checkpoints);
+        const auto start =
+            replay ? replay->find("start_frame")->asInt()
+                   : std::llround(app->head().timeMap->secondsAt(checkpoints % 4) * 48000);
+        const auto context = watchdogContext;
+        watchdogContext += " checkpoint=" + std::to_string(index);
+        auto row = json::Value::object();
+        row["phase"] = "checkpoint";
+        row["index"] = index;
+        row["start_frame"] = start;
+        row["frames"] = frames;
+        const auto line = json::writeCompact(row) + "\n";
+        trace += line;
+        journal << line << std::flush;
+        REQUIRE(journal.good());
+        INFO(trace);
+        ++checkpoints;
+        INFO("intermediate audio checkpoint " << index << " start_frame=" << start);
+        // Flush intent before any handshake, so a watchdog-aborted checkpoint
+        // remains in an explicit replay rather than silently disappearing.
+        auto& engine = *app->engine();
+        backend.park();
+        const auto restore = engine.transport();
+        // Adoption can acknowledge at the start of an in-flight block. Drain
+        // the specified 10 ms swap/wet fade after parking, in sample counts,
+        // before comparing with an offline plan that starts at its target.
+        constexpr std::int64_t fadeFrames = 480;  // fixed 48 kHz fixture
+        backend.advance(engine, (fadeFrames + kBlock - 1) / kBlock);
+        // A locate is the defined RT/offline DSP reset boundary. Keep the
+        // running engine, pooled instances and audio thread through the probe.
+        const OfflineSettings settings{.startSeconds = double(start) / 48000,
+                                       .endSeconds = double(start + frames) / 48000,
+                                       .threads = 1};
+        auto offline = app->renderSession(app->head(), settings);
+        REQUIRE_MESSAGE(offline, (offline ? "" : offline.error().toString()));
+        engine.setLoop(0, 0, false);
+        engine.seek(settings.startSeconds);
+        const auto latency = engine.outputLatency();
+        const auto cycles = (frames + latency + kBlock - 1) / kBlock;
+        backend.arm(cycles * kBlock);
+        const auto misses = engine.anticipationMisses();
+        backend.advance(engine, cycles);
+        equalAudio(offline->audio, backend.window(), latency);
+        REQUIRE(engine.anticipationMisses() == misses);
+        REQUIRE(engine.processErrors() == 0);
+        engine.setLoop(double(restore.loop.start) / 48000, double(restore.loop.end) / 48000,
+                       restore.loop.on);
+        engine.seek(restore.seconds);
+        backend.resume();
+        watchdogContext = context;
     }
     void step(std::string command, json::Value a = json::Value::object()) {
         call(std::move(command), std::move(a));
@@ -584,10 +767,7 @@ struct Soak {
         finalEngine.play();
         const auto latency = finalEngine.outputLatency();
         const auto cycles = (offline->audio.frames() + latency + kBlock - 1) / kBlock;
-        if (options.anticipative)
-            runAhead(finalEngine, manual, cycles, kBlock);
-        else
-            manual.run(cycles);
+        runReady(finalEngine, manual, cycles);
         finalEngine.stop();
         REQUIRE(finalEngine.processErrors() == 0);
         app->stopEngine();
@@ -603,6 +783,7 @@ struct Soak {
         std::size_t count = 0;
         for (const auto& [name, n] : commands) count += n;
         std::cout << "plan-soak completed commands=" << count << " published_plans=" << swaps
+                  << " audio_checkpoints=" << checkpoints
                   << " retired_plans=0 retired_fx=0 retired_modules=0" << std::endl;
         passed = true;
     }
@@ -618,11 +799,37 @@ struct Soak {
             }));
             INFO("channel=" << c << " offset=" << offset
                             << " max difference=" << maxDiff(a, offset, e, e.size()));
-            REQUIRE(std::memcmp(e.data(), a.data() + offset, e.size() * sizeof(float)) == 0);
+            std::size_t first = 0;
+            while (first < e.size() && std::bit_cast<std::uint32_t>(e[first]) ==
+                                           std::bit_cast<std::uint32_t>(a[offset + first]))
+                ++first;
+            REQUIRE_MESSAGE(first == e.size(),
+                            "plan-soak AUDIO MISMATCH channel=" << c << " frame=" << first);
         }
     }
 };
+
+void replayBypassCheckpoint() {
+    Soak soak(202611150122, false, true);
+    soak.call("fx.patch.merge", args(R"({"fx":"fx_2","patch":{"params":{"gain":-6}}})"));
+    soak.settle();
+    auto& engine = *soak.app->engine();
+    soak.backend.park();
+    soak.backend.advance(engine, 4);
+    soak.call("fx.set", args(R"({"fx":"fx_2","bypass":true})"));
+    // Adoption and three completed blocks leave 96 samples of the intended
+    // 480-sample fade. A fresh offline plan starts fully bypassed.
+    soak.backend.advance(engine, 3);
+    REQUIRE(EngineTestAccess::wetRamp(engine, {model::Kind::Fx, 2}) == 96);
+    soak.audioCheckpoint();
+    soak.finish();
+}
 }  // namespace
+
+TEST_CASE("soak audio checkpoints drain a bypass fade after adoption" *
+          doctest::description("rt")) {
+    replayBypassCheckpoint();
+}
 
 TEST_CASE("soak reclamation observes callback adoption before collection" *
           doctest::description("rt")) {
@@ -641,6 +848,7 @@ TEST_CASE("seeded plan-swap soak during playback in both executors" * doctest::d
         std::getenv("SUPPLE_SOAK_EXECUTOR") ? std::getenv("SUPPLE_SOAK_EXECUTOR") : "both";
     REQUIRE((executor == "both" || executor == "callback" || executor == "ahead"));
     std::vector<json::Value> replayRows;
+    bool explicitCheckpoints = false;
     auto masterSeed = setting("SUPPLE_SOAK_SEED", 20261114);
     std::string replayExecutor;
     const char* replayPath = std::getenv("SUPPLE_SOAK_REPLAY");
@@ -653,8 +861,12 @@ TEST_CASE("seeded plan-swap soak during playback in both executors" * doctest::d
         REQUIRE(header);
         REQUIRE((*header)["schema"] == "supple.plan-soak/1");
         if (const auto* probe = header->find("probe")) {
-            REQUIRE(probe->asString() == "retirement-checkpoint");
-            replayRetirementCheckpoint();
+            if (probe->asString() == "bypass-checkpoint") {
+                replayBypassCheckpoint();
+            } else {
+                REQUIRE(probe->asString() == "retirement-checkpoint");
+                replayRetirementCheckpoint();
+            }
             return;
         }
         const auto& seedText = (*header)["seed"].asString();
@@ -669,9 +881,19 @@ TEST_CASE("seeded plan-swap soak during playback in both executors" * doctest::d
             if ((*row)["phase"] == "edits") {
                 REQUIRE((*row)["command"].isString());
                 REQUIRE((*row)["args"].isObject());
-                REQUIRE(replayRows.size() < 16384);
-                replayRows.push_back(std::move(*row));
+            } else if ((*row)["phase"] == "checkpoint") {
+                for (const char* key : {"index", "start_frame", "frames"})
+                    REQUIRE((*row)[key].isInt());
+                REQUIRE((*row)["index"].asInt() >= 0);
+                REQUIRE((*row)["start_frame"].asInt() >= 0);
+                REQUIRE((*row)["start_frame"].asInt() <= 10 * 48000);
+                REQUIRE((*row)["frames"].asInt() == 1024);
+                explicitCheckpoints = true;
+            } else {
+                continue;  // setup and finish rows are diagnostics
             }
+            REQUIRE(replayRows.size() < 32768);
+            replayRows.push_back(std::move(*row));
         }
     }
     std::map<std::string, std::size_t> coverage;
@@ -687,10 +909,14 @@ TEST_CASE("seeded plan-swap soak during playback in both executors" * doctest::d
             CAPTURE(seed);
             CAPTURE(ahead);
             try {
-                Soak soak(seed, ahead);
+                Soak soak(seed, ahead, explicitCheckpoints);
                 if (replayPath) {
-                    for (const auto& row : replayRows)
-                        soak.step(row.find("command")->asString(), *row.find("args"));
+                    for (const auto& row : replayRows) {
+                        if (*row.find("phase") == "checkpoint")
+                            soak.audioCheckpoint(&row);
+                        else
+                            soak.step(row.find("command")->asString(), *row.find("args"));
+                    }
                 } else {
                     SoakRandom random{seed};
                     std::array<unsigned, 23> order;
