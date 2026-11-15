@@ -116,7 +116,8 @@ struct RecordedTake {
     // Optional known digest (e.g. a recovered take). stopRecording leaves it
     // empty: EngineApp hashes closed audio files in a background job.
     std::string hash;
-    std::int64_t startSample = 0;  // timeline sample of the file's first frame (may be < 0)
+    std::filesystem::path journal;  // owned audio placement journal, retired after save
+    std::int64_t startSample = 0;   // timeline sample of the file's first frame (may be < 0)
     std::int64_t frames = 0;
     // The runs, in file order; the first is {0, startSample}. More than one:
     // loop passes (`loop` is the loop they were recorded in), or runs split

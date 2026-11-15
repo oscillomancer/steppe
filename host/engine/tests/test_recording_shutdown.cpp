@@ -895,3 +895,292 @@ TEST_CASE("a journal this recording did not create is never the take's, nor dele
     }
     fs::remove_all(dir);
 }
+
+TEST_CASE("audio crash recovery trusts journal runs and progress instead of flattening the WAV") {
+    const fs::path root =
+        fs::temp_directory_path() / ("supple-audio-placement-" + std::to_string(test::processId()));
+    fs::remove_all(root);
+    struct Cleanup {
+        fs::path path;
+        ~Cleanup() { fs::remove_all(path); }
+    } cleanup{root};
+    auto created = EngineApp::create({.workdir = root});
+    REQUIRE(created);
+    auto& app = **created;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher dispatcher(registry, app);
+    REQUIRE(dispatcher.execute({"track.add",
+                                *json::parse(R"({"name":"Audio"})"),
+                                {cmd::Origin::Type::Test, "audio", ""}}));
+    REQUIRE(app.save(root / "song.json"));
+    const auto before = readTextFile(root / "song.json");
+    REQUIRE(before);
+    const fs::path wav = app.recordDir() / "take.wav";
+    fs::create_directories(wav.parent_path());
+    audio::WavStreamWriter writer;
+    REQUIRE(writer.open(wav, 48000, 1));
+    std::array<float, 320> samples{};
+    REQUIRE(writer.append(samples.data(), samples.size()));
+    REQUIRE(writer.close());
+    REQUIRE(detail::writeSidecar(wav, {model::Id{model::Kind::Track, 1}, 1000, 48000, {}, 0, 0}));
+    fs::path journal = wav;
+    journal.replace_extension(".audio.jsonl");
+    REQUIRE(writeFileAtomic(journal,
+                            "{\"schema\":\"supple.audio-recording/"
+                            "1.0\",\"track\":\"tr_1\",\"sample_rate\":48000,\"start_sample\":1000,"
+                            "\"latency\":0,\"channels\":1,\"loop\":[1000,1064]}\n"
+                            "{\"run\":[64,1000]}\n{\"run\":[128,1000]}\n{\"run\":[192,1000]}\n"
+                            "{\"captured\":256,\"frames\":256}\n{\"captured\":320,\"frames\":"));
+    auto list = app.recoverable();
+    REQUIRE(list.size() == 1);
+    CHECK(list[0].seconds == doctest::Approx(256. / 48000));
+    auto recovered = app.recover({}, std::nullopt);
+    REQUIRE(recovered);
+    REQUIRE(recovered->size() == 1);
+    CHECK(recovered->front().takes.size() == 4);
+    CHECK(audio::inspectWavStream(wav)->fileFrames == 320);
+    REQUIRE(app.save(root / "song.json"));
+    CHECK_FALSE(fs::exists(journal));
+    // A project saved before the take can still recover it after retirement.
+    REQUIRE(writeFileAtomic(root / "before.json", *before));
+    auto reopened = EngineApp::create({.workdir = root});
+    REQUIRE(reopened);
+    REQUIRE((*reopened)->open(root / "before.json"));
+    list = (*reopened)->recoverable();
+    REQUIRE(list.size() == 1);
+    CHECK(list[0].seconds == doctest::Approx(256. / 48000));
+    auto again = (*reopened)->recover({}, std::nullopt);
+    REQUIRE(again);
+    REQUIRE(again->size() == 1);
+    CHECK(again->front().takes.size() == 4);
+}
+
+TEST_CASE("audio recording publishes an append-only placement journal on its writer") {
+    const fs::path root =
+        fs::temp_directory_path() / ("supple-audio-journal-" + std::to_string(test::processId()));
+    fs::remove_all(root);
+    struct Cleanup {
+        fs::path path;
+        ~Cleanup() { fs::remove_all(path); }
+    } cleanup{root};
+    RecordTarget target{model::Id{model::Kind::Track, 1}, {0}, root / "take.wav", {}};
+    detail::Recorder recorder({target}, 48000, 8);
+    recorder.setLoop({1000, 1064, true});
+    REQUIRE(recorder.open());
+    std::array<float, 64> samples{};
+    const float* in[]{samples.data()};
+    for (int i = 0; i != 4; ++i) {
+        recorder.capture(in, 1, 64, 1000);
+        RecordingErrorTestAccess::passes(recorder);
+    }
+    const auto takes = recorder.finish({1000, 1064, true});
+    REQUIRE(takes.size() == 1);
+    const auto journal = root / "take.audio.jsonl";
+    auto text = readTextFile(journal);
+    REQUIRE(text);
+    CHECK(text->find("supple.audio-recording/1.0") != std::string::npos);
+    CHECK(text->find("\"run\":[64,1000]") != std::string::npos);
+    CHECK(text->find("\"frames\":256") != std::string::npos);
+}
+
+TEST_CASE("audio journal placement matches stop for loops seeks and rendered clocks") {
+    const fs::path root = fs::temp_directory_path() /
+                          ("supple-audio-journal-clocks-" + std::to_string(test::processId()));
+    fs::remove_all(root);
+    struct Cleanup {
+        fs::path path;
+        ~Cleanup() { fs::remove_all(path); }
+    } cleanup{root};
+    const bool looping = GENERATE(false, true);
+    const int mode = GENERATE(0, 1, 2, 3);
+    RecordTarget target{model::Id{model::Kind::Track, 1}, {0}, root / "take.wav", {}};
+    target.output = mode == 2;
+    target.rackInput = mode == 3;
+    target.outputShift = mode == 2 ? -8 : 24;
+    detail::Recorder recorder({target}, 48000, 8);
+    recorder.setLoop(looping ? LoopRange{1000, 1064, true} : LoopRange{});
+    REQUIRE(recorder.open());
+    std::array<float, 64> samples{};
+    const float* input[]{samples.data()};
+    detail::ProcessedInput processed{target.track, {samples.data(), samples.data()}, 16};
+    for (int i = 0; i != 4; ++i) {
+        const auto pos = looping ? 1000 : (i < 2 ? 1000 + 64 * i : 2000 + 64 * (i - 2));
+        recorder.capture(
+            input, 1, 64, pos,
+            mode ? std::span(&processed, 1) : std::span<const detail::ProcessedInput>{});
+        RecordingErrorTestAccess::passes(recorder);
+    }
+    const auto prefix = detail::readAudioJournal(target.file, root);
+    REQUIRE(prefix);
+    REQUIRE(prefix->frames);
+    CHECK(*prefix->frames > 0);
+    const auto takes = recorder.finish(looping ? LoopRange{1000, 1064, true} : LoopRange{});
+    REQUIRE(takes.size() == 1);
+    auto after = detail::readAudioJournal(target.file, root);
+    REQUIRE(after);
+    CHECK(*after->frames == takes[0].frames);
+    CHECK(after->startSample == takes[0].startSample);
+    CHECK(after->loopStart == takes[0].loop.start);
+    CHECK(after->loopEnd == takes[0].loop.end);
+    REQUIRE(after->segments.size() == takes[0].segments.size());
+    for (std::size_t i = 0; i < after->segments.size(); ++i) {
+        CHECK(after->segments[i].fileFrame == takes[0].segments[i].fileFrame);
+        CHECK(after->segments[i].timeline == takes[0].segments[i].timeline);
+    }
+    CHECK(takes[0].journal == detail::audioJournalPath(target.file));
+    const auto side = detail::readSidecar(target.file, root);
+    REQUIRE(side);
+    CHECK(side->frames == after->frames);
+}
+
+TEST_CASE("an audio journal creation failure wakes the model and isolates the failed target") {
+    const fs::path root = fs::temp_directory_path() /
+                          ("supple-audio-journal-error-" + std::to_string(test::processId()));
+    fs::remove_all(root);
+    struct Cleanup {
+        fs::path path;
+        ~Cleanup() { fs::remove_all(path); }
+    } cleanup{root};
+    fs::create_directories(root);
+    const auto bad = root / "failed.wav";
+    const auto occupied = detail::audioJournalPath(bad);
+    REQUIRE(writeFileAtomic(occupied, "another recording's metadata"));
+    MainThreadWake wake;
+    detail::Recorder recorder({{model::Id{model::Kind::Track, 1}, {0}, bad, {}},
+                               {model::Id{model::Kind::Track, 2}, {0}, root / "healthy.wav", {}}},
+                              48000, 0);
+    recorder.setMainThreadWake(&wake);
+    REQUIRE(recorder.open());
+    const auto errors = recorder.takeErrors();
+    REQUIRE(errors.size() == 1);
+    CHECK(errors[0].error.code == "record.journal");
+    WaitItem ready{wake.waitable(), kWaitRead};
+    REQUIRE(waitFor(std::span(&ready, 1), -1) == 1);
+    CHECK(wake.drain());
+    std::array<float, 64> samples{};
+    const float* input[]{samples.data()};
+    recorder.capture(input, 1, 64, 1000);
+    RecordingErrorTestAccess::passes(recorder);
+    const auto takes = recorder.finish();
+    CHECK(takes[0].frames == 0);
+    CHECK(takes[0].journal.empty());
+    CHECK(takes[1].frames == 64);
+    CHECK(takes[1].error.empty());
+    CHECK(*readTextFile(occupied) == "another recording's metadata");
+}
+
+TEST_CASE("audio placement journals retire only owned durable save and autosave copies") {
+    const int mode = GENERATE(0, 1, 2, 3);
+    const bool anticipative = GENERATE(false, true);
+    const fs::path root = fs::temp_directory_path() /
+                          ("supple-audio-journal-save-" + std::to_string(test::processId()));
+    fs::remove_all(root);
+    struct Cleanup {
+        fs::path path;
+        ~Cleanup() { fs::remove_all(path); }
+    } cleanup{root};
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    auto created = EngineApp::create(
+        {.workdir = root, .scratchDir = mode == 1 ? root / "scratch" : fs::path{}});
+    REQUIRE(created);
+    auto& app = **created;
+    app.setFixedClock(1'000'000);
+    auto txn = app.beginTransaction({cmd::Origin::Type::Test, "audio", ""}, "Audio target");
+    REQUIRE(txn);
+    model::Track track;
+    track.name = "Audio";
+    track.parent = model::kMaster;
+    track.record.armed = true;
+    const auto id = app.txn().create(track);
+    model::Route route;
+    route.from.hwChannels = std::vector<int>{1};
+    route.to.track = id;
+    const auto input = app.txn().create(route);
+    app.txn().modify<model::Track>(id, [&](auto& value) { value.record.input = input; });
+    app.txn().modify<model::Track>(model::kMaster,
+                                   [&](auto& value) { value.children.push_back(id); });
+    REQUIRE(app.commitTransaction(*txn));
+    const auto first = root / "old" / "song.json";
+    if (mode >= 2) REQUIRE(app.save(first));
+    REQUIRE(app.startEngine(backend, {.sampleRate = 48000, .blockSize = 64, .inputs = 1},
+                            {.anticipative = anticipative, .workers = anticipative ? 2 : 0}));
+    REQUIRE(app.transport("record"));
+    if (anticipative)
+        REQUIRE_MESSAGE(app.engine()->awaitRendered(192), "renderer watchdog aborted the test");
+    backend.run(3);
+    REQUIRE(app.transport("stop"));
+    app.stopEngine();
+    const auto journal = app.recordDir() / "Audio-1.audio.jsonl";
+    REQUIRE(fs::exists(journal));
+    const auto side = detail::readSidecar(app.recordDir() / "Audio-1.wav");
+    REQUIRE(side);
+    CHECK(side->frames == 192);
+    if (mode == 3) {
+        app.setFixedClock(1'060'000);
+        app.tick();
+        CHECK(fs::exists(app.autosaveDir() / "autosave-1.json"));
+        CHECK_FALSE(fs::exists(journal));
+    } else {
+        const auto next = root / "new" / "song.json";
+        REQUIRE(app.save(next));
+        CHECK_FALSE(fs::exists(app.recordDir() / "Audio-1.audio.jsonl"));
+        if (mode == 2)
+            CHECK(fs::exists(journal));  // belongs to the older project
+        else
+            CHECK_FALSE(fs::exists(journal));
+        REQUIRE(app.open(next));
+        CHECK(app.head().media.size() == 1);
+        CHECK(app.recoverable().empty());
+        if (mode == 0) {
+            REQUIRE(
+                app.startEngine(backend, {.sampleRate = 48000, .blockSize = 64, .inputs = 1},
+                                {.anticipative = anticipative, .workers = anticipative ? 2 : 0}));
+            REQUIRE(app.transport("record"));
+            const auto emptyJournal = app.recordDir() / "Audio-1.audio.jsonl";
+            REQUIRE(app.transport("stop"));
+            app.stopEngine();
+            REQUIRE(fs::exists(emptyJournal));
+            REQUIRE(app.save(next));
+            CHECK_FALSE(fs::exists(emptyJournal));
+        }
+        if (mode == 2) {
+            REQUIRE(app.open(first));
+            CHECK(app.head().media.empty());
+            CHECK(app.recoverable().size() == 1);
+        }
+    }
+}
+
+TEST_CASE("audio journal validation bounds clocks and stops at a malformed progress record") {
+    const fs::path root = fs::temp_directory_path() /
+                          ("supple-audio-journal-bounds-" + std::to_string(test::processId()));
+    fs::remove_all(root);
+    struct Cleanup {
+        fs::path path;
+        ~Cleanup() { fs::remove_all(path); }
+    } cleanup{root};
+    const auto wav = root / "take.wav";
+    const auto journal = detail::audioJournalPath(wav);
+    const std::string header =
+        R"({"schema":"supple.audio-recording/1.0","track":"tr_1","sample_rate":48000,"start_sample":1000,"latency":8,"channels":2,"loop":[0,0]})"
+        "\n";
+    const std::string prefix = header + "{\"captured\":64,\"frames\":64}\n";
+    for (const std::string bad :
+         {"{\"captured\":128}\n", "{\"captured\":128,\"frames\":281474976710657}\n",
+          "{\"captured\":32,\"frames\":128}\n", "[10,144,60,100]\n"}) {
+        REQUIRE(writeFileAtomic(journal, prefix + bad + "{\"captured\":256,\"frames\":256}\n"));
+        bool torn = false;
+        const auto read = detail::readAudioJournal(wav, root, &torn);
+        REQUIRE(read);
+        CHECK(torn);
+        CHECK(read->frames == 64);
+    }
+    auto invalid = header;
+    invalid.replace(invalid.find("\"channels\":2"), 12, "\"channels\":0");
+    REQUIRE(writeFileAtomic(journal, invalid));
+    const auto read = detail::readAudioJournal(wav, root);
+    REQUIRE_FALSE(read);
+    CHECK(read.error().code == "record.journal");
+    CHECK(read.error().path == "/0/channels");
+}

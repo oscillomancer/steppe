@@ -1160,9 +1160,11 @@ Session and editing:
   unprivileged file flushes and write-through media publication, with no claimed
   POSIX-style parent/ancestor namespace durability after a power cut (ADR-0082).
   Native macOS/Windows validation of these changes remains pending.
-- A crash during audio loop/seek recording retains written samples but loses
-  the run placement metadata saved only at stop. ADR-0082 defines the pending
-  placement-journal implementation.
+- Audio loop/seek recovery uses an append-only placement journal, sharing MIDI
+  validation and checkpoints (ADR-0082). Recovery keeps physical tails but places
+  only trusted progress; final sidecars retain that bound after save/autosave
+  retirement. Initial loop-range changes remain unsupported as for MIDI.
+  Native macOS/Windows journal validation remains pending.
 - Streaming audio recording still stops at the RIFF 4 GiB limit
   (`audio.stream_full`), despite ADR-0014 and the engine spec describing RF64.
   Offline RF64 export is separate; ADR-0082 defines the pending streaming format.

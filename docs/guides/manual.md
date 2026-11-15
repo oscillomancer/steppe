@@ -938,6 +938,13 @@ Recorded filenames use sanitized track names and take numbers. Tracks named
 `Vocal` and `vocal` receive distinct take names when recorded together, including
 on case-insensitive filesystems.
 
+Audio takes keep an append-only placement journal beside each WAV. After a
+crash, Project recovery restores loop passes and seeks through the last complete
+checkpoint; extra audio bytes are kept without guessing their placement. Stop
+keeps a final placement sidecar, and the next successful save/autosave retires
+the journal. The loop range at recording start is used for recovery; changing
+it during the take has the same limitation as MIDI recording.
+
 Output recording is not supported yet. If a loaded project has an armed track
 in output record mode, recording fails before creating any files. Switch that
 track to input mode with `track.set {track: "tr_1", record_mode: "input"}`.

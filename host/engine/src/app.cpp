@@ -637,7 +637,7 @@ Status EngineApp::replaceProject(model::VersionStore store, fs::path path,
     recordingErrorsReported_.clear();
     // Not saved: a saved project's journals stay, offered on its next open;
     // an unsaved one's went with its folder above (ADR-0078, ADR-0080).
-    midiJournalsPending_.clear();
+    recordingJournalsPending_.clear();
     unpublishedCopies_.clear();
     endMasterRecording();
     autoWrite_.clear();
@@ -729,6 +729,8 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
     for (const auto& e : head().fx) running.push_back(e.id);
     captureFxStates(running, warnings);
     SUPPLE_TRY(model::checkInvariants(head()));
+    SUPPLE_TRY(checkpointRecordingJournals());
+    const bool relocated = !projectPath_.empty() || !options_.scratchDir.empty();
     const bool fromScratch = projectPath_.empty() && !options_.scratchDir.empty();
     if (fromScratch && engine_ && engine_->recording())
         return Error("project.recording", "a recording is running", {},
@@ -868,9 +870,9 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
     // folder (whose old copy stays the old project's, as its WAVs do). A
     // file the copy found already there is not this save's: it stays.
     std::vector<fs::path> retire;
-    for (const fs::path& journal : midiJournalsPending_) {
+    for (const fs::path& journal : recordingJournalsPending_) {
         const fs::path rel = journal.lexically_relative(oldMedia);
-        if (sameMedia || rel.empty() || *rel.begin() == "..") {
+        if (!relocated || sameMedia || rel.empty() || *rel.begin() == "..") {
             retire.push_back(journal);
             continue;
         }
@@ -879,8 +881,8 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
             std::find(createdMedia.begin(), createdMedia.end(), moved) != createdMedia.end())
             retire.push_back(moved);
     }
-    midiJournalsPending_ = std::move(retire);
-    dropSavedMidiJournals();
+    recordingJournalsPending_ = std::move(retire);
+    dropSavedRecordingJournals();
     if (fromScratch) releaseScratch();  // its media moved; its autosaves are older than the file
     autosaveMarked_ = true;             // the file itself is the newest copy
     autosaveMs_ = serviceClockMs();
@@ -1843,12 +1845,14 @@ void EngineApp::autosave() {
         next = *autosavedThrough_ + 1;
     }
     const fs::path file = dir / ("autosave-" + std::to_string(next) + ".json");
-    if (auto st = writeFileAtomic(file, model::serializeProjectFile(*versions_)); !st) {
+    auto st = checkpointRecordingJournals();
+    if (st) st = writeFileAtomic(file, model::serializeProjectFile(*versions_));
+    if (!st) {
         emit("engine.error", json::Value(st.error().toString()));
         autosaveMs_ = serviceClockMs();  // try again after an interval, not every tick
         return;
     }
-    dropSavedMidiJournals();
+    dropSavedRecordingJournals();
     existing.push_back({next, file});
     std::sort(existing.begin(), existing.end(),
               [](const auto& a, const auto& b) { return a.first < b.first; });
@@ -1862,12 +1866,44 @@ void EngineApp::autosave() {
     autosaveMarked_ = true;
 }
 
-void EngineApp::dropSavedMidiJournals() {
-    for (const fs::path& journal : midiJournalsPending_) {
-        std::error_code ec;
-        fs::remove(journal, ec);  // a failure leaves it recoverable: offered again, never lost
+namespace {
+fs::path audioJournalWave(const fs::path& journal) {
+    auto stem = journal.filename().string();
+    stem.resize(stem.size() - std::string_view(".audio.jsonl").size());
+    return journal.parent_path() / (stem + ".wav");
+}
+}  // namespace
+Status EngineApp::checkpointRecordingJournals() {
+    for (const auto& journal : recordingJournalsPending_) {
+        if (!detail::isAudioJournal(journal)) continue;
+        const auto wav = audioJournalWave(journal);
+        // A prior writer sync may have failed; never retire its recovery
+        // metadata on the strength of a durable project but volatile audio.
+        SUPPLE_TRY(syncFile(wav));
+        SUPPLE_TRY(syncParentDirectories(wav));
     }
-    midiJournalsPending_.clear();
+    return okStatus();
+}
+void EngineApp::dropSavedRecordingJournals() {
+    std::vector<fs::path> kept;
+    for (const fs::path& journal : recordingJournalsPending_) {
+        if (detail::isAudioJournal(journal)) {
+            const auto wav = audioJournalWave(journal);
+            auto side = detail::readSidecar(wav, wav.parent_path());
+            // Metadata failure leaves the journal, including across retry.
+            if (!side || !side->frames) {
+                const auto inspected = audio::inspectWavStream(wav);
+                if (!inspected || inspected->fileFrames != 0) {
+                    kept.push_back(journal);
+                    continue;
+                }
+            }
+        }
+        std::error_code ec;
+        fs::remove(journal, ec);
+        if (ec) kept.push_back(journal);
+    }
+    recordingJournalsPending_ = std::move(kept);
 }
 
 void EngineApp::restartFx(model::Id fx) {
@@ -2021,7 +2057,8 @@ Result<TransportInfo> EngineApp::transport(std::string_view action, std::optiona
                     const bool taken = reservedStems.contains(folded) ||
                                        occupied(dir / (stem + ".wav")) ||
                                        occupied(dir / (stem + ".rec.json")) ||
-                                       occupied(dir / (stem + ".midi.jsonl"));
+                                       occupied(dir / (stem + ".midi.jsonl")) ||
+                                       occupied(dir / (stem + ".audio.jsonl"));
                     if (!taken) {
                         reservedStems.insert(std::move(folded));
                         return file;
@@ -2626,10 +2663,13 @@ Result<std::vector<RecordedInfo>> EngineApp::commitTakes(const std::vector<Recor
     record_.invocations.push_back(
         {"record.commit", detail::recordCommitArgs(takes, punch_, media)});
     SUPPLE_TRY(commitTransaction(*txnId));
-    // The MIDI takes are in the project now; their journals go once a saved
-    // file or autosave holds them (ADR-0080).
+    // The takes are in the project now; owned journals go once a saved
+    // file or autosave holds them (ADR-0080/0082).
     for (const RecordedTake& r : takes)
-        if (r.isMidi && !r.file.empty()) midiJournalsPending_.push_back(r.file);
+        if (r.isMidi && !r.file.empty())
+            recordingJournalsPending_.push_back(r.file);
+        else if (!r.isMidi && !r.journal.empty())
+            recordingJournalsPending_.push_back(r.journal);
     for (auto& [source, pendingTake] : pendingHashes) {
         // Open only; all reads happen on the worker. The handle survives a
         // first save moving the scratch file before the job gets to run.
@@ -2846,6 +2886,7 @@ void EngineApp::finalizeRecordingHash(Id source, model::MediaSource expected, Re
         detail::RecordingInfo side{take.track,    take.startSample, take.sampleRate,
                                    take.segments, take.loop.start,  take.loop.end,
                                    hash};
+        side.frames = take.frames;
         Status finalized;
         {
             std::lock_guard lock(recordingFinalizeMutex_);
@@ -3074,6 +3115,13 @@ std::int64_t leftoverRecordings(const fs::path& folder, const fs::path& rec,
         }
         if (f.extension() != ".wav" || !it->is_regular_file(ec)) continue;
         if (used.count(("rec" / f.filename()).generic_string())) continue;
+        const auto journal = detail::audioJournalPath(f);
+        if (fs::symlink_status(journal, ec).type() != fs::file_type::not_found) {
+            auto side = detail::readAudioJournal(f, rec);
+            auto wav = audio::inspectWavStream(f);
+            if (side && side->frames && *side->frames > 0 && wav && wav->fileFrames > 0) ++n;
+            continue;
+        }
         std::error_code sideError;  // a sidecar recovery would read: regular, inside
         if (detail::recoveryFileInside(rec, f) &&
             detail::recoveryFileInside(rec, detail::sidecarPath(f)) &&
@@ -3136,11 +3184,14 @@ RecordingCheck checkRecording(const model::Session& s, const fs::path& rec, cons
     }
     // The sidecar is opened only inside the WAV's own folder (itself inside
     // `root`): a link to placement metadata elsewhere is not followed.
-    auto side = detail::readSidecar(f, rec);  // none: not a recording, or capture never began
+    const auto journal = detail::audioJournalPath(f);
+    const bool journalPresent = fs::symlink_status(journal, ec).type() != fs::file_type::not_found;
+    auto side = journalPresent ? detail::readAudioJournal(f, rec) : detail::readSidecar(f, rec);
+    // A journal is authoritative while present: never flatten an unreadable one.
     if (!side) {
-        if (fs::exists(detail::sidecarPath(f), ec)) {
+        if (journalPresent || fs::exists(detail::sidecarPath(f), ec)) {
             Error e = std::move(side).error();
-            e.code = "record.sidecar";
+            e.code = journalPresent ? "record.journal" : "record.sidecar";
             if (e.path.empty()) e.path = "/";
             if (e.hint.empty()) e.hint = "restore a valid recording sidecar or skip this file";
             out.problem = std::move(e);
@@ -3156,6 +3207,8 @@ RecordingCheck checkRecording(const model::Session& s, const fs::path& rec, cons
         out.problem = std::move(e);
         return out;
     }
+    if (side->frames)
+        wav->fileFrames = std::min(wav->fileFrames, static_cast<std::uint64_t>(*side->frames));
     if (wav->fileFrames == 0) return out;
     if (auto valid = recordingBounds(s, *side, wav->fileFrames, wav->sampleRate); !valid) {
         out.problem = valid.error();
@@ -3849,7 +3902,7 @@ std::vector<RecoverableInfo> EngineApp::recoverable(std::vector<RecordingWarning
         }
     });
     for (const fs::path& f : recordingFiles_) used.insert(comparable(f));
-    for (const fs::path& f : midiJournalsPending_) used.insert(comparable(f));
+    for (const fs::path& f : recordingJournalsPending_) used.insert(comparable(f));
     std::vector<fs::path> files;
     for (auto it = fs::directory_iterator(dir, ec); !ec && it != fs::directory_iterator();
          it.increment(ec))
@@ -3963,6 +4016,7 @@ Result<std::vector<RecordedInfo>> EngineApp::recover(const std::vector<std::stri
             return Error("track.strip_type", "recover recordings onto a channel or master",
                          "/track", "choose a child channel of the buss instead");
         if (!check.midi) {
+            t.frames = static_cast<std::int64_t>(check.wav->fileFrames);
             t.startSample = side->startSample;
             t.sampleRate = side->sampleRate;
             t.segments = side->segments;  // loop passes, when the recording ended normally
@@ -3988,7 +4042,20 @@ Result<std::vector<RecordedInfo>> EngineApp::recover(const std::vector<std::stri
             it = takes.erase(it);
             continue;
         }
-        t.frames = static_cast<std::int64_t>(*frames);
+        t.frames = std::min(t.frames, static_cast<std::int64_t>(*frames));
+        const auto journal = detail::audioJournalPath(t.file);
+        std::error_code ec;
+        if (fs::is_regular_file(fs::symlink_status(journal, ec))) t.journal = journal;
+        // Keep trusted placement after the next save retires the journal.
+        detail::RecordingInfo side{t.track,    t.startSample, t.sampleRate,
+                                   t.segments, t.loop.start,  t.loop.end};
+        side.frames = t.frames;
+        auto metadata = detail::writeSidecar(t.file, side);
+        if (!metadata) {
+            warn(metadata.error(), t.file.lexically_relative(mediaDir()), t.track.str());
+            it = takes.erase(it);
+            continue;
+        }
         ++it;
     }
     return commitTakes(takes, "recover");

@@ -217,7 +217,9 @@ it is allowed.
   hash (SHA-256 of file bytes), format, sample_rate, channels, frames}`.
   Decoding and resampling to the engine rate are cached by the engine keyed
   by `(hash, rate)`; peak pyramids are cached outside the project (never in
-  diffs). Recording sources may initially have an empty hash. A background
+  diffs). Recording sources may initially have an empty hash. A recovered recording's
+  `frames` may name only its journal-trusted prefix; unplaced physical tail
+  bytes remain in the file. A background
   completion replaces matching media metadata in stored sessions without a
   version/undo step or revision change; existing reader leases remain immutable
   and retain their versions. An undone/deleted take drops its completion.

@@ -833,10 +833,11 @@ first use, and no plug-in code runs early to warm it.
   rewriting the header every 5 s so a crash leaves a valid file up to the last
   flush. Targets reserve their sanitized track/take stems with ASCII case folding
   before any files are opened, so simultaneous names cannot collide on
-  case-insensitive filesystems. Existing WAV, sidecar and MIDI journal entries
+  case-insensitive filesystems. Existing WAV, sidecar and audio/MIDI journal entries
   also reserve their stems. A sidecar per file records its track and start;
   `project.recover` repairs the header to cover everything on disk and places
-  takes a crash left out (ADR-0014). Repair checks both RIFF and data byte
+  takes a crash left out, clipping placement to trusted journal/sidecar progress
+  when present (ADR-0014/0082). Repair checks both RIFF and data byte
   counts against the whole frames physically present, including a torn size
   whose rounded-down frame count already matches; partial trailing frames are
   not included in either repaired size. Punch in/out and loop recording (one take per pass); MIDI recording
@@ -854,6 +855,30 @@ first use, and no plug-in code runs early to warm it.
   survive pending hash jobs (including finalized loop runs at stop); the
   background finalization adds an optional `hash` without changing their
   recovery contract.
+- **Audio placement journals** (ADR-0082): each WAV owns an exclusively
+  created `<stem>.audio.jsonl`, schema `supple.audio-recording/1.0`. The shared
+  MIDI journal reader/writer handles header, append, flush/sync and torn tails.
+  Its header has `track`, `sample_rate`, `start_sample`, `latency`, `channels`
+  and the initial `loop`. Runs use the same captured-frame clock as MIDI;
+  progress is `{"captured": n, "frames": f}`, where `f` counts complete WAV
+  frames actually written (including rendered-input padding/trim). The writer
+  flushes audio before progress, and syncs data/header before the journal at
+  each five-second checkpoint. Audio journal failure stops that target and
+  reports `record.error`; healthy targets continue. Recovery lists the WAV,
+  clips placement to min(physical frames, last complete journal progress),
+  and uses stop's initial start/latency/run rule. Extra WAV frames are kept,
+  never guessed into an unknown placement. Loop-range changes retain the
+  initial-loop limitation of ADR-0080. Before journal retirement, a final
+  `supple.recording/1.1` sidecar preserves this trusted `frames` bound; legacy
+  1.0 sidecars still load. Hash completion preserves the bound. Save/autosave
+  checkpoint the stopped audio before publishing and retire owned journals
+  only after success; Save As retires its new copies, never another project's.
+`RecordedTake::journal` is the owned audio placement journal path (empty if
+exclusive creation failed); it is not project media and does not enter
+`record.commit`. Recovery reconstructs it from the checked WAV companion.
+The final sidecar 1.1 `frames` is a nonnegative clock bounded by 2^48, and
+clips recovery without truncating the physical WAV.
+
 - **MIDI take journals** (ADR-0080): each MIDI target writes
   `<media>/rec/<Track>-<n>.midi.jsonl` (created exclusively, never through a
   link; a name any entry has, a dangling link too, is not free, and a take

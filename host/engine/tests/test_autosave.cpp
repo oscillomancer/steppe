@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 #include <doctest/doctest.h>
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -2432,4 +2433,37 @@ TEST_CASE("retrying a failed save as retires the journal copy the first attempt 
     CHECK(p.app->head().midi.size() == 1);
     CHECK(p.app->recoverable().empty());
     CHECK(fs::exists(old));  // the first project's journal stays its own
+}
+
+TEST_CASE("an unsaved audio journal recovers loops without a sidecar or autosave") {
+    Unsaved u;
+    const std::string left = "20261114-090000-82";
+    const auto wave = u.folder(left) / "media" / "rec" / "Audio-1.wav";
+    fs::create_directories(wave.parent_path());
+    audio::WavStreamWriter writer;
+    REQUIRE(writer.open(wave, 48000, 1));
+    std::array<float, 160> data{};
+    REQUIRE(writer.append(data.data(), data.size()));
+    REQUIRE(writer.close());
+    const auto journal = detail::audioJournalPath(wave);
+    REQUIRE(writeFileAtomic(
+        journal,
+        R"({"schema":"supple.audio-recording/1.0","track":"tr_9","sample_rate":48000,"start_sample":48000,"latency":0,"channels":1,"loop":[48000,48064]})"
+        "\n"
+        "{\"run\":[64,48000]}\n{\"captured\":128,\"frames\":128}\n"));
+    auto app = u.run("20261114-100000-1");
+    auto sessions = app->recoverableSessions();
+    REQUIRE(sessions.size() == 1);
+    CHECK(sessions[0].recordings == 1);
+    auto recovered = app->recoverSession(left);
+    REQUIRE_MESSAGE(recovered, (recovered ? "" : recovered.error().toString()));
+    REQUIRE(recovered->recovered.size() == 1);
+    CHECK(recovered->recovered[0].takes.size() == 2);
+    CHECK(app->head().media.begin()->value->frames == 128);
+    REQUIRE(app->save(u.root / "saved" / "song.json"));
+    CHECK_FALSE(fs::exists(app->recordDir() / "Audio-1.audio.jsonl"));
+    CHECK(audio::inspectWavStream(app->recordDir() / "Audio-1.wav")->fileFrames == 160);
+    REQUIRE(app->open(u.root / "saved" / "song.json"));
+    CHECK(app->head().media.begin()->value->frames == 128);
+    CHECK(app->head().takes.size() == 2);
 }

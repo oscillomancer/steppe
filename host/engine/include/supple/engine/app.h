@@ -958,10 +958,11 @@ class EngineApp : public cmd::Host {
     std::vector<std::filesystem::path> recordingFiles_;  // while recording
     std::set<std::filesystem::path> recordingErrorsReported_;
     void emitRecordingError(const RecordingError& error);
-    // MIDI journals (ADR-0080) of takes committed in this project and not
+    // Audio/MIDI journals (ADR-0080/0082) of takes committed in this project and not
     // yet in a saved file or autosave: not leftovers; deleted once one is.
-    std::vector<std::filesystem::path> midiJournalsPending_;
-    void dropSavedMidiJournals();
+    std::vector<std::filesystem::path> recordingJournalsPending_;
+    void dropSavedRecordingJournals();
+    Status checkpointRecordingJournals();
     // What a save as copied into another media folder before its file failed
     // to publish: a retry finds these already there, yet they are still this
     // project's copies (its journals among them retire once a save holds them).
