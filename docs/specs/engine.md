@@ -1513,7 +1513,10 @@ A committed recording may carry a `warnings` array with structured
 and the `record.warning` event while retained passes still commit.
 `project.recoverable` and `project.recover` expose skipped invalid-sidecar
 diagnostics in the same optional `warnings` shape (`record.sidecar`, and
-`record.journal` for a MIDI journal whose header does not read).
+`record.journal` for a MIDI journal whose header does not read). Their
+`file`, like the media path a committed take is stored under, is relative
+to the media folder with `/` between its parts on every platform
+(`rec/Vocal-1.wav`).
 `project.recoverable` lists a MIDI journal with at least one event that no
 committed take of the project holds (`midi_events`: how many; `channels`
 0); `project.recover` places it as stop would have, with its Note Out route

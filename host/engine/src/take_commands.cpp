@@ -188,14 +188,19 @@ struct RecordCommitArgs {
 };
 
 schema::Schema<RecordCommitArgs> recordCommitSchema() {
+    // The bounds of a MIDI journal (ADR-0080): a replayed record.commit is
+    // read from a project's history, the same file boundary.
+    constexpr double limit = static_cast<double>(detail::kRecordingClockLimit);
+    const auto clock = schema::integer().range(-limit, limit);
+    const auto length = schema::integer().range(0, limit);
     auto segment = schema::object<RecSegmentArg>("record_commit_segment")
-                       .field("file_frame", &RecSegmentArg::fileFrame, schema::integer().min(0))
-                       .field("timeline", &RecSegmentArg::timeline, schema::integer())
+                       .field("file_frame", &RecSegmentArg::fileFrame, length)
+                       .field("timeline", &RecSegmentArg::timeline, clock)
                        .build();
     auto event =
         schema::object<RecMidiArg>("record_commit_event")
-            .field("timeline", &RecMidiArg::timeline, schema::integer())
-            .field("run", &RecMidiArg::run, schema::integer().min(0))
+            .field("timeline", &RecMidiArg::timeline, clock)
+            .field("run", &RecMidiArg::run, schema::integer().range(0, UINT32_MAX))
             .field("bytes", &RecMidiArg::bytes, schema::arrayOf(schema::integer().min(0).max(255)))
             .field("route", &RecMidiArg::route, idArg("sd", "Route"))
             .field("voice", &RecMidiArg::voice, schema::integer())
@@ -205,13 +210,13 @@ schema::Schema<RecordCommitArgs> recordCommitSchema() {
                     .field("file", &RecTakeArg::file,
                            schema::string().doc("Relative to the media folder when inside it"))
                     .field("hash", &RecTakeArg::hash, schema::string())
-                    .field("start_sample", &RecTakeArg::startSample, schema::integer())
-                    .field("frames", &RecTakeArg::frames, schema::integer().min(0))
+                    .field("start_sample", &RecTakeArg::startSample, clock)
+                    .field("frames", &RecTakeArg::frames, length)
                     .field("segments", &RecTakeArg::segments, schema::arrayOf(segment))
-                    .field("loop_start", &RecTakeArg::loopStart, schema::integer())
-                    .field("loop_end", &RecTakeArg::loopEnd, schema::integer())
-                    .field("overflow_frames", &RecTakeArg::overflowFrames, schema::integer().min(0))
-                    .field("sample_rate", &RecTakeArg::sampleRate, schema::number().min(0))
+                    .field("loop_start", &RecTakeArg::loopStart, length)
+                    .field("loop_end", &RecTakeArg::loopEnd, length)
+                    .field("overflow_frames", &RecTakeArg::overflowFrames, length)
+                    .field("sample_rate", &RecTakeArg::sampleRate, schema::number().exclusiveMin(0))
                     .field("midi", &RecTakeArg::midi, schema::boolean())
                     .field("events", &RecTakeArg::events, schema::arrayOf(event))
                     .build();
