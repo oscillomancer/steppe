@@ -1962,3 +1962,54 @@ TEST_CASE("module banks and gate helpers run in real-time native and generated h
         code->destroy(self);
     }
 }
+
+#include "dsp/Interpolation.h"
+
+// The runtime's DelayLine is the framework's FractionalDelay ring for ring,
+// and its clear() is O(1): it reads what it held before as zero instead of
+// zeroing the ring. Every read, around the edge of what was pushed since,
+// must equal the framework's line whose ring clear() zeroed, to the bit.
+TEST_CASE("a cleared DelayLine reads exactly as the framework's zeroed line") {
+    for (const int longest : {0, 5, 100, 1000}) {
+        CAPTURE(longest);
+        script::DelayLine line;
+        dsp::FractionalDelay reference;
+        line.prepare(longest);
+        reference.prepare(longest);
+        std::uint32_t seed = 12345;
+        auto next = [&] {
+            seed = seed * 1664525u + 1013904223u;
+            return static_cast<double>(seed >> 8) / double(1 << 24) * 2.0 - 1.0;
+        };
+        const double most = reference.capacity();
+        auto agree = [&](int pushed) {
+            std::vector<double> delays = {0.0, 0.25, 0.5,  0.999,      1.0,        1.5,
+                                          2.0, 2.75, most, most - 0.5, most + 3.0, -1.0};
+            for (int k = -3; k <= 3; ++k)
+                for (double f : {0.0, 0.3, 0.7}) delays.push_back(pushed + k + f);
+            for (double d : delays) {
+                if (d > most + 3.0) continue;
+                CAPTURE(d);
+                const double a = line.read(d), b = reference.read(d);
+                CHECK(std::bit_cast<std::uint64_t>(a) == std::bit_cast<std::uint64_t>(b));
+            }
+        };
+        for (int round = 0; round < 3; ++round) {
+            const int fill = round == 0 ? 7 : longest + 40;
+            for (int i = 0; i < fill; ++i) {
+                const double x = next();
+                line.push(x);
+                reference.push(x);
+                agree(i + 1 + (round == 0 ? 0 : 1 << 20));
+            }
+            line.clear();
+            reference.clear();
+            for (int i = 0; i < longest + 12; ++i) {
+                const double x = next();
+                line.push(x);
+                reference.push(x);
+                agree(i + 1);
+            }
+        }
+    }
+}

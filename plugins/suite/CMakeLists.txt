@@ -63,6 +63,8 @@ endif()
 if(SUPPLE_BUILD_TESTS)
   add_executable(script-compiler.tests compiler/tests/test_compiler.cpp)
   target_include_directories(script-compiler.tests PRIVATE compiler/tests)
+  # The framework's DelayLine, the reference the runtime's line must match.
+  target_include_directories(script-compiler.tests SYSTEM PRIVATE ${SUPPLE_TEMPLATE_FRAMEWORK})
   target_link_libraries(script-compiler.tests PRIVATE supple::script-compiler supple::doctest-main)
   target_compile_definitions(script-compiler.tests PRIVATE
                              SUPPLE_SKILL_GUIDES="${PROJECT_SOURCE_DIR}/skill/guides")

@@ -390,7 +390,8 @@ saying when the library version is used instead or the type is unavailable.
   prepared struct (so a module's memory is held twice, except a `Buffer`
   it leaves all zero and a `DelayLine` nothing was pushed into since it was
   prepared: those are kept as their size alone, `detail::PristineCopy`,
-  and cleared in place), and `restart()`
+  and cleared in place: a buffer by `memset`, a line in O(1), since a
+  line reads what it held before its last clear as zero), and `restart()`
   copies it back in place, keeping the members' bindings, the knobs and
   the status, and snapping parameters to their targets. Runtime objects
   are sized in `prepare()` only, so the copy never reallocates. A host

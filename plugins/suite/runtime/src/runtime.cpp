@@ -734,17 +734,67 @@ void EnvelopeFollower::clear() { as<FollowerState>(storage_).state = {}; }
 
 // A resource: the line's buffer is allocated, so the object holds it by
 // pointer. Constructed with the plugin (main thread); prepare() sizes it.
+//
+// The framework's FractionalDelay, ring for ring and read for read (its
+// sizing, its Hermite taps, dsp::hermite itself), with one addition: the line
+// knows how many of its newest samples were pushed since it was last cleared
+// (`fresh`), and a tap older than that reads as zero. So clear(), and a
+// restart from a line prepare() left empty, are O(1): the ring keeps its
+// stale samples, which are never read, and the line plays exactly as one
+// whose ring was zeroed.
 namespace {
 struct LineState {
-    dsp::FractionalDelay line;
-    bool pushed = false;  // since prepare() or clear(): otherwise all zero
+    std::vector<double> ring = std::vector<double>(4, 0.0);
+    std::size_t mask = 3, write = 0;
+    std::size_t fresh = 4;  // up to ring.size(): all of it is current
+    bool pushed = false;    // since prepare() or clear(): otherwise all zero
     // A prepared state kept without its ring (detail::PristineCopy): zeros
     // of this capacity; a copy from it clears in place.
     bool zeros = false;
-    double capacity = 0.0;
+    std::size_t size = 4;  // the ring's, for a kept state without one
+
+    double capacity() const { return static_cast<double>(mask - 3); }
+    void prepare(int maxDelay) {
+        std::size_t n = 4;
+        while (n < static_cast<std::size_t>(std::max(0, maxDelay)) + 4) n <<= 1;
+        ring.assign(n, 0.0);
+        mask = n - 1;
+        write = 0;
+        fresh = n;
+        size = n;
+    }
+    void clear() { fresh = 0; }
+    void push(double x) {
+        write = (write + 1) & mask;
+        ring[write] = x;
+        if (fresh <= mask) ++fresh;
+    }
+    // `age` samples before the newest; zero once older than the last clear.
+    double tap(std::size_t age) const { return age < fresh ? ring[(write - age) & mask] : 0.0; }
+    double read(double delay) const {
+        delay = std::clamp(delay, 0.0, capacity());
+        const double whole = std::floor(delay);
+        const double t = delay - whole;
+        const auto w = static_cast<std::size_t>(whole);
+        double x0, x1, xm1, x2;
+        if (fresh > mask) {  // nothing stale: the framework's taps exactly
+            const std::size_t i = (write - w) & mask;
+            x0 = ring[i];
+            x1 = ring[(i - 1) & mask];
+            xm1 = ring[(i + 1) & mask];
+            x2 = ring[(i - 2) & mask];
+        } else {
+            x0 = tap(w);
+            x1 = tap(w + 1);
+            xm1 = w >= 1 ? tap(w - 1) : 0.0;  // unused below 1
+            x2 = tap(w + 2);
+        }
+        // At delay < 1 the "newer" neighbour is not yet written; use x0.
+        const double newer = whole < 1.0 ? x0 : xm1;
+        return dsp::hermite(newer, x0, x1, x2, t);
+    }
 };
 LineState& state(void* p) { return *static_cast<LineState*>(p); }
-dsp::FractionalDelay& line(void* p) { return state(p).line; }
 }  // namespace
 DelayLine::DelayLine() : line_(new LineState()) {}
 DelayLine::DelayLine(const DelayLine& other) : line_(new LineState()) { *this = other; }
@@ -752,31 +802,42 @@ DelayLine& DelayLine::operator=(const DelayLine& other) {
     if (this == &other) return *this;
     LineState& to = state(line_);
     const LineState& from = state(other.line_);
-    const double capacity = from.zeros ? from.capacity : from.line.capacity();
-    if (!to.zeros && to.line.capacity() == capacity) {
+    if (!to.zeros && to.ring.size() == from.size) {
         // In place, as restoring a plugin's state or a restart copies: lines
-        // of equal capacity, which std::vector copies without allocating.
-        if (from.zeros)
-            to.line.clear();
-        else
-            to.line = from.line;
-        to.pushed = !from.zeros && from.pushed;
+        // of equal size, which std::vector copies without allocating. From
+        // an empty kept state, a clear: O(1).
+        if (from.zeros) {
+            to.clear();
+            to.pushed = false;
+        } else {
+            to.ring = from.ring;
+            to.write = from.write;
+            to.fresh = from.fresh;
+            to.pushed = from.pushed;
+        }
         return *this;
     }
-    // A different capacity: this allocates (off the audio thread).
+    // A different size: this allocates (off the audio thread).
     if (tPristineCopy && (from.zeros || !from.pushed)) {
-        to.line = dsp::FractionalDelay();
+        to.ring = std::vector<double>();
+        to.mask = from.size - 1;
+        to.write = 0;
+        to.fresh = 0;
+        to.size = from.size;
         to.zeros = true;
-        to.capacity = capacity;
         to.pushed = false;
         return *this;
     }
     to.zeros = false;
     if (from.zeros) {
-        to.line.prepare(static_cast<int>(capacity));  // a ring of that capacity, all zero
+        to.prepare(static_cast<int>(from.size) - 4);  // a ring of that size, all zero
         to.pushed = false;
     } else {
-        to.line = from.line;
+        to.ring = from.ring;
+        to.mask = from.mask;
+        to.write = from.write;
+        to.fresh = from.fresh;
+        to.size = from.size;
         to.pushed = from.pushed;
     }
     return *this;
@@ -788,21 +849,22 @@ void DelayLine::prepare(int maxDelaySamples) {
     std::int64_t ring = 4;
     while (ring < std::int64_t{maxDelaySamples} + 4) ring <<= 1;
     if (!detail::reserve(ring * static_cast<std::int64_t>(sizeof(double)))) return;
-    line(line_).prepare(maxDelaySamples);
+    state(line_).prepare(maxDelaySamples);
     state(line_).pushed = false;
     state(line_).zeros = false;
 }
 void DelayLine::push(double x) {
-    state(line_).pushed = true;
-    line(line_).push(x);
+    LineState& s = state(line_);
+    s.pushed = true;
+    s.push(x);
 }
 double DelayLine::read(double delaySamples) const {
-    // The framework's line converts the delay to an index: NaN must not reach it.
+    // The delay becomes an index: NaN must not reach it.
     if (!(delaySamples == delaySamples)) delaySamples = 0.0;
-    return line(line_).read(delaySamples);
+    return state(line_).read(delaySamples);
 }
 void DelayLine::clear() {
-    line(line_).clear();
+    state(line_).clear();
     state(line_).pushed = false;
 }
 
