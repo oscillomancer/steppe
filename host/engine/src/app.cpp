@@ -2650,7 +2650,7 @@ Result<std::vector<RecordedInfo>> EngineApp::placeTakes(
         const fs::path relative =
             media.empty() ? fs::path() : fs::relative(r.file, media, relError);
         const std::string mediaPath = !relError && !relative.empty() && *relative.begin() != ".."
-                                          ? relative.string()
+                                          ? relative.generic_string()
                                           : r.file.string();
         if (!live && hash.empty())
             versions_->forEachVersion([&](const model::Version& v) {
@@ -3718,13 +3718,13 @@ std::vector<RecoverableInfo> EngineApp::recoverable(std::vector<RecordingWarning
                 const Error& e = *check.problem;
                 warnings->push_back({e.code, e.message, e.path, e.hint,
                                      check.side ? check.side->track.str() : std::string(),
-                                     f.lexically_relative(media).string()});
+                                     f.lexically_relative(media).generic_string()});
             }
             continue;
         }
         const detail::RecordingInfo* side = &*check.side;
         RecoverableInfo r;
-        r.file = f.lexically_relative(media).string();
+        r.file = f.lexically_relative(media).generic_string();
         r.track = side->track.str();
         r.startSeconds = static_cast<double>(side->startSample) / side->sampleRate;
         if (check.midi) {

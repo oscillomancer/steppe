@@ -470,7 +470,8 @@ void registerProjectCommands(cmd::Registry& registry) {
         c.description =
             "recordings: takes (audio WAVs, and MIDI takes' journals with midi_events) recorded "
             "but never committed (the program stopped "
-            "mid-recording) or never saved, found in the media folder's rec/. start_seconds is "
+            "mid-recording) or never saved, found in the media folder's rec/ (file: relative to "
+            "the media folder, with / on every platform). start_seconds is "
             "where each was recorded; seconds includes audio written after the file's last "
             "header update. sessions: unsaved projects of earlier runs that ended without "
             "saving or discarding them (a crash), each with its newest autosave's project "
