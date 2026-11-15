@@ -1051,7 +1051,10 @@ and naming. All `edit` unless marked (q) query or (a) action.
   (`frames`, `file_frame`, `loop_start`, `loop_end`, `overflow_frames`),
   `run` fits 32 bits and `sample_rate` is above 0; otherwise the call fails
   with `command.invalid_args`, its detail `schema.out_of_range` at the
-  field's path.
+  field's path. A loop ends after it starts or is [0, 0] (none), or the call
+  fails with `record.loop` at the take's `loop_end`; each punch endpoint, in
+  every take's frames, is within the same 2^48, and an enabled punch ends
+  after it starts, or the call fails with `record.punch` at that endpoint.
 - **render** (a): `render.mix {master}` (one master for the call; default the `masters` setting, else tr_0), `render.stems`, `render.regions` (matrix),
   `render.items`, `render.dry-run` (q: resolved file list), `render.job.*`;
   `format` (wav|flac), `secondary` (a second file in another format/bit depth

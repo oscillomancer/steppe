@@ -1940,6 +1940,64 @@ TEST_CASE("record.commit refuses clocks and runs no recording can have") {
     CHECK(p.app->head().midi.size() == 1);
 }
 
+TEST_CASE("record.commit refuses a punch or a loop no recording can have") {
+    // Round-12 review, finding 3: a finite punch end too large for a frame
+    // count made the clip empty, and the call succeeded without the take. A
+    // loop that ends before it starts is refused as in a journal's header.
+    Project p;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *p.app);
+    REQUIRE(d.execute({"track.add", json::Value::object(), kUnit}));
+    struct Args {
+        std::string punch = R"({"enabled":true,"start":0,"end":1})";
+        std::string loopStart = "0", loopEnd = "0";
+    };
+    auto commit = [&](const Args& a) {
+        auto args = json::parse(
+            std::string(R"({"takes":[{"track":"tr_1","file":"","hash":"","start_sample":0,)") +
+            R"("frames":48000,"sample_rate":48000,"midi":true,"loop_start":)" + a.loopStart +
+            R"(,"loop_end":)" + a.loopEnd +
+            R"(,"overflow_frames":0,"segments":[{"file_frame":0,"timeline":0}],)" +
+            R"("events":[{"timeline":0,"run":0,"voice":-1,"bytes":[144,60,100]},)" +
+            R"({"timeline":24000,"run":0,"voice":-1,"bytes":[128,60,0]}]}],"punch":)" + a.punch +
+            "}");
+        REQUIRE(args);
+        return d.execute({"record.commit", *args, kUnit});
+    };
+    const std::vector<std::tuple<Args, std::string, std::string>> cases = {
+        {{R"({"enabled":true,"start":0,"end":1e300})"}, "record.punch", "/args/punch/end"},
+        {{R"({"enabled":true,"start":-1e300,"end":1})"}, "record.punch", "/args/punch/start"},
+        {{R"({"enabled":false,"start":0,"end":1e300})"}, "record.punch", "/args/punch/end"},
+        {{R"({"enabled":true,"start":1,"end":1})"}, "record.punch", "/args/punch/end"},
+        {{R"({"enabled":true,"start":2,"end":1})"}, "record.punch", "/args/punch/end"},
+        {{R"({"enabled":true,"start":0,"end":1})", "48000", "24000"},
+         "record.loop",
+         "/args/takes/0/loop_end"},
+        {{R"({"enabled":true,"start":0,"end":1})", "24000", "24000"},
+         "record.loop",
+         "/args/takes/0/loop_end"},
+    };
+    for (const auto& [args, code, path] : cases) {
+        INFO(args.punch << " loop " << args.loopStart << ".." << args.loopEnd);
+        auto r = commit(args);
+        REQUIRE_FALSE(r);
+        INFO(r.error().toString());
+        CHECK(r.error().code == code);
+        CHECK(r.error().path == path);
+        CHECK_FALSE(r.error().hint.empty());
+        CHECK(p.app->head().midi.empty());
+    }
+    auto good = commit({});  // the same take, punched in at 0..1 s
+    REQUIRE_MESSAGE(good, (good ? std::string() : good.error().toString()));
+    CHECK(p.app->head().midi.size() == 1);
+    Args looped;  // and [0, 0] means no loop, as in a journal
+    looped.loopStart = "0";
+    looped.loopEnd = "96000";
+    auto withLoop = commit(looped);
+    REQUIRE_MESSAGE(withLoop, (withLoop ? std::string() : withLoop.error().toString()));
+}
+
 TEST_CASE("a recovered take whose Note Out route is gone keeps its voices apart") {
     // Round-10 review, finding 3: dropping the missing route also dropped
     // each voice's identity, so two overlapping notes of one pitch paired as
