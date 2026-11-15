@@ -39,17 +39,24 @@ bool sameBytes(const fs::path& a, const fs::path& b) {
 // copy into a temporary name, published with link() so nothing is replaced.
 Status copyNew(const fs::path& from, const fs::path& to) {
     static std::atomic<unsigned> serial{0};
-    fs::path temp = to;
-    temp += "." + std::to_string(files::processId()) + "." + std::to_string(serial.fetch_add(1)) +
-            ".copy-tmp";
+    const auto nextTemp = [&] {
+        return to.parent_path() / (".copy-" + std::to_string(files::processId()) + "-" +
+                                   std::to_string(serial.fetch_add(1)) + ".copy-tmp");
+    };
+    fs::path temp;
 #if defined(__linux__)
     const int in = ::open(from.c_str(), O_RDONLY | O_CLOEXEC);
     if (in < 0) return copyError(from, to, std::strerror(errno));
-    const int out = ::open(temp.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
-    if (out < 0) {
-        const int error = errno;
-        ::close(in);
-        return copyError(from, to, std::strerror(error));
+    int out = -1;
+    for (;;) {
+        temp = nextTemp();
+        out = ::open(temp.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
+        if (out >= 0) break;
+        const auto error = errno;
+        if (error != EEXIST) {
+            ::close(in);
+            return copyError(from, to, std::strerror(error));
+        }
     }
     const bool cloned = ::ioctl(out, FICLONE, in) == 0;
     ::close(in);
@@ -57,8 +64,21 @@ Status copyNew(const fs::path& from, const fs::path& to) {
     std::error_code ec;
     if (!cloned) fs::copy_file(from, temp, fs::copy_options::overwrite_existing, ec);
 #else
+    // Reserve the staging file ourselves, so cleanup can never remove an
+    // entry copy_file found already there (including after a PID is reused).
     std::error_code ec;
-    fs::copy_file(from, temp, fs::copy_options::none, ec);
+    for (;;) {
+        temp = nextTemp();
+        auto* reserved = files::createAppend(temp, ec);
+        if (reserved) {
+            if (std::fclose(reserved) == 0) break;
+            const std::string reason = std::strerror(errno);
+            fs::remove(temp, ec);
+            return copyError(from, to, reason);
+        }
+        if (ec != std::errc::file_exists) return copyError(from, to, ec.message());
+    }
+    fs::copy_file(from, temp, fs::copy_options::overwrite_existing, ec);
 #endif
     if (ec) {
         const auto reason = ec.message();

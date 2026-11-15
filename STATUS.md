@@ -478,7 +478,9 @@ instructions are in `docs/guides/installing.md`.
   pointer when off. Projects and renders default to
   `~/Documents/<slug>-media` (the render folder is choosable), each project
   in a folder of its own with its own media; imports are copied into the
-  project by default, and Save as into another folder copies the media. FX
+  project by default, and Save as into another folder copies the media. Media
+  staging names are short and exclusively reserved; valid destination filenames
+  need no spare bytes for a temporary suffix. FX
   chain presets, track templates (a strip and its chains) and project
   templates (with a copy of their audio) are saved, loaded and deleted in
   the app. Tracks duplicate from either right-click menu with their chains,

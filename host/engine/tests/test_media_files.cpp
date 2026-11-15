@@ -17,6 +17,47 @@
 namespace fs = std::filesystem;
 using namespace supple::engine;
 
+TEST_CASE("media copy accepts a valid filename without room for a staging suffix") {
+    const auto root = fs::temp_directory_path() /
+                      ("supple-media-long-" + std::to_string(supple::test::processId()) + "-" +
+                       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    REQUIRE(fs::create_directory(root));
+    struct Cleanup {
+        fs::path path;
+        ~Cleanup() { fs::remove_all(path); }
+    } cleanup{root};
+    fs::create_directory(root / "source");
+    const std::string name = std::string(251, 'a') + ".wav";
+    const auto source = root / "source" / name;
+    {
+        std::ofstream file(source, std::ios::binary);
+        if (!file) {
+            MESSAGE("this filesystem/path cannot hold a 255-byte filename");
+            return;
+        }
+        file << "complete media bytes";
+        REQUIRE(file.good());
+    }
+    const auto target = root / "target";
+    SUBCASE("import") {
+        bool created = false;
+        const auto copy = detail::copyIntoFolder(source, target, &created);
+        REQUIRE_MESSAGE(copy, (copy ? "" : copy.error().toString()));
+        CHECK(*copy == name);
+        CHECK(created);
+        REQUIRE(detail::copyIntoFolder(source, target, &created));
+        CHECK_FALSE(created);
+    }
+    SUBCASE("save as") { REQUIRE(detail::copyFolder(source.parent_path(), target)); }
+    CHECK(fs::file_size(target / name) == fs::file_size(source));
+    std::size_t entries = 0;
+    for (const auto& entry : fs::directory_iterator(target)) {
+        CHECK(entry.path().filename() == name);
+        ++entries;
+    }
+    CHECK(entries == 1);
+}
+
 TEST_CASE("media folder copy excludes its destination subtree and resolved aliases") {
     const auto root = fs::temp_directory_path() /
                       ("engine-media-copy-" +

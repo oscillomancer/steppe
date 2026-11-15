@@ -641,6 +641,9 @@ reused) instead of naming it where it is. The GUI gives each project a
 folder of its own (gui.md §4.11).
 Copy failures retain the underlying filesystem error even when temporary-file
 cleanup succeeds, so `media.copy` identifies the cause of a failed import or save.
+Copy staging uses short, exclusively reserved names independent of the final
+filename: a valid destination name needs no spare bytes for a temporary suffix,
+and cleanup removes only the staging file this operation created.
 Only if the resolved destination is a strict descendant of the resolved source
 media folder does the recursive copy skip that destination subtree, including
 symlink aliases. Existing destination files stay there; copied files are never
