@@ -628,6 +628,18 @@ class Engine {
     // Callback cycles in which a bridged plug-in did not answer by the
     // cycle's bridge deadline (ADR-0081): each ran past its period.
     std::uint64_t bridgeLateCycles() const { return bridgeLate_.load(); }
+    // Callback cycles with bridged calls that ran past their period, by
+    // cause (ADR-0081 diagnostics): a call's wait reached the deadline; the
+    // bridged waits took the overrun without reaching it; or the cycle was
+    // not waiting on the bridge (its own work, or its thread descheduled).
+    struct BridgeOverruns {
+        std::uint64_t lateWait = 0, slowBridge = 0, notWaiting = 0;
+        std::int64_t longestCycleNs = 0;  // of the cycles with bridged calls
+    };
+    BridgeOverruns bridgeOverruns() const {
+        return {overrunLateWait_.load(), overrunSlowBridge_.load(), overrunNotWaiting_.load(),
+                longestBridgedCycle_.load()};
+    }
     // Recording (main thread): capture starts with the first played cycle,
     // placed where the performer heard it (device and plan latency).
     // Main thread: masters recording their output (ADR-0057), for the plans
@@ -1008,6 +1020,8 @@ class Engine {
     std::uint64_t xportSeen_ = ~0ull;           // as seekSeen_: one executor at a time
     std::atomic<std::uint64_t> misses_{0};
     std::atomic<std::uint64_t> bridgeLate_{0};
+    std::atomic<std::uint64_t> overrunLateWait_{0}, overrunSlowBridge_{0}, overrunNotWaiting_{0};
+    std::atomic<std::int64_t> longestBridgedCycle_{0};
 
     // The callback's share when anticipative: its plan and the live instances
     // it owns, and where it plays live nodes.

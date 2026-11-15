@@ -23,6 +23,9 @@
 #else
 #include <pthread.h>
 #endif
+#if defined(__linux__)
+#include <sched.h>
+#endif
 
 #include "supple/base/thread.h"
 #include "supple/host/clap_host.h"
@@ -110,8 +113,15 @@ Result<json::Value> run(const Options& o, const PluginInfo& gain, const std::str
     calls.reserve(static_cast<std::size_t>(o.cycles) * chain.size());
     cycles.reserve(static_cast<std::size_t>(o.cycles));
     int over = 0;
+    std::uint64_t callerCpus = 0;
     auto next = Clock::now();
     for (int c = 0; c < o.warmup + o.cycles; ++c) {
+        if (c == o.warmup) resetBridgeTiming();  // the measured cycles only
+#if defined(__linux__)
+        if (c >= o.warmup)
+            if (const int cpu = sched_getcpu(); cpu >= 0 && cpu < 64)
+                callerCpus |= std::uint64_t{1} << cpu;
+#endif
         if (o.paced) {
             next += period;
             std::this_thread::sleep_until(next);
@@ -129,6 +139,7 @@ Result<json::Value> run(const Options& o, const PluginInfo& gain, const std::str
         cycles.push_back(us);
         if (us > periodUs) ++over;
     }
+    const BridgeTiming::Calls timing = bridgeTiming().background;
     for (auto& instance : chain) {
         if (instance->failed()) return Error("bench.failed", mode + ": " + instance->failure());
         instance->stopProcessing();
@@ -143,6 +154,25 @@ Result<json::Value> run(const Options& o, const PluginInfo& gain, const std::str
     row["cycle"] = summary(cycles);
     row["cycles"] = o.cycles;
     row["cycles_over_period"] = over;
+    // Where a bridged call's time went (ADR-0081 diagnostics): none in process.
+    if (timing.calls > 0) {
+        const double n = static_cast<double>(timing.calls);
+        json::Value t = json::Value::object();
+        t["calls"] = static_cast<std::int64_t>(timing.calls);
+        t["spun"] = static_cast<std::int64_t>(timing.spun);
+        t["wake_mean_us"] = static_cast<double>(timing.wakeSumNs) / n / 1000.0;
+        t["wake_max_us"] = static_cast<double>(timing.wakeMaxNs) / 1000.0;
+        t["work_mean_us"] = static_cast<double>(timing.workSumNs) / n / 1000.0;
+        t["return_mean_us"] = static_cast<double>(timing.returnSumNs) / n / 1000.0;
+        t["return_max_us"] = static_cast<double>(timing.returnMaxNs) / 1000.0;
+        t["wakes_over_200us"] = static_cast<std::int64_t>(timing.wakesOver200us);
+        t["wakes_over_1ms"] = static_cast<std::int64_t>(timing.wakesOver1ms);
+        t["bridge_cpus"] = static_cast<std::int64_t>(timing.bridgeCpus);
+        t["migrations"] = static_cast<std::int64_t>(timing.migrations);
+        t["class_mismatches"] = static_cast<std::int64_t>(timing.classMismatches);
+        row["bridge"] = std::move(t);
+    }
+    row["caller_cpus"] = static_cast<std::int64_t>(callerCpus);
     return row;
 }
 
@@ -243,8 +273,9 @@ int main(int argc, char** argv) {
     report["caller"] = std::string(policyName(caller.kind)) + " " + std::to_string(caller.priority);
     report["bridge"] = o.bridgePriority ? "fifo " + std::to_string(o.bridgePriority) : "normal 0";
     json::Value rows = json::Value::array();
-    std::printf("%-14s %6s %5s %9s %9s %9s %9s %9s %9s %6s\n", "isolation", "block", "n", "period",
-                "call p50", "call p99", "cyc p50", "cyc p99", "cyc max", "over");
+    std::printf("%-14s %6s %5s %9s %9s %9s %9s %9s %9s %6s %8s %8s %8s %8s %6s %6s\n", "isolation",
+                "block", "n", "period", "call p50", "call p99", "cyc p50", "cyc p99", "cyc max",
+                "over", "wake avg", "wake max", "work avg", "ret avg", "spun%", "cpus");
     for (const auto& mode : o.modes)
         for (int block : o.blocks)
             for (int count : o.instances) {
@@ -254,12 +285,20 @@ int main(int argc, char** argv) {
                     return 1;
                 }
                 json::Value& r = *row;
-                std::printf("%-14s %6d %5d %9.1f %9.1f %9.1f %9.1f %9.1f %9.1f %6lld\n",
-                            mode.c_str(), block, count, r["period_us"].asDouble(),
-                            r["call"]["p50_us"].asDouble(), r["call"]["p99_us"].asDouble(),
-                            r["cycle"]["p50_us"].asDouble(), r["cycle"]["p99_us"].asDouble(),
-                            r["cycle"]["max_us"].asDouble(),
+                std::printf("%-14s %6d %5d %9.1f %9.1f %9.1f %9.1f %9.1f %9.1f %6lld", mode.c_str(),
+                            block, count, r["period_us"].asDouble(), r["call"]["p50_us"].asDouble(),
+                            r["call"]["p99_us"].asDouble(), r["cycle"]["p50_us"].asDouble(),
+                            r["cycle"]["p99_us"].asDouble(), r["cycle"]["max_us"].asDouble(),
                             static_cast<long long>(r["cycles_over_period"].asInt()));
+                if (json::Value* b = r.asObject().find("bridge"))
+                    std::printf(" %8.1f %8.1f %8.1f %8.1f %6.1f %6llx\n",
+                                (*b)["wake_mean_us"].asDouble(), (*b)["wake_max_us"].asDouble(),
+                                (*b)["work_mean_us"].asDouble(), (*b)["return_mean_us"].asDouble(),
+                                100.0 * static_cast<double>((*b)["spun"].asInt()) /
+                                    static_cast<double>((*b)["calls"].asInt()),
+                                static_cast<unsigned long long>((*b)["bridge_cpus"].asInt()));
+                else
+                    std::printf("\n");
                 std::fflush(stdout);
                 rows.push_back(std::move(*row));
             }

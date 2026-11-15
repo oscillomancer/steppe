@@ -194,7 +194,8 @@ instructions are in `docs/guides/installing.md`.
   the callback under a bounded wait (ADR-0081), with their in-process output
   in both executors (tested with device MIDI, effects, note output and
   input FX); a late block is silent and counted in `bridge_late` and
-  `xruns`. Where a third-party plug-in left on `inherit` runs is an app
+  `xruns`, and `engine.status.bridge_timing` says where bridged calls spent
+  their time and why a cycle overran. Where a third-party plug-in left on `inherit` runs is an app
   preference (Edit > Preferences, `plugin_isolation`), still in process by
   default until the bridging measurements decide; stock plug-ins stay in
   process. A

@@ -977,6 +977,10 @@ handles. The existing background/offline bounded-wait exception and failure
 semantics apply on each platform. Native editor hosting follows ADR-0040;
 the DAW shell is integrated separately on port-gui.
 
+POSIX protocol 22 / Windows protocol 23 add each command's timing to the
+header: when the host posted it, when the bridge saw it and finished it, the
+CPU the bridge thread ran on, its migrations, and the scheduling class it read
+back after taking the requested one (ADR-0081 diagnostics, §5).
 POSIX protocol 21 / Windows protocol 22 add each command's audio class and the
 bridge's refusal flag to the header (ADR-0081); 20/21 added plug-in note and
 MIDI output (ADR-0068). POSIX protocol 19 / Windows protocol 20 carry typed native editor parents
@@ -1142,6 +1146,20 @@ instance).
   late bridged call counts in `Engine::bridgeLateCycles()`,
   `engine.status.bridge_late`, and in `engine.status.xruns`. A pipelined mode
   remains future work.
+- Bridge timing. Every bridged call records where its time went
+  (`host::bridgeTiming()`, live and background apart): the host's wait, the
+  bridge's wake (post to seen), its work and the return (finished to seen by
+  the host), wakes over 200 µs and 1 ms, whether the answer came while the
+  host still spun, the CPUs the bridge thread ran on, its migrations, and
+  calls whose bridge thread did not hold the class asked for (Linux). A wait
+  for an earlier late block before the next call (`settles`) counts its wait
+  too. `Engine::bridgeOverruns()` sorts each callback cycle with live bridged
+  calls that ran past its period: `late_wait` (a call hit the deadline),
+  `slow_bridge` (the waits cover the overrun: the bridge was slow to answer)
+  or `not_waiting` (the time went elsewhere, such as the callback thread
+  being descheduled), and keeps the longest such cycle.
+  `engine.status.bridge_timing` reports both; the call counters are
+  process-wide, the cycle counters per engine.
 - Crash handling: a control thread watches the process (pidfd); on crash the
   instance becomes a **failed node** (silence; `fx.failed` event with the
   signal and last known state kept in the model), the rest of the session
@@ -1163,6 +1181,7 @@ bus and exposes it through the control protocol (Unix socket), Lua and MCP (prox
 `engine.start {backend, device, rate, block}`, `engine.stop`,
 `engine.status` (q: backend, rate, block, load, xruns (device xruns plus
 `bridge_late`, the callback cycles a bridged plug-in made late, ADR-0081),
+`bridge_timing` (the live bridged calls' waits and why cycles overran, §5),
 anticipation misses, meter drops), `engine.settings.set {render_ahead_ms,
 worker_threads, automation_resolution, …}`.
 `OfflineResult::graph` supplies compiled graph text: input edges and residual

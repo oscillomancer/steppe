@@ -3529,7 +3529,10 @@ TEST_CASE("a hung bridged plug-in on a live track fails within the bound; the re
     };
     constexpr std::uint32_t kBlock = 128;
     constexpr int kCycles = 200;  // 533 ms
+    Engine::BridgeOverruns overruns;
+    host::BridgeTiming::Calls liveCalls;
     auto run = [&](bool hung, InstancePool& pool, Engine*& out, std::uint64_t& late) {
+        host::resetBridgeTiming();
         MediaCache media;
         DummyBackend backend(constantInput(kCycles * kBlock + 1024));
         Engine engine(pool, media, kInCallback);
@@ -3550,6 +3553,8 @@ TEST_CASE("a hung bridged plug-in on a live track fails within the bound; the re
         engine.service();
         CHECK(engine.processErrors() == 0);
         late = engine.bridgeLateCycles();
+        overruns = engine.bridgeOverruns();
+        liveCalls = host::bridgeTiming().live;
         out = nullptr;
         engine.stop();
         return backend.capture();
@@ -3558,6 +3563,12 @@ TEST_CASE("a hung bridged plug-in on a live track fails within the bound; the re
     std::uint64_t late = 0, referenceLate = 0;
     auto pool = makePool();
     const auto played = run(true, pool, none, late);
+    // ADR-0081 diagnostics: each late cycle waited to its deadline (at least
+    // its period), so it ran over for that reason, and the calls say so.
+    CHECK(overruns.lateWait >= 1);
+    CHECK(overruns.lateWait <= late);
+    CHECK(liveCalls.late + liveCalls.lateSettles >= late);
+    CHECK(liveCalls.waitMaxNs >= 2'000'000);  // the deadline: at least 2 ms
     const Id crash = build(true).second;
     REQUIRE(pool.find(crash));
     CHECK(pool.find(crash)->failed());

@@ -1434,18 +1434,38 @@ void Engine::cycle(const float* const* in, float* const* out, std::uint32_t fram
     struct BridgeCycle {
         Engine& engine;
         std::uint64_t late = host::bridgeLateCalls();
+        host::BridgeWaits waits = host::bridgeLiveWaits();
+        std::int64_t start = host::steadyNanoseconds();
+        std::int64_t period;
         host::LiveBridgeDeadline deadline;
         BridgeCycle(Engine& e, std::uint32_t count)
             : engine(e),
-              deadline(host::steadyNanoseconds() +
-                       std::max<std::int64_t>(
-                           static_cast<std::int64_t>(e.options_.liveBridgeDeadlineMs * 1e6),
-                           static_cast<std::int64_t>(count * 1e9 / e.config_.sampleRate))) {}
+              period(static_cast<std::int64_t>(count * 1e9 / e.config_.sampleRate)),
+              deadline(start + std::max<std::int64_t>(
+                                   static_cast<std::int64_t>(e.options_.liveBridgeDeadlineMs * 1e6),
+                                   period)) {}
         ~BridgeCycle() {
-            if (host::bridgeLateCalls() != late) {
+            const bool lateCall = host::bridgeLateCalls() != late;
+            if (lateCall) {
                 engine.bridgeLate_.fetch_add(1, std::memory_order_relaxed);
                 engine.notifyMain();
             }
+            // Why a cycle with bridged calls ran past its period (ADR-0081
+            // diagnostics). The waits are summed over this cycle's threads.
+            const host::BridgeWaits now = host::bridgeLiveWaits();
+            if (now.calls == waits.calls) return;
+            const std::int64_t took = host::steadyNanoseconds() - start;
+            std::int64_t longest = engine.longestBridgedCycle_.load(std::memory_order_relaxed);
+            while (took > longest && !engine.longestBridgedCycle_.compare_exchange_weak(
+                                         longest, took, std::memory_order_relaxed)) {
+            }
+            if (took <= period) return;
+            if (lateCall)
+                engine.overrunLateWait_.fetch_add(1, std::memory_order_relaxed);
+            else if (now.waitNs - waits.waitNs >= took - period)
+                engine.overrunSlowBridge_.fetch_add(1, std::memory_order_relaxed);
+            else
+                engine.overrunNotWaiting_.fetch_add(1, std::memory_order_relaxed);
         }
     } bridgeCycle(*this, frames);
     hardwareMidi_->begin(*midiSource_, frames);

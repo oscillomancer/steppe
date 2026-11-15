@@ -311,6 +311,7 @@ q = nil
 ---@field device_latency integer
 ---@field xruns integer
 ---@field bridge_late integer
+---@field bridge_timing table
 ---@field midi_dropped integer
 ---@field midi_inputs any
 ---@field midi_outputs any
@@ -354,6 +355,7 @@ q = nil
 ---@field device_latency integer
 ---@field xruns integer
 ---@field bridge_late integer
+---@field bridge_timing table
 ---@field midi_dropped integer
 ---@field midi_inputs any
 ---@field midi_outputs any

@@ -286,6 +286,44 @@ std::int64_t currentLiveBridgeDeadline() SUPPLE_RT;
 // Bridged audio-thread calls that missed a live deadline, process-wide.
 std::uint64_t bridgeLateCalls() SUPPLE_RT;
 
+// How bridged calls spent their time (ADR-0081 diagnostics), process-wide
+// since start or resetBridgeTiming(): calls under a live deadline and the
+// rest apart. A call's wait runs from posting it to its answer (or giving
+// up); its wake, from posting to the bridge's thread seeing it; its work,
+// that thread's run of it; its return, from the bridge finishing to the
+// host seeing the answer. Times in nanoseconds on the steady clock. `calls`
+// and `late` count posted calls; wake, work and return are over those
+// answered.
+struct BridgeTiming {
+    struct Calls {
+        std::uint64_t calls = 0;
+        std::uint64_t late = 0;          // live: not answered by the deadline
+        std::uint64_t pastDeadline = 0;  // live: posted once the deadline had passed
+        std::uint64_t spun = 0;          // answered while the host still spun, before a wait
+        // Waits for the answer to an earlier late block before the next
+        // call (its wait counts in the totals), and those that missed again.
+        std::uint64_t settles = 0, lateSettles = 0;
+        std::int64_t waitMaxNs = 0, waitSumNs = 0;
+        std::int64_t wakeMaxNs = 0, wakeSumNs = 0;
+        std::int64_t workMaxNs = 0, workSumNs = 0;
+        std::int64_t returnMaxNs = 0, returnSumNs = 0;
+        std::uint64_t wakesOver200us = 0, wakesOver1ms = 0;
+        std::uint64_t bridgeCpus = 0;       // bit c: a bridge thread ran a call on CPU c
+        std::uint64_t classMismatches = 0;  // Linux: answers from a thread not in the class asked
+        std::uint32_t migrations = 0;       // the most CPU changes one bridge thread reported
+    };
+    Calls live, background;
+};
+BridgeTiming bridgeTiming();
+void resetBridgeTiming();
+// The live calls and settles so far and their summed waits, for a cycle to
+// compare.
+struct BridgeWaits {
+    std::uint64_t calls = 0;
+    std::int64_t waitNs = 0;
+};
+BridgeWaits bridgeLiveWaits() SUPPLE_RT;
+
 class Instance {
   public:
     // `isolated`: the plugin runs in a bridge process. Pass `bridge` to share

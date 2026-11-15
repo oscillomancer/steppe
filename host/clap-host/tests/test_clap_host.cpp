@@ -1457,7 +1457,11 @@ TEST_CASE("bridge protocol v6 retains nested structured error details") {
     CHECK(decoded.details[0].hint == "correct it");
     REQUIRE(decoded.details[0].details.size() == 1);
     CHECK(decoded.details[0].details[0].code == "leaf");
-    CHECK(bridge::kVersion == 21);
+#if defined(_WIN32)
+    CHECK(bridge::kVersion == 23);
+#else
+    CHECK(bridge::kVersion == 22);
+#endif
 }
 
 TEST_CASE("editor failures destroy the partial editor and show-hide requests reach its owner") {
@@ -2237,4 +2241,61 @@ TEST_CASE("bridge rejects main layouts beyond its channel limit") {
     auto activated = (*remote)->activate(48000, 1, 64, 17, 2);
     REQUIRE_FALSE(activated);
     CHECK(activated.error().code == "host.layout");
+}
+
+TEST_CASE("bridged calls report where their time went") {
+    // ADR-0081 diagnostics: a call's wait splits into the bridge seeing it,
+    // running it and the host seeing its answer; live calls apart, with the
+    // late ones and those posted after their deadline.
+    setBridgeExecutable(BRIDGE_PATH);
+    resetBridgeTiming();
+    auto gain = Instance::create(find("com.suppleaudio.test.gain"), {}, true);
+    REQUIRE(gain);
+    Instance& g = **gain;
+    REQUIRE(g.activate(48000, 1, 64));
+    REQUIRE(g.startProcessing());
+    Buffers buf(256);
+    resetBridgeTiming();
+    for (int i = 0; i < 50; ++i) REQUIRE(g.process(buf.block(64)));
+    BridgeTiming t = bridgeTiming();
+    CHECK(t.background.calls == 50);
+    CHECK(t.live.calls == 0);
+    CHECK(t.background.late == 0);
+    CHECK(t.background.workSumNs > 0);
+    CHECK(t.background.waitMaxNs >= t.background.workMaxNs);
+    CHECK(t.background.wakeSumNs >= 0);
+    CHECK(t.background.returnSumNs >= 0);
+    CHECK(t.background.classMismatches == 0);
+#if defined(__linux__) || defined(_WIN32)
+    CHECK(t.background.bridgeCpus != 0);
+#endif
+    {
+        // A deadline already past: the call is still made, and counted so.
+        LiveBridgeDeadline deadline(steadyNanoseconds() - 1);
+        (void)g.process(buf.block(64));
+    }
+    t = bridgeTiming();
+    CHECK(t.live.calls == 1);
+    CHECK(t.live.pastDeadline == 1);
+    g.stopProcessing();
+    g.deactivate();
+
+    auto hang = Instance::create(find("com.suppleaudio.test.crash"), {}, true);
+    REQUIRE(hang);
+    Instance& h = **hang;
+    REQUIRE(h.activate(48000, 1, 256));
+    REQUIRE(h.startProcessing());
+    REQUIRE(h.setParam(1, 2.0));  // hang in the next process()
+    resetBridgeTiming();
+    const std::int64_t span = 20'000'000;
+    {
+        LiveBridgeDeadline deadline(steadyNanoseconds() + span);
+        CHECK(h.process(buf.block(256)));  // silent for the block, not failed
+    }
+    t = bridgeTiming();
+    CHECK(t.live.calls == 1);
+    CHECK(t.live.late == 1);
+    CHECK(t.live.pastDeadline == 0);
+    CHECK(t.live.waitMaxNs >= span);  // it gives up only once the deadline passed
+    h.stopProcessing();
 }

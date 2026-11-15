@@ -392,6 +392,8 @@ int main(int argc, char** argv) {
     if (!service(1)) return changedDevice();
     const auto before = backend.status();
     const auto m0 = engine->anticipationMisses(), e0 = engine->processErrors();
+    host::resetBridgeTiming();  // the measured interval's bridged calls only
+    const auto o0 = engine->bridgeOverruns();
     const auto c0 = backend.cycles();
     rusage ru0{}, ru1{};
     getrusage(RUSAGE_SELF, &ru0);
@@ -445,6 +447,36 @@ int main(int argc, char** argv) {
     result["xruns"] = device == "jack" ? json::Value(after.xruns - before.xruns) : json::Value();
     result["anticipation_misses"] = engine->anticipationMisses() - m0;
     result["process_errors"] = engine->processErrors() - e0;
+    {
+        // Where live bridged calls spent the interval, and why cycles ran late.
+        auto o1 = engine->bridgeOverruns();
+        o1.lateWait -= o0.lateWait;
+        o1.slowBridge -= o0.slowBridge;
+        o1.notWaiting -= o0.notWaiting;
+        const auto t = bridgeTimingStatus(host::bridgeTiming().live, o1);
+        json::Value b = json::Value::object();
+        b["calls"] = t.calls;
+        b["late"] = t.late;
+        b["past_deadline"] = t.pastDeadline;
+        b["spun"] = t.spun;
+        b["wait_max_us"] = t.waitMaxUs;
+        b["wait_mean_us"] = t.waitMeanUs;
+        b["wake_max_us"] = t.wakeMaxUs;
+        b["wake_mean_us"] = t.wakeMeanUs;
+        b["work_max_us"] = t.workMaxUs;
+        b["return_max_us"] = t.returnMaxUs;
+        b["wakes_over_200us"] = t.wakesOver200us;
+        b["wakes_over_1ms"] = t.wakesOver1ms;
+        b["bridge_cpus"] = json::Value::array();
+        for (auto c : t.bridgeCpus) b["bridge_cpus"].push_back(c);
+        b["migrations"] = t.migrations;
+        b["class_mismatches"] = t.classMismatches;
+        b["longest_cycle_us"] = t.longestCycleUs;  // since the engine started
+        b["overruns_late_wait"] = t.overrunsLateWait;
+        b["overruns_slow_bridge"] = t.overrunsSlowBridge;
+        b["overruns_not_waiting"] = t.overrunsNotWaiting;
+        result["bridge_timing"] = std::move(b);
+    }
     result["cycles"] = backend.cycles() - c0;
     result["restart_needed"] = after.restartNeeded;
     result["warnings"] = json::Value::array();

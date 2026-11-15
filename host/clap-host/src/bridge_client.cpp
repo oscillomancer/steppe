@@ -844,6 +844,30 @@ Instance::EditorRequests RemoteInstance::editorRequests() {
 namespace {
 thread_local std::int64_t tLiveDeadline = 0;  // ADR-0081; 0: none
 std::atomic<std::uint64_t> gLateCalls{0};
+
+// Bridged calls' timing (BridgeTiming), live and background apart.
+struct TimingCounters {
+    std::atomic<std::uint64_t> calls{0}, late{0}, pastDeadline{0}, spun{0};
+    std::atomic<std::uint64_t> settles{0}, lateSettles{0};
+    std::atomic<std::int64_t> waitMax{0}, waitSum{0}, wakeMax{0}, wakeSum{0};
+    std::atomic<std::int64_t> workMax{0}, workSum{0}, returnMax{0}, returnSum{0};
+    std::atomic<std::uint64_t> wakesOver200us{0}, wakesOver1ms{0}, bridgeCpus{0};
+    std::atomic<std::uint64_t> classMismatches{0};
+    std::atomic<std::uint32_t> migrations{0};
+};
+TimingCounters gTiming[2];  // 0: background, 1: live
+
+void raise(std::atomic<std::int64_t>& to, std::int64_t value) SUPPLE_RT {
+    std::int64_t now = to.load(std::memory_order_relaxed);
+    while (value > now && !to.compare_exchange_weak(now, value, std::memory_order_relaxed)) {
+    }
+}
+void add(std::atomic<std::int64_t>& max, std::atomic<std::int64_t>& sum,
+         std::int64_t value) SUPPLE_RT {
+    value = std::max<std::int64_t>(value, 0);
+    raise(max, value);
+    sum.fetch_add(value, std::memory_order_relaxed);
+}
 // Consecutive late live calls for this long fail the instance (ADR-0081).
 constexpr std::int64_t kLateFailNs = 50'000'000;
 }  // namespace
@@ -861,8 +885,10 @@ std::int64_t steadyNanoseconds() SUPPLE_RT {
 std::uint64_t bridgeLateCalls() SUPPLE_RT { return gLateCalls.load(std::memory_order_relaxed); }
 
 bool RemoteInstance::answered(std::uint32_t req, Cmd cmd) SUPPLE_RT {
+    spun_ = true;
     for (int spin = 0; spin < 4000; ++spin)
         if (hdr_->done.load(std::memory_order_acquire) == req) return true;
+    spun_ = false;
     if (const std::int64_t live = tLiveDeadline) {
         // The callback's wait (ADR-0081): timed waits on the done word up to
         // the cycle's deadline, and nothing else. Only the wait itself is
@@ -921,8 +947,16 @@ void RemoteInstance::late(std::uint32_t outstanding) SUPPLE_RT {
 
 bool RemoteInstance::settle() SUPPLE_RT {
     if (!outstanding_) return true;
-    if (!answered(outstanding_, Cmd::Process)) {
-        if (tLiveDeadline) late(0);
+    TimingCounters& timing = gTiming[tLiveDeadline ? 1 : 0];
+    const std::int64_t from = steadyNanoseconds();
+    const bool ok = answered(outstanding_, Cmd::Process);
+    timing.settles.fetch_add(1, std::memory_order_relaxed);
+    add(timing.waitMax, timing.waitSum, steadyNanoseconds() - from);
+    if (!ok) {
+        if (tLiveDeadline) {
+            timing.lateSettles.fetch_add(1, std::memory_order_relaxed);
+            late(0);
+        }
         return false;
     }
     outstanding_ = 0;  // that late block's output is not used
@@ -944,6 +978,11 @@ bool RemoteInstance::command(Cmd cmd) SUPPLE_RT {
     hdr_->livePolicy = static_cast<std::uint32_t>(live.kind);
     hdr_->livePriority = static_cast<std::uint32_t>(live.priority);
     hdr_->cmd = static_cast<std::uint32_t>(cmd);
+    TimingCounters& timing = gTiming[tLiveDeadline ? 1 : 0];
+    const std::int64_t posted = steadyNanoseconds();
+    if (tLiveDeadline && posted >= tLiveDeadline)
+        timing.pastDeadline.fetch_add(1, std::memory_order_relaxed);
+    hdr_->postedNs = posted;
     const std::uint32_t req = ++seq_;
     hdr_->request.store(req, std::memory_order_release);
     {
@@ -954,13 +993,89 @@ bool RemoteInstance::command(Cmd cmd) SUPPLE_RT {
         signals_.wake(hdr_->request);
 #endif
     }
-    if (answered(req, cmd)) {
+    const bool ok = answered(req, cmd);
+    const std::int64_t back = steadyNanoseconds();
+    timing.calls.fetch_add(1, std::memory_order_relaxed);
+    add(timing.waitMax, timing.waitSum, back - posted);
+    if (ok) {
+        if (spun_) timing.spun.fetch_add(1, std::memory_order_relaxed);
+        const std::int64_t wake = hdr_->seenNs - posted;
+        add(timing.wakeMax, timing.wakeSum, wake);
+        add(timing.workMax, timing.workSum, hdr_->finishedNs - hdr_->seenNs);
+        add(timing.returnMax, timing.returnSum, back - hdr_->finishedNs);
+        if (wake > 200'000) timing.wakesOver200us.fetch_add(1, std::memory_order_relaxed);
+        if (wake > 1'000'000) timing.wakesOver1ms.fetch_add(1, std::memory_order_relaxed);
+        if (hdr_->cpu >= 0 && hdr_->cpu < 64)
+            timing.bridgeCpus.fetch_or(std::uint64_t{1} << hdr_->cpu, std::memory_order_relaxed);
+        std::uint32_t most = timing.migrations.load(std::memory_order_relaxed);
+        while (hdr_->migrations > most && !timing.migrations.compare_exchange_weak(
+                                              most, hdr_->migrations, std::memory_order_relaxed)) {
+        }
+#if defined(__linux__)
+        // The class asked for, as the thread reads it back (Linux applies the
+        // policy itself; macOS and Windows map it to their audio classes).
+        const ThreadPolicy asked = hdr_->audioClass == 2 ? live : background;
+        if (asked.kind != ThreadPolicy::Kind::None &&
+            (hdr_->appliedPolicy != static_cast<std::uint32_t>(asked.kind) ||
+             hdr_->appliedPriority != static_cast<std::uint32_t>(asked.priority)))
+            timing.classMismatches.fetch_add(1, std::memory_order_relaxed);
+#endif
         lateSince_ = 0;
         classRefused_.store(hdr_->classRefused != 0, std::memory_order_relaxed);
         return true;
     }
-    if (tLiveDeadline) late(req);
+    if (tLiveDeadline) {
+        timing.late.fetch_add(1, std::memory_order_relaxed);
+        late(req);
+    }
     return false;
+}
+
+BridgeWaits bridgeLiveWaits() SUPPLE_RT {
+    return {gTiming[1].calls.load(std::memory_order_relaxed) +
+                gTiming[1].settles.load(std::memory_order_relaxed),
+            gTiming[1].waitSum.load(std::memory_order_relaxed)};
+}
+
+BridgeTiming bridgeTiming() {
+    BridgeTiming out;
+    for (int k = 0; k < 2; ++k) {
+        const TimingCounters& t = gTiming[k];
+        BridgeTiming::Calls& c = k ? out.live : out.background;
+        auto get = [](const auto& a) { return a.load(std::memory_order_relaxed); };
+        c.calls = get(t.calls);
+        c.late = get(t.late);
+        c.pastDeadline = get(t.pastDeadline);
+        c.settles = get(t.settles);
+        c.lateSettles = get(t.lateSettles);
+        c.spun = get(t.spun);
+        c.waitMaxNs = get(t.waitMax);
+        c.waitSumNs = get(t.waitSum);
+        c.wakeMaxNs = get(t.wakeMax);
+        c.wakeSumNs = get(t.wakeSum);
+        c.workMaxNs = get(t.workMax);
+        c.workSumNs = get(t.workSum);
+        c.returnMaxNs = get(t.returnMax);
+        c.returnSumNs = get(t.returnSum);
+        c.wakesOver200us = get(t.wakesOver200us);
+        c.wakesOver1ms = get(t.wakesOver1ms);
+        c.bridgeCpus = get(t.bridgeCpus);
+        c.classMismatches = get(t.classMismatches);
+        c.migrations = get(t.migrations);
+    }
+    return out;
+}
+
+void resetBridgeTiming() {
+    for (TimingCounters& t : gTiming) {
+        for (auto* a : {&t.calls, &t.late, &t.pastDeadline, &t.spun, &t.settles, &t.lateSettles,
+                        &t.wakesOver200us, &t.wakesOver1ms, &t.bridgeCpus, &t.classMismatches})
+            a->store(0, std::memory_order_relaxed);
+        for (auto* a : {&t.waitMax, &t.waitSum, &t.wakeMax, &t.wakeSum, &t.workMax, &t.workSum,
+                        &t.returnMax, &t.returnSum})
+            a->store(0, std::memory_order_relaxed);
+        t.migrations.store(0, std::memory_order_relaxed);
+    }
 }
 
 bool RemoteInstance::startProcessing() SUPPLE_RT {

@@ -181,6 +181,7 @@ class RemoteInstance {
     std::uint32_t seq_ = 0;
     std::uint32_t outstanding_ = 0;  // a late live request not yet answered
     std::int64_t lateSince_ = 0;     // steady ns of the first of consecutive late calls
+    bool spun_ = false;              // the last answer came while spinning, before a wait
     int deadlineMs_ = 2000;          // for process(); lifecycle commands get longer
     std::uint32_t latency_ = 0, tail_ = 0;
     bool reportsTail_ = false, restartPending_ = false;

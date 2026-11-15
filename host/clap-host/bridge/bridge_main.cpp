@@ -21,6 +21,7 @@
 #else
 #include <fcntl.h>
 #include <pthread.h>
+#include <sched.h>
 #include <signal.h>
 #include <unistd.h>
 #endif
@@ -28,6 +29,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <map>
@@ -120,6 +122,33 @@ bool takeAudioClass(const AudioClass& want, double rate, std::uint32_t frames) {
 #endif
     if (want.background.kind == ThreadPolicy::Kind::None) return true;
     return static_cast<bool>(setThreadPolicy(thread, want.background));
+}
+
+// The steady clock, as the host reads it (one clock for both processes).
+std::int64_t steadyNs() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
+// The CPU the calling thread runs on, -1 where the platform does not say.
+std::int32_t currentCpu() {
+#if defined(_WIN32)
+    return static_cast<std::int32_t>(GetCurrentProcessorNumber());
+#elif defined(__linux__)
+    return static_cast<std::int32_t>(sched_getcpu());
+#else
+    return -1;
+#endif
+}
+
+// The calling thread's class as the platform reports it after taking one.
+ThreadPolicy appliedClass() {
+#if defined(_WIN32)
+    return threadPolicy(GetCurrentThread());
+#else
+    return threadPolicy(::pthread_self());
+#endif
 }
 
 struct BridgeInstance {
@@ -244,6 +273,9 @@ struct BridgeInstance {
         // Created by the bridge's main thread: normal until told otherwise.
         AudioClass taken;
         bool refused = false;
+        ThreadPolicy applied{ThreadPolicy::Kind::Normal, 0};
+        std::int32_t lastCpu = -1;
+        std::uint32_t migrations = 0;
         while (!quit.load()) {
             const std::uint32_t req = hdr->request.load(std::memory_order_acquire);
             if (req == last) {
@@ -256,6 +288,10 @@ struct BridgeInstance {
             }
             if (quit.load(std::memory_order_acquire)) break;
             last = req;
+            hdr->seenNs = steadyNs();
+            const std::int32_t cpu = currentCpu();
+            if (cpu >= 0 && lastCpu >= 0 && cpu != lastCpu) ++migrations;
+            if (cpu >= 0) lastCpu = cpu;
             const auto command = static_cast<Cmd>(hdr->cmd);
             // The class the host asks for with this command, taken before it
             // runs, only when it changed (best effort: a refusal keeps the
@@ -268,6 +304,7 @@ struct BridgeInstance {
                     refused = !takeAudioClass(
                         want, rate, command == Cmd::Process ? hdr->frames : layout.maxFrames);
                     taken = want;
+                    applied = appliedClass();
                 }
             }
             bool hadFlush = false;
@@ -336,6 +373,11 @@ struct BridgeInstance {
             hdr->result = result;
             hdr->processing = instance->processing() ? 1 : 0;
             hdr->classRefused = refused ? 1 : 0;
+            hdr->cpu = cpu;
+            hdr->migrations = migrations;
+            hdr->appliedPolicy = static_cast<std::uint32_t>(applied.kind);
+            hdr->appliedPriority = static_cast<std::uint32_t>(std::max(applied.priority, 0));
+            hdr->finishedNs = steadyNs();
             hdr->done.store(req, std::memory_order_release);
 #if defined(__linux__)
             futexWake(hdr->done);

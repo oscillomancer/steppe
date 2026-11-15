@@ -1840,6 +1840,37 @@ void EngineApp::restartFx(model::Id fx) {
     headChanged();  // a running engine gets the new instance in its next plan
 }
 
+EngineBridgeTiming bridgeTimingStatus(const host::BridgeTiming::Calls& live,
+                                      const Engine::BridgeOverruns& overruns) {
+    EngineBridgeTiming t;
+    const double calls =
+        live.calls + live.settles ? static_cast<double>(live.calls + live.settles) : 1.0;
+    const double answered =
+        live.calls > live.late ? static_cast<double>(live.calls - live.late) : 1.0;
+    t.calls = static_cast<std::int64_t>(live.calls);
+    t.late = static_cast<std::int64_t>(live.late + live.lateSettles);
+    t.settles = static_cast<std::int64_t>(live.settles);
+    t.pastDeadline = static_cast<std::int64_t>(live.pastDeadline);
+    t.spun = static_cast<std::int64_t>(live.spun);
+    t.waitMaxUs = static_cast<double>(live.waitMaxNs) / 1000.0;
+    t.waitMeanUs = static_cast<double>(live.waitSumNs) / calls / 1000.0;
+    t.wakeMaxUs = static_cast<double>(live.wakeMaxNs) / 1000.0;
+    t.wakeMeanUs = static_cast<double>(live.wakeSumNs) / answered / 1000.0;
+    t.workMaxUs = static_cast<double>(live.workMaxNs) / 1000.0;
+    t.returnMaxUs = static_cast<double>(live.returnMaxNs) / 1000.0;
+    t.longestCycleUs = static_cast<double>(overruns.longestCycleNs) / 1000.0;
+    t.wakesOver200us = static_cast<std::int64_t>(live.wakesOver200us);
+    t.wakesOver1ms = static_cast<std::int64_t>(live.wakesOver1ms);
+    for (int c = 0; c < 64; ++c)
+        if (live.bridgeCpus >> c & 1) t.bridgeCpus.push_back(c);
+    t.migrations = live.migrations;
+    t.classMismatches = static_cast<std::int64_t>(live.classMismatches);
+    t.overrunsLateWait = static_cast<std::int64_t>(overruns.lateWait);
+    t.overrunsSlowBridge = static_cast<std::int64_t>(overruns.slowBridge);
+    t.overrunsNotWaiting = static_cast<std::int64_t>(overruns.notWaiting);
+    return t;
+}
+
 EngineStatus EngineApp::engineStatus() {
     checkFailures();
     EngineStatus st;
@@ -1888,6 +1919,7 @@ EngineStatus EngineApp::engineStatus() {
     // A cycle a bridged plug-in made late is an xrun too (ADR-0081).
     st.bridgeLate = static_cast<std::int64_t>(engine_->bridgeLateCycles());
     st.xruns = static_cast<std::int64_t>(b.xruns) + st.bridgeLate;
+    st.bridgeTiming = bridgeTimingStatus(host::bridgeTiming().live, engine_->bridgeOverruns());
     st.midiDropped = static_cast<std::int64_t>(backend_->midiDropped());
     st.midiWarnings = backend_->midiWarnings();
     st.midiOutDropped = static_cast<std::int64_t>(backend_->midiOutDropped());

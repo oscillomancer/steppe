@@ -2967,6 +2967,98 @@ Kind: `action`. Exposure: `mcp-tool`.
     "bridge_late": {
       "type": "integer"
     },
+    "bridge_timing": {
+      "type": "object",
+      "title": "engine_bridge_timing",
+      "properties": {
+        "calls": {
+          "type": "integer"
+        },
+        "late": {
+          "type": "integer"
+        },
+        "settles": {
+          "type": "integer"
+        },
+        "past_deadline": {
+          "type": "integer"
+        },
+        "spun": {
+          "type": "integer"
+        },
+        "wait_max_us": {
+          "type": "number"
+        },
+        "wait_mean_us": {
+          "type": "number"
+        },
+        "wake_max_us": {
+          "type": "number"
+        },
+        "wake_mean_us": {
+          "type": "number"
+        },
+        "work_max_us": {
+          "type": "number"
+        },
+        "return_max_us": {
+          "type": "number"
+        },
+        "wakes_over_200us": {
+          "type": "integer"
+        },
+        "wakes_over_1ms": {
+          "type": "integer"
+        },
+        "bridge_cpus": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "migrations": {
+          "type": "integer"
+        },
+        "class_mismatches": {
+          "type": "integer"
+        },
+        "longest_cycle_us": {
+          "type": "number"
+        },
+        "overruns_late_wait": {
+          "type": "integer"
+        },
+        "overruns_slow_bridge": {
+          "type": "integer"
+        },
+        "overruns_not_waiting": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "calls",
+        "late",
+        "settles",
+        "past_deadline",
+        "spun",
+        "wait_max_us",
+        "wait_mean_us",
+        "wake_max_us",
+        "wake_mean_us",
+        "work_max_us",
+        "return_max_us",
+        "wakes_over_200us",
+        "wakes_over_1ms",
+        "bridge_cpus",
+        "migrations",
+        "class_mismatches",
+        "longest_cycle_us",
+        "overruns_late_wait",
+        "overruns_slow_bridge",
+        "overruns_not_waiting"
+      ],
+      "additionalProperties": false
+    },
     "midi_dropped": {
       "type": "integer"
     },
@@ -3359,6 +3451,7 @@ Kind: `action`. Exposure: `mcp-tool`.
     "device_latency",
     "xruns",
     "bridge_late",
+    "bridge_timing",
     "midi_dropped",
     "midi_inputs",
     "midi_outputs",
@@ -3427,6 +3520,28 @@ Result:
   "device_latency": 0,
   "xruns": 0,
   "bridge_late": 0,
+  "bridge_timing": {
+    "calls": 0,
+    "late": 0,
+    "settles": 0,
+    "past_deadline": 0,
+    "spun": 0,
+    "wait_max_us": 0,
+    "wait_mean_us": 0,
+    "wake_max_us": 0,
+    "wake_mean_us": 0,
+    "work_max_us": 0,
+    "return_max_us": 0,
+    "wakes_over_200us": 0,
+    "wakes_over_1ms": 0,
+    "bridge_cpus": [],
+    "migrations": 0,
+    "class_mismatches": 0,
+    "longest_cycle_us": 0,
+    "overruns_late_wait": 0,
+    "overruns_slow_bridge": 0,
+    "overruns_not_waiting": 0
+  },
   "midi_dropped": 0,
   "midi_warnings": [],
   "midi_out_dropped": 0,
@@ -3549,6 +3664,98 @@ Kind: `query`. Exposure: `mcp-tool`.
     "bridge_late": {
       "type": "integer"
     },
+    "bridge_timing": {
+      "type": "object",
+      "title": "engine_bridge_timing",
+      "properties": {
+        "calls": {
+          "type": "integer"
+        },
+        "late": {
+          "type": "integer"
+        },
+        "settles": {
+          "type": "integer"
+        },
+        "past_deadline": {
+          "type": "integer"
+        },
+        "spun": {
+          "type": "integer"
+        },
+        "wait_max_us": {
+          "type": "number"
+        },
+        "wait_mean_us": {
+          "type": "number"
+        },
+        "wake_max_us": {
+          "type": "number"
+        },
+        "wake_mean_us": {
+          "type": "number"
+        },
+        "work_max_us": {
+          "type": "number"
+        },
+        "return_max_us": {
+          "type": "number"
+        },
+        "wakes_over_200us": {
+          "type": "integer"
+        },
+        "wakes_over_1ms": {
+          "type": "integer"
+        },
+        "bridge_cpus": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "migrations": {
+          "type": "integer"
+        },
+        "class_mismatches": {
+          "type": "integer"
+        },
+        "longest_cycle_us": {
+          "type": "number"
+        },
+        "overruns_late_wait": {
+          "type": "integer"
+        },
+        "overruns_slow_bridge": {
+          "type": "integer"
+        },
+        "overruns_not_waiting": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "calls",
+        "late",
+        "settles",
+        "past_deadline",
+        "spun",
+        "wait_max_us",
+        "wait_mean_us",
+        "wake_max_us",
+        "wake_mean_us",
+        "work_max_us",
+        "return_max_us",
+        "wakes_over_200us",
+        "wakes_over_1ms",
+        "bridge_cpus",
+        "migrations",
+        "class_mismatches",
+        "longest_cycle_us",
+        "overruns_late_wait",
+        "overruns_slow_bridge",
+        "overruns_not_waiting"
+      ],
+      "additionalProperties": false
+    },
     "midi_dropped": {
       "type": "integer"
     },
@@ -3941,6 +4148,7 @@ Kind: `query`. Exposure: `mcp-tool`.
     "device_latency",
     "xruns",
     "bridge_late",
+    "bridge_timing",
     "midi_dropped",
     "midi_inputs",
     "midi_outputs",
@@ -3997,6 +4205,28 @@ Result:
   "device_latency": 0,
   "xruns": 0,
   "bridge_late": 0,
+  "bridge_timing": {
+    "calls": 0,
+    "late": 0,
+    "settles": 0,
+    "past_deadline": 0,
+    "spun": 0,
+    "wait_max_us": 0,
+    "wait_mean_us": 0,
+    "wake_max_us": 0,
+    "wake_mean_us": 0,
+    "work_max_us": 0,
+    "return_max_us": 0,
+    "wakes_over_200us": 0,
+    "wakes_over_1ms": 0,
+    "bridge_cpus": [],
+    "migrations": 0,
+    "class_mismatches": 0,
+    "longest_cycle_us": 0,
+    "overruns_late_wait": 0,
+    "overruns_slow_bridge": 0,
+    "overruns_not_waiting": 0
+  },
   "midi_dropped": 0,
   "midi_warnings": [],
   "midi_out_dropped": 0,

@@ -72,6 +72,32 @@ schema::Schema<EngineScheduling> engineSchedulingSchema() {
         .build();
 }
 
+schema::Schema<EngineBridgeTiming> engineBridgeTimingSchema() {
+    using T = EngineBridgeTiming;
+    return schema::object<T>("engine_bridge_timing")
+        .field("calls", &T::calls, schema::integer())
+        .field("late", &T::late, schema::integer())
+        .field("settles", &T::settles, schema::integer())
+        .field("past_deadline", &T::pastDeadline, schema::integer())
+        .field("spun", &T::spun, schema::integer())
+        .field("wait_max_us", &T::waitMaxUs, schema::number())
+        .field("wait_mean_us", &T::waitMeanUs, schema::number())
+        .field("wake_max_us", &T::wakeMaxUs, schema::number())
+        .field("wake_mean_us", &T::wakeMeanUs, schema::number())
+        .field("work_max_us", &T::workMaxUs, schema::number())
+        .field("return_max_us", &T::returnMaxUs, schema::number())
+        .field("wakes_over_200us", &T::wakesOver200us, schema::integer())
+        .field("wakes_over_1ms", &T::wakesOver1ms, schema::integer())
+        .field("bridge_cpus", &T::bridgeCpus, schema::arrayOf(schema::integer()))
+        .field("migrations", &T::migrations, schema::integer())
+        .field("class_mismatches", &T::classMismatches, schema::integer())
+        .field("longest_cycle_us", &T::longestCycleUs, schema::number())
+        .field("overruns_late_wait", &T::overrunsLateWait, schema::integer())
+        .field("overruns_slow_bridge", &T::overrunsSlowBridge, schema::integer())
+        .field("overruns_not_waiting", &T::overrunsNotWaiting, schema::integer())
+        .build();
+}
+
 schema::Schema<EngineWorkgroup> engineWorkgroupSchema() {
     return schema::object<EngineWorkgroup>("engine_workgroup")
         .field("state", &EngineWorkgroup::state, schema::string())
@@ -109,6 +135,7 @@ schema::Schema<EngineStatus> engineStatusSchema() {
         .field("device_latency", &EngineStatus::deviceLatency, schema::integer())
         .field("xruns", &EngineStatus::xruns, schema::integer())
         .field("bridge_late", &EngineStatus::bridgeLate, schema::integer())
+        .field("bridge_timing", &EngineStatus::bridgeTiming, engineBridgeTimingSchema())
         .field("midi_dropped", &EngineStatus::midiDropped, schema::integer())
         .field("midi_inputs", &EngineStatus::midiInputs, schema::any())
         .field("midi_outputs", &EngineStatus::midiOutputs, schema::any())
@@ -259,7 +286,7 @@ void registerDeviceCommands(cmd::Registry& registry) {
         c.examples = {
             {"Without a device", j(R"({"backend": "dummy", "block": 128})"),
              j(R"({"running": true, "backend": "dummy", "sample_rate": 48000.0, "block": 128,
-                     "period": 128, "plan_latency": 0, "device_latency": 0, "xruns": 0, "bridge_late": 0, "midi_dropped": 0, "midi_warnings": [], "midi_out_dropped": 0, "midi_output_warnings": [], "midi_output_latency": [], "midi_inputs": [], "midi_outputs": [], "midi_lead_frames": 0,
+                     "period": 128, "plan_latency": 0, "device_latency": 0, "xruns": 0, "bridge_late": 0, "bridge_timing": {"calls": 0, "late": 0, "settles": 0, "past_deadline": 0, "spun": 0, "wait_max_us": 0, "wait_mean_us": 0, "wake_max_us": 0, "wake_mean_us": 0, "work_max_us": 0, "return_max_us": 0, "wakes_over_200us": 0, "wakes_over_1ms": 0, "bridge_cpus": [], "migrations": 0, "class_mismatches": 0, "longest_cycle_us": 0, "overruns_late_wait": 0, "overruns_slow_bridge": 0, "overruns_not_waiting": 0}, "midi_dropped": 0, "midi_warnings": [], "midi_out_dropped": 0, "midi_output_warnings": [], "midi_output_latency": [], "midi_inputs": [], "midi_outputs": [], "midi_lead_frames": 0,
                      "midi_devices_changed": false, "midi_devices_message": "",
                      "preparing_audio": false, "preparation_error": "",
                      "prepared_version": "<any>", "preparation_version": 0,
@@ -436,7 +463,7 @@ void registerDeviceCommands(cmd::Registry& registry) {
         c.result = engineStatusSchema();
         c.examples = {{"Not running", j("{}"),
                        j(R"({"running": false, "backend": "", "sample_rate": 0.0, "block": 0,
-                     "period": 0, "plan_latency": 0, "device_latency": 0, "xruns": 0, "bridge_late": 0, "midi_dropped": 0, "midi_warnings": [], "midi_out_dropped": 0, "midi_output_warnings": [], "midi_output_latency": [], "midi_inputs": [], "midi_outputs": [], "midi_lead_frames": 0,
+                     "period": 0, "plan_latency": 0, "device_latency": 0, "xruns": 0, "bridge_late": 0, "bridge_timing": {"calls": 0, "late": 0, "settles": 0, "past_deadline": 0, "spun": 0, "wait_max_us": 0, "wait_mean_us": 0, "wake_max_us": 0, "wake_mean_us": 0, "work_max_us": 0, "return_max_us": 0, "wakes_over_200us": 0, "wakes_over_1ms": 0, "bridge_cpus": [], "migrations": 0, "class_mismatches": 0, "longest_cycle_us": 0, "overruns_late_wait": 0, "overruns_slow_bridge": 0, "overruns_not_waiting": 0}, "midi_dropped": 0, "midi_warnings": [], "midi_out_dropped": 0, "midi_output_warnings": [], "midi_output_latency": [], "midi_inputs": [], "midi_outputs": [], "midi_lead_frames": 0,
                      "midi_devices_changed": false, "midi_devices_message": "",
                      "preparing_audio": false, "preparation_error": "",
                      "prepared_version": 0, "preparation_version": 0,

@@ -113,6 +113,22 @@ struct EngineScheduling {
     ThreadClass callback, live, renderer, background;
 };
 
+// Where live bridged calls spent their time, and why cycles with them ran
+// late (ADR-0081 diagnostics): host::BridgeTiming's live calls, process-wide,
+// and the engine's overrun causes. Times in microseconds.
+struct EngineBridgeTiming {
+    // late: posted calls and waits on an earlier late block that missed.
+    std::int64_t calls = 0, late = 0, settles = 0, pastDeadline = 0, spun = 0;
+    double waitMaxUs = 0, waitMeanUs = 0, wakeMaxUs = 0, wakeMeanUs = 0;
+    double workMaxUs = 0, returnMaxUs = 0, longestCycleUs = 0;
+    std::int64_t wakesOver200us = 0, wakesOver1ms = 0;
+    std::vector<std::int64_t> bridgeCpus;
+    std::int64_t migrations = 0, classMismatches = 0;
+    std::int64_t overrunsLateWait = 0, overrunsSlowBridge = 0, overrunsNotWaiting = 0;
+};
+EngineBridgeTiming bridgeTimingStatus(const host::BridgeTiming::Calls& live,
+                                      const Engine::BridgeOverruns& overruns);
+
 // The live helpers' audio workgroup membership (ADR-0038); see WorkgroupStatus.
 struct EngineWorkgroup {
     std::string state = "none";
@@ -170,6 +186,7 @@ struct EngineStatus {
     std::int64_t planLatency = 0, deviceLatency = 0;  // frames
     std::int64_t xruns = 0, cycles = 0, processErrors = 0;
     std::int64_t bridgeLate = 0;  // callback cycles a bridged plug-in made late (ADR-0081)
+    EngineBridgeTiming bridgeTiming;
     std::int64_t midiDropped = 0, midiOutDropped = 0, midiLeadFrames = 0;
     json::Value midiInputs = json::Value::array(), midiOutputs = json::Value::array();
     std::vector<MidiInputWarning> midiOutputWarnings;
