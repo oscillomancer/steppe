@@ -1206,6 +1206,34 @@ TEST_CASE("a recovery whose preservation copy fails changes nothing") {
     CHECK(*readTextFile(u.root / "song" / "song.json.pre-branches.bak") == raw);
 }
 
+TEST_CASE("an autosave written after a save is newer than the file whatever the file clock") {
+    // Native CI on Windows: a save and the autosave after it in one tick of
+    // the file clock had the same time, so the autosave was never offered. A
+    // coarse clock (FAT's two seconds) or one set back does the same; here
+    // the file's time is ahead of the clock the autosave is written by.
+    Project p;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *p.app);
+    p.rename("Saved");
+    REQUIRE(p.app->save("song.json"));
+    const fs::path file = p.root / "song.json";
+    fs::last_write_time(file, fs::last_write_time(file) + std::chrono::seconds(30));
+    p.rename("Edited after the save");
+    p.app->setFixedClock(1'060'000);
+    p.app->tick();
+    REQUIRE(fs::exists(p.root / "song.json-data" / "autosave-1.json"));
+    CHECK(fs::last_write_time(p.root / "song.json-data" / "autosave-1.json") >
+          fs::last_write_time(file));
+    REQUIRE(p.app->open("song.json"));
+    auto info = d.execute({"project.get", json::Value::object(), kUnit});
+    REQUIRE(info);
+    CHECK((*info)["autosave_available"].asBool());
+    auto r = d.execute({"project.recover", json::parse(R"({"autosave": true})").value(), kUnit});
+    REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+    CHECK(p.app->head().project->name == "Edited after the save");
+}
+
 TEST_CASE("a saved project's autosave recovery whose preservation copy fails changes nothing") {
     // Round-5 review, finding 2, for project.recover {autosave: true}.
     Project p;
@@ -1219,6 +1247,8 @@ TEST_CASE("a saved project's autosave recovery whose preservation copy fails cha
     p.app->tick();
     const fs::path data = p.root / "song.json-data";
     REQUIRE(writeFileAtomic(data / "autosave-9.json", "garbage"));  // newer, unreadable
+    fs::last_write_time(data / "autosave-9.json",  // newer than the file, on any file clock
+                        fs::last_write_time(p.root / "song.json") + std::chrono::seconds(2));
     REQUIRE(p.app->open("song.json"));
     setFileSyncHookForTesting([](const fs::path& f) { return f.extension() != ".keep"; });
     auto failed =

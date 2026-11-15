@@ -658,7 +658,10 @@ suffixes (such as `autosave-1-backup.json`). An exhausted index reports
 `autosave.index` without writing or pruning, and retries after the same interval.
 `project.open` of a file that has
 a newer autosave next to it reports `autosave_available` and loads nothing
-from it. `project.recover {autosave: true}` brings it back: the newest
+from it. Newer means a later write time; an autosave written after a save
+is dated after the file even where the file clock's grain (a Windows tick,
+FAT's two seconds) or a clock set back would give it the same or an earlier
+time. `project.recover {autosave: true}` brings it back: the newest
 autosave newer than the file that reads (older ones are tried, each failure
 a `recover.autosave` warning) replaces the open project, keeping its path,
 so it stays unsaved until saved over the file; `recover.no_autosave` when

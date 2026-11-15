@@ -1615,6 +1615,28 @@ std::optional<std::uint64_t> autosaveIndex(std::string_view name) {
         return std::nullopt;
     return index;
 }
+
+// A saved project's autosave is offered by being newer than its file
+// (ADR-0078 decision 6). A file clock's grain (a Windows tick, a coarse
+// kernel clock, FAT's two seconds) can give a save and the autosave written
+// after it the same time, and a clock set back an earlier one: the autosave
+// is made later than the file by the least step the file system keeps.
+void laterThan(const fs::path& autosave, const fs::path& file) {
+    std::error_code ec;
+    const auto base = fs::last_write_time(file, ec);
+    if (ec) return;
+    using std::chrono::duration_cast;
+    using Step = fs::file_time_type::duration;
+    for (const Step step : {duration_cast<Step>(std::chrono::microseconds(1)),
+                            duration_cast<Step>(std::chrono::milliseconds(1)),
+                            duration_cast<Step>(std::chrono::seconds(1)),
+                            duration_cast<Step>(std::chrono::seconds(2))}) {
+        const auto time = fs::last_write_time(autosave, ec);
+        if (ec || time > base) return;
+        fs::last_write_time(autosave, base + step, ec);
+        if (ec) return;
+    }
+}
 }  // namespace
 
 fs::path EngineApp::newerAutosave(const fs::path& project) const {
@@ -1728,6 +1750,7 @@ void EngineApp::autosave() {
         autosaveMs_ = serviceClockMs();  // try again after an interval, not every tick
         return;
     }
+    if (!projectPath_.empty()) laterThan(file, projectPath_);
     dropSavedMidiJournals();
     existing.push_back({next, file});
     std::sort(existing.begin(), existing.end(),
