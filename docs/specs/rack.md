@@ -387,7 +387,10 @@ saying when the library version is used instead or the type is unavailable.
   `reset()` (main thread) makes the struct anew and prepares it;
   `restart()` (`SUPPLE_RT`, by the owner) returns it to the same state on
   the audio thread without allocating: `prepare()` keeps a copy of the
-  prepared struct (so a module's memory is held twice), and `restart()`
+  prepared struct (so a module's memory is held twice, except a `Buffer`
+  it leaves all zero and a `DelayLine` nothing was pushed into since it was
+  prepared: those are kept as their size alone, `detail::PristineCopy`,
+  and cleared in place), and `restart()`
   copies it back in place, keeping the members' bindings, the knobs and
   the status, and snapping parameters to their targets. Runtime objects
   are sized in `prepare()` only, so the copy never reallocates. A host

@@ -397,7 +397,9 @@ instructions are in `docs/guides/installing.md`.
   and reverb tails and feedback cables' history start afresh; a loop wrap
   keeps them), so this holds
   after any locate, not only from new instances; each module keeps a copy
-  of its prepared state for that, so its memory is held twice. Engine-owned `module.copy` / `rack.paste` retain modules,
+  of its prepared state for that, so its memory is held twice, apart from
+  buffers and delay lines `prepare()` leaves all zero, which are held once
+  (so a delay's 10 s lines are). Engine-owned `module.copy` / `rack.paste` retain modules,
   internal cables (including plug-in parameter modulation), learn bindings
   and copy-time live plug-in state across cuts and racks, as one paste undo
   step; unavailable types or plug-ins refuse the paste without changing the

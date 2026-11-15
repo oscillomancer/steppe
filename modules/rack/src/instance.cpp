@@ -151,13 +151,18 @@ void Instance::prepare() {
     first_ = true;
     // What restart() returns to: a copy of the prepared struct, bound to
     // the same record (its runtime objects sized as prepare() sized them,
-    // so copying it back is in place).
+    // so copying it back is in place). A buffer or delay line still all zero
+    // is kept as its size alone, and restart() clears it in place: a long
+    // delay is not held twice.
     const sd::ModuleCode& code = *type_->code();
     if (!pristine_) {
         pristine_ = code.create();
         sd::Instance::bind(*reinterpret_cast<script::Plugin*>(pristine_), &record_);
     }
-    code.copy(pristine_, self_);
+    {
+        sd::PristineCopy kept;
+        code.copy(pristine_, self_);
+    }
     pristineTail_ = record_.tail;
 }
 

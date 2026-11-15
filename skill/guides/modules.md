@@ -322,5 +322,7 @@ state independent, use `seed()` for repeatability, and size memory in
 `prepare()` only: a seek or a play from a position returns every module to
 what `prepare()` left (as a plugin's reset does), copying that state back
 in place on the audio thread, so a buffer sized elsewhere would allocate
-there. A loop wrap keeps the state. Every stock module is tested against the JIT and interpreter
+there. That state is kept twice, except a `Buffer` `prepare()` leaves all
+zero and a `DelayLine` it pushes nothing into: those are kept by size and
+cleared. A loop wrap keeps the state. Every stock module is tested against the JIT and interpreter
 for the same bits as its native C++ build.
