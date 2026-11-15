@@ -1149,6 +1149,18 @@ Engine and hosting:
   malformed UTF-8 parameter input is refused. Native verification is pending.
 
 Session and editing:
+- Audio recording recovery has durability limits: the writer flushes to the OS
+  each drain but does not fsync the WAV, so power-loss recovery has no bounded
+  window. Imported/copied media and first-save media staging also lack explicit
+  payload/directory durability barriers before the project is published.
+- A crash during audio loop/seek recording retains written samples but loses
+  the run placement metadata saved only at stop. Short writes can leave more
+  complete frames on disk than the stopped take accounts for; writer errors
+  reach `record.error` at commit, with no mid-take notification. These need
+  recovery and notification policy decisions before changing behaviour.
+- Streaming audio recording still stops at the RIFF 4 GiB limit
+  (`audio.stream_full`), despite ADR-0014 and the engine spec describing RF64.
+  Offline RF64 export is separate; a streaming format/recovery decision is pending.
 - Consolidation's shared engine/model code has local Linux coverage; native
   macOS/Windows validation remains pending before merge.
 - Project files accept `record.mode: output`, but output capture is not
