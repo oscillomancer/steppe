@@ -1961,6 +1961,29 @@ TEST_CASE("a save that moves or copies the media retires the journal where the t
         CHECK(p.app->head().midi.empty());
         CHECK(p.app->recoverable().size() == 1);
     }
+    SUBCASE("a save as into a folder that already holds the same journal leaves that one") {
+        // Round-11 review, finding 1: the copy reused the identical file
+        // already there, and the save retired it although another project's
+        // file there does not hold its take.
+        Project p;
+        cmd::Dispatcher d(registry, *p.app);
+        REQUIRE(d.execute({"track.add", json::Value::object(), kUnit}));
+        const fs::path first = p.root / "first/song.json";
+        REQUIRE(p.app->save(first));
+        const fs::path old = p.app->recordDir() / "Keys-1.midi.jsonl";
+        REQUIRE(writeFileAtomic(old, journalHeader() + body));
+        const fs::path other = p.root / "second/other.json";  // a project already there
+        REQUIRE(writeFileAtomic(other, *readTextFile(first)));
+        const fs::path theirs = p.root / "second/media/rec/Keys-1.midi.jsonl";
+        REQUIRE(writeFileAtomic(theirs, journalHeader() + body));
+        REQUIRE(p.app->recover({}, {}));
+        REQUIRE(p.app->save(p.root / "second/song.json"));
+        CHECK(fs::exists(theirs));
+        CHECK(fs::exists(old));
+        REQUIRE(p.app->open(other));
+        CHECK(p.app->head().midi.empty());
+        CHECK(p.app->recoverable().size() == 1);
+    }
 }
 
 TEST_CASE("replacing an unsaved project without saving discards its journals with its folder") {

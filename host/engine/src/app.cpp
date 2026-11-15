@@ -766,12 +766,24 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
     };
     const fs::path media = path.parent_path() / head().project->mediaDir;
     const fs::path oldMedia = mediaDir();
+    std::error_code sameError;
+    const bool sameMedia =
+        media == oldMedia || (fs::exists(media, sameError) && fs::exists(oldMedia, sameError) &&
+                              fs::equivalent(media, oldMedia, sameError));
+    // A recording writes into the project's media folder until it stops: a
+    // save as into another folder would copy its first part while the rest
+    // goes on into the old one. As a first save, it waits for the stop.
+    if (!fromScratch && !projectPath_.empty() && !sameMedia && engine_ && engine_->recording())
+        return Error("project.recording", "a recording is running", {},
+                     "stop it before saving as into another folder (its files are copied then), "
+                     "or save in place");
+    std::vector<fs::path> createdMedia;  // what this save created in the new media folder
     if (fromScratch) {
         SUPPLE_TRY(moveScratchMedia(media, publish));
     } else {
         // Saved as into another folder: that folder gets its own copy of the
         // media (the old project keeps its files).
-        if (!projectPath_.empty()) SUPPLE_TRY(detail::copyFolder(mediaDir(), media));
+        if (!projectPath_.empty()) SUPPLE_TRY(detail::copyFolder(mediaDir(), media, &createdMedia));
         SUPPLE_TRY(publish());
     }
     // The user's modules it plays go with it, as its media do (ADR-0062):
@@ -799,11 +811,21 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
         if (const auto time = fs::last_write_time(path, ec); !ec) openedFile_.emplace(path, time);
     // The journals of the takes this file holds are retired where the save
     // put them: moved with a first save, copied by a save as into another
-    // folder (whose old copy stays the old project's, as its WAVs do).
-    for (fs::path& journal : midiJournalsPending_)
-        if (const fs::path rel = journal.lexically_relative(oldMedia);
-            !rel.empty() && *rel.begin() != "..")
-            journal = media / rel;
+    // folder (whose old copy stays the old project's, as its WAVs do). A
+    // file the copy found already there is not this save's: it stays.
+    std::vector<fs::path> retire;
+    for (const fs::path& journal : midiJournalsPending_) {
+        const fs::path rel = journal.lexically_relative(oldMedia);
+        if (sameMedia || rel.empty() || *rel.begin() == "..") {
+            retire.push_back(journal);
+            continue;
+        }
+        const fs::path moved = media / rel;
+        if (fromScratch ||
+            std::find(createdMedia.begin(), createdMedia.end(), moved) != createdMedia.end())
+            retire.push_back(moved);
+    }
+    midiJournalsPending_ = std::move(retire);
     dropSavedMidiJournals();
     if (fromScratch) releaseScratch();  // its media moved; its autosaves are older than the file
     autosaveMarked_ = true;             // the file itself is the newest copy

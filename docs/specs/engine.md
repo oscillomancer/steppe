@@ -880,8 +880,10 @@ first use, and no plug-in code runs early to warm it.
   does not stop the recording. The app deletes a committed take's journal
   once a save or autosave is written, where the save put it: a first save
   moves it with the media, and a save as into another folder deletes the
-  copy there, leaving the old folder's for the old project, whose file does
-  not hold the take. Replacing a saved project without saving leaves its journals, offered on
+  copy it made there (an identical file already there is not its copy and
+  stays), leaving the old folder's for the old project, whose file does
+  not hold the take. A save as into another folder waits for a running
+  recording to stop (`project.recording`). Replacing a saved project without saving leaves its journals, offered on
   its next open; replacing an unsaved one without saving discards them with
   its folder (ADR-0078).
 - **Recording a rack Out** (rack.md §6): an armed channel whose selected
