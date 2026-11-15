@@ -663,7 +663,10 @@ suffixes (such as `autosave-1-backup.json`). An exhausted index reports
 a newer autosave next to it reports `autosave_available` and loads nothing
 from it. Newer means numbered above the file's `autosaved_through`
 (schema 2.15): the highest autosave number beside the file when it was
-saved, whose work it therefore holds. An autosave is numbered past the
+saved, whose work it therefore holds. A save that cannot read that folder
+(other than its not existing) fails with `project.autosave_folder` and
+writes nothing: a count short of autosaves it could not see would later
+offer them over the file. An autosave is numbered past the
 highest present and past that number, so the newest is the highest
 numbered, and file times decide nothing (a clock set back, a coarse file
 clock or a future-dated file cannot reorder them). A file without the field

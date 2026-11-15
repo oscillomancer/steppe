@@ -2186,3 +2186,49 @@ TEST_CASE("replacing an unsaved project without saving discards its journals wit
             CHECK(e.path().filename() == "session.lock");
     CHECK(app->recoverableSessions().empty());
 }
+
+TEST_CASE("a save that cannot read the autosave folder publishes nothing") {
+    // Round-13 review, finding 1: the scan stopped at the error, so the file
+    // was published with a count short of the autosave beside it, and that
+    // older autosave was later offered (and recovered) over the newer file.
+    Project p;
+    p.rename("Saved");
+    const auto file = p.root / "song.json";
+    REQUIRE(p.app->save(file));
+    const auto saved = readTextFile(file);
+    REQUIRE(saved);
+    p.rename("Autosaved");
+    p.app->setFixedClock(1'060'000);
+    p.app->tick();
+    const auto dir = p.app->autosaveDir();
+    REQUIRE(fs::exists(dir / "autosave-1.json"));
+    struct Restore {
+        fs::path path;
+        ~Restore() {
+            std::error_code ec;
+            fs::permissions(path, fs::perms::owner_all, fs::perm_options::replace, ec);
+        }
+    } restore{dir};
+    fs::permissions(dir, fs::perms::none);
+    std::error_code probe;
+    fs::directory_iterator listing(dir, probe);
+    if (!probe) {  // Windows, or a user whom permissions do not stop
+        fs::permissions(dir, fs::perms::owner_all);
+        MESSAGE("an unreadable folder cannot be made here");
+        return;
+    }
+    p.rename("Newer");
+    auto refused = p.app->save(file);
+    fs::permissions(dir, fs::perms::owner_all);
+    REQUIRE_FALSE(refused);
+    CHECK(refused.error().code == "project.autosave_folder");
+    CHECK(refused.error().path == dir.string());
+    CHECK_FALSE(refused.error().hint.empty());
+    CHECK(readTextFile(file).value() == *saved);  // nothing published
+    // Readable again, the save goes through and holds that autosave.
+    REQUIRE(p.app->save(file));
+    REQUIRE(p.app->open(file));
+    CHECK(p.app->head().project->name == "Newer");
+    CHECK(p.app->newerAutosave(file).empty());
+    CHECK_FALSE(p.app->recoverAutosave());
+}

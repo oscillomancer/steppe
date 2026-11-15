@@ -740,6 +740,15 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
         for (fs::directory_iterator it(data, ec), end; !ec && it != end; it.increment(ec))
             if (const auto n = autosaveIndex(it->path().filename().string()))
                 through = std::max(through, *n);
+        // A folder it cannot read may hold autosaves above what it read: a
+        // count short of them would offer them over this file once the folder
+        // reads again. No folder (or a file in its place) holds none.
+        if (ec && ec != std::errc::no_such_file_or_directory && ec != std::errc::not_a_directory)
+            return Error("project.autosave_folder",
+                         "could not read the autosave folder beside the file: " + ec.message(),
+                         data.string(),
+                         "make the folder readable (or move it aside), then save again; or save "
+                         "to another file");
         if (path == projectPath_ && autosavedThrough_)
             through = std::max(through, *autosavedThrough_);
     }

@@ -127,6 +127,10 @@ as well as past those present. File times had let a clock set back, a
 coarse file clock or a future-dated file offer older edits, or offer an
 autosave over a later save. A file without the count keeps the time rule.
 
+*Amended 2026-11-15 after review round 13:* a save that cannot read the
+autosave folder fails (`project.autosave_folder`) rather than record a count
+short of what is there.
+
 ## Alternatives considered
 
 - **The pid in the folder name decides liveness:** pids are reused, and a
