@@ -14,6 +14,7 @@
 #include <cerrno>
 #include <cstring>
 
+#include "supple/base/files.h"
 #include "supple/base/sha256.h"
 
 namespace supple::engine::detail {
@@ -76,8 +77,9 @@ Status copyNew(const fs::path& from, const fs::path& to) {
 
 }  // namespace
 
-Result<std::string> copyIntoFolder(const fs::path& file, const fs::path& dir) {
+Result<std::string> copyIntoFolder(const fs::path& file, const fs::path& dir, bool* created) {
     std::error_code ec;
+    if (created) *created = false;
     if (!fs::is_regular_file(file, ec))
         return Error("media.missing", file.string() + " is missing", {},
                      "restore the file, or remove the items that use it");
@@ -96,12 +98,13 @@ Result<std::string> copyIntoFolder(const fs::path& file, const fs::path& dir) {
             if (fs::exists(target, ec)) continue;  // another writer took the name
             return std::move(copied).error();
         }
+        if (created) *created = true;
         return name;
     }
     return copyError(file, dir, "too many files with this name");
 }
 
-Status copyFolder(const fs::path& from, const fs::path& to) {
+Status copyFolder(const fs::path& from, const fs::path& to, std::vector<fs::path>* created) {
     std::error_code ec;
     if (!fs::is_directory(from, ec)) return {};
     if (fs::exists(to, ec) && fs::equivalent(from, to, ec)) return {};
@@ -147,9 +150,69 @@ Status copyFolder(const fs::path& from, const fs::path& to) {
         fs::create_directories(target.parent_path(), ec);
         if (ec) return copyError(it->path(), target, ec.message());
         SUPPLE_TRY(copyNew(it->path(), target));
+        if (created) created->push_back(target);
     }
     if (ec) return copyError(from, to, ec.message());
     return {};
+}
+
+bool resolvedInside(const fs::path& root, const fs::path& path, std::vector<fs::path>* missing) {
+    std::error_code ec;
+    const fs::path base = fs::canonical(root, ec);
+    if (ec) return false;
+    fs::path existing = path;
+    std::vector<fs::path> absent;
+    while (!existing.empty() && !fs::exists(fs::symlink_status(existing, ec))) {
+        absent.push_back(existing);
+        if (existing == existing.parent_path()) return false;
+        existing = existing.parent_path();
+    }
+    for (const auto& part : path.lexically_relative(existing))
+        if (part == "..") return false;
+    const fs::path rel = fs::canonical(existing, ec).lexically_relative(base);
+    if (ec || rel.empty() || *rel.begin() == "..") return false;
+    if (missing) *missing = std::move(absent);
+    return true;
+}
+
+Status recoveryFileInside(const fs::path& root, const fs::path& file) {
+    if (root.empty() || resolvedInside(root, file)) return okStatus();
+    return Error("recover.outside",
+                 file.string() + " leads outside " + root.string() + "; recovery does not open it",
+                 {}, "copy the file into " + root.string() + " if it belongs there");
+}
+
+Result<std::vector<std::uint8_t>> readRecoveryFile(const fs::path& root, const fs::path& file,
+                                                   std::size_t limit) {
+    SUPPLE_TRY(recoveryFileInside(root, file));
+    std::vector<std::uint8_t> bytes;
+    switch (files::readRegular(file, limit, bytes)) {
+        case files::ReadRegular::Read:
+            return bytes;
+        case files::ReadRegular::Missing:
+            return Error("file.open", "cannot open " + file.string() + ": it does not exist", {},
+                         "check the path");
+        case files::ReadRegular::NotRegular:
+            return Error("recover.not_file",
+                         file.string() + " is not a regular file; recovery does not open it", {},
+                         "move it out of the folder: recovery reads only the regular files a "
+                         "recording or an autosave leaves");
+        case files::ReadRegular::TooLarge:
+            return Error("file.too_large",
+                         file.string() + " is larger than " + std::to_string(limit) + " bytes", {},
+                         "this is not a file recovery wrote; move it out of the folder");
+        case files::ReadRegular::Failed:
+            break;
+    }
+    return Error("file.read", "cannot read " + file.string(), {},
+                 "check that the file is readable");
+}
+
+Result<std::string> readRecoveryText(const fs::path& root, const fs::path& file,
+                                     std::size_t limit) {
+    auto bytes = readRecoveryFile(root, file, limit);
+    if (!bytes) return std::move(bytes).error();
+    return std::string(bytes->begin(), bytes->end());
 }
 
 }  // namespace supple::engine::detail

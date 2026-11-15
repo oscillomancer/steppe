@@ -1,0 +1,295 @@
+{
+  "schema": "supple.project/2.14",
+  "project": {
+    "next_ids": {
+      "tr": 3,
+      "it": 1,
+      "tk": 1,
+      "md": 1,
+      "mi": 1,
+      "fx": 1,
+      "sd": 1,
+      "en": 1,
+      "ai": 1,
+      "mk": 1,
+      "rg": 1,
+      "tp": 2,
+      "ts": 2,
+      "gr": 1,
+      "ln": 1,
+      "rj": 1
+    }
+  },
+  "tempo": {
+    "points": {
+      "tp_1": {
+        "beat": 0.0,
+        "bpm": 120.0
+      }
+    },
+    "meters": {
+      "ts_1": {
+        "bar": 1,
+        "numerator": 4,
+        "denominator": 4
+      }
+    }
+  },
+  "rulers": {
+    "markers": {},
+    "regions": {}
+  },
+  "tracks": {
+    "tr_0": {
+      "type": "master",
+      "name": "Master",
+      "children": ["tr_1", "tr_2"]
+    },
+    "tr_1": {
+      "name": "Drums",
+      "parent": "tr_0",
+      "mute": true,
+      "record": {
+        "armed": false,
+        "monitor": "on",
+        "mode": "input"
+      }
+    },
+    "tr_2": {
+      "name": "Keys",
+      "parent": "tr_0",
+      "record": {
+        "armed": false,
+        "monitor": "on",
+        "mode": "input"
+      }
+    }
+  },
+  "items": {},
+  "takes": {},
+  "fx": {},
+  "sources": {
+    "media": {},
+    "midi": {}
+  },
+  "routes": {},
+  "envelopes": {},
+  "blobs": {},
+  "branches": {
+    "current": "agent/claude/bass",
+    "next_version": 5,
+    "main_hash": "sha256:370c4225a277301c4d6634fe54ce94e773345d0c3ec976478265c65cf3669c6a",
+    "refs": {
+      "main": {
+        "head": 4,
+        "base": 4,
+        "next_ids": {
+          "tr": 3,
+          "it": 1,
+          "tk": 1,
+          "md": 1,
+          "mi": 1,
+          "fx": 1,
+          "sd": 1,
+          "en": 1,
+          "ai": 1,
+          "mk": 1,
+          "rg": 1,
+          "tp": 2,
+          "ts": 2,
+          "gr": 1,
+          "ln": 1,
+          "rj": 1,
+          "rk": 1,
+          "mo": 1,
+          "cb": 1
+        }
+      },
+      "agent/claude/bass": {
+        "head": 2,
+        "base": 0,
+        "next_ids": {
+          "tr": 3,
+          "it": 1,
+          "tk": 1,
+          "md": 1,
+          "mi": 1,
+          "fx": 1,
+          "sd": 1,
+          "en": 1,
+          "ai": 1,
+          "mk": 1,
+          "rg": 1,
+          "tp": 2,
+          "ts": 2,
+          "gr": 1,
+          "ln": 1,
+          "rj": 1,
+          "rk": 1,
+          "mo": 1,
+          "cb": 1
+        }
+      }
+    },
+    "versions": {
+      "0": {
+        "parents": [],
+        "label": "initial",
+        "state": {
+          "set": {
+            "/project": {
+              "next_ids": {
+                "tr": 2,
+                "it": 1,
+                "tk": 1,
+                "md": 1,
+                "mi": 1,
+                "fx": 1,
+                "sd": 1,
+                "en": 1,
+                "ai": 1,
+                "mk": 1,
+                "rg": 1,
+                "tp": 2,
+                "ts": 2,
+                "gr": 1,
+                "ln": 1,
+                "rj": 1
+              }
+            },
+            "/tracks/tr_0": {
+              "type": "master",
+              "name": "Master",
+              "children": ["tr_1"]
+            },
+            "/tracks/tr_1": {
+              "name": "Drums",
+              "parent": "tr_0",
+              "record": {
+                "armed": false,
+                "monitor": "on",
+                "mode": "input"
+              }
+            }
+          },
+          "remove": ["/tracks/tr_2"]
+        }
+      },
+      "1": {
+        "parents": [0],
+        "label": "track.add",
+        "origin": "rpc:cli",
+        "time_ms": 1794641729240,
+        "invocations": [
+          {
+            "command": "track.add",
+            "args": {
+              "name": "Bass"
+            }
+          }
+        ],
+        "changes": [
+          ["update", "tr_0"],
+          ["add", "tr_2"]
+        ],
+        "created": ["tr_2"],
+        "state": {
+          "set": {
+            "/tracks/tr_1": {
+              "name": "Drums",
+              "parent": "tr_0",
+              "record": {
+                "armed": false,
+                "monitor": "on",
+                "mode": "input"
+              }
+            },
+            "/tracks/tr_2": {
+              "name": "Bass",
+              "parent": "tr_0",
+              "record": {
+                "armed": false,
+                "monitor": "on",
+                "mode": "input"
+              }
+            }
+          }
+        }
+      },
+      "2": {
+        "parents": [1],
+        "label": "track.set",
+        "origin": "rpc:cli",
+        "time_ms": 1794641729355,
+        "invocations": [
+          {
+            "command": "track.set",
+            "args": {
+              "track": "tr_2",
+              "volume_db": -4
+            }
+          }
+        ],
+        "changes": [
+          ["update", "tr_2"]
+        ],
+        "state": {
+          "set": {
+            "/tracks/tr_1": {
+              "name": "Drums",
+              "parent": "tr_0",
+              "record": {
+                "armed": false,
+                "monitor": "on",
+                "mode": "input"
+              }
+            },
+            "/tracks/tr_2": {
+              "name": "Bass",
+              "parent": "tr_0",
+              "volume_db": -4.0,
+              "record": {
+                "armed": false,
+                "monitor": "on",
+                "mode": "input"
+              }
+            }
+          }
+        }
+      },
+      "4": {
+        "parents": [0],
+        "label": "earlier history",
+        "origin": "rpc:cli",
+        "time_ms": 1794641729707,
+        "invocations": [
+          {
+            "command": "track.add",
+            "args": {
+              "name": "Keys"
+            }
+          },
+          {
+            "command": "track.set",
+            "args": {
+              "track": "tr_1",
+              "mute": true
+            }
+          }
+        ],
+        "changes": [
+          ["update", "tr_0"],
+          ["update", "tr_1"],
+          ["add", "tr_2"]
+        ],
+        "created": ["tr_2"],
+        "squashed_steps": 1,
+        "squashed_fields": {
+          "tr_0": ["children"],
+          "tr_1": ["mute"]
+        }
+      }
+    }
+  }
+}
+

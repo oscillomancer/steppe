@@ -12,6 +12,7 @@
 #include <tuple>
 
 #include "module_harness.h"
+#include "restart_check.h"
 #include "supple/rack/stock.h"
 #include "supple/script_compiler.hpp"
 #include "supple/script_program.hpp"
@@ -158,6 +159,23 @@ TEST_CASE("every stock module agrees with JIT and MIR interpreter") {
             }
         }
     }
+}
+
+// A locate's restart, through the compiled program's copy (Program::copy):
+// every stock module, compiled to the JIT, plays again as when new.
+TEST_CASE("every stock module compiled as a script restarts to its prepared state" *
+          doctest::description("rt")) {
+    int restarted = 0;
+    for (const auto* stock : supple::rack::stockModules()) {
+        CAPTURE(stock->name);
+        auto result = supple::scriptc::compile(stock->source, {});
+        REQUIRE_MESSAGE(result.program, supple::scriptc::toText(result.diagnostics));
+        auto jit = supple::scriptc::moduleCode(std::move(result.program));
+        REQUIRE(jit);
+        restarted +=
+            supple::rack::test::replaysAfterRestart(std::move(jit), supple::rack::Origin::Library);
+    }
+    CHECK(restarted > 40);
 }
 
 TEST_CASE(

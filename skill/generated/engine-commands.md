@@ -4563,6 +4563,44 @@ Result:
 
 ```
 
+## `env.write.commit@1`
+
+Record what a write pass wrote into an envelope as a replayable edit.
+
+Points with after < pos <= through go and the given points come in, in the envelope's own units (beats or seconds by its timebase, stored values).
+
+Kind: `edit`. Exposure: `internal`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `env` | string |  |  |  | Envelope id, e.g. "en_1". |
+| `after` | number |  |  |  |  |
+| `through` | number |  |  |  |  |
+| `points` | array |  |  |  |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "empty",
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "additionalProperties": false
+}
+
+```
+
+### Examples
+
 ## `fx.add@1`
 
 Insert a plugin into a track's (or a take's) FX chain and return its id.
@@ -6271,6 +6309,42 @@ Result:
 {}
 
 ```
+
+## `fx.state.capture@1`
+
+Record a plug-in's own state change as a replayable edit.
+
+
+
+Kind: `edit`. Exposure: `internal`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `fx` | string |  |  |  | Plug-in id, e.g. "fx_1". |
+| `state` | string |  |  |  | The state's blob hash, as the plug-in's state field holds it |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "empty",
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "additionalProperties": false
+}
+
+```
+
+### Examples
 
 ## `group.add@1`
 
@@ -10389,6 +10463,13 @@ Kind: `query`. Exposure: `mcp-tool`.
     "branch": {
       "type": "string"
     },
+    "branches": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Every branch the project holds; the file keeps them all"
+    },
     "sample_rate": {
       "type": "number"
     },
@@ -10425,6 +10506,10 @@ Kind: `query`. Exposure: `mcp-tool`.
     "autosave_available": {
       "type": "boolean"
     },
+    "recoverable_sessions": {
+      "type": "integer",
+      "description": "Unsaved projects earlier runs left behind (project.recoverable lists them)"
+    },
     "warnings": {
       "type": "array",
       "items": {
@@ -10436,6 +10521,7 @@ Kind: `query`. Exposure: `mcp-tool`.
     "name",
     "path",
     "branch",
+    "branches",
     "sample_rate",
     "tempo",
     "meter",
@@ -10443,7 +10529,8 @@ Kind: `query`. Exposure: `mcp-tool`.
     "version",
     "generation",
     "recoverable",
-    "autosave_available"
+    "autosave_available",
+    "recoverable_sessions"
   ],
   "additionalProperties": false
 }
@@ -10466,6 +10553,7 @@ Result:
   "name": "",
   "path": "",
   "branch": "main",
+  "branches": ["main"],
   "sample_rate": 48000.0,
   "tempo": 120.0,
   "meter": "4/4",
@@ -10476,7 +10564,8 @@ Result:
   "version": 0,
   "recoverable": 0,
   "generation": "<any>",
-  "autosave_available": false
+  "autosave_available": false,
+  "recoverable_sessions": 0
 }
 
 ```
@@ -10512,6 +10601,13 @@ Kind: `action`. Exposure: `mcp-exec`.
     "branch": {
       "type": "string"
     },
+    "branches": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Every branch the project holds; the file keeps them all"
+    },
     "sample_rate": {
       "type": "number"
     },
@@ -10548,6 +10644,10 @@ Kind: `action`. Exposure: `mcp-exec`.
     "autosave_available": {
       "type": "boolean"
     },
+    "recoverable_sessions": {
+      "type": "integer",
+      "description": "Unsaved projects earlier runs left behind (project.recoverable lists them)"
+    },
     "warnings": {
       "type": "array",
       "items": {
@@ -10559,6 +10659,7 @@ Kind: `action`. Exposure: `mcp-exec`.
     "name",
     "path",
     "branch",
+    "branches",
     "sample_rate",
     "tempo",
     "meter",
@@ -10566,7 +10667,8 @@ Kind: `action`. Exposure: `mcp-exec`.
     "version",
     "generation",
     "recoverable",
-    "autosave_available"
+    "autosave_available",
+    "recoverable_sessions"
   ],
   "additionalProperties": false
 }
@@ -10591,6 +10693,7 @@ Result:
   "name": "Sketch",
   "path": "",
   "branch": "main",
+  "branches": ["main"],
   "sample_rate": 48000.0,
   "tempo": "<any>",
   "meter": "<any>",
@@ -10598,16 +10701,17 @@ Result:
   "version": 0,
   "recoverable": 0,
   "generation": "<any>",
-  "autosave_available": false
+  "autosave_available": false,
+  "recoverable_sessions": 0
 }
 
 ```
 
 ## `project.open@1`
 
-Open a project file (replaces the current project and its history).
+Open a project file and its branches (replaces the current project).
 
-recoverable > 0: recordings a crash left out of the project; project.recoverable lists them and project.recover puts them back. autosave_available: a newer autosave exists next to the file (it is not loaded silently). warnings also report project module copies that could not be read or compiled, and name types using a library version instead or left unavailable.
+recoverable > 0: recordings a crash left out of the project; project.recoverable lists them and project.recover puts them back. autosave_available: a newer autosave exists next to the file (it is not loaded silently). branch: the branch current when saved. warnings: project.history when the saved branches could not be restored (main opens alone; the first save over the file keeps a copy of it); also project module copies that could not be read or compiled, and name types using a library version instead or left unavailable.
 
 Kind: `action`. Exposure: `mcp-tool`.
 
@@ -10633,6 +10737,13 @@ Kind: `action`. Exposure: `mcp-tool`.
     "branch": {
       "type": "string"
     },
+    "branches": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Every branch the project holds; the file keeps them all"
+    },
     "sample_rate": {
       "type": "number"
     },
@@ -10669,6 +10780,10 @@ Kind: `action`. Exposure: `mcp-tool`.
     "autosave_available": {
       "type": "boolean"
     },
+    "recoverable_sessions": {
+      "type": "integer",
+      "description": "Unsaved projects earlier runs left behind (project.recoverable lists them)"
+    },
     "warnings": {
       "type": "array",
       "items": {
@@ -10680,6 +10795,7 @@ Kind: `action`. Exposure: `mcp-tool`.
     "name",
     "path",
     "branch",
+    "branches",
     "sample_rate",
     "tempo",
     "meter",
@@ -10687,7 +10803,8 @@ Kind: `action`. Exposure: `mcp-tool`.
     "version",
     "generation",
     "recoverable",
-    "autosave_available"
+    "autosave_available",
+    "recoverable_sessions"
   ],
   "additionalProperties": false
 }
@@ -10717,6 +10834,7 @@ Result:
   "name": "<any>",
   "path": "<any>",
   "branch": "main",
+  "branches": ["main"],
   "sample_rate": "<any>",
   "tempo": "<any>",
   "meter": "<any>",
@@ -10724,16 +10842,17 @@ Result:
   "version": "<any>",
   "recoverable": 0,
   "generation": "<any>",
-  "autosave_available": false
+  "autosave_available": false,
+  "recoverable_sessions": 0
 }
 
 ```
 
 ## `project.recover@1`
 
-Put recordings a crash left out back into the project (one undo step).
+Put back what a crash left behind: recordings, or an unsaved project.
 
-files: as project.recoverable lists them (omit for all). Each becomes an item on the track it was recorded on (or track) at the position it was recorded.
+files: as project.recoverable lists them (omit for all). Each becomes an item on the track it was recorded on (or track) at the position it was recorded, in one undo step. session: instead opens that unsaved project from its newest readable autosave in place of the current one (unsaved changes are lost: save first), still unsaved, and puts back its leftover recordings as one more undo step. autosave: instead opens the saved project's autosave newer than its file (project.get autosave_available) in place of what is open, keeping its path: it is unsaved until saved over the file. autosave_file names the autosave to open (as project.recover returned or a client offered it); it must be newer than the file as this project was opened.
 
 Kind: `action`. Exposure: `mcp-exec`.
 
@@ -10743,6 +10862,9 @@ Kind: `action`. Exposure: `mcp-exec`.
 | --- | --- | --- | --- | --- | --- |
 | `files` | array |  |  |  |  |
 | `track` | string |  |  |  | Track id, e.g. "tr_1". |
+| `session` | string |  |  |  | A session project.recoverable lists |
+| `autosave` | boolean |  |  | false | The saved project's newer autosave |
+| `autosave_file` | string |  |  |  | With autosave: which one, e.g. autosave-3.json, as offered |
 
 ### Result
 
@@ -10815,6 +10937,10 @@ Kind: `action`. Exposure: `mcp-exec`.
         "additionalProperties": false
       }
     },
+    "autosave": {
+      "type": "string",
+      "description": "The autosave it opened"
+    },
     "warnings": {
       "type": "array",
       "items": {
@@ -10834,6 +10960,13 @@ Kind: `action`. Exposure: `mcp-exec`.
 - `recover.unknown_file`: a file is not a recording to recover Hint: project.recoverable lists them
 - `recover.duplicate_file`: a file is listed twice Hint: list each once
 - `recover.no_track`: the track it was recorded on is gone Hint: give track
+- `recover.unknown_session`: no unsaved project of that name was left behind Hint: project.recoverable lists them
+- `recover.busy`: the session belongs to an app that is running Hint: recover it in that app
+- `recover.damaged`: nothing in the session can be opened Hint: project.recoverable.delete
+- `recover.session_args`: session cannot be combined with files or track Hint: recover the session, then its recordings
+- `recover.no_autosave`: no autosave is newer than the saved file Hint: open the project as saved
+- `recover.keep`: a copy recovery must keep could not be made; nothing changed Hint: make the folder writable and retry
+- `recover.autosave_args`: autosave cannot be combined with session, files or track Hint: recover the autosave, then the recordings
 
 ### Examples
 
@@ -10863,11 +10996,40 @@ Result:
 
 ```
 
+**Recover an unsaved project** (`session_left_behind`)
+
+```json
+{
+  "session": "20261114-090000-4242"
+}
+
+```
+
+Result:
+
+```json
+{
+  "recovered": [
+    {
+      "track": "tr_1",
+      "item": "<any>",
+      "take": "<any>",
+      "file": "<any>",
+      "seconds": 1.0,
+      "lost_frames": 0,
+      "takes": "<any>"
+    }
+  ],
+  "autosave": "autosave-1.json"
+}
+
+```
+
 ## `project.recoverable@1`
 
-List recordings a crash left out of the project.
+List recordings and unsaved projects a crash left behind.
 
-Takes recorded but never committed (the program stopped mid-recording) or never saved, found in the media folder's rec/. start_seconds is where each was recorded; seconds includes audio written after the file's last header update.
+recordings: takes (audio WAVs, and MIDI takes' journals with midi_events) recorded but never committed (the program stopped mid-recording) or never saved, found in the media folder's rec/ (file: relative to the media folder, with / on every platform). start_seconds is where each was recorded; seconds includes audio written after the file's last header update. sessions: unsaved projects of earlier runs that ended without saving or discarding them (a crash), each with its newest autosave's project name, tracks and branches, its leftover recordings and its size on disk; project.recover {session} opens one, project.recoverable.delete deletes one.
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -10909,14 +11071,61 @@ Kind: `query`. Exposure: `mcp-exec`.
           },
           "channels": {
             "type": "integer"
+          },
+          "midi_events": {
+            "type": "integer",
+            "description": "A MIDI take's journal: the events it holds"
           }
         },
         "required": ["file", "track", "start_seconds", "seconds", "channels"],
         "additionalProperties": false
       }
+    },
+    "sessions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "recoverable_session",
+        "properties": {
+          "session": {
+            "type": "string"
+          },
+          "started_ms": {
+            "type": "integer",
+            "description": "When that run started (Unix ms)"
+          },
+          "autosaved_ms": {
+            "type": "integer",
+            "description": "When its newest readable autosave was written (Unix ms); absent: none, only recordings"
+          },
+          "name": {
+            "type": "string"
+          },
+          "tracks": {
+            "type": "integer",
+            "description": "Channels and busses, not masters"
+          },
+          "branches": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "recordings": {
+            "type": "integer",
+            "description": "Takes no autosaved version uses"
+          },
+          "bytes": {
+            "type": "integer",
+            "description": "Its folder's size on disk"
+          }
+        },
+        "required": ["session", "name", "tracks", "branches", "recordings", "bytes"],
+        "additionalProperties": false
+      }
     }
   },
-  "required": ["recordings"],
+  "required": ["recordings", "sessions"],
   "additionalProperties": false
 }
 
@@ -10943,6 +11152,35 @@ Result:
       "seconds": 1.0,
       "channels": 2
     }
+  ],
+  "sessions": []
+}
+
+```
+
+**An unsaved project a crash left behind** (`session_left_behind`)
+
+```json
+{}
+
+```
+
+Result:
+
+```json
+{
+  "recordings": [],
+  "sessions": [
+    {
+      "session": "20261114-090000-4242",
+      "started_ms": "<any>",
+      "autosaved_ms": "<any>",
+      "name": "Sketch",
+      "tracks": 1,
+      "branches": ["main"],
+      "recordings": 1,
+      "bytes": "<any>"
+    }
   ]
 }
 
@@ -10959,7 +11197,71 @@ Result:
 
 ```json
 {
-  "recordings": []
+  "recordings": [],
+  "sessions": []
+}
+
+```
+
+## `project.recoverable.delete@1`
+
+Delete an unsaved project a crash left behind, with its recordings.
+
+session: as project.recoverable lists it. Its folder and everything in it are deleted for good (this is not an undo step).
+
+Kind: `action`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `session` | string |  |  |  |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "session_deleted",
+  "properties": {
+    "session": {
+      "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["session"],
+  "additionalProperties": false
+}
+
+```
+
+### Errors
+
+- `recover.unknown_session`: no unsaved project of that name was left behind Hint: project.recoverable lists them
+- `recover.busy`: the session belongs to an app that is running Hint: quit that app
+- `recover.delete`: the folder could not be deleted Hint: make it writable
+
+### Examples
+
+**Delete one** (`session_left_behind`)
+
+```json
+{
+  "session": "20261114-090000-4242"
+}
+
+```
+
+Result:
+
+```json
+{
+  "session": "20261114-090000-4242"
 }
 
 ```
@@ -10968,7 +11270,7 @@ Result:
 
 Save the project (canonical JSON) to its file or a new path.
 
-path: where to save (becomes the project's file); omit to save in place. warnings: running plug-ins whose current state could not be read; the file keeps the state each had before (fx.restart, then save again, or replace the plug-in).
+path: where to save (becomes the project's file); omit to save in place. The file keeps every branch with its unmerged steps (undoable after opening) and which branch is current; history: true also keeps undo history. warnings: running plug-ins whose current state could not be read; the file keeps the state each had before (fx.restart, then save again, or replace the plug-in); project.history_backup names the copy kept of a file whose branches could not be restored when opened. project.recording: a first save, or a save into another folder, while recording; stop first.
 
 Kind: `action`. Exposure: `mcp-tool`.
 
@@ -10977,6 +11279,7 @@ Kind: `action`. Exposure: `mcp-tool`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `path` | string |  |  |  |  |
+| `history` | boolean |  |  | false | Also keep undo and redo history (ADR-0076) |
 
 ### Result
 
@@ -12277,6 +12580,30 @@ Result:
 {}
 
 ```
+
+## `record.commit@1`
+
+Record a recording's commit (or a recovery's) as a replayable edit.
+
+The takes as the device delivered them and the punch range then; placing them again builds the same items, takes and sources. Audio files must still be there.
+
+Kind: `edit`. Exposure: `internal`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `takes` | array |  |  |  |  |
+| `punch` | object |  |  |  |  |
+
+### Result
+
+```json
+{}
+
+```
+
+### Examples
 
 ## `region.add@1`
 

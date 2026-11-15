@@ -124,6 +124,54 @@ struct FxPatchListResult {
 }  // namespace
 
 void registerFxCommands(cmd::Registry& registry) {
+    // ---------------------------------------------------------------- fx.state.capture
+    // A plug-in's own state change (its editor, a preset loaded inside it) as
+    // a replayable edit: captureFxState logs it, and merges replay it on
+    // another branch (session-model §6.4). The state is found by its hash in
+    // any kept version, so the log holds no copy of the bytes.
+    [&] {
+        struct StateArgs {
+            std::string fx, state;
+        };
+        Command<StateArgs, Empty> c;
+        c.name = "fx.state.capture";
+        c.kind = Kind::Edit;
+        c.exposure = cmd::Exposure::Internal;
+        c.summary = "Record a plug-in's own state change as a replayable edit.";
+        c.args =
+            schema::object<StateArgs>("fx_state_capture_args")
+                .field("fx", &StateArgs::fx, idArg("fx", "Plug-in"))
+                .field("state", &StateArgs::state,
+                       schema::string()
+                           .pattern("^sha256:[0-9a-f]{64}$", "a state hash")
+                           .doc("The state's blob hash, as the plug-in's state field holds it"))
+                .build();
+        c.result = emptySchema();
+        c.run = [](const StateArgs& a, Context& ctx) -> Result<Empty> {
+            EngineApp& engine = app(ctx);
+            const model::Session s = engine.view();
+            auto id = existing<model::FxInstance>(s, a.fx, "/fx");
+            if (!id) return std::move(id).error();
+            std::shared_ptr<const model::Blob> blob;
+            if (const auto found = s.blobs.find(a.state); found != s.blobs.end())
+                blob = found->second;
+            engine.versions().forEachVersion([&](const model::Version& v) {
+                if (blob) return;
+                if (const auto found = v.session->blobs.find(a.state);
+                    found != v.session->blobs.end())
+                    blob = found->second;
+            });
+            if (!blob)
+                return Error("fx.state_missing", "no kept version holds the state " + a.state,
+                             "/state", "capture the plug-in's state again on this branch");
+            model::FxInstance next = *s.fx.find(*id);
+            next.state = a.state;
+            engine.txn().putBlob(a.state, std::move(blob));
+            engine.txn().put<model::FxInstance>(*id, std::move(next));
+            return Empty{};
+        };
+        addChecked(registry, std::move(c));
+    }();
     // ---------------------------------------------------------------- fx.add
     [&] {
         Command<FxAddArgs, FxAddResult> c;

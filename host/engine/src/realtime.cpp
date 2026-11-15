@@ -2182,6 +2182,7 @@ Status Engine::startRecording(std::vector<RecordTarget> targets) {
         static_cast<std::int64_t>(outputLatency()) + b.outputLatency + b.inputLatency;
     auto rec = std::make_unique<detail::Recorder>(std::move(targets), config_.sampleRate, latency);
     rec->setDriftTolerant(slaved && slaved->syncRate);
+    rec->setLoop(readLoop());  // for the MIDI journals (ADR-0080)
     SUPPLE_TRY(rec->open());
     recorderOwned_ = std::move(rec);
     recorder_.store(recorderOwned_.get(), std::memory_order_release);

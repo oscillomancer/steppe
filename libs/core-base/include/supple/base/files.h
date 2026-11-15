@@ -31,6 +31,18 @@ Result<std::string> readTextFile(const std::filesystem::path& path,
 Status writeFileAtomic(const std::filesystem::path& path, std::span<const std::uint8_t> bytes);
 Status writeFileAtomic(const std::filesystem::path& path, std::string_view text);
 
+// As writeFileAtomic, but never replaces: the synced temporary file is
+// published under `path` only if nothing is there, atomically (renameat2
+// RENAME_NOREPLACE or link() on Linux, renamex_np RENAME_EXCL or link() on
+// macOS, a rename without replace on Windows). "file.exists" when `path` is
+// taken, at any moment up to the publication; nothing is written then.
+Status writeFileNew(const std::filesystem::path& path, std::span<const std::uint8_t> bytes);
+
+// Tests only: called with the destination before each write above syncs its
+// data; returning false fails that write as a failed sync would. An empty
+// function removes the hook. Not for concurrent use with writes.
+void setFileSyncHookForTesting(std::function<bool(const std::filesystem::path&)> hook);
+
 #ifdef _WIN32
 // Windows only. Antivirus scanners, indexers, sync clients and viewers often
 // hold a just-written file open without FILE_SHARE_DELETE, which fails a

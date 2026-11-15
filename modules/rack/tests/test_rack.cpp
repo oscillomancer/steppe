@@ -7,6 +7,7 @@
 #include <cmath>
 #include <vector>
 
+#include "restart_check.h"
 #include "stock_lookup.h"
 #include "supple/rack/host_modules.h"
 #include "supple/rack/schedule.h"
@@ -138,6 +139,19 @@ TEST_CASE("rack: automation resamples after a locate within the same grid interv
     CHECK(rig.vca->paramMember(0).value() == -10.0);
     CHECK(curve.calls == 2);
     CHECK_FALSE(curve.offGrid);
+}
+
+// A locate's restart (ADR-0062 §5, 2026-11-14 note): every stock module,
+// restarted on the audio thread after playing, plays again as when new.
+// Under rtsan, restart() is checked not to allocate, free or lock.
+TEST_CASE("rack: a restart gives every stock module its prepared state back" *
+          doctest::description("rt")) {
+    int restarted = 0;
+    for (const StockModule* m : stockModules()) {
+        INFO(m->name);
+        restarted += test::replaysAfterRestart(m->code, Origin::Stock);
+    }
+    CHECK(restarted > 40);
 }
 
 TEST_CASE("rack: a loop runs frame by frame with one frame of delay") {

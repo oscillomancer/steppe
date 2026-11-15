@@ -260,6 +260,46 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
         addChecked(registry, std::move(c));
     }();
     [&] {
+        struct WritePoint {
+            double pos = 0, value = 0;
+        };
+        struct WriteArgs {
+            std::string env;
+            double after = 0, through = 0;
+            std::vector<WritePoint> points;
+        };
+        Command<WriteArgs, Empty> c;
+        c.name = "env.write.commit";
+        c.kind = Kind::Edit;
+        c.exposure = cmd::Exposure::Internal;
+        c.summary = "Record what a write pass wrote into an envelope as a replayable edit.";
+        c.description =
+            "Points with after < pos <= through go and the given points come in, in the "
+            "envelope's own units (beats or seconds by its timebase, stored values).";
+        c.args =
+            schema::object<WriteArgs>("env_write_commit_args")
+                .field("env", &WriteArgs::env, idArg("en", "Envelope"))
+                .field("after", &WriteArgs::after, schema::number())
+                .field("through", &WriteArgs::through, schema::number())
+                .field("points", &WriteArgs::points,
+                       schema::arrayOf(schema::object<WritePoint>("env_write_point")
+                                           .field("pos", &WritePoint::pos, schema::number())
+                                           .field("value", &WritePoint::value, schema::number())
+                                           .build()))
+                .build();
+        c.result = emptySchema();
+        c.run = [](const WriteArgs& a, Context& ctx) -> Result<Empty> {
+            EngineApp& engine = app(ctx);
+            auto id = existing<model::Envelope>(engine.view(), a.env, "/env");
+            if (!id) return std::move(id).error();
+            std::vector<model::EnvPoint> points;
+            for (const auto& p : a.points) points.push_back({p.pos, p.value});
+            engine.writeEnvelope(*id, a.after, a.through, points, false);
+            return Empty{};
+        };
+        addChecked(registry, std::move(c));
+    }();
+    [&] {
         Command<EnvPointsSetArgs, EnvCount> c;
         c.name = "env.points.set";
         c.kind = Kind::Edit;

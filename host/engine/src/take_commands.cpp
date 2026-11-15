@@ -5,12 +5,18 @@
 // render an item through its FX as a new audio take (MIDI through the track's
 // instrument). Every command is one undo step.
 #include <algorithm>
+#include <atomic>
+#include <cerrno>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <set>
 
 #include "command_helpers.h"
 #include "command_validation.h"
+#include "file_platform.h"
 #include "media_files.h"
+#include "recording.h"
 #include "supple/audio/audio_file.h"
 #include "supple/base/sha256.h"
 #include "supple/engine/app.h"
@@ -107,7 +113,8 @@ fs::path freshFile(const fs::path& dir, std::string name) {
     std::error_code ec;
     for (int n = 1;; ++n) {
         const fs::path p = dir / (n == 1 ? name + ".wav" : name + "-" + std::to_string(n) + ".wav");
-        if (!fs::exists(p, ec)) return p;
+        // Not even a dangling link: writing through it would land elsewhere.
+        if (!fs::exists(fs::symlink_status(p, ec))) return p;
     }
 }
 
@@ -148,6 +155,81 @@ struct TakeEntry {
 struct TakeList {
     std::vector<TakeEntry> takes;
 };
+
+// --- record.commit: a recording's commit, replayable (ADR-0076) -------------------
+
+struct RecSegmentArg {
+    std::int64_t fileFrame = 0, timeline = 0;
+};
+struct RecMidiArg {
+    std::int64_t timeline = 0, run = 0;
+    std::vector<std::int64_t> bytes;
+    std::optional<std::string> route;
+    std::int64_t voice = -1;
+};
+struct RecTakeArg {
+    std::string track, file;
+    std::string hash;
+    std::int64_t startSample = 0, frames = 0;
+    std::vector<RecSegmentArg> segments;
+    std::int64_t loopStart = 0, loopEnd = 0;
+    std::int64_t overflowFrames = 0;
+    double sampleRate = 0;
+    bool midi = false;
+    std::vector<RecMidiArg> events;
+};
+struct RecPunchArg {
+    bool enabled = false;
+    double start = 0, end = 0;
+};
+struct RecordCommitArgs {
+    std::vector<RecTakeArg> takes;
+    RecPunchArg punch;
+};
+
+schema::Schema<RecordCommitArgs> recordCommitSchema() {
+    // The bounds of a MIDI journal (ADR-0080): a replayed record.commit is
+    // read from a project's history, the same file boundary.
+    constexpr double limit = static_cast<double>(detail::kRecordingClockLimit);
+    const auto clock = schema::integer().range(-limit, limit);
+    const auto length = schema::integer().range(0, limit);
+    auto segment = schema::object<RecSegmentArg>("record_commit_segment")
+                       .field("file_frame", &RecSegmentArg::fileFrame, length)
+                       .field("timeline", &RecSegmentArg::timeline, clock)
+                       .build();
+    auto event =
+        schema::object<RecMidiArg>("record_commit_event")
+            .field("timeline", &RecMidiArg::timeline, clock)
+            .field("run", &RecMidiArg::run, schema::integer().range(0, UINT32_MAX))
+            .field("bytes", &RecMidiArg::bytes, schema::arrayOf(schema::integer().min(0).max(255)))
+            .field("route", &RecMidiArg::route, idArg("sd", "Route"))
+            .field("voice", &RecMidiArg::voice, schema::integer())
+            .build();
+    auto take = schema::object<RecTakeArg>("record_commit_take")
+                    .field("track", &RecTakeArg::track, idArg("tr", "Track"))
+                    .field("file", &RecTakeArg::file,
+                           schema::string().doc("Relative to the media folder when inside it"))
+                    .field("hash", &RecTakeArg::hash, schema::string())
+                    .field("start_sample", &RecTakeArg::startSample, clock)
+                    .field("frames", &RecTakeArg::frames, length)
+                    .field("segments", &RecTakeArg::segments, schema::arrayOf(segment))
+                    .field("loop_start", &RecTakeArg::loopStart, length)
+                    .field("loop_end", &RecTakeArg::loopEnd, length)
+                    .field("overflow_frames", &RecTakeArg::overflowFrames, length)
+                    .field("sample_rate", &RecTakeArg::sampleRate, schema::number().exclusiveMin(0))
+                    .field("midi", &RecTakeArg::midi, schema::boolean())
+                    .field("events", &RecTakeArg::events, schema::arrayOf(event))
+                    .build();
+    return schema::object<RecordCommitArgs>("record_commit_args")
+        .field("takes", &RecordCommitArgs::takes, schema::arrayOf(take))
+        .field("punch", &RecordCommitArgs::punch,
+               schema::object<RecPunchArg>("record_commit_punch")
+                   .field("enabled", &RecPunchArg::enabled, schema::boolean())
+                   .field("start", &RecPunchArg::start, schema::number())
+                   .field("end", &RecPunchArg::end, schema::number())
+                   .build())
+        .build();
+}
 
 }  // namespace
 
@@ -671,9 +753,31 @@ void registerTakeCommands(cmd::Registry& registry) {
             const fs::path dir = engine.mediaDir();
             std::error_code ec;
             fs::create_directories(dir, ec);
-            const fs::path file =
-                freshFile(dir, (heard->name.empty() ? std::string("item") : heard->name) + " fx");
-            SUPPLE_TRY(audio::writeWav(file, rendered->audio));
+            // Written under a temporary name, then published only under a
+            // free one: another writer may take the fresh name meanwhile.
+            static std::atomic<unsigned> serial{0};
+            const std::string stem =
+                (heard->name.empty() ? std::string("item") : heard->name) + " fx";
+            fs::path temp = dir / ("." + stem + "." + std::to_string(detail::files::processId()) +
+                                   "." + std::to_string(serial.fetch_add(1)) + ".tmp");
+            if (auto written = audio::writeWav(temp, rendered->audio); !written) {
+                fs::remove(temp, ec);
+                return std::move(written).error();
+            }
+            fs::path file;
+            for (int attempt = 0;; ++attempt) {
+                file = freshFile(dir, stem);
+                if (detail::files::publishNew(temp, file) == 0) break;
+                if (errno != EEXIST || attempt >= 100) {
+                    const std::string reason = std::strerror(errno);
+                    fs::remove(temp, ec);
+                    return Error("item.apply_fx_write",
+                                 "cannot publish the render as " + file.string() + ": " + reason,
+                                 "/item", "check media-folder permissions and free space");
+                }
+            }
+            fs::remove(temp, ec);  // the published name keeps the file
+            engine.noteCreatedFile(file);
             auto hash = sha256File(file);
             if (!hash) return std::move(hash).error();
             model::MediaSource md;
@@ -703,6 +807,142 @@ void registerTakeCommands(cmd::Registry& registry) {
         };
         addChecked(registry, std::move(c));
     }
+    {
+        Command<RecordCommitArgs, json::Value> c;
+        c.name = "record.commit";
+        c.kind = Kind::Edit;
+        c.exposure = cmd::Exposure::Internal;
+        c.summary = "Record a recording's commit (or a recovery's) as a replayable edit.";
+        c.description =
+            "The takes as the device delivered them and the punch range then; placing them "
+            "again builds the same items, takes and sources. Audio files must still be there.";
+        c.args = recordCommitSchema();
+        c.result = schema::any();
+        c.run = [](const RecordCommitArgs& a, Context& ctx) -> Result<json::Value> {
+            EngineApp& engine = app(ctx);
+            const model::Session s = engine.view();
+            std::vector<RecordedTake> takes;
+            for (std::size_t i = 0; i < a.takes.size(); ++i) {
+                const RecTakeArg& t = a.takes[i];
+                const std::string at = "/takes/" + std::to_string(i);
+                auto track = existing<model::Track>(s, t.track, at + "/track");
+                if (!track) return std::move(track).error();
+                RecordedTake r;
+                r.track = *track;
+                if (!t.midi) {
+                    const fs::path file(t.file);
+                    r.file = file.is_relative() ? engine.mediaDir() / file : file;
+                    std::error_code ec;
+                    if (!fs::is_regular_file(r.file, ec))
+                        return Error("record.missing", "the recorded file " + t.file + " is gone",
+                                     at + "/file", "restore the file, then merge again");
+                }
+                r.hash = t.hash;
+                r.startSample = t.startSample;
+                r.frames = t.frames;
+                for (const auto& g : t.segments) r.segments.push_back({g.fileFrame, g.timeline});
+                // As a journal's header: a loop ends after it starts, or is
+                // [0, 0] (none).
+                if (t.loopEnd <= t.loopStart && (t.loopStart != 0 || t.loopEnd != 0))
+                    return Error("record.loop", "the recorded loop ends before it starts",
+                                 at + "/loop_end",
+                                 "give loop_end after loop_start, or both 0 for no loop");
+                // The punch, in this take's frames, within the same bound
+                // as its clocks: placement converts and clips with it.
+                const double limit = static_cast<double>(detail::kRecordingClockLimit);
+                for (auto [seconds, name] :
+                     {std::pair{a.punch.start, "start"}, std::pair{a.punch.end, "end"}})
+                    if (!(std::fabs(seconds * t.sampleRate) <= limit))
+                        return Error(
+                            "record.punch",
+                            std::string("the punch ") + name + " is beyond any recording's length",
+                            std::string("/punch/") + name,
+                            "give a punch within the recording's range, in seconds");
+                r.loop.start = t.loopStart;
+                r.loop.end = t.loopEnd;
+                r.overflowFrames = static_cast<std::uint64_t>(t.overflowFrames);
+                r.sampleRate = t.sampleRate;
+                r.isMidi = t.midi;
+                for (std::size_t k = 0; k < t.events.size(); ++k) {
+                    const RecMidiArg& e = t.events[k];
+                    const std::string event = at + "/events/" + std::to_string(k);
+                    // A channel message as captured (ADR-0080): a status
+                    // 0x80..0xEF, then two 7-bit data bytes.
+                    if (e.bytes.size() != 3 || e.bytes[0] < 0x80 || e.bytes[0] > 0xef ||
+                        e.bytes[1] > 0x7f || e.bytes[2] > 0x7f)
+                        return Error(
+                            "record.midi", "a recorded MIDI event is not a channel message",
+                            event + "/bytes", "give [status 128..239, data 0..127, data 0..127]");
+                    if (e.voice < INT32_MIN || e.voice > INT32_MAX)
+                        return Error("record.midi", "a recorded MIDI voice is out of range",
+                                     event + "/voice", "give a voice within 32 bits");
+                    RecordedMidiEvent m;
+                    m.timeline = e.timeline;
+                    m.run = static_cast<std::uint32_t>(e.run);
+                    for (std::size_t b = 0; b < 3; ++b)
+                        m.bytes[b] = static_cast<std::uint8_t>(e.bytes[b]);
+                    if (e.route) {
+                        auto route = existing<model::Route>(s, *e.route, event + "/route");
+                        if (!route) return std::move(route).error();
+                        m.route = *route;
+                    }
+                    m.voice = static_cast<int>(e.voice);
+                    r.midi.push_back(m);
+                }
+                takes.push_back(std::move(r));
+            }
+            if (a.punch.enabled && a.punch.end <= a.punch.start)
+                return Error("record.punch", "the punch ends before it starts", "/punch/end",
+                             "give punch.end after punch.start, or disable the punch");
+            TransportRange punch;
+            punch.enabled = a.punch.enabled;
+            punch.start = a.punch.start;
+            punch.end = a.punch.end;
+            auto placed = engine.placeTakes(takes, punch, nullptr);
+            if (!placed) return std::move(placed).error();
+            return json::Value::object();
+        };
+        addChecked(registry, std::move(c));
+    }
 }
+
+namespace detail {
+json::Value recordCommitArgs(const std::vector<RecordedTake>& takes, const TransportRange& punch,
+                             const fs::path& media) {
+    RecordCommitArgs a;
+    for (const RecordedTake& r : takes) {
+        RecTakeArg t;
+        t.track = r.track.str();
+        std::error_code ec;
+        const fs::path rel = media.empty() ? fs::path() : fs::relative(r.file, media, ec);
+        // A MIDI take's file is its crash-recovery journal (ADR-0080): not
+        // part of what a merge replays.
+        if (!r.isMidi)
+            t.file = !ec && !rel.empty() && *rel.begin() != ".." ? rel.generic_string()
+                                                                 : r.file.string();
+        t.hash = r.hash;
+        t.startSample = r.startSample;
+        t.frames = r.frames;
+        for (const auto& g : r.segments) t.segments.push_back({g.fileFrame, g.timeline});
+        t.loopStart = r.loop.start;
+        t.loopEnd = r.loop.end;
+        t.overflowFrames = static_cast<std::int64_t>(r.overflowFrames);
+        t.sampleRate = r.sampleRate;
+        t.midi = r.isMidi;
+        for (const auto& m : r.midi) {
+            RecMidiArg e;
+            e.timeline = m.timeline;
+            e.run = m.run;
+            e.bytes = {m.bytes[0], m.bytes[1], m.bytes[2]};
+            if (m.route != model::Id{}) e.route = m.route.str();
+            e.voice = m.voice;
+            t.events.push_back(std::move(e));
+        }
+        a.takes.push_back(std::move(t));
+    }
+    a.punch = {punch.enabled, punch.start, punch.end};
+    return recordCommitSchema().encode(a);
+}
+}  // namespace detail
 
 }  // namespace supple::engine

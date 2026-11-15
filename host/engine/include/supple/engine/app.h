@@ -26,6 +26,8 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <tuple>
+#include <utility>
 #include <vector>
 #include "supple/base/stop.h"
 
@@ -45,7 +47,8 @@ class SourcePreparation;
 
 namespace detail {
 class RuntimeProtection;
-}
+class SessionLock;
+}  // namespace detail
 
 struct AppOptions {
     std::vector<std::string> dummyMidiInputs,
@@ -73,9 +76,13 @@ struct AppOptions {
     // <workdir>/rack-presets; the app passes <data>/<slug>/rack-presets.
     std::filesystem::path rackPresetDir;
     // An unsaved project's own folder (the GUI's, one per run): its media (the
-    // recordings) live in <scratchDir>/<media_dir> until the first save moves
-    // them beside the project file; clearScratch() deletes it when the
-    // unsaved project is discarded. Empty: <workdir>/media, never deleted.
+    // recordings) and autosaves live in <scratchDir>/<media_dir> and
+    // <scratchDir>/autosave-<n>.json until the first save moves the media
+    // beside the project file; clearScratch() deletes it when the unsaved
+    // project is discarded. The app holds an OS lock on its session.lock
+    // while it uses it (ADR-0078); other folders beside it in the same parent
+    // are earlier runs', recoverableSessions() lists those a run left
+    // behind. Empty: <workdir>/media, never deleted, no autosaves.
     std::filesystem::path scratchDir;
     std::string jackLibrary = "libjack.so.0";                    // tests use a stand-in
     std::shared_ptr<RuntimeProtectionOps> runtimeProtectionOps;  // null: Linux operations
@@ -219,6 +226,29 @@ struct RecoverableInfo {
     std::string track;
     double startSeconds = 0, seconds = 0;
     std::int64_t channels = 0;
+    // A MIDI take's journal (ADR-0080): how many events it holds (channels 0).
+    std::optional<std::int64_t> midiEvents;
+};
+
+// An unsaved project a run left behind (it crashed or was killed): its
+// folder beside the scratch folder, no longer locked, with something in it
+// (ADR-0078).
+struct RecoverableSession {
+    std::string session;                      // the folder's name
+    std::optional<std::int64_t> startedMs;    // when that run started (Unix ms)
+    std::optional<std::int64_t> autosavedMs;  // its newest readable autosave
+    std::string name;                         // the project's name, from the autosave
+    std::int64_t tracks = 0;                  // channels and busses (not masters)
+    std::vector<std::string> branches;
+    std::int64_t recordings = 0;  // takes in its rec/ no autosaved version uses
+    std::int64_t bytes = 0;       // the folder's size on disk
+};
+
+// What recoverSession() brought back.
+struct SessionRecovery {
+    std::string autosave;                 // the autosave file it opened ("" if none)
+    std::vector<RecordedInfo> recovered;  // leftover recordings put back
+    std::vector<RecordingWarning> warnings;
 };
 
 struct TransportInfo {
@@ -277,10 +307,35 @@ class EngineApp : public cmd::Host {
     // Where relative media paths resolve: the saved project's folder, or the
     // scratch folder of an unsaved one (empty without either).
     std::filesystem::path projectDir() const;
-    // Deletes the scratch folder (an unsaved project's recordings): called when
-    // the unsaved project is discarded (quit, new, open). Does nothing once the
-    // project is saved, and never touches a folder holding the work directory.
+    // Deletes the scratch folder (an unsaved project's recordings and
+    // autosaves) and releases its lock: called when the unsaved project is
+    // discarded (quit, new, open). Does nothing once the project is saved,
+    // and never touches a folder holding the work directory.
     void clearScratch();
+    // Unsaved projects earlier runs left behind (ADR-0078), oldest first:
+    // folders beside the scratch folder whose lock no running app holds and
+    // that hold an autosave or a file. Unreadable autosaves are skipped with
+    // a warning. Empty without a scratch folder.
+    std::vector<RecoverableSession> recoverableSessions(
+        std::vector<RecordingWarning>* warnings = nullptr) const;
+    // How many there are, without reading their autosaves.
+    std::int64_t recoverableSessionCount() const;
+    // Replaces the project (as open() does: the caller decides about unsaved
+    // changes first) with `session`'s newest readable autosave, still
+    // unsaved, takes its folder over as the scratch folder (with its lock),
+    // and puts back its leftover recordings as one more version. The run's
+    // own folder is discarded.
+    Result<SessionRecovery> recoverSession(const std::string& session);
+    // A saved project with an autosave newer than its file: replaces the
+    // current project with the newest such autosave that reads, keeping the
+    // project's path, so it is unsaved until saved over the file
+    // ("recover.no_autosave" when there is none). Leftover recordings stay
+    // for project.recover.
+    // `name` (optional) opens that autosave of the project's folder, the one
+    // that was offered, even if the file has been saved since.
+    Result<SessionRecovery> recoverAutosave(const std::string& name = {});
+    // Deletes a folder recoverableSessions() lists.
+    Status deleteSession(const std::string& session);
 
     // --- plugins ----------------------------------------------------------------
     const host::ScanReport& pluginScanReport() const { return scanReport_; }
@@ -330,12 +385,18 @@ class EngineApp : public cmd::Host {
     Result<std::string> describeFx(const model::FxInstance& fx, bool changedOnly);
 
     // --- project files ------------------------------------------------------------
-    // Atomic; becomes the project path. `warnings` names each running plug-in
-    // whose state could not be read: the file keeps the state it had before.
-    Status save(const std::filesystem::path& path,
-                std::vector<schema::Warning>* warnings = nullptr);
+    // Atomic; becomes the project path. The file holds main's head and every
+    // branch (ADR-0076); `history` also keeps undo history. `warnings` names
+    // each running plug-in whose state could not be read: the file keeps the
+    // state it had before.
+    Status save(const std::filesystem::path& path, std::vector<schema::Warning>* warnings = nullptr,
+                bool history = false);
+    // Replaces the history with the file's: its branches and current branch.
+    // A branches section that cannot be restored opens main alone with a
+    // project.history warning; the first save over that file keeps a copy of
+    // it (<file>.pre-branches.bak).
     Status open(const std::filesystem::path& path,
-                std::vector<schema::Warning>* warnings = nullptr);  // replaces the history
+                std::vector<schema::Warning>* warnings = nullptr);
     Status newProject(model::Project project);
     // A project template (project.template.*): `folder` receives project.json
     // (the head, without history) and media/ with a copy of every audio file
@@ -358,8 +419,32 @@ class EngineApp : public cmd::Host {
     }
 
     // --- branches ------------------------------------------------------------------
+    // Whether a logged step may be replayed from a saved file (ADR-0076,
+    // "Replayable steps"): a registered edit command of this program (Kind
+    // Edit, not batch) whose arguments fit its schema. Edits change the session
+    // and at most add new files to the project's media folder; anything else
+    // (saves, renders, transport, files elsewhere) never runs from a log.
+    // open() checks every saved step against the engine's commands, replay()
+    // every step it runs.
+    static Status replayableFromFile(const cmd::Registry& registry,
+                                     const model::Invocation& invocation);
+    // True while replay() runs steps: an edit that would otherwise write
+    // outside the project (rack.preset.load installing modules into the
+    // library) refuses instead.
+    bool replaying() const { return replaying_; }
+    // A replayed edit that creates a file names it here before writing it;
+    // a merge that then fails removes the files its replays created.
+    void noteCreatedFile(const std::filesystem::path& file) {
+        if (mergeCreated_) mergeCreated_->push_back(file);
+    }
+    // Where a replayed edit may create files: the project's media folder,
+    // which must resolve (symlinks followed) inside the project's own folder.
+    // "history.media_outside" otherwise, also for a media_dir naming "..".
+    // Makes the folder to resolve it, and removes what it made if refused.
+    Status replayMayWriteMedia();
     // Re-executes recorded invocations on `base` as `version` (the replayer
-    // for merges): commands run against a temporary transaction on that base.
+    // for merges): commands run against a temporary transaction on that base,
+    // each first checked with replayableFromFile().
     Result<model::Replayed> replay(const cmd::Registry& registry, const model::Session& base,
                                    const std::vector<model::Invocation>& invocations,
                                    std::uint64_t version);
@@ -493,6 +578,13 @@ class EngineApp : public cmd::Host {
     // Commits recorded takes as items on their tracks (one version).
     Result<std::vector<RecordedInfo>> commitTakes(const std::vector<RecordedTake>& takes,
                                                   std::string_view label = "record");
+    // Places recorded takes as items in the open transaction, with `punch`
+    // as it was when they were recorded. `pendingHashes` (live commits): the
+    // sources whose files still need hashing, and warnings are emitted; null
+    // when record.commit replays a commit on another branch.
+    Result<std::vector<RecordedInfo>> placeTakes(
+        const std::vector<RecordedTake>& takes, const TransportRange& punch,
+        std::vector<std::pair<model::Id, RecordedTake>>* pendingHashes);
 
     // --- recordings (crash recovery, ADR-0014 §3) -----------------------------------
     // Where media lives: next to the project file, or the work directory's
@@ -530,6 +622,13 @@ class EngineApp : public cmd::Host {
     // a write envelope never touched is flattened over the pass (one
     // transaction, "Automation written").
     void recordAutomation(model::Id object, const std::string& param, double value);
+    // A write pass's edit of one envelope, in the open transaction: the points
+    // with after < pos <= through go, `points` come in (each where its
+    // position sorts). `log`: also log it as env.write.commit, so a merge
+    // replays it on another branch (what the pass computed from the transport
+    // cannot be computed again there). env.write.commit runs it unlogged.
+    void writeEnvelope(model::Id env, double after, double through,
+                       const std::vector<model::EnvPoint>& points, bool log);
     // Whether a change to this parameter would be recorded now.
     bool writesAutomation(model::Id object, const std::string& param) const;
     // transport.loop / transport.punch (ADR-0015): transport state, not
@@ -632,6 +731,9 @@ class EngineApp : public cmd::Host {
     std::filesystem::path autosaveDir() const;
     // The newest autosave of the project file `project` that is newer than the
     // file itself, or empty. project.open reports it instead of loading it.
+    // Newer: numbered above the file's autosaved_through (the open project's
+    // file), or, for a file without one, written after it; the highest
+    // numbered of those.
     std::filesystem::path newerAutosave(const std::filesystem::path& project) const;
 
     // --- scripting ------------------------------------------------------------------
@@ -698,11 +800,14 @@ class EngineApp : public cmd::Host {
     // Writes one autosave (rotating: the newest 5 stay) and marks the head
     // saved. Errors are emitted as engine.error.
     void autosave();
-    void maybeAutosave();  // autosave() when the head changed and an interval passed
+    void maybeAutosave();  // autosave() when the project changed and an interval passed
 
     // `prepare` runs once the new project is in place, before the engine
     // starts on it (a template's media copied into its folder).
     Status replaceProject(model::Session session, std::filesystem::path path,
+                          const std::function<Status()>& prepare = {},
+                          std::vector<schema::Warning>* warnings = nullptr);
+    Status replaceProject(model::VersionStore store, std::filesystem::path path,
                           const std::function<Status()>& prepare = {},
                           std::vector<schema::Warning>* warnings = nullptr);
     bool copyImports_ = false;
@@ -851,6 +956,10 @@ class EngineApp : public cmd::Host {
     double syncSeekSeconds_ = 0.05;  // how long a seek takes to be heard (measured)
     std::vector<std::string> syncWarnings_;
     std::vector<std::filesystem::path> recordingFiles_;  // while recording
+    // MIDI journals (ADR-0080) of takes committed in this project and not
+    // yet in a saved file or autosave: not leftovers; deleted once one is.
+    std::vector<std::filesystem::path> midiJournalsPending_;
+    void dropSavedMidiJournals();
     bool recordingMasters_ = false;  // armed masters record their output (ADR-0057)
     std::set<model::Id> reportedFailures_;
     std::filesystem::path projectPath_;
@@ -874,10 +983,59 @@ class EngineApp : public cmd::Host {
     std::uint64_t restartRetryAt_ = 0;  // the next attempt
     std::uint64_t restartBackoff_ = 0;  // ms, doubling to 4 s
 
-    // Autosave: the head version last written and when.
+    // Autosave: the branch heads last written and when.
     bool autosaveMarked_ = false;
     std::uint64_t autosaveMs_ = 0;
-    std::uint64_t autosaveVersion_ = 0;
+    model::VersionStore::Heads autosaveHeads_;
+    // The opened file whose branches section could not be restored: the
+    // first save over it keeps a copy first (ADR-0076).
+    std::filesystem::path branchesBackupFor_;
+    // Raw files a recovery must not lose (ADR-0078): an autosave whose
+    // branches were not restored, or one that could not be read at all. Each
+    // is a copy beside the autosaves (a name rotation leaves alone), published
+    // beside the file by the first save as <file><suffix>.bak before the
+    // autosaves go, then removed.
+    struct RecoveryKeep {
+        std::filesystem::path copy;
+        std::string suffix;  // ".pre-branches", ".unreadable-autosave"
+    };
+    std::vector<RecoveryKeep> recoveryKeep_;
+    // The project file as this project was opened (or first saved, or saved
+    // under a new path): a named autosave must be newer than that
+    // (recoverAutosave). `through` is its autosaved_through; a file without
+    // one (before 2.15) is compared by `time`.
+    struct OpenedFile {
+        std::filesystem::path path;
+        std::filesystem::file_time_type time;
+        std::optional<std::uint64_t> through;
+    };
+    std::optional<OpenedFile> openedFile_;
+    // The project file's autosaved_through as it is now (opened or saved):
+    // an autosave numbered above it is newer than the file (ADR-0078).
+    // Absent for a file without one, whose autosaves go by file time.
+    std::optional<std::uint64_t> autosavedThrough_;
+    // Where recovery may read and repair recordings: an unsaved project's
+    // session folder; empty for a saved project (its file names its media).
+    std::filesystem::path recoveryRoot() const;
+    // A raw autosave a recovery cannot fully restore: (name, bytes, suffix).
+    using RawAutosave = std::tuple<std::string, std::string, std::string>;
+    // Copies each into `folder` out of the autosave rotation, all or none
+    // (recover.keep at `path`), before a recovery replaces anything.
+    Result<std::vector<RecoveryKeep>> keepForFirstSave(const std::filesystem::path& folder,
+                                                       const std::vector<RawAutosave>& raw,
+                                                       const std::string& path);
+    Status publishRecoveryKeeps(const std::filesystem::path& file,
+                                std::vector<schema::Warning>* warnings);
+    bool replaying_ = false;
+    std::vector<std::filesystem::path>* mergeCreated_ = nullptr;
+    // The OS lock on the scratch folder while an unsaved project uses it
+    // (ADR-0078).
+    std::unique_ptr<detail::SessionLock> scratchLock_;
+    void holdScratch();     // creates the scratch folder and takes its lock
+    void releaseScratch();  // after the first save: autosaves, lock, empty folder go
+    // A sibling of the scratch folder named `session`, or an error.
+    Result<std::filesystem::path> sessionFolder(const std::string& session) const;
+    void pruneEmptySessions();  // at creation: left-behind folders with nothing in them
 };
 
 // Clones a take and its owned FX/envelopes/automation. `copy` may already

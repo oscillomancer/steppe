@@ -164,11 +164,47 @@ A project is a JSON file. Its media lives in the `media/` folder beside it.
 Project and FX chain files accept oversampling factors 1, 2, 4 or 8. If a
 hand-edited file uses another factor, loading reports the field and allowed values.
 
+A project file keeps every branch, not just the one you are on: an agent's
+branch you have not merged yet is still there after quitting and reopening,
+with each of its steps (History panel), and it can be undone step by step or
+merged into main as before. The file opens on the branch that was current when
+it was saved. Main's own undo history is not kept: after reopening, undo on
+main starts from the saved state. (Agents can keep it with
+`project.save {"history": true}`.) Autosaves keep branches too.
+
+If a program that does not know about branches (an older Steppe, a script)
+changed the file's main project, the saved branches no longer fit it: Steppe
+opens main alone and says so, and the first time you save over that file it
+keeps a copy of the old one beside it as `<file>.pre-branches.bak`.
+
 Until a project is saved, its recordings go to a folder of its own under the
 data folder (below), in `unsaved/<start time>-<pid>/media/rec`. The first
-save moves them into `media/` beside the project file. Quitting, or starting
+save moves them into `media/` beside the project file. While a recording runs, a
+project cannot be saved for the first time, or saved as into another
+folder: stop recording first, and its files move or are copied then.
+Saving in place works while recording. Quitting, or starting
 another project, without saving deletes that folder after the app has asked.
-A crashed run leaves its folder behind, recordings included.
+
+An unsaved project is autosaved into that folder every minute while it
+changes, like a saved one. If Steppe stops without you saving or discarding
+(a crash, a power cut), the folder stays, with its autosaves and recordings.
+MIDI recordings are kept as they are played, so a crash loses at most the
+last moment of a take (a power cut, at most the last five seconds).
+The next time Steppe starts without a project to open, it lists what was left
+behind: each with its name, when it was last autosaved, how many tracks and
+recordings it has, and its size. **Recover** opens it (after asking about any
+unsaved changes in the current project), still unsaved: save it to keep it.
+**Delete** removes it for good, after asking once more. **Later** closes the
+list and keeps everything; File > Recover unsaved work… shows it again. A
+Steppe that is still running keeps its own folder to itself, so two copies
+of the app never offer each other's work.
+
+The same list appears when you open a saved project that Steppe autosaved
+after its last save, or whose recordings were not added because Steppe
+stopped while recording. **Open autosave** replaces what you opened with
+those later changes; the file itself is not changed until you save.
+**Put back** adds the recordings where they were recorded, as one step you
+can undo.
 
 New, Open and Quit (including File > Quit, Cmd+Q on macOS and closing the main
 window) first stop an active recording and add its takes to the
@@ -644,6 +680,14 @@ Patches that play from the song (a Transport module, sequencers, clocks:
 Rain Bells, Song Machine and the other generative ones) stay silent until
 you press play; while the transport is stopped, the rack window's status
 bar says so. Instrument patches need notes: MIDI items on their channel.
+Pressing play, or moving the playhead while playing, starts every module
+afresh, as plug-ins are reset there: an LFO starts its cycle again from
+its offset, a delay or reverb drops its tail, a filter its ringing, and a
+knob you just turned is at its new value at once instead of still
+gliding. So the rack sounds the same from a given point on every play and
+in every render, whatever it played before. A loop going round does not
+restart them: an LFO runs on and tails carry across the loop point. While
+the transport is stopped a rack runs on as it was.
 A rack sends audio both ways. Its Out modules are channel inputs, and an
 **In** module takes sends, and the rack becomes an effect. Send a track to
 it in the routing matrix (**View > Routing matrix**), where each In module
@@ -891,8 +935,9 @@ report the option and how to correct it before playback starts.
 
 For headless recording, stop the transport and save the project before closing
 an MCP connection or stopping the socket server. Shutdown finishes capture but
-does not save the project. Unsaved audio files can be recovered; unsaved MIDI
-recordings and other session edits are lost when the process exits.
+does not save the project. Unsaved audio and MIDI recordings can be recovered
+(File > Recover unsaved work…, or `project.recover`); other session edits are
+lost when the process exits.
 
 MIDI sends, including a rack's Note Out routes, can be recorded by their destination channel. Arm
 it in MIDI replace or MIDI overdub mode, then record; loop and punch apply

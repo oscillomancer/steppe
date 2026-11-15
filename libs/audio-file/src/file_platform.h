@@ -16,6 +16,7 @@
 #include "supple/base/files.h"
 #else
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -32,7 +33,7 @@ inline std::FILE* open(const std::filesystem::path& path, bool write, bool creat
                     create ? CREATE_NEW : OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
     if (handle == INVALID_HANDLE_VALUE) return nullptr;
     BY_HANDLE_FILE_INFORMATION info{};
-    if (!GetFileInformationByHandle(handle, &info) ||
+    if (GetFileType(handle) != FILE_TYPE_DISK || !GetFileInformationByHandle(handle, &info) ||
         (info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY))) {
         CloseHandle(handle);
         return nullptr;
@@ -46,11 +47,21 @@ inline std::FILE* open(const std::filesystem::path& path, bool write, bool creat
     std::FILE* stream = _fdopen(fd, write ? "r+b" : "rb");
     if (!stream) _close(fd);
 #else
-    const int fd = ::open(
-        path.c_str(),
-        (write ? O_RDWR : O_RDONLY) | (create ? O_CREAT | O_EXCL : 0) | O_NOFOLLOW | O_CLOEXEC,
-        0644);
+    // A recording's file is regular (crash recovery reads and repairs these):
+    // anything else is refused unopened, and one put in its place after that
+    // check (a named pipe, a device) is opened without waiting, then refused.
+    struct stat info{};
+    if (!create && ::lstat(path.c_str(), &info) == 0 && !S_ISREG(info.st_mode)) return nullptr;
+    const int fd = ::open(path.c_str(),
+                          (write ? O_RDWR : O_RDONLY) | (create ? O_CREAT | O_EXCL : 0) |
+                              O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK,
+                          0644);
     if (fd < 0) return nullptr;
+    if (::fstat(fd, &info) != 0 || !S_ISREG(info.st_mode) ||
+        ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL) & ~O_NONBLOCK) != 0) {
+        ::close(fd);
+        return nullptr;
+    }
     std::FILE* stream = ::fdopen(fd, write ? "r+b" : "rb");
     if (!stream) ::close(fd);
 #endif

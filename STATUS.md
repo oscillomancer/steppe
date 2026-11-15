@@ -149,8 +149,16 @@ instructions are in `docs/guides/installing.md`.
   two branches, a command log with origins, a history budget that squashes
   the oldest steps. Undo to an FX's initial unsaved settings restores its factory
   state while retaining the previous processing instance until plan retirement.
-  Project format `supple.project/2.6` with migration from
-  1.x, autosave, crash recovery of recordings, a per-project UI sidecar.
+  Project format `supple.project/2.15` with migration from
+  1.x, autosave (unsaved projects too, recovered from File > Recover unsaved
+  work… or at start, ADR-0078), crash recovery of recordings, a per-project
+  UI sidecar.
+  Saves and autosaves keep every branch with its unmerged steps and the
+  current branch (ADR-0076): a reopened agent branch is reviewable, undoable
+  and merges as before; `project.save {history: true}` also keeps undo
+  history. A plug-in's own state change (`fx.state.capture`), automation
+  written during playback (`env.write.commit`) and recorded takes
+  (`record.commit`) replay in merges.
 - **Track freeze** (ADR-0054): whole-channel pre-fader float32 capture, including
   take FX and auxiliary channels, with virtual latency and plugin retirement.
   Typed freeze/unfreeze, cancellable jobs, dependency-checked completion, retained
@@ -412,7 +420,11 @@ instructions are in `docs/guides/installing.md`.
   as scripts and as C++ alike. Each rack is a node of the render plan on a
   32-frame grid; module automation holds across host block fragments.
   Real-time output equals offline renders, and the audio path passes
-  RealtimeSanitizer. Engine-owned `module.copy` / `rack.paste` retain modules,
+  RealtimeSanitizer. A seek, and a play from a position, restart every
+  module where plug-ins are reset (an LFO's phase, a knob's glide, delay
+  and reverb tails start afresh; a loop wrap keeps them), so this holds
+  after any locate, not only from new instances; each module keeps a copy
+  of its prepared state for that, so its memory is held twice. Engine-owned `module.copy` / `rack.paste` retain modules,
   internal cables (including plug-in parameter modulation), learn bindings
   and copy-time live plug-in state across cuts and racks, as one paste undo
   step; unavailable types or plug-ins refuse the paste without changing the
@@ -1172,8 +1184,13 @@ Session and editing:
   mode to record; existing project files still load.
 - Engine stop/device restart retains finished audio and MIDI takes and commits
   them before app teardown. Headless exit does not save the project; clients
-  must stop and save first to preserve MIDI and other session edits. Audio
-  WAVs/sidecars remain recoverable; MIDI has no crash-recovery file.
+  must stop and save first to preserve session edits. Audio WAVs/sidecars and
+  MIDI take journals remain recoverable (ADR-0080): a MIDI take loses at most
+  the writer's last 20 ms pass on a crash, 5 s on a power cut. A committed
+  MIDI take's journal is deleted at the next save or autosave, so a take
+  undone before that save is not offered later (an undone audio WAV is). A
+  crash between an autosave and that deletion can offer a take the autosave
+  already holds. Native macOS/Windows runs of the journal are pending.
 - Save As into a subdirectory of the source media folder skips its destination
   subtree, including resolved symlink aliases, so copied files are not copied again.
 - Master playrate 0.25..4x and its tr_0 envelope persist in schema 2.1.
@@ -1227,7 +1244,7 @@ Session and editing:
   mid-call, and the cache remains memory-backed. Native CI for audio warp and
   background preparation is pending on macOS/Windows.
 - Loop recording passes that span a change of the loop range are not
-  handled; MIDI recordings have no crash recovery.
+  handled; a MIDI take's journal keeps the loop in effect at its start.
 - Master recording (ADR-0057): a plan change that moves a master's latency
   while it records shifts the rest of the take, as output-latency changes do
   for channel takes. Starting a recording while already playing lets an
@@ -1238,6 +1255,12 @@ Session and editing:
 - `fx.copy` does not copy envelopes or key routes; take FX cannot be keyed.
 - The history budget's size estimate walks shared payloads per version, and
   squashed steps keep large invocation arguments.
+- Saved branches (ADR-0076): main's undo history and redo steps are kept only
+  with `project.save {history: true}`, which the GUI does not offer yet. A
+  command whose arguments change incompatibly makes a merge of an older
+  file's branch stop with an `invalid` conflict. Saving serializes every kept
+  version's state on the main thread. Linux is tested locally; native
+  macOS/Windows CI has not run on it yet.
 
 GUI:
 - Automation-item point editing requires an amplitude magnitude above 0.000000001; restore

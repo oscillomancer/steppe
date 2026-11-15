@@ -5,8 +5,14 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <string>
+#include <utility>
 
+#include "../../../tests/file_platform.h"
 #include "../src/media_files.h"
+#if !defined(_WIN32)
+#include <sys/stat.h>
+#endif
 
 namespace fs = std::filesystem;
 using namespace supple::engine;
@@ -65,4 +71,47 @@ TEST_CASE("media folder copy excludes its destination subtree and resolved alias
     REQUIRE(detail::copyFolder(target, source));
     REQUIRE(fs::exists(source / "rec" / "new-take.wav"));
     CHECK(fs::file_size(source / "rec" / "new-take.wav") == 8);
+}
+
+TEST_CASE("crash recovery reads regular files only, and never waits on a named pipe") {
+    // Round-9 review: a sidecar that was a named pipe parked recovery in
+    // open() until something wrote to it. Every recovery read (autosaves,
+    // kept copies, sidecars, MIDI journals) goes through these helpers.
+    const fs::path root = fs::temp_directory_path() /
+                          ("supple-recovery-files-" + std::to_string(supple::test::processId()));
+    fs::remove_all(root);
+    fs::create_directories(root / "folder");
+    struct Cleanup {
+        fs::path path;
+        ~Cleanup() { fs::remove_all(path); }
+    } cleanup{root};
+    std::ofstream(root / "autosave-1.json") << "{}";
+    CHECK(detail::readRecoveryText(root, root / "autosave-1.json", 1 << 20).value() == "{}");
+    CHECK(detail::readRecoveryFile(root, root / "autosave-1.json", 1 << 20)->size() == 2);
+    // The codes the two readers gave; read on a thread when a pipe could hold it.
+    auto codes = [&](const fs::path& file, const fs::path& confine) {
+        auto text = detail::readRecoveryText(confine, file, 1 << 20);
+        auto bytes = detail::readRecoveryFile(confine, file, 1 << 20);
+        return std::pair(text ? std::string("read") : text.error().code + ":" + text.error().hint,
+                         bytes ? std::string("read") : bytes.error().code);
+    };
+    auto refused = [&](const std::pair<std::string, std::string>& got) {
+        CHECK(got.first.starts_with("recover.not_file:"));
+        CHECK(got.first.size() > std::string("recover.not_file:").size());  // a hint
+        CHECK(got.second == "recover.not_file");
+    };
+    refused(codes(root / "folder", root));
+#if !defined(_WIN32)
+    const fs::path pipe = root / "take.rec.json";
+    REQUIRE(::mkfifo(pipe.c_str(), 0600) == 0);
+    fs::create_symlink(pipe, root / "link.rec.json");
+    for (const fs::path& file : {pipe, root / "link.rec.json"})
+        for (const fs::path& confine : {root, fs::path()}) {
+            INFO(file.string(), " confined to ", confine.string());
+            std::pair<std::string, std::string> got;
+            CHECK_FALSE(supple::test::waitsOnFifo(pipe, [&] { got = codes(file, confine); }));
+            refused(got);
+        }
+    CHECK(fs::is_fifo(pipe));  // left as it was
+#endif
 }

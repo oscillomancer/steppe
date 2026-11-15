@@ -115,8 +115,8 @@ Status WavStreamWriter::close() {
 Result<WavStreamInfo> inspectWavStream(const std::filesystem::path& path) {
     std::FILE* f = detail::files::open(path, false);
     if (!f)
-        return Error("file.open",
-                     "cannot read " + detail::files::text(path) + " (or it is a link)");
+        return Error("file.open", "cannot read " + detail::files::text(path) +
+                                      " (or it is a link or not a regular file)");
     std::uint8_t h[kHeaderBytes];
     bool read = std::fread(h, 1, sizeof h, f) == sizeof h;
     std::int64_t end = -1;
@@ -147,8 +147,8 @@ Result<std::uint64_t> repairWavStream(const std::filesystem::path& path) {
     if (info->fileFrames == info->headerFrames) return info->headerFrames;
     std::FILE* f = detail::files::open(path, true);
     if (!f)
-        return Error("file.write",
-                     "cannot open " + detail::files::text(path) + " (or it is a link)");
+        return Error("file.write", "cannot open " + detail::files::text(path) +
+                                       " (or it is a link or not a regular file)");
     const auto data = static_cast<std::uint32_t>(info->fileFrames * info->channels * 4);
     std::uint8_t b[4];
     bool ok = true;
