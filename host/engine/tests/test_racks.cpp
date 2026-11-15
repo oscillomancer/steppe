@@ -750,6 +750,67 @@ TEST_CASE("racks: a seek starts a feedback rack afresh, as offline" * doctest::d
             }
 }
 
+// Round-15 review: Delay's wow and flutter wandered once per process()
+// call, so after a seek off the rack's grid, where device blocks split grid
+// intervals into two calls, a modulated feedback delay no longer played as
+// the offline render did, in either executor.
+TEST_CASE("racks: a warm modulated feedback delay seeks and loops as offline" *
+          doctest::description("rt")) {
+    for (const bool anticipative : {false, true})
+        for (const bool loop : {false, true})
+            for (const std::int64_t seek : {std::int64_t{0}, std::int64_t{3217}}) {
+                INFO("anticipative " << anticipative << ", loop " << loop << ", seek " << seek);
+                model::Project project;
+                project.console9 = false;
+                project.seed = 31337;
+                model::EditTxn t(model::Session::create(project), 1);
+                const Id channel = addChannel(t);
+                const Id rack = t.create(model::Rack{channel, ""});
+                const Id lfo =
+                    addModule(t, rack, "com.suppleaudio.rack.lfo",
+                              json::parse(R"({"rate": 3.7, "voices": 4, "spread": 25})").value());
+                const Id delay = addModule(t, rack, "com.suppleaudio.rack.delay",
+                                           json::parse(R"({"time": 7.5, "feedback": 65,
+                                               "mix": 100, "wow": 70, "flutter": 50,
+                                               "offset": 11, "tone": 0})")
+                                               .value());
+                const Id out = addModule(t, rack, "com.suppleaudio.rack.out");
+                cable(t, lfo, "out", delay, "in_l");
+                cable(t, delay, "out_l", out, "l");
+                cable(t, delay, "out_r", out, "r");
+                listen(t, out, channel);
+                const auto scene = commit(t);
+                const std::int64_t first = loop ? 0 : seek;
+                InstancePool offlinePool = makePool();
+                const auto reference = renderOffline(scene, offlinePool,
+                                                     {.startSeconds = double(first) / 48000,
+                                                      .endSeconds = double(first + 8192) / 48000,
+                                                      .threads = 1});
+                REQUIRE(reference);
+                CHECK(std::any_of(reference->audio.channels[0].begin(),
+                                  reference->audio.channels[0].end(),
+                                  [](float x) { return std::abs(x) > 0.01f; }));
+                InstancePool pool = makePool();
+                MediaCache media;
+                DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 20000});
+                Engine engine(pool, media, {.anticipative = anticipative, .workers = 0});
+                REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+                REQUIRE(engine.load(scene));
+                if (loop) engine.setLoop(0, 0.016, true);
+                engine.play();
+                if (!loop) {
+                    runCycles(engine, backend, anticipative, 64, 128);
+                    engine.seek(double(seek) / 48000);
+                }
+                runCycles(engine, backend, anticipative, 64, 128);
+                engine.stop();
+                CHECK(engine.processErrors() == 0);
+                for (std::size_t ch = 0; ch < 2; ++ch)
+                    CHECK(worstFrom(backend.capture().channels[ch], loop ? 0 : 8192,
+                                    reference->audio.channels[ch]) == 0.0);
+            }
+}
+
 // A loop going round keeps the history (ADR-0015): modules and feedback
 // samples run on, as one continuous offline render does.
 TEST_CASE("racks: a loop wrap keeps a feedback rack's history" * doctest::description("rt")) {

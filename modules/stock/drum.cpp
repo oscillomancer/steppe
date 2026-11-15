@@ -55,6 +55,7 @@ struct Hit {
     double bend = 0.0;   // the pitch envelope
     double force = 1.0;  // 1 plus the accent
     double env = 0.0;    // what Env shows
+    double tone = 0.0;   // Tone, as last set
     bool high = false;
 };
 
@@ -90,6 +91,7 @@ struct Drum : Module {
     Output env = unipolarOut("Env").help("The hit's loudness, 0 to 1: for ducking or follow-ups.");
 
     Array<Hit, 16> hit;
+    int untilVoice = 0;  // frames to the filters' next setting
 
     void prepare() {
         for (int c = 0; c < 16; ++c) {
@@ -98,7 +100,7 @@ struct Drum : Module {
         }
     }
 
-    // The block's filters for channel c's model.
+    // Channel c's filters for its model.
     void voice(int c, int m, double tn, double scale) {
         Hit& h = hit[c];
         const double top = 0.45 * sampleRate();
@@ -116,16 +118,35 @@ struct Drum : Module {
         }
     }
 
+    // The filters and Tone are set every 32 frames from the start, whatever
+    // the host's blocks, so a render does not depend on where they fall.
     void process(int frames) {
+        int from = 0;
+        while (from < frames) {
+            if (untilVoice == 0) {
+                for (int c = 0; c < channels(); ++c) {
+                    hit[c].tone = clamp(tone.at(from, c), 0.0, 1.0);
+                    const double scale =
+                        exp2(tune.at(from, c) / 12.0 + clamp(pitch[c][from], -4.0, 4.0));
+                    voice(c, model.index(), hit[c].tone, scale);
+                }
+                untilVoice = 32;
+            }
+            const int to = min(frames, from + untilVoice);
+            strike(from, to);
+            untilVoice -= to - from;
+            from = to;
+        }
+    }
+
+    void strike(int from, int to) {
         const double sr = sampleRate();
         const double dt = 1.0 / sr;
         const int m = model.index();
         for (int c = 0; c < channels(); ++c) {
             Hit& h = hit[c];
-            const double tn = clamp(tone.at(0, c), 0.0, 1.0);
-            const double scale0 = exp2(tune.at(0, c) / 12.0 + clamp(pitch[c][0], -4.0, 4.0));
-            voice(c, m, tn, scale0);
-            for (int i = 0; i < frames; ++i) {
+            const double tn = h.tone;
+            for (int i = from; i < to; ++i) {
                 const double g = trigger[c][i];
                 if (!h.high && g >= 0.5) {
                     h.high = true;

@@ -182,18 +182,20 @@ struct Resonator : Module {
     Output outR = audioOut("Out R").help("The modes panned right by Spread.");
 
     Array<Body, 16> body;
+    int untilTune = 0;  // frames to the next retune
 
     // Retune channel c's modes from the values at frame 0.
-    void tune(int c) {
+    // Tunes channel c's modes from frame i's pitch and knobs.
+    void tune(int c, int i) {
         Body& b = body[c];
         const double sr = sampleRate();
-        const double f0 = kC4 * exp2(clamp(pitch[c][0], -6.0, 5.0));
-        const double st = structure.at(0, c);
-        const double tilt = 1.6 * (1.0 - clamp(brightness.at(0, c), 0.0, 1.0));
-        const double t60 = max(decay.at(0, c), 1.0) * 0.001;
-        const double damp = clamp(damping.at(0, c), 0.0, 1.0);
-        const double pos = clamp(position.at(0, c), 0.01, 0.5);
-        const double sp = clamp(spread.at(0, c), 0.0, 1.0);
+        const double f0 = kC4 * exp2(clamp(pitch[c][i], -6.0, 5.0));
+        const double st = structure.at(i, c);
+        const double tilt = 1.6 * (1.0 - clamp(brightness.at(i, c), 0.0, 1.0));
+        const double t60 = max(decay.at(i, c), 1.0) * 0.001;
+        const double damp = clamp(damping.at(i, c), 0.0, 1.0);
+        const double pos = clamp(position.at(i, c), 0.01, 0.5);
+        const double sp = clamp(spread.at(i, c), 0.0, 1.0);
         double total = 0.0;
         for (int n = 0; n < kModes; ++n) {
             Mode& m = b.mode[n];
@@ -222,11 +224,26 @@ struct Resonator : Module {
         }
     }
 
+    // The modes are retuned every 32 frames from the start, whatever the
+    // host's blocks, so a render does not depend on where they fall.
     void process(int frames) {
+        int from = 0;
+        while (from < frames) {
+            if (untilTune == 0) {
+                for (int c = 0; c < channels(); ++c) tune(c, from);
+                untilTune = 32;
+            }
+            const int to = min(frames, from + untilTune);
+            ring(from, to);
+            untilTune -= to - from;
+            from = to;
+        }
+    }
+
+    void ring(int from, int to) {
         for (int c = 0; c < channels(); ++c) {
-            tune(c);
             Body& b = body[c];
-            for (int i = 0; i < frames; ++i) {
+            for (int i = from; i < to; ++i) {
                 const double g = strike[c][i];
                 double click = 0.0;
                 if (!b.high && g >= 0.5) {
