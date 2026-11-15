@@ -13,6 +13,9 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <map>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -30,6 +33,101 @@
 using namespace supple;
 using namespace supple::engine;
 namespace {
+// What the kernel says about each thread of the bench and of its bridge
+// children (Linux): its class, the switches it made and suffered, its
+// migrations and how long it waited runnable for a CPU (schedstat run_delay).
+// Read before and after the measured interval, off the audio path.
+struct TaskSched {
+    std::string process, comm;
+    long long policy = 0, prio = 0, voluntary = 0, involuntary = 0, migrations = 0;
+    long long cpuNs = 0, runDelayNs = 0, slices = 0;
+};
+using SchedSnapshot = std::map<std::string, TaskSched>;
+
+SchedSnapshot schedSnapshot() {
+    SchedSnapshot out;
+#if defined(__linux__)
+    namespace fs = std::filesystem;
+    const std::string self = std::to_string(::getpid());
+    std::vector<std::string> pids{self};
+    std::error_code ec;
+    for (const auto& entry : fs::directory_iterator("/proc", ec)) {
+        const std::string pid = entry.path().filename().string();
+        if (pid.empty() || pid.find_first_not_of("0123456789") != std::string::npos) continue;
+        std::ifstream stat(entry.path() / "stat");
+        std::string line;
+        if (!std::getline(stat, line)) continue;
+        const auto close = line.rfind(')');
+        if (close == std::string::npos) continue;
+        char state = 0;
+        long long ppid = 0;
+        if (std::sscanf(line.c_str() + close + 1, " %c %lld", &state, &ppid) == 2 &&
+            std::to_string(ppid) == self)
+            pids.push_back(pid);
+    }
+    for (const auto& pid : pids) {
+        std::ifstream pcomm("/proc/" + pid + "/comm");
+        std::string process;
+        std::getline(pcomm, process);
+        for (const auto& task : fs::directory_iterator("/proc/" + pid + "/task", ec)) {
+            TaskSched t;
+            t.process = process;
+            std::ifstream comm(task.path() / "comm");
+            std::getline(comm, t.comm);
+            std::ifstream schedstat(task.path() / "schedstat");
+            schedstat >> t.cpuNs >> t.runDelayNs >> t.slices;
+            std::ifstream sched(task.path() / "sched");
+            std::string line;
+            while (std::getline(sched, line)) {
+                const auto colon = line.find(':');
+                if (colon == std::string::npos) continue;
+                std::string key = line.substr(0, colon);
+                key.erase(key.find_last_not_of(' ') + 1);
+                const long long value = std::atoll(line.c_str() + colon + 1);
+                if (key == "nr_voluntary_switches")
+                    t.voluntary = value;
+                else if (key == "nr_involuntary_switches")
+                    t.involuntary = value;
+                else if (key == "se.nr_migrations")
+                    t.migrations = value;
+                else if (key == "policy")
+                    t.policy = value;
+                else if (key == "prio")
+                    t.prio = value;
+            }
+            out[pid + "/" + task.path().filename().string()] = std::move(t);
+        }
+    }
+#endif
+    return out;
+}
+
+// The interval's real-time threads (and the busiest others) with their deltas.
+json::Value schedDelta(const SchedSnapshot& before, const SchedSnapshot& after) {
+    auto threads = json::Value::array();
+    for (const auto& [id, t] : after) {
+        const auto was = before.find(id);
+        const TaskSched z;
+        const TaskSched& b = was == before.end() ? z : was->second;
+        const long long delay = t.runDelayNs - b.runDelayNs;
+        if (t.policy == 0 && delay < 1'000'000) continue;
+        auto e = json::Value::object();
+        e["id"] = id;
+        e["process"] = t.process;
+        e["comm"] = t.comm;
+        e["policy"] = t.policy;
+        e["prio"] = t.prio;
+        e["cpu_ms"] = static_cast<double>(t.cpuNs - b.cpuNs) / 1e6;
+        e["run_delay_ms"] = static_cast<double>(delay) / 1e6;
+        e["slices"] = t.slices - b.slices;
+        e["voluntary"] = t.voluntary - b.voluntary;
+        e["involuntary"] = t.involuntary - b.involuntary;
+        e["migrations"] = t.migrations - b.migrations;
+        threads.push_back(std::move(e));
+    }
+    return threads;
+}
+
 // Supplies silent monitored inputs and silences the physical outputs after DSP.
 // JACK owns whole-period timing; the paced thread owns synthetic timing. With
 // a callback priority the paced thread and live helpers run SCHED_FIFO at it,
@@ -395,6 +493,7 @@ int main(int argc, char** argv) {
     host::resetBridgeTiming();  // the measured interval's bridged calls only
     const auto o0 = engine->bridgeOverruns();
     const auto c0 = backend.cycles();
+    const SchedSnapshot s0 = schedSnapshot();
     rusage ru0{}, ru1{};
     getrusage(RUSAGE_SELF, &ru0);
     const auto begin = std::chrono::steady_clock::now();
@@ -407,10 +506,11 @@ int main(int argc, char** argv) {
     const double measured =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count();
     getrusage(RUSAGE_SELF, &ru1);
+    const SchedSnapshot s1 = schedSnapshot();
     const auto after = backend.status();
     const double rate = backend.config().sampleRate;
     auto result = json::Value::object();
-    result["schema"] = "supple.capacity-run/2.2";
+    result["schema"] = "supple.capacity-run/2.3";
     result["tracks"] = tracks;
     result["workload"] = pluginFile.empty() ? "stock" : "effect";
     result["plugin_file"] = pluginFile;
@@ -477,6 +577,7 @@ int main(int argc, char** argv) {
         b["overruns_not_waiting"] = t.overrunsNotWaiting;
         result["bridge_timing"] = std::move(b);
     }
+    result["threads"] = schedDelta(s0, s1);
     result["cycles"] = backend.cycles() - c0;
     result["restart_needed"] = after.restartNeeded;
     result["warnings"] = json::Value::array();

@@ -99,7 +99,14 @@ Scheduling and isolation (B1 only, engine.md §2.2, ADR-0026):
 
 A background scheduling fallback is a warning, so it invalidates the run.
 
-B1 run schema **`supple.capacity-run/2.2`** retains the 2.1 fields and adds
+B1 run schema **`supple.capacity-run/2.3`** adds `bridge_timing`, the
+interval's live bridged calls and overrun classes as in
+`engine.status.bridge_timing` (ADR-0081), and on Linux `threads`: for each
+real-time thread of the bench and its bridge processes (and any other thread
+that waited over 1 ms for a CPU), the kernel's view over the interval: `policy`
+and kernel `prio`, `cpu_ms`, `run_delay_ms` (runnable but waiting for a CPU,
+from `/proc/<tid>/schedstat`), `slices`, `voluntary` and `involuntary` switches
+and `migrations`. Schema 2.2 retains the 2.1 fields and adds
 `isolation`, the requested `background`, `background_priority` and
 `callback_priority`, and `scheduling`: the engine's applied policy per thread
 class (`callback`, `live`, `renderer`, `background`, each `policy` and
