@@ -63,7 +63,7 @@ struct Voice {
     int flip = 0;  // the sub's half
     bool armed = false;
     double lastSync = 0.0;
-    double drift = 0.0;
+    double drift = 0.0, wander = 0.0;
     Random random;
     // Each output's last two samples, still open to corrections, and the
     // corrections this sample's edges make to them (back2, back1), to this
@@ -201,22 +201,44 @@ struct Vco : Module {
     Array<Voice, 16> voice;
     Array<double, 5> y;
 
+    int untilDrift = 0;  // frames to the drift's next step
+
     void prepare() {
         for (int c = 0; c < 16; ++c) voice[c].random.seed(seed() + 7919 * c);
+        untilDrift = 0;
     }
 
     void process(int frames) {
         const double sr = sampleRate();
-        // The drift: a slow random walk per voice, once a block (~0.5 s memory).
-        const double k = frames / (0.5 * sr);
+        // The drift: a slow random walk per voice (~0.5 s memory), a step
+        // every 32 frames from the start, whatever the host's blocks.
+        const double k = 32.0 / (0.5 * sr);
         const double spread = sqrt(2.0 * k);
+        int from = 0;
+        while (from < frames) {
+            if (untilDrift == 0) {
+                for (int c = 0; c < channels(); ++c) {
+                    Voice& v = voice[c];
+                    const double kick = v.random.gaussian();
+                    v.drift += -v.drift * k + spread * kick;
+                    v.wander =
+                        clamp(v.drift, -3.0, 3.0) * drift.at(from, c) * (10.0 / 1200.0 / 3.0);
+                }
+                untilDrift = 32;
+            }
+            const int to = min(frames, from + untilDrift);
+            generate(from, to);
+            untilDrift -= to - from;
+            from = to;
+        }
+    }
+
+    void generate(int from, int to) {
+        const double sr = sampleRate();
         for (int c = 0; c < channels(); ++c) {
             Voice& v = voice[c];
-            const double kick = v.random.gaussian();
-            v.drift += -v.drift * k + spread * kick;
-            const double wander =
-                clamp(v.drift, -3.0, 3.0) * drift.at(0, c) * (10.0 / 1200.0 / 3.0);
-            for (int i = 0; i < frames; ++i) {
+            const double wander = v.wander;
+            for (int i = from; i < to; ++i) {
                 const double oct = pitch[c][i] + coarse.at(i, c) / 12.0 + fine.at(i, c) / 1200.0 +
                                    fmDepth.at(i, c) * expFm[c][i] + wander;
                 const double hz =

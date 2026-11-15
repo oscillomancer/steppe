@@ -331,21 +331,50 @@ void freeBuffer(T* items) {
     std::free(items);
     gBufferAllocations.fetch_sub(1, std::memory_order_relaxed);
 }
+
+// Read only on paths that allocate (prepare(), off the audio thread).
+thread_local bool tPristineCopy = false;
+
+template <class T>
+bool allZero(const T* items, int size) {
+    // By bytes: -0.0 is not zero here, so a cleared copy is bit-identical.
+    const auto* bytes = reinterpret_cast<const unsigned char*>(items);
+    const std::size_t n = static_cast<std::size_t>(size) * sizeof(T);
+    for (std::size_t i = 0; i < n; ++i)
+        if (bytes[i] != 0) return false;
+    return true;
+}
 }  // namespace
+
+detail::PristineCopy::PristineCopy() : previous_(tPristineCopy) { tPristineCopy = true; }
+detail::PristineCopy::~PristineCopy() { tPristineCopy = previous_; }
 
 std::size_t detail::bufferAllocations() {
     return gBufferAllocations.load(std::memory_order_relaxed);
 }
 
+// A Buffer with a size and no storage is zeros of that size: a prepared
+// state kept without its content (detail::PristineCopy).
 template <class T>
 Buffer<T>& Buffer<T>::operator=(const Buffer& other) {
     if (this == &other) return *this;
-    if (size_ != other.size_) {
-        freeBuffer(items_);
-        items_ = allocateBuffer<T>(other.size_);
-        size_ = items_ ? other.size_ : 0;
+    const bool zeros = !other.items_;
+    const auto bytes = static_cast<std::size_t>(other.size_) * sizeof(T);
+    if (size_ == other.size_ && (items_ || size_ == 0)) {
+        // In place, as a restart copies: no allocation.
+        if (size_ > 0)
+            zeros ? std::memset(items_, 0, bytes) : std::memcpy(items_, other.items_, bytes);
+        return *this;
     }
-    if (size_ > 0) std::memcpy(items_, other.items_, static_cast<std::size_t>(size_) * sizeof(T));
+    freeBuffer(items_);
+    items_ = nullptr;
+    if (tPristineCopy && (zeros || allZero(other.items_, other.size_))) {
+        size_ = other.size_;  // kept as its size alone
+        return *this;
+    }
+    items_ = allocateBuffer<T>(other.size_);  // calloc: zeros already
+    size_ = items_ ? other.size_ : 0;
+    if (size_ > 0 && !zeros) std::memcpy(items_, other.items_, bytes);
     return *this;
 }
 
@@ -363,10 +392,10 @@ void Buffer<T>::resize(int size) {
     // Counted before the size is compared: a second prepare() resizes to what it already has.
     if (!detail::reserve(static_cast<std::int64_t>(size) * static_cast<std::int64_t>(sizeof(T))))
         return;
-    if (size == size_) return;
+    if (size == size_ && (items_ || size == 0)) return;
     T* grown = allocateBuffer<T>(size);
     if (size > 0 && !grown) return;  // out of memory: keep what there was
-    const int keep = size < size_ ? size : size_;
+    const int keep = !items_ ? 0 : (size < size_ ? size : size_);
     if (keep > 0) std::memcpy(grown, items_, static_cast<std::size_t>(keep) * sizeof(T));
     freeBuffer(items_);
     items_ = grown;
@@ -705,33 +734,139 @@ void EnvelopeFollower::clear() { as<FollowerState>(storage_).state = {}; }
 
 // A resource: the line's buffer is allocated, so the object holds it by
 // pointer. Constructed with the plugin (main thread); prepare() sizes it.
+//
+// The framework's FractionalDelay, ring for ring and read for read (its
+// sizing, its Hermite taps, dsp::hermite itself), with one addition: the line
+// knows how many of its newest samples were pushed since it was last cleared
+// (`fresh`), and a tap older than that reads as zero. So clear(), and a
+// restart from a line prepare() left empty, are O(1): the ring keeps its
+// stale samples, which are never read, and the line plays exactly as one
+// whose ring was zeroed.
 namespace {
-dsp::FractionalDelay& line(void* p) { return *static_cast<dsp::FractionalDelay*>(p); }
+struct LineState {
+    std::vector<double> ring = std::vector<double>(4, 0.0);
+    std::size_t mask = 3, write = 0;
+    std::size_t fresh = 4;  // up to ring.size(): all of it is current
+    bool pushed = false;    // since prepare() or clear(): otherwise all zero
+    // A prepared state kept without its ring (detail::PristineCopy): zeros
+    // of this capacity; a copy from it clears in place.
+    bool zeros = false;
+    std::size_t size = 4;  // the ring's, for a kept state without one
+
+    double capacity() const { return static_cast<double>(mask - 3); }
+    void prepare(int maxDelay) {
+        std::size_t n = 4;
+        while (n < static_cast<std::size_t>(std::max(0, maxDelay)) + 4) n <<= 1;
+        ring.assign(n, 0.0);
+        mask = n - 1;
+        write = 0;
+        fresh = n;
+        size = n;
+    }
+    void clear() { fresh = 0; }
+    void push(double x) {
+        write = (write + 1) & mask;
+        ring[write] = x;
+        if (fresh <= mask) ++fresh;
+    }
+    // `age` samples before the newest; zero once older than the last clear.
+    double tap(std::size_t age) const { return age < fresh ? ring[(write - age) & mask] : 0.0; }
+    double read(double delay) const {
+        delay = std::clamp(delay, 0.0, capacity());
+        const double whole = std::floor(delay);
+        const double t = delay - whole;
+        const auto w = static_cast<std::size_t>(whole);
+        double x0, x1, xm1, x2;
+        if (fresh > mask) {  // nothing stale: the framework's taps exactly
+            const std::size_t i = (write - w) & mask;
+            x0 = ring[i];
+            x1 = ring[(i - 1) & mask];
+            xm1 = ring[(i + 1) & mask];
+            x2 = ring[(i - 2) & mask];
+        } else {
+            x0 = tap(w);
+            x1 = tap(w + 1);
+            xm1 = w >= 1 ? tap(w - 1) : 0.0;  // unused below 1
+            x2 = tap(w + 2);
+        }
+        // At delay < 1 the "newer" neighbour is not yet written; use x0.
+        const double newer = whole < 1.0 ? x0 : xm1;
+        return dsp::hermite(newer, x0, x1, x2, t);
+    }
+};
+LineState& state(void* p) { return *static_cast<LineState*>(p); }
 }  // namespace
-DelayLine::DelayLine() : line_(new dsp::FractionalDelay()) {}
-DelayLine::DelayLine(const DelayLine& other) : line_(new dsp::FractionalDelay(line(other.line_))) {}
+DelayLine::DelayLine() : line_(new LineState()) {}
+DelayLine::DelayLine(const DelayLine& other) : line_(new LineState()) { *this = other; }
 DelayLine& DelayLine::operator=(const DelayLine& other) {
-    // Restoring a plugin's state copies lines of equal capacity, which
-    // std::vector does in place; only a differently sized line allocates.
-    if (this != &other) line(line_) = line(other.line_);
+    if (this == &other) return *this;
+    LineState& to = state(line_);
+    const LineState& from = state(other.line_);
+    if (!to.zeros && to.ring.size() == from.size) {
+        // In place, as restoring a plugin's state or a restart copies: lines
+        // of equal size, which std::vector copies without allocating. From
+        // an empty kept state, a clear: O(1).
+        if (from.zeros) {
+            to.clear();
+            to.pushed = false;
+        } else {
+            to.ring = from.ring;
+            to.write = from.write;
+            to.fresh = from.fresh;
+            to.pushed = from.pushed;
+        }
+        return *this;
+    }
+    // A different size: this allocates (off the audio thread).
+    if (tPristineCopy && (from.zeros || !from.pushed)) {
+        to.ring = std::vector<double>();
+        to.mask = from.size - 1;
+        to.write = 0;
+        to.fresh = 0;
+        to.size = from.size;
+        to.zeros = true;
+        to.pushed = false;
+        return *this;
+    }
+    to.zeros = false;
+    if (from.zeros) {
+        to.prepare(static_cast<int>(from.size) - 4);  // a ring of that size, all zero
+        to.pushed = false;
+    } else {
+        to.ring = from.ring;
+        to.mask = from.mask;
+        to.write = from.write;
+        to.fresh = from.fresh;
+        to.size = from.size;
+        to.pushed = from.pushed;
+    }
     return *this;
 }
-DelayLine::~DelayLine() { delete &line(line_); }
+DelayLine::~DelayLine() { delete &state(line_); }
 void DelayLine::prepare(int maxDelaySamples) {
     if (maxDelaySamples < 0) maxDelaySamples = 0;
     // The framework's ring: a power of two, four samples longer than the delay.
     std::int64_t ring = 4;
     while (ring < std::int64_t{maxDelaySamples} + 4) ring <<= 1;
     if (!detail::reserve(ring * static_cast<std::int64_t>(sizeof(double)))) return;
-    line(line_).prepare(maxDelaySamples);
+    state(line_).prepare(maxDelaySamples);
+    state(line_).pushed = false;
+    state(line_).zeros = false;
 }
-void DelayLine::push(double x) { line(line_).push(x); }
+void DelayLine::push(double x) {
+    LineState& s = state(line_);
+    s.pushed = true;
+    s.push(x);
+}
 double DelayLine::read(double delaySamples) const {
-    // The framework's line converts the delay to an index: NaN must not reach it.
+    // The delay becomes an index: NaN must not reach it.
     if (!(delaySamples == delaySamples)) delaySamples = 0.0;
-    return line(line_).read(delaySamples);
+    return state(line_).read(delaySamples);
 }
-void DelayLine::clear() { line(line_).clear(); }
+void DelayLine::clear() {
+    state(line_).clear();
+    state(line_).pushed = false;
+}
 
 // A resource, as a DelayLine is: its filters' buffers are allocated in
 // prepare(). Unprepared, it passes samples through.

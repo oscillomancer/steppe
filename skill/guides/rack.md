@@ -602,6 +602,11 @@ to avoid doubling it.
 - Unequal paths summed inside a patch stay unaligned; add an explicit Delay
   when needed (ADR-0064).
 - Racks do not follow a track's playrate changes.
+- Projects play the current stock modules, so one saved by an earlier
+  version can sound different: in a feedback group, Harmonic, Resonator,
+  Delay, VCO with drift, and modulated Drum and Sequencer; Slew and a moving Macro at a start;
+  Markov clocked from a cable after a reset; Reverb as Freeze ends. A
+  render that differs from one made earlier may be this, not the patch.
 
 ## Timing through plug-ins
 

@@ -132,6 +132,80 @@ TEST_CASE("stock modules stay finite and within budget on any input") {
     }
 }
 
+// A host block need not end on the rack's grid (after a seek off it, say),
+// so a grid interval may reach a module in two calls. What a module plays
+// must not depend on where those calls fall (rack.md §4.2): RT and offline
+// renders split differently.
+TEST_CASE("stock modules play the same however host blocks split the grid") {
+    // 0: defaults; 1: every knob turned part way; 2: and every one modulated;
+    // 3: knobs turned and nothing plugged in, so clocked modules follow the
+    // song. Each from the timeline's start and from off the grid, as after a
+    // seek, with the song playing at an ordinary tempo.
+    for (const std::int64_t start : {std::int64_t{0}, std::int64_t{3217}})
+        for (const int variant : {0, 1, 2, 3})
+            for (const StockModule* m : stockModules()) {
+                CAPTURE(m->name);
+                CAPTURE(variant);
+                CAPTURE(start);
+                ModuleHarness a(*m->code), b(*m->code);
+                for (ModuleHarness* h : {&a, &b}) {
+                    h->startAt(start);
+                    if (variant != 3) drive(*h, *m->code, 2);
+                    if (variant >= 1) {
+                        int k = 0;
+                        for (const sd::ParamModel& p : m->code->params()) {
+                            if (p.output || p.bypass) continue;
+                            const double at = 0.35 + 0.1 * (k++ % 4);
+                            double v = p.min + at * (p.max - p.min);
+                            if (p.unit == sd::ParamModel::Unit::Hertz && p.min > 0)
+                                v = p.min * std::pow(p.max / p.min, at);
+                            v = p.kind == sd::ParamModel::Kind::Continuous
+                                    ? std::round(v * 1000.0) / 1000.0
+                                    : std::round(v);
+                            h->set(p.key, v);
+                        }
+                    }
+                    if (variant == 2) {
+                        int k = 0;
+                        for (const sd::ParamModel& p : m->code->params()) {
+                            const int input = 7 + k++;
+                            h->modulate(
+                                p.key, 2,
+                                [input](int c, std::int64_t n) { return 0.3 * probe(input, c, n); },
+                                1.0);
+                        }
+                    }
+                    ModuleHarness::Transport t;
+                    t.playing = true;
+                    t.tempo = 128.0;
+                    t.beats = 0.25 + static_cast<double>(start) * 128.0 / 60.0 / 48000.0;
+                    h->transport(t);
+                }
+                a.run(9600);
+                b.runSplit(9600, {17, 15, 128, 1, 31, 64, 5, 200});
+                for (const sd::PortModel& p : m->code->ports())
+                    if (p.output) {
+                        CAPTURE(p.key);
+                        for (int c = 0; c < 2; ++c) {
+                            CAPTURE(c);
+                            const auto& x = a.output(p.key, c);
+                            const auto& y = b.output(p.key, c);
+                            REQUIRE(x.size() == y.size());
+                            std::size_t first = x.size();
+                            double worst = 0.0;
+                            for (std::size_t i = 0; i < x.size(); ++i)
+                                if (x[i] != y[i] && !(std::isnan(x[i]) && std::isnan(y[i]))) {
+                                    first = std::min(first, i);
+                                    worst = std::max(worst, std::abs(x[i] - y[i]));
+                                }
+                            CAPTURE(first);
+                            CAPTURE(worst);
+                            CHECK(first == x.size());
+                        }
+                    }
+            }
+}
+
 TEST_CASE("stock modules render the same twice") {
     for (const StockModule* m : stockModules()) {
         CAPTURE(m->name);

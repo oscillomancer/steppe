@@ -220,7 +220,7 @@ struct Scope : Module {
             }
 
             if (synced) {
-                const double q = (t.beats + i * perFrame + 1e-7) / spanBeats;
+                const double q = (t.beats + (t.offset + i) * perFrame + 1e-7) / spanBeats;
                 const int s = floorToInt(q);
                 if (s != lastSpan) {
                     if (sweeping) finish();

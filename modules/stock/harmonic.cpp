@@ -80,6 +80,7 @@ struct Harmonic : Module {
     Output even = audioOut("Even").help("The even partials (the second, the fourth, ...).");
 
     Array<Partials, 16> voice;
+    int untilPlan = 0;  // frames to the next plan
 
     void prepare() {
         // Phases spread as n^2 / 64 of a cycle: the partials' peaks seldom meet.
@@ -92,21 +93,22 @@ struct Harmonic : Module {
                 voice[c].step[n] = 0.0;
                 voice[c].ratio[n] = k;
             }
+        untilPlan = 0;
     }
 
-    // Channel c's ratios, and the levels its partials glide to over this
-    // block, from the values at frame 0.
-    void plan(int c, int frames, double inc) {
+    // Channel c's ratios, and the levels its partials glide to over the next
+    // 32 frames, from the values at frame i.
+    void plan(int c, int i, double inc) {
         Partials& v = voice[c];
-        const double count = clamp(partials.at(0, c), 1.0, 32.0);
-        const double tilt = 2.0 * (1.0 - clamp(brightness.at(0, c), 0.0, 1.0));
-        const double oe = clamp(oddEven.at(0, c), -1.0, 1.0);
+        const double count = clamp(partials.at(i, c), 1.0, 32.0);
+        const double tilt = 2.0 * (1.0 - clamp(brightness.at(i, c), 0.0, 1.0));
+        const double oe = clamp(oddEven.at(i, c), -1.0, 1.0);
         const double evenGain = 1.0 + min(oe, 0.0);
         const double oddGain = 1.0 - max(oe, 0.0);
-        const double power = 1.0 + 0.3 * clamp(stretch.at(0, c), -1.0, 1.0);
-        const double depth = clamp(comb.at(0, c), 0.0, 1.0);
-        const double spacing = clamp(combSpacing.at(0, c), 2.0, 8.0);
-        const double shift = combShift.at(0, c);
+        const double power = 1.0 + 0.3 * clamp(stretch.at(i, c), -1.0, 1.0);
+        const double depth = clamp(comb.at(i, c), 0.0, 1.0);
+        const double spacing = clamp(combSpacing.at(i, c), 2.0, 8.0);
+        const double shift = combShift.at(i, c);
         double total = 0.0;
         for (int n = 0; n < kPartials; ++n) {
             const double k = n + 1.0;
@@ -123,17 +125,36 @@ struct Harmonic : Module {
             total += a * a;
         }
         const double norm = 0.5 / sqrt(max(total, 1e-12));
-        for (int n = 0; n < kPartials; ++n) v.step[n] = (v.step[n] * norm - v.amp[n]) / frames;
+        for (int n = 0; n < kPartials; ++n) v.step[n] = (v.step[n] * norm - v.amp[n]) / 32.0;
     }
 
+    // The partials are planned every 32 frames from the start, whatever the
+    // host's blocks, so a render does not depend on where they fall.
     void process(int frames) {
+        const double sr = sampleRate();
+        int from = 0;
+        while (from < frames) {
+            if (untilPlan == 0) {
+                for (int c = 0; c < channels(); ++c) {
+                    const double oct0 = pitch[c][from] + coarse.at(from, c) / 12.0 +
+                                        fine.at(from, c) / 1200.0 +
+                                        fmDepth.at(from, c) * fm[c][from];
+                    plan(c, from, kC4 * exp2(clamp(oct0, -14.0, 7.0)) / sr);
+                }
+                untilPlan = 32;
+            }
+            const int to = min(frames, from + untilPlan);
+            sound(from, to);
+            untilPlan -= to - from;
+            from = to;
+        }
+    }
+
+    void sound(int from, int to) {
         const double sr = sampleRate();
         for (int c = 0; c < channels(); ++c) {
             Partials& v = voice[c];
-            const double oct0 = pitch[c][0] + coarse.at(0, c) / 12.0 + fine.at(0, c) / 1200.0 +
-                                fmDepth.at(0, c) * fm[c][0];
-            plan(c, frames, kC4 * exp2(clamp(oct0, -14.0, 7.0)) / sr);
-            for (int i = 0; i < frames; ++i) {
+            for (int i = from; i < to; ++i) {
                 const double oct = pitch[c][i] + coarse.at(i, c) / 12.0 + fine.at(i, c) / 1200.0 +
                                    fmDepth.at(i, c) * fm[c][i];
                 const double inc = kC4 * exp2(clamp(oct, -14.0, 7.0)) / sr;

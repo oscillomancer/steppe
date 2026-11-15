@@ -254,7 +254,7 @@ struct LSystem : Module {
             bool rose = false;
             if (internal) {
                 if (t.playing) {
-                    const double e = t.beats * 2.0 + i * perFrame + 1e-7;
+                    const double e = t.beats * 2.0 + (t.offset + i) * perFrame + 1e-7;
                     high = e - floor(e) < 0.5;
                 }
                 rose = high && !clockHigh;

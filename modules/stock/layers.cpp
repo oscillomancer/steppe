@@ -152,7 +152,7 @@ struct Layers : Module {
         for (int i = 0; i < frames; ++i) {
             int s = 0;
             if (internal) {
-                const double beats = t.beats + i * beatsPerFrame;
+                const double beats = t.beats + (t.offset + i) * beatsPerFrame;
                 const double len = a == 0 ? beatBeats : barBeats * spanBars;
                 s = floorToInt(beats / max(0.0625, len) + 1e-9);
                 place = beats / max(0.25, barBeats * 4.0);

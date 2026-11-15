@@ -325,6 +325,7 @@ void Schedule::run(ModulePlan& m, int f0, int n, const HostContext& ctx) SUPPLE_
         c.frames = n;
         c.offset = ctx.offset + f0;
         c.position = ctx.position + f0;
+        c.transport.offset = ctx.transport.offset + f0;
         c.channels = width;
         host->process(c);
     } else if (!in.status().silent.load(std::memory_order_relaxed)) {
@@ -333,6 +334,7 @@ void Schedule::run(ModulePlan& m, int f0, int n, const HostContext& ctx) SUPPLE_
             const std::uint32_t before =
                 record.status.budgetExceeded.load(std::memory_order_relaxed);
             record.transport = ctx.transport;
+            record.transport.offset = ctx.transport.offset + f0;  // a feedback group's frame
             {
                 sd::CurrentScope scope(&record);
                 record.budget = kFrameBudget * n;
@@ -353,6 +355,19 @@ void Schedule::run(ModulePlan& m, int f0, int n, const HostContext& ctx) SUPPLE_
     }
 }
 
+void Schedule::restart() SUPPLE_RT {
+    for (ModulePlan& m : modules_) {
+        for (auto& out : m.outputs) std::fill(out.begin(), out.end(), 0.0);
+        std::fill(m.channels.begin(), m.channels.end(), 1);
+        std::fill(m.lastChannels.begin(), m.lastChannels.end(), kChannels);
+        std::fill(m.automated.begin(), m.automated.end(), std::numeric_limits<double>::quiet_NaN());
+    }
+    for (auto& carried : carry_) carried.fill(0.0);
+    std::fill(carryChannels_.begin(), carryChannels_.end(), 0);
+    expected_ = INT64_MIN;
+    lastFrames_ = 0;
+}
+
 void Schedule::process(std::int64_t position, int frames, Clock& clock) SUPPLE_RT {
     if (frames <= 0) return;
     int done = 0;
@@ -364,7 +379,11 @@ void Schedule::process(std::int64_t position, int frames, Clock& clock) SUPPLE_R
         ctx.frames = n;
         ctx.offset = done;
         ctx.position = pos;
-        ctx.transport = clock.transport(pos);
+        // The transport at the grid interval's start, and how far into it
+        // this call starts: a frame's song position is then computed alike
+        // however host blocks split the interval.
+        ctx.transport = clock.transport(pos - phase);
+        ctx.transport.offset = phase;
         // Host blocks may split one grid interval into several calls. Keep
         // its sampled automation target while smoothing still advances every
         // frame. A first call or locate samples the grid containing its start.

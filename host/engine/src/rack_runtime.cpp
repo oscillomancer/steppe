@@ -325,7 +325,12 @@ double RackCurve::at(std::int64_t position) SUPPLE_RT {
 
 script::Transport RackClock::transport(std::int64_t position) SUPPLE_RT {
     const std::int64_t sample = rack->playing ? position - rack->origin : rack->stoppedAt;
-    const host::Transport t = transportAt(*plan, sample, nullptr, rack->live);
+    // Without playrate, the time of a timeline sample, computed alike whatever
+    // the plan's start: an offline render from a seek and the real-time plan
+    // then agree on every frame's song position to the bit.
+    const host::Transport t =
+        plan->rateEnabled ? transportAt(*plan, sample, nullptr, rack->live)
+                          : transportAtSeconds(*plan, double(rack->origin + sample) / plan->rate);
     script::Transport out;
     out.playing = rack->playing;
     out.tempo = t.tempo;
@@ -805,12 +810,13 @@ void prepareRack(Plan& p, Node& n, const Session& s) {
     for (auto& curve : r.curves) curve->curve.cursor = 0;
 }
 
-void locateRack(Node& n, std::int64_t pos, bool restart) SUPPLE_RT {
+void locateRack(Node& n, std::int64_t pos, bool restart, bool restartModules) SUPPLE_RT {
     RackNode& r = *n.rack;
     if (restart) {
         ++r.midiEpoch;
         r.resetNotes = true;
     }
+    if (restartModules) r.resetModules = true;
     for (NotesFeed& feed : r.notes) {
         auto it =
             std::lower_bound(feed.events.begin(), feed.events.end(), pos,
@@ -869,6 +875,15 @@ bool processRack(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames,
         for (auto ei : n.out)
             if (p.edges[ei].rackSend) p.edges[ei].encoded.clear(frames);
         return true;
+    }
+    if (r.resetModules) {
+        // A locate's fresh start, as the plug-ins' reset (ADR-0062 §5): what
+        // follows is the offline render's, whatever the modules played.
+        for (rack::Instance* in : r.instances) in->restart();
+        // The feedback cables' last samples are the schedule's, not a
+        // module's: they start afresh with the modules.
+        if (r.schedule) r.schedule->restart();
+        r.resetModules = false;
     }
     if (r.resetNotes) {
         for (auto& feed : r.notes) feed.notes->endAll();

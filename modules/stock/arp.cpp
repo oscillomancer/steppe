@@ -164,7 +164,7 @@ struct Arp : Module {
             bool tick = false;
             if (internal) {
                 if (t.playing) {
-                    const int s = floorToInt(t.beats * 4.0 + i * perFrame + 1e-7);
+                    const int s = floorToInt(t.beats * 4.0 + (t.offset + i) * perFrame + 1e-7);
                     tick = s != lastSixteenth;
                     lastSixteenth = s;
                     period = max(1, roundToInt(sampleRate() * 15.0 / max(1.0, t.tempo)));

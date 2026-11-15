@@ -305,16 +305,18 @@ struct Markov : Module {
         wasPlaying = t.playing;
         const double perFrame = t.tempo / 30.0 / sampleRate();
         const int eighth = max(1, roundToInt(sampleRate() * 30.0 / max(1.0, t.tempo)));
-        if (internal || !stepped) period = eighth;
         for (int i = 0; i < frames; ++i) {
             if (resetEdge.rose(reset[0][i])) startOver();
             if (clearEdge.rose(clear[0][i])) forget();
             if (learnEdge.rose(learn[0][i])) teach(in[0][i]);
+            // Each frame, so a reset takes effect where it falls, not at the
+            // next call (a render must not depend on the host's blocks).
+            if (internal || !stepped) period = eighth;
             bool rose = false;
             if (internal) {
                 bool high = false;
                 if (t.playing) {
-                    const double e = t.beats * 2.0 + i * perFrame + 1e-7;
+                    const double e = t.beats * 2.0 + (t.offset + i) * perFrame + 1e-7;
                     high = e - floor(e) < 0.5;
                 }
                 rose = high && !clockHigh;

@@ -184,7 +184,7 @@ struct Reverb : Module {
         const double glide = 1.0 - exp(-1.0 / (0.2 * sr));
         const double window = kShiftWindow * sr;
         for (int k = 0; k < kLines; ++k)
-            damp[k].setCutoff(frozen ? 0.45 * sr : min(dampHz, 0.45 * sr));
+            damp[k].setCutoff(min(dampHz, 0.45 * sr));  // unused while frozen
         for (int i = 0; i < frames; ++i) {
             frozen = freeze.on() || freezeGate[0][i] >= 0.5 || (frozen && freezeGate[0][i] >= 0.25);
             double l = 0.0, r = 0.0;

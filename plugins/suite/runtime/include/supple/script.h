@@ -794,13 +794,20 @@ class Channel {
     double* spare_ = nullptr;
 };
 
-// The host's transport at the start of the block.
+// The host's transport. `beats` and `tempo` are read `offset` frames before
+// the block's first frame, so frame i of the block is at song position
+// `beats + (offset + i) * tempo / 60 / sampleRate`. A plugin's offset is 0. A
+// rack module's transport is read at the start of the rack's 32-frame grid
+// interval and offset is how far into it the block starts: computed that
+// way, a frame's position is the same however host blocks split the grid
+// (rack.md §4.2).
 struct Transport {
     bool playing = false;
     double tempo = 120.0;  // beats per minute (120 when the host sent none)
-    double beats = 0.0;    // song position in quarter notes
+    double beats = 0.0;    // song position in quarter notes, `offset` frames ago
     double barStart = 0.0;
     int timeSigNumerator = 4, timeSigDenominator = 4;
+    int offset = 0;  // frames from where beats and tempo were read to the block's start
 };
 
 // One block of audio, processed in place: io[channel][frame]. For an effect

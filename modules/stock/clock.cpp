@@ -211,7 +211,7 @@ struct Clock : Module {
         const bool song = !external && followSong.on();
         const double songBeatsPerFrame = t.tempo / 60.0 / sampleRate();
         for (int i = 0; i < frames; ++i) {
-            const double songBeats = t.beats + i * songBeatsPerFrame;
+            const double songBeats = t.beats + (t.offset + i) * songBeatsPerFrame;
             const bool resetNow = resetEdge.rose(reset[0][i]);
             const bool go = run[0][i] >= 0.5 && (!song || t.playing);
             if (go && !running) {

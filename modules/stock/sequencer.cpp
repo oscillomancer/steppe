@@ -122,6 +122,8 @@ struct Sequencer : Module {
     Array<bool, 16> stepGate;
     Array<double, 16> stepLength;
     Array<double, 16> stepChance;
+    int heldLen = 1;    // Steps, as last read
+    int untilRead = 0;  // frames to the knobs' next reading
 
     Trigger clockEdge;
     Trigger resetEdge;
@@ -154,27 +156,27 @@ struct Sequencer : Module {
 
     // --- the steps by number ------------------------------------------------------------
     // Every step's settings at the block's start, with the cables into them.
-    void readSteps() {
-        stepPitch[0] = pitch_1.at(0);
-        stepPitch[1] = pitch_2.at(0);
-        stepPitch[2] = pitch_3.at(0);
-        stepPitch[3] = pitch_4.at(0);
-        stepPitch[4] = pitch_5.at(0);
-        stepPitch[5] = pitch_6.at(0);
-        stepPitch[6] = pitch_7.at(0);
-        stepPitch[7] = pitch_8.at(0);
-        stepPitch[8] = pitch_9.at(0);
-        stepPitch[9] = pitch_10.at(0);
-        stepPitch[10] = pitch_11.at(0);
-        stepPitch[11] = pitch_12.at(0);
-        stepPitch[12] = pitch_13.at(0);
-        stepPitch[13] = pitch_14.at(0);
-        stepPitch[14] = pitch_15.at(0);
-        stepPitch[15] = pitch_16.at(0);
+    void readSteps(int i) {
+        stepPitch[0] = pitch_1.at(i);
+        stepPitch[1] = pitch_2.at(i);
+        stepPitch[2] = pitch_3.at(i);
+        stepPitch[3] = pitch_4.at(i);
+        stepPitch[4] = pitch_5.at(i);
+        stepPitch[5] = pitch_6.at(i);
+        stepPitch[6] = pitch_7.at(i);
+        stepPitch[7] = pitch_8.at(i);
+        stepPitch[8] = pitch_9.at(i);
+        stepPitch[9] = pitch_10.at(i);
+        stepPitch[10] = pitch_11.at(i);
+        stepPitch[11] = pitch_12.at(i);
+        stepPitch[12] = pitch_13.at(i);
+        stepPitch[13] = pitch_14.at(i);
+        stepPitch[14] = pitch_15.at(i);
+        stepPitch[15] = pitch_16.at(i);
         for (int k = 0; k < kSteps; ++k) {
             stepGate[k] = gates[k].on();
-            stepLength[k] = lengths[k].at(0);
-            stepChance[k] = chances[k].at(0);
+            stepLength[k] = lengths[k].at(i);
+            stepChance[k] = chances[k].at(i);
         }
     }
     double pitchShown(int k) const {
@@ -331,7 +333,10 @@ struct Sequencer : Module {
         p.add("Eight Drunk Steps").set(steps, 8).set(direction, "drunk");
     }
 
-    void prepare() { salt = seed(); }
+    void prepare() {
+        salt = seed();
+        untilRead = 0;
+    }
 
     // The step for count n of a pattern len long.
     int stepFor(int n, int len, int mode) {
@@ -368,7 +373,7 @@ struct Sequencer : Module {
         } else {
             count = internal ? sixteenth - base : count + 1;
         }
-        const int len = clamp(roundToInt(steps.at(0)), 1, kSteps);
+        const int len = heldLen;
         const int mode = clamp(direction.index(), 0, 4);
         const int next = stepFor(count, len, mode);
         const bool tied = playing && stepLength[current] >= 0.999;
@@ -388,20 +393,28 @@ struct Sequencer : Module {
     }
 
     void process(int frames) {
-        readSteps();
         const Transport t = transport();
         const bool internal = !clock.connected();
         const double sixteenthsPerFrame = t.tempo / 15.0 / sampleRate();
-        const int len = clamp(roundToInt(steps.at(0)), 1, kSteps);
         gate.setChannels(1);
         step.setChannels(1);
         end.setChannels(1);
         position.setChannels(1);
         for (int i = 0; i < frames; ++i) {
+            // The steps' knobs are read every 32 frames from the start,
+            // whatever the host's blocks, so a render does not depend on them.
+            if (untilRead == 0) {
+                readSteps(i);
+                heldLen = clamp(roundToInt(steps.at(i)), 1, kSteps);
+                untilRead = 32;
+            }
+            --untilRead;
+            const int len = heldLen;
             if (resetEdge.rose(reset[0][i])) armed = true;
             if (internal) {
                 if (t.playing) {
-                    const int s = floorToInt(t.beats * 4.0 + i * sixteenthsPerFrame + 1e-9);
+                    const int s =
+                        floorToInt(t.beats * 4.0 + (t.offset + i) * sixteenthsPerFrame + 1e-9);
                     if (s != lastSixteenth) advance(s, true);
                     lastSixteenth = s;
                 } else {

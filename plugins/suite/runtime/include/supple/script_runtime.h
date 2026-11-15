@@ -293,6 +293,23 @@ bool reserve(std::int64_t bytes);
 // accounting, independent of prepare()'s per-instance memory budget.
 std::size_t bufferAllocations();
 
+// While one lives on a thread, a copy made there is a prepared state kept to
+// restart from (rack::Instance, ADR-0062 §5): a Buffer whose content is all
+// zero, and a DelayLine nothing was pushed into since it was prepared or
+// cleared, keep none of it, and a later copy from them clears in place. Made
+// off the audio thread; a copy in place (equal sizes, what a restart does)
+// never reads it.
+class PristineCopy {
+  public:
+    PristineCopy();
+    ~PristineCopy();
+    PristineCopy(const PristineCopy&) = delete;
+    PristineCopy& operator=(const PristineCopy&) = delete;
+
+  private:
+    bool previous_;
+};
+
 // Where the runtime classes keep what generated code reads directly.
 struct Layout {
     static constexpr int paramValue = offsetof(Param, value_);

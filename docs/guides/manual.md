@@ -680,6 +680,37 @@ Patches that play from the song (a Transport module, sequencers, clocks:
 Rain Bells, Song Machine and the other generative ones) stay silent until
 you press play; while the transport is stopped, the rack window's status
 bar says so. Instrument patches need notes: MIDI items on their channel.
+Pressing play, or moving the playhead while playing, starts every module
+afresh, as plug-ins are reset there: an LFO starts its cycle again from
+its offset, a delay or reverb drops its tail, a filter its ringing, a
+cable patched back into the rack (feedback) starts from silence, and a
+knob you just turned is at its new value at once instead of still
+gliding. So the rack sounds the same from a given point on every play and
+in every render, whatever it played before. A loop going round does not
+restart them: an LFO runs on and tails carry across the loop point. While
+the transport is stopped a rack runs on as it was.
+
+Some stock modules play a little differently than in earlier versions,
+and a project saved then plays them the new way: a project does not keep
+its own copy of the stock modules, and there is no setting for the old
+sound. They used to do some of their work once per block the audio
+engine handed them, so how they sounded after you moved the playhead
+could differ between playing and exporting; they now keep their own
+steady 32-sample pace. You may hear it in these cases:
+
+- modules on a loop of cables (one with a dashed cable): **Harmonic**,
+  **Resonator**, **Delay** (its Wow and Flutter), **VCO** with Drift, and
+  **Drum** or **Sequencer** with cables on their knobs follow their
+  cables and wander every 32 samples instead of every sample;
+- **Slew**, and a **Macro** whose knob is moving, glide from the very
+  start of playback (or a move of the playhead) instead of following
+  their input unglided for the first 32 samples;
+- **Markov** clocked from a cable: just after a reset, a note's length
+  can change by up to 31 samples;
+- **Reverb** with **Freeze**: when Freeze ends, the damping comes back
+  at once instead of up to 31 samples later, so the tail is slightly
+  darker there.
+
 A rack sends audio both ways. Its Out modules are channel inputs, and an
 **In** module takes sends, and the rack becomes an effect. Send a track to
 it in the routing matrix (**View > Routing matrix**), where each In module

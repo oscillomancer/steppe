@@ -259,7 +259,8 @@ struct RackNode {
     bool playing = false, started = false;
     std::int64_t own = 0, stoppedAt = 0;
     bool live = false;
-    bool resetNotes = false;  // locate defers shared state changes until owned
+    bool resetNotes = false;    // locate defers shared state changes until owned
+    bool resetModules = false;  // and its modules' restart (Instance::restart)
 };
 
 // Sorted, preallocated module lists. Release dropped instances only after
@@ -315,7 +316,9 @@ bool processRack(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames,
                  const host::Transport& transport, const void* self) SUPPLE_RT;
 // Cursors to `pos`; a seek (`restart`) or a loop wrap also ends held notes.
 // An executor taking the node over continues it (no restart): what the
-// other one played stays held.
-void locateRack(Node& n, std::int64_t pos, bool restart) SUPPLE_RT;
+// other one played stays held. `restartModules` (a seek or a play from a
+// position, where plug-ins are reset; not a loop wrap, which keeps their
+// history) also starts every module afresh, once the executor owns them.
+void locateRack(Node& n, std::int64_t pos, bool restart, bool restartModules) SUPPLE_RT;
 
 }  // namespace supple::engine::detail
