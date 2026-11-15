@@ -1437,7 +1437,7 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
         auto migrated = migrateProject1(std::move(doc), warnings);
         if (!migrated) return std::move(migrated).error();
         doc = std::move(*migrated);
-    } else if (version->minor > 14 && warnings)  // 2.14: saved branches, nothing to migrate
+    } else if (version->minor > 15 && warnings)  // 2.14: branches; 2.15: autosaved_through
         warnings->push_back(
             {"project.newer_minor", "loading a newer project minor version", "/schema"});
     // Before 2.10 a Notes module heard only its source track's own MIDI, never

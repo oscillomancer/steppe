@@ -1223,8 +1223,6 @@ TEST_CASE("an autosave written after a save is newer than the file whatever the 
     p.app->setFixedClock(1'060'000);
     p.app->tick();
     REQUIRE(fs::exists(p.root / "song.json-data" / "autosave-1.json"));
-    CHECK(fs::last_write_time(p.root / "song.json-data" / "autosave-1.json") >
-          fs::last_write_time(file));
     REQUIRE(p.app->open("song.json"));
     auto info = d.execute({"project.get", json::Value::object(), kUnit});
     REQUIRE(info);
@@ -1232,6 +1230,115 @@ TEST_CASE("an autosave written after a save is newer than the file whatever the 
     auto r = d.execute({"project.recover", json::parse(R"({"autosave": true})").value(), kUnit});
     REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
     CHECK(p.app->head().project->name == "Edited after the save");
+}
+
+TEST_CASE("the newest autosave is the highest numbered, whatever the file clock") {
+    // Round-12 review, finding 1: dated after a future-dated file, two
+    // autosaves had one time, and the offer named the older one.
+    Project p;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *p.app);
+    p.rename("Saved");
+    REQUIRE(p.app->save("song.json"));
+    const fs::path file = p.root / "song.json";
+    fs::last_write_time(file, fs::last_write_time(file) + std::chrono::hours(2));
+    p.rename("First autosave");
+    p.app->setFixedClock(1'060'000);
+    p.app->tick();
+    p.rename("Second autosave");
+    p.app->setFixedClock(1'120'000);
+    p.app->tick();
+    REQUIRE(fs::exists(p.root / "song.json-data" / "autosave-2.json"));
+    // As a clock set back between them leaves them: both after the file,
+    // the older edits dated later.
+    fs::last_write_time(p.root / "song.json-data" / "autosave-1.json",
+                        fs::last_write_time(file) + std::chrono::hours(1));
+    fs::last_write_time(p.root / "song.json-data" / "autosave-2.json",
+                        fs::last_write_time(file) + std::chrono::minutes(30));
+    REQUIRE(p.app->open("song.json"));
+    CHECK(p.app->newerAutosave(p.app->projectPath()).filename() == "autosave-2.json");
+    SUBCASE("the offered one, by name") {
+        const std::string offered = p.app->newerAutosave(p.app->projectPath()).filename().string();
+        auto r = p.app->recoverAutosave(offered);
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        CHECK(p.app->head().project->name == "Second autosave");
+    }
+    SUBCASE("the newest, unnamed") {
+        auto r =
+            d.execute({"project.recover", json::parse(R"({"autosave": true})").value(), kUnit});
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        CHECK(p.app->head().project->name == "Second autosave");
+    }
+}
+
+TEST_CASE("a save holds what the autosaves before it hold: none of them is offered after it") {
+    // Round-12 review, finding 2: an autosave dated after a future-dated
+    // file stayed newer than a later save of newer edits, and recovering it
+    // replaced them.
+    Project p;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *p.app);
+    p.rename("Saved");
+    REQUIRE(p.app->save("song.json"));
+    const fs::path file = p.root / "song.json";
+    fs::last_write_time(file, fs::last_write_time(file) + std::chrono::hours(2));
+    p.rename("Autosaved");
+    p.app->setFixedClock(1'060'000);
+    p.app->tick();
+    REQUIRE(fs::exists(p.root / "song.json-data" / "autosave-1.json"));
+    fs::last_write_time(p.root / "song.json-data" / "autosave-1.json",
+                        fs::last_write_time(file) + std::chrono::hours(1));
+    p.rename("Saved later");
+    REQUIRE(p.app->save("song.json"));
+    REQUIRE(p.app->open("song.json"));
+    auto info = d.execute({"project.get", json::Value::object(), kUnit});
+    REQUIRE(info);
+    CHECK_FALSE((*info)["autosave_available"].asBool());
+    auto r = d.execute({"project.recover", json::parse(R"({"autosave": true})").value(), kUnit});
+    REQUIRE_FALSE(r);
+    CHECK(r.error().code == "recover.no_autosave");
+    auto named = d.execute(
+        {"project.recover",
+         json::parse(R"({"autosave": true, "autosave_file": "autosave-1.json"})").value(), kUnit});
+    REQUIRE_FALSE(named);
+    CHECK(named.error().code == "recover.no_autosave");
+    CHECK(p.app->head().project->name == "Saved later");
+    // The next autosave numbers on past what the file holds, and is offered.
+    p.rename("Autosaved after");
+    p.app->setFixedClock(1'200'000);
+    p.app->tick();
+    REQUIRE(p.app->open("song.json"));
+    CHECK(p.app->newerAutosave(p.app->projectPath()).filename() == "autosave-2.json");
+}
+
+TEST_CASE("a file saved before autosave numbers were kept in it still goes by file time") {
+    // A 2.14 file has no autosaved_through: its autosaves are compared by
+    // write time, as before, the highest numbered of the newer ones first.
+    Project p;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *p.app);
+    p.rename("Saved");
+    REQUIRE(p.app->save("song.json"));
+    const fs::path file = p.root / "song.json";
+    auto doc = json::parse(*readTextFile(file)).value();
+    doc.asObject().erase("autosaved_through");
+    doc["schema"] = "supple.project/2.14";
+    REQUIRE(writeFileAtomic(file, json::writeCanonical(doc) + "\n"));
+    const fs::path data = p.root / "song.json-data";
+    const auto saved = fs::last_write_time(file);
+    REQUIRE(p.app->open("song.json"));
+    p.rename("Older");
+    p.app->setFixedClock(1'060'000);
+    p.app->tick();
+    REQUIRE(fs::exists(data / "autosave-1.json"));
+    fs::last_write_time(data / "autosave-1.json", saved - std::chrono::seconds(10));
+    REQUIRE(p.app->open("song.json"));
+    CHECK(p.app->newerAutosave(p.app->projectPath()).empty());
+    fs::last_write_time(data / "autosave-1.json", saved + std::chrono::seconds(10));
+    CHECK(p.app->newerAutosave(p.app->projectPath()).filename() == "autosave-1.json");
 }
 
 TEST_CASE("a saved project's autosave recovery whose preservation copy fails changes nothing") {
@@ -1247,8 +1354,6 @@ TEST_CASE("a saved project's autosave recovery whose preservation copy fails cha
     p.app->tick();
     const fs::path data = p.root / "song.json-data";
     REQUIRE(writeFileAtomic(data / "autosave-9.json", "garbage"));  // newer, unreadable
-    fs::last_write_time(data / "autosave-9.json",  // newer than the file, on any file clock
-                        fs::last_write_time(p.root / "song.json") + std::chrono::seconds(2));
     REQUIRE(p.app->open("song.json"));
     setFileSyncHookForTesting([](const fs::path& f) { return f.extension() != ".keep"; });
     auto failed =
@@ -1409,24 +1514,21 @@ TEST_CASE("a named autosave must be newer than the file as the project was opene
     p.app->setFixedClock(1'060'000);
     p.app->tick();
     REQUIRE(fs::exists(data / "autosave-1.json"));
-    const auto now = fs::file_time_type::clock::now();
     auto args = json::parse(R"({"autosave": true, "autosave_file": "autosave-1.json"})").value();
 
     SUBCASE("older than the file as opened: refused") {
-        fs::last_write_time(data / "autosave-1.json", now - std::chrono::hours(2));
-        fs::last_write_time(p.root / "song.json", now - std::chrono::hours(1));
+        p.rename("Saved after it");
+        REQUIRE(p.app->save("song.json"));  // holds autosave-1's work and more
         REQUIRE(p.app->open("song.json"));
         auto r = d.execute({"project.recover", args, kUnit});
         REQUIRE_FALSE(r);
         CHECK(r.error().code == "recover.no_autosave");
-        CHECK(p.app->head().project->name == "Saved");
+        CHECK(p.app->head().project->name == "Saved after it");
     }
     SUBCASE("newer than the file as opened, though saved over since: opened") {
-        fs::last_write_time(p.root / "song.json", now - std::chrono::hours(2));
-        fs::last_write_time(data / "autosave-1.json", now - std::chrono::hours(1));
         REQUIRE(p.app->open("song.json"));
-        p.rename("Saved again");
-        REQUIRE(p.app->save("song.json"));
+        p.rename("Saved over");
+        REQUIRE(p.app->save("song.json"));  // the question before opening it offers Save
         auto r = d.execute({"project.recover", args, kUnit});
         REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
         CHECK(p.app->head().project->name == "Autosaved");

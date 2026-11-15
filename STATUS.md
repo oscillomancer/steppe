@@ -149,7 +149,7 @@ instructions are in `docs/guides/installing.md`.
   two branches, a command log with origins, a history budget that squashes
   the oldest steps. Undo to an FX's initial unsaved settings restores its factory
   state while retaining the previous processing instance until plan retirement.
-  Project format `supple.project/2.14` with migration from
+  Project format `supple.project/2.15` with migration from
   1.x, autosave (unsaved projects too, recovered from File > Recover unsaved
   work… or at start, ADR-0078), crash recovery of recordings, a per-project
   UI sidecar.

@@ -4,6 +4,7 @@
 #include <supple/model/project_file.h>
 #include <supple/model/schemas.h>
 #include <supple/model/versions.h>
+#include <algorithm>
 #include <ostream>
 
 #if defined(__linux__) && !defined(__SANITIZE_ADDRESS__) && !defined(__SANITIZE_THREAD__)
@@ -1141,4 +1142,35 @@ TEST_CASE("a project saved before branches were kept opens as main") {
     CHECK_FALSE(opened->branchesDropped);
     CHECK(opened->store.branches() == std::vector<std::string>{"main"});
     CHECK(opened->store.head()->tracks.find(*Id::parse("tr_1"))->name == "Old");
+}
+
+TEST_CASE("a project file carries the autosave number it holds, beside its branches") {
+    // Round-12 review: autosaves are compared by number, not file time
+    // (ADR-0078). The count reads back, with or without a branches section,
+    // and leaves main's document and its hash alone.
+    for (bool branches : {false, true}) {
+        CAPTURE(branches);
+        VersionStore vs = branches ? diverged() : VersionStore(Session::create());
+        const std::string plain = serializeProjectFile(vs);
+        const std::string text = serializeProjectFile(vs, false, 7);
+        CHECK(text.find("\"autosaved_through\": 7") != std::string::npos);
+        auto opened = parseProjectFile(text);
+        REQUIRE(opened);
+        CHECK_FALSE(opened->branchesDropped);
+        REQUIRE(opened->autosavedThrough);
+        CHECK(*opened->autosavedThrough == 7);
+        CHECK(serializeProjectFile(opened->store, false, 7) == text);
+        auto without = parseProjectFile(plain);
+        REQUIRE(without);
+        CHECK_FALSE(without->autosavedThrough);
+        auto doc = json::parse(text).value();
+        doc["autosaved_through"] = "seven";
+        std::vector<schema::Warning> warnings;
+        auto bad = parseProjectFile(json::writeCanonical(doc), &warnings);
+        REQUIRE(bad);  // the project still opens
+        CHECK_FALSE(bad->autosavedThrough);
+        CHECK(std::any_of(warnings.begin(), warnings.end(), [](const schema::Warning& w) {
+            return w.code == "project.autosaved_through";
+        }));
+    }
 }
