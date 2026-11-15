@@ -2317,3 +2317,47 @@ TEST_CASE("retrying a failed save as retires the journal copy the first attempt 
     CHECK(p.app->recoverable().empty());
     CHECK(fs::exists(old));  // the first project's journal stays its own
 }
+
+TEST_CASE("a save as retried through another spelling of the path retires its own copy") {
+    // Round-14 review: the copies a failed save as made were kept by their
+    // literal paths, so a retry as second/./song.json (or through a link)
+    // did not know its own journal copy, left it offered, and accepting
+    // the recovery duplicated the take.
+    for (const bool link : {false, true}) {
+        INFO("through " << std::string(link ? "a directory link" : "a dot segment"));
+        Project p;
+        cmd::Registry registry;
+        registerEngineCommands(registry);
+        cmd::Dispatcher d(registry, *p.app);
+        REQUIRE(d.execute({"track.add", json::Value::object(), kUnit}));
+        REQUIRE(p.app->save(p.root / "first/song.json"));
+        const auto old = p.app->recordDir() / "Keys-1.midi.jsonl";
+        REQUIRE(writeFileAtomic(
+            old, journalHeader() + "[0,144,60,100]\n[24000,128,60,0]\n{\"captured\":48000}\n"));
+        REQUIRE(p.app->recover({}, {}));
+        const auto second = p.root / "second/song.json";
+        setFileSyncHookForTesting([&](const fs::path& f) { return f.filename() != "song.json"; });
+        auto failed = p.app->save(second);
+        setFileSyncHookForTesting({});
+        REQUIRE_FALSE(failed);
+        const auto copy = second.parent_path() / "media/rec" / old.filename();
+        REQUIRE(fs::exists(copy));
+        fs::path retry = p.root / "second/./song.json";
+        if (link) {
+            std::error_code ec;
+            fs::create_directory_symlink(p.root / "second", p.root / "alias", ec);
+            if (ec) {
+                MESSAGE("skipped: no directory link here (" << ec.message() << ")");
+                continue;
+            }
+            retry = p.root / "alias/song.json";
+        }
+        REQUIRE(p.app->save(retry));
+        CHECK_FALSE(fs::exists(copy));
+        CHECK(p.app->recoverable().empty());
+        REQUIRE(p.app->open(second));
+        CHECK(p.app->head().midi.size() == 1);
+        CHECK(p.app->recoverable().empty());
+        CHECK(fs::exists(old));
+    }
+}

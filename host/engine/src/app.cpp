@@ -715,6 +715,20 @@ fs::path EngineApp::resolve(const fs::path& path) const {
 namespace {
 // autosave-<n>.json's n (defined with the autosave code below).
 std::optional<std::uint64_t> autosaveIndex(std::string_view name);
+
+// Whether two spellings name one file: the same path once `.` and `..` are
+// resolved, or (through links, or a case-insensitive file system) the same
+// file on disk.
+bool sameFile(const fs::path& a, const fs::path& b) {
+    if (a.lexically_normal() == b.lexically_normal()) return true;
+    std::error_code ec;
+    return fs::equivalent(a, b, ec) && !ec;
+}
+
+bool holds(const std::vector<fs::path>& files, const fs::path& file) {
+    return std::any_of(files.begin(), files.end(),
+                       [&](const fs::path& f) { return sameFile(f, file); });
+}
 }  // namespace
 
 Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warnings,
@@ -817,9 +831,7 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
             // Until a file holds them, a failure keeps them ours: a retry
             // would take them for files that were there before it.
             for (const fs::path& file : createdMedia)
-                if (std::find(unpublishedCopies_.begin(), unpublishedCopies_.end(), file) ==
-                    unpublishedCopies_.end())
-                    unpublishedCopies_.push_back(file);
+                if (!holds(unpublishedCopies_, file)) unpublishedCopies_.push_back(file);
             SUPPLE_TRY(std::move(copied));
         }
         SUPPLE_TRY(publish());
@@ -863,9 +875,7 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
             continue;
         }
         const fs::path moved = media / rel;
-        if (fromScratch ||
-            std::find(createdMedia.begin(), createdMedia.end(), moved) != createdMedia.end())
-            retire.push_back(moved);
+        if (fromScratch || holds(createdMedia, moved)) retire.push_back(moved);
     }
     midiJournalsPending_ = std::move(retire);
     dropSavedMidiJournals();
