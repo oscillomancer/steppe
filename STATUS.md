@@ -394,7 +394,8 @@ instructions are in `docs/guides/installing.md`.
   Real-time output equals offline renders, and the audio path passes
   RealtimeSanitizer. A seek, and a play from a position, restart every
   module where plug-ins are reset (an LFO's phase, a knob's glide, delay
-  and reverb tails start afresh; a loop wrap keeps them), so this holds
+  and reverb tails and feedback cables' history start afresh; a loop wrap
+  keeps them), so this holds
   after any locate, not only from new instances; each module keeps a copy
   of its prepared state for that, so its memory is held twice. Engine-owned `module.copy` / `rack.paste` retain modules,
   internal cables (including plug-in parameter modulation), learn bindings

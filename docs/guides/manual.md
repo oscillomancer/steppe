@@ -682,7 +682,8 @@ you press play; while the transport is stopped, the rack window's status
 bar says so. Instrument patches need notes: MIDI items on their channel.
 Pressing play, or moving the playhead while playing, starts every module
 afresh, as plug-ins are reset there: an LFO starts its cycle again from
-its offset, a delay or reverb drops its tail, a filter its ringing, and a
+its offset, a delay or reverb drops its tail, a filter its ringing, a
+cable patched back into the rack (feedback) starts from silence, and a
 knob you just turned is at its new value at once instead of still
 gliding. So the rack sounds the same from a given point on every play and
 in every render, whatever it played before. A loop going round does not

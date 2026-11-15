@@ -701,6 +701,96 @@ TEST_CASE("racks: a seek, or a play after a restart, starts the modules afresh a
     }
 }
 
+// Round-13 review, finding 3: a feedback cable's last samples live in the
+// rack's schedule, not in a module. A seek restarts them with the modules,
+// so a warm feedback rack plays from there as a fresh offline render does.
+TEST_CASE("racks: a seek starts a feedback rack afresh, as offline" * doctest::description("rt")) {
+    for (const bool feedback : {false, true})
+        for (const bool anticipative : {false, true})
+            for (const std::int64_t seek : {std::int64_t{0}, std::int64_t{3217}}) {
+                INFO("feedback " << feedback << ", anticipative " << anticipative << ", seek "
+                                 << seek);
+                model::Project project;
+                project.console9 = false;
+                project.seed = 31337;
+                model::EditTxn t(model::Session::create(project), 1);
+                const Id channel = addChannel(t);
+                const Id rack = t.create(model::Rack{channel, ""});
+                const Id lfo = addModule(t, rack, "com.suppleaudio.rack.lfo",
+                                         json::parse(R"({"rate": 3.7})").value());
+                const Id vca = addModule(t, rack, "com.suppleaudio.rack.vca",
+                                         json::parse(R"({"level": -6})").value());
+                const Id out = addModule(t, rack, "com.suppleaudio.rack.out");
+                cable(t, lfo, "out", vca, "in");
+                if (feedback) cable(t, vca, "out", vca, "in", 0.5);
+                cable(t, vca, "out", out, "l");
+                listen(t, out, channel);
+                const auto scene = commit(t);
+                InstancePool offlinePool = makePool();
+                const auto reference = renderOffline(scene, offlinePool,
+                                                     {.startSeconds = double(seek) / 48000,
+                                                      .endSeconds = double(seek + 8192) / 48000,
+                                                      .threads = 1});
+                REQUIRE(reference);
+                REQUIRE(reference->audio.frames() == 8192);
+                InstancePool pool = makePool();
+                MediaCache media;
+                DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 20000});
+                Engine engine(pool, media, {.anticipative = anticipative, .workers = 0});
+                REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+                REQUIRE(engine.load(scene));
+                engine.play();
+                runCycles(engine, backend, anticipative, 32, 128);
+                engine.seek(double(seek) / 48000);
+                runCycles(engine, backend, anticipative, 64, 128);
+                engine.stop();
+                CHECK(engine.processErrors() == 0);
+                CHECK(worstFrom(backend.capture().channels[0], 32 * 128,
+                                reference->audio.channels[0]) == 0.0);
+            }
+}
+
+// A loop going round keeps the history (ADR-0015): modules and feedback
+// samples run on, as one continuous offline render does.
+TEST_CASE("racks: a loop wrap keeps a feedback rack's history" * doctest::description("rt")) {
+    for (const bool anticipative : {false, true}) {
+        INFO("anticipative " << anticipative);
+        model::Project project;
+        project.console9 = false;
+        project.seed = 12345;
+        model::EditTxn t(model::Session::create(project), 1);
+        const Id channel = addChannel(t);
+        const Id rack = t.create(model::Rack{channel, ""});
+        const Id lfo =
+            addModule(t, rack, "com.suppleaudio.rack.lfo",
+                      json::parse(R"({"rate": 3.7, "voices": 4, "spread": 25})").value());
+        const Id vca =
+            addModule(t, rack, "com.suppleaudio.rack.vca", json::parse(R"({"level": -6})").value());
+        const Id out = addModule(t, rack, "com.suppleaudio.rack.out");
+        cable(t, lfo, "out", vca, "in");
+        cable(t, vca, "out", vca, "in", 0.5);
+        cable(t, vca, "out", out, "l");
+        listen(t, out, channel);
+        const auto scene = commit(t);
+        InstancePool offlinePool = makePool();
+        const auto reference =
+            renderOffline(scene, offlinePool, {.endSeconds = 0.128, .threads = 1});
+        REQUIRE(reference);
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 8192});
+        Engine engine(pool, media, {.anticipative = anticipative, .workers = 0});
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+        REQUIRE(engine.load(scene));
+        engine.setLoop(0, 0.016, true);
+        engine.play();
+        runCycles(engine, backend, anticipative, 48, 128);
+        engine.stop();
+        CHECK(engine.processErrors() == 0);
+        CHECK(worstFrom(backend.capture().channels[0], 0, reference->audio.channels[0]) == 0.0);
+    }
+}
+
 namespace {
 struct NoteRouteScene {
     model::Session session, itemReference;

@@ -400,6 +400,10 @@ saying when the library version is used instead or the type is unavailable.
   must own every instance before binding or processing a schedule.
 - `rack::Schedule`: an immutable compiled rack: order, feedback groups,
   cable buffers, port and parameter bindings. Built on the main thread.
+  What it carries from block to block (each feedback cable's last frame,
+  its outputs, where automation was last sampled) `restart()` (`SUPPLE_RT`,
+  no allocation) returns to how `build()` left it: with the instances'
+  `restart()`, a locate's fresh start (§6).
 - `rack::HostModule`: what a host module implements: `process(HostBlock&)`
   given its port buffers and the block's context.
 
@@ -431,7 +435,9 @@ Kahn's algorithm over modules ordered by id; strongly connected components
 (Tarjan) become feedback groups, each placed where its first module would
 be. Inside a group modules run in id order, and a cable from a later to an
 earlier (or the same) module reads the previous frame. Such cables are
-`feedback: true` in `rack.get`.
+`feedback: true` in `rack.get`. A block's first frame reads the last frame
+of the block before, carried by the schedule: zero when it is new or
+restarted.
 
 ### 4.4 Polyphony and buffers
 

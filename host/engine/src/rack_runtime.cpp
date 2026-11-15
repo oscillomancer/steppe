@@ -875,6 +875,9 @@ bool processRack(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames,
         // A locate's fresh start, as the plug-ins' reset (ADR-0062 §5): what
         // follows is the offline render's, whatever the modules played.
         for (rack::Instance* in : r.instances) in->restart();
+        // The feedback cables' last samples are the schedule's, not a
+        // module's: they start afresh with the modules.
+        if (r.schedule) r.schedule->restart();
         r.resetModules = false;
     }
     if (r.resetNotes) {

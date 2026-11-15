@@ -229,6 +229,9 @@ cable buffers, binds ports and parameters, and calls the modules' hooks.
   executors, as §5's determinism requires. The plan-swap soak found a
   locate keeping a smoother mid-glide and an LFO's phase (finding F1). A
   loop wrap keeps module state, as ADR-0015 keeps plug-ins' history.
+  **2026-11-15 note:** that includes the history feedback cables carry in
+  the rack's schedule (`rack::Schedule::restart()`); review round 13 found
+  it surviving a seek.
 
 ### 6. Engine integration
 
