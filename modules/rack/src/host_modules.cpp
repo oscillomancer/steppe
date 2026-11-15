@@ -307,6 +307,14 @@ void In::process(const HostContext& ctx) SUPPLE_RT {
 // --- Notes --------------------------------------------------------------------------
 
 void Notes::prepare(Instance& instance) {
+    restart(instance);
+    triggerFrames_ =
+        std::max(1, static_cast<int>(std::lround(instance.setup().sampleRate * 0.001)));
+}
+
+void Notes::restart(Instance&) SUPPLE_RT {
+    // As new: no voices, controllers at rest. The live generation stays, as
+    // the host's count of its input changes.
     voice_ = {};
     stacked_ = 0;
     bend_ = modwheel_ = channelPressure_ = 0;
@@ -316,8 +324,7 @@ void Notes::prepare(Instance& instance) {
     trackSource_ = 0;
     endTrack_ = false;
     rotate_ = 0;
-    triggerFrames_ =
-        std::max(1, static_cast<int>(std::lround(instance.setup().sampleRate * 0.001)));
+    clock_ = 0;
 }
 
 void Notes::release(Voice& v) {
@@ -594,11 +601,15 @@ void Notes::process(const HostContext& ctx) SUPPLE_RT {
 
 // --- Transport ------------------------------------------------------------------------
 
-void Transport::prepare(Instance& instance) {
+void Transport::restart(Instance&) SUPPLE_RT {
     expected_ = 0;
     wasPlaying_ = started_ = false;
     lastTicks_ = lastBar_ = lastBeat_ = -1;
     reset_ = bar_ = beat_ = clock_ = 0;
+}
+
+void Transport::prepare(Instance& instance) {
+    restart(instance);
     triggerFrames_ =
         std::max(1, static_cast<int>(std::lround(instance.setup().sampleRate * 0.001)));
 }

@@ -680,6 +680,15 @@ Patches that play from the song (a Transport module, sequencers, clocks:
 Rain Bells, Song Machine and the other generative ones) stay silent until
 you press play; while the transport is stopped, the rack window's status
 bar says so. Instrument patches need notes: MIDI items on their channel.
+Pressing play, or moving the playhead while playing, starts every module
+afresh, as plug-ins are reset there: an LFO starts its cycle again from
+its offset, a delay or reverb drops its tail, a filter its ringing, a
+cable patched back into the rack (feedback) starts from silence, and a
+knob you just turned is at its new value at once instead of still
+gliding. So the rack sounds the same from a given point on every play and
+in every render, whatever it played before. A loop going round does not
+restart them: an LFO runs on and tails carry across the loop point. While
+the transport is stopped a rack runs on as it was.
 A rack sends audio both ways. Its Out modules are channel inputs, and an
 **In** module takes sends, and the rack becomes an effect. Send a track to
 it in the routing matrix (**View > Routing matrix**), where each In module

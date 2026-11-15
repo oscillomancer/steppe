@@ -384,12 +384,29 @@ saying when the library version is used instead or the type is unavailable.
   generations so racks notice changed code.
 - `rack::Instance`: one module's state (the struct, its runtime record,
   its parameter slots and telemetry). Lives across schedule rebuilds.
+  `reset()` (main thread) makes the struct anew and prepares it;
+  `restart()` (`SUPPLE_RT`, by the owner) returns it to the same state on
+  the audio thread without allocating: `prepare()` keeps a copy of the
+  prepared struct (so a module's memory is held twice, except a `Buffer`
+  it leaves all zero and a `DelayLine` nothing was pushed into since it was
+  prepared: those are kept as their size alone, `detail::PristineCopy`,
+  and cleared in place), and `restart()`
+  copies it back in place, keeping the members' bindings, the knobs and
+  the status, and snapping parameters to their targets. Runtime objects
+  are sized in `prepare()` only, so the copy never reallocates. A host
+  module restarts through `HostModule::restart()`: Transport and Notes
+  clear what they track; Out and In hold only bindings, and a plugin module
+  follows its plug-in's own reset (below).
   `owner()`, `claimOwner(token)` and `releaseOwner()` provide an atomic
   executor handoff. A claim succeeds only from null; only the owning
   executor releases, after joining all helpers. A host using ownership
   must own every instance before binding or processing a schedule.
 - `rack::Schedule`: an immutable compiled rack: order, feedback groups,
   cable buffers, port and parameter bindings. Built on the main thread.
+  What it carries from block to block (each feedback cable's last frame,
+  its outputs, where automation was last sampled) `restart()` (`SUPPLE_RT`,
+  no allocation) returns to how `build()` left it: with the instances'
+  `restart()`, a locate's fresh start (§6).
 - `rack::HostModule`: what a host module implements: `process(HostBlock&)`
   given its port buffers and the block's context.
 
@@ -421,7 +438,9 @@ Kahn's algorithm over modules ordered by id; strongly connected components
 (Tarjan) become feedback groups, each placed where its first module would
 be. Inside a group modules run in id order, and a cable from a later to an
 earlier (or the same) module reads the previous frame. Such cables are
-`feedback: true` in `rack.get`.
+`feedback: true` in `rack.get`. A block's first frame reads the last frame
+of the block before, carried by the schedule: zero when it is new or
+restarted.
 
 ### 4.4 Polyphony and buffers
 
@@ -641,6 +660,13 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   silent. Claims retry at block boundaries without waiting. A locate's
   Notes/Note Out reset is deferred until ownership is obtained, retained
   through continuing plan swaps, and applied before any bindings or MIDI.
+  A seek, and a play from a position (where plug-ins are reset: the
+  callback's seek and play start for non-live nodes, the renderer's
+  relocation and play start, the live region's fresh entry and a node
+  joining it), also restart every module of the rack
+  (`RackNode::resetModules`, deferred and retained the same way, applied
+  first), so real time equals an offline render from there. A loop wrap,
+  and an executor's adoption of a plan, keep module state.
   With anticipation off, the callback owns all modules; offline plans have
   private instances and need no ownership check. The callback and renderer
   graphs remain disjoint within each plan; ownership protects shared

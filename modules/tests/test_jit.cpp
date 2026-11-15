@@ -12,6 +12,7 @@
 #include <tuple>
 
 #include "module_harness.h"
+#include "restart_check.h"
 #include "supple/rack/stock.h"
 #include "supple/script_compiler.hpp"
 #include "supple/script_program.hpp"
@@ -160,6 +161,23 @@ TEST_CASE("every stock module agrees with JIT and MIR interpreter") {
     }
 }
 
+// A locate's restart, through the compiled program's copy (Program::copy):
+// every stock module, compiled to the JIT, plays again as when new.
+TEST_CASE("every stock module compiled as a script restarts to its prepared state" *
+          doctest::description("rt")) {
+    int restarted = 0;
+    for (const auto* stock : supple::rack::stockModules()) {
+        CAPTURE(stock->name);
+        auto result = supple::scriptc::compile(stock->source, {});
+        REQUIRE_MESSAGE(result.program, supple::scriptc::toText(result.diagnostics));
+        auto jit = supple::scriptc::moduleCode(std::move(result.program));
+        REQUIRE(jit);
+        restarted +=
+            supple::rack::test::replaysAfterRestart(std::move(jit), supple::rack::Origin::Library);
+    }
+    CHECK(restarted > 40);
+}
+
 TEST_CASE(
     "module arrays, bit operations, gate helpers and reference arguments agree in all backends") {
     using T = supple::script::array_test::ArrayModule;
@@ -193,4 +211,65 @@ TEST_CASE(
             }
         }
     }
+}
+
+// What prepare() leaves that is not zero is copied back at a restart; what
+// is all zero (a buffer it only sized, a delay line nothing was pushed into)
+// is kept as its size alone and cleared in place. Both restart exactly.
+TEST_CASE("a module whose prepare leaves content restarts to it, and zeros cost no copy" *
+          doctest::description("rt")) {
+    const std::string source = R"(#include <supple/script.h>
+struct Primed : Module {
+    static constexpr ModuleInfo info = {
+        .name = "Primed",
+        .id = "com.suppleaudio.test.primed",
+        .vendor = "Supple Audio",
+        .description = "prepare() fills a table and a line; a buffer and a line stay zero.",
+        .tags = {"test"}};
+    Input in = audioIn("In");
+    Output out = audioOut("Out");
+    Buffer<double> table;
+    Buffer<double> scratch;
+    DelayLine primed;
+    DelayLine fresh;
+    int at = 0;
+    void prepare() {
+        table.resize(4096);
+        scratch.resize(4096);
+        for (int i = 0; i < 4096; ++i) table[i] = 0.25 + 0.0001 * i;
+        primed.prepare(2048);
+        fresh.prepare(2048);
+        for (int i = 0; i < 300; ++i) primed.push(0.5 - 0.001 * i);
+        at = 0;
+    }
+    void process(int frames) {
+        for (int i = 0; i < frames; ++i) {
+            const double x = in[0][i];
+            const int k = at % 4096;
+            const double y = table[k] + scratch[k] + primed.read(250.5) + fresh.read(100.25);
+            table[k] = table[k] * 0.5 + x;
+            scratch[k] = scratch[k] + x * 0.25;
+            primed.push(x);
+            fresh.push(y * 0.5);
+            out[0][i] = y;
+            at = at + 1;
+        }
+    }
+};
+)";
+    auto result = supple::scriptc::compile(source, {});
+    REQUIRE_MESSAGE(result.program, supple::scriptc::toText(result.diagnostics));
+    auto jit = supple::scriptc::moduleCode(std::move(result.program));
+    REQUIRE(jit);
+    {
+        // The instance's two buffers, and the prepared table kept beside them:
+        // the zero scratch buffer is kept as its size alone.
+        const auto type = supple::rack::ModuleType::fromCode(jit, supple::rack::Origin::Project);
+        REQUIRE(type);
+        const std::size_t before = sd::bufferAllocations();
+        auto instance = supple::rack::Instance::make(type, {});
+        REQUIRE(instance);
+        CHECK(sd::bufferAllocations() == before + 3);
+    }
+    CHECK(supple::rack::test::replaysAfterRestart(std::move(jit), supple::rack::Origin::Project));
 }

@@ -597,6 +597,201 @@ TEST_CASE("racks: a held gate plays again after a seek resets the instrument" *
 }
 
 namespace {
+// A VCA, its level just edited from -30 to -27 dB, on Transport's beat phase
+// or on a free-running 3.7 Hz LFO, into an Out: a level glide caught when the
+// transport stops, or an oscillator's phase, is what a module carries past a
+// locate unless it starts afresh.
+struct Afresh {
+    model::Session before, after;
+    explicit Afresh(bool lfo) {
+        model::Project project;
+        project.console9 = false;
+        project.seed = 31337;
+        model::EditTxn t(model::Session::create(project), 1);
+        const Id channel = addChannel(t);
+        const Id rack = t.create(model::Rack{channel, ""});
+        const Id source = lfo ? addModule(t, rack, "com.suppleaudio.rack.lfo",
+                                          json::parse(R"({"rate": 3.7})").value())
+                              : addModule(t, rack, "com.suppleaudio.rack.transport");
+        const Id vca = addModule(t, rack, "com.suppleaudio.rack.vca",
+                                 json::parse(R"({"level": -30})").value());
+        const Id out = addModule(t, rack, "com.suppleaudio.rack.out");
+        cable(t, source, lfo ? "out" : "beat_phase", vca, "in");
+        cable(t, vca, "out", out, "l");
+        listen(t, out, channel);
+        before = commit(t);
+        model::EditTxn edit(before, 2);
+        edit.modify<model::RackModule>(
+            vca, [](model::RackModule& m) { m.params = json::parse(R"({"level": -27})").value(); });
+        after = commit(edit);
+    }
+};
+
+void runCycles(Engine& engine, DummyBackend& backend, bool anticipative, std::int64_t cycles,
+               std::uint32_t block) {
+    while (cycles > 0) {
+        if (anticipative) REQUIRE(engine.awaitRendered(4096));
+        const std::int64_t n = std::min<std::int64_t>(cycles, 4096 / block);
+        backend.run(n);
+        cycles -= n;
+    }
+}
+
+double worstFrom(const std::vector<float>& captured, std::size_t from,
+                 const std::vector<float>& reference) {
+    REQUIRE(captured.size() >= from + reference.size());
+    double worst = 0;
+    for (std::size_t i = 0; i < reference.size(); ++i)
+        worst = std::max(worst, std::fabs(double(captured[from + i]) - double(reference[i])));
+    return worst;
+}
+}  // namespace
+
+// ADR-0062 §5 (2026-11-14 note), engine.md §3: a seek, and a play from a
+// position, restart the rack's modules as they reset plug-ins, so what
+// follows is the offline render's whatever the modules played before.
+TEST_CASE("racks: a seek, or a play after a restart, starts the modules afresh as offline" *
+          doctest::description("rt")) {
+    constexpr std::uint32_t kBlock = 128;
+    constexpr std::size_t kFrames = 24000;
+    for (const bool lfo : {false, true}) {
+        const Afresh scene(lfo);
+        InstancePool offlinePool = makePool();
+        const auto offline = renderOffline(scene.after, offlinePool, {.endSeconds = 0.5}).value();
+        const std::vector<float> reference(offline.audio.channels[0].begin(),
+                                           offline.audio.channels[0].begin() + kFrames);
+        for (const bool anticipative : {false, true}) {
+            INFO((lfo ? "LFO" : "level glide") << ", anticipative " << anticipative);
+            const EngineOptions options{.anticipative = anticipative, .workers = 0};
+            InstancePool pool = makePool();
+            MediaCache media;
+            {
+                // Played, the level edited, a seek back to the start while playing.
+                DummyBackend backend(
+                    {.mode = DummyBackend::Mode::Manual, .captureFrames = 4096 + 2 * kFrames});
+                Engine engine(pool, media, options);
+                REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
+                REQUIRE(engine.load(scene.before));
+                engine.play();
+                runCycles(engine, backend, anticipative, 30, kBlock);
+                REQUIRE(engine.load(scene.after));
+                runCycles(engine, backend, anticipative, 2, kBlock);
+                engine.seek(0);
+                runCycles(engine, backend, anticipative, (kFrames + 2 * kBlock) / kBlock, kBlock);
+                engine.stop();
+                CHECK(engine.processErrors() == 0);
+                CHECK(engine.outputLatency() == 0);
+                CHECK(worstFrom(backend.capture().channels[0], 32 * kBlock, reference) == 0.0);
+            }
+            {
+                // A new engine on the same pool (its modules kept): play from 0.
+                DummyBackend backend(
+                    {.mode = DummyBackend::Mode::Manual, .captureFrames = kFrames + 4096});
+                Engine engine(pool, media, options);
+                REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
+                REQUIRE(engine.load(scene.after));
+                engine.seek(0);
+                engine.play();
+                runCycles(engine, backend, anticipative, (kFrames + 2 * kBlock) / kBlock, kBlock);
+                engine.stop();
+                CHECK(engine.processErrors() == 0);
+                CHECK(worstFrom(backend.capture().channels[0], 0, reference) == 0.0);
+            }
+        }
+    }
+}
+
+// Round-13 review, finding 3: a feedback cable's last samples live in the
+// rack's schedule, not in a module. A seek restarts them with the modules,
+// so a warm feedback rack plays from there as a fresh offline render does.
+TEST_CASE("racks: a seek starts a feedback rack afresh, as offline" * doctest::description("rt")) {
+    for (const bool feedback : {false, true})
+        for (const bool anticipative : {false, true})
+            for (const std::int64_t seek : {std::int64_t{0}, std::int64_t{3217}}) {
+                INFO("feedback " << feedback << ", anticipative " << anticipative << ", seek "
+                                 << seek);
+                model::Project project;
+                project.console9 = false;
+                project.seed = 31337;
+                model::EditTxn t(model::Session::create(project), 1);
+                const Id channel = addChannel(t);
+                const Id rack = t.create(model::Rack{channel, ""});
+                const Id lfo = addModule(t, rack, "com.suppleaudio.rack.lfo",
+                                         json::parse(R"({"rate": 3.7})").value());
+                const Id vca = addModule(t, rack, "com.suppleaudio.rack.vca",
+                                         json::parse(R"({"level": -6})").value());
+                const Id out = addModule(t, rack, "com.suppleaudio.rack.out");
+                cable(t, lfo, "out", vca, "in");
+                if (feedback) cable(t, vca, "out", vca, "in", 0.5);
+                cable(t, vca, "out", out, "l");
+                listen(t, out, channel);
+                const auto scene = commit(t);
+                InstancePool offlinePool = makePool();
+                const auto reference = renderOffline(scene, offlinePool,
+                                                     {.startSeconds = double(seek) / 48000,
+                                                      .endSeconds = double(seek + 8192) / 48000,
+                                                      .threads = 1});
+                REQUIRE(reference);
+                REQUIRE(reference->audio.frames() == 8192);
+                InstancePool pool = makePool();
+                MediaCache media;
+                DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 20000});
+                Engine engine(pool, media, {.anticipative = anticipative, .workers = 0});
+                REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+                REQUIRE(engine.load(scene));
+                engine.play();
+                runCycles(engine, backend, anticipative, 32, 128);
+                engine.seek(double(seek) / 48000);
+                runCycles(engine, backend, anticipative, 64, 128);
+                engine.stop();
+                CHECK(engine.processErrors() == 0);
+                CHECK(worstFrom(backend.capture().channels[0], 32 * 128,
+                                reference->audio.channels[0]) == 0.0);
+            }
+}
+
+// A loop going round keeps the history (ADR-0015): modules and feedback
+// samples run on, as one continuous offline render does.
+TEST_CASE("racks: a loop wrap keeps a feedback rack's history" * doctest::description("rt")) {
+    for (const bool anticipative : {false, true}) {
+        INFO("anticipative " << anticipative);
+        model::Project project;
+        project.console9 = false;
+        project.seed = 12345;
+        model::EditTxn t(model::Session::create(project), 1);
+        const Id channel = addChannel(t);
+        const Id rack = t.create(model::Rack{channel, ""});
+        const Id lfo =
+            addModule(t, rack, "com.suppleaudio.rack.lfo",
+                      json::parse(R"({"rate": 3.7, "voices": 4, "spread": 25})").value());
+        const Id vca =
+            addModule(t, rack, "com.suppleaudio.rack.vca", json::parse(R"({"level": -6})").value());
+        const Id out = addModule(t, rack, "com.suppleaudio.rack.out");
+        cable(t, lfo, "out", vca, "in");
+        cable(t, vca, "out", vca, "in", 0.5);
+        cable(t, vca, "out", out, "l");
+        listen(t, out, channel);
+        const auto scene = commit(t);
+        InstancePool offlinePool = makePool();
+        const auto reference =
+            renderOffline(scene, offlinePool, {.endSeconds = 0.128, .threads = 1});
+        REQUIRE(reference);
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 8192});
+        Engine engine(pool, media, {.anticipative = anticipative, .workers = 0});
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+        REQUIRE(engine.load(scene));
+        engine.setLoop(0, 0.016, true);
+        engine.play();
+        runCycles(engine, backend, anticipative, 48, 128);
+        engine.stop();
+        CHECK(engine.processErrors() == 0);
+        CHECK(worstFrom(backend.capture().channels[0], 0, reference->audio.channels[0]) == 0.0);
+    }
+}
+
+namespace {
 struct NoteRouteScene {
     model::Session session, itemReference;
     Id source, target, rack, notes, noteOut;

@@ -319,5 +319,10 @@ help on every port and parameter, musical defaults, grouped controls,
 smoothing on audio levels. Gate inputs use hysteresis (rise at ≥0.5,
 fall below 0.25); trigger outputs stay high for 1 ms. Keep per-channel
 state independent, use `seed()` for repeatability, and size memory in
-`prepare()`. Every stock module is tested against the JIT and interpreter
+`prepare()` only: a seek or a play from a position returns every module to
+what `prepare()` left (as a plugin's reset does), copying that state back
+in place on the audio thread, so a buffer sized elsewhere would allocate
+there. That state is kept twice, except a `Buffer` `prepare()` leaves all
+zero and a `DelayLine` it pushes nothing into: those are kept by size and
+cleared. A loop wrap keeps the state. Every stock module is tested against the JIT and interpreter
 for the same bits as its native C++ build.

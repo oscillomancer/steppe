@@ -70,6 +70,11 @@ class Schedule {
 
     // `frames` frames whose first is at timeline `position`.
     void process(std::int64_t position, int frames, Clock& clock) SUPPLE_RT;
+    // Back to how build() left it, on the audio thread and without
+    // allocating: feedback cables carry nothing yet, outputs are silent and
+    // the next block samples automation afresh. A locate's fresh start, with
+    // the modules' Instance::restart() (ADR-0062 §5); a loop wrap keeps both.
+    void restart() SUPPLE_RT;
 
     const Patch& patch() const { return patch_; }
     // Whether a cable carries the previous frame (it closes a loop).

@@ -132,6 +132,6 @@ if(SUPPLE_BUILD_TESTS)
   # One CTest entry per source file: the whole suite runs for minutes, past
   # the test timeout on slower CI runners.
   supple_add_tests(rack-stock SOURCES tests/test_stock.cpp tests/test_jit.cpp ${_stock_tests}
-                   DEPS supple::script-compiler LABELS rack SPLIT)
+                   DEPS supple::script-compiler supple::rack LABELS rack SPLIT)
   target_include_directories(rack-stock.tests PRIVATE tests)
 endif()

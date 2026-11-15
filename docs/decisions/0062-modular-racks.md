@@ -221,6 +221,17 @@ cable buffers, binds ports and parameters, and calls the modules' hooks.
   phase, a reverb's tail). Knob edits reach running instances through
   atomic slots without a rebuild. A module whose code changes starts fresh
   in the new code.
+  **2026-11-14 note:** state lives across edits, not across a locate. A
+  seek, and a play from a position, restart every module as plug-ins are
+  reset there (`rack::Instance::restart()`, on the audio thread: each
+  instance keeps a copy of its prepared struct and copies it back in
+  place, as the script plug-in glue's `reset()` already does), so real time equals an offline render from that point in both
+  executors, as §5's determinism requires. The plan-swap soak found a
+  locate keeping a smoother mid-glide and an LFO's phase (finding F1). A
+  loop wrap keeps module state, as ADR-0015 keeps plug-ins' history.
+  **2026-11-15 note:** that includes the history feedback cables carry in
+  the rack's schedule (`rack::Schedule::restart()`); review round 13 found
+  it surviving a seek.
 
 ### 6. Engine integration
 
