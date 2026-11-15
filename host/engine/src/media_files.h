@@ -28,7 +28,9 @@ Result<std::string> copyIntoFolder(const std::filesystem::path& file,
 // with other bytes is an error, and nothing is overwritten. A destination
 // strictly within `from` is excluded from traversal, including resolved symlink
 // aliases. An ancestor destination receives the source files normally.
-Status copyFolder(const std::filesystem::path& from, const std::filesystem::path& to);
+// `created`, if given, gets each file this copy created (not those it kept).
+Status copyFolder(const std::filesystem::path& from, const std::filesystem::path& to,
+                  std::vector<std::filesystem::path>* created = nullptr);
 
 // The one test of where a path the engine reads or writes on a file's say
 // leads (ADR-0076, ADR-0078): inside `root` when the deepest part of `path`
