@@ -2361,3 +2361,53 @@ TEST_CASE("a save as retried through another spelling of the path retires its ow
         CHECK(fs::exists(old));
     }
 }
+
+TEST_CASE("a save as through a link and .. does not take another folder's journal for its copy") {
+    // Round-17 review: base/link/../dest and base/dest are one path once
+    // `..` is removed by spelling, but with link pointing into another
+    // folder they are two folders. A save as that failed under the first
+    // made its journal copy there; the retry under the second found an
+    // identical journal already in base/dest, which it did not make, and
+    // deleted it. Only the file system says whether two paths are one file.
+    Project p;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *p.app);
+    REQUIRE(d.execute({"track.add", json::Value::object(), kUnit}));
+    REQUIRE(p.app->save(p.root / "first/song.json"));
+    const auto old = p.app->recordDir() / "Keys-1.midi.jsonl";
+    REQUIRE(writeFileAtomic(
+        old, journalHeader() + "[0,144,60,100]\n[24000,128,60,0]\n{\"captured\":48000}\n"));
+    REQUIRE(p.app->recover({}, {}));
+    fs::create_directories(p.root / "base");
+    fs::create_directories(p.root / "elsewhere/child");
+    std::error_code ec;
+    fs::create_directory_symlink(p.root / "elsewhere/child", p.root / "base/link", ec);
+    if (ec) {
+        MESSAGE("skipped: no directory link here (" << ec.message() << ")");
+        return;
+    }
+    const auto first = p.root / "base/link/../dest/song.json";  // elsewhere/dest
+    setFileSyncHookForTesting([](const fs::path& f) { return f.filename() != "song.json"; });
+    auto failed = p.app->save(first);
+    setFileSyncHookForTesting({});
+    REQUIRE_FALSE(failed);
+    const auto made = first.parent_path() / "media/rec" / old.filename();
+    REQUIRE(fs::exists(made));
+    REQUIRE(fs::exists(p.root / "elsewhere/dest/media/rec" / old.filename()));
+
+    const auto retry = p.root / "base/dest/song.json";
+    const auto theirs = retry.parent_path() / "media/rec" / old.filename();
+    fs::create_directories(theirs.parent_path());
+    REQUIRE(fs::copy_file(old, theirs));
+    REQUIRE(made.lexically_normal() == theirs.lexically_normal());
+    REQUIRE_FALSE(fs::equivalent(made, theirs));
+    const auto before = sha256File(theirs);
+    REQUIRE(before);
+
+    REQUIRE(p.app->save(retry));
+    CHECK(fs::exists(theirs));  // not this save's copy: it stays
+    if (fs::exists(theirs)) CHECK(sha256File(theirs).value() == *before);
+    CHECK(fs::exists(made));  // the failed attempt's copy, in a folder no file uses
+    CHECK(fs::exists(old));   // the first project's journal stays its own
+}

@@ -879,7 +879,9 @@ first use, and no plug-in code runs early to warm it.
   copy it made there (an identical file already there is not its copy and
   stays; one a failed save as made is, and the retry deletes it, whatever
   spelling of the same file it is retried under: copies are known by file
-  identity, not by literal path), leaving
+  identity as the file system reports it, not by spelling, since a path
+  through a link followed by `..` is not the path with both removed; a
+  path where no file is matches no copy), leaving
   the old folder's for the old project, whose file does not hold the take. A save as into another folder waits for a running
   recording to stop (`project.recording`). Replacing a saved project without saving leaves its journals, offered on
   its next open; replacing an unsaved one without saving discards them with
