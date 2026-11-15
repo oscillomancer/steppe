@@ -17,6 +17,7 @@
 #include <supple/engine/app.h>
 #include <supple/engine/jack.h>
 #include <supple/host/clap_host.h>
+#include <supple/model/project_file.h>
 #include <supple/model/schemas.h>
 
 #include <supple/analysis/analysis.h>
@@ -402,6 +403,87 @@ TEST_CASE("an LLM plays the song in real time over the bus (a stand-in libjack)"
     CHECK(std::string(fake.propsEnv()) == "{ node.force-quantum=128 node.force-rate=96000 }");
     call("engine.stop", "{}");
     fake.reset();
+}
+
+TEST_CASE("the plug-in isolation preference places inherit plug-ins as they load") {
+    // ADR-0081 commit 7: a third-party plug-in left on inherit runs where
+    // the preference says; the project keeps inherit, fx.describe says where.
+    host::setBridgeExecutable(BRIDGE_PATH);
+    Root root;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    auto app = makeApp(root.path);
+    cmd::Dispatcher d(registry, *app);
+    auto call = [&](std::string command, std::string_view args) {
+        auto r = d.execute({std::move(command), j(args), kTest});
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        return *r;
+    };
+    CHECK(app->pluginIsolation() == model::Isolation::InProcess);  // as shipped
+    CHECK_FALSE(app->setPluginIsolation(model::Isolation::Inherit));
+    REQUIRE(app->setPluginIsolation(model::Isolation::SharedBridge));
+    call("batch", R"({"steps": [
+        {"command": "track.add", "args": {"name": "Lead"}, "as": "t"},
+        {"command": "fx.add", "args": {"track": "${t.track}", "plugin": "com.suppleaudio.test.gain"}}]})");
+    const model::Id fx = *model::Id::parse("fx_1");
+    call("engine.start", R"({"backend": "dummy"})");
+    host::Instance* instance = app->instanceOf(fx);
+    REQUIRE(instance);
+    CHECK(instance->isolated());
+    auto described = call("fx.describe", R"({"fx": "fx_1"})");
+    CHECK(described["isolation_effective"].asString() == "shared_bridge");
+    CHECK(app->head().fx.find(fx)->isolation == model::Isolation::Inherit);
+    // A new preference applies as plug-ins load: this one stays until then.
+    REQUIRE(app->setPluginIsolation(model::Isolation::InProcess));
+    CHECK(call("fx.describe", R"({"fx": "fx_1"})")["isolation_effective"].asString() ==
+          "shared_bridge");
+    call("fx.restart", R"({"fx": "fx_1"})");
+    instance = app->instanceOf(fx);
+    REQUIRE(instance);
+    CHECK_FALSE(instance->isolated());
+    CHECK(call("fx.describe", R"({"fx": "fx_1"})")["isolation_effective"].asString() ==
+          "in_process");
+    call("engine.stop", "{}");
+    REQUIRE(app->save(root.path / "song.json"));
+    auto saved = model::parseProjectFile(*readTextFile(root.path / "song.json"));
+    REQUIRE(saved);
+    CHECK(saved->store.head()->fx.find(fx)->isolation == model::Isolation::Inherit);
+}
+
+TEST_CASE(
+    "without a plug-in bridge, the isolation preference runs plug-ins in process, and says so") {
+    struct Restore {
+        ~Restore() { host::setBridgeExecutable(BRIDGE_PATH); }
+    } restore;
+    Root root;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    auto app = makeApp(root.path);
+    REQUIRE(app->plugins());  // a scan finds the bridge again: as when none is installed
+    host::setBridgeExecutable({});
+    cmd::Dispatcher d(registry, *app);
+    auto call = [&](std::string command, std::string_view args) {
+        auto r = d.execute({std::move(command), j(args), kTest});
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        return *r;
+    };
+    REQUIRE(app->setPluginIsolation(model::Isolation::Dedicated));
+    call("batch", R"({"steps": [
+        {"command": "track.add", "args": {"name": "Lead"}, "as": "t"},
+        {"command": "fx.add", "args": {"track": "${t.track}", "plugin": "com.suppleaudio.test.gain"}}]})");
+    call("engine.start", R"({"backend": "dummy"})");
+    host::Instance* instance = app->instanceOf(*model::Id::parse("fx_1"));
+    REQUIRE(instance);
+    CHECK_FALSE(instance->isolated());
+    CHECK(call("fx.describe", R"({"fx": "fx_1"})")["isolation_effective"].asString() ==
+          "in_process");
+    auto status = call("engine.status", "{}");
+    bool said = false;
+    for (std::size_t i = 0; i < status["warnings"].size(); ++i)
+        said = said ||
+               status["warnings"].at(i).asString().find("no plug-in bridge") != std::string::npos;
+    CHECK(said);
+    call("engine.stop", "{}");
 }
 
 TEST_CASE("an isolated plugin that crashes is reported and restarted over the bus") {

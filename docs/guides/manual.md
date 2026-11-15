@@ -811,6 +811,17 @@ In the chain window, Ctrl-click (Cmd-click on macOS) toggles a row in the
 selection, including the active row. Effects moved to another track leave
 that window’s selection.
 
+Each row in the chain window says where its plugin runs: in-process (inside
+Steppe), shared bridge (in a helper process shared with other plugins) or
+isolated (in a process of its own). A plugin that crashes in a bridge
+process goes silent and can be restarted, and Steppe keeps playing; one
+that crashes in-process takes Steppe down with it. **Edit > Preferences… >
+Third-party plug-ins run** sets where plugins you have not set yourself
+run: in the app (the default), in a shared bridge process, or each in its
+own process. Those rows say "(default)". The choice applies as plugins
+load (adding one, opening a project, restarting one); Steppe's own plugins
+always run in the app.
+
 ## Agents (MCP)
 
 Steppe is built to be driven by an AI agent as well as by hand. `steppe-mcp`

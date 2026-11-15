@@ -954,6 +954,19 @@ not suppress a key connected later; a missing block key supplies silence.
 
 ## 5. Plugin isolation (`host/clap-host/bridge`)
 
+**Default isolation (ADR-0081).** An fx's `isolation` names its process;
+`inherit` is resolved when its instance is made
+(`InstancePool::setDefaultIsolation`, from `EngineApp::setPluginIsolation`,
+the GUI's preference): a stock plug-in (its file in `stockPluginDir()`) runs
+in process, any other at the default (`in_process`, as shipped;
+`shared_bridge`; `dedicated`). A bridged default with no bridge executable
+set runs it in process and `engine.status.warnings` says so. An instance
+keeps its process until it is made again (fx.restart, the plug-in replaced,
+a project opened), so changing the default never reloads a running
+plug-in. `fx.describe isolation_effective` says where it runs. Offline
+renders, render snapshots and rack probes make their own instances in
+process, as before; isolation does not change the output.
+
 The bridge is native on Linux, macOS and Windows (ADR-0037). Linux retains
 memfd, SCM_RIGHTS, shared futexes and pidfd behavior. macOS uses unlinked
 shm_open descriptors transferred over socketpair, shared address waits/wakes,

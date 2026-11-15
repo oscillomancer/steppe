@@ -418,6 +418,15 @@ class EngineApp : public cmd::Host {
     // unsaved one) always names the original.
     void setCopyImportedMedia(bool on) { copyImports_ = on; }
     bool copyImportedMedia() const { return copyImports_; }
+    // Where third-party plug-ins left on inherit run (the GUI's preference,
+    // ADR-0081): in_process, shared_bridge or dedicated, applied as their
+    // instances are made (InstancePool::setDefaultIsolation); stock plug-ins
+    // stay in process. engine.status warns of an instance kept in process
+    // because no bridge was found. inherit is not a preference.
+    Status setPluginIsolation(model::Isolation isolation);
+    model::Isolation pluginIsolation() const { return pluginIsolation_; }
+    // Where `fx` runs, or would if its instance were made now.
+    model::Isolation effectiveIsolation(model::Id fx) const;
     std::uint64_t projectGeneration() const {
         return projectGeneration_.load(std::memory_order_acquire);
     }
@@ -812,6 +821,7 @@ class EngineApp : public cmd::Host {
                           const std::function<Status()>& prepare = {},
                           std::vector<schema::Warning>* warnings = nullptr);
     bool copyImports_ = false;
+    model::Isolation pluginIsolation_ = model::Isolation::InProcess;
     // Declared first: outlives instances, engine/backend, and worker joins.
     MainThreadWake mainWake_;
     MidiPortPreferences midiInputsPreferences_, midiOutputsPreferences_;

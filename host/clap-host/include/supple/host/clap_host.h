@@ -238,6 +238,8 @@ class Vst3Instance;    // local VST3 backing
 
 // The bridge executable for isolated instances (process-wide, set at startup).
 void setBridgeExecutable(std::filesystem::path path);
+// The one set (empty when none is).
+std::filesystem::path bridgeExecutable();
 // Finds the bridge named `name` (<slug>-bridge) next to the running
 // executable (installed) or in the build tree's host/clap-host directory, and
 // sets it. False when there is none.

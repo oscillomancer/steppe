@@ -133,6 +133,7 @@ Result<std::unique_ptr<EngineApp>> EngineApp::create(AppOptions options, model::
         [self](const model::PluginRef& ref) { return self->findPlugin(ref.id); },
         app->options_.identity);
     app->pool_->setMainThreadWake(app->mainWake_);
+    app->pool_->setDefaultIsolation(app->pluginIsolation_);
     app->modules_ = detail::loadModuleLibrary(detail::builtinModuleCatalog(), app->moduleDir());
     app->pool_->racks().setCatalog(app->modules_);
     SUPPLE_TRY(app->newProject(std::move(project)));
@@ -670,6 +671,7 @@ Status EngineApp::replaceProject(model::VersionStore store, fs::path path,
     pool_ = std::make_unique<InstancePool>(
         [this](const model::PluginRef& ref) { return findPlugin(ref.id); }, options_.identity);
     pool_->setMainThreadWake(mainWake_);
+    pool_->setDefaultIsolation(pluginIsolation_);
     pool_->racks().setCatalog(modules_);
     pendingDirtyStates_.clear();
     if (scripts_) {
@@ -1620,6 +1622,21 @@ void EngineApp::retryRestart() {
     restartRetryAt_ = finishedAt + restartBackoff_;
 }
 
+Status EngineApp::setPluginIsolation(model::Isolation isolation) {
+    if (isolation == model::Isolation::Inherit)
+        return Error("preferences.plugin_isolation", "inherit is not a default isolation",
+                     "/plugin_isolation", "use in_process, shared_bridge or dedicated");
+    pluginIsolation_ = isolation;
+    if (pool_) pool_->setDefaultIsolation(isolation);
+    return okStatus();
+}
+
+model::Isolation EngineApp::effectiveIsolation(model::Id fx) const {
+    const model::FxInstance* instance = head().fx.find(fx);
+    if (!instance) return model::Isolation::InProcess;
+    return pool_ ? pool_->effectiveIsolation(fx, *instance) : instance->isolation;
+}
+
 fs::path EngineApp::autosaveDir() const {
     if (projectPath_.empty()) return options_.scratchDir;  // an unsaved project's (ADR-0078)
     return projectPath_.parent_path() / (projectPath_.filename().string() + "-data");
@@ -1818,6 +1835,12 @@ EngineStatus EngineApp::engineStatus() {
                               st.cpuIdleLatency.error->hint);
     if (st.memoryLock.error)
         st.warnings.push_back(st.memoryLock.error->message + "; " + st.memoryLock.error->hint);
+    for (model::Id id : pool_->isolationFallbacks()) {
+        const model::FxInstance* fx = head().fx.find(id);
+        st.warnings.push_back((fx ? fx->plugin.name : id.str()) + " (" + id.str() +
+                              ") runs in process: no plug-in bridge was found for the plug-in "
+                              "isolation preference; reinstall, or choose In the app");
+    }
     st.dropped = static_cast<std::int64_t>(outputDrops_ + consumerDrops_);
     st.voiceDropped = static_cast<std::int64_t>(voiceDrops_);
     for (const model::Id& id : pool_->bridgeThreadsRefused())

@@ -1089,6 +1089,17 @@ TEST_CASE("preferences: the dialog applies each setting at once and saves it") {
     // Copying imports, toggled.
     REQUIRE(f.root->click("prefs.imports.set"));
     CHECK_FALSE(f.app->copyImportedMedia());
+    // Third-party plug-ins' isolation (ADR-0081), from the menu.
+    CHECK(f.node("prefs.isolation.set")->valueText() == "In the app");
+    REQUIRE(f.root->click("prefs.isolation.set"));
+    auto* isolationMenu = dynamic_cast<ui::List*>(f.root->find("prefs.isolation.menu"));
+    REQUIRE(isolationMenu);
+    auto choose = isolationMenu->onActivate;
+    choose(1);  // In a shared bridge process
+    CHECK(f.app->pluginIsolation() == model::Isolation::SharedBridge);
+    CHECK(f.node("prefs.isolation.set")->valueText() == "In a shared bridge process");
+    CHECK_FALSE(prefs.setPluginIsolation(model::Isolation::Inherit));
+    CHECK(f.app->pluginIsolation() == model::Isolation::SharedBridge);
     // The render folder: absolute only.
     CHECK_FALSE(prefs.setRenderDirectory("relative/renders"));
     REQUIRE(prefs.setRenderDirectory(f.dir / "my renders"));
@@ -1100,6 +1111,7 @@ TEST_CASE("preferences: the dialog applies each setting at once and saves it") {
     CHECK(engine::midiPortSettings(saved->midiOutputs, "Synth").offsetMs == -2.5);
     CHECK(saved->audioThreads == 4);
     CHECK_FALSE(saved->copyImports);
+    CHECK(saved->pluginIsolation == model::Isolation::SharedBridge);
     CHECK(saved->renderDirectory == f.dir / "my renders");
     // A failed save changes neither the shown nor the effective setting.
     std::filesystem::remove(file);
@@ -1126,6 +1138,7 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
     values.preventDeepIdle = true;
     values.renderDirectory = f.dir / "renders";
     values.copyImports = false;
+    values.pluginIsolation = model::Isolation::Dedicated;
     values.renderOpenFolder = true;
     values.audio.backend = "portaudio";
     values.audio.hostApi = "Core Audio";
@@ -1150,17 +1163,19 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
     CHECK(loaded->preventDeepIdle);
     CHECK(loaded->renderDirectory == f.dir / "renders");
     CHECK_FALSE(loaded->copyImports);
+    CHECK(loaded->pluginIsolation == model::Isolation::Dedicated);
     CHECK(loaded->renderOpenFolder);
     CHECK(loaded->audio == values.audio);
     CHECK(loaded->sync == values.sync);
     CHECK(loaded->midiOutputs.empty());  // the engine writes these records, not the GUI
     const auto bytes = readFile(file).value();
-    CHECK(std::string(bytes.begin(), bytes.end()).find("supple.preferences/1.8") !=
+    CHECK(std::string(bytes.begin(), bytes.end()).find("supple.preferences/1.9") !=
           std::string::npos);
     REQUIRE(loaded->save(file));
     CHECK(readFile(file).value() == bytes);
     // Older schemas load, with defaults for what they lack.
-    for (const char* version : {"1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8"}) {
+    for (const char* version :
+         {"1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9"}) {
         REQUIRE(writeFileAtomic(
             file, std::string("{\"schema\":\"supple.preferences/") + version + "\"}"));
         auto old = gui::Preferences::load(file);
@@ -1170,6 +1185,7 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
         CHECK_FALSE(old->preventDeepIdle);
         CHECK(old->renderDirectory.empty());
         CHECK(old->copyImports);
+        CHECK(old->pluginIsolation == model::Isolation::InProcess);
         CHECK_FALSE(old->renderOpenFolder);
         CHECK(old->audio == gui::AudioDeviceSettings{});
         CHECK(old->sync == engine::SyncSettings{});
@@ -1199,6 +1215,8 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
                               {"prevent_deep_idle", "\"true\""},
                               {"render_directory", "\"relative\""},
                               {"copy_imported_media", "1"},
+                              {"plugin_isolation", "\"inherit\""},
+                              {"plugin_isolation", "1"},
                               {"render_open_folder", "\"no\""}}) {
         REQUIRE(writeFileAtomic(file, std::string(R"({"schema":"supple.preferences/1.6",")") +
                                           field + "\":" + bad + "}"));
@@ -1523,7 +1541,7 @@ TEST_CASE(
     prefs.open();
     f.root->frame(false);
     const float offHeight = f.node("prefs")->bounds().h;
-    CHECK(offHeight < 460);  // no space reserved for empty notes
+    CHECK(offHeight < 520);  // no space reserved for empty notes (eight would add ~190)
     CHECK_FALSE(f.node("prefs.memory.note.0")->visible);
     CHECK_FALSE(f.node("prefs.latency.note.0")->visible);
     for (const char* id : {"prefs.memory.set", "prefs.latency.set"}) {

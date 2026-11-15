@@ -91,6 +91,15 @@ input cannot hide, and its output is no longer the in-process output.
 - The rtsan preset covers the live bridged path; only the scope in point 2
   may make system calls there.
 
+*Amended 2026-11-14 (implementation):* ADR-0013 point 8's default is an
+app preference, `plugin_isolation` (`in_process`, `shared_bridge`,
+`dedicated`; shipped `in_process`). `inherit` resolves as an instance is
+made: a stock plug-in in process, any other at the preference, in process
+with an `engine.status` warning when no bridge is found. The project keeps
+`inherit`, since isolation does not change the output, and an instance keeps
+its process until it is made again. Making `shared_bridge` the shipped
+default is a separate decision, gated on this ADR's measurements.
+
 ## Alternatives considered
 
 - **Pipelined live bridging:** never waits, but adds a block of latency per

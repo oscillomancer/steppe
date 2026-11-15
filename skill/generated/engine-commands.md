@@ -5152,6 +5152,10 @@ Kind: `query`. Exposure: `mcp-tool`.
       "type": "integer",
       "description": "The instance's reported latency, in samples"
     },
+    "isolation_effective": {
+      "type": "string",
+      "description": "Where the instance runs: in_process, shared_bridge or dedicated; inherit resolves to the plug-in isolation preference (stock plug-ins in process), as the instance is made"
+    },
     "outputs_notes": {
       "type": "boolean",
       "description": "The loaded plug-in sends notes or MIDI: fx.set midi_output chooses replace or merge"
@@ -5192,6 +5196,7 @@ Result:
   "name": "<any>",
   "description": "<any>",
   "latency_samples": "<any>",
+  "isolation_effective": "in_process",
   "status_available": false
 }
 

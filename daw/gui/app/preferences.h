@@ -30,6 +30,8 @@ struct Preferences {
     AudioDeviceSettings audio;      // the device the engine starts with (1.5)
     bool renderOpenFolder = false;  // open the render folder when a render finishes (1.6)
     engine::SyncSettings sync;      // external sync and LTC output (1.7, ADR-0071)
+    // Where third-party plug-ins left on inherit run (1.9, ADR-0081).
+    model::Isolation pluginIsolation = model::Isolation::InProcess;
     // The MIDI port records (routing, ADR-0072; clock output, 1.8, ADR-0073),
     // read for display. The engine is their only writer (midi.*.set).
     engine::MidiPortPreferences midiInputs, midiOutputs;
@@ -50,6 +52,7 @@ class PreferencesDialog {
     Status setMemoryLock(bool requested);
     Status setPreventDeepIdle(bool requested);
     Status setCopyImports(bool on);
+    Status setPluginIsolation(model::Isolation isolation);  // saved; as plug-ins load
     void refresh();  // open dialog only; also called by the existing GUI tick
     Status setAudioThreads(unsigned limit);  // saved; next engine start
     // The render dialog's folder choice: saved, and renders go there at once.
@@ -79,6 +82,7 @@ class PreferencesDialog {
     std::array<ui::Label*, 4> memoryNote_{};
     ui::Button* latency_ = nullptr;
     ui::Button* imports_ = nullptr;
+    ui::Button* isolation_ = nullptr;
     ui::Button* audio_ = nullptr;
     std::array<ui::Label*, 4> latencyNote_{};
 };

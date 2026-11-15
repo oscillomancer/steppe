@@ -74,6 +74,20 @@ class InstancePool {
     // The next get() for `id` creates a new instance (fx.restart); the old
     // one lives until prune().
     void restart(model::Id id);
+    // Where an fx left on inherit runs (ADR-0081): a stock plug-in (one in
+    // the stock directory) in process, any other at this default (inherit
+    // means in process), in process when it is bridged and no bridge
+    // executable is set. It applies as instances are made: an instance made
+    // before keeps its process until it is made again (fx.restart, a new
+    // plug-in, a project opened). In process unless set.
+    void setDefaultIsolation(model::Isolation isolation);
+    model::Isolation defaultIsolation() const { return defaultIsolation_; }
+    // The stock plug-ins' directory; host::stockPluginDir() unless set.
+    void setStockDir(std::filesystem::path dir);
+    // Where `id`'s instance runs, or would if it were made now.
+    model::Isolation effectiveIsolation(model::Id id, const model::FxInstance& fx) const;
+    // Instances on inherit made in process because no bridge was set.
+    std::vector<model::Id> isolationFallbacks() const;
     // Isolated instances whose bridge crashed or hung, with the reason.
     std::vector<std::pair<model::Id, std::string>> failed() const;
     host::Instance* find(model::Id id) const;
@@ -108,7 +122,9 @@ class InstancePool {
     struct Entry {
         std::unique_ptr<host::Instance> instance;
         std::string pluginId;
-        model::Isolation isolation = model::Isolation::InProcess;
+        model::Isolation isolation = model::Isolation::InProcess;  // as the fx asked
+        model::Isolation effective = model::Isolation::InProcess;  // where it runs
+        bool fallback = false;         // inherit, bridged default, but no bridge: in process
         std::uint32_t latency = 0;     // prepared stage frames
         std::uint32_t rawLatency = 0;  // plug-in frames at its activation rate
         bool restarting = false;       // a restart the plug-in asked for waits on processing
@@ -117,6 +133,10 @@ class InstancePool {
         std::string appliedState;  // canonical patch text or blob hash last applied
     };
     void retire(std::unique_ptr<host::Instance> instance);
+    model::Isolation resolveIsolation(const model::FxInstance& fx, const host::PluginInfo& info,
+                                      bool* fallback) const;
+    model::Isolation defaultIsolation_ = model::Isolation::InProcess;
+    mutable std::optional<std::optional<std::filesystem::path>> stockDir_;  // found when needed
     MainThreadWake* mainWake_ = nullptr;
     Resolver resolve_;
     host::HostIdentity identity_;

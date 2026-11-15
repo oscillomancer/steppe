@@ -160,10 +160,64 @@ std::vector<host::Instance*> InstancePool::instances() const {
     return out;
 }
 
+void InstancePool::setDefaultIsolation(model::Isolation isolation) {
+    defaultIsolation_ =
+        isolation == model::Isolation::Inherit ? model::Isolation::InProcess : isolation;
+}
+
+void InstancePool::setStockDir(std::filesystem::path dir) {
+    std::error_code ec;
+    auto canonical = std::filesystem::weakly_canonical(dir, ec);
+    stockDir_ = std::optional<std::filesystem::path>(ec ? std::move(dir) : std::move(canonical));
+}
+
+model::Isolation InstancePool::resolveIsolation(const model::FxInstance& fx,
+                                                const host::PluginInfo& info,
+                                                bool* fallback) const {
+    if (fallback) *fallback = false;
+    if (fx.isolation != model::Isolation::Inherit) return fx.isolation;
+    if (defaultIsolation_ == model::Isolation::InProcess) return model::Isolation::InProcess;
+    if (!stockDir_) {
+        std::error_code ec;
+        auto dir = host::stockPluginDir();
+        if (dir) {
+            auto canonical = std::filesystem::weakly_canonical(*dir, ec);
+            if (!ec) dir = std::move(canonical);
+        }
+        stockDir_ = std::move(dir);
+    }
+    if (*stockDir_ && !info.path.empty()) {
+        std::error_code ec;
+        const auto path = std::filesystem::weakly_canonical(info.path, ec);
+        const auto inside = (ec ? info.path : path).lexically_relative(**stockDir_);
+        if (!inside.empty() && *inside.begin() != "..") return model::Isolation::InProcess;
+    }
+    if (host::bridgeExecutable().empty()) {
+        if (fallback) *fallback = true;
+        return model::Isolation::InProcess;
+    }
+    return defaultIsolation_;
+}
+
+model::Isolation InstancePool::effectiveIsolation(Id id, const model::FxInstance& fx) const {
+    if (auto it = instances_.find(id); it != instances_.end() && it->second.instance)
+        return it->second.effective;
+    if (fx.isolation != model::Isolation::Inherit) return fx.isolation;
+    if (defaultIsolation_ == model::Isolation::InProcess) return model::Isolation::InProcess;
+    auto info = resolve_(fx.plugin);
+    if (!info) return model::Isolation::InProcess;  // nothing to make: nothing bridged
+    return resolveIsolation(fx, *info, nullptr);
+}
+
+std::vector<model::Id> InstancePool::isolationFallbacks() const {
+    std::vector<model::Id> out;
+    for (const auto& [id, e] : instances_)
+        if (e.instance && e.fallback) out.push_back(id);
+    return out;
+}
+
 Result<host::Instance*> InstancePool::get(Id id, const model::FxInstance& fx,
                                           const Session& session) {
-    const bool isolated = fx.isolation == model::Isolation::SharedBridge ||
-                          fx.isolation == model::Isolation::Dedicated;
     std::string desired;
     if (fx.patch)
         desired = "patch:" + json::writeCompact(*fx.patch);
@@ -190,8 +244,12 @@ Result<host::Instance*> InstancePool::get(Id id, const model::FxInstance& fx,
             instances_.erase(id);
             return std::move(info).error();
         }
+        bool fallback = false;
+        const model::Isolation effective = resolveIsolation(fx, *info, &fallback);
+        const bool isolated =
+            effective == model::Isolation::SharedBridge || effective == model::Isolation::Dedicated;
         std::shared_ptr<host::BridgeProcess> bridge;
-        if (fx.isolation == model::Isolation::SharedBridge) {
+        if (effective == model::Isolation::SharedBridge) {
             if (!sharedBridge_ || host::bridgeProcessFailed(sharedBridge_)) {
                 auto spawned = host::createBridgeProcess();
                 if (!spawned) {
@@ -211,6 +269,8 @@ Result<host::Instance*> InstancePool::get(Id id, const model::FxInstance& fx,
         if (mainWake_) e.instance->setMainThreadWake(*mainWake_);
         e.pluginId = fx.plugin.id;
         e.isolation = fx.isolation;
+        e.effective = effective;
+        e.fallback = fallback;
         e.appliedState.clear();
         e.failure.reset();
         e.clearedAutomation.clear();

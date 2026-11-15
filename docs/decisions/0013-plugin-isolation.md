@@ -92,6 +92,9 @@ renderer and worker threads, not in the device callback.
    parameter is on (and can hang instead, for the deadline path).
 8. **Defaults.** `inherit` resolves to the project's default isolation
    (`in_process` until the bridge has shipped a release of testing).
+   *Note 2026-11-14:* the default is an app preference rather than the
+   project's, and stock plug-ins stay in process; see
+   [ADR-0081](0081-live-bridged-plugins.md).
 
 ## Consequences
 

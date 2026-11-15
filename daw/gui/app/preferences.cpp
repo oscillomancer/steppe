@@ -29,6 +29,32 @@ const char* monitorName(model::Monitor m) {
     return m == model::Monitor::Off ? "off" : m == model::Monitor::On ? "on" : "auto";
 }
 
+std::string isolationLabel(model::Isolation i) {
+    switch (i) {
+        case model::Isolation::SharedBridge:
+            return "In a shared bridge process";
+        case model::Isolation::Dedicated:
+            return "Each in its own process";
+        case model::Isolation::InProcess:
+        case model::Isolation::Inherit:
+            break;
+    }
+    return "In the app";
+}
+
+const char* isolationName(model::Isolation i) {
+    switch (i) {
+        case model::Isolation::SharedBridge:
+            return "shared_bridge";
+        case model::Isolation::Dedicated:
+            return "dedicated";
+        case model::Isolation::InProcess:
+        case model::Isolation::Inherit:
+            break;
+    }
+    return "in_process";
+}
+
 std::string monitorLabel(model::Monitor m) {
     switch (m) {
         case model::Monitor::Off:
@@ -78,7 +104,8 @@ Result<Preferences> Preferences::load(const std::filesystem::path& file) {
          schema->asString() != "supple.preferences/1.4" &&
          schema->asString() != "supple.preferences/1.5" &&
          schema->asString() != "supple.preferences/1.6" &&
-         schema->asString() != "supple.preferences/1.7"))
+         schema->asString() != "supple.preferences/1.7" &&
+         schema->asString() != "supple.preferences/1.8"))
         return Error("preferences.schema", file.string() + " is not a " + kSchema + " document",
                      "/schema");
     if (const json::Value* m = doc->find("default_monitor")) {
@@ -114,6 +141,19 @@ Result<Preferences> Preferences::load(const std::filesystem::path& file) {
             return Error("preferences.copy_imported_media", "copy_imported_media must be a boolean",
                          "/copy_imported_media", "use true or false");
         out.copyImports = v->asBool();
+    }
+    if (const auto* v = doc->find("plugin_isolation")) {  // 1.9, ADR-0081
+        const std::string name = v->isString() ? v->asString() : std::string();
+        if (name == "in_process")
+            out.pluginIsolation = model::Isolation::InProcess;
+        else if (name == "shared_bridge")
+            out.pluginIsolation = model::Isolation::SharedBridge;
+        else if (name == "dedicated")
+            out.pluginIsolation = model::Isolation::Dedicated;
+        else
+            return Error("preferences.plugin_isolation",
+                         "plugin_isolation must be in_process, shared_bridge or dedicated",
+                         "/plugin_isolation", "use one of in_process, shared_bridge, dedicated");
     }
     if (const auto* v = doc->find("render_open_folder")) {
         if (!v->isBool())
@@ -165,6 +205,7 @@ Status Preferences::save(const std::filesystem::path& file) const {
     doc["audio_threads"] = static_cast<std::int64_t>(audioThreads);
     if (!renderDirectory.empty()) doc["render_directory"] = renderDirectory.string();
     doc["copy_imported_media"] = copyImports;
+    doc["plugin_isolation"] = isolationName(pluginIsolation);
     doc["render_open_folder"] = renderOpenFolder;
     doc["audio"] = audioDeviceJson(audio);
     doc["sync"] = engine::syncSettingsJson(sync);
@@ -196,6 +237,8 @@ PreferencesDialog::PreferencesDialog(ui::Root& root, engine::EngineApp& app, Mou
     (void)app_.setPreventDeepIdle(prefs_.preventDeepIdle);
     if (!prefs_.renderDirectory.empty()) app_.setRendersDir(prefs_.renderDirectory);
     app_.setCopyImportedMedia(prefs_.copyImports);
+    if (!app_.setPluginIsolation(prefs_.pluginIsolation))
+        prefs_.pluginIsolation = app_.pluginIsolation();
 }
 
 Status PreferencesDialog::save(Preferences& prefs) {
@@ -325,6 +368,33 @@ void PreferencesDialog::open() {
                              ui::Font::Ui, "small", "ink-quiet")
         .layout.height = ui::SizeRule::fixed(20);
 
+    auto& isolation = row(*form, "prefs.isolation", "Third-party plug-ins run");
+    isolation_ = &isolation.emplace<ui::Button>("prefs.isolation.set", "");
+    isolation_->layout.width = ui::SizeRule::fraction();
+    isolation_->layout.height = ui::SizeRule::fixed(26);
+    isolation_->onClick = [this] {
+        std::vector<ui::MenuItem> items;
+        for (model::Isolation i : {model::Isolation::InProcess, model::Isolation::SharedBridge,
+                                   model::Isolation::Dedicated}) {
+            ui::MenuItem item;
+            item.label = isolationLabel(i);
+            item.checked = prefs_.pluginIsolation == i;
+            item.run = [this, i] {
+                if (auto result = setPluginIsolation(i); !result && onError)
+                    onError("preferences: " + result.error().toString());
+            };
+            items.push_back(std::move(item));
+        }
+        root_.openPopup(
+            ui::makeMenu("prefs.isolation.menu", std::move(items), [this] { root_.closePopup(); }),
+            isolation_->bounds());
+    };
+    form->emplace<ui::Label>("prefs.isolation.note",
+                             "Applies as plug-ins load. Stock plug-ins stay in the app; a "
+                             "plug-in's own choice wins.",
+                             ui::Font::Ui, "small", "ink-quiet")
+        .layout.height = ui::SizeRule::fixed(20);
+
     auto& audio = row(*form, "prefs.audio", "Audio device");
     audio_ = &audio.emplace<ui::Button>("prefs.audio.open", "", [this] {
         if (onAudioDevice) onAudioDevice();
@@ -344,6 +414,7 @@ void PreferencesDialog::open() {
         latency_ = nullptr;
         latencyNote_.fill(nullptr);
         imports_ = nullptr;
+        isolation_ = nullptr;
         audio_ = nullptr;
     });
     refresh();
@@ -379,6 +450,7 @@ void protectionNote(const std::array<ui::Label*, 4>& labels,
 void PreferencesDialog::refresh() {
     if (latency_) latency_->setText(prefs_.preventDeepIdle ? "On" : "Off");
     if (imports_) imports_->setText(prefs_.copyImports ? "On" : "Off");
+    if (isolation_) isolation_->setText(isolationLabel(prefs_.pluginIsolation));
     protectionNote(latencyNote_, app_.cpuIdleLatencyStatus(), "Requested: 20 µs");
     if (memory_) memory_->setText(prefs_.lockMemory ? "On" : "Off");
     protectionNote(memoryNote_, app_.memoryLockStatus(), "Locked");
@@ -435,6 +507,21 @@ Status PreferencesDialog::setCopyImports(bool on) {
     if (!file_.empty()) SUPPLE_TRY(save(next));
     prefs_ = next;
     app_.setCopyImportedMedia(on);
+    refresh();
+    return {};
+}
+
+Status PreferencesDialog::setPluginIsolation(model::Isolation isolation) {
+    auto next = prefs_;
+    next.pluginIsolation = isolation;
+    SUPPLE_TRY(app_.setPluginIsolation(isolation));  // inherit is refused before saving
+    if (!file_.empty()) {
+        if (auto saved = save(next); !saved) {
+            (void)app_.setPluginIsolation(prefs_.pluginIsolation);
+            return saved;
+        }
+    }
+    prefs_ = next;
     refresh();
     return {};
 }
