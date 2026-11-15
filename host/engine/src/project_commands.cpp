@@ -357,7 +357,8 @@ void registerProjectCommands(cmd::Registry& registry) {
             "(fx.restart, then save again, or replace the plug-in); project.history_backup names "
             "the copy kept of a file whose branches could not be restored when opened. "
             "project.recording: a first save, or a save into another folder, while recording; "
-            "stop first.";
+            "stop first. project.autosave_folder: the autosave folder beside the file "
+            "(<file>-data) could not be read; nothing was written.";
         c.tags = {"project"};
         c.args = schema::object<SaveArgs>("save_args")
                      .field("path", &SaveArgs::path, schema::string())

@@ -658,15 +658,19 @@ that is not current counts, media hash completions do not) and 60 s of
 monotonic service time have passed. Unchanged projects have no autosave
 deadline; an overdue edit arms immediate service. A failed write
 waits 60 s before retrying. History timestamps still use wall time, and
-`<n>` is a positive unsigned 64-bit decimal index and counts up from the highest
-present. Discovery and rotation ignore names with nonnumeric or out-of-range
+`<n>` is a positive decimal index up to 9223372036854775807 (2^63 - 1, the
+largest count a project file's `autosaved_through` holds) and counts up from
+the highest present. Discovery and rotation ignore names with nonnumeric or out-of-range
 suffixes (such as `autosave-1-backup.json`). An exhausted index reports
 `autosave.index` without writing or pruning, and retries after the same interval.
 `project.open` of a file that has
 a newer autosave next to it reports `autosave_available` and loads nothing
 from it. Newer means numbered above the file's `autosaved_through`
 (schema 2.15): the highest autosave number beside the file when it was
-saved, whose work it therefore holds. An autosave is numbered past the
+saved, whose work it therefore holds. A save that cannot read that folder
+(other than its not existing) fails with `project.autosave_folder` and
+writes nothing: a count short of autosaves it could not see would later
+offer them over the file. An autosave is numbered past the
 highest present and past that number, so the newest is the highest
 numbered, and file times decide nothing (a clock set back, a coarse file
 clock or a future-dated file cannot reorder them). A file without the field

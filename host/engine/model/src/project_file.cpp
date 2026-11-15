@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 #include "supple/model/project_file.h"
 
+#include <algorithm>
 #include <charconv>
 #include <map>
 #include <new>
@@ -523,7 +524,9 @@ namespace {
 constexpr std::string_view kAutosavedThrough = "autosaved_through";
 json::Value withAutosavedThrough(json::Value doc, std::optional<std::uint64_t> through) {
     // Beside the document, as `branches` is: main's hash does not cover it.
-    if (through) doc[std::string(kAutosavedThrough)] = static_cast<std::int64_t>(*through);
+    if (through)
+        doc[std::string(kAutosavedThrough)] =
+            static_cast<std::int64_t>(std::min(*through, kAutosaveNumberMax));
     return doc;
 }
 json::Value projectFileToJsonImpl(const VersionStore& store, bool history);

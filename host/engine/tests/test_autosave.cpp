@@ -77,7 +77,7 @@ TEST_CASE("autosave numbering preserves other files and cannot overflow") {
         CHECK_FALSE(fs::exists(dir / "autosave-1.json"));
     }
     SUBCASE("an exhausted index reports a failure without writing or pruning") {
-        write("autosave-18446744073709551615.json");
+        write("autosave-9223372036854775807.json");
         save();
         CHECK_FALSE(fs::exists(dir / "autosave-1.json"));
         CHECK(app.nextServiceDelayMs() == 60'000);
@@ -87,7 +87,7 @@ TEST_CASE("autosave numbering preserves other files and cannot overflow") {
                 value.asString().find("autosave.index") != std::string::npos)
                 reported = true;
         CHECK(reported);
-        auto contents = readTextFile(dir / "autosave-18446744073709551615.json");
+        auto contents = readTextFile(dir / "autosave-9223372036854775807.json");
         REQUIRE(contents);
         CHECK(*contents == "preserved");
     }
@@ -2185,4 +2185,229 @@ TEST_CASE("replacing an unsaved project without saving discards its journals wit
         for (const auto& e : fs::recursive_directory_iterator(u.folder("earlier")))
             CHECK(e.path().filename() == "session.lock");
     CHECK(app->recoverableSessions().empty());
+}
+
+TEST_CASE("a save that cannot read the autosave folder publishes nothing") {
+    // Round-13 review, finding 1: the scan stopped at the error, so the file
+    // was published with a count short of the autosave beside it, and that
+    // older autosave was later offered (and recovered) over the newer file.
+    Project p;
+    p.rename("Saved");
+    const auto file = p.root / "song.json";
+    REQUIRE(p.app->save(file));
+    const auto saved = readTextFile(file);
+    REQUIRE(saved);
+    p.rename("Autosaved");
+    p.app->setFixedClock(1'060'000);
+    p.app->tick();
+    const auto dir = p.app->autosaveDir();
+    REQUIRE(fs::exists(dir / "autosave-1.json"));
+    struct Restore {
+        fs::path path;
+        ~Restore() {
+            std::error_code ec;
+            fs::permissions(path, fs::perms::owner_all, fs::perm_options::replace, ec);
+        }
+    } restore{dir};
+    fs::permissions(dir, fs::perms::none);
+    std::error_code probe;
+    fs::directory_iterator listing(dir, probe);
+    if (!probe) {  // Windows, or a user whom permissions do not stop
+        fs::permissions(dir, fs::perms::owner_all);
+        MESSAGE("an unreadable folder cannot be made here");
+        return;
+    }
+    p.rename("Newer");
+    auto refused = p.app->save(file);
+    fs::permissions(dir, fs::perms::owner_all);
+    REQUIRE_FALSE(refused);
+    CHECK(refused.error().code == "project.autosave_folder");
+    CHECK(refused.error().path == dir.string());
+    CHECK_FALSE(refused.error().hint.empty());
+    CHECK(readTextFile(file).value() == *saved);  // nothing published
+    // Readable again, the save goes through and holds that autosave.
+    REQUIRE(p.app->save(file));
+    REQUIRE(p.app->open(file));
+    CHECK(p.app->head().project->name == "Newer");
+    CHECK(p.app->newerAutosave(file).empty());
+    CHECK_FALSE(p.app->recoverAutosave());
+}
+
+TEST_CASE("autosave numbers stay within what a project file can hold") {
+    // Round-13 review, finding 2: autosave-9223372036854775808.json was read
+    // as a number and written through int64 as a negative count, which the
+    // reopened file then ignored (file times decided again).
+    Project p;
+    const auto file = p.root / "song.json";
+    REQUIRE(p.app->save(file));
+    const auto dir = p.app->autosaveDir();
+    auto through = [&] {
+        auto raw = json::parse(readTextFile(file).value());
+        REQUIRE(raw);
+        REQUIRE((*raw)["autosaved_through"].isInt());
+        return (*raw)["autosaved_through"].asInt();
+    };
+    SUBCASE("a name above the largest count is not an autosave") {
+        fs::create_directories(dir);
+        REQUIRE(fs::is_directory(dir));
+        REQUIRE(writeFileAtomic(dir / "autosave-9223372036854775808.json", "preserved"));
+        REQUIRE(p.app->save(file));
+        CHECK(through() == 0);
+        std::vector<schema::Warning> warnings;
+        REQUIRE(p.app->open(file, &warnings));
+        CHECK_FALSE(hasWarning(warnings, "project.autosaved_through"));
+        CHECK(p.app->newerAutosave(file).empty());
+        CHECK(readTextFile(dir / "autosave-9223372036854775808.json").value() == "preserved");
+    }
+    SUBCASE("the largest count round-trips, and the next autosave reports exhaustion") {
+        fs::create_directories(dir);
+        REQUIRE(fs::is_directory(dir));
+        REQUIRE(writeFileAtomic(dir / "autosave-9223372036854775807.json", "preserved"));
+        REQUIRE(p.app->save(file));
+        CHECK(through() == INT64_MAX);
+        std::vector<schema::Warning> warnings;
+        REQUIRE(p.app->open(file, &warnings));
+        CHECK_FALSE(hasWarning(warnings, "project.autosaved_through"));
+        p.rename("Edited");
+        p.app->setFixedClock(1'060'000);
+        p.app->tick();
+        bool reported = false;
+        for (const auto& [topic, value] : p.app->takeEvents())
+            if (topic == "engine.error" && value.isString() &&
+                value.asString().find("autosave.index") != std::string::npos)
+                reported = true;
+        CHECK(reported);
+    }
+    SUBCASE("the model writes no count above the largest") {
+        auto doc = model::projectFileToJson(p.app->versions(), false, UINT64_MAX);
+        CHECK(doc["autosaved_through"].asInt() == INT64_MAX);
+        auto opened = model::projectFileFromJson(doc);
+        REQUIRE(opened);
+        CHECK(opened->autosavedThrough == std::uint64_t{INT64_MAX});
+    }
+}
+
+TEST_CASE("retrying a failed save as retires the journal copy the first attempt made") {
+    // Round-13 review, finding 4: the copy a failed save as made was found
+    // already there by the retry, so it was not this save's to retire and
+    // stayed offered for recovery after the file saved.
+    Project p;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *p.app);
+    REQUIRE(d.execute({"track.add", json::Value::object(), kUnit}));
+    REQUIRE(p.app->save(p.root / "first/song.json"));
+    const auto old = p.app->recordDir() / "Keys-1.midi.jsonl";
+    REQUIRE(writeFileAtomic(
+        old, journalHeader() + "[0,144,60,100]\n[24000,128,60,0]\n{\"captured\":48000}\n"));
+    REQUIRE(p.app->recover({}, {}));
+    const auto second = p.root / "second/song.json";
+    setFileSyncHookForTesting([&](const fs::path& f) { return f != second; });
+    auto failed = p.app->save(second);
+    setFileSyncHookForTesting({});
+    REQUIRE_FALSE(failed);
+    REQUIRE_FALSE(fs::exists(second));
+    const auto copy = second.parent_path() / "media/rec" / old.filename();
+    REQUIRE(fs::exists(copy));
+    REQUIRE(p.app->save(second));
+    CHECK_FALSE(fs::exists(copy));
+    CHECK(p.app->recoverable().empty());
+    REQUIRE(p.app->open(second));
+    CHECK(p.app->head().midi.size() == 1);
+    CHECK(p.app->recoverable().empty());
+    CHECK(fs::exists(old));  // the first project's journal stays its own
+}
+
+TEST_CASE("a save as retried through another spelling of the path retires its own copy") {
+    // Round-14 review: the copies a failed save as made were kept by their
+    // literal paths, so a retry as second/./song.json (or through a link)
+    // did not know its own journal copy, left it offered, and accepting
+    // the recovery duplicated the take.
+    for (const bool link : {false, true}) {
+        INFO("through " << std::string(link ? "a directory link" : "a dot segment"));
+        Project p;
+        cmd::Registry registry;
+        registerEngineCommands(registry);
+        cmd::Dispatcher d(registry, *p.app);
+        REQUIRE(d.execute({"track.add", json::Value::object(), kUnit}));
+        REQUIRE(p.app->save(p.root / "first/song.json"));
+        const auto old = p.app->recordDir() / "Keys-1.midi.jsonl";
+        REQUIRE(writeFileAtomic(
+            old, journalHeader() + "[0,144,60,100]\n[24000,128,60,0]\n{\"captured\":48000}\n"));
+        REQUIRE(p.app->recover({}, {}));
+        const auto second = p.root / "second/song.json";
+        setFileSyncHookForTesting([&](const fs::path& f) { return f.filename() != "song.json"; });
+        auto failed = p.app->save(second);
+        setFileSyncHookForTesting({});
+        REQUIRE_FALSE(failed);
+        const auto copy = second.parent_path() / "media/rec" / old.filename();
+        REQUIRE(fs::exists(copy));
+        fs::path retry = p.root / "second/./song.json";
+        if (link) {
+            std::error_code ec;
+            fs::create_directory_symlink(p.root / "second", p.root / "alias", ec);
+            if (ec) {
+                MESSAGE("skipped: no directory link here (" << ec.message() << ")");
+                continue;
+            }
+            retry = p.root / "alias/song.json";
+        }
+        REQUIRE(p.app->save(retry));
+        CHECK_FALSE(fs::exists(copy));
+        CHECK(p.app->recoverable().empty());
+        REQUIRE(p.app->open(second));
+        CHECK(p.app->head().midi.size() == 1);
+        CHECK(p.app->recoverable().empty());
+        CHECK(fs::exists(old));
+    }
+}
+
+TEST_CASE("a save as through a link and .. does not take another folder's journal for its copy") {
+    // Round-17 review: base/link/../dest and base/dest are one path once
+    // `..` is removed by spelling, but with link pointing into another
+    // folder they are two folders. A save as that failed under the first
+    // made its journal copy there; the retry under the second found an
+    // identical journal already in base/dest, which it did not make, and
+    // deleted it. Only the file system says whether two paths are one file.
+    Project p;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *p.app);
+    REQUIRE(d.execute({"track.add", json::Value::object(), kUnit}));
+    REQUIRE(p.app->save(p.root / "first/song.json"));
+    const auto old = p.app->recordDir() / "Keys-1.midi.jsonl";
+    REQUIRE(writeFileAtomic(
+        old, journalHeader() + "[0,144,60,100]\n[24000,128,60,0]\n{\"captured\":48000}\n"));
+    REQUIRE(p.app->recover({}, {}));
+    fs::create_directories(p.root / "base");
+    fs::create_directories(p.root / "elsewhere/child");
+    std::error_code ec;
+    fs::create_directory_symlink(p.root / "elsewhere/child", p.root / "base/link", ec);
+    if (ec) {
+        MESSAGE("skipped: no directory link here (" << ec.message() << ")");
+        return;
+    }
+    const auto first = p.root / "base/link/../dest/song.json";  // elsewhere/dest
+    setFileSyncHookForTesting([](const fs::path& f) { return f.filename() != "song.json"; });
+    auto failed = p.app->save(first);
+    setFileSyncHookForTesting({});
+    REQUIRE_FALSE(failed);
+    const auto made = first.parent_path() / "media/rec" / old.filename();
+    REQUIRE(fs::exists(made));
+    REQUIRE(fs::exists(p.root / "elsewhere/dest/media/rec" / old.filename()));
+
+    const auto retry = p.root / "base/dest/song.json";
+    const auto theirs = retry.parent_path() / "media/rec" / old.filename();
+    fs::create_directories(theirs.parent_path());
+    REQUIRE(fs::copy_file(old, theirs));
+    REQUIRE(made.lexically_normal() == theirs.lexically_normal());
+    REQUIRE_FALSE(fs::equivalent(made, theirs));
+    const auto before = sha256File(theirs);
+    REQUIRE(before);
+
+    REQUIRE(p.app->save(retry));
+    CHECK(fs::exists(theirs));  // not this save's copy: it stays
+    if (fs::exists(theirs)) CHECK(sha256File(theirs).value() == *before);
+    CHECK(fs::exists(made));  // the failed attempt's copy, in a folder no file uses
+    CHECK(fs::exists(old));   // the first project's journal stays its own
 }

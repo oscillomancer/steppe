@@ -991,6 +991,10 @@ class EngineApp : public cmd::Host {
     // yet in a saved file or autosave: not leftovers; deleted once one is.
     std::vector<std::filesystem::path> midiJournalsPending_;
     void dropSavedMidiJournals();
+    // What a save as copied into another media folder before its file failed
+    // to publish: a retry finds these already there, yet they are still this
+    // project's copies (its journals among them retire once a save holds them).
+    std::vector<std::filesystem::path> unpublishedCopies_;
     bool recordingMasters_ = false;  // armed masters record their output (ADR-0057)
     std::set<model::Id> reportedFailures_;
     std::filesystem::path projectPath_;

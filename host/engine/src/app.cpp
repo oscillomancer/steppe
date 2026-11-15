@@ -637,6 +637,7 @@ Status EngineApp::replaceProject(model::VersionStore store, fs::path path,
     // Not saved: a saved project's journals stay, offered on its next open;
     // an unsaved one's went with its folder above (ADR-0078, ADR-0080).
     midiJournalsPending_.clear();
+    unpublishedCopies_.clear();
     endMasterRecording();
     autoWrite_.clear();
     renderQueue_.clear();
@@ -716,6 +717,21 @@ fs::path EngineApp::resolve(const fs::path& path) const {
 namespace {
 // autosave-<n>.json's n (defined with the autosave code below).
 std::optional<std::uint64_t> autosaveIndex(std::string_view name);
+
+// Whether two spellings name one file, as the file system says: through
+// `.`, links or a case-insensitive file system. Spelling alone decides
+// nothing: a/link/../b is not a/b when link points into another folder.
+// A path where no file is names the same file as no other path:
+// equivalent() is then false, or reports an error, which is taken as no.
+bool sameFile(const fs::path& a, const fs::path& b) {
+    std::error_code ec;
+    return fs::equivalent(a, b, ec) && !ec;
+}
+
+bool holds(const std::vector<fs::path>& files, const fs::path& file) {
+    return std::any_of(files.begin(), files.end(),
+                       [&](const fs::path& f) { return sameFile(f, file); });
+}
 }  // namespace
 
 Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warnings,
@@ -742,6 +758,15 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
         for (fs::directory_iterator it(data, ec), end; !ec && it != end; it.increment(ec))
             if (const auto n = autosaveIndex(it->path().filename().string()))
                 through = std::max(through, *n);
+        // A folder it cannot read may hold autosaves above what it read: a
+        // count short of them would offer them over this file once the folder
+        // reads again. No folder (or a file in its place) holds none.
+        if (ec && ec != std::errc::no_such_file_or_directory && ec != std::errc::not_a_directory)
+            return Error("project.autosave_folder",
+                         "could not read the autosave folder beside the file: " + ec.message(),
+                         data.string(),
+                         "make the folder readable (or move it aside), then save again; or save "
+                         "to another file");
         if (path == projectPath_ && autosavedThrough_)
             through = std::max(through, *autosavedThrough_);
     }
@@ -804,8 +829,17 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
     } else {
         // Saved as into another folder: that folder gets its own copy of the
         // media (the old project keeps its files).
-        if (!projectPath_.empty()) SUPPLE_TRY(detail::copyFolder(mediaDir(), media, &createdMedia));
+        if (!projectPath_.empty()) {
+            Status copied = detail::copyFolder(mediaDir(), media, &createdMedia);
+            // Until a file holds them, a failure keeps them ours: a retry
+            // would take them for files that were there before it.
+            for (const fs::path& file : createdMedia)
+                if (!holds(unpublishedCopies_, file)) unpublishedCopies_.push_back(file);
+            SUPPLE_TRY(std::move(copied));
+        }
         SUPPLE_TRY(publish());
+        createdMedia = std::move(unpublishedCopies_);
+        unpublishedCopies_.clear();
     }
     // The user's modules it plays go with it, as its media do (ADR-0062):
     // those of every version the store keeps, not only the current head's,
@@ -844,9 +878,7 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
             continue;
         }
         const fs::path moved = media / rel;
-        if (fromScratch ||
-            std::find(createdMedia.begin(), createdMedia.end(), moved) != createdMedia.end())
-            retire.push_back(moved);
+        if (fromScratch || holds(createdMedia, moved)) retire.push_back(moved);
     }
     midiJournalsPending_ = std::move(retire);
     dropSavedMidiJournals();
@@ -1674,7 +1706,9 @@ std::optional<std::uint64_t> autosaveIndex(std::string_view name) {
     name.remove_suffix(suffix.size());
     std::uint64_t index = 0;
     const auto parsed = std::from_chars(name.data(), name.data() + name.size(), index);
-    if (parsed.ec != std::errc{} || parsed.ptr != name.data() + name.size() || index == 0)
+    // Above the largest count a project file holds, it is not an autosave.
+    if (parsed.ec != std::errc{} || parsed.ptr != name.data() + name.size() || index == 0 ||
+        index > model::kAutosaveNumberMax)
         return std::nullopt;
     return index;
 }
@@ -1781,7 +1815,7 @@ void EngineApp::autosave() {
         const std::string name = it->path().filename().string();
         const auto n = autosaveIndex(name);
         if (!n) continue;
-        if (*n == UINT64_MAX) {
+        if (*n == model::kAutosaveNumberMax) {
             emit(
                 "engine.error",
                 json::Value(Error("autosave.index", "autosave numbering is exhausted", dir.string(),
@@ -1795,7 +1829,7 @@ void EngineApp::autosave() {
     }
     // Past what the project file holds, even when its autosaves are gone.
     if (!projectPath_.empty() && autosavedThrough_ && *autosavedThrough_ >= next) {
-        if (*autosavedThrough_ == UINT64_MAX) {
+        if (*autosavedThrough_ >= model::kAutosaveNumberMax) {
             emit(
                 "engine.error",
                 json::Value(Error("autosave.index", "autosave numbering is exhausted", dir.string(),
