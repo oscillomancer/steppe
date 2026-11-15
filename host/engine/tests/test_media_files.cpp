@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -11,6 +12,7 @@
 #include "../../../tests/file_platform.h"
 #include "../src/media_files.h"
 #include "supple/audio/audio_file.h"
+#include "supple/base/files.h"
 #include "supple/base/sha256.h"
 #if !defined(_WIN32)
 #include <sys/stat.h>
@@ -18,6 +20,78 @@
 
 namespace fs = std::filesystem;
 using namespace supple::engine;
+
+TEST_CASE("media copies checkpoint payload and publication and propagate sync failures") {
+    const auto root = fs::temp_directory_path() /
+                      ("supple-copy-sync-" + std::to_string(supple::test::processId()));
+    REQUIRE(fs::create_directory(root));
+    struct Cleanup {
+        fs::path path;
+        ~Cleanup() {
+            std::error_code ec;
+            fs::permissions(path / "source" / "take.wav", fs::perms::owner_write,
+                            fs::perm_options::add, ec);
+            fs::remove_all(path, ec);
+        }
+    } cleanup{root};
+    fs::create_directory(root / "source");
+    const auto source = root / "source" / "take.wav";
+    supple::audio::AudioData audio;
+    audio.sampleRate = 48000;
+    audio.channels = {{.25f, -.25f}};
+    REQUIRE(supple::audio::writeWav(source, audio));
+    const auto before = supple::sha256File(source).value();
+    const auto target = root / "dest";
+    const auto realTarget = fs::weakly_canonical(target);
+    bool folder = false, failData = false, failDirectory = false, readonly = false;
+    SUBCASE("import") { folder = false; }
+    SUBCASE("folder") { folder = true; }
+    SUBCASE("import: data barrier failure") { failData = true; }
+    SUBCASE("folder: data barrier failure") { folder = failData = true; }
+    SUBCASE("import: directory barrier failure") { failDirectory = true; }
+    SUBCASE("folder: directory barrier failure") { folder = failDirectory = true; }
+    SUBCASE("read-only source") { readonly = true; }
+    if (readonly)
+        fs::permissions(source,
+                        fs::perms::owner_write | fs::perms::group_write | fs::perms::others_write,
+                        fs::perm_options::remove);
+    std::vector<fs::path> synced;
+    struct ResetHook {
+        ~ResetHook() { supple::setDurabilityHookForTesting({}); }
+    } reset;
+    supple::setDurabilityHookForTesting([&](const fs::path& path, bool) {
+        synced.push_back(path);
+        if (path == realTarget) return !failDirectory;
+        return !(failData && path.parent_path() == target && fs::is_regular_file(path));
+    });
+    bool created = false;
+    std::vector<fs::path> owned;
+    supple::Status status = supple::okStatus();
+    if (folder) {
+        status = detail::copyFolder(source.parent_path(), target, &owned);
+        created = !owned.empty();
+    } else {
+        const auto copied = detail::copyIntoFolder(source, target, &created);
+        if (!copied) status = copied.error();
+    }
+    CHECK_FALSE(synced.empty());
+    CHECK(supple::sha256File(source).value() == before);
+    if (readonly)
+        CHECK((fs::status(source).permissions() & fs::perms::owner_write) == fs::perms::none);
+    if (failData || failDirectory)
+        CHECK_FALSE(status);
+    else
+        CHECK(status);
+    if (failData) {
+        CHECK_FALSE(fs::exists(target / "take.wav"));
+        CHECK_FALSE(created);
+    } else {
+        REQUIRE(fs::exists(target / "take.wav"));
+        CHECK(supple::sha256File(target / "take.wav").value() == before);
+        CHECK(created);
+        CHECK(std::find(synced.begin(), synced.end(), realTarget) != synced.end());
+    }
+}
 
 namespace {
 // These cases run in separate CTest processes: the first staging serial is

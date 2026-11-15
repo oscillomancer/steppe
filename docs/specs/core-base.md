@@ -121,6 +121,27 @@ path, message and hint. Tests check a result directly rather than
 
 ## Platform builds
 
+### Durable file helpers (ADR-0082)
+
+All calls are non-RT. `syncFileStream(FILE*)` flushes buffered bytes and uses
+fsync (macOS: F_FULLFSYNC, falling back to fsync when unsupported) or Windows
+FlushFileBuffers. `syncFile(path)` does the same for an existing regular file;
+`syncParentDirectories(path)` syncs its parent/ancestor directories on POSIX,
+from the resolved real parent to the root/read-only filesystem anchor; symlinks
+are resolved before dot segments, preserving the filesystem meaning. Errors are structured
+`file.sync` / `file.sync_directory` with the path and a storage/permissions hint.
+`setDurabilityHookForTesting(path, directory)` observes the new path-based
+barriers; its directory flag is true only for namespace checkpoints. The
+existing atomic-write file hook retains its file-only contract.
+An atomic write whose publication succeeded but checkpoint failed returns
+`file.sync_published`: the new file may exist, and callers must retain its
+referenced payloads. Before-publication failures keep `file.write`.
+
+On Windows, parent-directory handling validates the directory but does not
+claim a POSIX directory barrier. Publication uses unprivileged write-through
+renames and flushed files; parent/ancestor namespace survival after a power
+cut is not established. No elevation or whole-volume flush is used.
+
 Core-base sources and platform-neutral tests build on Linux, macOS and Windows
 (ADR-0035). Tests that inspect Linux memory residency or scheduling limits stay
 Linux-only. Hosting/engine/GUI remain separately gated until their port steps

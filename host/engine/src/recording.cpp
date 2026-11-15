@@ -438,12 +438,17 @@ Status Recorder::openFiles() {
                 "make the recordings folder writable; this take has no "
                 "crash recovery");
     }
+    updateHeaders();  // establish the initial audio file and namespace checkpoint
     return okStatus();
 }
 
 void Recorder::closeFiles() {
+    for (auto& t : tracks_) {
+        const bool opened = t->writer.isOpen();
+        rememberError(*t, t->writer.close());
+        if (opened) rememberError(*t, syncParentDirectories(t->target.file));
+    }
     closeJournals();
-    for (auto& t : tracks_) rememberError(*t, t->writer.close());
 }
 
 std::vector<RecordingError> Recorder::takeErrors() {
@@ -608,6 +613,13 @@ void Recorder::writeJournals(bool sync) {
             t->journalError =
                 Error("record.journal", "cannot flush " + t->target.file.string(), "/recording",
                       "free disk space; this take has no crash recovery");
+        if (sync && t->journalError) {
+            auto directory = syncParentDirectories(t->target.file);
+            if (!directory)
+                t->journalError =
+                    Error("record.journal", directory.error().message, "/recording",
+                          "check storage; this MIDI take has no durable crash checkpoint");
+        }
     }
 }
 
@@ -725,13 +737,19 @@ void Recorder::rememberError(Track& track, Status status, bool sidecar) {
 
 void Recorder::updateHeaders() {
     for (auto& t : tracks_)
-        if (t->writeError) rememberError(*t, t->writer.updateHeader());
+        if (t->writeError) {
+            rememberError(*t, t->writer.sync());
+            if (t->writeError) rememberError(*t, syncParentDirectories(t->target.file));
+        }
 }
 
 void Recorder::writerLoop() {
     nameThread("audio-recorder");
     std::vector<float> scratch(8192 * 16);
-    auto lastHeader = std::chrono::steady_clock::now();
+    auto now = [&] {
+        return nowForTests_ ? nowForTests_(clockContext_) : std::chrono::steady_clock::now();
+    };
+    auto checkpoint = now() + std::chrono::seconds(5);
     while (!stop_.load(std::memory_order_acquire)) {
         if (writerStalled_.load(std::memory_order_acquire)) {
             writerStallAck_.store(true, std::memory_order_release);
@@ -743,19 +761,25 @@ void Recorder::writerLoop() {
         writeSidecars();
         for (auto& t : tracks_) drain(*t, scratch);
         drainMidi();  // the MIDI rings too (bounded: a long performance must not overflow)
-        const bool due = std::chrono::steady_clock::now() - lastHeader > std::chrono::seconds(5);
-        writeJournals(due);  // ADR-0080: a crash keeps what was drained
+        const auto at = now();
+        const bool due = at >= checkpoint;
         if (due) {
-            updateHeaders();  // a crash keeps this much
-            lastHeader = std::chrono::steady_clock::now();
+            updateHeaders();  // data/header before the journals that describe them
+            checkpoint = at + std::chrono::seconds(5);
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        writeJournals(due);
+        writerPasses_.fetch_add(1, std::memory_order_release);
+        writerPasses_.notify_all();
+        std::this_thread::sleep_for(std::min(
+            checkpoint - now(), std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                    std::chrono::milliseconds(20))));
     }
     writeSidecars();
     drainMidi();
-    writeJournals(true);
     for (auto& t : tracks_) drain(*t, scratch);    // what arrived before the stop
     for (auto& t : tracks_) padTo(*t, captured_);  // a final dropped tail has no next timestamp
+    updateHeaders();
+    writeJournals(true);
     // Persist complete placement before finish returns, so recovery of a
     // stopped-but-unhashed loop take still has every pass. No main-thread I/O.
     if (started_.load(std::memory_order_acquire)) {

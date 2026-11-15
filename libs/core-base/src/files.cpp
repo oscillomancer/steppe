@@ -3,6 +3,7 @@
 #include "supple/base/files.h"
 
 #ifdef _WIN32
+#include <io.h>
 #include <windows.h>
 #else
 #include <fcntl.h>
@@ -24,6 +25,9 @@
 #include <cstring>
 #include <fstream>
 #include <memory>
+#ifndef _WIN32
+#include <sys/stat.h>
+#endif
 
 namespace supple {
 
@@ -149,12 +153,112 @@ std::function<bool(const fs::path&)>& syncHook() {
     return hook;
 }
 bool syncAllowed(const fs::path& path) { return !syncHook() || syncHook()(path); }
+std::function<bool(const fs::path&, bool)>& durabilityHook() {
+    static std::function<bool(const fs::path&, bool)> hook;
+    return hook;
+}
+bool durabilityAllowed(const fs::path& path, bool directory) {
+    return !durabilityHook() || durabilityHook()(path, directory);
+}
 
 Status writeFile(const fs::path& path, std::span<const std::uint8_t> bytes, bool replace);
 }  // namespace
 
 void setFileSyncHookForTesting(std::function<bool(const fs::path&)> hook) {
     syncHook() = std::move(hook);
+}
+void setDurabilityHookForTesting(std::function<bool(const fs::path&, bool)> hook) {
+    durabilityHook() = std::move(hook);
+}
+
+namespace {
+#ifndef _WIN32
+bool syncDescriptor(int fd) {
+#if defined(__APPLE__)
+    if (::fcntl(fd, F_FULLFSYNC) == 0) return true;
+    if (errno != EINVAL && errno != ENOTSUP && errno != ENOTTY) return false;
+#endif
+    return ::fsync(fd) == 0;
+}
+#endif
+Error syncError(const fs::path& path, bool directory, const std::string& reason) {
+    return Error(directory ? "file.sync_directory" : "file.sync",
+                 "cannot sync " + displayPath(path) + ": " + reason, displayPath(path),
+                 "check free space, permissions and storage health; keep the original media");
+}
+}  // namespace
+
+bool syncFileStream(std::FILE* stream) {
+    if (!stream || std::fflush(stream) != 0) return false;
+#ifdef _WIN32
+    return ::FlushFileBuffers(reinterpret_cast<HANDLE>(_get_osfhandle(_fileno(stream)))) != 0;
+#else
+    return syncDescriptor(::fileno(stream));
+#endif
+}
+
+Status syncFile(const fs::path& path) {
+    std::error_code ec;
+    if (!fs::is_regular_file(path, ec))
+        return syncError(path, false, ec ? ec.message() : "not a regular file");
+    if (!durabilityAllowed(path, false)) return syncError(path, false, "injected sync failure");
+#ifdef _WIN32
+    const HANDLE file = ::CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE,
+                                      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                      nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE)
+        return syncError(path, false, std::system_category().message(::GetLastError()));
+    const bool synced = ::FlushFileBuffers(file) != 0;
+    const auto error = ::GetLastError();
+    ::CloseHandle(file);
+    if (!synced) return syncError(path, false, std::system_category().message(error));
+#else
+    const int file = ::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK);
+    if (file < 0) return syncError(path, false, std::strerror(errno));
+    struct stat info{};
+    const bool regular = ::fstat(file, &info) == 0 && S_ISREG(info.st_mode);
+    const bool synced = regular && syncDescriptor(file);
+    const int error = errno;
+    ::close(file);
+    if (!synced)
+        return syncError(path, false, regular ? std::strerror(error) : "not a regular file");
+#endif
+    return okStatus();
+}
+
+Status syncParentDirectories(const fs::path& file) {
+    std::error_code ec;
+    const auto absolute = fs::absolute(file, ec);
+    if (ec) return syncError(file, true, ec.message());
+    // Resolve the real parent before processing '..': lexical normalization
+    // can select another directory when a preceding component is a symlink.
+    auto directory = fs::canonical(absolute.parent_path(), ec);
+    if (ec) return syncError(file, true, ec.message());
+    for (; !directory.empty();) {
+        if (!durabilityAllowed(directory, true))
+            return syncError(directory, true, "injected sync failure");
+#ifdef _WIN32
+        // No documented unprivileged POSIX directory-barrier equivalent.
+        // Media publication uses MOVEFILE_WRITE_THROUGH; validate paths here
+        // without claiming a namespace power-loss bound or elevating.
+        if (!fs::is_directory(directory, ec))
+            return syncError(directory, true, ec ? ec.message() : "not a directory");
+#else
+        const int fd = ::open(directory.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        if (fd < 0) return syncError(directory, true, std::strerror(errno));
+        const bool synced = syncDescriptor(fd);
+        const int error = errno;
+        ::close(fd);
+        // A read-only ancestor has no new writable namespace entries from
+        // this operation. Lower writable directories were checkpointed first.
+        if (!synced && error == EROFS) return okStatus();
+        if (!synced) return syncError(directory, true, std::strerror(error));
+#endif
+        auto parent = directory.parent_path();
+        if (parent == directory) break;
+        directory = std::move(parent);
+    }
+    return okStatus();
 }
 
 Status writeFileAtomic(const fs::path& path, std::span<const std::uint8_t> bytes) {
@@ -177,11 +281,13 @@ Status writeFile(const fs::path& path, std::span<const std::uint8_t> bytes, bool
     fs::path tmp = path;
     tmp += "." + std::to_string(::GetCurrentProcessId()) + "." +
            std::to_string(counter.fetch_add(1)) + ".tmp";
+    bool published = false;
     auto error = [&](const std::string& what, DWORD code) {
-        fs::remove(tmp, ec);
-        return Error("file.write",
+        if (!published) fs::remove(tmp, ec);
+        return Error(published ? "file.sync_published" : "file.write",
                      what + " " + displayPath(path) + ": Windows error " + std::to_string(code), {},
-                     "check free disk space and permissions");
+                     published ? "the new file may already exist; check storage before retrying"
+                               : "check free disk space and permissions");
     };
     const auto destination = fs::absolute(path, ec).native();
     if (ec) {
@@ -242,8 +348,10 @@ Status writeFile(const fs::path& path, std::span<const std::uint8_t> bytes, bool
         }
         return error("cannot rename temporary file into place", renameError);
     }
-    if (!::FlushFileBuffers(file)) {
-        const DWORD code = ::GetLastError();
+    published = true;
+    const bool allowed = durabilityAllowed(path, false);
+    if (!allowed || !::FlushFileBuffers(file)) {
+        const DWORD code = allowed ? ::GetLastError() : ERROR_WRITE_FAULT;
         ::CloseHandle(file);
         return error("cannot sync renamed file", code);
     }
@@ -314,12 +422,12 @@ Status writeFile(const fs::path& path, std::span<const std::uint8_t> bytes, bool
                          "cannot move " + displayPath(tmp) + " into place: " + reason);
         }
     }
-    // And the directory entry: sync the directory (best effort).
-    const int dfd = ::open(dir.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-    if (dfd >= 0) {
-        (void)::fsync(dfd);
-        ::close(dfd);
-    }
+    // Publication already happened. Distinguish an uncertain checkpoint from
+    // a failure before publication, so callers retain any referenced media.
+    if (auto synced = syncParentDirectories(path); !synced)
+        return Error(
+            "file.sync_published", synced.error().message, displayPath(path),
+            "the new file may already exist; keep its media and check storage before retrying");
 #endif
     return okStatus();
 }

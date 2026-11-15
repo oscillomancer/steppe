@@ -1154,12 +1154,15 @@ Engine and hosting:
 
 Session and editing:
 - Audio recording recovery has durability limits: the writer flushes to the OS
-  each drain but does not fsync the WAV, so power-loss recovery has no bounded
-  window. Imported/copied media and first-save media staging also lack explicit
-  payload/directory durability barriers before the project is published.
+  each drain and syncs data/header at the shared five-second journal cadence,
+  off RT. Copied/moved media and POSIX directories are checkpointed before the
+  project, and originals stay until its checkpoint succeeds. Windows uses
+  unprivileged file flushes and write-through media publication, with no claimed
+  POSIX-style parent/ancestor namespace durability after a power cut (ADR-0082).
+  Native macOS/Windows validation of these changes remains pending.
 - A crash during audio loop/seek recording retains written samples but loses
   the run placement metadata saved only at stop. ADR-0082 defines the pending
-  placement-journal implementation and the durability changes above.
+  placement-journal implementation.
 - Streaming audio recording still stops at the RIFF 4 GiB limit
   (`audio.stream_full`), despite ADR-0014 and the engine spec describing RF64.
   Offline RF64 export is separate; ADR-0082 defines the pending streaming format.

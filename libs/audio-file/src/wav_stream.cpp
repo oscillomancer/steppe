@@ -49,6 +49,7 @@ Status WavStreamWriter::open(const std::filesystem::path& path, double sampleRat
     channels_ = channels;
     frames_ = 0;
     failed_ = false;
+    synced_ = false;
     std::uint8_t h[kHeaderBytes] = {};
     const auto rate = static_cast<std::uint32_t>(std::lround(sampleRate));
     std::memcpy(h, "RIFF", 4);
@@ -70,6 +71,7 @@ Status WavStreamWriter::open(const std::filesystem::path& path, double sampleRat
 Status WavStreamWriter::append(const float* frames, std::size_t count) {
     if (!file_) return Error("audio.stream", "the writer is closed");
     if (failed_) return Error("file.write", "the recording target has failed");
+    synced_ = false;
     if (count > kMaxData / (channels_ * 4) - frames_)
         return Error("audio.stream_full", "a recording over 4 GiB needs RF64 (not yet)");
     const auto bytes = count * sizeof(float) * channels_;
@@ -86,6 +88,7 @@ Status WavStreamWriter::append(const float* frames, std::size_t count) {
 
 Status WavStreamWriter::updateHeader() {
     if (!file_) return okStatus();
+    synced_ = false;
     // A buffered write can fail here too. Still try to publish the complete
     // physical prefix, preserving the original failure for the caller.
     auto status = flush();
@@ -128,9 +131,21 @@ void WavStreamWriter::abandon() {
     file_ = nullptr;
 }
 
+Status WavStreamWriter::sync() {
+    if (!file_) return okStatus();
+    SUPPLE_TRY(updateHeader());
+    const bool synced = io_.sync ? io_.sync(io_.context, file_) : detail::files::sync(file_);
+    if (!synced) {
+        failed_ = true;
+        return Error("file.sync", "cannot sync recording data and header");
+    }
+    synced_ = true;
+    return okStatus();
+}
+
 Status WavStreamWriter::close() {
     if (!file_) return okStatus();
-    auto st = updateHeader();
+    auto st = synced_ ? okStatus() : sync();
     const int closed = std::fclose(file_);
     file_ = nullptr;
     if (st && closed != 0) return Error("file.write", "close");

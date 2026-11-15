@@ -1515,6 +1515,25 @@ harness. See the tooling README for schemas, limits and invocation details.
 
 ### Recording diagnostics (2026-10-04)
 
+**Durability (ADR-0082):** the recording writer flushes each drain and syncs
+audio data and header at the MIDI journal's shared five-second deadline and
+at stop, through the same core-base helper (fsync / macOS full-sync-or-fsync /
+FlushFileBuffers). New audio and journal directory entries are checkpointed
+off RT too. The cadence assumes healthy storage making progress; a stalled or
+failed barrier is not a successful checkpoint. A sync failure latches
+`file.sync` / `file.sync_directory` as a target failure and reaches `record.error` through the model
+wake, like an append failure. Healthy targets and the engine continue.
+
+Copied/moved media is synced, then published without replace, and its directory
+is checkpointed before the referencing project is published. The project is
+confirmed durable before originals are removed. A failure after project
+publication returns `project.sync` and retains both originals and copied media;
+its hint explains that the project may already exist and storage needs checking.
+On Windows these operations use only unprivileged FlushFileBuffers and
+MoveFileExW with MOVEFILE_WRITE_THROUGH for media publication. This matches the
+project-save level of file durability; it does **not** establish POSIX-style
+parent/ancestor namespace durability after a power cut. No elevation is used.
+
 Audio writer failures (ADR-0082) latch the first error per target and wake the
 model thread. `Engine::takeRecordingErrors()` consumes these off-RT notices
 (`track`, `file`, structured `error`); EngineApp emits `record.error` immediately,

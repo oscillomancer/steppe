@@ -10,6 +10,7 @@
 #include <string>
 #include <system_error>
 #include <vector>
+#include "supple/base/files.h"
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -123,14 +124,7 @@ inline std::FILE* createAppend(const std::filesystem::path& path, std::error_cod
 #endif
 }
 // What was written reaches the disk (fflush, then fsync / FlushFileBuffers).
-inline bool syncFile(std::FILE* stream) {
-    if (std::fflush(stream) != 0) return false;
-#if defined(_WIN32)
-    return FlushFileBuffers(reinterpret_cast<HANDLE>(_get_osfhandle(_fileno(stream)))) != 0;
-#else
-    return ::fsync(::fileno(stream)) == 0;
-#endif
-}
+inline bool syncFile(std::FILE* stream) { return ::supple::syncFileStream(stream); }
 // How readRegular ended.
 enum class ReadRegular { Read, Missing, NotRegular, TooLarge, Failed };
 // Reads `path` whole only when it is a regular file (a link to one is

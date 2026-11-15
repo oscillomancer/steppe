@@ -140,6 +140,70 @@ bool hasWarning(const std::vector<schema::Warning>& warnings, std::string_view c
 
 }  // namespace
 
+TEST_CASE("first save checkpoints media before publication and keeps originals on uncertain sync") {
+    Project p;
+    auto created = EngineApp::create({.workdir = p.root, .scratchDir = p.root / "scratch"});
+    REQUIRE(created);
+    p.app = std::move(*created);
+    p.app->setCopyImportedMedia(true);
+    audio::AudioData wave;
+    wave.sampleRate = 48000;
+    wave.channels = {{.25f, -.25f}};
+    const auto external = p.root / "take.wav";
+    REQUIRE(audio::writeWav(external, wave));
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *p.app);
+    auto args = json::Value::object();
+    auto track = bus.execute({"track.add", args, {cmd::Origin::Type::Test, "sync", ""}});
+    REQUIRE(track);
+    args["track"] = track->find("track")->asString();
+    args["audio_file"] = external.string();
+    REQUIRE(bus.execute({"item.add", args, {cmd::Origin::Type::Test, "sync", ""}}));
+    const auto original = p.app->mediaDir() / "take.wav";
+    REQUIRE(fs::exists(original));
+    const auto project = p.root / "saved" / "project.json";
+    fs::create_directory(project.parent_path());
+    const auto media = project.parent_path() / "media";
+    const auto realMedia = fs::weakly_canonical(media);
+    bool failPublished = false;
+    SUBCASE("successful checkpoint") {}
+    SUBCASE("a failed post-publication checkpoint retains both copies") { failPublished = true; }
+    bool data = false, directory = false;
+    struct ResetHook {
+        ~ResetHook() {
+            setFileSyncHookForTesting({});
+            setDurabilityHookForTesting({});
+        }
+    } reset;
+    auto checkpoint = [&](const fs::path& path) {
+        if (path != original && path.extension() == ".wav" && fs::is_regular_file(path))
+            data = true;
+        if (path == realMedia) directory = true;
+        if (path == project) {
+            CHECK(data);
+            CHECK(directory);
+            CHECK(fs::exists(original));
+            if (fs::exists(project) && failPublished) return false;
+        }
+        return true;
+    };
+    setFileSyncHookForTesting(checkpoint);
+    setDurabilityHookForTesting([&](const fs::path& path, bool) { return checkpoint(path); });
+    const auto saved = p.app->save(project);
+    if (failPublished) {
+        REQUIRE_FALSE(saved);
+        CHECK(saved.error().code == "project.sync");
+        CHECK(fs::exists(original));
+    } else {
+        REQUIRE(saved);
+        CHECK_FALSE(fs::exists(original));
+    }
+    CHECK(fs::exists(project));
+    REQUIRE(fs::exists(media / "take.wav"));
+    CHECK(sha256File(media / "take.wav").value() == sha256File(external).value());
+}
+
 TEST_CASE("save as preserves audio referenced only by a saved branch regardless of filename") {
     Project p;
     std::string name;

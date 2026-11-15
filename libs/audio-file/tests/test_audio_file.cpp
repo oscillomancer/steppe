@@ -328,6 +328,35 @@ TEST_CASE("a streamed WAV is readable after every header update and after close"
     std::filesystem::remove(path);
 }
 
+TEST_CASE("streamed WAV sync failures keep the prefix and stop further appends") {
+    const auto path = fs::temp_directory_path() /
+                      ("supple-wav-sync-" + std::to_string(supple::test::processId()) + ".wav");
+    struct Cleanup {
+        fs::path path;
+        ~Cleanup() { fs::remove(path); }
+    } cleanup{path};
+    WavStreamWriterTestAccess::Fault fault;
+    WavStreamWriter writer;
+    REQUIRE(writer.open(path, 48000, 1));
+    WavStreamWriterTestAccess::inject(writer, fault);
+    const std::array<float, 4> data{.25f, -.25f, .5f, -.5f};
+    REQUIRE(writer.append(data.data(), data.size()));
+    REQUIRE(writer.sync());
+    CHECK(fault.syncCalls.load() == 1);
+    REQUIRE(writer.append(data.data(), data.size()));
+    fault.failSync = true;
+    const auto synced = writer.sync();
+    REQUIRE_FALSE(synced);
+    CHECK(synced.error().code == "file.sync");
+    CHECK(writer.frames() == 8);
+    CHECK_FALSE(writer.append(data.data(), 1));
+    fault.failSync = false;
+    REQUIRE(writer.close());
+    const auto read = readAudio(path);
+    REQUIRE(read);
+    CHECK(read->channels[0] == std::vector<float>{.25f, -.25f, .5f, -.5f, .25f, -.25f, .5f, -.5f});
+}
+
 TEST_CASE("streamed WAV write failures retain every complete physical frame") {
     const auto path = fs::temp_directory_path() /
                       ("supple-wav-short-" + std::to_string(supple::test::processId()) + ".wav");

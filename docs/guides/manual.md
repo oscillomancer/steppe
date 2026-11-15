@@ -194,8 +194,14 @@ starting another recording.
 An unsaved project is autosaved into that folder every minute while it
 changes, like a saved one. If Steppe stops without you saving or discarding
 (a crash, a power cut), the folder stays, with its autosaves and recordings.
-MIDI recordings are kept as they are played, so a crash loses at most the
-last moment of a take (a power cut, at most the last five seconds).
+Audio and MIDI recordings are kept as they are played. With storage keeping
+up, a program crash loses about the writer's last pass; a power cut retains
+the last completed file checkpoint, at most about five seconds behind. Storage
+failures are shown immediately for audio, with the written prefix kept.
+On Windows file data is flushed without elevation, but a power cut can still
+lose newly created file or folder names; the file checkpoint does not promise
+that stronger namespace guarantee. A failed save that reports the project may
+already exist keeps both original and copied media; check storage before retrying.
 The next time Steppe starts without a project to open, it lists what was left
 behind: each with its name, when it was last autosaved, how many tracks and
 recordings it has, and its size. **Recover** opens it (after asking about any

@@ -647,6 +647,14 @@ and cleanup removes only the staging file this operation created.
 After reserving a staging file its native identity must differ from the final
 payload path (including case-insensitive aliases); otherwise it is removed and
 a different candidate reserved. A payload may itself have a staging-looking name.
+Copies sync their complete payload before publication and checkpoint parent
+directories before a referencing project is published (ADR-0082). First save
+verifies and syncs staged media, publishes it without replacement, and confirms
+the project checkpoint before removing scratch originals. A `project.sync`
+failure after project publication keeps both originals and destination media:
+the project may already exist, and rollback must not remove its audio.
+Windows uses flushed files and write-through media renames without elevation;
+it has no claimed POSIX-equivalent parent/ancestor namespace durability bound.
 Save As does not discard a media file by a temporary-looking filename suffix:
 an imported file named `take.copy-tmp` may be used by a saved branch even when
 the current branch has no items. Unreferenced stale copy files may therefore

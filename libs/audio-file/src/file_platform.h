@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <string>
+#include "supple/base/files.h"
 #if defined(_WIN32)
 #include <fcntl.h>
 #include <io.h>
@@ -91,14 +92,7 @@ inline int seek(std::FILE* stream, std::int64_t offset, int origin) {
     return ::fseeko(stream, static_cast<off_t>(offset), origin);
 #endif
 }
-inline bool sync(std::FILE* stream) {
-    if (std::fflush(stream) != 0) return false;
-#if defined(_WIN32)
-    return FlushFileBuffers(reinterpret_cast<HANDLE>(_get_osfhandle(_fileno(stream)))) != 0;
-#else
-    return ::fsync(::fileno(stream)) == 0;
-#endif
-}
+inline bool sync(std::FILE* stream) { return ::supple::syncFileStream(stream); }
 inline std::FILE* temporary(const std::filesystem::path& target, std::filesystem::path& temp) {
 #if defined(_WIN32)
     static std::atomic<std::uint64_t> counter{0};

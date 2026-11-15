@@ -8,6 +8,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
@@ -253,6 +254,10 @@ class Recorder {
     std::thread writer_;
     bool sidecars_ = false;               // writer thread
     MainThreadWake* mainWake_ = nullptr;  // set before starting the writer
+    // Cold writer instrumentation: deterministic cadence tests, never read by audio.
+    std::chrono::steady_clock::time_point (*nowForTests_)(void*) = nullptr;
+    void* clockContext_ = nullptr;
+    std::atomic<std::uint64_t> writerPasses_{0};
 };
 
 }  // namespace supple::engine::detail

@@ -13,6 +13,7 @@
 #include "recording.h"
 #include "supple/audio/audio_file.h"
 #include "supple/base/files.h"
+#include "supple/base/main_thread_wake.h"
 #include "supple/engine/app.h"
 #include "supple/model/schemas.h"
 
@@ -22,6 +23,25 @@ namespace fs = std::filesystem;
 
 namespace supple::engine {
 struct RecordingErrorTestAccess {
+    static void clock(detail::Recorder& recorder, std::atomic<std::int64_t>& milliseconds) {
+        recorder.clockContext_ = &milliseconds;
+        recorder.nowForTests_ = [](void* context) {
+            return std::chrono::steady_clock::time_point(std::chrono::milliseconds(
+                static_cast<std::atomic<std::int64_t>*>(context)->load()));
+        };
+    }
+    static void fault(detail::Recorder& recorder, std::size_t index,
+                      audio::WavStreamWriterTestAccess::Fault& fault) {
+        audio::WavStreamWriterTestAccess::inject(recorder.tracks_[index]->writer, fault);
+    }
+    static void passes(detail::Recorder& recorder, unsigned count = 2) {
+        const auto target = recorder.writerPasses_.load() + count;
+        for (;;) {
+            const auto at = recorder.writerPasses_.load(std::memory_order_acquire);
+            if (at >= target) return;
+            recorder.writerPasses_.wait(at);
+        }
+    }
     static void failNextAudioWrite(Engine& engine, audio::WavStreamWriterTestAccess::Fault& fault) {
         auto& recorder = *engine.recorderOwned_;
         recorder.writerStalled_.store(true);
@@ -35,6 +55,70 @@ struct RecordingErrorTestAccess {
     }
 };
 }  // namespace supple::engine
+
+TEST_CASE("audio checkpoints share the five-second journal cadence and isolate sync failures") {
+    const auto root =
+        fs::temp_directory_path() / ("supple-record-sync-" + std::to_string(test::processId()));
+    REQUIRE(fs::create_directory(root));
+    struct Cleanup {
+        fs::path path;
+        ~Cleanup() { fs::remove_all(path); }
+    } cleanup{root};
+    std::atomic<std::int64_t> clock{0};
+    audio::WavStreamWriterTestAccess::Fault failed, healthy;
+    MainThreadWake wake;
+    detail::Recorder recorder({{model::Id{model::Kind::Track, 1}, {0}, root / "failed.wav", {}},
+                               {model::Id{model::Kind::Track, 2}, {0}, root / "healthy.wav", {}}},
+                              48000, 0);
+    RecordingErrorTestAccess::clock(recorder, clock);
+    RecordingErrorTestAccess::fault(recorder, 0, failed);
+    RecordingErrorTestAccess::fault(recorder, 1, healthy);
+    recorder.setMainThreadWake(&wake);
+    REQUIRE(recorder.open());
+    REQUIRE(failed.syncCalls.load() == 1);
+    std::array<float, 64> samples;
+    samples.fill(.25f);
+    const float* input[]{samples.data()};
+    recorder.capture(input, 1, 64, 0);
+    RecordingErrorTestAccess::passes(recorder);
+    clock.store(4999);
+    RecordingErrorTestAccess::passes(recorder);
+    CHECK(failed.syncCalls.load() == 1);
+    auto info = audio::inspectWavStream(root / "failed.wav");
+    REQUIRE(info);
+    CHECK(info->headerFrames == 0);
+    CHECK(info->fileFrames == 64);
+    clock.store(5000);
+    RecordingErrorTestAccess::passes(recorder);
+    REQUIRE(failed.syncCalls.load() == 2);
+    REQUIRE(healthy.syncCalls.load() == 2);
+    info = audio::inspectWavStream(root / "failed.wav");
+    REQUIRE(info);
+    CHECK(info->headerFrames == 64);
+    failed.failSync = true;
+    clock.store(10000);
+    RecordingErrorTestAccess::passes(recorder);
+    WaitItem ready{wake.waitable(), kWaitRead};
+    REQUIRE(waitFor(std::span(&ready, 1), -1) == 1);
+    CHECK(wake.drain());
+    const auto errors = recorder.takeErrors();
+    REQUIRE(errors.size() == 1);
+    CHECK(errors[0].error.code == "file.sync");
+    CHECK(errors[0].file == root / "failed.wav");
+    CHECK(recorder.takeErrors().empty());
+    recorder.capture(input, 1, 64, 64);
+    RecordingErrorTestAccess::passes(recorder);
+    const auto takes = recorder.finish();
+    REQUIRE(takes.size() == 2);
+    CHECK(takes[0].frames == 64);
+    CHECK(takes[0].overflowFrames == 64);
+    CHECK(takes[0].failure->code == "file.sync");
+    CHECK(takes[1].frames == 128);
+    CHECK(takes[1].error.empty());
+    CHECK(failed.syncThread != std::this_thread::get_id());
+    CHECK(healthy.syncThread != std::this_thread::get_id());
+    REQUIRE(audio::readAudio(root / "healthy.wav"));
+}
 
 TEST_CASE("audio write failure wakes the model before stop and retains the physical prefix") {
     struct Root {

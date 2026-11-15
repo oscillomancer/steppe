@@ -331,6 +331,10 @@ or buffered flush failure it stops accepting audio and reconciles `frames()`
 with complete frames physically present in its open file; final header updates
 retain that prefix (ADR-0082). A failed write never claims buffered, unwritten
 frames as retained, and never discards complete frames already written.
+`WavStreamWriter::sync()` updates/flushes the header and syncs the complete
+prefix through core-base's shared stream helper. `close()` establishes the
+same durable file checkpoint before closing, unless it was already synced
+and unchanged. Sync failures stop further appends and return `file.sync`.
 
 ## 10. Tests and docs
 

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 #include "supple/engine/app.h"
+#include "file_platform.h"
 #include "media_files.h"
 #include "module_library.h"
 #include "rack_runtime.h"
@@ -792,7 +793,17 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
             branchesBackupFor_.clear();
         }
         SUPPLE_TRY(publishRecoveryKeeps(path, warnings));
-        return writeFileAtomic(path, model::serializeProjectFile(*versions_, history, through));
+        auto written =
+            writeFileAtomic(path, model::serializeProjectFile(*versions_, history, through));
+        if (!written && written.error().code != "file.sync_published") return written;
+        auto confirmed = written ? syncFile(path) : written;
+        if (confirmed) confirmed = syncParentDirectories(path);
+        if (!confirmed)
+            return Status{
+                Error("project.sync", confirmed.error().message, path.string(),
+                      "the project may already exist; originals and copied media are kept; "
+                      "check storage before retrying the save")};
+        return okStatus();
     };
     const fs::path media = path.parent_path() / head().project->mediaDir;
     const fs::path oldMedia = mediaDir();
@@ -3743,6 +3754,9 @@ Status EngineApp::moveScratchMedia(const fs::path& dest, const std::function<Sta
         const auto staged = stage / rel;
         fs::create_directories(staged.parent_path(), ec);
         if (!ec) fs::copy_file(from / rel, staged, fs::copy_options::none, ec);
+#if defined(_WIN32)
+        if (!ec) fs::permissions(staged, fs::perms::owner_write, fs::perm_options::add, ec);
+#endif
         if (ec)
             return Error("project.media_move", ec.message(), (from / rel).string(),
                          "save to a writable project directory with sufficient space and keep all "
@@ -3752,18 +3766,27 @@ Status EngineApp::moveScratchMedia(const fs::path& dest, const std::function<Sta
             return Error("project.media_move", "staged media verification failed", rel.string(),
                          "keep source media unchanged during the save and save into a directory "
                          "with reliable writable storage");
+        SUPPLE_TRY(syncFile(staged));
     }
     for (const auto& rel : files) {
         const auto target = dest / rel;
         fs::create_directories(target.parent_path(), ec);
-        if (!ec) fs::create_hard_link(stage / rel, target, ec);
+        if (!ec && detail::files::publishNew(stage / rel, target) != 0)
+            ec = std::error_code(errno, std::generic_category());
         if (ec)
             return Error("project.media_move", ec.message(), target.string(),
                          "save to a writable project directory with sufficient space and keep all "
                          "scratch media readable during the save");
         placed.push_back(target);
+        SUPPLE_TRY(syncParentDirectories(target));
     }
-    SUPPLE_TRY(publish());
+    auto saved = publish();
+    if (!saved) {
+        // Publication may already have replaced the file. Keep its audio
+        // as well as the originals; rollback must never strand that project.
+        if (saved.error().code == "project.sync") published = true;
+        return saved;
+    }
     published = true;
     std::vector<fs::path> emptyDirs;
     for (const auto& rel : files) {

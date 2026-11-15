@@ -28,6 +28,7 @@ class WavStreamWriter {
     // Hands what is buffered to the OS (a crash of the process keeps it; the
     // header catches up at the next update or on repair).
     Status flush();
+    Status sync();  // complete data/header checkpoint, through the shared platform helper
     Status close();
     // Closes without the final header rewrite, as a crash would leave the
     // file (tests and fixtures).
@@ -42,10 +43,12 @@ class WavStreamWriter {
         void* context = nullptr;
         std::size_t (*write)(void*, const void*, std::size_t, std::FILE*) = nullptr;
         int (*flush)(void*, std::FILE*) = nullptr;
+        bool (*sync)(void*, std::FILE*) = nullptr;
     } io_;
     void reconcileWritten();
     std::FILE* file_ = nullptr;
     bool failed_ = false;
+    bool synced_ = false;
     std::uint32_t channels_ = 0;
     std::uint64_t frames_ = 0;
 };
