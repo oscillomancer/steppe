@@ -3,6 +3,7 @@
 #include <doctest/doctest.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -324,6 +325,50 @@ TEST_CASE("a streamed WAV is readable after every header update and after close"
     CHECK(double(whole->channels[0][999]) == doctest::Approx(0.999));
     CHECK(double(whole->channels[1][1499]) == doctest::Approx(-0.499));
     std::filesystem::remove(path);
+}
+
+TEST_CASE("streamed WAV repair validates both byte counts, not only complete frames") {
+    const auto path = std::filesystem::temp_directory_path() /
+                      ("supple-wav-lengths-" + std::to_string(supple::test::processId()) + ".wav");
+    struct Cleanup {
+        std::filesystem::path path;
+        ~Cleanup() { std::filesystem::remove(path); }
+    } cleanup{path};
+    supple::audio::WavStreamWriter writer;
+    REQUIRE(writer.open(path, 48000, 2));
+    std::vector<float> data(2000, .25f);
+    REQUIRE(writer.append(data.data(), 1000));
+    REQUIRE(writer.close());
+    auto write32 = [&](std::streamoff offset, std::uint32_t value) {
+        std::fstream file(path, std::ios::in | std::ios::out | std::ios::binary);
+        REQUIRE(file);
+        const std::array<char, 4> bytes{char(value), char(value >> 8), char(value >> 16),
+                                        char(value >> 24)};
+        file.seekp(offset);
+        file.write(bytes.data(), bytes.size());
+        REQUIRE(file.good());
+    };
+    auto read32 = [&](std::streamoff offset) {
+        std::ifstream file(path, std::ios::binary);
+        std::array<unsigned char, 4> bytes{};
+        file.seekg(offset);
+        file.read(reinterpret_cast<char*>(bytes.data()), bytes.size());
+        REQUIRE(file.good());
+        return std::uint32_t(bytes[0]) | (std::uint32_t(bytes[1]) << 8) |
+               (std::uint32_t(bytes[2]) << 16) | (std::uint32_t(bytes[3]) << 24);
+    };
+    SUBCASE("a torn RIFF size with a correct data size") { write32(4, 36); }
+    SUBCASE("a torn data size whose whole-frame count is unchanged") { write32(40, 8001); }
+    const auto info = supple::audio::inspectWavStream(path);
+    REQUIRE(info);
+    REQUIRE(info->headerFrames == info->fileFrames);
+    REQUIRE(supple::audio::repairWavStream(path));
+    CHECK(read32(4) == 8036);
+    CHECK(read32(40) == 8000);
+    const auto restored = supple::audio::readAudio(path);
+    REQUIRE(restored);
+    CHECK(restored->frames() == 1000);
+    CHECK(supple::audio::repairWavStream(path).value() == 1000);
 }
 
 TEST_CASE("repairing a streamed WAV recovers the frames written after the last header update") {

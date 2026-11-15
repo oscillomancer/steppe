@@ -112,7 +112,8 @@ Status WavStreamWriter::close() {
     return st;
 }
 
-Result<WavStreamInfo> inspectWavStream(const std::filesystem::path& path) {
+namespace {
+Result<WavStreamInfo> inspectStream(const std::filesystem::path& path, bool& sizesMatch) {
     std::FILE* f = detail::files::open(path, false);
     if (!f)
         return Error("file.open", "cannot read " + detail::files::text(path) +
@@ -138,13 +139,22 @@ Result<WavStreamInfo> inspectWavStream(const std::filesystem::path& path) {
     info.headerFrames = get32(h + 40) / frameBytes;
     const std::uint64_t data = std::min<std::uint64_t>(size - kHeaderBytes, kMaxData);
     info.fileFrames = data / frameBytes;
+    const auto wholeBytes = info.fileFrames * frameBytes;
+    sizesMatch = get32(h + 4) == wholeBytes + kHeaderBytes - 8 && get32(h + 40) == wholeBytes;
     return info;
+}
+}  // namespace
+
+Result<WavStreamInfo> inspectWavStream(const std::filesystem::path& path) {
+    bool sizesMatch = false;
+    return inspectStream(path, sizesMatch);
 }
 
 Result<std::uint64_t> repairWavStream(const std::filesystem::path& path) {
-    auto info = inspectWavStream(path);
+    bool sizesMatch = false;
+    auto info = inspectStream(path, sizesMatch);
     if (!info) return std::move(info).error();
-    if (info->fileFrames == info->headerFrames) return info->headerFrames;
+    if (sizesMatch) return info->fileFrames;
     std::FILE* f = detail::files::open(path, true);
     if (!f)
         return Error("file.write", "cannot open " + detail::files::text(path) +
