@@ -20,12 +20,17 @@
 
 namespace supple::model {
 
+// The largest autosave number, and so the largest `autosaved_through`: a JSON
+// integer is signed 64-bit. autosave-<n> with n above it is not an autosave.
+inline constexpr std::uint64_t kAutosaveNumberMax = 9'223'372'036'854'775'807ULL;
+
 // `history`: keep every retained version, base and redo step (undo survives
 // reopening); otherwise what VersionStore::saved(false) keeps. A store with
 // main alone and nothing to undo writes no `branches` section.
 // `autosavedThrough`: the highest numbered autosave (<file>-data/autosave-<n>)
 // this file holds the work of, written as `autosaved_through` (schema 2.15):
-// an autosave numbered above it is newer than the file (ADR-0078).
+// an autosave numbered above it is newer than the file (ADR-0078). At most
+// kAutosaveNumberMax (a larger value is written as it).
 json::Value projectFileToJson(const VersionStore& store, bool history = false,
                               std::optional<std::uint64_t> autosavedThrough = std::nullopt);
 std::string serializeProjectFile(const VersionStore& store, bool history = false,

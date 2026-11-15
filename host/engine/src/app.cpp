@@ -1666,7 +1666,9 @@ std::optional<std::uint64_t> autosaveIndex(std::string_view name) {
     name.remove_suffix(suffix.size());
     std::uint64_t index = 0;
     const auto parsed = std::from_chars(name.data(), name.data() + name.size(), index);
-    if (parsed.ec != std::errc{} || parsed.ptr != name.data() + name.size() || index == 0)
+    // Above the largest count a project file holds, it is not an autosave.
+    if (parsed.ec != std::errc{} || parsed.ptr != name.data() + name.size() || index == 0 ||
+        index > model::kAutosaveNumberMax)
         return std::nullopt;
     return index;
 }
@@ -1773,7 +1775,7 @@ void EngineApp::autosave() {
         const std::string name = it->path().filename().string();
         const auto n = autosaveIndex(name);
         if (!n) continue;
-        if (*n == UINT64_MAX) {
+        if (*n == model::kAutosaveNumberMax) {
             emit(
                 "engine.error",
                 json::Value(Error("autosave.index", "autosave numbering is exhausted", dir.string(),
@@ -1787,7 +1789,7 @@ void EngineApp::autosave() {
     }
     // Past what the project file holds, even when its autosaves are gone.
     if (!projectPath_.empty() && autosavedThrough_ && *autosavedThrough_ >= next) {
-        if (*autosavedThrough_ == UINT64_MAX) {
+        if (*autosavedThrough_ >= model::kAutosaveNumberMax) {
             emit(
                 "engine.error",
                 json::Value(Error("autosave.index", "autosave numbering is exhausted", dir.string(),

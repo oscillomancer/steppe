@@ -77,7 +77,7 @@ TEST_CASE("autosave numbering preserves other files and cannot overflow") {
         CHECK_FALSE(fs::exists(dir / "autosave-1.json"));
     }
     SUBCASE("an exhausted index reports a failure without writing or pruning") {
-        write("autosave-18446744073709551615.json");
+        write("autosave-9223372036854775807.json");
         save();
         CHECK_FALSE(fs::exists(dir / "autosave-1.json"));
         CHECK(app.nextServiceDelayMs() == 60'000);
@@ -87,7 +87,7 @@ TEST_CASE("autosave numbering preserves other files and cannot overflow") {
                 value.asString().find("autosave.index") != std::string::npos)
                 reported = true;
         CHECK(reported);
-        auto contents = readTextFile(dir / "autosave-18446744073709551615.json");
+        auto contents = readTextFile(dir / "autosave-9223372036854775807.json");
         REQUIRE(contents);
         CHECK(*contents == "preserved");
     }
@@ -2231,4 +2231,58 @@ TEST_CASE("a save that cannot read the autosave folder publishes nothing") {
     CHECK(p.app->head().project->name == "Newer");
     CHECK(p.app->newerAutosave(file).empty());
     CHECK_FALSE(p.app->recoverAutosave());
+}
+
+TEST_CASE("autosave numbers stay within what a project file can hold") {
+    // Round-13 review, finding 2: autosave-9223372036854775808.json was read
+    // as a number and written through int64 as a negative count, which the
+    // reopened file then ignored (file times decided again).
+    Project p;
+    const auto file = p.root / "song.json";
+    REQUIRE(p.app->save(file));
+    const auto dir = p.app->autosaveDir();
+    auto through = [&] {
+        auto raw = json::parse(readTextFile(file).value());
+        REQUIRE(raw);
+        REQUIRE((*raw)["autosaved_through"].isInt());
+        return (*raw)["autosaved_through"].asInt();
+    };
+    SUBCASE("a name above the largest count is not an autosave") {
+        fs::create_directories(dir);
+        REQUIRE(fs::is_directory(dir));
+        REQUIRE(writeFileAtomic(dir / "autosave-9223372036854775808.json", "preserved"));
+        REQUIRE(p.app->save(file));
+        CHECK(through() == 0);
+        std::vector<schema::Warning> warnings;
+        REQUIRE(p.app->open(file, &warnings));
+        CHECK_FALSE(hasWarning(warnings, "project.autosaved_through"));
+        CHECK(p.app->newerAutosave(file).empty());
+        CHECK(readTextFile(dir / "autosave-9223372036854775808.json").value() == "preserved");
+    }
+    SUBCASE("the largest count round-trips, and the next autosave reports exhaustion") {
+        fs::create_directories(dir);
+        REQUIRE(fs::is_directory(dir));
+        REQUIRE(writeFileAtomic(dir / "autosave-9223372036854775807.json", "preserved"));
+        REQUIRE(p.app->save(file));
+        CHECK(through() == INT64_MAX);
+        std::vector<schema::Warning> warnings;
+        REQUIRE(p.app->open(file, &warnings));
+        CHECK_FALSE(hasWarning(warnings, "project.autosaved_through"));
+        p.rename("Edited");
+        p.app->setFixedClock(1'060'000);
+        p.app->tick();
+        bool reported = false;
+        for (const auto& [topic, value] : p.app->takeEvents())
+            if (topic == "engine.error" && value.isString() &&
+                value.asString().find("autosave.index") != std::string::npos)
+                reported = true;
+        CHECK(reported);
+    }
+    SUBCASE("the model writes no count above the largest") {
+        auto doc = model::projectFileToJson(p.app->versions(), false, UINT64_MAX);
+        CHECK(doc["autosaved_through"].asInt() == INT64_MAX);
+        auto opened = model::projectFileFromJson(doc);
+        REQUIRE(opened);
+        CHECK(opened->autosavedThrough == std::uint64_t{INT64_MAX});
+    }
 }

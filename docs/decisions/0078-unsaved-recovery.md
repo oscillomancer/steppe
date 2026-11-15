@@ -129,7 +129,9 @@ autosave over a later save. A file without the count keeps the time rule.
 
 *Amended 2026-11-15 after review round 13:* a save that cannot read the
 autosave folder fails (`project.autosave_folder`) rather than record a count
-short of what is there.
+short of what is there, and autosave numbers stop at 2^63 - 1, the largest
+count a project file holds (a larger one had been written as a negative
+count).
 
 ## Alternatives considered
 

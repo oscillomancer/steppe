@@ -655,8 +655,9 @@ that is not current counts, media hash completions do not) and 60 s of
 monotonic service time have passed. Unchanged projects have no autosave
 deadline; an overdue edit arms immediate service. A failed write
 waits 60 s before retrying. History timestamps still use wall time, and
-`<n>` is a positive unsigned 64-bit decimal index and counts up from the highest
-present. Discovery and rotation ignore names with nonnumeric or out-of-range
+`<n>` is a positive decimal index up to 9223372036854775807 (2^63 - 1, the
+largest count a project file's `autosaved_through` holds) and counts up from
+the highest present. Discovery and rotation ignore names with nonnumeric or out-of-range
 suffixes (such as `autosave-1-backup.json`). An exhausted index reports
 `autosave.index` without writing or pruning, and retries after the same interval.
 `project.open` of a file that has
