@@ -855,6 +855,13 @@ first use, and no plug-in code runs early to warm it.
   survive pending hash jobs (including finalized loop runs at stop); the
   background finalization adds an optional `hash` without changing their
   recovery contract.
+- **Streaming RF64** (ADR-0082): new audio takes reserve a 28-byte JUNK payload
+  in their 80-byte RIFF header. A take crossing the 32-bit size limit promotes
+  that space to ds64 and becomes RF64 in place, without moving samples or
+  stopping capture. Recovery reads/repairs old 44-byte recordings and new
+  RIFF/RF64 recordings, including an interrupted promotion. Decoding, metadata
+  inspection and media import accept RF64. Tests inject a small size threshold
+  or use sparse files, without writing a 4 GiB audio payload.
 - **Audio placement journals** (ADR-0082): each WAV owns an exclusively
   created `<stem>.audio.jsonl`, schema `supple.audio-recording/1.0`. The shared
   MIDI journal reader/writer handles header, append, flush/sync and torn tails.

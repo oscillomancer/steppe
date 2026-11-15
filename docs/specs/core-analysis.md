@@ -336,6 +336,19 @@ prefix through core-base's shared stream helper. `close()` establishes the
 same durable file checkpoint before closing, unless it was already synced
 and unchanged. Sync failures stop further appends and return `file.sync`.
 
+Streaming recording files reserve an 80-byte header: RIFF/WAVE, `JUNK` with a
+28-byte payload, float32 `fmt `, then `data`. Short takes remain plain WAV.
+Crossing either 32-bit container/data limit promotes JUNK to `ds64` and RIFF
+to RF64 in place, with 64-bit RIFF/data/frame counts and 32-bit sentinels.
+Audio never moves. Promotion writes ds64 payload/tag and sentinels before the
+RF64 marker; recovery also recognizes an interrupted RIFF+ds64 promotion.
+`inspectWavStream`/`repairWavStream` accept the legacy 44-byte recording layout
+and the new reserved RIFF/RF64 layout. Repair covers every complete physical
+frame, excludes a trailing partial frame, and syncs the repaired header before
+returning. A valid read-only file requires no rewrite. Decode, metadata inspection
+and import accept RF64. Overflow beyond representable 64-bit file offsets is
+still refused before reading the input pointer (`audio.stream_full`).
+
 ## 10. Tests and docs
 
 Beyond §1.2: each descriptor against synthetic signals with known answers

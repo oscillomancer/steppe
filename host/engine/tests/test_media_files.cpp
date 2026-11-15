@@ -10,10 +10,12 @@
 #include <utility>
 
 #include "../../../tests/file_platform.h"
+#include "../../../tests/wav_stream_test_support.h"
 #include "../src/media_files.h"
 #include "supple/audio/audio_file.h"
 #include "supple/base/files.h"
 #include "supple/base/sha256.h"
+#include "supple/engine/app.h"
 #if !defined(_WIN32)
 #include <sys/stat.h>
 #endif
@@ -278,4 +280,53 @@ TEST_CASE("crash recovery reads regular files only, and never waits on a named p
         }
     CHECK(fs::is_fifo(pipe));  // left as it was
 #endif
+}
+
+TEST_CASE("import and save reopen accept a recording promoted to RF64") {
+    using namespace supple;
+    const auto root =
+        fs::temp_directory_path() / ("supple-rf64-import-" + std::to_string(test::processId()));
+    fs::remove_all(root);
+    struct Cleanup {
+        fs::path path;
+        ~Cleanup() { fs::remove_all(path); }
+    } cleanup{root};
+    fs::create_directories(root / "source");
+    const auto wave = root / "source" / "take.wav";
+    audio::WavStreamWriter writer;
+    REQUIRE(writer.open(wave, 48000, 2));
+    audio::WavStreamWriterTestAccess::riffLimit(writer, 256);
+    std::vector<float> data(128);
+    for (std::size_t i = 0; i < data.size(); ++i) data[i] = static_cast<float>(i) / 128;
+    REQUIRE(writer.append(data.data(), 64));
+    REQUIRE(writer.close());
+    const auto expected = audio::readAudio(wave);
+    REQUIRE(expected);
+    auto created = EngineApp::create({.workdir = root / "project"});
+    REQUIRE(created);
+    auto& app = **created;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher dispatcher(registry, app);
+    REQUIRE(dispatcher.execute(
+        {"track.add", *json::parse(R"({"name":"Audio"})"), {cmd::Origin::Type::Test, "rf64", ""}}));
+    auto args = *json::parse(R"({"track":"tr_1","position":0})");
+    args["audio_file"] = wave.string();
+    auto added = dispatcher.execute({"item.add", args, {cmd::Origin::Type::Test, "rf64", ""}});
+    REQUIRE_MESSAGE(added, (added ? "" : added.error().toString()));
+    REQUIRE(app.head().media.size() == 1);
+    CHECK(app.head().media.begin()->value->frames == 64);
+    CHECK(app.head().media.begin()->value->channels == 2);
+    const auto saved = root / "project" / "song.json";
+    REQUIRE(app.save(saved));
+    REQUIRE(app.open(saved));
+    CHECK(app.head().media.begin()->value->frames == 64);
+    const auto copy = app.mediaDir() / app.head().media.begin()->value->path;
+    const auto decoded = audio::readAudio(copy);
+    REQUIRE(decoded);
+    CHECK(decoded->channels == expected->channels);
+    auto bytes = readFile(copy);
+    REQUIRE(bytes);
+    CHECK(std::string(reinterpret_cast<const char*>(bytes->data()), 4) == "RF64");
+    CHECK(sha256File(wave).value() == sha256File(copy).value());
 }

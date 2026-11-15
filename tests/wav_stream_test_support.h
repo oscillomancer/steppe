@@ -22,6 +22,9 @@ struct WavStreamWriterTestAccess {
         std::atomic<unsigned> syncCalls{0};
         std::thread::id syncThread;
     };
+    static void riffLimit(WavStreamWriter& writer, std::uint64_t bytes) {
+        writer.riffLimit_ = bytes;
+    }
     static void inject(WavStreamWriter& writer, Fault& fault) {
         writer.io_.context = &fault;
         writer.io_.write = [](void* context, const void* data, std::size_t bytes, std::FILE* f) {

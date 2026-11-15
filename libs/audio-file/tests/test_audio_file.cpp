@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -404,6 +405,14 @@ TEST_CASE("streamed WAV repair validates both byte counts, not only complete fra
     std::vector<float> data(2000, .25f);
     REQUIRE(writer.append(data.data(), 1000));
     REQUIRE(writer.close());
+    const bool legacy = GENERATE(false, true);
+    if (legacy) {
+        AudioData old;
+        old.sampleRate = 48000;
+        old.channels.assign(2, std::vector<float>(1000, .25f));
+        REQUIRE(writeWav(path, old));
+    }
+    const std::uint32_t headerBytes = legacy ? 44 : 80;
     auto write32 = [&](std::streamoff offset, std::uint32_t value) {
         std::fstream file(path, std::ios::in | std::ios::out | std::ios::binary);
         REQUIRE(file);
@@ -422,14 +431,16 @@ TEST_CASE("streamed WAV repair validates both byte counts, not only complete fra
         return std::uint32_t(bytes[0]) | (std::uint32_t(bytes[1]) << 8) |
                (std::uint32_t(bytes[2]) << 16) | (std::uint32_t(bytes[3]) << 24);
     };
-    SUBCASE("a torn RIFF size with a correct data size") { write32(4, 36); }
-    SUBCASE("a torn data size whose whole-frame count is unchanged") { write32(40, 8001); }
+    SUBCASE("a torn RIFF size with a correct data size") { write32(4, headerBytes - 8); }
+    SUBCASE("a torn data size whose whole-frame count is unchanged") {
+        write32(headerBytes - 4, 8001);
+    }
     const auto info = supple::audio::inspectWavStream(path);
     REQUIRE(info);
     REQUIRE(info->headerFrames == info->fileFrames);
     REQUIRE(supple::audio::repairWavStream(path));
-    CHECK(read32(4) == 8036);
-    CHECK(read32(40) == 8000);
+    CHECK(read32(4) == 8000 + headerBytes - 8);
+    CHECK(read32(headerBytes - 4) == 8000);
     const auto restored = supple::audio::readAudio(path);
     REQUIRE(restored);
     CHECK(restored->frames() == 1000);
@@ -797,18 +808,27 @@ TEST_CASE("recording recovery uses 64-bit positions past Windows long range") {
         return;
     }
 #endif
-    constexpr std::int64_t end = (std::int64_t{1} << 31) + 44 + 8;
+    const std::int64_t payload = GENERATE((std::int64_t{1} << 31) + 8, (std::int64_t{1} << 32) + 8);
+    const std::int64_t end = payload + 80;
     REQUIRE(supple::audio::detail::files::seek(stream, end - 1, SEEK_SET) == 0);
     REQUIRE(std::fputc(0, stream) != EOF);
     CHECK(supple::audio::detail::files::tell(stream) == end);
     REQUIRE(std::fclose(stream) == 0);
     auto info = inspectWavStream(path);
     REQUIRE(info);
-    CHECK(info->fileFrames == static_cast<std::uint64_t>(end - 44) / 8);
+    CHECK(info->fileFrames == static_cast<std::uint64_t>(end - 80) / 8);
     auto repaired = repairWavStream(path);
     REQUIRE(repaired);
     CHECK(*repaired == info->fileFrames);
     CHECK(inspectWavStream(path)->headerFrames == *repaired);
+    const auto metadata = inspect(path);
+    REQUIRE(metadata);
+    CHECK(metadata->frames == static_cast<std::int64_t>(*repaired));
+    std::ifstream input(path, std::ios::binary);
+    std::array<char, 4> marker{};
+    input.read(marker.data(), marker.size());
+    CHECK(std::string(marker.data(), marker.size()) ==
+          (payload > UINT32_MAX - 72 ? "RF64" : "RIFF"));
 }
 
 #if defined(_WIN32)
@@ -958,4 +978,108 @@ TEST_CASE("WAV and FLAC metadata: INFO, bext v2, cue points and Vorbis comments"
     CHECK(contains(*flac, "TITLE=Song"));
     CHECK(contains(*flac, "ISRC=USRC17607839"));
     CHECK(readAudio(*flac)->channels == readAudio(*encodeFlac(d))->channels);
+}
+
+TEST_CASE("streamed recordings reserve ds64 space while short takes remain RIFF") {
+    const auto path =
+        fs::temp_directory_path() /
+        ("supple-stream-reserved-" + std::to_string(supple::test::processId()) + ".wav");
+    struct Cleanup {
+        fs::path path;
+        ~Cleanup() { fs::remove(path); }
+    } cleanup{path};
+    WavStreamWriter writer;
+    REQUIRE(writer.open(path, 48000, 2));
+    REQUIRE(writer.close());
+    auto bytes = supple::readFile(path);
+    REQUIRE(bytes);
+    REQUIRE(bytes->size() == 80);
+    CHECK(std::string(reinterpret_cast<const char*>(bytes->data()), 4) == "RIFF");
+    CHECK(std::string(reinterpret_cast<const char*>(bytes->data() + 12), 4) == "JUNK");
+    CHECK((*bytes)[16] == 28);
+    CHECK(std::string(reinterpret_cast<const char*>(bytes->data() + 72), 4) == "data");
+    REQUIRE(readAudio(path));
+}
+
+TEST_CASE("streamed RF64 repair recovers whole frames after its last header update") {
+    const auto path =
+        fs::temp_directory_path() /
+        ("supple-stream-rf64-repair-" + std::to_string(supple::test::processId()) + ".wav");
+    struct Cleanup {
+        fs::path path;
+        ~Cleanup() { fs::remove(path); }
+    } cleanup{path};
+    auto bytes = wavHeader(std::uint64_t{1} << 30, 1, 48000, SampleFormat::Float32);
+    REQUIRE(bytes);
+    auto put64 = [&](std::size_t offset, std::uint64_t value) {
+        for (int i = 0; i < 8; ++i)
+            (*bytes)[offset + i] = static_cast<std::uint8_t>(value >> (8 * i));
+    };
+    put64(20, 72 + 8 * 4);
+    put64(28, 8 * 4);
+    put64(36, 8);
+    bytes->resize(80 + 12 * 4 + 2);  // complete tail plus an interrupted frame
+    const std::array<float, 12> data{.25f, -.25f, .5f, -.5f, 0, .125f, 1, -1, .5f, .25f, -.5f, 0};
+    std::memcpy(bytes->data() + 80, data.data(), sizeof(data));
+    REQUIRE(supple::writeFileAtomic(path, *bytes));
+    REQUIRE(readAudio(path));
+    CHECK(readAudio(path)->frames() == 8);
+    auto info = inspectWavStream(path);
+    REQUIRE(info);
+    CHECK(info->headerFrames == 8);
+    CHECK(info->fileFrames == 12);
+    auto repaired = repairWavStream(path);
+    REQUIRE(repaired);
+    CHECK(*repaired == 12);
+    const auto decoded = readAudio(path);
+    REQUIRE(decoded);
+    CHECK(decoded->channels[0] == std::vector<float>(data.begin(), data.end()));
+    CHECK(inspect(path)->frames == 12);
+}
+
+TEST_CASE("streamed WAV promotes in place at an injected limit and repairs interrupted promotion") {
+    const auto path =
+        fs::temp_directory_path() /
+        ("supple-stream-promote-" + std::to_string(supple::test::processId()) + ".wav");
+    struct Cleanup {
+        fs::path path;
+        ~Cleanup() { fs::remove(path); }
+    } cleanup{path};
+    WavStreamWriter writer;
+    REQUIRE(writer.open(path, 48000, 2));
+    WavStreamWriterTestAccess::riffLimit(writer, 256);
+    std::vector<float> block(32, .25f);
+    REQUIRE(writer.append(block.data(), 16));
+    REQUIRE(writer.updateHeader());
+    auto bytes = supple::readFile(path);
+    REQUIRE(bytes);
+    CHECK(std::string(reinterpret_cast<const char*>(bytes->data()), 4) == "RIFF");
+    REQUIRE(writer.append(block.data(), 16));  // 256 bytes data + 72 bytes container
+    bytes = supple::readFile(path);
+    REQUIRE(bytes);
+    CHECK(std::string(reinterpret_cast<const char*>(bytes->data()), 4) == "RF64");
+    CHECK(std::string(reinterpret_cast<const char*>(bytes->data() + 12), 4) == "ds64");
+    CHECK((*bytes)[4] == 255);
+    CHECK((*bytes)[76] == 255);
+    auto decoded = readAudio(path);
+    REQUIRE(decoded);
+    CHECK(decoded->channels == std::vector<std::vector<float>>(2, std::vector<float>(32, .25f)));
+    REQUIRE(writer.append(block.data(), 8));
+    REQUIRE(writer.flush());
+    writer.abandon();
+    SUBCASE("complete RF64 promotion") {}
+    SUBCASE("crash before publishing RF64 marker") {
+        std::fstream edit(path, std::ios::in | std::ios::out | std::ios::binary);
+        edit.write("RIFF", 4);
+        REQUIRE(edit.good());
+    }
+    const auto before = inspectWavStream(path);
+    REQUIRE(before);
+    CHECK(before->headerFrames == 32);
+    CHECK(before->fileFrames == 40);
+    REQUIRE(repairWavStream(path));
+    decoded = readAudio(path);
+    REQUIRE(decoded);
+    CHECK(decoded->channels == std::vector<std::vector<float>>(2, std::vector<float>(40, .25f)));
+    REQUIRE(repairWavStream(path));  // unchanged valid-header fast path
 }

@@ -938,6 +938,10 @@ Recorded filenames use sanitized track names and take numbers. Tracks named
 `Vocal` and `vocal` receive distinct take names when recorded together, including
 on case-insensitive filesystems.
 
+Audio takes begin as ordinary WAV files and become RF64 automatically above the
+32-bit size limit, without interrupting recording. Steppe can import and recover
+both formats, including recordings made with the older WAV header layout.
+
 Audio takes keep an append-only placement journal beside each WAV. After a
 crash, Project recovery restores loop passes and seeks through the last complete
 checkpoint; extra audio bytes are kept without guessing their placement. Stop

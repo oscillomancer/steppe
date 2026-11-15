@@ -49,6 +49,8 @@ class WavStreamWriter {
     std::FILE* file_ = nullptr;
     bool failed_ = false;
     bool synced_ = false;
+    bool rf64_ = false;
+    std::uint64_t riffLimit_ = UINT32_MAX;  // private small-limit promotion test seam
     std::uint32_t channels_ = 0;
     std::uint64_t frames_ = 0;
 };
@@ -62,7 +64,7 @@ struct WavStreamInfo {
     std::uint64_t fileFrames = 0;    // whole frames present after the header
 };
 // audio.not_stream when the file is not in the writer's layout (float32,
-// 44-byte header, the data chunk last).
+// legacy 44-byte or reserved 80-byte RIFF/RF64 header, the data chunk last).
 Result<WavStreamInfo> inspectWavStream(const std::filesystem::path& path);
 // Rewrites the header's sizes to cover every whole frame in the file (a
 // crash between header rewrites leaves the tail unaccounted). Returns the
