@@ -109,7 +109,11 @@ from `/proc/<tid>/schedstat`), `slices`, `voluntary` and `involuntary` switches
 and `migrations`. With `kernel.sched_schedstats=1` each thread's statistics
 are reset at the interval's start and it also reports `wait_max_ms` (the
 longest single wait runnable for a CPU), `wait_sum_ms`, `wait_count` and
-`exec_max_ms` (the longest run without a switch) over the interval. Schema 2.2 retains the 2.1 fields and adds
+`exec_max_ms` (the longest run without a switch) over the interval.
+`bridge_timing` also carries `wake_buckets` and `return_buckets`: how many
+answered live bridged calls took under 10, 20, 50, 100, 200, 500, 1000 and
+2000 µs, and at or over 2 ms, from post to the bridge seeing the call, and
+from the bridge finishing to the host seeing the answer. Schema 2.2 retains the 2.1 fields and adds
 `isolation`, the requested `background`, `background_priority` and
 `callback_priority`, and `scheduling`: the engine's applied policy per thread
 class (`callback`, `live`, `renderer`, `background`, each `policy` and

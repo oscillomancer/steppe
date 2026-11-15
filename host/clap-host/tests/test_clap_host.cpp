@@ -2266,6 +2266,16 @@ TEST_CASE("bridged calls report where their time went") {
     CHECK(t.background.wakeSumNs >= 0);
     CHECK(t.background.returnSumNs >= 0);
     CHECK(t.background.classMismatches == 0);
+    {
+        // Every answered call is counted once in each distribution.
+        std::uint64_t wakes = 0, returns = 0;
+        for (std::size_t b = 0; b < t.background.wakeBuckets.size(); ++b) {
+            wakes += t.background.wakeBuckets[b];
+            returns += t.background.returnBuckets[b];
+        }
+        CHECK(wakes == 50);
+        CHECK(returns == 50);
+    }
 #if defined(__linux__) || defined(_WIN32)
     CHECK(t.background.bridgeCpus != 0);
 #endif

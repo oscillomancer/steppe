@@ -854,6 +854,7 @@ struct TimingCounters {
     std::atomic<std::uint64_t> wakesOver200us{0}, wakesOver1ms{0}, bridgeCpus{0};
     std::atomic<std::uint64_t> classMismatches{0};
     std::atomic<std::uint32_t> migrations{0};
+    std::array<std::atomic<std::uint64_t>, 9> wakeBuckets{}, returnBuckets{};
 };
 TimingCounters gTiming[2];  // 0: background, 1: live
 
@@ -867,6 +868,15 @@ void add(std::atomic<std::int64_t>& max, std::atomic<std::int64_t>& sum,
     value = std::max<std::int64_t>(value, 0);
     raise(max, value);
     sum.fetch_add(value, std::memory_order_relaxed);
+}
+// Counts a duration under the first of BridgeTiming::kTimingBucketsUs it is
+// below, or in the last bucket.
+void bucket(std::array<std::atomic<std::uint64_t>, 9>& buckets, std::int64_t ns) SUPPLE_RT {
+    std::size_t b = 0;
+    while (b < BridgeTiming::kTimingBucketsUs.size() &&
+           ns >= std::int64_t{BridgeTiming::kTimingBucketsUs[b]} * 1000)
+        ++b;
+    buckets[b].fetch_add(1, std::memory_order_relaxed);
 }
 // Consecutive late live calls for this long fail the instance (ADR-0081).
 constexpr std::int64_t kLateFailNs = 50'000'000;
@@ -1003,6 +1013,8 @@ bool RemoteInstance::command(Cmd cmd) SUPPLE_RT {
         add(timing.wakeMax, timing.wakeSum, wake);
         add(timing.workMax, timing.workSum, hdr_->finishedNs - hdr_->seenNs);
         add(timing.returnMax, timing.returnSum, back - hdr_->finishedNs);
+        bucket(timing.wakeBuckets, wake);
+        bucket(timing.returnBuckets, back - hdr_->finishedNs);
         if (wake > 200'000) timing.wakesOver200us.fetch_add(1, std::memory_order_relaxed);
         if (wake > 1'000'000) timing.wakesOver1ms.fetch_add(1, std::memory_order_relaxed);
         if (hdr_->cpu >= 0 && hdr_->cpu < 64)
@@ -1062,6 +1074,10 @@ BridgeTiming bridgeTiming() {
         c.bridgeCpus = get(t.bridgeCpus);
         c.classMismatches = get(t.classMismatches);
         c.migrations = get(t.migrations);
+        for (std::size_t b = 0; b < c.wakeBuckets.size(); ++b) {
+            c.wakeBuckets[b] = get(t.wakeBuckets[b]);
+            c.returnBuckets[b] = get(t.returnBuckets[b]);
+        }
     }
     return out;
 }
@@ -1075,6 +1091,10 @@ void resetBridgeTiming() {
                         &t.returnMax, &t.returnSum})
             a->store(0, std::memory_order_relaxed);
         t.migrations.store(0, std::memory_order_relaxed);
+        for (std::size_t b = 0; b < t.wakeBuckets.size(); ++b) {
+            t.wakeBuckets[b].store(0, std::memory_order_relaxed);
+            t.returnBuckets[b].store(0, std::memory_order_relaxed);
+        }
     }
 }
 

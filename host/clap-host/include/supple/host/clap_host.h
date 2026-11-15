@@ -12,6 +12,7 @@
 
 #include <clap/clap.h>
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
@@ -311,7 +312,11 @@ struct BridgeTiming {
         std::uint64_t bridgeCpus = 0;       // bit c: a bridge thread ran a call on CPU c
         std::uint64_t classMismatches = 0;  // Linux: answers from a thread not in the class asked
         std::uint32_t migrations = 0;       // the most CPU changes one bridge thread reported
+        // How many answered calls' wake and return fell under each bound of
+        // kTimingBucketsUs (the last: at or over 2 ms).
+        std::array<std::uint64_t, 9> wakeBuckets{}, returnBuckets{};
     };
+    static constexpr std::array<int, 8> kTimingBucketsUs{10, 20, 50, 100, 200, 500, 1000, 2000};
     Calls live, background;
 };
 BridgeTiming bridgeTiming();

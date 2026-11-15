@@ -589,6 +589,14 @@ int main(int argc, char** argv) {
         b["return_max_us"] = t.returnMaxUs;
         b["wakes_over_200us"] = t.wakesOver200us;
         b["wakes_over_1ms"] = t.wakesOver1ms;
+        // Under 10, 20, 50, 100, 200, 500, 1000, 2000 µs, and at or over 2 ms.
+        const host::BridgeTiming::Calls liveCalls = host::bridgeTiming().live;
+        b["wake_buckets"] = json::Value::array();
+        b["return_buckets"] = json::Value::array();
+        for (std::size_t k = 0; k < liveCalls.wakeBuckets.size(); ++k) {
+            b["wake_buckets"].push_back(static_cast<std::int64_t>(liveCalls.wakeBuckets[k]));
+            b["return_buckets"].push_back(static_cast<std::int64_t>(liveCalls.returnBuckets[k]));
+        }
         b["bridge_cpus"] = json::Value::array();
         for (auto c : t.bridgeCpus) b["bridge_cpus"].push_back(c);
         b["migrations"] = t.migrations;
