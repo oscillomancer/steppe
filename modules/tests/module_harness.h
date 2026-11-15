@@ -116,6 +116,28 @@ class ModuleHarness {
         }
     }
 
+    // Runs `frames` frames as host blocks of the given sizes in turn split
+    // them: each piece is cut where it crosses the grid, so a grid interval
+    // can reach the module in two calls, as after a seek off the grid. The
+    // knobs here are constant, so holding them across a split interval (as
+    // the rack does) and sampling them per call agree.
+    void runSplit(std::int64_t frames, const std::vector<int>& pieces) {
+        std::size_t k = 0;
+        int left = pieces.at(0);
+        while (frames > 0) {
+            const int toGrid = kGrid - static_cast<int>(frame_ % kGrid);
+            const int n =
+                static_cast<int>(std::min<std::int64_t>({frames, std::int64_t{left}, toGrid}));
+            block(n);
+            frames -= n;
+            left -= n;
+            if (left == 0) {
+                k = (k + 1) % pieces.size();
+                left = pieces[k];
+            }
+        }
+    }
+
     // What an output carried, channel c, every frame run (0 where it had
     // fewer channels).
     const std::vector<double>& output(std::string_view key, int c = 0) const {

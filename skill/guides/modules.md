@@ -247,6 +247,17 @@ of the host block size. Acyclic cables have no delay: a module's output
 reaches its dependents in the same block. In a feedback group, modules
 run one frame at a time in fixed id order. Cables going backwards in that
 order, including self-feedback, carry the previous frame (ADR-0062 §5).
+
+A host block need not end on the grid (after a seek off it, for one), so
+one grid interval can arrive as two calls, and the offline render splits
+it elsewhere or not at all. Keep what a module plays independent of where
+calls fall: advance state per frame, and do work you would do "once a
+block" (a random wander, retuning filters from a cable, planning partials)
+on a count of frames you keep yourself, every 32 frames from `prepare()`,
+reading the cables at that frame. Do not clear a "first frame" flag at the
+end of a call: test it for the first frame only. A song position computed
+as `beats + i * beatsPerFrame` from the call's transport is the exception:
+it can differ from the unsplit call's in the last bits.
 A process loop has a budget of `65536 * frames`; exhaustion stops that
 module, silences its outputs and reports the problem.
 

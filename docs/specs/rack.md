@@ -426,7 +426,19 @@ grid of that position, and for each grid block:
 4. publishes telemetry when due.
 
 Automation targets are sampled at absolute grid starts and held when host
-blocks split a grid interval; smoothing still advances every frame. A first
+blocks split a grid interval; smoothing still advances every frame. A
+module's own output must not depend on where host blocks split an
+interval (they split it differently in the real-time and offline renders):
+stock modules advance state per frame, and do their control-rate work
+(Delay's wander, VCO's drift, Harmonic's partial plan, Resonator's and
+Drum's tuning, Sequencer's step knobs) every 32 frames counted from
+`prepare()` or a restart, reading cables at that frame. A run that starts
+on the grid does that work where it did per call. `rack-stock.tests`
+checks every stock module with split calls against whole ones. One limit
+remains: a module computes song positions as `beats + i * beatsPerFrame`
+from its call's transport, so after a seek off the grid a split call's
+positions can differ from the unsplit call's in the last bits, and a step
+or gate that falls exactly on such a position can move by a frame. A first
 call or a discontinuity samples the grid interval containing its start,
 including for negative positions. A zero-frame call leaves that state alone.
 

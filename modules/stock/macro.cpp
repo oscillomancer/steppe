@@ -39,7 +39,8 @@ struct Macro : Module {
             for (int i = 0; i < frames; ++i) {
                 const double v = clamp(macro[k].at(i), 0.0, 1.0);
                 const double target = bipolar ? 2.0 * v - 1.0 : v;
-                glided[k] = unplayed ? target : target + (glided[k] - target) * coefficient;
+                glided[k] =
+                    unplayed && i == 0 ? target : target + (glided[k] - target) * coefficient;
                 out[k][0][i] = glided[k];
             }
         }
