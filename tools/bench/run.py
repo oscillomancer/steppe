@@ -362,6 +362,8 @@ def main(argv=None):
                         help="B1 paced only: SCHED_FIFO priority of the paced callback")
     parser.add_argument("--isolation", choices=("in_process", "shared_bridge", "dedicated"),
                         default="in_process", help="B1 only: every FX's isolation mode")
+    parser.add_argument("--park-us", type=int, default=0,
+                        help="B1 only, experimental: live helpers park after this many idle us (0: spin)")
     parser.add_argument("--recipe", type=Path, default=ROOT / "host/engine/bench/session.json")
     parser.add_argument("--device", choices=("paced", "offline", "jack"))
     parser.add_argument("--anticipative", choices=("on", "off", "both"), default="both")
@@ -435,7 +437,8 @@ def main(argv=None):
                                "--background", args.background,
                                "--background-priority", str(args.background_priority),
                                "--callback-priority", str(args.callback_priority),
-                               "--isolation", args.isolation, *effect_args]
+                               "--isolation", args.isolation, "--park-us", str(args.park_us),
+                               *effect_args]
                     with (run_dir / "console.log").open("w") as log:
                         completed = subprocess.run(command, check=False, timeout=args.seconds + args.timeout,
                                                    stdout=log, stderr=subprocess.STDOUT)

@@ -331,6 +331,9 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
                 "; using serial processing; lower Audio processing threads and restart the engine");
         }
         if (liveWorkers_)
+            liveWorkers_->setParkAfter(
+                static_cast<std::int64_t>(std::max(0.0, options_.liveHelperParkUs) * 1000.0));
+        if (liveWorkers_)
             if (auto configured = liveWorkers_->configure(backend); !configured) {
                 startWarnings_.push_back(configured.error().message + "; " +
                                          configured.error().hint);

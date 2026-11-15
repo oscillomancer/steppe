@@ -96,6 +96,9 @@ Scheduling and isolation (B1 only, engine.md §2.2, ADR-0026):
   `RLIMIT_RTPRIO`.
 - `--isolation in_process|shared_bridge|dedicated` sets every FX's isolation
   before the engine starts.
+- `--park-us N` (experimental, item D): live helpers idle N µs within a
+  callback's job park instead of spinning (`EngineOptions::liveHelperParkUs`;
+  0, the default, spins). Recorded as `park_us`.
 
 A background scheduling fallback is a warning, so it invalidates the run.
 

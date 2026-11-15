@@ -5,6 +5,7 @@
 #include "supple/host/clap_host.h"
 
 #include <algorithm>
+#include <bit>
 #include <string>
 
 #include "supple/base/thread.h"
@@ -67,17 +68,67 @@ ThreadPolicy LiveWorkers::policy() {
                                               : threadPolicy(threads_.front().native_handle());
 }
 
-void LiveWorkers::help(TaskGraph& g, Fn fn, void* context) SUPPLE_RT {
+void LiveWorkers::help(TaskGraph& g, Fn fn, void* context, int self) SUPPLE_RT {
+    const bool parks = self >= 0 && self < 64 && parkAfterNs_ > 0;
+    std::int64_t idleSince = 0;
     while (g.remaining.load(std::memory_order_acquire) != 0) {
         std::uint32_t task = 0;
         if (!g.ready.pop(task)) {
+            if (parks) {
+                const std::int64_t now = host::steadyNanoseconds();
+                if (idleSince == 0) {
+                    idleSince = now;
+                } else if (now - idleSince >= parkAfterNs_) {
+                    park(g, self);
+                    idleSince = 0;
+                    continue;
+                }
+            }
             rt::relax();
             continue;
         }
+        idleSince = 0;
         fn(context, task);
+        int pushed = 0;
         for (std::uint32_t next : g.succ[task])
-            if (g.pending[next].fetch_sub(1, std::memory_order_acq_rel) == 1) g.ready.push(next);
-        g.remaining.fetch_sub(1, std::memory_order_acq_rel);
+            if (g.pending[next].fetch_sub(1, std::memory_order_acq_rel) == 1) {
+                g.ready.push(next);
+                ++pushed;
+            }
+        const bool last = g.remaining.fetch_sub(1, std::memory_order_acq_rel) == 1;
+        if (parkAfterNs_ > 0 && (pushed > 0 || last)) unpark(pushed, last);
+    }
+}
+
+// A parked helper's bit is set, then (after a full fence) it looks again for
+// a task or the job's end before it waits; a pusher pushes, then (after a
+// full fence) reads the bits. Either the pusher sees the bit and bumps the
+// helper's word, or the helper's second look sees the push: no wake is lost.
+void LiveWorkers::park(TaskGraph& g, int self) SUPPLE_RT {
+    const std::uint64_t bit = std::uint64_t{1} << self;
+    std::atomic<std::uint32_t>& word = slots_[static_cast<std::size_t>(self)].park;
+    parked_.fetch_or(bit, std::memory_order_seq_cst);
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    const std::uint32_t seen = word.load(std::memory_order_acquire);
+    if (g.remaining.load(std::memory_order_acquire) != 0 && g.ready.empty()) {
+        // Experimental (item D): a helper's wait within a job. Helpers already
+        // block between jobs (loop); this needs an ADR-0024 amendment if kept.
+        event(Event::Park);
+        rt::ScopedSanctionedSyscall wait;
+        rt::wait(word, seen);
+    }
+    parked_.fetch_and(~bit, std::memory_order_seq_cst);
+}
+
+void LiveWorkers::unpark(int count, bool all) SUPPLE_RT {
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    std::uint64_t waiting = parked_.load(std::memory_order_seq_cst);
+    while (waiting != 0 && (all || count-- > 0)) {
+        const int i = std::countr_zero(waiting);
+        waiting &= waiting - 1;
+        std::atomic<std::uint32_t>& word = slots_[static_cast<std::size_t>(i)].park;
+        word.fetch_add(1, std::memory_order_release);
+        rt::wake(word);
     }
 }
 
@@ -105,7 +156,7 @@ void LiveWorkers::run(TaskGraph& g, Fn fn, void* context) SUPPLE_RT {
         rt::wake(slots_[i].sequence);
     }
     event(Event::Published);
-    help(g, fn, context);
+    help(g, fn, context, -1);
     // This store/load and the helper's increment/open check form a Dekker
     // handshake: either we see its claim, or it sees closed. Acquire/release
     // alone would let both sides miss each other and retire a job still read.
@@ -130,7 +181,7 @@ void LiveWorkers::loop(unsigned index) {
         if (open_.load(std::memory_order_seq_cst)) {
             event(Event::Entered);
             const host::LiveBridgeDeadline deadline(deadline_);
-            help(*job_, fn_, context_);
+            help(*job_, fn_, context_, static_cast<int>(index));
             event(Event::Leave);
         } else {
             // The graph and context may already be gone. An old notification

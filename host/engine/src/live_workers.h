@@ -17,7 +17,8 @@ class LiveWorkers {
     using Fn = Workers::Fn;
     // Test seams: Join precedes the claim; Claimed precedes the open check;
     // Entered/Leave surround job access. Published/JoinWait run on the caller.
-    enum class Event { Join, Claimed, Entered, Leave, Missed, Idle, Published, JoinWait };
+    // Park: a helper is about to wait within a job (setParkAfter).
+    enum class Event { Join, Claimed, Entered, Leave, Missed, Idle, Published, JoinWait, Park };
     struct Hooks {
         void (*event)(void*, Event) = nullptr;
         void* context = nullptr;
@@ -36,16 +37,25 @@ class LiveWorkers {
     ThreadPolicy policy();  // main thread: the first helper's (None without helpers)
     // One callback at a time. No helper can access this job after return.
     void run(TaskGraph& graph, Fn fn, void* context) SUPPLE_RT;
+    // Experimental (item D): a helper idle this long within a job parks
+    // until a task is ready or the job completes, instead of spinning, so
+    // waits on bridged plug-ins leave CPUs to the bridge. 0 (the default):
+    // helpers spin. Main thread, before the first job.
+    void setParkAfter(std::int64_t nanoseconds) { parkAfterNs_ = nanoseconds; }
 
   private:
     void shutDown();
     void loop(unsigned index);
-    void help(TaskGraph& graph, Fn fn, void* context) SUPPLE_RT;
+    // `self`: the helper's index, or -1 for the callback (which never parks).
+    void help(TaskGraph& graph, Fn fn, void* context, int self) SUPPLE_RT;
+    void park(TaskGraph& graph, int self) SUPPLE_RT;
+    void unpark(int count, bool all) SUPPLE_RT;
     void event(Event e) {
         if (hooks_.event) hooks_.event(hooks_.context, e);
     }
     struct alignas(64) Slot {
         std::atomic<std::uint32_t> sequence{0};
+        std::atomic<std::uint32_t> park{0};  // bumped to wake it from park()
     };
     std::unique_ptr<Slot[]> slots_;
     ThreadStartup startup_;
@@ -62,6 +72,8 @@ class LiveWorkers {
     // The callback's bridge deadline for this job (ADR-0081), which helpers
     // take for their bridged calls; 0 for none.
     std::int64_t deadline_ = 0;
+    std::int64_t parkAfterNs_ = 0;
+    std::atomic<std::uint64_t> parked_{0};  // a bit per parked helper
 };
 
 }  // namespace detail

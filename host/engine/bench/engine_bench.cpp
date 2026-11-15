@@ -348,7 +348,7 @@ int main(int argc, char** argv) {
     std::string output, exportPath, pluginFile, pluginId, input;
     std::string background = "auto", isolation = "in_process";
     int block = 64, workers = -1, fxPerTrack = 1, capacity = 500000;
-    int backgroundPriority = 0, callbackPriority = 0;
+    int backgroundPriority = 0, callbackPriority = 0, parkUs = 0;
     bool live = false, metrics = true;
     int tracks = 2;
     double seconds = 300;
@@ -363,7 +363,7 @@ int main(int argc, char** argv) {
                     "[--block 64|128] [--workers -1] [--metrics on|off] "
                     "[--sample-capacity 500000] [--plugin-file PATH --plugin-id ID --input WAV "
                     "--live on|off --fx-per-track N] [--background auto|normal|fifo] "
-                    "[--background-priority 0] [--callback-priority 0] "
+                    "[--background-priority 0] [--callback-priority 0] [--park-us 0] "
                     "[--isolation in_process|shared_bridge|dedicated] "
                     "[--export-session JSON] [--search --max-tracks 256 --report "
                     "docs/benchmarks/b1.md]");
@@ -389,7 +389,7 @@ int main(int argc, char** argv) {
                 isolation = value;
             else if (arg == "--block" || arg == "--workers" || arg == "--fx-per-track" ||
                      arg == "--sample-capacity" || arg == "--background-priority" ||
-                     arg == "--callback-priority") {
+                     arg == "--callback-priority" || arg == "--park-us") {
                 std::size_t used;
                 const int number = std::stoi(value, &used);
                 if (used != value.size()) throw std::invalid_argument("invalid integer");
@@ -403,6 +403,8 @@ int main(int argc, char** argv) {
                     backgroundPriority = number;
                 else if (arg == "--callback-priority")
                     callbackPriority = number;
+                else if (arg == "--park-us")
+                    parkUs = number;
                 else
                     capacity = number;
             } else if ((arg == "--live" || arg == "--metrics") &&
@@ -480,6 +482,7 @@ int main(int argc, char** argv) {
         {.anticipative = anticipative,
          .workers = workers,
          .benchProbe = metrics ? &probe : nullptr,
+         .liveHelperParkUs = static_cast<double>(parkUs),
          .background = background == "normal" ? Background::Normal
                        : background == "fifo" ? Background::Fifo
                                               : Background::Auto,
@@ -547,6 +550,7 @@ int main(int argc, char** argv) {
     result["background"] = background;
     result["background_priority"] = backgroundPriority;
     result["callback_priority"] = callbackPriority;
+    result["park_us"] = parkUs;
     auto scheduling = json::Value::object();
     const Engine::Scheduling& applied = engine->scheduling();
     for (const auto& [name, policy] :

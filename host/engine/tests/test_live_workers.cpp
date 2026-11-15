@@ -56,6 +56,40 @@ TEST_CASE("live pool: runs every task once, after its dependencies") {
     }
 }
 
+TEST_CASE("live pool: helpers that park within a job still run every task once") {
+    // Item D's experiment: idle helpers park instead of spinning. Parking
+    // after 1 ns makes them park whenever no task is ready (in chains and
+    // behind long tasks), so every push and the job's end must wake them.
+    std::atomic<int> parks{0};
+    LiveWorkers::Hooks hooks;
+    hooks.context = &parks;
+    hooks.event = [](void* c, LiveWorkers::Event e) {
+        if (e == LiveWorkers::Event::Park) static_cast<std::atomic<int>*>(c)->fetch_add(1);
+    };
+    std::mt19937 rng(11);
+    for (unsigned helpers : {1u, 3u, 7u}) {
+        LiveWorkers workers(helpers, hooks);
+        workers.setParkAfter(1);
+        for (int graph = 0; graph < 40; ++graph) {
+            Run r;
+            const std::uint32_t n = 1 + rng() % 40;
+            r.deps.resize(n);
+            for (std::uint32_t i = 1; i < n; ++i)
+                for (std::uint32_t k = rng() % 3; k > 0; --k) r.deps[i].push_back(rng() % i);
+            r.spin = static_cast<int>(rng() % 20000);
+            TaskGraph g;
+            g.build(r.deps);
+            for (int rep = 0; rep < 5; ++rep) {
+                r.done = std::make_unique<std::atomic<int>[]>(n);
+                workers.run(g, &task, &r);
+                for (std::uint32_t i = 0; i < n; ++i) REQUIRE(r.done[i].load() == 1);
+            }
+            CHECK(r.violations.load() == 0);
+        }
+    }
+    CHECK(parks.load() > 0);  // the path ran
+}
+
 TEST_CASE("live pool: an empty graph and a chain") {
     LiveWorkers workers(3);
     TaskGraph empty;
