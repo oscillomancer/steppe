@@ -108,6 +108,12 @@ std::int64_t midiClock(const RecordTarget::Midi& midi, std::int64_t latency);
 // The take stop commits, from what was captured (events in time order).
 RecordedTake placeMidi(const MidiCapture& capture);
 
+// Every clock a recording's file (its MIDI journal) or replayed commit
+// (record.commit) holds is within this many frames of zero (over 23 years at
+// 384 kHz). A value beyond it is damage, and the bound keeps placement's
+// sums, of at most six such terms, far inside int64.
+inline constexpr std::int64_t kRecordingClockLimit = std::int64_t(1) << 48;
+
 // A MIDI take's crash-recovery journal (ADR-0080), <name>.midi.jsonl beside
 // the WAVs: a header line, then events, runs and how far capture got, one
 // canonical JSON value per line, appended by the recorder's writer thread.

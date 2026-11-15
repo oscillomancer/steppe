@@ -1773,6 +1773,71 @@ TEST_CASE("record.commit refuses MIDI that is not a channel message of 7-bit dat
     CHECK(p.app->head().midi.size() == 1);
 }
 
+TEST_CASE("record.commit refuses clocks and runs no recording can have") {
+    // As the journal reader (round 10, finding 2): every clock within 2^48
+    // frames, so placement's sums stay inside int64, and a run that fits the
+    // 32 bits a recorded event keeps it in, never truncated into another.
+    Project p;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *p.app);
+    REQUIRE(d.execute({"track.add", json::Value::object(), kUnit}));
+    struct Field {
+        std::string key, value;
+    };
+    auto commit = [&](const Field& bad) {
+        std::map<std::string, std::string> f = {{"start_sample", "0"},    {"frames", "48000"},
+                                                {"loop_start", "0"},      {"loop_end", "0"},
+                                                {"overflow_frames", "0"}, {"sample_rate", "48000"},
+                                                {"file_frame", "0"},      {"segment_timeline", "0"},
+                                                {"timeline", "0"},        {"run", "0"}};
+        f[bad.key] = bad.value;
+        auto args = json::parse(
+            R"({"takes":[{"track":"tr_1","file":"","hash":"","start_sample":)" + f["start_sample"] +
+            R"(,"frames":)" + f["frames"] + R"(,"sample_rate":)" + f["sample_rate"] +
+            R"(,"midi":true,"loop_start":)" + f["loop_start"] + R"(,"loop_end":)" + f["loop_end"] +
+            R"(,"overflow_frames":)" + f["overflow_frames"] + R"(,"segments":[{"file_frame":)" +
+            f["file_frame"] + R"(,"timeline":)" + f["segment_timeline"] +
+            R"(}],"events":[{"timeline":)" + f["timeline"] + R"(,"run":)" + f["run"] +
+            R"(,"voice":-1,"bytes":[144,60,100]}]}],"punch":{"enabled":false,"start":0,"end":0}})");
+        REQUIRE(args);
+        return d.execute({"record.commit", *args, kUnit});
+    };
+    const std::string far = "4611686018427387904", farBack = "-4611686018427387904";  // 2^62
+    const std::string past = "281474976710657";                                       // 2^48 + 1
+    const std::vector<std::pair<Field, std::string>> cases = {
+        {{"start_sample", far}, "/args/takes/0/start_sample"},
+        {{"start_sample", farBack}, "/args/takes/0/start_sample"},
+        {{"frames", past}, "/args/takes/0/frames"},
+        {{"loop_start", far}, "/args/takes/0/loop_start"},
+        {{"loop_end", far}, "/args/takes/0/loop_end"},
+        {{"loop_start", "-1"}, "/args/takes/0/loop_start"},
+        {{"overflow_frames", far}, "/args/takes/0/overflow_frames"},
+        {{"sample_rate", "0"}, "/args/takes/0/sample_rate"},
+        {{"file_frame", far}, "/args/takes/0/segments/0/file_frame"},
+        {{"segment_timeline", farBack}, "/args/takes/0/segments/0/timeline"},
+        {{"timeline", far}, "/args/takes/0/events/0/timeline"},
+        {{"timeline", farBack}, "/args/takes/0/events/0/timeline"},
+        {{"run", "4294967296"}, "/args/takes/0/events/0/run"},  // 2^32 was run 0
+    };
+    for (const auto& [bad, path] : cases) {
+        INFO(bad.key << " = " << bad.value);
+        auto r = commit(bad);
+        REQUIRE_FALSE(r);
+        INFO(r.error().toString());
+        CHECK(r.error().code == "command.invalid_args");
+        REQUIRE(r.error().details.size() == 1);
+        const Error& field = r.error().details[0];
+        CHECK(field.code == "schema.out_of_range");
+        CHECK(field.path == path);
+        CHECK(field.hint.starts_with("valid range: "));
+        CHECK(p.app->head().midi.empty());
+    }
+    auto good = commit({"timeline", "281474976710656"});  // 2^48 itself: the bound holds
+    REQUIRE_MESSAGE(good, (good ? std::string() : good.error().toString()));
+    CHECK(p.app->head().midi.size() == 1);
+}
+
 TEST_CASE("a recovered take whose Note Out route is gone keeps its voices apart") {
     // Round-10 review, finding 3: dropping the missing route also dropped
     // each voice's identity, so two overlapping notes of one pitch paired as

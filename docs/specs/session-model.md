@@ -1036,7 +1036,13 @@ and naming. All `edit` unless marked (q) query or (a) action.
   punch range then, so a merge places them again on another branch. Each
   MIDI event's `bytes` is a channel message (status 128..239, then two
   data bytes 0..127) and its `voice` fits 32 bits, or the call fails with
-  `record.midi`.
+  `record.midi`. As in a MIDI journal (ADR-0080), every clock is within
+  2^48 frames of zero (`start_sample`, a segment's and an event's
+  `timeline`), lengths and positions that cannot be negative are 0..2^48
+  (`frames`, `file_frame`, `loop_start`, `loop_end`, `overflow_frames`),
+  `run` fits 32 bits and `sample_rate` is above 0; otherwise the call fails
+  with `command.invalid_args`, its detail `schema.out_of_range` at the
+  field's path.
 - **render** (a): `render.mix {master}` (one master for the call; default the `masters` setting, else tr_0), `render.stems`, `render.regions` (matrix),
   `render.items`, `render.dry-run` (q: resolved file list), `render.job.*`;
   `format` (wav|flac), `secondary` (a second file in another format/bit depth
