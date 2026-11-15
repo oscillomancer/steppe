@@ -235,7 +235,10 @@ instructions are in `docs/guides/installing.md`.
   `track.move` accepts reorders under a non-root buss and moves between
   sibling folders, and refuses destinations in the moved track's own subtree.
   Its portable command regression covers undo and cycle rollback; the
-  two-move soak replay is in the fuzzing guide.
+  two-move soak replay is in the fuzzing guide. Soak reclamation checkpoints
+  observe executor adoption before collection and require a stable generation;
+  a manual-callback regression covers acknowledgement arriving after an earlier
+  collection, which previously caused a false retained-plan failure.
 - **Strips and routing** (ADR-0019 to ADR-0022): typed channel, buss and
   master strips with Console 9 summing (switchable, level-matched; unity
   staging, so a hop costs nothing, ADR-0066); pan modes (pan, dual pan, pan

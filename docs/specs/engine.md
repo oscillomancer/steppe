@@ -326,6 +326,11 @@ undo (ADR-0008). The seed determines the operation stream; native thread
 interleaving remains free. Wall-clock guards detect hung handshakes, not audio
 correctness. Long-run and replay controls are in `tests/fuzz/README.md`.
 
+Reclamation checkpoints observe both executor acknowledgements before
+collecting on the model thread and require the published generation to stay
+unchanged through collection. A callback acknowledgement arriving after an
+earlier collection does not imply that collection already freed its old plan.
+
 **Mix-value edits (ADR-0060).** A session that differs from the last one
 `Engine::load` took only in strip `volume_db`/`pan`/`width`/`pan_left`/`pan_right`,
 send `volume_db`/`pan` and VCA `volume_db` (and in the points of envelopes a

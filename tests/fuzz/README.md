@@ -126,6 +126,18 @@ assertion so a timed diagnostic run can cover its entire requested duration.
 Every failure still counts and the process exits nonzero; sanitizer aborts and
 crashes remain fatal. Normal tests and replay stop at the first failed check.
 
+`plan-soak-corpus/retirement-checkpoint.jsonl` minimises a harness fault found
+under ASan and TSan. Its optional header `probe: retirement-checkpoint` selects
+a deterministic schedule probe: publish one replacement plan, acknowledge it
+in the renderer, then release the preceding plan in a manual callback at the
+checkpoint's readiness check. The seed records the original failing run; no
+musical commands are needed to reproduce the ordering. Collection before that
+readiness check legitimately leaves two plans, so checking for one immediately
+afterwards was a harness error. The checkpoint now observes both acknowledgements
+before collection and retries if service publishes another generation. The
+strict one-plan assertion is unchanged. This schedule regression also runs in
+the default test budget.
+
 `plan-soak-corpus/rack-level.jsonl` and `rack-level-ahead.jsonl` are known
 failing one-edit reproducers:
 changing the connected VCA's level from -30 to -27 makes the retained RT pool

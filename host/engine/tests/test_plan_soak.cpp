@@ -57,6 +57,55 @@ std::uint64_t setting(const char* key, std::uint64_t fallback) {
                     key << " must be an unsigned decimal integer");
     return value;
 }
+// Readiness is supplied separately so the regression can place a real
+// manual callback acknowledgement at the same boundary as the racing callback.
+template <class Ready>
+bool collectAdoptedPlan(Engine& engine, Ready ready) {
+    const auto generation = engine.planGeneration();
+    if (!ready()) return false;
+    engine.service();
+    // Service may publish a replacement after a latency/restart notification.
+    // Its acknowledgements need another collection pass even if they arrive now.
+    return engine.planGeneration() == generation && ready();
+}
+
+void replayRetirementCheckpoint() {
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    Engine engine(pool, media, {.workers = 0});
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
+    const auto original = model::Session::create({.console9 = false});
+    REQUIRE(engine.load(original));
+    REQUIRE(engine.awaitPlan());
+    backend.run(1);
+    engine.service();
+    REQUIRE(EngineTestAccess::plans(engine) == 1);
+
+    model::EditTxn edit(original, original.version + 1);
+    edit.modify<model::Track>(kMaster, [](auto& track) { track.name = "Checkpoint"; });
+    auto changed = edit.commit();
+    REQUIRE(changed);
+    REQUIRE(engine.load(*changed));
+    REQUIRE(engine.awaitPlan());
+    // Renderer ready, callback still using the preceding plan. Collection
+    // must retain it until that callback has released it.
+    REQUIRE_FALSE(EngineTestAccess::adopted(engine));
+    REQUIRE(EngineTestAccess::plans(engine) == 2);
+    bool acknowledged = false;
+    REQUIRE(collectAdoptedPlan(engine, [&] {
+        if (!acknowledged) {
+            backend.run(1);
+            acknowledged = true;
+        }
+        return EngineTestAccess::adopted(engine);
+    }));
+    REQUIRE(EngineTestAccess::plans(engine) == 1);
+    REQUIRE(engine.processErrors() == 0);
+    engine.stop();
+    REQUIRE(EngineTestAccess::plans(engine) == 0);
+}
+
 json::Value args(std::string_view text) { return json::parse(text).value(); }
 std::string content(const model::Session& s) {
     auto doc = model::projectToJson(s);
@@ -248,8 +297,7 @@ struct Soak {
             if (!engine.awaitPlan()) return false;
             const auto target = engine.cycles() + 4;
             if (!wait([&] { return engine.cycles() >= target; })) return false;
-            engine.service();
-            return EngineTestAccess::adopted(engine);
+            return collectAdoptedPlan(engine, [&] { return EngineTestAccess::adopted(engine); });
         }));
         REQUIRE(engine.transport().playing);
         REQUIRE(engine.processErrors() == 0);
@@ -576,6 +624,11 @@ struct Soak {
 };
 }  // namespace
 
+TEST_CASE("soak reclamation observes callback adoption before collection" *
+          doctest::description("rt")) {
+    replayRetirementCheckpoint();
+}
+
 TEST_CASE("seeded plan-swap soak during playback in both executors" * doctest::description("rt")) {
     const auto seconds = setting("SUPPLE_SOAK_SECONDS", 0);
     const auto keepGoing = setting("SUPPLE_SOAK_CONTINUE", 0);
@@ -599,6 +652,11 @@ TEST_CASE("seeded plan-swap soak during playback in both executors" * doctest::d
         auto header = json::parse(line);
         REQUIRE(header);
         REQUIRE((*header)["schema"] == "supple.plan-soak/1");
+        if (const auto* probe = header->find("probe")) {
+            REQUIRE(probe->asString() == "retirement-checkpoint");
+            replayRetirementCheckpoint();
+            return;
+        }
         const auto& seedText = (*header)["seed"].asString();
         const auto parsedSeed =
             std::from_chars(seedText.data(), seedText.data() + seedText.size(), masterSeed);
