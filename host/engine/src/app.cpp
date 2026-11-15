@@ -636,6 +636,7 @@ Status EngineApp::replaceProject(model::VersionStore store, fs::path path,
     // Not saved: a saved project's journals stay, offered on its next open;
     // an unsaved one's went with its folder above (ADR-0078, ADR-0080).
     midiJournalsPending_.clear();
+    unpublishedCopies_.clear();
     endMasterRecording();
     autoWrite_.clear();
     renderQueue_.clear();
@@ -679,9 +680,10 @@ Status EngineApp::replaceProject(model::VersionStore store, fs::path path,
     versions_ = std::make_unique<model::VersionStore>(std::move(store));
     projectPath_ = std::move(path);
     openedFile_.reset();
+    autosavedThrough_.reset();  // open() sets the file's
     if (std::error_code ec; !projectPath_.empty())
         if (const auto time = fs::last_write_time(projectPath_, ec); !ec)
-            openedFile_.emplace(projectPath_, time);
+            openedFile_.emplace(OpenedFile{projectPath_, time, std::nullopt});
     branchesBackupFor_.clear();
     recoveryKeep_.clear();
     autosaveMarked_ = !autosaveDir().empty();
@@ -710,6 +712,11 @@ fs::path EngineApp::resolve(const fs::path& path) const {
     return path.is_relative() ? options_.workdir / path : path;
 }
 
+namespace {
+// autosave-<n>.json's n (defined with the autosave code below).
+std::optional<std::uint64_t> autosaveIndex(std::string_view name);
+}  // namespace
+
 Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warnings,
                        bool history) {
     const fs::path path = resolve(where);
@@ -724,6 +731,28 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
     if (fromScratch && engine_ && engine_->recording())
         return Error("project.recording", "a recording is running", {},
                      "stop it before the project's first save (its files move then)");
+    // The file holds the work of every autosave already beside it (and of
+    // those this project numbered before them): one numbered above that is
+    // newer than it (ADR-0078). File times decide nothing here.
+    std::uint64_t through = 0;
+    {
+        std::error_code ec;
+        const fs::path data = path.parent_path() / (path.filename().string() + "-data");
+        for (fs::directory_iterator it(data, ec), end; !ec && it != end; it.increment(ec))
+            if (const auto n = autosaveIndex(it->path().filename().string()))
+                through = std::max(through, *n);
+        // A folder it cannot read may hold autosaves above what it read: a
+        // count short of them would offer them over this file once the folder
+        // reads again. No folder (or a file in its place) holds none.
+        if (ec && ec != std::errc::no_such_file_or_directory && ec != std::errc::not_a_directory)
+            return Error("project.autosave_folder",
+                         "could not read the autosave folder beside the file: " + ec.message(),
+                         data.string(),
+                         "make the folder readable (or move it aside), then save again; or save "
+                         "to another file");
+        if (path == projectPath_ && autosavedThrough_)
+            through = std::max(through, *autosavedThrough_);
+    }
     auto publish = [&]() -> Status {
         // This file's branches could not be restored when it was opened:
         // keep it before writing main alone over it.
@@ -762,17 +791,40 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
             branchesBackupFor_.clear();
         }
         SUPPLE_TRY(publishRecoveryKeeps(path, warnings));
-        return writeFileAtomic(path, model::serializeProjectFile(*versions_, history));
+        return writeFileAtomic(path, model::serializeProjectFile(*versions_, history, through));
     };
     const fs::path media = path.parent_path() / head().project->mediaDir;
     const fs::path oldMedia = mediaDir();
+    std::error_code sameError;
+    const bool sameMedia =
+        media == oldMedia || (fs::exists(media, sameError) && fs::exists(oldMedia, sameError) &&
+                              fs::equivalent(media, oldMedia, sameError));
+    // A recording writes into the project's media folder until it stops: a
+    // save as into another folder would copy its first part while the rest
+    // goes on into the old one. As a first save, it waits for the stop.
+    if (!fromScratch && !projectPath_.empty() && !sameMedia && engine_ && engine_->recording())
+        return Error("project.recording", "a recording is running", {},
+                     "stop it before saving as into another folder (its files are copied then), "
+                     "or save in place");
+    std::vector<fs::path> createdMedia;  // what this save created in the new media folder
     if (fromScratch) {
         SUPPLE_TRY(moveScratchMedia(media, publish));
     } else {
         // Saved as into another folder: that folder gets its own copy of the
         // media (the old project keeps its files).
-        if (!projectPath_.empty()) SUPPLE_TRY(detail::copyFolder(mediaDir(), media));
+        if (!projectPath_.empty()) {
+            Status copied = detail::copyFolder(mediaDir(), media, &createdMedia);
+            // Until a file holds them, a failure keeps them ours: a retry
+            // would take them for files that were there before it.
+            for (const fs::path& file : createdMedia)
+                if (std::find(unpublishedCopies_.begin(), unpublishedCopies_.end(), file) ==
+                    unpublishedCopies_.end())
+                    unpublishedCopies_.push_back(file);
+            SUPPLE_TRY(std::move(copied));
+        }
         SUPPLE_TRY(publish());
+        createdMedia = std::move(unpublishedCopies_);
+        unpublishedCopies_.clear();
     }
     // The user's modules it plays go with it, as its media do (ADR-0062):
     // those of every version the store keeps, not only the current head's,
@@ -795,15 +847,27 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
     // A first save or a save as gives the project a file: an autosave
     // offered from now on is offered against the file as it is now, and a
     // later save to the same path keeps that (recoverAutosave).
-    if (std::error_code ec; !openedFile_ || openedFile_->first != path)
-        if (const auto time = fs::last_write_time(path, ec); !ec) openedFile_.emplace(path, time);
+    autosavedThrough_ = through;
+    if (std::error_code ec; !openedFile_ || openedFile_->path != path)
+        if (const auto time = fs::last_write_time(path, ec); !ec)
+            openedFile_.emplace(OpenedFile{path, time, through});
     // The journals of the takes this file holds are retired where the save
     // put them: moved with a first save, copied by a save as into another
-    // folder (whose old copy stays the old project's, as its WAVs do).
-    for (fs::path& journal : midiJournalsPending_)
-        if (const fs::path rel = journal.lexically_relative(oldMedia);
-            !rel.empty() && *rel.begin() != "..")
-            journal = media / rel;
+    // folder (whose old copy stays the old project's, as its WAVs do). A
+    // file the copy found already there is not this save's: it stays.
+    std::vector<fs::path> retire;
+    for (const fs::path& journal : midiJournalsPending_) {
+        const fs::path rel = journal.lexically_relative(oldMedia);
+        if (sameMedia || rel.empty() || *rel.begin() == "..") {
+            retire.push_back(journal);
+            continue;
+        }
+        const fs::path moved = media / rel;
+        if (fromScratch ||
+            std::find(createdMedia.begin(), createdMedia.end(), moved) != createdMedia.end())
+            retire.push_back(moved);
+    }
+    midiJournalsPending_ = std::move(retire);
     dropSavedMidiJournals();
     if (fromScratch) releaseScratch();  // its media moved; its autosaves are older than the file
     autosaveMarked_ = true;             // the file itself is the newest copy
@@ -849,7 +913,10 @@ Status EngineApp::open(const fs::path& where, std::vector<schema::Warning>* warn
         }
     }
     const bool dropped = opened->branchesDropped.has_value();
+    const auto through = opened->autosavedThrough;
     SUPPLE_TRY(replaceProject(std::move(opened->store), path, {}, warnings));
+    autosavedThrough_ = through;
+    if (openedFile_) openedFile_->through = through;
     if (dropped) branchesBackupFor_ = path;
     return okStatus();
 }
@@ -1611,32 +1678,13 @@ std::optional<std::uint64_t> autosaveIndex(std::string_view name) {
     name.remove_suffix(suffix.size());
     std::uint64_t index = 0;
     const auto parsed = std::from_chars(name.data(), name.data() + name.size(), index);
-    if (parsed.ec != std::errc{} || parsed.ptr != name.data() + name.size() || index == 0)
+    // Above the largest count a project file holds, it is not an autosave.
+    if (parsed.ec != std::errc{} || parsed.ptr != name.data() + name.size() || index == 0 ||
+        index > model::kAutosaveNumberMax)
         return std::nullopt;
     return index;
 }
 
-// A saved project's autosave is offered by being newer than its file
-// (ADR-0078 decision 6). A file clock's grain (a Windows tick, a coarse
-// kernel clock, FAT's two seconds) can give a save and the autosave written
-// after it the same time, and a clock set back an earlier one: the autosave
-// is made later than the file by the least step the file system keeps.
-void laterThan(const fs::path& autosave, const fs::path& file) {
-    std::error_code ec;
-    const auto base = fs::last_write_time(file, ec);
-    if (ec) return;
-    using std::chrono::duration_cast;
-    using Step = fs::file_time_type::duration;
-    for (const Step step : {duration_cast<Step>(std::chrono::microseconds(1)),
-                            duration_cast<Step>(std::chrono::milliseconds(1)),
-                            duration_cast<Step>(std::chrono::seconds(1)),
-                            duration_cast<Step>(std::chrono::seconds(2))}) {
-        const auto time = fs::last_write_time(autosave, ec);
-        if (ec || time > base) return;
-        fs::last_write_time(autosave, base + step, ec);
-        if (ec) return;
-    }
-}
 }  // namespace
 
 fs::path EngineApp::newerAutosave(const fs::path& project) const {
@@ -1644,21 +1692,28 @@ fs::path EngineApp::newerAutosave(const fs::path& project) const {
     std::error_code ec;
     const fs::path dir = project.parent_path() / (project.filename().string() + "-data");
     if (!fs::is_directory(dir, ec)) return {};
-    const auto written = fs::last_write_time(project, ec);
-    if (ec) return {};
+    // The open project's file says which autosaves it holds; another file,
+    // or one written before 2.15, goes by file time.
+    const std::optional<std::uint64_t> through =
+        project == projectPath_ ? autosavedThrough_ : std::nullopt;
+    fs::file_time_type written{};
+    if (!through) {
+        written = fs::last_write_time(project, ec);
+        if (ec) return {};
+    }
     fs::path best;
-    fs::file_time_type bestTime{};
+    std::uint64_t bestIndex = 0;
     for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
         const fs::path& candidate = it->path();
-        const std::string name = candidate.filename().string();
-        if (!autosaveIndex(name)) continue;
-        if (!fs::is_regular_file(candidate, ec)) continue;
-        const auto time = fs::last_write_time(candidate, ec);
-        if (ec) break;
-        if (time > written && (best.empty() || time > bestTime)) {
-            best = candidate;
-            bestTime = time;
-        }
+        const auto index = autosaveIndex(candidate.filename().string());
+        if (!index || *index <= bestIndex) continue;
+        std::error_code fileError;
+        if (!fs::is_regular_file(fs::symlink_status(candidate, fileError))) continue;
+        if (through ? *index <= *through
+                    : fs::last_write_time(candidate, fileError) <= written || fileError)
+            continue;
+        best = candidate;
+        bestIndex = *index;
     }
     return best;
 }
@@ -1732,7 +1787,7 @@ void EngineApp::autosave() {
         const std::string name = it->path().filename().string();
         const auto n = autosaveIndex(name);
         if (!n) continue;
-        if (*n == UINT64_MAX) {
+        if (*n == model::kAutosaveNumberMax) {
             emit(
                 "engine.error",
                 json::Value(Error("autosave.index", "autosave numbering is exhausted", dir.string(),
@@ -1744,13 +1799,25 @@ void EngineApp::autosave() {
         next = std::max(next, *n + 1);
         existing.push_back({*n, it->path()});
     }
+    // Past what the project file holds, even when its autosaves are gone.
+    if (!projectPath_.empty() && autosavedThrough_ && *autosavedThrough_ >= next) {
+        if (*autosavedThrough_ >= model::kAutosaveNumberMax) {
+            emit(
+                "engine.error",
+                json::Value(Error("autosave.index", "autosave numbering is exhausted", dir.string(),
+                                  "save the project under a new name to number afresh")
+                                .toString()));
+            autosaveMs_ = serviceClockMs();
+            return;
+        }
+        next = *autosavedThrough_ + 1;
+    }
     const fs::path file = dir / ("autosave-" + std::to_string(next) + ".json");
     if (auto st = writeFileAtomic(file, model::serializeProjectFile(*versions_)); !st) {
         emit("engine.error", json::Value(st.error().toString()));
         autosaveMs_ = serviceClockMs();  // try again after an interval, not every tick
         return;
     }
-    if (!projectPath_.empty()) laterThan(file, projectPath_);
     dropSavedMidiJournals();
     existing.push_back({next, file});
     std::sort(existing.begin(), existing.end(),
@@ -3343,8 +3410,20 @@ Result<SessionRecovery> EngineApp::recoverAutosave(const std::string& name) {
     };
     if (projectPath_.empty()) return none();
     std::error_code ec;
-    const auto written = fs::last_write_time(projectPath_, ec);
-    if (ec) return none();
+    // Newer than the file: numbered above its autosaved_through, or, for a
+    // file without one (before 2.15), written after it.
+    fs::file_time_type written{};
+    if (!autosavedThrough_) {
+        written = fs::last_write_time(projectPath_, ec);
+        if (ec) return none();
+    }
+    auto newer = [&](const fs::path& file, std::optional<std::uint64_t> through,
+                     fs::file_time_type time) {
+        if (through) return autosaveIndex(file.filename().string()).value_or(0) > *through;
+        std::error_code timeError;
+        const auto t = fs::last_write_time(file, timeError);
+        return !timeError && t > time;
+    };
     SessionRecovery out;
     const fs::path folder = autosaveDir();
     // A named one is the one that was offered: it must be newer than the
@@ -3359,10 +3438,10 @@ Result<SessionRecovery> EngineApp::recoverAutosave(const std::string& name) {
             return Error("recover.no_autosave", name + " is not an autosave of this project",
                          "/autosave_file",
                          "omit autosave_file to open the newest autosave newer than the file");
-        const auto opened =
-            openedFile_ && openedFile_->first == projectPath_ ? openedFile_->second : written;
-        const auto time = fs::last_write_time(file, ec);
-        if (ec || time <= opened)
+        const bool asOpened = openedFile_ && openedFile_->path == projectPath_;
+        const auto openedThrough = asOpened ? openedFile_->through : autosavedThrough_;
+        const auto openedTime = asOpened ? openedFile_->time : written;
+        if (!newer(file, openedThrough, openedTime))
             return Error("recover.no_autosave",
                          name + " is not newer than " + projectPath_.filename().string() +
                              " as it was opened",
@@ -3377,8 +3456,7 @@ Result<SessionRecovery> EngineApp::recoverAutosave(const std::string& name) {
     // fully restore is kept for the first save to publish beside the file.
     std::vector<RawAutosave> keep;
     for (const fs::path& file : candidates) {
-        const auto time = fs::last_write_time(file, ec);
-        if (name.empty() && (ec || time <= written)) continue;
+        if (name.empty() && !newer(file, autosavedThrough_, written)) continue;
         std::vector<schema::Warning> parsed;
         auto text = detail::readRecoveryText(folder, file, std::size_t(1) << 30);
         auto opened = text ? model::parseProjectFile(*text, &parsed, replayableStep)
@@ -3412,12 +3490,17 @@ Result<SessionRecovery> EngineApp::recoverAutosave(const std::string& name) {
         auto kept = keepForFirstSave(folder, keep, "/autosave");
         if (!kept) return std::move(kept).error();
         std::vector<schema::Warning> replaced;
+        // The file is unchanged: what it holds, and how it was opened, stay.
+        const auto fileThrough = autosavedThrough_;
+        const auto fileOpened = openedFile_;
         if (Status st = replaceProject(std::move(opened->store), projectPath_, {}, &replaced);
             !st) {
             std::error_code removeError;
             for (const RecoveryKeep& k : *kept) fs::remove(k.copy, removeError);
             return std::move(st).error();
         }
+        autosavedThrough_ = fileThrough;
+        openedFile_ = fileOpened;
         recoveryKeep_ = std::move(*kept);
         for (auto& w : replaced) out.warnings.push_back({w.code, w.message, w.path, "", "", ""});
         out.autosave = file.filename().string();

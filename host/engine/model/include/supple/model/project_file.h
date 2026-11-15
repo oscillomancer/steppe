@@ -7,6 +7,7 @@
 // which it differs from main's head.
 #pragma once
 
+#include <cstdint>
 #include <functional>
 #include <optional>
 #include <string>
@@ -19,14 +20,27 @@
 
 namespace supple::model {
 
+// The largest autosave number, and so the largest `autosaved_through`: a JSON
+// integer is signed 64-bit. autosave-<n> with n above it is not an autosave.
+inline constexpr std::uint64_t kAutosaveNumberMax = 9'223'372'036'854'775'807ULL;
+
 // `history`: keep every retained version, base and redo step (undo survives
 // reopening); otherwise what VersionStore::saved(false) keeps. A store with
 // main alone and nothing to undo writes no `branches` section.
-json::Value projectFileToJson(const VersionStore& store, bool history = false);
-std::string serializeProjectFile(const VersionStore& store, bool history = false);
+// `autosavedThrough`: the highest numbered autosave (<file>-data/autosave-<n>)
+// this file holds the work of, written as `autosaved_through` (schema 2.15):
+// an autosave numbered above it is newer than the file (ADR-0078). At most
+// kAutosaveNumberMax (a larger value is written as it).
+json::Value projectFileToJson(const VersionStore& store, bool history = false,
+                              std::optional<std::uint64_t> autosavedThrough = std::nullopt);
+std::string serializeProjectFile(const VersionStore& store, bool history = false,
+                                 std::optional<std::uint64_t> autosavedThrough = std::nullopt);
 
 struct OpenedProject {
     VersionStore store;
+    // The file's `autosaved_through`; absent in a file written before 2.15,
+    // or by a program that does not autosave, and when it does not read.
+    std::optional<std::uint64_t> autosavedThrough;
     // Set when the file had a branches section that could not be restored:
     // main opened alone, and saving over the file would drop the section.
     std::optional<Error> branchesDropped;

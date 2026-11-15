@@ -77,7 +77,7 @@ Patch patch() {
 TEST_CASE("racks: a patch saves, reopens and serializes the same") {
     Patch p = patch();
     const std::string bytes = serializeProject(p.s);
-    CHECK(bytes.find("\"supple.project/2.14\"") != std::string::npos);
+    CHECK(bytes.find("\"supple.project/2.15\"") != std::string::npos);
     CHECK(bytes.find("\"mo_2.saw\"") != std::string::npos);
     auto loaded = parseProject(bytes);
     REQUIRE_MESSAGE(loaded, (loaded ? "" : loaded.error().message));
@@ -239,7 +239,7 @@ TEST_CASE("racks: a rack send to a buss saves, reopens and follows its home (ADR
     // The Out stays its channel's input: that route is not a rack send.
     CHECK_FALSE(rackSendHome(*s, *s->routes.find(*s->tracks.find(p.channel)->record.input)));
     const std::string bytes = serializeProject(*s);
-    CHECK(bytes.find("\"supple.project/2.14\"") != std::string::npos);
+    CHECK(bytes.find("\"supple.project/2.15\"") != std::string::npos);
     auto loaded = parseProject(bytes);
     REQUIRE_MESSAGE(loaded, (loaded ? "" : loaded.error().toString()));
     CHECK(serializeProject(*loaded) == bytes);
@@ -341,7 +341,7 @@ TEST_CASE("MIDI sends: channel endpoints, Notes source off and old projects roun
     auto s = t.commit();
     REQUIRE(s);
     const auto bytes = serializeProject(*s);
-    CHECK(bytes.find("supple.project/2.14") != std::string::npos);
+    CHECK(bytes.find("supple.project/2.15") != std::string::npos);
     auto reopened = parseProject(bytes);
     REQUIRE(reopened);
     CHECK(reopened->modules.find(p.notes)->sourceOff);

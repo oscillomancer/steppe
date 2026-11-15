@@ -179,7 +179,10 @@ keeps a copy of the old one beside it as `<file>.pre-branches.bak`.
 
 Until a project is saved, its recordings go to a folder of its own under the
 data folder (below), in `unsaved/<start time>-<pid>/media/rec`. The first
-save moves them into `media/` beside the project file. Quitting, or starting
+save moves them into `media/` beside the project file. While a recording runs, a
+project cannot be saved for the first time, or saved as into another
+folder: stop recording first, and its files move or are copied then.
+Saving in place works while recording. Quitting, or starting
 another project, without saving deletes that folder after the app has asked.
 
 An unsaved project is autosaved into that folder every minute while it

@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 #include "supple/model/project_file.h"
 
+#include <algorithm>
 #include <charconv>
 #include <map>
 #include <new>
@@ -519,7 +520,25 @@ Result<VersionStore> restoreBranches(const json::Value& mainDoc, const json::Val
 
 }  // namespace
 
-json::Value projectFileToJson(const VersionStore& store, bool history) {
+namespace {
+constexpr std::string_view kAutosavedThrough = "autosaved_through";
+json::Value withAutosavedThrough(json::Value doc, std::optional<std::uint64_t> through) {
+    // Beside the document, as `branches` is: main's hash does not cover it.
+    if (through)
+        doc[std::string(kAutosavedThrough)] =
+            static_cast<std::int64_t>(std::min(*through, kAutosaveNumberMax));
+    return doc;
+}
+json::Value projectFileToJsonImpl(const VersionStore& store, bool history);
+}  // namespace
+
+json::Value projectFileToJson(const VersionStore& store, bool history,
+                              std::optional<std::uint64_t> autosavedThrough) {
+    return withAutosavedThrough(projectFileToJsonImpl(store, history), autosavedThrough);
+}
+
+namespace {
+json::Value projectFileToJsonImpl(const VersionStore& store, bool history) {
     const SavedHistory saved = store.saved(history);
     json::Value doc = projectToJson(*store.head("main"));
     const SavedBranch& main = saved.branches.front();
@@ -549,9 +568,11 @@ json::Value projectFileToJson(const VersionStore& store, bool history) {
     doc[kSection] = std::move(section);
     return doc;
 }
+}  // namespace
 
-std::string serializeProjectFile(const VersionStore& store, bool history) {
-    return json::writeCanonical(projectFileToJson(store, history)) + "\n";
+std::string serializeProjectFile(const VersionStore& store, bool history,
+                                 std::optional<std::uint64_t> autosavedThrough) {
+    return json::writeCanonical(projectFileToJson(store, history, autosavedThrough)) + "\n";
 }
 
 Result<OpenedProject> projectFileFromJson(const json::Value& input,
@@ -564,9 +585,20 @@ Result<OpenedProject> projectFileFromJson(const json::Value& input,
         section = std::move(*found);
         doc.asObject().erase(kSection);
     }
+    std::optional<std::uint64_t> through;
+    if (auto* found = doc.asObject().find(std::string(kAutosavedThrough))) {
+        if (found->isInt() && found->asInt() >= 0)
+            through = static_cast<std::uint64_t>(found->asInt());
+        else if (warnings)
+            warnings->push_back({"project.autosaved_through",
+                                 "autosaved_through is not a count; its autosaves are compared "
+                                 "by file time",
+                                 "/autosaved_through"});
+        doc.asObject().erase(std::string(kAutosavedThrough));
+    }
     auto main = projectFromJson(doc, warnings);
     if (!main) return std::move(main).error();
-    if (!section) return OpenedProject{VersionStore(std::move(*main)), std::nullopt};
+    if (!section) return OpenedProject{VersionStore(std::move(*main)), through, std::nullopt};
     Result<VersionStore> restored = Error("history.saved", "not restored");
     try {
         restored = restoreBranches(doc, *section, *main, check);
@@ -576,8 +608,8 @@ Result<OpenedProject> projectFileFromJson(const json::Value& input,
                          "main opens alone");
     }
     if (!restored)
-        return OpenedProject{VersionStore(std::move(*main)), std::move(restored).error()};
-    return OpenedProject{std::move(*restored), std::nullopt};
+        return OpenedProject{VersionStore(std::move(*main)), through, std::move(restored).error()};
+    return OpenedProject{std::move(*restored), through, std::nullopt};
 }
 
 Result<OpenedProject> parseProjectFile(std::string_view text,

@@ -841,6 +841,23 @@ void registerTakeCommands(cmd::Registry& registry) {
                 r.startSample = t.startSample;
                 r.frames = t.frames;
                 for (const auto& g : t.segments) r.segments.push_back({g.fileFrame, g.timeline});
+                // As a journal's header: a loop ends after it starts, or is
+                // [0, 0] (none).
+                if (t.loopEnd <= t.loopStart && (t.loopStart != 0 || t.loopEnd != 0))
+                    return Error("record.loop", "the recorded loop ends before it starts",
+                                 at + "/loop_end",
+                                 "give loop_end after loop_start, or both 0 for no loop");
+                // The punch, in this take's frames, within the same bound
+                // as its clocks: placement converts and clips with it.
+                const double limit = static_cast<double>(detail::kRecordingClockLimit);
+                for (auto [seconds, name] :
+                     {std::pair{a.punch.start, "start"}, std::pair{a.punch.end, "end"}})
+                    if (!(std::fabs(seconds * t.sampleRate) <= limit))
+                        return Error(
+                            "record.punch",
+                            std::string("the punch ") + name + " is beyond any recording's length",
+                            std::string("/punch/") + name,
+                            "give a punch within the recording's range, in seconds");
                 r.loop.start = t.loopStart;
                 r.loop.end = t.loopEnd;
                 r.overflowFrames = static_cast<std::uint64_t>(t.overflowFrames);
@@ -874,6 +891,9 @@ void registerTakeCommands(cmd::Registry& registry) {
                 }
                 takes.push_back(std::move(r));
             }
+            if (a.punch.enabled && a.punch.end <= a.punch.start)
+                return Error("record.punch", "the punch ends before it starts", "/punch/end",
+                             "give punch.end after punch.start, or disable the punch");
             TransportRange punch;
             punch.enabled = a.punch.enabled;
             punch.start = a.punch.start;

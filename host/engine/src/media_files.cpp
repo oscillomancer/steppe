@@ -104,7 +104,7 @@ Result<std::string> copyIntoFolder(const fs::path& file, const fs::path& dir, bo
     return copyError(file, dir, "too many files with this name");
 }
 
-Status copyFolder(const fs::path& from, const fs::path& to) {
+Status copyFolder(const fs::path& from, const fs::path& to, std::vector<fs::path>* created) {
     std::error_code ec;
     if (!fs::is_directory(from, ec)) return {};
     if (fs::exists(to, ec) && fs::equivalent(from, to, ec)) return {};
@@ -150,6 +150,7 @@ Status copyFolder(const fs::path& from, const fs::path& to) {
         fs::create_directories(target.parent_path(), ec);
         if (ec) return copyError(it->path(), target, ec.message());
         SUPPLE_TRY(copyNew(it->path(), target));
+        if (created) created->push_back(target);
     }
     if (ec) return copyError(from, to, ec.message());
     return {};

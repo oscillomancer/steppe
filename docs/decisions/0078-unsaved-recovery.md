@@ -118,6 +118,21 @@ used neither, nor `autosave_available` for saved projects.
   and takes it, so an older build still running beside a newer one could
   see its folder offered for recovery.
 
+*Amended 2026-11-14 after review round 12:* decision 6's "newer than its
+file" is decided by number, not file time. A saved file records
+`autosaved_through`, the highest autosave number beside it when it was
+written (project schema 2.15); an autosave numbered above it is newer, and
+the highest numbered is the newest. Autosaves are numbered past that count
+as well as past those present. File times had let a clock set back, a
+coarse file clock or a future-dated file offer older edits, or offer an
+autosave over a later save. A file without the count keeps the time rule.
+
+*Amended 2026-11-15 after review round 13:* a save that cannot read the
+autosave folder fails (`project.autosave_folder`) rather than record a count
+short of what is there, and autosave numbers stop at 2^63 - 1, the largest
+count a project file holds (a larger one had been written as a negative
+count).
+
 ## Alternatives considered
 
 - **The pid in the folder name decides liveness:** pids are reused, and a

@@ -114,6 +114,15 @@ media; a save as into another folder deletes the copy there and leaves the
 old folder's, which the old file does not hold (as it leaves that folder's
 WAVs). Deleting the old path had left the new copy to be offered again.
 
+*Amended 2026-11-14 after review round 11:* that copy is deleted only if
+this save created it; an identical file already in the destination folder
+(another project's journal there) stays.
+
+*Amended 2026-11-14 after review round 11:* a save as into another folder
+is refused while a recording runs (`project.recording`, as for an untitled
+project's first save): the recorder writes the old folder until it stops,
+so the copy would hold only the take's first part.
+
 *Amended 2026-11-14 after review round 10:* a take's journal is the file
 its recording created, or none. A name that any entry has, a dangling link
 included, is not free; if the exclusive creation still fails, the take has

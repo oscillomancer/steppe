@@ -77,7 +77,7 @@ TEST_CASE("autosave numbering preserves other files and cannot overflow") {
         CHECK_FALSE(fs::exists(dir / "autosave-1.json"));
     }
     SUBCASE("an exhausted index reports a failure without writing or pruning") {
-        write("autosave-18446744073709551615.json");
+        write("autosave-9223372036854775807.json");
         save();
         CHECK_FALSE(fs::exists(dir / "autosave-1.json"));
         CHECK(app.nextServiceDelayMs() == 60'000);
@@ -87,7 +87,7 @@ TEST_CASE("autosave numbering preserves other files and cannot overflow") {
                 value.asString().find("autosave.index") != std::string::npos)
                 reported = true;
         CHECK(reported);
-        auto contents = readTextFile(dir / "autosave-18446744073709551615.json");
+        auto contents = readTextFile(dir / "autosave-9223372036854775807.json");
         REQUIRE(contents);
         CHECK(*contents == "preserved");
     }
@@ -1223,8 +1223,6 @@ TEST_CASE("an autosave written after a save is newer than the file whatever the 
     p.app->setFixedClock(1'060'000);
     p.app->tick();
     REQUIRE(fs::exists(p.root / "song.json-data" / "autosave-1.json"));
-    CHECK(fs::last_write_time(p.root / "song.json-data" / "autosave-1.json") >
-          fs::last_write_time(file));
     REQUIRE(p.app->open("song.json"));
     auto info = d.execute({"project.get", json::Value::object(), kUnit});
     REQUIRE(info);
@@ -1232,6 +1230,115 @@ TEST_CASE("an autosave written after a save is newer than the file whatever the 
     auto r = d.execute({"project.recover", json::parse(R"({"autosave": true})").value(), kUnit});
     REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
     CHECK(p.app->head().project->name == "Edited after the save");
+}
+
+TEST_CASE("the newest autosave is the highest numbered, whatever the file clock") {
+    // Round-12 review, finding 1: dated after a future-dated file, two
+    // autosaves had one time, and the offer named the older one.
+    Project p;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *p.app);
+    p.rename("Saved");
+    REQUIRE(p.app->save("song.json"));
+    const fs::path file = p.root / "song.json";
+    fs::last_write_time(file, fs::last_write_time(file) + std::chrono::hours(2));
+    p.rename("First autosave");
+    p.app->setFixedClock(1'060'000);
+    p.app->tick();
+    p.rename("Second autosave");
+    p.app->setFixedClock(1'120'000);
+    p.app->tick();
+    REQUIRE(fs::exists(p.root / "song.json-data" / "autosave-2.json"));
+    // As a clock set back between them leaves them: both after the file,
+    // the older edits dated later.
+    fs::last_write_time(p.root / "song.json-data" / "autosave-1.json",
+                        fs::last_write_time(file) + std::chrono::hours(1));
+    fs::last_write_time(p.root / "song.json-data" / "autosave-2.json",
+                        fs::last_write_time(file) + std::chrono::minutes(30));
+    REQUIRE(p.app->open("song.json"));
+    CHECK(p.app->newerAutosave(p.app->projectPath()).filename() == "autosave-2.json");
+    SUBCASE("the offered one, by name") {
+        const std::string offered = p.app->newerAutosave(p.app->projectPath()).filename().string();
+        auto r = p.app->recoverAutosave(offered);
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        CHECK(p.app->head().project->name == "Second autosave");
+    }
+    SUBCASE("the newest, unnamed") {
+        auto r =
+            d.execute({"project.recover", json::parse(R"({"autosave": true})").value(), kUnit});
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        CHECK(p.app->head().project->name == "Second autosave");
+    }
+}
+
+TEST_CASE("a save holds what the autosaves before it hold: none of them is offered after it") {
+    // Round-12 review, finding 2: an autosave dated after a future-dated
+    // file stayed newer than a later save of newer edits, and recovering it
+    // replaced them.
+    Project p;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *p.app);
+    p.rename("Saved");
+    REQUIRE(p.app->save("song.json"));
+    const fs::path file = p.root / "song.json";
+    fs::last_write_time(file, fs::last_write_time(file) + std::chrono::hours(2));
+    p.rename("Autosaved");
+    p.app->setFixedClock(1'060'000);
+    p.app->tick();
+    REQUIRE(fs::exists(p.root / "song.json-data" / "autosave-1.json"));
+    fs::last_write_time(p.root / "song.json-data" / "autosave-1.json",
+                        fs::last_write_time(file) + std::chrono::hours(1));
+    p.rename("Saved later");
+    REQUIRE(p.app->save("song.json"));
+    REQUIRE(p.app->open("song.json"));
+    auto info = d.execute({"project.get", json::Value::object(), kUnit});
+    REQUIRE(info);
+    CHECK_FALSE((*info)["autosave_available"].asBool());
+    auto r = d.execute({"project.recover", json::parse(R"({"autosave": true})").value(), kUnit});
+    REQUIRE_FALSE(r);
+    CHECK(r.error().code == "recover.no_autosave");
+    auto named = d.execute(
+        {"project.recover",
+         json::parse(R"({"autosave": true, "autosave_file": "autosave-1.json"})").value(), kUnit});
+    REQUIRE_FALSE(named);
+    CHECK(named.error().code == "recover.no_autosave");
+    CHECK(p.app->head().project->name == "Saved later");
+    // The next autosave numbers on past what the file holds, and is offered.
+    p.rename("Autosaved after");
+    p.app->setFixedClock(1'200'000);
+    p.app->tick();
+    REQUIRE(p.app->open("song.json"));
+    CHECK(p.app->newerAutosave(p.app->projectPath()).filename() == "autosave-2.json");
+}
+
+TEST_CASE("a file saved before autosave numbers were kept in it still goes by file time") {
+    // A 2.14 file has no autosaved_through: its autosaves are compared by
+    // write time, as before, the highest numbered of the newer ones first.
+    Project p;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *p.app);
+    p.rename("Saved");
+    REQUIRE(p.app->save("song.json"));
+    const fs::path file = p.root / "song.json";
+    auto doc = json::parse(*readTextFile(file)).value();
+    doc.asObject().erase("autosaved_through");
+    doc["schema"] = "supple.project/2.14";
+    REQUIRE(writeFileAtomic(file, json::writeCanonical(doc) + "\n"));
+    const fs::path data = p.root / "song.json-data";
+    const auto saved = fs::last_write_time(file);
+    REQUIRE(p.app->open("song.json"));
+    p.rename("Older");
+    p.app->setFixedClock(1'060'000);
+    p.app->tick();
+    REQUIRE(fs::exists(data / "autosave-1.json"));
+    fs::last_write_time(data / "autosave-1.json", saved - std::chrono::seconds(10));
+    REQUIRE(p.app->open("song.json"));
+    CHECK(p.app->newerAutosave(p.app->projectPath()).empty());
+    fs::last_write_time(data / "autosave-1.json", saved + std::chrono::seconds(10));
+    CHECK(p.app->newerAutosave(p.app->projectPath()).filename() == "autosave-1.json");
 }
 
 TEST_CASE("a saved project's autosave recovery whose preservation copy fails changes nothing") {
@@ -1247,8 +1354,6 @@ TEST_CASE("a saved project's autosave recovery whose preservation copy fails cha
     p.app->tick();
     const fs::path data = p.root / "song.json-data";
     REQUIRE(writeFileAtomic(data / "autosave-9.json", "garbage"));  // newer, unreadable
-    fs::last_write_time(data / "autosave-9.json",  // newer than the file, on any file clock
-                        fs::last_write_time(p.root / "song.json") + std::chrono::seconds(2));
     REQUIRE(p.app->open("song.json"));
     setFileSyncHookForTesting([](const fs::path& f) { return f.extension() != ".keep"; });
     auto failed =
@@ -1409,24 +1514,21 @@ TEST_CASE("a named autosave must be newer than the file as the project was opene
     p.app->setFixedClock(1'060'000);
     p.app->tick();
     REQUIRE(fs::exists(data / "autosave-1.json"));
-    const auto now = fs::file_time_type::clock::now();
     auto args = json::parse(R"({"autosave": true, "autosave_file": "autosave-1.json"})").value();
 
     SUBCASE("older than the file as opened: refused") {
-        fs::last_write_time(data / "autosave-1.json", now - std::chrono::hours(2));
-        fs::last_write_time(p.root / "song.json", now - std::chrono::hours(1));
+        p.rename("Saved after it");
+        REQUIRE(p.app->save("song.json"));  // holds autosave-1's work and more
         REQUIRE(p.app->open("song.json"));
         auto r = d.execute({"project.recover", args, kUnit});
         REQUIRE_FALSE(r);
         CHECK(r.error().code == "recover.no_autosave");
-        CHECK(p.app->head().project->name == "Saved");
+        CHECK(p.app->head().project->name == "Saved after it");
     }
     SUBCASE("newer than the file as opened, though saved over since: opened") {
-        fs::last_write_time(p.root / "song.json", now - std::chrono::hours(2));
-        fs::last_write_time(data / "autosave-1.json", now - std::chrono::hours(1));
         REQUIRE(p.app->open("song.json"));
-        p.rename("Saved again");
-        REQUIRE(p.app->save("song.json"));
+        p.rename("Saved over");
+        REQUIRE(p.app->save("song.json"));  // the question before opening it offers Save
         auto r = d.execute({"project.recover", args, kUnit});
         REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
         CHECK(p.app->head().project->name == "Autosaved");
@@ -1838,6 +1940,64 @@ TEST_CASE("record.commit refuses clocks and runs no recording can have") {
     CHECK(p.app->head().midi.size() == 1);
 }
 
+TEST_CASE("record.commit refuses a punch or a loop no recording can have") {
+    // Round-12 review, finding 3: a finite punch end too large for a frame
+    // count made the clip empty, and the call succeeded without the take. A
+    // loop that ends before it starts is refused as in a journal's header.
+    Project p;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *p.app);
+    REQUIRE(d.execute({"track.add", json::Value::object(), kUnit}));
+    struct Args {
+        std::string punch = R"({"enabled":true,"start":0,"end":1})";
+        std::string loopStart = "0", loopEnd = "0";
+    };
+    auto commit = [&](const Args& a) {
+        auto args = json::parse(
+            std::string(R"({"takes":[{"track":"tr_1","file":"","hash":"","start_sample":0,)") +
+            R"("frames":48000,"sample_rate":48000,"midi":true,"loop_start":)" + a.loopStart +
+            R"(,"loop_end":)" + a.loopEnd +
+            R"(,"overflow_frames":0,"segments":[{"file_frame":0,"timeline":0}],)" +
+            R"("events":[{"timeline":0,"run":0,"voice":-1,"bytes":[144,60,100]},)" +
+            R"({"timeline":24000,"run":0,"voice":-1,"bytes":[128,60,0]}]}],"punch":)" + a.punch +
+            "}");
+        REQUIRE(args);
+        return d.execute({"record.commit", *args, kUnit});
+    };
+    const std::vector<std::tuple<Args, std::string, std::string>> cases = {
+        {{R"({"enabled":true,"start":0,"end":1e300})"}, "record.punch", "/args/punch/end"},
+        {{R"({"enabled":true,"start":-1e300,"end":1})"}, "record.punch", "/args/punch/start"},
+        {{R"({"enabled":false,"start":0,"end":1e300})"}, "record.punch", "/args/punch/end"},
+        {{R"({"enabled":true,"start":1,"end":1})"}, "record.punch", "/args/punch/end"},
+        {{R"({"enabled":true,"start":2,"end":1})"}, "record.punch", "/args/punch/end"},
+        {{R"({"enabled":true,"start":0,"end":1})", "48000", "24000"},
+         "record.loop",
+         "/args/takes/0/loop_end"},
+        {{R"({"enabled":true,"start":0,"end":1})", "24000", "24000"},
+         "record.loop",
+         "/args/takes/0/loop_end"},
+    };
+    for (const auto& [args, code, path] : cases) {
+        INFO(args.punch << " loop " << args.loopStart << ".." << args.loopEnd);
+        auto r = commit(args);
+        REQUIRE_FALSE(r);
+        INFO(r.error().toString());
+        CHECK(r.error().code == code);
+        CHECK(r.error().path == path);
+        CHECK_FALSE(r.error().hint.empty());
+        CHECK(p.app->head().midi.empty());
+    }
+    auto good = commit({});  // the same take, punched in at 0..1 s
+    REQUIRE_MESSAGE(good, (good ? std::string() : good.error().toString()));
+    CHECK(p.app->head().midi.size() == 1);
+    Args looped;  // and [0, 0] means no loop, as in a journal
+    looped.loopStart = "0";
+    looped.loopEnd = "96000";
+    auto withLoop = commit(looped);
+    REQUIRE_MESSAGE(withLoop, (withLoop ? std::string() : withLoop.error().toString()));
+}
+
 TEST_CASE("a recovered take whose Note Out route is gone keeps its voices apart") {
     // Round-10 review, finding 3: dropping the missing route also dropped
     // each voice's identity, so two overlapping notes of one pitch paired as
@@ -1961,6 +2121,29 @@ TEST_CASE("a save that moves or copies the media retires the journal where the t
         CHECK(p.app->head().midi.empty());
         CHECK(p.app->recoverable().size() == 1);
     }
+    SUBCASE("a save as into a folder that already holds the same journal leaves that one") {
+        // Round-11 review, finding 1: the copy reused the identical file
+        // already there, and the save retired it although another project's
+        // file there does not hold its take.
+        Project p;
+        cmd::Dispatcher d(registry, *p.app);
+        REQUIRE(d.execute({"track.add", json::Value::object(), kUnit}));
+        const fs::path first = p.root / "first/song.json";
+        REQUIRE(p.app->save(first));
+        const fs::path old = p.app->recordDir() / "Keys-1.midi.jsonl";
+        REQUIRE(writeFileAtomic(old, journalHeader() + body));
+        const fs::path other = p.root / "second/other.json";  // a project already there
+        REQUIRE(writeFileAtomic(other, *readTextFile(first)));
+        const fs::path theirs = p.root / "second/media/rec/Keys-1.midi.jsonl";
+        REQUIRE(writeFileAtomic(theirs, journalHeader() + body));
+        REQUIRE(p.app->recover({}, {}));
+        REQUIRE(p.app->save(p.root / "second/song.json"));
+        CHECK(fs::exists(theirs));
+        CHECK(fs::exists(old));
+        REQUIRE(p.app->open(other));
+        CHECK(p.app->head().midi.empty());
+        CHECK(p.app->recoverable().size() == 1);
+    }
 }
 
 TEST_CASE("replacing an unsaved project without saving discards its journals with its folder") {
@@ -2002,4 +2185,135 @@ TEST_CASE("replacing an unsaved project without saving discards its journals wit
         for (const auto& e : fs::recursive_directory_iterator(u.folder("earlier")))
             CHECK(e.path().filename() == "session.lock");
     CHECK(app->recoverableSessions().empty());
+}
+
+TEST_CASE("a save that cannot read the autosave folder publishes nothing") {
+    // Round-13 review, finding 1: the scan stopped at the error, so the file
+    // was published with a count short of the autosave beside it, and that
+    // older autosave was later offered (and recovered) over the newer file.
+    Project p;
+    p.rename("Saved");
+    const auto file = p.root / "song.json";
+    REQUIRE(p.app->save(file));
+    const auto saved = readTextFile(file);
+    REQUIRE(saved);
+    p.rename("Autosaved");
+    p.app->setFixedClock(1'060'000);
+    p.app->tick();
+    const auto dir = p.app->autosaveDir();
+    REQUIRE(fs::exists(dir / "autosave-1.json"));
+    struct Restore {
+        fs::path path;
+        ~Restore() {
+            std::error_code ec;
+            fs::permissions(path, fs::perms::owner_all, fs::perm_options::replace, ec);
+        }
+    } restore{dir};
+    fs::permissions(dir, fs::perms::none);
+    std::error_code probe;
+    fs::directory_iterator listing(dir, probe);
+    if (!probe) {  // Windows, or a user whom permissions do not stop
+        fs::permissions(dir, fs::perms::owner_all);
+        MESSAGE("an unreadable folder cannot be made here");
+        return;
+    }
+    p.rename("Newer");
+    auto refused = p.app->save(file);
+    fs::permissions(dir, fs::perms::owner_all);
+    REQUIRE_FALSE(refused);
+    CHECK(refused.error().code == "project.autosave_folder");
+    CHECK(refused.error().path == dir.string());
+    CHECK_FALSE(refused.error().hint.empty());
+    CHECK(readTextFile(file).value() == *saved);  // nothing published
+    // Readable again, the save goes through and holds that autosave.
+    REQUIRE(p.app->save(file));
+    REQUIRE(p.app->open(file));
+    CHECK(p.app->head().project->name == "Newer");
+    CHECK(p.app->newerAutosave(file).empty());
+    CHECK_FALSE(p.app->recoverAutosave());
+}
+
+TEST_CASE("autosave numbers stay within what a project file can hold") {
+    // Round-13 review, finding 2: autosave-9223372036854775808.json was read
+    // as a number and written through int64 as a negative count, which the
+    // reopened file then ignored (file times decided again).
+    Project p;
+    const auto file = p.root / "song.json";
+    REQUIRE(p.app->save(file));
+    const auto dir = p.app->autosaveDir();
+    auto through = [&] {
+        auto raw = json::parse(readTextFile(file).value());
+        REQUIRE(raw);
+        REQUIRE((*raw)["autosaved_through"].isInt());
+        return (*raw)["autosaved_through"].asInt();
+    };
+    SUBCASE("a name above the largest count is not an autosave") {
+        fs::create_directories(dir);
+        REQUIRE(fs::is_directory(dir));
+        REQUIRE(writeFileAtomic(dir / "autosave-9223372036854775808.json", "preserved"));
+        REQUIRE(p.app->save(file));
+        CHECK(through() == 0);
+        std::vector<schema::Warning> warnings;
+        REQUIRE(p.app->open(file, &warnings));
+        CHECK_FALSE(hasWarning(warnings, "project.autosaved_through"));
+        CHECK(p.app->newerAutosave(file).empty());
+        CHECK(readTextFile(dir / "autosave-9223372036854775808.json").value() == "preserved");
+    }
+    SUBCASE("the largest count round-trips, and the next autosave reports exhaustion") {
+        fs::create_directories(dir);
+        REQUIRE(fs::is_directory(dir));
+        REQUIRE(writeFileAtomic(dir / "autosave-9223372036854775807.json", "preserved"));
+        REQUIRE(p.app->save(file));
+        CHECK(through() == INT64_MAX);
+        std::vector<schema::Warning> warnings;
+        REQUIRE(p.app->open(file, &warnings));
+        CHECK_FALSE(hasWarning(warnings, "project.autosaved_through"));
+        p.rename("Edited");
+        p.app->setFixedClock(1'060'000);
+        p.app->tick();
+        bool reported = false;
+        for (const auto& [topic, value] : p.app->takeEvents())
+            if (topic == "engine.error" && value.isString() &&
+                value.asString().find("autosave.index") != std::string::npos)
+                reported = true;
+        CHECK(reported);
+    }
+    SUBCASE("the model writes no count above the largest") {
+        auto doc = model::projectFileToJson(p.app->versions(), false, UINT64_MAX);
+        CHECK(doc["autosaved_through"].asInt() == INT64_MAX);
+        auto opened = model::projectFileFromJson(doc);
+        REQUIRE(opened);
+        CHECK(opened->autosavedThrough == std::uint64_t{INT64_MAX});
+    }
+}
+
+TEST_CASE("retrying a failed save as retires the journal copy the first attempt made") {
+    // Round-13 review, finding 4: the copy a failed save as made was found
+    // already there by the retry, so it was not this save's to retire and
+    // stayed offered for recovery after the file saved.
+    Project p;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *p.app);
+    REQUIRE(d.execute({"track.add", json::Value::object(), kUnit}));
+    REQUIRE(p.app->save(p.root / "first/song.json"));
+    const auto old = p.app->recordDir() / "Keys-1.midi.jsonl";
+    REQUIRE(writeFileAtomic(
+        old, journalHeader() + "[0,144,60,100]\n[24000,128,60,0]\n{\"captured\":48000}\n"));
+    REQUIRE(p.app->recover({}, {}));
+    const auto second = p.root / "second/song.json";
+    setFileSyncHookForTesting([&](const fs::path& f) { return f != second; });
+    auto failed = p.app->save(second);
+    setFileSyncHookForTesting({});
+    REQUIRE_FALSE(failed);
+    REQUIRE_FALSE(fs::exists(second));
+    const auto copy = second.parent_path() / "media/rec" / old.filename();
+    REQUIRE(fs::exists(copy));
+    REQUIRE(p.app->save(second));
+    CHECK_FALSE(fs::exists(copy));
+    CHECK(p.app->recoverable().empty());
+    REQUIRE(p.app->open(second));
+    CHECK(p.app->head().midi.size() == 1);
+    CHECK(p.app->recoverable().empty());
+    CHECK(fs::exists(old));  // the first project's journal stays its own
 }

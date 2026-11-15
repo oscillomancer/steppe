@@ -515,6 +515,77 @@ TEST_CASE("a MIDI take a crash interrupted comes back from its journal, and goes
     }
 }
 
+TEST_CASE("a recording keeps its project's folder: no save as into another while it runs") {
+    // Round-11 review, finding 2: a save as during a recording copied the
+    // journal's (and a WAV's) first part to the new folder while the
+    // recorder went on writing the old one; the new file then offered a
+    // stale partial take and the old folder lost its journal. As an
+    // untitled project's first save, it waits until the recording stops.
+    const fs::path dir =
+        fs::temp_directory_path() / ("supple-midi-save-as-" + std::to_string(test::processId()));
+    fs::remove_all(dir);
+    {
+        auto created = EngineApp::create({.workdir = dir});
+        REQUIRE(created);
+        auto& app = **created;
+        cmd::Registry registry;
+        registerEngineCommands(registry);
+        cmd::Dispatcher dispatcher(registry, app);
+        auto call = [&](std::string_view name, std::string_view args) {
+            return dispatcher.execute(
+                {std::string(name), *json::parse(args), {cmd::Origin::Type::Test, "save-as", ""}});
+        };
+        REQUIRE(call("track.add", R"({"name":"Keys"})"));
+        REQUIRE(call("track.set", R"({"track":"tr_1","armed":true,"record_midi":"*"})"));
+        const fs::path first = dir / "first/song.json", second = dir / "second/song.json";
+        REQUIRE(app.save(first));
+        DummyBackend backend(
+            {.mode = DummyBackend::Mode::Manual,
+             .midiPorts = {"Keys"},
+             .midi = [](std::vector<MidiInputEvent>& out, std::uint32_t n, std::int64_t frame) {
+                 for (std::int64_t f = frame; f < frame + n; ++f) {
+                     if (f != 0 && f != 256 && f != 1024 && f != 1280) continue;
+                     MidiInputEvent e;
+                     e.frame = static_cast<std::uint32_t>(f - frame);
+                     e.size = 3;
+                     e.bytes[0] = f == 0 || f == 1024 ? 0x90 : 0x80;
+                     e.bytes[1] = f < 1024 ? 60 : 64;
+                     e.bytes[2] = f == 0 || f == 1024 ? 100 : 0;
+                     out.push_back(e);
+                 }
+             }});
+        REQUIRE(app.startEngine(backend,
+                                {.sampleRate = 48000, .blockSize = 256, .midiInputs = true},
+                                {.anticipative = false, .workers = 0}));
+        REQUIRE(call("transport.record", "{}"));
+        backend.run(4);
+        const fs::path journal = app.recordDir() / "Keys-1.midi.jsonl";
+        REQUIRE(journalWith(journal, 2));
+        auto refused = call("project.save", R"({"path":")" + second.generic_string() + R"("})");
+        REQUIRE_FALSE(refused);
+        CHECK(refused.error().code == "project.recording");
+        CHECK_FALSE(refused.error().hint.empty());
+        CHECK_FALSE(fs::exists(dir / "second"));
+        CHECK(app.projectPath() == first);
+        REQUIRE(app.save(first));  // in place: the recording's folder stays the project's
+        backend.run(4);
+        REQUIRE(call("transport.stop", "{}"));
+        app.stopEngine();
+        REQUIRE(app.head().midi.size() == 1);
+        CHECK(app.head().midi.begin()->value->sequence.notes.size() == 2);
+        REQUIRE(app.save(second));  // stopped: the save as copies the whole journal
+        CHECK_FALSE(fs::exists(dir / "second/media/rec/Keys-1.midi.jsonl"));
+        CHECK(fs::exists(journal));  // the first file does not hold the take
+        REQUIRE(app.open(second));
+        CHECK(app.head().midi.size() == 1);
+        CHECK(app.recoverable().empty());
+        REQUIRE(app.open(first));
+        CHECK(app.head().midi.empty());
+        CHECK(app.recoverable().size() == 1);
+    }
+    fs::remove_all(dir);
+}
+
 TEST_CASE("a journal this recording did not create is never the take's, nor deleted at save") {
     // Round-10 review, finding 5: a dangling link at the journal's name was
     // refused by the exclusive creation, yet the take still named it as its
