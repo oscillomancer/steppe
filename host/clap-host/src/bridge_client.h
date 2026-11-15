@@ -131,7 +131,11 @@ class RemoteInstance {
     Instance::EditorRequests editorRequests();
 
     // audio thread
+    // False when the plug-in refused, or when the bridge has not answered yet
+    // (startUnanswered(): a live deadline passed first; asking again later
+    // gets the answer, ADR-0081).
     bool startProcessing() SUPPLE_RT;
+    bool startUnanswered() const SUPPLE_RT { return startUnanswered_; }
     // While a late request is outstanding (ADR-0081 §4) these are kept, in
     // this order and once each, and sent before the next block: stop, reset,
     // flush. A reset drops the notes carried from skipped blocks.
@@ -200,7 +204,8 @@ class RemoteInstance {
     std::uint32_t seq_ = 0;
     std::uint32_t outstanding_ = 0;  // a late live request not yet answered (if pending_)
     bool pending_ = false;           // apart from its number, which wraps through 0
-    std::uint8_t lifecycle_ = 0;     // kept commands, a bit each (bridge_client.cpp)
+    bool startUnanswered_ = false;
+    std::uint8_t lifecycle_ = 0;  // kept commands, a bit each (bridge_client.cpp)
     std::unique_ptr<Event[]> carried_ = std::make_unique<Event[]>(kMaxCarried);
     std::uint32_t carriedCount_ = 0;
     std::int64_t lateSince_ = 0;            // steady ns of the first of consecutive late calls

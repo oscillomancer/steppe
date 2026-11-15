@@ -2620,3 +2620,34 @@ TEST_CASE("more than a late bridge can carry resets it and keeps each parameter'
     }
     CHECK(buf.ol[0] == 0.0f);
 }
+
+TEST_CASE("a bridged start that misses its live deadline is unanswered, not refused") {
+    // Round 16: the engine took it for a refusal and never asked again.
+    {
+        GatedPeer peer;
+        {
+            Past past;
+            CHECK_FALSE(peer.instance->startProcessing());
+        }
+        CHECK(peer.instance->startUnanswered());
+        GatedPeer::waitFor(peer.accepted, 1);
+        {
+            Past past;  // still held
+            CHECK_FALSE(peer.instance->startProcessing());
+            CHECK(peer.instance->startUnanswered());
+        }
+        peer.release();
+        {
+            Patient patient;
+            CHECK(peer.instance->startProcessing());  // its answer, not a second start
+        }
+        CHECK_FALSE(peer.instance->startUnanswered());
+        CHECK(peer.commands == std::vector{bridge::Cmd::StartProcessing});
+    }
+    {
+        GatedPeer peer(0, 0, true);  // answers at once, refusing
+        Patient patient;
+        CHECK_FALSE(peer.instance->startProcessing());
+        CHECK_FALSE(peer.instance->startUnanswered());
+    }
+}

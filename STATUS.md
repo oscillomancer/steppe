@@ -196,7 +196,8 @@ instructions are in `docs/guides/installing.md`.
   input FX); a late block is silent and counted in `bridge_late` and
   `xruns`, blocks skipped while it is outstanding lose their audio but pass
   their events and lifecycle commands on when it answers (bounded, with a
-  reset beyond 512 events), and `engine.status.bridge_timing` says where bridged calls spent
+  reset beyond 512 events), a start answered late is asked again, not taken
+  for a refusal, and `engine.status.bridge_timing` says where bridged calls spent
   their time and why a cycle overran. Where a third-party plug-in left on `inherit` runs is an app
   preference (Edit > Preferences, `plugin_isolation`), still in process by
   default until the bridging measurements decide; stock plug-ins stay in

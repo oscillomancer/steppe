@@ -637,6 +637,10 @@ struct Bridge {
             }
             case Op::Deactivate:
                 stopAudio();
+                // A start answered after the host's live deadline passed may
+                // have left it processing (ADR-0081); this thread is its audio
+                // thread now that that one has ended.
+                if (instance->processing()) instance->stopProcessing();
                 instance->deactivate();
                 unmap();
                 return reply(Writer{});

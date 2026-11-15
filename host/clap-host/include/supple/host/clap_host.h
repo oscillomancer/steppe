@@ -454,8 +454,12 @@ class Instance {
 
     // --- processing (audio thread) ---
     // start_processing; false if inactive or the plugin refused (then
-    // process() must not be called).
+    // process() must not be called), or when a bridged plug-in has not
+    // answered yet (startUnanswered()).
     bool startProcessing() SUPPLE_RT;
+    // The last startProcessing() of a bridged instance passed its live
+    // deadline unanswered (ADR-0081): not a refusal; ask again later.
+    bool startUnanswered() const SUPPLE_RT;
     void stopProcessing() SUPPLE_RT;
     bool processing() const { return processing_; }
     // The host's executor that currently processes this instance (an opaque

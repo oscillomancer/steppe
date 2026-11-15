@@ -24,6 +24,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <sched.h>
+#include <sys/mman.h>
 #include <sys/resource.h>
 #include <unistd.h>
 #include <cerrno>
@@ -3508,6 +3509,72 @@ TEST_CASE("live bridged effects play in the callback as in-process ones do") {
             CHECK(maxDiff(bridged.channels[1], 0, local.channels[1], 512) == 0);
         }
     }
+}
+
+TEST_CASE("a bridged start answered after its live deadline is not taken for a refusal") {
+    // Round 16: a healthy bridge whose start missed the first cycle's deadline
+    // was marked refused, so its stage passed audio through, unprocessed and
+    // unreported, until another plan came. The gain's start waits on a gate
+    // in shared memory that the test opens once that cycle is over.
+    host::setBridgeExecutable(BRIDGE_PATH);
+    const std::filesystem::path file = std::filesystem::temp_directory_path() /
+                                       ("supple-start-gate-" + std::to_string(::getpid()));
+    const int fd = ::open(file.c_str(), O_CREAT | O_TRUNC | O_RDWR, 0600);
+    REQUIRE(fd >= 0);
+    REQUIRE(::ftruncate(fd, 4096) == 0);
+    void* words = ::mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    ::close(fd);
+    REQUIRE(words != MAP_FAILED);
+    auto* gate = static_cast<std::atomic<unsigned>*>(words);
+    for (int i = 0; i < 3; ++i) new (gate + i) std::atomic<unsigned>(0);
+    // Only a guard against a bridge that died: the gate, not the clock,
+    // orders the test.
+    auto reached = [&](int word) {
+        const auto giveUp = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+        while (!gate[word].load(std::memory_order_acquire) &&
+               std::chrono::steady_clock::now() < giveUp)
+            std::this_thread::yield();
+        return gate[word].load(std::memory_order_acquire) != 0;
+    };
+    ::setenv("SUPPLE_TEST_START_GATE", file.c_str(), 1);
+    auto base = monitoring(synthSession(0, "com.suppleaudio.test.gain"));
+    model::EditTxn t(base, 2);
+    Id fxId;
+    for (const auto& fx : base.fx)
+        if (fx.value->plugin.id == "com.suppleaudio.test.gain") {
+            fxId = fx.id;
+            t.modify<model::FxInstance>(fx.id, [&](auto& f) {
+                f.isolation = model::Isolation::Dedicated;
+                f.patch = json::parse(R"({"schema":"supple.test-gain-patch/1.0",
+                    "params":{"gain":-12,"latency":"none"}})")
+                              .value();
+            });
+        }
+    const auto session = t.commit().value();
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend(constantInput(64 * 128));
+    Engine engine(pool, media, kInCallback);
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128, .inputs = 2}));
+    REQUIRE(engine.load(session));
+    ::unsetenv("SUPPLE_TEST_START_GATE");  // the bridge has it; nothing else made later
+    backend.run(1);                        // the start is held past this cycle's deadline
+    REQUIRE(reached(0));                   // the bridge is in the plug-in's start
+    gate[1].store(1, std::memory_order_release);
+    REQUIRE(reached(2));
+    backend.run(16);
+    host::Instance* instance = pool.find(fxId);
+    REQUIRE(instance);
+    CHECK_FALSE(instance->failed());
+    CHECK(instance->processing());
+    CHECK(engine.processErrors() == 0);
+    // Processed from the second cycle on: -12 dB on the 0.5 input.
+    const auto& out = backend.capture().channels[0];
+    CHECK(double(out[0]) == 0.5);  // not started yet: passed through, as a refused one is
+    CHECK(double(out[300]) == doctest::Approx(.5 * 0.2511886).epsilon(1e-4));
+    engine.stop();
+    ::munmap(words, 4096);
+    std::filesystem::remove(file);
 }
 
 TEST_CASE("a cycle late before its bridged call is not blamed on the bridge") {

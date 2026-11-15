@@ -6,7 +6,8 @@
 //   com.suppleaudio.test.gain  — stereo effect; params "gain" (dB, ADR-0010
 //     normalized CLAP value, modulatable by param_mod) and "latency" (0/64 samples, stepped;
 //     changing it while active requests a restart); versioned state; the semantic-params extension
-//     implemented with core-params + core-patch.
+//     implemented with core-params + core-patch. With SUPPLE_TEST_START_GATE set when it is
+//     made (POSIX), start_processing waits on a gate shared with the test (see factoryCreate).
 //   com.suppleaudio.test.sine  — instrument; 0 inputs, stereo output, CLAP and
 //     MIDI note dialects; one sine voice per key at velocity * 0.25, stops at
 //     note off and reports NOTE_END.
@@ -35,6 +36,8 @@
 #include <windows.h>
 
 #else
+#include <fcntl.h>
+#include <sys/mman.h>
 #include <unistd.h>
 #endif
 
@@ -45,6 +48,7 @@
 #include <cmath>
 #include <csignal>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <thread>
@@ -1719,6 +1723,29 @@ const clap_plugin_t* CLAP_ABI factoryCreate(const clap_plugin_factory_t*, const 
             std::memset(G(pl)->delay, 0, sizeof(G(pl)->delay));
             G(pl)->delayPos = 0;
         };
+#if !defined(_WIN32)
+        // A gated start for host tests: SUPPLE_TEST_START_GATE names a file of
+        // at least three atomic words, mapped here, on the main thread. Then
+        // start_processing sets word 0, spins until the test sets word 1, sets
+        // word 2 and succeeds: no system call on the audio thread.
+        if (const char* file = std::getenv("SUPPLE_TEST_START_GATE")) {
+            static std::atomic<unsigned>* gate = nullptr;
+            const int fd = ::open(file, O_RDWR);
+            void* words = fd >= 0 ? ::mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0)
+                                  : MAP_FAILED;
+            if (fd >= 0) ::close(fd);
+            if (words != MAP_FAILED) {
+                gate = static_cast<std::atomic<unsigned>*>(words);
+                plugin->start_processing = [](const clap_plugin_t*) {
+                    gate[0].store(1, std::memory_order_release);
+                    while (!gate[1].load(std::memory_order_acquire)) {
+                    }
+                    gate[2].store(1, std::memory_order_release);
+                    return true;
+                };
+            }
+        }
+#endif
         return plugin;
     }
     if (!std::strcmp(id, checkedGainDescriptor(false)->id) ||

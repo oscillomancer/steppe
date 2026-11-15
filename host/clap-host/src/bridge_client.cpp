@@ -328,6 +328,7 @@ void RemoteInstance::unmap() {
     // kept or carried.
     outstanding_ = 0;
     pending_ = false;
+    startUnanswered_ = false;
     lifecycle_ = 0;
     carriedCount_ = 0;
     lateSince_ = 0;
@@ -1005,6 +1006,7 @@ bool RemoteInstance::settle() SUPPLE_RT {
 
 void RemoteInstance::lifecycle(Cmd cmd) SUPPLE_RT {
     if (cmd == Cmd::Reset) dropCarriedNotes();  // they came before it
+    if (cmd == Cmd::StopProcessing) startUnanswered_ = false;
     if (!hdr_ || process_->failed()) return;
     if (settle()) {
         (void)post(cmd);  // answered, or outstanding: either way the bridge has it
@@ -1177,11 +1179,17 @@ void resetBridgeTiming() {
 }
 
 bool RemoteInstance::startProcessing() SUPPLE_RT {
+    startUnanswered_ = false;
     if (!hdr_ || process_->failed()) return false;
-    if (!settle()) return false;
+    if (!settle()) {
+        startUnanswered_ = pending_ && !process_->failed();
+        return false;
+    }
     // A start left outstanding by a late call may have been answered since.
     if (hdr_->processing != 0) return true;
-    return post(Cmd::StartProcessing) == Sent::Answered && hdr_->processing != 0;
+    const Sent sent = post(Cmd::StartProcessing);
+    startUnanswered_ = sent == Sent::Late;
+    return sent == Sent::Answered && hdr_->processing != 0;
 }
 
 void RemoteInstance::stopProcessing() SUPPLE_RT { lifecycle(Cmd::StopProcessing); }

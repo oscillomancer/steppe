@@ -1135,7 +1135,10 @@ instance).
   before that block, so no note whose end it never heard hangs. Stop, reset
   and flush asked for meanwhile are kept, once each, and sent first when the
   answer comes, in the order reset, stop, flush; a reset drops the carried
-  notes, which came before it. `host::bridgeLateCalls()` counts late calls
+  notes, which came before it. A start not answered by the deadline returns
+  false with `startUnanswered()` set; asked again, it returns the answer
+  (no second start). A stop reaches such an instance too, and the bridge
+  stops an instance still processing before it deactivates it. `host::bridgeLateCalls()` counts late calls
   process-wide. Consecutive late calls spanning 50 ms fail the instance with
   the hung reason; the audio thread only sets the flag, and the main thread
   kills the process when it services the instance. Without a deadline the
@@ -1387,7 +1390,10 @@ harness. See the tooling README for schemas, limits and invocation details.
   is left out of processing (its stage passes audio through,
   delay-compensated, and `processErrors` counts it) and is reset as it
   refuses, so a retry that succeeds starts it clean; the next plan retries
-  it. Per-stage event storage is reserved for the most events any block-long
+  it. A bridged plug-in whose start is not answered by the live deadline
+  (`Instance::startUnanswered()`, ADR-0081) has not refused: it is reset and
+  let go the same way, uncounted, and the next cycle asks again; one that
+  never answers fails as a hung bridge. Per-stage event storage is reserved for the most events any block-long
   window holds, so a seek off the block grid never allocates. Plans share
   ownership of the session's TimeMap (a session version may be freed while
   its plan plays).

@@ -110,6 +110,9 @@ the notes are dropped, each parameter keeps its latest value and the plug-in
 is reset before that block, so no stale note survives. Lifecycle commands
 asked for meanwhile (reset, stop, flush) are kept, once each, and sent in
 that order before anything else (`docs/specs/engine.md`, live deadline).
+A start the deadline passes is unanswered, not refused: the engine asks
+again on the next cycle rather than leaving the stage passed through until
+another plan.
 
 ## Alternatives considered
 

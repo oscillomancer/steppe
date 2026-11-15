@@ -1362,6 +1362,13 @@ void Engine::startFree(std::vector<host::Instance*>& owned,
             // renderer's held note) that the callback then restarts must not
             // resume that note when a retry succeeds, untracked, so never ended.
             in->reset();
+            if (in->startUnanswered()) {
+                // Not refused: a bridge that has not answered by the live
+                // deadline (ADR-0081). Asked again next cycle; one that never
+                // answers fails within 50 ms like any late bridge.
+                in->setOwner(nullptr);
+                continue;
+            }
             in->setOwner(&kRefused);
             processErrors_.fetch_add(1);
             notifyMain();
