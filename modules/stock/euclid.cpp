@@ -108,7 +108,7 @@ struct Euclid : Module {
             int sixteenth = 0;
             if (internal) {
                 if (t.playing) {
-                    const double position = t.beats * 4.0 + i * perFrame + 1e-7;
+                    const double position = t.beats * 4.0 + (t.offset + i) * perFrame + 1e-7;
                     sixteenth = floorToInt(position);
                     high = position - sixteenth < 0.5;
                 }

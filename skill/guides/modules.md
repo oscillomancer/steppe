@@ -237,8 +237,10 @@ and evaluation-order rules apply to helpers and their calls.
 The runtime calls hooks; scripts do not call them. `sampleRate()`,
 `maxBlockSize()` (32), `channels()`, `transport()`, `seed()` and
 `trace(name, value[, i])` are available. `transport()` gives `playing`,
-`tempo`, `beats`, `barStart`, `timeSigNumerator`, `timeSigDenominator` at
-the block's start. `offline()` exists; making sound depend on it defeats
+`tempo`, `beats`, `barStart`, `timeSigNumerator`, `timeSigDenominator` read
+at the start of the block's grid interval, and `offset`, the frames from
+there to the block's first frame (0 unless a host block split the
+interval). `offline()` exists; making sound depend on it defeats
 the same-render guarantee.
 
 The rack processes blocks of at most 32 frames on a grid aligned to the
@@ -255,9 +257,10 @@ calls fall: advance state per frame, and do work you would do "once a
 block" (a random wander, retuning filters from a cable, planning partials)
 on a count of frames you keep yourself, every 32 frames from `prepare()`,
 reading the cables at that frame. Do not clear a "first frame" flag at the
-end of a call: test it for the first frame only. A song position computed
-as `beats + i * beatsPerFrame` from the call's transport is the exception:
-it can differ from the unsplit call's in the last bits.
+end of a call: test it for the first frame only. Compute frame i's song
+position as `t.beats + (t.offset + i) * t.tempo / 60.0 / sampleRate()`:
+`transport()` is read at the grid interval's start and `offset` says how
+far into it the call starts, so the position is exact however calls fall.
 A process loop has a budget of `65536 * frames`; exhaustion stops that
 module, silences its outputs and reports the problem.
 

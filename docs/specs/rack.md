@@ -222,7 +222,7 @@ see each element as an ordinary declaration.
 | `sampleRate()` | |
 | `maxBlockSize()` | 32: the rack's grid |
 | `channels()` | The widest connected input or modulating cable, at least 1 |
-| `transport()` | `Transport` at the block's start (playing, tempo, beats, barStart, time signature) |
+| `transport()` | `Transport` (playing, tempo, beats, barStart, time signature) read at the start of the block's grid interval, and `offset`, the frames from there to the block's first frame: frame i is at `beats + (offset + i) * tempo / 60 / sampleRate()` |
 | `seed()` | An `int` from the project's seed and the module's id: the same every render |
 | `trace(...)` | As a plugin's |
 
@@ -433,12 +433,18 @@ stock modules advance state per frame, and do their control-rate work
 (Delay's wander, VCO's drift, Harmonic's partial plan, Resonator's and
 Drum's tuning, Sequencer's step knobs) every 32 frames counted from
 `prepare()` or a restart, reading cables at that frame. A run that starts
-on the grid does that work where it did per call. `rack-stock.tests`
-checks every stock module with split calls against whole ones. One limit
-remains: a module computes song positions as `beats + i * beatsPerFrame`
-from its call's transport, so after a seek off the grid a split call's
-positions can differ from the unsplit call's in the last bits, and a step
-or gate that falls exactly on such a position can move by a frame. A first
+on the grid does that work where it did per call. Song positions are exact
+too: every call of a grid interval gets the transport read at the
+interval's start (`Clock::transport(position - phase)`) with
+`Transport::offset` set to the phase (plus the frame, for a feedback
+group's per-frame calls), and modules compute frame i's position as
+`beats + (offset + i) * perFrame`, the same expression for a frame whatever
+call it falls in. Without playrate the engine's clock reads the time of a
+timeline sample as `(origin + sample) / rate`, so an offline render that
+starts at a seek and the real-time plan agree on it to the bit.
+`rack-stock.tests` checks every stock module with split calls against whole
+ones, from the timeline's start and off the grid, with the song playing and
+clocked modules following it. A first
 call or a discontinuity samples the grid interval containing its start,
 including for negative positions. A zero-frame call leaves that state alone.
 

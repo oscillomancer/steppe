@@ -377,7 +377,8 @@ void Builtins::addClasses() {
         {"beats", double_, static_cast<int>(offsetof(S::Transport, beats))},
         {"barStart", double_, static_cast<int>(offsetof(S::Transport, barStart))},
         {"timeSigNumerator", int_, static_cast<int>(offsetof(S::Transport, timeSigNumerator))},
-        {"timeSigDenominator", int_, static_cast<int>(offsetof(S::Transport, timeSigDenominator))}};
+        {"timeSigDenominator", int_, static_cast<int>(offsetof(S::Transport, timeSigDenominator))},
+        {"offset", int_, static_cast<int>(offsetof(S::Transport, offset))}};
     transport->declarable = false;
     transport_ = transport;
 

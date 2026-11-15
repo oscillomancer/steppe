@@ -182,7 +182,8 @@ struct Glitch : Module {
                 }
                 if (clockPeriod > 0.0) span = clockPeriod;
             } else {
-                const double beats = tr.playing ? tr.beats + i * perSample : freeBeats;
+                const double beats =
+                    tr.playing ? tr.beats + (tr.offset + i) * perSample : freeBeats;
                 const int index = floorToInt(beats / stepBeats + 1e-9);
                 if (index != lastIndex) starts = true;
                 lastIndex = index;

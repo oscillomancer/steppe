@@ -413,7 +413,8 @@ struct Sequencer : Module {
             if (resetEdge.rose(reset[0][i])) armed = true;
             if (internal) {
                 if (t.playing) {
-                    const int s = floorToInt(t.beats * 4.0 + i * sixteenthsPerFrame + 1e-9);
+                    const int s =
+                        floorToInt(t.beats * 4.0 + (t.offset + i) * sixteenthsPerFrame + 1e-9);
                     if (s != lastSixteenth) advance(s, true);
                     lastSixteenth = s;
                 } else {

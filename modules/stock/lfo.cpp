@@ -207,7 +207,8 @@ struct Lfo : Module {
         const bool unipolar = polarity.index() == 1;
         const bool driven = drive.connected();
         for (int i = 0; i < frames; ++i) {
-            const double beats = t.playing ? t.beats + i * beatStep : freeBeats + beatStep;
+            const double beats =
+                t.playing ? t.beats + (t.offset + i) * beatStep : freeBeats + beatStep;
             freeBeats = beats;
             const double r = reset[0][i];
             bool restart = false;

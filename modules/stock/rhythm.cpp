@@ -309,7 +309,8 @@ struct Rhythm : Module {
             if (internal) {
                 if (t.playing) {
                     // Sixteenths from the bar's start: the groove's first is its downbeat.
-                    const double position = (t.beats - t.barStart) * 4.0 + i * perFrame + 1e-7;
+                    const double position =
+                        (t.beats - t.barStart) * 4.0 + (t.offset + i) * perFrame + 1e-7;
                     sixteenth = floorToInt(position);
                     high = position - sixteenth < 0.5;
                 }

@@ -304,7 +304,8 @@ struct Changes : Module {
             bool rose = false;
             if (internal) {
                 if (t.playing) {
-                    const int now = floorToInt((t.beats + i * beatsPerFrame) / span + 1e-9);
+                    const int now =
+                        floorToInt((t.beats + (t.offset + i) * beatsPerFrame) / span + 1e-9);
                     rose = now != lastSpan;
                     lastSpan = now;
                 }

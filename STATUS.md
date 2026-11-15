@@ -400,10 +400,9 @@ instructions are in `docs/guides/installing.md`.
   of its prepared state for that, so its memory is held twice, apart from
   buffers and delay lines `prepare()` leaves all zero, which are held once
   (so a delay's 10 s lines are). No stock module's sound depends on where
-  host blocks split the grid, which a seek off it does (checked for every
-  stock module); the one limit is a song position a module computes from its
-  call's transport, which after such a seek can differ in the last bits and
-  move a step that falls exactly on it by a frame. Engine-owned `module.copy` / `rack.paste` retain modules,
+  host blocks split the grid, which a seek off it does, song positions
+  included (`Transport::offset`; checked for every stock module, and in
+  both executors after seeks off the grid). Engine-owned `module.copy` / `rack.paste` retain modules,
   internal cables (including plug-in parameter modulation), learn bindings
   and copy-time live plug-in state across cuts and racks, as one paste undo
   step; unavailable types or plug-ins refuse the paste without changing the

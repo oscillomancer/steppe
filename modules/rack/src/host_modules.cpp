@@ -630,14 +630,15 @@ void Transport::process(const HostContext& ctx) SUPPLE_RT {
         outs[k] = &in.outputMember(k);
         outs[k]->setChannels(1);
     }
-    const bool jumped =
-        t.playing && wasPlaying_ && std::abs(t.beats - expected_) > 1e-9 * (1 + std::abs(t.beats));
+    const double startBeat = t.beats + t.offset * perFrame;  // where this block starts
+    const bool jumped = t.playing && wasPlaying_ &&
+                        std::abs(startBeat - expected_) > 1e-9 * (1 + std::abs(startBeat));
     if (t.playing && (!wasPlaying_ || jumped)) {
         reset_ = triggerFrames_;
         lastTicks_ = lastBar_ = lastBeat_ = -1;
     }
     for (int i = 0; i < ctx.frames; ++i) {
-        const double beat = t.beats + i * perFrame;
+        const double beat = t.beats + (t.offset + i) * perFrame;
         const double inBar = beat - t.barStart;
         double barPhase = std::fmod(inBar, barLen) / barLen;
         if (barPhase < 0) barPhase += 1.0;
@@ -672,7 +673,7 @@ void Transport::process(const HostContext& ctx) SUPPLE_RT {
         for (int* c : {&reset_, &bar_, &beat_, &clock_})
             if (*c > 0) --*c;
     }
-    expected_ = t.beats + ctx.frames * perFrame;
+    expected_ = t.beats + (t.offset + ctx.frames) * perFrame;
     wasPlaying_ = t.playing;
 }
 

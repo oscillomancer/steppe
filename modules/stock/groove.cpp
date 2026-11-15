@@ -161,7 +161,7 @@ struct Groove : Module {
         const int f = feel.index();
         int playing = 0;
         for (int i = 0; i < frames; ++i) {
-            const double song = (t.beats + i * beatsPerFrame) * 4.0;  // sixteenths
+            const double song = (t.beats + (t.offset + i) * beatsPerFrame) * 4.0;  // sixteenths
             if (!internal) {
                 ++since;
                 if (clockEdge.rose(clock[0][i])) {

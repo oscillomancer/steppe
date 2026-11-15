@@ -105,12 +105,25 @@ class ModuleHarness {
         p.modSignal = std::move(signal);
         p.amount = amount;
     }
-    void transport(const ss::Transport& t) { transport_ = t; }
+    // The song: `t.beats` is the position at the next frame run; while it
+    // plays it moves on at t.tempo. Each call gets it as the rack gives it,
+    // read at the grid interval's start with the call's offset into it.
+    void transport(const ss::Transport& t) {
+        transport_ = t;
+        anchor_ = start_ + frame_;
+    }
+    // Where the first frame run sits on the timeline, as after a seek: the
+    // grid is the timeline's, so a start off it begins with a short call.
+    // Call before running.
+    void startAt(std::int64_t position) {
+        start_ = position;
+        anchor_ = position;
+    }
 
     // Runs `frames` frames in grid blocks, recording every output.
     void run(std::int64_t frames) {
         while (frames > 0) {
-            const int n = static_cast<int>(std::min<std::int64_t>(frames, kGrid));
+            const int n = static_cast<int>(std::min<std::int64_t>(frames, kGrid - phase()));
             block(n);
             frames -= n;
         }
@@ -125,7 +138,7 @@ class ModuleHarness {
         std::size_t k = 0;
         int left = pieces.at(0);
         while (frames > 0) {
-            const int toGrid = kGrid - static_cast<int>(frame_ % kGrid);
+            const int toGrid = kGrid - phase();
             const int n =
                 static_cast<int>(std::min<std::int64_t>({frames, std::int64_t{left}, toGrid}));
             block(n);
@@ -258,6 +271,11 @@ class ModuleHarness {
         for (const ParamState& p : params_) width = std::max(width, p.modChannels);
         record_.channels = width;
         record_.transport = transport_;
+        record_.transport.offset = phase();
+        if (transport_.playing)
+            record_.transport.beats =
+                transport_.beats + static_cast<double>(start_ + frame_ - phase() - anchor_) *
+                                       transport_.tempo / 60.0 / record_.sampleRate;
         if (changed) call(code_.update(), kBudget);
         for (InputState& in : inputs_) {
             ss::Input& port = inputPort(*in.model);
@@ -290,8 +308,6 @@ class ModuleHarness {
                         c < out.lastChannels ? out.buffer[static_cast<std::size_t>(c * kGrid + f)]
                                              : 0.0);
         }
-        if (transport_.playing)
-            transport_.beats += n * transport_.tempo / 60.0 / record_.sampleRate;
         frame_ += n;
     }
 
@@ -302,8 +318,13 @@ class ModuleHarness {
     std::vector<InputState> inputs_;
     std::vector<OutputState> outputs_;
     std::array<double, kGrid> zero_{};
+    // The frame's place in the rack's grid.
+    int phase() const { return static_cast<int>(((start_ + frame_) % kGrid + kGrid) % kGrid); }
+
     ss::Transport transport_;
     std::int64_t frame_ = 0;
+    std::int64_t start_ = 0;   // the timeline position of the first frame
+    std::int64_t anchor_ = 0;  // where transport_.beats is the song position
 };
 
 }  // namespace supple::rack::test

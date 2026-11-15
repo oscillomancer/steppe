@@ -256,7 +256,7 @@ struct RandomModule : Module {
             bool high = false;
             if (internal) {
                 if (t.playing) {
-                    const double e = t.beats * 2.0 + i * eighthsPerFrame;
+                    const double e = t.beats * 2.0 + (t.offset + i) * eighthsPerFrame;
                     high = e - floor(e) < 0.5;
                 }
             } else {

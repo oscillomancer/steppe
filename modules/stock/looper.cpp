@@ -124,7 +124,7 @@ struct Looper : Module {
         for (int i = 0; i < frames; ++i) {
             if (clearEdge.rose(clear[0][i])) forget();
             const bool resetNow = resetEdge.rose(reset[0][i]);
-            const double songAt = t.beats + i * beatsPerFrame;
+            const double songAt = t.beats + (t.offset + i) * beatsPerFrame;
             if (resetNow) {
                 origin = songAt;
                 freePhase = 0.0;
