@@ -106,7 +106,10 @@ real-time thread of the bench and its bridge processes (and any other thread
 that waited over 1 ms for a CPU), the kernel's view over the interval: `policy`
 and kernel `prio`, `cpu_ms`, `run_delay_ms` (runnable but waiting for a CPU,
 from `/proc/<tid>/schedstat`), `slices`, `voluntary` and `involuntary` switches
-and `migrations`. Schema 2.2 retains the 2.1 fields and adds
+and `migrations`. With `kernel.sched_schedstats=1` each thread's statistics
+are reset at the interval's start and it also reports `wait_max_ms` (the
+longest single wait runnable for a CPU), `wait_sum_ms`, `wait_count` and
+`exec_max_ms` (the longest run without a switch) over the interval. Schema 2.2 retains the 2.1 fields and adds
 `isolation`, the requested `background`, `background_priority` and
 `callback_priority`, and `scheduling`: the engine's applied policy per thread
 class (`callback`, `live`, `renderer`, `background`, each `policy` and

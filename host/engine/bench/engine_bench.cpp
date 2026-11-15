@@ -41,10 +41,17 @@ struct TaskSched {
     std::string process, comm;
     long long policy = 0, prio = 0, voluntary = 0, involuntary = 0, migrations = 0;
     long long cpuNs = 0, runDelayNs = 0, slices = 0;
+    // With kernel.sched_schedstats=1 (else -1), in ms since the reset at the
+    // interval's start: the longest wait runnable for a CPU, and the longest
+    // run without a switch; the waits' sum and count.
+    double waitMaxMs = -1, execMaxMs = -1, waitSumMs = -1;
+    long long waitCount = -1;
 };
 using SchedSnapshot = std::map<std::string, TaskSched>;
 
-SchedSnapshot schedSnapshot() {
+// `reset`: clear each thread's scheduler statistics first (allowed for one's
+// own threads), so the maxima cover what follows.
+SchedSnapshot schedSnapshot(bool reset = false) {
     SchedSnapshot out;
 #if defined(__linux__)
     namespace fs = std::filesystem;
@@ -74,6 +81,7 @@ SchedSnapshot schedSnapshot() {
             t.process = process;
             std::ifstream comm(task.path() / "comm");
             std::getline(comm, t.comm);
+            if (reset) std::ofstream(task.path() / "sched") << "0";
             std::ifstream schedstat(task.path() / "schedstat");
             schedstat >> t.cpuNs >> t.runDelayNs >> t.slices;
             std::ifstream sched(task.path() / "sched");
@@ -94,6 +102,14 @@ SchedSnapshot schedSnapshot() {
                     t.policy = value;
                 else if (key == "prio")
                     t.prio = value;
+                else if (key == "wait_max")
+                    t.waitMaxMs = std::atof(line.c_str() + colon + 1);
+                else if (key == "exec_max")
+                    t.execMaxMs = std::atof(line.c_str() + colon + 1);
+                else if (key == "wait_sum")
+                    t.waitSumMs = std::atof(line.c_str() + colon + 1);
+                else if (key == "wait_count")
+                    t.waitCount = value;
             }
             out[pid + "/" + task.path().filename().string()] = std::move(t);
         }
@@ -123,6 +139,12 @@ json::Value schedDelta(const SchedSnapshot& before, const SchedSnapshot& after) 
         e["voluntary"] = t.voluntary - b.voluntary;
         e["involuntary"] = t.involuntary - b.involuntary;
         e["migrations"] = t.migrations - b.migrations;
+        if (t.waitMaxMs >= 0) {
+            e["wait_max_ms"] = t.waitMaxMs;
+            e["wait_sum_ms"] = t.waitSumMs;
+            e["wait_count"] = t.waitCount;
+            e["exec_max_ms"] = t.execMaxMs;
+        }
         threads.push_back(std::move(e));
     }
     return threads;
@@ -493,7 +515,7 @@ int main(int argc, char** argv) {
     host::resetBridgeTiming();  // the measured interval's bridged calls only
     const auto o0 = engine->bridgeOverruns();
     const auto c0 = backend.cycles();
-    const SchedSnapshot s0 = schedSnapshot();
+    const SchedSnapshot s0 = schedSnapshot(true);
     rusage ru0{}, ru1{};
     getrusage(RUSAGE_SELF, &ru0);
     const auto begin = std::chrono::steady_clock::now();
