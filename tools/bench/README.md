@@ -119,7 +119,10 @@ from `/proc/<tid>/schedstat`), `slices`, `voluntary` and `involuntary` switches
 and `migrations`. With `kernel.sched_schedstats=1` each thread's statistics
 are reset at the interval's start and it also reports `wait_max_ms` (the
 longest single wait runnable for a CPU), `wait_sum_ms`, `wait_count` and
-`exec_max_ms` (the longest run without a switch) over the interval.
+`exec_max_ms` (the longest run without a switch) over the interval. A
+thread whose `wait_max_ms` or `wait_sum_ms` exceeds the interval, which
+cannot be the interval's (one reset while it waited reported about the
+machine's uptime), has both null and `wait_stale: true`.
 `bridge_timing` also carries `wake_buckets` and `return_buckets`: how many
 answered live bridged calls took under 10, 20, 50, 100, 200, 500, 1000 and
 2000 µs, and at or over 2 ms, from post to the bridge seeing the call, and

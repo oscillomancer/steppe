@@ -137,7 +137,11 @@ SchedSnapshot schedSnapshot(bool reset = false) {
 }
 
 // The interval's real-time threads (and the busiest others) with their deltas.
-json::Value schedDelta(const SchedSnapshot& before, const SchedSnapshot& after) {
+// `intervalMs` bounds the schedstat waits: no wait in the interval is longer.
+// A thread reset while it waited for a CPU has been seen to report about the
+// uptime (its wait start cleared, it seems); such a thread's waits are null
+// and flagged `wait_stale`.
+json::Value schedDelta(const SchedSnapshot& before, const SchedSnapshot& after, double intervalMs) {
     auto threads = json::Value::array();
     for (const auto& [id, t] : after) {
         const auto was = before.find(id);
@@ -162,10 +166,12 @@ json::Value schedDelta(const SchedSnapshot& before, const SchedSnapshot& after) 
         e["minor_faults"] = minor;
         e["major_faults"] = major;
         if (t.waitMaxMs >= 0) {
-            e["wait_max_ms"] = t.waitMaxMs;
-            e["wait_sum_ms"] = t.waitSumMs;
+            const bool stale = t.waitMaxMs > intervalMs || t.waitSumMs > intervalMs;
+            e["wait_max_ms"] = stale ? json::Value() : json::Value(t.waitMaxMs);
+            e["wait_sum_ms"] = stale ? json::Value() : json::Value(t.waitSumMs);
             e["wait_count"] = t.waitCount;
             e["exec_max_ms"] = t.execMaxMs;
+            if (stale) e["wait_stale"] = true;
         }
         threads.push_back(std::move(e));
     }
@@ -633,7 +639,7 @@ int main(int argc, char** argv) {
         b["overruns_not_waiting"] = t.overrunsNotWaiting;
         result["bridge_timing"] = std::move(b);
     }
-    result["threads"] = schedDelta(s0, s1);
+    result["threads"] = schedDelta(s0, s1, measured * 1000.0);
     result["cycles"] = backend.cycles() - c0;
     result["restart_needed"] = after.restartNeeded;
     result["warnings"] = json::Value::array();
