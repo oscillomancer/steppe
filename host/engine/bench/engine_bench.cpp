@@ -554,10 +554,11 @@ int main(int argc, char** argv) {
     const SchedSnapshot s1 = schedSnapshot();
     const auto f1 = (*app)->engineStatus().audioPageFaults;
     const auto thp = (*app)->engineStatus().thpOptOut;
+    const auto idle = (*app)->engineStatus().cpuIdleLatency;
     const auto after = backend.status();
     const double rate = backend.config().sampleRate;
     auto result = json::Value::object();
-    result["schema"] = "supple.capacity-run/2.4";
+    result["schema"] = "supple.capacity-run/2.5";
     result["tracks"] = tracks;
     result["workload"] = pluginFile.empty() ? "stock" : "effect";
     result["plugin_file"] = pluginFile;
@@ -667,7 +668,17 @@ int main(int argc, char** argv) {
         faults["threads"] = f1.threads;
         result["audio_page_faults"] = std::move(faults);
         result["thp_opt_out"] = thp.active ? (thp.advisedOnly ? "advised_only" : "all") : "off";
+        result["thp_inherited"] = thp.inherited;
     }
+    // Whether the 20 us idle-latency request was held at the interval's end,
+    // and why (ADR-0086): asked for, automatic (a bridged plug-in plays
+    // live), or refused (its errno).
+    auto latency = json::Value::object();
+    latency["active"] = idle.active;
+    latency["requested"] = idle.requested;
+    latency["automatic"] = idle.automatic;
+    latency["errno"] = idle.error ? json::Value(idle.error->errnoValue) : json::Value();
+    result["cpu_idle_latency"] = std::move(latency);
     // Silence means a missing signal unless the anticipative renderer fell
     // behind: then its starved ring explains it and the run is a failure.
     const bool signal = backend.peak > 1e-5 || result["anticipation_misses"].asInt() > 0;

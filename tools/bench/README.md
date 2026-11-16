@@ -99,7 +99,11 @@ Scheduling and isolation (B1 only, engine.md §2.2, ADR-0026):
 
 A background scheduling fallback is a warning, so it invalidates the run.
 
-B1 run schema **`supple.capacity-run/2.4`** adds page faults over the
+B1 run schema **`supple.capacity-run/2.5`** adds `cpu_idle_latency`, the
+20 µs idle-latency request at the interval's end (`active`, `requested`,
+`automatic`: held because a bridged plug-in plays live, ADR-0086, and
+`errno`, null unless refused), and on Linux `thp_inherited` (the process
+already had its huge-page setting, ADR-0084). Schema 2.4 added page faults over the
 interval: `audio_page_faults` as `engine.status` counts them (`scope`, `minor`,
 `major`, `threads`; on Linux the callback's and the live helpers'),
 `thp_opt_out` (`advised_only`, `all` or `off`, ADR-0084), and on Linux each
