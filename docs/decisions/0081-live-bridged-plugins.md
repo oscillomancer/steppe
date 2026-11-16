@@ -2,7 +2,9 @@
 
 **Status:** Accepted, 2026-11-14. Implementation follows in separate commits.
 Amended 2026-11-16 by [ADR-0085](0085-live-helpers-park-while-bridged.md):
-the job's idle live helpers park while a bridged call blocks.
+the job's idle live helpers park while a bridged call blocks; and by
+[ADR-0087](0087-lost-bridged-output-ends-held-notes.md): a lost block's
+output ends the notes it held and resets the controllers it moved.
 Amends [ADR-0013](0013-plugin-isolation.md) §5 (synchronous bridge calls
 never run in the device callback) and the callback rules of
 [ADR-0024](0024-live-multiprocessing.md) and

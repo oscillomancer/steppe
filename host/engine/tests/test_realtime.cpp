@@ -5708,3 +5708,88 @@ TEST_CASE("MIDI bus: plug-in note output nulls offline in both executors and all
         }
     }
 }
+
+TEST_CASE("a bridged note plug-in's lost block ends the notes its output held" *
+          doctest::description("rt")) {
+    // ADR-0087. The echo plays key 60 as 67 (with CC 74) to a hardware MIDI
+    // send. Key 119, at 60's end, makes the echo's block take 30 ms: over the
+    // 10 ms live deadline, so that block, which held the echo's 67 off, is
+    // lost. The host must end 67 and reset the controllers itself.
+    host::setBridgeExecutable(BRIDGE_PATH);
+    model::EditTxn t(model::Session::create({.console9 = false}), 1);
+    model::Track tr;
+    tr.parent = kMaster;
+    const Id track = t.create(tr);
+    t.modify<model::Track>(kMaster, [&](model::Track& m) { m.children.push_back(track); });
+    model::FxInstance echo;
+    echo.plugin.id = "com.suppleaudio.test.note-echo";
+    echo.midiOutput = model::MidiOutputMode::Replace;
+    echo.isolation = model::Isolation::SharedBridge;
+    const Id echoId = t.create(echo);
+    t.modify<model::Track>(track, [&](model::Track& x) { x.chain.push_back(echoId); });
+    model::MidiSource src;
+    src.sequence.ppq = 960;
+    src.sequence.length = 4 * 960;
+    src.sequence.notes.push_back({0, 960, 0, 60, 100, 0});
+    src.sequence.notes.push_back({960, 240, 0, 119, 100, 0});
+    model::Take take;
+    take.source = t.create(src);
+    model::Item item;
+    item.track = track;
+    item.length = 4.0;
+    item.takes = {t.create(take)};
+    item.activeTake = item.takes[0];
+    t.create(item);
+    model::Route send;
+    send.from.track = track;
+    send.to.midiDevice = "Synth";
+    send.midi = model::MidiRouting{};
+    t.create(send);
+    const auto session = t.commit();
+    REQUIRE_MESSAGE(session, (session ? "" : session.error().toString()));
+
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.midiOutputPorts = {"Synth"}});
+    Engine engine(pool, media, {.anticipative = false, .workers = 0, .liveBridgeDeadlineMs = 10.0});
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128, .midiOutputs = true}));
+    auto port = json::Value::object();
+    port["offset_ms"] = 0.0;
+    port["enabled"] = true;
+    port["reset_on_stop"] = true;
+    engine.setMidiPreferences({}, {{"Synth", port}});
+    REQUIRE(engine.load(*session));
+    engine.play();
+    backend.run(180);  // to 0.48 s: key 60 (the echo's 67) is held
+    if (engine.bridgeLateCycles() != 0) {
+        // A healthy block missed 10 ms here: what follows would not test the
+        // lost block alone. Not a failure of the change.
+        MESSAGE("skipped: the machine made a healthy bridged block late");
+        engine.stop();
+        return;
+    }
+    backend.run(200);  // past key 119's slow block and its answer
+    CHECK(engine.bridgeLateCycles() >= 1);
+    // Before stop, which ends held notes on the port anyway.
+    std::vector<DummyBackend::CapturedMidi> heard(backend.midiCapture().begin(),
+                                                  backend.midiCapture().end());
+    engine.stop();
+    auto is = [](const DummyBackend::CapturedMidi& m, std::uint8_t status, int d1) {
+        return (m.event.bytes[0] & 0xf0) == status && m.event.bytes[1] == d1;
+    };
+    const auto on = std::find_if(heard.begin(), heard.end(), [&](const auto& m) {
+        return is(m, 0x90, 67) && m.event.bytes[2] > 0;
+    });
+    REQUIRE(on != heard.end());
+    CHECK(std::any_of(heard.begin(), heard.end(), [&](const auto& m) { return is(m, 0xb0, 74); }));
+    const auto off = std::find_if(on, heard.end(), [&](const auto& m) {
+        return is(m, 0x80, 67) || (is(m, 0x90, 67) && m.event.bytes[2] == 0);
+    });
+    REQUIRE(off != heard.end());  // the echo's own off was in the lost block
+    CHECK(off->frame >= 23936);   // that block (60's end at 24000), not before
+    CHECK(std::any_of(off, heard.end(), [&](const auto& m) { return is(m, 0xb0, 121); }));
+    // Exactly one off: the echo's own, in its late answer, was discarded.
+    CHECK(std::count_if(heard.begin(), heard.end(), [&](const auto& m) {
+              return is(m, 0x80, 67) || (is(m, 0x90, 67) && m.event.bytes[2] == 0);
+          }) == 1);
+}

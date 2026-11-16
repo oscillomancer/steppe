@@ -1151,7 +1151,10 @@ instance).
   touches the shared memory, and discards the late output. A block skipped
   meanwhile is silent and its audio is lost, but its events reach the
   plug-in at offset 0 of the next block it processes, in order and before
-  that block's own: no note off, pedal or parameter change is lost. At most
+  that block's own: no note off, pedal or parameter change is lost. The
+  block's own output is lost (`OutputEvents::lost`, also for a failed
+  bridge), so the chain's MIDI bus ends what it held and resets the
+  controllers it moved (ADR-0087, below). At most
   `RemoteInstance::kMaxCarried` (512) are carried; beyond that, or when they
   and the next block's would not fit the arena's 2048, the notes and MIDI are
   dropped, each parameter keeps its latest value, and, if anything but
@@ -3356,7 +3359,13 @@ stage, `stageMidiBus` turns a note-output stage's output into bus events:
 notes (and MIDI 1.0 note messages) take its voice slots, keyed by the
 plug-in's `(port, channel, key, note id)`, with an end before an onset on a
 held address and CLAP wildcard ends; all-notes-off ends that channel; other
-MIDI passes. Replace makes that the bus; merge interleaves it after the
+MIDI passes. It also records, per output port below 8, the channels the
+stage's MIDI moved a controller (not a channel mode message), pitch bend or
+pressure on; Reset All Controllers clears one. A block whose output is lost
+(`OutputEvents::lost`: a late or skipped bridged block, or a failed bridge,
+ADR-0087) ends every held voice at frame 0 and sends Reset All Controllers
+on each recorded channel, as the stage's output; `carryBus` keeps the
+record with the held notes. Replace makes that the bus; merge interleaves it after the
 bus's own events at each frame. `finishMidiBus` writes `midiPostFx`: first
 the releases of post-FX voices of parts no longer reaching the end, then
 the bus; `midiPostHeld` follows it, and post-FX send restarts read its

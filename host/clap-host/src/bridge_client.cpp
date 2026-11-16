@@ -1267,8 +1267,13 @@ bool RemoteInstance::process(const ProcessBlock& b, OutputEvents* out) SUPPLE_RT
         for (std::uint32_t c = 0; b.auxOutputs && c < b.auxOutputChannels; ++c)
             std::fill_n(b.auxOutputs[c], b.frames, 0.0f);
     };
+    // Its output never arrives (ADR-0087): the engine ends what it held.
+    auto lose = [&] {
+        silence();
+        if (out) out->lost = true;
+    };
     if (!hdr_ || process_->failed()) {
-        silence();  // a failed node is silent; the session plays on
+        lose();  // a failed node is silent; the session plays on
         return true;
     }
     const auto own = static_cast<std::uint32_t>(std::min<std::size_t>(b.events.size(), kMaxEvents));
@@ -1278,7 +1283,7 @@ bool RemoteInstance::process(const ProcessBlock& b, OutputEvents* out) SUPPLE_RT
         // output is silence and its audio is lost, but what it tells the
         // plug-in reaches it with the next block it processes (ADR-0081 §4).
         carry(b.events);
-        silence();
+        lose();
         return true;
     }
     auto* base = static_cast<std::uint8_t*>(map_);
@@ -1326,7 +1331,7 @@ bool RemoteInstance::process(const ProcessBlock& b, OutputEvents* out) SUPPLE_RT
     std::copy(carried_.get() + lead, carried_.get() + carriedCount_, carried_.get());
     carriedCount_ -= lead;
     if (sent != Sent::Answered) {
-        silence();
+        lose();
         return true;
     }
     // The acknowledged arena is untrusted. Snapshot once, before copying any
@@ -1339,7 +1344,7 @@ bool RemoteInstance::process(const ProcessBlock& b, OutputEvents* out) SUPPLE_RT
                       static_cast<std::uint8_t>(OutputEvent::Kind::Midi);
     if (outEventCount > room || !kindsValid) {
         process_->fail(BridgeProcess::kProtocolViolation);
-        silence();
+        lose();
         return true;
     }
     for (std::uint32_t c = 0; c < b.outputChannels; ++c) {

@@ -98,3 +98,4 @@ current state.
 | [0084](0084-audio-thread-page-faults.md) | Audio threads take no page faults the app can prevent | Accepted |
 | [0085](0085-live-helpers-park-while-bridged.md) | Live helpers park while a bridged call blocks | Accepted |
 | [0086](0086-idle-hold-for-live-bridged-plugins.md) | The idle-latency request is held while a bridged plug-in plays live | Accepted |
+| [0087](0087-lost-bridged-output-ends-held-notes.md) | A bridged block's lost output ends the notes it held | Accepted |

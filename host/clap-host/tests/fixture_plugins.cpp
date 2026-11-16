@@ -1491,7 +1491,8 @@ const clap_plugin_t* make(const clap_host_t* host, const clap_plugin_descriptor_
 // on also emits CC 74 = velocity (CLAP_EVENT_MIDI) at the same time, after the
 // note. A MIDI 1.0 note in comes out a fifth up as MIDI. Key 120 emits a burst
 // of every kind, out of time order (see noteEchoStress); key 121 emits 300
-// CC 1 events, one per frame from the note's time (wrapping).
+// CC 1 events, one per frame from the note's time (wrapping); key 119 takes
+// 30 ms over its block (a block that misses a live deadline, ADR-0087).
 
 const clap_plugin_descriptor_t* noteEchoDescriptor() {
     static const char* features[] = {CLAP_PLUGIN_FEATURE_NOTE_EFFECT, nullptr};
@@ -1618,6 +1619,12 @@ clap_process_status CLAP_ABI noteEchoProcess(const clap_plugin_t*, const clap_pr
                 for (uint32_t k = 0; k < 300; ++k)
                     pushMidi(out, (h->time + k) % p->frames_count, 0xb0, 1,
                              static_cast<uint8_t>(k & 0x7f));
+                continue;
+            }
+            if (on && n->key == 119) {  // spin on the clock: no system call
+                const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(30);
+                while (std::chrono::steady_clock::now() < until) {
+                }
                 continue;
             }
             if (n->key < 0 || n->key >= 100) continue;

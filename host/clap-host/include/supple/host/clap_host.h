@@ -224,12 +224,20 @@ struct OutputEvent {
 // events keep the order the plug-in emitted them in). `unsupported` counts
 // note/MIDI output with no OutputEvent form: SysEx, MIDI 2.0 messages and
 // note expressions without a MIDI 1.0 equivalent, malformed notes and MIDI.
+// `lost`: the block's output never arrived and never will (a bridged block
+// that missed its live deadline or was skipped behind one, or a failed
+// bridge): process() returned silence and no events, whatever the plug-in
+// made of it (ADR-0087).
 struct OutputEvents {
     std::span<OutputEvent> storage;
     std::size_t count = 0;
     std::size_t dropped = 0;
     std::size_t unsupported = 0;
-    void clear() { count = dropped = unsupported = 0; }
+    bool lost = false;
+    void clear() {
+        count = dropped = unsupported = 0;
+        lost = false;
+    }
 };
 
 class Library;         // a loaded .clap binary (shared by its instances)
