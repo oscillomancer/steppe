@@ -179,11 +179,15 @@ class RemoteInstance {
     // While unsettled, keeps a lifecycle command for settle() to send.
     void lifecycle(bridge::Cmd cmd) SUPPLE_RT;
     // A skipped block's events, for the next block the plug-in processes.
+    // Full of distinct parameters, it still takes a later value of one.
     void carry(std::span<const Event> events) SUPPLE_RT;
     void dropCarriedNotes() SUPPLE_RT;
     // Too much carried: keep each parameter's latest value, drop the notes
-    // and reset the plug-in first, so no note it never hears the end of hangs.
+    // and, if any went, reset the plug-in first, so no note it never hears
+    // the end of hangs.
     void overflow() SUPPLE_RT;
+    // Drops the carried parameters `events` set again.
+    void supersede(std::span<const Event> events) SUPPLE_RT;
     // Whether request `req` was answered: within the live deadline when the
     // calling thread has one (ADR-0081), else within the background one
     // (ADR-0013), which fails and kills a bridge that misses it.

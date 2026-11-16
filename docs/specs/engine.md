@@ -1141,8 +1141,13 @@ instance).
   that block's own: no note off, pedal or parameter change is lost. At most
   `RemoteInstance::kMaxCarried` (512) are carried; beyond that, or when they
   and the next block's would not fit the arena's 2048, the notes and MIDI are
-  dropped, each parameter keeps its latest value, and the plug-in is reset
-  before that block, so no note whose end it never heard hangs. Stop, reset
+  dropped, each parameter keeps its latest value, and, if anything but
+  parameters went, the plug-in is reset before that block, so no note whose
+  end it never heard hangs. A carry full of distinct parameters still takes
+  a later value of one of them; a value for a 513th target is lost. A legal
+  block (at most 2048 events) never loses one of its own to the carry: the
+  carried parameters it sets again give way to its later values, as many of
+  the rest as fit go before it, and the others wait for the next block. Stop, reset
   and flush asked for meanwhile are kept, once each, and sent first when the
   answer comes, in the order reset, stop, flush; a reset drops the carried
   notes, which came before it. A start not answered by the deadline returns

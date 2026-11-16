@@ -195,8 +195,9 @@ instructions are in `docs/guides/installing.md`.
   in both executors (tested with device MIDI, effects, note output and
   input FX); a late block is silent and counted in `bridge_late` and
   `xruns`, blocks skipped while it is outstanding lose their audio but pass
-  their events and lifecycle commands on when it answers (bounded, with a
-  reset beyond 512 events), a start answered late is asked again, not taken
+  their events and lifecycle commands on when it answers (bounded: beyond
+  512 events notes go behind a reset and each parameter keeps its latest
+  value; a block's own events are never crowded out), a start answered late is asked again, not taken
   for a refusal, and `engine.status.bridge_timing` says where bridged calls spent
   their time and why a cycle overran. Where a third-party plug-in left on `inherit` runs is an app
   preference (Edit > Preferences, `plugin_isolation`), still in process by

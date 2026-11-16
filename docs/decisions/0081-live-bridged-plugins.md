@@ -114,6 +114,13 @@ A start the deadline passes is unanswered, not refused: the engine asks
 again on the next cycle rather than leaving the stage passed through until
 another plan.
 
+*Amended 2026-11-15 (review round 19):* the reset that follows an overflow
+is sent only when a note or MIDI event was dropped. A block's own events
+(at most 2048) always all reach the plug-in: carried parameters it sets
+again give way to its later values, and carried ones that do not fit
+beside it wait for the next block. A carry full of distinct parameters
+still takes a later value of one of them.
+
 ## Alternatives considered
 
 - **Pipelined live bridging:** never waits, but adds a block of latency per

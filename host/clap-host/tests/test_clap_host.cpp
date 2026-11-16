@@ -2624,6 +2624,96 @@ TEST_CASE("more than a late bridge can carry resets it and keeps each parameter'
     CHECK(buf.ol[0] == 0.0f);
 }
 
+TEST_CASE("a full block after a late bridge loses none of its events to the carry") {
+    // Round 19: one carried parameter crowded a 2048-event block's last
+    // event, its NoteOff, out, and the reset kept for the overflow came
+    // before the block's NoteOn, so the note hung.
+    GatedPeer peer;
+    Buffers buf(64);
+    {
+        Past past;
+        CHECK(peer.instance->process(buf.block(64), nullptr));
+    }
+    GatedPeer::waitFor(peer.accepted, 1);
+    const std::vector<Event> skipped{param(7, 0.25, 3), param(8, 0.5, 9)};
+    {
+        Past past;
+        CHECK(peer.instance->process(buf.block(64, skipped), nullptr));
+    }
+    // A legal block, full: a note from its start to its end, parameter 7
+    // again, and other parameters.
+    std::vector<Event> full{note(Event::Kind::NoteOn, 60)};
+    full.push_back(param(7, 0.75, 1));
+    while (full.size() < bridge::kMaxEvents - 1)
+        full.push_back(param(100 + full.size() % 50, double(full.size()), 2));
+    full.push_back(note(Event::Kind::NoteOff, 60, 63));
+    peer.release();
+    {
+        Patient patient;
+        CHECK(peer.instance->process(buf.block(64, full), nullptr));
+        CHECK(peer.instance->process(buf.block(64), nullptr));
+    }
+    using bridge::Cmd;
+    // Nothing but parameters was carried: no reset.
+    CHECK(peer.commands == std::vector{Cmd::Process, Cmd::Process, Cmd::Process});
+    REQUIRE(peer.blocks.size() == 3);
+    const std::vector<Event>& got = peer.blocks[1];
+    REQUIRE(got.size() == full.size());  // every event of the block
+    for (std::size_t i = 0; i < full.size(); ++i) {
+        CAPTURE(i);
+        CHECK(got[i].kind == full[i].kind);
+        CHECK(got[i].time == full[i].time);
+        CHECK(got[i].paramId == full[i].paramId);
+        CHECK(got[i].value == full[i].value);
+    }
+    // Parameter 7's carried value gave way to the block's later one;
+    // parameter 8's, which did not fit, came with the next block.
+    REQUIRE(peer.blocks[2].size() == 1);
+    CHECK(peer.blocks[2][0].paramId == 8);
+    CHECK(peer.blocks[2][0].value == 0.5);
+    CHECK(peer.blocks[2][0].time == 0);
+    CHECK(buf.ol[0] == 0.0f);  // the note ended
+}
+
+TEST_CASE("a late bridge's carry full of parameters still takes a later value of one") {
+    // Round 19: once 512 distinct parameters filled it, the carry stopped
+    // looking, and a later value of one of them was lost.
+    GatedPeer peer;
+    Buffers buf(64);
+    {
+        Past past;
+        CHECK(peer.instance->process(buf.block(64), nullptr));
+    }
+    GatedPeer::waitFor(peer.accepted, 1);
+    std::vector<Event> skipped;
+    for (std::uint32_t id = 0; id < RemoteInstance::kMaxCarried; ++id)
+        skipped.push_back(param(id, 0.1));
+    const std::vector<Event> later{param(0, 0.9, 5), param(9999, 0.3, 6)};
+    {
+        Past past;
+        CHECK(peer.instance->process(buf.block(64, skipped), nullptr));
+        CHECK(peer.instance->process(buf.block(64, later), nullptr));
+    }
+    peer.release();
+    {
+        Patient patient;
+        CHECK(peer.instance->process(buf.block(64), nullptr));
+    }
+    using bridge::Cmd;
+    CHECK(peer.commands == std::vector{Cmd::Process, Cmd::Process});
+    REQUIRE(peer.blocks.size() == 2);
+    const std::vector<Event>& got = peer.blocks[1];
+    CHECK(got.size() == RemoteInstance::kMaxCarried);
+    const auto zero =
+        std::find_if(got.begin(), got.end(), [](const Event& e) { return e.paramId == 0; });
+    REQUIRE(zero != got.end());
+    CHECK(zero->value == 0.9);  // the latest value
+    CHECK(std::count_if(got.begin(), got.end(), [](const Event& e) { return e.paramId == 0; }) ==
+          1);
+    // A 513th target has no room: it is the one value lost.
+    CHECK(std::none_of(got.begin(), got.end(), [](const Event& e) { return e.paramId == 9999; }));
+}
+
 TEST_CASE("a bridged start that misses its live deadline is unanswered, not refused") {
     // Round 16: the engine took it for a refusal and never asked again.
     {

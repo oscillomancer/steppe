@@ -1031,27 +1031,57 @@ void RemoteInstance::dropCarriedNotes() SUPPLE_RT {
 
 void RemoteInstance::overflow() SUPPLE_RT {
     std::uint32_t kept = 0;
+    bool dropped = false;
     for (std::uint32_t i = 0; i < carriedCount_; ++i) {
-        if (!isParam(carried_[i])) continue;
+        if (!isParam(carried_[i])) {
+            dropped = true;
+            continue;
+        }
         bool later = false;
         for (std::uint32_t j = i + 1; j < carriedCount_ && !later; ++j)
             later = sameTarget(carried_[i], carried_[j]);
         if (!later) carried_[kept++] = carried_[i];
     }
     carriedCount_ = kept;
-    lifecycle_ = static_cast<std::uint8_t>(lifecycle_ | kKeepReset);
+    // A dropped note's end may be among what was dropped: a reset, sent
+    // before the next block, means none can hang.
+    if (dropped) lifecycle_ = static_cast<std::uint8_t>(lifecycle_ | kKeepReset);
 }
 
 void RemoteInstance::carry(std::span<const Event> events) SUPPLE_RT {
     for (const Event& e : events) {
         if (carriedCount_ == kMaxCarried) overflow();
-        // Still full: more parameters than it holds. The reset overflow()
-        // keeps means no dropped note can hang.
-        if (carriedCount_ == kMaxCarried) return;
-        Event& kept = carried_[carriedCount_++];
-        kept = e;
-        kept.time = 0;
+        if (carriedCount_ < kMaxCarried) {
+            Event& kept = carried_[carriedCount_++];
+            kept = e;
+            kept.time = 0;
+            continue;
+        }
+        // Still full, of parameters with distinct targets: a later value of
+        // one of them replaces it, since only the latest counts. A value for
+        // another target is lost; anything else is lost behind a reset.
+        if (!isParam(e)) {
+            lifecycle_ = static_cast<std::uint8_t>(lifecycle_ | kKeepReset);
+            continue;
+        }
+        for (std::uint32_t i = 0; i < carriedCount_; ++i)
+            if (sameTarget(carried_[i], e)) {
+                carried_[i] = e;
+                carried_[i].time = 0;
+                break;
+            }
     }
+}
+
+void RemoteInstance::supersede(std::span<const Event> events) SUPPLE_RT {
+    std::uint32_t kept = 0;
+    for (std::uint32_t i = 0; i < carriedCount_; ++i) {
+        bool later = false;
+        for (std::size_t j = 0; j < events.size() && !later; ++j)
+            later = sameTarget(carried_[i], events[j]);
+        if (!later) carried_[kept++] = carried_[i];
+    }
+    carriedCount_ = kept;
 }
 
 bool RemoteInstance::command(Cmd cmd) SUPPLE_RT {
@@ -1246,12 +1276,17 @@ bool RemoteInstance::process(const ProcessBlock& b, OutputEvents* out) SUPPLE_RT
             else
                 std::fill_n(dst, frames, 0.0f);
         }
-    // Events carried from skipped blocks first, at its start, then its own.
+    // Events carried from skipped blocks first, at its start, then its own,
+    // every one of them (a legal block loses nothing to the carry). When the
+    // carry does not fit beside them, overflow() above left only parameters:
+    // those this block sets again go (it sends the later value), as many of
+    // the rest as fit go first, and the others wait for the next block.
     auto* events = reinterpret_cast<Event*>(base + layout_.events);
-    std::copy_n(carried_.get(), carriedCount_, events);
-    const std::uint32_t n = std::min(own, kMaxEvents - carriedCount_);
-    std::copy_n(b.events.begin(), n, events + carriedCount_);
-    hdr_->eventCount = carriedCount_ + n;
+    if (carriedCount_ + own > kMaxEvents) supersede(b.events.first(own));
+    const std::uint32_t lead = std::min(carriedCount_, kMaxEvents - own);
+    std::copy_n(carried_.get(), lead, events);
+    std::copy_n(b.events.begin(), own, events + lead);
+    hdr_->eventCount = lead + own;
     hdr_->frames = frames;
     hdr_->steadyTime = b.steadyTime;
     hdr_->hasTransport = b.transport ? 1 : 0;
@@ -1262,7 +1297,9 @@ bool RemoteInstance::process(const ProcessBlock& b, OutputEvents* out) SUPPLE_RT
     hdr_->outSink = out ? 1 : 0;
     hdr_->outEventCapacity = room;
     const Sent sent = post(Cmd::Process);
-    carriedCount_ = 0;  // the bridge has them, whether it answers in time or not
+    // The bridge has those it sent, whether it answers in time or not.
+    std::copy(carried_.get() + lead, carried_.get() + carriedCount_, carried_.get());
+    carriedCount_ -= lead;
     if (sent != Sent::Answered) {
         silence();
         return true;
