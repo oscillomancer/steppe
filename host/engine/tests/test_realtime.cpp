@@ -3577,8 +3577,8 @@ TEST_CASE("a bridged start answered after its live deadline is not taken for a r
 
 TEST_CASE("a cycle late before its bridged call is not blamed on the bridge") {
     // ADR-0081 diagnostics: an in-process stage spends 20 ms, so the bridged
-    // gain after it is posted past the cycle's deadline and is late. The
-    // overrun is the in-process stage's, not the bridge's wait.
+    // gain after it is posted past the cycle's deadline. The overrun is the
+    // in-process stage's, not the bridge's wait.
     host::setBridgeExecutable(BRIDGE_PATH);
     auto base = monitoring(synthSession(0, "com.suppleaudio.test.crash"));
     model::EditTxn t(base, 2);
@@ -3613,7 +3613,10 @@ TEST_CASE("a cycle late before its bridged call is not blamed on the bridge") {
     REQUIRE(pool.find(crash)->setParam(1, 3));  // 20 ms in every block from now
     backend.run(2);
     const auto after = engine.bridgeOverruns();
-    CHECK(engine.bridgeLateCycles() > lateBefore);  // the gain was late
+    // Whether the gain's answer is also late is the runner's timing: posted
+    // past the deadline, a fast bridge can still answer before the cycle
+    // looks (native CI saw 0 late). The blame below holds either way.
+    (void)lateBefore;
     CHECK(after.notWaiting - before.notWaiting >= 1);
     CHECK(after.lateWait == before.lateWait);
     CHECK(after.slowBridge == before.slowBridge);
