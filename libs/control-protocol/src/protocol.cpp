@@ -169,12 +169,13 @@ struct Server::Impl : std::enable_shared_from_this<Impl> {
         peer->output.push_back(std::move(message));
     }
     void process(const std::shared_ptr<Peer>& peer, const std::string& frame) {
-        auto parsed = json::parse(frame);
+        auto parsed =
+            json::parse(frame, {.maxBytes = kMaxMessageBytes, .maxValues = kMaxFrameValues});
         if (!parsed) {
             enqueue(peer, rpcError(nullptr, -32700, "Parse error", parsed.error()));
             return;
         }
-        const auto& request = *parsed;
+        auto& request = *parsed;
         if (request.isArray()) {
             enqueue(peer, rpcError(nullptr, -32600, "Invalid Request",
                                    Error("rpc.batch", "JSON-RPC arrays are unsupported", "",
@@ -216,7 +217,7 @@ struct Server::Impl : std::enable_shared_from_this<Impl> {
             return;
         }
         const auto& name = method->asString();
-        json::Value args = params ? *params : json::Value::object();
+        json::Value args = params ? std::move(request["params"]) : json::Value::object();
         if (name == "rpc.hello") {
             auto* client = args.find("client");
             auto* protocol = args.find("protocol");
@@ -756,7 +757,8 @@ Result<json::Value> Client::exchange(std::string_view method, const json::Value&
             auto frame = input_.substr(0, newline);
             input_.erase(0, newline + 1);
             scanned = 0;
-            auto parsed = json::parse(frame);
+            auto parsed =
+                json::parse(frame, {.maxBytes = kMaxMessageBytes, .maxValues = kMaxFrameValues});
             if (!parsed) return fail(parsed.error());
             auto* responseId = parsed->isObject() ? parsed->find("id") : nullptr;
             if (!responseId) continue;  // subscribed event

@@ -721,3 +721,14 @@ This does not admit other wrong types or bypass numeric constraints on present
 values. Exported schemas and tool-list byte budgets remain unchanged. The
 schema-driven corpus keeps probing null and exempts it only in its conservative
 exported-contract oracle.
+
+### Untrusted JSON value budget (ADR-0087 D3)
+
+RPC request/response frames and MCP stdin frames admit at most 1,000,000 JSON
+values (containers and primitives, not object keys), checked before constructing
+the next value. Refusal is a parse error with structured json.parse.too_many_values
+and a corrective hint; the next newline-delimited frame remains usable. Raw byte
+and depth limits remain. Trusted files keep the parser's unlimited value default.
+MCP handle takes ownership of its request; transports move parsed requests/params
+rather than deep-copying them. Embedders passing lvalues retain ordinary copy
+semantics. No bad_alloc catch is introduced.

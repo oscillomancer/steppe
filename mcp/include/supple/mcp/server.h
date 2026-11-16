@@ -48,7 +48,8 @@ class Server {
     // As above, reading requests from `fd` so it can be polled with the tick's
     // deadline (a negative fd reads blocking).
     Status serve(int fd, std::ostream& output, Tick tick = {});
-    std::optional<json::Value> handle(const json::Value& request);
+    // Own the request so parsed transports can move params without a deep copy.
+    std::optional<json::Value> handle(json::Value request);
     // Embedders drain pending notifications after handle(); serve() does this
     // automatically, before writing that request's response.
     json::Value takeNotifications();

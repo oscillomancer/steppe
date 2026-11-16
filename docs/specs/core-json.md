@@ -106,6 +106,7 @@ session model is done above this layer.)
 struct ParseOptions {
     std::size_t maxDepth = 256;
     std::size_t maxBytes = 256u << 20;   // 256 MiB
+    std::size_t maxValues = 0;          // zero = unlimited (trusted default)
 };
 Result<Value> parse(std::string_view text, const ParseOptions& = {});
 ```
@@ -114,6 +115,9 @@ Result<Value> parse(std::string_view text, const ParseOptions& = {});
   are errors). A UTF-8 BOM is rejected with a hint to remove it.
 - Integer literals (no `.`/`e`/`E`) that fit in int64 become `Int`; all other
   numbers become `Double` (literals that overflow double are errors).
+- A nonzero maxValues counts containers and primitive values, excluding object
+  keys, before construction. Exceeding it refuses with json.parse.too_many_values;
+  the default leaves trusted file parsing unchanged (ADR-0087 D3).
 - Duplicate object keys are an error (`json.parse.duplicate_key`).
 - Leading/trailing whitespace allowed; anything else after the value is an
   error.

@@ -326,7 +326,7 @@ Result<json::Value> Server::callTool(std::string_view name, const json::Value& a
     if (it == commands_.end()) return Error("mcp.tool", "unknown tool", "/name", "use tools/list");
     return invoke_(it->second, args, origin_);
 }
-std::optional<json::Value> Server::handle(const json::Value& request) {
+std::optional<json::Value> Server::handle(json::Value request) {
     if (!request.isObject()) return error(nullptr, -32600, "Invalid Request");
     auto* id = request.find("id");
     auto* version = request.find("jsonrpc");
@@ -346,7 +346,7 @@ std::optional<json::Value> Server::handle(const json::Value& request) {
         return error(validId ? *id : json::Value(nullptr), -32600, "Invalid Request");
     if (!id) return std::nullopt;
     if (params && !params->isObject()) return error(*id, -32602, "Invalid params");
-    auto args = params ? *params : json::Value::object();
+    auto args = params ? std::move(request["params"]) : json::Value::object();
     auto name = method->asString();
     if (name == "initialize") {
         auto* requested = args.find("protocolVersion");
@@ -618,9 +618,11 @@ Status pump(Server& server, Byter& byter, std::ostream& output, const Tick& tick
             overflow = false;
             continue;
         }
-        auto parsed = json::parse(frame);
-        auto reply = parsed ? server.handle(*parsed)
+        auto parsed = json::parse(
+            frame, {.maxBytes = rpc::kMaxMessageBytes, .maxValues = rpc::kMaxFrameValues});
+        auto reply = parsed ? server.handle(std::move(*parsed))
                             : std::optional<json::Value>(error(nullptr, -32700, "Parse error"));
+        if (!parsed) (*reply)["error"]["data"] = rpc::errorJson(parsed.error());
         const auto notifications = server.takeNotifications();
         for (const auto& notification : notifications.asArray())
             output << json::writeCompact(notification) << '\n';

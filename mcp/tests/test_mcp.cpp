@@ -978,6 +978,34 @@ TEST_CASE("MCP request ids have a serialized byte budget") {
     }
 }
 
+TEST_CASE("MCP refuses wide frames at its value budget and resumes at the next frame") {
+    auto commands = registry();
+    Host host;
+    cmd::Dispatcher bus(commands, host);
+    mcp::Server server(commands, bus);
+    std::string wide = R"({"jsonrpc":"2.0","id":2,"method":"ping","params":{"values":[)";
+    for (int i = 0; i < 1000000; ++i) wide += i ? ",0" : "0";
+    wide += "]}}\n";
+    std::istringstream input(
+        std::string(
+            R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}})") +
+        "\n" + wide + R"({"jsonrpc":"2.0","id":3,"method":"ping"})" + "\n");
+    std::ostringstream output;
+    REQUIRE(server.serve(input, output));
+    std::istringstream replies(output.str());
+    std::string line;
+    REQUIRE(std::getline(replies, line));
+    REQUIRE(std::getline(replies, line));
+    const auto refused = parse(line);
+    REQUIRE(refused.find("error"));
+    REQUIRE(refused.find("error")->find("data"));
+    CHECK(refused.find("error")->find("data")->find("code")->asString() ==
+          "json.parse.too_many_values");
+    CHECK(refused.find("id")->isNull());
+    REQUIRE(std::getline(replies, line));
+    CHECK(*parse(line).find("id") == 3);
+}
+
 TEST_CASE("generic MCP argument envelopes are validated before executing edits") {
     auto commands = registry();
     Host host;

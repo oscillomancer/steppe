@@ -94,6 +94,13 @@ TEST_CASE("malformed request ids are never echoed into portable RPC error envelo
             CHECK(json::writeCompact(result).size() < 1024);
         }
     }
+    std::string wide = R"({"jsonrpc":"2.0","id":1,"method":"counter.add","params":{"values":[)";
+    for (int i = 0; i < 1000000; ++i) wide += i ? ",0" : "0";
+    wide += "]}}";
+    const auto refused = exchange(wide);
+    REQUIRE(refused.find("error"));
+    CHECK(refused.find("error")->find("data")->find("code")->asString() ==
+          "json.parse.too_many_values");
     server.stop();
     CHECK(host.count == 0);
 }

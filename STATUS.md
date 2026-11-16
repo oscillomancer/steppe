@@ -184,6 +184,9 @@ instructions are in `docs/guides/installing.md`.
   Optional null is accepted as omission for caller leniency; exported argument
   schemas deliberately remain narrower on this point (ADR-0087).
   The skill's command reference is generated and drift-tested.
+  RPC/MCP untrusted frames are limited to 1,000,000 parsed values before
+  construction, in addition to byte/depth limits; params move into dispatch.
+  Trusted file parsing is unchanged (ADR-0087).
   Fixed-seed schema mutations exercise every engine/sandbox command's argument
   decoder and rejected dispatches, checking structured errors and unchanged state;
   engine coverage includes recording in both executors and interleaved saves.
@@ -1052,8 +1055,6 @@ Library boundaries:
   disconnected peers. Reconnect churn can accumulate posted frames while the
   model is busy. Subscriptions also have no retained count/byte cap; aggregate
   budgets, fairness and accepted-request lifetime need a policy decision.
-- RPC/MCP limit raw frames to 16 MiB and parsing depth to 256; there is no
-  parsed-value budget. Wide JSON can exhaust a constrained process's memory.
 - In-process MCP writes stdout synchronously on the model thread, so a client
   that stops reading can stall model service. Socket clients have separate I/O;
   the standalone proxy isolates this stdout stall from its engine process.
