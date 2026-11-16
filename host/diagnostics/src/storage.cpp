@@ -3,7 +3,9 @@
 #include "storage.h"
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
+#include <initializer_list>
 #include "diagnostics_build.h"
 #include "private_files.h"
 #include "supple/base/files.h"
@@ -153,22 +155,43 @@ bool reportShape(const json::Value& value) {
         const auto* v = value.find(key);
         return v && v->isString() && v->asString().size() <= max;
     };
-    for (const auto* key : {"schema", "incident", "role", "platform", "architecture", "kind"})
-        if (!text(key, 64)) return false;
-    for (const auto* key : {"code", "cause", "dropped"}) {
+    auto oneOf = [&](const char* key, std::initializer_list<std::string_view> choices) {
         const auto* v = value.find(key);
-        if (!v || !v->isInt()) return false;
-    }
+        return v && v->isString() &&
+               std::find(choices.begin(), choices.end(), v->asString()) != choices.end();
+    };
+    if (!text("incident", 32) || !oneOf("schema", {"supple.crash-report/1.0"}) ||
+        !oneOf("role", {"gui", "engine", "fixture"}) ||
+        !oneOf("platform", {"linux", "macos", "windows"}) ||
+        !oneOf("architecture", {"arm64", "x86_64", "unknown"}) ||
+        !oneOf("kind", {"crash", "unexpected_exit"}))
+        return false;
+    auto integer = [&](const char* key, std::int64_t min, std::int64_t max) {
+        const auto* v = value.find(key);
+        return v && v->isInt() && v->asInt() >= min && v->asInt() <= max;
+    };
+    // Normal returns are signed ints; native capsule codes/causes are uint32_t.
+    if (!integer("code", INT32_MIN, UINT32_MAX) || !integer("cause", 0, UINT32_MAX) ||
+        !integer("dropped", 0, INT64_MAX))
+        return false;
     for (const auto* key : {"complete", "terminal_context", "native_fatal_status"}) {
         const auto* v = value.find(key);
         if (!v || !v->isBool()) return false;
     }
-    for (const auto* key : {"threads", "plugins", "commands", "unavailable"}) {
+    if (value.find("complete")->asBool()) return false;
+    // This stage emits no inventory or traces. Until their nested schemas land,
+    // nonempty arrays cannot be validated and must not authorize deletion.
+    for (const auto* key : {"threads", "plugins", "commands"}) {
         const auto* v = value.find(key);
-        if (!v || !v->isArray() || v->size() > 128) return false;
+        if (!v || !v->isArray() || v->size() != 0) return false;
     }
-    for (const auto& reason : value.find("unavailable")->asArray())
-        if (!reason.isString() || reason.asString().size() > 32768) return false;
+    const auto* unavailable = value.find("unavailable");
+    if (!unavailable || !unavailable->isArray() || unavailable->size() == 0 ||
+        unavailable->size() > 128)
+        return false;
+    for (const auto& reason : unavailable->asArray())
+        if (!reason.isString() || reason.asString().empty() || reason.asString().size() > 32768)
+            return false;
     const auto* build = value.find("build");
     if (!build || !build->isObject() || build->size() != 3) return false;
     for (const auto* key : {"version", "commit"}) {

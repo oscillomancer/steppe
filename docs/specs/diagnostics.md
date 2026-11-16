@@ -59,7 +59,11 @@ are forbidden. Never create a minidump to sanitize later.
 
 Atomic private publication uses native wide Windows paths and existing atomic
 write/durability primitives. Retention prunes oldest validated owned reports until
-count <=20 and total <=50 MiB. Malformed/link/foreign entries are neither followed
+count <=20 and total <=50 MiB. Validation checks the implemented role/kind/platform/architecture
+enums, native code/cause bounds, nonnegative drop counters and incomplete-report
+reasons. Thread/plugin/command arrays must be empty until their later-topic nested
+schemas are implemented; nonempty arrays do not authorize retention deletion.
+Malformed/link/foreign entries are neither followed
 nor treated as authority to delete another file. Run markers/locks and recovery
 are not report-retention inputs. Namespace power-cut durability on Windows has
 the same unprivileged limitations as ordinary project publication.

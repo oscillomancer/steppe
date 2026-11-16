@@ -141,3 +141,68 @@ TEST_CASE("report publication never removes an unowned pre-existing run marker")
     REQUIRE(publishReport(root.path, boot(0), nullptr, 31, false));
     CHECK(fs::exists(marker));
 }
+
+TEST_CASE("diagnostic retention preserves malformed report-shaped entries") {
+    Root root;
+    REQUIRE(publishReport(root.path, boot(0), nullptr, 31, false));
+    const auto seed = root.path / (std::string(boot(0).incident.data()) + ".json");
+    auto text = privateRead(seed);
+    REQUIRE(text);
+    auto parsed = json::parse(*text);
+    REQUIRE(parsed);
+    REQUIRE(privateRemove(seed));
+
+    auto item = json::Value::array();
+    item.asArray().push_back("not an object");
+    auto objectItem = json::Value::array();
+    objectItem.asArray().push_back(json::Value::object());
+    auto badBuild = (*parsed)["build"];
+    badBuild["dirty"] = "false";
+    const std::pair<const char*, json::Value> invalid[]{
+        {"role", "unknown"},
+        {"kind", "unknown"},
+        {"platform", "unknown"},
+        {"architecture", "mips"},
+        {"threads", item},
+        {"plugins", item},
+        {"commands", item},
+        // Later-topic nested schemas are not implemented: do not authorize deletion.
+        {"threads", objectItem},
+        {"plugins", objectItem},
+        {"commands", objectItem},
+        {"code", -2147483649LL},
+        {"code", 4294967296LL},
+        {"cause", -1},
+        {"cause", 4294967296LL},
+        {"dropped", -1},
+        {"complete", true},
+        {"unavailable", json::Value::array()},
+        {"unavailable", objectItem},
+        {"build", badBuild},
+        {"future_field", true},
+    };
+    const auto oldest = fs::file_time_type::clock::now() - std::chrono::hours(48);
+    unsigned id = 128;
+    for (const auto& [key, value] : invalid) {
+        auto report = *parsed;
+        report["incident"] = std::string(boot(id).incident.data());
+        report[key] = value;
+        const auto file = root.path / (std::string(boot(id++).incident.data()) + ".json");
+        REQUIRE(privatePublish(file, json::writeCanonical(report)));
+        fs::last_write_time(file, oldest);
+    }
+    for (unsigned i = 0; i < 21; ++i) {
+        REQUIRE(publishReport(root.path, boot(i), nullptr, 31, false));
+        fs::last_write_time(root.path / (std::string(boot(i).incident.data()) + ".json"),
+                            oldest + std::chrono::hours(24) + std::chrono::seconds(i));
+    }
+    id = 128;
+    for (const auto& [key, value] : invalid) {
+        CAPTURE(key);
+        CAPTURE(json::writeCanonical(value));
+        CHECK(fs::exists(root.path / (std::string(boot(id++).incident.data()) + ".json")));
+    }
+    CHECK(reports(root.path) == 20 + std::size(invalid));
+    CHECK_FALSE(fs::exists(root.path / (std::string(boot(0).incident.data()) + ".json")));
+    CHECK(fs::exists(root.path / (std::string(boot(20).incident.data()) + ".json")));
+}
