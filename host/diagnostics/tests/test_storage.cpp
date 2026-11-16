@@ -2,12 +2,21 @@
 // Copyright (c) 2026 Supple Audio
 #include <doctest/doctest.h>
 #include <algorithm>
+#include <array>
+#include <barrier>
+#include <functional>
+#include <thread>
 #include "../src/private_files.h"
 #include "../src/storage.h"
 #include "supple/base/files.h"
 using namespace supple;
 using namespace supple::diagnostics::detail;
 namespace fs = std::filesystem;
+// Internal overload, deliberately absent from the storage interface.
+namespace supple::diagnostics::detail {
+Status pruneReports(const fs::path& root,
+                    const std::function<void(const fs::path&, std::string_view)>& checkpoint);
+}  // namespace supple::diagnostics::detail
 namespace {
 struct Root {
     fs::path path;
@@ -205,4 +214,97 @@ TEST_CASE("diagnostic retention preserves malformed report-shaped entries") {
     CHECK(reports(root.path) == 20 + std::size(invalid));
     CHECK_FALSE(fs::exists(root.path / (std::string(boot(0).incident.data()) + ".json")));
     CHECK(fs::exists(root.path / (std::string(boot(20).incident.data()) + ".json")));
+}
+
+TEST_CASE("diagnostic retention tolerates reports disappearing during metadata scan") {
+    for (const std::string_view point : {"status", "size", "time"}) {
+        CAPTURE(point);
+        Root root;
+        REQUIRE(publishReport(root.path, boot(0), nullptr, 31, false));
+        bool removed = false;
+        CHECK(pruneReports(root.path, [&](const fs::path& path, std::string_view phase) {
+            if (phase == point) {
+                REQUIRE(privateRemove(path));
+                removed = true;
+            }
+        }));
+        CHECK(removed);
+        CHECK(reports(root.path) == 0);
+    }
+}
+
+TEST_CASE("concurrent diagnostic pruners can remove the same oldest report") {
+    Root root;
+    REQUIRE(publishReport(root.path, boot(0), nullptr, 31, false));
+    const auto file = root.path / (std::string(boot(0).incident.data()) + ".json");
+    auto text = privateRead(file);
+    REQUIRE(text);
+    auto parsed = json::parse(*text);
+    REQUIRE(parsed);
+    const auto oldest = fs::file_time_type::clock::now() - std::chrono::hours(24);
+    fs::last_write_time(file, oldest);
+    for (unsigned i = 1; i < 21; ++i) {
+        (*parsed)["incident"] = std::string(boot(i).incident.data());
+        const auto next = root.path / (std::string(boot(i).incident.data()) + ".json");
+        REQUIRE(privatePublish(next, json::writeCanonical(*parsed)));
+        fs::last_write_time(next, oldest + std::chrono::seconds(i));
+    }
+    SUBCASE("a genuine removal refusal still fails storage") {
+        const auto alias = root.path / "retained-alias";
+        const auto result =
+            pruneReports(root.path, [&](const fs::path& path, std::string_view phase) {
+                if (phase == "remove") fs::create_hard_link(path, alias);
+            });
+        CHECK_FALSE(result);
+        CHECK(reports(root.path) == 21);
+        CHECK(fs::exists(file));
+        CHECK(fs::exists(alias));
+    }
+    SUBCASE("another pruner's removal is harmless") {
+        std::barrier rendezvous(2);
+        std::array<Status, 2> results;
+        auto prune = [&](std::size_t index) {
+            results[index] = pruneReports(root.path, [&](const fs::path&, std::string_view phase) {
+                // Both snapshots include 21 reports and both select the same oldest.
+                if (phase == "remove") rendezvous.arrive_and_wait();
+            });
+        };
+        std::thread first(prune, 0);
+        std::thread second(prune, 1);
+        first.join();
+        second.join();
+        CHECK(results[0]);
+        CHECK(results[1]);
+        CHECK(reports(root.path) == 20);
+        CHECK_FALSE(fs::exists(file));
+    }
+}
+
+TEST_CASE("diagnostic removal is idempotent but preserves genuine refusal") {
+    Root root;
+    const auto file = root.path / "private.json";
+    CHECK(privateRemove(file));
+    REQUIRE(privatePublish(file, "{}"));
+    CHECK(privateRemove(file));
+    CHECK(privateRemove(file));
+    REQUIRE(privatePublish(file, "{}"));
+    const auto alias = root.path / "alias.json";
+    fs::create_hard_link(file, alias);
+    CHECK_FALSE(privateRemove(file));
+    CHECK(fs::exists(file));
+    CHECK(fs::exists(alias));
+    CHECK_FALSE(privateRemove(root.path));
+}
+
+TEST_CASE("diagnostic pruning preserves genuine metadata errors") {
+    Root root;
+    REQUIRE(publishReport(root.path, boot(0), nullptr, 31, false));
+    const auto result = pruneReports(root.path, [&](const fs::path& path, std::string_view phase) {
+        if (phase == "size") {
+            REQUIRE(privateRemove(path));
+            REQUIRE(fs::create_directory(path));
+        }
+    });
+    CHECK_FALSE(result);
+    CHECK(fs::is_directory(root.path / (std::string(boot(0).incident.data()) + ".json")));
 }

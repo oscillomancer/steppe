@@ -56,12 +56,12 @@ struct Security {
     }
     PSID user() { return reinterpret_cast<TOKEN_USER*>(token.data())->User.Sid; }
 };
-bool owned(HANDLE file, bool directory = false) {
+bool owned(HANDLE file, bool directory = false, bool removing = false) {
     BY_HANDLE_FILE_INFORMATION info{};
     if (!GetFileInformationByHandle(file, &info) ||
         (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ||
         bool(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != directory ||
-        (!directory && info.nNumberOfLinks != 1))
+        (!directory && info.nNumberOfLinks != 1 && !(removing && info.nNumberOfLinks == 0)))
         return false;
     Security security;
     if (!security.ready) return false;
@@ -96,10 +96,10 @@ bool owned(HANDLE file, bool directory = false) {
     return ok;
 }
 #else
-bool owned(int fd, struct stat& info) {
+bool owned(int fd, struct stat& info, bool removing = false) {
     return ::fstat(fd, &info) == 0 && S_ISREG(info.st_mode) && info.st_uid == ::geteuid() &&
-           info.st_nlink == 1 && !(info.st_mode & 0077) && info.st_size >= 0 &&
-           static_cast<std::uint64_t>(info.st_size) <= kLimit;
+           (info.st_nlink == 1 || (removing && info.st_nlink == 0)) && !(info.st_mode & 0077) &&
+           info.st_size >= 0 && static_cast<std::uint64_t>(info.st_size) <= kLimit;
 }
 #endif
 }  // namespace
@@ -205,22 +205,38 @@ Result<std::string> privateRead(const fs::path& path) {
 }
 bool privateRemove(const fs::path& path) {
 #if defined(_WIN32)
+    auto missing = [] {
+        const auto error = GetLastError();
+        return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
+    };
     HANDLE file = CreateFileW(path.c_str(), DELETE | READ_CONTROL | FILE_READ_ATTRIBUTES,
                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                               OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-    if (file == INVALID_HANDLE_VALUE) return false;
+    if (file == INVALID_HANDLE_VALUE) return missing();
     FILE_DISPOSITION_INFO disposition{TRUE};
-    const bool ok = owned(file) && SetFileInformationByHandle(file, FileDispositionInfo,
-                                                              &disposition, sizeof(disposition));
+    bool ok = false;
+    if (owned(file, false, true)) {
+        ok = SetFileInformationByHandle(file, FileDispositionInfo, &disposition,
+                                        sizeof(disposition)) != FALSE;
+        if (!ok) ok = missing();
+    }
     CloseHandle(file);
     return ok;
 #else
     const int fd = ::open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
-    if (fd < 0) return false;
+    if (fd < 0) return errno == ENOENT;
     struct stat opened{}, named{};
-    const bool ok = owned(fd, opened) && ::lstat(path.c_str(), &named) == 0 &&
-                    opened.st_dev == named.st_dev && opened.st_ino == named.st_ino &&
-                    ::unlink(path.c_str()) == 0;
+    bool ok = false;
+    // Another pruner may unlink after open, leaving this valid descriptor with
+    // zero links. It must still pass every other private-file check.
+    if (owned(fd, opened, true)) {
+        if (::lstat(path.c_str(), &named) != 0) {
+            ok = errno == ENOENT;
+        } else if (opened.st_dev == named.st_dev && opened.st_ino == named.st_ino) {
+            ok = ::unlink(path.c_str()) == 0;
+            if (!ok) ok = errno == ENOENT;
+        }
+    }
     ::close(fd);
     return ok;
 #endif

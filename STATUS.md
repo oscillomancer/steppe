@@ -1394,7 +1394,9 @@ opt-in-remembered safe loading and diagnostics-only hangs. The development front
 supervised worker, with private run markers, expected-return/exit classification,
 metadata-only reports, bounded retention and collector-loss fixtures. Retention
 validates current report enums/scalar bounds and preserves malformed entries,
-including nonempty inventories/traces whose nested schemas are not implemented. Terminal
+including nonempty inventories/traces whose nested schemas are not implemented.
+Concurrent pruners tolerate another pruner removing a report during metadata scan
+or deletion, while preserving genuine storage failures. Terminal
 signal/SEH/terminate capsules and cold thread-stack registration now exist, with
 metadata-only sanitizer/fail-fast fallbacks. macOS leaves Mach handling untouched
 and uses signal/exit-only capture; signed-native Mach forwarding/liveness is not

@@ -65,7 +65,9 @@ reasons. Thread/plugin/command arrays must be empty until their later-topic nest
 schemas are implemented; nonempty arrays do not authorize retention deletion.
 Malformed/link/foreign entries are neither followed
 nor treated as authority to delete another file. Run markers/locks and recovery
-are not report-retention inputs. Namespace power-cut durability on Windows has
+are not report-retention inputs. Concurrent pruning tolerates entries disappearing
+at metadata reads or removal; only not-found errors are benign, while genuine
+metadata/removal errors still fail storage. Namespace power-cut durability on Windows has
 the same unprivileged limitations as ordinary project publication.
 
 ## Terminal behavior

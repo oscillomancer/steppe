@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <functional>
 #include <initializer_list>
 #include "diagnostics_build.h"
 #include "private_files.h"
@@ -284,7 +285,10 @@ Status publishReport(const fs::path& root, const Packet& boot, const Packet* ter
     SUPPLE_TRY(privatePublish(root / (std::string(boot.incident.data(), 32) + ".json"), text));
     return pruneReports(root);
 }
-Status pruneReports(const fs::path& root) {
+// Private overload lets storage tests control filesystem interleavings without
+// clocks or platform-specific hooks. Ordinary callers supply no checkpoint.
+Status pruneReports(const fs::path& root,
+                    const std::function<void(const fs::path&, std::string_view)>& checkpoint) {
     struct Entry {
         fs::path path;
         fs::file_time_type time;
@@ -298,10 +302,20 @@ Status pruneReports(const fs::path& root) {
         const auto& entry = *it;
         const auto path = entry.path();
         if (path.extension() != ".json" || !reportName(reportStem(path))) continue;
+        if (checkpoint) checkpoint(path, "status");
         const auto status = entry.symlink_status(ec);
+        if (ec == std::errc::no_such_file_or_directory) {
+            ec.clear();
+            continue;
+        }
         if (ec) return failure();
         if (!fs::is_regular_file(status)) continue;
+        if (checkpoint) checkpoint(path, "size");
         const auto bytes = entry.file_size(ec);
+        if (ec == std::errc::no_such_file_or_directory) {
+            ec.clear();
+            continue;
+        }
         if (ec) return failure();
         if (bytes > 4 * 1024 * 1024) continue;
         auto text = privateRead(path);
@@ -313,7 +327,12 @@ Status pruneReports(const fs::path& root) {
         if (!schema || !schema->isString() || schema->asString() != "supple.crash-report/1.0" ||
             !id || !id->isString() || id->asString() != reportStem(path))
             continue;
+        if (checkpoint) checkpoint(path, "time");
         const auto time = entry.last_write_time(ec);
+        if (ec == std::errc::no_such_file_or_directory) {
+            ec.clear();
+            continue;
+        }
         if (ec) return failure();
         reports.push_back({path, time, bytes});
         total += bytes;
@@ -325,10 +344,12 @@ Status pruneReports(const fs::path& root) {
     std::size_t count = reports.size();
     for (const auto& report : reports) {
         if (count <= 20 && total <= 50 * 1024 * 1024) break;
+        if (checkpoint) checkpoint(report.path, "remove");
         if (!privateRemove(report.path)) return failure();
         --count;
         total -= report.bytes;
     }
     return okStatus();
 }
+Status pruneReports(const fs::path& root) { return pruneReports(root, {}); }
 }  // namespace supple::diagnostics::detail

@@ -6,6 +6,7 @@
 namespace supple::diagnostics::detail {
 Status privatePublish(const std::filesystem::path& path, const std::string& text);
 Result<std::string> privateRead(const std::filesystem::path& path);
+// Removal is idempotent for absent files; ownership/link and other I/O errors fail.
 bool privateRemove(const std::filesystem::path& path);
 #if defined(_WIN32)
 bool privateDirectoryAcl(const std::filesystem::path& path);
