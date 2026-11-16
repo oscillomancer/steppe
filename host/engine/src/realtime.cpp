@@ -1332,8 +1332,9 @@ void Engine::publishPluginOutputs(detail::Plan& p, bool renderer, std::uint64_t 
             changed |= st.voiceDropped != 0 || st.outEvents.dropped != 0;
             voiceDrops_.fetch_add(st.voiceDropped, std::memory_order_relaxed);
             st.voiceDropped = 0;
-            outputDrops_.fetch_add(st.outEvents.dropped, std::memory_order_relaxed);
+            // The FX before its count, so a drain that sees the count can name it.
             if (st.outEvents.dropped != 0) noteDroppedFx(st.fx);
+            outputDrops_.fetch_add(st.outEvents.dropped, std::memory_order_release);
             for (std::size_t i = 0; i < st.outEvents.count; ++i) {
                 const auto& event = st.outEvents.storage[i];
                 // Voice ends and note/MIDI output stay on the audio path;
@@ -1351,8 +1352,8 @@ void Engine::publishPluginOutputs(detail::Plan& p, bool renderer, std::uint64_t 
                 output.event = event;
                 output.anticipative = renderer;
                 if (!queue.push(output)) {
-                    outputDrops_.fetch_add(1, std::memory_order_relaxed);
                     noteDroppedFx(st.fx);
+                    outputDrops_.fetch_add(1, std::memory_order_release);
                 }
             }
         });

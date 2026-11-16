@@ -755,6 +755,7 @@ class Engine {
 
   private:
     friend struct EngineTestAccess;  // defined by the tests alone
+    friend struct OutputTestAccess;  // likewise (test_app.cpp)
     friend struct RecordingErrorTestAccess;
     void cycle(const float* const* in, float* const* out, std::uint32_t frames) SUPPLE_RT;
     // cycle() after its bookkeeping: count-in, then the transport's work.

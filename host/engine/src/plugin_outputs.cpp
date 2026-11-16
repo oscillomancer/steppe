@@ -243,8 +243,13 @@ void EngineApp::consumePluginOutputs() {
     }
     bool overflow =
         outputOverflow_ || taken.dropped != outputDrops_ || taken.voiceDropped != voiceDrops_;
-    // Voice tracking names no FX; the engine's table may have overflowed.
-    overflowAll_ = overflowAll_ || taken.droppedAll || taken.voiceDropped != voiceDrops_;
+    // Voice tracking names no FX; the engine's table may have overflowed; a
+    // count whose FX is not named yet (round 23: the identity can trail the
+    // count) is recovered as all. A named FX recovers even when the count it
+    // belongs to was seen by an earlier drain.
+    overflowAll_ = overflowAll_ || taken.droppedAll || taken.voiceDropped != voiceDrops_ ||
+                   (taken.dropped != outputDrops_ && taken.droppedFx.empty());
+    overflow = overflow || taken.droppedAll || !taken.droppedFx.empty();
     for (const auto& fx : taken.droppedFx)
         if (std::find(overflowFx_.begin(), overflowFx_.end(), fx) == overflowFx_.end())
             overflowFx_.push_back(fx);
@@ -282,20 +287,22 @@ void EngineApp::consumePluginOutputs() {
     };
     if (overflow) {
         outputOverflow_ = false;
-        pendingOutputs_.clear();
-        outputGestures_.clear();
-        std::erase_if(autoWrite_, [&](const auto& entry) {
-            const auto* env = head().envelopes.find(entry.first);
-            return env && env->target.object.kind == model::Kind::Fx;
-        });
-        // Read current values rather than guessing missing events or points.
-        const auto session = head();
         // Only the FX whose outputs were dropped, and only their writable
-        // parameters: read-only outputs (meters) never enter the model.
+        // parameters: read-only outputs (meters) never enter the model. What
+        // the others sent in this drain stays pending and is consumed below
+        // (round 23: clearing every FX's lost their valid outputs).
         const auto dropped = [&](model::Id id) {
             return overflowAll_ ||
                    std::find(overflowFx_.begin(), overflowFx_.end(), id) != overflowFx_.end();
         };
+        std::erase_if(pendingOutputs_, [&](const PluginOutput& o) { return dropped(o.fx); });
+        std::erase_if(outputGestures_, [&](const auto& g) { return dropped(g.first.first); });
+        std::erase_if(autoWrite_, [&](const auto& entry) {
+            const auto* env = head().envelopes.find(entry.first);
+            return env && env->target.object.kind == model::Kind::Fx && dropped(env->target.object);
+        });
+        // Read current values rather than guessing missing events or points.
+        const auto session = head();
         for (const auto& fx : session.fx) {
             if (!dropped(fx.id)) continue;
             auto* instance = pool_->find(fx.id);
@@ -321,7 +328,7 @@ void EngineApp::consumePluginOutputs() {
         }
         overflowFx_.clear();
         overflowAll_ = false;
-        return;
+        // The other FX's outputs kept above are consumed in this drain.
     }
     for (auto it = pendingOutputs_.begin(); it != pendingOutputs_.end();) {
         if (engine_ && it->anticipative && !it->idle &&
@@ -363,13 +370,13 @@ void EngineApp::consumePluginOutputs() {
                 outputGestures_.emplace(key, OutputGesture{});
             else {
                 ++consumerDrops_;
-                outputOverflow_ = true;
+                outputOverflow_ = overflowAll_ = true;  // names no FX
             }
         } else if (event.kind == Kind::ParamValue) {
             const bool single = found == outputGestures_.end();
             if (single && outputGestures_.size() >= kGestures) {
                 ++consumerDrops_;
-                outputOverflow_ = true;
+                outputOverflow_ = overflowAll_ = true;  // names no FX
                 continue;
             }
             auto& gesture = outputGestures_[key];
@@ -382,7 +389,7 @@ void EngineApp::consumePluginOutputs() {
                     ++consumerDrops_;
                     gesture.recording.clear();
                     gesture.ended = true;
-                    outputOverflow_ = true;
+                    outputOverflow_ = overflowAll_ = true;  // names no FX
                 }
             }
             if (single || gesture.ended) {
