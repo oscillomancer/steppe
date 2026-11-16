@@ -4,6 +4,12 @@
 `docs/specs/engine.md` (Audio-thread page faults). Number chosen above
 ADR-0082 and ADR-0083, which other branches hold.
 
+**Review correction, 2026-11-16 (round 21):** §1's opt-out reads the
+process's mode first. A mode it already has (1, or 3) is kept and not undone
+at stop; only a mode the engine set from 0 is released, and only while it is
+still that mode, with a refused release reported. Bridges set it only from 0
+(`docs/specs/engine.md`, Audio-thread page faults).
+
 ## Context
 
 The item D measurements found callbacks of 100 ms and more, in process, with
@@ -72,7 +78,7 @@ memory after `resize()`, so the callback's first writes, or a restart's
 - **Windows** has no transparent huge pages: large pages are explicit,
   privileged and never pageable. Working-set trimming can make idle pages
   soft-fault back. `GetProcessMemoryInfo` counts the process's faults without
-  telling minor from major, so `major` is null.
+  telling minor from major, so `major` is omitted.
 
 ## Consequences
 

@@ -26,7 +26,8 @@ RuntimeProtectionOps::RuntimeProtectionOps()
       closeLatency([](int fd) { return ::close(fd); }),
       thpDisable([](unsigned long disable, unsigned long flags) {
           return ::prctl(PR_SET_THP_DISABLE, disable, flags, 0UL, 0UL);
-      }) {}
+      }),
+      thpMode([] { return ::prctl(PR_GET_THP_DISABLE, 0UL, 0UL, 0UL, 0UL); }) {}
 #else
 RuntimeProtectionOps::RuntimeProtectionOps()
     : lockMemory([](int) {
@@ -48,6 +49,10 @@ RuntimeProtectionOps::RuntimeProtectionOps()
       }),
       closeLatency([](int) { return 0; }),
       thpDisable([](unsigned long, unsigned long) {
+          errno = ENOTSUP;
+          return -1;
+      }),
+      thpMode([] {
           errno = ENOTSUP;
           return -1;
       }) {}
@@ -226,6 +231,31 @@ void RuntimeProtection::applyThp() {
     // Linux 6.18's PR_THP_DISABLE_EXCEPT_ADVISED, for older headers.
     constexpr unsigned long kThpExceptAdvised = 1UL << 1;
     if (thp_.active) return;
+    auto refused = [&](const char* operation, const char* hint) {
+        const int value = errno;
+        thp_.error = RuntimeProtectionError{"engine.thp_opt_out",
+                                            std::string(operation) + ": " + std::strerror(value) +
+                                                " (errno " + std::to_string(value) + ")",
+                                            "/thp_opt_out", hint, value};
+    };
+    // What the process already has stays (ADR-0084): whatever launched it, or
+    // a plug-in, may have kept it out of huge pages entirely (1), stricter
+    // than advised-only, or as advised-only (3). Only from none (0) does the
+    // engine change it, and only that is undone at stop.
+    const int mode = ops_->thpMode();
+    if (mode < 0) {
+        refused("prctl(PR_GET_THP_DISABLE)",
+                "the kernel did not say whether the process uses transparent huge pages, so it "
+                "was left as it is; audio threads may stall while khugepaged collapses memory "
+                "(set transparent_hugepage to madvise or never to avoid it)");
+        return;
+    }
+    if (mode != 0) {
+        thp_.active = thp_.inherited = true;
+        thp_.advisedOnly = (static_cast<unsigned long>(mode) & kThpExceptAdvised) != 0;
+        thp_.error.reset();
+        return;
+    }
     // Advised regions keep huge pages where the kernel can say so; an older
     // kernel refuses the flag (EINVAL), and then no region does.
     bool advisedOnly = true;
@@ -237,27 +267,36 @@ void RuntimeProtection::applyThp() {
     if (result == 0) {
         thp_.active = true;
         thp_.advisedOnly = advisedOnly;
+        thp_.inherited = false;
+        thpSet_ = advisedOnly ? 3 : 1;
         thp_.error.reset();
         return;
     }
-    const int value = errno;
-    thp_.error = RuntimeProtectionError{
-        "engine.thp_opt_out",
-        std::string("prctl(PR_SET_THP_DISABLE): ") + std::strerror(value) + " (errno " +
-            std::to_string(value) + ")",
-        "/thp_opt_out",
-        "the kernel refused to keep the process out of transparent huge pages; audio threads "
-        "may stall while khugepaged collapses memory (set transparent_hugepage to madvise or "
-        "never to avoid it)",
-        value};
+    refused("prctl(PR_SET_THP_DISABLE)",
+            "the kernel refused to keep the process out of transparent huge pages; audio threads "
+            "may stall while khugepaged collapses memory (set transparent_hugepage to madvise or "
+            "never to avoid it)");
 #endif
 }
 
 void RuntimeProtection::releaseThp() {
     if (!thp_.active) return;
-    (void)ops_->thpDisable(0, 0);
-    thp_.active = false;
-    thp_.advisedOnly = false;
+    // Undo only what the engine set, and only while it is still what the
+    // engine set: an inherited setting, or one a plug-in changed since, stays.
+    if (thpSet_ != 0 && ops_->thpMode() == thpSet_ && ops_->thpDisable(0, 0) != 0) {
+        const int value = errno;
+        thp_.error = RuntimeProtectionError{
+            "engine.thp_opt_out",
+            std::string("prctl(PR_SET_THP_DISABLE, 0): ") + std::strerror(value) + " (errno " +
+                std::to_string(value) + ")",
+            "/thp_opt_out",
+            "the process stays out of transparent huge pages until it exits, as while the "
+            "engine ran; nothing else is affected, and starting the engine again keeps it so",
+            value};
+        return;  // still kept out, and still the engine's to undo
+    }
+    thpSet_ = 0;
+    thp_ = {};
 }
 
 void RuntimeProtection::start() {

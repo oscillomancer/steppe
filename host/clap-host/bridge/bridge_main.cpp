@@ -961,8 +961,11 @@ int main(int argc, char** argv) {
 #if defined(__linux__)
     // As the engine keeps the host (ADR-0084): out of transparent huge pages
     // but where a plug-in advised them (Linux 6.18), or out entirely. A bridge
-    // started before the engine did inherits nothing. Best effort.
-    if (::prctl(PR_SET_THP_DISABLE, 1UL, 1UL << 1, 0UL, 0UL) != 0)
+    // started before the engine did inherits nothing; one that inherited a
+    // setting (the host's, or its launcher's stricter one) keeps it. Best
+    // effort.
+    if (::prctl(PR_GET_THP_DISABLE, 0UL, 0UL, 0UL, 0UL) == 0 &&
+        ::prctl(PR_SET_THP_DISABLE, 1UL, 1UL << 1, 0UL, 0UL) != 0)
         (void)::prctl(PR_SET_THP_DISABLE, 1UL, 0UL, 0UL, 0UL);
 #endif
     if (argc == 3 && std::string_view(argv[1]) == "--scan") {

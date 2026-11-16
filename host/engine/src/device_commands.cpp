@@ -68,6 +68,7 @@ schema::Schema<ThpOptOutStatus> thpOptOutSchema() {
     return schema::object<ThpOptOutStatus>("thp_opt_out_status")
         .field("active", &ThpOptOutStatus::active, schema::boolean())
         .field("advised_only", &ThpOptOutStatus::advisedOnly, schema::boolean())
+        .field("inherited", &ThpOptOutStatus::inherited, schema::boolean())
         .field("error", &ThpOptOutStatus::error, runtimeProtectionErrorSchema())
         .build();
 }
@@ -482,10 +483,12 @@ void registerDeviceCommands(cmd::Registry& registry) {
             "automatic: held without the option because a bridged plug-in plays live (Linux; "
             "an automatic failure is no warning). It affects system idle while held and leaves "
             "CPU frequency policy unchanged. "
-            "thp_opt_out: active, advised_only and an optional error, Linux only (khugepaged "
+            "thp_opt_out: active, advised_only, inherited (the process was already kept out "
+            "when the engine started; left as it was, not undone at stop) and an optional "
+            "error, Linux only (khugepaged "
             "collapsing memory would stall audio threads). audio_page_faults: page faults since "
             "the engine started; scope audio_threads counts the callback's and live helpers' "
-            "(Linux), process the whole process's (macOS, Windows, where major is null), none "
+            "(Linux), process the whole process's (macOS, Windows, where major is omitted), none "
             "while stopped. "
             "live_helpers is the enabled live helper capacity. scheduling: each thread class's "
             "policy (none, normal, fifo, rr, high) and priority as applied at start: the device "
@@ -524,7 +527,7 @@ void registerDeviceCommands(cmd::Registry& registry) {
                      "warnings": [],
                      "memory_lock": {"requested": false, "active": false},
                      "cpu_idle_latency": {"requested": false, "active": false, "automatic": false},
-                     "thp_opt_out": {"active": false, "advised_only": false},
+                     "thp_opt_out": {"active": false, "advised_only": false, "inherited": false},
                      "audio_page_faults": {"scope": "none", "minor": 0, "major": 0, "threads": 0},
                      "meter_drops": {"renderer": 0, "callback": 0}, "failed_fx": [],
                      "bridge_threads_refused": [],

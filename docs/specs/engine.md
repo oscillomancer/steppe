@@ -1942,11 +1942,17 @@ the app can prevent it:
   waits for khugepaged, a nice-19 kernel thread that a loaded machine starves
   of CPU, to finish. Memory locking does not prevent this: the kernel
   collapses locked pages too. Applied after the backend start with the other
-  controls, released at stop (`prctl(PR_SET_THP_DISABLE, 0)`); a refusal is
-  reported and the engine runs regardless. `engine.status.thp_opt_out` is
-  `{active, advised_only, error?}` (code `engine.thp_opt_out`, path
-  `/thp_opt_out`); never active on macOS or Windows, which collapse no pages
-  under a running process.
+  controls; a refusal is reported and the engine runs regardless. The
+  process's mode is read first (`PR_GET_THP_DISABLE`: 0 none, 1 all, 3 all
+  but advised regions). A mode the process already has, from whatever
+  launched it or a plug-in, is kept as it is, whether stricter (1) or the
+  same (3), reported as `inherited` and not undone at stop. Only from 0 does
+  the engine set it, and at stop it writes 0 again only if the mode is still
+  the one it set; a refused release is reported, and the engine still owns
+  it until a later stop releases it. A bridge likewise sets it only from 0.
+  `engine.status.thp_opt_out` is `{active, advised_only, inherited, error?}`
+  (code `engine.thp_opt_out`, path `/thp_opt_out`); never active on macOS or
+  Windows, which collapse no pages under a running process.
 - **Memory is touched when it is prepared.** Storage the audio path will use
   is written when it is allocated, off the audio thread, so its first touch
   is not a callback's. Engine buffers are value-initialised containers. The
@@ -1964,7 +1970,7 @@ within a tick of its first cycle; the cycle records `pthread_self()`, which
 makes no system call). The kernel thread id comes from the thread's CPU clock
 id and the counts from `/proc/self/task/<tid>/stat`. On macOS (`getrusage`)
 and Windows (`GetProcessMemoryInfo`, which does not separate minor from major,
-so `major` is null) neither keeps a count per thread, and `scope` is
+so `major` is omitted) neither keeps a count per thread, and `scope` is
 `process`. `none` while stopped. The bench reports the same count over its
 measured interval, and each thread's on Linux (`tools/bench/README.md`).
 

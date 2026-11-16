@@ -52,10 +52,13 @@ struct RuntimeProtectionStatus {
 // touches the range, behind a low-priority kernel thread holding the process's
 // address-space lock. `advisedOnly`: regions a plug-in advised (MADV_HUGEPAGE)
 // keep huge pages, on kernels from 6.18; otherwise none do. Never active on
-// macOS or Windows, which have no such collapse.
+// macOS or Windows, which have no such collapse. `inherited`: the process was
+// already kept out when the engine started (by whatever launched it, or a
+// plug-in); that setting is left exactly as it was, and not undone at stop.
 struct ThpOptOutStatus {
     bool active = false;
     bool advisedOnly = false;
+    bool inherited = false;
     std::optional<RuntimeProtectionError> error;
 };
 
@@ -70,6 +73,9 @@ struct RuntimeProtectionOps {
     std::function<int(int)> closeLatency;
     // prctl(PR_SET_THP_DISABLE, disable, flags, 0, 0) on Linux.
     std::function<int(unsigned long disable, unsigned long flags)> thpDisable;
+    // prctl(PR_GET_THP_DISABLE, 0, 0, 0, 0) on Linux: 0 none, 1 all, 3 all
+    // but advised regions; -1 with errno on failure.
+    std::function<int()> thpMode;
 };
 
 }  // namespace supple::engine

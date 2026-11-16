@@ -41,6 +41,7 @@ struct FakeLatency {
             return 0;
         };
         ops->thpDisable = [](unsigned long, unsigned long) { return 0; };
+        ops->thpMode = [] { return 0; };
     }
 };
 }  // namespace

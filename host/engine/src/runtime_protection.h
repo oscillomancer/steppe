@@ -40,6 +40,7 @@ class RuntimeProtection {
     RuntimeProtectionStatus latency_;
     ThpOptOutStatus thp_;
     int latencyFd_ = -1;
+    int thpSet_ = 0;  // the THP mode applyThp set (1 or 3); 0: none of its own
 };
 
 }  // namespace supple::engine::detail
