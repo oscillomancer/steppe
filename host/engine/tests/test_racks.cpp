@@ -3373,3 +3373,39 @@ TEST_CASE("rack sends: home mute and send level are mix edits beside a hardware 
         CHECK(peakIn(L, 130000, 153600) < 1e-5);  // the home's mute silences its send
     }
 }
+
+TEST_CASE("racks: transport() keeps its arithmetic at a nonzero start; gridTransport() is exact") {
+    // Review round 20: transport() had taken the exact grid arithmetic,
+    // (origin + sample) / rate, which rounds apart in the last bit from the
+    // start-plus-samples arithmetic saved module source was written against.
+    model::EditTxn t(model::Session::create(), 1);
+    const auto channel = addChannel(t);
+    t.create(model::Rack{channel, ""});
+    const auto s = commit(t);
+    auto pool = makePool();
+    for (const std::int64_t origin : {std::int64_t{3217}, std::int64_t{70001}}) {
+        CAPTURE(origin);
+        auto plan = supple::engine::detail::compile(s, pool, double(origin) / 48000.0, 128, 48000);
+        REQUIRE(plan);
+        supple::engine::detail::RackNode* rack = nullptr;
+        for (auto& node : plan->nodes)
+            if (node.rack) rack = node.rack.get();
+        REQUIRE(rack);
+        rack->clock.plan = &*plan;
+        rack->origin = origin;
+        rack->playing = true;
+        int apart = 0;
+        for (std::int64_t sample = 0; sample < 512; ++sample) {
+            const auto historical = supple::engine::detail::transportAt(*plan, sample);
+            const auto exact = supple::engine::detail::transportAtSeconds(
+                *plan, double(origin + sample) / 48000.0);
+            const auto call = rack->clock.callTransport(origin + sample);
+            const auto grid = rack->clock.transport(origin + sample);
+            CHECK(call.beats == historical.beat);
+            CHECK(call.tempo == historical.tempo);
+            CHECK(grid.beats == exact.beat);
+            apart += call.beats != grid.beats;
+        }
+        CHECK(apart > 0);  // the two arithmetics do differ here
+    }
+}
