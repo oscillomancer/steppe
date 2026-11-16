@@ -6,10 +6,12 @@
 // commands arrive in per-instance shared memory sent with Activate and run on
 // that instance's audio thread. Exits when the host closes the control socket.
 #if defined(_WIN32)
-#include <avrt.h>
 #include <fcntl.h>
 #include <io.h>
 #include <windows.h>
+// After windows.h, which declares its types; a separate block keeps
+// clang-format from sorting it back above.
+#include <avrt.h>
 #elif defined(__APPLE__)
 #include <fcntl.h>
 #include <mach/mach.h>
