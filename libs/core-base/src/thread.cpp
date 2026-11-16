@@ -9,17 +9,18 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#include <psapi.h>
 #include <windows.h>
 #else
 #include <pthread.h>
 #include <sched.h>
-#if defined(__linux__)
 #include <sys/resource.h>
-#endif
+#include <time.h>
 #endif
 
 #include <algorithm>
 #include <bit>
+#include <cstdio>
 #include <cstring>
 #include <string>
 
@@ -185,5 +186,61 @@ int realtimePriorityLimit(int requested) {
         return static_cast<int>(std::min<rlim_t>(static_cast<rlim_t>(requested), limit.rlim_cur));
 #endif
     return requested;
+}
+
+std::thread::native_handle_type currentThreadHandle() {
+#if defined(_WIN32)
+    return GetCurrentThread();  // a pseudo handle: the calls below do not use it
+#else
+    return ::pthread_self();
+#endif
+}
+
+std::int64_t kernelThreadId(std::thread::native_handle_type thread) {
+#if defined(__linux__)
+    // glibc and musl encode the tid in the thread's CPU clock, as the kernel
+    // defines per-thread CPU clocks: (~tid << 3) | 6.
+    clockid_t clock{};
+    if (::pthread_getcpuclockid(thread, &clock) != 0) return 0;
+    return ~(static_cast<std::int64_t>(clock) >> 3);
+#else
+    (void)thread;
+    return 0;
+#endif
+}
+
+std::optional<PageFaults> threadPageFaults(std::int64_t kernelId) {
+#if defined(__linux__)
+    if (kernelId <= 0) return std::nullopt;
+    const std::string path = "/proc/self/task/" + std::to_string(kernelId) + "/stat";
+    std::FILE* file = std::fopen(path.c_str(), "re");
+    if (!file) return std::nullopt;
+    char line[1024] = {};
+    const bool read = std::fgets(line, sizeof(line), file) != nullptr;
+    std::fclose(file);
+    if (!read) return std::nullopt;
+    // "pid (comm) state ppid ...": the name may hold spaces and parentheses.
+    const char* close = std::strrchr(line, ')');
+    long long minor = 0, major = 0;
+    if (!close ||
+        std::sscanf(close + 1, " %*c %*d %*d %*d %*d %*d %*u %lld %*u %lld", &minor, &major) != 2)
+        return std::nullopt;
+    return PageFaults{minor, major};
+#else
+    (void)kernelId;
+    return std::nullopt;
+#endif
+}
+
+PageFaults processPageFaults() {
+#if defined(_WIN32)
+    PROCESS_MEMORY_COUNTERS counters{};
+    if (!GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters))) return {0, -1};
+    return {static_cast<std::int64_t>(counters.PageFaultCount), -1};
+#else
+    rusage usage{};
+    if (::getrusage(RUSAGE_SELF, &usage) != 0) return {};
+    return {usage.ru_minflt, usage.ru_majflt};
+#endif
 }
 }  // namespace supple

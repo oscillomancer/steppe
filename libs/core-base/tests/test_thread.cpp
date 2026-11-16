@@ -7,10 +7,15 @@
 #endif
 #if defined(__linux__)
 #include <sys/resource.h>
+#include <unistd.h>
 #endif
 
 #include <algorithm>
 #include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <optional>
 #include <ostream>
 #include <string>
 #include <thread>
@@ -160,3 +165,42 @@ TEST_CASE("macOS QoS is applied and verified by the owning thread") {
     CHECK_MESSAGE(normal, (normal ? "" : normal.error().toString()));
 }
 #endif
+
+TEST_CASE("page faults are counted for a thread on Linux and for the process everywhere") {
+    // Memory nothing has touched yet: each page's first write faults.
+    constexpr std::size_t kPages = 256, kStride = 4096;
+    const auto touch = [] {
+        std::unique_ptr<char[]> fresh(new char[kPages * kStride]);
+        auto* bytes = reinterpret_cast<volatile char*>(fresh.get());
+        for (std::size_t i = 0; i < kPages * kStride; i += kStride) bytes[i] = 1;
+    };
+    const supple::PageFaults before = supple::processPageFaults();
+    std::int64_t seen = 0, own = 0;
+    std::optional<supple::PageFaults> first, last;
+    std::thread worker([&] {
+#if defined(__linux__)
+        own = static_cast<std::int64_t>(::gettid());
+#endif
+        seen = supple::kernelThreadId(supple::currentThreadHandle());
+        first = supple::threadPageFaults(seen);
+        touch();
+        last = supple::threadPageFaults(seen);
+    });
+    const std::int64_t outside = supple::kernelThreadId(worker.native_handle());
+    worker.join();
+    const supple::PageFaults after = supple::processPageFaults();
+    CHECK(after.minor + std::max<std::int64_t>(after.major, 0) >=
+          before.minor + std::max<std::int64_t>(before.major, 0) + kPages / 2);
+#if defined(__linux__)
+    CHECK(seen == own);
+    CHECK(outside == own);
+    REQUIRE(first);
+    REQUIRE(last);
+    CHECK(last->minor >= first->minor + static_cast<std::int64_t>(kPages / 2));
+    CHECK_FALSE(supple::threadPageFaults(own));  // gone
+#else
+    CHECK(seen == 0);
+    CHECK(outside == 0);
+    CHECK_FALSE(first);
+#endif
+}
