@@ -264,7 +264,7 @@ int main(int argc, char** argv) {
         return p.id == "com.suppleaudio.test.gain";
     });
     if (gain == found->end()) {
-        std::fprintf(stderr, "the gain fixture is missing from %s\n", o.fixture.c_str());
+        std::fprintf(stderr, "the gain fixture is missing from %s\n", o.fixture.string().c_str());
         return 1;
     }
     json::Value report = json::Value::object();
