@@ -909,6 +909,53 @@ TEST_CASE("malformed request ids are never echoed into MCP error envelopes") {
     CHECK(host.count == 0);
 }
 
+TEST_CASE("generic MCP argument envelopes are validated before executing edits") {
+    auto commands = registry();
+    Host host;
+    cmd::Dispatcher bus(commands, host);
+    mcp::Server server(commands, bus);
+    request(
+        server,
+        R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}})");
+    auto call = [&](std::string_view name, const json::Value& args) -> Result<json::Value> {
+        auto input = parse(R"({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{}})");
+        input["params"]["name"] = name;
+        input["params"]["arguments"] = args;
+        const auto reply = server.handle(input);
+        REQUIRE(reply);
+        const auto* result = reply->find("result");
+        REQUIRE(result);
+        const auto* structured = result->find("structuredContent");
+        REQUIRE(structured);
+        if (const auto* failed = result->find("isError"); failed && failed->asBool())
+            return rpc::errorFromJson(*structured);
+        return *structured;
+    };
+    for (
+        const auto* args :
+        {R"({"command":"counter.add","args":{"value":1},"typo":true})",
+         R"({"command":false,"args":false,"batch":{"steps":[{"command":"counter.add","args":{"value":1}}]}})",
+         R"({"batch":{"steps":[]},"args":[]})", R"({"batch":{"steps":[]},"command":null})"}) {
+        auto result = call("exec", parse(args));
+        REQUIRE_FALSE(result);
+        CHECK(result.error().code == "mcp.arguments");
+        CHECK(result.error().path.starts_with("/arguments/"));
+        CHECK_FALSE(result.error().message.empty());
+        CHECK_FALSE(result.error().hint.empty());
+        CHECK(host.count == 0);
+    }
+    for (const auto* args :
+         {R"({"command":"counter.add","tag":false})", R"({"command":"counter.add","unknown":0})"}) {
+        const auto result = call("describe", parse(args));
+        REQUIRE_FALSE(result);
+        CHECK(result.error().code == "mcp.arguments");
+    }
+    REQUIRE(call("exec", parse(R"({"command":"counter.add","args":{"value":2}})")));
+    REQUIRE(call("exec",
+                 parse(R"({"batch":{"steps":[{"command":"counter.add","args":{"value":3}}]}})")));
+    CHECK(host.count == 5);
+}
+
 TEST_CASE("stdio service fds run while an incomplete request waits without a periodic tick") {
     auto r = registry();
     Host host;

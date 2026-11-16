@@ -59,6 +59,38 @@ std::string stringField(const json::Value& value, std::string_view key) {
     auto* part = value.isObject() ? value.find(key) : nullptr;
     return part && part->isString() ? part->asString() : std::string{};
 }
+json::Value genericInput(std::string_view name) {
+    const auto string = typeSchema("string"), object = typeSchema("object");
+    if (name == "exec")
+        return objectSchema({{"command", string}, {"args", object}, {"batch", object}});
+    if (name == "query") return objectSchema({{"command", string}, {"args", object}}, {"command"});
+    return objectSchema({{"command", string}, {"tag", string}, {"kind", string}, {"text", string}});
+}
+Status validateGenericInput(std::string_view name, const json::Value& args) {
+    if (!args.isObject())
+        return Error("mcp.arguments", "tool arguments must be an object", "/arguments",
+                     "send the named arguments shown by tools/list");
+    const auto contract = genericInput(name);
+    const auto& properties = *contract.find("properties");
+    for (const auto& field : args.asObject()) {
+        const auto path = json::pointerJoin("/arguments", field.key);
+        const auto* property = properties.find(field.key);
+        if (!property)
+            return Error("mcp.arguments", "unknown tool argument", path,
+                         "use only the arguments shown by tools/list");
+        const auto type = stringField(*property, "type");
+        if ((type == "string" && !field.value.isString()) ||
+            (type == "object" && !field.value.isObject()))
+            return Error("mcp.arguments", "tool argument must be a " + type, path,
+                         "send a " + type + " as shown by tools/list");
+    }
+    for (const auto& required : contract.find("required")->asArray())
+        if (!args.find(required.asString()))
+            return Error("mcp.arguments", "missing required tool argument",
+                         json::pointerJoin("/arguments", required.asString()),
+                         "provide the argument shown by tools/list");
+    return {};
+}
 json::Value tool(std::string name, std::string title, std::string description, json::Value input,
                  json::Value output = typeSchema("object")) {
     json::Value value = json::Value::object();
@@ -216,17 +248,15 @@ json::Value Server::takeNotifications() {
 }
 json::Value Server::tools() const {
     auto out = dedicated_;
-    auto string = typeSchema("string"), object = typeSchema("object");
     out.push_back(tool(
         "describe", "Describe commands",
         "List all commands grouped by namespace, filter by tag/kind/text, or describe one command.",
-        objectSchema({{"command", string}, {"tag", string}, {"kind", string}, {"text", string}})));
-    auto execInput = objectSchema({{"command", string}, {"args", object}, {"batch", object}});
+        genericInput("describe")));
     out.push_back(tool("exec", "Execute a command", "Run one command or an atomic batch.",
-                       std::move(execInput)));
+                       genericInput("exec")));
     if (queryTool_)
-        out.push_back(tool("query", "Query the session", "Run a read-only command.",
-                           objectSchema({{"command", string}, {"args", object}}, {"command"})));
+        out.push_back(
+            tool("query", "Query the session", "Run a read-only command.", genericInput("query")));
     return out;
 }
 Result<json::Value> Server::call(std::string_view name, const json::Value& args) {
@@ -243,6 +273,8 @@ Result<json::Value> Server::call(std::string_view name, const json::Value& args)
     return ready && unsent ? callTool(name, args) : result;
 }
 Result<json::Value> Server::callTool(std::string_view name, const json::Value& args) {
+    if (name == "describe" || name == "exec" || (name == "query" && queryTool_))
+        SUPPLE_TRY(validateGenericInput(name, args));
     if (name == "describe") {
         auto command = stringField(args, "command");
         if (!command.empty()) {

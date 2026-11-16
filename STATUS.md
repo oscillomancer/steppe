@@ -187,6 +187,8 @@ instructions are in `docs/guides/installing.md`.
   engine coverage includes recording in both executors and interleaved saves.
   RPC and MCP reject invalid request IDs using a null response ID, keeping error
   envelopes valid while preserving valid IDs for other envelope errors.
+  Generic MCP describe/exec/query arguments are checked against their advertised
+  envelope before dispatch, including batch siblings, so malformed wrappers cannot edit.
   The engine MCP default is 37 common tools plus describe/exec/query, with a
   60,000-byte tools/list budget. Other commands remain discoverable in the compact
   namespace index and callable through exec/query; --tools all exposes every

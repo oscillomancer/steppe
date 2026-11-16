@@ -433,6 +433,12 @@ common tools, describe/exec/query workflow and argument-free index.
 
 ### 4.3 Calls and results
 
+The adapter validates the generic describe/exec/query envelopes against their
+advertised member names, types and required fields before invoking any command.
+An invalid envelope returns structured `mcp.arguments` with the offending
+`/arguments/...` path and a corrective hint. A present batch does not bypass
+validation of sibling fields. The inner command still uses dispatcher validation.
+
 `tools/call` → dispatcher `execute` with `Origin{Mcp, client name from
 initialize, agent}`. Every valid `initialize` replaces the client and agent
 identity; an absent `_meta.agent` clears the agent. The proxy forwards that
