@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Supple Audio
 #include <doctest/doctest.h>
+#include <limits>
 
 #if !defined(_WIN32)
 #include <pthread.h>
@@ -215,4 +216,16 @@ TEST_CASE("page faults are counted for a thread on Linux and for the process eve
     CHECK(outside == 0);
     CHECK_FALSE(first);
 #endif
+}
+
+TEST_CASE("macOS task counts that reached their limit are saturated, not counts") {
+    // Round 23: TASK_EVENTS_INFO's 32-bit counts stop at INT32_MAX, which gave
+    // negative deltas; the conversion says so instead.
+    const auto normal = supple::pageFaultsFromTaskCounts(100, 5);
+    CHECK(normal.minor == 95);
+    CHECK(normal.major == 5);
+    CHECK_FALSE(normal.saturated);
+    constexpr auto kLimit = std::numeric_limits<std::int32_t>::max();
+    CHECK(supple::pageFaultsFromTaskCounts(kLimit, 5).saturated);
+    CHECK(supple::pageFaultsFromTaskCounts(100, kLimit).saturated);
 }

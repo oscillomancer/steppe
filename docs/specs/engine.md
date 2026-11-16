@@ -2097,7 +2097,8 @@ the app can prevent it:
   launched it or a plug-in, is kept as it is, whether stricter (1) or the
   same (3), reported as `inherited` and not undone at stop. Only from 0 does
   the engine set it, and at stop it writes 0 again only if the mode is still
-  the one it set; a refused release is reported, and the engine still owns
+  the one it set; a refused release, or a refused mode read at stop, is
+  reported, and the engine still owns
   it until a later stop releases it. A bridge likewise sets it only from 0.
   `engine.status.thp_opt_out` is `{active, advised_only, inherited, error?}`
   (code `engine.thp_opt_out`, path `/thp_opt_out`); never active on macOS or
@@ -2121,7 +2122,8 @@ id and the counts from `/proc/self/task/<tid>/stat`. On macOS (`task_info` event
 `getrusage` there misses fresh pages' zero-fill faults) and Windows (`GetProcessMemoryInfo`, which does not separate minor from major,
 so `major` is omitted) neither keeps a count per thread, and `scope` is
 `process`. `none` while stopped. The bench reports the same count over its
-measured interval, and each thread's on Linux (`tools/bench/README.md`).
+measured interval, and each thread's on Linux (`tools/bench/README.md`). On macOS a counter at its 32-bit limit makes `saturated` true, with
+`minor` 0 and `major` omitted: the counts are not counts then.
 
 ### Headless platform mechanisms (2026-10-14, ADR-0035)
 

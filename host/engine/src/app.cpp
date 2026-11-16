@@ -2055,7 +2055,12 @@ EngineStatus EngineApp::engineStatus() {
         faults.scope = "process";
         const PageFaults now = processPageFaults();
         faults.minor = now.minor - processFaultBase_->minor;
-        if (now.major < 0)
+        if (now.saturated || processFaultBase_->saturated) {
+            // A counter stopped at its limit: no delta is a count (round 23).
+            faults.saturated = true;
+            faults.minor = 0;
+            faults.major.reset();
+        } else if (now.major < 0)
             faults.major.reset();
         else
             faults.major = now.major - processFaultBase_->major;

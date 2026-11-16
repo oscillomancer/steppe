@@ -81,6 +81,7 @@ schema::Schema<EngineStatus::AudioPageFaults> audioPageFaultsSchema() {
         .field("minor", &EngineStatus::AudioPageFaults::minor, schema::integer())
         .field("major", &EngineStatus::AudioPageFaults::major, schema::integer())
         .field("threads", &EngineStatus::AudioPageFaults::threads, schema::integer())
+        .field("saturated", &EngineStatus::AudioPageFaults::saturated, schema::boolean())
         .build();
 }
 
@@ -489,7 +490,8 @@ void registerDeviceCommands(cmd::Registry& registry) {
             "collapsing memory would stall audio threads). audio_page_faults: page faults since "
             "the engine started; scope audio_threads counts the callback's and live helpers' "
             "(Linux), process the whole process's (macOS, Windows, where major is omitted), none "
-            "while stopped. "
+            "while stopped; saturated: the platform's counter stopped at its limit (macOS 32-bit "
+            "counts), so minor is 0 and major omitted, not counts. "
             "live_helpers is the enabled live helper capacity. scheduling: each thread class's "
             "policy (none, normal, fifo, rr, high) and priority as applied at start: the device "
             "callback, live helpers, renderer and background helpers (real-time below a "
@@ -528,7 +530,8 @@ void registerDeviceCommands(cmd::Registry& registry) {
                      "memory_lock": {"requested": false, "active": false},
                      "cpu_idle_latency": {"requested": false, "active": false, "automatic": false},
                      "thp_opt_out": {"active": false, "advised_only": false, "inherited": false},
-                     "audio_page_faults": {"scope": "none", "minor": 0, "major": 0, "threads": 0},
+                     "audio_page_faults": {"scope": "none", "minor": 0, "major": 0, "threads": 0,
+                                           "saturated": false},
                      "meter_drops": {"renderer": 0, "callback": 0}, "failed_fx": [],
                      "bridge_threads_refused": [],
                      "dropped": 0, "voice_dropped": 0, "failed_errors": [], "sync": "<any>"})"),

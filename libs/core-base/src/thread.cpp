@@ -27,6 +27,7 @@
 #include <bit>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <string>
 
 namespace supple {
@@ -237,6 +238,12 @@ std::optional<PageFaults> threadPageFaults(std::int64_t kernelId) {
 #endif
 }
 
+PageFaults pageFaultsFromTaskCounts(std::int32_t faults, std::int32_t pageins) {
+    constexpr auto kLimit = std::numeric_limits<std::int32_t>::max();
+    if (faults >= kLimit || pageins >= kLimit) return {0, 0, true};
+    return {std::max<std::int64_t>(std::int64_t{faults} - pageins, 0), std::max(pageins, 0)};
+}
+
 PageFaults processPageFaults() {
 #if defined(_WIN32)
     PROCESS_MEMORY_COUNTERS counters{};
@@ -251,9 +258,7 @@ PageFaults processPageFaults() {
     if (::task_info(::mach_task_self(), TASK_EVENTS_INFO, reinterpret_cast<task_info_t>(&events),
                     &count) != KERN_SUCCESS)
         return {};
-    const auto pageins = static_cast<std::int64_t>(static_cast<std::uint32_t>(events.pageins));
-    const auto faults = static_cast<std::int64_t>(static_cast<std::uint32_t>(events.faults));
-    return {std::max<std::int64_t>(faults - pageins, 0), pageins};
+    return pageFaultsFromTaskCounts(events.faults, events.pageins);
 #else
     rusage usage{};
     if (::getrusage(RUSAGE_SELF, &usage) != 0) return {};

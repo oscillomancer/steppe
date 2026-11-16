@@ -49,7 +49,13 @@ int realtimePriorityLimit(int requested);
 // `major` is -1 where the platform does not tell them apart (Windows).
 struct PageFaults {
     std::int64_t minor = 0, major = 0;
+    // A counter reached its limit and stopped (macOS keeps 32-bit counts that
+    // stay at INT32_MAX): minor and major no longer count what follows.
+    bool saturated = false;
 };
+// macOS's task event counts (every fault, page-ins), as PageFaults: minor is
+// faults less page-ins; either at INT32_MAX is saturated. Pure, for tests.
+PageFaults pageFaultsFromTaskCounts(std::int32_t faults, std::int32_t pageins);
 // The calling thread's native handle, without a system call: callable on an
 // audio path, to name the thread for the calls below.
 std::thread::native_handle_type currentThreadHandle();

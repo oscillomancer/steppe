@@ -214,6 +214,7 @@ struct EngineStatus {
         std::int64_t minor = 0;
         std::optional<std::int64_t> major = 0;
         std::int64_t threads = 0;  // the threads counted, for audio_threads
+        bool saturated = false;    // the platform's counter stopped at its limit
     } audioPageFaults;
     MeterDrops meterDrops;              // meter entries dropped by a full ring
     std::vector<std::string> failedFx;  // isolated instances whose bridge crashed or hung
