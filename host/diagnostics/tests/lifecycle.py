@@ -46,6 +46,13 @@ with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
             p.stdin.write(b"release");p.stdin.close()
             if p.poll() is None: p.kill();p.wait()
             p.stdout.close();p.stderr.close()
+    if os.name != "nt":
+        root=base/"ignored-sigchld"/"app"/"diagnostics"
+        run=subprocess.run([binary,str(root),"normal"],capture_output=True,timeout=30,
+                           preexec_fn=lambda:signal.signal(signal.SIGCHLD,signal.SIG_IGN))
+        assert run.returncode==7,run
+        assert not list(root.glob("*.json"))
+        assert not list(root.glob("*.run"))
     # Invalid/partial bootstrap degrades to ordinary operation, with a watchdog
     # only to abort a hung fixture. No elapsed-time assertion.
     root=base/"bad-bootstrap"/"app"/"diagnostics"

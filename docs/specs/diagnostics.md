@@ -27,7 +27,10 @@ listener. `ready` follows private marker/terminal setup, `expected_return` follo
 Main's return; terminal cause overrides expected return. The supervisor observes
 OS process exit independently. POSIX checks/reaps the worker while parking on
 channel readiness; a forked helper retaining the channel cannot defer collection,
-and already queued terminal/return packets are drained before classification. An unexpected exit without terminal packet remains
+and already queued terminal/return packets are drained before classification.
+If inherited SIGCHLD policy has auto-reaped the worker, a validated expected-return
+packet supplies its handled return code, unless a terminal packet overrides it.
+The supervisor does not change that inherited SIGCHLD disposition. An unexpected exit without terminal packet remains
 unknown, never guessed into a signal or plug-in attribution. Sanitizer deaths
 remain visible and do not get converted into successful app returns.
 

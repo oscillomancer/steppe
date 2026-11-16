@@ -3,6 +3,7 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 #include "supple/base/result.h"
@@ -31,7 +32,7 @@ bool receive(Native& native, Packet& packet);  // collector, parked until work/e
 bool publish(Native& native, const Packet& packet) noexcept;
 void acknowledge(Native& native) noexcept;
 void awaitAcknowledgement(Native& native) noexcept;  // terminal only, <=1 second
-int wait(Native& native, bool& fatal);
+int wait(Native& native, bool& fatal, std::optional<std::uint32_t> expected = {});
 void close(Native& native);
 void closeProtocolStdio();
 std::uint64_t pid();

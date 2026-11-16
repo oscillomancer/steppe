@@ -73,7 +73,8 @@ int runFrontend(int argc, char** argv, Role role, Main main, Options options) {
     }
     auto native = *child;
     closeProtocolStdio();
-    bool expected = false, hasTerminal = false, markerUnavailable = false, ownsMarker = false;
+    bool hasTerminal = false, markerUnavailable = false, ownsMarker = false;
+    std::optional<std::uint32_t> expected;
     Packet packet, terminal;
     while (receive(native, packet)) {
         if (packet.incident != boot.incident || packet.role != boot.role) break;
@@ -81,7 +82,7 @@ int runFrontend(int argc, char** argv, Role role, Main main, Options options) {
             markerUnavailable = packet.code != 0;
             ownsMarker = !markerUnavailable;
         }
-        if (packet.kind == Message::Expected) expected = true;
+        if (packet.kind == Message::Expected) expected = packet.code;
         if (packet.kind == Message::Terminal) {
             terminal = packet;
             hasTerminal = true;
@@ -89,7 +90,7 @@ int runFrontend(int argc, char** argv, Role role, Main main, Options options) {
         }
     }
     bool fatal = false;
-    const int code = wait(native, fatal);
+    const int code = wait(native, fatal, hasTerminal ? std::nullopt : expected);
     close(native);
     if (markerUnavailable) std::fputs("diagnostic coverage was partial\n", stderr);
     if (hasTerminal || fatal || !expected) {

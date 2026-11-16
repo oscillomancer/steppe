@@ -227,7 +227,7 @@ void awaitAcknowledgement(Native& native) noexcept {
     const timespec timeout{1, 0};
     (void)::pselect(fd + 1, &ready, nullptr, nullptr, &timeout, nullptr);
 }
-int wait(Native& native, bool& fatal) {
+int wait(Native& native, bool& fatal, std::optional<std::uint32_t> expected) {
     if (!native.exited) {
         pid_t result;
         do {
@@ -237,7 +237,7 @@ int wait(Native& native, bool& fatal) {
         native.exited = true;
     }
     fatal = native.statusKnown && WIFSIGNALED(native.status);
-    return !native.statusKnown ? 1
+    return !native.statusKnown ? static_cast<int>(expected.value_or(1))
            : fatal             ? 128 + WTERMSIG(native.status)
                                : WEXITSTATUS(native.status);
 }
