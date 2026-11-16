@@ -84,7 +84,8 @@ macOS and Windows, which keep no per-thread count). `processPageFaults()` is
 the process's: `getrusage` on Linux; on macOS the task's event counts
 (`TASK_EVENTS_INFO`: every fault, less page-ins as `minor`, page-ins as
 `major`), since `getrusage` there counts only page reclaims and misses
-fresh pages' zero-fill faults; `GetProcessMemoryInfo` on Windows with
+fresh pages' zero-fill faults; it maps fresh anonymous memory in clusters,
+so touching N new pages can count far fewer than N faults; `GetProcessMemoryInfo` on Windows with
 `major` -1, since it does not separate them. None of these but
 the first may run on an audio path.
 
