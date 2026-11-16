@@ -6,14 +6,15 @@ binary=sys.argv[1]
 sanitized=len(sys.argv)>2 and bool(sys.argv[2])
 with tempfile.TemporaryDirectory(prefix="diagnostics-fixtures-") as folder:
     base=pathlib.Path(folder)
-    for mode in ("normal","exit","abort","terminate","fault","thread-fault","stack","concurrent","teardown","echo","handled","killed") + (("failfast",) if os.name=="nt" else ()):
+    for mode in ("normal","negative-return","exit","abort","terminate","fault","thread-fault","stack","concurrent","teardown","echo","handled","killed") + (("failfast",) if os.name=="nt" else ()):
         root=base/mode/"app"/"diagnostics"
         args=[binary,str(root),mode]
         if mode=="echo": args.append('argument with spaces " and slash\\')
         run=subprocess.run(args,input=b"private-project-sentinel\n",stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=30)
         found=list(root.glob("*.json"))
-        if mode in ("normal","echo","handled"):
-            assert run.returncode==(7 if mode=="normal" else 0),(mode,run)
+        if mode in ("normal","negative-return","echo","handled"):
+            expected_code=7 if mode=="normal" else (0xffffffff if os.name=="nt" else 255) if mode=="negative-return" else 0
+            assert run.returncode==expected_code,(mode,run)
             assert not found,(mode,found)
             assert not list(root.glob("*.run")),mode
             if mode=="echo": assert run.stdout==b"private-project-sentinel\n",run

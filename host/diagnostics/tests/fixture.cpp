@@ -52,6 +52,7 @@ int body(int argc, char** argv) {
     if (argc < 3) return 2;
     const std::string mode = argv[2];
     if (mode == "normal") return 7;
+    if (mode == "negative-return") return -1;
     if (mode == "exit") std::_Exit(31);
 #if !defined(_WIN32)
     if (mode == "fork-channel") {

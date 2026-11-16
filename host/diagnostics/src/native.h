@@ -32,6 +32,11 @@ bool receive(Native& native, Packet& packet);  // collector, parked until work/e
 bool publish(Native& native, const Packet& packet) noexcept;
 void acknowledge(Native& native) noexcept;
 void awaitAcknowledgement(Native& native) noexcept;  // terminal only, <=1 second
+inline bool windowsFatalStatus(std::uint32_t code, std::optional<std::uint32_t> expected) {
+    // A Main return can use every DWORD value, including exception-shaped
+    // values. The caller withholds expected when a terminal capsule exists.
+    return (!expected || *expected != code) && (code & 0xc0000000U) == 0xc0000000U;
+}
 int wait(Native& native, bool& fatal, std::optional<std::uint32_t> expected = {});
 void close(Native& native);
 void closeProtocolStdio();

@@ -127,7 +127,10 @@ This is an explicit delivery limit, not a claim of complete Mach coverage.
 
 A captured terminal capsule sets kind `crash`. Without one, kind remains
 `unexpected_exit`, even when the OS status is fatal; `native_fatal_status`
-records that status independently. An exit code cannot establish a cause.
+records that status independently. An exit code cannot establish a cause. On Windows, an exit value matching a
+validated expected-return packet is a handled return even when its high bits
+resemble NTSTATUS; terminal capsules still override expected return. Without a
+capsule, coincident handled-return and teardown statuses cannot be distinguished.
 
 Windows GUI console attachment happens in the launcher entry before spawning;
 redirected handles retain the original frontend rules. After spawn, only the

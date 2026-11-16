@@ -222,11 +222,10 @@ bool receive(Native& n, Packet& packet) {
 void acknowledge(Native& n) noexcept { SetEvent(handle(n.ack)); }
 void awaitAcknowledgement(Native& n) noexcept { WaitForSingleObject(handle(n.ack), 1000); }
 int wait(Native& n, bool& fatal, std::optional<std::uint32_t> expected) {
-    (void)expected;
     WaitForSingleObject(handle(n.process), INFINITE);
     DWORD code = 1;
     GetExitCodeProcess(handle(n.process), &code);
-    fatal = (code & 0xc0000000U) == 0xc0000000U;
+    fatal = windowsFatalStatus(code, expected);
     return static_cast<int>(code);
 }
 void close(Native& n) {
