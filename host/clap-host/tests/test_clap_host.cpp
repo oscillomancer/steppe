@@ -1465,9 +1465,9 @@ TEST_CASE("bridge protocol v6 retains nested structured error details") {
     REQUIRE(decoded.details[0].details.size() == 1);
     CHECK(decoded.details[0].details[0].code == "leaf");
 #if defined(_WIN32)
-    CHECK(bridge::kVersion == 24);
+    CHECK(bridge::kVersion == 25);
 #else
-    CHECK(bridge::kVersion == 23);
+    CHECK(bridge::kVersion == 24);
 #endif
 }
 
@@ -2333,7 +2333,7 @@ struct GatedPeer {
     std::vector<bridge::Cmd> commands;
     std::vector<std::vector<Event>> blocks;  // each Process's events
     std::vector<float> firstInput;           // each Process's first input sample
-    std::vector<std::uint32_t> periods;      // each command's livePeriod
+    std::vector<std::uint32_t> periods;      // each command's livePeriodNs
     std::thread thread;
 
     // `hold`: the first request it holds (0: none).
@@ -2374,7 +2374,7 @@ struct GatedPeer {
             if (quit.load()) return;
             const auto cmd = static_cast<bridge::Cmd>(header->cmd);
             commands.push_back(cmd);
-            periods.push_back(header->livePeriod);
+            periods.push_back(header->livePeriodNs);
             if (cmd == bridge::Cmd::StartProcessing) processing = !refuseStart;
             if (cmd == bridge::Cmd::StopProcessing) processing = false;
             if (cmd == bridge::Cmd::Reset) sounding = false;
@@ -2754,17 +2754,33 @@ TEST_CASE("bridged calls carry the device period for the live class") {
     } restore;
     GatedPeer peer(0);
     Buffers buf(64);
-    setLiveBridgeAudioPolicy({ThreadPolicy::Kind::Normal, 0}, 128);
+    setLiveBridgeAudioPolicy({ThreadPolicy::Kind::Normal, 0}, 128, 48000);
     {
         Patient patient;
         CHECK(peer.instance->startProcessing());
         CHECK(peer.instance->process(buf.block(64), nullptr));
     }
-    setLiveBridgeAudioPolicy({ThreadPolicy::Kind::Normal, 0}, 256);
+    setLiveBridgeAudioPolicy({ThreadPolicy::Kind::Normal, 0}, 256, 48000);
     {
         Patient patient;
         CHECK(peer.instance->process(buf.block(64), nullptr));
     }
-    CHECK(liveBridgePeriod() == 256);
-    CHECK(peer.periods == std::vector<std::uint32_t>{128, 128, 256});
+    CHECK(liveBridgePeriodNs() == 5333333);
+    // A duration (round 19): the device's frames at the device's rate.
+    CHECK(peer.periods == std::vector<std::uint32_t>{2666667, 2666667, 5333333});
+}
+
+TEST_CASE("the live class's period is the device's whatever rate a plug-in runs at") {
+    // Round 19: the bridge divided the device's period in frames by the
+    // plug-in's activation rate, so a 2x or 4x oversampled effect on a
+    // 48 kHz, 128-frame device asked for a half or a quarter of 2.667 ms.
+    const std::uint32_t device = 2666667;  // 128 frames at 48 kHz
+    for (const double rate : {48000.0, 96000.0, 192000.0}) {
+        CAPTURE(rate);
+        CHECK(bridge::liveClassPeriodNs(device, 128, rate) == double(device));
+        CHECK(bridge::liveClassPeriodNs(device, 1024, rate) == double(device));
+    }
+    // Without a device period: the command's block at the activation rate.
+    CHECK(bridge::liveClassPeriodNs(0, 256, 96000) == doctest::Approx(2666666.67));
+    CHECK(bridge::liveClassPeriodNs(0, 256, 0) == 0.0);
 }

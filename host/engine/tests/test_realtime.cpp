@@ -3478,8 +3478,9 @@ TEST_CASE("live bridged effects play in the callback as in-process ones do") {
             DummyBackend backend(constantInput(1024));
             Engine engine(pool, media, options);
             REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128, .inputs = 2}));
-            // The live class's period is the device's, not the render block's.
-            CHECK(host::liveBridgePeriod() == 128);
+            // The live class's period is the device's, not the render block's:
+            // 128 frames at 48 kHz, as a duration.
+            CHECK(host::liveBridgePeriodNs() == 2666667);
             REQUIRE(engine.load(monitored(isolation, fxId)));
             if (options.anticipative) REQUIRE(engine.awaitPlan());
             backend.run(4);

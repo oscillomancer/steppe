@@ -34,8 +34,8 @@ std::atomic<std::uint32_t> gBridgeAudioPolicy{static_cast<std::uint32_t>(ThreadP
                                               << 8};
 std::atomic<std::uint32_t> gLiveBridgeAudioPolicy{
     static_cast<std::uint32_t>(ThreadPolicy::Kind::Normal) << 8};
-// The device period in frames while an engine runs (0: none).
-std::atomic<std::uint32_t> gLiveBridgePeriod{0};
+// The device period in nanoseconds while an engine runs (0: none).
+std::atomic<std::uint32_t> gLiveBridgePeriodNs{0};
 
 std::uint32_t pack(ThreadPolicy policy) {
     return static_cast<std::uint32_t>(policy.kind) << 8 |
@@ -55,17 +55,22 @@ ThreadPolicy bridgeAudioPolicy() SUPPLE_RT {
     return unpack(gBridgeAudioPolicy.load(std::memory_order_relaxed));
 }
 
-void setLiveBridgeAudioPolicy(ThreadPolicy policy, std::uint32_t periodFrames) {
+void setLiveBridgeAudioPolicy(ThreadPolicy policy, std::uint32_t periodFrames, double sampleRate) {
     gLiveBridgeAudioPolicy.store(pack(policy), std::memory_order_relaxed);
-    gLiveBridgePeriod.store(periodFrames, std::memory_order_relaxed);
+    // A duration, not frames: an oversampled plug-in runs at another rate
+    // than the device whose period this is.
+    const double ns = periodFrames && sampleRate > 0 ? periodFrames * 1e9 / sampleRate : 0.0;
+    gLiveBridgePeriodNs.store(static_cast<std::uint32_t>(std::clamp(
+                                  std::llround(ns), 0LL, static_cast<long long>(UINT32_MAX))),
+                              std::memory_order_relaxed);
 }
 
 ThreadPolicy liveBridgeAudioPolicy() SUPPLE_RT {
     return unpack(gLiveBridgeAudioPolicy.load(std::memory_order_relaxed));
 }
 
-std::uint32_t liveBridgePeriod() SUPPLE_RT {
-    return gLiveBridgePeriod.load(std::memory_order_relaxed);
+std::uint32_t liveBridgePeriodNs() SUPPLE_RT {
+    return gLiveBridgePeriodNs.load(std::memory_order_relaxed);
 }
 
 void setBridgeExecutable(std::filesystem::path path) {
@@ -1103,7 +1108,7 @@ RemoteInstance::Sent RemoteInstance::post(Cmd cmd) SUPPLE_RT {
     hdr_->audioPriority = static_cast<std::uint32_t>(background.priority);
     hdr_->livePolicy = static_cast<std::uint32_t>(live.kind);
     hdr_->livePriority = static_cast<std::uint32_t>(live.priority);
-    hdr_->livePeriod = liveBridgePeriod();
+    hdr_->livePeriodNs = liveBridgePeriodNs();
     hdr_->cmd = static_cast<std::uint32_t>(cmd);
     TimingCounters& timing = gTiming[tLiveDeadline ? 1 : 0];
     const std::int64_t posted = steadyNanoseconds();

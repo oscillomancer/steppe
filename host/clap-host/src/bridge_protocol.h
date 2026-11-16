@@ -58,10 +58,12 @@ inline constexpr std::uint32_t kMagic = 0x31474253;  // "SBG1"
 // migrations, and the class it read back (ADR-0081 diagnostics).
 // 23/24: every command carries the device period, which sizes the live class
 // on macOS (ADR-0081 §5).
+// 24/25: that period is a duration (ns), not device frames, which the bridge
+// read at an oversampled plug-in's rate.
 #if defined(_WIN32)
-inline constexpr std::uint32_t kVersion = 24;  // Windows runs one ahead: native control handles
+inline constexpr std::uint32_t kVersion = 25;  // Windows runs one ahead: native control handles
 #else
-inline constexpr std::uint32_t kVersion = 23;
+inline constexpr std::uint32_t kVersion = 24;
 #endif
 inline constexpr int kControlFd = 3;  // the bridge's end of the socketpair
 inline constexpr std::uint32_t kMaxChannels = 16;
@@ -73,6 +75,15 @@ inline constexpr std::uint32_t kMaxEvents = 2048;
 inline constexpr std::uint32_t kMaxOutEvents = 1024;
 inline constexpr std::uint32_t kMaxParamClears = 4096;
 inline constexpr std::uint32_t kMaxMessage = 64u << 20;
+
+// The period the live class is sized for (macOS's time constraint), in ns:
+// the device's, as the header carries it, whatever rate the plug-in was
+// activated at (oversampling makes it 2 or 4 times the device's); without
+// one, a block of `frames` at the activation's `rate`.
+inline double liveClassPeriodNs(std::uint32_t livePeriodNs, std::uint32_t frames, double rate) {
+    if (livePeriodNs) return livePeriodNs;
+    return rate > 0 ? frames / rate * 1e9 : 0.0;
+}
 
 // --- control plane -----------------------------------------------------------------
 
@@ -336,13 +347,14 @@ struct Header {
     // ADR-0081). audioClass 1: background, ThreadPolicy kind and priority in
     // audioPolicy/audioPriority (kind 0, None, keeps the current one); 2: live,
     // the callback's class (Linux: livePolicy/livePriority; macOS: a
-    // time-constraint policy for livePeriod; Windows: MMCSS Pro Audio); 0:
+    // time-constraint policy for livePeriodNs; Windows: MMCSS Pro Audio); 0:
     // unchanged.
     std::uint32_t audioPolicy, audioPriority;
     std::uint32_t audioClass, livePolicy, livePriority;
-    // The device period in frames while an engine runs (0: none, the live
-    // class then takes the command's block).
-    std::uint32_t livePeriod;
+    // The device period in nanoseconds while an engine runs (0: none, the
+    // live class then takes the command's block at the activation rate). A
+    // duration: an oversampled plug-in's rate is not the device's.
+    std::uint32_t livePeriodNs;
     // The bridge, with each answer: 1 when the thread did not get the class
     // last asked for (it keeps what it had), else 0.
     std::uint32_t classRefused;

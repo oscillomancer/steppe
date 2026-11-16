@@ -63,7 +63,7 @@ namespace {
 struct AudioClass {
     std::uint32_t kind = 0;  // 0: none yet, 1: background, 2: live
     ThreadPolicy background, live;
-    std::uint32_t period = 0;  // live: the device period in frames (0: unknown)
+    std::uint32_t periodNs = 0;  // live: the device period (0: unknown)
     bool operator==(const AudioClass&) const = default;
 };
 
@@ -77,9 +77,10 @@ ThreadPolicy policyFrom(std::uint32_t kind, std::uint32_t priority) {
 // The calling thread (an instance's audio thread) takes `want`; false when it
 // was refused, the thread then keeping what it could. The live class is the
 // callback's: on Linux its policy and priority; on macOS a time-constraint
-// policy for a block of `frames` at `rate` (the device helpers' rule,
-// ADR-0038); on Windows MMCSS Pro Audio at critical priority. Setup calls,
-// made only when the class changes.
+// policy for the device period, or without one a block of `frames` at the
+// activation's `rate` (the device helpers' rule, ADR-0038); on Windows MMCSS
+// Pro Audio at critical priority. Setup calls, made only when the class
+// changes.
 bool takeAudioClass(const AudioClass& want, double rate, std::uint32_t frames) {
 #if defined(_WIN32)
     static thread_local HANDLE mmcss = nullptr;
@@ -100,7 +101,7 @@ bool takeAudioClass(const AudioClass& want, double rate, std::uint32_t frames) {
         mach_timebase_info_data_t timebase{};
         mach_timebase_info(&timebase);
         const double ticks =
-            rate > 0 ? double(frames) / rate * 1e9 * timebase.denom / timebase.numer : 0;
+            liveClassPeriodNs(want.periodNs, frames, rate) * timebase.denom / timebase.numer;
         const auto period = static_cast<std::uint32_t>(std::clamp(ticks, 1.0, double(UINT32_MAX)));
         thread_time_constraint_policy_data_t policy{};
         policy.period = period;
@@ -325,12 +326,10 @@ struct BridgeInstance {
                 const AudioClass want{hdr->audioClass,
                                       policyFrom(hdr->audioPolicy, hdr->audioPriority),
                                       policyFrom(hdr->livePolicy, hdr->livePriority),
-                                      hdr->audioClass == 2 ? hdr->livePeriod : 0};
+                                      hdr->audioClass == 2 ? hdr->livePeriodNs : 0};
                 if (want != taken) {
-                    refused = !takeAudioClass(want, rate,
-                                              want.period               ? want.period
-                                              : command == Cmd::Process ? hdr->frames
-                                                                        : layout.maxFrames);
+                    refused = !takeAudioClass(
+                        want, rate, command == Cmd::Process ? hdr->frames : layout.maxFrames);
                     taken = want;
                     applied = appliedClass();
                 }

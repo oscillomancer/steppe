@@ -981,6 +981,9 @@ handles. The existing background/offline bounded-wait exception and failure
 semantics apply on each platform. Native editor hosting follows ADR-0040;
 the DAW shell is integrated separately on port-gui.
 
+POSIX protocol 24 / Windows protocol 25 carry that period as a duration
+(`livePeriodNs`): in device frames, the bridge read it at an oversampled
+plug-in's rate, 2 or 4 times the device's.
 POSIX protocol 23 / Windows protocol 24 add the device period
 (`livePeriod`) to each command, which sizes the macOS live class (ADR-0081).
 POSIX protocol 22 / Windows protocol 23 add each command's timing to the
@@ -1111,17 +1114,18 @@ instance).
   restores its MXCSR afterwards (§2.4), so a bridged plug-in computes as an
   in-process one does.
 - Each instance's audio thread is named `audio-bridge`. Every command carries
-  the class it runs in (protocol POSIX 23 / Windows 24; `audioClass` in the
+  the class it runs in (protocol POSIX 24 / Windows 25; `audioClass` in the
   header): background, the policy in `audioPolicy`/`audioPriority` (the
   engine's background policy while an engine runs, normal otherwise; §2.2,
   ADR-0026), or live under a live deadline (ADR-0081): on Linux the
   callback's policy in `livePolicy`/`livePriority`, on macOS a
-  time-constraint policy for the device period (`livePeriod`, which the
-  engine sets with `host::setLiveBridgeAudioPolicy` while it runs; without
-  one, the command's block) at the activation rate, read back after it is
-  set, on Windows MMCSS "Pro Audio" at critical priority (the bridge links
-  `avrt`). The thread changes class only when the request, period included,
-  changes. The class read back on macOS is `high` for a time-constraint
+  time-constraint policy for the device period (`livePeriodNs`, a duration
+  the engine sets with `host::setLiveBridgeAudioPolicy` from the device's
+  period and rate while it runs, so an oversampled plug-in's rate does not
+  scale it; without one, the command's block at the activation rate), read
+  back after it is set, on Windows MMCSS "Pro Audio" at critical priority
+  (the bridge links `avrt`). The thread changes class only when the
+  request, period included, changes. The class read back on macOS is `high` for a time-constraint
   policy, else the QoS. A waiting renderer
   or callback therefore never waits behind a lower-priority thread. Applying
   it is best effort: a refusal leaves the thread as it was, and the answer's

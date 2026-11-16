@@ -120,6 +120,9 @@ is sent only when a note or MIDI event was dropped. A block's own events
 again give way to its later values, and carried ones that do not fit
 beside it wait for the next block. A carry full of distinct parameters
 still takes a later value of one of them.
+The device period that sizes §5's macOS class is carried as a duration
+(protocol POSIX 24 / Windows 25), so an oversampled plug-in, activated at
+2 or 4 times the device's rate, still asks for the device's period.
 
 ## Alternatives considered
 
