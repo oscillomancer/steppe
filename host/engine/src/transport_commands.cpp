@@ -429,6 +429,9 @@ void registerTransportCommands(cmd::Registry& registry) {
         c.errors = {{"transport.range",
                      "not one start and one end, end not after start, or clear with a range",
                      "e.g. start_bar 5, end_bar 9"}};
+        if (!loop)
+            c.errors.push_back({"record.punch", "the active recording cannot represent this punch",
+                                "clear the punch or use a range within 2^48 recording frames"});
         c.examples = {
             {"Bars 2-3 (120 BPM, 4/4)", j(R"({"start_bar": 2, "end_bar": 4})"),
              j(R"({"enabled": true, "start_seconds": 2.0, "end_seconds": 6.0})"), "empty"},
@@ -493,8 +496,17 @@ void registerTransportCommands(cmd::Registry& registry) {
             }
             if (loop)
                 app.setLoop(r);
-            else
-                app.setPunch(r);
+            else {
+                auto changed = app.setPunch(r);
+                if (!changed) {
+                    auto error = std::move(changed).error();
+                    error.path = a.endSeconds ? "/end_seconds"
+                                 : a.endBeat  ? "/end_beat"
+                                 : a.endBar   ? "/end_bar"
+                                              : "/enabled";
+                    return error;
+                }
+            }
             return r;
         };
         addChecked(registry, std::move(c));

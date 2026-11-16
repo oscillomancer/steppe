@@ -947,7 +947,11 @@ crash, Project recovery restores loop passes and seeks through the last complete
 checkpoint; extra audio bytes are kept without guessing their placement. Stop
 keeps a final placement sidecar, and the next successful save/autosave retires
 the journal. The loop range at recording start is used for recovery; changing
-it during the take has the same limitation as MIDI recording.
+it during the take has the same limitation as MIDI recording. Punch changes
+continue to apply at stop; crash recovery restores the punch from the last
+complete recording checkpoint, independently of the current transport punch.
+During recording the punch must contain at least one sample and fit the
+recording clock; a refused change leaves the range unchanged.
 
 Output recording is not supported yet. If a loaded project has an armed track
 in output record mode, recording fails before creating any files. Switch that

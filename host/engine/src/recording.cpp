@@ -20,6 +20,41 @@
 
 namespace supple::engine::detail {
 
+namespace {
+json::Value punchJson(RecordedPunch punch) {
+    auto v = json::Value::object();
+    v["enabled"] = punch.enabled;
+    v["start"] = static_cast<long long>(punch.start);
+    v["end"] = static_cast<long long>(punch.end);
+    return v;
+}
+std::optional<RecordedPunch> parsePunch(const json::Value* value) {
+    if (!value || !value->isObject()) return {};
+    const auto* enabled = value->find("enabled");
+    const auto* start = value->find("start");
+    const auto* end = value->find("end");
+    auto bounded = [](const json::Value* v) {
+        return v && v->isInt() && v->asInt() >= 0 && v->asInt() <= kRecordingClockLimit;
+    };
+    if (!enabled || !enabled->isBool() || !bounded(start) || !bounded(end) ||
+        (enabled->asBool() && end->asInt() <= start->asInt()))
+        return {};
+    return RecordedPunch{enabled->asBool(), start->asInt(), end->asInt()};
+}
+}  // namespace
+
+Status validateRecordingPunch(RecordedPunch punch) {
+    if (punch.enabled && punch.end <= punch.start)
+        return Error(
+            "record.punch", "the enabled punch contains no recording sample", "/punch/end",
+            "set the end at least one recording sample after the start, or clear the punch");
+    if (punch.start < 0 || punch.end < 0 || punch.start > kRecordingClockLimit ||
+        punch.end > kRecordingClockLimit)
+        return Error("record.punch", "the punch is outside the recording clock range", "/punch",
+                     "clear the punch or use a nonnegative range within 2^48 recording frames");
+    return okStatus();
+}
+
 std::filesystem::path sidecarPath(const std::filesystem::path& wav) {
     std::filesystem::path p = wav;
     p.replace_extension(".rec.json");
@@ -28,7 +63,10 @@ std::filesystem::path sidecarPath(const std::filesystem::path& wav) {
 
 Status writeSidecar(const std::filesystem::path& wav, const RecordingInfo& info) {
     json::Value v = json::Value::object();
-    v["schema"] = info.frames ? "supple.recording/1.1" : "supple.recording/1.0";
+    v["schema"] = info.punch    ? "supple.recording/1.2"
+                  : info.frames ? "supple.recording/1.1"
+                                : "supple.recording/1.0";
+    if (info.punch) v["punch"] = punchJson(*info.punch);
     if (info.frames) v["frames"] = static_cast<long long>(*info.frames);
     v["track"] = info.track.str();
     v["start_sample"] = static_cast<long long>(info.startSample);
@@ -59,12 +97,13 @@ Result<RecordingInfo> readSidecar(const std::filesystem::path& wav,
     if (!v) return std::move(v).error();
     auto invalid = [&](std::string path, std::string message) {
         return Error("record.sidecar", sidecarPath(wav).string() + ": " + message, std::move(path),
-                     "restore a valid supple.recording/1.0 sidecar or skip this file");
+                     "restore a valid recording sidecar or skip this file");
     };
     const auto* schema = v->find("schema");
     if (!v->isObject() || !schema || !schema->isString() ||
         (schema->asString() != "supple.recording/1.0" &&
-         schema->asString() != "supple.recording/1.1"))
+         schema->asString() != "supple.recording/1.1" &&
+         schema->asString() != "supple.recording/1.2"))
         return invalid("/schema", "unsupported recording schema/version");
     const auto* track = v->find("track");
     const auto* start = v->find("start_sample");
@@ -75,7 +114,12 @@ Result<RecordingInfo> readSidecar(const std::filesystem::path& wav,
     if (!rate || !rate->isNumber() || !std::isfinite(rate->asDouble()) || rate->asDouble() <= 0)
         return invalid("/sample_rate", "expected a positive finite rate");
     RecordingInfo info{*id, start->asInt(), rate->asDouble(), {}, 0, 0};
-    if (schema->asString() == "supple.recording/1.1") {
+    if (schema->asString() == "supple.recording/1.2") {
+        info.punch = parsePunch(v->find("punch"));
+        if (!info.punch) return invalid("/punch", "expected a bounded punch range");
+    }
+    if (schema->asString() == "supple.recording/1.1" ||
+        (schema->asString() == "supple.recording/1.2" && v->find("frames"))) {
         const auto* frames = v->find("frames");
         if (!frames || !frames->isInt() || frames->asInt() < 0 ||
             frames->asInt() > kRecordingClockLimit)
@@ -118,6 +162,7 @@ RecordedTake placeMidi(const MidiCapture& c) {
     RecordedTake r;
     r.track = c.track;
     r.isMidi = true;
+    r.punch = c.punch;
     r.startSample = c.start;
     r.sampleRate = c.rate;
     r.frames = c.captured;
@@ -191,7 +236,7 @@ RecordedTake placeMidi(const MidiCapture& c) {
 
 namespace {
 constexpr std::string_view kJournalSuffix = ".midi.jsonl";
-constexpr std::string_view kJournalSchema = "supple.midi-recording/1.0";
+constexpr std::string_view kJournalSchema = "supple.midi-recording/1.1";
 constexpr std::int64_t kJournalClockLimit = kRecordingClockLimit;
 bool clock(const json::Value& v, std::int64_t low = -kJournalClockLimit) {
     return v.isInt() && v.asInt() >= low && v.asInt() <= kJournalClockLimit;
@@ -224,7 +269,7 @@ static Result<MidiCapture> readJournal(const std::filesystem::path& file,
     };
     if (torn) *torn = false;
     MidiCapture c;
-    bool header = false;
+    bool header = false, punchAware = false;
     std::size_t at = 0;
     while (at < text->size()) {
         const std::size_t end = text->find('\n', at);
@@ -237,7 +282,9 @@ static Result<MidiCapture> readJournal(const std::filesystem::path& file,
         if (!header) {
             const auto* schema = v ? v->find("schema") : nullptr;
             if (!v || !v->isObject() || !schema || !schema->isString() ||
-                schema->asString() != (audio ? "supple.audio-recording/1.0" : kJournalSchema))
+                (schema->asString() != (audio ? "supple.audio-recording/1.1" : kJournalSchema) &&
+                 schema->asString() !=
+                     (audio ? "supple.audio-recording/1.0" : "supple.midi-recording/1.0")))
                 return invalid("/0/schema", "unsupported recording journal schema/version");
             const auto* track = v->find("track");
             const auto id =
@@ -278,6 +325,12 @@ static Result<MidiCapture> readJournal(const std::filesystem::path& file,
                     channels->asInt() > 64)
                     return invalid("/0/channels", "expected 1..64 audio channels");
                 c.channels = static_cast<std::uint32_t>(channels->asInt());
+            }
+            punchAware = schema->asString().ends_with("/1.1");
+            if (punchAware) {
+                auto punch = parsePunch(v->find("punch"));
+                if (!punch) return invalid("/0/punch", "expected a bounded punch range");
+                c.punch = *punch;
             }
             c.track = *id;
             c.rate = rate->asDouble();
@@ -334,11 +387,19 @@ static Result<MidiCapture> readJournal(const std::filesystem::path& file,
             c.runs.push_back({run->at(0).asInt(), run->at(1).asInt()});
         } else if (const auto* captured = v->isObject() ? v->find("captured") : nullptr) {
             const auto* frames = v->find("frames");
-            if (!clock(*captured, 0) ||
+            if (!clock(*captured, 0) || (punchAware && captured->asInt() < c.captured) ||
                 (audio && (!frames || !clock(*frames, 0) || frames->asInt() < c.audioFrames ||
                            captured->asInt() < c.captured))) {
                 stop();
                 break;
+            }
+            if (const auto* value = v->find("punch"); punchAware && value) {
+                auto punch = parsePunch(value);
+                if (!punch) {
+                    stop();
+                    break;
+                }
+                c.punch = *punch;
             }
             c.captured = std::max(c.captured, captured->asInt());
             if (audio) c.audioFrames = frames->asInt();
@@ -364,6 +425,7 @@ Result<RecordingInfo> readAudioJournal(const std::filesystem::path& wav,
     const auto& c = *capture;
     RecordingInfo info{c.track, c.start, c.rate, {}, c.loop.start, c.loop.end};
     info.frames = c.audioFrames;
+    info.punch = c.punch;
     if (c.audioFrames > 0) info.segments.push_back({0, c.start});
     for (const auto& run : c.runs) {
         const auto frame = run.fileFrame + c.latency;
@@ -417,8 +479,9 @@ std::size_t FrameRing::read(float* out, std::size_t maxFrames, std::int64_t* fir
     return n;
 }
 
-Recorder::Recorder(std::vector<RecordTarget> targets, double rate, std::int64_t latency)
-    : rate_(rate), latency_(latency) {
+Recorder::Recorder(std::vector<RecordTarget> targets, double rate, std::int64_t latency,
+                   RecordedPunch punch)
+    : rate_(rate), latency_(latency), startPunch_(punch), punch_(punch) {
     for (RecordTarget& t : targets) {
         if (t.midi) {
             auto track = std::make_unique<MidiTrack>();
@@ -445,12 +508,24 @@ Recorder::Recorder(std::vector<RecordTarget> targets, double rate, std::int64_t 
     }
 }
 
+Status Recorder::setPunch(RecordedPunch punch) {
+    SUPPLE_TRY(validateRecordingPunch(punch));
+    std::lock_guard lock(punchMutex_);
+    punch_ = punch;
+    return okStatus();
+}
+RecordedPunch Recorder::getPunch() {
+    std::lock_guard lock(punchMutex_);
+    return punch_;
+}
+
 Recorder::~Recorder() {
     stop_ = true;
     if (writer_.joinable()) writer_.join();
 }
 
 Status Recorder::open() {
+    SUPPLE_TRY(validateRecordingPunch(startPunch_));
     std::promise<Status> opened;
     auto ready = opened.get_future();
     writer_ = std::thread([this, opened = std::move(opened)]() mutable {
@@ -607,14 +682,16 @@ void Recorder::openJournal(Journal& t, const std::filesystem::path& path) {
 }
 
 void Recorder::appendJournal(Journal& t, const RecordTarget& target,
-                             std::span<const MidiEvent> events, std::int64_t frames) {
+                             std::span<const MidiEvent> events, std::int64_t frames,
+                             RecordedPunch punch) {
     const auto captured = published_.load(std::memory_order_acquire);
     const auto runs = segmentCount_.load(std::memory_order_acquire);
     const bool audio = !target.midi;
     std::string out;
     if (!t.header) {
         json::Value h = json::Value::object();
-        h["schema"] = audio ? "supple.audio-recording/1.0" : std::string(kJournalSchema);
+        h["schema"] = audio ? "supple.audio-recording/1.1" : std::string(kJournalSchema);
+        h["punch"] = punchJson(startPunch_);
         h["track"] = target.track.str();
         h["sample_rate"] = rate_;
         h["start_sample"] = static_cast<long long>(start_.load(std::memory_order_relaxed));
@@ -656,13 +733,16 @@ void Recorder::appendJournal(Journal& t, const RecordTarget& target,
         }
         out += journalLine(row);
     }
-    if (captured != t.capturedJournaled || (audio && frames != t.framesJournaled)) {
+    if (captured != t.capturedJournaled || (audio && frames != t.framesJournaled) ||
+        t.punchJournaled != punch) {
         json::Value line = json::Value::object();
         line["captured"] = static_cast<long long>(captured);
         if (audio) line["frames"] = static_cast<long long>(frames);
+        if (t.punchJournaled != punch) line["punch"] = punchJson(punch);
         out += journalLine(line);
         t.capturedJournaled = captured;
         t.framesJournaled = frames;
+        t.punchJournaled = punch;
     }
     if (!out.empty() && std::fwrite(out.data(), 1, out.size(), t.journal) != out.size())
         t.journalError = Error("record.journal", "cannot write " + t.journalFile.string(),
@@ -671,10 +751,11 @@ void Recorder::appendJournal(Journal& t, const RecordTarget& target,
 
 void Recorder::writeJournals(bool sync) {
     if (!started_.load(std::memory_order_acquire)) return;
+    const auto punch = getPunch();
     auto write = [&](Journal& t, const RecordTarget& target, std::span<const MidiEvent> events,
                      std::int64_t frames) {
         if (!t.journal || !t.journalError) return;
-        appendJournal(t, target, events, frames);
+        appendJournal(t, target, events, frames, punch);
         if (t.journalError && (sync ? !files::syncFile(t.journal) : std::fflush(t.journal) != 0))
             t.journalError =
                 Error("record.journal", "cannot flush " + t.journalFile.string(), "/recording",
@@ -803,7 +884,9 @@ void Recorder::writeSidecars() {
     const std::int64_t start = start_.load(std::memory_order_relaxed);
     for (auto& t : tracks_) {
         // Without one the take is fine but a crash would leave it unplaced.
-        auto st = writeSidecar(t->target.file, {t->target.track, start, rate_, {}, 0, 0});
+        RecordingInfo info{t->target.track, start, rate_, {}, 0, 0};
+        info.punch = startPunch_;
+        auto st = writeSidecar(t->target.file, info);
         rememberError(*t, std::move(st), true);
     }
 }
@@ -880,6 +963,7 @@ void Recorder::writerLoop() {
                     info.segments.push_back({frame, segments_[i].timeline});
             }
             info.frames = static_cast<std::int64_t>(t->writer.frames());
+            info.punch = getPunch();
             rememberError(*t, writeSidecar(t->target.file, info), true);
         }
     }
@@ -902,6 +986,7 @@ std::vector<RecordedTake> Recorder::finish(LoopRange loop) {
     const std::size_t count = segmentCount_.load(std::memory_order_acquire);
     for (std::size_t i = 0; i < count; ++i)
         segments.push_back({segments_[i].fileFrame + latency_, segments_[i].timeline});
+    const auto punch = getPunch();
     // MIDI (ADR-0016): placed by the rule a journal's recovery uses too.
     for (auto& t : midiTracks_) {
         MidiCapture c;
@@ -916,6 +1001,7 @@ std::vector<RecordedTake> Recorder::finish(LoopRange loop) {
         c.events = t->drained;
         c.overflow = t->overflow.load();
         c.runsFull = runsFull_;
+        c.punch = punch;
         RecordedTake r = placeMidi(c);
         // The journal, only if this recording created it: a file already at
         // its name (refused by the exclusive creation) is someone else's,
@@ -928,6 +1014,7 @@ std::vector<RecordedTake> Recorder::finish(LoopRange loop) {
         RecordedTake r;
         r.track = t->target.track;
         r.file = t->target.file;
+        r.punch = punch;
         if (t->journalCreated) r.journal = t->journalFile;
         r.startSample = start;
         r.sampleRate = rate_;

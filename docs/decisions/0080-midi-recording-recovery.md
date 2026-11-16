@@ -140,3 +140,8 @@ new project or by opening another, loses its folder as ADR-0078 decides,
 after the app has asked, and its journals with it, as its WAVs and
 autosaves go. ADR-0078 wins: discarding an untitled project discards all of
 it.
+
+*Amended 2026-11-15 after review round 18:* ADR-0082's journal 1.1 punch
+metadata applies to MIDI as well as audio. Version 1.0 remains readable with
+punch disabled; changed punch settings are published with a complete progress
+record, using the existing writer rather than any audio-thread file operation.

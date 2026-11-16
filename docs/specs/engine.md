@@ -847,7 +847,7 @@ first use, and no plug-in code runs early to warm it.
   target's first error. The loop run table holds the initial run plus 4096 wraps;
   when full, capture stops adding input and returns retained passes with a
   structured `recording.loop_runs_full` warning for the commit. Sidecars require
-  `supple.recording/1.0`, a track id, a positive finite sample rate, and complete,
+  `supple.recording/1.0`, `1.1` or `1.2`, a track id, a positive finite sample rate, and complete,
   ordered loop runs beginning at file frame zero, with the loop range they were
   recorded in, or `[0, 0]` when seeks split the runs while no loop was active
   (an inactive loop range is never recorded); invalid sidecars return a
@@ -859,14 +859,38 @@ first use, and no plug-in code runs early to warm it.
   in their 80-byte RIFF header. A take crossing the 32-bit size limit promotes
   that space to ds64 and becomes RF64 in place, without moving samples or
   stopping capture. Recovery reads/repairs old 44-byte recordings and new
-  RIFF/RF64 recordings, including bytewise-torn promotion FourCCs in the otherwise unchanged fixed layout. Decoding, metadata
+  RIFF/RF64 recordings, including bytewise-torn promotion FourCCs in the
+  otherwise unchanged fixed layout. Decoding, metadata
   inspection and media import accept RF64. Tests inject a small size threshold
   or use sparse files, without writing a 4 GiB audio payload.
+- **Authoritative punch placement** (round-18 correction): audio/MIDI journal
+  version 1.1 records `punch: {enabled, start, end}` in the header, in the take's
+  sample-rate frames. Coordinates are nonnegative and at most 2^48; an enabled
+  range increases. Mid-take punch edits retain ADR-0015's commit-time behavior:
+  the writer snapshots the latest model setting off RT and includes a changed
+  punch in the same complete progress record as captured/physical frames.
+  A torn or invalid progress line advances neither frames nor punch. Normal
+  stop takes the final snapshot; recovery uses the last trusted one, never
+  the recovering app's transport setting. Version 1.0 journals load with punch
+  disabled. Final sidecars 1.2 persist the same punch and trusted frame bound;
+  sidecars 1.0/1.1 remain readable with punch disabled. Hash completion and
+  retirement preserve it. Mixed recovered punches are logged as contiguous
+  `record.commit` groups within one undo transaction, using its existing punch
+  arguments; history replay therefore retains each take's placement.
+  `RecordedPunch` carries `{enabled, start, end}` in recording-rate samples.
+  `Engine::startRecording(targets, punch = {})` starts with disabled punch by
+  default; `setRecordingPunch(punch)` is model-thread-only. The recorder's
+  model/writer mutex protects only the small punch snapshot, never file work;
+  the callback never accesses it. `RecordedTake::punch` preserves the final
+  snapshot for deferred commit. Initial sidecars 1.2 omit the trusted frame
+  field until finalization; failed finalization therefore cannot retire a journal; the journal supplies live progress. No other non-model
+  placement input is omitted: start/rate, latency-adjusted runs, initial loop,
+  physical frame extent and MIDI input clocks are already persisted.
 - **Audio placement journals** (ADR-0082): each WAV owns an exclusively
-  created `<stem>.audio.jsonl`, schema `supple.audio-recording/1.0`. The shared
+  created `<stem>.audio.jsonl`, schema `supple.audio-recording/1.1` (legacy 1.0 still loads). The shared
   MIDI journal reader/writer handles header, append, flush/sync and torn tails.
   Its header has `track`, `sample_rate`, `start_sample`, `latency`, `channels`
-  and the initial `loop`. Runs use the same captured-frame clock as MIDI;
+  and the initial `loop` and `punch`. Runs use the same captured-frame clock as MIDI;
   progress is `{"captured": n, "frames": f}`, where `f` counts complete WAV
   frames actually written (including rendered-input padding/trim). The writer
   flushes audio before progress, and syncs data/header before the journal at
@@ -876,23 +900,23 @@ first use, and no plug-in code runs early to warm it.
   and uses stop's initial start/latency/run rule. Extra WAV frames are kept,
   never guessed into an unknown placement. Loop-range changes retain the
   initial-loop limitation of ADR-0080. Before journal retirement, a final
-  `supple.recording/1.1` sidecar preserves this trusted `frames` bound; legacy
-  1.0 sidecars still load. Hash completion preserves the bound. Save/autosave
+  `supple.recording/1.2` sidecar preserves the trusted `frames` bound and punch;
+  legacy 1.0/1.1 sidecars still load. Hash completion preserves the bound. Save/autosave
   checkpoint the stopped audio before publishing and retire owned journals
   only after success; Save As retires its new copies, never another project's.
 `RecordedTake::journal` is the owned audio placement journal path (empty if
 exclusive creation failed); it is not project media and does not enter
 `record.commit`. Recovery reconstructs it from the checked WAV companion.
-The final sidecar 1.1 `frames` is a nonnegative clock bounded by 2^48, and
+The final sidecar 1.1/1.2 `frames` is a nonnegative clock bounded by 2^48, and
 clips recovery without truncating the physical WAV.
 
 - **MIDI take journals** (ADR-0080): each MIDI target writes
   `<media>/rec/<Track>-<n>.midi.jsonl` (created exclusively, never through a
   link; a name any entry has, a dangling link too, is not free, and a take
   whose journal could not be created names none, so nothing already there
-  is ever deleted as its journal), JSON Lines with schema `supple.midi-recording/1.0`: a header object
+  is ever deleted as its journal), JSON Lines with schema `supple.midi-recording/1.1` (legacy 1.0 still loads): a header object
   (`track`, `sample_rate`, `start_sample`, `latency`, `device`, `routed`,
-  `shift`, `loop`), then events `[at, status, data1, data2]` (plus `route`,
+  `shift`, `loop`, `punch`), then events `[at, status, data1, data2]` (plus `route`,
   `voice` for Note Out voices; `at` in captured frames), `{"run": [captured
   frame, timeline]}` per loop wrap or seek, and `{"captured": n}`. The audio
   thread only pushes to the MIDI rings and stores how far capture got (one

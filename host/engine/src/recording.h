@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <thread>
 #include <vector>
@@ -62,6 +63,7 @@ struct RecordingInfo {
     std::int64_t loopStart = 0, loopEnd = 0;
     std::string hash = {};                    // optional; finalized by the background recording job
     std::optional<std::int64_t> frames = {};  // trusted placement prefix, sidecar 1.1
+    std::optional<RecordedPunch> punch = {};  // sidecar 1.2; old files default disabled
 };
 // A track's input after its input FX (ADR-0014): what it records
 // instead of the raw device channels, and the latency of those FX. For a
@@ -106,6 +108,7 @@ struct MidiCapture {
     bool runsFull = false;
     std::int64_t audioFrames = 0;  // audio journal: complete physical prefix
     std::uint32_t channels = 0;
+    RecordedPunch punch;
 };
 // The clock a MIDI target's events are captured on: the device round trip,
 // or a Note Out destination's input shift (ADR-0016).
@@ -137,6 +140,8 @@ Result<MidiCapture> readMidiJournal(const std::filesystem::path& file,
 // record.commit's arguments for takes committed with `punch` (take_commands.cpp):
 // files relative to `media` when inside it, so they resolve after a save
 // moves the project (ADR-0076).
+Status validateRecordingPunch(RecordedPunch punch);
+
 json::Value recordCommitArgs(const std::vector<RecordedTake>& takes, const TransportRange& punch,
                              const std::filesystem::path& media);
 
@@ -149,7 +154,9 @@ Result<RecordingInfo> readSidecar(const std::filesystem::path& wav,
 
 class Recorder {
   public:
-    Recorder(std::vector<RecordTarget> targets, double rate, std::int64_t latency);
+    Recorder(std::vector<RecordTarget> targets, double rate, std::int64_t latency,
+             RecordedPunch punch = {});
+    Status setPunch(RecordedPunch punch);  // model thread; writer snapshots off RT
     ~Recorder();
     // While slaved (ADR-0071) the timeline moves at the chase rate, not one
     // frame per frame: a position within a block of the expected one is the
@@ -198,6 +205,7 @@ class Recorder {
         bool header = false;
         std::size_t eventsJournaled = 0, runsJournaled = 0;
         std::int64_t capturedJournaled = -1, framesJournaled = -1;
+        std::optional<RecordedPunch> punchJournaled;
     };
     struct Track : Journal {
         RecordTarget target;
@@ -237,7 +245,7 @@ class Recorder {
     void closeJournals();
     void openJournal(Journal& journal, const std::filesystem::path& path);
     void appendJournal(Journal& journal, const RecordTarget& target,
-                       std::span<const MidiEvent> events, std::int64_t frames);
+                       std::span<const MidiEvent> events, std::int64_t frames, RecordedPunch punch);
     void drain(Track& t, std::vector<float>& scratch);
     void padTo(Track& t, std::int64_t frame);
     void writeSidecars();
@@ -257,6 +265,10 @@ class Recorder {
     // captured_ as of the end of the latest capture(), for the journals: a
     // MIDI event the writer has drained was captured no later than this.
     std::atomic<std::int64_t> published_{0};
+    RecordedPunch getPunch();  // model/writer only; no file work while locked
+    const RecordedPunch startPunch_;
+    std::mutex punchMutex_;
+    RecordedPunch punch_;
     LoopRange startLoop_;
     bool loopConfigured_ = false;
     bool driftTolerant_ = false;

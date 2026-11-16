@@ -635,7 +635,7 @@ class EngineApp : public cmd::Host {
     // versioned; the loop reaches the engine (now, and whenever it starts),
     // the punch range trims takes when a recording is committed.
     void setLoop(const TransportRange& loop);
-    void setPunch(const TransportRange& punch) { punch_ = punch; }
+    Status setPunch(const TransportRange& punch);
     const TransportRange& loop() const { return loop_; }
     const MetronomeSettings& metronome() const { return metronome_; }
     void setMetronome(const MetronomeSettings& m);  // reaches the engine now and on every start

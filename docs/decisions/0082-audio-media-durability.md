@@ -74,3 +74,10 @@ RF64 decision. A saved project must not outlive the media it references.
   project or branch. No filename-based orphan collector is introduced.
 - Implementation proceeds in order: error/prefix handling, durability,
   placement journaling, then streaming RF64, one topic per commit.
+
+*Clarified 2026-11-15 after review round 18:* normal-stop placement includes
+the authoritative punch. Journal 1.1 headers store its initial value and a
+changed value is committed atomically with progress; final sidecar 1.2 retains
+it after retirement. Punch edits during recording keep ADR-0015's commit-time
+rule: stop uses the final setting, recovery the last complete checkpoint's.
+Old metadata without punch defaults to disabled, never the new app's setting.

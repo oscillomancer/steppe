@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <fstream>
+#include <iterator>
 #include <numbers>
 #include <set>
 #include <string_view>
@@ -1248,6 +1249,32 @@ void EngineApp::stopJobs() {
 
 // --- real-time engine -----------------------------------------------------------------------
 
+namespace {
+Result<RecordedPunch> punchFrames(const TransportRange& punch, double rate) {
+    const long double start =
+        static_cast<long double>(punch.start) * static_cast<long double>(rate);
+    const long double end = static_cast<long double>(punch.end) * static_cast<long double>(rate);
+    if (!std::isfinite(start) || !std::isfinite(end) || start < 0 || end < 0 ||
+        start >= static_cast<long double>(detail::kRecordingClockLimit) + .5L ||
+        end >= static_cast<long double>(detail::kRecordingClockLimit) + .5L)
+        return Error("record.punch", "the punch is outside the recording clock range", "/punch",
+                     "clear the punch or use a nonnegative range within 2^48 recording frames");
+    RecordedPunch frames{punch.enabled, static_cast<std::int64_t>(std::llround(start)),
+                         static_cast<std::int64_t>(std::llround(end))};
+    SUPPLE_TRY(detail::validateRecordingPunch(frames));
+    return frames;
+}
+}  // namespace
+Status EngineApp::setPunch(const TransportRange& punch) {
+    if (engine_ && engine_->recording()) {
+        auto frames = punchFrames(punch, engine_->config().sampleRate);
+        if (!frames) return std::move(frames).error();
+        SUPPLE_TRY(engine_->setRecordingPunch(*frames));
+    }
+    punch_ = punch;
+    return okStatus();
+}
+
 Status EngineApp::setAudioThreadLimit(unsigned limit) {
     if (limit > 64)
         return Error("engine.audio_threads", "audio processing thread limit is out of range",
@@ -2086,6 +2113,8 @@ Result<TransportInfo> EngineApp::transport(std::string_view action, std::optiona
             t.file = freeName(".wav");
             targets.push_back(std::move(t));
         }
+        auto recordPunch = punchFrames(punch_, engine_->config().sampleRate);
+        if (!recordPunch) return std::move(recordPunch).error();
         std::vector<fs::path> files;  // WAVs and MIDI journals: not leftovers while recording
         for (const RecordTarget& t : targets)
             if (!t.file.empty()) files.push_back(t.file);
@@ -2099,7 +2128,7 @@ Result<TransportInfo> EngineApp::transport(std::string_view action, std::optiona
             recordingMasters_ = true;
             headChanged();
         }
-        if (auto started = engine_->startRecording(std::move(targets)); !started) {
+        if (auto started = engine_->startRecording(std::move(targets), *recordPunch); !started) {
             endMasterRecording();
             return std::move(started).error();
         }
@@ -2483,6 +2512,12 @@ Status recordingBounds(const model::Session& s, const detail::RecordingInfo& sid
         return Error("record.sidecar", "recording positions exceed the finite timeline range",
                      std::move(path), "restore valid recording positions or skip this file");
     };
+    if (side.punch) {
+        const auto& punch = *side.punch;
+        if (punch.start < 0 || punch.end < 0 || punch.start > detail::kRecordingClockLimit ||
+            punch.end > detail::kRecordingClockLimit || (punch.enabled && punch.end <= punch.start))
+            return invalid("/punch");
+    }
     if (!std::isfinite(side.sampleRate) || side.sampleRate < 8000 || side.sampleRate > 384000 ||
         (fileRate > 0 && side.sampleRate != fileRate) || frames > INT64_MAX)
         return invalid("/sample_rate");
@@ -2649,19 +2684,46 @@ Result<std::vector<RecordedInfo>> EngineApp::commitTakes(const std::vector<Recor
         const double rate = r.sampleRate == 0 ? initial.project->sampleRate : r.sampleRate;
         detail::RecordingInfo side{r.track,    r.startSample, rate,
                                    r.segments, r.loop.start,  r.loop.end};
+        side.punch = r.punch;
         SUPPLE_TRY(recordingBounds(initial, side, static_cast<std::uint64_t>(r.frames)));
     }
     auto txnId = beginTransaction({cmd::Origin::Type::Internal, "engine", ""}, label);
     if (!txnId) return std::move(txnId).error();
-    auto placed = placeTakes(takes, punch_, &pendingHashes);
-    if (!placed) return std::move(placed).error();
-    std::vector<RecordedInfo> out = std::move(*placed);
-    // Logged as record.commit, so a merge replays it on another branch: the
-    // takes came from the device, not from a command.
+    std::vector<RecordedInfo> out;
+    // One undo step, with contiguous groups retaining each recording's punch.
+    // record.commit already has a top-level punch: no argument/schema change.
     const fs::path media =
         projectDir().empty() ? fs::path() : projectDir() / head().project->mediaDir;
-    record_.invocations.push_back(
-        {"record.commit", detail::recordCommitArgs(takes, punch_, media)});
+    auto punchFor = [&](const RecordedTake& take) {
+        if (!take.punch) return punch_;
+        const auto& p = *take.punch;
+        const double rate = take.sampleRate > 0 ? take.sampleRate : initial.project->sampleRate;
+        return TransportRange{p.enabled, static_cast<double>(p.start) / rate,
+                              static_cast<double>(p.end) / rate};
+    };
+    for (std::size_t first = 0; first < takes.size();) {
+        const auto punch = punchFor(takes[first]);
+        auto last = first + 1;
+        while (last < takes.size()) {
+            const auto other = punchFor(takes[last]);
+            if (other.enabled != punch.enabled || other.start != punch.start ||
+                other.end != punch.end)
+                break;
+            ++last;
+        }
+        const std::vector<RecordedTake> group(takes.begin() + static_cast<std::ptrdiff_t>(first),
+                                              takes.begin() + static_cast<std::ptrdiff_t>(last));
+        auto placed = placeTakes(group, punch, &pendingHashes);
+        if (!placed) return std::move(placed).error();
+        out.insert(out.end(), std::make_move_iterator(placed->begin()),
+                   std::make_move_iterator(placed->end()));
+        record_.invocations.push_back(
+            {"record.commit", detail::recordCommitArgs(group, punch, media)});
+        first = last;
+    }
+    if (takes.empty())
+        record_.invocations.push_back(
+            {"record.commit", detail::recordCommitArgs(takes, punch_, media)});
     SUPPLE_TRY(commitTransaction(*txnId));
     // The takes are in the project now; owned journals go once a saved
     // file or autosave holds them (ADR-0080/0082).
@@ -2887,6 +2949,7 @@ void EngineApp::finalizeRecordingHash(Id source, model::MediaSource expected, Re
                                    take.segments, take.loop.start,  take.loop.end,
                                    hash};
         side.frames = take.frames;
+        side.punch = take.punch;
         Status finalized;
         {
             std::lock_guard lock(recordingFinalizeMutex_);
@@ -3172,6 +3235,7 @@ RecordingCheck checkRecording(const model::Session& s, const fs::path& rec, cons
         RecordedTake take = detail::placeMidi(*capture);
         out.side = detail::RecordingInfo{take.track,    take.startSample, take.sampleRate,
                                          take.segments, take.loop.start,  take.loop.end};
+        out.side->punch = take.punch;
         if (take.midi.empty() || take.frames <= 0) return out;  // nothing was played
         if (auto valid = recordingBounds(s, *out.side, static_cast<std::uint64_t>(take.frames));
             !valid) {
@@ -4006,6 +4070,7 @@ Result<std::vector<RecordedInfo>> EngineApp::recover(const std::vector<std::stri
                     e.voice = it->second;
                 }
         }
+        t.punch = side->punch.value_or(RecordedPunch{});
         t.track = track.value_or(side->track);
         if (!s.tracks.find(t.track))
             return Error("recover.no_track",
@@ -4050,6 +4115,7 @@ Result<std::vector<RecordedInfo>> EngineApp::recover(const std::vector<std::stri
         detail::RecordingInfo side{t.track,    t.startSample, t.sampleRate,
                                    t.segments, t.loop.start,  t.loop.end};
         side.frames = t.frames;
+        side.punch = t.punch;
         auto metadata = detail::writeSidecar(t.file, side);
         if (!metadata) {
             warn(metadata.error(), t.file.lexically_relative(mediaDir()), t.track.str());

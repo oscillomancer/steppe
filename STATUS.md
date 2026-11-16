@@ -1162,7 +1162,7 @@ Session and editing:
   Native macOS/Windows validation of these changes remains pending.
 - Audio loop/seek recovery uses an append-only placement journal, sharing MIDI
   validation and checkpoints (ADR-0082). Recovery keeps physical tails but places
-  only trusted progress; final sidecars retain that bound after save/autosave
+  only trusted progress and its punch; final sidecars retain both after save/autosave
   retirement. Initial loop-range changes remain unsupported as for MIDI.
   Native macOS/Windows journal validation remains pending.
 - Streaming audio recording reserves JUNK/ds64 space and promotes to RF64 in

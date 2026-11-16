@@ -110,6 +110,13 @@ struct RecordingError {
     Error error;
 };
 
+// Punch placement in recording sample-rate frames, independent of later transport.
+struct RecordedPunch {
+    bool enabled = false;
+    std::int64_t start = 0, end = 0;
+    bool operator==(const RecordedPunch&) const = default;
+};
+
 struct RecordedTake {
     model::Id track;
     std::filesystem::path file;
@@ -133,6 +140,7 @@ struct RecordedTake {
     double sampleRate = 0;             // of the file and of startSample (the engine's rate)
     // MIDI (ADR-0016): no file; `frames` is the length recorded, `segments`
     // the runs, the events in time order.
+    std::optional<RecordedPunch> punch = {};  // authoritative when present
     bool isMidi = false;
     std::vector<RecordedMidiEvent> midi;
 };
@@ -636,7 +644,8 @@ class Engine {
     void setRecordingMasters(std::vector<RecordingMaster> masters) {
         recordingMasters_ = std::move(masters);
     }
-    Status startRecording(std::vector<RecordTarget> targets);
+    Status startRecording(std::vector<RecordTarget> targets, RecordedPunch punch = {});
+    Status setRecordingPunch(RecordedPunch punch);  // model thread only, never the callback
     // Also retrieves takes finalized by stop(), once, after the device stopped.
     Result<std::vector<RecordedTake>> stopRecording();
     std::vector<RecordingError> takeRecordingErrors();

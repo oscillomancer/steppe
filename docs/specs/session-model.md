@@ -720,6 +720,11 @@ is gone; one whose lock is held is a running app's and is never listed or
 touched. Process IDs decide nothing. Left-behind folders with content stay
 until the user recovers or deletes them; empty ones untouched for an hour
 are removed when an app starts.
+Recording recovery uses the take's saved punch, not the current transport punch
+(ADR-0082). A mixed recovery remains one undo step; its history may contain
+multiple `record.commit` invocations, each with its corresponding existing punch
+argument. No project or command schema changes.
+
 `project.recoverable` lists them (MIDI takes' journals among the
 recordings, ADR-0080) as `sessions` beside `recordings`
 (`session`, `started_ms`, `autosaved_ms`, `name`, `tracks`, `branches`,
